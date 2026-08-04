@@ -196,6 +196,36 @@ int WINAPI WinMain(
     // Barrier plan step 6: "--canonical-check" logs every resource that did not END the frame in
     // its declared canonical state (DBWIN "[canonical]" lines). Parsed above the scene-stress
     // branch for the same reason as --barrier-cmp: the churn is where drift shows up.
+    // Step 7 prerequisite: a few resting states are CONFIG-dependent, and the Step 6 constants were
+    // all measured with the shipping defaults. These two flip the VSM page-draw path so
+    // --canonical-check can be re-run against the other configuration; they must be parsed here for
+    // the same reason as the flags above (the scene-stress branch returns first). Names match the
+    // globals: "--vsm-page-multidraw" turns g_pageDrawSingle OFF, "--vsm-page-compact" turns
+    // g_pageDrawCompact ON.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-page-multidraw")) {
+        vsm::g_pageDrawSingle = false;
+    }
+    if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-page-compact")) {
+        vsm::g_pageDrawCompact = true;
+    }
+
+    // Step 7: "--barrier-compile-log" prints the compiled barrier count per frame. The compile
+    // itself always runs once every graph has Prepares; only the logging is gated.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-compile-log")) {
+        render::g_barrierCompileLog = true;
+    }
+
+    // Step 7 THE FLIP: "--barrier-flip" makes Renderer::Transition emit the COMPILED barrier
+    // instead of feeding the ResourceStateTracker. Off by default until verified.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-flip")) {
+        render::g_barrierFlip = true;
+    }
+    // "--barrier-flip-trace" additionally logs every emitted point. Loud — for chasing one resource.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-flip-trace")) {
+        render::g_barrierFlip = true;
+        render::g_barrierFlipTrace = true;
+    }
+
     if (lpCmdLine && std::strstr(lpCmdLine, "--canonical-check")) {
         render::g_canonicalCheck = true;
     }

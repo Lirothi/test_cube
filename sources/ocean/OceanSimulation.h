@@ -37,6 +37,9 @@ public:
     // Barrier plan step 5: Update's transition sequence, registered ahead of recording.
     // Keep in step with Update / DispatchSpectrum / DispatchFFT* / GenerateMips / DispatchFoam.
     void PrepareUpdate(RenderGraphPassContext& ctx);
+    // D1.1: shared by PrepareUpdate and Update so the two cannot disagree about whether
+    // this frame performs the displacement-history copy.
+    bool WillCopyDisplacementHistory() const;
     void OnHotReload(Renderer* renderer);
 
     void SetSettings(Renderer* renderer, const OceanSimulationSettings& settings);

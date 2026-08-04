@@ -53,6 +53,19 @@ namespace render {
 // measurement that says whether D2's "every frame ends at canonical" invariant is real, and
 // exactly which resources need an epilogue transition before Step 7 makes it load-bearing.
 inline bool g_canonicalCheck = false;
+
+// Step 7 — THE FLIP. When on, Renderer::Transition stops feeding the ResourceStateTracker and
+// instead emits the barrier the COMPILE already produced for this pass. Off by default until the
+// flip is verified; `--barrier-flip` turns it on.
+//
+// Why this shape: every pass body already calls Transition exactly where it needs a state, and the
+// comparator proved (0 MISSING over 20 GBV iterations, both shadow modes) that those calls are
+// precisely what the pass registered. So the body needs no edit at all — the call site stays, only
+// the thing behind it changes. Rewriting ~25 pass bodies to call ctx.Barrier() by hand would have
+// been the same semantics with far more room to get one wrong.
+inline bool g_barrierFlip = false;
+// Step 7: per-emission trace of the flip. Loud; for chasing a specific resource only.
+inline bool g_barrierFlipTrace = false;
 } // namespace render
 
 class Renderer {
@@ -273,6 +286,17 @@ public:
     void ClearResourceState(ID3D12Resource* res);
     void SetTrackedStateOnly(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
     D3D12_RESOURCE_STATES GetCanonicalState(ID3D12Resource* res) const; // COMMON if undeclared
+    // Step 7: exclude a resource from the barrier compile — its state is written by code
+    // outside the render graph, so tracking it is not the graph's business.
+    void SetResourceUnmanaged(ID3D12Resource* res) { canonicalStates_.SetUnmanaged(res); }
+    bool IsResourceUnmanaged(ID3D12Resource* res) const { return canonicalStates_.IsUnmanaged(res); }
+    // The compile and Transition MUST agree on which resources are modelled: compiling a barrier
+    // for one the flip then hands to the tracker advances the running state past a barrier that
+    // pass never emits, and the next user of that resource gets a wrong before-state.
+    bool IsResourceCompileManaged(ID3D12Resource* res) const { return canonicalStates_.IsCompileManaged(res); }
+    // Where the last barrier compile left this resource; the seed for the next one.
+    D3D12_RESOURCE_STATES GetPredictedState(ID3D12Resource* res) const { return canonicalStates_.GetPredicted(res); }
+    void SetPredictedState(ID3D12Resource* res, D3D12_RESOURCE_STATES s) { canonicalStates_.SetPredicted(res, s); }
     // For subsystems that create resources without a Renderer& (RenderTargetManager).
     ResourceDeclarations Declarations() { return ResourceDeclarations{ &stateTracker_, &canonicalStates_ }; }
     // Step 6 diagnostic: log every declared resource that did not END the frame at canonical.
@@ -281,6 +305,13 @@ public:
     void ReportOffCanonicalStates();
 
     void Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after);
+    // Step 7: a transition whose BEFORE state the caller knows by construction. This is what
+    // out-of-graph paths need instead of a tracker: an upload just created the resource in
+    // COPY_DEST, the editor pick readback runs after the frame with objectID still a render
+    // target. Emitting directly is both correct and the reason the tracker can go away —
+    // guessing the before state was its only job.
+    static void TransitionExplicit(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
+                                   D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after);
 
     // --- Barrier plan, step 3: transition observation (diagnostic) ---
     //
@@ -306,6 +337,50 @@ public:
     };
     static void SetThreadTransitionLog(TransitionLog* log);
     static TransitionLog* CurrentThreadTransitionLog();
+
+    // Step 7: the compiled barriers belonging to the pass currently recording on this thread.
+    //
+    // `Transition` claims the entry matching (resource, stateAfter) and emits it. Claiming is by
+    // MATCH rather than by a cursor because fan-out passes record from several threads at once and
+    // their order is genuinely nondeterministic — a cursor would be a race by construction. Each
+    // entry is claimed at most once (`claimed` is atomic), so a body that transitions the same
+    // resource to the same state twice gets the second one for free, which is exactly the
+    // redundant-transition case the tracker used to swallow.
+    struct CompiledBarriers {
+        // Grouped by POINT, because a point is the unit that must be emitted atomically: the
+        // compile's running state advances past a whole point, so emitting only the entries a
+        // body happens to name leaves the model and reality disagreeing — which surfaces as
+        // "before state does not match" (D3D12 message 527), not as anything subtle. The first
+        // Transition naming ANY entry of a point emits the WHOLE point.
+        struct Point {
+            const D3D12_RESOURCE_BARRIER* entries = nullptr;
+            std::uint32_t                 count = 0;
+            std::atomic<bool>             emitted{ false };
+        };
+        Point*                     points = nullptr;
+        std::uint32_t              pointCount = 0;
+        std::atomic<std::uint32_t> unmatched{ 0 };  // body wanted something not compiled
+        int                        pass = -1;       // RenderPass enum, --barrier-flip-trace only
+    };
+    static void SetThreadCompiledBarriers(CompiledBarriers* cb);
+    static CompiledBarriers* CurrentThreadCompiledBarriers();
+
+    // Barrier-diagnostics sink for --barrier-cmp / --barrier-flip-trace: barrier_diag.log plus the
+    // debugger. A file because the --scene-stress harness runs with no debugger attached.
+    static void DiagLog(const char* line);
+
+    // Carries both the log and the compiled barriers onto a fan-out worker (see TransitionLogScope).
+    struct CompiledBarrierScope {
+        explicit CompiledBarrierScope(CompiledBarriers* cb) : prev_(CurrentThreadCompiledBarriers())
+        {
+            if (cb) { SetThreadCompiledBarriers(cb); }
+        }
+        ~CompiledBarrierScope() { SetThreadCompiledBarriers(prev_); }
+        CompiledBarrierScope(const CompiledBarrierScope&) = delete;
+        CompiledBarrierScope& operator=(const CompiledBarrierScope&) = delete;
+    private:
+        CompiledBarriers* prev_ = nullptr;
+    };
 
     // Carries the dispatching thread's log onto a fan-out worker for the duration of a job.
     // Without this a pass that spreads its recording over several threads is invisible to the

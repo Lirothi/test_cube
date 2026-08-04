@@ -254,6 +254,9 @@ void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
 
     for (UINT i = 0; i < render::kFrameCount; ++i) {
         SetResourceState(swapchain_.Backbuffer(i), D3D12_RESOURCE_STATE_PRESENT);
+        // Step 7: the backbuffer is written by hand-rolled barriers in RecordBindAndClear
+        // and the present epilogue, which the compile never sees. Excluded from it.
+        SetResourceUnmanaged(swapchain_.Backbuffer(i));
     }
 }
 
@@ -393,7 +396,10 @@ void Renderer::RecordObjectIdPickReadback(ID3D12GraphicsCommandList* cl)
         objectIdReadback_->SetName(L"Editor.ObjectIdReadback");
     }
 
-    Transition(cl, D.objectID.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    // Out-of-graph (post-frame editor pick): the before state is known — objectID rests as a
+    // render target, which is also its canonical. No tracker needed.
+    TransitionExplicit(cl, D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                       D3D12_RESOURCE_STATE_COPY_SOURCE);
 
     D3D12_TEXTURE_COPY_LOCATION dst{};
     dst.pResource = objectIdReadback_.Get();
@@ -491,9 +497,14 @@ void Renderer::BeginImGuiFrame()
 
 void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
 {
+    // Step 7 — out-of-graph, explicit before state. The list holds two kinds: editor-owned
+    // textures (created shader-readable, so this is a no-op) and engine render targets shown by
+    // TextureDebugViewer (left at their canonical by the frame's graph work, since the overlay
+    // runs last). Both answers come from the canonical registry, so no tracker is involved.
     for (ID3D12Resource* resource : pendingImGuiTextureResources_)
     {
-        Transition(commandList, resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        TransitionExplicit(commandList, resource, GetCanonicalState(resource),
+                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
     imguiLayer_.Render(commandList);
     pendingImGuiTextureResources_.clear();
@@ -548,7 +559,10 @@ void Renderer::MarkImGuiTextureShaderReadable(ID3D12Resource* resource)
     // instead and keep their real tracked state, so they are unaffected.
     if (resource)
     {
-        stateTracker_.SetResourceState(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // Step 7: this now DECLARES the texture's canonical (it is created shader-readable and
+        // stays there), rather than papering over the tracker's global map. That is why it
+        // survives the tracker's deletion instead of going with it as D2 assumed.
+        SetResourceState(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 }
 #endif
@@ -787,11 +801,26 @@ void Renderer::ExecuteTimelineAndPresent() {
             }
 
             barrierScratch_.clear();
+            // Step 7 — THE FLIP. Under the flip this runs for the UNMANAGED resources ONLY, and
+            // that falls out of the routing rather than needing a filter: a compile-managed
+            // resource returns from Renderer::Transition before ever reaching the tracker, so its
+            // firstUse map now contains exactly the resources the graph does not model (the
+            // backbuffer, uploads, ImGui). Those still need the tracker's stitching, because it
+            // defers a command list's FIRST transition to submit time — disabling this wholesale
+            // dropped that first barrier and left the pair half-applied.
             if (currentState) {
                 stateTracker_.AppendAcquireBarriers(*currentState, barrierScratch_);
             }
 
             if (!barrierScratch_.empty()) {
+                // THE cost this whole plan exists to remove: a command list allocated for nothing
+                // but barriers. Count them under the flip — the number is what says whether the
+                // tracker can go, and it is the Step 8 before/after baseline.
+                if (render::g_barrierFlip && render::g_barrierFlipTrace) {
+                    char m[128];
+                    std::snprintf(m, sizeof(m), "[acquire-prologue] %zu barriers\n", barrierScratch_.size());
+                    Renderer::DiagLog(m);
+                }
                 ID3D12GraphicsCommandList* acquire = acquireDirectCL();
                 acquire->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
                 ThrowIfFailed(acquire->Close());
@@ -931,13 +960,19 @@ void Renderer::ReportOffCanonicalStates() {
         // NEVER dereference `res` here. Not every release path unregisters, so this table can
         // hold dangling keys; the name was captured at declaration time for exactly that reason,
         // and GetGlobalKnownState only uses the pointer as a hash key.
-        const D3D12_RESOURCE_STATES actual = stateTracker_.GetGlobalKnownState(res);
+        //
+        // Under the flip the tracker never sees a graph transition, so its global map is stale by
+        // construction — read the compile's own ending state instead, or this whole report is
+        // noise that reads like a result.
+        const D3D12_RESOURCE_STATES actual = render::g_barrierFlip
+            ? entry.predicted
+            : stateTracker_.GetGlobalKnownState(res);
         if (actual == entry.state) { continue; }
         ++drifted;
         char msg[320];
         std::snprintf(msg, sizeof(msg), "[canonical] off-canonical res=%s canonical=0x%X actual=0x%X\n",
                       entry.name, static_cast<unsigned>(entry.state), static_cast<unsigned>(actual));
-        OutputDebugStringA(msg);
+        Renderer::DiagLog(msg);
     }
 
     // Step 6b part 2: name the LEAK. Every resource has a unique debug name, so two live entries
@@ -969,7 +1004,7 @@ void Renderer::ReportOffCanonicalStates() {
             char dup[240];
             std::snprintf(dup, sizeof(dup), "[canonical] LEAK %s: live entries grew to %d\n",
                           name.c_str(), net);
-            OutputDebugStringA(dup);
+            Renderer::DiagLog(dup);
         }
 
         unsigned anonymous = 0;
@@ -982,7 +1017,7 @@ void Renderer::ReportOffCanonicalStates() {
         char anon[160];
         std::snprintf(anon, sizeof(anon), "[canonical] %u named + %u UNNAMED entries declared\n",
                       static_cast<unsigned>(canonicalNetScratch_.size()), anonymous);
-        OutputDebugStringA(anon);
+        Renderer::DiagLog(anon);
     }
 
     // One summary line so an empty log is distinguishable from a check that never ran — the same
@@ -996,7 +1031,7 @@ void Renderer::ReportOffCanonicalStates() {
         char summary[160];
         std::snprintf(summary, sizeof(summary), "[canonical] frame end: %u of %u declared resources off-canonical\n",
                       drifted, declaredCount);
-        OutputDebugStringA(summary);
+        Renderer::DiagLog(summary);
     }
 }
 
@@ -1009,6 +1044,39 @@ void Renderer::SetThreadTransitionLog(TransitionLog* log) {
 
 Renderer::TransitionLog* Renderer::CurrentThreadTransitionLog() {
     return tlTransitionLog;
+}
+
+// Step 7: the pass whose compiled barriers this thread should emit. Null outside a converted
+// pass body, which is what keeps unconverted paths (uploads, editor, present) on the old route.
+static thread_local Renderer::CompiledBarriers* tlCompiledBarriers = nullptr;
+
+void Renderer::SetThreadCompiledBarriers(CompiledBarriers* cb) { tlCompiledBarriers = cb; }
+Renderer::CompiledBarriers* Renderer::CurrentThreadCompiledBarriers() { return tlCompiledBarriers; }
+
+// Barrier-diagnostics sink, shared by --barrier-flip-trace and --barrier-cmp. Goes to a FILE as
+// well as the debugger: the --scene-stress runs that reproduce the residual mismatches have no
+// debugger attached, so DBWIN output is simply lost (the same trap as the stress harness's own
+// verdict). Flushed per line — a crash mid-frame must not take the last line with it, which is the
+// one that matters.
+void Renderer::DiagLog(const char* line) {
+    static std::mutex mtx;
+    static FILE* f = nullptr;
+    std::lock_guard<std::mutex> lk(mtx);
+    if (f == nullptr) { fopen_s(&f, "barrier_diag.log", "w"); }
+    if (f != nullptr) { std::fputs(line, f); std::fflush(f); }
+    OutputDebugStringA(line);
+}
+
+void Renderer::TransitionExplicit(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
+                                  D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+    if (cl == nullptr || res == nullptr || before == after) { return; }
+    D3D12_RESOURCE_BARRIER b{};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = res;
+    b.Transition.StateBefore = before;
+    b.Transition.StateAfter = after;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    cl->ResourceBarrier(1, &b);
 }
 
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
@@ -1024,6 +1092,98 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
             // Truncating would make the comparator report a false "missing" entry.
             log.overflowed.store(true, std::memory_order_relaxed);
         }
+    }
+
+    // Step 7 — the flip. Emit the barrier the compile already produced for this pass instead of
+    // handing the state to the tracker for submit-time stitching.
+    // The flip owns a transition only for resources the compile actually models. An UNDECLARED
+    // resource transitioned inside a converted pass body — Renderer::RenderImGui does exactly this
+    // for editor preview textures, from Pass_Overlay — has no compiled entry, and treating that as
+    // "no barrier needed" SILENTLY DROPPED it. Undeclared means "not ours": route to the tracker.
+    if (render::g_barrierFlip && tlCompiledBarriers != nullptr && res != nullptr && cl != nullptr &&
+        canonicalStates_.IsCompileManaged(res)) {
+        CompiledBarriers& cb = *tlCompiledBarriers;
+        // A request may only match the CURRENT point — the first not yet emitted. Never a later
+        // one.
+        //
+        // Searching all points for (resource, state) is ambiguous, because the same transition
+        // appears at several of them: Pass_Tonemap moves `tonemap` UAV -> COPY_SOURCE -> UAV, and
+        // its very first request (ApplyDeclaredStates asking for UAV, which the compile turned
+        // into nothing because UAV is already canonical) matched the RESTORE point at the end and
+        // dragged the whole pass's barriers to the top of the command list. Measured with
+        // --barrier-flip-trace: "point 3 emit 0x800->0x8" printed before "point 2 emit 0x8->0x800".
+        //
+        // Registrations are made in body order, so the body's requests arrive in point order and
+        // the current point is the only one it can legitimately be asking for. Anything else is a
+        // transition the compile decided needs no barrier.
+        for (std::uint32_t p = 0; p < cb.pointCount; ++p) {
+            CompiledBarriers::Point& pt = cb.points[p];
+            if (pt.emitted.load(std::memory_order_relaxed)) { continue; }
+            bool names = false;
+            for (std::uint32_t i2 = 0; i2 < pt.count && !names; ++i2) {
+                names = pt.entries[i2].Transition.pResource == res &&
+                        pt.entries[i2].Transition.StateAfter == after;
+            }
+            if (!names) { break; } // current point is not this request -> nothing to emit
+            bool notYet = false;
+            if (pt.emitted.compare_exchange_strong(notYet, true, std::memory_order_relaxed)) {
+                cl->ResourceBarrier(pt.count, pt.entries);
+                if (render::g_barrierFlipTrace) {
+                    char label[96];
+                    canonicalStates_.NameOf(res, label, sizeof(label));
+                    char m[280];
+                    std::snprintf(m, sizeof(m), "[flip] pass=%d point %u/%u (%u barriers) asked %s 0x%X\n",
+                                  cb.pass, p, cb.pointCount, pt.count, label, static_cast<unsigned>(after));
+                    Renderer::DiagLog(m);
+                }
+            }
+            return;
+        }
+        // Nothing to emit. Either the compile decided this transition needs no barrier (the
+        // resource is already in `after`), or Prepare and the body disagree about what this frame
+        // does — and only the second is a bug. The trace prints the CURRENT point so the two can
+        // be told apart by eye: a benign miss sits at a point that names other resources, a real
+        // one sits at a point that names THIS resource with a different state, or past the end.
+        if (render::g_barrierFlipTrace) {
+            std::uint32_t cur = cb.pointCount;
+            for (std::uint32_t p = 0; p < cb.pointCount; ++p) {
+                if (!cb.points[p].emitted.load(std::memory_order_relaxed)) { cur = p; break; }
+            }
+            char label[96];
+            canonicalStates_.NameOf(res, label, sizeof(label));
+            char detail[320] = {};
+            int off = 0;
+            if (cur < cb.pointCount) {
+                const CompiledBarriers::Point& pt = cb.points[cur];
+                for (std::uint32_t i2 = 0; i2 < pt.count && off >= 0 && off < static_cast<int>(sizeof(detail)) - 1; ++i2) {
+                    char n2[96];
+                    canonicalStates_.NameOf(pt.entries[i2].Transition.pResource, n2, sizeof(n2));
+                    off += std::snprintf(detail + off, sizeof(detail) - static_cast<size_t>(off), "%s%s:0x%X->0x%X",
+                                         (i2 == 0) ? "" : ", ", n2,
+                                         static_cast<unsigned>(pt.entries[i2].Transition.StateBefore),
+                                         static_cast<unsigned>(pt.entries[i2].Transition.StateAfter));
+                }
+            }
+            char m[520];
+            std::snprintf(m, sizeof(m), "[flip-miss] pass=%d res=%s want=0x%X cur=%u/%u [%s]\n",
+                          cb.pass, label, static_cast<unsigned>(after), cur, cb.pointCount, detail);
+            Renderer::DiagLog(m);
+        }
+        cb.unmatched.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    // Everything that reaches here is still the TRACKER's, and while anything does, the
+    // submit-time acquire prologue (and its barrier-only command list) cannot be deleted. Under
+    // --barrier-flip-trace, name them: this list IS the deletion worklist.
+    if (render::g_barrierFlip && render::g_barrierFlipTrace && res != nullptr) {
+        char label[96];
+        canonicalStates_.NameOf(res, label, sizeof(label));
+        char m[200];
+        std::snprintf(m, sizeof(m), "[tracker-fallthrough] res=%s after=0x%X declared=%d\n",
+                      label, static_cast<unsigned>(after),
+                      canonicalStates_.IsCompileManaged(res) ? 1 : 0);
+        Renderer::DiagLog(m);
     }
     stateTracker_.Transition(cl, res, after);
 }

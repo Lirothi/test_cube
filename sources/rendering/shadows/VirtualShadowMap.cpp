@@ -42,12 +42,12 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         cv.DepthStencil.Depth = 1.0f;
 
         if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(pagePool_.GetAddressOfForCreate()))) || !pagePool_)
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, IID_PPV_ARGS(pagePool_.GetAddressOfForCreate()))) || !pagePool_)
         {
             pagePool_.Reset();
             return;
         }
-        pagePool_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"VSM.PagePool");
+        pagePool_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"VSM.PagePool");
     }
 
     // --- Page table: StructuredBuffer<uint>[kPageTableEntries] (virtual page -> packed
@@ -65,13 +65,13 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
         if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
-                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(pageTable_.GetAddressOfForCreate()))) || !pageTable_)
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(pageTable_.GetAddressOfForCreate()))) || !pageTable_)
         {
             pageTable_.Reset();
             pagePool_.Reset();
             return;
         }
-        pageTable_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"VSM.PageTable");
+        pageTable_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"VSM.PageTable");
     }
 
     // --- Step 19 page-request bitfield: DEFAULT-heap UAV, 1 bit per virtual page. ---
@@ -88,12 +88,12 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
         if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
-                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(requestBuffer_.GetAddressOfForCreate()))) || !requestBuffer_)
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(requestBuffer_.GetAddressOfForCreate()))) || !requestBuffer_)
         {
             requestBuffer_.Reset(); pageTable_.Reset(); pagePool_.Reset();
             return;
         }
-        requestBuffer_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"VSM.PageRequest");
+        requestBuffer_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"VSM.PageRequest");
     }
 
     // --- DSV for the pool (render pages into it, Step 22). ---
@@ -181,8 +181,11 @@ namespace
 {
     // A persistent DEFAULT-heap RWStructuredBuffer<uint>[numUints] (ALLOW_UNORDERED_ACCESS,
     // created COMMON). Used for the Step-20 allocation state buffers.
+    // `initial` is the resource's RESTING state (step 7 prereq): created directly there, so
+    // creation == canonical and the compile can seed from the canonical table on frame 1.
     Microsoft::WRL::ComPtr<ID3D12Resource> CreateUavUintBuffer(ID3D12Device* dev,
-        std::uint32_t numUints, const wchar_t* name)
+        std::uint32_t numUints, const wchar_t* name,
+        D3D12_RESOURCE_STATES initial = D3D12_RESOURCE_STATE_COMMON)
     {
         Microsoft::WRL::ComPtr<ID3D12Resource> res;
         D3D12_HEAP_PROPERTIES heap{};
@@ -198,7 +201,7 @@ namespace
         bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
-                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(res.GetAddressOf()))) || !res)
+                initial, nullptr, IID_PPV_ARGS(res.GetAddressOf()))) || !res)
         {
             return nullptr;
         }
@@ -263,22 +266,18 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
     if (!renderer || !renderer->GetDevice()) { return; }
     ID3D12Device* dev = renderer->GetDevice();
 
-    physOwner_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwner"), D3D12_RESOURCE_STATE_COMMON, nullptr);
-    physLastFrame_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysLastFrame"), D3D12_RESOURCE_STATE_COMMON, nullptr);
-    freeList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.FreeList"), D3D12_RESOURCE_STATE_COMMON, nullptr);
-    needsRender_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.NeedsRender"), D3D12_RESOURCE_STATE_COMMON, nullptr);
-    allocCounters_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.AllocCounters"), D3D12_RESOURCE_STATE_COMMON, nullptr);
+    // Same story as PageProj: the multi-draw path leaves this in COPY_SOURCE. Combined.
+    physOwner_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwner", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr);
+    physLastFrame_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysLastFrame", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    freeList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.FreeList", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    needsRender_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.NeedsRender", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    allocCounters_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.AllocCounters", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
     if (!physOwner_ || !physLastFrame_ || !freeList_ || !needsRender_ || !allocCounters_)
     {
         physOwner_.Reset(); physLastFrame_.Reset(); freeList_.Reset();
         needsRender_.Reset(); allocCounters_.Reset();
         return;
     }
-    physOwner_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
-    physLastFrame_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
-    freeList_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
-    needsRender_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
-    allocCounters_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
 
     // One non-shader-visible heap for the 5 alloc-state UAVs (staged into the frame heap per
     // dispatch alongside the existing pageTable/request UAVs).
@@ -393,10 +392,7 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
 
 void VirtualShadowMap::PrepareRequestPass(RenderGraphPassContext& ctx) const
 {
-    // Mirrors what RecordPageRequest + RecordPageAllocate transition, in body order. The
-    // debug readback's COPY_SOURCE moves are conditional (RecordDebugReadback), which the
-    // comparator reports as benign "extra" on frames it does not run — the compiled path
-    // emits them regardless, which keeps the state consistent.
+    // Mirrors what RecordPageRequest + RecordPageAllocate transition, in body order.
     if (!IsAllocated()) { return; }
     ctx.Use(requestBuffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.NextPoint();
@@ -406,60 +402,113 @@ void VirtualShadowMap::PrepareRequestPass(RenderGraphPassContext& ctx) const
     ctx.Use(freeList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(needsRender_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // The debug readback runs on exactly one frame. Step 7: gate the registration on the SAME
+    // condition the body uses, evaluated on the same values — registering it every frame was a
+    // benign "INFO extra" under the tracker and is fatal under the flip, because the compile
+    // would advance past three barriers nobody emits.
+    if (!WillRecordDebugReadback(ctx.renderer)) { return; }
     ctx.NextPoint();
     ctx.Use(requestBuffer_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
     ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
+    // ...and back to canonical — RecordDebugReadback no longer parks them in COPY_SOURCE.
+    ctx.NextPoint();
+    ctx.Use(requestBuffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
 }
 
-void VirtualShadowMap::PrepareRenderPass(RenderGraphPassContext& ctx, ShadowGpuData* shadowGpu) const
+// The exact gate RecordDebugReadback uses. Shared so Prepare and Record cannot drift apart —
+// duplicating the condition is what makes over-registration creep back in.
+bool VirtualShadowMap::WillRecordDebugReadback(Renderer* renderer) const
 {
-    // RecordPageRender is the worst case in the whole engine: nine resources through 2-3 states
-    // each, most of them behind a runtime predicate (scatterActive, caching, singleDraw,
-    // compactArgs, g_residentIterOnly).
-    //
-    // This registers the UNION of the reachable states, in body order. That covers the fatal
-    // direction completely — nothing the body performs is unregistered — and the branches not
-    // taken on a given frame surface as benign "INFO extra" lines, which is exactly what they
-    // are: the compiled path emits them anyway and the running state stays consistent.
-    //
-    // Step 7 must tighten this. Duplicating the predicates here would violate D1.1 (compute
-    // once, read in Record); the correct end state is RecordPageRender READING decisions this
-    // function made, which is a VSM refactor of its own.
+    return renderer != nullptr && debugReadbackState_ == 0 &&
+           renderer->GetTotalFrameNumber() > render::kFrameCount;
+}
+
+void VirtualShadowMap::ComputePageRenderDecisions(ShadowGpuData* shadowGpu, const vfx::WindState* wind)
+{
+    pageRenderDecisions_ = PageRenderDecisions{};
+    if (!shadowGpu) { return; }
+    PageRenderDecisions d;
+
+    d.caching = vsm::g_pageCaching && pageClearMat_ && pageClearMat_->GetPipelineState() && perPageDirtySrv_.ptr != 0;
+    const bool windAnimating = wind && wind->swayAmplitude > 0.0f && shadowGpu->HasWindCasters();
+    d.forceAll = (!d.caching || cacheWarmup_ || shadowGpu->MoverCount() > 0 || windAnimating) ? 1u : 0u;
+
+    d.useMega = shadowGpu->MegaReady() &&
+                shadowGpu->MegaVertexBuffer() && shadowGpu->MegaIndexBuffer();
+
+    const std::uint32_t activeCasters = shadowGpu->ActiveCasterCount();
+    Material* pageMat = shadowGpu->IndirectShadowPageMaterial();
+    d.singleDraw = vsm::g_pageDrawSingle && d.useMega &&
+                   activeCasters < (1u << vsm::kPageIdShift) && pageProjSrv_.ptr != 0 &&
+                   pageMat && pageMat->GetPipelineState();
+
+    d.compactArgs = d.singleDraw && vsm::g_pageDrawCompact &&
+                    pageArgCount_ && pageArgCountUav_.ptr != 0;
+
+    d.scatterActive = pageScatterMat_ && pageScatterMat_->GetPipelineState() &&
+                      pageScatterClearMat_ && pageScatterClearMat_->GetPipelineState() &&
+                      pageGroupCountUav_.ptr != 0 && pageScatterDynUav_.ptr != 0 &&
+                      pageGroupCountSrv_.ptr != 0 && pageScatterDynSrv_.ptr != 0 &&
+                      shadowGpu->PerGroupSrv().ptr != 0;
+
+    d.valid = true;
+    pageRenderDecisions_ = d;
+}
+
+void VirtualShadowMap::PrepareRenderPass(RenderGraphPassContext& ctx, ShadowGpuData* shadowGpu,
+                                        const vfx::WindState* wind)
+{
+    // D1.1 DONE: the runtime predicates are decided HERE, once, and RecordPageRender reads them.
+    // This function no longer registers the union of every reachable branch — it registers exactly
+    // what this frame's decisions imply, which is what makes the compiled barriers emittable.
+    pageRenderDecisions_ = PageRenderDecisions{};
     if (!IsAllocated() || !shadowGpu) { return; }
+    ComputePageRenderDecisions(shadowGpu, wind);
+    const PageRenderDecisions& d = pageRenderDecisions_;
 
     ctx.Use(shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
     ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     ctx.Use(pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(pageProj_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ctx.Use(pageArgCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (pageArgCount_) { ctx.Use(pageArgCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
 
     // Spatial scatter cull (directional clipmap views only).
-    ctx.NextPoint();
-    ctx.Use(pageGroupCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ctx.Use(pageScatterDyn_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    ctx.Use(pageTable_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    ctx.NextPoint();
-    ctx.Use(pageGroupCount_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    ctx.Use(pageScatterDyn_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (d.scatterActive)
+    {
+        ctx.NextPoint();
+        ctx.Use(pageGroupCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(pageScatterDyn_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(pageTable_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.NextPoint();
+        ctx.Use(pageGroupCount_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.Use(pageScatterDyn_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
 
-    // Page cache snapshot + the resident-set readback (both opt-in).
-    ctx.NextPoint();
-    ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-    ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
-    ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // Page cache snapshot: only when caching actually runs.
+    if (d.caching)
+    {
+        ctx.NextPoint();
+        ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
+        ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
 
     // Consume: args + per-instance stream + projection, then the pool as the depth target.
     ctx.NextPoint();
     ctx.Use(pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-    ctx.Use(pageArgCount_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    if (d.compactArgs) { ctx.Use(pageArgCount_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT); }
     // pageProj goes to an SRV on the single-draw path and to a per-page root CBV on the loop.
-    ctx.Use(pageProj_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    ctx.Use(pageProj_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    // One COMBINED read state now, not one per page-draw path — the record side transitions to
+    // the union so both paths agree with the canonical table (see RecordPageRender).
+    ctx.Use(pageProj_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     ctx.Use(pagePool_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
 }
@@ -593,7 +642,7 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
 
 void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
-    if (debugReadbackState_ != 0 || renderer->GetTotalFrameNumber() <= render::kFrameCount) { return; }
+    if (!WillRecordDebugReadback(renderer)) { return; } // shared with PrepareRequestPass
 
     const UINT64 reqBytes   = static_cast<UINT64>(vsm::kRequestWords) * sizeof(std::uint32_t);
     const UINT64 cntBytes   = 4ull * sizeof(std::uint32_t);
@@ -619,9 +668,22 @@ void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCom
     cl->CopyBufferRegion(debugReadback_.Get(), reqBytes, allocCounters_.Get(), 0, cntBytes);
     if (physOwner_)
     {
-        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
         cl->CopyBufferRegion(debugReadback_.Get(), reqBytes + cntBytes, physOwner_.Get(), 0, ownerBytes);
     }
+
+    // Step 7 prerequisite (D2's frame epilogue): return these to their CANONICAL states instead of
+    // parking them in COPY_SOURCE. They were the only two resources measured to end the frame in a
+    // state that varies frame to frame, which is exactly what a static canonical table cannot
+    // express. Restoring here also retires the "re-assert UAV at the top" workaround that this
+    // parking forced on RecordPageRequest.
+    renderer->Transition(cl, requestBuffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, allocCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (physOwner_)
+    {
+        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
+    }
+
     debugReadbackFrame_ = renderer->GetTotalFrameNumber();
     debugReadbackState_ = 1;
 }
@@ -638,16 +700,17 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     const std::uint32_t argUints = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) / 4; // 5
     if (!pageDrawArgs_ || groups > renderGroups_)
     {
-        pageDrawArgs_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups * argUints, L"VSM.PageDrawArgs"), D3D12_RESOURCE_STATE_COMMON, nullptr);
+        pageDrawArgs_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups * argUints, L"VSM.PageDrawArgs", D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, nullptr);
         renderGroups_ = groups;
-        if (pageDrawArgs_) { pageDrawArgs_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, nullptr); }
         pageDrawArgsUav_ = {}; // force descriptor rebuild
     }
     if (!pageProj_)
     {
         // 64 uints (256 bytes) per page: a float4x4 + padding for root-CBV alignment.
-        pageProj_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * 64u, L"VSM.PageProj"), D3D12_RESOURCE_STATE_COMMON, nullptr);
-        if (pageProj_) { pageProj_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); }
+        // Step 7 prereq: g_pageDrawSingle is RUNTIME-toggleable, and the two paths rest this
+        // buffer in different states. Both are READ states and legally combine, so one
+        // declaration covers either path and no re-declaration on toggle is needed.
+        pageProj_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * 64u, L"VSM.PageProj", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, nullptr);
         pageProjUav_ = {};
     }
     // Per-page-cull plan (Step 1): per (page, caster-slot) visible list, sized pool-pages x casters.
@@ -655,44 +718,38 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     if (!pageVisibleList_ || casters > renderCasters_)
     {
         const std::uint32_t cap = casters > 0u ? casters : 1u;
-        pageVisibleList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * cap, L"VSM.PageVisibleList"), D3D12_RESOURCE_STATE_COMMON, nullptr);
+        pageVisibleList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * cap, L"VSM.PageVisibleList", D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, nullptr);
         renderCasters_ = cap;
-        if (pageVisibleList_) { pageVisibleList_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, nullptr); }
         pageVisibleListUav_ = {}; // force descriptor rebuild
     }
     // Page-caching plan (Step 1): fixed-size (kPoolPageCount) caching buffers, allocated once.
     // physOwnerPrev_ = last frame's physOwner (new-page detect); perPageDirty_ = per-page dirty bit.
     if (!physOwnerPrev_)
     {
-        physOwnerPrev_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwnerPrev"), D3D12_RESOURCE_STATE_COMMON, nullptr);
-        if (physOwnerPrev_) { physOwnerPrev_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); }
+        physOwnerPrev_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwnerPrev", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
         physOwnerPrevSrv_ = {};
     }
     if (!perPageDirty_)
     {
-        perPageDirty_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PerPageDirty"), D3D12_RESOURCE_STATE_COMMON, nullptr);
-        if (perPageDirty_) { perPageDirty_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr); }
+        perPageDirty_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PerPageDirty", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
         perPageDirtyUav_ = {}; perPageDirtySrv_ = {};
     }
     // Compacted draw args: the append counter / ExecuteIndirect count buffer (element 0 only).
     if (!pageArgCount_)
     {
-        pageArgCount_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.PageArgCount"), D3D12_RESOURCE_STATE_COMMON, nullptr);
-        if (pageArgCount_) { pageArgCount_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr); }
+        pageArgCount_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.PageArgCount", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
         pageArgCountUav_ = {};
     }
     // Spatial scatter cull: per (page, mesh-group) count/cursor + per-page dynamic-overlap flag.
     if (!pageGroupCount_ || groups > scatterGroups_)
     {
-        pageGroupCount_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups, L"VSM.PageGroupCount"), D3D12_RESOURCE_STATE_COMMON, nullptr);
+        pageGroupCount_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups, L"VSM.PageGroupCount", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
         scatterGroups_ = groups;
-        if (pageGroupCount_) { pageGroupCount_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); }
         pageGroupCountUav_ = {}; pageGroupCountSrv_ = {};
     }
     if (!pageScatterDyn_)
     {
-        pageScatterDyn_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PageScatterDyn"), D3D12_RESOURCE_STATE_COMMON, nullptr);
-        if (pageScatterDyn_) { pageScatterDyn_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); }
+        pageScatterDyn_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PageScatterDyn", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
         pageScatterDynUav_ = {}; pageScatterDynSrv_ = {};
     }
     if (!pageDrawArgs_ || !pageProj_ || !physOwnerPrev_ || !perPageDirty_ ||
@@ -890,20 +947,22 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // guaranteed here). When off, force every page dirty (gForceAll=1) so the whole-pool-clear +
     // draw-all fallback stays correct. When on, force all only when a static caster moved this frame
     // (MoverCount>0) or a rebuild happened — not covered by the per-page dynamic-overlap test.
-    const bool caching = vsm::g_pageCaching && pageClearMat_ && pageClearMat_->GetPipelineState() && perPageDirtySrv_.ptr != 0;
+    // D1.1: read the decisions PrepareRenderPass took this frame. Recomputing them here is what
+    // forced Prepare to register the union of every branch — and a union registration is
+    // unemittable once barriers are compiled.
+    const PageRenderDecisions& dec = pageRenderDecisions_;
+    const bool caching = dec.caching;
     // Force a full render when caching is off, on the warmup frame (physOwnerPrev_ still garbage), or
     // when a static caster moved / a rebuild happened (not covered by the per-page dynamic test).
     // W5: a wind caster sways in the VERTEX shader, so it is neither a "mover" nor a dynamic caster —
     // the per-page dirty test would call its page clean and cache a stale, frozen shadow pose.
     const bool windAnimating = wind && wind->swayAmplitude > 0.0f && shadowGpu->HasWindCasters();
-    const std::uint32_t forceAll =
-        (!caching || cacheWarmup_ || shadowGpu->MoverCount() > 0 || windAnimating) ? 1u : 0u;
+    const std::uint32_t forceAll = dec.forceAll;
 
     // Consolidated caster VB/IB (built once at level load, ShadowGpuData::EnsureMegaBuffer): when
     // ready, the draw loop below binds geometry ONCE + issues one ExecuteIndirect(maxCount=groups)
     // per page instead of a bind + draw per (page, mesh-group).
-    const bool useMega = shadowGpu->MegaReady() &&
-                         shadowGpu->MegaVertexBuffer() && shadowGpu->MegaIndexBuffer();
+    const bool useMega = dec.useMega;
 
     // Single-draw page render: ONE ExecuteIndirect over every (page, group) arg instead of the
     // kPoolPageCount-iteration loop below. Decided HERE, above the scatter dispatch, because it
@@ -914,9 +973,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     //   - activeCasters bound: the caster slot id has to survive in the low kPageIdShift bits.
     //   - pageProjSrv_/pageMat: the VS reads the projection from the SRV and needs its own PSO.
     Material* pageMat = shadowGpu->IndirectShadowPageMaterial();
-    const bool singleDraw = vsm::g_pageDrawSingle && useMega &&
-                            activeCasters < (1u << vsm::kPageIdShift) && pageProjSrv_.ptr != 0 &&
-                            pageMat && pageMat->GetPipelineState();
+    const bool singleDraw = dec.singleDraw;
     if (vsm::g_pageDrawSingle && !singleDraw)
     {
         // Log the reason ONCE per distinct cause — silently falling back to the loop is exactly the
@@ -943,14 +1000,13 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
 
     // Compacted draw args: only meaningful on the single-draw path — the loop derives each page's
     // argOffset from (page, group), so a compacted buffer would feed it other pages' records.
-    const bool compactArgs = singleDraw && vsm::g_pageDrawCompact &&
-                             pageArgCount_ && pageArgCountUav_.ptr != 0;
+    const bool compactArgs = dec.compactArgs;
 
     // --- Setup compute: per physical page, build the off-center projection AND cull the caster set
     // to the page's frustum, writing a per-page compacted visible list + per-page draw args. Reads
     // Rung0 args (per-group index count) + physOwner + the unified world AABBs + per-caster group. ---
     renderer->Transition(cl, shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
     renderer->Transition(cl, physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -972,12 +1028,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // every caster append itself into the few pages its AABB covers. This replaces the O(pages x
     // casters) brute force for clipmap pages; local (perspective) views still cull in the setup. ---
     const D3D12_CPU_DESCRIPTOR_HANDLE perGroupSrv = shadowGpu->PerGroupSrv();
-    const bool scatterActive = pageScatterMat_ && pageScatterMat_->GetPipelineState() &&
-                               pageScatterClearMat_ && pageScatterClearMat_->GetPipelineState() &&
-                               pageGroupCountUav_.ptr != 0 && pageScatterDynUav_.ptr != 0 &&
-                               pageGroupCountSrv_.ptr != 0 && pageScatterDynSrv_.ptr != 0 &&
-                               pageTableSrv_.ptr != 0 && perGroupSrv.ptr != 0 &&
-                               viewCount > vsm::kNumLocalVirtualViews && activeCasters > 0;
+    const bool scatterActive = dec.scatterActive;
     if (scatterActive)
     {
         GPU_SCOPE(cl, ProfilerScopes::kVsmPageScatter);
@@ -1119,7 +1170,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     if (caching)
     {
         renderer->UAVBarrier(cl, perPageDirty_.Get());
-        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE); // combined: see pageProj
         renderer->Transition(cl, physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
         cl->CopyBufferRegion(physOwnerPrev_.Get(), 0, physOwner_.Get(), 0,
                              static_cast<UINT64>(vsm::kPoolPageCount) * sizeof(std::uint32_t));
@@ -1139,7 +1190,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     if (!singleDraw && vsm::g_residentIterOnly && residentReadback_[f])
     {
         residentSet = residentReadbackValid_[f] ? residentReadbackPtr_[f] : nullptr;
-        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        renderer->Transition(cl, physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
         cl->CopyBufferRegion(residentReadback_[f].Get(), 0, physOwner_.Get(), 0,
                              static_cast<UINT64>(vsm::kPoolPageCount) * sizeof(std::uint32_t));
         residentReadbackValid_[f] = true;
@@ -1150,8 +1201,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // or a per-page root CBV on the loop path.
     renderer->Transition(cl, pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     if (compactArgs) { renderer->Transition(cl, pageArgCount_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT); }
-    renderer->Transition(cl, pageProj_.Get(), singleDraw ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
-                                                         : D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    // Both page-draw paths land on the same COMBINED read state (the shader reads it as an SRV
+    // in single-draw and as a vertex buffer otherwise). Declaring and transitioning to the union
+    // is what lets g_pageDrawSingle flip at runtime without invalidating the canonical table.
+    renderer->Transition(cl, pageProj_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     renderer->Transition(cl, pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
 
     // --- Render: clear then draw each pool page's casters into its 128² cell via ExecuteIndirect. The

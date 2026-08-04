@@ -221,7 +221,24 @@ public:
     // is forward-declared — the definition lives in the .cpp, which keeps RenderGraph.h out of
     // this header (it already includes Renderer.h, so including it here would be circular).
     void PrepareRequestPass(RenderGraphPassContext& ctx) const;
-    void PrepareRenderPass(RenderGraphPassContext& ctx, ShadowGpuData* shadowGpu) const;
+    // Barrier plan D1.1: the page-render path's runtime decisions, taken ONCE per frame in
+    // PrepareRenderPass and READ by RecordPageRender. They used to be recomputed inside the record
+    // body, which forced Prepare to register the union of every reachable branch — benign under the
+    // tracker, fatal once barriers are compiled (the compile advances past barriers the body never
+    // emits). Deciding once is what makes the registration exact instead of conservative.
+    struct PageRenderDecisions {
+        bool caching = false;
+        bool useMega = false;
+        bool singleDraw = false;
+        bool compactArgs = false;
+        bool scatterActive = false;
+        std::uint32_t forceAll = 1u;
+        bool valid = false; // false => Prepare did not run this frame (pass will early-out)
+    };
+    const PageRenderDecisions& CurrentPageRenderDecisions() const { return pageRenderDecisions_; }
+
+    void PrepareRenderPass(RenderGraphPassContext& ctx, ShadowGpuData* shadowGpu,
+                           const vfx::WindState* wind);
     // Step 24b: free every VSM GPU allocation (Legacy mode / teardown). MUST be at GPU idle.
     void ReleaseResources();
     bool IsAllocated() const { return pagePool_ != nullptr && pageTable_ != nullptr; }
@@ -420,5 +437,11 @@ private:
     std::vector<std::uint32_t> physOwnerSnapshot_; // kPoolPageCount, physical -> owning virtual page / INVALID
 
     void RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCommandList* cl); // Step 20: copy request+counters
+    // Step 7: the gate RecordDebugReadback uses, shared with PrepareRequestPass so the two cannot
+    // drift — a Prepare that registers what its Record skips is fatal once barriers are compiled.
+    bool WillRecordDebugReadback(Renderer* renderer) const;
+    // D1.1: filled by PrepareRenderPass, read by RecordPageRender. Never written by Record.
+    void ComputePageRenderDecisions(ShadowGpuData* shadowGpu, const vfx::WindState* wind);
+    PageRenderDecisions pageRenderDecisions_;
     void EnsureAllocResources(Renderer* renderer); // create the alloc buffers + descriptors
 };

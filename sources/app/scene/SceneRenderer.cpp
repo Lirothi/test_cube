@@ -527,6 +527,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         OceanSimulation* oceanSim = Systems::GetOceanSimulation();
         ID3D12Resource* shoreDepth = oceanSim ? oceanSim->GetShoreDepthResource() : nullptr;
         if (!shoreDepth) { return; }
+        // Step 7: same gate the body uses — registering on a frame it will skip advances the
+        // compile past barriers nobody emits.
+        if (!oceanSim->ShouldRenderShoreDepth()) { return; }
         p.Use(shoreDepth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
         p.NextPoint();
         p.Use(shoreDepth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
@@ -567,7 +570,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         rg.SetPassPrepare(pShadow, [this](RenderGraphPassContext& p) {
             p.UseDeclared(); // the CSM atlas -> DEPTH_WRITE
             p.NextPoint();
-            PrepareOpaqueDrawStates(p);
+            if (frame_->cascadeViews) { PrepareOpaqueDrawStates(p, frame_->cascadeViews->data(), frame_->cascadeViews->size(), /*shadowDraw=*/true); }
         });
     }
 
@@ -582,9 +585,21 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // Every per-light list re-registers the atlas itself, so one registration of the state
     // covers all of them (the comparator matches by state, not by count).
     rg.SetPassPrepare(pSpotShadow, [this](RenderGraphPassContext& p) {
+        // Step 7: register NOTHING when the body will early-out. Under the tracker an
+        // over-registration was a benign "INFO extra"; under the flip the compile advances its
+        // model past a barrier nobody emits, and every later use of that resource gets a wrong
+        // before-state. Gate on conditions that cannot change between Prepare and Record.
+        if (render::VsmActive()) { return; } // Pass_SpotShadows returns immediately in VSM mode
+        if (!frame_->spotShadowViews) { return; }
+        // Only the ACTIVE views: the arrays are fixed-size and their tail entries keep queues from
+        // earlier frames, whose object pointers a level switch has already freed. Pass_SpotShadows
+        // dispatches over exactly this count for the same reason — reading past it crashed the
+        // stress harness inside the very first SwitchLevel.
+        const size_t n = std::min(frame_->spotShadowViews->size(), frame_->lightManager->GetShadowedSpotCount());
+        if (n == 0) { return; }
         p.Use(p.renderer->GetDeferredForFrame().spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         p.NextPoint();
-        PrepareOpaqueDrawStates(p);
+        PrepareOpaqueDrawStates(p, frame_->spotShadowViews->data(), n, /*shadowDraw=*/true);
     });
 
     // B2b: point cube shadows. Same per-CL atlas-state registration story as spot
@@ -596,9 +611,16 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_PointShadows(renderer, ctx, *frame_->pointShadowViews);
         });
     rg.SetPassPrepare(pPointShadow, [this](RenderGraphPassContext& p) {
+        if (render::VsmActive()) { return; } // same early-out as the spot pass
+        if (!frame_->pointShadowViews) { return; }
+        // Pass_PointShadows returns before opening any list when no point light is shadowed —
+        // mirror it, or the atlas transition below is compiled and never emitted.
+        const size_t n = std::min(frame_->pointShadowViews->size(),
+                                  frame_->lightManager->GetShadowedPointCount() * 6);
+        if (n == 0) { return; }
         p.Use(p.renderer->GetDeferredForFrame().pointShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         p.NextPoint();
-        PrepareOpaqueDrawStates(p);
+        PrepareOpaqueDrawStates(p, frame_->pointShadowViews->data(), n, /*shadowDraw=*/true);
     });
 
     auto pGbuf = rg.AddPass(RenderPass::Main_GBuffer, { pPointShadow },
@@ -623,7 +645,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         // Objects transition their own buffers inside Render, on the fan-out worker (GPU-
         // instanced clouds flip the instance buffer back to SRV).
         p.NextPoint();
-        PrepareOpaqueDrawStates(p);
+        if (frame_->mainView) { PrepareOpaqueDrawStates(p, frame_->mainView, 1, /*shadowDraw=*/false); }
     });
 
     // Rung 2 / Step 19: VSM page-request pass — reads the camera depth (after GBuffer), marks the
@@ -636,9 +658,18 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_VsmPageRequest(renderer, ctx);
         });
     rg.SetPassPrepare(pVsmPageRequest, [this](RenderGraphPassContext& p) {
-        p.UseDeclared();
+        // Step 7: mirror BOTH of the body's gates. `vsmSkipUpdate_` is decided before the
+        // graph is built and does not change during the frame, so this is exact.
+        if (!render::VsmActive() || vsmSkipUpdate_) { return; }
+        // IsAllocated BEFORE UseDeclared: the body returns on it too, so declaring the depth read
+        // above this line registered a barrier the body would never emit.
+        if (!frame_->vsm || !frame_->vsm->IsAllocated()) { return; }
+        // NOT UseDeclared: Pass_VsmPageRequest is the one converted pass whose body never calls
+        // ApplyDeclaredStates — it reads the depth SRV without transitioning it, relying on the
+        // light passes' own declaration. Registering the declared depth read here therefore
+        // promises a barrier the body never emits, which is exactly what breaks the compile.
         // VSM owns the buffers its Record* functions transition, so it registers them itself.
-        if (frame_->vsm) { frame_->vsm->PrepareRequestPass(p); }
+        frame_->vsm->PrepareRequestPass(p);
     });
     (void)pVsmPageRequest;
 
@@ -696,7 +727,10 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 Pass_VsmPageRender(renderer, ctx);
             });
         rg.SetPassPrepare(pVsmPageRender, [this](RenderGraphPassContext& p) {
-            frame_->vsm->PrepareRenderPass(p, frame_->shadowGpu);
+            // Same two gates as the body — see the request pass.
+            if (!render::VsmActive() || vsmSkipUpdate_) { return; }
+            if (!frame_->shadowGpu) { return; }
+            frame_->vsm->PrepareRenderPass(p, frame_->shadowGpu, frame_->wind);
         });
     }
     (void)pVsmPageRender;
@@ -810,8 +844,14 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // each covers all of them. All three always create a real pass — none falls back to a
     // previous index, which would otherwise attach a second Prepare to somebody else's pass.
     rg.SetPassPrepare(pLight, [](RenderGraphPassContext& p) { p.UseDeclared(); });
-    rg.SetPassPrepare(pSpotLights, [](RenderGraphPassContext& p) { p.UseDeclared(); });
-    rg.SetPassPrepare(pPointLights, [](RenderGraphPassContext& p) { p.UseDeclared(); });
+    rg.SetPassPrepare(pSpotLights, [this](RenderGraphPassContext& p) {
+        if (frame_->lightManager->GetSpotLightCount() == 0) { return; } // body early-outs
+        p.UseDeclared();
+    });
+    rg.SetPassPrepare(pPointLights, [this](RenderGraphPassContext& p) {
+        if (frame_->lightManager->PointLights().empty()) { return; } // body early-outs
+        p.UseDeclared();
+    });
 
     auto pSky = rg.AddPass(RenderPass::Main_Skybox, { pPointLights },
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
@@ -1087,7 +1127,11 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassDebugDraw);
             Pass_DebugDraw(renderer, ctx, *frame_->camera);
         });
-    rg.SetPassPrepare(pDebugDraw, [](RenderGraphPassContext& p) { p.UseDeclared(); });
+    rg.SetPassPrepare(pDebugDraw, [renderer](RenderGraphPassContext& p) {
+        DebugDrawSystem* dd = renderer->GetDebugDrawSystem();
+        if (!dd || !dd->HasCommands()) { return; } // body early-outs
+        p.UseDeclared();
+    });
 
     size_t pSelectionOutline = pDebugDraw;
 #if WITH_EDITOR
@@ -1118,7 +1162,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // SOURCE (fxaa vs tonemap) and `ranDlss` are both decided inside the body, so BOTH
     // alternatives are registered — a state the body skips is one redundant barrier, the
     // one it takes and never registered is a missing barrier.
-    rg.SetPassPrepare(pTone, [](RenderGraphPassContext& p) {
+    rg.SetPassPrepare(pTone, [this](RenderGraphPassContext& p) {
         constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         p.UseDeclared(); // tonemap + fxaa -> UAV
         const auto& DTM = p.renderer->GetDeferredForFrame();
@@ -1135,15 +1179,23 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         }
         p.Use(DTM.scene.Get(), kNps); // the non-DLSS tonemap source
         p.NextPoint();
-        p.Use(DTM.tonemap.Get(), kNps); // FXAA input
-        // Backbuffer resolve.
+        // The body needs ALL of these, not just the setting — gating on the setting alone
+        // registered the FXAA resolve source on frames the FXAA pass could not run.
+        const bool fxaa = frame_->settings.doFxaa && resources_.GetFxaaMaterial() &&
+                          resources_.GetFxaaCBSizeBytes() > 0 &&
+                          p.renderer->GetWidth() > 0 && p.renderer->GetHeight() > 0;
+        if (fxaa) { p.Use(DTM.tonemap.Get(), kNps); } // FXAA input
+        // Backbuffer resolve. Gated on the SAME things the body needs: without the tonemap
+        // material it breaks out before the resolve, and the pass's trailing
+        // `Transition(tonemap, UAV)` would then fire this point's restore barrier against a
+        // resource that never went to COPY_SOURCE.
+        if (!resources_.GetTonemapMaterial() || !p.renderer->GetCurrentBackbuffer()) { return; }
         p.NextPoint();
-        p.Use(DTM.tonemap.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-        p.Use(DTM.fxaa.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        // The resolve reads whichever of the two actually produced this frame.
+        p.Use(fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
         p.Use(p.renderer->GetCurrentBackbuffer(), D3D12_RESOURCE_STATE_COPY_DEST);
         p.NextPoint();
-        p.Use(DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        p.Use(DTM.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        p.Use(fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         p.Use(p.renderer->GetCurrentBackbuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET);
     });
 
@@ -1207,9 +1259,13 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
     // comparator observes what they record. Captured HERE, on the pass thread, where the log is
     // installed; without it these passes look silent because they are unobserved, not correct.
     Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();
-    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene, bindVelocity, viewCB, localOrderBase, cmpLog](std::size_t jobIndex)
+    // Step 7: the compiled barriers travel with the log — a fan-out worker must emit its
+    // pass's barriers too, or the flip loses exactly the passes that record in parallel.
+    Renderer::CompiledBarriers* const cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
+    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, bindGbufOrScene, bindVelocity, viewCB, localOrderBase, cmpLog, cmpBarriers](std::size_t jobIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
+        Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
         CPU_SCOPE(ProfilerScopes::kRenderObjectBatchAsync);
         const size_t begin = jobIndex * chunkSize;
         const size_t end = std::min(begin + chunkSize, objects.size());
@@ -1521,15 +1577,45 @@ void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContex
     ctx.EndCL(t);
 }
 
-void SceneRenderer::PrepareOpaqueDrawStates(RenderGraphPassContext& p)
+void SceneRenderer::PrepareOpaqueDrawStates(RenderGraphPassContext& p, const SceneView* views,
+                                            size_t viewCount, bool shadowDraw)
 {
-    if (!frame_ || !frame_->objects) { return; }
-    // Every opaque object, not just the visible buckets: a culled object's redundant
-    // barrier is free, a visible one's missing barrier is not.
-    for (const auto& obj : *frame_->objects)
-    {
-        if (!obj || obj->IsTransparent()) { continue; }
+    if (!frame_ || !views || viewCount == 0) { return; }
+    ShadowGpuData* const shadowGpu = frame_->shadowGpu;
+    const bool indirect = shadowDraw && render::g_indirectShadowsEnabled &&
+                          shadowGpu && shadowGpu->IndirectDrawReady();
+
+    // The VISIBLE buckets of the pass's own views, not every opaque object. This used to be the
+    // whole object list on the reasoning that "a culled object's redundant barrier is free" —
+    // true under the tracker, exactly backwards under the flip. A compiled barrier that no body
+    // ever asks for stalls the rest of the pass's points (a request may only match the CURRENT
+    // one) and leaves the compile's model one transition ahead of the GPU. Measured: the GI cloud
+    // registered here while the GPU-driven path drew it through the cull instead, which put
+    // D3D12 error 527 on the SpotShadow/PointShadow atlases across half the frame's lists.
+    tc::inl_vector<const RenderableObjectBase*, 16> registered;
+    auto prepareOne = [&](RenderableObjectBase* obj) {
+        if (!obj) { return; }
+        // The bodies' own gate (Pass_CSM / Pass_SpotShadows / Pass_PointShadows): with GPU-driven
+        // shadows on, only the GPU-instanced casters the GI fold did NOT take are drawn here —
+        // everything else casts through the indirect cull and its RenderShadow is never called.
+        const bool gpuInstanced = obj->IsGpuInstancedCaster();
+        if (indirect && (!gpuInstanced || shadowGpu->IsGiFoldedActive(obj))) { return; }
+        if (gpuInstanced)
+        {
+            // The only kind that registers PER-OBJECT state (its instance buffer), so the only
+            // kind worth de-duplicating across views against kResourceUsesPerPassBudget. Everything
+            // else's PrepareRender is empty, so repeats there cost nothing.
+            for (const RenderableObjectBase* seen : registered) { if (seen == obj) { return; } }
+            if (registered.size() < registered.capacity()) { registered.push_back(obj); }
+        }
         obj->PrepareRender(p);
+    };
+
+    for (size_t v = 0; v < viewCount; ++v)
+    {
+        const auto& visibleBuckets = views[v].queue.VisibleBuckets();
+        for (auto* obj : visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)])  { prepareOne(obj); }
+        for (auto* obj : visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)]) { prepareOne(obj); }
     }
 }
 
@@ -1668,9 +1754,13 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     // comparator observes what they record. Captured HERE, on the pass thread, where the log is
     // installed; without it these passes look silent because they are unobserved, not correct.
     Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();
-    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind, cmpLog](std::size_t cascadeIndex)
+    // Step 7: the compiled barriers travel with the log — a fan-out worker must emit its
+    // pass's barriers too, or the flip loses exactly the passes that record in parallel.
+    Renderer::CompiledBarriers* const cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
+    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind, cmpLog, cmpBarriers](std::size_t cascadeIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
+        Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
         if (cascadeIndex >= cascadeViews.size())
         {
             return;
@@ -1814,9 +1904,13 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
     // comparator observes what they record. Captured HERE, on the pass thread, where the log is
     // installed; without it these passes look silent because they are unobserved, not correct.
     Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();
-    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog](std::size_t lightIndex)
+    // Step 7: the compiled barriers travel with the log — a fan-out worker must emit its
+    // pass's barriers too, or the flip loses exactly the passes that record in parallel.
+    Renderer::CompiledBarriers* const cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
+    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog, cmpBarriers](std::size_t lightIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
+        Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
         if (lightIndex >= spotViews.size())
         {
             return;
@@ -1826,7 +1920,16 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
-            renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            // Only the FIRST light's list moves the atlas. Recording order across the fan-out is
+            // nondeterministic; SUBMISSION order is localOrder = lightIndex. Letting every list
+            // transition meant the barrier the flip actually emitted landed in whichever list
+            // recorded first, i.e. possibly AFTER another list's ClearDepthStencilView had already
+            // run on the queue — D3D12 errors 527/538 on the atlas. The tracker hid this by
+            // stitching acquire barriers at submit time, where the real order is known.
+            if (lightIndex == 0)
+            {
+                renderer->Transition(t.cl, D.spotShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            }
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
 
             const SceneView& view = spotViews[lightIndex];
@@ -1938,9 +2041,13 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
     // comparator observes what they record. Captured HERE, on the pass thread, where the log is
     // installed; without it these passes look silent because they are unobserved, not correct.
     Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();
-    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog](std::size_t faceIndex)
+    // Step 7: the compiled barriers travel with the log — a fan-out worker must emit its
+    // pass's barriers too, or the flip loses exactly the passes that record in parallel.
+    Renderer::CompiledBarriers* const cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
+    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog, cmpBarriers](std::size_t faceIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
+        Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
         if (faceIndex >= pointViews.size())
         {
             return;
@@ -1950,7 +2057,12 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassPointShadow);
-            renderer->Transition(t.cl, D.pointShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            // See Pass_SpotShadows: the atlas barrier must be recorded into the list submitted
+            // first (localOrder = faceIndex), not into whichever list records first.
+            if (faceIndex == 0)
+            {
+                renderer->Transition(t.cl, D.pointShadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            }
             renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
                 static_cast<UINT>(faceIndex % 6), /*clear=*/true);
 

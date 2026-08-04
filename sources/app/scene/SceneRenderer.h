@@ -76,7 +76,11 @@ private:
     // Shared by the G-buffer and the three shadow passes: RecordShadow reads the same
     // buffers in the same states as Render, and if that ever diverges the comparator
     // reports it as MISSING rather than letting it pass silently.
-    void PrepareOpaqueDrawStates(RenderGraphPassContext& p);
+    // Registers the per-object states a draw pass's body will transition, for the objects that
+    // body will actually draw — hence the view list, whose visible buckets are exactly what the
+    // bodies iterate. `shadowDraw` selects the shadow bodies' extra GPU-driven gate.
+    void PrepareOpaqueDrawStates(RenderGraphPassContext& p, const SceneView* views, size_t viewCount,
+                                 bool shadowDraw);
 
     void Pass_BuildAS(Renderer* r, RenderGraphPassContext ctx);
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);

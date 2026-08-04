@@ -716,7 +716,15 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Measured: CPU 0.182 -> 0.058 ms, GPU neutral, frame time unchanged\n"
                                       "(the pass records on a worker, so the CPU saving is off the hot path).");
 
-                ImGui::Checkbox("Compact draw args (off = net loss here)", &vsm::g_pageDrawCompact);
+                // Barrier plan step 7 prereq: this one is BOOT-ONLY (`--vsm-page-compact`).
+                // It is the only config flag whose two paths rest a buffer in states that cannot
+                // be combined — PageArgCount is UAV when off and INDIRECT_ARGUMENT when on, and
+                // UAV is exclusive. Toggling it live would invalidate the canonical table the
+                // barrier compile seeds from. The other page-draw flag needs no such treatment:
+                // its two states are both reads and are declared as a union.
+                ImGui::BeginDisabled();
+                ImGui::Checkbox("Compact draw args (boot-only: --vsm-page-compact)", &vsm::g_pageDrawCompact);
+                ImGui::EndDisabled();
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: the setup CS appends only NON-EMPTY (page, group) records and the draw\n"
                                       "uses that counter as its count buffer, instead of walking all 1024 x groups\n"

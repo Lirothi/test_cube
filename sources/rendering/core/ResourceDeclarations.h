@@ -25,11 +25,32 @@ class CanonicalStateRegistry
 public:
     struct Entry {
         D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
+        // Step 7: where the LAST barrier compile left this resource. The compile seeds a frame
+        // from here, not from `state`.
+        //
+        // Seeding from the canonical state assumed every frame ENDS at canonical. That holds only
+        // while the graph keeps its shape: Pass_Tonemap returns the depth and velocity buffers to
+        // their resting state as part of the DLSS branch, so the frames where DLSS is off leave
+        // them at DEPTH_WRITE / RENDER_TARGET and the next frame's GBuffer barrier claimed a
+        // before-state of NON_PIXEL_SHADER_RESOURCE (D3D12 error 527, measured across every
+        // render-resolution change the stress harness makes).
+        //
+        // This is NOT the tracker coming back: one value per resource, written once per frame by
+        // the single-threaded compile, with no per-command-list lanes, no first-use bookkeeping
+        // and no submit-time stitching. Declare resets it, so a resource created at a recycled
+        // address starts from its own resting state rather than the previous owner's.
+        D3D12_RESOURCE_STATES predicted = D3D12_RESOURCE_STATE_COMMON;
         // Captured HERE, at declaration, because that is the only moment the pointer is
         // guaranteed live. Not every release path unregisters (measured — see the plan's
         // Step 6 result), so the table can hold dangling keys; reading a name off one later
         // is an access violation, which is exactly how this was found.
         char name[96] = {};
+        // Step 7: this resource's state is driven from OUTSIDE the render graph (the swapchain
+        // backbuffer: RecordBindAndClear and the present epilogue write it with hand-rolled
+        // barriers, and uploads/ImGui touch others). The compile cannot model those, so it must
+        // not compile barriers for them and Transition must keep routing them to the tracker —
+        // otherwise the compiled before-state is guesswork against code that never told us.
+        bool unmanaged = false;
     };
 
     // Last write wins rather than first: a resource recreated at a recycled address must not
@@ -39,6 +60,7 @@ public:
         if (res == nullptr) { return; }
         Entry e;
         e.state = state;
+        e.predicted = state; // a freshly created resource IS in its resting state
         // 256, not 64: GetPrivateData returns DXGI_ERROR_MORE_DATA when the name does not fit and
         // the D3D12 debug layer RAISES on that — a Debug-only crash Release runs can never show.
         // Texture names carry a full asset path, which is what overflowed the old buffer.
@@ -55,6 +77,35 @@ public:
         if (it != states_.end()) { --net_[it->second.name]; } // overwrite = the old one is gone
         ++net_[e.name];
         states_[res] = e;
+    }
+
+    // Mark a declared resource as driven from outside the graph (see Entry::unmanaged).
+    void SetUnmanaged(ID3D12Resource* res)
+    {
+        if (res == nullptr) { return; }
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = states_.find(res);
+        if (it != states_.end()) { it->second.unmanaged = true; }
+    }
+
+    // Is this resource the barrier compile's business at all? It must be DECLARED (so the
+    // compile seeded a canonical state for it) and not explicitly excluded. An UNDECLARED
+    // resource — an editor/ImGui texture, an upload buffer — was never modelled, so its
+    // transitions must keep going to the tracker.
+    bool IsCompileManaged(ID3D12Resource* res) const
+    {
+        if (res == nullptr) { return false; }
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = states_.find(res);
+        return it != states_.end() && !it->second.unmanaged;
+    }
+
+    bool IsUnmanaged(ID3D12Resource* res) const
+    {
+        if (res == nullptr) { return false; }
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = states_.find(res);
+        return it != states_.end() && it->second.unmanaged;
     }
 
     void Forget(ID3D12Resource* res)
@@ -99,6 +150,36 @@ public:
         auto it = states_.find(res);
         if (it == states_.end()) { return; }
         std::snprintf(it->second.name, sizeof(it->second.name), "%ls", wide);
+    }
+
+    // The name captured at Declare time, copied out. Used by --barrier-flip-trace, which runs
+    // while command lists are recording: reading the name off the resource there would mean a
+    // GetPrivateData call per miss, and the pointer may already be dangling.
+    void NameOf(ID3D12Resource* res, char* out, size_t cap) const
+    {
+        if (out == nullptr || cap == 0) { return; }
+        out[0] = '\0';
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = states_.find(res);
+        if (it == states_.end()) { std::snprintf(out, cap, "%p", static_cast<const void*>(res)); return; }
+        std::snprintf(out, cap, "%s", it->second.name);
+    }
+
+    // Where the last compile left this resource (see Entry::predicted). Falls back to the
+    // canonical state, which is also what a never-declared resource reports.
+    D3D12_RESOURCE_STATES GetPredicted(ID3D12Resource* res) const
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = states_.find(res);
+        return (it == states_.end()) ? D3D12_RESOURCE_STATE_COMMON : it->second.predicted;
+    }
+
+    void SetPredicted(ID3D12Resource* res, D3D12_RESOURCE_STATES state)
+    {
+        if (res == nullptr) { return; }
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = states_.find(res);
+        if (it != states_.end()) { it->second.predicted = state; }
     }
 
     // COMMON for a resource that never declared — the same answer the tracker gives, so an

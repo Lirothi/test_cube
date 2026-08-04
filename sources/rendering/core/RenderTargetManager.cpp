@@ -108,7 +108,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         };
 
     // ---- Shared factories ----
-    auto CreateRT = [&](DXGI_FORMAT fmt,
+    auto CreateRT = [&](D3D12_RESOURCE_STATES canonical, // step 7 prereq: created DIRECTLY in its
+                                          // resting state, so creation == canonical
+        DXGI_FORMAT fmt,
         DeferredRtvSlot rtvSlot,
         DeferredSrvSlot srvSlot,
         DeferredSrvSlot uavSlot,
@@ -130,7 +132,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
+                canonical, &cv, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
 
             // RTV/SRV — ONLY for frame f
             outRTV = DeferredRtvCPU(f, rtvSlot);
@@ -192,7 +194,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
                 }
             }
 
-            outRes.DeclareCreated(decls, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr);
+            outRes.DeclareCreated(decls, canonical, nullptr);
         };
 
 #if WITH_EDITOR
@@ -222,7 +224,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         };
 #endif
 
-    auto CreateSrvTexture = [&](DXGI_FORMAT fmt,
+    auto CreateSrvTexture = [&](D3D12_RESOURCE_STATES canonical, // step 7 prereq: created DIRECTLY in its
+                                          // resting state, so creation == canonical
+        DXGI_FORMAT fmt,
         DeferredSrvSlot srvSlot,
         UINT f,
         GpuResource& outRes,
@@ -233,7 +237,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
+                canonical, nullptr, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
 
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = srvFormat == DXGI_FORMAT_UNKNOWN ? fmt : srvFormat;
@@ -246,7 +250,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
             // Declare BEFORE handing ownership over: a moved-from wrapper is empty, so declaring
             // after the move would silently register nothing.
-            outRes.DeclareCreated(decls, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr);
+            outRes.DeclareCreated(decls, canonical, nullptr);
 
             auto& D = deferred_[f];
             if (srvSlot == DeferredSrvSlot::SceneOpaque)
@@ -261,7 +265,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             }
         };
 
-    auto CreateSrvUavTexture = [&](DXGI_FORMAT fmt,
+    auto CreateSrvUavTexture = [&](D3D12_RESOURCE_STATES canonical, // step 7 prereq: created DIRECTLY in its
+                                          // resting state, so creation == canonical
+        DXGI_FORMAT fmt,
         DeferredSrvSlot srvSlot,
         DeferredSrvSlot uavSlot,
         UINT f,
@@ -277,7 +283,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
+                canonical, nullptr, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
 
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = fmt;
@@ -322,10 +328,12 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
                 D.fxaaUAV = outUAV;
             }
 
-            outRes.DeclareCreated(decls, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+            outRes.DeclareCreated(decls, canonical, nullptr);
         };
 
-    auto CreateDepth = [&](DXGI_FORMAT dsvFmt,
+    auto CreateDepth = [&](D3D12_RESOURCE_STATES canonical, // step 7 prereq: created DIRECTLY in its
+                                          // resting state, so creation == canonical
+        DXGI_FORMAT dsvFmt,
         DeferredDsvSlot dsvSlot,
         DeferredSrvSlot srvSlot,
         UINT f,
@@ -343,7 +351,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D3D12_CLEAR_VALUE cv{}; cv.Format = dsvFmt; cv.DepthStencil.Depth = clearDepth; cv.DepthStencil.Stencil = 0;
             ThrowIfFailed(dev->CreateCommittedResource(
                 &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
+                canonical, &cv, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
 
             // DSV
             outDSV = DeferredDsvCPU(f, dsvSlot);
@@ -374,7 +382,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
                 dev->CreateShaderResourceView(outRes.Get(), &stencilDesc, *outStencilSRV);
             }
 
-            outRes.DeclareCreated(decls, D3D12_RESOURCE_STATE_DEPTH_WRITE, nullptr);
+            outRes.DeclareCreated(decls, canonical, nullptr);
         };
 
     // Step 24f-2: CSM cascade atlas creation lives in CreateShadowResource (below) so the shadow-mode
@@ -390,19 +398,19 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
         currentTargetWidth = rtWidth;
         currentTargetHeight = rtHeight;
-        CreateRT(formats.gb0, DeferredRtvSlot::GB0, DeferredSrvSlot::GB0, DeferredSrvSlot::Count, f, D.gb0, D.gbRTV[0], D.gbSRV[0]);
-        CreateRT(formats.gb1, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
-        CreateRT(formats.gb2, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
-        CreateRT(formats.velocity, DeferredRtvSlot::GBVelocity, DeferredSrvSlot::GBVelocity, DeferredSrvSlot::Count, f, D.gbVelocity, D.gbRTV[3], D.gbSRV[3]);
-        CreateRT(formats.gbAux, DeferredRtvSlot::GBAux, DeferredSrvSlot::GBAux, DeferredSrvSlot::Count,
+        CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.gb0, DeferredRtvSlot::GB0, DeferredSrvSlot::GB0, DeferredSrvSlot::Count, f, D.gb0, D.gbRTV[0], D.gbSRV[0]);
+        CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.gb1, DeferredRtvSlot::GB1, DeferredSrvSlot::GB1, DeferredSrvSlot::Count, f, D.gb1, D.gbRTV[1], D.gbSRV[1]);
+        CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.gb2, DeferredRtvSlot::GB2, DeferredSrvSlot::GB2, DeferredSrvSlot::Count, f, D.gb2, D.gbRTV[2], D.gbSRV[2]);
+        CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.velocity, DeferredRtvSlot::GBVelocity, DeferredSrvSlot::GBVelocity, DeferredSrvSlot::Count, f, D.gbVelocity, D.gbRTV[3], D.gbSRV[3]);
+        CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.gbAux, DeferredRtvSlot::GBAux, DeferredSrvSlot::GBAux, DeferredSrvSlot::Count,
             f, D.gbAux, D.gbAuxRTV, D.gbAuxSRV, float4(1, 1, 0, 0));
 #if WITH_EDITOR
         CreateObjectIdTarget(f);
 #endif
 
-        CreateDepth(formats.depth, DeferredDsvSlot::Depth, DeferredSrvSlot::Depth, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV,
+        CreateDepth(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.depth, DeferredDsvSlot::Depth, DeferredSrvSlot::Depth, f, D.depth, D.dsv, /*outDepthSRV*/ D.depthSRV,
             0.0f, DXGI_FORMAT_UNKNOWN, DeferredSrvSlot::Stencil, &D.stencilSRV, render::kDeferredStencilSrvFormat);
-        CreateSrvTexture(formats.depth, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, formats.depthSrv);
+        CreateSrvTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.depth, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, formats.depthSrv);
 
         D.shadowRes = 4096; // could be driven by config/parameter
         CreateShadowResource(dev, decls, f, D.shadowRes);
@@ -413,26 +421,26 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         D.pointShadowRes = 256;
         CreatePointShadowResource(dev, decls, f, D.pointShadowRes);
 
-        CreateRT(formats.light, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
-        CreateRT(formats.sceneColor, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
-        CreateSrvTexture(formats.sceneColor, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
-        CreateSrvUavTexture(formats.reflection, DeferredSrvSlot::Reflection, DeferredSrvSlot::ReflectionUAV, f, D.reflection, D.reflectionSRV, D.reflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
-        CreateSrvUavTexture(formats.reflectionScratch, DeferredSrvSlot::ReflectionScratch, DeferredSrvSlot::ReflectionScratchUAV, f, D.reflectionScratch, D.reflectionScratchSRV, D.reflectionScratchUAV, sizes.reflectionWidth, sizes.reflectionHeight);
-        CreateSrvUavTexture(formats.oceanReflection, DeferredSrvSlot::OceanReflection, DeferredSrvSlot::OceanReflectionUAV, f, D.oceanReflection, D.oceanReflectionSRV, D.oceanReflectionUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
+        CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.light, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
+        CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.sceneColor, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
+        CreateSrvTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.sceneColor, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::Reflection, DeferredSrvSlot::ReflectionUAV, f, D.reflection, D.reflectionSRV, D.reflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflectionScratch, DeferredSrvSlot::ReflectionScratch, DeferredSrvSlot::ReflectionScratchUAV, f, D.reflectionScratch, D.reflectionScratchSRV, D.reflectionScratchUAV, sizes.reflectionWidth, sizes.reflectionHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.oceanReflection, DeferredSrvSlot::OceanReflection, DeferredSrvSlot::OceanReflectionUAV, f, D.oceanReflection, D.oceanReflectionSRV, D.oceanReflectionUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
 
         // S15 off-screen glass reflections (reflection res): a glass G-buffer (front-face
         // normal RTV + depth DSV) feeding a second rt_reflections_cs dispatch into glassReflection.
         currentTargetWidth = std::max(1u, sizes.reflectionWidth);
         currentTargetHeight = std::max(1u, sizes.reflectionHeight);
-        CreateRT(formats.gb1, DeferredRtvSlot::GlassReflNormal, DeferredSrvSlot::GlassReflNormal, DeferredSrvSlot::Count, f, D.glassReflNormal, D.glassReflNormalRTV, D.glassReflNormalSRV);
-        CreateDepth(formats.depth, DeferredDsvSlot::GlassReflDepth, DeferredSrvSlot::GlassReflDepth, f, D.glassReflDepth, D.glassReflDepthDSV, D.glassReflDepthSRV);
-        CreateSrvUavTexture(formats.reflection, DeferredSrvSlot::GlassReflection, DeferredSrvSlot::GlassReflectionUAV, f, D.glassReflection, D.glassReflectionSRV, D.glassReflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
+        CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.gb1, DeferredRtvSlot::GlassReflNormal, DeferredSrvSlot::GlassReflNormal, DeferredSrvSlot::Count, f, D.glassReflNormal, D.glassReflNormalRTV, D.glassReflNormalSRV);
+        CreateDepth(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.depth, DeferredDsvSlot::GlassReflDepth, DeferredSrvSlot::GlassReflDepth, f, D.glassReflDepth, D.glassReflDepthDSV, D.glassReflDepthSRV);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::GlassReflection, DeferredSrvSlot::GlassReflectionUAV, f, D.glassReflection, D.glassReflectionSRV, D.glassReflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
 
         currentTargetWidth = displayWidthClamped;
         currentTargetHeight = displayHeightClamped;
-        CreateSrvUavTexture(formats.sceneColor, DeferredSrvSlot::DLSSOutput, DeferredSrvSlot::DLSSOutputUAV, f, D.dlssOutput, D.dlssOutputSRV, D.dlssOutputUAV, displayWidthClamped, displayHeightClamped);
-        CreateSrvUavTexture(formats.backbufferResource, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, displayWidthClamped, displayHeightClamped);
-        CreateSrvUavTexture(formats.backbufferResource, DeferredSrvSlot::Fxaa, DeferredSrvSlot::FxaaUAV, f, D.fxaa, D.fxaaSRV, D.fxaaUAV, displayWidthClamped, displayHeightClamped);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.sceneColor, DeferredSrvSlot::DLSSOutput, DeferredSrvSlot::DLSSOutputUAV, f, D.dlssOutput, D.dlssOutputSRV, D.dlssOutputUAV, displayWidthClamped, displayHeightClamped);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, formats.backbufferResource, DeferredSrvSlot::Tonemap, DeferredSrvSlot::TonemapUAV, f, D.tonemap, D.tonemapSRV, D.tonemapUAV, displayWidthClamped, displayHeightClamped);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_UNORDERED_ACCESS, formats.backbufferResource, DeferredSrvSlot::Fxaa, DeferredSrvSlot::FxaaUAV, f, D.fxaa, D.fxaaSRV, D.fxaaUAV, displayWidthClamped, displayHeightClamped);
 
         // Debug names so DRED / the debug layer print readable resource names in
         // page-fault reports (these are the prime use-after-free suspects during
@@ -454,7 +462,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
                 // so every deferred target was logged as a raw pointer. Safe to re-read here —
                 // they were all just created.
                 decls.RefreshName(res);
-                decls.SetCanonical(res, resting);
+                (void)resting; // creation state IS the canonical now — kept as documentation
             }
         };
         nameRes(D.gb0.Get(), L"GB0", kNps);
@@ -521,7 +529,7 @@ void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclar
 
     ThrowIfFailed(dev->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(D.shadow.GetAddressOfForCreate())));
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, IID_PPV_ARGS(D.shadow.GetAddressOfForCreate())));
 
     D.shadowDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
     D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
@@ -538,7 +546,7 @@ void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclar
     dev->CreateShaderResourceView(D.shadow.Get(), &sd, D.shadowSRV);
 
     D.shadow->SetName(L"CascadeShadow"); // also created by SetLocalShadowResidency, after Create's naming block
-    D.shadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+    D.shadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); // created in its resting state
 }
 
 // Step 24c: spot shadow atlas (R16_TYPELESS 2D-array, DSV=D16 per slice, SRV=R16 Texture2DArray).
@@ -574,7 +582,7 @@ void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDe
 
     ThrowIfFailed(dev->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(D.spotShadow.GetAddressOfForCreate())));
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &clear, IID_PPV_ARGS(D.spotShadow.GetAddressOfForCreate())));
 
     D.spotShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::SpotShadow);
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -603,7 +611,7 @@ void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDe
     }
 
     D.spotShadow->SetName(L"SpotShadow");
-    D.spotShadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+    D.spotShadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
 }
 
 // Step 24c: point shadow cube-array (6*N slices of R16_TYPELESS; DSV=D16 per face, SRV=R16 cube
@@ -638,7 +646,7 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceD
 
     ThrowIfFailed(dev->CreateCommittedResource(
         &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(D.pointShadow.GetAddressOfForCreate())));
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, IID_PPV_ARGS(D.pointShadow.GetAddressOfForCreate())));
 
     D.pointShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::PointShadow);
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -666,7 +674,7 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceD
     }
 
     D.pointShadow->SetName(L"PointShadow");
-    D.pointShadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr);
+    D.pointShadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr);
 }
 
 void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceDeclarations decls, bool full)

@@ -33,7 +33,8 @@ The other order means touching every site twice.
 | 4 — lazy creation out of record bodies | **DONE** (committed `fed604f`) |
 | 5 — convert passes | **DONE** (committed `58cde73`) — every pass converted, zero fatal mismatches in both shadow modes |
 | 6 + 6b — canonical registry | **DONE (uncommitted)** — 0 off-canonical on a steady frame; declared-resource table no longer ratchets; every owner on `GpuResource`. **The measurement refuted D2's "canonical = creation state" — read Step 6 before Step 7.** |
-| 7..16 | not started — Step 7 has three prerequisites listed below |
+| 7 — the flip | **compiled barriers VERIFIED CLEAN (uncommitted, default-OFF behind `--barrier-flip`)** — 0 non-noise GBV + 0 comparator findings over 20 GBV stress iterations in BOTH shadow modes; tracker path re-verified 0/0 too. The tracker deletion itself is the remaining half — see Step 7. |
+| 8..16 | not started |
 
 ---
 
@@ -966,15 +967,97 @@ while `g_pageDrawSingle` is on; `VSM.PageArgCount` would rest in `INDIRECT_ARGUM
    canonical, the first frame after a resource is created is wrong — the frames-in-flight finding
    makes this concrete (`Deferred[1]`/`[2]` sit at their creation state for whole frames). Answer:
    create resources directly in their canonical state (`InitialResourceState`).
-2. **Re-measure the config-dependent resting states.** `VSM.PageProj` depends on
-   `g_pageDrawSingle`, `VSM.PageArgCount` would be `INDIRECT_ARGUMENT` with `g_pageDrawCompact`
-   back on, `ShadowGpuData.IndirectArgs` was measured under VSM. Re-run `--canonical-check` with
-   those flags flipped; do not trust the constants.
-3. **Give the two genuinely-varying resources an epilogue transition.** `VSM.PageRequest` and
-   `VSM.AllocCounters` end in `COPY_SOURCE` on the frame the debug readback runs. Both are behind
-   a debug flag, so a normal frame's epilogue stays empty.
+2. **Config-dependent resting states — SWEPT, and it found more than predicted.** Three boot flags
+   were added for this (`--vsm-page-multidraw`, `--vsm-page-compact`, plus the existing
+   `--shadow-mode=legacy`), each parsed above the scene-stress branch, and `--canonical-check` re-run
+   against each:
+
+   | Config | Resource | default canonical | actual under that config |
+   |---|---|---|---|
+   | `--vsm-page-multidraw` | `VSM.PageProj` | non-pixel SRV | `VERTEX_AND_CONSTANT_BUFFER` |
+   | `--vsm-page-multidraw` | `VSM.PhysOwner` | non-pixel SRV | `COPY_SOURCE` — **was not predicted** |
+   | `--vsm-page-compact` | `VSM.PageArgCount` | UAV | `INDIRECT_ARGUMENT` |
+   | `--shadow-mode=legacy` | `ShadowGpuData.IndirectArgs` | non-pixel SRV | `INDIRECT_ARGUMENT` |
+
+   Four, not three — guessing which constants were config-dependent would have missed `PhysOwner`.
+
+   **The harder half of this finding: `g_pageDrawSingle` and `g_pageDrawCompact` are toggleable at
+   RUNTIME from the dev window.** A static canonical table is simply wrong the moment one flips
+   mid-session. Step 7 has to pick one:
+   - re-declare the affected resources when the flag changes (they already flip at GPU idle), or
+   - declare a state valid for both paths and accept one redundant transition, or
+   - demote those flags to boot-only.
+
+   Whichever way, this is a *correctness* prerequisite, not a tuning detail: the compile seeds from
+   this table.
+3. **The two genuinely-varying resources — DONE.** `RecordDebugReadback` used to *park*
+   `requestBuffer_`, `allocCounters_` and `physOwner_` in `COPY_SOURCE` and never restore them;
+   that is why they were the only resources whose end-of-frame state changed frame to frame, which
+   is exactly what a static canonical table cannot express. They now transition back to canonical
+   at the end of the readback (D2's frame epilogue, in the one place that needed it), and the
+   matching registration was extended with a second barrier point. Verified: no `COPY_SOURCE`
+   drift left, 0 `MISSING`, steady-frame drift `0 of 140`. This also retires the "re-assert UAV at
+   the top" workaround the parking had forced on `RecordPageRequest`.
 
 Compiled barriers become authoritative.
+
+**RESULT — the flip is CLEAN in both shadow modes (uncommitted, still default-OFF behind
+`--barrier-flip`).** `--barrier-flip --barrier-cmp --canonical-check --scene-stress-gbv=20`, VSM
+and `--shadow-mode=legacy`: `verdict: CLEAN after 20 iterations`, **0** non-noise GBV messages
+(only the pre-existing {939, 940, 1006, 1358}), **0** comparator findings in either direction. The
+tracker path re-measured under the same command with the flip off: also 0/0 — the 86 `INFO extra`
+occurrences it used to report are gone, because every one of them was a real over-registration.
+
+Getting there took five causes, and none of the last four were guessable — each was found by
+instrumenting (`--barrier-flip-trace`, which now also carries the comparator into
+`barrier_diag.log`, because the stress harness runs with no debugger and DBWIN output is lost).
+
+1. **A request may only match the CURRENT un-emitted point.** Matching (resource, state) across
+   all points is ambiguous — `Pass_Tonemap` moves `tonemap` UAV → COPY_SOURCE → UAV — and its
+   first request matched the RESTORE point, dragging the whole pass's barriers to the top of the
+   list. "Emit everything up to the match" was worse (it pulled other resources' points forward,
+   D3D12 error 538).
+2. **Every registration must be one the body will actually perform.** Under the tracker an
+   over-registration was a benign `INFO extra`; under the flip a compiled barrier nobody asks for
+   **stalls the rest of the pass** (rule 1) and leaves the model one transition ahead of the GPU.
+   Two instances: `ShadowGpuData::PrepareCullPass` registered the GI scatter's COPY_DEST → UAV
+   pair on `useUnified` alone when the body nests it inside `giOn`; and `PrepareOpaqueDrawStates`
+   walked *every opaque object* on the old reasoning that "a culled object's redundant barrier is
+   free" — true under the tracker, exactly backwards here. It now walks the pass's own views'
+   VISIBLE buckets with the bodies' own GPU-driven-shadow gate. **Trap:** the spot/point view
+   arrays are fixed-size and their tail entries hold queues whose objects a level switch has
+   freed — reading past the active count crashed the harness inside the first `SwitchLevel`.
+3. **Fan-out passes: the barrier must be recorded into the list submitted FIRST, not by whichever
+   thread records first.** `Pass_SpotShadows`/`Pass_PointShadows` had every per-light list
+   transition the atlas; the compiled point fired in whichever list won the race, which could be
+   submitted after another list had already cleared the atlas (~500 errors, 527 and 538). Now only
+   `lightIndex == 0` / `faceIndex == 0` transitions — `localOrder` makes that list first. This is
+   what the tracker's submit-time stitching had been hiding.
+4. **The compile and `Transition` must agree on WHICH resources are modelled.** The compile skipped
+   only `IsResourceUnmanaged`; the flip gates on `IsCompileManaged` (declared **and** not
+   unmanaged). An undeclared resource therefore got a compiled barrier that was never emitted.
+5. **The compile seeds from the PREVIOUS COMPILE'S ENDING STATE, not from canonical.** This
+   supersedes the design note above. Canonical seeding silently assumed *every frame ends with
+   every resource at canonical* — false the moment the graph changes shape: `Pass_Tonemap` returns
+   the depth and velocity buffers to their resting state as part of the DLSS branch, so a DLSS-off
+   frame leaves them at DEPTH_WRITE / RENDER_TARGET and the next frame's GBuffer barrier claimed
+   `NON_PIXEL_SHADER_RESOURCE`. The stress harness changes render resolution in three of its five
+   churn ops, so this fired on essentially every one. Measured with the flip on:
+   `[canonical] frame end: 7 of 122 declared resources off-canonical` — the invariant was simply
+   not true. Fix: `CanonicalStateRegistry::Entry::predicted`, seeded from canonical at `Declare`
+   (so a recycled address never inherits the previous owner's state), read by `CompileBarriers`
+   and written back at the end of every compile. **This is not the tracker returning:** one value
+   per resource, written once per frame by the single-threaded compile — no per-command-list
+   lanes, no first-use bookkeeping, no TLS, no submit-time stitching. It also carries the main
+   graph's ending state into the epilogue graph's compile, which canonical seeding could not do.
+   Consequence to keep in mind: a missed emission is now *sticky* rather than self-correcting at
+   the next frame's reseed — the comparator (silence in both directions) is the guard, so keep it
+   in the acceptance run.
+
+`--canonical-check` under the flip now reads `predicted` instead of the tracker's global map,
+which the flip no longer updates — it was reporting a dead map that looked like a result.
+
+Remaining, once the above is committed:
 
 - Delete the `if (!barrierScratch_.empty()) { acquireDirectCL(); ... }` block at
   `Renderer.cpp:791-796` — deleted, not merely rarely taken.

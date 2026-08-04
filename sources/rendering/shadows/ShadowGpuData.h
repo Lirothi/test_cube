@@ -66,6 +66,10 @@ public:
     // visible list + InstanceCounts). Writes the current frame's ring region. Produces the
     // indirect args; NOTHING draws from them yet. Call from a render-graph pass before shadows.
     void RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+    // D1.1: the gate RecordCull's one-shot validation readback uses, shared with
+    // PrepareCullPass so Prepare cannot register what Record will skip.
+    bool WillRecordValidationReadback(Renderer* renderer) const;
+    bool WillUseUnifiedBuffers(Renderer* renderer) const;
 
     // Step 4 (temporary): once, a few frames after the cull first runs, read back the GPU
     // InstanceCounts and compare per-view totals against a CPU frustum cull of the same

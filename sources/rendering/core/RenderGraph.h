@@ -18,6 +18,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "core/containers/inl_vector.h"
 #include "rendering/core/RenderPass.h"
+#include "third_party/robin_hood.h"
 
 // A resource state a pass declares it needs before it runs. Declarations are
 // registered as first-use states on the pass's main command list; the actual
@@ -70,6 +71,8 @@ namespace render {
 // conversion safe, since a Prepare that disagrees with its Record produces wrong barriers
 // with no other symptom.
 inline bool g_barrierComparator = false;
+// Step 7: one line per frame with the compiled barrier count. DEFAULT OFF.
+inline bool g_barrierCompileLog = false;
 } // namespace render
 
 struct RenderGraphPassContext {
@@ -258,6 +261,29 @@ public:
             Renderer::TransitionLog log{};
         };
         std::array<Observed, MaxPasses> observed{};
+        // Step 7: per-pass view of the compiled barriers. HEAP-side for the same reason the
+        // TransitionLog is: RenderObjectBatch fans out with DispatchTrack, so a worker can
+        // still be emitting after the body returned. A stack local here crashed immediately.
+        std::array<Renderer::CompiledBarriers, MaxPasses> passBarriers{};
+
+        // --- Step 7: the compile ---
+        //
+        // Turns the registered uses into the barriers a pass must emit at each of its barrier
+        // points, seeded from the CANONICAL table rather than any live map — that is the whole
+        // reason Step 6 existed. Produced once per frame after every Prepare has run and before
+        // any body records, so it is single-threaded by construction.
+        //
+        // One flat arena plus a {begin,count} slice per (pass, point): a pass can declare at most
+        // one point per registered use, so the slice grid is bounded by the same budget.
+        struct BarrierSlice { std::uint32_t begin = 0, count = 0; };
+        D3D12_RESOURCE_BARRIER barrierArena[MaxPasses * kResourceUsesPerPassBudget]{};
+        // One claim flag per arena entry: a barrier is emitted at most once even when the
+        // pass records from several fan-out threads. Reset with the compile, not per body.
+        // One Point record per (pass, point): the emit unit of the flip.
+        std::array<std::array<Renderer::CompiledBarriers::Point, kResourceUsesPerPassBudget>, MaxPasses> barrierPointViews{};
+        std::uint32_t barrierCount = 0;
+        std::array<std::array<BarrierSlice, kResourceUsesPerPassBudget>, MaxPasses> barrierPoints{};
+        bool compiled = false;
     };
 
     // Convenience AddPass: treat all prereqs as mt-deps (flag) or specify mtDeps explicitly
@@ -566,6 +592,121 @@ private:
             }
             for (size_t m : groups_[gid]) { RunPrepareOne(renderer, m, n.batch); }
         }
+        CompileBarriers(renderer, schedule);
+    }
+
+    // Step 7: compile every registered use into the barriers its pass must emit.
+    //
+    // Walks the schedule in the SAME order RunPrepares just did — which is also the order the
+    // bodies will record in — carrying a running state per resource. A use whose required state
+    // already matches produces nothing; anything else produces one transition and advances the
+    // running state. The seed is the canonical table (Step 6), so there is no cross-frame carry
+    // and a graph that changes shape frame to frame (DLSS on/off, VSM vs Legacy, editor) is
+    // handled without a live map.
+    //
+    // DORMANT: nothing reads `barrierArena` yet — `ctx.Barrier` is still a no-op and the tracker
+    // still emits the real barriers. This step is judged on the compiled counts being sane and on
+    // the flip afterwards, not on any behaviour change here.
+    void CompileBarriers(Renderer* renderer, const tc::inl_vector<FlatNode, MaxPasses>& schedule)
+    {
+        if (!prepare_ || !renderer) { return; }
+        prepare_->barrierCount = 0;
+        prepare_->compiled = false;
+        // `row.fill(PrepareState::BarrierSlice{})` trips MSVC's dependent-name parse inside the
+        // class template (same trap as `typename PrepareState::Slice&` back in Step 1); `{}` is fine.
+        for (auto& row : prepare_->barrierPoints) { row.fill({}); }
+
+        // Running state per resource for THIS frame only. Seeded lazily from canonical the first
+        // time a resource is touched, which is what makes the table static and the map disposable.
+        compileState_.clear();
+        returnBarrierEstimate_ = 0;
+
+        // Measurement for the "every pass is self-contained" design (the fix for the ordering
+        // blocker): if each pass returned what it touched to canonical, how many EXTRA barriers
+        // would that cost? Counted here, emitted nowhere — the number decides whether that design
+        // is affordable before any of it is written.
+        passTouched_.clear();
+
+        auto compileOne = [&](size_t passIdx) {
+            passTouched_.clear();
+            const auto& slice = prepare_->slices[passIdx];
+            for (std::uint32_t i = 0; i < slice.count; ++i) {
+                const ResourceUse& use = prepare_->arena[slice.begin + i];
+                if (!use.resource || use.point >= kResourceUsesPerPassBudget) { continue; }
+                // Not ours to model: driven from outside the graph (the backbuffer), or never
+                // declared at all. The SAME predicate Renderer::Transition uses to decide whether
+                // to emit a compiled barrier or fall back to the tracker — the two disagreeing is
+                // a barrier compiled but never emitted, i.e. a running state ahead of the GPU.
+                if (!renderer->IsResourceCompileManaged(use.resource)) { continue; }
+                auto it = compileState_.find(use.resource);
+                const D3D12_RESOURCE_STATES before =
+                    (it == compileState_.end()) ? renderer->GetPredictedState(use.resource) : it->second;
+                if (before == use.state) { continue; } // already there — no barrier
+                if (prepare_->barrierCount >= std::size(prepare_->barrierArena)) {
+                    RendererInvariantFailure("RenderGraph::CompileBarriers: barrier arena exhausted");
+                }
+                D3D12_RESOURCE_BARRIER& b = prepare_->barrierArena[prepare_->barrierCount];
+                b = D3D12_RESOURCE_BARRIER{};
+                b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                b.Transition.pResource = use.resource;
+                b.Transition.StateBefore = before;
+                b.Transition.StateAfter = use.state;
+                b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                auto& pt = prepare_->barrierPoints[passIdx][use.point];
+                // Points are filled in ascending order within a pass, so a slice is contiguous.
+                if (pt.count == 0) { pt.begin = prepare_->barrierCount; }
+                ++pt.count;
+                ++prepare_->barrierCount;
+                compileState_[use.resource] = use.state;
+                passTouched_[use.resource] = use.state;
+            }
+            for (const auto& kv : passTouched_) {
+                if (kv.second != renderer->GetCanonicalState(kv.first)) { ++returnBarrierEstimate_; }
+            }
+        };
+
+        for (const FlatNode& n : schedule) {
+            const size_t gid = passes_[n.pass].groupId;
+            if (gid == kNoGroup) { compileOne(n.pass); continue; }
+            for (size_t m : groups_[gid]) { compileOne(m); }
+        }
+        // Hand this graph's ending states to the next compile — the main graph's to the epilogue's,
+        // this frame's to the next frame's. See CanonicalStateRegistry::Entry::predicted for why
+        // re-seeding from canonical every frame was wrong.
+        for (const auto& kv : compileState_) { renderer->SetPredictedState(kv.first, kv.second); }
+        prepare_->compiled = true;
+
+        if (render::g_barrierCompileLog) {
+            char msg[240];
+            std::snprintf(msg, sizeof(msg),
+                          "[barrier-compile] %u barriers over %zu resources; return-to-canonical would add %u\n",
+                          prepare_->barrierCount, compileState_.size(), returnBarrierEstimate_);
+            OutputDebugStringA(msg);
+        }
+    }
+
+    // Step 7: flatten one pass's per-point compiled barriers into a contiguous view.
+    //
+    // The compile writes each pass's barriers into ONE contiguous run of the arena (points are
+    // filled in ascending order), so the view is just the span from the first non-empty point to
+    // the last — no copying. `claimed` rides alongside in the PrepareState so the flags reset with
+    // the compile, not per body.
+    void BuildPassBarrierView(size_t passIdx, Renderer::CompiledBarriers& out)
+    {
+        out.unmatched.store(0, std::memory_order_relaxed);
+        auto& views = prepare_->barrierPointViews[passIdx];
+        std::uint32_t n = 0;
+        for (std::uint32_t p = 0; p < kResourceUsesPerPassBudget; ++p) {
+            const auto& slice = prepare_->barrierPoints[passIdx][p];
+            if (slice.count == 0) { continue; }
+            views[n].entries = &prepare_->barrierArena[slice.begin];
+            views[n].count = slice.count;
+            views[n].emitted.store(false, std::memory_order_relaxed);
+            ++n;
+        }
+        out.points = views.data();
+        out.pointCount = n;
+        out.pass = static_cast<int>(passes_[passIdx].name); // --barrier-flip-trace label only
     }
 
     // Step 3: diff registered-vs-observed for every converted pass and log the differences.
@@ -661,7 +802,7 @@ private:
         char msg[320];
         std::snprintf(msg, sizeof(msg), "[barrier-cmp] pass=%d %s res=%s state=0x%X\n",
                       static_cast<int>(pass), what, label, static_cast<unsigned>(state));
-        OutputDebugStringA(msg);
+        Renderer::DiagLog(msg);
     }
 
     // Step 3: run one pass body with its transitions observed, when it has a Prepare and
@@ -669,6 +810,20 @@ private:
     // cost, and nothing to compare it against).
     void RunPassBody(Renderer* renderer, size_t passIdx, PassContext& ctx)
     {
+        // Step 7: install this pass's compiled barriers for the duration of its body, so its
+        // Transition calls emit them instead of feeding the tracker. Independent of the
+        // comparator — the flip must work with diagnostics off.
+        const bool flip = render::g_barrierFlip && prepare_ && prepare_->compiled && prepare_->fns[passIdx];
+        if (flip) {
+            Renderer::CompiledBarriers& cbs = prepare_->passBarriers[passIdx];
+            BuildPassBarrierView(passIdx, cbs);
+            Renderer::SetThreadCompiledBarriers(&cbs);
+        }
+        struct Restore {
+            bool on;
+            ~Restore() { if (on) { Renderer::SetThreadCompiledBarriers(nullptr); } }
+        } restore{ flip };
+
         if (!prepare_ || !render::g_barrierComparator || !prepare_->fns[passIdx]) {
             passes_[passIdx].exec(ctx);
             return;
@@ -894,4 +1049,10 @@ private:
     // A.1s: null unless some pass supplied a Prepare (see PrepareState for why it is
     // heap-side). One pointer of stack cost when unused, which is every graph today.
     std::unique_ptr<PrepareState> prepare_;
+    // Step 7: the compile's running per-resource state. A member so the per-frame compile
+    // reuses its buckets; cleared at the top of every CompileBarriers.
+    robin_hood::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> compileState_;
+    // Scratch for the per-pass return-to-canonical estimate (see CompileBarriers).
+    robin_hood::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> passTouched_;
+    std::uint32_t returnBarrierEstimate_ = 0;
 };

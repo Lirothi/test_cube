@@ -549,15 +549,13 @@ void OceanSimulation::CreateResources(Renderer* renderer,
 
     ComPtr<ID3D12Resource> dispRes;
     ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-        &texDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+        &texDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
         IID_PPV_ARGS(&dispRes)));
 
     // Created as the FFT's UAV, but the frame leaves it shader-readable for the surface draw
     // (see PrepareUpdate). Measured with --canonical-check.
-    displacement_.Attach(renderer->Declarations(), std::move(dispRes),
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        L"Ocean.Displacement");
+    displacement_.Attach(renderer->Declarations(), std::move(dispRes), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        L"Ocean.Displacement"); // created in its resting state
 
     D3D12_RESOURCE_DESC prevDesc = texDesc;
     prevDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -581,11 +579,9 @@ void OceanSimulation::CreateResources(Renderer* renderer,
         foamDesc.MipLevels = static_cast<UINT16>(mipCount_);
         ComPtr<ID3D12Resource> foamRes;
         ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-            &foamDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            &foamDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
             IID_PPV_ARGS(&foamRes)));
-        foamTurbulence_.Attach(renderer->Declarations(), std::move(foamRes),
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        foamTurbulence_.Attach(renderer->Declarations(), std::move(foamRes), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             L"Ocean.FoamTurbulence");
         foamNeedsInit_ = true;
         lastFoamSimTime_ = 0.0f;
@@ -636,12 +632,11 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
 
     Microsoft::WRL::ComPtr<ID3D12Resource> shoreDepthRes;
     ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-        &depthDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&shoreDepthRes)));
+        &depthDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, IID_PPV_ARGS(&shoreDepthRes)));
     // Naming, declaring and unregistering are now one thing the wrapper owns; rasterized as
     // depth, then sampled, so the frame leaves it shader-readable.
-    shoreDepth_.Attach(renderer->Declarations(), std::move(shoreDepthRes),
-        D3D12_RESOURCE_STATE_DEPTH_WRITE,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    // Created in its RESTING state (rasterized as depth, then sampled) — step 7 prereq #1.
+    shoreDepth_.Attach(renderer->Declarations(), std::move(shoreDepthRes), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         L"Ocean.ShoreDepth");
 
     shoreDepthWidth_ = static_cast<UINT>(depthDesc.Width);
@@ -1049,7 +1044,7 @@ void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
 
     if (displacement_ && prevDisplacement_)
     {
-        if (hasDisplacementHistory_)
+        if (WillCopyDisplacementHistory()) // shared with PrepareUpdate — see the note there
         {
             renderer->Transition(cl, displacement_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
             renderer->Transition(cl, prevDisplacement_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
@@ -1081,6 +1076,21 @@ void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
     hasDisplacementHistory_ = true;
 }
 
+// Barrier plan D1.1: does THIS frame's Update copy displacement into the history texture?
+//
+// `initialized_` matters as much as the history flag: Update calls Initialize() when it is false,
+// and CreateResources resets hasDisplacementHistory_ — so a Prepare that consulted the flag alone
+// saw `true`, registered the copy, and then the copy did not happen. That mismatch was benign
+// under the tracker and is a wrong before-state once barriers are compiled.
+//
+// Hoisting Initialize out of the record body entirely is the cleaner end state (it is the Step-4
+// rule, and this call escaped that sweep only because it is not named Ensure*). This gate makes
+// Prepare and Record agree in the meantime.
+bool OceanSimulation::WillCopyDisplacementHistory() const
+{
+    return initialized_ && hasDisplacementHistory_;
+}
+
 void OceanSimulation::PrepareUpdate(RenderGraphPassContext& ctx)
 {
     const D3D12_RESOURCE_STATES srvState =
@@ -1089,11 +1099,16 @@ void OceanSimulation::PrepareUpdate(RenderGraphPassContext& ctx)
 
     if (displacement_ && prevDisplacement_)
     {
-        // The copy pair only runs once history exists (frame 2 onward). Registered every
-        // frame anyway: hasDisplacementHistory_ flips inside Update, so gating on it here
-        // would under-register exactly on the frame the copy first happens.
-        ctx.Use(displacement_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-        ctx.Use(prevDisplacement_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        // Step 7: gate on hasDisplacementHistory_ after all. It is written at the END of Update,
+        // so at Prepare time it still holds exactly the value Update is about to read — the
+        // registration is therefore EXACT, not one frame stale. Over-registering was benign under
+        // the tracker and is fatal under the flip: the compile would advance its model past a copy
+        // that never happens, and every later use of these two gets a wrong before-state.
+        if (WillCopyDisplacementHistory())
+        {
+            ctx.Use(displacement_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            ctx.Use(prevDisplacement_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        }
         ctx.NextPoint();
         ctx.Use(prevDisplacement_.Get(), srvState);
     }

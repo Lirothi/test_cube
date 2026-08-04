@@ -339,50 +339,73 @@ Material* ShadowGpuData::IndirectShadowMaterial() const
 // practice. A null here is handled by the caller (it keeps the per-page loop).
 void ShadowGpuData::PrepareCullPass(RenderGraphPassContext& ctx) const
 {
-    // Mirrors RecordCull in body order. Several groups are conditional (the unified-buffer
-    // upload, the GI scatter, the validation readback), so this registers the union: the
-    // untaken ones surface as benign "extra" lines, never as a missing barrier.
-    if (!indirectArgs_.Valid()) { return; }
+    // Mirrors RecordCull in body order — INCLUDING every one of its early returns. Registering
+    // on a frame the body will skip advances the compile past barriers nobody emits, which is a
+    // wrong before-state for the next pass that touches them (measured: VsmPageRender reading
+    // IndirectArgs right after a level switch, when the cull bails on count_ == 0).
+    if (!cullClearMat_ || !cullMat_) { return; }
+    if (count_ == 0 || numMeshGroups_ == 0) { return; }
+    if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return; }
+    if (!bounds_.Valid() || !viewFrustums_.Valid() || !casterGroup_.Valid() || !perGroup_.Valid() ||
+        !perViewGroup_.Valid()) { return; }
+    if (!cullUavHeap_) { return; }
+    if (ctx.renderer == nullptr || ctx.renderer->GetCurrentFrameIndex() >= render::kFrameCount) { return; }
 
     ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(indirectCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    // Unified instance/bounds: uploaded, then scattered into, then read by the cull.
-    if (instancesUnified_.Valid() && boundsUnified_.Valid())
+    // Unified instance/bounds: uploaded, then scattered into, then read by the cull. The NESTING
+    // below mirrors RecordCull's exactly, and that is not cosmetic — see the giOn block.
+    // D1.1: the record body gates these on `useUnified`, which needs the per-frame SRVs too —
+    // Valid() alone over-registers on the frames the descriptors are not up yet.
+    const bool useUnified = WillUseUnifiedBuffers(ctx.renderer);
+    if (useUnified)
     {
         ctx.NextPoint();
         ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
         ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
-        ctx.NextPoint();
-        ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
 
-    // GI scatter reads each folded object's own instance buffer — resource identity is
-    // per-object (census category D), so walk the same list the body walks.
-    if (IsGiIndirectActive())
-    {
-        ctx.NextPoint();
-        for (const GiCaster& gc : giCasters_)
+        // The COPY_DEST -> UAV pair belongs to the GI SCATTER, which the body runs only when GI
+        // folding is on. Registering it on `useUnified` alone compiled a point no request ever
+        // named on a GI-off frame — and because a request may only match the CURRENT point, that
+        // stalled every later request behind it: the closing IndirectArgs -> INDIRECT_ARGUMENT
+        // never fired while the compile (and therefore VsmPageRender's compiled before-state) had
+        // already advanced past it. That is exactly D3D12 error 527 on 'VsmPageRender', plus 538
+        // on the validation readback's CopyBufferRegion when that frame also carried one.
+        if (IsGiIndirectActive())
         {
-            if (!gc.obj) { continue; }
-            if (ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource())
+            ctx.NextPoint();
+            ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+            // GI scatter reads each folded object's own instance buffer — resource identity is
+            // per-object (census category D), so walk the same list the body walks AND skip
+            // exactly what it skips. A point whose every entry the body skips is compiled empty,
+            // which BuildPassBarrierView drops, so it cannot stall anything.
+            ctx.NextPoint();
+            for (const GiCaster& gc : giCasters_)
             {
+                if (!gc.obj || gc.count == 0) { continue; }
+                ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource();
+                if (!giBuf || gc.obj->GetInstanceCasterSrv().ptr == 0) { continue; }
                 ctx.Use(giBuf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             }
         }
-    }
 
-    if (instancesUnified_.Valid() && boundsUnified_.Valid())
-    {
         ctx.NextPoint();
         ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
-    ctx.NextPoint();
-    ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE); // validation readback
+    // D1.1: the one-shot validation readback runs on exactly one frame. Registering its
+    // COPY_SOURCE move every frame was benign under the tracker and unemittable once barriers are
+    // compiled, so gate it on the SAME condition RecordCull uses.
+    if (WillRecordValidationReadback(ctx.renderer))
+    {
+        ctx.NextPoint();
+        ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    }
     ctx.NextPoint();
     ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
@@ -1393,6 +1416,24 @@ void ShadowGpuData::EnsureReadback(Renderer* renderer, size_t bytes)
         IID_PPV_ARGS(valReadback_.GetAddressOf()));
 }
 
+// The gate RecordCull's one-shot validation readback uses. Shared with PrepareCullPass so the two
+// cannot drift — a duplicated predicate is how over-registration creeps back in.
+// Shared with PrepareCullPass: the unified instance/bounds SRVs are only usable once this frame's
+// per-region descriptors exist, so Valid() alone would over-register.
+bool ShadowGpuData::WillUseUnifiedBuffers(Renderer* renderer) const
+{
+    if (!renderer) { return false; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    return instancesUnified_.Valid() && boundsUnified_.Valid() && unifiedSrvHeap_ &&
+           UnifiedInstanceSrv(f).ptr != 0 && UnifiedBoundsSrv(f).ptr != 0;
+}
+
+bool ShadowGpuData::WillRecordValidationReadback(Renderer* renderer) const
+{
+    return renderer != nullptr && valState_ == 0 && !IsGiIndirectActive() &&
+           renderer->GetTotalFrameNumber() > render::kFrameCount;
+}
+
 void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl)
 {
     if (!renderer || !cl) { return; }
@@ -1430,8 +1471,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     // rings stay in GENERIC_READ (which includes COPY_SOURCE) so no source barrier is needed. Left in
     // NON_PIXEL_SHADER_RESOURCE for the cull's compute SRV read and the parallel shadow passes' VS t0
     // read (both non-pixel shader stages).
-    const bool useUnified = instancesUnified_.Valid() && boundsUnified_.Valid() && unifiedSrvHeap_ &&
-                            UnifiedInstanceSrv(f).ptr != 0 && UnifiedBoundsSrv(f).ptr != 0;
+    const bool useUnified = WillUseUnifiedBuffers(renderer); // shared with PrepareCullPass
     if (useUnified)
     {
         renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
