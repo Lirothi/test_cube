@@ -19,7 +19,6 @@
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/core/SwapchainManager.h"
 #include "rendering/core/FrameScheduler.h"
-#include "rendering/core/ResourceStateTracker.h"
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/core/RenderTargetManager.h"
 #include "rendering/core/SubmitTimeline.h"
@@ -54,17 +53,9 @@ namespace render {
 // exactly which resources need an epilogue transition before Step 7 makes it load-bearing.
 inline bool g_canonicalCheck = false;
 
-// Step 7 — THE FLIP. When on, Renderer::Transition stops feeding the ResourceStateTracker and
-// instead emits the barrier the COMPILE already produced for this pass. Off by default until the
-// flip is verified; `--barrier-flip` turns it on.
-//
-// Why this shape: every pass body already calls Transition exactly where it needs a state, and the
-// comparator proved (0 MISSING over 20 GBV iterations, both shadow modes) that those calls are
-// precisely what the pass registered. So the body needs no edit at all — the call site stays, only
-// the thing behind it changes. Rewriting ~25 pass bodies to call ctx.Barrier() by hand would have
-// been the same semantics with far more room to get one wrong.
-inline bool g_barrierFlip = false;
-// Step 7: per-emission trace of the flip. Loud; for chasing a specific resource only.
+// Step 7: per-emission trace of the compiled barriers — which point each Transition request
+// matched, and `[flip-miss]` (with the CURRENT point's contents) when it matched none. Loud; for
+// chasing a specific resource only. `--barrier-flip-trace`.
 inline bool g_barrierFlipTrace = false;
 } // namespace render
 
@@ -276,29 +267,30 @@ public:
     // seed from this static table instead of a live cross-frame map. Written at create/destroy
     // only, read-only during a frame — it is the tracker's `knownStates_` that dies, not this.
     //
-    // So `SetResourceState` IS the declaration. Mid-frame pokes that are not a resting state
-    // must use SetTrackedStateOnly, or they would redefine canonical every frame.
+    // So `SetResourceState` IS the declaration, and it must carry a RESTING state: a mid-frame
+    // poke would redefine canonical every frame and make the frame-end check vacuous.
     void SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
-    // Step 6b: creation state and resting state are different facts. The first seeds the
-    // tracker (where the resource IS); the second is what the frame must leave it in.
+    // Step 6b: creation state and resting state were separate facts while the tracker needed
+    // seeding with where the resource actually IS. Step 7 aligned them (resources are created
+    // directly in their resting state) and deleted the tracker; the overload survives for the
+    // upload-initialised resources whose sites still state both.
     void SetResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES creationState,
                           D3D12_RESOURCE_STATES canonicalState);
     void ClearResourceState(ID3D12Resource* res);
-    void SetTrackedStateOnly(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
     D3D12_RESOURCE_STATES GetCanonicalState(ID3D12Resource* res) const; // COMMON if undeclared
     // Step 7: exclude a resource from the barrier compile — its state is written by code
     // outside the render graph, so tracking it is not the graph's business.
     void SetResourceUnmanaged(ID3D12Resource* res) { canonicalStates_.SetUnmanaged(res); }
     bool IsResourceUnmanaged(ID3D12Resource* res) const { return canonicalStates_.IsUnmanaged(res); }
     // The compile and Transition MUST agree on which resources are modelled: compiling a barrier
-    // for one the flip then hands to the tracker advances the running state past a barrier that
-    // pass never emits, and the next user of that resource gets a wrong before-state.
+    // that Transition will not emit advances the running state past a barrier nobody emits, and
+    // the next user of that resource gets a wrong before-state.
     bool IsResourceCompileManaged(ID3D12Resource* res) const { return canonicalStates_.IsCompileManaged(res); }
     // Where the last barrier compile left this resource; the seed for the next one.
     D3D12_RESOURCE_STATES GetPredictedState(ID3D12Resource* res) const { return canonicalStates_.GetPredicted(res); }
     void SetPredictedState(ID3D12Resource* res, D3D12_RESOURCE_STATES s) { canonicalStates_.SetPredicted(res, s); }
     // For subsystems that create resources without a Renderer& (RenderTargetManager).
-    ResourceDeclarations Declarations() { return ResourceDeclarations{ &stateTracker_, &canonicalStates_ }; }
+    ResourceDeclarations Declarations() { return ResourceDeclarations{ &canonicalStates_ }; }
     // Step 6 diagnostic: log every declared resource that did not END the frame at canonical.
     // Logging, not enforcing — each hit is either a mis-declaration or a resource that genuinely
     // needs an epilogue transition, and this is the step that finds them all.
@@ -515,7 +507,6 @@ private:
     SubmitTimeline submitTimeline_;
     std::vector<ID3D12CommandList*> submitListsScratch_;
     std::vector<ID3D12CommandList*> fixedSubmitScratch_;
-    std::vector<D3D12_RESOURCE_BARRIER> barrierScratch_;
 
     // Per-frame deferred render targets + their CPU descriptor heaps
     RenderTargetManager rtManager_;
@@ -575,10 +566,11 @@ private:
     std::array<ID3D12DescriptorHeap*, kFrameShaderVisibleHeapCount_> currentFrameDescriptorHeaps_{};
     UINT                              currentFrameDescriptorHeapCount_ = 0;
 
-    // Resource-state tracking across parallel command-list recording
-    ResourceStateTracker stateTracker_;
-
-    // Step 6: resource -> canonical (resting) state. Outlives stateTracker_ by design.
+    // Step 6/7: resource -> {canonical resting state, where the last compile left it}. This is ALL
+    // the cross-frame resource-state the engine keeps now — one value per resource, written once
+    // per frame by the single-threaded barrier compile. It replaced ResourceStateTracker's global
+    // map, its per-command-list first-use/current maps, its per-thread lanes and its submit-time
+    // barrier stitching.
     CanonicalStateRegistry canonicalStates_;
     // Reused by the frame-end check so the diagnostic does not allocate per frame.
     std::vector<std::pair<ID3D12Resource*, CanonicalStateRegistry::Entry>> canonicalScratch_;

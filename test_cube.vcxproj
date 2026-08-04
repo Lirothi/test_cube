@@ -308,7 +308,6 @@
     <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp" />
     <ClCompile Include="sources/rendering/diagnostics/RendererSubmissionStress.cpp" />
     <ClCompile Include="sources/rendering/core/RenderTargetManager.cpp" />
-    <ClCompile Include="sources/rendering/core/ResourceStateTracker.cpp" />
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp" />
     <ClCompile Include="sources/rendering/core/SwapchainManager.cpp" />
     <ClCompile Include="sources/rendering/rt/AccelerationStructure.cpp" />
@@ -513,7 +512,6 @@
     <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h" />
     <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h" />
     <ClInclude Include="sources/rendering/core/RenderTargetManager.h" />
-    <ClInclude Include="sources/rendering/core/ResourceStateTracker.h" />
     <ClInclude Include="sources/rendering/core/ResourceDeclarations.h" />
     <ClInclude Include="sources/rendering/core/SubmitTimeline.h" />
     <ClInclude Include="sources/rendering/core/SwapchainManager.h" />

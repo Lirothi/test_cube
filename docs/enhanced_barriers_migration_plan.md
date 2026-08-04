@@ -33,7 +33,7 @@ The other order means touching every site twice.
 | 4 — lazy creation out of record bodies | **DONE** (committed `fed604f`) |
 | 5 — convert passes | **DONE** (committed `58cde73`) — every pass converted, zero fatal mismatches in both shadow modes |
 | 6 + 6b — canonical registry | **DONE (uncommitted)** — 0 off-canonical on a steady frame; declared-resource table no longer ratchets; every owner on `GpuResource`. **The measurement refuted D2's "canonical = creation state" — read Step 6 before Step 7.** |
-| 7 — the flip | **compiled barriers VERIFIED CLEAN (uncommitted, default-OFF behind `--barrier-flip`)** — 0 non-noise GBV + 0 comparator findings over 20 GBV stress iterations in BOTH shadow modes; tracker path re-verified 0/0 too. The tracker deletion itself is the remaining half — see Step 7. |
+| 7 — the flip | **DONE (uncommitted). `ResourceStateTracker` IS DELETED**, along with the per-list acquire prologue. Compiled barriers are the only barrier path; there is no flag any more. 0 non-noise GBV + 0 comparator findings over 20 GBV stress iterations in BOTH shadow modes; submission stress 0 failures; both configs 0/0. Net −777/+110. |
 | 8..16 | not started |
 
 ---
@@ -1057,17 +1057,43 @@ instrumenting (`--barrier-flip-trace`, which now also carries the comparator int
 `--canonical-check` under the flip now reads `predicted` instead of the tracker's global map,
 which the flip no longer updates — it was reporting a dead map that looked like a result.
 
-Remaining, once the above is committed:
+**THE TRACKER IS DELETED (uncommitted).** `ResourceStateTracker.{h,cpp}` are gone, along with
+their entries in `test_cube.vcxproj` **and** `.filters`. Net **−777/+110** lines.
 
-- Delete the `if (!barrierScratch_.empty()) { acquireDirectCL(); ... }` block at
-  `Renderer.cpp:791-796` — deleted, not merely rarely taken.
-- Delete `ResourceStateTracker.{h,cpp}`, including their entries in `test_cube.vcxproj` **and**
-  `test_cube.vcxproj.filters` (the filters file is the one that gets skipped; literal-backslash
-  CRLF paths).
-- Delete `Renderer::MarkImGuiTextureShaderReadable` (`Renderer.cpp:537-550`).
-- Retarget or retire `RendererSubmissionStress.cpp:530`, the only reader of
-  `GetGlobalKnownState`.
-- Turn the Debug validation from D1.2 on permanently.
+What went, and what replaced it:
+
+| deleted | replaced by |
+|---|---|
+| the per-list acquire-prologue loop in `ExecuteTimelineAndPresent` (Service2) | nothing — the loop is now a straight `push_back` of each work list |
+| `firstUse` / `current` per command list, per-thread lanes, the TLS quartet, `knownStatesMtx_`, `ResetLanesForFrame`, `AppendAcquireBarriers`, `FindCLStateForCmd`, `ApplyFinalStates`, `SetKnownStateDirect` | `CanonicalStateRegistry::Entry::predicted` — ONE value per resource, written once per frame by the single-threaded compile |
+| `Renderer::SetTrackedStateOnly`, `barrierScratch_`, `stateTracker_` | — |
+| `ResourceDeclarations::tracker` | — (`creationState` kept: the upload-initialised sites legitimately state both) |
+| `render::g_barrierFlip` / `--barrier-flip` | — the compiled barriers are the only barrier path, so there is nothing to flip |
+| the four `ScenarioTracker*` cases in `RendererSubmissionStress` | — (the SubmitTimeline half is untouched and still passes, incl. the death tests) |
+
+**The measurement that made deletion possible.** Before deleting, `[tracker-fallthrough]` and
+`[acquire-prologue]` were added under `--barrier-flip-trace` and run in Release: the tracker's
+entire remaining job was **the swapchain backbuffer, 2 transitions per frame**, delivered by
+**one barrier-only command list per frame carrying exactly one barrier**. Converting
+`Pass_Tonemap`'s backbuffer resolve to `TransitionExplicit` — legitimate, because
+`RecordBindAndClear` and the present epilogue already bracket the backbuffer with hand-rolled
+barriers, so its cycle PRESENT→RENDER_TARGET→(COPY_DEST→RENDER_TARGET)→PRESENT is fully
+determined — emptied that set. Its registration was removed from Tonemap's Prepare in the same
+edit, or the comparator would have reported it as an (now fatal) over-registration.
+
+**`Renderer::Transition` no longer has a fallback: it is an invariant failure.** Reaching the end
+of it means a resource the compile does not model, or a call from outside a pass body — which
+under the old code fell through to the tracker and would now silently drop the barrier. Measured
+empty first; loud rather than silent if that ever changes. Out-of-graph code uses
+`TransitionExplicit` and supplies its own before-state.
+
+**Acceptance met:** both configs `0/0`; `--barrier-cmp --canonical-check --scene-stress-gbv=20`
+in BOTH shadow modes = `CLEAN after 20 iterations`, **0** non-noise GBV, **0** comparator
+findings; `--renderer-submission-stress` = `failures: 0` with every death test still aborting.
+
+Still open from the original list: `Renderer::MarkImGuiTextureShaderReadable` survives, but
+REPURPOSED — it declares the editor texture's canonical state rather than patching a tracker map,
+so it is no longer dead weight.
 
 **Acceptance (this is Goal 1's payoff — be thorough):**
 - Both `0/0`; GBV CLEAN; `--scene-stress` CLEAN across the full churn.

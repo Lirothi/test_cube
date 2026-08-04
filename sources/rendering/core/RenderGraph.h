@@ -20,10 +20,9 @@
 #include "rendering/core/RenderPass.h"
 #include "third_party/robin_hood.h"
 
-// A resource state a pass declares it needs before it runs. Declarations are
-// registered as first-use states on the pass's main command list; the actual
-// transition barriers are injected between command lists at submit time by the
-// ResourceStateTracker machinery, exactly like manual Renderer::Transition calls.
+// A resource state a pass declares it needs before it runs. The pass body applies them with
+// ctx.ApplyDeclaredStates(cl) and its Prepare registers them with ctx.UseDeclared(), so they are
+// compiled into real barriers ahead of execution like every other registered use.
 struct ResourceStateDecl {
     ID3D12Resource* resource = nullptr;   // null entries are skipped
     D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
@@ -40,10 +39,10 @@ using ResourceStateDeclList = tc::inl_vector<ResourceStateDecl, 10>;
 // ctx.NextPoint() closes one barrier point and opens the next; the pass body marks the
 // same boundaries with ctx.Barrier(cl, n).
 //
-// DORMANT at A.1s: nothing consumes the registrations yet (A.2s compiles them and
-// compares against what ResourceStateTracker actually emits), and ctx.Barrier is a
-// no-op. A pass without a Prepare is untouched and keeps using Renderer::Transition,
-// so the two models coexist and A.4s can convert one file at a time.
+// At Step 7 these registrations became the ONLY source of barriers: CompileBarriers turns them
+// into D3D12_RESOURCE_BARRIER arrays before any body records, and Renderer::Transition emits the
+// array for the point the body has reached. Every pass has a Prepare — a pass without one would
+// now hit the invariant failure in Renderer::Transition rather than silently lose its barriers.
 struct ResourceUse {
     ID3D12Resource*       resource = nullptr;
     D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
@@ -810,10 +809,10 @@ private:
     // cost, and nothing to compare it against).
     void RunPassBody(Renderer* renderer, size_t passIdx, PassContext& ctx)
     {
-        // Step 7: install this pass's compiled barriers for the duration of its body, so its
-        // Transition calls emit them instead of feeding the tracker. Independent of the
-        // comparator — the flip must work with diagnostics off.
-        const bool flip = render::g_barrierFlip && prepare_ && prepare_->compiled && prepare_->fns[passIdx];
+        // Step 7: install this pass's compiled barriers for the duration of its body — this is
+        // what its Transition calls emit. Independent of the comparator: barriers must work with
+        // every diagnostic off.
+        const bool flip = prepare_ && prepare_->compiled && prepare_->fns[passIdx];
         if (flip) {
             Renderer::CompiledBarriers& cbs = prepare_->passBarriers[passIdx];
             BuildPassBarrierView(passIdx, cbs);

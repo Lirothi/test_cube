@@ -93,10 +93,9 @@ void Renderer::Shutdown()
     // 3) Back buffers and RTV/DSV heaps
     swapchain_.ReleaseBuffers();
 
-    // 4) Safety measure: clear resource state tracking. The canonical declarations go with it —
-    // every resource they describe has just been destroyed, and a surviving entry would hand a
-    // recycled address someone else's resting state.
-    stateTracker_.ClearAllKnownStates();
+    // 4) Safety measure: drop every canonical declaration — each resource they describe has just
+    // been destroyed, and a surviving entry would hand a recycled address someone else's resting
+    // state (and its stale `predicted`).
     canonicalStates_.Clear();
 
     // 5) SwapChain — exit fullscreen (if needed) and release it
@@ -545,7 +544,7 @@ ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12
 void Renderer::ReleaseImGuiTextureDescriptors(ID3D12Resource* resource)
 {
     imguiLayer_.ReleasePreviewDescriptorsForResource(resource);
-    stateTracker_.ClearResourceState(resource);
+    canonicalStates_.Forget(resource);
 }
 
 void Renderer::MarkImGuiTextureShaderReadable(ID3D12Resource* resource)
@@ -782,57 +781,16 @@ void Renderer::ExecuteTimelineAndPresent() {
     {
         CPU_SCOPE(ProfilerScopes::kService2);
 
-        // Step 4: work lists are already closed (directs at EndThreadCommandList,
-        // drivers at gather time). For each in submission order, compute its
-        // acquire barriers against the global state and, when non-empty, record
-        // them into a small DEDICATED command list submitted immediately before
-        // that work list. Per-list (never one prologue per batch): a later list
-        // in a batch may transition out of an earlier list's final state, which
-        // a single aggregated prologue could not represent.
-        const ResourceStateTracker::CLState* previousState = nullptr;
-
+        // Step 7: work lists are already closed (directs at EndThreadCommandList, drivers at
+        // gather time) and each one now carries its OWN barriers, compiled ahead of execution
+        // by RenderGraph::CompileBarriers. This loop used to resolve every list's acquire
+        // barriers against a live global state map and, when non-empty, record them into a
+        // DEDICATED command list submitted immediately before that work list. Measured just
+        // before the deletion: one such list per frame carrying exactly one barrier, all of it
+        // for the swapchain backbuffer -- which now uses explicit before-states like the rest
+        // of the out-of-graph paths. So the whole thing is a straight append.
         for (auto* cmd : submitListsScratch_) {
-            const ResourceStateTracker::CLState* currentState = stateTracker_.FindCLStateForCmd(cmd);
-
-            // Fold the previous list's final states into the global map first,
-            // then resolve this list's acquire barriers against it.
-            if (previousState) {
-                stateTracker_.ApplyFinalStates(*previousState);
-            }
-
-            barrierScratch_.clear();
-            // Step 7 — THE FLIP. Under the flip this runs for the UNMANAGED resources ONLY, and
-            // that falls out of the routing rather than needing a filter: a compile-managed
-            // resource returns from Renderer::Transition before ever reaching the tracker, so its
-            // firstUse map now contains exactly the resources the graph does not model (the
-            // backbuffer, uploads, ImGui). Those still need the tracker's stitching, because it
-            // defers a command list's FIRST transition to submit time — disabling this wholesale
-            // dropped that first barrier and left the pair half-applied.
-            if (currentState) {
-                stateTracker_.AppendAcquireBarriers(*currentState, barrierScratch_);
-            }
-
-            if (!barrierScratch_.empty()) {
-                // THE cost this whole plan exists to remove: a command list allocated for nothing
-                // but barriers. Count them under the flip — the number is what says whether the
-                // tracker can go, and it is the Step 8 before/after baseline.
-                if (render::g_barrierFlip && render::g_barrierFlipTrace) {
-                    char m[128];
-                    std::snprintf(m, sizeof(m), "[acquire-prologue] %zu barriers\n", barrierScratch_.size());
-                    Renderer::DiagLog(m);
-                }
-                ID3D12GraphicsCommandList* acquire = acquireDirectCL();
-                acquire->ResourceBarrier(static_cast<UINT>(barrierScratch_.size()), barrierScratch_.data());
-                ThrowIfFailed(acquire->Close());
-                fixedSubmitScratch_.push_back(acquire);
-            }
-
             fixedSubmitScratch_.push_back(cmd);
-            previousState = currentState;
-        }
-
-        if (previousState) {
-            stateTracker_.ApplyFinalStates(*previousState);
         }
 
         // Dedicated epilogue list submitted last: present transition (+ GPU
@@ -849,20 +807,17 @@ void Renderer::ExecuteTimelineAndPresent() {
         presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
         epilogueCmd->ResourceBarrier(1, &presentBarrier);
-        // The engine's one existing return-to-canonical transition (D2's frame epilogue). Same
-        // value the declaration carries, so it only needs to reach the tracker.
-        SetTrackedStateOnly(backbuffer, D3D12_RESOURCE_STATE_PRESENT);
+        // The engine's one return-to-canonical transition (D2's frame epilogue): PRESENT is
+        // the backbuffer's declared resting state, so the frame ends where it began.
 #if PROF_GPU_ENABLED
         Profiler::Get().EndGpuFrame(epilogueCmd);
 #endif
         ThrowIfFailed(epilogueCmd->Close());
         fixedSubmitScratch_.push_back(epilogueCmd);
-
-        stateTracker_.SetKnownStateDirect(backbuffer, D3D12_RESOURCE_STATE_PRESENT);
     }
 
-    // Step 6: every command list's final states have been folded into the tracker by here, so
-    // this is the frame's true end state. Default off.
+    // Step 6: the frame's compiles have all run by here, so `predicted` is the frame's true
+    // end state. Default off.
     ReportOffCanonicalStates();
 
     {
@@ -871,8 +826,6 @@ void Renderer::ExecuteTimelineAndPresent() {
             GetCommandQueue()->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
         }
     }
-
-    stateTracker_.ResetLanesForFrame();
 
     {
         CPU_SCOPE(ProfilerScopes::kService4);
@@ -940,10 +893,6 @@ void Renderer::ClearResourceState(ID3D12Resource* res) {
     Declarations().Forget(res);
 }
 
-void Renderer::SetTrackedStateOnly(ID3D12Resource* res, D3D12_RESOURCE_STATES state) {
-    stateTracker_.SetResourceState(res, state);
-}
-
 D3D12_RESOURCE_STATES Renderer::GetCanonicalState(ID3D12Resource* res) const {
     return canonicalStates_.Get(res);
 }
@@ -951,22 +900,16 @@ D3D12_RESOURCE_STATES Renderer::GetCanonicalState(ID3D12Resource* res) const {
 void Renderer::ReportOffCanonicalStates() {
     if (!render::g_canonicalCheck) { return; }
 
-    // Snapshot first: GetGlobalKnownState takes the tracker's lock, and holding the canonical
-    // lock across it would nest two locks on the frame's critical path.
+    // Snapshot first: the report walks the whole table and the registry's lock is also taken by
+    // texture loads on other threads, so it is copied out rather than held across the loop.
     canonicalStates_.Snapshot(canonicalScratch_);
 
     unsigned drifted = 0;
     for (const auto& [res, entry] : canonicalScratch_) {
-        // NEVER dereference `res` here. Not every release path unregisters, so this table can
-        // hold dangling keys; the name was captured at declaration time for exactly that reason,
-        // and GetGlobalKnownState only uses the pointer as a hash key.
-        //
-        // Under the flip the tracker never sees a graph transition, so its global map is stale by
-        // construction — read the compile's own ending state instead, or this whole report is
-        // noise that reads like a result.
-        const D3D12_RESOURCE_STATES actual = render::g_barrierFlip
-            ? entry.predicted
-            : stateTracker_.GetGlobalKnownState(res);
+        // NEVER dereference `res`. Not every release path unregisters, so this table can hold
+        // dangling keys; both the name and the state come from the ENTRY for exactly that reason.
+        (void)res;
+        const D3D12_RESOURCE_STATES actual = entry.predicted;
         if (actual == entry.state) { continue; }
         ++drifted;
         char msg[320];
@@ -1094,13 +1037,13 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
         }
     }
 
-    // Step 7 — the flip. Emit the barrier the compile already produced for this pass instead of
-    // handing the state to the tracker for submit-time stitching.
-    // The flip owns a transition only for resources the compile actually models. An UNDECLARED
-    // resource transitioned inside a converted pass body — Renderer::RenderImGui does exactly this
-    // for editor preview textures, from Pass_Overlay — has no compiled entry, and treating that as
-    // "no barrier needed" SILENTLY DROPPED it. Undeclared means "not ours": route to the tracker.
-    if (render::g_barrierFlip && tlCompiledBarriers != nullptr && res != nullptr && cl != nullptr &&
+    // Step 7 — emit the barrier the compile already produced for this pass. This is the engine's
+    // only barrier path for graph resources; there is no state tracking behind it any more.
+    // It owns a transition only for resources the compile actually MODELS: an undeclared or
+    // unmanaged resource has no compiled entry, and treating that as "no barrier needed" would
+    // silently drop it — so it falls to the invariant failure at the bottom instead, which says
+    // to use TransitionExplicit.
+    if (tlCompiledBarriers != nullptr && res != nullptr && cl != nullptr &&
         canonicalStates_.IsCompileManaged(res)) {
         CompiledBarriers& cb = *tlCompiledBarriers;
         // A request may only match the CURRENT point — the first not yet emitted. Never a later
@@ -1173,19 +1116,22 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
         return;
     }
 
-    // Everything that reaches here is still the TRACKER's, and while anything does, the
-    // submit-time acquire prologue (and its barrier-only command list) cannot be deleted. Under
-    // --barrier-flip-trace, name them: this list IS the deletion worklist.
-    if (render::g_barrierFlip && render::g_barrierFlipTrace && res != nullptr) {
-        char label[96];
-        canonicalStates_.NameOf(res, label, sizeof(label));
-        char m[200];
-        std::snprintf(m, sizeof(m), "[tracker-fallthrough] res=%s after=0x%X declared=%d\n",
-                      label, static_cast<unsigned>(after),
-                      canonicalStates_.IsCompileManaged(res) ? 1 : 0);
-        Renderer::DiagLog(m);
-    }
-    stateTracker_.Transition(cl, res, after);
+    // Nothing may reach here. `Renderer::Transition` is the RENDER GRAPH's entry point: it emits
+    // the barriers the compile produced for the pass recording on this thread. A call for a
+    // resource the compile does not model, or from outside a pass body, has no barrier to emit and
+    // used to fall through to ResourceStateTracker — which is now deleted, so falling through
+    // would SILENTLY DROP the barrier. Out-of-graph code uses TransitionExplicit and supplies its
+    // own before-state. Measured EMPTY before the tracker was removed (the last client was the
+    // backbuffer resolve in Pass_Tonemap); loud rather than silent if that ever changes.
+    char label[96];
+    canonicalStates_.NameOf(res, label, sizeof(label));
+    char msg[240];
+    std::snprintf(msg, sizeof(msg),
+                  "Renderer::Transition: no compiled barrier for res=%s after=0x%X "
+                  "(undeclared/unmanaged, or called outside a render-graph pass) - "
+                  "use TransitionExplicit instead",
+                  label, static_cast<unsigned>(after));
+    RendererInvariantFailure(msg);
 }
 
 void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {
@@ -1285,10 +1231,6 @@ void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     cl->ResourceBarrier(1, &b);
-    // Step 6: a mid-frame flip, NOT the backbuffer's resting state — its canonical is PRESENT,
-    // declared once in CreateSwapChainAndRTVs. Declaring RENDER_TARGET here would redefine
-    // canonical every single frame and make the frame-end check vacuous.
-    SetTrackedStateOnly(swapchain_.Backbuffer(currentFrameIndex_), D3D12_RESOURCE_STATE_RENDER_TARGET);
 
     // RTV/DSV
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = swapchain_.BackbufferRTV(currentFrameIndex_);

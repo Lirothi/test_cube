@@ -215,14 +215,10 @@ int WINAPI WinMain(
         render::g_barrierCompileLog = true;
     }
 
-    // Step 7 THE FLIP: "--barrier-flip" makes Renderer::Transition emit the COMPILED barrier
-    // instead of feeding the ResourceStateTracker. Off by default until verified.
-    if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-flip")) {
-        render::g_barrierFlip = true;
-    }
-    // "--barrier-flip-trace" additionally logs every emitted point. Loud — for chasing one resource.
+    // "--barrier-flip-trace" logs every emitted barrier point plus every request that matched
+    // none. Loud — for chasing one resource. (The flip itself is no longer a flag: the compiled
+    // barriers are the only barrier path there is, ResourceStateTracker having been deleted.)
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-flip-trace")) {
-        render::g_barrierFlip = true;
         render::g_barrierFlipTrace = true;
     }
 

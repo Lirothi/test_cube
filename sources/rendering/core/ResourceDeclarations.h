@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "rendering/core/ResourceStateTracker.h"
 #include "third_party/robin_hood.h"
 
 // Barrier plan step 6 (design D2).
@@ -18,8 +17,8 @@
 // were never tracking, only seeding.
 //
 // Once the invariant holds, the compiled barriers can seed from this static table and the
-// live cross-frame map inside ResourceStateTracker becomes dead weight. So this table is
-// deliberately NOT a member of that class: it has to outlive it.
+// live cross-frame map inside ResourceStateTracker became dead weight — and at Step 7 that class
+// was deleted outright. This table outlived it, exactly as keeping it out of that class intended.
 class CanonicalStateRegistry
 {
 public:
@@ -224,12 +223,11 @@ private:
     robin_hood::unordered_map<std::string, int> net_;
 };
 
-// The sink a creation site declares through. Today it feeds BOTH the canonical registry and
-// the tracker's live map; at Step 7 the `tracker` member goes away and every call site written
-// against this interface stays exactly as it is. Passed by value — two references.
+// The sink a creation site declares through. It used to feed BOTH the canonical registry and the
+// tracker's live map; at Step 7 the `tracker` member went away and — as that split was designed to
+// guarantee — not one of the ~60 call sites changed. Passed by value.
 struct ResourceDeclarations
 {
-    ResourceStateTracker*   tracker = nullptr;
     CanonicalStateRegistry* canonical = nullptr;
 
     // Creation state doubles as the resting state. Correct for the ~75 resources measured to
@@ -239,30 +237,27 @@ struct ResourceDeclarations
         Declare(res, creationState, creationState);
     }
 
-    // Step 6b: the two states are NOT the same thing, and for most resources they differ.
-    // `creationState` seeds the tracker, because that is where the resource actually IS and
-    // the first barrier's before-state depends on it. `canonicalState` is where the frame must
-    // LEAVE it — the measured resting state, which is what Step 7's compile will seed from.
-    // Aligning the two (creating resources directly in canonical) belongs to Step 7, where the
-    // compile starts reading this table; doing it here would change real frame-1 GPU behaviour
-    // for no gain.
+    // Step 6b kept these as two separate facts because the tracker had to be seeded with where the
+    // resource actually IS. Step 7 aligned them (resources are now created directly in their
+    // resting state) and then deleted the tracker, so `creationState` has no consumer left — the
+    // overload survives for the upload-initialised resources whose sites still state both, and
+    // where the two genuinely differ (COPY_DEST at creation, canonical after the upload's own
+    // final barrier).
     void Declare(ID3D12Resource* res, D3D12_RESOURCE_STATES creationState,
                  D3D12_RESOURCE_STATES canonicalState) const
     {
+        (void)creationState;
         if (canonical) { canonical->Declare(res, canonicalState); }
-        if (tracker) { tracker->SetResourceState(res, creationState); }
     }
 
     void Forget(ID3D12Resource* res) const
     {
         if (canonical) { canonical->Forget(res); }
-        if (tracker) { tracker->ClearResourceState(res); }
     }
 
     void ForgetMany(const std::vector<ID3D12Resource*>& resources) const
     {
         if (canonical) { canonical->ForgetMany(resources); }
-        if (tracker) { tracker->ForgetResources(resources); }
     }
 
     // See CanonicalStateRegistry::RefreshName — caller guarantees the resource is alive.

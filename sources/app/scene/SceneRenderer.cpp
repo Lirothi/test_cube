@@ -478,7 +478,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // No consumer yet, so it's an independent node (no prereqs/dependents); a
     // future RT reflections pass (S7) will depend on it. The pass declares no
     // resource states and never transitions the AS buffers, so they bypass the
-    // ResourceStateTracker and stay in RAYTRACING_ACCELERATION_STRUCTURE.
+    // the barrier compile entirely and stay in RAYTRACING_ACCELERATION_STRUCTURE.
     size_t pBuildAS = (size_t)-1;
     if (rtBuildAS)
     {
@@ -1192,11 +1192,12 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         if (!resources_.GetTonemapMaterial() || !p.renderer->GetCurrentBackbuffer()) { return; }
         p.NextPoint();
         // The resolve reads whichever of the two actually produced this frame.
+        // The backbuffer is NOT registered: it is driven from outside the graph (present
+        // epilogue + RecordBindAndClear both write it with hand-rolled barriers), so the body
+        // resolves it with Renderer::TransitionExplicit and the compile models only the source.
         p.Use(fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-        p.Use(p.renderer->GetCurrentBackbuffer(), D3D12_RESOURCE_STATE_COPY_DEST);
         p.NextPoint();
         p.Use(fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        p.Use(p.renderer->GetCurrentBackbuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET);
     });
 
     const size_t pDebug = rg.AddPass(RenderPass::Main_Debug, { pTone },
@@ -1426,7 +1427,7 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassBuildAS);
-        // AS buffers bypass the ResourceStateTracker: this pass declares no
+        // AS buffers bypass the barrier compile: this pass declares no
         // resource states and never calls Transition on them, so the RenderGraph
         // never moves them out of RAYTRACING_ACCELERATION_STRUCTURE / UNORDERED_
         // ACCESS. Mesh VB/IB are read by first-frame BLAS builds via implicit
@@ -3639,10 +3640,17 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         if (backbuffer && resolveSource)
         {
             renderer->Transition(t.cl, resolveSource, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            renderer->Transition(t.cl, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST);
+            // The backbuffer's state cycle is owned OUTSIDE the graph and is fully determined:
+            // RecordBindAndClear takes it PRESENT -> RENDER_TARGET at the top of the frame and the
+            // present epilogue takes it back, both with hand-rolled barriers. So the resolve knows
+            // its own before-states and needs no state tracking -- this pair was the LAST client of
+            // ResourceStateTracker, and converting it is what let the tracker be deleted.
+            Renderer::TransitionExplicit(t.cl, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                         D3D12_RESOURCE_STATE_COPY_DEST);
             t.cl->CopyResource(backbuffer, resolveSource);
             renderer->Transition(t.cl, resolveSource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            renderer->Transition(t.cl, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            Renderer::TransitionExplicit(t.cl, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST,
+                                         D3D12_RESOURCE_STATE_RENDER_TARGET);
         }
 
         renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);

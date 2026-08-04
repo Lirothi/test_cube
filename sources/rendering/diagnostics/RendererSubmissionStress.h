@@ -2,20 +2,19 @@
 
 // Renderer submission stress harness, run via
 // "test_cube.exe --renderer-submission-stress" instead of the app. CPU-only:
-// drives the registration/gathering layer (SubmitTimeline) and the
-// ResourceStateTracker recording layer with fake command-list/resource
-// pointer values — registration only stores pointers; the real submit path is
-// never run (it calls Close()). Covers: retention beyond the old 8-entry
+// drives the registration/gathering layer (SubmitTimeline) with fake
+// command-list pointer values — registration only stores pointers; the real
+// submit path is never run (it calls Close()). Covers: retention beyond the old 8-entry
 // inline capacity, registration-order preservation (single-threaded and
 // concurrent), persistent-pool reuse across frames with varying batch counts,
 // deterministic submit ordering (shuffled registration order always yields the
 // same localOrder-sorted gather), the invariant death tests (null
 // registration, stale/out-of-range batch index, duplicate registration,
 // duplicate localOrder among directs and among bundles — each spawned in a
-// child process that is EXPECTED to abort), and the tracker's memory-safety
-// paths: repeated lane reset + reuse from persistent threads, flat-map rehash
-// with many CL keys per thread, more than 64 participating threads, and
-// acquire-barrier deduction. Writes details to renderer_submission_stress.log
+// child process that is EXPECTED to abort). The four ResourceStateTracker
+// scenarios went with that class at barrier-plan Step 7; resource states are
+// now compiled by the render graph and have no recording layer to stress.
+// Writes details to renderer_submission_stress.log
 // in the working directory and returns the number of failed checks
 // (0 = success).
 //
