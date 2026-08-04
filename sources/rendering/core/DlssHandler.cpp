@@ -1,4 +1,5 @@
 #include "rendering/core/DlssHandler.h"
+#include "rendering/core/BarrierTranslation.h"
 
 #include <array>
 #include <cmath>
@@ -408,7 +409,7 @@ void DlssHandler::EnsureExposureResources(ID3D12GraphicsCommandList* cl)
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    cl->ResourceBarrier(1, &barrier);
+    barriers::EmitOne(cl, barrier);
 
     exposureUploaded_ = true;
 }

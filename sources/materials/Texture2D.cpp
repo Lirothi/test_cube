@@ -1,4 +1,5 @@
 #include "materials/Texture2D.h"
+#include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
 #include "materials/TextureDecodeCache.h"
 #include "rendering/core/Renderer.h"
@@ -380,7 +381,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
         b.Transition.StateAfter = kShaderReadStates;
-        uploadCmd->ResourceBarrier(1, &b);
+        barriers::EmitOne(uploadCmd, b);
     }
 
     if (keepAlive) {
@@ -754,7 +755,7 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
     b.Transition.StateAfter = kShaderReadStates;
-    uploadCmd->ResourceBarrier(1, &b);
+    barriers::EmitOne(uploadCmd, b);
 
     // Keep the upload resource alive until execution
     if (keepAlive) {
@@ -854,7 +855,7 @@ void Texture2D::UploadRGBA8Mips_(Renderer* r, ID3D12GraphicsCommandList* uploadC
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
     b.Transition.StateAfter = kShaderReadStates;
-    uploadCmd->ResourceBarrier(1, &b);
+    barriers::EmitOne(uploadCmd, b);
 
     if (keepAlive) { keepAlive->push_back(upload); }
     tex_.DeclareCreated(r->Declarations(), kShaderReadStates, debugName_.c_str());

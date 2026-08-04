@@ -1,4 +1,5 @@
 #include "editor/assets/EditorPreviewRenderer.h"
+#include "rendering/core/BarrierTranslation.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -621,7 +622,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         b.Transition.StateBefore = before;
         b.Transition.StateAfter = after;
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        cl->ResourceBarrier(1, &b);
+        barriers::EmitOne(cl, b);
     };
 
     barrier(color.Get(), existingColorTarget
@@ -932,7 +933,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordCubeThumbnai
         transition.Transition.StateBefore = before;
         transition.Transition.StateAfter = after;
         transition.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        cl->ResourceBarrier(1, &transition);
+        barriers::EmitOne(cl, transition);
     };
 
     barrier(color.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);

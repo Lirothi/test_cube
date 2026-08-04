@@ -9,6 +9,7 @@
 
 #include "core/Helpers.h"
 #include "core/diagnostics/DiagPaths.h"
+#include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
 
 namespace
@@ -123,6 +124,7 @@ void GraphicsDevice::InitDevice()
     // Publish the resolved decision for the texture-creation helper (step 11). Done here, once,
     // so the ~11 creation sites need no new parameter and cannot disagree about it.
     render::SetEnhancedTextureCreation(UseEnhancedBarriers());
+    barriers::SetEnabled(UseEnhancedBarriers()); // step 13: direct sites read the same decision
     {
         char msg[224];
         std::snprintf(msg, sizeof(msg),
@@ -150,7 +152,13 @@ void GraphicsDevice::SetupDebugBreaks()
     {
         Microsoft::WRL::ComPtr<ID3D12InfoQueue> info;
         if (SUCCEEDED(device_.As(&info))) {
-            info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+            // --scene-stress-gbv asks for "errors logged, not fatal" so the harness can DRAIN the
+            // info queue and print what the debug layer actually said. Breaking on ERROR defeats
+            // that: the process dies inside the offending call and the message is never read. This
+            // cost real time during the enhanced-barrier work — the stack named the call site over
+            // and over but never the reason.
+            const bool breakOnError = !g_gbvForStress.load(std::memory_order_relaxed);
+            info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, breakOnError ? TRUE : FALSE);
             info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
             info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
             // Add filters for noisy messages if desired

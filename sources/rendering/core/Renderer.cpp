@@ -825,7 +825,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         presentBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
         presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-        epilogueCmd->ResourceBarrier(1, &presentBarrier);
+        barriers::EmitOne(epilogueCmd, presentBarrier);
         // The engine's one return-to-canonical transition (D2's frame epilogue): PRESENT is
         // the backbuffer's declared resting state, so the frame ends where it began.
 #if PROF_GPU_ENABLED
@@ -1038,7 +1038,7 @@ void Renderer::TransitionExplicit(ID3D12GraphicsCommandList* cl, ID3D12Resource*
     b.Transition.StateBefore = before;
     b.Transition.StateAfter = after;
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    cl->ResourceBarrier(1, &b);
+    barriers::EmitOne(cl, b);
 }
 
 void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3D12_RESOURCE_STATES after) {
@@ -1176,7 +1176,7 @@ void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {
     D3D12_RESOURCE_BARRIER b{};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     b.UAV.pResource = res;
-    cl->ResourceBarrier(1, &b);
+    barriers::EmitOne(cl, b);
 }
 
 void Renderer::EnsureVsmDummySrvs() {
@@ -1265,7 +1265,7 @@ void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {
     b.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    cl->ResourceBarrier(1, &b);
+    barriers::EmitOne(cl, b);
 
     // RTV/DSV
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = swapchain_.BackbufferRTV(currentFrameIndex_);

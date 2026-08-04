@@ -49,6 +49,24 @@ bool IsTextureCompatible(D3D12_RESOURCE_STATES state);
 //
 // Returns false and emits NOTHING when `cl7` is null or a barrier cannot be expressed; the caller
 // then falls back to ResourceBarrier, which keeps a gap in this table from becoming a lost barrier.
+// Step 13 — the single global switch for enhanced EMISSION, published once by
+// GraphicsDevice::InitDevice. Same process-global style the device file already uses for
+// DRED/GBV/--legacy-barriers, and the same one texture creation reads.
+void SetEnabled(bool enable);
+bool Enabled();
+
+// Step 13 — emit ONE already-built legacy barrier, enhanced when enabled and legacy otherwise.
+//
+// Takes the constructed `D3D12_RESOURCE_BARRIER` rather than its parts, because every direct site
+// in the engine already builds one and then calls `ResourceBarrier(1, &b)` — so each converts by
+// changing that one line. Handles TRANSITION and UAV.
+//
+// Buffer-vs-texture is derived from the resource itself: these sites are uploads, present and
+// screenshots, i.e. rare, so one GetDesc costs nothing and spares every caller from knowing.
+// Falls back to `ResourceBarrier` whenever the enhanced form cannot be built — never silently
+// drops a barrier.
+void EmitOne(ID3D12GraphicsCommandList* cl, const D3D12_RESOURCE_BARRIER& barrier);
+
 // How many compiled points went out as enhanced barriers vs fell back to ResourceBarrier. The
 // enhanced emission is written at step 12 but only becomes REACHABLE at step 13 (the direct
 // upload/present sites still record legacy barriers, and mixing kills the run before a frame

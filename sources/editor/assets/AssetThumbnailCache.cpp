@@ -1,4 +1,5 @@
 #include "editor/assets/AssetThumbnailCache.h"
+#include "rendering/core/BarrierTranslation.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -573,7 +574,7 @@ namespace
             transition.Transition.StateBefore = before;
             transition.Transition.StateAfter = after;
             transition.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            commandList->ResourceBarrier(1, &transition);
+            barriers::EmitOne(commandList, transition);
         };
 
         barrier(color, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,

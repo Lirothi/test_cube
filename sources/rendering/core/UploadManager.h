@@ -1,5 +1,6 @@
 #pragma once
 #include <wrl.h>
+#include "rendering/core/BarrierTranslation.h"
 #include <d3d12.h>
 #include <vector>
 #include <cstdint>
@@ -67,7 +68,7 @@ public:
             b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             b.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
             b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-            cmdList_->ResourceBarrier(1, &b);
+            barriers::EmitOne(cmdList_, b);
         }
 
         // Copy the buffer (prefer CopyBufferRegion)
@@ -81,7 +82,7 @@ public:
             b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
             b.Transition.StateAfter = afterCopy;
-            cmdList_->ResourceBarrier(1, &b);
+            barriers::EmitOne(cmdList_, b);
         }
 
         keepAlive_.push_back(uploadBuf);

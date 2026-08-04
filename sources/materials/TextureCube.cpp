@@ -1,4 +1,5 @@
 #include "materials/TextureCube.h"
+#include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "core/Helpers.h"
@@ -195,7 +196,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
         b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
         b.Transition.StateAfter  = kShaderReadStates;
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        uploadCmd->ResourceBarrier(1, &b);
+        barriers::EmitOne(uploadCmd, b);
     }
 
     if (keepAlive) {

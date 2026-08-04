@@ -1,4 +1,5 @@
 #include "rendering/core/Screenshot.h"
+#include "rendering/core/BarrierTranslation.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -122,7 +123,7 @@ bool SaveBackbufferPng(Renderer& renderer, const std::string& path)
         t.Transition.StateBefore = a;
         t.Transition.StateAfter = b;
         t.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        cl->ResourceBarrier(1, &t);
+        barriers::EmitOne(cl, t);
     };
     barrier(src, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
     D3D12_TEXTURE_COPY_LOCATION s{};

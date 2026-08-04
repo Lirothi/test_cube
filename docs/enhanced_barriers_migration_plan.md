@@ -1366,7 +1366,46 @@ By this point Steps 1-7 have collapsed emission to **one place** — the compile
 
 **Acceptance:** both `0/0`; `--scene-stress` CLEAN; behavior unchanged (flag off).
 
-### Step 13 — present, UAV, and direct sites (gated)
+### Step 13 — present, UAV, and direct sites — **DONE (uncommitted)**
+
+`barriers::EmitOne(cl, barrier)` takes an already-built `D3D12_RESOURCE_BARRIER` and re-expresses
+it, enhanced when enabled and legacy otherwise. That shape was chosen because every direct site in
+the engine already builds one and calls `ResourceBarrier(1, &b)` — so each site converts by
+changing exactly one line, and buffer-vs-texture is derived from the resource itself (these are
+uploads, present and screenshots: rare enough that one `GetDesc` costs nothing and spares every
+caller from knowing).
+
+Converted, 14 sites: `Texture2D` x3, `TextureCube`, `UploadManager` x2, `DlssHandler`,
+`Screenshot`, `EditorPreviewRenderer` x2, `AssetThumbnailCache`, and `Renderer` x4 (present
+epilogue, `RecordBindAndClear`, `TransitionExplicit`, `UAVBarrier`). Acceleration structures are
+step 14. A blanket UAV barrier (null resource) becomes a `D3D12_GLOBAL_BARRIER`; a per-resource one
+becomes a texture/buffer barrier with UAV access and layout on both sides.
+
+**`--enhanced-barriers` now RUNS: `verdict: CLEAN after 1 iterations`.** Steps 11-13 are therefore
+exercised, not merely compiled.
+
+**And the residual is now a named, understood problem instead of a mystery — D3D12 error 1350:**
+> `Deferred[0].GBVelocity` … last transitioned by **enhanced** barrier to
+> `LAYOUT_SHADER_RESOURCE` **must be in common layout before switching to legacy barriers**
+
+**Mixing the two models on one resource is illegal**, and the only remaining legacy emitter is the
+compiled path's own fallback: when `EmitEnhanced` refuses a point it drops to `ResourceBarrier`,
+which is safe in isolation but fatal once that resource has already taken an enhanced barrier. The
+fallback that makes each step individually safe is exactly what step 15 must remove — the enhanced
+path has to become EXCLUSIVE, not preferred. That is a design conclusion this step earned, and it
+belongs in step 15's scope rather than being patched here.
+
+**A diagnostic change that paid for itself immediately.** `SetupDebugBreaks` broke on
+`D3D12_MESSAGE_SEVERITY_ERROR` unconditionally, so under `--scene-stress-gbv` — whose entire
+contract is "errors logged, not fatal, so the harness can drain the info queue" — the process died
+*inside* the offending call and the message was never read. Three debugging rounds across steps
+11-13 got the call site from the stack and never the reason. The break is now suppressed when
+`--scene-stress-gbv` is set, and the first run with it printed error 1350 verbatim.
+
+**Acceptance met (flag off):** both `0/0`; `--barrier-cmp --canonical-check --scene-stress-gbv=12`
+= `CLEAN after 12 iterations`, 0 non-noise GBV.
+
+### (original spec) Step 13 — present, UAV, and direct sites (gated)
 
 - Present (`Renderer.cpp:812-819` / `:994-999` + the canonical seeds): a `D3D12_TEXTURE_BARRIER`
   to/from `LAYOUT_PRESENT` when enhanced (verify flip-model present layout).

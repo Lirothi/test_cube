@@ -144,6 +144,90 @@ std::atomic<std::uint32_t> gEnhancedEmits{ 0 };
 std::atomic<std::uint32_t> gLegacyEmits{ 0 };
 } // namespace
 
+std::atomic<bool> gEnabled{ false };
+
+void SetEnabled(bool enable) { gEnabled.store(enable, std::memory_order_relaxed); }
+bool Enabled() { return gEnabled.load(std::memory_order_relaxed); }
+
+void EmitOne(ID3D12GraphicsCommandList* cl, const D3D12_RESOURCE_BARRIER& barrier)
+{
+    if (cl == nullptr) { return; }
+
+    if (Enabled()) {
+        ID3D12Resource* res = (barrier.Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION)
+            ? barrier.Transition.pResource
+            : (barrier.Type == D3D12_RESOURCE_BARRIER_TYPE_UAV ? barrier.UAV.pResource : nullptr);
+        ID3D12GraphicsCommandList7* cl7 = nullptr;
+        if (SUCCEEDED(cl->QueryInterface(IID_PPV_ARGS(&cl7))) && cl7) {
+            cl7->Release(); // borrowed view; `cl` keeps it alive
+            const bool isBuffer =
+                res != nullptr && res->GetDesc().Dimension == D3D12_RESOURCE_DIMENSION_BUFFER;
+            if (barrier.Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) {
+                const auto isBufferFn = [](void* ctx, ID3D12Resource*) {
+                    return *static_cast<const bool*>(ctx);
+                };
+                bool flag = isBuffer;
+                if (EmitEnhanced(cl7, &barrier, 1, isBufferFn, &flag)) { return; }
+            }
+            else if (barrier.Type == D3D12_RESOURCE_BARRIER_TYPE_UAV && res == nullptr) {
+                // A blanket UAV barrier (null resource) is a GLOBAL barrier in the enhanced model.
+                D3D12_GLOBAL_BARRIER g{};
+                g.SyncBefore = D3D12_BARRIER_SYNC_ALL;
+                g.SyncAfter = D3D12_BARRIER_SYNC_ALL;
+                g.AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+                g.AccessAfter = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+                D3D12_BARRIER_GROUP grp{};
+                grp.Type = D3D12_BARRIER_TYPE_GLOBAL;
+                grp.NumBarriers = 1;
+                grp.pGlobalBarriers = &g;
+                cl7->Barrier(1, &grp);
+                gEnhancedEmits.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            else if (barrier.Type == D3D12_RESOURCE_BARRIER_TYPE_UAV) {
+                // A UAV barrier on ONE resource: same layout and access on both sides, which is
+                // how the enhanced model spells "finish the writes before the next reads".
+                D3D12_BARRIER_GROUP grp{};
+                if (isBuffer) {
+                    D3D12_BUFFER_BARRIER bb{};
+                    bb.SyncBefore = D3D12_BARRIER_SYNC_COMPUTE_SHADING | D3D12_BARRIER_SYNC_PIXEL_SHADING;
+                    bb.SyncAfter = bb.SyncBefore;
+                    bb.AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+                    bb.AccessAfter = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+                    bb.pResource = res;
+                    bb.Offset = 0;
+                    bb.Size = UINT64_MAX;
+                    grp.Type = D3D12_BARRIER_TYPE_BUFFER;
+                    grp.NumBarriers = 1;
+                    grp.pBufferBarriers = &bb;
+                    cl7->Barrier(1, &grp);
+                }
+                else {
+                    D3D12_TEXTURE_BARRIER tb{};
+                    tb.SyncBefore = D3D12_BARRIER_SYNC_COMPUTE_SHADING | D3D12_BARRIER_SYNC_PIXEL_SHADING;
+                    tb.SyncAfter = tb.SyncBefore;
+                    tb.AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+                    tb.AccessAfter = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+                    tb.LayoutBefore = D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS;
+                    tb.LayoutAfter = D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS;
+                    tb.pResource = res;
+                    tb.Subresources.IndexOrFirstMipLevel = 0xffffffff;
+                    tb.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
+                    grp.Type = D3D12_BARRIER_TYPE_TEXTURE;
+                    grp.NumBarriers = 1;
+                    grp.pTextureBarriers = &tb;
+                    cl7->Barrier(1, &grp);
+                }
+                gEnhancedEmits.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
+    }
+
+    cl->ResourceBarrier(1, &barrier);
+    gLegacyEmits.fetch_add(1, std::memory_order_relaxed);
+}
+
 void EmitStats(std::uint32_t& enhanced, std::uint32_t& legacy)
 {
     enhanced = gEnhancedEmits.load(std::memory_order_relaxed);
