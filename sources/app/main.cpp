@@ -11,6 +11,7 @@
 #include "app/diagnostics/SceneStress.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "core/task/diagnostics/TaskSystemStress.h"
+#include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
@@ -241,6 +242,16 @@ int WINAPI WinMain(
     // scene-stress branch like every other flag the churn needs.
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-msg-trace")) {
         GraphicsDevice::EnableBarrierMessageTrace(true);
+    }
+    // Step 16: "--barrier-census" counts the (before -> after) pairs the engine actually emits and
+    // dumps them to logs/barrier_census.log, so sync narrowing is aimed at what the frame uses.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-census")) {
+        barriers::SetCensusEnabled(true);
+    }
+    // Step 16: "--barrier-sync-wide" restores the conservative sync scopes the narrowing removed.
+    // The A/B switch for measuring it, and the bisect switch for a suspected sync race afterwards.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-sync-wide")) {
+        barriers::SetWideSync(true);
     }
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-cache-verify")) {
         render::g_barrierCacheVerify = true;

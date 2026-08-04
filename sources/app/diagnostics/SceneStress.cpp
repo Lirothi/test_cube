@@ -406,6 +406,7 @@ private:
         barriers::AsEmitStats(asEnhanced, asLegacy);
         Log("barriers: emit enhanced=%u legacy=%u | as enhanced=%u legacy=%u\n",
             emitEnhanced, emitLegacy, asEnhanced, asLegacy);
+        barriers::DumpCensus("barrier_census.log"); // step 16; no-op unless --barrier-census
     }
 
     int FinishFault_(int iter, const char* op, const char* reason)

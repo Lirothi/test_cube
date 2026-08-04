@@ -1563,7 +1563,66 @@ Set `enhancedBarriers_` to its real value: enhanced on capable machines, legacy 
 - Visual parity: G-buffer, CSM + spot/point shadows, transparent/glass, SSR + RT reflections,
   tonemap. Compare `--shot` captures legacy vs enhanced at the same camera.
 
-### Step 16 — tighten sync (optional, perf)
+### Step 16 — tighten sync — **DONE (uncommitted). Correct, and NOT a measurable win.**
+
+**Started with a census, because narrowing a row nothing emits buys nothing.** `--barrier-census`
+counts the distinct `(before -> after)` pairs actually emitted and dumps them with the sync/access
+each side translates to (`logs/barrier_census.log`). What it showed, over a 12-iteration stress:
+
+- The scopes the plan predicted would be fat are **already tight**: `RENDER_TARGET` is
+  `SYNC_RENDER_TARGET`, `DEPTH_WRITE` is `SYNC_DEPTH_STENCIL`, the copy states are `SYNC_COPY`,
+  `INDIRECT_ARGUMENT` is `SYNC_EXECUTE_INDIRECT`. The plan's own example — G-buffer→lighting — was
+  emitting exactly what it should. Nothing to do there.
+- The real fat was two BITS carried on the most common rows.
+
+**Narrowing 1 — `SYNC_RAYTRACING` off the shader-resource row (~2100 of ~4000 barriers).** It
+covers the DXR *pipeline*, i.e. `DispatchRays`, and this engine has none: RT reflections are an
+inline `RayQuery` inside a compute shader, which syncs as `COMPUTE_SHADING`. Verified rather than
+assumed — no `DispatchRays`, no `SetPipelineState1`, no state object in `sources/`. Acceleration
+structures are unaffected: `EmitAccelerationStructureBuildBarrier` names `SYNC_RAYTRACING` itself.
+
+**Narrowing 2 — `SYNC_PIXEL_SHADING` off the `UNORDERED_ACCESS` row (~1500).** Every unordered
+access in this engine comes from a compute shader. Verified three ways: no
+`OMSetRenderTargetsAndUnorderedAccessViews` call exists; every shader declaring an `RW*` resource
+is a compute shader (none carries a pixel semantic); and the one case that *looks* like a
+pixel-shader UAV write — the VSM page atlas — writes depth through a DSV
+(`OMSetRenderTargets(0, nullptr, FALSE, &dsv)`) with an empty `PSMain`.
+
+**One narrowing was deliberately NOT made.** `COMMON -> SYNC_ALL` is ~13% of emitted barriers and
+`SYNC_ALL` is the most expensive scope there is — but the census showed that COMMON traffic is
+almost entirely step 15's DLSS hand-off bracket, where the other side of the barrier is NGX's own
+legacy barriers. There `SYNC_ALL` is not conservatism, it is the honest answer: we cannot know
+which stages a closed-source module uses. Narrowing it would be a guess.
+
+**MEASURED, and the result is a null.** `--barrier-sync-wide` restores exactly the two removed
+scopes, so this is an A/B on one binary rather than a rebuild between runs. Eight Release runs,
+25 s warmup each (~12 500 frames, well past the EMA settling point), **interleaved and then run
+again in REVERSED order** — because the first block showed a monotonic decline across runs
+(thermal downclock) that on its own would have manufactured a win for whichever arm ran first:
+
+| | GPU.Frame mean | sd | frames mean | sd |
+|---|---|---|---|---|
+| narrowed | 1.9283 ms | 0.0234 | 12524 | 127 |
+| wide | 1.9350 ms | 0.0249 | 12480 | 123 |
+
+Delta **−0.0068 ms (−0.35%)**, which is under a third of one standard deviation. Both metrics lean
+the same way, and neither is distinguishable from noise. **The narrowing is free, not fast.** Its
+value is that the barriers now describe what the engine actually does; anyone reading
+`SYNC_RAYTRACING` on every texture read would be reading a lie.
+
+**Honest limit on the gates below: GBV and a stress run cannot prove the absence of a race.** A
+too-narrow sync scope produces no message and no crash — it produces a rare wrong pixel. What
+justifies these two is the STATIC argument above; the runs only show nothing obvious broke. That is
+also why `--barrier-sync-wide` stays: a suspected sync race is one flag away from being tested
+instead of a rebuild away. **Two invariants now exist:** adding a `DispatchRays` pipeline means
+restoring `SYNC_RAYTRACING`; the first pixel shader that writes a UAV means restoring
+`SYNC_PIXEL_SHADING`.
+
+**Acceptance met:** both configs `0/0`; `--scene-stress-gbv=12 --barrier-cmp --canonical-check`
+CLEAN, 0 MISSING, no new ids; `--shadow-mode=legacy --scene-stress-gbv=20` CLEAN, 0 MISSING;
+`--scene-stress=12` with break-on-error active CLEAN.
+
+### (original spec) Step 16 — tighten sync (optional, perf)
 
 Replace the conservative `SYNC_ALL*` fallbacks with minimal correct scopes (a G-buffer→lighting
 transition needs `SYNC_RENDER_TARGET`→`SYNC_(PIXEL/COMPUTE)_SHADING`, not `SYNC_ALL`). Measure;

@@ -1,9 +1,15 @@
 #include "rendering/core/BarrierTranslation.h"
 
 #include <atomic>
+#include <cstdio>
+
+#include "core/diagnostics/DiagPaths.h"
 
 namespace barriers {
 namespace {
+
+// Step 16's A/B + bisect switch; read by LegacyStateToBarrier, so it must be declared above it.
+std::atomic<bool> gWideSync{ false };
 
 // One row per legacy BIT. A combined state is the OR of its rows' sync/access; `layout` is the
 // texture layout that bit implies, or UNDEFINED for a buffer-only state.
@@ -30,17 +36,39 @@ constexpr Row kRows[] = {
 
     // Shader reads. The two shader-resource bits differ ONLY in sync — same access, same layout —
     // which is exactly why 0xC0 (both) has to OR rather than pick.
+    //
+    // Step 16 narrowing (the widest-reaching one available: the census puts this row on ~2100 of
+    // ~4000 emitted barriers). `SYNC_RAYTRACING` is GONE. It covers the DXR *pipeline*, i.e.
+    // `DispatchRays` — and this engine has none: RT reflections are an INLINE RayQuery inside a
+    // compute shader, which syncs as COMPUTE_SHADING. Verified, not assumed: no `DispatchRays`,
+    // no `SetPipelineState1`, no state object anywhere in sources/.
+    // `SYNC_VERTEX_SHADING` stays and is not a typo — in the enhanced model it is the umbrella for
+    // every PRE-RASTERIZATION stage (VS/HS/DS/GS/AS/MS), not the vertex shader alone.
+    //
+    // INVARIANT THIS ROW NOW DEPENDS ON: adding a real raytracing pipeline (DispatchRays) means
+    // putting SYNC_RAYTRACING back here. A missing sync scope has no symptom until it has a very
+    // rare one. Acceleration structures are unaffected — EmitAccelerationStructureBuildBarrier
+    // names SYNC_RAYTRACING itself.
     { D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-      D3D12_BARRIER_SYNC_VERTEX_SHADING | D3D12_BARRIER_SYNC_COMPUTE_SHADING |
-          D3D12_BARRIER_SYNC_RAYTRACING,
+      D3D12_BARRIER_SYNC_VERTEX_SHADING | D3D12_BARRIER_SYNC_COMPUTE_SHADING,
       D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_SHADER_RESOURCE, true },
     { D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
       D3D12_BARRIER_SYNC_PIXEL_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
       D3D12_BARRIER_LAYOUT_SHADER_RESOURCE, true },
 
     // UAV. Writable, so it never collapses into GENERIC_READ.
+    //
+    // Step 16 narrowing: `SYNC_PIXEL_SHADING` is GONE — every unordered access in this engine is
+    // made from a COMPUTE shader. Verified three ways: no `OMSetRenderTargetsAndUnorderedAccess-
+    // Views` call exists, every shader declaring an `RW*` resource is a compute shader (none
+    // carries a pixel semantic), and the one case that looks like a pixel-shader UAV write — the
+    // VSM page atlas — writes DEPTH through a DSV (`OMSetRenderTargets(0, nullptr, FALSE, &dsv)`)
+    // with an EMPTY PSMain.
+    //
+    // INVARIANT THIS ROW NOW DEPENDS ON: the first pixel shader that writes a UAV must put
+    // SYNC_PIXEL_SHADING back.
     { D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-      D3D12_BARRIER_SYNC_COMPUTE_SHADING | D3D12_BARRIER_SYNC_PIXEL_SHADING,
+      D3D12_BARRIER_SYNC_COMPUTE_SHADING,
       D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS, false },
 
     // Copies and resolves.
@@ -91,6 +119,13 @@ Translated LegacyStateToBarrier(D3D12_RESOURCE_STATES state, bool isBuffer)
     // COMMON is ZERO, not a bit — and PRESENT has the same value, so the two are indistinguishable
     // here by construction. LAYOUT_PRESENT and LAYOUT_COMMON are also the same value in D3D12, so
     // that ambiguity costs nothing: both want the common layout.
+    //
+    // Step 16 looked hard at narrowing this SYNC_ALL and DELIBERATELY LEFT IT. It is ~13% of the
+    // emitted barriers, and SYNC_ALL is the most expensive scope there is — but the census showed
+    // the COMMON traffic is almost entirely step 15's DLSS hand-off bracket, where the other side
+    // of the barrier is NGX's own legacy barriers. SYNC_ALL is not conservatism there, it is the
+    // honest answer: we do not know, and cannot know, which stages the external module will use.
+    // Narrowing it would be a guess about a closed-source module's internals.
     if (state == D3D12_RESOURCE_STATE_COMMON) {
         out.sync = D3D12_BARRIER_SYNC_ALL;
         out.access = D3D12_BARRIER_ACCESS_COMMON;
@@ -123,6 +158,18 @@ Translated LegacyStateToBarrier(D3D12_RESOURCE_STATES state, bool isBuffer)
         return out;
     }
 
+    // `--barrier-sync-wide`: put back exactly the two scopes step 16 removed, so the narrowing is
+    // an A/B rather than a rebuild. Keyed off ACCESS (which the rows just produced) rather than
+    // re-testing the state bits, so it cannot drift from the rows above.
+    if (gWideSync.load(std::memory_order_relaxed)) {
+        if (out.access & D3D12_BARRIER_ACCESS_SHADER_RESOURCE) {
+            out.sync = static_cast<D3D12_BARRIER_SYNC>(out.sync | D3D12_BARRIER_SYNC_RAYTRACING);
+        }
+        if (out.access & D3D12_BARRIER_ACCESS_UNORDERED_ACCESS) {
+            out.sync = static_cast<D3D12_BARRIER_SYNC>(out.sync | D3D12_BARRIER_SYNC_PIXEL_SHADING);
+        }
+    }
+
     if (isBuffer) {
         out.layout = D3D12_BARRIER_LAYOUT_UNDEFINED; // buffers carry no layout
         return out;
@@ -147,6 +194,8 @@ std::atomic<std::uint32_t> gAsLegacyEmits{ 0 };
 } // namespace
 
 std::atomic<bool> gEnabled{ false };
+
+void SetWideSync(bool enable) { gWideSync.store(enable, std::memory_order_relaxed); }
 
 void SetEnabled(bool enable) { gEnabled.store(enable, std::memory_order_relaxed); }
 bool Enabled() { return gEnabled.load(std::memory_order_relaxed); }
@@ -278,6 +327,80 @@ void AsEmitStats(std::uint32_t& enhanced, std::uint32_t& legacy)
     legacy = gAsLegacyEmits.load(std::memory_order_relaxed);
 }
 
+namespace {
+
+// Step 16's census. A fixed table under one spinlock: the emission path is multi-threaded (pass
+// bodies record on workers), and the whole point of the flag is that this does not exist in a
+// normal run — so simple and correct beats clever and lock-free.
+struct CensusEntry
+{
+    D3D12_RESOURCE_STATES before;
+    D3D12_RESOURCE_STATES after;
+    bool                  isBuffer;
+    std::uint32_t         count;
+};
+constexpr int kCensusMax = 96;
+CensusEntry gCensus[kCensusMax]{};
+int gCensusCount = 0;
+std::atomic_flag gCensusLock = ATOMIC_FLAG_INIT;
+std::atomic<bool> gCensusEnabled{ false };
+
+void NoteTranslation(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after, bool isBuffer)
+{
+    if (!gCensusEnabled.load(std::memory_order_relaxed)) { return; }
+    while (gCensusLock.test_and_set(std::memory_order_acquire)) {}
+    for (int i = 0; i < gCensusCount; ++i) {
+        if (gCensus[i].before == before && gCensus[i].after == after &&
+            gCensus[i].isBuffer == isBuffer) {
+            ++gCensus[i].count;
+            gCensusLock.clear(std::memory_order_release);
+            return;
+        }
+    }
+    if (gCensusCount < kCensusMax) {
+        gCensus[gCensusCount++] = CensusEntry{ before, after, isBuffer, 1 };
+    }
+    gCensusLock.clear(std::memory_order_release);
+}
+
+} // namespace
+
+void SetCensusEnabled(bool enable) { gCensusEnabled.store(enable, std::memory_order_relaxed); }
+
+void DumpCensus(const char* logName)
+{
+    if (!gCensusEnabled.load(std::memory_order_relaxed) || logName == nullptr) { return; }
+    while (gCensusLock.test_and_set(std::memory_order_acquire)) {}
+    FILE* f = nullptr;
+    if (fopen_s(&f, diag::LogPath(logName).c_str(), "w") == 0 && f) {
+        std::fputs("[barrier-census] emitted (before -> after) pairs, hottest first.\n"
+                   "count | before -> after | syncBefore -> syncAfter | accessBefore -> accessAfter"
+                   " | layoutBefore -> layoutAfter\n", f);
+        // Selection sort by count: at most 96 rows, once, at shutdown.
+        bool used[kCensusMax] = {};
+        for (int n = 0; n < gCensusCount; ++n) {
+            int best = -1;
+            for (int i = 0; i < gCensusCount; ++i) {
+                if (!used[i] && (best < 0 || gCensus[i].count > gCensus[best].count)) { best = i; }
+            }
+            if (best < 0) { break; }
+            used[best] = true;
+            const CensusEntry& e = gCensus[best];
+            const Translated b = LegacyStateToBarrier(e.before, e.isBuffer);
+            const Translated a = LegacyStateToBarrier(e.after, e.isBuffer);
+            std::fprintf(f, "%6u | %s 0x%X -> 0x%X | sync 0x%X -> 0x%X | access 0x%X -> 0x%X | "
+                            "layout %d -> %d\n",
+                         e.count, e.isBuffer ? "buf" : "tex",
+                         static_cast<unsigned>(e.before), static_cast<unsigned>(e.after),
+                         static_cast<unsigned>(b.sync), static_cast<unsigned>(a.sync),
+                         static_cast<unsigned>(b.access), static_cast<unsigned>(a.access),
+                         static_cast<int>(b.layout), static_cast<int>(a.layout));
+        }
+        std::fclose(f);
+    }
+    gCensusLock.clear(std::memory_order_release);
+}
+
 void EmitStats(std::uint32_t& enhanced, std::uint32_t& legacy)
 {
     enhanced = gEnhancedEmits.load(std::memory_order_relaxed);
@@ -315,6 +438,7 @@ bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
         const bool asBuffer = isBuffer(ctx, res);
         const Translated before = LegacyStateToBarrier(b.Transition.StateBefore, asBuffer);
         const Translated after = LegacyStateToBarrier(b.Transition.StateAfter, asBuffer);
+        NoteTranslation(b.Transition.StateBefore, b.Transition.StateAfter, asBuffer);
 
         if (asBuffer) {
             D3D12_BUFFER_BARRIER& out = buf[bufCount++];

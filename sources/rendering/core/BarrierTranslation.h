@@ -94,6 +94,25 @@ void NoteLegacyEmit();
 // zero here means the step was never exercised rather than that it works.
 void AsEmitStats(std::uint32_t& enhanced, std::uint32_t& legacy);
 
+// Step 16 — restore the pre-narrowing conservative scopes (`--barrier-sync-wide`).
+//
+// Two things at once: the A/B switch that lets the narrowing be MEASURED without rebuilding
+// between runs (interleaving A/B/A/B is the only way to see through GPU downclocking), and the
+// bisect switch afterwards — a suspected sync-scope race is then one flag away from being tested
+// instead of a rebuild away, exactly like `--legacy-barriers` is for the model as a whole.
+void SetWideSync(bool enable);
+
+// Step 16 — the census that decides what is worth narrowing.
+//
+// Sync scopes are chosen per legacy STATE, but what costs GPU time is the (before -> after) PAIR
+// the engine actually emits, and how often. Narrowing a row nothing uses buys nothing; narrowing
+// the hottest pair is the whole step. So: count the distinct pairs, dump them with the sync/access
+// each side translates to, and narrow from the log rather than from the table.
+//
+// Off by default (`--barrier-census`); the counting is a short linear scan on the emission path.
+void SetCensusEnabled(bool enable);
+void DumpCensus(const char* logName);
+
 bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
                   const D3D12_RESOURCE_BARRIER* entries,
                   std::uint32_t count,
