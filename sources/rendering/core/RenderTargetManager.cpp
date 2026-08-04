@@ -1,4 +1,5 @@
 #include "rendering/core/RenderTargetManager.h"
+#include "rendering/core/TextureCreate.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -130,9 +131,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D3D12_CLEAR_VALUE cv{}; cv.Format = fmt;
             cv.Color[0] = clear.x; cv.Color[1] = clear.y; cv.Color[2] = clear.z; cv.Color[3] = clear.w;
 
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                canonical, &cv, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
+            ThrowIfFailed(render::CreateCommittedTexture(dev,
+                heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                canonical, &cv, outRes.GetAddressOfForCreate()));
 
             // RTV/SRV — ONLY for frame f
             outRTV = DeferredRtvCPU(f, rtvSlot);
@@ -210,9 +211,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             cv.Color[3] = 0.0f;
 
             auto& D = deferred_[f];
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, IID_PPV_ARGS(D.objectID.GetAddressOfForCreate())));
+            ThrowIfFailed(render::CreateCommittedTexture(dev,
+                heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, D.objectID.GetAddressOfForCreate()));
 
             D.objectIDRTV = DeferredRtvCPU(f, DeferredRtvSlot::ObjectID);
             D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
@@ -235,9 +236,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         {
             D3D12_RESOURCE_DESC rd = MakeTex2DDesc(fmt, D3D12_RESOURCE_FLAG_NONE);
 
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                canonical, nullptr, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
+            ThrowIfFailed(render::CreateCommittedTexture(dev,
+                heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                canonical, nullptr, outRes.GetAddressOfForCreate()));
 
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = srvFormat == DXGI_FORMAT_UNKNOWN ? fmt : srvFormat;
@@ -281,9 +282,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             if (overrideWidth > 0) { rd.Width = overrideWidth; }
             if (overrideHeight > 0) { rd.Height = overrideHeight; }
 
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                canonical, nullptr, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
+            ThrowIfFailed(render::CreateCommittedTexture(dev,
+                heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                canonical, nullptr, outRes.GetAddressOfForCreate()));
 
             D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
             sd.Format = fmt;
@@ -349,9 +350,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D3D12_RESOURCE_DESC rd = MakeTex2DDesc(dsvFmt, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
 
             D3D12_CLEAR_VALUE cv{}; cv.Format = dsvFmt; cv.DepthStencil.Depth = clearDepth; cv.DepthStencil.Stencil = 0;
-            ThrowIfFailed(dev->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-                canonical, &cv, IID_PPV_ARGS(outRes.GetAddressOfForCreate())));
+            ThrowIfFailed(render::CreateCommittedTexture(dev,
+                heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                canonical, &cv, outRes.GetAddressOfForCreate()));
 
             // DSV
             outDSV = DeferredDsvCPU(f, dsvSlot);
@@ -527,9 +528,9 @@ void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclar
     cv.DepthStencil.Depth = 1.0f;
     cv.DepthStencil.Stencil = 0;
 
-    ThrowIfFailed(dev->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, IID_PPV_ARGS(D.shadow.GetAddressOfForCreate())));
+    ThrowIfFailed(render::CreateCommittedTexture(dev,
+        heapProps, D3D12_HEAP_FLAG_NONE, rd,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, D.shadow.GetAddressOfForCreate()));
 
     D.shadowDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
     D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
@@ -580,9 +581,9 @@ void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDe
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-    ThrowIfFailed(dev->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &clear, IID_PPV_ARGS(D.spotShadow.GetAddressOfForCreate())));
+    ThrowIfFailed(render::CreateCommittedTexture(dev,
+        heapProps, D3D12_HEAP_FLAG_NONE, desc,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &clear, D.spotShadow.GetAddressOfForCreate()));
 
     D.spotShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::SpotShadow);
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -644,9 +645,9 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceD
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-    ThrowIfFailed(dev->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, IID_PPV_ARGS(D.pointShadow.GetAddressOfForCreate())));
+    ThrowIfFailed(render::CreateCommittedTexture(dev,
+        heapProps, D3D12_HEAP_FLAG_NONE, desc,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, D.pointShadow.GetAddressOfForCreate()));
 
     D.pointShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::PointShadow);
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};

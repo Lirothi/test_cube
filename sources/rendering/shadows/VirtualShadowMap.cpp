@@ -1,4 +1,5 @@
 #include "rendering/shadows/VirtualShadowMap.h"
+#include "rendering/core/TextureCreate.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -41,8 +42,8 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         cv.Format = DXGI_FORMAT_D16_UNORM;
         cv.DepthStencil.Depth = 1.0f;
 
-        if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, IID_PPV_ARGS(pagePool_.GetAddressOfForCreate()))) || !pagePool_)
+        if (FAILED(render::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, rd,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, pagePool_.GetAddressOfForCreate())) || !pagePool_)
         {
             pagePool_.Reset();
             return;

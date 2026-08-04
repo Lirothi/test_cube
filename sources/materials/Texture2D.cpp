@@ -1,4 +1,5 @@
 #include "materials/Texture2D.h"
+#include "rendering/core/TextureCreate.h"
 #include "materials/TextureDecodeCache.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
@@ -296,8 +297,8 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
     // DDS first and falls back to WIC on the same object, so the fallback textures were declared
     // twice and forgotten once.
-    ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(tex_.GetAddressOfForCreate())));
+    ThrowIfFailed(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, tex_.GetAddressOfForCreate()));
 
     // 4) Compute footprints for every mip
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(mipCount);
@@ -789,8 +790,8 @@ void Texture2D::UploadRGBA8Mips_(Renderer* r, ID3D12GraphicsCommandList* uploadC
     // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
     // DDS first and falls back to WIC on the same object, so the fallback textures were declared
     // twice and forgotten once.
-    ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(tex_.GetAddressOfForCreate())));
+    ThrowIfFailed(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, tex_.GetAddressOfForCreate()));
 
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(n);
     std::vector<UINT> numRows(n);
@@ -810,6 +811,9 @@ void Texture2D::UploadRGBA8Mips_(Renderer* r, ID3D12GraphicsCommandList* uploadC
     upDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
     ComPtr<ID3D12Resource> upload;
+    // A BUFFER — deliberately NOT routed through CreateCommittedTexture. Buffers have no layout,
+    // so asking CreateCommittedResource3 for one is invalid and the debug layer raises inside the
+    // call (which is how this was caught: the enhanced path faulted here, not at any texture).
     ThrowIfFailed(device->CreateCommittedResource(&hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
 

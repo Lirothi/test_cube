@@ -420,6 +420,9 @@
     <ClCompile Include="sources/rendering/core/BarrierTranslation.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/TextureCreate.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/Renderer.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
@@ -1011,6 +1014,9 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/BarrierTranslation.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/TextureCreate.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/Renderer.h">

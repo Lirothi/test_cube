@@ -230,6 +230,11 @@ int WINAPI WinMain(
     if (lpCmdLine && std::strstr(lpCmdLine, "--legacy-barriers")) {
         GraphicsDevice::ForceLegacyBarriers(true);
     }
+    // Step 11: "--enhanced-barriers" opts INTO the enhanced path (creation layouts now, emission
+    // at step 12+). Detection alone must not change behaviour until step 15 flips the default.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--enhanced-barriers")) {
+        GraphicsDevice::EnableEnhancedBarriers(true);
+    }
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-cache-verify")) {
         render::g_barrierCacheVerify = true;
     }

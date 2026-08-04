@@ -52,14 +52,22 @@ public:
     //
     // Set from main.cpp BEFORE device creation (mirrors EnableDredForStress).
     static void ForceLegacyBarriers(bool enable);
+    // Step 11: OPT IN to the enhanced path. Step 9 detects the capability but the engine must
+    // "treat it as OFF everywhere" until step 15 flips the default, so support alone must not
+    // change behaviour — an explicit `--enhanced-barriers` does. Also set before device creation.
+    static void EnableEnhancedBarriers(bool enable);
     ID3D12Device10* Device10() const { return device10_.Get(); }
     bool AreEnhancedBarriersSupported() const { return enhancedBarriers_; }
+    // The EFFECTIVE switch: supported AND opted in. Everything that would change behaviour reads
+    // this; `AreEnhancedBarriersSupported` stays a pure capability report.
+    bool UseEnhancedBarriers() const { return enhancedBarriers_ && enhancedOptIn_; }
 
 private:
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
     Microsoft::WRL::ComPtr<ID3D12Device5> device5_; // null if DXR unsupported
     Microsoft::WRL::ComPtr<ID3D12Device10> device10_; // null without the enhanced-barrier interfaces
     bool enhancedBarriers_ = false;
+    bool enhancedOptIn_ = false;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
     D3D12_RAYTRACING_TIER raytracingTier_ = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
 };

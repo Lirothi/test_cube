@@ -305,6 +305,7 @@
     <ClCompile Include="sources/rendering/core/FrameScheduler.cpp" />
     <ClCompile Include="sources/rendering/core/GraphicsDevice.cpp" />
     <ClCompile Include="sources/rendering/core/BarrierTranslation.cpp" />
+    <ClCompile Include="sources/rendering/core/TextureCreate.cpp" />
     <ClCompile Include="sources/rendering/core/Renderer.cpp" />
     <ClCompile Include="sources/rendering/core/Screenshot.cpp" />
     <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp" />
@@ -512,6 +513,7 @@
     <ClInclude Include="sources/rendering/core/FrameScheduler.h" />
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h" />
     <ClInclude Include="sources/rendering/core/BarrierTranslation.h" />
+    <ClInclude Include="sources/rendering/core/TextureCreate.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />
     <ClInclude Include="sources/rendering/core/Screenshot.h" />
     <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h" />

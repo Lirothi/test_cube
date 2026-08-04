@@ -1273,7 +1273,46 @@ and the unknown-bit fallback. `failures: 0`.
 
 **Acceptance met:** both `0/0`; nothing calls the translation yet; behaviour unchanged.
 
-### Step 11 — create textures with an initial layout (gated)
+### Step 11 — create textures with an initial layout — **DONE (uncommitted)**
+
+`sources/rendering/core/TextureCreate.{h,cpp}`: `render::CreateCommittedTexture(...)`, one place
+that creates a texture. With the enhanced path off it is byte-for-byte the old
+`CreateCommittedResource`; with it on, `CreateCommittedResource3` takes the `D3D12_BARRIER_LAYOUT`
+that `barriers::LegacyStateToBarrier` derives from the resource's resting state.
+
+Shaped to take a raw `ID3D12Device*` so each of the 14 converted sites changes by one identifier
+instead of threading a new parameter through six `RenderTargetManager` signatures. The resolved
+decision is published once by `GraphicsDevice::InitDevice`, in the same process-global style that
+file already uses for DRED/GBV/`--legacy-barriers`.
+
+Converted: `RenderTargetManager` x8 (every deferred target, the CSM/spot/point atlases),
+`Texture2D` x3, `OceanSimulation` x4, `VirtualShadowMap` pool, `ReflectionHistory`. Swapchain
+buffers come from the swapchain itself, not `CreateCommittedResource`.
+
+**A separate opt-in was required, and the plan is amended here.** Step 9 says the capability must
+be "treated as OFF everywhere", but detection reports `supported=yes` on this machine — so gating
+creation on `AreEnhancedBarriersSupported()` alone would have changed behaviour by default at a
+step whose whole point is that it must not. `GraphicsDevice::UseEnhancedBarriers()` =
+supported AND opted in (`--enhanced-barriers`); the capability accessor stays a pure report.
+Step 15 is where the default moves.
+
+**Acceptance met, and the flag-on result is the honest one:**
+- flag off — both builds `0/0`; `--barrier-cmp --canonical-check --scene-stress-gbv=12` =
+  `CLEAN after 12 iterations`, 0 non-noise GBV. Unchanged.
+- flag on — **every texture creates**: `CreateCommittedResource3` returned success for all of
+  them, zero entries in the refusal log the helper writes on failure.
+- flag on, then RUNNING — fails, by design. The debug layer raises at `ExecuteCommandLists`
+  (`UploadBatch::Submit`) because the recorded barriers are still LEGACY, and a texture created
+  with an explicit layout cannot take those. That is exactly what step 12 builds. The step's bar
+  is "textures still create", not "the engine runs".
+
+**Trap worth keeping: a BUFFER must never go through this helper.** The mechanical conversion
+caught `Texture2D`'s upload heap (`DIMENSION_BUFFER`) along with the texture beside it, and
+`CreateCommittedResource3` then raised *inside the call* for a layout on a bufferC — which read as
+"enhanced creation is broken" until the stack showed it was one wrong call site. Buffers have no
+layout; the site is now explicitly commented.
+
+### (original spec) Step 11 — create textures with an initial layout (gated)
 
 Enhanced barriers track texture layout, which must be declared at creation
 (`CreateCommittedResource3` / `CreatePlacedResource2`). Route texture creation through a helper

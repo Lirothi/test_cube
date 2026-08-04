@@ -1,4 +1,5 @@
 #include "ocean/OceanSimulation.h"
+#include "rendering/core/TextureCreate.h"
 
 #include <cassert>
 #include <algorithm>
@@ -548,9 +549,8 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
     ComPtr<ID3D12Resource> dispRes;
-    ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-        &texDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
-        IID_PPV_ARGS(&dispRes)));
+    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, texDesc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &dispRes));
 
     // Created as the FFT's UAV, but the frame leaves it shader-readable for the surface draw
     // (see PrepareUpdate). Measured with --canonical-check.
@@ -560,9 +560,8 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     D3D12_RESOURCE_DESC prevDesc = texDesc;
     prevDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
     ComPtr<ID3D12Resource> prevRes;
-    ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-        &prevDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
-        IID_PPV_ARGS(&prevRes)));
+    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, prevDesc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr, &prevRes));
 
     const D3D12_RESOURCE_STATES prevSrvState =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
@@ -578,9 +577,8 @@ void OceanSimulation::CreateResources(Renderer* renderer,
         foamDesc.DepthOrArraySize = static_cast<UINT16>(cascadeCount_);
         foamDesc.MipLevels = static_cast<UINT16>(mipCount_);
         ComPtr<ID3D12Resource> foamRes;
-        ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-            &foamDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
-            IID_PPV_ARGS(&foamRes)));
+        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, foamDesc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &foamRes));
         foamTurbulence_.Attach(renderer->Declarations(), std::move(foamRes), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             L"Ocean.FoamTurbulence");
         foamNeedsInit_ = true;
@@ -631,8 +629,8 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
     clear.DepthStencil.Stencil = 0;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> shoreDepthRes;
-    ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-        &depthDesc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, IID_PPV_ARGS(&shoreDepthRes)));
+    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, depthDesc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, &shoreDepthRes));
     // Naming, declaring and unregistering are now one thing the wrapper owns; rasterized as
     // depth, then sampled, so the frame leaves it shader-readable.
     // Created in its RESTING state (rasterized as depth, then sampled) — step 7 prereq #1.

@@ -9,6 +9,7 @@
 
 #include "core/Helpers.h"
 #include "core/diagnostics/DiagPaths.h"
+#include "rendering/core/TextureCreate.h"
 
 namespace
 {
@@ -20,11 +21,19 @@ namespace
     // Step 9: --legacy-barriers. Lives here rather than in render:: because GraphicsDevice cannot
     // see Renderer.h — Renderer.h includes THIS header, so the dependency only runs one way.
     std::atomic<bool> g_forceLegacyBarriers{ false };
+    // Step 11: --enhanced-barriers. Step 9 detects the capability; the engine must still behave
+    // exactly as before until this is opted into, so support alone changes nothing.
+    std::atomic<bool> g_enhancedOptIn{ false };
 }
 
 void GraphicsDevice::ForceLegacyBarriers(bool enable)
 {
     g_forceLegacyBarriers.store(enable, std::memory_order_relaxed);
+}
+
+void GraphicsDevice::EnableEnhancedBarriers(bool enable)
+{
+    g_enhancedOptIn.store(enable, std::memory_order_relaxed);
 }
 
 void GraphicsDevice::EnableDredForStress(bool enable)
@@ -110,13 +119,18 @@ void GraphicsDevice::InitDevice()
     // --legacy-barriers keeps the old path reachable for bisecting once step 15 flips the default.
     const bool forceLegacy = g_forceLegacyBarriers.load(std::memory_order_relaxed);
     if (forceLegacy) { enhancedBarriers_ = false; }
+    enhancedOptIn_ = g_enhancedOptIn.load(std::memory_order_relaxed) && !forceLegacy;
+    // Publish the resolved decision for the texture-creation helper (step 11). Done here, once,
+    // so the ~11 creation sites need no new parameter and cannot disagree about it.
+    render::SetEnhancedTextureCreation(UseEnhancedBarriers());
     {
-        char msg[192];
+        char msg[224];
         std::snprintf(msg, sizeof(msg),
-                      "[caps] raytracing tier=%d | enhanced barriers: device10=%s supported=%s%s\n",
+                      "[caps] raytracing tier=%d | enhanced barriers: device10=%s supported=%s in-use=%s%s\n",
                       static_cast<int>(raytracingTier_),
                       device10_ ? "yes" : "no",
                       enhancedBarriers_ ? "yes" : "no",
+                      UseEnhancedBarriers() ? "yes" : "no",
                       forceLegacy ? " (forced off by --legacy-barriers)" : "");
         OutputDebugStringA(msg);
         // Also to a file. A capability the whole enhanced-barrier half is gated on has to be
