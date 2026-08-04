@@ -42,9 +42,24 @@ public:
     D3D12_RAYTRACING_TIER RaytracingTier() const { return raytracingTier_; }
     bool IsRaytracingSupported() const { return raytracingTier_ >= D3D12_RAYTRACING_TIER_1_1; }
 
+    // Enhanced barriers (barrier plan step 9), queried once at device creation exactly like the
+    // DXR pair above. Device10() is null on a runtime that never had ID3D12Device10, and
+    // EnhancedBarriersSupported can still be false on one that does — both are checked.
+    //
+    // The Windows SDK on this machine (10.0.26100) already declares D3D12_BARRIER_GROUP,
+    // ID3D12GraphicsCommandList7 and D3D12_FEATURE_D3D12_OPTIONS12, so the plan's Agility SDK
+    // sub-step is NOT needed. Verified before any of this was written.
+    //
+    // Set from main.cpp BEFORE device creation (mirrors EnableDredForStress).
+    static void ForceLegacyBarriers(bool enable);
+    ID3D12Device10* Device10() const { return device10_.Get(); }
+    bool AreEnhancedBarriersSupported() const { return enhancedBarriers_; }
+
 private:
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
     Microsoft::WRL::ComPtr<ID3D12Device5> device5_; // null if DXR unsupported
+    Microsoft::WRL::ComPtr<ID3D12Device10> device10_; // null without the enhanced-barrier interfaces
+    bool enhancedBarriers_ = false;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
     D3D12_RAYTRACING_TIER raytracingTier_ = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
 };

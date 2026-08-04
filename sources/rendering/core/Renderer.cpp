@@ -34,6 +34,23 @@ static void logFunctionCallback(sl::LogType type, const char* msg)
     OutputDebugStringA(msg);
 }
 
+// Step 9: the enhanced-barrier command list. Same borrowed-view contract as AsCmdList4 — the
+// QueryInterface ref is released immediately and the pointer is valid only as long as `cl` is.
+// Null when the runtime predates ID3D12GraphicsCommandList7, which is why every future caller
+// must check it rather than assume AreEnhancedBarriersSupported() implies it.
+ID3D12GraphicsCommandList7* Renderer::AsCmdList7(ID3D12GraphicsCommandList* cl) const
+{
+    if (!cl) {
+        return nullptr;
+    }
+    ID3D12GraphicsCommandList7* cl7 = nullptr;
+    if (SUCCEEDED(cl->QueryInterface(IID_PPV_ARGS(&cl7)))) {
+        cl7->Release();
+        return cl7;
+    }
+    return nullptr;
+}
+
 ID3D12GraphicsCommandList4* Renderer::AsCmdList4(ID3D12GraphicsCommandList* cl) const
 {
     if (!cl) {

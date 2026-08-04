@@ -53,6 +53,12 @@ public:
         // not compile barriers for them and Transition must keep routing them to the tracker —
         // otherwise the compiled before-state is guesswork against code that never told us.
         bool unmanaged = false;
+        // Step 10: buffer or texture, read from GetDesc() HERE — the same reason the debug name is
+        // captured at declaration rather than at report time: this is the one moment the pointer is
+        // guaranteed live. The enhanced-barrier translation needs it (buffers carry no layout, and
+        // a buffer barrier is a different struct from a texture barrier), and asking the resource
+        // later would mean dereferencing a possibly-dangling key.
+        bool isBuffer = false;
     };
 
     // Last write wins rather than first: a resource recreated at a recycled address must not
@@ -63,6 +69,7 @@ public:
         Entry e;
         e.state = state;
         e.predicted = state; // a freshly created resource IS in its resting state
+        e.isBuffer = res->GetDesc().Dimension == D3D12_RESOURCE_DIMENSION_BUFFER;
         // 256, not 64: GetPrivateData returns DXGI_ERROR_MORE_DATA when the name does not fit and
         // the D3D12 debug layer RAISES on that — a Debug-only crash Release runs can never show.
         // Texture names carry a full asset path, which is what overflowed the old buffer.
@@ -102,6 +109,16 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         auto it = states_.find(res);
         return it != states_.end() && !it->second.unmanaged;
+    }
+
+    // Step 10: buffer or texture, as recorded at declaration. False for an unknown resource —
+    // a caller that cares must also check IsCompileManaged.
+    bool IsBuffer(ID3D12Resource* res) const
+    {
+        if (res == nullptr) { return false; }
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = states_.find(res);
+        return it != states_.end() && it->second.isBuffer;
     }
 
     bool IsUnmanaged(ID3D12Resource* res) const

@@ -212,6 +212,8 @@ public:
     // borrows the passed list's lifetime — use it within the same scope, do not
     // store it. Null if the list is null or the interface is unavailable.
     ID3D12GraphicsCommandList4* AsCmdList4(ID3D12GraphicsCommandList* cl) const;
+    // Step 9: enhanced-barrier view of a command list; null on older runtimes.
+    ID3D12GraphicsCommandList7* AsCmdList7(ID3D12GraphicsCommandList* cl) const;
     HWND GetHWND() const { return hWnd_; }
     UINT GetWidth() const { return width_; }
     UINT GetHeight() const { return height_; }
@@ -290,6 +292,8 @@ public:
     // that Transition will not emit advances the running state past a barrier nobody emits, and
     // the next user of that resource gets a wrong before-state.
     bool IsResourceCompileManaged(ID3D12Resource* res) const { return canonicalStates_.IsCompileManaged(res); }
+    // Step 10: buffer vs texture, recorded at declaration (enhanced barriers need the split).
+    bool IsResourceBuffer(ID3D12Resource* res) const { return canonicalStates_.IsBuffer(res); }
     // Where the last barrier compile left this resource; the seed for the next one.
     D3D12_RESOURCE_STATES GetPredictedState(ID3D12Resource* res) const { return canonicalStates_.GetPredicted(res); }
     // Bumped by every declare/forget/unmanaged/clear — the barrier compile's cache key.

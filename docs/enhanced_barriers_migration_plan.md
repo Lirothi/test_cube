@@ -1244,10 +1244,34 @@ one place where "it looked fine" is not evidence.
 
 **Acceptance:** both `0/0`; identical behavior; the detected capability is logged.
 
-### Step 10 — translation layer + resource-kind classification, dormant
+### Step 10 — translation layer + resource-kind classification — **DONE (uncommitted)**
 
-Add `LegacyStateToBarrier` (D4) and per-resource buffer/texture classification. Nothing calls
-them yet. **Acceptance:** both `0/0`; behavior unchanged.
+`sources/rendering/core/BarrierTranslation.{h,cpp}`: `LegacyStateToBarrier(state, isBuffer)` →
+`{sync, access, layout}`, plus `IsTextureCompatible`. Buffer/texture classification is an
+`isBuffer` bit on `CanonicalStateRegistry::Entry`, read from `GetDesc().Dimension` **at Declare
+time** — the same reasoning as the debug name: that is the one moment the pointer is guaranteed
+live, and the table can hold dangling keys.
+
+**D4's table needed extending in the one place that matters: COMBINED states.** It is written one
+row per legacy state, but this engine declares combinations deliberately — `0xC0`
+(NON_PIXEL|PIXEL) for a texture read from both stages, `0x840` (NON_PIXEL|COPY_SOURCE) for
+`VSM.PhysOwner`, `0x41` (NON_PIXEL|VERTEX_AND_CONSTANT_BUFFER) for `VSM.PageProj`. Sync and access
+simply OR. **Layout cannot** — a texture has exactly one — so:
+
+- one distinct layout (0xC0: both shader-resource bits share `LAYOUT_SHADER_RESOURCE`) → that one;
+- several, all read-only (0x840) → `LAYOUT_GENERIC_READ`, which is what it exists for;
+- several including a writable one → `LAYOUT_COMMON`: legal everywhere and slow enough to notice,
+  because that combination is a mis-declaration rather than something to guess at.
+
+An unknown bit widens to `SYNC_ALL` / `LAYOUT_COMMON` rather than being dropped — an
+under-specified barrier is a race, a too-wide one is only slow.
+
+**Gate.** A table nothing calls is a table nobody notices is wrong, so it is tested rather than
+merely compiled: `ScenarioBarrierTranslation` in `--renderer-submission-stress` asserts D4's
+single-state rows, the COMMON/PRESENT zero case, both combination rules, the buffer-only states
+and the unknown-bit fallback. `failures: 0`.
+
+**Acceptance met:** both `0/0`; nothing calls the translation yet; behaviour unchanged.
 
 ### Step 11 — create textures with an initial layout (gated)
 

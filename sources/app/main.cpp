@@ -224,6 +224,12 @@ int WINAPI WinMain(
     }
     // "--barrier-cache-verify" recompiles the barriers every frame and diffs them against what the
     // cross-frame cache would have served. Slower than no cache at all; it is a correctness gate.
+    // Step 9: "--legacy-barriers" forces the LEGACY barrier path even where the device supports
+    // enhanced barriers, so the old path stays bisectable once step 15 flips the default. Must be
+    // set before device creation.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--legacy-barriers")) {
+        GraphicsDevice::ForceLegacyBarriers(true);
+    }
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-cache-verify")) {
         render::g_barrierCacheVerify = true;
     }

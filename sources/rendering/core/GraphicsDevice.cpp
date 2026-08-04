@@ -5,8 +5,10 @@
 #include <d3d12sdklayers.h>
 
 #include <atomic>
+#include <cstdio>
 
 #include "core/Helpers.h"
+#include "core/diagnostics/DiagPaths.h"
 
 namespace
 {
@@ -15,6 +17,14 @@ namespace
     // device creation, read here.
     std::atomic<bool> g_dredForStress{ false };
     std::atomic<bool> g_gbvForStress{ false };
+    // Step 9: --legacy-barriers. Lives here rather than in render:: because GraphicsDevice cannot
+    // see Renderer.h — Renderer.h includes THIS header, so the dependency only runs one way.
+    std::atomic<bool> g_forceLegacyBarriers{ false };
+}
+
+void GraphicsDevice::ForceLegacyBarriers(bool enable)
+{
+    g_forceLegacyBarriers.store(enable, std::memory_order_relaxed);
 }
 
 void GraphicsDevice::EnableDredForStress(bool enable)
@@ -87,6 +97,37 @@ void GraphicsDevice::InitDevice()
             raytracingTier_ = options5.RaytracingTier;
         }
     }
+
+    // Enhanced barriers (barrier plan step 9). Same shape as the DXR probe above: both halves are
+    // optional and any failure just leaves the capability false. Detected and LOGGED only —
+    // nothing reads it yet; steps 10-16 build the emission path behind it.
+    if (SUCCEEDED(device_.As(&device10_))) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS12 options12{};
+        if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS12, &options12, sizeof(options12)))) {
+            enhancedBarriers_ = options12.EnhancedBarriersSupported != FALSE;
+        }
+    }
+    // --legacy-barriers keeps the old path reachable for bisecting once step 15 flips the default.
+    const bool forceLegacy = g_forceLegacyBarriers.load(std::memory_order_relaxed);
+    if (forceLegacy) { enhancedBarriers_ = false; }
+    {
+        char msg[192];
+        std::snprintf(msg, sizeof(msg),
+                      "[caps] raytracing tier=%d | enhanced barriers: device10=%s supported=%s%s\n",
+                      static_cast<int>(raytracingTier_),
+                      device10_ ? "yes" : "no",
+                      enhancedBarriers_ ? "yes" : "no",
+                      forceLegacy ? " (forced off by --legacy-barriers)" : "");
+        OutputDebugStringA(msg);
+        // Also to a file. A capability the whole enhanced-barrier half is gated on has to be
+        // readable from a plain run, not only under a debugger — DBWIN output is lost otherwise,
+        // the same trap that hid the stress verdict and the barrier trace earlier in this work.
+        FILE* f = nullptr;
+        if (fopen_s(&f, diag::LogPath("device_caps.log").c_str(), "w") == 0 && f) {
+            std::fputs(msg, f);
+            std::fclose(f);
+        }
+    }
 }
 
 void GraphicsDevice::SetupDebugBreaks()
@@ -143,6 +184,8 @@ void GraphicsDevice::ReleaseQueue()
 void GraphicsDevice::ReleaseDevice()
 {
     device5_.Reset();
+    device10_.Reset();
+    enhancedBarriers_ = false;
     if (device_) {
         device_.Reset();
     }

@@ -1,6 +1,7 @@
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "core/diagnostics/DiagPaths.h"
 #include "rendering/core/SubmitTimeline.h"
+#include "rendering/core/BarrierTranslation.h"
 
 #include <windows.h>
 
@@ -312,6 +313,91 @@ void ScenarioDeterministicOrder(int permutations)
     Check(ok, what);
 }
 
+// --- Barrier translation (step 10) -------------------------------------------
+//
+// A table nothing calls yet is a table nobody notices is wrong. These assert design D4's mapping
+// directly, plus the two cases the table's shape exists for: COMBINED read states (which the
+// engine declares deliberately — VSM.PhysOwner rests in NON_PIXEL|COPY_SOURCE) and the
+// buffer/texture split (a buffer has no layout at all).
+
+void ScenarioBarrierTranslation()
+{
+    using namespace barriers;
+    bool ok = true;
+    const auto tex = [](D3D12_RESOURCE_STATES s) { return LegacyStateToBarrier(s, /*isBuffer=*/false); };
+    const auto buf = [](D3D12_RESOURCE_STATES s) { return LegacyStateToBarrier(s, /*isBuffer=*/true); };
+
+    // Single states: the D4 table, verbatim.
+    {
+        const Translated t = tex(D3D12_RESOURCE_STATE_RENDER_TARGET);
+        ok = ok && t.sync == D3D12_BARRIER_SYNC_RENDER_TARGET
+                && t.access == D3D12_BARRIER_ACCESS_RENDER_TARGET
+                && t.layout == D3D12_BARRIER_LAYOUT_RENDER_TARGET;
+    }
+    {
+        const Translated t = tex(D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        ok = ok && t.access == D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE
+                && t.layout == D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE;
+    }
+    {
+        const Translated t = tex(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ok = ok && t.access == D3D12_BARRIER_ACCESS_UNORDERED_ACCESS
+                && t.layout == D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS;
+    }
+    {
+        const Translated t = tex(D3D12_RESOURCE_STATE_COPY_SOURCE);
+        ok = ok && t.sync == D3D12_BARRIER_SYNC_COPY
+                && t.layout == D3D12_BARRIER_LAYOUT_COPY_SOURCE;
+    }
+    Check(ok, "barrier translation: single states match design D4");
+
+    // COMMON is zero, not a bit, and PRESENT shares its value.
+    ok = tex(D3D12_RESOURCE_STATE_COMMON).layout == D3D12_BARRIER_LAYOUT_COMMON &&
+         tex(D3D12_RESOURCE_STATE_COMMON).sync == D3D12_BARRIER_SYNC_ALL &&
+         buf(D3D12_RESOURCE_STATE_COMMON).layout == D3D12_BARRIER_LAYOUT_UNDEFINED;
+    Check(ok, "barrier translation: COMMON/PRESENT -> SYNC_ALL, common layout (none for buffers)");
+
+    // Combined SHADER_RESOURCE: same access and layout, sync ORs. This is the engine's 0xC0.
+    {
+        const Translated t = tex(static_cast<D3D12_RESOURCE_STATES>(
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
+        ok = t.access == D3D12_BARRIER_ACCESS_SHADER_RESOURCE &&
+             t.layout == D3D12_BARRIER_LAYOUT_SHADER_RESOURCE &&
+             (t.sync & D3D12_BARRIER_SYNC_PIXEL_SHADING) != 0 &&
+             (t.sync & D3D12_BARRIER_SYNC_COMPUTE_SHADING) != 0;
+        Check(ok, "barrier translation: NON_PIXEL|PIXEL keeps one layout and ORs sync");
+    }
+
+    // Two DIFFERENT read layouts must collapse to GENERIC_READ — VSM.PhysOwner's resting state.
+    {
+        const Translated t = tex(static_cast<D3D12_RESOURCE_STATES>(
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE));
+        ok = t.layout == D3D12_BARRIER_LAYOUT_GENERIC_READ &&
+             (t.access & D3D12_BARRIER_ACCESS_SHADER_RESOURCE) != 0 &&
+             (t.access & D3D12_BARRIER_ACCESS_COPY_SOURCE) != 0;
+        Check(ok, "barrier translation: NON_PIXEL|COPY_SOURCE collapses to GENERIC_READ");
+    }
+
+    // Buffer-only states carry no layout, and asking for a texture layout is a caller bug.
+    {
+        const Translated t = buf(D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        ok = t.layout == D3D12_BARRIER_LAYOUT_UNDEFINED &&
+             t.access == D3D12_BARRIER_ACCESS_INDIRECT_ARGUMENT &&
+             t.sync == D3D12_BARRIER_SYNC_EXECUTE_INDIRECT;
+        ok = ok && !IsTextureCompatible(D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        ok = ok && !IsTextureCompatible(D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        ok = ok && IsTextureCompatible(D3D12_RESOURCE_STATE_RENDER_TARGET);
+        Check(ok, "barrier translation: buffer-only states have no texture layout");
+    }
+
+    // An unknown bit must widen, never silently drop: an under-specified barrier is a race.
+    {
+        const Translated t = tex(static_cast<D3D12_RESOURCE_STATES>(0x40000000));
+        Check(t.sync == D3D12_BARRIER_SYNC_ALL && t.layout == D3D12_BARRIER_LAYOUT_COMMON,
+              "barrier translation: unknown state falls back to the widest correct barrier");
+    }
+}
+
 // --- Death tests -------------------------------------------------------------
 
 int RunDeathTestChild(const char* flag)
@@ -437,6 +523,7 @@ int RunRendererSubmissionStress(const char* cmdLine)
         ScenarioPoolReuse(200);
         ScenarioBundleRetention();
         ScenarioDeterministicOrder(32);
+        ScenarioBarrierTranslation();
 
         if (gFailures != 0) {
             Log("aborting after round %d: %d failures\n", round + 1, gFailures);
