@@ -94,6 +94,17 @@ extern const Profiler::ScopeNameKey kRenderObjectBatchAsync;
 extern const Profiler::ScopeNameKey kCSMPerCascade;
 extern const Profiler::ScopeNameKey kRenderObjectBatchGpu;
 extern const Profiler::ScopeNameKey kGBufferDriver;
+// Bundle execution. A bundle CANNOT carry a timestamp query (D3D12 forbids queries in bundles),
+// and the bundles are appended to the driver list at GATHER time — after the pass body already
+// closed its own scope. So all bundled geometry executed inside the driver list but outside every
+// scope, and read as an 82 us HOLE in the GPU trace on 122 of 123 frames. This brackets the
+// ExecuteBundle calls on the driver list, which is the one place a query is legal.
+extern const Profiler::ScopeNameKey kExecuteBundles;
+// The ocean SURFACE draw. One fixed scope on the one object that dominates the transparent
+// batch (measured: 88% of it, ~14% of the GPU frame), so the split is visible in every trace
+// at no cost — instead of a general per-object mechanism that cost 17% of the frame to run.
+extern const Profiler::ScopeNameKey kOceanSurface;
+
 extern const Profiler::ScopeNameKey kTransparentDriver;
 extern const Profiler::ScopeNameKey kOceanRender;
 extern const Profiler::ScopeNameKey kPrepareTransparentBuckets;

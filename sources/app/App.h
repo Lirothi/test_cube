@@ -37,6 +37,10 @@ extern double g_shotDelaySec;
 // VSM tunables headlessly without reading the on-screen HUD from a screenshot. Empty = disabled.
 extern std::string g_profDumpPath;
 
+// "--trace=<frames>" (headless trace capture): after the same warmup delay, request the profiler
+// trace the CaptureTrace key would, then exit once it has been written to traces/. 0 = disabled.
+extern uint32_t g_traceFrames;
+
 class App {
 public:
     ~App();

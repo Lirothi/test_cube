@@ -20,6 +20,7 @@ std::string g_shotPath;
 double g_shotDelaySec = 7.0;
 // Temporary VSM perf harness; see App.h.
 std::string g_profDumpPath;
+uint32_t g_traceFrames = 0;
 
 #include "app/levels/JsonLevel.h"
 #include "rendering/core/Screenshot.h"
@@ -585,6 +586,28 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     const bool ok = Profiler::Get().DumpOverlay(g_profDumpPath);
                     OutputDebugStringA(ok ? "[profdump] saved\n" : "[profdump] FAILED\n");
                     g_profDumpPath.clear();
+                    isRunning_ = false;
+                }
+            }
+
+            // "--trace=<frames>": the same capture the CaptureTrace key requests, but headless.
+            // Without it a profiler change cannot be verified without driving the GUI — which is
+            // how an 82 us hole in the GPU timeline went unexplained for so long. Requests after
+            // the warmup delay, then keeps running until the capture has written itself out.
+            if (g_traceFrames != 0)
+            {
+                static double traceStart = GetTimeSeconds();
+                static uint32_t framesLeft = 0;
+                static bool requested = false;
+                if (!requested && GetTimeSeconds() - traceStart >= g_shotDelaySec)
+                {
+                    Profiler::Get().RequestTraceCapture(g_traceFrames);
+                    framesLeft = g_traceFrames + 30; // margin: the write happens on the last frame
+                    requested = true;
+                }
+                else if (requested && --framesLeft == 0)
+                {
+                    g_traceFrames = 0;
                     isRunning_ = false;
                 }
             }

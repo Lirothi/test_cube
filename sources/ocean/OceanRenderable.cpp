@@ -8,6 +8,8 @@
 
 #include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
@@ -712,6 +714,17 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
+}
+
+void OceanRenderable::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+    const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+{
+    // The whole point of this override: the transparent batch is ~88% this one draw, so it gets
+    // a name in every trace. It wraps Render and NOT RecordGraphics because RecordGraphics is
+    // binds only — the draw itself is issued by Render's DrawGeometry, and scoping the binds
+    // measured 1 us of the ~300 that actually matter.
+    GPU_SCOPE(cl, ProfilerScopes::kOceanSurface);
+    RenderableObject::Render(renderer, cl, camera, viewCB);
 }
 
 void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const

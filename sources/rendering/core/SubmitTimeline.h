@@ -6,6 +6,8 @@
 #include <mutex>
 #include <vector>
 
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/RendererInvariantFailure.h"
 
 // Per-frame submission timeline: the ordered pass batches that collect the
@@ -103,8 +105,17 @@ public:
                 driver = makeFallbackDriver();
             }
             if (driver != nullptr) {
-                for (const auto& bundle : pb.bundles) {
-                    driver->ExecuteBundle(bundle.cl); // bundles are non-null (checked at registration)
+                if (!pb.bundles.empty()) {
+                    // The ONE legal place to time bundled work. A bundle cannot contain a
+                    // timestamp query, and this loop runs after the pass body closed its own
+                    // scope — so without this bracket every bundled draw executed inside the
+                    // driver list but outside every scope, and showed in the GPU trace as a hole
+                    // rather than as work. Guarded on non-empty so batches without bundles do not
+                    // each pay for an empty scope.
+                    GPU_SCOPE(driver, ProfilerScopes::kExecuteBundles);
+                    for (const auto& bundle : pb.bundles) {
+                        driver->ExecuteBundle(bundle.cl); // non-null (checked at registration)
+                    }
                 }
                 if (FAILED(driver->Close())) {
                     RendererInvariantFailure("SubmitTimeline::GatherFrameLists: driver Close() failed");

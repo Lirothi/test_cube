@@ -11,6 +11,7 @@
 #include "app/diagnostics/SceneStress.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "core/task/diagnostics/TaskSystemStress.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
@@ -351,6 +352,10 @@ int WINAPI WinMain(
             std::string path;
             while (*p && !std::isspace(static_cast<unsigned char>(*p))) { path.push_back(*p); ++p; }
             g_profDumpPath = path;
+        }
+        // "--trace=<frames>": headless equivalent of the CaptureTrace key.
+        if (const char* flag = std::strstr(lpCmdLine, "--trace=")) {
+            g_traceFrames = static_cast<uint32_t>(std::atoi(flag + std::strlen("--trace=")));
         }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-extent=")) {
             vsm::g_clipmapBaseExtent = (float)std::atof(flag + std::strlen("--vsm-extent="));
