@@ -1388,12 +1388,12 @@ exercised, not merely compiled.
 > `Deferred[0].GBVelocity` … last transitioned by **enhanced** barrier to
 > `LAYOUT_SHADER_RESOURCE` **must be in common layout before switching to legacy barriers**
 
-**Mixing the two models on one resource is illegal**, and the only remaining legacy emitter is the
-compiled path's own fallback: when `EmitEnhanced` refuses a point it drops to `ResourceBarrier`,
-which is safe in isolation but fatal once that resource has already taken an enhanced barrier. The
-fallback that makes each step individually safe is exactly what step 15 must remove — the enhanced
-path has to become EXCLUSIVE, not preferred. That is a design conclusion this step earned, and it
-belongs in step 15's scope rather than being patched here.
+**Mixing the two models on one resource is illegal.** The conclusion drawn here — that the
+remaining legacy emitter is the compiled path's own fallback — **was wrong, and step 14's
+instrumentation disproved it.** With `--enhanced-barriers` the run now reports
+`emit enhanced=3277 legacy=0`: not one point fell back, and 1350 still fires 368 times. So the
+legacy `ResourceBarrier` calls come from code this engine does not own. See step 14 for what the
+measurement actually says and what step 15 therefore has to find.
 
 **A diagnostic change that paid for itself immediately.** `SetupDebugBreaks` broke on
 `D3D12_MESSAGE_SEVERITY_ERROR` unconditionally, so under `--scene-stress-gbv` — whose entire
@@ -1416,7 +1416,64 @@ contract is "errors logged, not fatal, so the harness can drain the info queue" 
 
 **Acceptance:** both `0/0`; `--scene-stress` CLEAN; behavior unchanged (flag off).
 
-### Step 14 — acceleration structures & special states (gated)
+### Step 14 — acceleration structures & special states — **DONE (uncommitted)**
+
+`barriers::EmitAccelerationStructureBuildBarrier(cl, as)`, used at both AS sites
+(`GetOrBuildBlas`, `BuildTlas`). It needs its own entry point rather than reusing `EmitOne`,
+and that is the whole point of the step:
+
+- **No legacy state describes an AS.** `D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE`
+  names only the READ side; the build's WRITE has no legacy spelling at all, which is why the code
+  emitted a bare **UAV** barrier. Routing that through `EmitOne` would have produced
+  `ACCESS_UNORDERED_ACCESS` — and an AS resource may only ever be accessed as
+  `ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ/WRITE`. The generic path would have been
+  *plausible and wrong*.
+- Emitted form: a `D3D12_BUFFER_BARRIER` (AS is a buffer → no layout),
+  `SYNC_BUILD_RTAS`/`ACCESS_RTAS_WRITE` before →
+  `SYNC_BUILD_RTAS|RAYTRACING|COMPUTE_SHADING` / `ACCESS_RTAS_READ` after. `COMPUTE_SHADING` is in
+  the after-sync because this engine's reader is an **inline RayQuery compute shader**, not
+  `DispatchRays` — that one is easy to leave out and it is the reader that actually exists here.
+- **Scratch audited, deliberately unchanged.** Each BLAS build allocates its own scratch (retired
+  post-fence via `pendingScratch_`) and the TLAS has one per frame-in-flight slot with one build
+  per frame — so no scratch is ever written twice inside one list and no barrier is owed. "Scratch
+  = COMMON not UAV" also stops being a hazard under enhanced barriers, which drop implicit
+  promotion/decay for buffers entirely. Creation stays legacy: the step's scope is barriers.
+- AS still bypasses the graph — it declares no states and is never `Transition`ed.
+
+**A CLEAN verdict proves nothing about a path that never ran**, and the AS barrier is the one
+emission nothing else stands in for: it is zero unless RT is on *and* a BLAS/TLAS actually builds.
+So the stress harness now prints what it emitted, on both the clean and the fault path:
+
+| run | emit enhanced | emit legacy | as enhanced | as legacy | verdict |
+|---|---|---|---|---|---|
+| default (legacy) | 0 | 3277 | 0 | **56** | CLEAN after 12 |
+| `--enhanced-barriers` | **3277** | 0 | **56** | 0 | CLEAN after 12 |
+
+The totals matching at 3277 is the structural check: every point legacy emitted, enhanced emitted
+too, and **nothing fell back**. RT genuinely ran (56 AS builds each way), and the legacy AS path is
+live rather than dead code. **Zero** debug-layer messages mention acceleration structures or
+raytracing in either run — the RTAS barrier is accepted as written.
+
+One instrumentation fix was needed to trust those numbers: `EmitEnhanced` never counted its
+successes, so the compiled path — the bulk of the engine's barriers — was invisible in the totals
+and only its *failures* showed up.
+
+**What this hands step 15.** `emit legacy=0` while 1350 fires 368 times means the illegal legacy
+barriers are **not ours**. They land on exactly `Deferred[0..2].{Scene, Depth, GBVelocity}` — the
+DLSS tag set, colour/depth/motion — plus `TextureCube_RESOURCE`. Our only other `ResourceBarrier`
+in the process is ImGui's font-texture upload, which touches none of those. Step 15's job is
+therefore not "remove the fallback" but "find the external emitter and hand it resources in a
+layout it may legally re-transition" (`LAYOUT_COMMON` at the boundary). Two further enhanced-only
+errors are waiting there and are unrelated to the AS: **1334** (288×,
+`Ocean.PrevDisplacement`: barrier layout `SHADER_RESOURCE` vs expected `COMMON` at
+`ExecuteCommandLists`) and **1358** (128×, `Ocean.Displacement` bound as an SRV while its layout is
+`UNORDERED_ACCESS`).
+
+**Acceptance met:** both `0/0`; `--scene-stress=12` CLEAN with RT reflections on (the default
+`ReflectionSource::RT`, so no GUI driving was needed); no device removal;
+`--scene-stress-gbv=12 --barrier-cmp --canonical-check` CLEAN on both paths.
+
+### (original spec) Step 14 — acceleration structures & special states (gated)
 
 Map AS/scratch states (`SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE`, `ACCESS_RTAS_READ/WRITE`;
 AS is a buffer → no layout). Audit `AccelerationStructure.cpp` for direct barriers and give them

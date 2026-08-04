@@ -4,6 +4,7 @@
 #include <atomic>
 #include <vector>
 
+#include "rendering/core/BarrierTranslation.h"
 #include "rendering/meshes/Mesh.h"
 
 namespace rt {
@@ -135,11 +136,10 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, ID3D12Graph
     build.ScratchAccelerationStructureData = scratch->GetGPUVirtualAddress();
     cmdList4->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
 
-    // Make the build's writes visible before the TLAS (or any reader) consumes it.
-    D3D12_RESOURCE_BARRIER uav{};
-    uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    uav.UAV.pResource = result.Get();
-    cmdList4->ResourceBarrier(1, &uav);
+    // Make the build's writes visible before the TLAS (or any reader) consumes it. Barrier plan
+    // step 14: an AS gets its own emitter — RTAS access, not UAV access — because no legacy state
+    // can spell an AS write, so the generic translation has nothing correct to say about it.
+    barriers::EmitAccelerationStructureBuildBarrier(cmdList4, result.Get());
 
     slot.result = std::move(result);
     pendingScratch_.push_back(std::move(scratch)); // freed via ReleaseCompletedScratch() post-fence
@@ -286,10 +286,9 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
     cmdList4->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
     f.canUpdate = true; // built with ALLOW_UPDATE -> refit-eligible next time this slot is used
 
-    D3D12_RESOURCE_BARRIER uav{};
-    uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    uav.UAV.pResource = f.result.Get();
-    cmdList4->ResourceBarrier(1, &uav);
+    // Step 14, as in GetOrBuildBlas: the TLAS result's reader is the inline-RayQuery compute
+    // shader, and the barrier now says RTAS rather than UAV.
+    barriers::EmitAccelerationStructureBuildBarrier(cmdList4, f.result.Get());
 
     // 4) (Re)create the per-frame TLAS SRV at this frame's result VA. AS SRVs are
     //    created with a NULL resource and reference the AS via Location.

@@ -67,12 +67,32 @@ bool Enabled();
 // drops a barrier.
 void EmitOne(ID3D12GraphicsCommandList* cl, const D3D12_RESOURCE_BARRIER& barrier);
 
+// Step 14 — the acceleration-structure build barrier, which needs its own entry point.
+//
+// An AS is a BUFFER (so: no layout) that NO legacy state fully describes.
+// `D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE` names only the READ side, and the
+// build's WRITE has no legacy spelling at all — which is why the AS manager emits a bare UAV
+// barrier today, and why routing it through `EmitOne` would be WRONG: a UAV barrier translates to
+// `ACCESS_UNORDERED_ACCESS`, while an AS resource may only ever be accessed as
+// `ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ/WRITE`. The enhanced model can say the real thing,
+// so this says it rather than reusing the generic path.
+//
+// Meaning: "the build's writes to `as` are complete; readers may consume it" — the TLAS build for a
+// BLAS, and the inline-RayQuery compute shader for the TLAS.
+void EmitAccelerationStructureBuildBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* as);
+
 // How many compiled points went out as enhanced barriers vs fell back to ResourceBarrier. The
 // enhanced emission is written at step 12 but only becomes REACHABLE at step 13 (the direct
 // upload/present sites still record legacy barriers, and mixing kills the run before a frame
 // renders), so these exist to prove it actually executed rather than merely compiled.
 void EmitStats(std::uint32_t& enhanced, std::uint32_t& legacy);
 void NoteLegacyEmit();
+
+// Step 14 — the same proof, for the AS path specifically. Broken out of the aggregate above
+// because the AS barrier is the one emission this engine makes that NOTHING else can stand in
+// for: it only happens when raytracing is actually enabled and a BLAS/TLAS actually builds, so a
+// zero here means the step was never exercised rather than that it works.
+void AsEmitStats(std::uint32_t& enhanced, std::uint32_t& legacy);
 
 bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
                   const D3D12_RESOURCE_BARRIER* entries,

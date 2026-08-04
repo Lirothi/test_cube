@@ -142,6 +142,8 @@ Translated LegacyStateToBarrier(D3D12_RESOURCE_STATES state, bool isBuffer)
 namespace {
 std::atomic<std::uint32_t> gEnhancedEmits{ 0 };
 std::atomic<std::uint32_t> gLegacyEmits{ 0 };
+std::atomic<std::uint32_t> gAsEnhancedEmits{ 0 };
+std::atomic<std::uint32_t> gAsLegacyEmits{ 0 };
 } // namespace
 
 std::atomic<bool> gEnabled{ false };
@@ -226,6 +228,54 @@ void EmitOne(ID3D12GraphicsCommandList* cl, const D3D12_RESOURCE_BARRIER& barrie
 
     cl->ResourceBarrier(1, &barrier);
     gLegacyEmits.fetch_add(1, std::memory_order_relaxed);
+}
+
+void EmitAccelerationStructureBuildBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* as)
+{
+    if (cl == nullptr || as == nullptr) { return; }
+
+    if (Enabled()) {
+        ID3D12GraphicsCommandList7* cl7 = nullptr;
+        if (SUCCEEDED(cl->QueryInterface(IID_PPV_ARGS(&cl7))) && cl7) {
+            cl7->Release(); // borrowed view; `cl` keeps it alive
+            D3D12_BUFFER_BARRIER bb{};
+            bb.SyncBefore = D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE;
+            bb.AccessBefore = D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE;
+            // Readers are: another BUILD (the TLAS consuming this BLAS), DispatchRays, and — the
+            // case this engine actually uses — inline RayQuery inside a compute shader, which syncs
+            // as COMPUTE_SHADING rather than RAYTRACING. All three, deliberately: a too-wide sync
+            // is only slow, a missing one is a race. Step 16 narrows it.
+            bb.SyncAfter = D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE |
+                           D3D12_BARRIER_SYNC_RAYTRACING | D3D12_BARRIER_SYNC_COMPUTE_SHADING;
+            bb.AccessAfter = D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ;
+            bb.pResource = as;
+            bb.Offset = 0;
+            bb.Size = UINT64_MAX;
+            D3D12_BARRIER_GROUP grp{};
+            grp.Type = D3D12_BARRIER_TYPE_BUFFER;
+            grp.NumBarriers = 1;
+            grp.pBufferBarriers = &bb;
+            cl7->Barrier(1, &grp);
+            gEnhancedEmits.fetch_add(1, std::memory_order_relaxed);
+            gAsEnhancedEmits.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+
+    // Unchanged legacy form: a UAV barrier is how the pre-enhanced model spells "the build wrote
+    // this, order the readers after it".
+    D3D12_RESOURCE_BARRIER uav{};
+    uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uav.UAV.pResource = as;
+    cl->ResourceBarrier(1, &uav);
+    gLegacyEmits.fetch_add(1, std::memory_order_relaxed);
+    gAsLegacyEmits.fetch_add(1, std::memory_order_relaxed);
+}
+
+void AsEmitStats(std::uint32_t& enhanced, std::uint32_t& legacy)
+{
+    enhanced = gAsEnhancedEmits.load(std::memory_order_relaxed);
+    legacy = gAsLegacyEmits.load(std::memory_order_relaxed);
 }
 
 void EmitStats(std::uint32_t& enhanced, std::uint32_t& legacy)
@@ -320,6 +370,10 @@ bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
     if (groupCount == 0) { return false; }
 
     cl7->Barrier(groupCount, groups);
+    // Counted per POINT, symmetrically with the caller's NoteLegacyEmit() on the fallback — so
+    // "enhanced vs legacy" compares like with like. Without this the compiled path, which is the
+    // bulk of the engine's barriers, was invisible in the totals and only its FAILURES showed up.
+    gEnhancedEmits.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 

@@ -789,13 +789,19 @@ private:
             // visible, never silent.
             std::uint32_t emitEnhanced = 0, emitLegacy = 0;
             barriers::EmitStats(emitEnhanced, emitLegacy);
-            char msg[344];
+            // Step 14: the acceleration-structure split, reported apart from the totals. It is the
+            // only counter that says whether RT ran at all — a stress run on a machine with
+            // reflections off would otherwise look identical to one where the AS barrier works.
+            std::uint32_t asEnhanced = 0, asLegacy = 0;
+            barriers::AsEmitStats(asEnhanced, asLegacy);
+            char msg[416];
             std::snprintf(msg, sizeof(msg),
                           "[barrier-compile] %u barriers over %zu resources; return-to-canonical would add %u; "
-                          "cache hits=%u misses=%u not-fixed-point=%u; emit enhanced=%u legacy=%u\n",
+                          "cache hits=%u misses=%u not-fixed-point=%u; emit enhanced=%u legacy=%u; "
+                          "as enhanced=%u legacy=%u\n",
                           prepare_->barrierCount, compileState_.size(), returnBarrierEstimate_,
                           prepare_->cacheHits, prepare_->cacheMisses, prepare_->cacheNotFixedPoint,
-                          emitEnhanced, emitLegacy);
+                          emitEnhanced, emitLegacy, asEnhanced, asLegacy);
             Renderer::DiagLog(msg);
         }
     }

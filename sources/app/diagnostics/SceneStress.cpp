@@ -8,6 +8,7 @@
 #include "app/levels/JsonLevel.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
+#include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 
@@ -250,6 +251,7 @@ public:
             Log("[iter %d] op=%s ok\n", iter, OpName(op));
         }
 
+        LogBarrierEmits_();
         Log("verdict: CLEAN after %d iterations\n", iterations_);
         if (gLog) { fflush(gLog); }
         return 0;
@@ -392,10 +394,25 @@ private:
         return nullptr;
     }
 
+    // Barrier plan step 14. A CLEAN verdict proves nothing about a path that never RAN, and the
+    // barrier work has exactly two such paths: the enhanced emission (off unless opted into) and
+    // the acceleration-structure barrier, which is zero unless raytracing was enabled AND a
+    // BLAS/TLAS actually built. Printed on both outcomes — on a fault it says which model was in
+    // use when it happened.
+    void LogBarrierEmits_()
+    {
+        std::uint32_t emitEnhanced = 0, emitLegacy = 0, asEnhanced = 0, asLegacy = 0;
+        barriers::EmitStats(emitEnhanced, emitLegacy);
+        barriers::AsEmitStats(asEnhanced, asLegacy);
+        Log("barriers: emit enhanced=%u legacy=%u | as enhanced=%u legacy=%u\n",
+            emitEnhanced, emitLegacy, asEnhanced, asLegacy);
+    }
+
     int FinishFault_(int iter, const char* op, const char* reason)
     {
         faultCaught_ = true;
         Log("[iter %d] op=%s FAULT: %s\n", iter, op, reason);
+        LogBarrierEmits_();
         Log("verdict: FAULT op=%s iter=%d detail=%s\n", op, iter, reason);
         if (gLog) { fflush(gLog); }
 
