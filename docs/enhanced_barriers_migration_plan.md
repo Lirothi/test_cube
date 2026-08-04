@@ -1667,3 +1667,56 @@ each narrowing must keep GBV clean and `--scene-stress` CLEAN.
   not relevant until async compute/copy queues exist.
 - **Dropping the legacy path** — keep the fallback until enhanced barriers are proven across the
   target hardware range.
+
+---
+
+## Follow-up: GBV id=1358, the defect step 15 deferred — **FIXED (uncommitted)**
+
+Step 15 measured 1358 as identical on both barrier models and handed it out as its own piece of
+work. It is now closed, and it was **two genuine engine bugs plus one of my own**.
+
+**The enabling move was naming the PSOs.** Every GBV message carries
+`Pipeline State: 0x...:'<name>'`, and that read `'Unnamed ID3D12PipelineState Object'` — so a report
+named a *dispatch index* and never a shader. `Material` now calls `SetName` on every compute and
+graphics PSO (`<shaderFile>:<entry>`). One line, and it turned an unattributable id into two
+different bugs in two different shaders within a single run. Same lesson as step 15's
+`--barrier-msg-trace`: **when a report names a resource but not a culprit, fix the report first.**
+
+**Bug 1 — the ocean mip chain read the texture it was writing, through an SRV.** `GenerateMips`
+puts the whole displacement texture in `UNORDERED_ACCESS` (whole-resource barriers are the model),
+then bound `displacementFullSrv_` over it and did `Source.Load(..., SrcMip)`. A resource cannot be
+a UAV and a shader resource at once; the read is undefined. It happened to work, and GBV said so
+54× per run. **Fix: read the source mip through its own UAV** (`RWTexture2DArray Source : u0`,
+`Dest[4] : u1`) — the whole pass then lives in ONE state and needs no barrier at all, because
+different mips are different subresources. The alternative, per-subresource barriers, would have
+meant teaching the whole compile a per-subresource model for one pass.
+Registers are not free choice here: `RenderContext::kMaxBindings` is 4 and `Material::Bind`
+**silently skips** a table whose base register is >= 4, so Source took u0 and Dest u1..u4.
+This makes the renderer depend on typed UAV *loads* of `R16G16B16A16_FLOAT`, so
+`TypedUAVLoadAdditionalFormats` is now queried and printed in `logs/device_caps.log`.
+
+**Bug 2 (mine, introduced fixing bug 1) — a shared material has a shared binding contract.**
+`mipMaterial_` has TWO call sites: the displacement chain and the foam chain. I converted one. The
+other kept setting the old layout, so the dest table landed in the *source* slot and the dest root
+argument was never set at all — GBV: "Uninitialized root argument accessed", naming the dispatch,
+not the site. Exactly the shape of step 13's `UploadManager`-in-a-header miss. **Grep for every
+call site of a material before changing what its bindings mean.**
+
+**Bug 3 — `Pass_VsmPageRequest` read camera depth as an SRV without transitioning it.** The pass
+*declared* the depth read but its Prepare deliberately did not register it, on the reasoning that
+some later pass would have moved depth to a read state. That reasoning was wrong: the pass runs
+straight after the G-buffer, which leaves depth in `DEPTH_WRITE`, and GBV reported the
+SRV-over-DEPTH_WRITE on all three `Deferred[N].Depth` every run. It now registers the read in
+Prepare and performs the matching transition in the body, like every other pass.
+
+**Result — 1358 is GONE (from 54+22 per run to zero), on BOTH barrier models.** What remains under
+GBV is a different class entirely: descriptor-table *contents* not matching what the shader
+expects, ~6 messages per 20 iterations, all on the first draw of a frame —
+`id=939` (heap slot holds a UAV where the register wants an SRV), `id=940` (SRV dimension BUFFER
+where the shader wants TEXTURECUBE), `id=1006` (COMPARISON sampler where the shader wants a default
+one), on `skybox.hlsl` and `gbuffer.hlsl`. Nothing to do with resource states.
+
+**Gates:** both configs `0/0`; `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN, 0
+MISSING; the same with `--shadow-mode=legacy` CLEAN, 0 MISSING; `--scene-stress=12` with
+break-on-error active CLEAN; `--legacy-barriers --scene-stress-gbv=12` CLEAN with 1358 gone there
+too — the fixes are model-independent, as the diagnosis said they had to be.

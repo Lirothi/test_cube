@@ -4,10 +4,12 @@
 #include <cassert>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <random>
 #include <vector>
 
 #include "core/Helpers.h"
+#include "core/diagnostics/DiagPaths.h"
 #include "materials/Material.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
@@ -1246,17 +1248,13 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
 
     renderer->Transition(cl, displacement_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    if (displacementFullSrv_.ptr == 0)
+    // The source mip is bound as a UAV, not an SRV — see the header comment in
+    // shaders/ocean_generate_mips.hlsl. The whole resource is in UNORDERED_ACCESS for this pass, so
+    // an SRV over it was undefined and GPU-based validation flagged it every frame (id=1358).
+    if (mipExtents_.size() < mipCount_ || displacementUavs_.size() < mipCount_)
     {
         return;
     }
-
-    if (mipExtents_.size() < mipCount_)
-    {
-        return;
-    }
-
-    D3D12_CPU_DESCRIPTOR_HANDLE srcSrv = displacementFullSrv_;
 
     for (UINT dstMip = 1; dstMip < mipCount_;)
     {
@@ -1285,7 +1283,7 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
             dstHeight
         };
 
-        auto srvTable = renderer->StageSrvUavTable({ srcSrv });
+        auto srcTable = renderer->StageSrvUavTable({ displacementUavs_[srcMip] });
 
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMipsPerDispatch> uavs{};
         for (UINT i = 0; i < batchCount; ++i)
@@ -1302,8 +1300,9 @@ void OceanSimulation::GenerateMips(Renderer* renderer, ID3D12GraphicsCommandList
         }
         auto uavTable = renderer->StageSrvUavTable(uavs);
 
-        ctx.srvTable[0] = srvTable.gpu;
-        ctx.uavTable[0] = uavTable.gpu;
+        // Both tables are UAVs now; the slot index is the table's BASE REGISTER (u0 / u1).
+        ctx.uavTable[0] = srcTable.gpu;
+        ctx.uavTable[1] = uavTable.gpu;
 
         mipMaterial_->Bind(cl, ctx);
 
@@ -1398,8 +1397,12 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
 
     renderer->UAVBarrier(cl, foamTurbulence_.Get());
 
-    if (mipMaterial_ && mipCount_ > 1 && cascadeCount_ > 0 &&
-        foamSrv_.ptr != 0 && !foamUavs_.empty())
+    // Second user of mipMaterial_ (the displacement chain is the other). Same shape, so it takes
+    // the same UAV-source binding — a shared material means a shared binding contract, and
+    // converting only one of the two call sites left this one setting the OLD layout: the dest
+    // table landed in the source slot and the dest root argument was never set at all. GBV said
+    // "Uninitialized root argument accessed" and named the dispatch, not the site.
+    if (mipMaterial_ && mipCount_ > 1 && cascadeCount_ > 0 && foamUavs_.size() >= mipCount_)
     {
         if (mipExtents_.size() < mipCount_)
         {
@@ -1433,7 +1436,7 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
                 dstHeight
             };
 
-            auto srvTable = renderer->StageSrvUavTable({ foamSrv_ });
+            auto srcTable = renderer->StageSrvUavTable({ foamUavs_[srcMip] });
 
             std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMipsPerDispatch> uavs{};
             for (UINT i = 0; i < batchCount; ++i)
@@ -1450,8 +1453,8 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
             }
             auto uavTable = renderer->StageSrvUavTable(uavs);
 
-            ctxMip.srvTable[0] = srvTable.gpu;
-            ctxMip.uavTable[0] = uavTable.gpu;
+            ctxMip.uavTable[0] = srcTable.gpu;
+            ctxMip.uavTable[1] = uavTable.gpu;
 
             mipMaterial_->Bind(cl, ctxMip);
 

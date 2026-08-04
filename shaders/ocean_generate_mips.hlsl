@@ -1,4 +1,16 @@
-#define OCEAN_MIPS_RS "RootConstants(num32BitConstants=8, b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+// The source mip is read through a UAV, not an SRV, and that is the point of this signature.
+//
+// Mip generation reads mip N and writes mips N+1.. of the SAME resource. The engine's barrier
+// model is whole-resource, so the texture is entirely in UNORDERED_ACCESS for this pass — and
+// binding an SRV over it is undefined: a resource cannot be a UAV and a shader resource at once.
+// It happened to work, and GPU-based validation reported it every frame as id=1358. Reading the
+// source through its own mip's UAV keeps the whole pass in ONE state and needs no barrier at all.
+// Different mips are different SUBRESOURCES, so read-mip-N/write-mip-N+1 in one dispatch is fine.
+//
+// Registers matter here: `RenderContext::kMaxBindings` is 4, and Material::Bind SKIPS any table
+// whose base register is >= 4 — silently. So Source takes u0 and Dest u1..u4 (base u1), rather
+// than the more natural Dest at u0 with Source after it.
+#define OCEAN_MIPS_RS "RootConstants(num32BitConstants=8, b0), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u1, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer MipParams : register(b0)
 {
@@ -12,8 +24,10 @@ cbuffer MipParams : register(b0)
     uint FirstDstHeight;
 };
 
-Texture2DArray<float4> Source : register(t0);
-RWTexture2DArray<float4> Dest[4] : register(u0);
+// Bound to the SrcMip slice itself, so the load carries no mip index (`SrcMip` survives in the
+// constants because the level-delta arithmetic below still needs it).
+RWTexture2DArray<float4> Source : register(u0);
+RWTexture2DArray<float4> Dest[4] : register(u1);
 
 [numthreads(8, 8, 1)]
 [RootSignature(OCEAN_MIPS_RS)]
@@ -53,7 +67,7 @@ void GenerateMip(uint3 dispatchThreadId : SV_DispatchThreadID)
                 {
                     uint2 coord = srcBase + uint2(ox, oy);
                     coord = uint2(min(coord.x, srcMax.x), min(coord.y, srcMax.y));
-                    sum += Source.Load(int4(coord, dispatchThreadId.z, SrcMip));
+                    sum += Source[uint3(coord, dispatchThreadId.z)];
                 }
             }
 

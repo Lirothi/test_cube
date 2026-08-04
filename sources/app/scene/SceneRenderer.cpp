@@ -664,10 +664,16 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         // IsAllocated BEFORE UseDeclared: the body returns on it too, so declaring the depth read
         // above this line registered a barrier the body would never emit.
         if (!frame_->vsm || !frame_->vsm->IsAllocated()) { return; }
-        // NOT UseDeclared: Pass_VsmPageRequest is the one converted pass whose body never calls
-        // ApplyDeclaredStates — it reads the depth SRV without transitioning it, relying on the
-        // light passes' own declaration. Registering the declared depth read here therefore
-        // promises a barrier the body never emits, which is exactly what breaks the compile.
+        // The depth read is registered HERE rather than via UseDeclared, and the body performs the
+        // matching transition. It used to do NEITHER — the pass read the depth SRV and relied on
+        // some later pass having already moved depth to a read state. That reliance was wrong:
+        // this pass runs right after the G-buffer, which leaves depth in DEPTH_WRITE, and
+        // GPU-based validation reported the SRV-over-a-DEPTH_WRITE-resource every frame
+        // (id=1358, on all three Deferred[N].Depth). Reading a resource the graph has not
+        // transitioned is undefined however the barriers are emitted.
+        // UseDeclared is still not used: it would register the WHOLE declare list, and the point
+        // structure below belongs to VSM's own buffers.
+        p.Use(p.renderer->GetDeferredForFrame().depth.Get(), kSrvAll);
         // VSM owns the buffers its Record* functions transition, so it registers them itself.
         frame_->vsm->PrepareRequestPass(p);
     });
@@ -1534,6 +1540,11 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassVsmPageRequest);
+        // Matches the Prepare above: this pass reads camera depth as an SRV, so it must be the one
+        // to move it there. It previously read it in whatever state the G-buffer left behind.
+        renderer->Transition(t.cl, D.depth.Get(),
+                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         frame_->vsm->RecordPageRequest(renderer, t.cl, cb, D.depthSRV, rw, rh);
         // Step 20: allocate physical pages for the just-marked requests (same CL — request buffer
         // stays UAV between them). Add-dormant: nothing samples/renders the pages yet.

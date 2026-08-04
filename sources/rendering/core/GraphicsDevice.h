@@ -74,6 +74,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Device10> device10_; // null without the enhanced-barrier interfaces
     bool enhancedBarriers_ = false;
     bool enhancedOptIn_ = false;
+    bool typedUavLoadAdditionalFormats_ = false; // ocean mip chain reads its source mip via a UAV
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
     D3D12_RAYTRACING_TIER raytracingTier_ = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
 };

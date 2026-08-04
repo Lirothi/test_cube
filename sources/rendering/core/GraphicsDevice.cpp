@@ -227,6 +227,15 @@ void GraphicsDevice::InitDevice()
             enhancedBarriers_ = options12.EnhancedBarriersSupported != FALSE;
         }
     }
+    // Typed UAV loads of the "additional formats" set. The ocean mip chain now READS its source
+    // mip through a UAV (R16G16B16A16_FLOAT) instead of an SRV, so this stopped being trivia and
+    // became a capability the renderer depends on — recorded here rather than assumed.
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
+        if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) {
+            typedUavLoadAdditionalFormats_ = options.TypedUAVLoadAdditionalFormats != FALSE;
+        }
+    }
     // Step 15 — THE FLIP. The capability is now the decision: enhanced on a machine that supports
     // it, legacy on one that does not. `--legacy-barriers` remains the escape hatch and is the
     // only thing that can turn it off, so a suspected barrier regression stays one flag away from
@@ -239,14 +248,16 @@ void GraphicsDevice::InitDevice()
     render::SetEnhancedTextureCreation(UseEnhancedBarriers());
     barriers::SetEnabled(UseEnhancedBarriers()); // step 13: direct sites read the same decision
     {
-        char msg[224];
+        char msg[288];
         std::snprintf(msg, sizeof(msg),
-                      "[caps] raytracing tier=%d | enhanced barriers: device10=%s supported=%s in-use=%s%s\n",
+                      "[caps] raytracing tier=%d | enhanced barriers: device10=%s supported=%s in-use=%s%s"
+                      " | typed UAV load additional formats=%s\n",
                       static_cast<int>(raytracingTier_),
                       device10_ ? "yes" : "no",
                       enhancedBarriers_ ? "yes" : "no",
                       UseEnhancedBarriers() ? "yes" : "no",
-                      forceLegacy ? " (forced off by --legacy-barriers)" : "");
+                      forceLegacy ? " (forced off by --legacy-barriers)" : "",
+                      typedUavLoadAdditionalFormats_ ? "yes" : "no");
         OutputDebugStringA(msg);
         // Also to a file. A capability the whole enhanced-barrier half is gated on has to be
         // readable from a plain run, not only under a debugger — DBWIN output is lost otherwise,

@@ -1,4 +1,4 @@
-﻿#include "materials/Material.h"
+#include "materials/Material.h"
 
 #include <d3dcompiler.h>
 #include <fstream>
@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+
+#include "core/diagnostics/DiagPaths.h"
 
 #include <d3d12shader.h>    // ID3D12ShaderReflection
 #include <d3dcompiler.h>    // D3DReflect (DXBC)
@@ -381,6 +383,35 @@ void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
     pipelineState_ = pso;
     rootParams_ = std::move(params);
 
+#ifdef _DEBUG
+    // What the root-signature reflection ACTUALLY produced: root index -> (type, shader register).
+    // Material::Bind keys every binding on that register, and when it disagrees with what the
+    // caller filled in, the root argument is simply never set — which surfaces only as a
+    // GPU-based-validation "Uninitialized root argument accessed", naming a dispatch and not a
+    // cause. A dozen lines per run, Debug only.
+    {
+        static bool first = true; // truncate once per run, then append
+        FILE* f = nullptr;
+        if (fopen_s(&f, diag::LogPath("material_rootparams.log").c_str(), first ? "w" : "a") == 0 && f) {
+            first = false;
+            std::fprintf(f, "%ls:%s\n", cd.shaderFile.c_str(), cd.csEntry ? cd.csEntry : "?");
+            for (const RootParameterInfo& p : rootParams_) {
+                const char* kind = "?";
+                switch (p.type) {
+                case RootParameterInfo::Constants:    kind = "constants"; break;
+                case RootParameterInfo::CBV:          kind = "cbv";       break;
+                case RootParameterInfo::TableSRV:     kind = "tableSRV";  break;
+                case RootParameterInfo::TableUAV:     kind = "tableUAV";  break;
+                case RootParameterInfo::TableSampler: kind = "tableSmp";  break;
+                }
+                std::fprintf(f, "    root[%u] %-9s register=%u space=%u\n", p.rootIndex, kind,
+                             p.bindingRegister, p.bindingSpace);
+            }
+            std::fclose(f);
+        }
+    }
+#endif
+
     {
         std::lock_guard<std::mutex> lk(watchMtx_);
         watchedFiles_ = std::move(inc);
@@ -720,6 +751,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     if (FAILED(r->GetDevice()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&outPSO)))) {
         return false;
     }
+    outPSO->SetName(gd.shaderFile.c_str()); // so GBV/PIX name the shader, not 'Unnamed'
 
     if (pso.PrimitiveTopologyType == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
     {
@@ -729,6 +761,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         if (FAILED(r->GetDevice()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&outPSOWire)))) {
             return false;
         }
+        outPSOWire->SetName((gd.shaderFile + L":wire").c_str());
     }
 
     outIncludes.clear();
@@ -779,6 +812,18 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     pso.CS = { cs->GetBufferPointer(), cs->GetBufferSize() };
     if (FAILED(r->GetDevice()->CreateComputePipelineState(&pso, IID_PPV_ARGS(&outPSO)))) {
         return false;
+    }
+    // Name the PSO after the shader that made it. Every GPU-based-validation message carries
+    // "Pipeline State: 0x...:'<name>'", and until now that read 'Unnamed ID3D12PipelineState
+    // Object' — so a GBV report named a dispatch INDEX and never a shader, which is most of the
+    // work in reading one. Costs a SetName per material build.
+    {
+        std::wstring name = cd.shaderFile;
+        name.append(L":");
+        for (const char* p = cd.csEntry ? cd.csEntry : ""; *p; ++p) {
+            name.push_back(static_cast<wchar_t>(*p)); // entry names are ASCII
+        }
+        outPSO->SetName(name.c_str());
     }
 
     outIncludes = incCS;
