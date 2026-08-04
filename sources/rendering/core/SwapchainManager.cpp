@@ -1,6 +1,7 @@
 #include "rendering/core/SwapchainManager.h"
 
 #include "core/Helpers.h"
+#include "rendering/core/TextureCreate.h"
 
 void SwapchainManager::Create(ID3D12Device* device, ID3D12CommandQueue* queue, HWND hwnd,
     UINT width, UINT height, DXGI_FORMAT resourceFormat, DXGI_FORMAT viewFormat)
@@ -87,10 +88,8 @@ void SwapchainManager::CreateDepth(ID3D12Device* device, UINT width, UINT height
     cv.DepthStencil.Depth = 0.0f;
     cv.DepthStencil.Stencil = 0;
 
-    ThrowIfFailed(device->CreateCommittedResource(
-        &heap, D3D12_HEAP_FLAG_NONE, &depthDesc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv,
-        IID_PPV_ARGS(&depthBuffer_)));
+    ThrowIfFailed(render::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, depthDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, &depthBuffer_));
 
     D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
     dsv.Format = DXGI_FORMAT_D32_FLOAT;

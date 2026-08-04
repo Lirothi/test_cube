@@ -230,10 +230,17 @@ int WINAPI WinMain(
     if (lpCmdLine && std::strstr(lpCmdLine, "--legacy-barriers")) {
         GraphicsDevice::ForceLegacyBarriers(true);
     }
-    // Step 11: "--enhanced-barriers" opts INTO the enhanced path (creation layouts now, emission
-    // at step 12+). Detection alone must not change behaviour until step 15 flips the default.
+    // "--enhanced-barriers" was the opt-in while the path was being built. Step 15 made enhanced
+    // the default on capable hardware, so this is now a no-op accepted for compatibility;
+    // "--legacy-barriers" above is the switch that changes anything.
     if (lpCmdLine && std::strstr(lpCmdLine, "--enhanced-barriers")) {
         GraphicsDevice::EnableEnhancedBarriers(true);
+    }
+    // Step 15: "--barrier-msg-trace" writes a MODULE-attributed stack to logs/barrier_msg_trace.log
+    // for each barrier-interop message (1350/1334/527/538). Debug-only; parsed above the
+    // scene-stress branch like every other flag the churn needs.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-msg-trace")) {
+        GraphicsDevice::EnableBarrierMessageTrace(true);
     }
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-cache-verify")) {
         render::g_barrierCacheVerify = true;

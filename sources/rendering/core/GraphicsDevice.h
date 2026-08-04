@@ -25,6 +25,12 @@ public:
     // it doesn't hide the device-hang race DRED is meant to catch.
     static void EnableDredForStress(bool enable);
     static void EnableGbvForStress(bool enable);
+    // Barrier plan step 15: log a MODULE-attributed stack for every barrier-interop message the
+    // debug layer raises (1350/1334/527/538). The enhanced work reached a point where the message
+    // names a resource but not the code that emitted the offending call — and the answer turned
+    // out to be "not our code at all", which no amount of reading our own call sites could show.
+    // Debug-only (it rides the info queue); set before device creation.
+    static void EnableBarrierMessageTrace(bool enable);
 
     void ReportLiveObjects();
 
@@ -52,14 +58,14 @@ public:
     //
     // Set from main.cpp BEFORE device creation (mirrors EnableDredForStress).
     static void ForceLegacyBarriers(bool enable);
-    // Step 11: OPT IN to the enhanced path. Step 9 detects the capability but the engine must
-    // "treat it as OFF everywhere" until step 15 flips the default, so support alone must not
-    // change behaviour — an explicit `--enhanced-barriers` does. Also set before device creation.
+    // Step 11 added this as the OPT-IN while the enhanced path was being built. Step 15 flipped
+    // the default, so it is now a NO-OP kept only so existing command lines keep working;
+    // `ForceLegacyBarriers` is the switch that still does something.
     static void EnableEnhancedBarriers(bool enable);
     ID3D12Device10* Device10() const { return device10_.Get(); }
     bool AreEnhancedBarriersSupported() const { return enhancedBarriers_; }
-    // The EFFECTIVE switch: supported AND opted in. Everything that would change behaviour reads
-    // this; `AreEnhancedBarriersSupported` stays a pure capability report.
+    // The EFFECTIVE switch. Since step 15 that means "supported, and not forced off by
+    // --legacy-barriers"; `AreEnhancedBarriersSupported` stays a pure capability report.
     bool UseEnhancedBarriers() const { return enhancedBarriers_ && enhancedOptIn_; }
 
 private:

@@ -1,5 +1,6 @@
 #include "editor/assets/EditorPreviewRenderer.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/TextureCreate.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -362,8 +363,8 @@ bool EditorPreviewRenderer::CreateSharedDepth(ID3D12Device* device,
     clear.Format = kDepthFormat;
     clear.DepthStencil.Depth = 1.0f;
 
-    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COMMON, &clear, IID_PPV_ARGS(&slot.depthTarget))))
+    if (FAILED(render::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, desc,
+            D3D12_RESOURCE_STATE_COMMON, &clear, &slot.depthTarget)))
     {
         return false;
     }
@@ -402,8 +403,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::CreateColorTarget(
     clear.Color[3] = 1.0f;
 
     ComPtr<ID3D12Resource> target;
-    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COMMON, &clear, IID_PPV_ARGS(&target))))
+    if (FAILED(render::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, desc,
+            D3D12_RESOURCE_STATE_COMMON, &clear, &target)))
     {
         return nullptr;
     }

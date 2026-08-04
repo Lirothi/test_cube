@@ -1481,7 +1481,75 @@ a gated enhanced path, preserving "scratch = COMMON not UAV" and AS-bypasses-the
 
 **Acceptance:** both `0/0`; `--scene-stress` CLEAN with RT reflections on (F5); no device removal.
 
-### Step 15 — the enhanced flip
+### Step 15 — the enhanced flip — **DONE (uncommitted)**
+
+`UseEnhancedBarriers()` is now `supported && !forceLegacy`: enhanced is the DEFAULT on capable
+hardware, `--legacy-barriers` is the only switch that turns it off, and `--enhanced-barriers`
+survives as an inert flag so existing command lines keep working.
+
+**The step began with a diagnostic, because the errors named a resource and never a culprit.**
+`--barrier-msg-trace` registers an `ID3D12InfoQueue1` message callback — it runs on the thread that
+raised the message, at the point of the offending call — and prints a MODULE-attributed backtrace
+for the barrier-interop family (1350/1334/527/538). No dbghelp: the third-party modules ship no
+PDBs, and `nvngx+0x1234` already answers "whose code is this". Two design notes worth keeping: the
+cap must be PER RESOURCE NAME (a flat cap is spent entirely on the first offender, and the
+interesting emitters come later — that cost a run), and the whole thing is Debug-only.
+
+That turned one guess into three separate, differently-owned bugs:
+
+**1. Two of our own texture-creation sites were never converted at step 11** — `Texture2D`'s
+raw-pixel path and *every* `TextureCube` site (plus the swapchain depth, the editor preview
+targets, and the DLSS exposure texture, converted here for consistency). Created legacy in
+COPY_DEST, then given an enhanced barrier → `id=1350` at ExecuteCommandLists: *"state COPY_DEST does
+not support barrier interop"*. Note this is the OTHER direction of 1350 from the one step 13 saw;
+the same id covers both.
+
+**2. Streamline/NGX emits legacy barriers on the resources we tag** — proven, not assumed: the
+stack put the `ResourceBarrier` in `190_*.dll` reached through `sl.interposer.dll` from our
+`slEvaluateFeature`. We cannot change that code, and the two models may not mix on one resource —
+but they are allowed to MEET in the COMMON layout. So `DlssHandler::Evaluate` now BRACKETS the
+evaluate: our enhanced barriers park colour/depth/motion/output in COMMON, NGX legacy-transitions
+them from and back to COMMON, and we take them back out. The bracket is deliberately **invisible to
+the barrier compile** — each resource leaves in exactly the state it entered — so `Pass_Tonemap`'s
+Prepare needs no change and the graph's model stays true. It is `TransitionExplicit`, not
+`Transition`, for exactly that reason, and it is **RAII**: four early `return false` paths sit
+between the two halves, and leaving through any of them with the resources parked in COMMON would
+desynchronise the model for the rest of the frame.
+
+**3. One genuine engine bug, ours: `Ocean.PrevDisplacement` was created in COMMON while its
+canonical is the shader-read state** — the single texture step 7's create-in-canonical sweep
+missed. Invisible under legacy barriers, because COMMON *implicitly promotes* to a shader-read
+state, so the compile's canonical seed happened to match reality. Enhanced barriers have no
+implicit promotion, so the first barrier declared `LayoutBefore=SHADER_RESOURCE` against a resource
+genuinely in `LAYOUT_COMMON` → `id=1334`. **This is the class of latent bug the migration was
+supposed to expose, and it is the only one it found.**
+
+**AMENDMENT — the acceptance criterion below was wrong, and the measurement says so.** The plan
+judged this step on `id=1358` vanishing. It does not, and it cannot: measured on identical
+6-iteration runs, legacy and enhanced report **byte-identical 1358** — 54× `Ocean.Displacement`
+bound as an SRV while in `LAYOUT_UNORDERED_ACCESS`, plus 9/7/6 on `Deferred[0..2].Depth` bound as
+an SRV while in `LAYOUT_DEPTH_STENCIL_WRITE`. That is a descriptor bound against a resource in the
+wrong state; GBV reports it the same way under both barrier models, so the barrier model cannot be
+the cause and enhanced barriers cannot be the fix. It is a real pre-existing defect and it now has
+a precise description — but it belongs to its own piece of work, not to this one.
+
+**Acceptance met:**
+- Both configs `0/0`.
+- `--scene-stress=12` on the new default (no GBV, so **break-on-error is ACTIVE**): CLEAN. The
+  strongest available gate — any debug-layer ERROR would kill the process.
+- `--scene-stress-gbv=12 --barrier-cmp --canonical-check`: CLEAN, 0 MISSING, **1350 and 1334 gone**,
+  only the pre-existing {1358, 1006, 940, 939} remain.
+- Same again with `--shadow-mode=legacy --scene-stress-gbv=20` (CSM + spot/point shadows, which VSM
+  skips): CLEAN, 0 MISSING.
+- `--legacy-barriers --scene-stress=12`: CLEAN, `emit enhanced=0 legacy=3277` — **the fallback is
+  not dead code**, and every barrier the enhanced path emits the legacy path emits too.
+- **Visual parity, measured against a control rather than asserted.** Two `--shot` captures at a
+  frozen wind clock: enhanced vs legacy differs in 0.225% of pixels, while enhanced vs *enhanced*
+  differs in 0.197% and legacy vs enhanced(run 2) in 0.251%. The cross-path difference sits inside
+  the run-to-run noise band of a scene with DLSS, ocean and particles — i.e. it is not measurable.
+- `logs/texcreate.log` empty: no texture fell back to legacy creation.
+
+### (original spec) Step 15 — the enhanced flip
 
 Set `enhancedBarriers_` to its real value: enhanced on capable machines, legacy on the rest.
 

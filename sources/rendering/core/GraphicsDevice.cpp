@@ -4,8 +4,11 @@
 #include <dxgidebug.h>
 #include <d3d12sdklayers.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
+#include <cstdint>
 
 #include "core/Helpers.h"
 #include "core/diagnostics/DiagPaths.h"
@@ -22,9 +25,111 @@ namespace
     // Step 9: --legacy-barriers. Lives here rather than in render:: because GraphicsDevice cannot
     // see Renderer.h — Renderer.h includes THIS header, so the dependency only runs one way.
     std::atomic<bool> g_forceLegacyBarriers{ false };
-    // Step 11: --enhanced-barriers. Step 9 detects the capability; the engine must still behave
-    // exactly as before until this is opted into, so support alone changes nothing.
+    // Was step 11's opt-in; step 15 made enhanced the default, so nothing reads this any more.
+    // Kept so `--enhanced-barriers` remains an accepted (inert) flag rather than an error.
     std::atomic<bool> g_enhancedOptIn{ false };
+    // Step 15: --barrier-msg-trace.
+    std::atomic<bool> g_barrierMsgTrace{ false };
+
+#ifdef _DEBUG
+    // The barrier-interop family. Deliberately NOT every message: the point is to attribute the
+    // legacy/enhanced mixing errors to a MODULE, and a trace of all debug-layer chatter would be
+    // unreadable and would slow the run enough to change what it reproduces.
+    bool IsBarrierInteropMessage(D3D12_MESSAGE_ID id)
+    {
+        switch (static_cast<int>(id)) {
+        case 527:  // before-state does not match
+        case 538:  // invalid state for use
+        case 1334: // barrier layout does not match expected layout (at ExecuteCommandLists)
+        case 1350: // enhanced -> legacy without passing through the common layout
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // Return addresses attributed to their MODULE, which is the whole question here. Deliberately
+    // no dbghelp: symbol resolution needs PDBs the third-party modules do not ship, it is slow
+    // inside a debug-layer callback, and "nvngx_dlss.dll+0x1234" already answers "whose code is
+    // this". Our own frames still read as test_cube.exe and can be resolved later if needed.
+    void AppendModuleBacktrace(char* out, size_t cap)
+    {
+        void* frames[24] = {};
+        const USHORT captured = CaptureStackBackTrace(2, 24, frames, nullptr);
+        size_t used = std::strlen(out);
+        for (USHORT i = 0; i < captured && used + 64 < cap; ++i) {
+            HMODULE mod = nullptr;
+            char name[MAX_PATH] = "?";
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   static_cast<LPCSTR>(frames[i]), &mod) && mod) {
+                char full[MAX_PATH] = "";
+                if (GetModuleFileNameA(mod, full, MAX_PATH) != 0) {
+                    const char* slash = std::strrchr(full, '\\');
+                    strncpy_s(name, slash ? slash + 1 : full, _TRUNCATE);
+                }
+            }
+            const auto offset = static_cast<std::uintptr_t>(
+                reinterpret_cast<std::uintptr_t>(frames[i]) - reinterpret_cast<std::uintptr_t>(mod));
+            const int n = std::snprintf(out + used, cap - used, "    #%02u %s+0x%llx\n",
+                                        static_cast<unsigned>(i), name,
+                                        static_cast<unsigned long long>(offset));
+            if (n <= 0) { break; }
+            used += static_cast<size_t>(n);
+        }
+    }
+
+    void CALLBACK BarrierMessageCallback(D3D12_MESSAGE_CATEGORY,
+                                         D3D12_MESSAGE_SEVERITY,
+                                         D3D12_MESSAGE_ID id,
+                                         LPCSTR description,
+                                         void*)
+    {
+        if (!IsBarrierInteropMessage(id)) { return; }
+
+        static std::atomic_flag lock = ATOMIC_FLAG_INIT;
+        while (lock.test_and_set(std::memory_order_acquire)) {}
+        {
+            // Capped PER RESOURCE NAME, not globally. A flat cap is useless here: the first
+            // offender floods it and everything later — which is where the interesting emitters
+            // are — never gets printed. That mistake cost one run.
+            char resName[96] = "";
+            if (description) {
+                if (const char* open = std::strchr(description, '\'')) {
+                    if (const char* close = std::strchr(open + 1, '\'')) {
+                        const size_t len = static_cast<size_t>(close - open - 1);
+                        strncpy_s(resName, open + 1, (std::min)(len, sizeof(resName) - 1));
+                    }
+                }
+            }
+            static char seen[64][96] = {};
+            static int seenHits[64] = {};
+            static int seenCount = 0;
+            int slot = -1;
+            for (int i = 0; i < seenCount; ++i) {
+                if (std::strcmp(seen[i], resName) == 0) { slot = i; break; }
+            }
+            if (slot < 0 && seenCount < 64) {
+                slot = seenCount++;
+                strncpy_s(seen[slot], resName, _TRUNCATE);
+            }
+            const bool skip = (slot < 0) || (++seenHits[slot] > 2);
+            if (skip) { lock.clear(std::memory_order_release); return; }
+
+            char msg[4096];
+            std::snprintf(msg, sizeof(msg), "\n[msg-trace] id=%d %s\n", static_cast<int>(id),
+                          description ? description : "");
+            AppendModuleBacktrace(msg, sizeof(msg));
+            FILE* f = nullptr;
+            if (fopen_s(&f, diag::LogPath("barrier_msg_trace.log").c_str(), "a") == 0 && f) {
+                std::fputs(msg, f);
+                std::fclose(f);
+            }
+            OutputDebugStringA(msg);
+        }
+        lock.clear(std::memory_order_release);
+    }
+#endif
 }
 
 void GraphicsDevice::ForceLegacyBarriers(bool enable)
@@ -45,6 +150,11 @@ void GraphicsDevice::EnableDredForStress(bool enable)
 void GraphicsDevice::EnableGbvForStress(bool enable)
 {
     g_gbvForStress.store(enable, std::memory_order_relaxed);
+}
+
+void GraphicsDevice::EnableBarrierMessageTrace(bool enable)
+{
+    g_barrierMsgTrace.store(enable, std::memory_order_relaxed);
 }
 
 void GraphicsDevice::InitDevice()
@@ -117,10 +227,13 @@ void GraphicsDevice::InitDevice()
             enhancedBarriers_ = options12.EnhancedBarriersSupported != FALSE;
         }
     }
-    // --legacy-barriers keeps the old path reachable for bisecting once step 15 flips the default.
+    // Step 15 — THE FLIP. The capability is now the decision: enhanced on a machine that supports
+    // it, legacy on one that does not. `--legacy-barriers` remains the escape hatch and is the
+    // only thing that can turn it off, so a suspected barrier regression stays one flag away from
+    // being bisected. `--enhanced-barriers` survives as a no-op so existing scripts keep working.
     const bool forceLegacy = g_forceLegacyBarriers.load(std::memory_order_relaxed);
     if (forceLegacy) { enhancedBarriers_ = false; }
-    enhancedOptIn_ = g_enhancedOptIn.load(std::memory_order_relaxed) && !forceLegacy;
+    enhancedOptIn_ = !forceLegacy;
     // Publish the resolved decision for the texture-creation helper (step 11). Done here, once,
     // so the ~11 creation sites need no new parameter and cannot disagree about it.
     render::SetEnhancedTextureCreation(UseEnhancedBarriers());
@@ -162,6 +275,19 @@ void GraphicsDevice::SetupDebugBreaks()
             info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
             info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
             // Add filters for noisy messages if desired
+        }
+
+        // Step 15: the message CALLBACK runs on the thread that raised the message, at the point
+        // of the offending call — so a stack captured here names the emitter, which the message
+        // text never does. ID3D12InfoQueue1 is optional; without it the flag is simply inert.
+        if (g_barrierMsgTrace.load(std::memory_order_relaxed)) {
+            Microsoft::WRL::ComPtr<ID3D12InfoQueue1> info1;
+            if (SUCCEEDED(device_.As(&info1))) {
+                std::remove(diag::LogPath("barrier_msg_trace.log").c_str()); // fresh per run
+                DWORD cookie = 0;
+                info1->RegisterMessageCallback(&BarrierMessageCallback,
+                                               D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
+            }
         }
     }
 #endif

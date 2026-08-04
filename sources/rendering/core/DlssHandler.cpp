@@ -1,5 +1,6 @@
 #include "rendering/core/DlssHandler.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/TextureCreate.h"
 
 #include <array>
 #include <cmath>
@@ -349,8 +350,8 @@ void DlssHandler::EnsureExposureResources(ID3D12GraphicsCommandList* cl)
         desc.Format = DXGI_FORMAT_R32_FLOAT;
         desc.SampleDesc.Count = 1;
         desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&exposureTex_))))
+        if (FAILED(render::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &exposureTex_)))
         {
             return;
         }
@@ -434,6 +435,57 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     renderer_.Transition(cl, deferred.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer_.Transition(cl, deferred.dlssOutput.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+    // Barrier plan step 15 — THE HAND-OFF BRACKET.
+    //
+    // Streamline/NGX records LEGACY `ResourceBarrier` calls on the resources we tag. That is not a
+    // guess: a module-attributed stack from the debug-layer message callback put the offending
+    // call in `190_*.dll` (the NGX feature module) reached through `sl.interposer.dll` from the
+    // `slEvaluateFeature` below. We cannot change that code, and mixing the two barrier models on
+    // one resource is illegal — but the models are allowed to MEET in the COMMON layout.
+    //
+    // So the evaluate is bracketed: our enhanced barriers park the four tagged resources in
+    // COMMON, NGX legacy-transitions them from and back to COMMON, and we take them back out.
+    // The bracket is deliberately INVISIBLE to the barrier compile — every resource leaves in
+    // exactly the state it entered — so the graph's model stays true and `Pass_Tonemap`'s Prepare
+    // needs no change. That is why these are `TransitionExplicit` (a direct emission with a stated
+    // before-state) rather than `Transition` (a request the compile must have predicted).
+    constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    constexpr D3D12_RESOURCE_STATES kUav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    constexpr D3D12_RESOURCE_STATES kCommon = D3D12_RESOURCE_STATE_COMMON;
+
+    // RAII, not a matching pair of statements: everything from here to the end of Evaluate has
+    // FOUR early `return false` exits (tagging, options, constants, the evaluate itself). Leaving
+    // through any of them with the resources parked in COMMON would desynchronise the compile's
+    // model from reality for the rest of the frame.
+    struct HandOffScope
+    {
+        ID3D12GraphicsCommandList* cl;
+        ID3D12Resource* read[3];
+        ID3D12Resource* write;
+        bool armed;
+        ~HandOffScope()
+        {
+            if (!armed) { return; }
+            for (ID3D12Resource* r : read) { Renderer::TransitionExplicit(cl, r, kCommon, kNps); }
+            Renderer::TransitionExplicit(cl, write, kCommon, kUav);
+        }
+    } handOffScope{ cl,
+                    { deferred.scene.Get(), deferred.gbVelocity.Get(), deferred.depth.Get() },
+                    deferred.dlssOutput.Get(),
+                    renderer_.UseEnhancedBarriers() };
+    if (handOffScope.armed)
+    {
+        for (ID3D12Resource* r : handOffScope.read)
+        {
+            Renderer::TransitionExplicit(cl, r, kNps, kCommon);
+        }
+        Renderer::TransitionExplicit(cl, handOffScope.write, kUav, kCommon);
+    }
+    // The state handed to Streamline must be the state the resource is actually IN, since NGX
+    // barriers from it and restores to it.
+    const D3D12_RESOURCE_STATES tagRead = handOffScope.armed ? kCommon : kNps;
+    const D3D12_RESOURCE_STATES tagWrite = handOffScope.armed ? kCommon : kUav;
+
     // Manual exposure is DISABLED on purpose: tagging the 1x1 exposure texture turns NGX
     // auto-exposure off, and the preset-F water fix empirically depends on auto-exposure
     // (manual exposure=1 brings the motion smearing back). Kept for future experiments —
@@ -444,25 +496,25 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
         EnsureExposureResources(cl);
     }
 
-    sl::Resource color(sl::ResourceType::eTex2d, deferred.scene.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+    sl::Resource color(sl::ResourceType::eTex2d, deferred.scene.Get(), static_cast<uint32_t>(tagRead));
     color.width = std::max(renderer_.renderWidth_, 1u);
     color.height = std::max(renderer_.renderHeight_, 1u);
     color.nativeFormat = static_cast<uint32_t>(renderer_.GetSceneColorFormat());
     color.mipLevels = 1;
 
-    sl::Resource motion(sl::ResourceType::eTex2d, deferred.gbVelocity.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+    sl::Resource motion(sl::ResourceType::eTex2d, deferred.gbVelocity.Get(), static_cast<uint32_t>(tagRead));
     motion.width = std::max(renderer_.renderWidth_, 1u);
     motion.height = std::max(renderer_.renderHeight_, 1u);
     motion.nativeFormat = static_cast<uint32_t>(renderer_.GetGBufferVelocityFormat());
     motion.mipLevels = 1;
 
-    sl::Resource depth(sl::ResourceType::eTex2d, deferred.depth.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+    sl::Resource depth(sl::ResourceType::eTex2d, deferred.depth.Get(), static_cast<uint32_t>(tagRead));
     depth.width = std::max(renderer_.renderWidth_, 1u);
     depth.height = std::max(renderer_.renderHeight_, 1u);
     depth.nativeFormat = static_cast<uint32_t>(renderer_.GetDeferredDepthFormat());
     depth.mipLevels = 1;
 
-    sl::Resource output(sl::ResourceType::eTex2d, deferred.dlssOutput.Get(), static_cast<uint32_t>(D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+    sl::Resource output(sl::ResourceType::eTex2d, deferred.dlssOutput.Get(), static_cast<uint32_t>(tagWrite));
     output.width = std::max(renderer_.width_, 1u);
     output.height = std::max(renderer_.height_, 1u);
     output.nativeFormat = static_cast<uint32_t>(renderer_.GetSceneColorFormat());

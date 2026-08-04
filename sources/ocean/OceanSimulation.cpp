@@ -559,15 +559,21 @@ void OceanSimulation::CreateResources(Renderer* renderer,
 
     D3D12_RESOURCE_DESC prevDesc = texDesc;
     prevDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
-    ComPtr<ID3D12Resource> prevRes;
-    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, prevDesc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr, &prevRes));
-
     const D3D12_RESOURCE_STATES prevSrvState =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    ComPtr<ID3D12Resource> prevRes;
+    // Step 15: created in its RESTING state like its two neighbours, not in COMMON. It was the one
+    // texture step 7's create-in-canonical sweep missed, and under LEGACY barriers that was
+    // invisible — COMMON implicitly promotes to a shader-read state, so the compile's canonical
+    // seed happened to match reality. Enhanced barriers have no implicit promotion, so the first
+    // barrier declared LayoutBefore=SHADER_RESOURCE against a resource genuinely in LAYOUT_COMMON:
+    // debug-layer id=1334, and the only enhanced-only error that was actually OUR bug.
+    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, prevDesc,
+            prevSrvState, nullptr, &prevRes));
+
     prevDisplacement_.Attach(renderer->Declarations(), std::move(prevRes),
-        D3D12_RESOURCE_STATE_COMMON, prevSrvState, L"Ocean.PrevDisplacement");
+        prevSrvState, prevSrvState, L"Ocean.PrevDisplacement");
     hasDisplacementHistory_ = false;
     prevDisplacementValid_ = false;
 

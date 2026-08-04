@@ -1,6 +1,7 @@
 #include "materials/TextureCube.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/TextureCreate.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "core/Helpers.h"
 
@@ -117,9 +118,10 @@ bool TextureCube::CreateFromDDS(Renderer* r,
 
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
 
-    ThrowIfFailed(r->GetDevice()->CreateCommittedResource(
-        &hp, D3D12_HEAP_FLAG_NONE, &td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(tex_.GetAddressOfForCreate())));
+    // Step 15: same miss as Texture2D's raw-pixel path — step 11 converted no TextureCube site at
+    // all, so the skybox was created legacy in COPY_DEST and then took an enhanced barrier.
+    ThrowIfFailed(render::CreateCommittedTexture(r->GetDevice(), hp, D3D12_HEAP_FLAG_NONE, td,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, tex_.GetAddressOfForCreate()));
 
     // 4) Prepare the upload buffer and subresource layout
     const UINT subresources = mips * arr;

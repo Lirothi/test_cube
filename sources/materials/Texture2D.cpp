@@ -695,8 +695,11 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
     // DDS first and falls back to WIC on the same object, so the fallback textures were declared
     // twice and forgotten once.
-    ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(tex_.GetAddressOfForCreate())));
+    // Step 15: this site was MISSED at step 11 (the two DDS/WIC paths were converted, this
+    // raw-pixel one was not) and the debug layer named it — a texture created legacy in COPY_DEST
+    // and then given an enhanced barrier fails interop at ExecuteCommandLists, id=1350.
+    ThrowIfFailed(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, tex_.GetAddressOfForCreate()));
 
     // Footprint
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
