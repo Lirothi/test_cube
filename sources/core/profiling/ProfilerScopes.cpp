@@ -109,6 +109,8 @@ const Profiler::ScopeNameKey kTextManagerEmitImmediate = Profiler::RegisterTrace
 
 const Profiler::ScopeNameKey kRenderGraphExecute = Profiler::RegisterTraceLiteral(L"RenderGraph::Execute");
 const Profiler::ScopeNameKey kRenderGraphExecuteParallel = Profiler::RegisterTraceLiteral(L"RenderGraph::ExecuteParallel");
+const Profiler::ScopeNameKey kRenderGraphPrepares = Profiler::RegisterTraceLiteral(L"RenderGraph::Prepares");
+const Profiler::ScopeNameKey kRenderGraphCompileBarriers = Profiler::RegisterTraceLiteral(L"RenderGraph::CompileBarriers");
 
 const Profiler::ScopeNameKey kService1 = Profiler::RegisterTraceLiteral(L"Service1");
 const Profiler::ScopeNameKey kService2 = Profiler::RegisterTraceLiteral(L"Service2");

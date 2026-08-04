@@ -392,3 +392,6 @@ import_staging/
 !/third_party/**
 !/sources/rendering/debug/
 !/sources/rendering/debug/**tasksystem_stress.log
+
+# All engine diagnostic output (see sources/core/diagnostics/DiagPaths.h)
+/logs/

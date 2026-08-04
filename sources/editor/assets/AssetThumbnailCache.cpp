@@ -4,12 +4,14 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -19,8 +21,11 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/task/TaskSystem.h"
+#include "core/diagnostics/DiagPaths.h"
 #include "editor/assets/AssetRegistry.h"
 #include "materials/MaterialData.h"
+#include "materials/MaterialDataManager.h"
+#include "materials/TextureDecodeCache.h"
 #include "materials/TextureCube.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
@@ -822,6 +827,66 @@ void AssetThumbnailCache::QueuePreflight(const EditorAssetRecord& record,
     });
 }
 
+// Hand this load's material textures to a worker to DECODE, long before StartGpuJob wants them.
+//
+// The main thread keeps doing the GPU upload — that needs the command list — but the expensive
+// half (WIC decode + CPU box-filter mip chain) no longer happens on it. Measured before this:
+// 2108 ms inside `materials` for one rock whose preset points at unimported 25/21/12 MB staging
+// PNGs, all of it on the main thread to draw a 256-pixel icon (logs/thumbnail_profile.log).
+//
+// Reading the preset table happens HERE, on the main thread, because that table is reloaded from
+// the main thread too; only the resolved paths cross to the worker. And nothing waits on the
+// result: a job that reaches StartGpuJob before its decode lands simply decodes inline, exactly as
+// it always did. The cache is an accelerator, never a dependency.
+void AssetThumbnailCache::PrewarmMaterialTextures(const PendingLoad& load)
+{
+    if (!preview_) { return; }
+    if (load.kind != PendingLoad::Kind::Mesh && load.kind != PendingLoad::Kind::Material) { return; }
+
+    // The preset table is loaded lazily by StartGpuJob, which runs AFTER this in ProcessPending.
+    // Reading it first meant FindPreset returned null and `work` came out empty — no ticket, no
+    // gate, and the decode happened on the main thread after all. Idempotent and cheap.
+    preview_->EnsurePresets();
+
+    std::vector<Texture2D::CreateDesc> work;
+    const MaterialDataManager& materials = preview_->Materials();
+    const auto add = [&work](const std::wstring& path, Texture2D::Usage usage, bool normalIsRG)
+    {
+        if (path.empty()) { return; }
+        Texture2D::CreateDesc d;
+        d.path = path;
+        d.usage = usage;
+        d.normalIsRG = normalIsRG;
+        work.push_back(std::move(d));
+    };
+    const auto addPreset = [&](const std::string& name)
+    {
+        if (name.empty() || name == "auto") { return; }
+        const MaterialPreset* preset = materials.FindPreset(name);
+        if (!preset) { return; }
+        add(preset->albedoPath, Texture2D::Usage::AlbedoSRGB, false);
+        add(preset->mrPath, Texture2D::Usage::MetalRough, false);
+        add(preset->normalPath, Texture2D::Usage::NormalMap, preset->normalIsRG);
+    };
+
+    if (load.kind == PendingLoad::Kind::Material) { addPreset(load.presetKey); }
+    for (const std::string& slot : load.meshMaterialSlots) { addPreset(slot); }
+    lastPrewarmSlots_ = static_cast<std::uint32_t>(load.meshMaterialSlots.size());
+    lastPrewarmDescs_ = static_cast<std::uint32_t>(work.size());
+    if (work.empty()) { return; }
+
+    auto ticket = std::make_shared<DecodeTicket>();
+    decodeTickets_[load.key] = ticket;
+    // SubmitDetach, not DispatchTrack: the frame joins TRACKED tasks at its top (App.cpp), so a
+    // tracked decode would stall the very frame it is meant to keep free.
+    TaskSystem::Get().SubmitDetach([work = std::move(work), ticket]() mutable
+    {
+        CPU_SCOPE(ProfilerScopes::kAssetThumbnailPreflight);
+        for (const Texture2D::CreateDesc& d : work) { texdecode::Prewarm(d); }
+        ticket->done.store(true, std::memory_order_release);
+    });
+}
+
 void AssetThumbnailCache::LaunchPreflightJobs()
 {
     if (!preflightState_)
@@ -986,6 +1051,7 @@ void AssetThumbnailCache::CommitPreflightResults(Renderer& renderer)
         load.presetKey = input.key;
         load.meshData = std::move(result.meshData);
         load.meshMaterialSlots = std::move(result.meshMaterialSlots);
+        PrewarmMaterialTextures(load);
         queue_.push_back(std::move(load));
     }
 }
@@ -1238,6 +1304,82 @@ bool AssetThumbnailCache::CommitGpuJob(Renderer& renderer)
     return true;
 }
 
+namespace {
+
+// Per-thumbnail phase timing, one line per job in logs/thumbnail_profile.log.
+//
+// The thumbnail path stalls the main thread and the first two suspects (a full material-library
+// reload per job, a GPU idle per cache eviction) did not account for it. Guessing a third time is
+// not a plan: this attributes every millisecond of StartGpuJob to a named phase, so the next
+// content-browser scroll says outright where it goes. Debug-only in practice (WITH_EDITOR), one
+// fprintf per generated thumbnail.
+class JobPhaseLog
+{
+public:
+    JobPhaseLog(const char* kind, std::string what)
+        : kind_(kind), what_(std::move(what)), start_(Clock::now()), phase_(start_) {}
+
+    void Mark(const char* name)
+    {
+        const auto now = Clock::now();
+        if (used_ < kMaxPhases)
+        {
+            names_[used_] = name;
+            ms_[used_] = std::chrono::duration<double, std::milli>(now - phase_).count();
+            ++used_;
+        }
+        phase_ = now;
+    }
+
+    ~JobPhaseLog()
+    {
+        const double total = std::chrono::duration<double, std::milli>(Clock::now() - start_).count();
+        if (total < 0.5) { return; } // sub-millisecond jobs are not the problem being chased
+        static std::mutex mtx;
+        static FILE* f = nullptr;
+        std::lock_guard<std::mutex> lk(mtx);
+        if (f == nullptr) { fopen_s(&f, diag::LogPath("thumbnail_profile.log").c_str(), "w"); }
+        if (f == nullptr) { return; }
+        std::fprintf(f, "%-10s total %8.2f ms |", kind_, total);
+        for (int i = 0; i < used_; ++i) { std::fprintf(f, " %s %.2f", names_[i], ms_[i]); }
+        std::uint32_t taken = 0, missed = 0;
+        texdecode::Stats(taken, missed);
+        std::fprintf(f, "  decode cache=%u inline=%u prewarm slots=%u descs=%u  | %s",
+                     taken, missed, slots_, descs_, what_.c_str());
+        std::fputc('\n', f);
+        std::fflush(f);
+    }
+
+private:
+    using Clock = std::chrono::steady_clock;
+    static constexpr int kMaxPhases = 8;
+    const char* kind_ = "";
+    std::string what_;
+public:
+    std::uint32_t slots_ = 0;   // material slots the load carried
+    std::uint32_t descs_ = 0;   // textures handed to the worker
+private:
+    Clock::time_point start_;
+    Clock::time_point phase_;
+    const char* names_[kMaxPhases]{};
+    double ms_[kMaxPhases]{};
+    int used_ = 0;
+};
+
+const char* KindName(int kind)
+{
+    switch (kind)
+    {
+    case 0: return "Texture";
+    case 1: return "Mesh";
+    case 2: return "Cube";
+    case 3: return "Material";
+    default: return "DiskCache";
+    }
+}
+
+} // namespace
+
 void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
 {
     if (gpuJob_) { return; }
@@ -1261,6 +1403,26 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         break;
     }
     if (!entry) { return; }
+
+    // The material textures are being decoded on a worker — come back next frame rather than
+    // decoding them here. This is the whole point of the prewarm: without the wait it loses the
+    // race every time and the main thread does the work anyway.
+    if (const auto ticket = decodeTickets_.find(load.key); ticket != decodeTickets_.end())
+    {
+        if (!ticket->second->done.load(std::memory_order_acquire))
+        {
+            entry->state = State::Queued;
+            queue_.push_front(std::move(load));
+            return;
+        }
+        decodeTickets_.erase(ticket);
+    }
+
+    texdecode::ResetStats(); // per-job: the counters below describe THIS thumbnail
+    JobPhaseLog phases(KindName(static_cast<int>(load.kind)),
+                       load.path.empty() ? load.presetKey : load.path);
+    phases.slots_ = lastPrewarmSlots_;
+    phases.descs_ = lastPrewarmDescs_;
 
     const bool needsPreview = load.kind == PendingLoad::Kind::Mesh ||
         load.kind == PendingLoad::Kind::Material ||
@@ -1288,18 +1450,32 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
     }
     if (load.kind == PendingLoad::Kind::Material || load.kind == PendingLoad::Kind::Mesh)
     {
-        preview_->ReloadPresets();
+        preview_->ReloadPresetsIfChanged();
     }
+    phases.Mark("presets");
 
     std::unique_ptr<GpuJob> job = std::make_unique<GpuJob>();
     job->load = std::move(load);
     job->commands = std::make_unique<UploadBatch>();
-    if (!job->commands->Begin(&renderer))
+    const bool batchBegun = job->commands->Begin(&renderer);
+    phases.Mark("batch");
+    if (!batchBegun)
     {
         entry->state = State::Queued;
         queue_.push_front(std::move(job->load));
         return;
     }
+
+    // FULL ASYNC: inside this scope nothing decodes an image on the main thread. A texture that
+    // is not ready yet fails its load, sets AnyPending(), and a worker starts on it. We then throw
+    // this attempt away and retry on a later frame — the thumbnail simply stays a placeholder for
+    // as long as the decode takes, and the frame never stalls.
+    //
+    // This does NOT depend on predicting which textures the material will pull in, which is what
+    // the earlier prewarm-only attempt got wrong: it guessed the list, guessed empty, and the main
+    // thread did the work anyway.
+    Texture2D::DeferDecodeScope deferDecodes;
+    std::vector<std::string> touchedMaterials;
 
     switch (job->load.kind)
     {
@@ -1332,6 +1508,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
                         static_cast<std::size_t>(submesh.materialSlot) + 1);
                 }
             }
+            phases.Mark("meshupload");
             job->meshMaterials.reserve(materialSlotCount);
             for (std::size_t slot = 0; slot < materialSlotCount; ++slot)
             {
@@ -1341,6 +1518,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
                 const std::string materialName = slot < job->load.meshMaterialSlots.size()
                     ? job->load.meshMaterialSlots[slot]
                     : "auto";
+                if (!materialName.empty() && materialName != "auto") { touchedMaterials.push_back(materialName); }
                 if (materialName.empty() || materialName == "auto")
                 {
                     job->meshMaterials.push_back(
@@ -1356,6 +1534,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
                 }
             }
             job->ok = job->mesh != nullptr;
+            phases.Mark("materials");
         }
         break;
     case PendingLoad::Kind::Cube:
@@ -1364,12 +1543,26 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
             job->commands->KeepAlive());
         break;
     case PendingLoad::Kind::Material:
+        touchedMaterials.push_back(job->load.presetKey);
         job->material = preview_->Materials().GetOrCreate(&renderer,
             job->commands->CommandList(), job->commands->KeepAlive(),
             job->load.presetKey);
         job->mesh = preview_->EnsureSphere(renderer, *job->commands);
         job->ok = job->material != nullptr && job->mesh != nullptr;
         break;
+    }
+
+    phases.Mark("assetload");
+
+    if (deferDecodes.AnyPending())
+    {
+        // At least one texture is still being decoded on a worker. Drop this attempt whole: the
+        // MaterialData built during it is missing maps, so it must not stay in the cache, and the
+        // UploadBatch closes itself without executing (see ~UploadBatch).
+        for (const std::string& name : touchedMaterials) { preview_->Materials().EvictCached(name); }
+        entry->state = State::Queued;
+        queue_.push_front(std::move(job->load));
+        return;
     }
 
     if (needsPreview && job->ok)
@@ -1403,6 +1596,8 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         }
     }
 
+    phases.Mark("record");
+
     if (FAILED(renderer.GetDevice()->CreateFence(0, D3D12_FENCE_FLAG_NONE,
             IID_PPV_ARGS(&job->fence))) ||
         !job->commands->Submit(&renderer))
@@ -1422,12 +1617,14 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         return;
     }
 
+    phases.Mark("submit");
     gpuJob_ = std::move(job);
 }
 
 void AssetThumbnailCache::ProcessPending(Renderer& renderer)
 {
     CPU_SCOPE(ProfilerScopes::kAssetThumbnailProcessPending);
+    FlushRetired(renderer, /*force=*/false);
     CommitPreflightResults(renderer);
     LaunchPreflightJobs();
 
@@ -1467,15 +1664,37 @@ void AssetThumbnailCache::EvictIfNeeded(Renderer& renderer)
     }
 }
 
+// A retired thumbnail is safe to free once every frame that could still hold its ImGui descriptor
+// has retired — kFrameCount frames, the same window BeginFrame waits on. `force` skips the window
+// for shutdown, where the caller has already idled the GPU.
+void AssetThumbnailCache::FlushRetired(Renderer& renderer, bool force)
+{
+    if (retired_.empty()) { return; }
+    const std::uint64_t now = renderer.GetTotalFrameNumber();
+    auto keep = retired_.begin();
+    for (auto it = retired_.begin(); it != retired_.end(); ++it)
+    {
+        if (!force && now < it->retiredAtFrame + render::kFrameCount + 1)
+        {
+            *keep++ = std::move(*it);
+            continue;
+        }
+        // Drop the descriptor BEFORE the resource dies, so the address cannot be recycled under
+        // a live ImGui preview handle.
+        renderer.ReleaseImGuiTextureDescriptors(it->resource.Get());
+        it->resource.Reset();
+    }
+    retired_.erase(keep, retired_.end());
+}
+
 void AssetThumbnailCache::ReleaseEntry(Renderer& renderer, Entry& entry)
 {
     if (entry.resource)
     {
-        // Idle the GPU before freeing a resource an in-flight frame may still
-        // reference through its ImGui preview descriptor, then drop that
-        // descriptor before the resource address can be recycled.
-        renderer.WaitForPreviousFrame();
-        renderer.ReleaseImGuiTextureDescriptors(entry.resource.Get());
+        // An in-flight frame may still reference this through its ImGui preview descriptor, so it
+        // cannot be freed now — but it does not need a GPU idle either. Retire it and let
+        // FlushRetired drop it once its frame has certainly retired.
+        retired_.push_back({ entry.resource, renderer.GetTotalFrameNumber() });
         entry.resource.Reset();
     }
     entry.state = State::Missing;
@@ -1489,6 +1708,15 @@ void AssetThumbnailCache::ReleaseAll(Renderer& renderer)
         renderer.WaitForPreviousFrame();
         gpuJob_.reset();
     }
+    // Shutdown: one idle already happened (or is about to), so the retire list can go now.
+    if (!retired_.empty())
+    {
+        renderer.WaitForPreviousFrame();
+        FlushRetired(renderer, /*force=*/true);
+    }
+    // Anything a worker decoded for a thumbnail nobody will now ask for.
+    decodeTickets_.clear();
+    texdecode::Clear();
 
     bool anyResident = false;
     for (auto& pair : entries_)

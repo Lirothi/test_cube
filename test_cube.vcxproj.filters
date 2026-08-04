@@ -52,6 +52,9 @@
     <Filter Include="sources\core\profiling">
       <UniqueIdentifier>{b159312f-ce29-4185-896e-c90bf9c9e7a1}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\diagnostics">
+      <UniqueIdentifier>{a14b2f1c-8fb2-4acf-8009-3349f15bfe0b}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\core\task">
       <UniqueIdentifier>{614b2f1c-8fb2-4acf-8009-3349f15bfe0b}</UniqueIdentifier>
     </Filter>
@@ -355,6 +358,9 @@
       <Filter>sources\materials</Filter>
     </ClCompile>
     <ClCompile Include="sources/materials/MaterialDataManager.cpp">
+      <Filter>sources\materials</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/materials/TextureDecodeCache.cpp">
       <Filter>sources\materials</Filter>
     </ClCompile>
     <ClCompile Include="sources/materials/Texture2D.cpp">
@@ -863,6 +869,9 @@
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h">
       <Filter>sources\core\profiling</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/diagnostics/DiagPaths.h">
+      <Filter>sources\core\diagnostics</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystem.h">
       <Filter>sources\core\task</Filter>
     </ClInclude>
@@ -891,6 +900,9 @@
       <Filter>sources\materials</Filter>
     </ClInclude>
     <ClInclude Include="sources/materials/MaterialDataManager.h">
+      <Filter>sources\materials</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/materials/TextureDecodeCache.h">
       <Filter>sources\materials</Filter>
     </ClInclude>
     <ClInclude Include="sources/materials/Texture2D.h">

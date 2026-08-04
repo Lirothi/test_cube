@@ -1,4 +1,5 @@
 #include "rendering/rt/RtSmoke.h"
+#include "core/diagnostics/DiagPaths.h"
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/meshes/Mesh.h"
 
@@ -46,7 +47,7 @@ void WriteVerdict(const char* outPath, const char* verdict)
 
 int RunRtSmoke(const char* outPath)
 {
-    fopen_s(&gLog, "rt_smoke.log", "w");
+    fopen_s(&gLog, diag::LogPath("rt_smoke.log").c_str(), "w");
     Log("rt smoke harness\n");
 
 #ifdef _DEBUG

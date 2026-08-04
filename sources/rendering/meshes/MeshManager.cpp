@@ -1621,11 +1621,80 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
     return !outVerts.empty() && !outIndices.empty();
 }
 
+// One parse per SELECTOR, not per material slot.
+//
+// This used to `cgltf_parse_file` the whole .gltf/.glb on every call, and MaterialDataManager calls
+// it once per slot — so a four-material mesh re-read and re-parsed the entire file four times, and
+// did it again for every thumbnail. Measured in the editor's thumbnail path: single jobs at
+// 519 ms, 2170 ms, 2220 ms, essentially all of it here (logs/thumbnail_profile.log).
+//
+// The parse fills EVERY group's descriptor, so slots 1..N are free, and the entry is keyed on the
+// file's last-write time so a re-import or an edit in another tool still takes effect.
+namespace {
+
+struct GltfMaterialCacheEntry {
+    std::filesystem::file_time_type stamp{};
+    std::vector<GltfMaterialDesc> byGroup; // index = resolved group ordinal
+};
+
+std::mutex gGltfMaterialCacheMtx;
+std::unordered_map<std::string, GltfMaterialCacheEntry> gGltfMaterialCache;
+
+bool EndsWithNoCase(const std::string& s, const char* suffix)
+{
+    const size_t n = std::strlen(suffix);
+    if (s.size() < n) { return false; }
+    for (size_t i = 0; i < n; ++i) {
+        if (std::tolower((unsigned char)s[s.size() - n + i]) !=
+            std::tolower((unsigned char)suffix[i])) { return false; }
+    }
+    return true;
+}
+
+std::filesystem::file_time_type FileStamp(const std::string& file)
+{
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(file, ec);
+    return ec ? std::filesystem::file_time_type{} : t;
+}
+
+} // namespace
+
+void MeshManager::InvalidateGltfMaterialCache()
+{
+    std::lock_guard<std::mutex> lk(gGltfMaterialCacheMtx);
+    gGltfMaterialCache.clear();
+}
+
 GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFragment,
     int groupOrdinal)
 {
     GltfMaterialDesc out;
     const GltfSelector sel = ParseGltfSelector(pathWithFragment);
+
+    // NOT A GLTF -> do not touch it. `cgltf_parse_file` READS THE WHOLE FILE before it can decide
+    // the contents are not glTF, so calling this for a baked .mesh.bin (which the "auto" material
+    // slot did, for every slot, for every thumbnail) meant reading the asset off disk purely to
+    // throw the result away. The engine's own meshes have not been glTF for a long time; this path
+    // exists only for previewing an unimported staging asset.
+    if (!EndsWithNoCase(sel.file, ".gltf") && !EndsWithNoCase(sel.file, ".glb")) {
+        return out; // valid=false: no glTF material to describe
+    }
+
+    // Cache hit: the file has not changed since it was described, so every group is already known.
+    const std::filesystem::file_time_type stamp = FileStamp(sel.file);
+    {
+        std::lock_guard<std::mutex> lk(gGltfMaterialCacheMtx);
+        const auto it = gGltfMaterialCache.find(pathWithFragment);
+        if (it != gGltfMaterialCache.end() && it->second.stamp == stamp) {
+            const std::vector<GltfMaterialDesc>& all = it->second.byGroup;
+            if (all.empty()) { return out; }
+            const size_t want = (groupOrdinal >= 0)
+                ? std::min(static_cast<size_t>(groupOrdinal), all.size() - 1)
+                : SelectGltfGroup(sel, pathWithFragment, all.size());
+            return (want < all.size()) ? all[want] : out;
+        }
+    }
 
     cgltf_options options{};
     cgltf_data* data = nullptr;
@@ -1642,36 +1711,47 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
         cgltf_free(data);
         return out;
     }
+    const std::string dir = DirOf(sel.file);
+
+    // Describe EVERY group in this one parse — the caller asks slot by slot.
+    std::vector<GltfMaterialDesc> all(groups.size());
+    for (size_t g = 0; g < groups.size(); ++g) {
+        GltfMaterialDesc& d = all[g];
+        const cgltf_size mi = groups[g].materialIndex;
+        if (mi == kNoMat || mi >= data->materials_count) {
+            continue; // null-material group -> valid stays false
+        }
+        const cgltf_material& m = data->materials[mi];
+        if (m.has_pbr_metallic_roughness) {
+            const cgltf_pbr_metallic_roughness& pbr = m.pbr_metallic_roughness;
+            for (int i = 0; i < 4; ++i) { d.baseColor[i] = pbr.base_color_factor[i]; }
+            d.metallic = pbr.metallic_factor;
+            d.roughness = pbr.roughness_factor;
+            d.albedoPath = ResolveTexUri(pbr.base_color_texture.texture, dir);
+            d.mrPath = ResolveTexUri(pbr.metallic_roughness_texture.texture, dir);
+        }
+        d.normalPath = ResolveTexUri(m.normal_texture.texture, dir);
+        d.normalScale = (m.normal_texture.texture ? m.normal_texture.scale : 1.0f);
+        for (int i = 0; i < 3; ++i) { d.emissive[i] = m.emissive_factor[i]; }
+        d.emissivePath = ResolveTexUri(m.emissive_texture.texture, dir);
+        d.alphaMask = (m.alpha_mode == cgltf_alpha_mode_mask);
+        d.alphaCutoff = m.alpha_cutoff;
+        d.doubleSided = (m.double_sided != 0);
+        d.valid = true;
+    }
+    cgltf_free(data);
+
     size_t want = SelectGltfGroup(sel, pathWithFragment, groups.size());
     if (groupOrdinal >= 0) {
         // B2: explicit ordinal = submesh index of a multi-submesh load (same ordered group list).
         want = std::min(static_cast<size_t>(groupOrdinal), groups.size() - 1);
     }
-    const cgltf_size mi = groups[want].materialIndex;
-    if (mi == kNoMat || mi >= data->materials_count) {
-        cgltf_free(data);
-        return out; // null-material group -> valid stays false
-    }
+    if (want < all.size()) { out = all[want]; }
 
-    const cgltf_material& m = data->materials[mi];
-    const std::string dir = DirOf(sel.file);
-
-    if (m.has_pbr_metallic_roughness) {
-        const cgltf_pbr_metallic_roughness& pbr = m.pbr_metallic_roughness;
-        for (int i = 0; i < 4; ++i) { out.baseColor[i] = pbr.base_color_factor[i]; }
-        out.metallic = pbr.metallic_factor;
-        out.roughness = pbr.roughness_factor;
-        out.albedoPath = ResolveTexUri(pbr.base_color_texture.texture, dir);
-        out.mrPath = ResolveTexUri(pbr.metallic_roughness_texture.texture, dir);
+    {
+        std::lock_guard<std::mutex> lk(gGltfMaterialCacheMtx);
+        gGltfMaterialCache[pathWithFragment] = GltfMaterialCacheEntry{ stamp, std::move(all) };
     }
-    out.normalPath = ResolveTexUri(m.normal_texture.texture, dir);
-    out.normalScale = (m.normal_texture.texture ? m.normal_texture.scale : 1.0f);
-    for (int i = 0; i < 3; ++i) { out.emissive[i] = m.emissive_factor[i]; }
-    out.emissivePath = ResolveTexUri(m.emissive_texture.texture, dir);
-    out.alphaMask = (m.alpha_mode == cgltf_alpha_mode_mask);
-    out.alphaCutoff = m.alpha_cutoff;
-    out.doubleSided = (m.double_sided != 0);
-    out.valid = true;
 
     GltfLog("material '" + pathWithFragment + "': group " + std::to_string(want) +
         ", metal=" + std::to_string(out.metallic) + " rough=" + std::to_string(out.roughness) +
@@ -1680,7 +1760,6 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
         " mr=" + (out.mrPath.empty() ? "-" : "y") +
         " nrm=" + (out.normalPath.empty() ? "-" : "y"));
 
-    cgltf_free(data);
     return out;
 }
 

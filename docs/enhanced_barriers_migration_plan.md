@@ -1104,12 +1104,131 @@ so it is no longer dead weight.
 - Imperative `Transition` sites: ~19 (D+E only).
 - Visual parity: `--shot` comparison at the same camera with `--wind-freeze`.
 
-### Step 8 — measure
+### Step 8 — measure — **DONE**
 
-`ExecuteTimelineAndPresent` and `Service2` before/after, interleaved A/B/A/B on matched clocks.
-Report **the epilogue's return-to-canonical transitions as a separate number** — that is the new
-cost this design introduces and the one thing that could eat the win. Expect `Service2` to
-shrink to roughly the epilogue, not to zero (R6).
+Interleaved A/B/A/B/A/B, Release, 45 s warmup each, ~23k frames per run (frame counts within 2 %
+across all six, so no downclock artefact). "Before" = `2594b7d` built in a `git worktree`;
+"after" = `0cce0c6`. Means of three paired runs, ms:
+
+| CPU scope | before | after | delta |
+|---|---|---|---|
+| `Renderer::ExecuteTimelineAndPresent` | 0.248 | 0.151 | **−0.098 (−39 %)** |
+| `Service2` | 0.093 | 0.007 | **−0.086 (13×)** |
+| `Scene::Render` | 0.560 | 0.465 | −0.095 |
+| `Renderer::BeginFrame` | 1.357 | 1.442 | **+0.085** |
+| `Renderer::WaitForFrame` | 1.328 | 1.421 | **+0.093** |
+| `CPU.Frame` | 1.962 | 1.950 | −0.012 |
+| `GPU.Frame` | 1.941 | 1.932 | −0.009 |
+
+**The target was hit almost exactly** — R6 predicted 0.102 ms for the acquire prologues and the
+measurement says 0.098 ms — **and the frame did not get faster.** Every millisecond removed from
+submission reappeared in `WaitForFrame`/`BeginFrame`: this scene is not CPU-submission-bound at
+that point, so the saving becomes *idle*, not *throughput*. `CPU.Frame` moved 0.012 ms, which is
+inside the run-to-run spread.
+
+That is the plan's own prediction, now measured rather than asserted (see R6: "Goal 1 is a
+capacity investment, not an FPS change"). What was actually bought:
+
+- **0.098 ms/frame of CPU headroom** on the submit path, available to any future work that *is*
+  submission-bound (GPU-driven passes, more lights, bigger scenes).
+- **One fewer command list allocated, recorded, closed and submitted per frame**, and with it the
+  whole per-thread lane / TLS / first-use bookkeeping that ran during recording.
+- The `returnBarrierEstimate_` worry is settled: the epilogue's return-to-canonical cost never
+  materialised, because `Entry::predicted` removed the need to return anything to canonical at
+  all. `Service2` shrank to 0.007 ms — the present epilogue and nothing else, exactly as R6 said.
+
+**Do not re-run this as an FPS test.** The honest headline is "the scope we targeted shrank 39 %
+and the frame time is unchanged"; anyone measuring FPS here will conclude the work did nothing.
+
+#### The two-phase prologue's own cost — measured, and it is NOT free
+
+`RunPrepares` and `CompileBarriers` are now permanently instrumented
+(`ProfilerScopes::kRenderGraphPrepares` / `kRenderGraphCompileBarriers`). Interleaved VSM/legacy,
+Release, 45 s, ~23–24k frames, `usages:2` per frame (main graph + epilogue graph):
+
+**`CompileBarriers` runs from the tail of `RunPrepares`, so the Prepares row is INCLUSIVE of the
+CompileBarriers row.** Reading them as two costs and adding them turned a 0.012 ms prologue into a
+reported 0.022 ms; the correction now sits on the scope declarations so it cannot happen twice.
+
+| | Prepares (the whole prologue) | of which CompileBarriers | vs `CPU.Frame` |
+|---|---|---|---|
+| VSM | 0.012–0.013 | 0.010 | 0.6 % of 1.97 |
+| legacy | 0.012 | 0.008–0.009 | 0.6 % of 1.86 |
+
+Legacy is not more expensive despite `PrepareOpaqueDrawStates` now walking per-view visible
+buckets for cascades + spots + point faces. **And this cost is NOT new:** `RunPrepares` already
+called `CompileBarriers` unconditionally in the `2594b7d` baseline (verified in the committed
+file), so the −0.098 ms above is already net of it.
+
+**Both phases are SERIAL by construction, and deliberately so:**
+
+- `RunPrepares` walks the schedule in order and hands out slices from ONE bump arena
+  (`prepare_->arenaSize`), so it is not merely un-parallelised, it is not thread-safe as written.
+- `CompileBarriers` is a sequential FOLD: `compileState_[res]` carries the running state from pass
+  to pass, and that fold IS the derivation of every barrier's before-state.
+
+**Could they be parallelised?** Yes, both, but differently:
+
+- *Prepare* — per pass. Each pass registers only its own uses and the slices are already per-pass
+  (`prepare_->slices[passIdx]`), so the arena would need per-pass regions — the same layout
+  `barrierPoints[passIdx][point]` already uses. The real blocker is that Prepare callbacks WRITE
+  subsystem state (`VirtualShadowMap::PrepareRenderPass` assigns `pageRenderDecisions_`), which is
+  safe today only because it is serial.
+- *Compile* — NOT per pass (the fold is inherently ordered), but per RESOURCE: each resource's
+  chain of uses is independent of every other's. Build per-resource chains, resolve them in
+  parallel, scatter the results back into the per-(pass, point) slices.
+
+**Neither was worth doing, and the cheaper lever was taken instead.** Threading 0.012 ms would buy
+idle, not frames (Step 8). The compile re-walked every use every frame for a graph shape that
+rarely changes, so it is now **cached across frames** — see below. Revisit threading only if pass
+count or per-pass use count grows several-fold; the scopes are permanent, so it is one
+`--profdump` away.
+
+### Step 8b — the cross-frame compile cache
+
+`CompileBarriers` keeps its output and reuses it whenever every input is unchanged.
+
+**The three inputs, and the guard on each:**
+
+| input | guard |
+|---|---|
+| compile order + registered uses | an EXACT COPY compared byte for byte (`CompileInputsUnchanged`). Not a hash: a collision here serves barriers with a wrong before-state, which is silent corruption, and `arenaSize` is a few hundred 16-byte entries so comparing is cheaper than hashing anyway |
+| which resources are declared / compile-managed | `CanonicalStateRegistry::Generation()`, bumped by Declare/Forget/ForgetMany/SetUnmanaged/Clear. This input cannot be seen in the use list at all |
+| the incoming `predicted` of every resource first touched | the SAME generation — `SetPredicted` bumps it only when a value actually moves |
+| (belt and braces) | a compile is stored only if it was a **fixed point**: every resource it touched ended where it began. Measured `not-fixed-point = 0`, so it never blocks; kept because a wrongly-refused cache costs 0.01 ms and a wrongly-accepted one corrupts |
+
+**ONE SLOT PER FRAME IN FLIGHT — this is the whole difference between a cache and a decoration.**
+The first version was single-slot and measured **0 hits out of 15** on the main graph. Cause:
+almost every pass registers `GetDeferredForFrame()` targets and there are `kFrameCount` rotating
+Deferred sets, so consecutive frames register different resource POINTERS. Frame N matches frame
+N−kFrameCount, not N−1. Keyed per frame index, steady state gives:
+
+```
+main graph:     hits=6729  misses=439   not-fixed-point=0     (93.9 %)
+epilogue graph: hits=3844  misses=252   not-fixed-point=0     (93.8 %)
+```
+
+That also means **hit rate can only be read in steady state.** A 15-frame `--scene-stress` reads
+1/14, because level reload, resize and DLSS-mode churn each recreate resources and bump the
+generation — correctly. Use `--profdump`, not the stress harness, and note `--barrier-compile-log`
+is throttled to one line per 512 compiles for exactly this reason.
+
+**Measured (Release, 45 s, ~23k frames, paired VSM/legacy):**
+
+| | prologue before | prologue after | of which compile |
+|---|---|---|---|
+| VSM | 0.012–0.013 | **0.005** | 0.010 → **0.002** |
+| legacy | 0.012 | **0.005** | 0.008–0.009 → **0.001** |
+
+`CPU.Frame` 1.964/1.970 → 1.959/1.990: unchanged, as Step 8 predicts. The compile itself is 5–8×
+cheaper; the prologue as a whole is 2.4× cheaper.
+
+**Correctness gate — `--barrier-cache-verify`.** It recompiles every frame *even on a hit* and
+diffs the fresh output against what the cache would have served, byte for byte, logging
+`[barrier-cache] STALE` on any difference. Run over `--scene-stress-gbv=20` in BOTH shadow modes:
+`CLEAN after 20 iterations`, **0** STALE lines, **0** comparator findings, **0** non-noise GBV.
+Any future change to what the compile reads must re-run this — a cache on the barrier path is the
+one place where "it looked fine" is not evidence.
 
 ### Step 9 — SDK / interface readiness + feature detection
 

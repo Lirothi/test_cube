@@ -1,4 +1,5 @@
 #include "rendering/diagnostics/RendererSubmissionStress.h"
+#include "core/diagnostics/DiagPaths.h"
 #include "rendering/core/SubmitTimeline.h"
 
 #include <windows.h>
@@ -417,7 +418,7 @@ int RunRendererSubmissionStress(const char* cmdLine)
     }
 
     gLog = nullptr;
-    fopen_s(&gLog, "renderer_submission_stress.log", "w");
+    fopen_s(&gLog, diag::LogPath("renderer_submission_stress.log").c_str(), "w");
     gFailures = 0;
     gUnexpectedFallbacks = 0;
 

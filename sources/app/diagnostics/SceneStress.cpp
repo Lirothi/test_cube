@@ -20,6 +20,7 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h> // ID3D12InfoQueue
+#include "core/diagnostics/DiagPaths.h"
 #include <dbghelp.h>        // StackWalk64 / SymFromAddr (crash-stack logger)
 #include <wrl/client.h>
 
@@ -70,7 +71,7 @@ LONG WINAPI StressCrashFilter(EXCEPTION_POINTERS* ep)
     const DWORD code = (ep && ep->ExceptionRecord) ? ep->ExceptionRecord->ExceptionCode : 0;
 
     FILE* cf = nullptr;
-    fopen_s(&cf, "crash_stack.txt", "w");
+    fopen_s(&cf, diag::LogPath("crash_stack.txt").c_str(), "w");
     auto emit = [&](const char* fmt, ...)
     {
         char line[1024];
@@ -496,7 +497,7 @@ private:
             return;
         }
 
-        fopen_s(&dredFile_, "dred_dump.txt", "w");
+        fopen_s(&dredFile_, diag::LogPath("dred_dump.txt").c_str(), "w");
 
         DredLine_("==== DRED dump (fault op=%s iter=%d) ====\n", op, iter);
         DredLine_("GetDeviceRemovedReason=0x%08X\n",
@@ -971,7 +972,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         iterations = 300; // default: a few hundred churn steps
     }
 
-    fopen_s(&gLog, "scene_stress.log", "w");
+    fopen_s(&gLog, diag::LogPath("scene_stress.log").c_str(), "w");
     SetUnhandledExceptionFilter(StressCrashFilter); // symbolize worker-thread/teardown/WndProc faults
     Log("scene lifecycle stress harness\n");
     Log("gbvContinue=%d\n", gbvContinue ? 1 : 0);

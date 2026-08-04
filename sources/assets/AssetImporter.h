@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "core/diagnostics/DiagPaths.h"
+
 // Part H1 — offline asset conversion backend (no editor UI). Turns raw downloads staged in
 // `import_staging/` into engine-ready content: PNG/JPG -> mipped BC7 DDS, texture-set MR
 // synthesis, frame-sequence flipbook atlases, and equirect .hdr -> BC6H cubemap skyboxes.
@@ -23,7 +25,9 @@ struct ImportOptions
     bool        centerNormals = false; // re-center a normal map whose flat baseline strays from (128,128)
                                        // (a "purple cast"/DC lean that skews lighting); threshold-gated
     int         skyboxFaceSize = 1024; // cube face edge for --skybox equirect -> cubemap
-    std::string logPath = "asset_import.log";
+    // Default routed through diag::LogPath so a headless --import lands in logs/ like every
+    // other engine diagnostic (the ImportPanel sets its own path the same way).
+    std::string logPath = diag::LogPath("asset_import.log");
 
     // H3 import-dialog controls. registerPreset=false skips the texture-set pass (no MR synth / no
     // material preset — every selected image is converted as a loose DDS). includeRel, when

@@ -63,9 +63,40 @@ public:
 	UINT GetWidth() const { return width_; }
 	UINT GetHeight() const { return height_; }
 	DXGI_FORMAT GetSrvFormat() const { return srvFormat_; }
+
+        // NEVER decode on this thread: inside this scope, CreateFromFile asks the decode cache
+        // instead and, when the image is not ready yet, FAILS the load and records it. The caller
+        // discards whatever it was building and retries on a later frame, by which time a worker
+        // has finished. That is what makes "the main thread does not stall" independent of knowing
+        // in advance which textures a material will touch — no prediction, just ask and bounce.
+        //
+        // Scoped and thread-local, so only the code inside opts in; the game path is untouched.
+        class DeferDecodeScope
+        {
+        public:
+                DeferDecodeScope();
+                ~DeferDecodeScope();
+                // True when at least one texture in this scope was not ready.
+                bool AnyPending() const;
+                DeferDecodeScope(const DeferDecodeScope&) = delete;
+                DeferDecodeScope& operator=(const DeferDecodeScope&) = delete;
+        private:
+                bool prevDefer_ = false;
+                bool prevPending_ = false;
+        };
+
+        // The CPU half of a WIC load: resolve the DDS sibling, decode to RGBA8, apply the
+        // normalIsRG fixup, build the box-filter mip chain. NO DEVICE, NO COMMAND LIST — safe on
+        // a worker, which is the whole point (see materials/TextureDecodeCache.h). Returns false
+        // when the path resolves to a DDS (nothing to decode) or the decode fails.
+        static bool DecodeToMips(const CreateDesc& desc,
+                std::vector<std::vector<uint8_t>>& outMips, UINT& outW, UINT& outH);
+        // The path DecodeToMips/CreateFromFile actually read, after DDS-sibling resolution.
+        static std::wstring ResolveSourcePath(const std::wstring& requested);
+
 private:
         // Loaders and upload helpers
-        bool LoadRGBA8_WIC_(const std::wstring& path, std::vector<uint8_t>& outRGBA, UINT& outW, UINT& outH);
+        static bool LoadRGBA8_WIC_(const std::wstring& path, std::vector<uint8_t>& outRGBA, UINT& outW, UINT& outH);
         void UploadRGBA8_(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmd,
                 const void* rgba8, UINT width, UINT height,
                 std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive,

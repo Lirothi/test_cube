@@ -283,6 +283,43 @@ public:
         std::uint32_t barrierCount = 0;
         std::array<std::array<BarrierSlice, kResourceUsesPerPassBudget>, MaxPasses> barrierPoints{};
         bool compiled = false;
+
+        // --- Cross-frame cache of the compile's OUTPUT (see CompileBarriers) ---------------
+        //
+        // The compile is a pure function of (compile order, registered uses, the incoming
+        // `predicted` state of each resource it first touches, and which resources are compile-
+        // managed). The graph is rebuilt every frame but almost always with the same shape, so
+        // the same inputs produce the same barriers frame after frame.
+        //
+        // The key is an EXACT COPY of the inputs, not a hash. A hash collision here would serve
+        // barriers with wrong before-states — silent GPU corruption — and `arenaSize` is a few
+        // hundred 16-byte entries, so a memcmp of the copy is cheaper than hashing it element by
+        // element anyway.
+        //
+        // ONE SLOT PER FRAME IN FLIGHT, and that is not an optimisation — it is the difference
+        // between a cache and a decoration. Almost every pass registers `GetDeferredForFrame()`
+        // targets, and there are kFrameCount rotating Deferred sets, so consecutive frames register
+        // DIFFERENT resource pointers and a single-slot cache measured a 0 % hit rate on the main
+        // graph. Frame N matches frame N-kFrameCount, not frame N-1.
+        struct CompiledPass { size_t index; RenderPass name; Slice slice; };
+        struct CacheSlot {
+            std::vector<CompiledPass> order;    // compile order + each pass's slice
+            std::vector<ResourceUse>  uses;     // arena[0, arenaSize) verbatim
+            // The compact output. Only the USED prefix of the arena is kept (~100 barriers), so a
+            // hit is two small memcpys rather than a second 147 KB arena per slot.
+            std::vector<D3D12_RESOURCE_BARRIER> barriers;
+            std::array<std::array<BarrierSlice, kResourceUsesPerPassBudget>, MaxPasses> points{};
+            std::uint64_t generation = 0;       // CanonicalStateRegistry::Generation()
+            bool          valid = false;
+        };
+        std::array<CacheSlot, render::kFrameCount> cache{};
+        std::uint32_t cacheHits = 0;            // diagnostics only (--barrier-compile-log)
+        std::uint32_t cacheMisses = 0;
+        std::uint32_t cacheNotFixedPoint = 0;   // compiled, but its own output forbids reuse
+        // --barrier-cache-verify: what the cache WOULD have served this frame, kept so the fresh
+        // compile can be compared against it byte for byte.
+        std::vector<D3D12_RESOURCE_BARRIER> verifyBarriers;
+        std::vector<BarrierSlice>           verifyPoints;
     };
 
     // Convenience AddPass: treat all prereqs as mt-deps (flag) or specify mtDeps explicitly
@@ -582,6 +619,7 @@ private:
     void RunPrepares(Renderer* renderer, const tc::inl_vector<FlatNode, MaxPasses>& schedule)
     {
         if (!prepare_) { return; }
+        CPU_SCOPE(ProfilerScopes::kRenderGraphPrepares);
         prepare_->arenaSize = 0; // one arena per frame; slices handed out in schedule order
         for (const FlatNode& n : schedule) {
             const size_t gid = passes_[n.pass].groupId;
@@ -609,6 +647,42 @@ private:
     void CompileBarriers(Renderer* renderer, const tc::inl_vector<FlatNode, MaxPasses>& schedule)
     {
         if (!prepare_ || !renderer) { return; }
+        CPU_SCOPE(ProfilerScopes::kRenderGraphCompileBarriers);
+
+        // --- Cache lookup ---------------------------------------------------------------------
+        // Sound iff nothing the cached compile READ has changed. Three inputs, three guards:
+        //   uses + compile order -> compared byte for byte (CompileInputsUnchanged)
+        //   which resources are declared / compile-managed -> the registry generation
+        //   the incoming `predicted` of every resource first touched -> ALSO the generation,
+        //       because SetPredicted only bumps it when a value actually moves.
+        // The third is the one that is easy to get wrong: reuse spans kFrameCount frames, so it is
+        // not enough that THIS slot's compile was a fixed point — a different slot's compile could
+        // have moved a shared resource in between. The generation covers that; the fixed-point test
+        // below is kept as a second, conservative gate.
+        //
+        // A hit also SKIPS the `predicted` write-back, which is sound for the same reason: the
+        // values it would write are the ones already there.
+        const UINT slotIndex = renderer->GetCurrentFrameIndex();
+        if (slotIndex >= render::kFrameCount) { return; } // no slot to key on: refuse to cache
+        auto& slot = prepare_->cache[slotIndex];
+        const std::uint64_t generation = renderer->DeclarationsGeneration();
+        const bool inputsMatch = slot.valid && slot.generation == generation &&
+                                 CompileInputsUnchanged(schedule, slot);
+        if (inputsMatch) {
+            if (!render::g_barrierCacheVerify) {
+                RestoreCachedOutput(slot);
+                ++prepare_->cacheHits;
+                return;
+            }
+            // --barrier-cache-verify: keep what the cache WOULD have served, compile for real, diff.
+            prepare_->verifyBarriers = slot.barriers;
+            prepare_->verifyPoints.clear();
+            for (size_t p = 0; p < MaxPasses; ++p) {
+                for (const auto& sl : slot.points[p]) { prepare_->verifyPoints.push_back(sl); }
+            }
+        }
+        ++prepare_->cacheMisses;
+
         prepare_->barrierCount = 0;
         prepare_->compiled = false;
         // `row.fill(PrepareState::BarrierSlice{})` trips MSVC's dependent-name parse inside the
@@ -672,15 +746,167 @@ private:
         // Hand this graph's ending states to the next compile — the main graph's to the epilogue's,
         // this frame's to the next frame's. See CanonicalStateRegistry::Entry::predicted for why
         // re-seeding from canonical every frame was wrong.
-        for (const auto& kv : compileState_) { renderer->SetPredictedState(kv.first, kv.second); }
+        //
+        // The same loop decides whether this compile may be CACHED. Reusing its barriers next frame
+        // means next frame's incoming states must equal THIS frame's incoming states — i.e. the
+        // compile must be a FIXED POINT: every resource it touched has to end where it began.
+        // `GetPredictedState` still returns the incoming value here, because the write-back happens
+        // in this very loop, so the test costs one lookup per touched resource and no extra memory.
+        //
+        // If it is not a fixed point the compile still runs normally; only the caching is refused.
+        // That is the conservative direction: a wrongly-refused cache costs 0.01 ms, a wrongly-
+        // accepted one emits barriers whose before-state the GPU has already moved past.
+        bool fixedPoint = true;
+        for (const auto& kv : compileState_) {
+            if (kv.second != renderer->GetPredictedState(kv.first)) { fixedPoint = false; }
+            renderer->SetPredictedState(kv.first, kv.second);
+        }
         prepare_->compiled = true;
 
-        if (render::g_barrierCompileLog) {
-            char msg[240];
+        if (fixedPoint) {
+            SnapshotCompile(schedule, slot);
+            // AFTER the write-back: a non-fixed-point compile bumps the generation as it writes, and
+            // the slot must record the value it will be compared against next time.
+            slot.generation = renderer->DeclarationsGeneration();
+            slot.valid = true;
+        }
+        else {
+            ++prepare_->cacheNotFixedPoint;
+            slot.valid = false;
+        }
+
+        if (inputsMatch) { VerifyAgainstCachedOutput(); }
+
+        // Throttled: one line per compile drowns any run long enough to leave the churn behind and
+        // reach steady state, which is the only regime where the cache's hit rate means anything.
+        // (Measured the hard way: a 15-frame --scene-stress read 1 hit / 14 misses, all of it
+        // level-reload and resize traffic.)
+        if (render::g_barrierCompileLog &&
+            ((prepare_->cacheHits + prepare_->cacheMisses) % 512u) == 0u) {
+            char msg[280];
             std::snprintf(msg, sizeof(msg),
-                          "[barrier-compile] %u barriers over %zu resources; return-to-canonical would add %u\n",
-                          prepare_->barrierCount, compileState_.size(), returnBarrierEstimate_);
-            OutputDebugStringA(msg);
+                          "[barrier-compile] %u barriers over %zu resources; return-to-canonical would add %u; "
+                          "cache hits=%u misses=%u not-fixed-point=%u\n",
+                          prepare_->barrierCount, compileState_.size(), returnBarrierEstimate_,
+                          prepare_->cacheHits, prepare_->cacheMisses, prepare_->cacheNotFixedPoint);
+            Renderer::DiagLog(msg);
+        }
+    }
+
+    // Is every input the compile reads identical to the snapshot the cached output was built from?
+    //
+    // Compared as raw bytes rather than hashed on purpose: the cost of being wrong here is barriers
+    // with a before-state the GPU has already left, which neither the comparator nor GBV is
+    // guaranteed to catch on the frame it happens. `arenaSize` is a few hundred 16-byte entries, so
+    // this is one memcmp-shaped loop.
+    //
+    // NOT covered here, and covered by `cacheGeneration` instead: whether each resource is still
+    // declared and still compile-managed. That can change with the use list untouched.
+    bool CompileInputsUnchanged(const tc::inl_vector<FlatNode, MaxPasses>& schedule,
+                                const typename PrepareState::CacheSlot& slot) const
+    {
+        if (slot.uses.size() != prepare_->arenaSize) { return false; }
+        size_t at = 0;
+        bool same = true;
+        auto checkPass = [&](size_t passIdx) {
+            if (!same) { return; }
+            if (at >= slot.order.size()) { same = false; return; }
+            const auto& c = slot.order[at++];
+            const auto& slice = prepare_->slices[passIdx];
+            // The pass NAME as well as its index: a graph that changes shape can reuse an index for
+            // a different pass, and then the slice alone would not tell them apart.
+            if (c.index != passIdx || c.name != passes_[passIdx].name ||
+                c.slice.begin != slice.begin || c.slice.count != slice.count) {
+                same = false;
+            }
+        };
+        for (const FlatNode& n : schedule) {
+            const size_t gid = passes_[n.pass].groupId;
+            if (gid == kNoGroup) { checkPass(n.pass); continue; }
+            for (size_t m : groups_[gid]) { checkPass(m); }
+        }
+        if (!same || at != slot.order.size()) { return false; }
+        for (std::uint32_t i = 0; i < prepare_->arenaSize; ++i) {
+            const ResourceUse& a = slot.uses[i];
+            const ResourceUse& b = prepare_->arena[i];
+            if (a.resource != b.resource || a.state != b.state || a.point != b.point) { return false; }
+        }
+        return true;
+    }
+
+    // Store this compile's inputs AND its output into the frame slot.
+    void SnapshotCompile(const tc::inl_vector<FlatNode, MaxPasses>& schedule,
+                         typename PrepareState::CacheSlot& slot)
+    {
+        slot.order.clear();
+        auto addPass = [&](size_t passIdx) {
+            slot.order.push_back(
+                typename PrepareState::CompiledPass{ passIdx, passes_[passIdx].name, prepare_->slices[passIdx] });
+        };
+        for (const FlatNode& n : schedule) {
+            const size_t gid = passes_[n.pass].groupId;
+            if (gid == kNoGroup) { addPass(n.pass); continue; }
+            for (size_t m : groups_[gid]) { addPass(m); }
+        }
+        slot.uses.assign(prepare_->arena, prepare_->arena + prepare_->arenaSize);
+        slot.barriers.assign(prepare_->barrierArena, prepare_->barrierArena + prepare_->barrierCount);
+        slot.points = prepare_->barrierPoints;
+    }
+
+    // Put a cached compile back where the recording path expects it. The point table is copied
+    // wholesale rather than cleared-and-refilled: it is one flat POD array either way, and a stale
+    // non-empty slice left behind by a longer previous compile would hand a pass barriers that are
+    // not its own.
+    void RestoreCachedOutput(const typename PrepareState::CacheSlot& slot)
+    {
+        prepare_->barrierCount = static_cast<std::uint32_t>(slot.barriers.size());
+        if (prepare_->barrierCount > 0) {
+            std::memcpy(prepare_->barrierArena, slot.barriers.data(),
+                        slot.barriers.size() * sizeof(D3D12_RESOURCE_BARRIER));
+        }
+        prepare_->barrierPoints = slot.points;
+        prepare_->compiled = true;
+    }
+
+    // --barrier-cache-verify: prove the cache would have served exactly what a fresh compile
+    // produces. Run it over the full --scene-stress churn; silence is the only acceptable result.
+    void VerifyAgainstCachedOutput() const
+    {
+        auto complain = [](const char* what) {
+            char msg[200];
+            std::snprintf(msg, sizeof(msg), "[barrier-cache] STALE: %s\n", what);
+            Renderer::DiagLog(msg);
+        };
+        if (prepare_->verifyBarriers.size() != prepare_->barrierCount) { complain("barrier count"); return; }
+        for (std::uint32_t i = 0; i < prepare_->barrierCount; ++i) {
+            const D3D12_RESOURCE_BARRIER& a = prepare_->verifyBarriers[i];
+            const D3D12_RESOURCE_BARRIER& b = prepare_->barrierArena[i];
+            if (a.Type != b.Type || a.Transition.pResource != b.Transition.pResource ||
+                a.Transition.StateBefore != b.Transition.StateBefore ||
+                a.Transition.StateAfter != b.Transition.StateAfter ||
+                a.Transition.Subresource != b.Transition.Subresource) {
+                char msg[260];
+                char label[96] = {};
+                std::snprintf(msg, sizeof(msg),
+                              "[barrier-cache] STALE barrier %u: cached %p 0x%X->0x%X, fresh %p 0x%X->0x%X\n",
+                              i, static_cast<const void*>(a.Transition.pResource),
+                              static_cast<unsigned>(a.Transition.StateBefore),
+                              static_cast<unsigned>(a.Transition.StateAfter),
+                              static_cast<const void*>(b.Transition.pResource),
+                              static_cast<unsigned>(b.Transition.StateBefore),
+                              static_cast<unsigned>(b.Transition.StateAfter));
+                (void)label;
+                Renderer::DiagLog(msg);
+                return;
+            }
+        }
+        size_t at = 0;
+        for (size_t p = 0; p < MaxPasses; ++p) {
+            for (const auto& sl : prepare_->barrierPoints[p]) {
+                if (at >= prepare_->verifyPoints.size()) { complain("point table size"); return; }
+                const auto& v = prepare_->verifyPoints[at++];
+                if (v.begin != sl.begin || v.count != sl.count) { complain("point slice"); return; }
+            }
         }
     }
 

@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <functional>
+#include <system_error>
 
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
@@ -423,6 +426,50 @@ void EditorPreviewRenderer::ReloadPresets()
     materials_.ClearAll();
     presetsLoaded_ = false;
     EnsurePresets();
+}
+
+// Fold of "what the presets are made of" — every source file's path and last-write time. Cheap
+// enough to run a couple of times a second; nowhere near cheap enough to run per thumbnail, which
+// is why the caller is throttled on top.
+std::uint64_t EditorPreviewRenderer::PresetSourceStamp() const
+{
+    std::error_code ec;
+    std::uint64_t stamp = 1469598103934665603ull;
+    auto mix = [&stamp](std::uint64_t v) { stamp = (stamp ^ v) * 1099511628211ull; };
+
+    const std::filesystem::path monolith = L"data/materials.json";
+    if (std::filesystem::is_regular_file(monolith, ec)) {
+        mix(static_cast<std::uint64_t>(
+            std::filesystem::last_write_time(monolith, ec).time_since_epoch().count()));
+    }
+    const std::filesystem::path dir = L"data/materials";
+    if (std::filesystem::is_directory(dir, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (ec) { break; }
+            if (!entry.is_regular_file(ec)) { continue; }
+            mix(std::hash<std::wstring>{}(entry.path().wstring()));
+            mix(static_cast<std::uint64_t>(entry.last_write_time(ec).time_since_epoch().count()));
+        }
+    }
+    return stamp;
+}
+
+void EditorPreviewRenderer::ReloadPresetsIfChanged()
+{
+    // Between scans, the presets are simply assumed unchanged — a thumbnail burst walks this path
+    // dozens of times in a frame and the filesystem is not going to move under it that fast.
+    const auto now = std::chrono::steady_clock::now();
+    if (presetsLoaded_ &&
+        presetStampCheckedAt_ != std::chrono::steady_clock::time_point{} &&
+        now - presetStampCheckedAt_ < std::chrono::milliseconds(500)) {
+        return;
+    }
+    presetStampCheckedAt_ = now;
+
+    const std::uint64_t stamp = PresetSourceStamp();
+    if (presetsLoaded_ && stamp == presetStamp_) { return; }
+    presetStamp_ = stamp;
+    ReloadPresets();
 }
 
 std::shared_ptr<Mesh> EditorPreviewRenderer::EnsureSphere(Renderer& renderer,

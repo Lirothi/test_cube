@@ -1,4 +1,5 @@
 #include "rendering/core/Renderer.h"
+#include "core/diagnostics/DiagPaths.h"
 #include "rendering/core/RendererInvariantFailure.h"
 #include "rendering/core/CommandListBindState.h"
 #include "core/Helpers.h"
@@ -1005,7 +1006,7 @@ void Renderer::DiagLog(const char* line) {
     static std::mutex mtx;
     static FILE* f = nullptr;
     std::lock_guard<std::mutex> lk(mtx);
-    if (f == nullptr) { fopen_s(&f, "barrier_diag.log", "w"); }
+    if (f == nullptr) { fopen_s(&f, diag::LogPath("barrier_diag.log").c_str(), "w"); }
     if (f != nullptr) { std::fputs(line, f); std::fflush(f); }
     OutputDebugStringA(line);
 }

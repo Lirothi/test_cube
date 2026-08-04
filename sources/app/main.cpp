@@ -1,4 +1,5 @@
 #include <windows.h>
+#include "core/diagnostics/DiagPaths.h"
 #include <mimalloc.h>
 #pragma warning(push)
 #pragma warning(disable: 28251)
@@ -127,13 +128,13 @@ int WINAPI WinMain(
     }
 
     if (lpCmdLine && std::strstr(lpCmdLine, "textmanager-benchmark") != nullptr) {
-        return RunTextManagerBenchmark("textmanager_benchmark.csv");
+        return RunTextManagerBenchmark(diag::LogPath("textmanager_benchmark.csv").c_str());
     }
 
     // "--cull-benchmark" times the per-object frustum intersect (legacy DirectXMath vs the
     // precomputed-plane path) over a fixed AABB set; results in cull_benchmark.txt.
     if (lpCmdLine && std::strstr(lpCmdLine, "cull-benchmark") != nullptr) {
-        return RunCullBenchmark("cull_benchmark.txt");
+        return RunCullBenchmark(diag::LogPath("cull_benchmark.txt").c_str());
     }
 
     // "--cull-nofuse" forces the split Bucketize()+Cull() path for self-culling views, for an
@@ -146,7 +147,7 @@ int WINAPI WinMain(
     // trivial BLAS/TLAS build) instead of the app; verdict in rt_smoke.txt,
     // exit code 0 on PASS/SKIP, non-zero on FAIL.
     if (lpCmdLine && std::strstr(lpCmdLine, "rt-smoke") != nullptr) {
-        return RunRtSmoke("rt_smoke.txt");
+        return RunRtSmoke(diag::LogPath("rt_smoke.txt").c_str());
     }
 
     // "--rt-force-as-fail" (S13 test hook): make every acceleration-structure
@@ -220,6 +221,11 @@ int WINAPI WinMain(
     // barriers are the only barrier path there is, ResourceStateTracker having been deleted.)
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-flip-trace")) {
         render::g_barrierFlipTrace = true;
+    }
+    // "--barrier-cache-verify" recompiles the barriers every frame and diffs them against what the
+    // cross-frame cache would have served. Slower than no cache at all; it is a correctness gate.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-cache-verify")) {
+        render::g_barrierCacheVerify = true;
     }
 
     if (lpCmdLine && std::strstr(lpCmdLine, "--canonical-check")) {

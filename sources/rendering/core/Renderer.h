@@ -53,6 +53,10 @@ namespace render {
 // exactly which resources need an epilogue transition before Step 7 makes it load-bearing.
 inline bool g_canonicalCheck = false;
 
+// Step 8: recompile the barriers every frame EVEN ON A CACHE HIT and diff the result against what
+// the cache would have served. The only honest way to ship a cache on the barrier path — run it
+// over the full --scene-stress churn and require silence. `--barrier-cache-verify`.
+inline bool g_barrierCacheVerify = false;
 // Step 7: per-emission trace of the compiled barriers — which point each Transition request
 // matched, and `[flip-miss]` (with the CURRENT point's contents) when it matched none. Loud; for
 // chasing a specific resource only. `--barrier-flip-trace`.
@@ -288,9 +292,11 @@ public:
     bool IsResourceCompileManaged(ID3D12Resource* res) const { return canonicalStates_.IsCompileManaged(res); }
     // Where the last barrier compile left this resource; the seed for the next one.
     D3D12_RESOURCE_STATES GetPredictedState(ID3D12Resource* res) const { return canonicalStates_.GetPredicted(res); }
+    // Bumped by every declare/forget/unmanaged/clear — the barrier compile's cache key.
+    std::uint64_t DeclarationsGeneration() const { return canonicalStates_.Generation(); }
     void SetPredictedState(ID3D12Resource* res, D3D12_RESOURCE_STATES s) { canonicalStates_.SetPredicted(res, s); }
     // For subsystems that create resources without a Renderer& (RenderTargetManager).
-    ResourceDeclarations Declarations() { return ResourceDeclarations{ &canonicalStates_ }; }
+    ResourceDeclarations Declarations() { return ResourceDeclarations{ &canonicalStates_, canonicalStates_.Liveness() }; }
     // Step 6 diagnostic: log every declared resource that did not END the frame at canonical.
     // Logging, not enforcing — each hit is either a mis-declaration or a resource that genuinely
     // needs an epilogue transition, and this is the step that finds them all.

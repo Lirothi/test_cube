@@ -2,7 +2,10 @@
 
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -76,6 +79,7 @@ public:
         if (it != states_.end()) { --net_[it->second.name]; } // overwrite = the old one is gone
         ++net_[e.name];
         states_[res] = e;
+        ++generation_; // invalidates the barrier compile's cache (RenderGraph::CompileBarriers)
     }
 
     // Mark a declared resource as driven from outside the graph (see Entry::unmanaged).
@@ -85,6 +89,7 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         auto it = states_.find(res);
         if (it != states_.end()) { it->second.unmanaged = true; }
+        ++generation_; // the compile SKIPS unmanaged resources, so this changes its output
     }
 
     // Is this resource the barrier compile's business at all? It must be DECLARED (so the
@@ -115,6 +120,7 @@ public:
         if (it == states_.end()) { return; }
         --net_[it->second.name];
         states_.erase(it);
+        ++generation_;
     }
 
     void ForgetMany(const std::vector<ID3D12Resource*>& resources)
@@ -122,6 +128,7 @@ public:
         if (resources.empty()) { return; }
         std::lock_guard<std::mutex> lk(mtx_);
         for (auto* res : resources) { states_.erase(res); }
+        ++generation_;
     }
 
     void Clear()
@@ -129,6 +136,7 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         states_.clear();
         net_.clear();
+        ++generation_;
     }
 
     // Re-read the debug name of an ALREADY-DECLARED resource. Owners that name their resources
@@ -173,12 +181,19 @@ public:
         return (it == states_.end()) ? D3D12_RESOURCE_STATE_COMMON : it->second.predicted;
     }
 
+    // Bumps the generation only when the value actually MOVES. That is what makes the barrier
+    // compile's cross-frame cache sound: a cached compile may be reused iff no `predicted` it read
+    // has changed since, and with frame-buffered resources the reuse spans kFrameCount frames, so
+    // "my own compile was a fixed point" is not enough — another frame slot's compile could have
+    // moved a SHARED resource in between. A generation that only ticks on real change covers both.
     void SetPredicted(ID3D12Resource* res, D3D12_RESOURCE_STATES state)
     {
         if (res == nullptr) { return; }
         std::lock_guard<std::mutex> lk(mtx_);
         auto it = states_.find(res);
-        if (it != states_.end()) { it->second.predicted = state; }
+        if (it == states_.end() || it->second.predicted == state) { return; }
+        it->second.predicted = state;
+        ++generation_;
     }
 
     // COMMON for a resource that never declared — the same answer the tracker gives, so an
@@ -190,8 +205,28 @@ public:
         return (it == states_.end()) ? D3D12_RESOURCE_STATE_COMMON : it->second.state;
     }
 
-    // Copied out rather than exposing the map, so callers cannot hold the lock across the
-    // tracker's own lock (the frame-end check needs both).
+    // Bumped by EVERY mutation of the table: declare, forget, unmanaged, clear. The barrier
+    // compile caches its output across frames and keys it on this, because a resource appearing,
+    // disappearing or turning unmanaged changes what the compile produces WITHOUT changing a
+    // single registered use — the one input the use list cannot express.
+    std::uint64_t Generation() const { return generation_.load(std::memory_order_relaxed); }
+
+    // Liveness token for `ResourceDeclarations`, and it is load-bearing at SHUTDOWN.
+    //
+    // The registry is a member of Renderer, but resources are not all owned below it:
+    // `App::Run` ends with `systems_.reset()`, which destroys the Renderer while `App`'s own
+    // `appController_` is still alive and still holds the editor's thumbnail/icon Texture2Ds.
+    // Those die later, in ~App, and each one's GpuResource dutifully calls Forget on a registry
+    // whose mutex has already been freed — an access violation on exit, reproducible only once
+    // the thumbnail cache has actually been populated (which is why no stress run ever saw it).
+    //
+    // A wrapper that unregisters in its destructor has to survive its registry disappearing, or
+    // it is not the guarantee it claims to be. Copying the sink copies a weak_ptr; expiry is a
+    // plain load and this path only runs at resource create/destroy.
+    std::weak_ptr<const void> Liveness() const { return alive_; }
+
+    // Copied out rather than exposing the map, so callers cannot hold the lock across another
+    // one (the frame-end check needs both).
     void Snapshot(std::vector<std::pair<ID3D12Resource*, Entry>>& out) const
     {
         out.clear();
@@ -219,6 +254,9 @@ private:
     // Touched only at resource creation and destruction, so the mutex is uncontended; it
     // exists because texture loads can declare off the main thread.
     mutable std::mutex mtx_;
+    // Dies with the registry; every ResourceDeclarations copy holds a weak_ptr to it.
+    std::shared_ptr<const void> alive_ = std::make_shared<char>('\0');
+    std::atomic<std::uint64_t> generation_{ 0 };
     robin_hood::unordered_map<ID3D12Resource*, Entry> states_;
     robin_hood::unordered_map<std::string, int> net_;
 };
@@ -229,6 +267,11 @@ private:
 struct ResourceDeclarations
 {
     CanonicalStateRegistry* canonical = nullptr;
+    // Expired (or never bound) means the registry is GONE and there is nothing to record or
+    // unrecord. See CanonicalStateRegistry::Liveness for the shutdown order that requires this.
+    std::weak_ptr<const void> alive;
+
+    bool Live() const { return canonical != nullptr && !alive.expired(); }
 
     // Creation state doubles as the resting state. Correct for the ~75 resources measured to
     // already end the frame where they started.
@@ -247,23 +290,23 @@ struct ResourceDeclarations
                  D3D12_RESOURCE_STATES canonicalState) const
     {
         (void)creationState;
-        if (canonical) { canonical->Declare(res, canonicalState); }
+        if (Live()) { canonical->Declare(res, canonicalState); }
     }
 
     void Forget(ID3D12Resource* res) const
     {
-        if (canonical) { canonical->Forget(res); }
+        if (Live()) { canonical->Forget(res); }
     }
 
     void ForgetMany(const std::vector<ID3D12Resource*>& resources) const
     {
-        if (canonical) { canonical->ForgetMany(resources); }
+        if (Live()) { canonical->ForgetMany(resources); }
     }
 
     // See CanonicalStateRegistry::RefreshName — caller guarantees the resource is alive.
     void RefreshName(ID3D12Resource* res) const
     {
-        if (canonical) { canonical->RefreshName(res); }
+        if (Live()) { canonical->RefreshName(res); }
     }
 
     // Override the resting state of an already-declared resource WITHOUT re-seeding the tracker.
@@ -272,7 +315,7 @@ struct ResourceDeclarations
     // states), so the resting state is stated per target rather than per helper.
     void SetCanonical(ID3D12Resource* res, D3D12_RESOURCE_STATES canonicalState) const
     {
-        if (canonical) { canonical->Declare(res, canonicalState); }
+        if (Live()) { canonical->Declare(res, canonicalState); }
     }
 };
 

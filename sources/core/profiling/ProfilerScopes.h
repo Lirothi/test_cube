@@ -123,6 +123,15 @@ extern const Profiler::ScopeNameKey kTextManagerEmitImmediate;
 // RenderGraph
 extern const Profiler::ScopeNameKey kRenderGraphExecute;
 extern const Profiler::ScopeNameKey kRenderGraphExecuteParallel;
+// Barrier plan step 7: the two-phase prologue. Both are SERIAL by construction (see
+// RenderGraph::RunPrepares / CompileBarriers) and run before any body records, so they are the
+// one piece of the design that could become a bottleneck without showing up anywhere else.
+//
+// DO NOT ADD THESE TWO TOGETHER. `CompileBarriers` is called from the tail of `RunPrepares`, so
+// the Prepares row is INCLUSIVE of the CompileBarriers row — `Prepares` alone is the whole
+// prologue. (Summing them once turned a 0.012 ms cost into a reported 0.022 ms.)
+extern const Profiler::ScopeNameKey kRenderGraphPrepares;
+extern const Profiler::ScopeNameKey kRenderGraphCompileBarriers;
 
 //Service
 extern const Profiler::ScopeNameKey kService1;

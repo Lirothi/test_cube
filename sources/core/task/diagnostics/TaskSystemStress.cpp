@@ -1,4 +1,5 @@
 #include "core/task/diagnostics/TaskSystemStress.h"
+#include "core/diagnostics/DiagPaths.h"
 #include "core/task/TaskSystem.h"
 
 #include <algorithm>
@@ -231,7 +232,7 @@ void RunOverflowDeathTest()
 int RunTaskSystemStress(bool overflowDeathTest)
 {
     gLog = nullptr;
-    fopen_s(&gLog, "tasksystem_stress.log", "w");
+    fopen_s(&gLog, diag::LogPath("tasksystem_stress.log").c_str(), "w");
     gFailures = 0;
 
     if (overflowDeathTest) {

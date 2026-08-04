@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -153,6 +154,10 @@ private:
         PendingLoad::Kind generationKind,
         std::uint64_t assetRegistryRevision,
         Entry& entry);
+    // Dispatch the material textures of a queued load to a worker for CPU decoding.
+    // Dispatch a queued load's material textures to a worker for CPU decoding (the GPU upload
+    // stays on the main thread). Best-effort: a miss just means CreateFromFile decodes inline.
+    void PrewarmMaterialTextures(const PendingLoad& load);
     void LaunchPreflightJobs();
     void CommitPreflightResults(Renderer& renderer);
     void StartPreviewInitialization(Renderer& renderer);
@@ -160,6 +165,8 @@ private:
     void StartGpuJob(Renderer& renderer);
     void EvictIfNeeded(Renderer& renderer);
     void ReleaseEntry(Renderer& renderer, Entry& entry);
+    // Free thumbnails retired at least kFrameCount frames ago (force = at shutdown, after an idle).
+    void FlushRetired(Renderer& renderer, bool force);
 
     std::unordered_map<std::string, Entry> entries_;
     std::deque<PendingLoad> queue_;
@@ -167,6 +174,29 @@ private:
     std::shared_ptr<editor_thumbnail_detail::PreflightState> preflightState_;
     std::shared_ptr<editor_thumbnail_detail::PreviewInitState> previewInitState_;
     std::unique_ptr<GpuJob> gpuJob_;
+
+    // Evicted thumbnails wait here instead of idling the GPU. ReleaseEntry used to call
+    // WaitForPreviousFrame() per victim, and once the cache is full EVERY new thumbnail evicts one
+    // — so scrolling a folder meant a full pipeline flush per icon, on the main thread. The ComPtr
+    // keeps the resource alive until its frame is provably retired, which is the same guarantee
+    // the idle was buying.
+    struct RetiredThumbnail
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+        std::uint64_t retiredAtFrame = 0;
+    };
+    std::vector<RetiredThumbnail> retired_;
+
+    // A queued load's material textures are decoded on a WORKER; the job must not start until
+    // that finishes. Without this gate the prewarm was pure decoration: the decode takes seconds
+    // and StartGpuJob runs a frame later, so it lost the race every single time and decoded the
+    // same textures again on the main thread (measured — the profile was byte-identical).
+    //
+    // Waiting here does NOT block: the load goes back on the queue and is retried next frame.
+    struct DecodeTicket { std::atomic<bool> done{ false }; };
+    std::unordered_map<std::string, std::shared_ptr<DecodeTicket>> decodeTickets_;
+    std::uint32_t lastPrewarmSlots_ = 0; // diagnostics: what the last prewarm actually saw
+    std::uint32_t lastPrewarmDescs_ = 0;
     std::shared_ptr<EditorPreviewRenderer> preview_;
     std::uint64_t frameCounter_ = 0;
     std::uint64_t preflightEpoch_ = 1;

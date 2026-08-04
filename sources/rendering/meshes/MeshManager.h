@@ -82,6 +82,8 @@ public:
     // picks that group within the selector's resolved, material-index-ordered group list
     // (submesh i of a multi-submesh load == ordinal i); -1 = the selector's own group choice.
     // Returns desc.valid=false if the group has no material.
+    // Drops the cached glTF material descriptions (a re-import writes new files).
+    static void InvalidateGltfMaterialCache();
     static GltfMaterialDesc DescribeGltfMaterial(const std::string& pathWithFragment,
                                                  int groupOrdinal = -1);
 

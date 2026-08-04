@@ -1,4 +1,5 @@
 #include "materials/Texture2D.h"
+#include "materials/TextureDecodeCache.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "core/Helpers.h"
@@ -402,6 +403,57 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
 }
 
 // ========================= Public API =========================
+// See Texture2D::DeferDecodeScope. Thread-local: a worker decoding for someone else must not
+// inherit the caller's policy.
+static thread_local bool tlDeferDecodes = false;
+static thread_local bool tlDecodePending = false;
+
+Texture2D::DeferDecodeScope::DeferDecodeScope()
+    : prevDefer_(tlDeferDecodes), prevPending_(tlDecodePending)
+{
+    tlDeferDecodes = true;
+    tlDecodePending = false;
+}
+
+Texture2D::DeferDecodeScope::~DeferDecodeScope()
+{
+    tlDeferDecodes = prevDefer_;
+    tlDecodePending = prevPending_;
+}
+
+bool Texture2D::DeferDecodeScope::AnyPending() const { return tlDecodePending; }
+
+std::wstring Texture2D::ResolveSourcePath(const std::wstring& requested)
+{
+    // H2: prefer a sibling ".dds" next to the requested source (the H1 importer writes mipped BC
+    // DDS beside the original PNG/JPG). Keeps glTF material URIs and preset paths byte-identical.
+    if (EndsWithNoCase(requested, L".dds")) { return requested; }
+    const std::wstring sibling = DdsSiblingPath(requested);
+    return (!sibling.empty() && FileExistsW(sibling)) ? sibling : requested;
+}
+
+bool Texture2D::DecodeToMips(const CreateDesc& desc,
+    std::vector<std::vector<uint8_t>>& outMips, UINT& outW, UINT& outH)
+{
+    const std::wstring path = ResolveSourcePath(desc.path);
+    if (EndsWithNoCase(path, L".dds")) { return false; } // DDS carries its own mips; no decode
+
+    std::vector<uint8_t> rgba;
+    UINT w = 0, h = 0;
+    if (!LoadRGBA8_WIC_(path, rgba, w, h)) { return false; }
+
+    // NormalMap + normalIsRG: zero B to avoid noise.
+    if (desc.usage == Usage::NormalMap && desc.normalIsRG) {
+        for (size_t i = 0; i < rgba.size(); i += 4) { rgba[i + 2] = 0; }
+    }
+
+    outMips.clear();
+    outMips.emplace_back(std::move(rgba));
+    BuildMipChainRGBA8_(outMips, w, h, desc.usage == Usage::AlbedoSRGB, desc.alphaCoverageCutoff);
+    outW = w; outH = h;
+    return true;
+}
+
 bool Texture2D::CreateFromFile(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmd,
     const CreateDesc& desc,
@@ -431,19 +483,25 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
         return true;
     }
 
-    // 1) WIC → RGBA8
-    std::vector<uint8_t> rgba;
+    // 1) The CPU half: taken from the decode cache when a worker already did it (the editor's
+    // thumbnail preflight prewarms it), otherwise done inline right here. A MISS IS NOT AN ERROR --
+    // inline is exactly the original behaviour, so nothing depends on the prewarm having run.
+    std::vector<std::vector<uint8_t>> mips;
     UINT w = 0, h = 0;
-    if (!LoadRGBA8_WIC_(d.path, rgba, w, h)) {
+    texdecode::DecodedImage prewarmed;
+    bool haveMips = texdecode::Take(d, prewarmed);
+    if (haveMips) { mips = std::move(prewarmed.mips); w = prewarmed.width; h = prewarmed.height; }
+    if (!haveMips && tlDeferDecodes) {
+        // Not ready and this thread must not decode. Kick a worker (idempotent) and fail out; the
+        // caller sees AnyPending() and retries once the worker has landed the image.
+        if (texdecode::Request(d) == texdecode::Status::Pending) {
+            tlDecodePending = true;
+            return false;
+        }
+    }
+    if (!haveMips && !DecodeToMips(d, mips, w, h)) {
         OutputDebugStringW((L"[Texture2D] WIC load failed: " + d.path + L"\n").c_str());
         return false;
-    }
-
-    // 2) If this is a NormalMap and normalIsRG=true, zero B to avoid noise
-    if (d.usage == Usage::NormalMap && d.normalIsRG) {
-        for (size_t i = 0; i < rgba.size(); i += 4) {
-            rgba[i + 2] = 0;   // B = 0
-        }
     }
 
     // 3) Choose formats: TYPELESS resource, UNORM/SRGB SRV
@@ -455,9 +513,6 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     // aliasing (DLSS jitter turns unmipped foliage/normal/MR into shimmer). Masked albedo
     // preserves its alpha-test coverage per level, else the cutouts erode with distance.
     // H1's importer (BC DDS with offline mips) supersedes this for imported content.
-    std::vector<std::vector<uint8_t>> mips;
-    mips.emplace_back(std::move(rgba));
-    BuildMipChainRGBA8_(mips, w, h, d.usage == Usage::AlbedoSRGB, d.alphaCoverageCutoff);
     UploadRGBA8Mips_(renderer, uploadCmd, mips, w, h, keepAlive, resourceFmt);
     CreateCpuSrv_(renderer, srvFmt, static_cast<UINT>(mips.size()));
 

@@ -66,6 +66,10 @@ public:
 
     // Does the preset exist?
     bool HasPreset(const std::string& name) const;
+    // Read-only view of a registered preset, for callers that need its TEXTURE PATHS without
+    // creating the MaterialData (the editor prewarms those decodes on a worker). Null when
+    // unknown. Valid until the preset table is reloaded.
+    const MaterialPreset* FindPreset(const std::string& name) const;
 
     size_t PresetCount() const { return presets_.size(); }
 

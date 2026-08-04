@@ -234,6 +234,12 @@ bool MaterialDataManager::HasPreset(const std::string& name) const
     return presets_.find(name) != presets_.end();
 }
 
+const MaterialPreset* MaterialDataManager::FindPreset(const std::string& name) const
+{
+    const auto it = presets_.find(name);
+    return (it == presets_.end()) ? nullptr : &it->second;
+}
+
 std::shared_ptr<MaterialData> MaterialDataManager::FindLoaded(const std::string& name) const
 {
     auto it = cache_.find(name);

@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -66,6 +67,19 @@ public:
     // Drop the preview-only material cache after a material file or one of its
     // referenced maps changed. The next EnsurePresets/GetOrCreate reloads them.
     void ReloadPresets();
+
+    // Same, but ONLY when the preset sources actually changed on disk.
+    //
+    // AssetThumbnailCache::StartGpuJob used to call ReloadPresets() unconditionally for every mesh
+    // and material thumbnail. That is a directory rescan plus a full JSON reparse per thumbnail —
+    // and, because ClearAll() drops the cached MaterialData, it also re-loads every referenced
+    // TEXTURE from disk for each one. Scrolling a folder of meshes did that once per icon, on the
+    // main thread. The stamp is a cheap mtime fold, and the scan behind it is throttled, so the
+    // steady-state cost of "did anything change" is nothing.
+    //
+    // Detects edits to `data/materials.json` and `data/materials/*`. It does NOT see a texture
+    // edited in place under an unchanged .json — that case needs an explicit refresh.
+    void ReloadPresetsIfChanged();
 
     // Ensure the shared unit sphere used for material previews is resident.
     // Records upload work into `load` on first use; returns null on failure.
@@ -155,6 +169,9 @@ private:
     std::uint32_t srvDescriptorSize_ = 0;
     bool initialized_ = false;
     bool presetsLoaded_ = false;
+    std::uint64_t PresetSourceStamp() const;              // fold of the preset sources' mtimes
+    std::uint64_t presetStamp_ = 0;
+    std::chrono::steady_clock::time_point presetStampCheckedAt_{}; // throttles the scan itself
 };
 
 #endif // WITH_EDITOR

@@ -288,6 +288,7 @@
     <ClCompile Include="sources/materials/Material.cpp" />
     <ClCompile Include="sources/materials/MaterialData.cpp" />
     <ClCompile Include="sources/materials/MaterialDataManager.cpp" />
+    <ClCompile Include="sources/materials/TextureDecodeCache.cpp" />
     <ClCompile Include="sources/materials/Texture2D.cpp" />
     <ClCompile Include="sources/materials/TextureCube.cpp" />
     <ClCompile Include="sources/ocean/OceanRenderable.cpp" />
@@ -471,6 +472,7 @@
     <ClInclude Include="sources/core/math/Math.h" />
     <ClInclude Include="sources/core/profiling/Profiler.h" />
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
+    <ClInclude Include="sources/core/diagnostics/DiagPaths.h" />
     <ClInclude Include="sources/core/task/TaskSystem.h" />
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />
     <ClInclude Include="sources/core/task/diagnostics/TaskSystemStress.h" />
@@ -481,6 +483,7 @@
     <ClInclude Include="sources/materials/Material.h" />
     <ClInclude Include="sources/materials/MaterialData.h" />
     <ClInclude Include="sources/materials/MaterialDataManager.h" />
+    <ClInclude Include="sources/materials/TextureDecodeCache.h" />
     <ClInclude Include="sources/materials/Texture2D.h" />
     <ClInclude Include="sources/materials/TextureCube.h" />
     <ClInclude Include="sources/rendering/core/UploadManager.h" />

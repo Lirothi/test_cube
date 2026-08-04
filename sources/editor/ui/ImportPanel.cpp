@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include "core/diagnostics/DiagPaths.h"
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -1269,7 +1270,7 @@ void ImportPanel::BeginImport(const Item& item,
     opt.centerNormals = centerNormals_;
     opt.useGpu = useGpu_;
     opt.skyboxFaceSize = skyboxFaceSize_;
-    opt.logPath = "asset_import.log";
+    opt.logPath = diag::LogPath("asset_import.log");
     opt.registerPreset = registerPreset;
     opt.includeRel = includeRel;
     opt.progressDone = &progressDone_;   // atomics live in this panel, which outlives the worker
