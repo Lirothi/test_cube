@@ -3,6 +3,7 @@
 #include <d3d12.h>
 
 #include "rendering/core/ResourceDeclarations.h"
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -50,7 +51,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE srvCPU_{};
 
     // Cache of the staged GPU handle per frame (same as Texture2D)
-    UINT stagedFrame_ = UINT(-1);
+    std::uint64_t stagedFrame_ = UINT64_MAX; // MONOTONIC frame number, not the in-flight slot
     D3D12_GPU_DESCRIPTOR_HANDLE srvGPU_{};
 
     // Metadata

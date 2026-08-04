@@ -64,7 +64,11 @@ public:
 private:
     struct Entry {
         UINT  cpuIndex = UINT(-1);                      // Index within the CPU heap
-        UINT  lastFrame = UINT(-1);                     // Frame when it was last staged
+        // MONOTONIC frame number. It used to be GetCurrentFrameIndex(), the frame-IN-FLIGHT SLOT,
+        // which repeats every kFrameCount frames — so this cache re-handed a GPU address the
+        // per-frame sampler ring had already re-allocated, and a draw sampled whatever landed
+        // there (GBV id=1006: a COMPARISON sampler where the shader wanted a default one).
+        std::uint64_t lastFrame = UINT64_MAX;           // frame this entry's `gpu` was staged in
         D3D12_GPU_DESCRIPTOR_HANDLE gpu{};              // GPU handle in the shader-visible heap (for lastFrame)
     };
 

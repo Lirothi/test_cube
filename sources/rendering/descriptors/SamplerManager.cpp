@@ -51,7 +51,11 @@ UINT SamplerManager::ensureCpu_(const D3D12_SAMPLER_DESC& desc) {
 
 D3D12_GPU_DESCRIPTOR_HANDLE SamplerManager::Get(Renderer* renderer, const D3D12_SAMPLER_DESC& desc) {
     const UINT cpuIdx = ensureCpu_(desc);
-    const UINT frame  = renderer->GetCurrentFrameIndex();
+    // MONOTONIC frame number: the per-frame sampler ring is reset every frame, while
+    // GetCurrentFrameIndex() is the frame-IN-FLIGHT SLOT and repeats every kFrameCount
+    // frames. Keyed on the slot, the early-out below returned a GPU address the ring had
+    // already handed to a different sampler — GBV id=1006.
+    const std::uint64_t frame = renderer->GetTotalFrameNumber();
 
     SamplerKey key(desc);
     {

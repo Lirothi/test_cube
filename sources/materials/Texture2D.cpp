@@ -548,7 +548,14 @@ void Texture2D::CreateFromRGBA8(Renderer* renderer,
 
 D3D12_GPU_DESCRIPTOR_HANDLE Texture2D::GetSRVForFrame(Renderer* r)
 {
-    if (stagedFrame_ == r->GetCurrentFrameIndex() && srvGPU_.ptr != 0) {
+    // Keyed on the MONOTONIC frame number, not GetCurrentFrameIndex().
+    //
+    // The descriptor ring is reset per frame, and GetCurrentFrameIndex() is the frame-IN-FLIGHT
+    // SLOT (0..kFrameCount-1) — it repeats every few frames. Keyed on the slot, this cache said
+    // "already staged this frame" three frames later and handed back an address the ring had
+    // long since re-allocated to something else. GPU-based validation caught it as the descriptor
+    // at that slot being the wrong TYPE or DIMENSION (ids 939/940).
+    if (stagedFrame_ == r->GetTotalFrameNumber() && srvGPU_.ptr != 0) {
         return srvGPU_;
     }
 
@@ -557,7 +564,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE Texture2D::GetSRVForFrame(Renderer* r)
     r->GetDevice()->CopyDescriptorsSimple(1, h.cpu, srvCPU_, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     srvGPU_ = h.gpu;
-    stagedFrame_ = r->GetCurrentFrameIndex();
+    stagedFrame_ = r->GetTotalFrameNumber();
     return srvGPU_;
 }
 

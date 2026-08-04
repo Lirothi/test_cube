@@ -1720,3 +1720,56 @@ one), on `skybox.hlsl` and `gbuffer.hlsl`. Nothing to do with resource states.
 MISSING; the same with `--shadow-mode=legacy` CLEAN, 0 MISSING; `--scene-stress=12` with
 break-on-error active CLEAN; `--legacy-barriers --scene-stress-gbv=12` CLEAN with 1358 gone there
 too — the fixes are model-independent, as the diagnosis said they had to be.
+
+---
+
+## Follow-up 2: GBV 939 / 940 / 1006 — **FIXED (uncommitted). One bug, three symptoms, and it was
+## not validation noise.**
+
+These three were carried as "glass noise" through the entire migration. They were one defect:
+
+**A staging cache keyed on the frame-in-flight SLOT instead of the frame NUMBER.**
+
+Three places did the same thing — `Texture2D::GetSRVForFrame`, `TextureCube::GetSRVForFrame`, and
+`SamplerManager::Get`:
+
+```cpp
+if (stagedFrame_ == r->GetCurrentFrameIndex() && srvGPU_.ptr != 0) { return srvGPU_; }
+```
+
+The intent is "I already copied this descriptor into the shader-visible ring **this frame**, reuse
+the handle". But `GetCurrentFrameIndex()` is the frame-in-flight slot (0..kFrameCount-1), and the
+ring it guards is `ResetPerFrame()`-ed at the top of every frame. So the condition really reads
+"…in some earlier frame that happened to use this same slot" — true again `kFrameCount` frames
+later, by which time the ring had rewound and handed that address to a different descriptor
+entirely.
+
+The result is a draw sampling **whatever else landed at that offset**, which is exactly what the
+three ids said:
+- `id=940` — skybox expected a TEXTURECUBE SRV, found a BUFFER or TEXTURE2D one.
+- `id=939` — the same slot holding a UAV where the register wanted an SRV.
+- `id=1006` — the G-buffer's default sampler slot holding a shadow COMPARISON sampler.
+
+It only bit when the ring's allocation pattern differed between two visits to the same slot — i.e.
+after a level switch, a resize, or any frame with a different draw mix. That is why it read as rare
+noise, and why `--scene-stress` (which does nothing but churn) was where it showed.
+
+**This was never cosmetic.** A stale descriptor means a draw reads the wrong texture or samples
+with a comparison sampler — occasional wrong-looking materials on random frames, with no crash and
+no message outside GBV. The fix is to key on `Renderer::GetTotalFrameNumber()` (monotonic,
+64-bit) in all three places.
+
+**Result: `--scene-stress-gbv` now reports ZERO debug-layer messages** — the first time in this
+work that the count is not "the usual noise". Every id the migration ever saw (1350, 1334, 1358,
+935, 939, 940, 1006) is gone.
+
+**Gates:** both configs `0/0`; `--scene-stress-gbv=20 --barrier-cmp --canonical-check` ZERO
+messages, 0 MISSING; the same with `--shadow-mode=legacy` ZERO, 0 MISSING; `--scene-stress=12`
+with break-on-error active CLEAN; `--legacy-barriers --scene-stress-gbv=12` ZERO. Visual: a `--shot`
+at a frozen wind clock differs from the pre-fix capture by 0.244% of pixels against a 0.197%
+same-build run-to-run noise floor — no visible change, as expected for a fix that removes a rare
+wrong-descriptor read.
+
+**Lesson worth keeping: "cached per frame" is ambiguous, and one reading of it is a bug.** Any
+cache guarding a per-frame ring must key on a monotonic counter; a frame-in-flight index is an
+identifier that repeats.

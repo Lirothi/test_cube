@@ -133,7 +133,7 @@ private:
         D3D12_CPU_DESCRIPTOR_HANDLE srvCPU_{};
 
         // Cache of the staged GPU handle per frame
-        UINT stagedFrame_ = UINT(-1);
+        std::uint64_t stagedFrame_ = UINT64_MAX; // MONOTONIC frame number, not the in-flight slot
         D3D12_GPU_DESCRIPTOR_HANDLE srvGPU_{};
 
         // Metadata

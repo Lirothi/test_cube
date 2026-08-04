@@ -219,7 +219,10 @@ bool TextureCube::CreateFromDDS(Renderer* r,
 
 D3D12_GPU_DESCRIPTOR_HANDLE TextureCube::GetSRVForFrame(Renderer* r)
 {
-    if (stagedFrame_ == r->GetCurrentFrameIndex() && srvGPU_.ptr != 0) {
+    // Monotonic frame number, not the frame-in-flight SLOT — see the note in
+    // Texture2D::GetSRVForFrame. Keyed on the slot this returned a stale ring address every few
+    // frames, which is what made the skybox sample a BUFFER/TEXTURE2D descriptor (GBV 939/940).
+    if (stagedFrame_ == r->GetTotalFrameNumber() && srvGPU_.ptr != 0) {
         return srvGPU_;
     }
     auto& da = r->GetDescAlloc();
@@ -227,7 +230,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE TextureCube::GetSRVForFrame(Renderer* r)
     r->GetDevice()->CopyDescriptorsSimple(
         1, h.cpu, srvCPU_, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     srvGPU_ = h.gpu;
-    stagedFrame_ = r->GetCurrentFrameIndex();
+    stagedFrame_ = r->GetTotalFrameNumber();
     return srvGPU_;
 }
 
