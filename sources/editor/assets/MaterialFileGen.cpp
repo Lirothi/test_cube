@@ -8,8 +8,10 @@
 #include "third_party/json/json.hpp"
 #pragma warning(pop)
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -27,10 +29,27 @@ namespace materialgen
         fs::create_directories("data/materials", ec);
         if (!overwrite && fs::exists(matPath, ec)) { return name; } // preserve prior/edited file
 
+        // Preset paths are stored relative to the working dir WITH FORWARD SLASHES (the same
+        // convention AssetImporter documents). These arrive from ResolveTexUri, which joins the
+        // glTF's URI onto the staging directory as it was handed in — on Windows that is
+        // "import_staging\rocks" + "/textures/x.png", i.e. mixed separators.
+        //
+        // That mattered: ImportPanel::RepointPresetPaths rewrites "import_staging/<name>/" to
+        // "models/<name>/" after the import copies the converted DDS out of staging, and it does a
+        // TEXTUAL prefix match. Mixed separators never matched, so the repoint silently did
+        // nothing and every generated preset kept pointing at the raw staging PNG — which is how a
+        // 256-pixel thumbnail ended up decoding 58 MB of source art with the converted DDS sitting
+        // unused next to it.
+        const auto normalize = [](std::string p)
+        {
+            std::replace(p.begin(), p.end(), '\\', '/');
+            return p;
+        };
+
         nlohmann::json m = nlohmann::json::object();
-        if (!d.albedoPath.empty()) { m["albedo"] = d.albedoPath; }
-        if (!d.mrPath.empty()) { m["mr"] = d.mrPath; }
-        if (!d.normalPath.empty()) { m["normal"] = d.normalPath; }
+        if (!d.albedoPath.empty()) { m["albedo"] = normalize(d.albedoPath); }
+        if (!d.mrPath.empty()) { m["mr"] = normalize(d.mrPath); }
+        if (!d.normalPath.empty()) { m["normal"] = normalize(d.normalPath); }
         m["shadingModel"] = "defaultLit";
         m["subsurfaceColor"] = { 1.0f, 1.0f, 1.0f };
         m["transmissionStrength"] = 0.0f;

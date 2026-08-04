@@ -908,6 +908,16 @@ namespace
                 ss << in.rdbuf();
                 content = ss.str();
             }
+            // Separator-agnostic. The generator now writes forward slashes, but presets produced
+            // before that fix carry "import_staging\rocks\textures/x.png" — backslashes, escaped
+            // by JSON, so a plain forward-slash prefix search never matched and this whole repoint
+            // silently did nothing. Normalising the CONTENT first (JSON escapes a backslash as two
+            // characters, so both forms collapse to one) makes it match either way.
+            for (size_t i = 0; i + 1 < content.size(); ++i)
+            {
+                if (content[i] == '\\' && content[i + 1] == '\\') { content.erase(i, 1); content[i] = '/'; }
+                else if (content[i] == '\\') { content[i] = '/'; }
+            }
             bool changed = false;
             for (size_t pos = 0; (pos = content.find(stagingPrefix, pos)) != std::string::npos; )
             {

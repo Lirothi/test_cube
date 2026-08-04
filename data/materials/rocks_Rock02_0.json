@@ -1,9 +1,9 @@
 {
-  "albedo": "import_staging\\rocks\\textures/Rock02Shader_baseColor.png",
+  "albedo": "models/rocks/textures/Rock02Shader_baseColor.png",
   "ambientOcclusion": 1.0,
   "indirectSpecularScale": 1.0,
-  "mr": "import_staging\\rocks\\textures/Rock02Shader_metallicRoughness.png",
-  "normal": "import_staging\\rocks\\textures/Rock02Shader_normal.png",
+  "mr": "models/rocks/textures/Rock02Shader_metallicRoughness.png",
+  "normal": "models/rocks/textures/Rock02Shader_normal.png",
   "normalIsRG": false,
   "shadingModel": "defaultLit",
   "subsurfaceColor": [

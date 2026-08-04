@@ -1,9 +1,9 @@
 {
-  "albedo": "import_staging\\rock_boulder_2_game_ready_asset\\textures/DefaultMaterial_baseColor.jpeg",
+  "albedo": "models/rock_boulder_2_game_ready_asset/textures/DefaultMaterial_baseColor.jpeg",
   "ambientOcclusion": 1.0,
   "indirectSpecularScale": 1.0,
-  "mr": "import_staging\\rock_boulder_2_game_ready_asset\\textures/DefaultMaterial_metallicRoughness.png",
-  "normal": "import_staging\\rock_boulder_2_game_ready_asset\\textures/DefaultMaterial_normal.png",
+  "mr": "models/rock_boulder_2_game_ready_asset/textures/DefaultMaterial_metallicRoughness.png",
+  "normal": "models/rock_boulder_2_game_ready_asset/textures/DefaultMaterial_normal.png",
   "normalIsRG": false,
   "shadingModel": "defaultLit",
   "subsurfaceColor": [
