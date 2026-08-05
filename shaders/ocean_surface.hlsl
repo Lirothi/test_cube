@@ -642,20 +642,47 @@ VSOutput VSMain(VSInput input)
         shoreFieldWeight);
 
 #if OCEAN_SHORE_SINK
-    // Dry land: instead of letting the pixel shader discard this, drop it far below the terrain.
-    // The terrain is opaque and already in the depth buffer, so the depth test draws the waterline
-    // — and it does so PER PIXEL, which is what the fwidth-based clip was buying. The plunge is
-    // deliberately steep (kSinkDepth over kSinkBand) so the surface crosses the sand almost
-    // vertically and the resulting edge is sharp rather than a soft wedge.
+    // Dry land: instead of letting the pixel shader discard this, tuck it UNDER the terrain and let
+    // the depth test draw the waterline — per pixel, which is what the fwidth-based clip bought,
+    // and without the discard that cost the whole draw its early-Z.
     //
-    // Note this sinks on `waterDepth`, the SOURCE depth — the same quantity the clip tested — not
-    // on `predictedDepth`. That is what preserves the run-up: geometry advected landward carries
-    // its source depth with it and survives exactly as far as water that STARTED below the mark.
+    // The sheet dips at a FIXED ANGLE past the waterline and then settles onto a shelf. It does not
+    // follow the terrain: mirroring it meant the water dived as hard as the land climbed, which is
+    // both odd to look at and pointless, since a steep face already hides whatever is behind it.
+    // What actually needs burying is the long shallow stretch, where sand and water are nearly
+    // coplanar and neither wins the depth test cleanly.
+    //
+    // `waterDepth` is a DEPTH, so it is turned into horizontal distance past the waterline with the
+    // depth field's own gradient — the same `terrainSlope` the run-up already uses. That is what
+    // makes the dip an angle rather than a mirror: on a gentle beach a metre inland is a metre of
+    // dip, and on a cliff the distance barely advances, so the sheet stays put and the rock in
+    // front of it does the hiding.
+    //
+    // Still driven by `waterDepth`, the SOURCE depth the old clip tested, not by `predictedDepth`:
+    // geometry advected landward carries its source depth with it, and that preserves the run-up.
     {
-        const float kSinkBand = 2.0f;   // metres of dry land over which the sheet plunges
-        const float kSinkDepth = 10.0f;  // deep enough that the crossing is effectively vertical
-        float dryness = saturate(-waterDepth / kSinkBand);
-        verticalDisplacement -= dryness * kSinkDepth;
+        const float kSinkSlope = 0.25f;     // tangent of the dip angle (0.5 = about 27 degrees)
+        const float kSinkMaxDepth = 5.0f;  // the shelf the sheet settles onto, metres below water
+
+        const float kSinkFlatten = 2.0f;  // metres inland over which the buried sheet goes still
+        // Floor on the slope used for the distance estimate. The depth gradient is measured from
+        // neighbouring texels, so it is noisy and can come out near zero; dividing by that sends
+        // inlandDistance to infinity for single vertices and tears the mesh into spikes.
+        const float kMinSlopeForDistance = 0.05f;
+
+        float inlandDistance =
+            max(-waterDepth, 0.0f) / max(terrainSlope, kMinSlopeForDistance);
+
+        // Buried water is still water. Nothing under the terrain is ever seen, so leaving the wave
+        // running down there only pays for displacement that can poke back through the sand — and
+        // in wireframe it is the sheet thrashing under the beach. Fade the wave out as the sheet
+        // goes under and let the dip carry it down as a smooth plane.
+        float buried = saturate(inlandDistance / kSinkFlatten);
+        verticalDisplacement = lerp(verticalDisplacement, 0.0f, buried);
+        horizontalDisplacement *= 1.0f - buried;
+
+        verticalDisplacement -=
+            min(inlandDistance * kSinkSlope, kSinkMaxDepth);
     }
 #endif
     //prevDisplacement *= attenuation;
@@ -1448,7 +1475,7 @@ PSOut PSMain(VSOutput input)
     [branch]
     if (needsFallbackShore || needsRefractionSoftEdge)
     {
-        sceneDepthAtPixel = SampleSceneDepth(screenUV);
+        sceneDepthAtPixel = SampleSceneDepthFiltered(screenUV);
     }
 
     float fallbackShoreDepth = 1000.0f;
@@ -1461,7 +1488,7 @@ PSOut PSMain(VSOutput input)
         {
             // Filtered: this depth ends up in the contact-foam mask (fallbackShoreDepth), which
             // must not carry the depth buffer's steps. The unfiltered value still gates the branch.
-            float sceneViewDepth = DepthToViewZ_Fast(SampleSceneDepthFiltered(screenUV));
+            float sceneViewDepth = DepthToViewZ_Fast(sceneDepthSample);
             float depthSeparation =
                 abs(sceneViewDepth - input.viewDepth);
             float contactDepthThreshold =
