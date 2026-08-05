@@ -85,6 +85,7 @@ const Profiler::ScopeNameKey kCSMPerCascade = Profiler::RegisterTraceLiteral(L"C
 const Profiler::ScopeNameKey kRenderObjectBatchGpu = Profiler::RegisterTraceLiteral(L"RenderObjectBatch");
 const Profiler::ScopeNameKey kGBufferDriver = Profiler::RegisterTraceLiteral(L"GBuffer.Driver");
 const Profiler::ScopeNameKey kExecuteBundles = Profiler::RegisterTraceLiteral(L"ExecuteBundles");
+const Profiler::ScopeNameKey kEditorAssetErrorsScan = Profiler::RegisterTraceLiteral(L"Editor.AssetErrorsScan");
 const Profiler::ScopeNameKey kOceanSurface = Profiler::RegisterTraceLiteral(L"Ocean.Surface");
 const Profiler::ScopeNameKey kTransparentDriver = Profiler::RegisterTraceLiteral(L"Transparent.Driver");
 const Profiler::ScopeNameKey kOceanRender = Profiler::RegisterTraceLiteral(L"OceanRenderable::RecordCompute");

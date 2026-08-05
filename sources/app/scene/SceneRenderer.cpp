@@ -380,6 +380,12 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
         frame_->vsm->EnsureFrameResources(renderer, frame_->shadowGpu);
     }
 
+    if (frame_->ocean)
+    {
+        // Was lazy inside OceanSimulation::Update, i.e. inside Main_ObjectCompute's RECORD body.
+        frame_->ocean->EnsureSimulationResources(renderer);
+    }
+
     if (frame_->lightManager)
     {
         // Same counts the passes derive; LightManager's light set does not change during Render.

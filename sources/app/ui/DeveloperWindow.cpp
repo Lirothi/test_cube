@@ -147,6 +147,88 @@ void DeveloperWindow::ToggleTextureInspector()
     textureDebugViewer_.SetOpen(!textureDebugViewer_.IsOpen());
 }
 
+void DeveloperWindow::DrawTraceControls()
+{
+    if (!traceWindowOpen_)
+    {
+        return;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(420.0f, 190.0f), ImGuiCond_FirstUseEver);
+    bool open = traceWindowOpen_;
+    if (ImGui::Begin("Trace capture###TraceCapture", &open))
+    {
+        const Profiler::TraceCaptureStatus status = Profiler::Get().GetTraceCaptureStatus();
+
+        if (status.active)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "RECORDING");
+            ImGui::SameLine();
+            if (status.openEnded)
+            {
+                ImGui::Text("%u frames, %zu events", status.framesRecorded, status.events);
+            }
+            else
+            {
+                ImGui::Text("%u frames left", status.framesRemaining);
+            }
+        }
+        else if (status.pending)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f), "starting next frame...");
+        }
+        else
+        {
+            ImGui::TextDisabled("idle");
+        }
+
+        ImGui::Separator();
+
+        // Start/Stop, not a frame count: the things worth capturing (a drag, a hitch while walking)
+        // have no length you can know in advance.
+        ImGui::BeginDisabled(status.active || status.pending);
+        if (ImGui::Button("Start", ImVec2(120.0f, 0.0f)))
+        {
+            Profiler::Get().BeginTraceCapture();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!status.active && !status.pending);
+        if (ImGui::Button("Stop", ImVec2(120.0f, 0.0f)))
+        {
+            Profiler::Get().StopTraceCapture();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(status.active || status.pending);
+        if (ImGui::Button("Quick 120", ImVec2(120.0f, 0.0f)))
+        {
+            Profiler::Get().RequestTraceCapture(120);
+        }
+        ImGui::EndDisabled();
+
+        ImGui::TextDisabled("F11 does the same as Quick 120 (unless ImGui has the keyboard).");
+
+        ImGui::Separator();
+        if (status.lastPath.empty())
+        {
+            ImGui::TextDisabled("no capture written yet");
+        }
+        else
+        {
+            ImGui::TextWrapped("last: %s", status.lastPath.c_str());
+            if (ImGui::Button("Copy path"))
+            {
+                ImGui::SetClipboardText(status.lastPath.c_str());
+            }
+        }
+    }
+    ImGui::End();
+    traceWindowOpen_ = open;
+}
+
 void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings
 #if WITH_EDITOR
     , EditorController& editorController
@@ -159,6 +241,7 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
     {
         textureDebugViewer_.Draw(renderer, GetOceanShoreDepthResource());
         oceanControlsWindow_.Draw(renderer);
+        DrawTraceControls();
         return;
     }
 
@@ -184,6 +267,8 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Text("Draw calls: %u   Primitives: %.3fM",
                     render::g_renderStats.lastDrawCalls,
                     static_cast<double>(render::g_renderStats.lastPrimitives) / 1.0e6);
+
+                ImGui::Checkbox("Trace capture window", &traceWindowOpen_);
 
                 ImGui::Separator();
 
@@ -884,4 +969,5 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
     textureDebugViewer_.Draw(renderer, GetOceanShoreDepthResource());
     oceanControlsWindow_.Draw(renderer);
+    DrawTraceControls();
 }

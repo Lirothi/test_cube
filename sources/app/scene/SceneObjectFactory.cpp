@@ -69,17 +69,46 @@ namespace
 
 namespace SceneObjectFactory
 {
-    json ResolveMeshAsset(const json& o)
+    static json ParseJsonFile(const std::string& path)
+    {
+        std::ifstream f(path);
+        if (!f) { return json{}; }
+        std::stringstream ss;
+        ss << f.rdbuf();
+        json parsed = json::parse(ss.str(), nullptr, /*allow_exceptions=*/false, /*ignore_comments=*/true);
+        return parsed.is_discarded() ? json{} : parsed;
+    }
+
+    // Parses one mesh.json, through `cache` when a scan supplies one. A discarded/absent asset is
+    // cached too — repeating a failed open per object is exactly as wasteful as repeating a good one.
+    static const json* LoadMeshAssetJson(const std::string& path, MeshAssetScanCache* cache)
+    {
+        if (cache)
+        {
+            auto it = cache->meshAssets.find(path);
+            if (it == cache->meshAssets.end())
+            {
+                // A failed open is cached too: repeating it per object is exactly as wasteful as
+                // repeating a successful one.
+                it = cache->meshAssets.emplace(path, ParseJsonFile(path)).first;
+            }
+            return it->second.is_object() ? &it->second : nullptr;
+        }
+        // Uncached callers get the parse held in a thread-local slot valid until their next call,
+        // which is all ResolveMeshAsset needs (it copies out of it before returning).
+        static thread_local json scratch;
+        scratch = ParseJsonFile(path);
+        return scratch.is_object() ? &scratch : nullptr;
+    }
+
+    json ResolveMeshAsset(const json& o, MeshAssetScanCache* cache)
     {
         const auto meshIt = o.find("mesh");
         if (meshIt == o.end() || !meshIt->is_string()) { return o; }
 
-        std::ifstream f(meshIt->get<std::string>());
-        if (!f) { return o; }
-        std::stringstream ss;
-        ss << f.rdbuf();
-        const json asset = json::parse(ss.str(), nullptr, /*allow_exceptions=*/false, /*ignore_comments=*/true);
-        if (asset.is_discarded() || !asset.is_object()) { return o; }
+        const json* assetPtr = LoadMeshAssetJson(meshIt->get<std::string>(), cache);
+        if (!assetPtr) { return o; }
+        const json& asset = *assetPtr;
 
         json eff = o;
         // Fold every asset key the object doesn't already carry — material, materials, shader,
@@ -97,15 +126,23 @@ namespace SceneObjectFactory
         return eff;
     }
 
-    std::vector<std::string> MeshAssetErrors(const json& oIn)
+    std::vector<std::string> MeshAssetErrors(const json& oIn, MeshAssetScanCache* cache)
     {
         namespace fs = std::filesystem;
         std::vector<std::string> errs;
 
-        const auto exists = [](const std::string& p)
+        const auto exists = [cache](const std::string& p)
         {
+            if (p.empty()) { return false; }
+            if (cache)
+            {
+                auto it = cache->fileExists.find(p);
+                if (it != cache->fileExists.end()) { return it->second; }
+            }
             std::error_code ec;
-            return !p.empty() && fs::exists(fs::path(p), ec);
+            const bool present = fs::exists(fs::path(p), ec);
+            if (cache) { cache->fileExists.emplace(p, present); }
+            return present;
         };
         // A referenced texture is present if the file exists OR (H2) its .dds sibling does.
         const auto texExists = [&](const std::string& p)
@@ -120,7 +157,7 @@ namespace SceneObjectFactory
             return false;
         };
 
-        const json o = ResolveMeshAsset(oIn);
+        const json o = ResolveMeshAsset(oIn, cache);
 
         // 1) Geometry: mesh.json resolvable + the geometry file present (fragment stripped).
         if (oIn.contains("mesh") && oIn["mesh"].is_string() && !o.contains("model"))
@@ -147,25 +184,50 @@ namespace SceneObjectFactory
         for (const std::string& m : mats)
         {
             if (m.empty() || m == "auto") { continue; }
-            const std::string matFile = "data/materials/" + m + ".json";
-            if (!exists(matFile)) { errs.push_back("material not found: " + m); continue; }
 
-            std::ifstream mf(matFile);
-            std::stringstream ss; ss << mf.rdbuf();
-            const json mj = json::parse(ss.str(), nullptr, /*exceptions=*/false, /*comments=*/true);
-            if (mj.is_discarded() || !mj.is_object()) { errs.push_back("material unreadable: " + m); continue; }
-
-            for (const char* key : { "albedo", "mr", "normal" })
+            // A material's verdict depends only on its NAME, so it is computed once per scan even
+            // though hundreds of objects reference the same preset.
+            if (cache)
             {
-                if (mj.contains(key) && mj[key].is_string())
+                auto it = cache->materialErrors.find(m);
+                if (it != cache->materialErrors.end())
                 {
-                    const std::string tp = mj[key].get<std::string>();
-                    if (!tp.empty() && !texExists(tp))
+                    errs.insert(errs.end(), it->second.begin(), it->second.end());
+                    continue;
+                }
+            }
+
+            std::vector<std::string> matErrs;
+            const std::string matFile = "data/materials/" + m + ".json";
+            if (!exists(matFile))
+            {
+                matErrs.push_back("material not found: " + m);
+            }
+            else
+            {
+                const json mj = ParseJsonFile(matFile);
+                if (!mj.is_object())
+                {
+                    matErrs.push_back("material unreadable: " + m);
+                }
+                else
+                {
+                    for (const char* key : { "albedo", "mr", "normal" })
                     {
-                        errs.push_back("texture missing (" + m + "/" + key + "): " + tp);
+                        if (mj.contains(key) && mj[key].is_string())
+                        {
+                            const std::string tp = mj[key].get<std::string>();
+                            if (!tp.empty() && !texExists(tp))
+                            {
+                                matErrs.push_back("texture missing (" + m + "/" + key + "): " + tp);
+                            }
+                        }
                     }
                 }
             }
+
+            errs.insert(errs.end(), matErrs.begin(), matErrs.end());
+            if (cache) { cache->materialErrors.emplace(m, std::move(matErrs)); }
         }
         return errs;
     }

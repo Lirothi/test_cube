@@ -414,10 +414,13 @@ void Renderer::RecordObjectIdPickReadback(ID3D12GraphicsCommandList* cl)
         objectIdReadback_->SetName(L"Editor.ObjectIdReadback");
     }
 
-    // Out-of-graph (post-frame editor pick): the before state is known — objectID rests as a
-    // render target, which is also its canonical. No tracker needed.
-    TransitionExplicit(cl, D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
-                       D3D12_RESOURCE_STATE_COPY_SOURCE);
+    // No transition here. This used to be an out-of-graph readback that moved objectID itself,
+    // and the comment claimed the before-state was "known". It is not: Main_ObjectIdReadback now
+    // DECLARES objectID as COPY_SOURCE and its body calls ApplyDeclaredStates, so by the time this
+    // runs the compile has already moved it. The leftover explicit transition then asserted
+    // before=RENDER_TARGET against a resource sitting in COPY_SOURCE — harmless under legacy
+    // barriers, a hard debug-layer error under enhanced ones (id=1334, INCOMPATIBLE_BARRIER_LAYOUT).
+    // Only reachable from that pass; see the single call site in SceneRenderer.
 
     D3D12_TEXTURE_COPY_LOCATION dst{};
     dst.pResource = objectIdReadback_.Get();

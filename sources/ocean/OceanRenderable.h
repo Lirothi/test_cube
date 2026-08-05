@@ -12,6 +12,20 @@
 class Camera;
 class SamplerManager;
 
+namespace ocean
+{
+// "--ocean-shore-sink": cut the run-up sheet on dry land by SINKING it under the terrain in the
+// vertex shader and letting the ordinary depth test draw the waterline, instead of `clip()`-ing it
+// in the pixel shader.
+//
+// It has to be a SHADER VARIANT, not a runtime branch: a `clip` behind an `if` is still a discard
+// in the compiled shader, so the hardware still disables early-Z for the whole draw and the branch
+// buys nothing. Measured cost of that discard: 38 us, ~14% of the ocean pass.
+//
+// Boot-only for the same reason — flipping it rebuilds the material. Compare two runs.
+inline bool g_shoreSinkCut = true;
+}
+
 class Scene;
 
 class OceanRenderable : public RenderableObject
@@ -41,6 +55,8 @@ public:
     // isn't a shadow caster, but correct if that ever changes).
     bool IsDynamicCaster() const override { return true; }
 
+    // Runs before the render graph — see OceanSimulation::EnsureFrameResources.
+    void EnsureSimulationResources(Renderer* renderer);
     void OnMaterialHotReload(Renderer* renderer) override;
     OceanRenderable* AsOceanRenderable() override { return this; }
 

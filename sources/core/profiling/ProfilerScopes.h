@@ -100,6 +100,9 @@ extern const Profiler::ScopeNameKey kGBufferDriver;
 // scope, and read as an 82 us HOLE in the GPU trace on 122 of 123 frames. This brackets the
 // ExecuteBundle calls on the driver list, which is the one place a query is legal.
 extern const Profiler::ScopeNameKey kExecuteBundles;
+// The editor's missing-asset scan. It was unscoped, and a trace of an inspector stall showed
+// 930 ms of a 946 ms frame inside EditorController::Draw with nothing named — this is why.
+extern const Profiler::ScopeNameKey kEditorAssetErrorsScan;
 // The ocean SURFACE draw. One fixed scope on the one object that dominates the transparent
 // batch (measured: 88% of it, ~14% of the GPU frame), so the split is visible in every trace
 // at no cost — instead of a general per-object mechanism that cost 17% of the frame to run.

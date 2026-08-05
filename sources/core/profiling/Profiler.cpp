@@ -482,6 +482,7 @@ void Profiler::BeginFrame(uint64_t frameNo) {
         traceCaptureRequested_ = false;
         traceCapturing_ = true;
         traceFramesRemaining_ = traceRequestFrameCount_;
+        traceFramesRecorded_ = 0;
         traceEvents_.clear();
         traceStartUs_ = 0;
         traceStartSet_ = false;
@@ -586,7 +587,12 @@ void Profiler::EndFrame() {
                 traceFramesRemaining_ = 0;
                 finishTrace = true;
             }
+            else if (traceOpenEnded_) {
+                // Runs until StopTraceCapture; the frame budget does not apply.
+                ++traceFramesRecorded_;
+            }
             else if (traceFramesRemaining_ > 0) {
+                ++traceFramesRecorded_;
                 traceFramesRemaining_--;
                 if (traceFramesRemaining_ == 0) {
                     finishTrace = true;
@@ -1441,8 +1447,43 @@ void Profiler::RequestTraceCapture(uint32_t frameCount) {
     }
     traceCaptureRequested_ = true;
     traceRequestFrameCount_ = frameCount;
+    traceOpenEnded_ = false;
     traceStopRequested_ = false;
     std::printf("Profiler trace capture requested: %u frames\n", frameCount);
+}
+
+void Profiler::BeginTraceCapture() {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (traceCapturing_ || traceCaptureRequested_) { return; }
+    traceCaptureRequested_ = true;
+    traceRequestFrameCount_ = 1; // the start path requires a non-zero budget; openEnded ignores it
+    traceOpenEnded_ = true;
+    traceStopRequested_ = false;
+}
+
+void Profiler::StopTraceCapture() {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (traceCapturing_) {
+        traceStopRequested_ = true;
+        return;
+    }
+    // Not started yet: cancel the pending request instead of leaving it armed.
+    traceCaptureRequested_ = false;
+    traceRequestFrameCount_ = 0;
+    traceOpenEnded_ = false;
+}
+
+Profiler::TraceCaptureStatus Profiler::GetTraceCaptureStatus() const {
+    TraceCaptureStatus s;
+    std::lock_guard<std::mutex> lk(mtx_);
+    s.active = traceCapturing_;
+    s.pending = traceCaptureRequested_;
+    s.openEnded = traceOpenEnded_;
+    s.framesRemaining = traceFramesRemaining_;
+    s.framesRecorded = traceFramesRecorded_;
+    s.events = traceEvents_.size();
+    s.lastPath = traceLastPath_;
+    return s;
 }
 
 void Profiler::Tick()
@@ -1508,6 +1549,13 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events) {
     fname << "traces/trace_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << kTraceBuildSuffix
           << "_" << std::setw(3) << std::setfill('0') << fileIdx << ".json";
     const std::string fileName = fname.str();
+    {
+        // Remembered so the trace window can say where the file went instead of the user hunting
+        // for it by timestamp.
+        std::lock_guard<std::mutex> lk(mtx_);
+        traceLastPath_ = fileName;
+        traceOpenEnded_ = false;
+    }
     std::filesystem::create_directory("traces");
     std::ofstream out(fileName, std::ios::binary);
     if (!out) {

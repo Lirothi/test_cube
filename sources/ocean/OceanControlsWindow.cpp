@@ -1143,8 +1143,10 @@ namespace
             drag("Opacity", render.shoreContactFoamOpacity, 0.005f, 0.0f, 1.0f);
 
             ImGui::SeparatorText("Wind response");
+            // The serialized field is still `shoreContactFoamCalmAmount` so existing ocean configs
+            // keep loading; only its MEANING changed (a wind threshold, not a calm-time multiplier).
             drag(
-                "Calm amount",
+                "No foam below wind force",
                 render.shoreContactFoamCalmAmount,
                 0.005f,
                 0.0f,
@@ -1621,7 +1623,12 @@ namespace
         if (ImGui::TreeNodeEx("Rendering", ImGuiTreeNodeFlags_DefaultOpen))
         {
             ImGui::PushItemWidth(CalculateOceanControlItemWidth());
-            configChanged |= DrawOceanRenderControls(ocean);
+            // Deliberately NOT folded into configChanged. This section is pure shader constants and
+            // applies itself with SetRenderConfig (a plain assignment). Feeding it to configChanged
+            // sent every drag tick through ApplyConfig -> ResetGpuResources, which tears down and
+            // recreates EVERY simulation texture and rebuilds the spectrum on the CPU — a full
+            // re-init per mouse move, which is what made dragging any of these sliders stall.
+            DrawOceanRenderControls(ocean);
             ImGui::PopItemWidth();
             ImGui::TreePop();
         }

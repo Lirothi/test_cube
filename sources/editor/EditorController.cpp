@@ -2391,10 +2391,14 @@ void EditorController::RefreshAssetErrors()
 {
     const bool wasClean = assetErrors_.empty();
     assetErrors_.clear();
+    // ONE cache for the whole pass: without it every object re-opens and re-parses the same
+    // mesh.json and material .json files. Measured at 926 ms for a single pass over wind_test.
+    SceneObjectFactory::MeshAssetScanCache scanCache;
     for (const EditorObject& obj : document_.Objects())
     {
         if (obj.type != "staticMesh" && obj.type != "transparentMesh") { continue; }
-        std::vector<std::string> errs = SceneObjectFactory::MeshAssetErrors(EditorSceneDocument::ObjectToJson(obj));
+        std::vector<std::string> errs =
+            SceneObjectFactory::MeshAssetErrors(EditorSceneDocument::ObjectToJson(obj), &scanCache);
         if (!errs.empty()) { assetErrors_.emplace(obj.id.value, std::move(errs)); }
     }
     // Pop the window open the moment a scan first surfaces problems (e.g. right after a level load).
@@ -2403,11 +2407,41 @@ void EditorController::RefreshAssetErrors()
 
 void EditorController::RefreshAssetErrorsIfStale()
 {
+    CPU_SCOPE(ProfilerScopes::kEditorAssetErrorsScan);
+
     const std::uint64_t v = document_.ContentVersion();
     const std::string& lvl = document_.LevelPath();
     const std::size_t n = document_.Objects().size();
     if (v == assetErrorsVersion_ && lvl == assetErrorsLevel_ && n == assetErrorsCount_) { return; }
+
+    // DEBOUNCED, and that is the whole point. RefreshAssetErrors serialises EVERY mesh object to
+    // JSON and then stats the filesystem for each of its assets — while `ContentVersion` bumps on
+    // every inspector edit, i.e. once per frame for the whole time a slider is being dragged.
+    // Measured on wind_test: 930 ms of a 946 ms frame. demo was tolerable only because it has far
+    // fewer mesh objects, which is exactly the level-dependence that gave this away.
+    //
+    // Structural changes (a different level, objects added or removed) still scan immediately —
+    // those are one-shot and the error list must be right at once. A value edit waits until the
+    // user stops moving, because a scan mid-drag is thrown away by the next frame anyway.
+    const bool structural = (lvl != assetErrorsLevel_) || (n != assetErrorsCount_);
+    if (!structural)
+    {
+        constexpr double kQuietSeconds = 0.25;
+        const double now = ImGui::GetTime();
+        if (v != assetErrorsPendingVersion_)
+        {
+            assetErrorsPendingVersion_ = v;
+            assetErrorsDueTimeSec_ = now + kQuietSeconds;
+            return;
+        }
+        if (now < assetErrorsDueTimeSec_)
+        {
+            return;
+        }
+    }
+
     assetErrorsVersion_ = v; assetErrorsLevel_ = lvl; assetErrorsCount_ = n;
+    assetErrorsPendingVersion_ = v;
     RefreshAssetErrors();
 }
 

@@ -222,6 +222,24 @@ public:
     // while a capture is pending or active will stop/cancel it.
 #endif
     void RequestTraceCapture(uint32_t frameCount);
+
+    // Open-ended capture, for the trace window's Start/Stop. RequestTraceCapture takes a frame
+    // COUNT, which forces the caller to guess how long the thing being investigated will last —
+    // and the interesting cases (dragging a slider, walking into a stall) have no known length.
+    void BeginTraceCapture();
+    void StopTraceCapture();
+
+    struct TraceCaptureStatus
+    {
+        bool     active = false;      // recording right now
+        bool     pending = false;     // requested, starts next frame
+        bool     openEnded = false;   // runs until StopTraceCapture
+        uint32_t framesRemaining = 0; // meaningless when openEnded
+        uint32_t framesRecorded = 0;
+        size_t   events = 0;
+        std::string lastPath;         // where the previous capture was written
+    };
+    TraceCaptureStatus GetTraceCaptureStatus() const;
     void Tick();
     void SetThreadName(const std::string& name);
 
@@ -278,7 +296,7 @@ private:
 private:
 #if PROF_ENABLED
     // statistics collection
-    std::mutex mtx_;
+    mutable std::mutex mtx_; // mutable: GetTraceCaptureStatus is a const query
     std::mutex traceMtx_;
     robin_hood::unordered_flat_map<ScopeNameKey, StatsEntry, ScopeNameKeyHash, ScopeNameKeyEqual> stats_;
 #if PROF_GPU_ENABLED
@@ -391,7 +409,10 @@ private:
     bool traceCapturing_ = false;
     std::atomic<bool> traceCapturingAtomic_{ false };
     bool traceStopRequested_ = false;
+    bool traceOpenEnded_ = false;
     uint32_t traceFramesRemaining_ = 0;
+    uint32_t traceFramesRecorded_ = 0;
+    std::string traceLastPath_;
     uint64_t traceStartUs_ = 0;
     bool traceStartSet_ = false;
     std::vector<TraceEvent> traceEvents_;

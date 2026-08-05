@@ -592,8 +592,18 @@ void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)
     const D3D12_RESOURCE_STATES srvState =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    ctx.Use(simulation_->GetDisplacementResource(), srvState);
-    ctx.Use(simulation_->GetPreviousDisplacementResource(), srvState);
+    // Guarded exactly as RecordGraphics guards them. Registering a resource the body will not
+    // transition advances the compile past a barrier nobody emits, which is fatal under compiled
+    // barriers; the previous-displacement pair was already asymmetric (registered unconditionally,
+    // transitioned only when non-null).
+    if (ID3D12Resource* displacement = simulation_->GetDisplacementResource())
+    {
+        ctx.Use(displacement, srvState);
+    }
+    if (ID3D12Resource* prevDisplacement = simulation_->GetPreviousDisplacementResource())
+    {
+        ctx.Use(prevDisplacement, srvState);
+    }
 }
 
 void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
@@ -707,7 +717,10 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     const D3D12_RESOURCE_STATES srvState =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    renderer->Transition(cl, simulation_->GetDisplacementResource(), srvState);
+    if (ID3D12Resource* displacement = simulation_->GetDisplacementResource())
+    {
+        renderer->Transition(cl, displacement, srvState);
+    }
     if (auto* prevDisplacement = simulation_->GetPreviousDisplacementResource())
     {
         renderer->Transition(cl, prevDisplacement, srvState);
@@ -745,6 +758,10 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
 #endif
         desc.dsvFormat = renderer->GetDsvFormat();
     }
+    if (ocean::g_shoreSinkCut)
+    {
+        desc.defines.emplace_back("OCEAN_SHORE_SINK", "1");
+    }
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;
@@ -754,6 +771,14 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
     desc.blend.RenderTarget[2].BlendEnable = FALSE;
     desc.blend.RenderTarget[2].RenderTargetWriteMask = 0;
 #endif
+}
+
+void OceanRenderable::EnsureSimulationResources(Renderer* renderer)
+{
+    if (simulation_)
+    {
+        simulation_->EnsureFrameResources(renderer);
+    }
 }
 
 void OceanRenderable::OnMaterialHotReload(Renderer* renderer)

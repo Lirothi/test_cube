@@ -39,7 +39,7 @@ cbuffer OceanCB : register(b0)
     float4 shoreFoamGeometryParams;    // x: main width, y: breakup length, z: geometry-edge refraction fade, w: opacity
     float4 shoreFoamPatternParams;     // x: pattern scale, y: density, z: scroll speed, w: signed-depth warp strength
     float4 shoreFoamBreakupParams;     // x: breakup-length variation, y: variation scale, z: contact normal strength, w: unused
-    float4 shoreFoamWindParams;        // x: wind force 0..1, y: calm amount, z: full amount wind force, w: unused
+    float4 shoreFoamWindParams;        // x: wind force 0..1, y: wind force below which there is no contact foam, z: wind force at which it is at full strength, w: unused
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed, z: signed-depth warp range, w: warp scale
     float4 shoreSlopeParams;           // xy: run-up slope fade gradient thresholds, z: edge soft depth, w: geometry fade distance
     float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
@@ -114,6 +114,11 @@ struct FoamInput
     float3 viewDir;
     float3 normal;
     float shoreDepth;
+    // Screen-space depth change per pixel, taken from the VERTEX-interpolated water depth rather
+    // than from fwidth() of the shore-depth TEXTURE. A bilinear fetch is C0 but not C1: its
+    // derivative is piecewise constant and jumps at every texel boundary, so fwidth() of it paints
+    // that map's texel grid into whatever consumes it — the regular stripes across the strip.
+    float depthFeather;
     float fallbackShoreDepth;
     float fallbackShoreWeight;
     float shoreFieldWeight;
@@ -160,11 +165,8 @@ struct LightingInput
 
 struct BrunetonInputs
 {
-    float3 lightDirWind;
     float3 viewDirWind;
     float3 normalWind;
-    float3 tangentXWind;
-    float3 tangentYWind;
     float2 slopeVarianceSquared;
 };
 
@@ -232,6 +234,15 @@ float2 ScreenUVToNDC(float2 uv)
 float SampleSceneDepth(float2 uv)
 {
     return SceneDepthTexture.SampleLevel(PointClampSampler, uv, 0).r;
+}
+
+// Filtered read, for FOAM only. Foam uses the scene depth as a soft mask, so it wants the values
+// interpolated; point sampling hands it the depth buffer's pixel steps and the contact strip
+// inherits them as a staircase. Refraction and world-position reconstruction keep the point read
+// above on purpose — averaging depth across a silhouette invents a position on neither surface.
+float SampleSceneDepthFiltered(float2 uv)
+{
+    return SceneDepthTexture.SampleLevel(LinearClampSampler, uv, 0).r;
 }
 
 float3 ViewSpacePosition(float depthSample, float2 uv)
@@ -497,6 +508,27 @@ float3 NormalFromDerivatives(DerivativesSet derivatives, float4 normalWeights)
     return NormalFromCombinedDerivatives(combined);
 }
 
+// Wind scale for the whole contact strip: 0 = no foam at all, 1 = the tuned widths.
+//
+// `.y` is the wind force BELOW WHICH there is no contact foam, and `.z` the force at which it
+// reaches full strength — a ramp between two wind speeds.
+//
+// It used to be `lerp(calmAmount, 1, smoothstep(0, fullWind, windForce))`, i.e. `.y` was the
+// multiplier AT ZERO WIND — a floor. That made foam impossible to remove with wind: at calm 0.1 the
+// widths never fell below 10% however still the water got. The value at `.z` is unchanged by this
+// rewrite (both forms return exactly 1 there), so a setup tuned at full wind looks identical.
+float ContactFoamWindAmount()
+{
+    const float windForce = saturate(shoreFoamWindParams.x);
+    const float calmWind = saturate(shoreFoamWindParams.y);
+    // Guard the degenerate ordering: smoothstep needs edge0 < edge1.
+    const float fullWind = max(shoreFoamWindParams.z, calmWind + 1e-3f);
+    // LINEAR between the two, not smoothstep: the slider should read as "how much foam", so half
+    // way between the thresholds must give half the widths. smoothstep's S-curve made the middle
+    // of the range behave nothing like the number on screen.
+    return saturate((windForce - calmWind) / (fullWind - calmWind));
+}
+
 [RootSignature(OCEAN_SURFACE_RS)]
 VSOutput VSMain(VSInput input)
 {
@@ -542,10 +574,21 @@ VSOutput VSMain(VSInput input)
         geometryWaveWeight,
         saturate(shoreFieldWeight));
     float positiveDepth = max(waterDepth, 0.0f);
-    float shoreVerticalFade = smoothstep(
+    // Water is never completely still.
+    //
+    // Right at the waterline the vertical fade goes to 0, and on a steep face runupSlopeWeight
+    // goes to 0 as well, so the horizontal floor collapses with it — both components of the wave
+    // vanish and those vertices stop dead. Frozen water beside a wall reads as glass, which is
+    // worse than slightly wrong water. This floors BOTH fades so some of the wave always survives.
+    //
+    // Deliberately a constant and not a slider: shaders compile at runtime here, so it can be
+    // tuned by editing this line and restarting. Say the word and it becomes a proper parameter.
+    const float kShoreMinMotion = 0.15f;
+
+    float shoreVerticalFade = max(smoothstep(
         0.0f,
         max(shoreBehaviorParams0.x, 0.01f),
-        positiveDepth);
+        positiveDepth), kShoreMinMotion);
     float terrainSlope = length(shore.depthGradient);
     float runupSlopeWeight = 1.0f - smoothstep(
         shoreSlopeParams.x,
@@ -556,10 +599,10 @@ VSOutput VSMain(VSInput input)
         0.0f,
         max(shoreBehaviorParams0.z, 0.01f),
         positiveDepth);
-    float shoreHorizontalFade = lerp(
+    float shoreHorizontalFade = max(lerp(
         saturate(shoreBehaviorParams0.y) * runupSlopeWeight,
         1.0f,
-        horizontalDepthWeight);
+        horizontalDepthWeight), kShoreMinMotion);
     float horizontalFade = lerp(1.0f, shoreHorizontalFade, shoreFieldWeight);
     float shoreBand = 1.0f -
         smoothstep(0.0f, max(shoreBehaviorParams1.x, 0.01f), positiveDepth);
@@ -576,16 +619,45 @@ VSOutput VSMain(VSInput input)
 
     float predictedDepth = waterDepth + dot(shore.depthGradient, horizontalDisplacement);
     float shoreVerticalDisplacement = displacement.y * shoreVerticalFade;
-    float bottomLimit = -max(predictedDepth - max(shoreBehaviorParams1.w, 0.0f), 0.0f);
+    // Bottom clearance has TWO jobs and only one of them may follow the wind.
+    //
+    // As a floor under the surface it is a geometric guard keeping the water out of the seabed —
+    // scaling THAT with wind drags the whole surface down in calm.
+    //
+    // As the height the RUN-UP SHEET stands above the waterline it is a reach onto dry sand, and
+    // that is what has to die away in calm: otherwise a wet sheet stays on the beach whatever the
+    // foam widths say, and the foam simply sits on it.
+    const float bottomClearance = max(shoreBehaviorParams1.w, 0.0f);
+    const float runupClearance = bottomClearance * ContactFoamWindAmount();
+
+    float bottomLimit = -max(predictedDepth - bottomClearance, 0.0f);
     shoreVerticalDisplacement = max(shoreVerticalDisplacement, bottomLimit);
     float runupSheetHeight =
-        max(-predictedDepth + max(shoreBehaviorParams1.w, 0.0f), 0.0f) *
+        max(-predictedDepth + runupClearance, 0.0f) *
         shoreBand * runupSlopeWeight;
     shoreVerticalDisplacement = max(shoreVerticalDisplacement, runupSheetHeight);
     float verticalDisplacement = lerp(
         displacement.y,
         shoreVerticalDisplacement,
         shoreFieldWeight);
+
+#if OCEAN_SHORE_SINK
+    // Dry land: instead of letting the pixel shader discard this, drop it far below the terrain.
+    // The terrain is opaque and already in the depth buffer, so the depth test draws the waterline
+    // — and it does so PER PIXEL, which is what the fwidth-based clip was buying. The plunge is
+    // deliberately steep (kSinkDepth over kSinkBand) so the surface crosses the sand almost
+    // vertically and the resulting edge is sharp rather than a soft wedge.
+    //
+    // Note this sinks on `waterDepth`, the SOURCE depth — the same quantity the clip tested — not
+    // on `predictedDepth`. That is what preserves the run-up: geometry advected landward carries
+    // its source depth with it and survives exactly as far as water that STARTED below the mark.
+    {
+        const float kSinkBand = 2.0f;   // metres of dry land over which the sheet plunges
+        const float kSinkDepth = 10.0f;  // deep enough that the crossing is effectively vertical
+        float dryness = saturate(-waterDepth / kSinkBand);
+        verticalDisplacement -= dryness * kSinkDepth;
+    }
+#endif
     //prevDisplacement *= attenuation;
 
     float3 world = float3(
@@ -720,21 +792,10 @@ float2 Coverage(FoamTurbulenceSet turbulence, float4 mixWeights, float2 worldUV,
     return float2(surfaceFoam, max(shallowUnderwaterFoam, deepUnderwaterFoam));
 }
 
-float ContactFoamWindAmount()
-{
-    float windResponse = smoothstep(
-        0.0f,
-        max(shoreFoamWindParams.z, 1e-3f),
-        saturate(shoreFoamWindParams.x));
-    return lerp(
-        saturate(shoreFoamWindParams.y),
-        1.0f,
-        windResponse);
-}
-
 float2 ContactFoamMask(
     float2 baseXZ,
     float shoreDepth,
+    float depthFeather,
     float time)
 {
     float windAmount = ContactFoamWindAmount();
@@ -793,7 +854,9 @@ float2 ContactFoamMask(
     }
 
     float depth = max(warpedShoreDepth, 0.0f);
-    float edgeFeather = max(fwidth(warpedShoreDepth) * 1.5f, 1e-4f);
+    // Passed in, NOT fwidth(warpedShoreDepth) — see FoamInput::depthFeather.
+    float edgeFeather = max(depthFeather * 1.5f, 1e-4f);
+
     [branch]
     if (breakupLength <= 1e-4f)
     {
@@ -1003,6 +1066,7 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
             fieldContactFoam = ContactFoamMask(
                 input.worldUV,
                 input.shoreDepth,
+                input.depthFeather,
                 input.time);
             fieldContactFoam *= saturate(input.shoreEffectWeight);
         }
@@ -1012,6 +1076,7 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
             fallbackContactFoam = ContactFoamMask(
                 input.worldUV,
                 input.fallbackShoreDepth,
+                input.depthFeather,
                 input.time);
             fallbackContactFoam *= saturate(input.fallbackShoreWeight);
         }
@@ -1096,16 +1161,11 @@ float2 SubsurfaceScatteringFactor(const LightingInput li)
 
 BrunetonInputs BuildBrunetonInputs(const LightingInput li)
 {
-    float3 tangentY = float3(0.0f, li.normal.z, -li.normal.y);
-    tangentY /= max(0.001f, length(tangentY));
-    float3 tangentX = cross(tangentY, li.normal);
-
+    // Only viewDirWind / normalWind / slopeVarianceSquared are ever read (by EffectiveFresnel).
+    // The wind-space light direction and the tangent frame were written and never used.
     BrunetonInputs bi;
-    bi.lightDirWind = TransformToWind(-li.mainLight.direction);
     bi.viewDirWind = TransformToWind(li.viewDir);
     bi.normalWind = TransformToWind(li.normal);
-    bi.tangentXWind = TransformToWind(tangentX);
-    bi.tangentYWind = TransformToWind(tangentY);
 
     float windSpeed = max(windParams0.x, 0.0f);
     float wavesScale = max(windParams0.y, 0.0f);
@@ -1281,23 +1341,40 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
 
     //return color;
 
-    float underwaterFoamVisibility = 20.0f / (20.0f + li.viewDist);
-    float3 tint = AbsorptionTint(0.8f);
-    float3 underwaterFoamColor = foamColor * tint * tint;
-    color = lerp(color, underwaterFoamColor, foamData.coverage.y * underwaterFoamVisibility);
+    // AbsorptionTint builds and evaluates a gradient; skip it where the lerp weight is already
+    // zero, which is all of the open ocean.
+    float underwaterFoamAmount =
+        foamData.coverage.y * (20.0f / (20.0f + li.viewDist));
+    [branch]
+    if (underwaterFoamAmount > 1e-3f)
+    {
+        float3 tint = AbsorptionTint(0.8f);
+        color = lerp(color, foamColor * tint * tint, underwaterFoamAmount);
+    }
     return color;
 }
 
 float4 HorizonBlend(const LightingInput li)
 {
-    float3 dir = -float3(li.viewDir.x, 0.0f, li.viewDir.z);
-    float3 horizonColor = SkyboxTexture.SampleLevel(LinearClampSampler, dir, 0).rgb;
-
     float horizonFog = max(specularParams.w, 0.01f);
     float distanceScale = 100.0f + 7.0f * abs(li.cameraPos.y);
     float exponent = -5.0f / horizonFog * (abs(li.viewDir.y) + distanceScale / (li.viewDist + distanceScale));
-    float blend = exp(exponent);
-    return float4(horizonColor, saturate(blend));
+    float blend = saturate(exp(exponent));
+
+    // The caller does lerp(color, horizon.rgb, horizon.a), so a zero alpha makes this a no-op —
+    // and everything except the horizon band has blend ~ 0. Computing blend is pure ALU; the
+    // cubemap fetch it now guards is not, and it used to be unconditional.
+    // SampleLevel is an EXPLICIT-LOD fetch, so moving it behind a branch is safe; an implicit-LOD
+    // Sample needs derivatives and could not be moved here.
+    [branch]
+    if (blend <= 1e-3f)
+    {
+        return float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    float3 dir = -float3(li.viewDir.x, 0.0f, li.viewDir.z);
+    float3 horizonColor = SkyboxTexture.SampleLevel(LinearClampSampler, dir, 0).rgb;
+    return float4(horizonColor, blend);
 }
 
 float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const FoamData foamData)
@@ -1335,19 +1412,13 @@ PSOut PSMain(VSOutput input)
     uint cascadesCount = max((uint)simulationParams.w, 1u);
 
     float sourceWaterDepth = input.shoreData.y;
+#if !OCEAN_SHORE_SINK
+    // The discard costs the WHOLE draw its early-Z, not just these pixels — see
+    // ocean::g_shoreSinkCut. OCEAN_SHORE_SINK removes it from the compiled shader entirely and
+    // moves the cut into the vertex shader.
     float shoreClipWidth = max(fwidth(sourceWaterDepth), 1e-4f);
     clip(sourceWaterDepth + shoreClipWidth * 0.5f);
-    float geometryEdgeRefractionWeight = 1.0f;
-    float geometryEdgeRefractionFadeDepth =
-        max(shoreFoamGeometryParams.z, 0.0f);
-    [branch]
-    if (geometryEdgeRefractionFadeDepth > 1e-4f)
-    {
-        geometryEdgeRefractionWeight = smoothstep(
-            0.0f,
-            geometryEdgeRefractionFadeDepth,
-            max(sourceWaterDepth, 0.0f));
-    }
+#endif
 
     float3 baseWorld = float3(input.baseXZ.x, 0.0f, input.baseXZ.y);
     float3 viewVector = baseWorld - clipMapViewer.xyz;
@@ -1365,16 +1436,32 @@ PSOut PSMain(VSOutput input)
             ShoreEffectDepthWeight(contactShoreDepth);
     }
 
+    // Both blocks below want the scene depth AT THIS PIXEL, and each used to fetch it itself —
+    // two identical samples whenever both conditions held. Fetched once under the OR of the two
+    // conditions, so a pixel that needs neither still pays nothing.
+    const bool needsFallbackShore =
+        shoreFieldWeight < 1.0f - 1e-3f && shoreFoamGeometryParams.w > 0.0f;
+    const bool needsRefractionSoftEdge =
+        shoreSlopeParams.z > 0.0f &&
+        sourceWaterDepth < max(shoreBehaviorParams1.x, 0.01f);
+    float sceneDepthAtPixel = 1.0f;
+    [branch]
+    if (needsFallbackShore || needsRefractionSoftEdge)
+    {
+        sceneDepthAtPixel = SampleSceneDepth(screenUV);
+    }
+
     float fallbackShoreDepth = 1000.0f;
     float fallbackShoreWeight = 0.0f;
     [branch]
-    if (shoreFieldWeight < 1.0f - 1e-3f &&
-        shoreFoamGeometryParams.w > 0.0f)
+    if (needsFallbackShore)
     {
-        float sceneDepthSample = SampleSceneDepth(screenUV);
+        float sceneDepthSample = sceneDepthAtPixel;
         if (sceneDepthSample < 1.0f - 1e-6f)
         {
-            float sceneViewDepth = DepthToViewZ_Fast(sceneDepthSample);
+            // Filtered: this depth ends up in the contact-foam mask (fallbackShoreDepth), which
+            // must not carry the depth buffer's steps. The unfiltered value still gates the branch.
+            float sceneViewDepth = DepthToViewZ_Fast(SampleSceneDepthFiltered(screenUV));
             float depthSeparation =
                 abs(sceneViewDepth - input.viewDepth);
             float contactDepthThreshold =
@@ -1392,10 +1479,9 @@ PSOut PSMain(VSOutput input)
 
     float refractionSoftEdge = 1.0f;
     [branch]
-    if (shoreSlopeParams.z > 0.0f &&
-        sourceWaterDepth < max(shoreBehaviorParams1.x, 0.01f))
+    if (needsRefractionSoftEdge)
     {
-        float sceneViewDepth = DepthToViewZ_Fast(SampleSceneDepth(screenUV));
+        float sceneViewDepth = DepthToViewZ_Fast(sceneDepthAtPixel);
         float geometryDepthSeparation = max(sceneViewDepth - input.viewDepth, 0.0f);
         refractionSoftEdge = smoothstep(
             0.0f,
@@ -1443,6 +1529,7 @@ PSOut PSMain(VSOutput input)
     foamInput.viewDir = viewDir;
     foamInput.normal = normal;
     foamInput.shoreDepth = contactShoreDepth;
+    foamInput.depthFeather = max(fwidth(sourceWaterDepth), 1e-4f);
     foamInput.fallbackShoreDepth = fallbackShoreDepth;
     foamInput.fallbackShoreWeight = fallbackShoreWeight;
     foamInput.shoreFieldWeight = shoreFieldWeight;
@@ -1481,23 +1568,15 @@ PSOut PSMain(VSOutput input)
     macroLi.slopeFactor = saturate(1.0f - macroNormal.y);
 
     float3 color = GetOceanColor(li, macroLi, foamData);
-    float refractionEdgeWeight = min(
-        refractionSoftEdge,
-        geometryEdgeRefractionWeight);
+    
+    float refractionEdgeWeight = refractionSoftEdge;
     [branch]
     if (refractionEdgeWeight < 0.95f)
     {
-        float3 softEdgeRefractionCoords = RefractionCoords(
-            refractionParams.x,
-            macroLi.positionNDC,
-            macroLi.viewDepth,
-            macroLi.normal);
-        float3 softEdgeRefraction = SceneColorTexture.SampleLevel(
-            LinearClampSampler,
-            softEdgeRefractionCoords.xy,
-            0).rgb;
+        float3 softEdgeRefraction = SceneColorTexture.SampleLevel(LinearClampSampler, screenUV, 0).rgb;
         color = lerp(softEdgeRefraction, color, refractionEdgeWeight);
     }
+    
     float4 outColor = float4(saturate(color), 1.0f);
 
     float2 currUv = ClipToUV(input.positionNDC);

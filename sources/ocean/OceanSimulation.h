@@ -4,6 +4,8 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+
+#include "rendering/core/UploadBatch.h" // held by value in a unique_ptr member below
 #include <string>
 #include <vector>
 
@@ -40,6 +42,10 @@ public:
     // D1.1: shared by PrepareUpdate and Update so the two cannot disagree about whether
     // this frame performs the displacement-history copy.
     bool WillCopyDisplacementHistory() const;
+    // Called from SceneRenderer::EnsureFrameResources, before the graph is built: re-creates the
+    // GPU resources after an invalidating settings change so Prepare and Record see the SAME
+    // pointers. See the definition for what went wrong when this was lazy inside Update().
+    void EnsureFrameResources(Renderer* renderer);
     void OnHotReload(Renderer* renderer);
 
     void SetSettings(Renderer* renderer, const OceanSimulationSettings& settings);
@@ -233,6 +239,15 @@ private:
     bool prevDisplacementValid_ = false;
     bool shouldRenderShoreDepth_ = true;
     std::vector<RetiredGpuResources> retiredGpuResources_;
+
+    // Upload batches from EnsureFrameResources, kept alive until their GPU work has certainly
+    // finished (drained in CollectRetiredResources by the same rule as the resources above).
+    struct PendingInitBatch
+    {
+        std::unique_ptr<UploadBatch> batch;
+        uint64_t submitFrame = 0;
+    };
+    std::vector<PendingInitBatch> pendingInitBatches_;
     std::vector<RetiredUploadResources> retiredUploadResources_;
 };
 

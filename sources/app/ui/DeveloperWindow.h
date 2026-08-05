@@ -36,6 +36,10 @@ public:
 
 private:
     void RefreshLevelList();
+    // Start/Stop trace capture. Its own window rather than a tab, so it stays reachable while the
+    // ocean/other windows have focus — the stalls worth capturing happen WHILE dragging something
+    // else, and a fixed frame count forces you to guess the length in advance.
+    void DrawTraceControls();
 
     TextureDebugViewer textureDebugViewer_;
     OceanControlsWindow oceanControlsWindow_;
@@ -45,5 +49,6 @@ private:
     char levelPathBuffer_[1024] = "data/levels/demo.json";
     bool levelListScanned_ = false;
     bool preserveCameraOnLevelChange_ = false;
+    bool traceWindowOpen_ = false;
     bool open_ = false;
 };

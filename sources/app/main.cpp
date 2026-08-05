@@ -12,6 +12,7 @@
 #include "app/scene/SceneRenderQueue.h"
 #include "core/task/diagnostics/TaskSystemStress.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "ocean/OceanRenderable.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
@@ -352,6 +353,13 @@ int WINAPI WinMain(
             std::string path;
             while (*p && !std::isspace(static_cast<unsigned char>(*p))) { path.push_back(*p); ++p; }
             g_profDumpPath = path;
+        }
+        // "--ocean-shore-sink": cut the ocean's run-up sheet by sinking it under the terrain in
+        // the VS instead of discarding it in the PS, which lets the whole ocean draw keep early-Z.
+        // Boot-only: it selects a shader VARIANT (a clip behind a runtime branch is still a discard
+        // in the compiled shader and restores nothing). Compare two runs.
+        if (std::strstr(lpCmdLine, "--ocean-shore-sink")) {
+            ocean::g_shoreSinkCut = true;
         }
         // "--trace=<frames>": headless equivalent of the CaptureTrace key.
         if (const char* flag = std::strstr(lpCmdLine, "--trace=")) {

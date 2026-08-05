@@ -110,6 +110,10 @@ private:
     std::uint64_t assetErrorsVersion_ = ~0ull;
     std::string   assetErrorsLevel_;
     std::size_t   assetErrorsCount_ = ~0ull;
+    // Debounce for the scan above: it serialises every mesh object and stats the filesystem, while
+    // ContentVersion bumps once per frame for the whole of a slider drag.
+    std::uint64_t assetErrorsPendingVersion_ = ~0ull;
+    double        assetErrorsDueTimeSec_ = 0.0;
     void RefreshAssetErrors();
     void RefreshAssetErrorsIfStale();
     AssetRegistry assetRegistry_;

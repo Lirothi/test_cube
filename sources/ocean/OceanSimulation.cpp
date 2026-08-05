@@ -12,6 +12,7 @@
 #include "core/diagnostics/DiagPaths.h"
 #include "materials/Material.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderContextPool.h"
@@ -184,6 +185,15 @@ void OceanSimulation::CollectRetiredResources(Renderer* renderer)
     {
         return frameNumber > retireFrame + kKeepAliveFrames;
     };
+
+    // Upload batches from EnsureFrameResources: the intermediates and the command allocator must
+    // outlive the GPU work, and this is the one place that already knows the retirement rule.
+    auto batchIt = pendingInitBatches_.begin();
+    while (batchIt != pendingInitBatches_.end())
+    {
+        batchIt = canRelease(batchIt->submitFrame) ? pendingInitBatches_.erase(batchIt)
+                                                   : std::next(batchIt);
+    }
 
     auto gpuIt = retiredGpuResources_.begin();
     while (gpuIt != retiredGpuResources_.end())
@@ -417,6 +427,40 @@ void OceanSimulation::Initialize(Renderer* renderer,
     ReleaseCpuData();
 
     initialized_ = true;
+}
+
+void OceanSimulation::EnsureFrameResources(Renderer* renderer)
+{
+    if (initialized_ || !renderer)
+    {
+        return;
+    }
+
+    // Creation must happen BEFORE the render graph runs its Prepares, never inside a record body.
+    // It used to be lazy inside Update() — i.e. inside Main_ObjectCompute's body — so changing a
+    // setting (wind force) released the sim's resources, Prepare then registered NULL pointers,
+    // the body recreated them, and the transparent pass handed Renderer::Transition a resource the
+    // barrier compile had never seen: "no compiled barrier for res=...". Same class as the
+    // ShadowGpuData::RecordCull miss the comparator caught, and it only fires when a setting
+    // changes, which is why the stress harness never reached it.
+    //
+    // Its own upload batch, because there is no pass command list this early.
+    //
+    // Submitted WITHOUT waiting. It used to be SubmitAndWait, on the reasoning that re-init only
+    // happens on a user action — but dragging a slider IS a user action, once per frame, so that
+    // stalled the GPU every frame of the drag and made the inspector unusable. The batch is instead
+    // retained until its work has certainly completed, which is the same rule the retired-resource
+    // list here already uses.
+    auto batch = std::make_unique<UploadBatch>();
+    if (!batch->Begin(renderer))
+    {
+        return;
+    }
+    Initialize(renderer, batch->CommandList(), nullptr);
+    if (batch->Submit(renderer))
+    {
+        pendingInitBatches_.push_back({ std::move(batch), renderer->GetTotalFrameNumber() });
+    }
 }
 
 void OceanSimulation::OnHotReload(Renderer* renderer)
