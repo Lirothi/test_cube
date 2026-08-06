@@ -434,6 +434,17 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
                     ocean->GetSwellDirectionDegrees(), wind.strength);
             }
         }
+
+        // "--ocean-wind=<0..1>" wins over both sources above — it exists so a headless capture can
+        // be forced into a sea state the level does not author.
+        if (ocean::g_windForceOverride >= 0.0f)
+        {
+            if (OceanSimulation* ocean = Systems::GetOceanSimulation())
+            {
+                ocean->SetSceneVariables(&renderer, ocean->GetLocalWindDirectionDegrees(),
+                    ocean->GetSwellDirectionDegrees(), ocean::g_windForceOverride);
+            }
+        }
     }
     else
     {

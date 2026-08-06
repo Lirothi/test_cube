@@ -105,6 +105,7 @@ private:
         const Camera& camera);
     void Pass_Skybox(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
+    // Shore depth window, plus (once per level) the SDF source render and its jump flood.
     void Pass_ShoreDepth(Renderer* r, RenderGraphPassContext ctx,
         const SceneView* view);
     void Pass_ScreenSpaceReflections(Renderer* r, RenderGraphPassContext ctx,

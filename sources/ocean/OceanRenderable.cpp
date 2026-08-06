@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -250,6 +251,7 @@ public:
             invViewHandle_ = material->ComputeCBFieldHandle(0, "invView");
             invProjHandle_ = material->ComputeCBFieldHandle(0, "invProj");
             shoreViewParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreViewParams");
+            shoreSdfParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSdfParams");
             shoreDepthParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreDepthParams");
             simulationParamsHandle_ = material->ComputeCBFieldHandle(0, "simulationParams");
             viewerParamsHandle_ = material->ComputeCBFieldHandle(0, "viewerParams");
@@ -306,6 +308,7 @@ public:
             invViewHandle_ = {};
             invProjHandle_ = {};
             shoreViewParamsHandle_ = {};
+            shoreSdfParamsHandle_ = {};
             shoreDepthParamsHandle_ = {};
             simulationParamsHandle_ = {};
             viewerParamsHandle_ = {};
@@ -375,6 +378,7 @@ public:
         UpdateUniform(owner, invViewHandle_, material, invView, cbData);
         UpdateUniform(owner, invProjHandle_, material, invProj, cbData);
         UpdateUniform(owner, shoreViewParamsHandle_, material, owner_.GetShoreViewParams(), cbData);
+        UpdateUniform(owner, shoreSdfParamsHandle_, material, owner_.GetShoreSdfParams(), cbData);
         UpdateUniform(owner, shoreDepthParamsHandle_, material, owner_.GetShoreDepthParams(), cbData);
 
         UpdateUniform(owner, simulationParamsHandle_, material, owner_.GetSimulationParams(), cbData);
@@ -437,6 +441,7 @@ private:
     Material::CBFieldHandle invViewHandle_{};
     Material::CBFieldHandle invProjHandle_{};
     Material::CBFieldHandle shoreViewParamsHandle_{};
+    Material::CBFieldHandle shoreSdfParamsHandle_{};
     Material::CBFieldHandle shoreDepthParamsHandle_{};
     Material::CBFieldHandle simulationParamsHandle_{};
     Material::CBFieldHandle viewerParamsHandle_{};
@@ -535,7 +540,7 @@ void OceanRenderable::Init(Renderer* renderer,
     loadTexture(foamAlbedoTexture_, L"textures/ocean/FoamAlbedo.png", Texture2D::Usage::AlbedoSRGB);
     loadTexture(foamUnderwaterTexture_, L"textures/ocean/UnderwaterFoam.png", Texture2D::Usage::AlbedoSRGB);
     loadTexture(foamTrailTexture_, L"textures/ocean/FoamTrail.png", Texture2D::Usage::LinearData);
-    loadTexture(shoreFoamBreakupMaskTexture_, L"textures/ocean/ContactFoam.png", Texture2D::Usage::LinearData);
+    loadTexture(shoreFoamBreakupMaskTexture_, L"textures/ocean/ContactFoam.dds", Texture2D::Usage::LinearData);
     loadTexture(shoreFoamAlbedoTexture_, L"textures/ocean/ShoreFoamAlbedo.png", Texture2D::Usage::AlbedoSRGB);
     // 8x8 flipbook of 128px caustic frames (BC4, per-frame mips) — see tools/gen_caustics.py.
     // Consumed by lighting_cs.hlsl, not by the ocean surface shader.
@@ -618,11 +623,14 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
 
     auto fallbackSrv = deferred.sceneSRV;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 15> srvs{};
+    // MUST match numDescriptors in OCEAN_SURFACE_RS. Pushing past the end is a silent buffer
+    // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 16> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
     {
+        assert(srvCount < srvs.size() && "ocean SRV table overrun - grow srvs AND OCEAN_SURFACE_RS");
         srvs[srvCount++] = srv;
     };
 
@@ -701,6 +709,15 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
     pushSrv(shoreDepthSrv.ptr != 0 ? shoreDepthSrv : fallbackSrv);
 
+    // Shore SDF. Falls back to the near depth map only so the slot is never null; the shader's
+    // own bounds check keeps a wrong reading out of the result.
+    D3D12_CPU_DESCRIPTOR_HANDLE shoreSdfSrv = shoreDepthSrv;
+    if (simulation_ && simulation_->GetShoreSdfSrv().ptr != 0)
+    {
+        shoreSdfSrv = simulation_->GetShoreSdfSrv();
+    }
+    pushSrv(shoreSdfSrv.ptr != 0 ? shoreSdfSrv : fallbackSrv);
+
     D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSrv = deferred.oceanReflectionSRV.ptr != 0 ? deferred.oceanReflectionSRV : fallbackSrv;
     pushSrv(oceanReflectionSrv.ptr != 0 ? oceanReflectionSrv : fallbackSrv);
 
@@ -761,6 +778,14 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
     if (ocean::g_shoreSinkCut)
     {
         desc.defines.emplace_back("OCEAN_SHORE_SINK", "1");
+    }
+    if (ocean::g_foamDebug)
+    {
+        desc.defines.emplace_back("OCEAN_FOAM_DEBUG", "1");
+    }
+    if (ocean::g_vsDepthProbe)
+    {
+        desc.defines.emplace_back("OCEAN_VS_DEPTH_PROBE", "1");
     }
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
@@ -1115,7 +1140,8 @@ Math::float4 OceanRenderable::GetShoreFoamBreakupParams() const
         GetRenderConfig().shoreContactFoamBreakupLengthVariation,
         GetRenderConfig().shoreContactFoamBreakupVariationScale,
         GetRenderConfig().shoreContactFoamNormalStrength,
-        0.0f);
+        // Diagnostic view id; ignored unless the shader was built with OCEAN_FOAM_DEBUG.
+        static_cast<float>(ocean::g_foamDebugView));
 }
 
 Math::float4 OceanRenderable::GetShoreFoamWindParams() const
@@ -1152,7 +1178,8 @@ Math::float4 OceanRenderable::GetShoreSlopeParams() const
         std::tan(startDegrees * kDegreesToRadians),
         std::tan(endDegrees * kDegreesToRadians),
         render.shoreEdgeSoftDepth,
-        render.shoreGeometryFadeDistance);
+        ocean::g_geometryFadeOverride >= 0.0f ? ocean::g_geometryFadeOverride
+                                              : render.shoreGeometryFadeDistance);
 }
 
 Math::float4 OceanRenderable::GetShoreSamplingParams() const
@@ -1318,6 +1345,20 @@ Math::float4 OceanRenderable::GetShoreViewParams() const
     }
      
     return { center.x, center.y, height, kInvExtent };
+}
+
+Math::float4 OceanRenderable::GetShoreSdfParams() const
+{
+    Math::float2 center = Math::float2(0.0f, 0.0f);
+    float extent = 2000.0f;
+    float resolution = 1024.0f;
+    if (simulation_)
+    {
+        center = simulation_->GetShoreSdfCenter();
+        extent = std::max(simulation_->GetShoreSdfHalfExtent() * 2.0f, 1.0f);
+    }
+
+    return { center.x, center.y, 1.0f / extent, extent / resolution };
 }
 
 Math::float4 OceanRenderable::GetShoreDepthParams() const

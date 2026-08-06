@@ -14,6 +14,7 @@
 #include "app/Systems.h"
 #include "core/math/Math.h"
 #include "imgui.h"
+#include "ocean/OceanRenderable.h"
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanSpectrum.h"
 #include "rendering/core/Renderer.h"
@@ -1192,6 +1193,40 @@ namespace
                 0.005f,
                 0.0f,
                 1.0f);
+
+            ImGui::SeparatorText("Diagnostics");
+            // Deliberately outside `render` — this is a debugging knob, not a setting, so it must
+            // never end up serialized into the ocean config.
+            static const char* kFoamDebugViews[] = {
+                "Off (normal shading)",
+                "1 Sweep t (solid=green, tail=heat, past end=magenta)",
+                "2 Feather used (red = clamped at max)",
+                "3 RAW fwidth(vertex depth) - the unclamped source",
+                "4 Tear noise",
+                "5 Contact coverage",
+                "6 Weights: R=field G=fallback B=depth",
+                "7 Shore depth, 10 cm contours (blue = above water)",
+                "8 Tail length (0..2 m)",
+                "9 Sweep t + shore-depth texel grid",
+                "10 Coverage, OLD pixel-shader depth lookup (facets)",
+                "11 (unused)",
+                "12 R=penetration fade B=land height G=field weight",
+            };
+            ImGui::Combo(
+                "Foam debug view",
+                &ocean::g_foamDebugView,
+                kFoamDebugViews,
+                static_cast<int>(std::size(kFoamDebugViews)));
+            if (!ocean::g_foamDebug)
+            {
+                ImGui::TextDisabled("inert: relaunch with --ocean-foam-debug");
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip(
+                        "The views are a shader VARIANT so the shipping shader carries none of\n"
+                        "their cost. Switching views once the variant is compiled is free.");
+                }
+            }
             ImGui::TreePop();
         }
 

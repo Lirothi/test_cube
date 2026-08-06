@@ -1261,6 +1261,9 @@
     <None Include="shaders\ocean_generate_mips.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\ocean_shore_sdf.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\ocean_foam_simulation.hlsl">
       <Filter>shaders</Filter>
     </None>

@@ -153,6 +153,8 @@ private:
     SceneFrameData frameData_{};
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
+    // Has the ocean been told where this level's terrain sits? One sweep of objects_ per load.
+    bool shoreAreaValid_ = false;
 #if WITH_EDITOR
     // Lockstep with objects_: objectIds_[i] is the editor id of objects_[i], or
     // 0 for a runtime object with no editor identity.

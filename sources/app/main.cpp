@@ -361,6 +361,32 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--ocean-shore-sink")) {
             ocean::g_shoreSinkCut = true;
         }
+        // "--ocean-wind=<0..1>": force the sea state for a headless capture (see the global's
+        // comment). The shore artifacts only appear in a swell, so a calm level proves nothing.
+        if (const char* flag = std::strstr(lpCmdLine, "--ocean-wind=")) {
+            ocean::g_windForceOverride =
+                (float)std::atof(flag + std::strlen("--ocean-wind="));
+        }
+        // "--ocean-vs-depth-probe": swap the shore SDF for a screen-space depth probe in the vertex
+        // shader, to compare the two. See the global's comment for what it is expected to get wrong.
+        if (std::strstr(lpCmdLine, "--ocean-vs-depth-probe")) {
+            ocean::g_vsDepthProbe = true;
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--ocean-geomfade=")) {
+            ocean::g_geometryFadeOverride =
+                (float)std::atof(flag + std::strlen("--ocean-geomfade="));
+        }
+        // "--ocean-foam-debug[=<view>]": compile the contact-foam diagnostic views into the ocean
+        // shader. Without this flag the combo in the ocean window (F7) is inert, because the views
+        // are not in the compiled shader at all. The optional "=<view>" preselects one so a view can
+        // be captured headless with --shot; otherwise pick it from the combo.
+        if (const char* flag = std::strstr(lpCmdLine, "--ocean-foam-debug")) {
+            ocean::g_foamDebug = true;
+            const char* p = flag + std::strlen("--ocean-foam-debug");
+            if (*p == '=') {
+                ocean::g_foamDebugView = std::atoi(p + 1);
+            }
+        }
         // "--trace=<frames>": headless equivalent of the CaptureTrace key.
         if (const char* flag = std::strstr(lpCmdLine, "--trace=")) {
             g_traceFrames = static_cast<uint32_t>(std::atoi(flag + std::strlen("--trace=")));

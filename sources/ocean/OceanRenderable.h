@@ -24,6 +24,34 @@ namespace ocean
 //
 // Boot-only for the same reason — flipping it rebuilds the material. Compare two runs.
 inline bool g_shoreSinkCut = true;
+
+// "--ocean-foam-debug": compile the contact-foam diagnostic views into the ocean surface shader.
+// Boot-only and a VARIANT for the same reason as above — the views need per-pixel intermediates
+// (sweep position, feather, tear noise) kept alive, and a runtime `if` would make every water pixel
+// pay for them. With the variant compiled in, the VIEW itself is a plain uniform, so switching
+// views in the ocean window is free and needs no rebuild.
+inline bool g_foamDebug = false;
+
+// Which diagnostic view the shader renders (0 = normal shading). Deliberately NOT part of
+// OceanRenderConfig: it is a debugging knob, and putting it there would serialize it into the
+// user's ocean settings. Rides shoreFoamBreakupParams.w.
+inline int g_foamDebugView = 0;
+
+// "--ocean-vs-depth-probe": A/B experiment, OFF. Replaces the world-space shore SDF with a
+// screen-space probe of the depth buffer, taken in the VERTEX shader, as the thing that decides
+// where the wave's vertical motion gets damped. Boot-only and a variant, because it changes which
+// texture the vertex shader reads; everything else is identical, so a pair of runs isolates exactly
+// that choice.
+//
+// COMPARED SIDE BY SIDE AND THE SDF WON, decisively — it stays the default. The probe's weaknesses
+// are structural, not tuning: a vertex off-screen gets no answer at all so the damping pops as the
+// camera turns, the along-ray depth gap degenerates at a grazing angle (tiny over genuinely deep
+// water, so it damps the open sea), and the buffer holds palms and props as well as terrain. It is
+// also the more expensive of the two in the ways that matter: the SDF is one texture read shared
+// with the sink and is built once per level, while the probe makes the vertex shader depend on a
+// buffer another pass writes in the same frame. Kept compilable because re-running the comparison
+// is easier than re-arguing it.
+inline bool g_vsDepthProbe = false;
 }
 
 class Scene;
@@ -137,6 +165,8 @@ private:
     Math::float4 GetDepthTextureSize(const Renderer* renderer) const;
     Math::float2 GetDepthParams() const;
     Math::float4 GetShoreViewParams() const;
+    // Shore SDF placement: xy centre, z inverse extent, w texel world size.
+    Math::float4 GetShoreSdfParams() const;
     Math::float4 GetShoreDepthParams() const;
     const OceanRenderConfig& GetRenderConfig() const;
     void UpdateFoamTrailState();

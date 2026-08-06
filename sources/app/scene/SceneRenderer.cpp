@@ -531,15 +531,39 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         });
     rg.SetPassPrepare(pShoreDepth, [](RenderGraphPassContext& p) {
         OceanSimulation* oceanSim = Systems::GetOceanSimulation();
-        ID3D12Resource* shoreDepth = oceanSim ? oceanSim->GetShoreDepthResource() : nullptr;
-        if (!shoreDepth) { return; }
+        if (!oceanSim) { return; }
         // Step 7: same gate the body uses — registering on a frame it will skip advances the
-        // compile past barriers nobody emits.
-        if (!oceanSim->ShouldRenderShoreDepth()) { return; }
-        p.Use(shoreDepth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        p.NextPoint();
-        p.Use(shoreDepth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // compile past barriers nobody emits. The map is static now, so this is true once per
+        // level rather than every time the camera crosses a snap step.
+        ID3D12Resource* shoreDepth = oceanSim->GetShoreDepthResource();
+        if (shoreDepth && oceanSim->ShouldRenderShoreDepth())
+        {
+            p.Use(shoreDepth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            p.NextPoint();
+            p.Use(shoreDepth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        if (oceanSim->ShouldBuildShoreSdf())
+        {
+            if (ID3D12Resource* sdfSource = oceanSim->GetShoreSdfSourceResource())
+            {
+                p.Use(sdfSource, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                p.NextPoint();
+                p.Use(sdfSource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            }
+            if (ID3D12Resource* scratch = oceanSim->GetShoreSdfScratchResource())
+            {
+                p.Use(scratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            }
+            if (ID3D12Resource* sdf = oceanSim->GetShoreSdfResource())
+            {
+                p.Use(sdf, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                p.NextPoint();
+                p.Use(sdf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            }
+        }
     });
 
     // Rung 0 / Step 4: GPU cull -> indirect shadow args, before the shadow passes (its output
@@ -1671,74 +1695,82 @@ void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext c
     }
 
     OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
-    if (!oceanSimulation || !oceanSimulation->ShouldRenderShoreDepth())
+    if (!oceanSimulation)
     {
         return;
     }
 
-    const auto& visibleBuckets = view->queue.VisibleBuckets();
-    const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
-    const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+    const bool drawDepth = oceanSimulation->ShouldRenderShoreDepth();
+    const bool buildSdf = oceanSimulation->ShouldBuildShoreSdf();
+    if (!drawDepth && !buildSdf)
+    {
+        return;
+    }
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
-    do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassShoreDepth);
-        ID3D12Resource* shoreDepth = oceanSimulation->GetShoreDepthResource();
-        if (shoreDepth)
+
+        auto renderCascade = [&](const SceneView& cascadeView,
+                                 ID3D12Resource* target,
+                                 D3D12_CPU_DESCRIPTOR_HANDLE dsv)
         {
-            renderer->Transition(t.cl, shoreDepth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-        }
-
-        const D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthDsv = oceanSimulation->GetShoreDepthDsv();
-        if (shoreDepthDsv.ptr == 0)
-        {
-            break;
-        }
-
-        t.cl->OMSetRenderTargets(0, nullptr, FALSE, &shoreDepthDsv);
-
-        float width = static_cast<float>(oceanSimulation->GetShoreDepthWidth());
-        float height = static_cast<float>(oceanSimulation->GetShoreDepthHeight());
-        if (shoreDepth)
-        {
-            const auto desc = shoreDepth->GetDesc();
-            width = static_cast<float>(desc.Width);
-            height = static_cast<float>(desc.Height);
-        }
-
-        D3D12_VIEWPORT vp{ 0.0f, 0.0f, width, height, 0.0f, 1.0f };
-        D3D12_RECT sc{ 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
-        t.cl->RSSetViewports(1, &vp);
-        t.cl->RSSetScissorRects(1, &sc);
-
-        t.cl->ClearDepthStencilView(shoreDepthDsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-
-        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view->view, view->proj, frame_->wind);
-
-        for (auto* obj : opaqueSimple)
-        {
-            if (obj)
+            if (!target || dsv.ptr == 0)
             {
-                obj->RenderShadow(renderer, t.cl, view->view, view->proj, viewCB);
+                return;
             }
-        }
 
-        for (auto* obj : opaqueComplex)
-        {
-            if (obj)
+            renderer->Transition(t.cl, target, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            t.cl->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
+
+            const auto desc = target->GetDesc();
+            const float width = static_cast<float>(desc.Width);
+            const float height = static_cast<float>(desc.Height);
+            D3D12_VIEWPORT vp{ 0.0f, 0.0f, width, height, 0.0f, 1.0f };
+            D3D12_RECT sc{ 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
+            t.cl->RSSetViewports(1, &vp);
+            t.cl->RSSetScissorRects(1, &sc);
+
+            t.cl->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB =
+                BuildShadowViewCB(renderer, cascadeView.view, cascadeView.proj, frame_->wind);
+
+            const auto& visibleBuckets = cascadeView.queue.VisibleBuckets();
+            for (auto bucket : { SceneRenderQueue::BucketType::OpaqueSimple,
+                                 SceneRenderQueue::BucketType::OpaqueComplex })
             {
-                obj->RenderShadow(renderer, t.cl, view->view, view->proj, viewCB);
+                for (auto* obj : visibleBuckets[BucketIndex(bucket)])
+                {
+                    if (obj)
+                    {
+                        obj->RenderShadow(renderer, t.cl, cascadeView.view, cascadeView.proj, viewCB);
+                    }
+                }
             }
-        }
 
-        if (shoreDepth)
-        {
-            renderer->Transition(t.cl, shoreDepth,
+            renderer->Transition(t.cl, target,
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        };
+
+        if (drawDepth)
+        {
+            renderCascade(*view, oceanSimulation->GetShoreDepthResource(),
+                oceanSimulation->GetShoreDepthDsv());
         }
-    } while (false);
+
+        // The SDF's source is the same top-down terrain render, just covering the whole level.
+        // Once per load: rasterize it, then jump-flood it into a distance field.
+        if (buildSdf)
+        {
+            renderCascade(oceanSimulation->GetShoreSdfView(),
+                oceanSimulation->GetShoreSdfSourceResource(),
+                oceanSimulation->GetShoreSdfSourceDsv());
+            oceanSimulation->BuildShoreSdf(renderer, t.cl);
+            oceanSimulation->MarkShoreSdfBuilt();
+        }
+    }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }

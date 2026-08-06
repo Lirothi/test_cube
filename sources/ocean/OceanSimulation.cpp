@@ -493,32 +493,136 @@ void OceanSimulation::UpdateShoreView(const Camera& camera)
     constexpr float kShoreFarPlane = 50.0f;
     constexpr float kShoreHeight = 20.0f;
 
+    // Camera-following window, as before: this map is the DETAIL one (foam, run-up, sink, water
+    // colour all read its depth), so its texel budget goes where the camera is. Whole-level
+    // coverage is the SDF's job, not this one's.
+    const float halfExtent = shoreDepthHalfExtent_;
     const float shoreDepthResolution = static_cast<float>(std::max(shoreDepthWidth_, 1u));
-    const float shoreTexelSize = (shoreDepthHalfExtent_ * 2.0f) / shoreDepthResolution;
+    const float shoreTexelSize = (halfExtent * 2.0f) / shoreDepthResolution;
     const float shoreSnapStep = shoreTexelSize * shoreViewSnapMultiplier_;
 
-    SceneView& shoreView = shoreDepthView_;
     float3 cameraPosition = camera.GetPosition();
-
     cameraPosition.x = std::floor(cameraPosition.x / shoreSnapStep) * shoreSnapStep + shoreSnapStep * 0.5f;
     cameraPosition.z = std::floor(cameraPosition.z / shoreSnapStep) * shoreSnapStep + shoreSnapStep * 0.5f;
+
+    SceneView& shoreView = shoreDepthView_;
     shoreView.type = SceneView::Type::ShoreDepth;
     shoreView.renderLayerMask = RenderLayerMask(RenderLayer::Terrain);
     shoreView.position = float3(cameraPosition.x, kShoreHeight, cameraPosition.z);
     shoreView.view = mat4::LookAtLH(shoreView.position, shoreView.position + float3(0.0f, -1.0f, 0.0f), float3(0.0f, 0.0f, 1.0f));
-    shoreView.proj = mat4::OrthoOffCenterLH(-shoreDepthHalfExtent_, shoreDepthHalfExtent_, -shoreDepthHalfExtent_, shoreDepthHalfExtent_, kShoreNearPlane, kShoreFarPlane);
+    shoreView.proj = mat4::OrthoOffCenterLH(-halfExtent, halfExtent, -halfExtent, halfExtent, kShoreNearPlane, kShoreFarPlane);
     shoreView.invView = mat4::Inverse(shoreView.view);
     shoreView.invProj = mat4::Inverse(shoreView.proj);
-    shoreView.frustum = Frustum::FromOrthoBounds(shoreView.invView, shoreDepthHalfExtent_, shoreDepthHalfExtent_, kShoreFarPlane - kShoreNearPlane,
+    shoreView.frustum = Frustum::FromOrthoBounds(shoreView.invView, halfExtent, halfExtent, kShoreFarPlane - kShoreNearPlane,
         float3(shoreView.position.x, shoreView.position.y - (kShoreFarPlane - kShoreNearPlane) * 0.5f, shoreView.position.z) );
     shoreView.zNear = kShoreNearPlane;
     shoreView.zFar = kShoreFarPlane;
     shoreView.hfov = 0.0f;
     shoreView.requiresDepthCheck = false;
 
-    shouldRenderShoreDepth_ = std::abs(cameraPosition.x - prevShoreDepthPos_.x) > 0.001f || std::abs(cameraPosition.z - prevShoreDepthPos_.y) > 0.001f;
+    shouldRenderShoreDepth_ = std::abs(cameraPosition.x - prevShoreDepthPos_.x) > 0.001f ||
+                              std::abs(cameraPosition.z - prevShoreDepthPos_.y) > 0.001f;
+    prevShoreDepthPos_ = float2(cameraPosition.x, cameraPosition.z);
 
-	prevShoreDepthPos_ = float2(cameraPosition.x, cameraPosition.z);
+    // The SDF's view never moves; it is rebuilt only when the level says where the terrain is.
+    SceneView& sdfView = shoreSdfView_;
+    const float sdfHalf = shoreSdfHalfExtent_;
+    sdfView.type = SceneView::Type::ShoreDepth;
+    sdfView.renderLayerMask = RenderLayerMask(RenderLayer::Terrain);
+    sdfView.position = float3(shoreSdfCenter_.x, kShoreHeight, shoreSdfCenter_.y);
+    sdfView.view = mat4::LookAtLH(sdfView.position, sdfView.position + float3(0.0f, -1.0f, 0.0f), float3(0.0f, 0.0f, 1.0f));
+    sdfView.proj = mat4::OrthoOffCenterLH(-sdfHalf, sdfHalf, -sdfHalf, sdfHalf, kShoreNearPlane, kShoreFarPlane);
+    sdfView.invView = mat4::Inverse(sdfView.view);
+    sdfView.invProj = mat4::Inverse(sdfView.proj);
+    sdfView.frustum = Frustum::FromOrthoBounds(sdfView.invView, sdfHalf, sdfHalf, kShoreFarPlane - kShoreNearPlane,
+        float3(sdfView.position.x, sdfView.position.y - (kShoreFarPlane - kShoreNearPlane) * 0.5f, sdfView.position.z));
+    sdfView.zNear = kShoreNearPlane;
+    sdfView.zFar = kShoreFarPlane;
+    sdfView.hfov = 0.0f;
+    sdfView.requiresDepthCheck = false;
+}
+
+void OceanSimulation::BuildShoreSdf(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+{
+    if (!renderer || !cl || !shoreSdfSeedMaterial_ || !shoreSdfJumpMaterial_ ||
+        !shoreSdfResolveMaterial_ || !shoreSdfJump_[0] || !shoreSdfJump_[1])
+    {
+        return;
+    }
+
+    // Must match UpdateShoreView's ortho setup — the shader decodes depth with these.
+    constexpr float kShoreNearPlane = 0.1f;
+    constexpr float kShoreFarPlane = 50.0f;
+    constexpr float kShoreHeight = 20.0f;
+    const float texelWorld = (shoreSdfHalfExtent_ * 2.0f) / static_cast<float>(kShoreSdfSize);
+    const UINT groups = (kShoreSdfSize + 7u) / 8u;
+
+    auto asUint = [](float value)
+    {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        return bits;
+    };
+
+    renderer->Transition(cl, shoreSdfJump_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, shoreSdfJump_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    auto srvTable = renderer->StageSrvUavTable({ shoreSdfSourceSrv_ });
+
+    // The constants are the same every dispatch bar the jump step, so they are filled once and the
+    // step is patched per pass.
+    auto dispatch = [&](const std::shared_ptr<Material>& material, UINT step, UINT readIndex, UINT writeIndex)
+    {
+        auto uavTable = renderer->StageSrvUavTable(
+            { shoreSdfJumpUav_[readIndex], shoreSdfJumpUav_[writeIndex] });
+
+        auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
+        auto& ctx = ctxHandle.ref();
+        ctx.constants[0] = {
+            kShoreSdfSize,
+            step,
+            asUint(texelWorld),
+            asUint(kShoreHeight),
+            asUint(kShoreNearPlane),
+            asUint(kShoreFarPlane),
+            asUint(0.0f), // sea level
+            0u,
+        };
+        ctx.srvTable[0] = srvTable.gpu;
+        ctx.uavTable[0] = uavTable.gpu;
+        material->Bind(cl, ctx);
+        cl->Dispatch(groups, groups, 1);
+        renderer->UAVBarrier(cl, shoreSdfJump_[readIndex].Get());
+        renderer->UAVBarrier(cl, shoreSdfJump_[writeIndex].Get());
+    };
+
+    // Seed writes through the READ slot, so the first jump reads what it wrote.
+    dispatch(shoreSdfSeedMaterial_, 0u, 0u, 1u);
+
+    // log2(N) passes, halving the step. With N = 1024 that is ten of them, an even count, so the
+    // result lands back in buffer 0 and Resolve can read 0 and write 1 without aliasing.
+    uint32_t readIndex = 0u;
+    for (UINT step = kShoreSdfSize / 2u; step >= 1u; step >>= 1)
+    {
+        dispatch(shoreSdfJumpMaterial_, step, readIndex, 1u - readIndex);
+        readIndex = 1u - readIndex;
+    }
+
+    dispatch(shoreSdfResolveMaterial_, 0u, readIndex, 1u);
+
+    renderer->Transition(cl, shoreSdfJump_[1].Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+}
+
+void OceanSimulation::SetShoreArea(float2 centerXZ)
+{
+    if (std::abs(centerXZ.x - shoreSdfCenter_.x) < 0.01f &&
+        std::abs(centerXZ.y - shoreSdfCenter_.y) < 0.01f)
+    {
+        return;
+    }
+    shoreSdfCenter_ = centerXZ;
+    shoreSdfDirty_ = true;
 }
 
 void OceanSimulation::CreateResources(Renderer* renderer,
@@ -702,6 +806,45 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
     dsvView.Format = DXGI_FORMAT_D16_UNORM;
     dsvView.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
     device->CreateDepthStencilView(shoreDepth_.Get(), &dsvView, shoreDepthDsv_);
+
+    // ---- Shore SDF -------------------------------------------------------------------------
+    // Source: the same top-down terrain depth, covering the whole level at a coarser texel. The two
+    // jump buffers carry seed coordinates during the flood, and [1] ends up holding the distance.
+    D3D12_RESOURCE_DESC sdfSourceDesc = depthDesc;
+    sdfSourceDesc.Width = kShoreSdfSize;
+    sdfSourceDesc.Height = kShoreSdfSize;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> sdfSourceRes;
+    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, sdfSourceDesc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, &sdfSourceRes));
+    shoreSdfSource_.Attach(renderer->Declarations(), std::move(sdfSourceRes),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        L"Ocean.ShoreSdfSource");
+
+    ThrowIfFailed(device->CreateDescriptorHeap(&dsvDesc, IID_PPV_ARGS(&shoreSdfDsvHeap_)));
+    shoreSdfSourceDsv_ = shoreSdfDsvHeap_->GetCPUDescriptorHandleForHeapStart();
+    device->CreateDepthStencilView(shoreSdfSource_.Get(), &dsvView, shoreSdfSourceDsv_);
+
+    D3D12_RESOURCE_DESC jumpDesc{};
+    jumpDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    jumpDesc.Width = kShoreSdfSize;
+    jumpDesc.Height = kShoreSdfSize;
+    jumpDesc.DepthOrArraySize = 1;
+    jumpDesc.MipLevels = 1;
+    jumpDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+    jumpDesc.SampleDesc.Count = 1;
+    jumpDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    jumpDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    for (int i = 0; i < 2; ++i)
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> jumpRes;
+        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, jumpDesc,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &jumpRes));
+        shoreSdfJump_[i].Attach(renderer->Declarations(), std::move(jumpRes),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            i == 0 ? L"Ocean.ShoreSdfJumpA" : L"Ocean.ShoreSdfJumpB");
+    }
 }
 
 void OceanSimulation::CreateDescriptors(ID3D12Device* device)
@@ -723,6 +866,10 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     if (shoreDepth_)
     {
         descriptorCount += 1u;        // shore depth SRV
+    }
+    if (shoreSdfSource_)
+    {
+        descriptorCount += 4u;        // sdf source SRV + 2 jump UAVs + sdf SRV
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
@@ -776,6 +923,21 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     else
     {
         shoreDepthSrv_ = {};
+    }
+
+    if (shoreSdfSource_)
+    {
+        shoreSdfSourceSrv_ = Offset(base, descriptorIndex++);
+        shoreSdfJumpUav_[0] = Offset(base, descriptorIndex++);
+        shoreSdfJumpUav_[1] = Offset(base, descriptorIndex++);
+        shoreSdfSrv_ = Offset(base, descriptorIndex++);
+    }
+    else
+    {
+        shoreSdfSourceSrv_ = {};
+        shoreSdfJumpUav_[0] = {};
+        shoreSdfJumpUav_[1] = {};
+        shoreSdfSrv_ = {};
     }
 
     for (UINT mip = 0; mip < mipCount_; ++mip)
@@ -855,6 +1017,27 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
         shoreSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         shoreSrv.Texture2D.MipLevels = 1;
         device->CreateShaderResourceView(shoreDepth_.Get(), &shoreSrv, shoreDepthSrv_);
+
+        if (shoreSdfSourceSrv_.ptr != 0 && shoreSdfSource_)
+        {
+            device->CreateShaderResourceView(shoreSdfSource_.Get(), &shoreSrv, shoreSdfSourceSrv_);
+        }
+    }
+
+    if (shoreSdfSrv_.ptr != 0 && shoreSdfJump_[0] && shoreSdfJump_[1])
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC jumpUav{};
+        jumpUav.Format = DXGI_FORMAT_R16G16_FLOAT;
+        jumpUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(shoreSdfJump_[0].Get(), nullptr, &jumpUav, shoreSdfJumpUav_[0]);
+        device->CreateUnorderedAccessView(shoreSdfJump_[1].Get(), nullptr, &jumpUav, shoreSdfJumpUav_[1]);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC sdfSrv{};
+        sdfSrv.Format = DXGI_FORMAT_R16G16_FLOAT;
+        sdfSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sdfSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sdfSrv.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(shoreSdfJump_[1].Get(), &sdfSrv, shoreSdfSrv_);
     }
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC texUav{};
@@ -914,6 +1097,15 @@ void OceanSimulation::CreateMaterials(Renderer* renderer)
     mipDesc.shaderFile = L"shaders/ocean_generate_mips.hlsl";
     mipDesc.csEntry = "GenerateMip";
     mipMaterial_ = materialMgr->GetOrCreateCompute(renderer, mipDesc);
+
+    Material::ComputeDesc sdfDesc{};
+    sdfDesc.shaderFile = L"shaders/ocean_shore_sdf.hlsl";
+    sdfDesc.csEntry = "Seed";
+    shoreSdfSeedMaterial_ = materialMgr->GetOrCreateCompute(renderer, sdfDesc);
+    sdfDesc.csEntry = "Jump";
+    shoreSdfJumpMaterial_ = materialMgr->GetOrCreateCompute(renderer, sdfDesc);
+    sdfDesc.csEntry = "Resolve";
+    shoreSdfResolveMaterial_ = materialMgr->GetOrCreateCompute(renderer, sdfDesc);
 
     Material::ComputeDesc foamDesc{};
     foamDesc.shaderFile = L"shaders/ocean_foam_simulation.hlsl";

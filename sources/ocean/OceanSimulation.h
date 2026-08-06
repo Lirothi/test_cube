@@ -107,6 +107,25 @@ public:
     float GetShoreDepthHalfExtent() const { return shoreDepthHalfExtent_; }
     void UpdateShoreView(const Camera& camera);
     bool ShouldRenderShoreDepth() const { return shouldRenderShoreDepth_; }
+
+    // Shore SDF — a STATIC map of the whole level holding plan-view distance to the waterline.
+    // Scene calls SetShoreArea once the terrain's footprint is known; that centres the map and
+    // marks it for a single rebuild. Unlike the depth window there is no "outside the field" case,
+    // so a distant island is still known about.
+    void SetShoreArea(float2 centerXZ);
+    bool ShouldBuildShoreSdf() const { return shoreSdfDirty_; }
+    void MarkShoreSdfBuilt() { shoreSdfDirty_ = false; }
+    ID3D12Resource* GetShoreSdfSourceResource() const { return shoreSdfSource_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetShoreSdfSourceDsv() const { return shoreSdfSourceDsv_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetShoreSdfSrv() const { return shoreSdfSrv_; }
+    ID3D12Resource* GetShoreSdfResource() const { return shoreSdfJump_[1].Get(); }
+    ID3D12Resource* GetShoreSdfScratchResource() const { return shoreSdfJump_[0].Get(); }
+    SceneView& GetShoreSdfView() { return shoreSdfView_; }
+    const SceneView& GetShoreSdfView() const { return shoreSdfView_; }
+    float2 GetShoreSdfCenter() const { return shoreSdfCenter_; }
+    float GetShoreSdfHalfExtent() const { return shoreSdfHalfExtent_; }
+    // The jump-flood itself. Called with the source already rendered and readable.
+    void BuildShoreSdf(Renderer* renderer, ID3D12GraphicsCommandList* cl);
     void SetShoreViewSnapMultiplier(float multiplier)
     {
         shoreViewSnapMultiplier_ = std::max(multiplier, 1.0f);
@@ -203,12 +222,39 @@ private:
     SceneView shoreDepthView_{};
     UINT shoreDepthWidth_ = 0u;
     UINT shoreDepthHeight_ = 0u;
+    // 500 m window following the camera, 512^2 = 0.98 m per texel. This is the DETAIL map: foam
+    // widths, run-up, sink and water colour all read its depth, so its budget goes where the
+    // camera is. Whole-level coverage is the SDF's job.
     float shoreDepthHalfExtent_ = 250.0f;
     float2 prevShoreDepthPos_ = {FLT_MAX, FLT_MAX};
+
+    // Shore SDF: 2 x 2 km, STATIC, centred on the terrain, holding the plan-view distance to the
+    // waterline. It answers only "how far is land from here", which is what the wave's vertical
+    // damping needs — and unlike the depth window it covers the whole level, so there is no
+    // "outside the field" case for a distant island to fall through.
+    float shoreSdfHalfExtent_ = 1000.0f;
+    float2 shoreSdfCenter_ = {0.0f, 0.0f};
+    bool shoreSdfDirty_ = true;
+    // 1024^2 over 2 km = 1.95 m per texel. Coarser than the depth window on purpose: this feeds
+    // wave damping, whose query is widened by half a clipmap quad anyway, so sub-metre precision
+    // here would buy nothing.
+    static constexpr UINT kShoreSdfSize = 1024u;
+    GpuResource shoreSdfSource_;   // terrain rendered from above, the flood's input
+    GpuResource shoreSdfJump_[2];  // jump-flood ping-pong; [1] ends up holding the distance
+    SceneView shoreSdfView_{};
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> shoreSdfDsvHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE shoreSdfSourceDsv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE shoreSdfSourceSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE shoreSdfJumpUav_[2]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE shoreSdfSrv_{};
+    std::shared_ptr<Material> shoreSdfSeedMaterial_;
+    std::shared_ptr<Material> shoreSdfJumpMaterial_;
+    std::shared_ptr<Material> shoreSdfResolveMaterial_;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> shoreDepthDsvHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthDsv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthSrv_{};
+
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap_;
     UINT descriptorIncr_ = 0;

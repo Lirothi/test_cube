@@ -128,6 +128,19 @@ struct OceanSimulationConfig
     size_t localPresetIndex = 0;
 };
 
+namespace ocean
+{
+// "--ocean-wind=<0..1>": boot-time override applied AFTER the level's own wind sources (inline
+// block and wind entity both), so a headless capture can be taken at a chosen sea state — the
+// artifacts this exists to check only show up in a swell. Negative = no override. Diagnostic only;
+// never written back to any config.
+inline float g_windForceOverride = -1.0f;
+
+// "--ocean-geomfade=<metres>": override shoreGeometryFadeDistance for a headless capture without
+// touching the level file. Negative = no override. Diagnostic only.
+inline float g_geometryFadeOverride = -1.0f;
+}
+
 OceanSimulationConfig CloneOceanSimulationConfig(const OceanSimulationConfig& config);
 bool LoadOceanSimulationConfigFromFile(const std::wstring& path, OceanSimulationConfig& outConfig);
 bool SaveOceanSimulationConfigToFile(const std::wstring& path, const OceanSimulationConfig& config);

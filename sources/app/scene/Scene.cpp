@@ -929,6 +929,30 @@ void Scene::PrepareViews(Renderer* renderer)
     SceneView* shoreViewPtr = nullptr;
     if (oceanSimulation)
     {
+        // The shore field is a static map of the level, so it has to be told where the level IS.
+        // Centred on the terrain's footprint, computed once per load — walking 600 objects every
+        // frame for a value that only changes when the level does would be silly.
+        if (!shoreAreaValid_)
+        {
+            float minX = FLT_MAX, minZ = FLT_MAX, maxX = -FLT_MAX, maxZ = -FLT_MAX;
+            for (const auto& obj : objects_)
+            {
+                if (!obj || !IsLayerEnabled(obj->GetRenderLayerMask(), RenderLayer::Terrain))
+                {
+                    continue;
+                }
+                const AABB& bounds = obj->GetWorldBounds();
+                minX = std::min(minX, bounds.GetMin().x);
+                minZ = std::min(minZ, bounds.GetMin().z);
+                maxX = std::max(maxX, bounds.GetMax().x);
+                maxZ = std::max(maxZ, bounds.GetMax().z);
+            }
+            if (minX <= maxX)
+            {
+                oceanSimulation->SetShoreArea(float2((minX + maxX) * 0.5f, (minZ + maxZ) * 0.5f));
+                shoreAreaValid_ = true;
+            }
+        }
         oceanSimulation->UpdateShoreView(camera_);
         shoreViewPtr = &oceanSimulation->GetShoreDepthView();
     }
@@ -1097,6 +1121,12 @@ void Scene::PrepareViews(Renderer* renderer)
     {
         enqueueView(*shoreViewPtr);
     }
+    if (oceanSimulation && oceanSimulation->ShouldBuildShoreSdf())
+    {
+        // Only on the frame the SDF is actually rebuilt — the rest of the time this view has no
+        // work and culling it would be pure overhead.
+        enqueueView(oceanSimulation->GetShoreSdfView());
+    }
     for (auto& cascadeView : cascadeViews_)
     {
         enqueueView(cascadeView);
@@ -1217,6 +1247,7 @@ void Scene::Clear()
     lightManager_.Reset();
     shadowGpu_.Reset(); // drop CPU caster state; GPU buffers retained
     objects_.clear();
+    shoreAreaValid_ = false; // the next level's terrain sits somewhere else
 #if WITH_EDITOR
     objectIds_.clear();
     selectedEditorObjectIds_.fill(0);
