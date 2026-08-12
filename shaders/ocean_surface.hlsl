@@ -287,9 +287,33 @@ float3 PositionWsFromDepth(float depthSample, float2 uv)
     return worldPos.xyz * invW;
 }
 
+// Bilinear done BY HAND, because the hardware's is not smooth enough for this field.
+//
+// D3D only guarantees 8 bits of subtexel precision in the texture address, so a hardware-filtered
+// tap is not a ramp between texels — it is a 256-step staircase across each one. On the shore map
+// that texel is about a metre wide, which puts a step every few millimetres of ground. Anywhere
+// else that is invisible; at the waterline it is not, because the camera stands half a metre above
+// the water and looks along it, so a few millimetres of beach cover something like ten screen
+// pixels. Every contour of the depth field then comes out as a regular sawtooth, and the contact
+// foam - whose whole shape is one contour of this field, authored millimetres wide - rides it. That
+// is the rectangular staircase along the foam edge.
+//
+// Gather returns the four texels untouched and the weights are computed here in float, so the ramp
+// is exact. The gather is taken at the CENTRE of the 2x2 block (half a texel from any boundary),
+// which is 128 quantization steps of margin - the hardware cannot pick a different footprint than
+// the one floor() picked. Same cost as the Sample it replaces.
 float SampleShoreDepth(float2 uv)
 {
-    return ShoreDepthTexture.SampleLevel(LinearClampSampler, uv, 0).r;
+    const float2 texelUV = max(shoreSamplingParams.xy, float2(1e-6f, 1e-6f));
+    const float2 st = uv / texelUV - 0.5f;
+    const float2 texelIndex = floor(st);
+    const float2 w = st - texelIndex;
+    // GatherRed order is (0,1) (1,1) (1,0) (0,0) relative to the block's upper-left texel.
+    const float4 taps = ShoreDepthTexture.GatherRed(
+        LinearClampSampler, (texelIndex + 1.0f) * texelUV);
+    const float top = lerp(taps.w, taps.z, w.x);
+    const float bottom = lerp(taps.x, taps.y, w.x);
+    return lerp(top, bottom, w.y);
 }
 
 float2 ShoreDepthUV(float2 baseXZ)
@@ -1271,22 +1295,44 @@ float2 ContactFoamMask(
     // Fine octave: the tear pattern itself. Histogram stretched exactly like
     // the old threshold mapping did, so existing masks read the same.
     //
-    // Its frequency is RAISED once the band gets thin on screen. The dither tears the band by
-    // comparing this noise against the depth sweep, so it can only read as torn if several periods
-    // fit ACROSS the band; at range the authored period is wider than the whole band, and the band
-    // fills in solid with a merely wavy edge — a white outline around the island. The boost keys
-    // off the band's width in PIXELS, so it is inert up close (where the band is hundreds of pixels
-    // wide) and comes in exactly where the tearing would otherwise be lost.
-    const float bandWorld = max(tailLen / kStripSlopeGuess, 1e-3f);
-    const float bandPixels = bandWorld / pixelWorldSize;
-    const float kThinBandPixels = 60.0f;
-    const float kPeriodsAcrossBand = 3.0f;
-    const float thinness = saturate((kThinBandPixels - bandPixels) / kThinBandPixels);
+    // TWO OCTAVES AT FIXED WORLD SCALES. Nothing here may depend on where the camera is.
+    //
+    // The dither tears the band by comparing this noise against the depth sweep, so it only reads
+    // as torn if several periods fit ACROSS the band. At range the authored period is wider than
+    // the band, the band fills in solid, and the island gets a drawn white outline. The old cure
+    // was to RAISE the frequency as the band got thin on screen, and that was a mistake twice over.
+    //
+    // First, the frequency became a continuous function of view distance, so every camera move
+    // rescaled the noise and the pattern crawled over ground that was standing still. Measured at
+    // two camera heights over the same shore it sat at 3.7x and 3.9x the authored scale, so Pattern
+    // Scale was barely in charge anywhere and the crawl was permanent. With Breakup Length
+    // Variation at zero the band is otherwise perfectly steady, which is exactly when it shows.
+    //
+    // Second, it could not work anyway. Measured at four distances, the boost asked for periods
+    // under two pixels as soon as the band got genuinely thin — past the sampling limit, which is
+    // what the old frequency cap was there to catch. Detail cannot be added to something that is
+    // already too small to resolve; a band that thin is the job of the minimum-width floor above,
+    // not of the dither.
+    //
+    // So: one octave at the authored scale, one at a fixed multiple of it, both pinned to the
+    // world. The only distance term left is the detail octave bowing out once its own period
+    // approaches the sampling limit — the same thing a mip chain would do, which is a fade the eye
+    // reads as detail settling, not as texture sliding.
+    const float kDetailOctave = 4.0f;
+    const float kDetailMix = 0.35f;
     const float authoredFine = max(shoreFoamPatternParams.x, 1e-3f);
-    const float fineFrequency =
-        lerp(authoredFine, max(authoredFine, kPeriodsAcrossBand / bandWorld), thinness);
+    const float detailPeriodPixels =
+        1.0f / max(authoredFine * kDetailOctave * pixelWorldSize, 1e-6f);
+    const float detailWeight = kDetailMix * smoothstep(2.0f, 5.0f, detailPeriodPixels);
 
-    float fine = ShoreFoamBreakupMaskTex.Sample(LinearWrapSampler, p * fineFrequency).r;
+    float fine = ShoreFoamBreakupMaskTex.Sample(LinearWrapSampler, p * authoredFine).r;
+    [branch]
+    if (detailWeight > 1e-3f)
+    {
+        const float detail = ShoreFoamBreakupMaskTex.Sample(
+            LinearWrapSampler, p * (authoredFine * kDetailOctave)).r;
+        fine = lerp(fine, detail, detailWeight);
+    }
     fine = lerp(0.02f, 0.98f, fine);
 
     // The sweep. Density shifts how much of the tail stays filled.
@@ -1956,23 +2002,24 @@ PSOut PSMain(VSOutput input)
     foamInput.viewDir = viewDir;
     foamInput.normal = normal;
     foamInput.shoreDepth = contactShoreDepth;
-    // Antialiasing floor for the contact strip: how much WATER DEPTH one pixel spans. Built from
-    // two separately smooth factors instead of fwidth(sourceWaterDepth):
+    // Pixel footprint in world metres, from the view DISTANCE — never from ddx/ddy of an
+    // interpolant.
     //
-    //   shoreData.w      |grad depth|, the shore field's own central difference, interpolated;
-    //   pixelWorldSize   derivative of baseXZ, which lies in the FLAT y=0 plane, so neighbouring
-    //                    clipmap triangles are exactly coplanar and this stays continuous.
+    // The derivative version is exact but it is CONSTANT INSIDE A TRIANGLE and jumps at every edge,
+    // and the water clipmap's triangles are a world-aligned grid. Anything sized by it inherits
+    // that: the antialiasing floor came out per-triangle and drew the rectangular staircase along
+    // the foam edge, and the dither's frequency came out as a mosaic of triangles with moire
+    // hatching inside each. Distance is interpolated, so this is continuous everywhere.
     //
-    // fwidth() of an interpolated attribute is constant inside a triangle and jumps at every edge,
-    // and the water clipmap's triangles form a world-axis-aligned grid — that is the rectangular
-    // staircase along the foam edge, and it is also what blew up (to fwidth of the 1000 m
-    // out-of-field sentinel) along the shore field's border and painted a foam line there.
-    // Diagnostic view 3 renders the old quantity, view 2 the one used now.
-    const float2 baseDdx = ddx(input.baseXZ);
-    const float2 baseDdy = ddy(input.baseXZ);
-    const float pixelWorldSize = max(length(baseDdx), length(baseDdy));
+    // Approximate on purpose. It only feeds thresholds — an AA floor and two width/frequency
+    // clamps — so being off by a factor at a grazing angle costs nothing, while a discontinuity
+    // costs a visible artifact. Cheaper too: no derivative instructions.
+    const float pixelWorldSize =
+        max(input.viewDepth * 2.0f / max(proj._22 * depthTextureSize.w, 1e-3f), 1e-4f);
+    // Metres of water DEPTH one pixel spans: the field's own gradient (interpolated, smooth) times
+    // that footprint.
     foamInput.depthFeather = max(input.shoreData.w * pixelWorldSize, 1e-4f);
-    foamInput.pixelWorldSize = max(pixelWorldSize, 1e-4f);
+    foamInput.pixelWorldSize = pixelWorldSize;
     foamInput.fallbackShoreDepth = fallbackShoreDepth;
     foamInput.fallbackShoreWeight = fallbackShoreWeight;
     foamInput.shoreFieldWeight = shoreFieldWeight;
@@ -2109,6 +2156,17 @@ PSOut PSMain(VSOutput input)
                 input.baseXZ, oldShoreDepth, foamInput.depthFeather,
                 foamInput.pixelWorldSize, foamInput.time);
             dbg = oldMask.y.xxx;
+        }
+        else if (foamDebugView == 14)
+        {
+            // The isobaths the foam edge actually rides, in 1 MM bands. View 7 draws the same
+            // field at 10 cm, which is far too coarse to see anything wrong with it: the strip is
+            // authored millimetres wide, so that is the scale the field has to be judged at. Every
+            // contour here must be a smooth curve. A regular sawtooth on ALL of them at once means
+            // the field is quantized somewhere upstream, not that the foam pattern is noisy — that
+            // is how the sampler's 8-bit subtexel snap was found (see SampleShoreDepth).
+            const float band = frac(abs(contactShoreDepth) * 1000.0f) < 0.5f ? 1.0f : 0.35f;
+            dbg = contactShoreDepth < 0.0f ? float3(0.1f, 0.1f, band) : float3(band, band, 0.1f);
         }
         else if (foamDebugView == 9)
         {

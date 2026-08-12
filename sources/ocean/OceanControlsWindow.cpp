@@ -1212,6 +1212,7 @@ namespace
                 "11 (unused)",
                 "12 R=out-of-field regime, G=field weight",
                 "13 Shore SDF (green = water, red = inland, 2 m bands)",
+                "14 Contact depth, 1 mm contours (sawtooth = quantized field)",
             };
             ImGui::Combo(
                 "Foam debug view",
