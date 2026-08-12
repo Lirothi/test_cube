@@ -2316,7 +2316,10 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
         if (!opaqueSimple.empty())
         {
-            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, camera, /*useBundles=*/true, true, true, 32, viewCB);
+            // Auto-instancing leaves one heavyweight object per mesh/material run. Small chunks
+            // let the three palm species record concurrently without paying one bundle per tiny
+            // terrain object. localOrder preserves deterministic execution order.
+            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, camera, /*useBundles=*/true, true, true, 2, viewCB);
         }
         });
 

@@ -42,6 +42,18 @@ public:
     size_t InstanceCount() const { return members_.size(); }
 
 private:
+    struct SlotBindingScratch
+    {
+        D3D12_GPU_VIRTUAL_ADDRESS paramsCbv = 0;
+        D3D12_GPU_DESCRIPTOR_HANDLE srvTable{};
+        D3D12_GPU_DESCRIPTOR_HANDLE samplerTable{};
+        Material* material = nullptr;
+    };
+
+    // Multi-slot material state is LOD-invariant. Build it once per batch Render instead of
+    // restaging the same 4-5 slots for every occupied LOD tier.
+    void PrepareSlotBindings(Renderer* renderer);
+
     // Records instanced draws for a SUBSET of the run at one LOD (chunked to the shader's
     // instance-array capacity). Step 6d: the camera pass buckets members per-instance and
     // calls this once per LOD tier; the shadow pass calls it once with all members.
@@ -64,6 +76,6 @@ private:
     const IInstanceable* leadInst_ = nullptr;
     // Per-instance LOD buckets, reused each Render (pooled batch -> retains capacity).
     std::array<std::vector<RenderableObjectBase*>, kMaxLodTiers> lodBuckets_;
-    // B2b scratch: per-slot param CB GPU addresses for the current RecordInstanced call.
-    std::vector<D3D12_GPU_VIRTUAL_ADDRESS> slotCbScratch_;
+    // B2b scratch reused by every occupied LOD in the current camera Render.
+    std::vector<SlotBindingScratch> slotBindingsScratch_;
 };
