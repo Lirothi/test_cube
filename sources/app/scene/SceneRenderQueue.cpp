@@ -159,6 +159,7 @@ float SceneRenderQueue::ComputeDepth(const mat4& view, const TransparentEntry& e
 
 void SceneRenderQueue::SortTransparent(const mat4& view)
 {
+    CPU_SCOPE(ProfilerScopes::kSceneRenderQueueSortTransparent);
     for (const auto bucketType : kTransparentBuckets)
     {
         auto& visibleBucket = visibleBuckets_[ToIndex(bucketType)];
@@ -198,6 +199,7 @@ void SceneRenderQueue::SortTransparent(const mat4& view)
 
 void SceneRenderQueue::SortOpaque()
 {
+    CPU_SCOPE(ProfilerScopes::kSceneRenderQueueSortOpaque);
     // Sort by the single draw-identity key (mesh + material/PSO + textures). Groups identical
     // pipeline state for the bind cache AND makes instanceable runs contiguous.
     auto cmp = [](RenderableObjectBase* a, RenderableObjectBase* b)
@@ -208,6 +210,19 @@ void SceneRenderQueue::SortOpaque()
               visibleBuckets_[ToIndex(BucketType::OpaqueSimple)].end(), cmp);
     std::sort(visibleBuckets_[ToIndex(BucketType::OpaqueComplex)].begin(),
               visibleBuckets_[ToIndex(BucketType::OpaqueComplex)].end(), cmp);
+}
+
+void SceneRenderQueue::SortOpaqueSource()
+{
+    CPU_SCOPE(ProfilerScopes::kSceneRenderQueueSortOpaque);
+    auto cmp = [](RenderableObjectBase* a, RenderableObjectBase* b)
+    {
+        return a->BatchKey() < b->BatchKey();
+    };
+    std::sort(buckets_[ToIndex(BucketType::OpaqueSimple)].begin(),
+              buckets_[ToIndex(BucketType::OpaqueSimple)].end(), cmp);
+    std::sort(buckets_[ToIndex(BucketType::OpaqueComplex)].begin(),
+              buckets_[ToIndex(BucketType::OpaqueComplex)].end(), cmp);
 }
 
 InstancedDrawBatch* SceneRenderQueue::AcquireBatch(size_t& cursor)
@@ -221,6 +236,7 @@ InstancedDrawBatch* SceneRenderQueue::AcquireBatch(size_t& cursor)
 
 void SceneRenderQueue::SelectLods(const Camera& camera)
 {
+    CPU_SCOPE(ProfilerScopes::kSceneRenderQueueSelectLods);
     for (auto& bucket : visibleBuckets_)
     {
         for (RenderableObjectBase* obj : bucket)
@@ -317,6 +333,7 @@ void SceneRenderQueue::Cull(const Frustum& frustum)
 void SceneRenderQueue::Cull(const Frustum& frustum, const SceneRenderQueue& source)
 {
     CPU_SCOPE(ProfilerScopes::kSceneRenderQueueCull);
+    const bool frustumValid = frustum.IsValid();
 
     for (auto& bucket : visibleBuckets_)
     {
@@ -350,7 +367,7 @@ void SceneRenderQueue::Cull(const Frustum& frustum, const SceneRenderQueue& sour
             }
 
             const AABB& bounds = obj->GetWorldBounds();
-            const bool visible = !frustum.IsValid() || !bounds.IsValid() || frustum.Intersects(bounds);
+            const bool visible = !frustumValid || !bounds.IsValid() || frustum.Intersects(bounds);
 
             if (visible)
             {

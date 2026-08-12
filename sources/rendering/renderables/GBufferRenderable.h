@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/IInstanceable.h"
 #include "materials/MaterialData.h"
@@ -19,7 +21,11 @@ public:
     const GBufferRenderable* AsGBufferRenderable() const override { return this; }
 
     // Slot-0 ("legacy single material") accessors — the factory/editor write these.
-    MaterialParams& MaterialParamsRef() { return matParamses_[0]; }
+    MaterialParams& MaterialParamsRef()
+    {
+        instanceSlotsCompatibilityKey_.store(0, std::memory_order_relaxed);
+        return matParamses_[0];
+    }
     const MaterialParams& MaterialParamsRef() const { return matParamses_[0]; }
 
     // Fields explicitly supplied by the effective object JSON. Material-file defaults are merged
@@ -170,6 +176,7 @@ public:
     {
         return slot < matParamses_.size() ? &matParamses_[slot] : nullptr;
     }
+    std::uint64_t InstanceSlotsCompatibilityKey() const override;
 
     // True when this object draws per-submesh with per-slot materials (B2). The same predicate
     // decides the instanced-variant flavor (INSTCB_SLOT_PARAMS) in BuildInstancedMaterials and
@@ -219,6 +226,7 @@ private:
     // factory can write params before Init). slotPresets_[i] = preset name or "auto" (glTF).
     std::vector<std::shared_ptr<MaterialData>> matDatas_;
     std::vector<MaterialParams> matParamses_;
+    mutable std::atomic<std::uint64_t> instanceSlotsCompatibilityKey_{ 0 };
     std::vector<std::string> slotPresets_;
     uint32_t currentDrawSlot_ = 0;
     uint32_t materialParamOverrideMask_ = 0;

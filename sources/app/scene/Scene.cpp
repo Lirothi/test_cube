@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cassert>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -500,13 +501,16 @@ bool Scene::RemoveOceanObjects()
 
 void Scene::SetOceanVisible(bool visible)
 {
+    bool changed = false;
     for (std::unique_ptr<RenderableObjectBase>& obj : objects_)
     {
         if (obj && obj->AsOceanRenderable())
         {
+            changed |= obj->IsVisible() != visible;
             obj->SetVisible(visible);
         }
     }
+    if (changed) { BumpStaticSetVersion(); }
 }
 
 #if WITH_EDITOR
@@ -881,6 +885,52 @@ void Scene::Tick(float deltaTime) {
     }
 }
 
+void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
+{
+    CPU_SCOPE(ProfilerScopes::kPrepareQueue);
+    if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
+    {
+        view.queue.Clear();
+        return;
+    }
+
+    // Shadow and camera views using the camera's layer mask reuse their already bucketized,
+    // BatchKey-sorted sources. Cull preserves source order, so neither view needs to sort again.
+    const bool usesSharedShadowSource =
+        view.type == SceneView::Type::Shadow && view.renderLayerMask == cameraLayerMask;
+    const bool usesSharedCameraSource =
+        view.type == SceneView::Type::Camera && view.renderLayerMask == cameraLayerMask;
+    if (usesSharedShadowSource)
+    {
+        view.queue.Cull(view.frustum, shadowCasterSource_);
+    }
+    else if (usesSharedCameraSource)
+    {
+        view.queue.Cull(view.frustum, cameraObjectSource_);
+    }
+    else if (g_useFusedBucketizeCull)
+    {
+        view.queue.BucketizeCull(objects_, view.renderLayerMask,
+            view.type == SceneView::Type::Shadow, view.frustum);
+    }
+    else
+    {
+        view.queue.Bucketize(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow);
+        view.queue.Cull(view.frustum);
+    }
+    if (view.type == SceneView::Type::Camera)
+    {
+        view.queue.SortTransparent(view.view);
+        // Camera LOD must be selected before camera batches build their per-tier member lists.
+        view.queue.SelectLods(camera_);
+    }
+    if (!usesSharedShadowSource && !usesSharedCameraSource)
+    {
+        view.queue.SortOpaque();
+    }
+    view.queue.BuildInstancedBatches(view.type == SceneView::Type::Camera);
+}
+
 void Scene::PrepareViews(Renderer* renderer)
 {
     CPU_SCOPE(ProfilerScopes::kPrepareViews);
@@ -890,6 +940,11 @@ void Scene::PrepareViews(Renderer* renderer)
     }
 
     OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
+    SceneView& mainView = camera_.GetView();
+    SceneView* shoreViewPtr = nullptr;
+    const uint32_t camMask = camera_.GetRenderLayerMask();
+    std::optional<Profiler::ScopedCpu> prepareViewsSetupScope(
+        std::in_place, ProfilerScopes::kPrepareViewsSetup);
     camera_.CalcMatrices(renderer);
     renderer->UpdateDlssCameraData(camera_);
 
@@ -920,13 +975,37 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.selectionOutlineRadius = 1;
 #endif
 
-    SceneView& mainView = camera_.GetView();
     mainView.renderLayerMask = camera_.GetRenderLayerMask();
     mainView.frustum = Frustum::FromInvViewProj(mainView.invView, mainView.proj, camera_.GetZNear(), camera_.GetZFar());
     mainView.type = SceneView::Type::Camera;
     mainView.requiresDepthCheck = false;
 
-    SceneView* shoreViewPtr = nullptr;
+    // The camera queue is independent of cascade/local-light view construction once its matrices
+    // and shared source are ready. Publish it first so a worker can overlap its expensive
+    // Cull/LOD/instancing chain with the remainder of PrepareViews setup on the main thread.
+    if (!renderQueueSourcesValid_ || renderQueueSourceVersion_ != staticSetVersion_ ||
+        renderQueueSourceMask_ != camMask)
+    {
+        shadowCasterSource_.Bucketize(objects_, camMask, /*filterShadowCaster=*/true);
+        shadowCasterSource_.SortOpaqueSource();
+        cameraObjectSource_.Bucketize(objects_, camMask, /*filterShadowCaster=*/false);
+        cameraObjectSource_.SortOpaqueSource();
+        renderQueueSourceVersion_ = staticSetVersion_;
+        renderQueueSourceMask_ = camMask;
+        renderQueueSourcesValid_ = true;
+    }
+
+    TaskSystem& tasks = TaskSystem::Get();
+    TaskSystem::TaskHandle mainViewTask = nullptr;
+    {
+        CPU_SCOPE(ProfilerScopes::kPrepareViewsDispatch);
+        mainViewTask = tasks.Submit([this, &mainView, camMask]()
+        {
+            CPU_SCOPE(ProfilerScopes::kPrepareMainView);
+            PrepareViewQueue(mainView, camMask);
+        });
+    }
+
     if (oceanSimulation)
     {
         // The shore field is a static map of the level, so it has to be told where the level IS.
@@ -1044,65 +1123,16 @@ void Scene::PrepareViews(Renderer* renderer)
         }
     }
 
-    // Step 6e: bucketize the shared shadow-caster set ONCE — every directional cascade and
-    // spot view uses identical inputs (same objects, camera layer mask, shadow-caster
-    // filter), so re-bucketizing per view was ~5 redundant passes/frame. Each shadow view
-    // now only runs its own per-frustum Cull against this. CPU-only (does not move GPU FPS).
-    const uint32_t camMask = camera_.GetRenderLayerMask();
-    shadowCasterSource_.Bucketize(objects_, camMask, /*filterShadowCaster=*/true);
-
-    auto prepareQueue = [this, camMask](SceneView& view)
-    {
-        CPU_SCOPE(ProfilerScopes::kPrepareQueue);
-        if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
-        {
-            view.queue.Clear();
-            return;
-        }
-
-        // Shadow views with the camera's layer mask reuse the shared shadow-caster set (6e);
-        // anything else (e.g. the camera view, filterShadowCaster=false) bucketizes its own.
-        // Step 6a pure frustum cull: the old camera-distance "depth clamp" was wrong-axis and
-        // disabled; the light-space ortho frustum (Step 2b pancaked) is the correct cull.
-        if (view.type == SceneView::Type::Shadow && view.renderLayerMask == camMask)
-        {
-            view.queue.Cull(view.frustum, shadowCasterSource_);
-        }
-        else if (g_useFusedBucketizeCull)
-        {
-            // Fused single pass — the camera view's dominant cost was bucketizing all visible
-            // objects and then culling them in a second pass; this stores only survivors.
-            view.queue.BucketizeCull(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow, view.frustum);
-        }
-        else
-        {
-            view.queue.Bucketize(objects_, view.renderLayerMask, view.type == SceneView::Type::Shadow);
-            view.queue.Cull(view.frustum);
-        }
-        if (view.type == SceneView::Type::Camera)
-        {
-            view.queue.SortTransparent(view.view);
-            // Step 6: choose each visible object's camera LOD here (per-view, before parallel
-            // recording) so Render stays side-effect-free; persistent per-object state gives
-            // hysteresis. Shadow views keep their per-cascade LOD floor (chosen at record time).
-            view.queue.SelectLods(camera_);
-        }
-        // Step 3: group opaque draws by pipeline state (PSO/material/mesh). Step 4: collapse
-        // the resulting identical-(mesh,material) runs into instanced batches. Applied to the
-        // camera gbuffer view AND every shadow view — opaque draws are depth-tested, so the
-        // reorder is invisible, and the grid instances in both the gbuffer and shadow passes.
-        view.queue.SortOpaque();
-        view.queue.BuildInstancedBatches(view.type == SceneView::Type::Camera);
-    };
+    prepareViewsSetupScope.reset();
 
     // main + shore + cascades + up to kMaxShadowedSpotLights spot views + up to
     // 6*kMaxShadowedPointLights point cube-face views.
     tc::inl_vector<SceneView*, 48> viewsToCull;
-    auto enqueueView = [&viewsToCull, &prepareQueue](SceneView& view)
+    auto enqueueView = [this, camMask, &viewsToCull](SceneView& view)
     {
         if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
         {
-            prepareQueue(view);
+            PrepareViewQueue(view, camMask);
             return;
         }
 
@@ -1112,45 +1142,63 @@ void Scene::PrepareViews(Renderer* renderer)
         }
         else
         {
-            prepareQueue(view);
+            PrepareViewQueue(view, camMask);
         }
     };
 
-    enqueueView(mainView);
-    if (shoreViewPtr)
     {
-        enqueueView(*shoreViewPtr);
-    }
-    if (oceanSimulation && oceanSimulation->ShouldBuildShoreSdf())
-    {
-        // Only on the frame the SDF is actually rebuilt — the rest of the time this view has no
-        // work and culling it would be pure overhead.
-        enqueueView(oceanSimulation->GetShoreSdfView());
-    }
-    for (auto& cascadeView : cascadeViews_)
-    {
-        enqueueView(cascadeView);
-    }
-    for (size_t s = 0; s < lightManager_.GetShadowedSpotCount(); ++s)
-    {
-        enqueueView(spotShadowViews_[s]);
-    }
-    for (size_t v = 0; v < lightManager_.GetShadowedPointCount() * 6; ++v)
-    {
-        enqueueView(pointShadowViews_[v]);
-    }
-
-    if (!viewsToCull.empty())
-    {
-        TaskSystem::Get().DispatchWait(viewsToCull.size(), [prepareQueue, &viewsToCull](std::size_t index)
+        CPU_SCOPE(ProfilerScopes::kPrepareViewsBuildList);
+        if (shoreViewPtr)
         {
-            if (index >= viewsToCull.size())
-            {
-                return;
-            }
+            enqueueView(*shoreViewPtr);
+        }
+        if (oceanSimulation && oceanSimulation->ShouldBuildShoreSdf())
+        {
+            // Only on the frame the SDF is actually rebuilt — the rest of the time this view has no
+            // work and culling it would be pure overhead.
+            enqueueView(oceanSimulation->GetShoreSdfView());
+        }
+        for (auto& cascadeView : cascadeViews_)
+        {
+            enqueueView(cascadeView);
+        }
+        for (size_t s = 0; s < lightManager_.GetShadowedSpotCount(); ++s)
+        {
+            enqueueView(spotShadowViews_[s]);
+        }
+        for (size_t v = 0; v < lightManager_.GetShadowedPointCount() * 6; ++v)
+        {
+            enqueueView(pointShadowViews_[v]);
+        }
+    }
 
-            prepareQueue(*viewsToCull[index]);
-        }, 1);
+    // Camera preparation was published before cascade/light-view setup. Publish the remaining
+    // independent views now; while waiting for the camera task, main may help drain these tasks.
+    tc::inl_vector<TaskSystem::TaskHandle, 48> viewTasks;
+    {
+        CPU_SCOPE(ProfilerScopes::kPrepareViewsDispatch);
+        for (SceneView* view : viewsToCull)
+        {
+            if (!view) { continue; }
+            if (TaskSystem::TaskHandle task = tasks.Submit([this, view, camMask]()
+                {
+                    PrepareViewQueue(*view, camMask);
+                }))
+            {
+                viewTasks.push_back(task);
+            }
+        }
+    }
+
+    {
+        CPU_SCOPE(ProfilerScopes::kPrepareViewsJoin);
+        tasks.Wait(mainViewTask);
+        tasks.Release(mainViewTask);
+        for (TaskSystem::TaskHandle& task : viewTasks)
+        {
+            tasks.Wait(task);
+            tasks.Release(task);
+        }
     }
 }
 
@@ -1246,6 +1294,9 @@ void Scene::Clear()
     frameData_ = SceneFrameData{}; // drop pointers into objects we are about to destroy
     lightManager_.Reset();
     shadowGpu_.Reset(); // drop CPU caster state; GPU buffers retained
+    shadowCasterSource_.Clear();
+    cameraObjectSource_.Clear();
+    renderQueueSourcesValid_ = false;
     objects_.clear();
     shoreAreaValid_ = false; // the next level's terrain sits somewhere else
 #if WITH_EDITOR

@@ -46,13 +46,10 @@ void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*>::const_ite
         }
     }
 
-    // Step 6d: union of member world bounds -> the run picks ONE LOD per view (camera screen
-    // size for gbuffer / cascade floor for shadows). Members are already visible (post-cull).
+    // The batch is created only after this view's frustum cull and consumed directly by its
+    // render pass. Recomputing the union of every member bound here is therefore redundant;
+    // an empty sentinel also makes an accidental later cull conservative.
     bounds_ = AABB::Empty();
-    for (RenderableObjectBase* m : members_)
-    {
-        if (m) { bounds_.Expand(m->GetWorldBounds()); }
-    }
 }
 
 void InstancedDrawBatch::BuildLodBuckets()

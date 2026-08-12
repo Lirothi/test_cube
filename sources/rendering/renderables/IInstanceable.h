@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "rendering/renderables/InstanceTypes.h"
 
 class Material;
@@ -36,6 +37,9 @@ public:
     virtual size_t InstanceSlotCount() const { return 1; }
     virtual MaterialData* InstanceSlotData(size_t /*slot*/) const { return nullptr; }
     virtual const MaterialParams* InstanceSlotParams(size_t /*slot*/) const { return nullptr; }
+    // Non-zero stable key for the slot identity tested by SameInstanceSlots. Implementations may
+    // cache it; the default keeps the exact field-by-field fallback for other renderable types.
+    virtual std::uint64_t InstanceSlotsCompatibilityKey() const { return 0; }
 
     // True when `other` can join a run led by this object (slot sets + params identical).
     // Single-slot pairs always pass: their params ride the per-instance array instead.

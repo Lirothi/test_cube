@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 
 #include "app/camera/Camera.h"
 #include "rendering/core/Renderer.h"
@@ -147,6 +148,10 @@ bool IInstanceable::SameInstanceSlots(const IInstanceable& other) const
     if (n != other.InstanceSlotCount()) { return false; }
     if (n <= 1) { return true; }
 
+    const std::uint64_t key = InstanceSlotsCompatibilityKey();
+    const std::uint64_t otherKey = other.InstanceSlotsCompatibilityKey();
+    if (key != 0 && otherKey != 0) { return key == otherKey; }
+
     const auto eq4 = [](const float4& a, const float4& b)
     { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; };
     const auto eq2 = [](const float2& a, const float2& b)
@@ -166,6 +171,40 @@ bool IInstanceable::SameInstanceSlots(const IInstanceable& other) const
         }
     }
     return true;
+}
+
+std::uint64_t GBufferRenderable::InstanceSlotsCompatibilityKey() const
+{
+    std::uint64_t cached = instanceSlotsCompatibilityKey_.load(std::memory_order_relaxed);
+    if (cached != 0) { return cached; }
+
+    std::uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](std::uint64_t value) { h ^= value; h *= 1099511628211ull; };
+    const auto mixFloat = [&mix](float value)
+    {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        mix(bits);
+    };
+
+    mix(static_cast<std::uint64_t>(matParamses_.size()));
+    for (size_t i = 0; i < matParamses_.size(); ++i)
+    {
+        mix(reinterpret_cast<std::uint64_t>(GetMaterialDataForSlot(i)));
+        const MaterialParams& p = matParamses_[i];
+        mixFloat(p.baseColor.x); mixFloat(p.baseColor.y);
+        mixFloat(p.baseColor.z); mixFloat(p.baseColor.w);
+        mixFloat(p.metalRough.x); mixFloat(p.metalRough.y);
+        mixFloat(p.mrMultiply);
+        mixFloat(p.texOffsScale.x); mixFloat(p.texOffsScale.y);
+        mixFloat(p.texOffsScale.z); mixFloat(p.texOffsScale.w);
+        mixFloat(p.texFlags.x); mixFloat(p.texFlags.y);
+        mixFloat(p.texFlags.z); mixFloat(p.texFlags.w);
+    }
+
+    if (h == 0) { h = 1; } // zero is the uncached/fallback sentinel
+    instanceSlotsCompatibilityKey_.store(h, std::memory_order_relaxed);
+    return h;
 }
 
 GBufferRenderable::GBufferRenderable(const std::string& matPreset,

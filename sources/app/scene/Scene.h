@@ -81,8 +81,8 @@ public:
     // change (spawn/delete). Runs on a fresh GPU-idle upload batch, so the VSM per-page draw keeps its
     // fast single-ExecuteIndirect-per-page path instead of the ~10ms per-group fallback until reload.
     void RefreshShadowGpuForEditor(Renderer& renderer);
-    // Marks the cached shadow caster set stale after an editor visibility toggle. The command stack
-    // coalesces this with other caster-set changes into one RefreshShadowGpuForEditor call.
+    // Marks cached render-queue sources stale after an editor visibility/layer change. The command
+    // stack coalesces visibility with other caster-set changes into one shadow GPU refresh.
     void NotifyEditorShadowCasterVisibilityChanged() { BumpStaticSetVersion(); }
     RenderableObjectBase* FindEditorObject(SceneObjectId id);
     const RenderableObjectBase* FindEditorObject(SceneObjectId id) const;
@@ -142,6 +142,7 @@ private:
     void UpdateCascades(const Camera& camera, Renderer* renderer);
     void UpdateClipmap(const Camera& camera); // Step 24d: camera-centered directional clipmap views (VSM)
 
+    void PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask);
     void PrepareViews(Renderer* renderer);
     void SyncObjectsForRender(SceneObjectSyncReason reason);
 
@@ -172,6 +173,13 @@ private:
     // shadow-caster set (identical objects/mask/filter), so it's bucketized ONCE here and
     // shared — each shadow view only runs its own per-frustum Cull against it.
     SceneRenderQueue shadowCasterSource_{};
+    // Classification and opaque BatchKey order do not depend on camera pose. Cache them until
+    // membership/visibility/layer or the camera layer mask changes; frustum cull, transparent
+    // depth sort and LOD selection still run every frame.
+    SceneRenderQueue cameraObjectSource_{};
+    std::uint32_t renderQueueSourceVersion_ = 0;
+    std::uint32_t renderQueueSourceMask_ = 0;
+    bool renderQueueSourcesValid_ = false;
     // Rung 0 / Steps 1-2: GPU-side shadow data (per-caster instance + bounds, per-view
     // frustum planes). Built at level load, maintained per frame; not yet consumed by any pass.
     ShadowGpuData shadowGpu_{};

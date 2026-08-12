@@ -36,7 +36,7 @@ public:
     bool IsTransparent() const override { return false; }
     bool IsSimpleRender() const override { return simple_; }
     bool CastsShadow() const override { return shadowMat_ != nullptr; }
-    // Union of the run's member bounds — for frustum culling of the batch as a whole.
+    // Created post-cull; the empty sentinel keeps any accidental later cull conservative.
     const AABB& GetWorldBounds() const override { return bounds_; }
 
     size_t InstanceCount() const { return members_.size(); }

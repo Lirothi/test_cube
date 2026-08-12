@@ -47,6 +47,9 @@ public:
     // because opaque draws are depth-tested (order-independent); transparents are NOT
     // touched (their blend order is set by SortTransparent).
     void SortOpaque();
+    // Sort the pre-cull opaque buckets. Cull(frustum, source) preserves source order, so views
+    // sharing one source can pay the BatchKey sort once instead of once per shadow view.
+    void SortOpaqueSource();
     void Cull(const Frustum& frustum);
     // Step 6e: cull `source`'s (already-bucketized) casters into THIS queue's visible
     // buckets — lets many views share one Bucketize. The single-arg overload culls own.

@@ -113,13 +113,21 @@ extern const Profiler::ScopeNameKey kOceanRender;
 extern const Profiler::ScopeNameKey kPrepareTransparentBuckets;
 extern const Profiler::ScopeNameKey kAddPass;
 extern const Profiler::ScopeNameKey kPrepareViews;
+extern const Profiler::ScopeNameKey kPrepareViewsSetup;
+extern const Profiler::ScopeNameKey kPrepareViewsBuildList;
 extern const Profiler::ScopeNameKey kPrepareQueue;
+extern const Profiler::ScopeNameKey kPrepareMainView;
+extern const Profiler::ScopeNameKey kPrepareViewsDispatch;
+extern const Profiler::ScopeNameKey kPrepareViewsJoin;
 extern const Profiler::ScopeNameKey kUpdateCascades;
 extern const Profiler::ScopeNameKey kSelectShadowedSpots;
 extern const Profiler::ScopeNameKey kSelectShadowedPoints;
 extern const Profiler::ScopeNameKey kSceneRenderQueueBucketize;
 extern const Profiler::ScopeNameKey kSceneRenderQueueBucketizeCull;
 extern const Profiler::ScopeNameKey kSceneRenderQueueCull;
+extern const Profiler::ScopeNameKey kSceneRenderQueueSelectLods;
+extern const Profiler::ScopeNameKey kSceneRenderQueueSortOpaque;
+extern const Profiler::ScopeNameKey kSceneRenderQueueSortTransparent;
 
 // DLSS/Streamline evaluate breakdown (diagnostic).
 extern const Profiler::ScopeNameKey kDlssEvaluate;

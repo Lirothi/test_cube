@@ -436,6 +436,7 @@ namespace
                     {
                         obj.properties["renderLayer"] = opt.name;
                         if (runtime) { runtime->SetRenderLayer(opt.layer); }
+                        ctx.scene.NotifyEditorShadowCasterVisibilityChanged();
                         ctx.document.SetDirty(true);
                     }
                 }
