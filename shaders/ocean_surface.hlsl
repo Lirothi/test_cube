@@ -258,6 +258,14 @@ float SampleSceneDepthFiltered(float2 uv)
     return SceneDepthTexture.SampleLevel(LinearClampSampler, uv, 0).r;
 }
 
+// The main depth buffer is reverse-Z and is cleared to exactly 0. Treating 1 as the empty value
+// reconstructs the clear as a far-plane point; on the horizon that point crosses sea level and the
+// out-of-field shore fallback mistakes the whole row for a coastline.
+bool HasSceneGeometryDepth(float depthSample)
+{
+    return depthSample > 0.0f;
+}
+
 float3 ViewSpacePosition(float depthSample, float2 uv)
 {
     float2 ndc = ScreenUVToNDC(uv);
@@ -426,7 +434,7 @@ float ShoreVerticalDampFromDepthBuffer(float3 probeWorld, float nearFieldWeight)
 
     const float solidDepth = SceneDepthTexture.SampleLevel(PointClampSampler, probeUv, 0).r;
     [branch]
-    if (solidDepth >= 1.0f - 1e-6f)
+    if (!HasSceneGeometryDepth(solidDepth))
     {
         return 1.0f;
     }
@@ -1860,12 +1868,14 @@ PSOut PSMain(VSOutput input)
     const bool needsRefractionSoftEdge =
         shoreSlopeParams.z > 0.0f &&
         sourceWaterDepth < max(shoreBehaviorParams1.x, 0.01f);
-    float sceneDepthAtPixel = 1.0f;
+    float sceneDepthAtPixel = 0.0f; // reverse-Z clear: no opaque geometry
     [branch]
     if (needsFallbackShore || needsRefractionSoftEdge)
     {
         sceneDepthAtPixel = SampleSceneDepthFiltered(screenUV);
     }
+    const bool hasSceneGeometryAtPixel =
+        HasSceneGeometryDepth(sceneDepthAtPixel);
 
     float fallbackShoreDepth = 1000.0f;
     float fallbackShoreWeight = 0.0f;
@@ -1873,10 +1883,11 @@ PSOut PSMain(VSOutput input)
     if (needsFallbackShore)
     {
         float sceneDepthSample = sceneDepthAtPixel;
-        if (sceneDepthSample < 1.0f - 1e-6f)
+        if (hasSceneGeometryAtPixel)
         {
             // Filtered: this depth ends up in the contact-foam mask (fallbackShoreDepth), which
-            // must not carry the depth buffer's steps. The unfiltered value still gates the branch.
+            // must not carry the depth buffer's steps. A fully clear footprint remains exactly 0
+            // and was rejected above; mixed geometry/clear samples retain the intended soft edge.
             float3 scenePositionWS =
                 PositionWsFromDepth(sceneDepthSample, screenUV);
             fallbackShoreDepth = -scenePositionWS.y;
@@ -1895,7 +1906,7 @@ PSOut PSMain(VSOutput input)
 
     float refractionSoftEdge = 1.0f;
     [branch]
-    if (needsRefractionSoftEdge)
+    if (needsRefractionSoftEdge && hasSceneGeometryAtPixel)
     {
         float sceneViewDepth = DepthToViewZ_Fast(sceneDepthAtPixel);
         float geometryDepthSeparation = max(sceneViewDepth - input.viewDepth, 0.0f);
