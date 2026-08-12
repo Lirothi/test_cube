@@ -102,8 +102,8 @@ public:
     // Copy a CPU descriptor (SRV or UAV) into a per-frame scene slot.
     void WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_DESCRIPTOR_HANDLE srcCpu);
 
-    // (Re)upload the geometry-info array and (re)create its SRV at slot 0. Call
-    // after registering meshes for the frame (cheap; rebuilds the whole array).
+    // Upload the geometry-info array and recreate its SRV at slot 0 when registrations changed.
+    // Call after registering meshes for the frame; unchanged frames return immediately.
     void UploadGeometryInfo();
 
     UINT GeometryCount() const { return static_cast<UINT>(geomInfo_.size()); }
@@ -122,6 +122,7 @@ private:
     std::vector<GeometryInfoGPU> geomInfo_;                  // CPU mirror
     Microsoft::WRL::ComPtr<ID3D12Resource> geomInfoBuffer_;  // UPLOAD, structured
     UINT geomInfoCapacity_ = 0;                              // in records
+    bool geomInfoDirty_ = false;                             // CPU mirror changed since upload
 };
 
 } // namespace rt

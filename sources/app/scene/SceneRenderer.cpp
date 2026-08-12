@@ -42,6 +42,29 @@ static void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
 
 namespace
 {
+    uint64_t RtMaterialFingerprint(const GBufferRenderable& object)
+    {
+        // Slot 0 is the only material-parameter slot with a public mutable accessor; slots 1+
+        // are immutable after Init and material/mesh hot reloads call InvalidateRaytracing().
+        const MaterialParams& p = object.MaterialParamsRef();
+        uint64_t h = 1469598103934665603ull;
+        const auto mix = [&h](uint64_t value) { h ^= value; h *= 1099511628211ull; };
+        const auto mixFloat = [&mix](float value)
+        {
+            uint32_t bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            mix(bits);
+        };
+        mix(reinterpret_cast<uint64_t>(object.GetMaterialData()));
+        mix(static_cast<uint64_t>(object.SlotCount()));
+        mixFloat(p.baseColor.x); mixFloat(p.baseColor.y);
+        mixFloat(p.baseColor.z); mixFloat(p.baseColor.w);
+        mixFloat(p.metalRough.x); mixFloat(p.metalRough.y);
+        mixFloat(p.mrMultiply);
+        mixFloat(p.texFlags.y); // useMR controls whether the MR descriptor participates
+        return h;
+    }
+
 #if WITH_EDITOR
     constexpr UINT kSelectionStencilBit = 0x80u;
     constexpr uint32_t kSelectionStencilGBufferLocalOrder = 0xfffffffeu;
@@ -336,6 +359,7 @@ void SceneRenderer::Reset()
     asManagerInited_ = false;
     asScratchRetireFrame_ = 0;
     rtInstances_.clear();
+    rtBindlessObjectCache_.clear();
     frame_ = nullptr;
 }
 
@@ -350,6 +374,7 @@ void SceneRenderer::InvalidateRaytracing()
     asManagerInited_ = false;
     asScratchRetireFrame_ = 0;
     rtInstances_.clear();
+    rtBindlessObjectCache_.clear();
 }
 
 // Barrier plan step 4: everything the pass bodies used to create lazily, created here instead —
@@ -1391,28 +1416,64 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
     rtInstances_.clear();
     if (frame_->objects)
     {
+        const auto& objects = *frame_->objects;
+        if (rtBindlessObjectCache_.size() != objects.size())
+        {
+            rtBindlessObjectCache_.resize(objects.size());
+        }
         uint32_t instanceId = 0;
         std::vector<RtInstanceDesc> descs; // reused across objects this frame
-        for (const auto& obj : *frame_->objects)
+        // wind_test has hundreds of identical multi-slot palms. Keep this scratch allocation
+        // across objects instead of allocating/freeing a 4-5 element vector for every palm.
+        std::vector<rt::BindlessTable::SlotMaterial> slotMats;
+        const GBufferRenderable* lastPerSlotObject = nullptr;
+        uint32_t lastPerSlotInstanceId = 0;
+        for (size_t objectIndex = 0; objectIndex < objects.size(); ++objectIndex)
         {
+            const auto& obj = objects[objectIndex];
             // The editor's Enabled command maps to visibility. In no-editor
             // builds ordinary level objects retain their default visible state,
             // so this only removes explicitly disabled editor objects from RT.
             if (!obj || !obj->IsVisible()) { continue; }
-            // GetRtInstances appends one desc for a single-mesh object, or one per GPU
-            // instance for instanced renderables (S14: instanced models reflect).
-            descs.clear();
-            obj->GetRtInstances(descs);
+            // Avoid the vector append for the common one-object/one-instance path. Only the GPU
+            // instanced caster overrides GetRtInstances today and needs the reusable array.
+            RtInstanceDesc singleDesc{};
+            const RtInstanceDesc* descData = nullptr;
+            size_t descCount = 0;
+            if (obj->IsGpuInstancedCaster())
+            {
+                descs.clear();
+                obj->GetRtInstances(descs);
+                descData = descs.data();
+                descCount = descs.size();
+            }
+            else if (obj->GetRtInstance(singleDesc))
+            {
+                descData = &singleDesc;
+                descCount = 1;
+            }
             // Per-slot RT materials (B3 follow-up): a multi-slot object registers one record per
             // submesh with THAT slot's albedo/MR/params, so palms reflect bark + green fronds
             // instead of slot-0 everywhere. Hit shaders already index per (InstanceID +
             // GeometryIndex). Single-slot objects and GI instance clouds keep the slot-0 path.
             GBufferRenderable* gb = obj->AsGBufferRenderable();
             const bool perSlot = bindless_.Ready() && gb && gb->MultiSlotDraw();
-            std::vector<rt::BindlessTable::SlotMaterial> slotMats;
-            if (perSlot)
+            // Auto-instanced render queues already define exact multi-slot compatibility. Reuse
+            // the bindless id for a matching mesh/material set instead of rebuilding and hashing
+            // the same five palm slots hundreds of times.
+            RtBindlessObjectCache& objectCache = rtBindlessObjectCache_[objectIndex];
+            const uint64_t materialFingerprint = perSlot ? RtMaterialFingerprint(*gb) : 0;
+            const bool reuseObjectCache = perSlot && objectCache.valid &&
+                objectCache.object == obj.get() && objectCache.mesh == gb->GetMesh() &&
+                objectCache.materialFingerprint == materialFingerprint;
+            bool reusePerSlotId = !reuseObjectCache && perSlot && lastPerSlotObject &&
+                gb->GetMesh() == lastPerSlotObject->GetMesh() &&
+                gb->SameInstanceSlots(*lastPerSlotObject);
+            if (perSlot && !reuseObjectCache && !reusePerSlotId)
             {
-                slotMats.resize(gb->SlotCount());
+                // assign() value-initializes reused entries too, clearing descriptor handles left
+                // by the preceding object when this one has no texture for a slot.
+                slotMats.assign(gb->SlotCount(), {});
                 for (size_t s = 0; s < slotMats.size(); ++s)
                 {
                     MaterialData* md = gb->GetMaterialDataForSlot(s);
@@ -1428,8 +1489,9 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                     }
                 }
             }
-            for (const RtInstanceDesc& desc : descs)
+            for (size_t descIndex = 0; descIndex < descCount; ++descIndex)
             {
+                const RtInstanceDesc& desc = descData[descIndex];
                 rt::InstanceEntry entry;
                 entry.mesh = desc.mesh;
                 entry.world = desc.world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
@@ -1439,7 +1501,32 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                 // a running index if the bindless table isn't up.
                 if (perSlot && desc.mesh == gb->GetMesh())
                 {
-                    entry.instanceId = bindless_.GetOrRegisterMesh(desc.mesh, slotMats.data(), slotMats.size());
+                    if (reuseObjectCache)
+                    {
+                        entry.instanceId = objectCache.instanceId;
+                    }
+                    else if (reusePerSlotId)
+                    {
+                        entry.instanceId = lastPerSlotInstanceId;
+                    }
+                    else
+                    {
+                        entry.instanceId = bindless_.GetOrRegisterMesh(
+                            desc.mesh, slotMats.data(), slotMats.size());
+                        lastPerSlotObject = gb;
+                        lastPerSlotInstanceId = entry.instanceId;
+                        reusePerSlotId = true;
+                    }
+                    if (!reuseObjectCache)
+                    {
+                        objectCache.object = obj.get();
+                        objectCache.mesh = desc.mesh;
+                        objectCache.materialFingerprint = materialFingerprint;
+                        objectCache.instanceId = entry.instanceId;
+                        objectCache.valid = true;
+                    }
+                    lastPerSlotObject = gb;
+                    lastPerSlotInstanceId = entry.instanceId;
                 }
                 else
                 {

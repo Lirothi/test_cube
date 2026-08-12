@@ -204,6 +204,11 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         buildFailed_ = true;
         return;
     }
+    // Authored object lists commonly keep repeated meshes adjacent (wind_test has 610 palms).
+    // Avoid repeating the Debug-build hash-table lookup for the same cached BLAS.
+    Mesh* lastMesh = nullptr;
+    D3D12_GPU_VIRTUAL_ADDRESS lastBlasAddress = 0;
+    bool lastBlasResolved = false;
     for (UINT i = 0; i < count; ++i) {
         const InstanceEntry& e = instances[i];
         D3D12_RAYTRACING_INSTANCE_DESC d{};
@@ -211,16 +216,24 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         // column-vector (M*p) with translation in column 3, i.e. the transpose
         // of the upper 3x4: Transform[r][c] = world.m[c][r].
         const DirectX::XMFLOAT4X4& w = e.world;
-        for (int r = 0; r < 3; ++r) {
-            for (int c = 0; c < 4; ++c) {
-                d.Transform[r][c] = w.m[c][r];
-            }
-        }
+        // Spell out the fixed-size transpose: in an unoptimized Debug build the nested loops
+        // otherwise contribute noticeable overhead across hundreds of TLAS instances.
+        d.Transform[0][0] = w.m[0][0]; d.Transform[0][1] = w.m[1][0];
+        d.Transform[0][2] = w.m[2][0]; d.Transform[0][3] = w.m[3][0];
+        d.Transform[1][0] = w.m[0][1]; d.Transform[1][1] = w.m[1][1];
+        d.Transform[1][2] = w.m[2][1]; d.Transform[1][3] = w.m[3][1];
+        d.Transform[2][0] = w.m[0][2]; d.Transform[2][1] = w.m[1][2];
+        d.Transform[2][2] = w.m[2][2]; d.Transform[2][3] = w.m[3][2];
         d.InstanceID = e.instanceId & 0xFFFFFFu;
         d.InstanceMask = 0xFF;
         d.InstanceContributionToHitGroupIndex = e.instanceId & 0xFFFFFFu;
         d.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
-        d.AccelerationStructure = GetOrBuildBlas(e.mesh, cmdList4).Address();
+        if (!lastBlasResolved || e.mesh != lastMesh) {
+            lastMesh = e.mesh;
+            lastBlasAddress = GetOrBuildBlas(e.mesh, cmdList4).Address();
+            lastBlasResolved = true;
+        }
+        d.AccelerationStructure = lastBlasAddress;
         if (d.AccelerationStructure == 0) {
             buildFailed_ = true; // a referenced BLAS failed to build (alloc/device) — disable RT
         }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <vector>
 #include <wrl/client.h>
@@ -167,6 +168,18 @@ private:
     bool rtReflectActive_ = false; // S15: RT reflections active this frame (for glass)
     bool glassReflActive_ = false; // S15b: traced glass reflections active (RT or SSR)
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)
+    struct RtBindlessObjectCache
+    {
+        const RenderableObjectBase* object = nullptr;
+        const Mesh* mesh = nullptr;
+        uint64_t materialFingerprint = 0;
+        uint32_t instanceId = 0;
+        bool valid = false;
+    };
+    // Per-object bindless registration is stable across frames even though TLAS transforms are
+    // uploaded/refit every frame. Indexed like SceneFrameData::objects; pointer checks make object
+    // replacement safe, while RT invalidation clears the entire cache after material hot reloads.
+    std::vector<RtBindlessObjectCache> rtBindlessObjectCache_;
 
     // VSM (Rung 2) skip-when-still: last camera view matrix + whether the VSM has been rendered
     // since the gate turned on. When the camera view is unchanged the pool + page table persist, so

@@ -50,6 +50,7 @@ void BindlessTable::Reset()
     geomInfo_.clear();
     geomInfoBuffer_.Reset();
     geomInfoCapacity_ = 0;
+    geomInfoDirty_ = false;
     heap_.Reset();
     incr_ = 0;
 }
@@ -163,12 +164,13 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots,
     }
 
     geomCache_.emplace(key, base);
+    geomInfoDirty_ = true;
     return base;
 }
 
 void BindlessTable::UploadGeometryInfo()
 {
-    if (!heap_ || geomInfo_.empty()) {
+    if (!heap_ || geomInfo_.empty() || !geomInfoDirty_) {
         return;
     }
 
@@ -198,10 +200,11 @@ void BindlessTable::UploadGeometryInfo()
 
     void* mapped = nullptr;
     D3D12_RANGE noRead{ 0, 0 };
-    if (SUCCEEDED(geomInfoBuffer_->Map(0, &noRead, &mapped))) {
-        std::memcpy(mapped, geomInfo_.data(), static_cast<size_t>(bytes));
-        geomInfoBuffer_->Unmap(0, nullptr);
+    if (FAILED(geomInfoBuffer_->Map(0, &noRead, &mapped))) {
+        return; // keep dirty so the next frame retries the upload
     }
+    std::memcpy(mapped, geomInfo_.data(), static_cast<size_t>(bytes));
+    geomInfoBuffer_->Unmap(0, nullptr);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
     srv.Format = DXGI_FORMAT_UNKNOWN;
@@ -211,6 +214,7 @@ void BindlessTable::UploadGeometryInfo()
     srv.Buffer.NumElements = count;
     srv.Buffer.StructureByteStride = sizeof(GeometryInfoGPU);
     device_->CreateShaderResourceView(geomInfoBuffer_.Get(), &srv, CpuHandle(kGeomInfoSlot));
+    geomInfoDirty_ = false;
 }
 
 } // namespace rt
