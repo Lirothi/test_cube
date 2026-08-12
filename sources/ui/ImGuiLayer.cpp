@@ -6,6 +6,9 @@
 #include <stdexcept>
 
 #include "imgui.h"
+#if WITH_EDITOR
+#include "imgui_internal.h"
+#endif
 #include "backends/imgui_impl_dx12.h"
 #include "backends/imgui_impl_win32.h"
 #include "rendering/core/RenderConstants.h"
@@ -24,6 +27,52 @@ constexpr uint32_t kSrvDescriptorCapacity = 512;
 constexpr uint32_t kSrvDescriptorCapacity = 64;
 #endif
 constexpr float kUiScale = 1.5f;
+
+#if WITH_EDITOR
+void SubmitEditorDockSpace()
+{
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if (!viewport)
+    {
+        return;
+    }
+
+    // An explicit id lets us build the layout before DockSpaceOverViewport submits its host.
+    const ImGuiID dockspaceId = ImHashStr("EditorDockSpace");
+    if (ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
+    {
+        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodePos(dockspaceId, viewport->WorkPos);
+        ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
+
+        ImGuiID center = dockspaceId;
+        const ImGuiID left = ImGui::DockBuilderSplitNode(
+            center, ImGuiDir_Left, 0.22f, nullptr, &center);
+        ImGuiID right = ImGui::DockBuilderSplitNode(
+            center, ImGuiDir_Right, 0.24f, nullptr, &center);
+        const ImGuiID bottom = ImGui::DockBuilderSplitNode(
+            center, ImGuiDir_Down, 0.30f, nullptr, &center);
+
+        const ImGuiID levelEditor = ImGui::DockBuilderSplitNode(
+            right, ImGuiDir_Down, 0.35f, nullptr, &right);
+        const ImGuiID commandHistory = ImGui::DockBuilderSplitNode(
+            right, ImGuiDir_Down, 0.26f, nullptr, &right);
+
+        ImGui::DockBuilderDockWindow("Scene Outliner", left);
+        ImGui::DockBuilderDockWindow("Content Browser", bottom);
+        ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderDockWindow("Command History", commandHistory);
+        // The visible title changes when the document is dirty, but ###LevelEditor keeps this id.
+        ImGui::DockBuilderDockWindow("LevelEditor", levelEditor);
+        ImGui::DockBuilderFinish(dockspaceId);
+    }
+
+    constexpr ImGuiDockNodeFlags flags =
+        ImGuiDockNodeFlags_PassthruCentralNode |
+        ImGuiDockNodeFlags_NoDockingOverCentralNode;
+    ImGui::DockSpaceOverViewport(dockspaceId, viewport, flags);
+}
+#endif
 } // namespace
 
 void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
@@ -60,6 +109,9 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+#if WITH_EDITOR
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+#endif
     io.ConfigWindowsMoveFromTitleBarOnly = true;
     //io.IniFilename = nullptr;
 
@@ -148,6 +200,10 @@ void ImGuiLayer::BeginFrame()
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     frameBegun_ = true;
+
+#if WITH_EDITOR
+    SubmitEditorDockSpace();
+#endif
 
     ApplyPendingRightClickFocusClear();
 }
