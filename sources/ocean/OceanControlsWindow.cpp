@@ -1210,7 +1210,8 @@ namespace
                 "9 Sweep t + shore-depth texel grid",
                 "10 Coverage, OLD pixel-shader depth lookup (facets)",
                 "11 (unused)",
-                "12 R=penetration fade B=land height G=field weight",
+                "12 R=out-of-field regime, G=field weight",
+                "13 Shore SDF (green = water, red = inland, 2 m bands)",
             };
             ImGui::Combo(
                 "Foam debug view",

@@ -129,6 +129,9 @@ struct FoamInput
     // derivative is piecewise constant and jumps at every texel boundary, so fwidth() of it paints
     // that map's texel grid into whatever consumes it — the regular stripes across the strip.
     float depthFeather;
+    // Metres of world per screen pixel at this fragment, from the flat base grid. Both the strip's
+    // minimum width and the tear pattern's frequency ceiling are expressed in pixels through it.
+    float pixelWorldSize;
     float fallbackShoreDepth;
     float fallbackShoreWeight;
     float shoreFieldWeight;
@@ -758,10 +761,11 @@ VSOutput VSMain(VSInput input)
     float positiveDepth = max(waterDepth, 0.0f);
     // Water is never completely still.
     //
-    // Right at the waterline the vertical fade goes to 0, and on a steep face runupSlopeWeight
-    // goes to 0 as well, so the horizontal floor collapses with it — both components of the wave
-    // vanish and those vertices stop dead. Frozen water beside a wall reads as glass, which is
-    // worse than slightly wrong water. This floors BOTH fades so some of the wave always survives.
+    // Floor under the VERTICAL fade only — the horizontal one is floored by Shallow XZ Strength
+    // itself (see below), which is what that slider means.
+    //
+    // Right at the waterline the vertical fade goes to zero and those vertices stop dead. Frozen
+    // water beside a wall reads as glass, which is worse than slightly wrong water.
     //
     // Deliberately a constant and not a slider: shaders compile at runtime here, so it can be
     // tuned by editing this line and restarting. Say the word and it becomes a proper parameter.
@@ -772,19 +776,45 @@ VSOutput VSMain(VSInput input)
         max(shoreBehaviorParams0.x, 0.01f),
         positiveDepth), kShoreMinMotion);
     float terrainSlope = length(shore.depthGradient);
+    // WIND ENTERS THE RUN-UP HERE, through the slope thresholds.
+    //
+    // As the wind falls toward the calm threshold the swell has less appetite for climbing, so the
+    // beach has to be flatter before the sheet will run up it — the thresholds tighten and the
+    // sheet stops reaching. That is the honest place for wind to act: it changes how far the water
+    // climbs, not how the shoreline is shaped.
+    //
+    // It used to be done by scaling BOTTOM CLEARANCE with wind instead, which shrank the run-up
+    // sheet's standing height so the foam sank with it. That worked by side effect and fought the
+    // clearance's other job (the floor keeping water out of the seabed), so it is gone.
+    //
+    // At the calm end the thresholds are 0.9 of the authored values — a light touch on purpose,
+    // since the widths already scale with wind and this must not double up on them.
+    const float kRunupSlopeCalmScale = 0.1f;
+    const float runupSlopeWind = lerp(kRunupSlopeCalmScale, 1.0f, ContactFoamWindAmount());
     float runupSlopeWeight = 1.0f - smoothstep(
-        shoreSlopeParams.x,
-        max(shoreSlopeParams.y, shoreSlopeParams.x + 1e-4f),
+        shoreSlopeParams.x * runupSlopeWind,
+        max(shoreSlopeParams.y * runupSlopeWind,
+            shoreSlopeParams.x * runupSlopeWind + 1e-4f),
         terrainSlope);
     runupSlopeWeight *= shoreFieldWeight * geometryWaveWeight;
     float horizontalDepthWeight = smoothstep(
         0.0f,
         max(shoreBehaviorParams0.z, 0.01f),
         positiveDepth);
+    // The floor here IS Shallow XZ Strength, not a hidden constant.
+    //
+    // A floor is needed because `runupSlopeWeight` goes to zero on a steep face, and multiplying by
+    // it alone stops the water dead — frozen water beside a wall reads as glass, which is worse
+    // than slightly wrong water. But using a constant for it silently overrode the slider: with
+    // kShoreMinMotion at 0.15, every authored value below that behaved identically and the first
+    // fifth of the slider's travel did nothing. The slider already means "how much lateral motion
+    // survives in the shallows", so it is exactly the right number to floor with — and now 0 really
+    // does still the water at the waterline while 1 leaves the chop untouched.
+    const float shallowXzStrength = saturate(shoreBehaviorParams0.y);
     float shoreHorizontalFade = max(lerp(
-        saturate(shoreBehaviorParams0.y) * runupSlopeWeight,
+        shallowXzStrength * runupSlopeWeight,
         1.0f,
-        horizontalDepthWeight), kShoreMinMotion);
+        horizontalDepthWeight), shallowXzStrength);
     float horizontalFade = lerp(1.0f, shoreHorizontalFade, shoreFieldWeight);
     float shoreBand = 1.0f -
         smoothstep(0.0f, max(shoreBehaviorParams1.x, 0.01f), positiveDepth);
@@ -809,22 +839,48 @@ VSOutput VSMain(VSInput input)
         dot(shore.depthGradient, horizontalDisplacement), -kMaxDepthShift, kMaxDepthShift);
 
     float shoreVerticalDisplacement = displacement.y * shoreVerticalFade;
-    // Bottom clearance has TWO jobs and only one of them may follow the wind.
+    // Bottom clearance has TWO jobs and NEITHER follows the wind any more.
     //
-    // As a floor under the surface it is a geometric guard keeping the water out of the seabed —
-    // scaling THAT with wind drags the whole surface down in calm.
+    // As a floor under the surface it is a geometric guard keeping the water out of the seabed.
+    // As the height the run-up sheet stands above the waterline it is a reach onto dry sand.
+    // Both are properties of the SHORE, not of the weather, so both stay at what was authored.
     //
-    // As the height the RUN-UP SHEET stands above the waterline it is a reach onto dry sand, and
-    // that is what has to die away in calm: otherwise a wet sheet stays on the beach whatever the
-    // foam widths say, and the foam simply sits on it.
+    // It used to be scaled by wind so that the sheet — and the foam sitting on it — faded out as
+    // the wind approached the calm threshold. That is now done where it belongs, by tightening the
+    // run-up SLOPE thresholds (see runupSlopeWind above): a calm sea climbs a gentler beach.
     const float bottomClearance = max(shoreBehaviorParams1.w, 0.0f);
-    const float runupClearance = bottomClearance * ContactFoamWindAmount();
+    const float runupClearance = bottomClearance;
 
     float bottomLimit = -max(predictedDepth - bottomClearance, 0.0f);
     shoreVerticalDisplacement = max(shoreVerticalDisplacement, bottomLimit);
+    // The sheet must DIE OFF INLAND, and nothing above did that.
+    //
+    // shoreBand fades it by DEPTH, but on dry land the depth term is pinned at zero, so the fade
+    // never engaged: `-predictedDepth` grows as the ground rises, the sheet climbed with it, and
+    // what was left standing on the beach was a raised blister of water — covered in foam, because
+    // a negative depth reads as solidly inside the strip. It only became visible once the clearance
+    // stopped being scaled by wind, which had been hiding it at low wind by accident.
+    //
+    // Distance inland comes from the SDF, so this is metres of beach and not a depth proxy.
+    // How far inland this vertex is, and it needs BOTH sources.
+    //
+    // The SDF is the accurate one in metres, but it is 1.95 m per texel against the near depth
+    // map's 0.98 m, so within a texel of the waterline the two disagree: the near map (which the
+    // FOAM reads) says land while the SDF still says water. In that gap nothing pushed the sheet
+    // down — it stood proud of the beach with solid foam on it, since a negative depth reads as
+    // fully inside the strip. Flooring the SDF with an estimate from the near map closes it.
+    //
+    // The estimate divides by a FIXED slope, never the measured gradient: dividing by a difference
+    // of neighbouring texels is what used to send this to infinity and tear the mesh into spikes.
+    const float kInlandAssumedSlope = 0.05f;
+    const float inlandFadeDistance = max(max(-shoreField.x, 0.0f),
+                                         max(-waterDepth, 0.0f) / kInlandAssumedSlope);
+
+    const float kRunupReach = 3.0f; // metres inland the sheet can still stand
+    const float runupReachFade = 1.0f - saturate(inlandFadeDistance / kRunupReach);
     float runupSheetHeight =
         max(-predictedDepth + runupClearance, 0.0f) *
-        shoreBand * runupSlopeWeight;
+        shoreBand * runupSlopeWeight * runupReachFade;
     shoreVerticalDisplacement = max(shoreVerticalDisplacement, runupSheetHeight);
 
     float verticalDisplacement = lerp(
@@ -851,14 +907,19 @@ VSOutput VSMain(VSInput input)
     // the mesh into spikes. A floor of 0.05 on the slope held that together and quietly distorted
     // the dip on every gentle beach, which is exactly where the sheet needs burying most.
     {
-        const float kSinkSlope = 0.15f;     // tangent of the dip angle (0.5 = about 27 degrees)
-        const float kSinkMaxDepth = 5.0f;  // the shelf the sheet settles onto, metres below water
+        const float kSinkSlope = 0.05f;     // tangent of the dip angle (0.5 = about 27 degrees)
+        const float kSinkMaxDepth = 2.0f;  // the shelf the sheet settles onto, metres below water
 
         const float kSinkFlatten = 2.0f;  // metres inland over which the buried sheet goes still
 
-        // Negative inland, so this is the distance past the waterline in metres — measured, not
-        // inferred, and finite everywhere by construction.
-        float inlandDistance = max(-shoreField.x, 0.0f);
+        // Distance past the waterline, straight from the SDF and NOTHING ELSE.
+        //
+        // Specifically NOT the floored `inlandFadeDistance` the fades use. That floor is derived
+        // from depth, so feeding it here would make the dip steepen wherever the terrain climbs
+        // faster — the water mirroring the land, which is both odd to look at and pointless, since
+        // a steep face already hides whatever is behind it. The dip has to be a FIXED ANGLE walked
+        // out from the waterline, and only a horizontal distance can give that.
+        const float inlandDistance = max(-shoreField.x, 0.0f);
 
         // Buried water is still water. Nothing under the terrain is ever seen, so leaving the wave
         // running down there only pays for displacement that can poke back through the sand — and
@@ -1074,6 +1135,7 @@ float2 ContactFoamMask(
     float2 baseXZ,
     float shoreDepth,
     float depthFeather,
+    float pixelWorldSize,
     float time)
 {
     // Softness of every torn edge, in sweep units (0..1 spans the whole tail).
@@ -1090,7 +1152,7 @@ float2 ContactFoamMask(
         return float2(0.0f, 0.0f);
     }
 
-    const float tailBase = min(max(shoreFoamGeometryParams.y, 0.0f) * windAmount, mainWidth);
+    float tailBase = min(max(shoreFoamGeometryParams.y, 0.0f) * windAmount, mainWidth);
     const float solidWidth = mainWidth - tailBase;
 
     // Shared scrolling domain: world XZ drifting along the wind.
@@ -1100,13 +1162,8 @@ float2 ContactFoamMask(
                                        : float2(1.0f, 0.0f);
     const float2 p = baseXZ - scrollDirection * time * max(shoreFoamPatternParams.z, 0.0f);
 
-    // Fine octave: the tear pattern itself. Histogram stretched exactly like
-    // the old threshold mapping did, so existing masks read the same.
-    float fine = ShoreFoamBreakupMaskTex.Sample(LinearWrapSampler,
-        p * max(shoreFoamPatternParams.x, 1e-3f)).r;
-    fine = lerp(0.02f, 0.98f, fine);
-
-    // Macro octave: same texture, rotated, at the variation frequency.
+    // Macro octave: same texture, rotated, at the variation frequency. Left at the authored scale —
+    // it shapes the coastline's rhythm, which stays readable at any range.
     const float2 pMacro = float2(p.x * 0.8f - p.y * 0.6f, p.x * 0.6f + p.y * 0.8f);
     const float macro = ShoreFoamBreakupMaskTex.Sample(LinearWrapSampler,
         pMacro * max(shoreFoamBreakupParams.y, 1e-4f)).r;
@@ -1125,7 +1182,35 @@ float2 ContactFoamMask(
     // The cost is that this slider, not Main Width, sets how far the foam reaches: a large value
     // against a narrow band means long tails and therefore a lot of foam. That is the intent —
     // shorten the reach by lowering THIS, not by fighting it elsewhere.
-    const float variation = max(shoreFoamBreakupParams.x, 0.0f) * windAmount;
+    float variation = max(shoreFoamBreakupParams.x, 0.0f) * windAmount;
+
+    // MINIMUM WIDTH IN PIXELS, applied as a SCALE on both the base and its variation.
+    //
+    // Far away a strip authored in centimetres of depth is thinner than a pixel and reads as a
+    // drawn outline around the island. Floor its width — but flooring the RESULT was wrong: once
+    // the floor exceeded the variation, every stretch of coast came out the same width and the
+    // band went perfectly even, which is the opposite of what the distance was supposed to fix.
+    // Scaling both terms keeps the ratio between them, so the far band is wide enough to see AND
+    // still breathes along the shore.
+    //
+    // Sized from the pixel's world footprint and a NOMINAL slope rather than from `depthFeather`:
+    // on the fallback path that feather is the screen derivative of the scene depth, which at a few
+    // hundred metres is enormous and blew the tail up to metres of depth.
+    const float kMinStripPixels = 5.0f;
+    const float kStripSlopeGuess = 0.05f;
+    // Scaled by wind like every other width. Without it the floor was weather-blind: at range it
+    // inflated the band to the same size in a dead calm as in a gale, so a light wind that should
+    // have shown a thread showed a full white rim around the island.
+    const float minStripDepth =
+        pixelWorldSize * kMinStripPixels * kStripSlopeGuess * windAmount;
+    // Normalised against MAIN WIDTH, never against the tail. The tail is legitimately zero when
+    // Breakup Length is zero, and dividing by it sent this multiplier into the tens: a variation of
+    // 0.09 came out as metres of tail, so a band authored with NO breakup grew enormous fingers.
+    // Main width is guaranteed non-zero here (the function returns early otherwise).
+    const float stripScale = max(1.0f, minStripDepth / max(mainWidth, 1e-4f));
+    tailBase *= stripScale;
+    variation *= stripScale;
+
     const float tailLen = max(tailBase + (macro * 2.0f - 1.0f) * variation,
                               max(tailBase * 0.25f, 1e-4f));
 
@@ -1175,6 +1260,27 @@ float2 ContactFoamMask(
         warpedDepth += warpNoise * warpAmp * warpFade;
     }
 
+    // Fine octave: the tear pattern itself. Histogram stretched exactly like
+    // the old threshold mapping did, so existing masks read the same.
+    //
+    // Its frequency is RAISED once the band gets thin on screen. The dither tears the band by
+    // comparing this noise against the depth sweep, so it can only read as torn if several periods
+    // fit ACROSS the band; at range the authored period is wider than the whole band, and the band
+    // fills in solid with a merely wavy edge — a white outline around the island. The boost keys
+    // off the band's width in PIXELS, so it is inert up close (where the band is hundreds of pixels
+    // wide) and comes in exactly where the tearing would otherwise be lost.
+    const float bandWorld = max(tailLen / kStripSlopeGuess, 1e-3f);
+    const float bandPixels = bandWorld / pixelWorldSize;
+    const float kThinBandPixels = 60.0f;
+    const float kPeriodsAcrossBand = 3.0f;
+    const float thinness = saturate((kThinBandPixels - bandPixels) / kThinBandPixels);
+    const float authoredFine = max(shoreFoamPatternParams.x, 1e-3f);
+    const float fineFrequency =
+        lerp(authoredFine, max(authoredFine, kPeriodsAcrossBand / bandWorld), thinness);
+
+    float fine = ShoreFoamBreakupMaskTex.Sample(LinearWrapSampler, p * fineFrequency).r;
+    fine = lerp(0.02f, 0.98f, fine);
+
     // The sweep. Density shifts how much of the tail stays filled.
     float t = (max(warpedDepth, 0.0f) - solidWidth) / tailLen;
     t -= (saturate(shoreFoamPatternParams.y) - 0.5f) * 0.5f;
@@ -1201,7 +1307,16 @@ float2 ContactFoamMask(
     const float kMaxFeather = 0.25f;
     const float feather = clamp(depthFeather * 1.5f / tailLen, kTearSoftness, kMaxFeather);
 
-    const float coverage = smoothstep(t - feather, t + feather, fine);
+    float coverage = smoothstep(t - feather, t + feather, fine);
+
+    // Kill the mask INLAND. `t` uses max(depth, 0), so everywhere the ground is above water the
+    // sweep sits at a constant negative value and the mask returns a solid 1 — the whole buried
+    // sheet, all the way under the beach, is painted with foam. Under the sand nobody sees it, but
+    // on a coarse distant LOD the sunken vertices smear that solid white across the shore and it
+    // reads as a pale blotch on the island. Fading it out over the first stretch of dry ground costs
+    // nothing where it matters (the strip lives at depth >= 0) and removes the blotch entirely.
+    const float kInlandFoamFade = 0.2f; // metres of NEGATIVE depth over which the mask dies
+    coverage *= 1.0f - smoothstep(0.0f, kInlandFoamFade, max(-shoreDepth, 0.0f));
 #if OCEAN_FOAM_DEBUG
     g_foamDbg = float4(t, feather, fine, tailLen);
 #endif
@@ -1325,6 +1440,7 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
                 input.worldUV,
                 input.shoreDepth,
                 input.depthFeather,
+                input.pixelWorldSize,
                 input.time);
             fieldContactFoam *= saturate(input.shoreEffectWeight);
         }
@@ -1341,6 +1457,7 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
                 input.worldUV,
                 input.fallbackShoreDepth,
                 input.depthFeather,
+                input.pixelWorldSize,
                 input.time);
             fallbackContactFoam *= saturate(input.fallbackShoreWeight);
         }
@@ -1712,7 +1829,25 @@ PSOut PSMain(VSOutput input)
     [branch]
     if (shoreFieldWeight > 1e-3f)
     {
-        contactShoreDepth = input.shoreData.x;
+        // HYBRID: the depth itself is fetched HERE, per pixel, at the vertex's BASE position; only
+        // the wave's advection comes interpolated from the vertex.
+        //
+        // Taking the whole thing from the vertex (shoreData.x) tied the isobath to the clipmap's
+        // vertex spacing. On a coarse distant LOD the field is only sampled every few metres and
+        // linearly interpolated between, so the waterline the foam draws drifts away from the real
+        // one — the strip visibly peels off the beach — and it slides as the clipmap morphs its
+        // vertices around. Fetching per pixel pins it to the map instead of to the mesh.
+        //
+        // Sampled at baseXZ, NOT at worldPos: worldPos carries the wave's horizontal displacement,
+        // a nonlinear field interpolated linearly, and reading a steep depth map through those
+        // kinks is what quantized the strip into world-aligned facets. baseXZ is the flat y=0 grid,
+        // so neighbouring triangles are exactly coplanar and the fetch is smooth.
+        //
+        // The advection is added back as the vertex's own correction (predicted minus source): it
+        // is small and smooth, so interpolating THAT costs nothing.
+        const float2 baseShoreUV = ShoreDepthUV(input.baseXZ);
+        const float waveAdvection = input.shoreData.x - input.shoreData.y;
+        contactShoreDepth = ShoreWaterDepth(baseShoreUV) + waveAdvection;
         shoreEffectWeight =
             ShoreEffectDepthWeight(contactShoreDepth);
     }
@@ -1742,19 +1877,19 @@ PSOut PSMain(VSOutput input)
         {
             // Filtered: this depth ends up in the contact-foam mask (fallbackShoreDepth), which
             // must not carry the depth buffer's steps. The unfiltered value still gates the branch.
-            float sceneViewDepth = DepthToViewZ_Fast(sceneDepthSample);
-            float depthSeparation =
-                abs(sceneViewDepth - input.viewDepth);
-            float contactDepthThreshold =
-                max(shoreSlopeParams.z, 1e-3f);
-            fallbackShoreWeight = 1.0f - smoothstep(
-                contactDepthThreshold,
-                contactDepthThreshold * 2.0f,
-                depthSeparation);
-
             float3 scenePositionWS =
                 PositionWsFromDepth(sceneDepthSample, screenUV);
             fallbackShoreDepth = -scenePositionWS.y;
+
+            // Weighted by WATER DEPTH, the same quantity the strip beside the near shore is
+            // measured with, so an out-of-field shoreline gets a band of comparable width.
+            //
+            // It used to be weighted by the along-ray gap between water and geometry against
+            // `Refraction Soft Edge Distance` — two centimetres, and a parameter that has nothing
+            // to do with foam. At a few hundred metres and a grazing angle only a sliver of the
+            // beach falls inside two centimetres of view depth, so the band collapsed to an even
+            // hairline no matter how wide the foam was authored.
+            fallbackShoreWeight = ShoreEffectDepthWeight(fallbackShoreDepth);
         }
     }
 
@@ -1826,6 +1961,7 @@ PSOut PSMain(VSOutput input)
     const float2 baseDdy = ddy(input.baseXZ);
     const float pixelWorldSize = max(length(baseDdx), length(baseDdy));
     foamInput.depthFeather = max(input.shoreData.w * pixelWorldSize, 1e-4f);
+    foamInput.pixelWorldSize = max(pixelWorldSize, 1e-4f);
     foamInput.fallbackShoreDepth = fallbackShoreDepth;
     foamInput.fallbackShoreWeight = fallbackShoreWeight;
     foamInput.shoreFieldWeight = shoreFieldWeight;
@@ -1936,6 +2072,15 @@ PSOut PSMain(VSOutput input)
         {
             dbg = DebugHeat(g_foamDbg.w * 0.5f);         // tail length, 0..2 m
         }
+        else if (foamDebugView == 13)
+        {
+            // Shore SDF as the pixel shader sees it: green = water (distance out), red = inland
+            // (negative), banded every 2 m. Black means the field reports nothing here at all.
+            const float2 field = SampleShoreField(input.baseXZ);
+            const float band = frac(abs(field.x) * 0.5f) < 0.5f ? 1.0f : 0.55f;
+            dbg = field.x >= 0.0f ? float3(0.0f, band, 0.2f * band)
+                                  : float3(band, 0.0f, 0.0f);
+        }
         else if (foamDebugView == 12)
         {
             // Where the out-of-range (depth-buffer) shore handling is in charge.
@@ -1950,7 +2095,8 @@ PSOut PSMain(VSOutput input)
                 ? ShoreWaterDepth(shoreUV)
                 : 1000.0f;
             const float2 oldMask = ContactFoamMask(
-                input.baseXZ, oldShoreDepth, foamInput.depthFeather, foamInput.time);
+                input.baseXZ, oldShoreDepth, foamInput.depthFeather,
+                foamInput.pixelWorldSize, foamInput.time);
             dbg = oldMask.y.xxx;
         }
         else if (foamDebugView == 9)
