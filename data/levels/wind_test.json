@@ -13584,7 +13584,7 @@
       ],
       "fogDensity": 0.10000000149011612,
       "horizonFogDistanceScale": 2.5,
-      "horizonFogStrength": 0.550000011920929,
+      "horizonFogStrength": 0.5,
       "macroNormalMipBiasDlss": 0.0,
       "macroNormalMipBiasNative": 1.0,
       "minMeshScale": 15.0,
@@ -13621,11 +13621,10 @@
       "shoreLegacyTailDepth": 0.04500000178813934,
       "shoreLegacyTailDetile": 0.4000000059604645,
       "shoreLegacyTailEdgeFade": 0.03999999910593033,
-      "shoreLegacyTailMaxDepth": 0.0,
       "shoreLegacyTailScrollSpeed": 0.5,
       "shoreLegacyTailTextureScale": 0.15000000596046448,
       "shoreLegacyVerticalDampStrength": 0.9750000238418579,
-      "shoreLegacyXzDampStrength": 0.699999988079071,
+      "shoreLegacyXzDampStrength": 0.6000000238418579,
       "shoreNormalFadeDepth": 5.0,
       "shoreNormalMinWeights": [
         0.25,
@@ -13676,7 +13675,7 @@
       "frequencyHz": 0.10000000149011612,
       "seed": 3
     },
-    "strength": 0.6000000238418579,
+    "strength": 1.0,
     "swayFrequency": 1.2000000476837158
   }
 }

@@ -486,7 +486,31 @@ VSOutput VSMain(VSInput input)
             horizontalAttenuation = lerp(1.0f - saturate(shoreLegacyDampParams.y), 1.0f, depthFade);
         }
     }
-
+    else
+    {
+        // Outside the shore-depth window: probe the DEPTH BUFFER under the undisplaced vertex
+        // and damp by the RAW view-Z gap between the scene and the water plane (same pattern the
+        // PS refraction soft edge uses) - Y only, the XZ damping matters at the waterline and
+        // the waterline is always inside the window. DELIBERATELY not reconstructed to vertical
+        // metres (the user chose the plain gap to evaluate): the gap is along-view metres, so it
+        // grows past the true water depth at grazing angles and Damp fade depth reads
+        // differently here than in the map branch. Other accepted probe limits: an off-screen
+        // vertex gets no answer (full amplitude), and the buffer holds props as well as terrain.
+        float4 baseClip = mul(mul(float4(baseWorld.x, 0.0f, baseWorld.z, 1.0f), model), viewProjNoJitter);
+        if (baseClip.w > 1e-3f)
+        {
+            float2 baseNDC = baseClip.xy / baseClip.w;
+            if (all(abs(baseNDC) <= 1.0f))
+            {
+                float2 screenUV = baseNDC * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
+                float rawDepth = SampleSceneDepth(screenUV);
+                float depthGap = max(DepthToViewZ_Fast(rawDepth) - baseClip.w, 0.0f);
+                float depthFade = saturate(depthGap / 15.0f);
+                verticalAttenuation = lerp(1.0f - saturate(shoreLegacyDampParams.x), 1.0f, depthFade);
+            }
+        }
+    }
+    
     displacement.y *= verticalAttenuation;
     displacement.xz *= horizontalAttenuation;
     //prevDisplacement *= attenuation;
