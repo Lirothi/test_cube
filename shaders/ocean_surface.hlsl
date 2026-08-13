@@ -43,6 +43,7 @@ cbuffer OceanCB : register(b0)
     float4 shoreFoamWindParams;        // x: wind force 0..1, y: wind force below which there is no contact foam, z: wind force at which it is at full strength, w: unused
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed, z: signed-depth warp range, w: warp scale
     float4 shoreSlopeParams;           // xy: run-up slope fade gradient thresholds, z: edge soft depth, w: geometry fade distance
+    float4 shoreSwashParams;           // x: swash amplitude, y: run-up slope smoothing baseline (shore-map texels)
     float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
@@ -388,18 +389,36 @@ ShoreData GetShoreData(float2 worldXZ)
     if (all(shoreUV >= texelUV) && all(shoreUV <= 1.0f - texelUV))
     {
         float centerDepth = ShoreWaterDepth(shoreUV);
-        float xDepth = ShoreWaterDepth(shoreUV + float2(texelUV.x, 0.0f));
+
+        // Gradient over a WIDE baseline, centred on the vertex — Run-up Slope Smoothing (texels).
+        //
+        // It used to be a forward difference to the NEXT texel, and single-texel differences of
+        // this map are noise: the run-up slope gate compares length(gradient) against a threshold,
+        // so that noise became a frozen zigzag waterline — metre-scale teeth wherever the beach's
+        // slope straddled the gate. The wider centred difference reads the slope of the BEACH, not
+        // of one texel; the teeth become bays and tongues. Everything downstream benefits the same
+        // way: the shoreward push direction stops flipping texel to texel, and the depth advection
+        // (predictedDepth) stops amplifying single-texel steps. Costs two extra taps per vertex.
+        //
+        // The baseline is a slider because it IS the tooth-count control: the number of teeth is
+        // the number of times the slope field crosses the gate window along the beach, and this
+        // sets which spatial frequency of the seabed that field still contains.
+        const float kGradientBaselineTexels = max(shoreSwashParams.y, 0.5f);
+        float xPos = ShoreWaterDepth(shoreUV + float2(texelUV.x * kGradientBaselineTexels, 0.0f));
+        float xNeg = ShoreWaterDepth(shoreUV - float2(texelUV.x * kGradientBaselineTexels, 0.0f));
         // Shore UV runs opposite world Z.
-        float zDepth = ShoreWaterDepth(shoreUV - float2(0.0f, texelUV.y));
+        float zPos = ShoreWaterDepth(shoreUV - float2(0.0f, texelUV.y * kGradientBaselineTexels));
+        float zNeg = ShoreWaterDepth(shoreUV + float2(0.0f, texelUV.y * kGradientBaselineTexels));
         float2 texelWorld = max(shoreSamplingParams.zw, float2(1e-3f, 1e-3f));
 
         shore.waterDepth = centerDepth;
         shore.fieldWeight =
             ShoreFieldWeight(shoreUV) *
             ShoreEffectDepthWeight(centerDepth);
+        const float invBaseline = 0.5f / kGradientBaselineTexels;
         shore.depthGradient = float2(
-            (xDepth - centerDepth) / texelWorld.x,
-            (zDepth - centerDepth) / texelWorld.y);
+            (xPos - xNeg) * invBaseline / texelWorld.x,
+            (zPos - zNeg) * invBaseline / texelWorld.y);
 
     }
     return shore;
@@ -821,14 +840,122 @@ VSOutput VSMain(VSInput input)
     //
     // At the calm end the thresholds are 0.9 of the authored values — a light touch on purpose,
     // since the widths already scale with wind and this must not double up on them.
+    //
+    // 0.9 IS LOAD-BEARING for Bottom Clearance. This was hand-tuned down to 0.1 at some point,
+    // and that quietly killed the clearance slider at low wind: 0.1 shrinks the slope window
+    // tenfold (start 1 degree reads as 0.1), no real beach passes, the run-up sheet — the only
+    // thing the clearance's standing-height job feeds — stops existing, and the slider goes dead
+    // (measured: a 5x clearance change moved 0.09% of the frame at wind 0.25). If calm needs to
+    // suppress the shore HARDER than the width scaling already does, that wants its own knob, not
+    // this one — anything below ~0.5 here disconnects a slider that gives no hint why.
     const float kRunupSlopeCalmScale = 0.1f;
-    const float runupSlopeWind = lerp(kRunupSlopeCalmScale, 1.0f, ContactFoamWindAmount());
+
+    // THE SWASH WAVE IS SAMPLED AT THE WATERLINE, NOT AT THIS VERTEX.
+    //
+    // Driving the run-up from the wave at the vertex itself made the wet edge a map of the local
+    // FFT field: a short-crested sea lifts one PATCH of beach for a moment, so the line mostly sat
+    // still and occasionally spat a narrow tongue where a crest happened to land — a flame lick
+    // that detached and vanished, not a wave arriving. Static captures looked fine; in motion it
+    // read as exactly that.
+    //
+    // A real swash is the wave AT THE WATERLINE lending the sheet its energy, and the wet edge
+    // follows it IN PHASE all the way up the beach. So every vertex asks for the wave at its own
+    // nearest point of the waterline — the SDF gives the distance inland, the smoothed depth
+    // gradient the direction — and the whole profile from the sea to the sheet's tip breathes as
+    // one body: it runs up, it pulls back. Costs one displacement fetch, paid only inside the
+    // shore field; in open water the anchor degenerates to the vertex itself, so the field is
+    // continuous across the waterline.
+    //
+    // Clamped by Run-up Max Wave — this same value also drives the shoreward push below, so that
+    // slider caps the swash driver as a whole.
+    float runupWave = 0.0f;
+    [branch]
+    if (shoreFieldWeight > 1e-3f)
+    {
+        const float2 waterlineAnchor =
+            baseWorld.xz - shoreDirection * max(-shoreField.x, 0.0f);
+        const float swashWave =
+            SampleCurrentDisplacement(waterlineAnchor, weights, cascadesCount).y *
+            geometryWaveWeight;
+        runupWave = clamp(
+            swashWave,
+            -max(shoreBehaviorParams1.z, 0.0f),
+            max(shoreBehaviorParams1.z, 0.0f));
+    }
+
+    // THE SWASH IS A MATERIAL MOTION, NOT A MASK.
+    //
+    // Two earlier shapes of this both animated a THRESHOLD over standing water — first the sheet's
+    // height, then its reach — and both read the same on screen: a shutter opening and closing
+    // over water that never went anywhere. The water has to MOVE: the splash-zone vertices shuttle
+    // horizontally along the shore direction with the wave phase, like cloth pulled up the beach
+    // and back, and the foam and ripples ride along because the geometry itself is what travels.
+    //
+    // The travel is signed metres of ground: a crest carries the whole zone up the beach, the
+    // drain pulls it back past its base position. No rectification and no rest pose — the sea
+    // never stops, so the wet edge never dwells anywhere. The phase is the anchored wave, so one
+    // profile of beach moves as one body; the slope gate and shore band weight it exactly like
+    // the wave-height push it joins below.
+    //
+    // NORMALISED PHASE, CONFINED TO A LOW-WIND WINDOW. Both halves are load-bearing, and each was
+    // once shipped alone and failed:
+    //
+    //   - Normalised alone (wave / reference height, a plus-minus-one signal at any sea): the
+    //     excursion detached from the weather. A storm stacked metres of travel on top of a push
+    //     that is already metres — the swash visibly AMPLIFIED the waves — and a dead-calm ripple
+    //     swung the line as far as a gale, stretching the near-shore quads into long smeared-
+    //     specular ribbons.
+    //   - Proportional to the wave in metres alone: the storm end tamed itself, but the low-wind
+    //     end starved — centimetres of wave times any sane gain is nothing, and measured at wind
+    //     0.3 the whole term sat at run-noise level. That is precisely the range this device
+    //     exists for: the authored push is wave-height too, so light weather leaves BOTH dead.
+    //
+    // So: the normalised phase gives light seas a real excursion, and the window hands the shore
+    // back to the push before the sea is big enough to speak for itself — ramping in above the
+    // calm threshold (below it there is no surf at all) and fading out QUADRATICALLY toward full
+    // wind. The result peaks in the low-to-mid band and is gone at both extremes.
+    const float kSwashTravelMeters = 3.0f;
+    const float swashPhase = clamp(runupWave / max(windParams1.z, 1e-2f), -1.0f, 1.0f);
+    const float swashWindAmount = ContactFoamWindAmount();
+    const float swashWindow =
+        saturate(swashWindAmount * 4.0f) *
+        (1.0f - swashWindAmount) * (1.0f - swashWindAmount);
+    const float swashTravel =
+        swashPhase * saturate(shoreSwashParams.x) * kSwashTravelMeters * swashWindow;
+
+    // How far inland this vertex is, in MATERIAL coordinates (undisplaced baseXZ) — computed here
+    // because the wet-edge floor below needs it, and reused by the reach fade and the sheet's
+    // inland die-off. It needs BOTH sources.
+    //
+    // The SDF is the accurate one in metres, but it is 1.95 m per texel against the near depth
+    // map's 0.98 m, so within a texel of the waterline the two disagree: the near map (which the
+    // FOAM reads) says land while the SDF still says water. In that gap nothing pushed the sheet
+    // down — it stood proud of the beach with solid foam on it, since a negative depth reads as
+    // fully inside the strip. Flooring the SDF with an estimate from the near map closes it.
+    //
+    // The estimate divides by a FIXED slope, never the measured gradient: dividing by a difference
+    // of neighbouring texels is what used to send this to infinity and tear the mesh into spikes.
+    const float kInlandAssumedSlope = 0.05f;
+    const float inlandFadeDistance = max(max(-shoreField.x, 0.0f),
+                                         max(-waterDepth, 0.0f) / kInlandAssumedSlope);
+
+    // Wind enters the gate as a static scale: a calm sea only climbs a gentler beach.
+    const float runupSlopeGate = lerp(kRunupSlopeCalmScale, 1.0f, ContactFoamWindAmount());
     float runupSlopeWeight = 1.0f - smoothstep(
-        shoreSlopeParams.x * runupSlopeWind,
-        max(shoreSlopeParams.y * runupSlopeWind,
-            shoreSlopeParams.x * runupSlopeWind + 1e-4f),
+        shoreSlopeParams.x * runupSlopeGate,
+        max(shoreSlopeParams.y * runupSlopeGate,
+            shoreSlopeParams.x * runupSlopeGate + 1e-4f),
         terrainSlope);
     runupSlopeWeight *= shoreFieldWeight * geometryWaveWeight;
+
+    // NO wet-edge floor here, and that is a measured decision, twice over.
+    //
+    // A waterline-hugging strip where the sheet stands regardless of the gate was tried (to give
+    // Bottom Clearance a consumer at calm) and it drew a JAGGED WHITE FENCE: a clearance-tall step
+    // of water at the waterline reads as a wall at a grazing angle, and the strip's sub-metre
+    // boundary rides the SDF's 1.95 m texels, so its edge was sawtooth noise. If the calm
+    // shoreline ever needs a standing film, it has to be millimetres thick and cut by something
+    // finer than the SDF.
     float horizontalDepthWeight = smoothstep(
         0.0f,
         max(shoreBehaviorParams0.z, 0.01f),
@@ -852,13 +979,14 @@ VSOutput VSMain(VSInput input)
         smoothstep(0.0f, max(shoreBehaviorParams1.x, 0.01f), positiveDepth);
     shoreBand *= shoreFieldWeight;
 
-    float runupWave = clamp(
-        displacement.y,
-        -max(shoreBehaviorParams1.z, 0.0f),
-        max(shoreBehaviorParams1.z, 0.0f));
     float2 horizontalDisplacement = displacement.xz * horizontalFade;
+    // The shoreward shuttle: the authored wave-height push (Run-up Strength) plus the swash
+    // travel, one coherent motion. The cut criteria downstream (reach fade, sheet height) read
+    // the UNDISPLACED baseXZ, so they are material coordinates: the water's edge is carried by
+    // this displacement instead of the water sliding through a world-anchored edge.
     horizontalDisplacement +=
-        shoreDirection * runupWave * max(shoreBehaviorParams1.y, 0.0f) *
+        shoreDirection *
+        (runupWave * max(shoreBehaviorParams1.y, 0.0f) + swashTravel) *
         shoreBand * runupSlopeWeight;
 
     // First-order extrapolation: the surface slid horizontally, so the bed under it changed by
@@ -879,8 +1007,17 @@ VSOutput VSMain(VSInput input)
     //
     // It used to be scaled by wind so that the sheet — and the foam sitting on it — faded out as
     // the wind approached the calm threshold. That is now done where it belongs, by tightening the
-    // run-up SLOPE thresholds (see runupSlopeWind above): a calm sea climbs a gentler beach.
+    // run-up SLOPE thresholds (see runupSlopeGate above): a calm sea climbs a gentler beach.
     const float bottomClearance = max(shoreBehaviorParams1.w, 0.0f);
+    // The sheet's standing height is STATIC — the swash moves its FRONT, not its altitude.
+    //
+    // Scaling the clearance with the wave phase was the previous shape of the swash and it drained
+    // WRONG: near the shore the raised sheet is nearly parallel to the sand, so lowering it drops
+    // the whole surface THROUGH the beach at once instead of pulling the wet edge back — the water
+    // vanished in place, and what remained was the bare still-water isoline cutting the terrain in
+    // a dead-straight, dead-static line under the edge fade. A sheet that always stands a full
+    // clearance above the ground keeps a crisp intersection at any phase; what advances and
+    // retreats is how far inland that sheet extends (the reach fade below).
     const float runupClearance = bottomClearance;
 
     float bottomLimit = -max(predictedDepth - bottomClearance, 0.0f);
@@ -890,26 +1027,34 @@ VSOutput VSMain(VSInput input)
     // shoreBand fades it by DEPTH, but on dry land the depth term is pinned at zero, so the fade
     // never engaged: `-predictedDepth` grows as the ground rises, the sheet climbed with it, and
     // what was left standing on the beach was a raised blister of water — covered in foam, because
-    // a negative depth reads as solidly inside the strip. It only became visible once the clearance
-    // stopped being scaled by wind, which had been hiding it at low wind by accident.
-    //
-    // Distance inland comes from the SDF, so this is metres of beach and not a depth proxy.
-    // How far inland this vertex is, and it needs BOTH sources.
-    //
-    // The SDF is the accurate one in metres, but it is 1.95 m per texel against the near depth
-    // map's 0.98 m, so within a texel of the waterline the two disagree: the near map (which the
-    // FOAM reads) says land while the SDF still says water. In that gap nothing pushed the sheet
-    // down — it stood proud of the beach with solid foam on it, since a negative depth reads as
-    // fully inside the strip. Flooring the SDF with an estimate from the near map closes it.
-    //
-    // The estimate divides by a FIXED slope, never the measured gradient: dividing by a difference
-    // of neighbouring texels is what used to send this to infinity and tear the mesh into spikes.
-    const float kInlandAssumedSlope = 0.05f;
-    const float inlandFadeDistance = max(max(-shoreField.x, 0.0f),
-                                         max(-waterDepth, 0.0f) / kInlandAssumedSlope);
+    // a negative depth reads as solidly inside the strip. `inlandFadeDistance` (computed above,
+    // next to the wet edge) is what cuts it.
 
-    const float kRunupReach = 3.0f; // metres inland the sheet can still stand
-    const float runupReachFade = 1.0f - saturate(inlandFadeDistance / kRunupReach);
+    // The sheet's extent in MATERIAL coordinates — deliberately constant.
+    //
+    // `inlandFadeDistance` is measured at the UNDISPLACED baseXZ, so this cut travels with the
+    // shuttle above: the vertex that carries the water's edge is decided once, in the water's own
+    // frame, and wherever the swash slides it, the edge goes along. Animating this threshold
+    // instead (the reach, earlier the height) was the mask mistake — a world-anchored edge with
+    // water sliding through it.
+    //
+    // The fade is a PLATEAU WITH A CLIFF, not a straight ramp. The ramp thinned the sheet all the
+    // way from the waterline, so its far end approached the sand at a grazing angle and the
+    // intersection smeared into metres of near-coplanar mush; the plateau holds the full standing
+    // height and drops over the last half of the reach, so the water/sand cut stays crisp.
+    //
+    // THE WIND LIVES HERE, in the reach — not in the slope gate. Choking the gate at calm (the
+    // 0.1 scale this shader carried for a while) removes the sheet everywhere, and with it every
+    // visible effect of Bottom Clearance; leaving the gate open with a full reach parks a
+    // foam-covered 3 m sheet on a dead-calm beach. What calm actually does is shorten how far the
+    // water gets: full storm keeps the whole runway, calm keeps a narrow wet hem at the edge whose
+    // thickness the clearance still authors — so the slider works in any weather.
+    const float kRunupReach = 3.0f;
+    const float kCalmReachScale = 0.15f;
+    const float runupReach =
+        kRunupReach * lerp(kCalmReachScale, 1.0f, ContactFoamWindAmount());
+    const float runupReachFade =
+        1.0f - smoothstep(runupReach * 0.55f, runupReach, inlandFadeDistance);
     float runupSheetHeight =
         max(-predictedDepth + runupClearance, 0.0f) *
         shoreBand * runupSlopeWeight * runupReachFade;
@@ -1369,7 +1514,15 @@ float2 ContactFoamMask(
     // on a coarse distant LOD the sunken vertices smear that solid white across the shore and it
     // reads as a pale blotch on the island. Fading it out over the first stretch of dry ground costs
     // nothing where it matters (the strip lives at depth >= 0) and removes the blotch entirely.
-    const float kInlandFoamFade = 0.2f; // metres of NEGATIVE depth over which the mask dies
+    //
+    // The fade SCALES WITH WIND. It used to be a flat 0.2 m of negative depth, and every other
+    // width in this mask already breathes with the weather — which went unnoticed only while the
+    // calm shore had no run-up sheet to paint. The moment a calm sea kept its wet hem, that hem
+    // came out solid white: anything shallower than 0.2 m of dry ground is inside a constant fade
+    // that the wind never touches. Scaled, a storm still foams the whole swash sheet while a calm
+    // sea keeps a thin lace right at the waterline.
+    const float kInlandFoamFade = // metres of NEGATIVE depth over which the mask dies
+        lerp(0.02f, 0.2f, windAmount);
     coverage *= 1.0f - smoothstep(0.0f, kInlandFoamFade, max(-shoreDepth, 0.0f));
 #if OCEAN_FOAM_DEBUG
     g_foamDbg = float4(t, feather, fine, tailLen);

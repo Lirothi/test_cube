@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <cassert>
 #include <climits>
+#include <cstdio>
 #include <mimalloc.h>
 #include <vector>
 #include <wincodec.h>
 #include <wrl/client.h>
+#include "vfx/WindState.h" // --shot-count phase series steps the frozen wind clock (g_windStep)
 
 // Boot-level override; see App.h. Set by main.cpp from "--level=<path>".
 std::string g_bootLevelPath;
@@ -18,6 +20,10 @@ float g_camRot[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 // One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
 std::string g_shotPath;
 double g_shotDelaySec = 7.0;
+// Phase series (see App.h): "--shot-count=<n> --shot-step=<sec> [--shot-interval=<sec>]".
+int    g_shotCount = 1;
+double g_shotStepSec = 0.0;
+double g_shotIntervalSec = 1.0;
 // Temporary VSM perf harness; see App.h.
 std::string g_profDumpPath;
 uint32_t g_traceFrames = 0;
@@ -564,15 +570,42 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
             // "--shot=<path>": after the warmup delay (ocean/particle sim settling), grab the
             // just-presented backbuffer to a PNG and quit. Reliable on the flip-model swapchain.
+            //
+            // "--shot-count=<n> --shot-step=<sec>" turns it into a PHASE SERIES from ONE process:
+            // requires --wind-freeze, whose frozen clock this advances by exactly --shot-step via
+            // vfx::g_windStep between frames (path gets an _NN suffix). One boot instead of N —
+            // the previous way to film the shore breathing was N full relaunches. The inter-shot
+            // pause (--shot-interval) exists for the temporal stack: DLSS needs a few frames after
+            // each time jump or every frame in the series carries the previous phase's ghost.
             if (!g_shotPath.empty())
             {
                 static double shotStart = GetTimeSeconds();
-                if (GetTimeSeconds() - shotStart >= g_shotDelaySec)
+                static int shotIndex = 0;
+                const double delay = shotIndex == 0 ? g_shotDelaySec : g_shotIntervalSec;
+                if (GetTimeSeconds() - shotStart >= delay)
                 {
-                    const bool ok = Screenshot::SaveBackbufferPng(renderer, g_shotPath);
+                    std::string path = g_shotPath;
+                    if (g_shotCount > 1)
+                    {
+                        char suffix[8];
+                        std::snprintf(suffix, sizeof(suffix), "_%02d", shotIndex);
+                        const size_t dot = path.rfind('.');
+                        if (dot != std::string::npos) { path.insert(dot, suffix); }
+                        else { path += suffix; }
+                    }
+                    const bool ok = Screenshot::SaveBackbufferPng(renderer, path);
                     OutputDebugStringA(ok ? "[shot] saved\n" : "[shot] FAILED\n");
-                    g_shotPath.clear();
-                    isRunning_ = false;
+                    ++shotIndex;
+                    if (shotIndex >= g_shotCount)
+                    {
+                        g_shotPath.clear();
+                        isRunning_ = false;
+                    }
+                    else
+                    {
+                        vfx::g_windStep = static_cast<float>(g_shotStepSec);
+                        shotStart = GetTimeSeconds();
+                    }
                 }
             }
 

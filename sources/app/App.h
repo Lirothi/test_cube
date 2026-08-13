@@ -31,6 +31,12 @@ extern float g_camRot[4]; // orientation quaternion (x,y,z,w)
 // The delay lets the ocean FFT + particle sim warm up before the grab. "--shot-delay=<sec>".
 extern std::string g_shotPath;
 extern double g_shotDelaySec;
+// "--shot-count=<n> --shot-step=<sec> [--shot-interval=<sec>]": phase series from one process.
+// With --wind-freeze, saves n frames (path suffixed _NN), advancing the frozen wind/ocean clock by
+// exactly --shot-step between them; --shot-interval is the settle time for the temporal stack.
+extern int    g_shotCount;
+extern double g_shotStepSec;
+extern double g_shotIntervalSec;
 
 // "--profdump=<path>" (temporary perf harness): after g_shotDelaySec of runtime, write the current
 // CPU+GPU profiler overlay rows (name / avg / max / usages) to a text file and exit. Used to sweep

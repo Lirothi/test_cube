@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32"><Configuration>Debug</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release_Editor|Win32"><Configuration>Release_Editor</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release_Editor|x64"><Configuration>Release_Editor</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{913f84e5-d17e-4f0b-b284-cc8f2a60b5b4}</ProjectGuid>
+    <RootNamespace>third_party_assets</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'!='Debug'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <TargetName>third_party_assets</TargetName>
+    <ThirdPartyAdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)meshoptimizer\src;$(ProjectDir)DirectXTex</ThirdPartyAdditionalIncludeDirectories>
+  </PropertyGroup>
+  <Import Project="$(ProjectDir)third_party_common.props" />
+  <ItemGroup>
+    <ClCompile Include="cgltf\cgltf.cpp" />
+    <ClCompile Include="meshoptimizer\src\allocator.cpp" />
+    <ClCompile Include="meshoptimizer\src\clusterizer.cpp" />
+    <ClCompile Include="meshoptimizer\src\indexanalyzer.cpp" />
+    <ClCompile Include="meshoptimizer\src\indexcodec.cpp" />
+    <ClCompile Include="meshoptimizer\src\indexgenerator.cpp" />
+    <ClCompile Include="meshoptimizer\src\meshletcodec.cpp" />
+    <ClCompile Include="meshoptimizer\src\meshletutils.cpp" />
+    <ClCompile Include="meshoptimizer\src\opacitymap.cpp" />
+    <ClCompile Include="meshoptimizer\src\overdrawoptimizer.cpp" />
+    <ClCompile Include="meshoptimizer\src\partition.cpp" />
+    <ClCompile Include="meshoptimizer\src\quantization.cpp" />
+    <ClCompile Include="meshoptimizer\src\rasterizer.cpp" />
+    <ClCompile Include="meshoptimizer\src\simplifier.cpp" />
+    <ClCompile Include="meshoptimizer\src\spatialorder.cpp" />
+    <ClCompile Include="meshoptimizer\src\stripifier.cpp" />
+    <ClCompile Include="meshoptimizer\src\tangentspace.cpp" />
+    <ClCompile Include="meshoptimizer\src\vcacheoptimizer.cpp" />
+    <ClCompile Include="meshoptimizer\src\vertexcodec.cpp" />
+    <ClCompile Include="meshoptimizer\src\vertexfilter.cpp" />
+    <ClCompile Include="meshoptimizer\src\vfetchoptimizer.cpp" />
+    <ClCompile Include="DirectXTex\BC.cpp" />
+    <ClCompile Include="DirectXTex\BC4BC5.cpp" />
+    <ClCompile Include="DirectXTex\BC6HBC7.cpp" />
+    <ClCompile Include="DirectXTex\BCDirectCompute.cpp">
+      <AdditionalIncludeDirectories>$(ProjectDir)DirectXTex\Shaders\Compiled;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="DirectXTex\DirectXTexCompressGPU.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexCompress.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexConvert.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexDDS.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexFlipRotate.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexHDR.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexImage.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexMipmaps.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexMisc.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexNormalMaps.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexPMAlpha.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexResize.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexTGA.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexUtil.cpp" />
+    <ClCompile Include="DirectXTex\DirectXTexWIC.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Update="DirectXTex\*.cpp">
+      <OpenMPSupport>true</OpenMPSupport>
+    </ClCompile>
+    <ClCompile Update="DirectXTex\BCDirectCompute.cpp">
+      <OpenMPSupport>false</OpenMPSupport>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="cgltf\cgltf.h" />
+    <ClInclude Include="meshoptimizer\src\meshoptimizer.h" />
+    <ClInclude Include="DirectXTex\DirectXTex.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

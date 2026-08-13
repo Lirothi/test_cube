@@ -314,6 +314,17 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--shot-delay=")) {
             g_shotDelaySec = std::atof(flag + std::strlen("--shot-delay="));
         }
+        // Phase series from one process (see App.h): "--shot-count=<n> --shot-step=<sec>" with
+        // --wind-freeze steps the frozen clock between frames instead of relaunching per phase.
+        if (const char* flag = std::strstr(lpCmdLine, "--shot-count=")) {
+            g_shotCount = std::max(std::atoi(flag + std::strlen("--shot-count=")), 1);
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--shot-step=")) {
+            g_shotStepSec = std::atof(flag + std::strlen("--shot-step="));
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--shot-interval=")) {
+            g_shotIntervalSec = std::max(std::atof(flag + std::strlen("--shot-interval=")), 0.1);
+        }
         // "--cam-pos=x,y,z --cam-rot=x,y,z,w": reproduce the exact view a screenshot was taken
         // from. Both are printed verbatim by the on-screen HUD, so a shot round-trips into a
         // headless repro instead of being re-guessed by hand (see AGENTS.md).

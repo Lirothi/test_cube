@@ -1101,6 +1101,8 @@ namespace
         drag("Run-up max wave", render.shoreRunupMaxWave, 0.01f, 0.0f, 10.0f);
         drag("Run-up slope fade start", render.shoreRunupSlopeStartDegrees, 0.25f, 0.0f, 89.0f);
         drag("Run-up slope cutoff", render.shoreRunupSlopeEndDegrees, 0.25f, 0.0f, 89.0f);
+        drag("Swash amplitude", render.shoreSwashAmplitude, 0.005f, 0.0f, 1.0f);
+        drag("Run-up slope smoothing", render.shoreRunupSlopeSmoothing, 0.05f, 0.5f, 8.0f);
         drag("Bottom clearance", render.shoreBottomClearance, 0.005f, 0.0f, 1.0f);
         drag("Refraction soft edge distance", render.shoreEdgeSoftDepth, 0.001f, 0.0f, 0.25f);
         drag(

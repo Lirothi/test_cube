@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="sources">
@@ -177,6 +177,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="sources/pch.cpp">
+      <Filter>sources</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/AppController.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
@@ -528,96 +531,6 @@
     <ClCompile Include="sources/ui/ImGuiLayer.cpp">
       <Filter>sources\ui</Filter>
     </ClCompile>
-    <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp">
-      <Filter>third_party\enkiTS\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\imgui\backends\imgui_impl_dx12.cpp">
-      <Filter>third_party\imgui\backends</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\imgui\backends\imgui_impl_win32.cpp">
-      <Filter>third_party\imgui\backends</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\imgui\imgui.cpp">
-      <Filter>third_party\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\imgui\imgui_demo.cpp">
-      <Filter>third_party\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\imgui\imgui_draw.cpp">
-      <Filter>third_party\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\imgui\imgui_tables.cpp">
-      <Filter>third_party\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\imgui\imgui_widgets.cpp">
-      <Filter>third_party\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\cgltf\cgltf.cpp">
-      <Filter>third_party\cgltf</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\ImGuizmo\ImGuizmo.cpp">
-      <Filter>third_party\ImGuizmo</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\allocator.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\clusterizer.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\indexanalyzer.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\indexcodec.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\indexgenerator.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\meshletcodec.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\meshletutils.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\opacitymap.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\overdrawoptimizer.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\partition.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\quantization.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\rasterizer.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\simplifier.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\spatialorder.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\stripifier.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\tangentspace.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\vcacheoptimizer.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\vertexcodec.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\vertexfilter.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\vfetchoptimizer.cpp">
-      <Filter>third_party\meshoptimizer\src</Filter>
-    </ClCompile>
     <ClCompile Include="sources/assets/AssetImporter.cpp">
       <Filter>sources\assets</Filter>
     </ClCompile>
@@ -633,65 +546,11 @@
     <ClCompile Include="sources/editor/ui/MeshEditorPreviewScene.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\BC.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\BC4BC5.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\BC6HBC7.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\BCDirectCompute.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexCompress.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexCompressGPU.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexConvert.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexDDS.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexFlipRotate.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexHDR.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexImage.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexMipmaps.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexMisc.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexNormalMaps.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexPMAlpha.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexResize.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexTGA.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexUtil.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexWIC.cpp">
-      <Filter>third_party\DirectXTex</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="sources/pch.h">
+      <Filter>sources</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/AppController.h">
       <Filter>sources\app</Filter>
     </ClInclude>
@@ -1130,12 +989,6 @@
     <ClInclude Include="sources/ui/ImGuiWindowUtils.h">
       <Filter>sources\ui</Filter>
     </ClInclude>
-    <ClInclude Include="third_party\cgltf\cgltf.h">
-      <Filter>third_party\cgltf</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h">
-      <Filter>third_party\enkiTS\src</Filter>
-    </ClInclude>
     <ClInclude Include="sources/core/math/Math.h">
       <Filter>sources\core\math</Filter>
     </ClInclude>
@@ -1147,30 +1000,6 @@
     </ClInclude>
     <ClInclude Include="sources\core\containers\inl_vector.h">
       <Filter>sources\core\containers</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imgui\backends\imgui_impl_dx12.h">
-      <Filter>third_party\imgui\backends</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imgui\backends\imgui_impl_win32.h">
-      <Filter>third_party\imgui\backends</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imgui\imconfig.h">
-      <Filter>third_party\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imgui\imgui.h">
-      <Filter>third_party\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imgui\imgui_internal.h">
-      <Filter>third_party\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imgui\imstb_rectpack.h">
-      <Filter>third_party\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imgui\imstb_textedit.h">
-      <Filter>third_party\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imgui\imstb_truetype.h">
-      <Filter>third_party\imgui</Filter>
     </ClInclude>
     <ClInclude Include="sources/assets/AssetImporter.h">
       <Filter>sources\assets</Filter>

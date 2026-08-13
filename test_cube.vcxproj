@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -99,7 +99,7 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <RunCodeAnalysis>true</RunCodeAnalysis>
+    <RunCodeAnalysis>false</RunCodeAnalysis>
     <IncludePath>$(IncludePath)</IncludePath>
     <LibraryPath>$(LibraryPath)</LibraryPath>
   </PropertyGroup>
@@ -223,6 +223,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="sources/pch.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">pch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)test_cube.pch</PrecompiledHeaderOutputFile>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'!='Debug|x64'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="sources/app/App.cpp" />
     <ClCompile Include="sources/app/diagnostics/SceneStress.cpp" />
     <ClCompile Include="sources/app/AppController.cpp" />
@@ -345,68 +351,27 @@
     <ClCompile Include="sources/text/TextManager.cpp" />
     <ClCompile Include="sources/ui/ImGuiLayer.cpp" />
     <ClCompile Include="sources/assets/AssetImporter.cpp" />
-    <ClCompile Include="third_party\enkiTS\src\TaskScheduler.cpp" />
-    <ClCompile Include="third_party\imgui\backends\imgui_impl_dx12.cpp" />
-    <ClCompile Include="third_party\imgui\backends\imgui_impl_win32.cpp" />
-    <ClCompile Include="third_party\imgui\imgui.cpp" />
-    <ClCompile Include="third_party\imgui\imgui_demo.cpp" />
-    <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
-    <ClCompile Include="third_party\imgui\imgui_tables.cpp" />
-    <ClCompile Include="third_party\imgui\imgui_widgets.cpp" />
-    <ClCompile Include="third_party\cgltf\cgltf.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\ImGuizmo\ImGuizmo.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\allocator.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\clusterizer.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\indexanalyzer.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\indexcodec.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\indexgenerator.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\meshletcodec.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\meshletutils.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\opacitymap.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\overdrawoptimizer.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\partition.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\quantization.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\rasterizer.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\simplifier.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\spatialorder.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\stripifier.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\tangentspace.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\vcacheoptimizer.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\vertexcodec.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\vertexfilter.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\meshoptimizer\src\vfetchoptimizer.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><PREfastProjectDirectory></PREfastProjectDirectory><PREfastRulesetDirectories></PREfastRulesetDirectories><PREfastRulesetFile></PREfastRulesetFile><PREfastAdditionalOptions></PREfastAdditionalOptions><PREfastAdditionalPlugins></PREfastAdditionalPlugins></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\BC.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\BC4BC5.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\BC6HBC7.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\BCDirectCompute.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><AdditionalIncludeDirectories>third_party\DirectXTex\Shaders\Compiled;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexCompressGPU.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexCompress.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexConvert.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexDDS.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexFlipRotate.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexHDR.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexImage.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexMipmaps.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexMisc.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexNormalMaps.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexPMAlpha.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexResize.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexTGA.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexUtil.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
-    <ClCompile Include="third_party\DirectXTex\DirectXTexWIC.cpp"><WarningLevel>TurnOffAllWarnings</WarningLevel><TreatWarningAsError>false</TreatWarningAsError><SDLCheck>false</SDLCheck><EnablePREfast>false</EnablePREfast><OpenMPSupport>true</OpenMPSupport></ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <!-- Keep the DirectXTex opt-out from static analysis self-contained.  Without this,
-         it inherits the project-level /analyze:projectdirectory and cl emits D9025. -->
-    <ClCompile Update="third_party\DirectXTex\*.cpp">
-      <PREfastProjectDirectory />
-      <PREfastRulesetDirectories />
-      <PREfastRulesetFile />
-      <PREfastAdditionalOptions />
-      <PREfastAdditionalPlugins />
+    <!-- PCH is limited to engine sources in Debug. Third-party translation units keep
+         their original compile environment and Release configurations remain unchanged. -->
+    <ClCompile Update="sources\**\*.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64' and '%(Filename)'!='pch'">Use</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64' and '%(Filename)'!='pch'">pch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64' and '%(Filename)'!='pch'">$(IntDir)test_cube.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug|x64' and '%(Filename)'!='pch'">pch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+    <!-- DirectXTex selects its D3D11 GPU-compression API from include order. Keep
+         this offline importer isolated from the renderer-oriented D3D12 PCH. -->
+    <ClCompile Update="sources\assets\AssetImporter.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeaderFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"></PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"></PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"></ForcedIncludeFiles>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="sources/pch.h" />
     <ClInclude Include="sources/app/App.h" />
     <ClInclude Include="sources/assets/AssetImporter.h" />
     <ClInclude Include="sources/app/diagnostics/SceneStress.h" />
@@ -563,16 +528,6 @@
     <ClInclude Include="sources/ui/ImGuiLayer.h" />
     <ClInclude Include="sources/ui/ImGuiWindowUtils.h" />
     <ClInclude Include="sources\core\containers\inl_vector.h" />
-    <ClInclude Include="third_party\cgltf\cgltf.h" />
-    <ClInclude Include="third_party\enkiTS\src\TaskScheduler.h" />
-    <ClInclude Include="third_party\imgui\backends\imgui_impl_dx12.h" />
-    <ClInclude Include="third_party\imgui\backends\imgui_impl_win32.h" />
-    <ClInclude Include="third_party\imgui\imconfig.h" />
-    <ClInclude Include="third_party\imgui\imgui.h" />
-    <ClInclude Include="third_party\imgui\imgui_internal.h" />
-    <ClInclude Include="third_party\imgui\imstb_rectpack.h" />
-    <ClInclude Include="third_party\imgui\imstb_textedit.h" />
-    <ClInclude Include="third_party\imgui\imstb_truetype.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\axes.hlsl" />
@@ -671,6 +626,17 @@
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="third_party\robin_hood.natvis" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="third_party\third_party_ui.vcxproj">
+      <Project>{4f6a79d2-8c60-4c59-b1ee-11b6d09bea01}</Project>
+    </ProjectReference>
+    <ProjectReference Include="third_party\third_party_assets.vcxproj">
+      <Project>{913f84e5-d17e-4f0b-b284-cc8f2a60b5b4}</Project>
+    </ProjectReference>
+    <ProjectReference Include="third_party\third_party_tasks.vcxproj">
+      <Project>{6b73e75b-cda7-48aa-a51c-f0e3e7289a6d}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

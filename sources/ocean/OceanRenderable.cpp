@@ -278,6 +278,7 @@ public:
             shoreFoamWindParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreFoamWindParams");
             shoreFoamAlbedoParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreFoamAlbedoParams");
             shoreSlopeParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSlopeParams");
+            shoreSwashParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSwashParams");
             shoreSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSamplingParams");
             sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
@@ -335,6 +336,7 @@ public:
             shoreFoamWindParamsHandle_ = {};
             shoreFoamAlbedoParamsHandle_ = {};
             shoreSlopeParamsHandle_ = {};
+            shoreSwashParamsHandle_ = {};
             shoreSamplingParamsHandle_ = {};
             sunDirAmbientHandle_ = {};
             sunColorExposureHandle_ = {};
@@ -406,6 +408,7 @@ public:
         UpdateUniform(owner, shoreFoamWindParamsHandle_, material, owner_.GetShoreFoamWindParams(), cbData);
         UpdateUniform(owner, shoreFoamAlbedoParamsHandle_, material, owner_.GetShoreFoamAlbedoParams(), cbData);
         UpdateUniform(owner, shoreSlopeParamsHandle_, material, owner_.GetShoreSlopeParams(), cbData);
+        UpdateUniform(owner, shoreSwashParamsHandle_, material, owner_.GetShoreSwashParams(), cbData);
         UpdateUniform(owner, shoreSamplingParamsHandle_, material, owner_.GetShoreSamplingParams(), cbData);
         UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
@@ -468,6 +471,7 @@ private:
     Material::CBFieldHandle shoreFoamWindParamsHandle_{};
     Material::CBFieldHandle shoreFoamAlbedoParamsHandle_{};
     Material::CBFieldHandle shoreSlopeParamsHandle_{};
+    Material::CBFieldHandle shoreSwashParamsHandle_{};
     Material::CBFieldHandle shoreSamplingParamsHandle_{};
     Material::CBFieldHandle sunDirAmbientHandle_{};
     Material::CBFieldHandle sunColorExposureHandle_{};
@@ -1180,6 +1184,16 @@ Math::float4 OceanRenderable::GetShoreSlopeParams() const
         render.shoreEdgeSoftDepth,
         ocean::g_geometryFadeOverride >= 0.0f ? ocean::g_geometryFadeOverride
                                               : render.shoreGeometryFadeDistance);
+}
+
+Math::float4 OceanRenderable::GetShoreSwashParams() const
+{
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        std::clamp(render.shoreSwashAmplitude, 0.0f, 1.0f),
+        std::clamp(render.shoreRunupSlopeSmoothing, 0.5f, 8.0f),
+        0.0f,
+        0.0f);
 }
 
 Math::float4 OceanRenderable::GetShoreSamplingParams() const

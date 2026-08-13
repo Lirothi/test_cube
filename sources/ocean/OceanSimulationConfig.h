@@ -50,6 +50,17 @@ struct OceanRenderConfig
     float shoreRunupMaxWave = 0.8f;
     float shoreRunupSlopeStartDegrees = 25.0f;
     float shoreRunupSlopeEndDegrees = 55.0f;
+    // Swash: the horizontal shuttle of the splash-zone water with the arriving wave — a material
+    // motion of the vertices (the wet edge rides along), not a mask. A LOW-WIND device: the
+    // excursion peaks in the light-to-mid wind band (ramping in above the calm threshold, fading
+    // out quadratically toward full wind), because a big sea's own run-up push already moves the
+    // shoreline and stacking the shuttle on top overdrives the waves, while below the calm
+    // threshold there is no surf at all. This slider scales it 0..1.
+    float shoreSwashAmplitude = 0.85f;
+    // Baseline (in shore-map texels, ~1 m each) of the centred difference that reads the beach
+    // slope for the run-up gate. THE tooth-count control: a short baseline reads texel noise and
+    // cuts many small teeth; a long one reads the beach's real shape and leaves a few wide bays.
+    float shoreRunupSlopeSmoothing = 1.5f;
     float shoreBottomClearance = 0.05f;
     float shoreEdgeSoftDepth = 0.03f;
     float shoreGeometryEdgeRefractionFadeDepth = 0.1f;

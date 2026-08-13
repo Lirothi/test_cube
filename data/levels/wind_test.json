@@ -13592,22 +13592,22 @@
       "roughnessDistance": 150.0,
       "roughnessScale": 0.699999988079071,
       "scatterSpread": 0.20000000298023224,
-      "shoreBottomClearance": 0.10000000149011612,
+      "shoreBottomClearance": 0.10499999672174454,
       "shoreContactFoamAlbedoScale": 0.25,
       "shoreContactFoamAlbedoScrollSpeed": 0.5,
-      "shoreContactFoamBreakupLength": 0.07500000298023224,
-      "shoreContactFoamBreakupLengthVariation": 0.10000000149011612,
+      "shoreContactFoamBreakupLength": 0.07000000029802322,
+      "shoreContactFoamBreakupLengthVariation": 0.07000000029802322,
       "shoreContactFoamBreakupVariationScale": 0.10000000149011612,
       "shoreContactFoamCalmAmount": 0.20000000298023224,
       "shoreContactFoamDepthWarpRange": 0.08500000089406967,
       "shoreContactFoamDepthWarpScale": 0.20000000298023224,
       "shoreContactFoamDepthWarpStrength": 0.10000000149011612,
       "shoreContactFoamFullWindForce": 0.6000000238418579,
-      "shoreContactFoamMainWidth": 0.09000000357627869,
+      "shoreContactFoamMainWidth": 0.07999999821186066,
       "shoreContactFoamNormalStrength": 0.0,
       "shoreContactFoamOpacity": 1.0,
       "shoreContactFoamPatternDensity": 0.699999988079071,
-      "shoreContactFoamPatternScale": 0.4560000002384186,
+      "shoreContactFoamPatternScale": 0.4000000059604645,
       "shoreContactFoamPatternScrollSpeed": 0.5,
       "shoreEdgeSoftDepth": 0.009999999776482582,
       "shoreGeometryEdgeRefractionFadeDepth": 0.0,
@@ -13623,9 +13623,11 @@
       ],
       "shoreRunupDepth": 1.0,
       "shoreRunupMaxWave": 4.0,
-      "shoreRunupSlopeEndDegrees": 4.0,
-      "shoreRunupSlopeStartDegrees": 1.0,
+      "shoreRunupSlopeEndDegrees": 5.0,
+      "shoreRunupSlopeSmoothing": 0.5,
+      "shoreRunupSlopeStartDegrees": 2.0,
       "shoreRunupStrength": 3.0,
+      "shoreSwashAmplitude": 1.0,
       "shoreVerticalFadeDepth": 5.0,
       "skyScatterStrength": 0.3499999940395355,
       "specularStrength": 1.0,
@@ -13647,7 +13649,7 @@
       "windSpeed": 12.0,
       "windUvWarpStrength": 0.20000000298023224
     },
-    "windForce": 0.4000000059604645
+    "windForce": 0.6000000238418579
   },
   "pointLights": [],
   "skybox": {
@@ -13662,7 +13664,7 @@
       "frequencyHz": 0.10000000149011612,
       "seed": 3
     },
-    "strength": 0.4000000059604645,
+    "strength": 0.6000000238418579,
     "swayFrequency": 1.2000000476837158
   }
 }

@@ -125,6 +125,12 @@ namespace OceanRenderConfigJson
         render.shoreRunupSlopeEndDegrees = std::clamp(
             ReadFloat(object, "shoreRunupSlopeEndDegrees", render.shoreRunupSlopeEndDegrees),
             0.0f, 89.0f);
+        render.shoreSwashAmplitude = std::clamp(
+            ReadFloat(object, "shoreSwashAmplitude", render.shoreSwashAmplitude),
+            0.0f, 1.0f);
+        render.shoreRunupSlopeSmoothing = std::clamp(
+            ReadFloat(object, "shoreRunupSlopeSmoothing", render.shoreRunupSlopeSmoothing),
+            0.5f, 8.0f);
         render.shoreBottomClearance = std::max(
             0.0f, ReadFloat(object, "shoreBottomClearance", render.shoreBottomClearance));
         render.shoreEdgeSoftDepth = std::max(
@@ -392,6 +398,8 @@ namespace OceanRenderConfigJson
         out["shoreRunupMaxWave"] = render.shoreRunupMaxWave;
         out["shoreRunupSlopeStartDegrees"] = render.shoreRunupSlopeStartDegrees;
         out["shoreRunupSlopeEndDegrees"] = render.shoreRunupSlopeEndDegrees;
+        out["shoreSwashAmplitude"] = render.shoreSwashAmplitude;
+        out["shoreRunupSlopeSmoothing"] = render.shoreRunupSlopeSmoothing;
         out["shoreBottomClearance"] = render.shoreBottomClearance;
         out["shoreEdgeSoftDepth"] = render.shoreEdgeSoftDepth;
         out["shoreGeometryEdgeRefractionFadeDepth"] =
