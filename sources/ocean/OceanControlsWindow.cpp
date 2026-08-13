@@ -1098,6 +1098,12 @@ namespace
         {
             ImGui::TextDisabled(
                 "Legacy ocean surface (relaunch with --ocean-runup-shore for the modern stack).");
+            drag("Vertical damp strength", render.shoreLegacyVerticalDampStrength, 0.005f, 0.0f, 1.0f);
+            drag("XZ damp strength", render.shoreLegacyXzDampStrength, 0.005f, 0.0f, 1.0f);
+            drag("Damp fade depth", render.shoreLegacyDampFadeDepth, 0.05f, 0.01f, 50.0f);
+            // Shared with the modern surface: the same fields drive its shoreline normal fade.
+            drag("Normal fade depth", render.shoreNormalFadeDepth, 0.01f, 0.01f, 10.0f);
+            dragVector4("Normal cascade minimums", render.shoreNormalMinWeights, 0.005f, 0.0f, 1.0f);
             drag(
                 "Contact foam strength",
                 render.shoreLegacyContactFoamStrength,

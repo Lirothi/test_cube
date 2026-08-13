@@ -13614,6 +13614,10 @@
       "shoreGeometryFadeDistance": 150.0,
       "shoreHorizontalFadeDepth": 5.0,
       "shoreHorizontalMin": 1.0,
+      "shoreLegacyContactFoamStrength": 0.10000000149011612,
+      "shoreLegacyDampFadeDepth": 5.0,
+      "shoreLegacyVerticalDampStrength": 0.9750000238418579,
+      "shoreLegacyXzDampStrength": 0.699999988079071,
       "shoreNormalFadeDepth": 5.0,
       "shoreNormalMinWeights": [
         0.25,

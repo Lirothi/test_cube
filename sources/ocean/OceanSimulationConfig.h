@@ -40,9 +40,15 @@ struct OceanRenderConfig
     float macroNormalMipBiasDlss = 0.0f;
     float macroNormalMipBiasNative = 1.0f;
 
-    // The LEGACY surface's one authored shore knob: its contact foam strength (foamParams2.y in
-    // the June-22 shader, which hardcoded 0.1). Ignored by the modern run-up surface.
+    // The LEGACY surface's authored shore knobs. Ignored by the modern run-up surface.
+    // Contact foam strength = foamParams2.y in the June-22 shader, which hardcoded 0.1.
     float shoreLegacyContactFoamStrength = 0.1f;
+    // Nearshore damping, split from the June hardcode `saturate(depth * 0.15)` on the whole
+    // displacement: separate vertical / XZ strengths (1 = fully still at the waterline) and the
+    // water depth where the damping starts biting. Defaults reproduce the original curve.
+    float shoreLegacyVerticalDampStrength = 1.0f;
+    float shoreLegacyXzDampStrength = 1.0f;
+    float shoreLegacyDampFadeDepth = 6.67f;
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

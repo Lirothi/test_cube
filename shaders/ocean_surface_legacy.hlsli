@@ -5,7 +5,9 @@
 // The ONLY edits against the original are binding plumbing for today's C++ SRV table:
 // RS numDescriptors 14->16, SceneDepth t11->t12, ShoreDepth t12->t13, Reflection t13->t15.
 // ContactFoamTex stays at t10: today's slot 10 carries the same ContactFoam.dds (loaded linear
-// rather than sRGB, the one known deviation). Do not otherwise touch this file.
+// rather than sRGB, the one known deviation). One FUNCTIONAL edit is sanctioned on top: the
+// nearshore attenuation is authored (shoreLegacyDampParams) instead of the original hardcoded
+// saturate(depth * 0.15); its defaults reproduce the original curve. Do not otherwise touch.
 #define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
@@ -53,6 +55,8 @@ cbuffer OceanCB : register(b0)
     float4 foamTrailParams1;           // xy: trail dir 0, zw: trail dir 1
     float4 foamParams2;                // x: trail blend, y: contact foam strength, z: underwater parallax, w: padding
     float4 foamTint;                   // xyz: foam tint, w: unused
+    float4 shoreLegacyDampParams;      // x: vertical damp strength, y: xz damp strength, z: damp fade depth (m), w: shoreline normal fade depth (m)
+    float4 shoreNormalMinWeights;      // minimum normal/foam weight per cascade at the shoreline
     float4 depthTextureSize;           // xy: texel size, zw: texture size
     float2 depthParams;                // x: zNear / (zNear - zFar) y :(zNear * zFar) / (zFar - zNear)
 };
@@ -456,7 +460,12 @@ VSOutput VSMain(VSInput input)
     float3 displacement = SampleCurrentDisplacement(worldUV, weights, cascadesCount);
     //float3 prevDisplacement = SamplePreviousDisplacement(prevWorldUV, prevWeights, cascadesCount);
 
-    float attenuation = 1.0f;
+    // Nearshore attenuation, AUTHORED (the second sanctioned edit, see the header note): the
+    // original hardcoded `saturate(waterDepth * 0.15)` on the whole displacement vector. Split
+    // into separate vertical and XZ fades with sliders for strength and for the depth where the
+    // damping begins. Defaults (1 / 1 / 6.67 m) reproduce the original curve exactly.
+    float verticalAttenuation = 1.0f;
+    float horizontalAttenuation = 1.0f;
     float2 shoreUV = ShoreDepthUV(worldUV);
     if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
     {
@@ -466,11 +475,14 @@ VSOutput VSMain(VSInput input)
             float viewDepth = ShoreViewDepth(shoreDepth);
             float terrainHeight = shoreViewParams.z - viewDepth;
             float waterDepth = -terrainHeight;
-            attenuation = saturate(waterDepth * 0.15f);
+            float depthFade = saturate(waterDepth / max(shoreLegacyDampParams.z, 0.01f));
+            verticalAttenuation = lerp(1.0f - saturate(shoreLegacyDampParams.x), 1.0f, depthFade);
+            horizontalAttenuation = lerp(1.0f - saturate(shoreLegacyDampParams.y), 1.0f, depthFade);
         }
     }
 
-    displacement *= attenuation;
+    displacement.y *= verticalAttenuation;
+    displacement.xz *= horizontalAttenuation;
     //prevDisplacement *= attenuation;
 
     float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);
@@ -950,7 +962,13 @@ PSOut PSMain(VSOutput input)
     float viewDist = length(viewVector);
     float2 screenUV = ComputeScreenUV(input.positionNDCJitter);
 
-    float attenuation = 1.0f;
+    // Shoreline normal attenuation, PORTED FROM THE MODERN SURFACE (minus its shore-field
+    // weight, which legacy has no equivalent of): instead of one scalar crushing every cascade
+    // equally, each cascade fades toward its authored minimum (shoreNormalMinWeights) as the
+    // water shallows over the normal fade depth - fine ripple detail dies first, the swell's
+    // shape survives to the waterline. The same weights feed the foam cascades below, exactly
+    // like the modern surface does.
+    float shorePixelDepth = 1000.0f;
     float2 shoreUV = ShoreDepthUV(baseWorld.xz);
     if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
     {
@@ -959,15 +977,17 @@ PSOut PSMain(VSOutput input)
         {
             float viewDepth = ShoreViewDepth(shoreDepth);
             float terrainHeight = shoreViewParams.z - viewDepth;
-            float waterDepth = -terrainHeight;
-            attenuation = saturate(waterDepth * 0.5f);
+            shorePixelDepth = -terrainHeight;
         }
     }
+    float normalFade = smoothstep(
+        0.0f, max(shoreLegacyDampParams.w, 0.01f), max(shorePixelDepth, 0.0f));
+    float4 normalWeights = lerp(saturate(shoreNormalMinWeights), 1.0f.xxxx, normalFade);
 
     float4 weights = LodWeights(viewDist, clipMapParams.w);
     DerivativesSet deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount);
     float4 activeCascades = ActiveCascadesMask(cascadesCount);
-    float4 combinedDerivatives = CombineDerivatives(deriv, max(attenuation.xxxx, 0.1f.xxxx) /*float4(1.0f, 1.0f, 1.0f, 1.0f)*/);
+    float4 combinedDerivatives = CombineDerivatives(deriv, normalWeights);
     float3 normal = NormalFromCombinedDerivatives(combinedDerivatives);
     //return float4(normal, 1);
 
@@ -982,7 +1002,7 @@ PSOut PSMain(VSOutput input)
     foamInput.worldUV = input.baseXZ;
     foamInput.viewDist = viewDist;
     foamInput.lodWeights = weights;
-    foamInput.shoreWeights = attenuation.xxxx; //float4(1.0f, 1.0f, 1.0f, 1.0f);
+    foamInput.shoreWeights = normalWeights;
     foamInput.positionNDC = input.positionNDCJitter;
     foamInput.time = simulationParams.z;
     foamInput.viewDir = viewDir;

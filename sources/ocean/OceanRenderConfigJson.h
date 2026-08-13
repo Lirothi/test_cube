@@ -132,6 +132,18 @@ namespace OceanRenderConfigJson
             ReadFloat(object, "shoreLegacyContactFoamStrength",
                 render.shoreLegacyContactFoamStrength),
             0.0f, 1.0f);
+        render.shoreLegacyVerticalDampStrength = std::clamp(
+            ReadFloat(object, "shoreLegacyVerticalDampStrength",
+                render.shoreLegacyVerticalDampStrength),
+            0.0f, 1.0f);
+        render.shoreLegacyXzDampStrength = std::clamp(
+            ReadFloat(object, "shoreLegacyXzDampStrength",
+                render.shoreLegacyXzDampStrength),
+            0.0f, 1.0f);
+        render.shoreLegacyDampFadeDepth = std::clamp(
+            ReadFloat(object, "shoreLegacyDampFadeDepth",
+                render.shoreLegacyDampFadeDepth),
+            0.01f, 50.0f);
         render.shoreRunupSlopeSmoothing = std::clamp(
             ReadFloat(object, "shoreRunupSlopeSmoothing", render.shoreRunupSlopeSmoothing),
             0.5f, 8.0f);
@@ -404,6 +416,9 @@ namespace OceanRenderConfigJson
         out["shoreRunupSlopeEndDegrees"] = render.shoreRunupSlopeEndDegrees;
         out["shoreSwashAmplitude"] = render.shoreSwashAmplitude;
         out["shoreLegacyContactFoamStrength"] = render.shoreLegacyContactFoamStrength;
+        out["shoreLegacyVerticalDampStrength"] = render.shoreLegacyVerticalDampStrength;
+        out["shoreLegacyXzDampStrength"] = render.shoreLegacyXzDampStrength;
+        out["shoreLegacyDampFadeDepth"] = render.shoreLegacyDampFadeDepth;
         out["shoreRunupSlopeSmoothing"] = render.shoreRunupSlopeSmoothing;
         out["shoreBottomClearance"] = render.shoreBottomClearance;
         out["shoreEdgeSoftDepth"] = render.shoreEdgeSoftDepth;
