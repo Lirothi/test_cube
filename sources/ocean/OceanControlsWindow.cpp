@@ -1091,6 +1091,22 @@ namespace
         drag("UV warp strength", render.windUvWarpStrength, 0.005f, 0.0f, 5.0f);
 
         ImGui::SeparatorText("Shore and surf");
+        // The two surface variants read DIFFERENT settings, so the section only shows the live
+        // ones. The legacy (June-22) surface has its damping built in and exactly one authored
+        // shore knob; everything below the else is modern-only and would be silently inert there.
+        if (!ocean::g_shoreRunup)
+        {
+            ImGui::TextDisabled(
+                "Legacy ocean surface (relaunch with --ocean-runup-shore for the modern stack).");
+            drag(
+                "Contact foam strength",
+                render.shoreLegacyContactFoamStrength,
+                0.002f,
+                0.0f,
+                1.0f);
+        }
+        else
+        {
         drag("Vertical fade depth", render.shoreVerticalFadeDepth, 0.01f, 0.01f, 10.0f);
         drag("Shallow XZ strength", render.shoreHorizontalMin, 0.005f, 0.0f, 1.0f);
         drag("XZ restore depth", render.shoreHorizontalFadeDepth, 0.01f, 0.01f, 10.0f);
@@ -1233,6 +1249,7 @@ namespace
             }
             ImGui::TreePop();
         }
+        } // modern shore stack (ocean::g_shoreRunup)
 
         ImGui::SeparatorText("Foam");
         drawColor("Foam tint", render.foamTint);

@@ -25,6 +25,13 @@ namespace ocean
 // Boot-only for the same reason — flipping it rebuilds the material. Compare two runs.
 inline bool g_shoreSinkCut = true;
 
+// OCEAN_SHORE_RUNUP variant switch. true = the modern shore stack (run-up sheet with a travelling
+// front, anchored swash, contact foam with the torn dither edge, SDF, sink). false = the CLASSIC
+// surface, byte-faithful from commit 3e54d5d (2026-06-22, pre-rework) via
+// ocean_surface_legacy.hlsli — classic depth-map damping and the old contact foam. Toggle at boot
+// with "--ocean-runup-shore" / "--ocean-classic-shore" (variant = material rebuild, so boot-only).
+inline bool g_shoreRunup = false;
+
 // "--ocean-foam-debug": compile the contact-foam diagnostic views into the ocean surface shader.
 // Boot-only and a VARIANT for the same reason as above — the views need per-pixel intermediates
 // (sweep position, feather, tear noise) kept alive, and a runtime `if` would make every water pixel

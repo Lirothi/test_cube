@@ -387,6 +387,14 @@ int WINAPI WinMain(
             ocean::g_geometryFadeOverride =
                 (float)std::atof(flag + std::strlen("--ocean-geomfade="));
         }
+        // Ocean surface variant (see OceanRenderable.h): the modern run-up stack vs the classic
+        // pre-rework surface. Either flag overrides the compiled-in default.
+        if (std::strstr(lpCmdLine, "--ocean-classic-shore")) {
+            ocean::g_shoreRunup = false;
+        }
+        if (std::strstr(lpCmdLine, "--ocean-runup-shore")) {
+            ocean::g_shoreRunup = true;
+        }
         // "--ocean-foam-debug[=<view>]": compile the contact-foam diagnostic views into the ocean
         // shader. Without this flag the combo in the ocean window (F7) is inert, because the views
         // are not in the compiled shader at all. The optional "=<view>" preselects one so a view can

@@ -1,3 +1,19 @@
+// TWO WHOLE SURFACES IN ONE MATERIAL, chosen by OCEAN_SHORE_RUNUP:
+//   1 (default)                    — the modern shore stack below: run-up sheet with a travelling
+//                                    front, anchored swash, contact foam with the torn dither
+//                                    edge, the SDF, the sink, all of it.
+//   0 ("--ocean-classic-shore")    — ocean_surface_legacy.hlsli, the surface VERBATIM from commit
+//                                    3e54d5d (2026-06-22), the last state before the shore rework:
+//                                    classic depth-map damping and the old contact foam. Kept as a
+//                                    byte-faithful baseline for looks and perf, not re-created.
+#ifndef OCEAN_SHORE_RUNUP
+#define OCEAN_SHORE_RUNUP 1
+#endif
+
+#if !OCEAN_SHORE_RUNUP
+#include "ocean_surface_legacy.hlsli"
+#else
+
 #define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
@@ -2389,3 +2405,5 @@ PSOut PSMain(VSOutput input)
     o.velocity = motion;
     return o;
 }
+
+#endif // OCEAN_SHORE_RUNUP

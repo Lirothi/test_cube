@@ -28,6 +28,7 @@
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
 #include "ocean/OceanRenderConfigJson.h"
+#include "ocean/OceanRenderable.h" // ocean::g_shoreRunup gates the Shore and surf section
 #include "ocean/OceanSimulation.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/lighting/DirectionalLight.h"
@@ -786,6 +787,21 @@ namespace
 
                 if (ImGui::CollapsingHeader("Shore and surf", ImGuiTreeNodeFlags_DefaultOpen))
                 {
+                    // Mirrors OceanControlsWindow: the two surface variants read different
+                    // settings, so only the live ones are shown per mode.
+                    if (!ocean::g_shoreRunup)
+                    {
+                        ImGui::TextDisabled(
+                            "Legacy ocean surface (relaunch with --ocean-runup-shore for the modern stack).");
+                        renderDrag(
+                            "Contact Foam Strength",
+                            render.shoreLegacyContactFoamStrength,
+                            0.002f,
+                            0.0f,
+                            1.0f);
+                    }
+                    else
+                    {
                     renderDrag("Vertical Fade Depth", render.shoreVerticalFadeDepth, 0.01f, 0.01f, 10.0f);
                     renderDrag("Shallow XZ Strength", render.shoreHorizontalMin, 0.005f, 0.0f, 1.0f);
                     renderDrag("XZ Restore Depth", render.shoreHorizontalFadeDepth, 0.01f, 0.01f, 10.0f);
@@ -890,6 +906,7 @@ namespace
                             1.0f);
                         ImGui::TreePop();
                     }
+                    } // modern shore stack (ocean::g_shoreRunup)
                 }
 
                 if (ImGui::CollapsingHeader("Foam"))

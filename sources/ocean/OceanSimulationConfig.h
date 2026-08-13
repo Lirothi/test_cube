@@ -40,6 +40,10 @@ struct OceanRenderConfig
     float macroNormalMipBiasDlss = 0.0f;
     float macroNormalMipBiasNative = 1.0f;
 
+    // The LEGACY surface's one authored shore knob: its contact foam strength (foamParams2.y in
+    // the June-22 shader, which hardcoded 0.1). Ignored by the modern run-up surface.
+    float shoreLegacyContactFoamStrength = 0.1f;
+
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;
     float shoreHorizontalFadeDepth = 2.0f;

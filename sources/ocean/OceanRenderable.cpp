@@ -791,6 +791,10 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
     {
         desc.defines.emplace_back("OCEAN_VS_DEPTH_PROBE", "1");
     }
+    if (!ocean::g_shoreRunup)
+    {
+        desc.defines.emplace_back("OCEAN_SHORE_RUNUP", "0");
+    }
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;
@@ -1328,9 +1332,15 @@ Math::float4 OceanRenderable::GetFoamParams2() const
 {
     const float blendValue = Math::Clamp(foamTrailBlendValue_, 0.0f, 1.0f);
     const OceanRenderConfig& render = GetRenderConfig();
+    // y: the LEGACY shader's contact-foam strength gate — the June-22 surface both scales and
+    // `if (y > 0)`-gates its contact foam by this (its C++ of the day hardcoded 0.1; now an
+    // authored knob). The modern surface does not read y at all, so it is zeroed there to keep
+    // the intent visible.
     return Math::float4(
         blendValue,
-        0.0f,
+        ocean::g_shoreRunup
+            ? 0.0f
+            : Math::Clamp(render.shoreLegacyContactFoamStrength, 0.0f, 1.0f),
         render.underwaterFoamParallax,
         0.0f);
 }
