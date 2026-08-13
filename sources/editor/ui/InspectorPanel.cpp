@@ -183,6 +183,18 @@ namespace
         return record.id.type == EditorAssetType::Mesh && record.extension == ".mesh.json";
     }
 
+    const EditorAssetRecord* FindMeshAsset(const AssetRegistry& registry, const std::string& key)
+    {
+        for (const EditorAssetRecord& record : registry.Assets())
+        {
+            if (IsMeshAsset(record) && record.id.key == key)
+            {
+                return &record;
+            }
+        }
+        return nullptr;
+    }
+
     void DrawMeshAssetSelector(EditorContext& ctx,
         EditorCommandStack& commandStack,
         const AssetRegistry& registry,
@@ -194,15 +206,7 @@ namespace
         }
 
         const std::string current = object.properties.value("mesh", std::string());
-        const EditorAssetRecord* currentRecord = nullptr;
-        for (const EditorAssetRecord& record : registry.Assets())
-        {
-            if (IsMeshAsset(record) && record.id.key == current)
-            {
-                currentRecord = &record;
-                break;
-            }
-        }
+        const EditorAssetRecord* currentRecord = FindMeshAsset(registry, current);
 
         std::string currentLabel;
         if (currentRecord)
@@ -257,6 +261,30 @@ namespace
             ImGui::TextDisabled("No .mesh.json assets found.");
         }
         ImGui::EndCombo();
+    }
+
+    void DrawMeshEditorButton(EditorContext& ctx,
+        const AssetRegistry& registry,
+        const EditorObject& object)
+    {
+        if (object.type != "staticMesh")
+        {
+            return;
+        }
+
+        const std::string meshKey = object.properties.value("mesh", std::string());
+        const EditorAssetRecord* meshAsset = FindMeshAsset(registry, meshKey);
+        const bool canOpenMesh = meshAsset && static_cast<bool>(ctx.openMeshEditor);
+        ImGui::BeginDisabled(!canOpenMesh);
+        if (ImGui::Button("Open Mesh Editor"))
+        {
+            ctx.openMeshEditor(meshAsset->path);
+        }
+        ImGui::EndDisabled();
+        if (!canOpenMesh && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("The selected object has no editable .mesh.json asset.");
+        }
     }
 
     void DrawInspectorDropTarget(EditorContext& ctx,
@@ -1259,6 +1287,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
     }
 
     DrawMeshAssetSelector(ctx, commandStack, registry, *obj);
+    DrawMeshEditorButton(ctx, registry, *obj);
 
     if (obj->properties.contains("model") && obj->properties["model"].is_string())
     {

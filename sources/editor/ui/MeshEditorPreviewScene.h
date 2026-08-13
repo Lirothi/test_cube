@@ -26,7 +26,7 @@ struct MeshEditorPreviewLight
     Math::float3 direction{ -0.4f, -0.8f, 0.5f };
     Math::float3 color{ 1.0f, 1.0f, 1.0f };
     float exposure = 1.0f;
-    float ambient = 0.3f;
+    float ambient = 0.1f;
 };
 
 // A small isolated scene used by the Mesh Editor. Geometry and materials are

@@ -814,6 +814,10 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;
+    // RT2 is the editor object-ID target. Independent blending is required for its zero write
+    // mask to apply; otherwise D3D12 replicates RT0's write mask to every bound target and the
+    // ocean can overwrite per-pixel selection IDs.
+    desc.blend.IndependentBlendEnable = TRUE;
     desc.blend.RenderTarget[1].BlendEnable = FALSE;
     desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 #if WITH_EDITOR

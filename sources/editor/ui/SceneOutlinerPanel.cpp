@@ -727,7 +727,15 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                 return;
             }
 
-            ImGui::TableNextRow();
+            // Lock data rows to one exact height. Table cell padding otherwise gets added on top
+            // of framed controls (the checkbox), while text-only rows only honor the minimum.
+            // That made Ocean taller than Skybox/Wind and invalidated the clipper's uniform-height
+            // assumption. Capture zero Y padding for this row and position each item explicitly.
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float rowHeight = ImGui::GetFrameHeight() + style.CellPadding.y * 2.0f;
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x, 0.0f));
+            ImGui::TableNextRow(ImGuiTableRowFlags_None, rowHeight);
+            ImGui::PopStyleVar();
             PushEditorObjectId(obj->id);
 
             ImGui::TableNextColumn();
@@ -736,6 +744,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                 !row.environment && renamingObject_.value == obj->id.value;
             if (renaming)
             {
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + style.CellPadding.y);
                 if (renameFocusRequested_)
                 {
                     ImGui::SetKeyboardFocusHere();
@@ -770,11 +779,16 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             {
                 // AllowOverlap so the "On" checkbox in a later column stays
                 // clickable instead of being covered by this row-spanning item.
+                ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.0f, 0.5f));
                 if (ImGui::Selectable(obj->name.c_str(), isSelected,
-                        ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
+                        ImGuiSelectableFlags_SpanAllColumns |
+                            ImGuiSelectableFlags_AllowOverlap |
+                            ImGuiSelectableFlags_NoPadWithHalfSpacing,
+                        ImVec2(0.0f, rowHeight)))
                 {
                     selectRow(obj->id);
                 }
+                ImGui::PopStyleVar();
 
                 if (ImGui::BeginPopupContextItem())
                 {
@@ -853,12 +867,17 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             }
 
             ImGui::TableNextColumn();
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                (rowHeight - ImGui::GetTextLineHeight()) * 0.5f);
             ImGui::TextUnformatted(obj->type.c_str());
 
             ImGui::TableNextColumn();
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                (rowHeight - ImGui::GetTextLineHeight()) * 0.5f);
             ImGui::Text("%llu", static_cast<unsigned long long>(obj->id.value));
 
             ImGui::TableNextColumn();
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + style.CellPadding.y);
             if (row.environment)
             {
                 if (SupportsEnvironmentEnable(*obj))

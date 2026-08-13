@@ -2628,6 +2628,16 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     }
 
     EditorContext ctx{ renderer, scene, levelManager, document_, selection_ };
+    ctx.openMeshEditor = [this](const std::string& meshPath)
+    {
+        meshEditor_.Open(meshPath);
+        showMeshEditor_ = true;
+    };
+    ctx.openMaterialEditor = [this](const std::string& materialName, const std::string& materialPath)
+    {
+        materialEditor_.Open(materialName, materialPath);
+        showMaterialEditor_ = true;
+    };
     if (!extensionsRegistered_)
     {
         EditorExtensionRegistry::RegisterBuiltins(extensions_);

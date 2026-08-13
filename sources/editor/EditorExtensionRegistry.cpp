@@ -13,6 +13,7 @@
 
 #include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
+#include "app/scene/SceneObjectFactory.h"
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
 #include "editor/commands/EditorCommandStack.h"
@@ -164,6 +165,50 @@ namespace
         return !outSelection.empty();
     }
 
+    const EditorAssetRecord* FindMaterialAsset(const AssetRegistry& registry,
+        const std::string& materialName)
+    {
+        if (materialName.empty() || materialName == "auto")
+        {
+            return nullptr;
+        }
+        for (const EditorAssetRecord& record : registry.Assets())
+        {
+            if (record.id.type == EditorAssetType::MaterialPreset &&
+                record.id.key == materialName)
+            {
+                return &record;
+            }
+        }
+        return nullptr;
+    }
+
+    void DrawOpenMaterialButton(EditorContext& ctx,
+        const AssetRegistry& registry,
+        const std::string& materialName)
+    {
+        const EditorAssetRecord* material = FindMaterialAsset(registry, materialName);
+        const bool canOpen = material && static_cast<bool>(ctx.openMaterialEditor);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!canOpen);
+        if (ImGui::SmallButton("Edit"))
+        {
+            ctx.openMaterialEditor(material->id.key, material->path);
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            if (canOpen)
+            {
+                ImGui::SetTooltip("Open %s in Material Editor.", material->id.key.c_str());
+            }
+            else
+            {
+                ImGui::SetTooltip("This slot has no editable material asset.");
+            }
+        }
+    }
+
     float JsonFloat(const nlohmann::json& p, const char* key, float def)
     {
         const auto it = p.find(key);
@@ -221,6 +266,25 @@ namespace
         { "Gizmo", RenderLayer::Gizmo },
         { "Debug", RenderLayer::Debug },
     };
+
+    std::string EffectiveRenderLayerName(const EditorObject& object,
+        const RenderableObjectBase* runtime)
+    {
+        if (runtime)
+        {
+            const uint32_t runtimeMask = runtime->GetRenderLayerMask();
+            for (const LayerOption& option : kLayers)
+            {
+                if (runtimeMask == RenderLayerMask(option.layer))
+                {
+                    return option.name;
+                }
+            }
+        }
+
+        const nlohmann::json effective = SceneObjectFactory::ResolveMeshAsset(object.properties);
+        return effective.value("renderLayer", std::string("Default"));
+    }
 
     // H-importer spawn-scale normalizer: a mesh import can record a default spawn scale in
     // its sibling `.assetimport.json` ("spawnScale" — longest side normalized to the panel's
@@ -399,6 +463,7 @@ namespace
                         commandStack.Execute(ctx, std::make_unique<SetMaterialSlotCommand>(
                             obj.id, static_cast<int>(i), std::move(selectedMaterial)));
                     }
+                    DrawOpenMaterialButton(ctx, registry, cur);
                     // "Save as material" (promote a still-"auto" glTF slot to a named file) lives
                     // in the Mesh Editor, not here — it's a per-mesh-asset op whose Save fans out
                     // to every placed instance, not a per-instance override.
@@ -419,6 +484,7 @@ namespace
                     commandStack.Execute(ctx, std::make_unique<SetMaterialCommand>(
                         obj.id, std::move(selectedMaterial)));
                 }
+                DrawOpenMaterialButton(ctx, registry, current);
             }
 
             // A material command above respawns the object (materials load at Init, no live
@@ -426,7 +492,10 @@ namespace
             // the render layer + live params below, or we dereference a dangling pointer.
             runtime = ctx.scene.FindEditorObject(obj.id.value);
 
-            const std::string currentLayer = obj.properties.value("renderLayer", std::string("Default"));
+            // Mesh assets own defaults such as the atoll's Terrain layer. Show the effective
+            // runtime value instead of claiming Default merely because this instance has no
+            // explicit override in the level JSON.
+            const std::string currentLayer = EffectiveRenderLayerName(obj, runtime);
             if (ImGui::BeginCombo("Render Layer", currentLayer.c_str()))
             {
                 for (const LayerOption& opt : kLayers)
