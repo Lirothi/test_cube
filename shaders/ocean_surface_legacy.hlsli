@@ -57,6 +57,10 @@ cbuffer OceanCB : register(b0)
     float4 foamTint;                   // xyz: foam tint, w: unused
     float4 shoreLegacyDampParams;      // x: vertical damp strength, y: xz damp strength, z: damp fade depth (m), w: shoreline normal fade depth (m)
     float4 shoreNormalMinWeights;      // minimum normal/foam weight per cascade at the shoreline
+    float4 shoreLegacyFoamParams;      // x: tail texture scale (tiles/m), y: tail depth (m), z: tail scroll speed (m/s), w: de-tile amount
+    float4 shoreLegacyFoamParams2;     // x: tail edge fade (depth units of softness), z: tail contrast (around 0.5), w: tail brightness bias
+    float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed (shared with the modern surface)
+    float4 shoreSlopeParams;           // z: edge soft depth = the contact foam's edge fade (shared with the modern surface)
     float4 depthTextureSize;           // xy: texel size, zw: texture size
     float2 depthParams;                // x: zNear / (zNear - zFar) y :(zNear * zFar) / (zFar - zNear)
 };
@@ -72,6 +76,7 @@ Texture2D FoamAlbedoTex : register(t7);
 Texture2D FoamUnderwaterTex : register(t8);
 Texture2D FoamTrailTex : register(t9);
 Texture2D ContactFoamTex : register(t10);
+Texture2D ShoreFoamAlbedoTex : register(t11);
 Texture2D SceneDepthTexture : register(t12);
 Texture2D ShoreDepthTexture : register(t13);
 Texture2D OceanReflectionTexture : register(t15);
@@ -113,6 +118,7 @@ struct FoamInput
     float time;
     float3 viewDir;
     float3 normal;
+    float shoreMapDepth; // water depth from the shore map at this pixel; 1000 = outside the map
 };
 
 struct FoamData
@@ -613,16 +619,70 @@ float2 Coverage(FoamTurbulenceSet turbulence, float4 mixWeights, float2 worldUV,
     return float2(surfaceFoam, max(shallowUnderwaterFoam, deepUnderwaterFoam));
 }
 
-float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV)
+float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float shoreMapDepth)
 {
-    float2 screenUV = positionNDC.xy / max(positionNDC.w, 1e-5f);
-    screenUV = screenUV * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-    float rawDepth = SampleSceneDepth(screenUV);
-    float depthDiff = DepthToViewZ_Fast(rawDepth) - viewDepth;
-    float contactTexture = ContactFoamTex.SampleLevel(LinearWrapSampler, worldUV, 0).r;
-    contactTexture = saturate(1.0f - contactTexture);
-    depthDiff = abs(depthDiff) * contactTexture;
-    return saturate(10 * (foamParams2.y * 2 - depthDiff));
+    // AUTHORED since the June original (sanctioned edit, see the header note). Two changes of
+    // substance on top of the June formula:
+    //   - THE DEPTH SOURCE: the shore map's water depth wherever the pixel is inside the map,
+    //     and only outside it the depth buffer - reconstructed to a WORLD position so both
+    //     branches measure the same thing, vertical metres of water, instead of the June
+    //     along-ray separation whose scale swung with the camera angle.
+    //   - THE TAIL: its texture has a scale, drifts with the wind, and an optional rotated
+    //     second octave breaks the tiling.
+    // The coverage math itself is the June shape, all knobs authored: the texture eats the
+    // distance, the reach is Tail depth, the softness is Tail edge fade.
+    float waterDepth;
+    [branch]
+    if (shoreMapDepth < 999.0f)
+    {
+        waterDepth = max(shoreMapDepth, 0.0f);
+    }
+    else
+    {
+        float2 screenUV = positionNDC.xy / max(positionNDC.w, 1e-5f);
+        screenUV = screenUV * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
+        float rawDepth = SampleSceneDepth(screenUV);
+        float3 scenePositionWS = PositionWsFromDepth(rawDepth, screenUV);
+        waterDepth = max(-scenePositionWS.y, 0.0f);
+    }
+
+    float2 windDirection = windParams1.xy;
+    float directionLengthSquared = dot(windDirection, windDirection);
+    windDirection = directionLengthSquared > 1e-8f
+        ? windDirection * rsqrt(directionLengthSquared)
+        : float2(1.0f, 0.0f);
+    float2 tailUV =
+        (worldUV - windDirection * simulationParams.z * max(shoreLegacyFoamParams.z, 0.0f)) *
+        max(shoreLegacyFoamParams.x, 1e-3f);
+    float tail = ContactFoamTex.SampleLevel(LinearWrapSampler, tailUV, 0).r;
+    [branch]
+    if (shoreLegacyFoamParams.w > 1e-3f)
+    {
+        // Second octave: same texture, rotated ~37 degrees and rescaled by an irrational-ish
+        // factor, so the two grids never line up and the repeat period stops reading.
+        float2 rotatedUV =
+            float2(tailUV.x * 0.8f - tailUV.y * 0.6f,
+                   tailUV.x * 0.6f + tailUV.y * 0.8f) * 0.531f + 17.31f;
+        float tail2 = ContactFoamTex.SampleLevel(LinearWrapSampler, rotatedUV, 0).r;
+        tail = lerp(tail, saturate(tail + tail2 - 0.5f), saturate(shoreLegacyFoamParams.w));
+    }
+
+    // Authored remap of the texel BEFORE it eats the depth. A texel of brightness t dies at
+    // TailDepth / (1 - t), so the top of the brightness distribution decides how far the bright
+    // tongues outrun the dark ones - the dissipation length. Contrast stretches/squashes that
+    // spread around mid-grey, bias shifts the whole distribution; pulling the top down gives the
+    // tail a finite dissipation depth of about TailDepth / (1 - maxTexel). Defaults (1, 0) are
+    // the identity - the June behaviour.
+    tail = saturate(
+        (tail - 0.5f) * max(shoreLegacyFoamParams2.z, 0.0f) + 0.5f + shoreLegacyFoamParams2.w);
+
+    float contactTexture = saturate(1.0f - tail);
+    float effectiveDepth = waterDepth * contactTexture;
+    float coverage = saturate(
+        (max(shoreLegacyFoamParams.y, 0.0f) - effectiveDepth) /
+        max(shoreLegacyFoamParams2.x, 1e-3f));
+    // The strength slider keeps its June default (0.1) reading as full intensity.
+    return coverage * saturate(foamParams2.y * 10.0f);
 }
 
 float Pow5(float x)
@@ -678,11 +738,11 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     float deepFoam = DeepFoam(input.worldUV, input.viewDir, input.normal, input.time);
     data.coverage = Coverage(turbulence, mixWeights, input.worldUV, deepFoam, bias);
 
+    float contactCoverage = 0.0f;
     if (foamParams2.y > 0.0f)
     {
-        data.coverage.x = saturate(data.coverage.x + ContactFoam(input.positionNDC, input.viewDepth, input.worldUV));
-        //data.coverage.x = saturate(ContactFoam(input.positionNDC, input.viewDepth, input.worldUV));
-        //return data;
+        contactCoverage = ContactFoam(input.positionNDC, input.viewDepth, input.worldUV, input.shoreMapDepth);
+        data.coverage.x = saturate(data.coverage.x + contactCoverage);
     }
 
     float4 foamNormalWeights = saturate(float4(1.0f, 0.66f, 0.33f, 0.0f) + foamParams1.w) * activeCascades;
@@ -691,6 +751,26 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
 
     float2 uv = input.worldUV * 1.0f;
     data.albedo = FoamAlbedoTex.SampleLevel(LinearWrapSampler, uv, 0).rgb;
+    // The shore strip wears the SHORE foam albedo (same asset and sliders as the modern
+    // surface), blended in by its share of the total coverage so simulated whitecap foam
+    // keeps its own look.
+    [branch]
+    if (contactCoverage > 1e-3f)
+    {
+        float2 windDirection = windParams1.xy;
+        float directionLengthSquared = dot(windDirection, windDirection);
+        windDirection = directionLengthSquared > 1e-8f
+            ? windDirection * rsqrt(directionLengthSquared)
+            : float2(1.0f, 0.0f);
+        float2 shoreAlbedoUV =
+            (input.worldUV -
+             windDirection * input.time * max(shoreFoamAlbedoParams.y, 0.0f)) *
+            max(shoreFoamAlbedoParams.x, 1e-3f);
+        float3 shoreAlbedo = ShoreFoamAlbedoTex.SampleLevel(
+            LinearWrapSampler, shoreAlbedoUV, 0).rgb;
+        float shoreMix = saturate(contactCoverage / max(data.coverage.x, 1e-3f));
+        data.albedo = lerp(data.albedo, shoreAlbedo, shoreMix);
+    }
     return data;
 }
 
@@ -1008,6 +1088,7 @@ PSOut PSMain(VSOutput input)
     foamInput.viewDir = viewDir;
     foamInput.normal = normal;
     foamInput.viewDepth = input.viewDepth;
+    foamInput.shoreMapDepth = shorePixelDepth;
 
     FoamData foamData = GetFoamData(foamInput, cascadesCount);
     //return float4(foamData.coverage.xxx, 1);
@@ -1038,6 +1119,27 @@ PSOut PSMain(VSOutput input)
     li.ambient = sunDirAmbient.w;
 
     float3 color = GetOceanColor(li, foamData);
+
+    // Refraction soft edge, PORTED FROM THE MODERN SURFACE: where the water sheet meets
+    // geometry, the distorted refraction is faded back to the UNDISTORTED scene sample over
+    // the authored edge-soft depth, so the waterline does not wear a wobbling distortion rim.
+    [branch]
+    if (shoreSlopeParams.z > 0.0f)
+    {
+        float sceneRawDepth = SampleSceneDepth(screenUV);
+        float geometrySeparation =
+            max(DepthToViewZ_Fast(sceneRawDepth) - input.viewDepth, 0.0f);
+        float refractionEdgeWeight =
+            smoothstep(0.0f, shoreSlopeParams.z, geometrySeparation);
+        [branch]
+        if (refractionEdgeWeight < 0.95f)
+        {
+            float3 softEdgeRefraction =
+                SceneColorTexture.SampleLevel(LinearClampSampler, screenUV, 0).rgb;
+            color = lerp(softEdgeRefraction, color, refractionEdgeWeight);
+        }
+    }
+
     float4 outColor = float4(saturate(color), 1.0f);
 
     float2 currUv = ClipToUV(input.positionNDC);

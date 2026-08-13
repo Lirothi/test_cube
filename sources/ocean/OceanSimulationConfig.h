@@ -49,6 +49,21 @@ struct OceanRenderConfig
     float shoreLegacyVerticalDampStrength = 1.0f;
     float shoreLegacyXzDampStrength = 1.0f;
     float shoreLegacyDampFadeDepth = 6.67f;
+    // The legacy contact-foam TAIL (the ContactFoam.dds strip): texture scale in tiles per metre,
+    // the depth-difference reach it survives to, its wind-drift speed, and the second-octave
+    // de-tiling mix. Edge fade reuses shoreEdgeSoftDepth; albedo reuses the shore foam albedo
+    // scale/scroll. Defaults (1 / 0.2 / 0 / 0) reproduce the June behaviour.
+    float shoreLegacyTailTextureScale = 1.0f;
+    float shoreLegacyTailDepth = 0.2f;
+    float shoreLegacyTailScrollSpeed = 0.0f;
+    float shoreLegacyTailDetile = 0.0f;
+    float shoreLegacyTailEdgeFade = 0.1f;
+    // Remap of the tail texel before the coverage math: contrast around mid-grey and a brightness
+    // bias. They shape the dissipation length (how far bright tongues outrun dark ones): a texel
+    // of brightness t survives to TailDepth / (1 - t), so pulling the top of the distribution
+    // down gives the tail a finite dissipation depth. Defaults (1, 0) = identity = June.
+    float shoreLegacyTailContrast = 1.0f;
+    float shoreLegacyTailBias = 0.0f;
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

@@ -144,6 +144,29 @@ namespace OceanRenderConfigJson
             ReadFloat(object, "shoreLegacyDampFadeDepth",
                 render.shoreLegacyDampFadeDepth),
             0.01f, 50.0f);
+        render.shoreLegacyTailTextureScale = std::clamp(
+            ReadFloat(object, "shoreLegacyTailTextureScale",
+                render.shoreLegacyTailTextureScale),
+            0.001f, 10.0f);
+        render.shoreLegacyTailDepth = std::clamp(
+            ReadFloat(object, "shoreLegacyTailDepth", render.shoreLegacyTailDepth),
+            0.0f, 5.0f);
+        render.shoreLegacyTailScrollSpeed = std::clamp(
+            ReadFloat(object, "shoreLegacyTailScrollSpeed",
+                render.shoreLegacyTailScrollSpeed),
+            0.0f, 10.0f);
+        render.shoreLegacyTailDetile = std::clamp(
+            ReadFloat(object, "shoreLegacyTailDetile", render.shoreLegacyTailDetile),
+            0.0f, 1.0f);
+        render.shoreLegacyTailEdgeFade = std::clamp(
+            ReadFloat(object, "shoreLegacyTailEdgeFade", render.shoreLegacyTailEdgeFade),
+            0.001f, 2.0f);
+        render.shoreLegacyTailContrast = std::clamp(
+            ReadFloat(object, "shoreLegacyTailContrast", render.shoreLegacyTailContrast),
+            0.0f, 4.0f);
+        render.shoreLegacyTailBias = std::clamp(
+            ReadFloat(object, "shoreLegacyTailBias", render.shoreLegacyTailBias),
+            -1.0f, 1.0f);
         render.shoreRunupSlopeSmoothing = std::clamp(
             ReadFloat(object, "shoreRunupSlopeSmoothing", render.shoreRunupSlopeSmoothing),
             0.5f, 8.0f);
@@ -419,6 +442,13 @@ namespace OceanRenderConfigJson
         out["shoreLegacyVerticalDampStrength"] = render.shoreLegacyVerticalDampStrength;
         out["shoreLegacyXzDampStrength"] = render.shoreLegacyXzDampStrength;
         out["shoreLegacyDampFadeDepth"] = render.shoreLegacyDampFadeDepth;
+        out["shoreLegacyTailTextureScale"] = render.shoreLegacyTailTextureScale;
+        out["shoreLegacyTailDepth"] = render.shoreLegacyTailDepth;
+        out["shoreLegacyTailScrollSpeed"] = render.shoreLegacyTailScrollSpeed;
+        out["shoreLegacyTailDetile"] = render.shoreLegacyTailDetile;
+        out["shoreLegacyTailEdgeFade"] = render.shoreLegacyTailEdgeFade;
+        out["shoreLegacyTailContrast"] = render.shoreLegacyTailContrast;
+        out["shoreLegacyTailBias"] = render.shoreLegacyTailBias;
         out["shoreRunupSlopeSmoothing"] = render.shoreRunupSlopeSmoothing;
         out["shoreBottomClearance"] = render.shoreBottomClearance;
         out["shoreEdgeSoftDepth"] = render.shoreEdgeSoftDepth;

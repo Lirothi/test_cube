@@ -805,6 +805,18 @@ namespace
                             0.002f,
                             0.0f,
                             1.0f);
+                        ImGui::SeparatorText("Contact Foam Tail");
+                        renderDrag("Tail Texture Scale", render.shoreLegacyTailTextureScale, 0.005f, 0.001f, 10.0f);
+                        renderDrag("Tail Depth", render.shoreLegacyTailDepth, 0.002f, 0.0f, 5.0f);
+                        renderDrag("Tail Scroll Speed", render.shoreLegacyTailScrollSpeed, 0.005f, 0.0f, 10.0f);
+                        renderDrag("Tail De-Tile", render.shoreLegacyTailDetile, 0.005f, 0.0f, 1.0f);
+                        renderDrag("Tail Contrast", render.shoreLegacyTailContrast, 0.005f, 0.0f, 4.0f);
+                        renderDrag("Tail Brightness Bias", render.shoreLegacyTailBias, 0.002f, -1.0f, 1.0f);
+                        renderDrag("Tail Edge Fade", render.shoreLegacyTailEdgeFade, 0.002f, 0.001f, 2.0f);
+                        // Shared fields: the same soft-edge and shore-albedo knobs the modern surface uses.
+                        renderDrag("Refraction Soft Edge Distance", render.shoreEdgeSoftDepth, 0.001f, 0.0f, 0.25f);
+                        renderDrag("Albedo Scale", render.shoreContactFoamAlbedoScale, 0.01f, 0.001f, 10.0f);
+                        renderDrag("Albedo Scroll Speed", render.shoreContactFoamAlbedoScrollSpeed, 0.01f, 0.0f, 10.0f);
                     }
                     else
                     {
