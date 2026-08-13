@@ -64,6 +64,10 @@ public:
     void SetSceneVariables(Renderer* renderer, float localWindDirectionDegrees, float swellDirectionDegrees, float windForce01);
     const OceanSimulationSettings& GetSettings() const { return settings_; }
     OceanSimulationInputs EvaluateInputs() const;
+    // Same evaluation at an ARBITRARY wind force, without touching the live state. Read-only:
+    // used by the shore run-up to learn the reference wave height at "full at wind", so the
+    // nearshore wave drive can stop growing past that force while the open-sea FFT keeps its size.
+    OceanSimulationInputs EvaluateInputsAt(float windForce01) const;
 
     UINT GetResolution() const { return resolution_; }
     UINT GetCascadeCount() const { return cascadeCount_; }

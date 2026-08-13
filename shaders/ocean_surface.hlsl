@@ -43,7 +43,7 @@ cbuffer OceanCB : register(b0)
     float4 shoreFoamWindParams;        // x: wind force 0..1, y: wind force below which there is no contact foam, z: wind force at which it is at full strength, w: unused
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed, z: signed-depth warp range, w: warp scale
     float4 shoreSlopeParams;           // xy: run-up slope fade gradient thresholds, z: edge soft depth, w: geometry fade distance
-    float4 shoreSwashParams;           // x: swash amplitude, y: run-up slope smoothing baseline (shore-map texels)
+    float4 shoreSwashParams;           // x: swash amplitude, y: run-up slope smoothing baseline (shore-map texels), z: reference wave height at "full at wind"
     float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
@@ -874,9 +874,21 @@ VSOutput VSMain(VSInput input)
     {
         const float2 waterlineAnchor =
             baseWorld.xz - shoreDirection * max(-shoreField.x, 0.0f);
+        // THE SHORE'S WAVE DRIVE STOPS GROWING AT "FULL AT WIND".
+        //
+        // Every other nearshore term saturates there (ContactFoamWindAmount caps the gate, the
+        // reach, the foam widths), but this is the raw wave in metres and the FFT keeps growing
+        // all the way to wind 1 — so past full the push (Run-up Strength times this) and
+        // everything advected by it kept inflating into absurd surf. The ratio of reference wave
+        // heights (the one full-at-wind WOULD give over the one the sea actually has) rescales
+        // the anchored wave back to its full-at-wind size; at or below full the ratio clamps to
+        // one and nothing changes. The open sea is untouched — this only shrinks what the RUN-UP
+        // is allowed to feel.
+        const float shoreWaveScale = min(
+            1.0f, max(shoreSwashParams.z, 1e-3f) / max(windParams1.z, 1e-3f));
         const float swashWave =
             SampleCurrentDisplacement(waterlineAnchor, weights, cascadesCount).y *
-            geometryWaveWeight;
+            geometryWaveWeight * shoreWaveScale;
         runupWave = clamp(
             swashWave,
             -max(shoreBehaviorParams1.z, 0.0f),
@@ -984,19 +996,50 @@ VSOutput VSMain(VSInput input)
     // travel, one coherent motion. The cut criteria downstream (reach fade, sheet height) read
     // the UNDISPLACED baseXZ, so they are material coordinates: the water's edge is carried by
     // this displacement instead of the water sliding through a world-anchored edge.
-    horizontalDisplacement +=
+    float2 runupPush =
         shoreDirection *
         (runupWave * max(shoreBehaviorParams1.y, 0.0f) + swashTravel) *
         shoreBand * runupSlopeWeight;
+    // THE PUSH STOPS AT GROUND THE SHEET CANNOT CLIMB.
+    //
+    // At storm strength the push is metres, and on a steep face it carried water vertices INTO
+    // the hillside: the landing point's ground stands far above anything the sheet can stand on,
+    // and the crest poked out of the dune as a white shred. The advected depth cannot catch this
+    // — it is a first-order extrapolation clamped to +-1 m of depth shift, blind exactly on the
+    // steep face where it matters. So the landing is checked with a REAL tap of the shore map at
+    // the displaced position, and the push fades out as the ground there rises past what the
+    // run-up sheet could legitimately climb. A gentle beach never triggers it (metres of push
+    // gain centimetres of ground); a cliff stops the wave at its foot, which is what a cliff does.
+    [branch]
+    if (dot(runupPush, runupPush) > 1e-6f)
+    {
+        const float landingDepth = ShoreWaterDepth(
+            ShoreDepthUV(baseWorld.xz + horizontalDisplacement + runupPush));
+        const float maxClimb = max(shoreBehaviorParams1.w, 0.0f) + 0.3f;
+        const float kClimbFade = 0.5f;
+        runupPush *= 1.0f - smoothstep(maxClimb, maxClimb + kClimbFade, -landingDepth);
+    }
+    horizontalDisplacement += runupPush;
 
-    // First-order extrapolation: the surface slid horizontally, so the bed under it changed by
-    // slope * step. Fine for a small step, nonsense on a steep gradient — an underwater scarp with
-    // a metre of chop behind it produced a correction of many metres, dragged a 10 m depth to zero
-    // and painted a solid foam RIBBON across open water (seen on demo). Clamped to the reach a wave
-    // can plausibly have, which leaves the shoreline case untouched (depths there are centimetres).
-    const float kMaxDepthShift = 1.0f;
+    // The ground under the vertex is read AT THE DISPLACED POSITION, with a real tap.
+    //
+    // It used to be a first-order extrapolation (depth at base plus gradient times step, clamped
+    // to +-1 m), and every vertical decision below — the seabed floor, the sheet height, the foam
+    // advection — was made as if the vertex still stood at its material base. On a gentle beach
+    // the extrapolation is nearly exact; on a steep face it is blind by construction, so a vertex
+    // carried metres by the chop and the push kept the height of the water it CAME from and poked
+    // out of the hillside as a white shred. Asking the map where the vertex actually LANDS makes
+    // the whole vertical stack agree with the ground it is drawn over; outside the shore field the
+    // old clamped extrapolation stays as the fallback (there is no map to ask there, and its +-1 m
+    // clamp is what kept an underwater scarp from painting a foam ribbon across open water).
     float predictedDepth = waterDepth + clamp(
-        dot(shore.depthGradient, horizontalDisplacement), -kMaxDepthShift, kMaxDepthShift);
+        dot(shore.depthGradient, horizontalDisplacement), -1.0f, 1.0f);
+    [branch]
+    if (shoreFieldWeight > 1e-3f && dot(horizontalDisplacement, horizontalDisplacement) > 1e-6f)
+    {
+        predictedDepth = ShoreWaterDepth(
+            ShoreDepthUV(baseWorld.xz + horizontalDisplacement));
+    }
 
     float shoreVerticalDisplacement = displacement.y * shoreVerticalFade;
     // Bottom clearance has TWO jobs and NEITHER follows the wind any more.
@@ -1055,9 +1098,16 @@ VSOutput VSMain(VSInput input)
         kRunupReach * lerp(kCalmReachScale, 1.0f, ContactFoamWindAmount());
     const float runupReachFade =
         1.0f - smoothstep(runupReach * 0.55f, runupReach, inlandFadeDistance);
+    // The sheet DIES on ground it could not have climbed. With the honest displaced-ground depth
+    // above, a vertex carried into a hillside reports metres of negative depth, and without this
+    // kill the sheet formula would happily stand clearance above THAT — a wall of water up the
+    // slope. Same ceiling the push limiter uses: a little above the standing clearance.
+    const float maxSheetClimb = runupClearance + 0.3f;
+    const float sheetClimbKill =
+        1.0f - smoothstep(maxSheetClimb, maxSheetClimb + 0.5f, -predictedDepth);
     float runupSheetHeight =
         max(-predictedDepth + runupClearance, 0.0f) *
-        shoreBand * runupSlopeWeight * runupReachFade;
+        shoreBand * runupSlopeWeight * runupReachFade * sheetClimbKill;
     shoreVerticalDisplacement = max(shoreVerticalDisplacement, runupSheetHeight);
 
     float verticalDisplacement = lerp(
@@ -1373,7 +1423,7 @@ float2 ContactFoamMask(
     // Sized from the pixel's world footprint and a NOMINAL slope rather than from `depthFeather`:
     // on the fallback path that feather is the screen derivative of the scene depth, which at a few
     // hundred metres is enormous and blew the tail up to metres of depth.
-    const float kMinStripPixels = 5.0f;
+    const float kMinStripPixels = 7.0f;
     const float kStripSlopeGuess = 0.05f;
     // Scaled by wind like every other width. Without it the floor was weather-blind: at range it
     // inflated the band to the same size in a dead calm as in a gale, so a light wind that should
@@ -1522,7 +1572,7 @@ float2 ContactFoamMask(
     // that the wind never touches. Scaled, a storm still foams the whole swash sheet while a calm
     // sea keeps a thin lace right at the waterline.
     const float kInlandFoamFade = // metres of NEGATIVE depth over which the mask dies
-        lerp(0.02f, 0.2f, windAmount);
+        lerp(0.2f, 0.5f, windAmount);
     coverage *= 1.0f - smoothstep(0.0f, kInlandFoamFade, max(-shoreDepth, 0.0f));
 #if OCEAN_FOAM_DEBUG
     g_foamDbg = float4(t, feather, fine, tailLen);

@@ -1189,10 +1189,19 @@ Math::float4 OceanRenderable::GetShoreSlopeParams() const
 Math::float4 OceanRenderable::GetShoreSwashParams() const
 {
     const OceanRenderConfig& render = GetRenderConfig();
+    // z: the reference wave height the sea WOULD have at "full at wind" force. The shore run-up
+    // uses it to freeze its wave drive past that wind: every other nearshore term saturates at
+    // full via ContactFoamWindAmount, but the raw anchored wave keeps growing to wind 1 and was
+    // dragging the push (and everything advected by it) into absurd surf. Read-only preset
+    // evaluation — the live FFT is untouched.
+    const float fullWind = std::clamp(render.shoreContactFoamFullWindForce, 0.0f, 1.0f);
+    const float fullWindWaveHeight = simulation_
+        ? simulation_->EvaluateInputsAt(fullWind).referenceWaveHeight
+        : 0.0f;
     return Math::float4(
         std::clamp(render.shoreSwashAmplitude, 0.0f, 1.0f),
         std::clamp(render.shoreRunupSlopeSmoothing, 0.5f, 8.0f),
-        0.0f,
+        fullWindWaveHeight,
         0.0f);
 }
 

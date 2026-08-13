@@ -338,6 +338,13 @@ OceanSimulationInputs OceanSimulation::EvaluateInputs() const
     return result;
 }
 
+OceanSimulationInputs OceanSimulation::EvaluateInputsAt(float windForce01) const
+{
+    OceanSimulationInputs result;
+    inputsProvider_.PopulateInputs(result, Math::Saturate(windForce01));
+    return result;
+}
+
 void OceanSimulation::RefreshDerivedSettings()
 {
     resolution_ = settings_.GetResolution();
