@@ -813,6 +813,12 @@ namespace
                         renderDrag("Tail Contrast", render.shoreLegacyTailContrast, 0.005f, 0.0f, 4.0f);
                         renderDrag("Tail Brightness Bias", render.shoreLegacyTailBias, 0.002f, -1.0f, 1.0f);
                         renderDrag("Tail Edge Fade", render.shoreLegacyTailEdgeFade, 0.002f, 0.001f, 2.0f);
+                        ImGui::SeparatorText("Foam Dissipation");
+                        renderDrag("Dissipation Scale", render.shoreLegacyDissipationScale, 0.25f, 1.0f, 200.0f);
+                        renderDrag("Dissipation Speed", render.shoreLegacyDissipationSpeed, 0.005f, 0.0f, 5.0f);
+                        renderDrag("Dissipation Amount", render.shoreLegacyDissipationAmount, 0.002f, 0.0f, 1.0f);
+                        renderDrag("Dissipation Contrast", render.shoreLegacyDissipationContrast, 0.01f, 0.1f, 8.0f);
+                        renderDrag("Wind Thinning", render.shoreLegacyWindThinning, 0.002f, 0.0f, 1.0f);
                         // Shared fields: the same soft-edge and shore-albedo knobs the modern surface uses.
                         renderDrag("Refraction Soft Edge Distance", render.shoreEdgeSoftDepth, 0.001f, 0.0f, 0.25f);
                         renderDrag("Albedo Scale", render.shoreContactFoamAlbedoScale, 0.01f, 0.001f, 10.0f);

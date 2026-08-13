@@ -156,6 +156,7 @@ private:
     Math::float4 GetShoreLegacyDampParams() const;
     Math::float4 GetShoreLegacyFoamParams() const;
     Math::float4 GetShoreLegacyFoamParams2() const;
+    Math::float4 GetShoreLegacyDissipationParams() const;
     Math::float4 GetShoreSwashParams() const;
     Math::float4 GetShoreSamplingParams() const;
     Math::float4 GetSunDirAmbient() const;

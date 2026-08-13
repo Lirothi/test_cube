@@ -64,6 +64,18 @@ struct OceanRenderConfig
     // down gives the tail a finite dissipation depth. Defaults (1, 0) = identity = June.
     float shoreLegacyTailContrast = 1.0f;
     float shoreLegacyTailBias = 0.0f;
+    // Foam dissipation (docs/ocean_shore_foam_breakup_plan.md, variant A): a slow large-scale
+    // spatio-temporal field that squeezes the tail's depth threshold so patches of the shoreline
+    // band decay and regrow in place instead of standing as a constant-width rim. Amount 0 = OFF
+    // = exact identity.
+    float shoreLegacyDissipationScale = 25.0f;
+    float shoreLegacyDissipationSpeed = 0.5f;
+    float shoreLegacyDissipationAmount = 0.0f;
+    float shoreLegacyDissipationContrast = 2.0f;
+    // Variant C of the same plan (variant B, the surf phase, was rejected - see the doc): wind
+    // thinning scales the tail threshold by the shared contact-foam wind amount, so the band
+    // starves at dead calm (0 = OFF).
+    float shoreLegacyWindThinning = 0.0f;
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

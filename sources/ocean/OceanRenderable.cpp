@@ -282,6 +282,7 @@ public:
             shoreLegacyDampParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreLegacyDampParams");
             shoreLegacyFoamParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreLegacyFoamParams");
             shoreLegacyFoamParams2Handle_ = material->ComputeCBFieldHandle(0, "shoreLegacyFoamParams2");
+            shoreLegacyDissipationParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreLegacyDissipationParams");
             shoreSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSamplingParams");
             sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
@@ -343,6 +344,7 @@ public:
             shoreLegacyDampParamsHandle_ = {};
             shoreLegacyFoamParamsHandle_ = {};
             shoreLegacyFoamParams2Handle_ = {};
+            shoreLegacyDissipationParamsHandle_ = {};
             shoreSamplingParamsHandle_ = {};
             sunDirAmbientHandle_ = {};
             sunColorExposureHandle_ = {};
@@ -418,6 +420,7 @@ public:
         UpdateUniform(owner, shoreLegacyDampParamsHandle_, material, owner_.GetShoreLegacyDampParams(), cbData);
         UpdateUniform(owner, shoreLegacyFoamParamsHandle_, material, owner_.GetShoreLegacyFoamParams(), cbData);
         UpdateUniform(owner, shoreLegacyFoamParams2Handle_, material, owner_.GetShoreLegacyFoamParams2(), cbData);
+        UpdateUniform(owner, shoreLegacyDissipationParamsHandle_, material, owner_.GetShoreLegacyDissipationParams(), cbData);
         UpdateUniform(owner, shoreSamplingParamsHandle_, material, owner_.GetShoreSamplingParams(), cbData);
         UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
@@ -484,6 +487,7 @@ private:
     Material::CBFieldHandle shoreLegacyDampParamsHandle_{};
     Material::CBFieldHandle shoreLegacyFoamParamsHandle_{};
     Material::CBFieldHandle shoreLegacyFoamParams2Handle_{};
+    Material::CBFieldHandle shoreLegacyDissipationParamsHandle_{};
     Material::CBFieldHandle shoreSamplingParamsHandle_{};
     Material::CBFieldHandle sunDirAmbientHandle_{};
     Material::CBFieldHandle sunColorExposureHandle_{};
@@ -1248,9 +1252,19 @@ Math::float4 OceanRenderable::GetShoreLegacyFoamParams2() const
     const OceanRenderConfig& render = GetRenderConfig();
     return Math::float4(
         std::clamp(render.shoreLegacyTailEdgeFade, 0.001f, 2.0f),
-        0.0f,
+        std::clamp(render.shoreLegacyWindThinning, 0.0f, 1.0f),
         std::clamp(render.shoreLegacyTailContrast, 0.0f, 4.0f),
         std::clamp(render.shoreLegacyTailBias, -1.0f, 1.0f));
+}
+
+Math::float4 OceanRenderable::GetShoreLegacyDissipationParams() const
+{
+    const OceanRenderConfig& render = GetRenderConfig();
+    return Math::float4(
+        std::clamp(render.shoreLegacyDissipationScale, 1.0f, 200.0f),
+        std::clamp(render.shoreLegacyDissipationSpeed, 0.0f, 5.0f),
+        std::clamp(render.shoreLegacyDissipationAmount, 0.0f, 1.0f),
+        std::clamp(render.shoreLegacyDissipationContrast, 0.1f, 8.0f));
 }
 
 Math::float4 OceanRenderable::GetShoreSamplingParams() const

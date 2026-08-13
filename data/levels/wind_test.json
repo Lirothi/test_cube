@@ -13593,7 +13593,7 @@
       "roughnessScale": 0.699999988079071,
       "scatterSpread": 0.20000000298023224,
       "shoreBottomClearance": 0.10499999672174454,
-      "shoreContactFoamAlbedoScale": 0.25,
+      "shoreContactFoamAlbedoScale": 0.5,
       "shoreContactFoamAlbedoScrollSpeed": 0.5,
       "shoreContactFoamBreakupLength": 0.05999999865889549,
       "shoreContactFoamBreakupLengthVariation": 0.07000000029802322,
@@ -13616,15 +13616,20 @@
       "shoreHorizontalMin": 1.0,
       "shoreLegacyContactFoamStrength": 0.10000000149011612,
       "shoreLegacyDampFadeDepth": 5.0,
-      "shoreLegacyTailBias": 0.05000000074505806,
+      "shoreLegacyDissipationAmount": 0.5,
+      "shoreLegacyDissipationContrast": 2.0,
+      "shoreLegacyDissipationScale": 100.0,
+      "shoreLegacyDissipationSpeed": 1.0,
+      "shoreLegacyTailBias": 0.0,
       "shoreLegacyTailContrast": 0.699999988079071,
-      "shoreLegacyTailDepth": 0.04500000178813934,
+      "shoreLegacyTailDepth": 0.07000000029802322,
       "shoreLegacyTailDetile": 0.4000000059604645,
-      "shoreLegacyTailEdgeFade": 0.03999999910593033,
+      "shoreLegacyTailEdgeFade": 0.019999999552965164,
       "shoreLegacyTailScrollSpeed": 0.5,
       "shoreLegacyTailTextureScale": 0.15000000596046448,
-      "shoreLegacyVerticalDampStrength": 0.9750000238418579,
-      "shoreLegacyXzDampStrength": 0.6000000238418579,
+      "shoreLegacyVerticalDampStrength": 0.9700000286102295,
+      "shoreLegacyWindThinning": 0.949999988079071,
+      "shoreLegacyXzDampStrength": 0.20000000298023224,
       "shoreNormalFadeDepth": 5.0,
       "shoreNormalMinWeights": [
         0.25,
@@ -13675,7 +13680,7 @@
       "frequencyHz": 0.10000000149011612,
       "seed": 3
     },
-    "strength": 1.0,
+    "strength": 0.6000000238418579,
     "swayFrequency": 1.2000000476837158
   }
 }

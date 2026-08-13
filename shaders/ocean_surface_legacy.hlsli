@@ -58,7 +58,9 @@ cbuffer OceanCB : register(b0)
     float4 shoreLegacyDampParams;      // x: vertical damp strength, y: xz damp strength, z: damp fade depth (m), w: shoreline normal fade depth (m)
     float4 shoreNormalMinWeights;      // minimum normal/foam weight per cascade at the shoreline
     float4 shoreLegacyFoamParams;      // x: tail texture scale (tiles/m), y: tail depth (m), z: tail scroll speed (m/s), w: de-tile amount
-    float4 shoreLegacyFoamParams2;     // x: tail edge fade (depth units of softness), z: tail contrast (around 0.5), w: tail brightness bias
+    float4 shoreLegacyFoamParams2;     // x: tail edge fade (depth units of softness), y: wind thinning amount (0 = off), z: tail contrast (around 0.5), w: tail brightness bias
+    float4 shoreLegacyDissipationParams; // foam dissipation injection: x: patch scale (m), y: drift speed (m/s), z: amount (0 = off), w: contrast
+    float4 shoreFoamWindParams;        // shared with the modern surface (same C++ feed): x: wind force 0..1, y: calm threshold, z: full threshold
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed (shared with the modern surface)
     float4 shoreSlopeParams;           // z: edge soft depth = the contact foam's edge fade (shared with the modern surface)
     float4 depthTextureSize;           // xy: texel size, zw: texture size
@@ -643,6 +645,10 @@ float2 Coverage(FoamTurbulenceSet turbulence, float4 mixWeights, float2 worldUV,
     return float2(surfaceFoam, max(shallowUnderwaterFoam, deepUnderwaterFoam));
 }
 
+// foam dissipation injection (see docs/ocean_shore_foam_breakup_plan.md, variant A); the other
+// two touch points are the shoreLegacyDissipationParams cbuffer field and one multiply below.
+#include "ocean_shore_foam_dissipation.hlsli"
+
 float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float shoreMapDepth)
 {
     // AUTHORED since the June original (sanctioned edit, see the header note). Two changes of
@@ -702,8 +708,14 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float sho
 
     float contactTexture = saturate(1.0f - tail);
     float effectiveDepth = waterDepth * contactTexture;
+    // foam breakup injection: dissipation patches x wind thinning squeeze the depth threshold,
+    // so foam geometrically vanishes instead of alpha-fading.
+    float breakup = ShoreFoamBreakupThresholdFactor(
+        ContactFoamTex, LinearWrapSampler, worldUV, simulationParams.z,
+        ShoreFoamWindAmount(shoreFoamWindParams), shoreLegacyFoamParams2.y,
+        shoreLegacyDissipationParams);
     float coverage = saturate(
-        (max(shoreLegacyFoamParams.y, 0.0f) - effectiveDepth) /
+        (max(shoreLegacyFoamParams.y, 0.0f) * breakup - effectiveDepth) /
         max(shoreLegacyFoamParams2.x, 1e-3f));
     // The strength slider keeps its June default (0.1) reading as full intensity.
     return coverage * saturate(foamParams2.y * 10.0f);

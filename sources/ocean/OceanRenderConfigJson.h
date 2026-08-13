@@ -167,6 +167,22 @@ namespace OceanRenderConfigJson
         render.shoreLegacyTailBias = std::clamp(
             ReadFloat(object, "shoreLegacyTailBias", render.shoreLegacyTailBias),
             -1.0f, 1.0f);
+        render.shoreLegacyDissipationScale = std::clamp(
+            ReadFloat(object, "shoreLegacyDissipationScale", render.shoreLegacyDissipationScale),
+            1.0f, 200.0f);
+        render.shoreLegacyDissipationSpeed = std::clamp(
+            ReadFloat(object, "shoreLegacyDissipationSpeed", render.shoreLegacyDissipationSpeed),
+            0.0f, 5.0f);
+        render.shoreLegacyDissipationAmount = std::clamp(
+            ReadFloat(object, "shoreLegacyDissipationAmount", render.shoreLegacyDissipationAmount),
+            0.0f, 1.0f);
+        render.shoreLegacyDissipationContrast = std::clamp(
+            ReadFloat(
+                object, "shoreLegacyDissipationContrast", render.shoreLegacyDissipationContrast),
+            0.1f, 8.0f);
+        render.shoreLegacyWindThinning = std::clamp(
+            ReadFloat(object, "shoreLegacyWindThinning", render.shoreLegacyWindThinning),
+            0.0f, 1.0f);
         render.shoreRunupSlopeSmoothing = std::clamp(
             ReadFloat(object, "shoreRunupSlopeSmoothing", render.shoreRunupSlopeSmoothing),
             0.5f, 8.0f);
@@ -449,6 +465,11 @@ namespace OceanRenderConfigJson
         out["shoreLegacyTailEdgeFade"] = render.shoreLegacyTailEdgeFade;
         out["shoreLegacyTailContrast"] = render.shoreLegacyTailContrast;
         out["shoreLegacyTailBias"] = render.shoreLegacyTailBias;
+        out["shoreLegacyDissipationScale"] = render.shoreLegacyDissipationScale;
+        out["shoreLegacyDissipationSpeed"] = render.shoreLegacyDissipationSpeed;
+        out["shoreLegacyDissipationAmount"] = render.shoreLegacyDissipationAmount;
+        out["shoreLegacyDissipationContrast"] = render.shoreLegacyDissipationContrast;
+        out["shoreLegacyWindThinning"] = render.shoreLegacyWindThinning;
         out["shoreRunupSlopeSmoothing"] = render.shoreRunupSlopeSmoothing;
         out["shoreBottomClearance"] = render.shoreBottomClearance;
         out["shoreEdgeSoftDepth"] = render.shoreEdgeSoftDepth;
