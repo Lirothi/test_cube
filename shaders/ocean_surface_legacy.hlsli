@@ -8,7 +8,7 @@
 // rather than sRGB, the one known deviation). One FUNCTIONAL edit is sanctioned on top: the
 // nearshore attenuation is authored (shoreLegacyDampParams) instead of the original hardcoded
 // saturate(depth * 0.15); its defaults reproduce the original curve. Do not otherwise touch.
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -42,6 +42,7 @@ cbuffer OceanCB : register(b0)
     float4 refractionParams;           // x: surface refraction strength, y: underwater refraction strength, z: absorption depth scale, w: fog density
     float4 subsurfaceParams;           // x: sun scatter strength, y: sky scatter strength, z: scatter spread, w: view alignment strength
     float4 heightFogParams;            // x: SSS height bias, y: SSS fade distance, z: horizon fog distance scale, w: reflection normal strength
+    float4 normalSamplingParams;       // x: detail normal mip bias, y: active macro normal mip bias
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
     float4 deepScatterColor;           // xyz: deep scatter tint, w: unused
@@ -85,6 +86,7 @@ Texture2D OceanReflectionTexture : register(t15);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointSampler : register(s2);
+SamplerState AnisotropicWrapSampler : register(s3);
 
 struct VSInput
 {
@@ -347,12 +349,12 @@ float3 SampleDisplacementCascadeTexture(Texture2DArray<float4> tex, float2 world
     return sample.xyz;
 }
 
-float4 SampleDerivativesCascade(float2 worldXZ, uint cascade)
+float4 SampleDerivativesCascade(float2 worldXZ, uint cascade, float mipBias)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
     float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f + 1.0f);
     //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
-    float4 sample = DisplacementDerivatives.SampleBias(LinearWrapSampler, uvw, -2.0f); //give more details far away
+    float4 sample = DisplacementDerivatives.SampleBias(AnisotropicWrapSampler, uvw, mipBias); //give more details far away
     return sample;
 }
 
@@ -385,7 +387,7 @@ float3 SamplePreviousDisplacement(float2 worldXZ, float4 weights, uint cascadesC
     return SampleDisplacementTexture(PrevDisplacementDerivatives, worldXZ, weights, cascadesCount);
 }
 
-DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount)
+DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount, float mipBias)
 {
     DerivativesSet derivatives;
     [unroll]
@@ -405,7 +407,7 @@ DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCo
         float w = weights[cascade];
         if (cascade == 0 || w > kLodThreshold)
         {
-            derivatives.cascades[cascade] = SampleDerivativesCascade(worldXZ, cascade) * w;
+            derivatives.cascades[cascade] = SampleDerivativesCascade(worldXZ, cascade, mipBias) * w;
         }
     }
     return derivatives;
@@ -1101,7 +1103,7 @@ PSOut PSMain(VSOutput input)
     float4 normalWeights = lerp(saturate(shoreNormalMinWeights), 1.0f.xxxx, normalFade);
 
     float4 weights = LodWeights(viewDist, clipMapParams.w);
-    DerivativesSet deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount);
+    DerivativesSet deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount, normalSamplingParams.y);
     float4 activeCascades = ActiveCascadesMask(cascadesCount);
     float4 combinedDerivatives = CombineDerivatives(deriv, normalWeights);
     float3 normal = NormalFromCombinedDerivatives(combinedDerivatives);
