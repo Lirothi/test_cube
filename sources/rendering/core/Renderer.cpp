@@ -70,12 +70,10 @@ ID3D12GraphicsCommandList4* Renderer::AsCmdList4(ID3D12GraphicsCommandList* cl) 
 
 void Renderer::Shutdown()
 {
-    // Guard against repeated calls
-    static bool inShutdown = false;
-    if (inShutdown) {
+    if (shutdown_) {
         return;
     }
-    inShutdown = true;
+    shutdown_ = true;
 
     // Nothing to do if the device is missing
     const bool hasDevice = (GetDevice() != nullptr);
@@ -90,6 +88,21 @@ void Renderer::Shutdown()
 #if PROF_GPU_ENABLED
     Profiler::Get().ShutdownGpu();
 #endif
+
+    // Streamline must release its feature resources and interposed D3D/DXGI
+    // objects while the device, queue, swap chain and all tagged resources are
+    // still alive. After slShutdown(), proxy calls fall back to the native
+    // implementation, so the remaining renderer teardown can proceed normally.
+    if (streamlineInitialized_)
+    {
+        if (dlssHandler_)
+        {
+            dlssHandler_->Shutdown();
+        }
+
+        slShutdown();
+        streamlineInitialized_ = false;
+    }
 
     ShutdownImGui();
 
@@ -128,17 +141,8 @@ void Renderer::Shutdown()
     frameScheduler_.ReleaseFence();
     graphicsDevice_.ReleaseQueue();
 
-    if (dlssHandler_)
-    {
-        dlssHandler_->Shutdown();
-    }
-
-    slShutdown();
-
     // 8) Release the device last
     graphicsDevice_.ReleaseDevice();
-
-    inShutdown = false;
 }
 
 void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
@@ -185,6 +189,7 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     pref.renderAPI = sl::RenderAPI::eD3D12;
 
     auto slRes = slInit(pref, sl::kSDKVersion);
+    streamlineInitialized_ = (slRes == sl::Result::eOk);
 
     // --- Device (debug layer enabled inside, in debug builds) ---
     graphicsDevice_.InitDevice();

@@ -598,6 +598,8 @@ private:
     // Streamline / DLSS integration
     sl::DLSSMode dlssMode_ = sl::DLSSMode::eBalanced;
     std::unique_ptr<DlssHandler> dlssHandler_;
+    bool streamlineInitialized_ = false;
+    bool shutdown_ = false;
 
     void UpdateDlssSettings();
     void AllocateDlssResourcesIfNeeded();

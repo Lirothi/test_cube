@@ -100,17 +100,42 @@ Math::float2 DlssHandler::GenerateJitterSample()
 
 void DlssHandler::Shutdown()
 {
+    ClearResourceTags();
+
     if (resourcesAllocated_)
     {
         slFreeResources(sl::kFeatureDLSS, viewport_);
         resourcesAllocated_ = false;
     }
 
+    exposureUpload_.Reset();
+    exposureTex_.Reset();
+    exposureUploaded_ = false;
     frameToken_ = nullptr;
     active_ = false;
     available_ = false;
     outputValid_ = false;
     ResetJitterSequence();
+}
+
+void DlssHandler::ClearResourceTags()
+{
+    if (!available_ || frameToken_ == nullptr)
+    {
+        return;
+    }
+
+    // eValidUntilPresent tags make Streamline hold references to the resources.
+    // Null-tag every buffer type before those resources and the swap chain are
+    // destroyed. All-null tags intentionally need no command list.
+    const std::array<sl::ResourceTag, 5> tags = {
+        sl::ResourceTag(nullptr, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(nullptr, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilPresent),
+        sl::ResourceTag(nullptr, sl::kBufferTypeExposure, sl::ResourceLifecycle::eValidUntilPresent)
+    };
+    slSetTagForFrame(*frameToken_, viewport_, tags.data(), static_cast<uint32_t>(tags.size()), nullptr);
 }
 
 void DlssHandler::OnStreamlineInitialized(sl::Result initResult)

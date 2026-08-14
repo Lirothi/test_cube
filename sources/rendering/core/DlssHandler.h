@@ -39,6 +39,7 @@ public:
     void InvalidateOutput() { outputValid_ = false; }
 
 private:
+    void ClearResourceTags();
     void HandleAllocationFailure();
     void ResetJitterSequence();
     Math::float2 GenerateJitterSample();
