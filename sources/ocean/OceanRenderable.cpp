@@ -560,7 +560,7 @@ void OceanRenderable::Init(Renderer* renderer,
     loadTexture(foamAlbedoTexture_, L"textures/ocean/FoamAlbedo.png", Texture2D::Usage::AlbedoSRGB);
     loadTexture(foamUnderwaterTexture_, L"textures/ocean/UnderwaterFoam.png", Texture2D::Usage::AlbedoSRGB);
     loadTexture(foamTrailTexture_, L"textures/ocean/FoamTrail.png", Texture2D::Usage::LinearData);
-    loadTexture(shoreFoamBreakupMaskTexture_, L"textures/ocean/ContactFoam.dds", Texture2D::Usage::LinearData);
+    loadTexture(shoreFoamBreakupMaskTexture_, L"textures/ocean/ContactFoam.png", Texture2D::Usage::LinearData);
     loadTexture(shoreFoamAlbedoTexture_, L"textures/ocean/ShoreFoamAlbedo.png", Texture2D::Usage::AlbedoSRGB);
     // 8x8 flipbook of 128px caustic frames (BC4, per-frame mips) — see tools/gen_caustics.py.
     // Consumed by lighting_cs.hlsl, not by the ocean surface shader.
