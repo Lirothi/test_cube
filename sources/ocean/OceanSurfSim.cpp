@@ -133,94 +133,109 @@ void OceanSurfSim::TickWindow(Math::float2 cameraXZ)
     pendingCenter_ = target;
 }
 
-void OceanSurfSim::PrepareCompute(RenderGraphPassContext& ctx)
+// Pass-flow S3 pilot: the whole pass in one builder — see the header comment. Decisions are
+// locals, the cross-frame state (ping-pong index, window centre, sim clock) is committed HERE,
+// the declarations are made from the same locals, and the returned record lambda captures them
+// by value. The record body names no resource: EmitPoint markers emit whatever the compile
+// produced for our two points.
+std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
+    RenderGraphPassContext& ctx, float timeSeconds)
 {
-    if (!created_)
+    if (!created_ || !updateMaterial_ || !relocateMaterial_)
     {
-        return;
+        return {};
     }
 
+    // ---- decisions, once ----
+    const bool relocate = WillRelocate();
+    const int shiftX = pendingShiftX_;
+    const int shiftY = pendingShiftY_;
+    const uint32_t readIndex = current_;
+    const uint32_t afterRelocate = relocate ? (readIndex ^ 1u) : readIndex;
+    const uint32_t finalIndex = afterRelocate ^ 1u;
+    if (relocate)
+    {
+        center_ = pendingCenter_;
+    }
+    const Math::float2 center = center_;
+    pendingShiftX_ = 0;
+    pendingShiftY_ = 0;
+    current_ = finalIndex; // committed before recording: GetWaveSrv is final from here on
+    const float dt = previousTime_ >= 0.0f ? std::max(0.0f, timeSeconds - previousTime_) : 0.0f;
+    previousTime_ = timeSeconds;
+
+    // ---- declarations, from the same locals ----
     // Everything is written as a UAV first (relocate and/or update)...
     ctx.NextPoint();
-    // Pass-flow S1 pilot: capture the absolute point index the markers in RecordCompute emit.
-    uavPointIndex_ = ctx.usePoint ? *ctx.usePoint : 0;
+    const std::uint32_t uavPoint = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(wave_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(wave_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(foam_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(foam_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
     // ...then the frame's freshest height field is left readable for the surface's pixel shader.
     ctx.NextPoint();
-    ctx.Use(wave_[CurrentAfterFrame()].Get(),
+    ctx.Use(wave_[finalIndex].Get(),
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-}
 
-void OceanSurfSim::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl, float timeSeconds)
-{
-    if (!created_ || !renderer || !cl || !updateMaterial_ || !relocateMaterial_)
+    // ---- record, capturing the decisions by value ----
+    return [this, timeSeconds, dt, relocate, shiftX, shiftY, center, readIndex,
+            uavPoint](RenderGraphPassContext c)
     {
-        return;
-    }
+        Renderer* renderer = c.renderer;
+        auto t = c.BeginCL();
+        ID3D12GraphicsCommandList* cl = t.cl;
+        {
+            GPU_SCOPE(cl, ProfilerScopes::kOceanSurfSim);
 
-    GPU_SCOPE(cl, ProfilerScopes::kOceanSurfSim);
+            const UINT groups = (kResolution + 7u) / 8u;
+            auto asUint = [](float value)
+            {
+                uint32_t bits = 0;
+                std::memcpy(&bits, &value, sizeof(bits));
+                return bits;
+            };
 
-    const float dt = previousTime_ >= 0.0f ? std::max(0.0f, timeSeconds - previousTime_) : 0.0f;
-    previousTime_ = timeSeconds;
+            renderer->EmitPoint(cl, uavPoint);
 
-    const UINT groups = (kResolution + 7u) / 8u;
+            auto dispatch = [&](const std::shared_ptr<Material>& material, uint32_t readIdx,
+                                int sx, int sy)
+            {
+                auto uavTable = renderer->StageSrvUavTable({
+                    waveUav_[readIdx], waveUav_[1u - readIdx],
+                    foamUav_[readIdx], foamUav_[1u - readIdx] });
 
-    auto asUint = [](float value)
-    {
-        uint32_t bits = 0;
-        std::memcpy(&bits, &value, sizeof(bits));
-        return bits;
+                auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
+                auto& rctx = ctxHandle.ref();
+                rctx.constants[0] = {
+                    kResolution,
+                    asUint(kTexelWorld),
+                    asUint(center.x),
+                    asUint(center.y),
+                    static_cast<uint32_t>(sx),
+                    static_cast<uint32_t>(sy),
+                    asUint(timeSeconds),
+                    asUint(dt),
+                };
+                rctx.uavTable[0] = uavTable.gpu;
+                material->Bind(cl, rctx);
+                cl->Dispatch(groups, groups, 1);
+                renderer->UAVBarrier(cl, wave_[1u - readIdx].Get());
+                renderer->UAVBarrier(cl, foam_[1u - readIdx].Get());
+            };
+
+            uint32_t read = readIndex;
+            if (relocate)
+            {
+                dispatch(relocateMaterial_, read, shiftX, shiftY);
+                read ^= 1u;
+            }
+            dispatch(updateMaterial_, read, 0, 0);
+
+            // The SRV handoff point (the final wave side to pixel-readable for the surface).
+            renderer->EmitPoint(cl, uavPoint + 1u);
+        }
+        c.EndCL(t);
     };
-
-    // Pass-flow S1 pilot: EmitPoint markers instead of named Transition calls — the compiled
-    // point for our declaration index carries whatever barriers this frame actually needs
-    // (usually just the previous frame's SRV side back to UAV), with nothing to keep in sync.
-    renderer->EmitPoint(cl, uavPointIndex_);
-
-    auto dispatch = [&](const std::shared_ptr<Material>& material, uint32_t readIndex,
-                        int shiftX, int shiftY, Math::float2 center)
-    {
-        auto uavTable = renderer->StageSrvUavTable({
-            waveUav_[readIndex], waveUav_[1u - readIndex],
-            foamUav_[readIndex], foamUav_[1u - readIndex] });
-
-        auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
-        auto& ctx = ctxHandle.ref();
-        ctx.constants[0] = {
-            kResolution,
-            asUint(kTexelWorld),
-            asUint(center.x),
-            asUint(center.y),
-            static_cast<uint32_t>(shiftX),
-            static_cast<uint32_t>(shiftY),
-            asUint(timeSeconds),
-            asUint(dt),
-        };
-        ctx.uavTable[0] = uavTable.gpu;
-        material->Bind(cl, ctx);
-        cl->Dispatch(groups, groups, 1);
-        renderer->UAVBarrier(cl, wave_[1u - readIndex].Get());
-        renderer->UAVBarrier(cl, foam_[1u - readIndex].Get());
-    };
-
-    if (WillRelocate())
-    {
-        dispatch(relocateMaterial_, current_, pendingShiftX_, pendingShiftY_, pendingCenter_);
-        current_ ^= 1u;
-        center_ = pendingCenter_;
-        pendingShiftX_ = 0;
-        pendingShiftY_ = 0;
-    }
-
-    dispatch(updateMaterial_, current_, 0, 0, center_);
-    current_ ^= 1u;
-
-    // The SRV handoff point (wave_[current_] to pixel-readable for the surface shaders).
-    renderer->EmitPoint(cl, uavPointIndex_ + 1u);
 }
 
 Math::float4 OceanSurfSim::GetWindowParams() const

@@ -49,12 +49,20 @@ plan removes, in three separable steps. The engine behaviour must not change at 
   Unroll → RunPrepares (builders, single-threaded) → CompileBarriers → record tasks.
   GATE: API in, zero passes converted yet, behaviour byte-identical, both stress gates green.
 
-- **S3 — Pilot conversions.** Convert 2–3 passes end-to-end to `AddPass2` + `EmitPoint`:
-  `Ocean.SurfSim` (ping-pong + relocate branch — kills `CurrentAfterFrame`), `Main_Tonemap`
-  (mid-pass UAV↔COPY round trip), `Main_VsmPageRender` (`PageRenderDecisions` becomes lambda
-  captures instead of a class member bridge). Each conversion is its own commit with the full
-  gate. Wider conversion after that is optional, pass-by-pass, whenever a pass is touched
-  anyway — both authoring styles coexist indefinitely.
+- **S3 — Pilot conversions.** Convert passes end-to-end to `AddPass2` + `EmitPoint`:
+  `Ocean.SurfSim` (ping-pong + relocate branch — kills `CurrentAfterFrame`) and
+  `Main_VsmPageRender` (`PageRenderDecisions` becomes lambda captures instead of a class member
+  bridge). Each conversion is its own commit with the full gate. Wider conversion after that is
+  optional, pass-by-pass, whenever a pass is touched anyway — both authoring styles coexist
+  indefinitely.
+  **Finding (S3 pilot #2 candidate rejected): `Main_Tonemap` is a COUNTEREXAMPLE, not a
+  candidate.** Its body is legitimately nondeterministic — `ranDlss = EvaluateDLSS(cl)` can
+  come back false only DURING recording, and `ranFxaa` hangs off material/size checks made in
+  the body — so a builder cannot pre-commit those decisions without changing the DLSS-failure
+  semantics. Its existing union registration ("declare both alternatives; a skipped state is
+  one redundant barrier") is the CORRECT authoring form for such a pass, not debt. Rule of
+  thumb this yields: AddPass2 fits passes whose frame decisions are knowable before recording;
+  union-style Prepare stays the right tool for bodies that discover outcomes mid-record.
 
 ## Detachability
 
@@ -75,4 +83,14 @@ be reverted independently.
   Gates green (builds 0/0, Release stress CLEAN, Debug GBV stress CLEAN, comparator silent).
   The API is deliberately unexercised — zero conversions per the plan; its end-to-end
   semantics are proven by the FIRST S3 pilot, which is the very next step.
-- S3: not started.
+- S3: pilot #1 DONE (uncommitted) — **the surf sim is its own render-graph pass now**
+  (`RenderPass::Main_SurfSim`, third member of the compute CL group, right after the FFT
+  dispatches): `OceanSurfSim::BuildPass` is the single builder (decisions as locals, cross-frame
+  ping-pong state committed at Prepare time, declarations from the same locals, record lambda
+  with by-value captures + two EmitPoint markers); `CurrentAfterFrame` and the
+  PrepareCompute/RecordCompute pair are DELETED, as are the surf-sim injection points in
+  OceanRenderable::PrepareCompute/RecordCompute (replaced by one `BuildSurfSimPass` bridge).
+  Gates green: builds 0/0, Release stress CLEAN, Debug GBV stress CLEAN, comparator silent,
+  surf-sim checkerboard identical in Debug with everything armed. Tonemap examined and
+  REJECTED as a candidate (see the finding above). Remaining: `Main_VsmPageRender`, its own
+  session — the largest and highest-value conversion.

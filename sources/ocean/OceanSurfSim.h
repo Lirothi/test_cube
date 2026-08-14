@@ -14,6 +14,7 @@
 // "surf sim injection".
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 #include <d3d12.h>
@@ -34,16 +35,18 @@ public:
     void EnsureResources(Renderer* renderer);
     bool IsReady() const { return created_; }
 
-    // CPU-side window follow. Decides this frame's re-anchor BEFORE PrepareCompute/RecordCompute
-    // run, so the barrier declarations and the recording cannot disagree about the ping-pong
-    // order (both derive it from pendingShift_ via CurrentAfterFrame).
+    // CPU-side window follow. Decides this frame's re-anchor BEFORE the render graph is built,
+    // so the pass builder below sees the final answer.
     void TickWindow(Math::float2 cameraXZ);
 
-    // Barrier declarations for exactly what RecordCompute will transition this frame. Call only
-    // on frames RecordCompute will actually run — registering resources a body never transitions
-    // advances the barrier compile past barriers nobody emits.
-    void PrepareCompute(RenderGraphPassContext& ctx);
-    void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl, float timeSeconds);
+    // Pass-flow S3 pilot (docs/render_graph_pass_flow_plan.md): the whole pass is ONE builder.
+    // It runs at Prepare time: makes every frame decision as a local (relocate, ping-pong
+    // indices, dt), COMMITS the cross-frame state immediately, declares the barrier points from
+    // those same locals, and returns the record lambda capturing them by value — there is no
+    // separate Record to keep in sync, and the record body names no resource (EmitPoint
+    // markers). Returns an empty function when the sim should not run this frame.
+    std::function<void(RenderGraphPassContext)> BuildPass(
+        RenderGraphPassContext& ctx, float timeSeconds);
 
     // x,y: window centre (world XZ), z: 1 / half extent, w: texel world size — the surface
     // shaders' window transform (debug view now, foam consumption at S4).
@@ -54,9 +57,6 @@ public:
 
 private:
     bool WillRelocate() const { return pendingShiftX_ != 0 || pendingShiftY_ != 0; }
-    // The ping-pong index that will hold the CURRENT (freshest) data once RecordCompute has run:
-    // a re-anchor frame swaps twice (relocate + update), a normal frame once.
-    uint32_t CurrentAfterFrame() const { return WillRelocate() ? current_ : (current_ ^ 1u); }
 
     static constexpr UINT kResolution = 512u;
     static constexpr float kHalfExtent = 250.0f; // 500 m window — the shore-depth precedent
@@ -74,11 +74,6 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE foamSrv_[2]{};
     std::shared_ptr<Material> updateMaterial_;
     std::shared_ptr<Material> relocateMaterial_;
-
-    // Pass-flow S1 pilot: the absolute declaration index of this object's first barrier point
-    // within the shared compute pass (captured from *ctx.usePoint in PrepareCompute); the SRV
-    // handoff point is uavPointIndex_ + 1. RecordCompute emits both with EmitPoint markers.
-    std::uint32_t uavPointIndex_ = 0;
 
     Math::float2 center_ = Math::float2(0.0f, 0.0f);
     // Texel shift decided by TickWindow for this frame's Relocate (0 = no re-anchor).

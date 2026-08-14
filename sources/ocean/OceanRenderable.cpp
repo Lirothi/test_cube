@@ -619,23 +619,25 @@ void OceanRenderable::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandLis
     lengthScales_ = simulation_->GetLengthScales();
     invLengthScales_ = simulation_->GetInvLengthScales();
     UpdateFoamTrailState();
-    // surf sim injection: OFF records zero dispatches (the Ocean.SurfSim scope disappears).
-    if (SurfSimActive() && surfSim_->IsReady())
-    {
-        surfSim_->RecordCompute(renderer, cl, elapsedTime_);
-    }
 }
 
 void OceanRenderable::PrepareCompute(RenderGraphPassContext& ctx)
 {
     if (!simulation_) { return; }
     simulation_->PrepareUpdate(ctx);
-    // surf sim injection: declare only on frames RecordCompute will actually run — registering
-    // resources a body never transitions is fatal under compiled barriers.
-    if (SurfSimActive() && surfSim_->IsReady())
+}
+
+// surf sim injection (pass-flow S3 pilot): the surf sim is its OWN render-graph pass now,
+// authored with AddPass2 — this is its builder, gated on the same activity condition for both
+// the declarations and the record (one gate, not two).
+std::function<void(RenderGraphPassContext)> OceanRenderable::BuildSurfSimPass(
+    RenderGraphPassContext& ctx)
+{
+    if (!SurfSimActive() || !surfSim_->IsReady())
     {
-        surfSim_->PrepareCompute(ctx);
+        return {};
     }
+    return surfSim_->BuildPass(ctx, elapsedTime_);
 }
 
 void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)

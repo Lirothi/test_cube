@@ -533,6 +533,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             CPU_SCOPE(ProfilerScopes::kPassObjectCompute);
             Pass_ObjectCompute(renderer, ctx);
         });
+    // surf sim injection (pass-flow S3 pilot): the surf sim as its OWN pass, authored with
+    // AddPass2 — the builder makes the frame's decisions, declares from them and returns the
+    // record lambda; there is no separate Prepare to mirror. Third member of the compute CL
+    // group, so it records into the same command list right after the FFT dispatches.
+    rg.AddPass2(RenderPass::Main_SurfSim, { pCompute },
+        [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            if (!frame_->ocean) { return {}; }
+            return frame_->ocean->BuildSurfSimPass(ctx);
+        });
     rg.EndCLGroup();
     // Measured: the prologue clear performs no transitions.
     rg.SetPassPrepare(pClear, [](RenderGraphPassContext&) {});
