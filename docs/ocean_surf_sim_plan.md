@@ -159,7 +159,57 @@ touched shader at every step; feature stays default-OFF throughout)
 
 ## Status
 
-- **S2 DONE (2026-08-14, uncommitted).** The SDF spawner lives. The kernels moved from root
+- **S3.1 deposit REWORK (2026-08-14, uncommitted, user-driven): crest-provoked foam, the
+  FFT-whitecap pattern.** The additive `foam += strength·sat(overload−1)·dt` behind a hard
+  threshold looked like "говно" (user): the deposit depended on how long the front lingered
+  over a texel (fast front = faint stamp) and the threshold only fired on the last strip of
+  depth — a tiny blob instead of a trail. Reworked to mirror ocean_foam_simulation.hlsl
+  exactly as the user pointed: instantaneous crest activity
+  `current = sat((overload − 0.5)/0.5)²·DepositStrength` (ramps in as the wave shoals toward
+  the breaker index) STAMPS the field via `foam = max(current, foam − FoamFadeRate·dt)` —
+  the crest provokes foam, the trail stays behind it all the way to the beach and decays
+  LINEARLY. `DepositStrength` is now the peak stamp (default 1.0), `FoamFadeRate` is foam/s
+  linear. SECOND fix in the same pass: the ContactFoam tear was REMOVED from the sim stamp —
+  at the sim's ~1 m texel the 0.12 tiles/m pattern aliases into per-texel noise, and bilinear
+  magnification renders every noisy texel as a soft axis-aligned square (the "staircase" the
+  user saw). The field stays a smooth physical quantity; `FrontBreakup` tears at CONSUMPTION
+  (S4), per pixel. GATE (30-frame twin series, height view vs OPAQUE foam view): foam rises
+  from t≈15 s under the crest, peaks ~150k px through 17.5–19.5 s as a solid trail following
+  the wave to the beach, decays through 22.5 s; deep water black. Residual: texel-tent
+  sawtooth on the trail's onset edge (1 m field magnified) — S4's per-pixel tear owns it.
+  Builds 0/0, both stress gates CLEAN, comparator 0.
+- **S3 post-mortem (the first "DONE" below was FALSE — the user caught it).** The first gate
+  claimed foam that was actually the LEGACY contact foam bleeding through the 0.85 debug tint;
+  the sim deposited NOTHING. Root causes, found by binary probes after making the foam debug
+  view OPAQUE (weight 1.0 — the only honest way to look at it):
+  1. **Committed-heap garbage/NaN.** The foam pair was never written wholesale (S0's checker
+     stamped only the wave pair), so creation-time garbage survived every
+     `read·fade + deposit` frame — NaN eats arithmetic and `saturate(NaN) = 0` renders as
+     permanent black. The spawner slot buffer shared the fate (phantom segments). FIX: the
+     first frame after creation runs a full-clear Relocate (shift >= Resolution = guaranteed
+     zeros; the same marker also scrubs the slots). LESSON: never trust heap zero-init;
+     wholesale-write or clear every RMW resource once.
+  2. **The injected peak is far below the authored amplitude** — the packet travels while it
+     inflates, smearing the hump; and the land absorber's first cut (20 cm) swallowed the whole
+     breaking zone. FIXES: absorber hugs the waterline (8 cm), injection shorter/tighter
+     (1.0 s / sigma 4 m), amplitude default 0.8 (it is a time INTEGRAL, not a peak), gamma 0.5.
+  Also: my "wave height" pixel measurements were poisoned by specular glints — measure fields,
+  not shaded frames.
+- **S3 DONE (2026-08-14, uncommitted, gate re-run HONESTLY).** Breaking + foam. `Update` deposits into the SurfFoam
+  ping-pong where a wave exceeds the surf breaker index (`h > gamma · max(depth, 0.15)`, gamma
+  default 0.78/McCowan, plus a 2 cm height floor so ripples never foam), scaled by the overload
+  and TORN by the shared ContactFoam pattern (t2, world-tiled 0.12/m); dissipation is
+  exponential (`Foam fade rate`). The foam field joined the SRV handoff (foam_[final] goes
+  pixel-readable with the wave; legacy t17, RS 17→18, table stages 18) and debug view 2 now
+  shows IT (white on dark) instead of the velocity channel. Knobs (config/JSON/both UIs):
+  Deposit strength 1.5, Breaker gamma 0.78, Foam fade rate 0.4, Front breakup 0.5.
+  GATE (25-frame series, view 2 now OPAQUE so only sim foam can read as white): the arriving
+  wave breaks on the shallows in front of the beach as a bright patch tied to THAT wave; deep
+  water stays black; no isobath band. Builds 0/0, both stress gates CLEAN, comparator silent.
+  KNOWN POLISH ITEMS: the deposit front shows substep stepping (rectangular stamps), and
+  spawn cadence/amplitude want level tuning — both land with S4's consumption pass where the
+  legacy breakup machinery will also tear the stripe. Next: S4 legacy consumption (sample
+  SurfFoam as an additive coverage source before the albedo blend). The SDF spawner lives. The kernels moved from root
   constants to ONE CB (`SurfSimCB`, CPU mirror in OceanSurfSim.cpp, dispatched via
   RecordComputeDispatch — the 16-root-constant squeeze is gone). Spawner slots are a GPU
   structured buffer (8 × 32 B, UAV-resident, zero-init = free): the CPU only throws a random

@@ -26,11 +26,14 @@ struct SurfSimCB
     float shoreZFar; float shoreCamHeight; float pokeAmp; float sdfCenterX;
     float sdfCenterZ; float sdfInvExtent; float spawnCandX; float spawnCandZ;
     std::uint32_t spawnSlot; float spawnDistance; float segmentHalfLen; float spawnAmp;
-    float spawnDuration; float spawnSigma; float pad0; float pad1;
+    float spawnDuration; float spawnSigma; float depositStrength; float breakerGamma;
+    float foamFadeRate; float frontBreakup; float pad0; float pad1;
 };
 
-constexpr float kSpawnDuration = 1.6f; // seconds of forcing per segment
-constexpr float kSpawnSigma = 5.0f;    // metres, across-segment width
+// Shorter + tighter than the first guess: the packet travels WHILE it inflates, so a long
+// injection smears the hump and the peak lands well under the authored amplitude.
+constexpr float kSpawnDuration = 1.0f; // seconds of forcing per segment
+constexpr float kSpawnSigma = 4.0f;    // metres, across-segment width
 }
 
 void OceanSurfSim::EnsureResources(Renderer* renderer)
@@ -193,19 +196,29 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
     const Tuning& tuning)
 {
     if (!created_ || !updateMaterial_ || !relocateMaterial_ || !spawnMaterial_ ||
-        shore.srv.ptr == 0 || shore.resource == nullptr || shore.sdfSrv.ptr == 0)
+        shore.srv.ptr == 0 || shore.resource == nullptr || shore.sdfSrv.ptr == 0 ||
+        shore.breakupSrv.ptr == 0)
     {
         return {};
     }
 
     // ---- decisions, once ----
-    const bool relocate = WillRelocate();
-    const int shiftX = pendingShiftX_;
-    const int shiftY = pendingShiftY_;
+    bool relocate = WillRelocate();
+    int shiftX = pendingShiftX_;
+    int shiftY = pendingShiftY_;
     const uint32_t readIndex = current_;
     if (relocate)
     {
         center_ = pendingCenter_;
+    }
+    if (needsInitialClear_)
+    {
+        // Full clear via Relocate's out-of-range path (see the kernel comment): scrubs the
+        // NaN/garbage the freshly created textures and spawner slots may hold.
+        needsInitialClear_ = false;
+        relocate = true;
+        shiftX = static_cast<int>(kResolution);
+        shiftY = 0;
     }
     const Math::float2 center = center_;
     pendingShiftX_ = 0;
@@ -291,9 +304,11 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
     ctx.Use(spawners_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(shore.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    // ...then the frame's freshest height field is left readable for the surface's pixel shader.
+    // ...then the frame's freshest height AND foam fields are left readable for the surface.
     ctx.NextPoint();
     ctx.Use(wave_[finalIndex].Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    ctx.Use(foam_[finalIndex].Get(),
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
     // ---- record, capturing the decisions by value ----
@@ -330,8 +345,12 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
             base.segmentHalfLen = tuning.segmentLength * 0.5f;
             base.spawnDuration = kSpawnDuration;
             base.spawnSigma = kSpawnSigma;
+            base.depositStrength = tuning.depositStrength;
+            base.breakerGamma = tuning.breakerGamma;
+            base.foamFadeRate = tuning.foamFadeRate;
+            base.frontBreakup = tuning.frontBreakup;
 
-            const auto srvs = { shore.srv, shore.sdfSrv };
+            const auto srvs = { shore.srv, shore.sdfSrv, shore.breakupSrv };
             const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
 
             if (spawn)
@@ -397,4 +416,9 @@ Math::float4 OceanSurfSim::GetWindowParams() const
 D3D12_CPU_DESCRIPTOR_HANDLE OceanSurfSim::GetWaveSrv() const
 {
     return created_ ? waveSrv_[current_] : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE OceanSurfSim::GetSurfFoamSrv() const
+{
+    return created_ ? foamSrv_[current_] : D3D12_CPU_DESCRIPTOR_HANDLE{};
 }

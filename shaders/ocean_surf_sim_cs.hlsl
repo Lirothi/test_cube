@@ -16,7 +16,7 @@
 //
 // The window is square, world-axis-aligned: worldXZ = center + (coord + 0.5) * texel - halfExtent.
 // Spawner slots hold WORLD positions, so a window re-anchor does not disturb them.
-#define OCEAN_SURF_SIM_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), StaticSampler(s0, filter=FILTER_MIN_MAG_LINEAR_MIP_POINT, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP)"
+#define OCEAN_SURF_SIM_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), StaticSampler(s0, filter=FILTER_MIN_MAG_LINEAR_MIP_POINT, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP), StaticSampler(s1, filter=FILTER_MIN_MAG_LINEAR_MIP_POINT, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP)"
 
 #define MAX_SPAWNERS 8u
 
@@ -54,13 +54,21 @@ cbuffer SurfSimCB : register(b0)
 
     float SpawnDuration;   // seconds of forcing (the sin envelope's period)
     float SpawnSigma;      // metres, across-segment Gaussian width
+    float DepositStrength; // S3: peak foam a breaking crest stamps (FFT-foam max() semantics)
+    float BreakerGamma;    // S3: surf breaker index H/d (~0.78, McCowan)
+
+    float FoamFadeRate;    // S3: foam/s LINEAR decay behind the crest (the FFT-foam pattern)
+    float FrontBreakup;    // S3: 0..1 tear of the foam at CONSUMPTION (S4) — never in the sim,
+                           // whose ~1 m texels alias the pattern into per-texel noise
     float Pad0;
     float Pad1;
 };
 
 Texture2D<float>    ShoreDepthTex : register(t0);
 Texture2D<float2>   ShoreSdfTex : register(t1); // x: metres to the waterline (negative inland)
+Texture2D<float4>   BreakupTex : register(t2);  // S3: the shared ContactFoam breakup pattern
 SamplerState        ClampSampler : register(s0);
+SamplerState        WrapSampler : register(s1);
 
 // x: height (metres), y: vertical velocity (m/s).
 RWTexture2D<float2> WaveRead  : register(u0);
@@ -143,8 +151,11 @@ void Update(uint3 dispatchThreadId : SV_DispatchThreadID)
     v += c2 * laplacian / (TexelWorldSize * TexelWorldSize) * DeltaTime;
 
     // Absorbers, not reflectors: land eats the wave (the run-up is S3's foam, not a bounce),
-    // and the window border eats it so a wave leaving the domain never echoes back.
-    const float landFade = saturate(depth / 0.2f);
+    // and the window border eats it so a wave leaving the domain never echoes back. The land
+    // absorber hugs the WATERLINE (8 cm) — its first cut at 20 cm swallowed the whole breaking
+    // zone (h > gamma*depth is reachable at 15..40 cm for our wave heights), which is why S3's
+    // first gate produced ZERO foam.
+    const float landFade = saturate(depth / 0.08f);
     const int borderTexels = min(min(c.x, c.y), min(maxC - c.x, maxC - c.y));
     const float borderFade = saturate((float)borderTexels / 24.0f);
     const float fade = min(landFade, borderFade);
@@ -201,8 +212,25 @@ void Update(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     WaveWrite[coord] = float2(h, v);
 
-    // Foam: still just a decaying carrier until S3 deposits into it.
-    FoamWrite[coord] = FoamRead[coord] * max(0.0f, 1.0f - 0.5f * DeltaTime);
+    // S3: crest-provoked foam, mirroring the FFT whitecap sim (ocean_foam_simulation.hlsl):
+    // the crest's instantaneous breaking activity STAMPS the field through max() and the trail
+    // it leaves decays LINEARLY behind it — foam follows every wave shoreward and dissipates,
+    // no matter how few substeps the front spends over a texel (the previous additive
+    // deposit-per-second left only faint stamps behind a fast front). Activity ramps in as the
+    // wave shoals toward the breaker index (H/d ~ gamma, McCowan) and squares so the stamp
+    // peaks at the actual break — still an event tied to THIS wave at THIS spot, never a
+    // function of depth alone (the plan's invariant 1).
+    // The field stays a SMOOTH physical quantity: the FrontBreakup tear is applied at
+    // consumption (S4), per PIXEL — sampled here at the sim's ~1 m texel the pattern aliases
+    // into per-texel noise, and bilinear magnification renders every noisy texel as a soft
+    // axis-aligned square.
+    const float breakDepth = max(depth, 0.1f); // the waterline would divide by zero otherwise
+    const float overload = h / (BreakerGamma * breakDepth);
+    const float kOnset = 0.5f; // fraction of the breaker index where whitecapping starts
+    float current = saturate((overload - kOnset) / (1.0f - kOnset));
+    current *= current * saturate(h / 0.02f) * DepositStrength; // ripples never foam
+    const float foam = max(current, FoamRead[coord] - FoamFadeRate * DeltaTime);
+    FoamWrite[coord] = min(foam, 1.5f);
 }
 
 // S2: refine the CPU's random candidate against the shore SDF and (over)write one spawner slot.
@@ -265,10 +293,21 @@ void Relocate(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     // worldPos(dst, newCenter) == worldPos(src, oldCenter)  =>  src = dst + (new - old) / texel.
-    // Spawner slots hold world positions and are untouched by a re-anchor.
+    // Spawner slots hold world positions and are untouched by a NORMAL re-anchor.
     const int2 src = int2(coord) + int2(ShiftX, ShiftY);
     const bool inside =
         src.x >= 0 && src.y >= 0 && src.x < (int)Resolution && src.y < (int)Resolution;
     WaveWrite[coord] = inside ? WaveRead[uint2(src)] : float2(0.0f, 0.0f);
     FoamWrite[coord] = inside ? FoamRead[uint2(src)] : 0.0f;
+
+    // A shift >= Resolution is the FULL-CLEAR marker (first frame after creation): committed
+    // heaps are NOT guaranteed zeroed and the foam pair proved it the hard way — garbage/NaN
+    // survived every `read * fade + deposit` frame because NaN eats arithmetic, and
+    // saturate(NaN) = 0 hid it as permanent blackness. The spawner slots come from the same
+    // heap, so they are scrubbed here too.
+    if (ShiftX >= (int)Resolution && coord.y == 0 && coord.x < MAX_SPAWNERS)
+    {
+        SpawnerSlot empty = (SpawnerSlot)0;
+        Spawners[coord.x] = empty;
+    }
 }

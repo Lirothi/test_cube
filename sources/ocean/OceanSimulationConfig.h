@@ -84,9 +84,21 @@ struct OceanRenderConfig
     // starves the surf (the plan's invariant 3).
     float surfSimSpawnDistance = 40.0f;  // metres seaward of the waterline
     float surfSimSegmentLength = 30.0f;  // metres along the shore
-    float surfSimWaveAmplitude = 0.35f;  // metres injected per segment at full wind
+    // The TIME INTEGRAL of the injection, not the peak: the packet spreads while it inflates,
+    // so the crest that actually arrives is a fraction of this. Tuned against the breaker
+    // trigger, not against textbook wave heights.
+    float surfSimWaveAmplitude = 0.8f;   // metres injected per segment at full wind
     float surfSimSpawnInterval = 3.0f;   // seconds between spawns at full wind
     float surfSimWindCoupling = 1.0f;    // 0 = ignore wind, 1 = calm silences the spawner
+    // S3 breaking + foam: deposit where a wave exceeds the surf breaker index (H/d), torn by
+    // the shared breakup pattern, dissipating exponentially.
+    // Gamma below the textbook 0.78: the linear wave equation has no shoaling (Green's law), so
+    // heights do NOT grow over the shelf the way real waves do — the trigger must meet the sim's
+    // waves where they actually are.
+    float surfSimDepositStrength = 1.0f; // peak foam a breaking crest stamps (max() semantics)
+    float surfSimBreakerGamma = 0.5f;    // H/d breaker index (sim-tuned; McCowan is 0.78)
+    float surfSimFoamFadeRate = 0.4f;    // foam/s linear decay behind the crest
+    float surfSimFrontBreakup = 0.5f;    // 0..1 stripe tear
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

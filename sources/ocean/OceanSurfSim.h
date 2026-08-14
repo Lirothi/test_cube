@@ -67,6 +67,8 @@ public:
         Math::float2 sdfCenter = Math::float2(0.0f, 0.0f);
         float sdfInvExtent = 0.0f;
         D3D12_CPU_DESCRIPTOR_HANDLE sdfSrv{};
+        // S3: the shared ContactFoam breakup pattern that tears the deposit stripe.
+        D3D12_CPU_DESCRIPTOR_HANDLE breakupSrv{};
     };
 
     // S2: authored spawner tuning + the frame's wind, assembled by OceanRenderable from the
@@ -79,6 +81,11 @@ public:
         float interval = 3.0f;        // seconds between spawns at full wind
         float windCoupling = 1.0f;    // 0 = ignore wind, 1 = calm silences the spawner
         float windAmount = 0.0f;      // 0..1, the shared contact-foam wind remap
+        // S3: breaking + foam.
+        float depositStrength = 1.0f; // peak foam a breaking crest stamps (max() semantics)
+        float breakerGamma = 0.78f;   // surf breaker index H/d
+        float foamFadeRate = 0.4f;    // foam/s linear decay behind the crest
+        float frontBreakup = 0.5f;    // 0..1 tear of the deposit stripe
     };
 
     // Pass-flow S3 pilot (docs/render_graph_pass_flow_plan.md): the whole pass is ONE builder.
@@ -95,8 +102,10 @@ public:
     // shaders' window transform (debug view now, foam consumption at S4).
     Math::float4 GetWindowParams() const;
     // The height field the surface may sample THIS frame (left in a pixel-readable state by
-    // RecordCompute).
+    // the pass).
     D3D12_CPU_DESCRIPTOR_HANDLE GetWaveSrv() const;
+    // S3: the surf foam field, same handoff contract as the wave.
+    D3D12_CPU_DESCRIPTOR_HANDLE GetSurfFoamSrv() const;
 
 private:
     bool WillRelocate() const { return pendingShiftX_ != 0 || pendingShiftY_ != 0; }
@@ -144,4 +153,8 @@ private:
     uint32_t spawnSeed_ = 0x12345u; // xorshift state for candidate placement
     bool created_ = false;
     bool hasCenter_ = false;
+    // First frame after creation runs a full-clear Relocate (shift >= Resolution): committed
+    // heaps are NOT guaranteed zeroed — the foam pair held NaN garbage that survived every
+    // read-modify-write frame and rendered as permanent black.
+    bool needsInitialClear_ = true;
 };

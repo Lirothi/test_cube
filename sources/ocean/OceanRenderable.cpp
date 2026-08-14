@@ -660,6 +660,8 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildSurfSimPass(
     shore.sdfInvExtent = 0.5f / sdfHalf;
     shore.sdfSrv = simulation_->GetShoreSdfSrv();
 
+    shore.breakupSrv = shoreFoamBreakupMaskTexture_.GetSRVCPU();
+
     OceanSurfSim::Tuning tuning;
     const OceanRenderConfig& render = GetRenderConfig();
     tuning.spawnDistance = std::clamp(render.surfSimSpawnDistance, 5.0f, 200.0f);
@@ -667,6 +669,10 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildSurfSimPass(
     tuning.amplitude = std::clamp(render.surfSimWaveAmplitude, 0.0f, 2.0f);
     tuning.interval = std::clamp(render.surfSimSpawnInterval, 0.25f, 30.0f);
     tuning.windCoupling = std::clamp(render.surfSimWindCoupling, 0.0f, 1.0f);
+    tuning.depositStrength = std::clamp(render.surfSimDepositStrength, 0.0f, 5.0f);
+    tuning.breakerGamma = std::clamp(render.surfSimBreakerGamma, 0.4f, 1.2f);
+    tuning.foamFadeRate = std::clamp(render.surfSimFoamFadeRate, 0.0f, 3.0f);
+    tuning.frontBreakup = std::clamp(render.surfSimFrontBreakup, 0.0f, 1.0f);
     // The shared contact-foam wind remap (see ShoreFoamWindAmount in the breakup include).
     const Math::float4 wind = GetShoreFoamWindParams();
     tuning.windAmount = std::clamp(
@@ -711,9 +717,9 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
 
     // MUST match numDescriptors in OCEAN_SURFACE_RS. Pushing past the end is a silent buffer
     // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
-    // 17th slot = the surf sim height field (surf sim injection): declared by the LEGACY RS only;
-    // the modern RS still says 16 and simply never addresses the extra descriptor.
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 17> srvs{};
+    // Slots 17/18 = the surf sim height and foam fields (surf sim injection): declared by the
+    // LEGACY RS only; the modern RS still says 16 and simply never addresses the extras.
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 18> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -809,14 +815,18 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSrv = deferred.oceanReflectionSRV.ptr != 0 ? deferred.oceanReflectionSRV : fallbackSrv;
     pushSrv(oceanReflectionSrv.ptr != 0 ? oceanReflectionSrv : fallbackSrv);
 
-    // surf sim injection: t16. Falls back so the slot is never garbage; the shader only samples
-    // it when surfSimParams.w says a debug view is active (S4 adds the foam consumption).
+    // surf sim injection: t16 height + t17 foam. Fall back so the slots are never garbage; the
+    // shader only samples them when surfSimParams.w says a debug view is active (S4 adds the
+    // foam consumption).
     D3D12_CPU_DESCRIPTOR_HANDLE surfWaveSrv = fallbackSrv;
-    if (surfSim_ && surfSim_->IsReady() && surfSim_->GetWaveSrv().ptr != 0)
+    D3D12_CPU_DESCRIPTOR_HANDLE surfFoamSrv = fallbackSrv;
+    if (surfSim_ && surfSim_->IsReady())
     {
-        surfWaveSrv = surfSim_->GetWaveSrv();
+        if (surfSim_->GetWaveSrv().ptr != 0) { surfWaveSrv = surfSim_->GetWaveSrv(); }
+        if (surfSim_->GetSurfFoamSrv().ptr != 0) { surfFoamSrv = surfSim_->GetSurfFoamSrv(); }
     }
     pushSrv(surfWaveSrv);
+    pushSrv(surfFoamSrv);
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;

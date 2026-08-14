@@ -878,6 +878,10 @@ namespace
                         renderDrag("Surf Wave Amplitude", render.surfSimWaveAmplitude, 0.005f, 0.0f, 2.0f);
                         renderDrag("Surf Spawn Interval", render.surfSimSpawnInterval, 0.02f, 0.25f, 30.0f);
                         renderDrag("Surf Wind Coupling", render.surfSimWindCoupling, 0.005f, 0.0f, 1.0f);
+                        renderDrag("Surf Deposit Strength", render.surfSimDepositStrength, 0.01f, 0.0f, 5.0f);
+                        renderDrag("Surf Breaker Gamma", render.surfSimBreakerGamma, 0.005f, 0.4f, 1.2f);
+                        renderDrag("Surf Foam Fade Rate", render.surfSimFoamFadeRate, 0.005f, 0.0f, 3.0f);
+                        renderDrag("Surf Front Breakup", render.surfSimFrontBreakup, 0.005f, 0.0f, 1.0f);
                     }
                     // Mirrors OceanControlsWindow: the two surface variants read different
                     // settings, so only the live ones are shown per mode.

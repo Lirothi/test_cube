@@ -377,6 +377,18 @@ namespace OceanRenderConfigJson
         render.surfSimWindCoupling = std::clamp(
             ReadFloat(object, "surfSimWindCoupling", render.surfSimWindCoupling),
             0.0f, 1.0f);
+        render.surfSimDepositStrength = std::clamp(
+            ReadFloat(object, "surfSimDepositStrength", render.surfSimDepositStrength),
+            0.0f, 5.0f);
+        render.surfSimBreakerGamma = std::clamp(
+            ReadFloat(object, "surfSimBreakerGamma", render.surfSimBreakerGamma),
+            0.4f, 1.2f);
+        render.surfSimFoamFadeRate = std::clamp(
+            ReadFloat(object, "surfSimFoamFadeRate", render.surfSimFoamFadeRate),
+            0.0f, 3.0f);
+        render.surfSimFrontBreakup = std::clamp(
+            ReadFloat(object, "surfSimFrontBreakup", render.surfSimFrontBreakup),
+            0.0f, 1.0f);
         render.causticsIntensity = std::max(
             0.0f, ReadFloat(object, "causticsIntensity", render.causticsIntensity));
         render.causticsScale = std::max(
@@ -539,6 +551,10 @@ namespace OceanRenderConfigJson
         out["surfSimWaveAmplitude"] = render.surfSimWaveAmplitude;
         out["surfSimSpawnInterval"] = render.surfSimSpawnInterval;
         out["surfSimWindCoupling"] = render.surfSimWindCoupling;
+        out["surfSimDepositStrength"] = render.surfSimDepositStrength;
+        out["surfSimBreakerGamma"] = render.surfSimBreakerGamma;
+        out["surfSimFoamFadeRate"] = render.surfSimFoamFadeRate;
+        out["surfSimFrontBreakup"] = render.surfSimFrontBreakup;
         out["causticsIntensity"] = render.causticsIntensity;
         out["causticsScale"] = render.causticsScale;
         out["causticsSpeed"] = render.causticsSpeed;

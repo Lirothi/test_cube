@@ -8,9 +8,10 @@
 // rather than sRGB, the one known deviation). One FUNCTIONAL edit is sanctioned on top: the
 // nearshore attenuation is authored (shoreLegacyDampParams) instead of the original hardcoded
 // saturate(depth * 0.15); its defaults reproduce the original curve. Do not otherwise touch.
-// numDescriptors 17: t16 is the surf sim height field (surf sim injection) - the C++ table
-// always stages 17 entries, the modern RS keeps saying 16 and never addresses the last one.
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=17, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+// numDescriptors 18: t16/t17 are the surf sim height and foam fields (surf sim injection) -
+// the C++ table always stages 18 entries, the modern RS keeps saying 16 and never addresses
+// the extras.
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=18, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -90,8 +91,10 @@ Texture2D ShoreDepthTexture : register(t13);
 // legacy surface never read it before. x: metres to the waterline (negative inland), y: depth.
 Texture2D<float2> ShoreSdfTexture : register(t14);
 Texture2D OceanReflectionTexture : register(t15);
-// surf sim injection: the sim's height field (x: height m, y: vertical velocity).
+// surf sim injection: the sim's height field (x: height m, y: vertical velocity) and its surf
+// foam field (r: coverage).
 Texture2D<float2> SurfSimWaveTex : register(t16);
+Texture2D<float> SurfSimFoamTex : register(t17);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointSampler : register(s2);
@@ -1213,10 +1216,18 @@ PSOut PSMain(VSOutput input)
                 (input.baseXZ - surfSimParams.xy) * (surfSimParams.z * 0.5f) + 0.5f;
             if (all(simUV >= 0.0f) && all(simUV <= 1.0f))
             {
-                const float2 wave = SurfSimWaveTex.SampleLevel(LinearClampSampler, simUV, 0);
-                const float value = debugView == 1u ? wave.x : wave.y;
-                debugColor = float3(saturate(value * 2.0f), 0.1f, saturate(-value * 2.0f));
-                debugWeight = 0.85f;
+                if (debugView == 1u)
+                {
+                    const float value = SurfSimWaveTex.SampleLevel(LinearClampSampler, simUV, 0).x;
+                    debugColor = float3(saturate(value * 2.0f), 0.1f, saturate(-value * 2.0f));
+                    debugWeight = 0.85f;
+                }
+                else // S3: the surf foam field, white on dark — OPAQUE, so nothing that is not
+                {    // sim foam can read as white (the legacy foam bled through at 0.85)
+                    const float f = SurfSimFoamTex.SampleLevel(LinearClampSampler, simUV, 0);
+                    debugColor = saturate(f).xxx;
+                    debugWeight = 1.0f;
+                }
             }
         }
         else if (debugView == 3u)

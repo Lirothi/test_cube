@@ -1116,6 +1116,10 @@ namespace
             drag("Wave amplitude", render.surfSimWaveAmplitude, 0.005f, 0.0f, 2.0f);
             drag("Spawn interval", render.surfSimSpawnInterval, 0.02f, 0.25f, 30.0f);
             drag("Wind coupling", render.surfSimWindCoupling, 0.005f, 0.0f, 1.0f);
+            drag("Deposit strength", render.surfSimDepositStrength, 0.01f, 0.0f, 5.0f);
+            drag("Breaker gamma", render.surfSimBreakerGamma, 0.005f, 0.4f, 1.2f);
+            drag("Foam fade rate", render.surfSimFoamFadeRate, 0.005f, 0.0f, 3.0f);
+            drag("Front breakup", render.surfSimFrontBreakup, 0.005f, 0.0f, 1.0f);
             // S1 gate: inject a test hump at the sim window's centre (i.e. under the camera).
             if (ImGui::Button("Poke"))
             {
