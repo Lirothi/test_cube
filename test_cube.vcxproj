@@ -300,6 +300,7 @@
     <ClCompile Include="sources/ocean/OceanRenderable.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationConfig.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulation.cpp" />
+    <ClCompile Include="sources/ocean/OceanSurfSim.cpp" />
     <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp" />
     <ClCompile Include="sources/vfx/ParticlePresets.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp" />
@@ -459,6 +460,7 @@
     <ClInclude Include="sources/ocean/OceanRenderable.h" />
     <ClInclude Include="sources/ocean/OceanSimulationConfig.h" />
     <ClInclude Include="sources/ocean/OceanSimulation.h" />
+    <ClInclude Include="sources/ocean/OceanSurfSim.h" />
     <ClInclude Include="sources/vfx/ParticleEmitterObject.h" />
     <ClInclude Include="sources/vfx/ParticlePresets.h" />
     <ClInclude Include="sources/vfx/ParticleTypes.h" />
@@ -560,6 +562,7 @@
     <None Include="shaders\ocean_fft.hlsl" />
     <None Include="shaders\ocean_generate_mips.hlsl" />
     <None Include="shaders\ocean_shore_sdf.hlsl" />
+    <None Include="shaders\ocean_surf_sim_cs.hlsl" />
     <None Include="shaders\ocean_foam_simulation.hlsl" />
     <None Include="shaders\ocean_reflection_cs.hlsl" />
     <None Include="shaders\ocean_surface.hlsl" />

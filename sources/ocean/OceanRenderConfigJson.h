@@ -354,6 +354,14 @@ namespace OceanRenderConfigJson
                 render.causticsEnabled = it->get<bool>();
             }
         }
+
+        {
+            const auto it = object.find("surfSimEnabled");
+            if (it != object.end() && it->is_boolean())
+            {
+                render.surfSimEnabled = it->get<bool>();
+            }
+        }
         render.causticsIntensity = std::max(
             0.0f, ReadFloat(object, "causticsIntensity", render.causticsIntensity));
         render.causticsScale = std::max(
@@ -510,6 +518,7 @@ namespace OceanRenderConfigJson
         out["underwaterFoamParallax"] = render.underwaterFoamParallax;
 
         out["causticsEnabled"] = render.causticsEnabled;
+        out["surfSimEnabled"] = render.surfSimEnabled;
         out["causticsIntensity"] = render.causticsIntensity;
         out["causticsScale"] = render.causticsScale;
         out["causticsSpeed"] = render.causticsSpeed;

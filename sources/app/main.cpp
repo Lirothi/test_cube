@@ -404,6 +404,15 @@ int WINAPI WinMain(
                 ocean::g_foamDebugView = std::atoi(p + 1);
             }
         }
+        // surf sim injection: "--ocean-surf-sim" force-enables the surf sim regardless of the
+        // level's surfSimEnabled; "--ocean-surf-debug=<view>" preselects a debug tint so the sim
+        // can be captured headless with --shot (both are plain runtime state, no variant).
+        if (std::strstr(lpCmdLine, "--ocean-surf-sim")) {
+            ocean::g_surfSimForce = true;
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--ocean-surf-debug=")) {
+            ocean::g_surfSimDebugView = std::atoi(flag + std::strlen("--ocean-surf-debug="));
+        }
         // "--trace=<frames>": headless equivalent of the CaptureTrace key.
         if (const char* flag = std::strstr(lpCmdLine, "--trace=")) {
             g_traceFrames = static_cast<uint32_t>(std::atoi(flag + std::strlen("--trace=")));

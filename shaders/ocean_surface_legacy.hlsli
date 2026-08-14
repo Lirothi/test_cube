@@ -8,7 +8,9 @@
 // rather than sRGB, the one known deviation). One FUNCTIONAL edit is sanctioned on top: the
 // nearshore attenuation is authored (shoreLegacyDampParams) instead of the original hardcoded
 // saturate(depth * 0.15); its defaults reproduce the original curve. Do not otherwise touch.
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+// numDescriptors 17: t16 is the surf sim height field (surf sim injection) - the C++ table
+// always stages 17 entries, the modern RS keeps saying 16 and never addresses the last one.
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=17, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -62,6 +64,8 @@ cbuffer OceanCB : register(b0)
     float4 shoreLegacyFoamParams2;     // x: tail edge fade (depth units of softness), y: wind thinning amount (0 = off), z: tail contrast (around 0.5), w: tail brightness bias
     float4 shoreLegacyDissipationParams; // foam dissipation injection: x: patch scale (m), y: drift speed (m/s), z: amount (0 = off), w: contrast
     float4 shoreFoamWindParams;        // shared with the modern surface (same C++ feed): x: wind force 0..1, y: calm threshold, z: full threshold
+    float4 shoreSdfParams;             // surf sim injection (debug): shared name with the modern surface - x: centre x, y: centre z, z: inv extent, w: texel world size
+    float4 surfSimParams;              // surf sim injection: xy: window centre, z: 1 / half extent, w: debug view (0 = off)
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed (shared with the modern surface)
     float4 shoreSlopeParams;           // z: edge soft depth = the contact foam's edge fade (shared with the modern surface)
     float4 depthTextureSize;           // xy: texel size, zw: texture size
@@ -82,7 +86,12 @@ Texture2D ContactFoamTex : register(t10);
 Texture2D ShoreFoamAlbedoTex : register(t11);
 Texture2D SceneDepthTexture : register(t12);
 Texture2D ShoreDepthTexture : register(t13);
+// surf sim injection (debug views): the shore SDF already rides the shared table at t14; the
+// legacy surface never read it before. x: metres to the waterline (negative inland), y: depth.
+Texture2D<float2> ShoreSdfTexture : register(t14);
 Texture2D OceanReflectionTexture : register(t15);
+// surf sim injection: the sim's height field (x: height m, y: vertical velocity).
+Texture2D<float2> SurfSimWaveTex : register(t16);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointSampler : register(s2);
@@ -268,6 +277,14 @@ float2 ShoreDepthUV(float2 baseXZ)
 {
     float2 offsetXZ = baseXZ - shoreViewParams.xy;
     float invExtent = shoreViewParams.w;
+    return float2(offsetXZ.x * invExtent + 0.5f, 0.5f - offsetXZ.y * invExtent);
+}
+
+// surf sim injection (debug): the modern surface's SDF UV mapping, duplicated for the debug view.
+float2 ShoreSdfUV(float2 baseXZ)
+{
+    float2 offsetXZ = baseXZ - shoreSdfParams.xy;
+    float invExtent = shoreSdfParams.z;
     return float2(offsetXZ.x * invExtent + 0.5f, 0.5f - offsetXZ.y * invExtent);
 }
 
@@ -1179,6 +1196,53 @@ PSOut PSMain(VSOutput input)
     }
 
     float4 outColor = float4(saturate(color), 1.0f);
+
+    // surf sim injection: debug tint (docs/ocean_surf_sim_plan.md). A plain uniform branch, no
+    // variant - surfSimParams.w = 0 keeps every water pixel on the early side of the branch.
+    // 1: sim height (red +, blue -), 2: sim vertical velocity, 3: shore SDF isolines (5 m),
+    // 4: shore depth map.
+    [branch]
+    if (surfSimParams.w > 0.5f)
+    {
+        const uint debugView = (uint)surfSimParams.w;
+        float3 debugColor = float3(0.0f, 0.0f, 0.0f);
+        float debugWeight = 0.0f;
+        if (debugView <= 2u)
+        {
+            const float2 simUV =
+                (input.baseXZ - surfSimParams.xy) * (surfSimParams.z * 0.5f) + 0.5f;
+            if (all(simUV >= 0.0f) && all(simUV <= 1.0f))
+            {
+                const float2 wave = SurfSimWaveTex.SampleLevel(LinearClampSampler, simUV, 0);
+                const float value = debugView == 1u ? wave.x : wave.y;
+                debugColor = float3(saturate(value * 2.0f), 0.1f, saturate(-value * 2.0f));
+                debugWeight = 0.85f;
+            }
+        }
+        else if (debugView == 3u)
+        {
+            const float2 sdfUV = ShoreSdfUV(input.baseXZ);
+            if (all(sdfUV >= 0.0f) && all(sdfUV <= 1.0f))
+            {
+                const float dist = ShoreSdfTexture.SampleLevel(LinearClampSampler, sdfUV, 0).x;
+                const float band = abs(frac(dist * 0.2f) - 0.5f) * 2.0f;
+                debugColor = dist < 0.0f
+                    ? float3(0.8f, 0.2f, 0.1f)                       // inland
+                    : float3(band, saturate(dist * 0.01f), 1.0f - band);
+                debugWeight = 0.85f;
+            }
+        }
+        else
+        {
+            const float2 shoreUV = ShoreDepthUV(input.baseXZ);
+            if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
+            {
+                debugColor = SampleShoreDepth(shoreUV).xxx;
+                debugWeight = 0.85f;
+            }
+        }
+        outColor.rgb = lerp(outColor.rgb, debugColor, debugWeight);
+    }
 
     float2 currUv = ClipToUV(input.positionNDC);
     float2 prevUv = ClipToUV(input.prevPositionNDC);

@@ -283,6 +283,7 @@ public:
             shoreLegacyFoamParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreLegacyFoamParams");
             shoreLegacyFoamParams2Handle_ = material->ComputeCBFieldHandle(0, "shoreLegacyFoamParams2");
             shoreLegacyDissipationParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreLegacyDissipationParams");
+            surfSimParamsHandle_ = material->ComputeCBFieldHandle(0, "surfSimParams");
             shoreSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSamplingParams");
             sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
@@ -345,6 +346,7 @@ public:
             shoreLegacyFoamParamsHandle_ = {};
             shoreLegacyFoamParams2Handle_ = {};
             shoreLegacyDissipationParamsHandle_ = {};
+            surfSimParamsHandle_ = {};
             shoreSamplingParamsHandle_ = {};
             sunDirAmbientHandle_ = {};
             sunColorExposureHandle_ = {};
@@ -421,6 +423,7 @@ public:
         UpdateUniform(owner, shoreLegacyFoamParamsHandle_, material, owner_.GetShoreLegacyFoamParams(), cbData);
         UpdateUniform(owner, shoreLegacyFoamParams2Handle_, material, owner_.GetShoreLegacyFoamParams2(), cbData);
         UpdateUniform(owner, shoreLegacyDissipationParamsHandle_, material, owner_.GetShoreLegacyDissipationParams(), cbData);
+        UpdateUniform(owner, surfSimParamsHandle_, material, owner_.GetSurfSimParams(), cbData);
         UpdateUniform(owner, shoreSamplingParamsHandle_, material, owner_.GetShoreSamplingParams(), cbData);
         UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
@@ -488,6 +491,7 @@ private:
     Material::CBFieldHandle shoreLegacyFoamParamsHandle_{};
     Material::CBFieldHandle shoreLegacyFoamParams2Handle_{};
     Material::CBFieldHandle shoreLegacyDissipationParamsHandle_{};
+    Material::CBFieldHandle surfSimParamsHandle_{};
     Material::CBFieldHandle shoreSamplingParamsHandle_{};
     Material::CBFieldHandle sunDirAmbientHandle_{};
     Material::CBFieldHandle sunColorExposureHandle_{};
@@ -537,6 +541,12 @@ void OceanRenderable::Init(Renderer* renderer,
 
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
+    // surf sim injection: the object always exists, its GPU resources are lazy (EnsureSimulationResources).
+    if (!surfSim_)
+    {
+        surfSim_ = std::make_unique<OceanSurfSim>();
+    }
+
     BuildMesh(renderer, uploadCmdList, uploadKeepAlive);
     if (simulation_)
     {
@@ -585,6 +595,12 @@ void OceanRenderable::Tick(float deltaTime)
         viewerXZ_ = Math::float2(pos.x, pos.z);
         viewerHeight_ = pos.y;
     }
+    // surf sim injection: the window follow is decided HERE, before the render graph, so the
+    // barrier declarations (PrepareCompute) and the recording agree on this frame's re-anchor.
+    if (SurfSimActive())
+    {
+        surfSim_->TickWindow(viewerXZ_);
+    }
     UpdateClipLevels();
 }
 
@@ -603,12 +619,23 @@ void OceanRenderable::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandLis
     lengthScales_ = simulation_->GetLengthScales();
     invLengthScales_ = simulation_->GetInvLengthScales();
     UpdateFoamTrailState();
+    // surf sim injection: OFF records zero dispatches (the Ocean.SurfSim scope disappears).
+    if (SurfSimActive() && surfSim_->IsReady())
+    {
+        surfSim_->RecordCompute(renderer, cl, elapsedTime_);
+    }
 }
 
 void OceanRenderable::PrepareCompute(RenderGraphPassContext& ctx)
 {
     if (!simulation_) { return; }
     simulation_->PrepareUpdate(ctx);
+    // surf sim injection: declare only on frames RecordCompute will actually run — registering
+    // resources a body never transitions is fatal under compiled barriers.
+    if (SurfSimActive() && surfSim_->IsReady())
+    {
+        surfSim_->PrepareCompute(ctx);
+    }
 }
 
 void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)
@@ -645,7 +672,9 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
 
     // MUST match numDescriptors in OCEAN_SURFACE_RS. Pushing past the end is a silent buffer
     // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 16> srvs{};
+    // 17th slot = the surf sim height field (surf sim injection): declared by the LEGACY RS only;
+    // the modern RS still says 16 and simply never addresses the extra descriptor.
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 17> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -741,6 +770,15 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSrv = deferred.oceanReflectionSRV.ptr != 0 ? deferred.oceanReflectionSRV : fallbackSrv;
     pushSrv(oceanReflectionSrv.ptr != 0 ? oceanReflectionSrv : fallbackSrv);
 
+    // surf sim injection: t16. Falls back so the slot is never garbage; the shader only samples
+    // it when surfSimParams.w says a debug view is active (S4 adds the foam consumption).
+    D3D12_CPU_DESCRIPTOR_HANDLE surfWaveSrv = fallbackSrv;
+    if (surfSim_ && surfSim_->IsReady() && surfSim_->GetWaveSrv().ptr != 0)
+    {
+        surfWaveSrv = surfSim_->GetWaveSrv();
+    }
+    pushSrv(surfWaveSrv);
+
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
 
@@ -831,6 +869,12 @@ void OceanRenderable::EnsureSimulationResources(Renderer* renderer)
     if (simulation_)
     {
         simulation_->EnsureFrameResources(renderer);
+    }
+    // surf sim injection: lazy creation at the engine's sanctioned pre-graph point; OFF never
+    // allocates.
+    if (SurfSimActive())
+    {
+        surfSim_->EnsureResources(renderer);
     }
 }
 
@@ -1269,6 +1313,23 @@ Math::float4 OceanRenderable::GetShoreLegacyDissipationParams() const
         std::clamp(render.shoreLegacyDissipationSpeed, 0.0f, 5.0f),
         std::clamp(render.shoreLegacyDissipationAmount, 0.0f, 1.0f),
         std::clamp(render.shoreLegacyDissipationContrast, 0.1f, 8.0f));
+}
+
+// surf sim injection: xy = window centre, z = 1 / half extent, w = debug view (0 = inert).
+Math::float4 OceanRenderable::GetSurfSimParams() const
+{
+    if (!SurfSimActive() || !surfSim_->IsReady())
+    {
+        return Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    Math::float4 params = surfSim_->GetWindowParams();
+    params.w = static_cast<float>(ocean::g_surfSimDebugView);
+    return params;
+}
+
+bool OceanRenderable::SurfSimActive() const
+{
+    return surfSim_ && (GetRenderConfig().surfSimEnabled || ocean::g_surfSimForce);
 }
 
 Math::float4 OceanRenderable::GetShoreSamplingParams() const

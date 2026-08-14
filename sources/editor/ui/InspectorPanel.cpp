@@ -862,6 +862,18 @@ namespace
 
                 if (ImGui::CollapsingHeader("Shore and surf", ImGuiTreeNodeFlags_DefaultOpen))
                 {
+                    // surf sim injection: mode-independent (docs/ocean_surf_sim_plan.md).
+                    {
+                        bool surfSimEnabled = render.surfSimEnabled;
+                        if (ImGui::Checkbox("Surf Sim Enabled", &surfSimEnabled))
+                        {
+                            OceanRenderConfig afterRender = render;
+                            afterRender.surfSimEnabled = surfSimEnabled;
+                            nlohmann::json after = p;
+                            after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                            executeChange(std::move(after), "Set Ocean Surf Sim Enabled");
+                        }
+                    }
                     // Mirrors OceanControlsWindow: the two surface variants read different
                     // settings, so only the live ones are shown per mode.
                     if (!ocean::g_shoreRunup)

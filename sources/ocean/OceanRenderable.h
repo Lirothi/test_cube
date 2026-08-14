@@ -8,6 +8,7 @@
 #include "rendering/renderables/RenderableObject.h"
 #include "materials/Texture2D.h"
 #include "ocean/OceanSimulation.h"
+#include "ocean/OceanSurfSim.h" // surf sim injection (docs/ocean_surf_sim_plan.md)
 
 class Camera;
 class SamplerManager;
@@ -43,6 +44,16 @@ inline bool g_foamDebug = false;
 // OceanRenderConfig: it is a debugging knob, and putting it there would serialize it into the
 // user's ocean settings. Rides shoreFoamBreakupParams.w.
 inline int g_foamDebugView = 0;
+
+// surf sim injection: which surf-sim channel the LEGACY surface tints with (0 = off, 1 = sim
+// height, 2 = sim foam, 3 = shore SDF isolines, 4 = shore depth). A plain runtime uniform, not
+// a variant, and not serialized — same reasoning as g_foamDebugView. Rides surfSimParams.w.
+inline int g_surfSimDebugView = 0;
+
+// "--ocean-surf-sim": force-enable the surf sim regardless of the level's surfSimEnabled, so a
+// headless capture can exercise it without editing authored level JSON. Runtime OR with the
+// config flag, not a variant.
+inline bool g_surfSimForce = false;
 
 // "--ocean-vs-depth-probe": A/B experiment, OFF. Replaces the world-space shore SDF with a
 // screen-space probe of the depth buffer, taken in the VERTEX shader, as the thing that decides
@@ -157,6 +168,8 @@ private:
     Math::float4 GetShoreLegacyFoamParams() const;
     Math::float4 GetShoreLegacyFoamParams2() const;
     Math::float4 GetShoreLegacyDissipationParams() const;
+    Math::float4 GetSurfSimParams() const; // surf sim injection
+    bool SurfSimActive() const;            // surf sim injection: config flag OR the boot force
     Math::float4 GetShoreSwashParams() const;
     Math::float4 GetShoreSamplingParams() const;
     Math::float4 GetSunDirAmbient() const;
@@ -187,6 +200,7 @@ private:
     Camera* camera_ = nullptr;
     Scene* scene_ = nullptr;
     OceanSimulation* simulation_ = nullptr;
+    std::unique_ptr<OceanSurfSim> surfSim_; // surf sim injection
 
     float elapsedTime_ = 0.0f;
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);

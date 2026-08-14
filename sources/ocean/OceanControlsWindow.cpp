@@ -1091,6 +1091,26 @@ namespace
         drag("UV warp strength", render.windUvWarpStrength, 0.005f, 0.0f, 5.0f);
 
         ImGui::SeparatorText("Shore and surf");
+        // surf sim injection: mode-independent (docs/ocean_surf_sim_plan.md).
+        if (ImGui::Checkbox("Surf sim enabled", &render.surfSimEnabled))
+        {
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Nearshore surf simulation (docs/ocean_surf_sim_plan.md).\n"
+                              "S0: infrastructure only - the debug views show a test pattern.\n"
+                              "OFF costs nothing: no dispatches, no resources allocated.");
+        }
+        {
+            static const char* kSurfSimViews[] = {
+                "Off", "Sim height", "Sim velocity", "Shore SDF", "Shore depth map" };
+            int surfSimView = std::clamp(ocean::g_surfSimDebugView, 0, 4);
+            if (ImGui::Combo("Surf sim debug view", &surfSimView, kSurfSimViews, 5))
+            {
+                ocean::g_surfSimDebugView = surfSimView;
+            }
+        }
         // The two surface variants read DIFFERENT settings, so the section only shows the live
         // ones. The legacy (June-22) surface has its damping built in and exactly one authored
         // shore knob; everything below the else is modern-only and would be silently inert there.

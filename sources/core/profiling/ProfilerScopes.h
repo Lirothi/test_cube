@@ -110,6 +110,7 @@ extern const Profiler::ScopeNameKey kOceanSurface;
 
 extern const Profiler::ScopeNameKey kTransparentDriver;
 extern const Profiler::ScopeNameKey kOceanRender;
+extern const Profiler::ScopeNameKey kOceanSurfSim;
 extern const Profiler::ScopeNameKey kPrepareTransparentBuckets;
 extern const Profiler::ScopeNameKey kAddPass;
 extern const Profiler::ScopeNameKey kPrepareViews;

@@ -159,4 +159,15 @@ touched shader at every step; feature stays default-OFF throughout)
 
 ## Status
 
-- NOT STARTED. A+C shader breakup shipped separately and stays regardless of this plan.
+- **S0 DONE + S0b verified (2026-08-14, uncommitted).** OceanSurfSim class (512²/500 m window,
+  WaveSim RG16F + SurfFoam R16F ping-pong pairs, texel-aligned snap + Relocate copy-shift),
+  `ocean_surf_sim_cs.hlsl` (placeholder Update: world-anchored 4 m checkerboard; Relocate),
+  `Ocean.SurfSim` GPU scope, `surfSimEnabled` config/JSON + both UIs, debug tint in the legacy
+  PS (1 height / 2 velocity / 3 SDF isolines / 4 shore depth), boot flags `--ocean-surf-sim` +
+  `--ocean-surf-debug=<view>` for headless capture. Verified: checkerboard stands still in the
+  world inside the window and fades past 500 m; SDF isolines hug the MESH island on wind_test
+  (S0b gate) in legacy mode; both builds 0/0, dxc clean, `--scene-stress=10` CLEAN. NOTE: the
+  Relocate content-preservation check needs persistent content — done at S1 with Poke, as
+  planned. NOTE: `--scene-stress` returns before the rest of the cmdline parses, so the stress
+  ran with the sim OFF (the shipping default).
+- A+C shader breakup shipped separately and stays regardless of this plan.

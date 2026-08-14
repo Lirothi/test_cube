@@ -76,6 +76,9 @@ struct OceanRenderConfig
     // thinning scales the tail threshold by the shared contact-foam wind amount, so the band
     // starves at dead calm (0 = OFF).
     float shoreLegacyWindThinning = 0.0f;
+    // Nearshore surf simulation (docs/ocean_surf_sim_plan.md). OFF = zero cost: no compute
+    // dispatches recorded and no sim resources allocated (the detachability contract).
+    bool surfSimEnabled = false;
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;
