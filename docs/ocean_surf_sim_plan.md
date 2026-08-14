@@ -159,7 +159,30 @@ touched shader at every step; feature stays default-OFF throughout)
 
 ## Status
 
-- **S1 DONE (2026-08-14, uncommitted).** The wave equation lives: five-point Laplacian on the
+- **S2 DONE (2026-08-14, uncommitted).** The SDF spawner lives. The kernels moved from root
+  constants to ONE CB (`SurfSimCB`, CPU mirror in OceanSurfSim.cpp, dispatched via
+  RecordComputeDispatch — the 16-root-constant squeeze is gone). Spawner slots are a GPU
+  structured buffer (8 × 32 B, UAV-resident, zero-init = free): the CPU only throws a random
+  candidate point + round-robin slot index on a wind-scaled cadence, and the `Spawn` kernel
+  refines it against the shore SDF — walks to the waterline along the SDF gradient, backs off
+  seaward by Spawn distance, orients the segment ALONG the shore; candidates without coast in
+  reach are dropped. `Update` integrates live slots as capsule-Gaussian forcing with a sin
+  envelope whose time integral equals the authored amplitude. Slots hold WORLD positions —
+  re-anchors don't disturb them. Wind scales BOTH amplitude and cadence (invariant 3). The
+  shore SDF is read UNDECLARED (its canonical is the creation-time UAV; the builder gates the
+  sim on `ShouldBuildShoreSdf`/`ShouldRenderShoreDepth` instead, so the sim never reads a map
+  mid-build). Knobs (config/JSON/both UIs): Spawn distance 40 m, Segment length 30 m, Wave
+  amplitude 0.35 m, Spawn interval 3 s, Wind coupling 1. GATE (30-frame real-time series at
+  wind 0.8, judged as GIF): segments are born seaward off DIFFERENT stretches of coast at
+  different times, run shoreward as along-shore-elongated fronts and refract onto the beach;
+  at wind 0 the field is a mirror (visual check); builds 0/0, both stress gates CLEAN,
+  comparator silent, Debug live run clean.
+  **S2 fix (user caught it): the injection is DIRECTED.** Height-only forcing splits
+  d'Alembert-style into equal shoreward and seaward waves — the user saw the seaward half in
+  the first GIF. The kernel now injects the matched velocity pair `v = −c·∂h/∂n` alongside the
+  height (the slot stores the SHOREWARD normal; the along-shore axis is its perpendicular), so
+  the seaward component cancels and the packet runs only at the beach. Verified by a re-shot
+  series: single fronts, no seaward twin. The wave equation lives: five-point Laplacian on the
   height/velocity pair, FIXED 1/120 s substeps with a 4-substep catch-up (a frozen clock stops
   the sim with it; a poke forces one substep so it lands anyway), `c² = g·depth` from the shore
   depth map (decode matches ShoreDepthUV/ShoreViewDepth; outside the window or far-plane =

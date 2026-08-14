@@ -1,41 +1,65 @@
 // Nearshore surf simulation - compute kernels (docs/ocean_surf_sim_plan.md).
 //
-// S1: the wave equation. `Update` advances the classic five-point-Laplacian height/velocity
-// pair (the numerics of Crest's UpdateDynWaves, see docs/ref/crest/) one FIXED substep at a
-// time, with the wave speed taken from the shore depth map: c^2 = g*depth, the shallow-water
-// celerity, which buys REFRACTION for free - fronts slow over the shallows and bend parallel
-// to the shoreline. Land (depth <= 0), the window border and open water outside the shore map
-// absorb instead of reflecting. A Poke (PokeAmp != 0) injects a Gaussian hump at the window
-// centre for the S1 gate. `Relocate` re-anchors the window by whole texels (S0).
+// S1: `Update` advances the classic five-point-Laplacian height/velocity wave equation one
+// FIXED substep at a time (Crest's UpdateDynWaves numerics, docs/ref/crest/), with the wave
+// speed from the shore depth map: c^2 = g*depth, the shallow-water celerity - fronts slow over
+// the shallows and bend parallel to the shoreline for free. Land, the window border and open
+// water absorb instead of reflecting.
+//
+// S2: `Spawn` places a disturbance SEGMENT via the shore SDF: the CPU throws a random candidate
+// point into the window, this kernel walks it to the waterline along the SDF gradient, backs off
+// seaward by the spawn distance and orients the segment ALONG the shore. `Update` integrates
+// every live slot as a capsule-Gaussian forcing with a sin^1 envelope whose time integral is
+// exactly the authored amplitude - the hump inflates smoothly and departs as a wave. Discrete,
+// local, randomized events: this is what keeps the surf from ever being an isobath ring
+// (the plan's invariant 1).
 //
 // The window is square, world-axis-aligned: worldXZ = center + (coord + 0.5) * texel - halfExtent.
-//
-// Registers: RenderContext::kMaxBindings is 4 and Material::Bind silently skips a table whose
-// base register is >= 4, so the four sim surfaces ride ONE UAV table at u0..u3 and the shore
-// depth map one SRV table at t0. The sampler is static - no sampler table needed.
-#define OCEAN_SURF_SIM_RS "RootConstants(num32BitConstants=16, b0), DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), StaticSampler(s0, filter=FILTER_MIN_MAG_LINEAR_MIP_POINT, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP)"
+// Spawner slots hold WORLD positions, so a window re-anchor does not disturb them.
+#define OCEAN_SURF_SIM_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), StaticSampler(s0, filter=FILTER_MIN_MAG_LINEAR_MIP_POINT, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP)"
 
-cbuffer SurfSimParams : register(b0)
+#define MAX_SPAWNERS 8u
+
+cbuffer SurfSimCB : register(b0)
 {
     uint  Resolution;      // texels per side
     float TexelWorldSize;  // metres per texel
     float CenterX;         // window centre, world XZ (also the poke position)
     float CenterZ;
+
     float Time;            // seconds (the ocean's simulation clock)
-    float DeltaTime;       // the FIXED substep, seconds
+    float DeltaTime;       // the FIXED substep, seconds (0 for Spawn/Relocate)
     int   ShiftX;          // Relocate only: texel shift, src = dst + shift
     int   ShiftY;
+
     float ShoreCenterX;    // shore depth map window (matches ShoreDepthUV in the surface shader)
     float ShoreCenterZ;
-    float ShoreInvExtent;  // shoreViewParams.w: uv = offset * invExtent + 0.5
+    float ShoreInvExtent;  // uv = offset * invExtent + 0.5
     float ShoreZNear;      // depth decode: viewDepth = lerp(zNear, zFar, raw)
+
     float ShoreZFar;
     float ShoreCamHeight;  // ortho camera height; waterDepth = viewDepth - camHeight
     float PokeAmp;         // metres; != 0 on the substep that injects the test hump
+    float SdfCenterX;      // shore SDF placement (matches ShoreSdfUV in the modern surface)
+
+    float SdfCenterZ;
+    float SdfInvExtent;
+    float SpawnCandX;      // Spawn only: the CPU's random candidate point
+    float SpawnCandZ;
+
+    uint  SpawnSlot;       // Spawn only: round-robin slot to (over)write
+    float SpawnDistance;   // metres seaward of the waterline
+    float SegmentHalfLen;  // metres, along-shore half length of the disturbance
+    float SpawnAmp;        // metres of total injected height
+
+    float SpawnDuration;   // seconds of forcing (the sin envelope's period)
+    float SpawnSigma;      // metres, across-segment Gaussian width
     float Pad0;
+    float Pad1;
 };
 
 Texture2D<float>    ShoreDepthTex : register(t0);
+Texture2D<float2>   ShoreSdfTex : register(t1); // x: metres to the waterline (negative inland)
 SamplerState        ClampSampler : register(s0);
 
 // x: height (metres), y: vertical velocity (m/s).
@@ -43,6 +67,12 @@ RWTexture2D<float2> WaveRead  : register(u0);
 RWTexture2D<float2> WaveWrite : register(u1);
 RWTexture2D<float>  FoamRead  : register(u2);
 RWTexture2D<float>  FoamWrite : register(u3);
+
+// posDir: xy = segment centre (world), zw = SHOREWARD normal (unit; the along-shore direction
+// is its perpendicular). params: x = half length (m), y = amplitude (m), z = birth time (s),
+// w = duration (s; <= 0 = free).
+struct SpawnerSlot { float4 posDir; float4 params; };
+RWStructuredBuffer<SpawnerSlot> Spawners : register(u4);
 
 float2 WindowWorldPos(uint2 coord)
 {
@@ -70,6 +100,12 @@ float WaterDepthAt(float2 world)
     }
     float viewDepth = lerp(ShoreZNear, ShoreZFar, raw);
     return viewDepth - ShoreCamHeight;
+}
+
+float2 SdfUV(float2 world)
+{
+    float2 offset = world - float2(SdfCenterX, SdfCenterZ);
+    return float2(offset.x * SdfInvExtent + 0.5f, 0.5f - offset.y * SdfInvExtent);
 }
 
 [numthreads(8, 8, 1)]
@@ -120,6 +156,41 @@ void Update(uint3 dispatchThreadId : SV_DispatchThreadID)
     // Heights decay too where absorbed, so land never accumulates a standing sheet.
     h *= lerp(max(0.0f, 1.0f - 8.0f * DeltaTime), 1.0f, fade);
 
+    // S2: spawner forcing. Each live segment is a capsule Gaussian with a sin envelope whose
+    // TIME INTEGRAL equals the authored amplitude (int sin(pi*tau) dtau * pi/2 = 1), so the
+    // hump inflates smoothly over the duration and departs as a wave. DIRECTED: injecting
+    // height alone splits d'Alembert-style into equal shoreward and seaward waves, so the
+    // matched velocity pair v = -c * dh/dn is injected with it — the seaward half cancels and
+    // the packet runs at the beach (exactly for constant c; near-exactly over our depths).
+    [loop]
+    for (uint s = 0; s < MAX_SPAWNERS; ++s)
+    {
+        const SpawnerSlot slot = Spawners[s];
+        if (slot.params.w <= 0.0f)
+        {
+            continue;
+        }
+        const float tau = (Time - slot.params.z) / slot.params.w;
+        if (tau <= 0.0f || tau >= 1.0f)
+        {
+            continue;
+        }
+        const float2 toShore = slot.posDir.zw;
+        const float2 alongDir = float2(-toShore.y, toShore.x);
+        const float2 rel = world - slot.posDir.xy;
+        const float along = clamp(dot(rel, alongDir), -slot.params.x, slot.params.x);
+        const float2 closest = slot.posDir.xy + alongDir * along;
+        const float2 d = world - closest;
+        const float sAcross = dot(d, toShore); // signed metres shoreward of the segment
+        const float sigma2 = SpawnSigma * SpawnSigma;
+        const float gauss = exp(-dot(d, d) / (2.0f * sigma2));
+        const float forcing =
+            slot.params.y * sin(3.14159265f * tau) * (3.14159265f / (2.0f * slot.params.w));
+        const float cLocal = sqrt(9.81f * max(depth, 0.1f));
+        h += forcing * gauss * DeltaTime;
+        v += forcing * cLocal * (sAcross / sigma2) * gauss * DeltaTime;
+    }
+
     // Poke (S1 gate): a Gaussian hump at the window centre, injected on exactly one substep.
     if (PokeAmp != 0.0f)
     {
@@ -134,6 +205,55 @@ void Update(uint3 dispatchThreadId : SV_DispatchThreadID)
     FoamWrite[coord] = FoamRead[coord] * max(0.0f, 1.0f - 0.5f * DeltaTime);
 }
 
+// S2: refine the CPU's random candidate against the shore SDF and (over)write one spawner slot.
+// One thread does the work; the kernel keeps the shared numthreads(8,8,1) contract of
+// RecordComputeDispatch.
+[numthreads(8, 8, 1)]
+[RootSignature(OCEAN_SURF_SIM_RS)]
+void Spawn(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    if (dispatchThreadId.x != 0 || dispatchThreadId.y != 0)
+    {
+        return;
+    }
+
+    const float2 cand = float2(SpawnCandX, SpawnCandZ);
+    const float2 uv = SdfUV(cand);
+    if (any(uv < 0.02f) || any(uv > 0.98f))
+    {
+        return; // candidate outside the SDF - no coast information, skip this beat
+    }
+    const float dist = ShoreSdfTex.SampleLevel(ClampSampler, uv, 0).x;
+    if (dist < -20.0f || dist > 400.0f)
+    {
+        return; // deep inland or far offshore - no surf to seed here
+    }
+
+    // SDF gradient by central differences (2 texels apart in UV; only the direction matters).
+    // uv.y runs against worldZ, so the Z component flips sign.
+    const float kEps = 2.0f / 1024.0f;
+    const float dxp = ShoreSdfTex.SampleLevel(ClampSampler, uv + float2(kEps, 0.0f), 0).x;
+    const float dxm = ShoreSdfTex.SampleLevel(ClampSampler, uv - float2(kEps, 0.0f), 0).x;
+    const float dyp = ShoreSdfTex.SampleLevel(ClampSampler, uv + float2(0.0f, kEps), 0).x;
+    const float dym = ShoreSdfTex.SampleLevel(ClampSampler, uv - float2(0.0f, kEps), 0).x;
+    float2 grad = float2(dxp - dxm, -(dyp - dym)); // points SEAWARD (distance grows offshore)
+    const float gradLen = length(grad);
+    if (gradLen < 1e-4f)
+    {
+        return; // flat field (window border padding) - no reliable shore direction
+    }
+    grad /= gradLen;
+
+    const float2 shorePoint = cand - grad * dist;
+    const float2 spawnPos = shorePoint + grad * SpawnDistance;
+    const float2 toShore = -grad; // the direction the injected packet travels
+
+    SpawnerSlot slot;
+    slot.posDir = float4(spawnPos, toShore);
+    slot.params = float4(SegmentHalfLen, SpawnAmp, Time, SpawnDuration);
+    Spawners[SpawnSlot] = slot;
+}
+
 [numthreads(8, 8, 1)]
 [RootSignature(OCEAN_SURF_SIM_RS)]
 void Relocate(uint3 dispatchThreadId : SV_DispatchThreadID)
@@ -145,6 +265,7 @@ void Relocate(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     // worldPos(dst, newCenter) == worldPos(src, oldCenter)  =>  src = dst + (new - old) / texel.
+    // Spawner slots hold world positions and are untouched by a re-anchor.
     const int2 src = int2(coord) + int2(ShiftX, ShiftY);
     const bool inside =
         src.x >= 0 && src.y >= 0 && src.x < (int)Resolution && src.y < (int)Resolution;

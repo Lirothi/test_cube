@@ -79,6 +79,14 @@ struct OceanRenderConfig
     // Nearshore surf simulation (docs/ocean_surf_sim_plan.md). OFF = zero cost: no compute
     // dispatches recorded and no sim resources allocated (the detachability contract).
     bool surfSimEnabled = false;
+    // S2 spawner knobs: segments of disturbance born seaward of the waterline, oriented along
+    // the shore. Wind coupling scales BOTH the amplitude and the spawn cadence, so a dead calm
+    // starves the surf (the plan's invariant 3).
+    float surfSimSpawnDistance = 40.0f;  // metres seaward of the waterline
+    float surfSimSegmentLength = 30.0f;  // metres along the shore
+    float surfSimWaveAmplitude = 0.35f;  // metres injected per segment at full wind
+    float surfSimSpawnInterval = 3.0f;   // seconds between spawns at full wind
+    float surfSimWindCoupling = 1.0f;    // 0 = ignore wind, 1 = calm silences the spawner
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

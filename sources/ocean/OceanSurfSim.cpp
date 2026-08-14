@@ -7,12 +7,31 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Material.h"
+#include "rendering/core/ComputeDispatch.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/core/TextureCreate.h"
 
 using Microsoft::WRL::ComPtr;
+
+namespace
+{
+// CPU mirror of the shader's SurfSimCB (ocean_surf_sim_cs.hlsl) - keep the layouts in step.
+struct SurfSimCB
+{
+    std::uint32_t resolution; float texelWorldSize; float centerX; float centerZ;
+    float time; float deltaTime; std::int32_t shiftX; std::int32_t shiftY;
+    float shoreCenterX; float shoreCenterZ; float shoreInvExtent; float shoreZNear;
+    float shoreZFar; float shoreCamHeight; float pokeAmp; float sdfCenterX;
+    float sdfCenterZ; float sdfInvExtent; float spawnCandX; float spawnCandZ;
+    std::uint32_t spawnSlot; float spawnDistance; float segmentHalfLen; float spawnAmp;
+    float spawnDuration; float spawnSigma; float pad0; float pad1;
+};
+
+constexpr float kSpawnDuration = 1.6f; // seconds of forcing per segment
+constexpr float kSpawnSigma = 5.0f;    // metres, across-segment width
+}
 
 void OceanSurfSim::EnsureResources(Renderer* renderer)
 {
@@ -58,8 +77,28 @@ void OceanSurfSim::EnsureResources(Renderer* renderer)
     createPair(wave_, DXGI_FORMAT_R16G16_FLOAT, L"Ocean.SurfSimWaveA", L"Ocean.SurfSimWaveB");
     createPair(foam_, DXGI_FORMAT_R16_FLOAT, L"Ocean.SurfSimFoamA", L"Ocean.SurfSimFoamB");
 
+    // S2: the spawner slot buffer. UAV-resident for its whole life (Spawn writes, Update reads),
+    // zero-initialized by creation => duration 0 => every slot starts free.
+    {
+        D3D12_RESOURCE_DESC bufDesc{};
+        bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufDesc.Width = static_cast<UINT64>(kMaxSpawners) * kSpawnerStride;
+        bufDesc.Height = 1;
+        bufDesc.DepthOrArraySize = 1;
+        bufDesc.MipLevels = 1;
+        bufDesc.Format = DXGI_FORMAT_UNKNOWN;
+        bufDesc.SampleDesc.Count = 1;
+        bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        ComPtr<ID3D12Resource> res;
+        ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&res)));
+        spawners_.Attach(renderer->Declarations(), std::move(res),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Ocean.SurfSimSpawners");
+    }
+
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors = 8u; // 4 UAVs + 4 SRVs
+    heapDesc.NumDescriptors = 9u; // 4 sim UAVs + 4 sim SRVs + the spawner buffer UAV
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap_)));
@@ -93,6 +132,15 @@ void OceanSurfSim::EnsureResources(Renderer* renderer)
         foamSrv_[i] = next();
         device->CreateShaderResourceView(foam_[i].Get(), nullptr, foamSrv_[i]);
     }
+    {
+        spawnersUav_ = next();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.NumElements = kMaxSpawners;
+        uavDesc.Buffer.StructureByteStride = kSpawnerStride;
+        device->CreateUnorderedAccessView(spawners_.Get(), nullptr, &uavDesc, spawnersUav_);
+    }
 
     auto* materialMgr = renderer->GetMaterialManager();
     Material::ComputeDesc desc{};
@@ -101,6 +149,8 @@ void OceanSurfSim::EnsureResources(Renderer* renderer)
     updateMaterial_ = materialMgr->GetOrCreateCompute(renderer, desc);
     desc.csEntry = "Relocate";
     relocateMaterial_ = materialMgr->GetOrCreateCompute(renderer, desc);
+    desc.csEntry = "Spawn";
+    spawnMaterial_ = materialMgr->GetOrCreateCompute(renderer, desc);
 
     created_ = true;
 }
@@ -139,10 +189,11 @@ void OceanSurfSim::TickWindow(Math::float2 cameraXZ)
 // lambda captures them by value. The record body names no resource: EmitPoint markers emit
 // whatever the compile produced for our two points.
 std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
-    RenderGraphPassContext& ctx, float timeSeconds, const ShoreDepthWindow& shore)
+    RenderGraphPassContext& ctx, float timeSeconds, const ShoreDepthWindow& shore,
+    const Tuning& tuning)
 {
-    if (!created_ || !updateMaterial_ || !relocateMaterial_ || shore.srv.ptr == 0 ||
-        shore.resource == nullptr)
+    if (!created_ || !updateMaterial_ || !relocateMaterial_ || !spawnMaterial_ ||
+        shore.srv.ptr == 0 || shore.resource == nullptr || shore.sdfSrv.ptr == 0)
     {
         return {};
     }
@@ -187,7 +238,35 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
         pokeAmp = 0.6f; // metres
     }
 
-    if (substeps == 0 && !relocate)
+    // S2: the spawner beat. Wind scales BOTH the amplitude and the cadence (invariant 3: a dead
+    // calm starves the surf); the candidate is a random point in the window - the Spawn kernel
+    // walks it to the waterline along the SDF and rejects candidates with no coast in reach.
+    const float windFactor =
+        std::clamp(1.0f - tuning.windCoupling * (1.0f - std::clamp(tuning.windAmount, 0.0f, 1.0f)),
+                   0.0f, 1.0f);
+    const float spawnAmp = tuning.amplitude * windFactor;
+    const float spawnInterval = tuning.interval / std::max(windFactor, 0.05f);
+    bool spawn = false;
+    float candX = 0.0f;
+    float candZ = 0.0f;
+    uint32_t spawnSlot = 0;
+    if (spawnAmp > 0.005f && timeSeconds - lastSpawnTime_ >= spawnInterval)
+    {
+        spawn = true;
+        lastSpawnTime_ = timeSeconds;
+        spawnSlot = nextSpawnSlot_++ % kMaxSpawners;
+        auto rnd01 = [this]()
+        {
+            spawnSeed_ ^= spawnSeed_ << 13;
+            spawnSeed_ ^= spawnSeed_ >> 17;
+            spawnSeed_ ^= spawnSeed_ << 5;
+            return static_cast<float>(spawnSeed_ & 0xFFFFFFu) / static_cast<float>(0x1000000);
+        };
+        candX = center_.x + (rnd01() * 2.0f - 1.0f) * (kHalfExtent * 0.8f);
+        candZ = center_.y + (rnd01() * 2.0f - 1.0f) * (kHalfExtent * 0.8f);
+    }
+
+    if (substeps == 0 && !relocate && !spawn)
     {
         return {}; // nothing to integrate: no dispatches, no declarations, no barriers
     }
@@ -197,14 +276,19 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
     current_ = finalIndex; // committed before recording: GetWaveSrv is final from here on
 
     // ---- declarations, from the same locals ----
-    // Everything is written as a UAV first (relocate and/or the substep chain); the shore depth
-    // map is read at its canonical state (no barrier, the compile just sees the read)...
+    // Everything is written as a UAV first (spawn, relocate and/or the substep chain); the
+    // shore depth map is read at its canonical state (no barrier, the compile just sees the
+    // read). The shore SDF is deliberately NOT declared: its canonical is its creation-time
+    // UAV while it actually rests shader-readable after the one-shot jump flood — the caller
+    // gates the sim on the SDF being built instead, exactly like the modern surface which
+    // samples it undeclared.
     ctx.NextPoint();
     const std::uint32_t uavPoint = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(wave_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(wave_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(foam_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(foam_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(spawners_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(shore.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     // ...then the frame's freshest height field is left readable for the surface's pixel shader.
@@ -214,7 +298,8 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
 
     // ---- record, capturing the decisions by value ----
     return [this, timeSeconds, relocate, shiftX, shiftY, center, readIndex, substeps, pokeAmp,
-            shore, uavPoint](RenderGraphPassContext c)
+            spawn, candX, candZ, spawnSlot, spawnAmp, shore, tuning,
+            uavPoint](RenderGraphPassContext c)
     {
         Renderer* renderer = c.renderer;
         auto t = c.BeginCL();
@@ -222,50 +307,66 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
         {
             GPU_SCOPE(cl, ProfilerScopes::kOceanSurfSim);
 
-            const UINT groups = (kResolution + 7u) / 8u;
-            auto asUint = [](float value)
-            {
-                uint32_t bits = 0;
-                std::memcpy(&bits, &value, sizeof(bits));
-                return bits;
-            };
-
             renderer->EmitPoint(cl, uavPoint);
 
-            auto srvTable = renderer->StageSrvUavTable({ shore.srv });
+            // The CB base every dispatch starts from; per-dispatch fields are patched in the
+            // write lambda RecordComputeDispatch hands us.
+            SurfSimCB base{};
+            base.resolution = kResolution;
+            base.texelWorldSize = kTexelWorld;
+            base.centerX = center.x;
+            base.centerZ = center.y;
+            base.time = timeSeconds;
+            base.shoreCenterX = shore.center.x;
+            base.shoreCenterZ = shore.center.y;
+            base.shoreInvExtent = shore.invExtent;
+            base.shoreZNear = shore.zNear;
+            base.shoreZFar = shore.zFar;
+            base.shoreCamHeight = shore.camHeight;
+            base.sdfCenterX = shore.sdfCenter.x;
+            base.sdfCenterZ = shore.sdfCenter.y;
+            base.sdfInvExtent = shore.sdfInvExtent;
+            base.spawnDistance = tuning.spawnDistance;
+            base.segmentHalfLen = tuning.segmentLength * 0.5f;
+            base.spawnDuration = kSpawnDuration;
+            base.spawnSigma = kSpawnSigma;
+
+            const auto srvs = { shore.srv, shore.sdfSrv };
+            const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
+
+            if (spawn)
+            {
+                SurfSimCB cb = base;
+                cb.spawnCandX = candX;
+                cb.spawnCandZ = candZ;
+                cb.spawnSlot = spawnSlot;
+                cb.spawnAmp = spawnAmp;
+                RecordComputeDispatch(renderer, cl, spawnMaterial_.get(),
+                    static_cast<UINT>(sizeof(SurfSimCB)),
+                    [&cb](std::uint8_t* dst) { std::memcpy(dst, &cb, sizeof(cb)); },
+                    srvs,
+                    { waveUav_[readIndex], waveUav_[1u - readIndex],
+                      foamUav_[readIndex], foamUav_[1u - readIndex], spawnersUav_ },
+                    noSampler, 1, 1,
+                    spawners_.Get());
+            }
 
             auto dispatch = [&](const std::shared_ptr<Material>& material, uint32_t readIdx,
                                 int sx, int sy, float dt, float pokeMetres)
             {
-                auto uavTable = renderer->StageSrvUavTable({
-                    waveUav_[readIdx], waveUav_[1u - readIdx],
-                    foamUav_[readIdx], foamUav_[1u - readIdx] });
-
-                auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
-                auto& rctx = ctxHandle.ref();
-                rctx.constants[0] = {
-                    kResolution,
-                    asUint(kTexelWorld),
-                    asUint(center.x),
-                    asUint(center.y),
-                    asUint(timeSeconds),
-                    asUint(dt),
-                    static_cast<uint32_t>(sx),
-                    static_cast<uint32_t>(sy),
-                    asUint(shore.center.x),
-                    asUint(shore.center.y),
-                    asUint(shore.invExtent),
-                    asUint(shore.zNear),
-                    asUint(shore.zFar),
-                    asUint(shore.camHeight),
-                    asUint(pokeMetres),
-                    0u,
-                };
-                rctx.srvTable[0] = srvTable.gpu;
-                rctx.uavTable[0] = uavTable.gpu;
-                material->Bind(cl, rctx);
-                cl->Dispatch(groups, groups, 1);
-                renderer->UAVBarrier(cl, wave_[1u - readIdx].Get());
+                SurfSimCB cb = base;
+                cb.deltaTime = dt;
+                cb.shiftX = sx;
+                cb.shiftY = sy;
+                cb.pokeAmp = pokeMetres;
+                RecordComputeDispatch(renderer, cl, material.get(),
+                    static_cast<UINT>(sizeof(SurfSimCB)),
+                    [&cb](std::uint8_t* dst) { std::memcpy(dst, &cb, sizeof(cb)); },
+                    srvs,
+                    { waveUav_[readIdx], waveUav_[1u - readIdx],
+                      foamUav_[readIdx], foamUav_[1u - readIdx], spawnersUav_ },
+                    noSampler, kResolution, kResolution,
+                    wave_[1u - readIdx].Get());
                 renderer->UAVBarrier(cl, foam_[1u - readIdx].Get());
             };
 

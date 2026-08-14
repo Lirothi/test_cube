@@ -638,6 +638,13 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildSurfSimPass(
     {
         return {};
     }
+    // S2: both shore maps are read UNDECLARED at their post-build resting states, so the sim
+    // must not run on a frame that (re)builds them — our pass sits BEFORE Main_TerrainDepth in
+    // the graph and would read the SDF mid-flood / the depth map mid-raster.
+    if (simulation_->ShouldBuildShoreSdf() || simulation_->ShouldRenderShoreDepth())
+    {
+        return {};
+    }
     OceanSurfSim::ShoreDepthWindow shore;
     shore.center = simulation_->GetShoreViewCenter();
     const float halfExtent = std::max(simulation_->GetShoreDepthHalfExtent(), 1.0f);
@@ -648,7 +655,26 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildSurfSimPass(
     shore.camHeight = simulation_->GetShoreViewHeight();
     shore.srv = simulation_->GetShoreDepthSrv();
     shore.resource = simulation_->GetShoreDepthResource();
-    return surfSim_->BuildPass(ctx, elapsedTime_, shore);
+    shore.sdfCenter = simulation_->GetShoreSdfCenter();
+    const float sdfHalf = std::max(simulation_->GetShoreSdfHalfExtent(), 1.0f);
+    shore.sdfInvExtent = 0.5f / sdfHalf;
+    shore.sdfSrv = simulation_->GetShoreSdfSrv();
+
+    OceanSurfSim::Tuning tuning;
+    const OceanRenderConfig& render = GetRenderConfig();
+    tuning.spawnDistance = std::clamp(render.surfSimSpawnDistance, 5.0f, 200.0f);
+    tuning.segmentLength = std::clamp(render.surfSimSegmentLength, 4.0f, 120.0f);
+    tuning.amplitude = std::clamp(render.surfSimWaveAmplitude, 0.0f, 2.0f);
+    tuning.interval = std::clamp(render.surfSimSpawnInterval, 0.25f, 30.0f);
+    tuning.windCoupling = std::clamp(render.surfSimWindCoupling, 0.0f, 1.0f);
+    // The shared contact-foam wind remap (see ShoreFoamWindAmount in the breakup include).
+    const Math::float4 wind = GetShoreFoamWindParams();
+    tuning.windAmount = std::clamp(
+        (std::clamp(wind.x, 0.0f, 1.0f) - std::clamp(wind.y, 0.0f, 1.0f)) /
+            std::max(wind.z - std::clamp(wind.y, 0.0f, 1.0f), 1e-3f),
+        0.0f, 1.0f);
+
+    return surfSim_->BuildPass(ctx, elapsedTime_, shore, tuning);
 }
 
 void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)

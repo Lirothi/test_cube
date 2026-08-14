@@ -1110,6 +1110,12 @@ namespace
             {
                 ocean::g_surfSimDebugView = surfSimView;
             }
+            // S2 spawner knobs (shared config fields, serialized with the level).
+            drag("Spawn distance", render.surfSimSpawnDistance, 0.25f, 5.0f, 200.0f);
+            drag("Segment length", render.surfSimSegmentLength, 0.25f, 4.0f, 120.0f);
+            drag("Wave amplitude", render.surfSimWaveAmplitude, 0.005f, 0.0f, 2.0f);
+            drag("Spawn interval", render.surfSimSpawnInterval, 0.02f, 0.25f, 30.0f);
+            drag("Wind coupling", render.surfSimWindCoupling, 0.005f, 0.0f, 1.0f);
             // S1 gate: inject a test hump at the sim window's centre (i.e. under the camera).
             if (ImGui::Button("Poke"))
             {

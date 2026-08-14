@@ -873,6 +873,11 @@ namespace
                             after["render"] = OceanRenderConfigJson::ToJson(afterRender);
                             executeChange(std::move(after), "Set Ocean Surf Sim Enabled");
                         }
+                        renderDrag("Surf Spawn Distance", render.surfSimSpawnDistance, 0.25f, 5.0f, 200.0f);
+                        renderDrag("Surf Segment Length", render.surfSimSegmentLength, 0.25f, 4.0f, 120.0f);
+                        renderDrag("Surf Wave Amplitude", render.surfSimWaveAmplitude, 0.005f, 0.0f, 2.0f);
+                        renderDrag("Surf Spawn Interval", render.surfSimSpawnInterval, 0.02f, 0.25f, 30.0f);
+                        renderDrag("Surf Wind Coupling", render.surfSimWindCoupling, 0.005f, 0.0f, 1.0f);
                     }
                     // Mirrors OceanControlsWindow: the two surface variants read different
                     // settings, so only the live ones are shown per mode.

@@ -362,6 +362,21 @@ namespace OceanRenderConfigJson
                 render.surfSimEnabled = it->get<bool>();
             }
         }
+        render.surfSimSpawnDistance = std::clamp(
+            ReadFloat(object, "surfSimSpawnDistance", render.surfSimSpawnDistance),
+            5.0f, 200.0f);
+        render.surfSimSegmentLength = std::clamp(
+            ReadFloat(object, "surfSimSegmentLength", render.surfSimSegmentLength),
+            4.0f, 120.0f);
+        render.surfSimWaveAmplitude = std::clamp(
+            ReadFloat(object, "surfSimWaveAmplitude", render.surfSimWaveAmplitude),
+            0.0f, 2.0f);
+        render.surfSimSpawnInterval = std::clamp(
+            ReadFloat(object, "surfSimSpawnInterval", render.surfSimSpawnInterval),
+            0.25f, 30.0f);
+        render.surfSimWindCoupling = std::clamp(
+            ReadFloat(object, "surfSimWindCoupling", render.surfSimWindCoupling),
+            0.0f, 1.0f);
         render.causticsIntensity = std::max(
             0.0f, ReadFloat(object, "causticsIntensity", render.causticsIntensity));
         render.causticsScale = std::max(
@@ -519,6 +534,11 @@ namespace OceanRenderConfigJson
 
         out["causticsEnabled"] = render.causticsEnabled;
         out["surfSimEnabled"] = render.surfSimEnabled;
+        out["surfSimSpawnDistance"] = render.surfSimSpawnDistance;
+        out["surfSimSegmentLength"] = render.surfSimSegmentLength;
+        out["surfSimWaveAmplitude"] = render.surfSimWaveAmplitude;
+        out["surfSimSpawnInterval"] = render.surfSimSpawnInterval;
+        out["surfSimWindCoupling"] = render.surfSimWindCoupling;
         out["causticsIntensity"] = render.causticsIntensity;
         out["causticsScale"] = render.causticsScale;
         out["causticsSpeed"] = render.causticsSpeed;

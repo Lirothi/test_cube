@@ -60,6 +60,25 @@ public:
         float camHeight = 0.0f;
         D3D12_CPU_DESCRIPTOR_HANDLE srv{};
         ID3D12Resource* resource = nullptr; // declared read-only at its canonical state
+        // S2: the shore SDF the spawner refines candidates against. NOT declared to the barrier
+        // compile: its canonical is the creation-time UAV while it actually rests shader-readable
+        // after the one-shot jump flood — the caller instead GATES the sim on the SDF being built,
+        // exactly like the modern surface which samples it undeclared.
+        Math::float2 sdfCenter = Math::float2(0.0f, 0.0f);
+        float sdfInvExtent = 0.0f;
+        D3D12_CPU_DESCRIPTOR_HANDLE sdfSrv{};
+    };
+
+    // S2: authored spawner tuning + the frame's wind, assembled by OceanRenderable from the
+    // ocean config (all knobs live there; the sim itself stays config-free).
+    struct Tuning
+    {
+        float spawnDistance = 40.0f;  // metres seaward of the waterline
+        float segmentLength = 30.0f;  // metres along the shore
+        float amplitude = 0.35f;      // metres of injected height at full wind
+        float interval = 3.0f;        // seconds between spawns at full wind
+        float windCoupling = 1.0f;    // 0 = ignore wind, 1 = calm silences the spawner
+        float windAmount = 0.0f;      // 0..1, the shared contact-foam wind remap
     };
 
     // Pass-flow S3 pilot (docs/render_graph_pass_flow_plan.md): the whole pass is ONE builder.
@@ -69,7 +88,8 @@ public:
     // there is no separate Record to keep in sync, and the record body names no resource
     // (EmitPoint markers). Returns an empty function when the sim should not run this frame.
     std::function<void(RenderGraphPassContext)> BuildPass(
-        RenderGraphPassContext& ctx, float timeSeconds, const ShoreDepthWindow& shore);
+        RenderGraphPassContext& ctx, float timeSeconds, const ShoreDepthWindow& shore,
+        const Tuning& tuning);
 
     // x,y: window centre (world XZ), z: 1 / half extent, w: texel world size — the surface
     // shaders' window transform (debug view now, foam consumption at S4).
@@ -92,16 +112,23 @@ private:
     // at most kMaxSubsteps per frame — the Crest LodDataMgrPersistent cadence.
     static constexpr float kFixedDt = 1.0f / 120.0f;
     static constexpr int kMaxSubsteps = 4;
+    // S2: disturbance slots, GPU-resident (the Spawn kernel writes them from the SDF; the CPU
+    // only round-robins an index). 8 concurrent segments is plenty at seconds-long lifetimes.
+    static constexpr UINT kMaxSpawners = 8u;
+    static constexpr UINT kSpawnerStride = 32u; // float4 posDir + float4 params
 
     GpuResource wave_[2];
     GpuResource foam_[2];
+    GpuResource spawners_; // kMaxSpawners x kSpawnerStride structured buffer, UAV-resident
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE waveUav_[2]{};
     D3D12_CPU_DESCRIPTOR_HANDLE foamUav_[2]{};
     D3D12_CPU_DESCRIPTOR_HANDLE waveSrv_[2]{};
     D3D12_CPU_DESCRIPTOR_HANDLE foamSrv_[2]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE spawnersUav_{};
     std::shared_ptr<Material> updateMaterial_;
     std::shared_ptr<Material> relocateMaterial_;
+    std::shared_ptr<Material> spawnMaterial_;
 
     Math::float2 center_ = Math::float2(0.0f, 0.0f);
     // Texel shift decided by TickWindow for this frame's Relocate (0 = no re-anchor).
@@ -112,6 +139,9 @@ private:
     float previousTime_ = -1.0f;
     float substepAccum_ = 0.0f;  // seconds of sim time not yet integrated
     float lastAutoPoke_ = -1.0e9f; // sim-clock time of the last --ocean-surf-poke injection
+    float lastSpawnTime_ = -1.0e9f; // sim-clock time of the last spawner injection
+    uint32_t nextSpawnSlot_ = 0;    // CPU round-robin into the GPU slot buffer
+    uint32_t spawnSeed_ = 0x12345u; // xorshift state for candidate placement
     bool created_ = false;
     bool hasCenter_ = false;
 };
