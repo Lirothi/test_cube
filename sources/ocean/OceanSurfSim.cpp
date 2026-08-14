@@ -142,6 +142,8 @@ void OceanSurfSim::PrepareCompute(RenderGraphPassContext& ctx)
 
     // Everything is written as a UAV first (relocate and/or update)...
     ctx.NextPoint();
+    // Pass-flow S1 pilot: capture the absolute point index the markers in RecordCompute emit.
+    uavPointIndex_ = ctx.usePoint ? *ctx.usePoint : 0;
     ctx.Use(wave_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(wave_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(foam_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -174,11 +176,10 @@ void OceanSurfSim::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* 
         return bits;
     };
 
-    for (int i = 0; i < 2; ++i)
-    {
-        renderer->Transition(cl, wave_[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        renderer->Transition(cl, foam_[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
+    // Pass-flow S1 pilot: EmitPoint markers instead of named Transition calls — the compiled
+    // point for our declaration index carries whatever barriers this frame actually needs
+    // (usually just the previous frame's SRV side back to UAV), with nothing to keep in sync.
+    renderer->EmitPoint(cl, uavPointIndex_);
 
     auto dispatch = [&](const std::shared_ptr<Material>& material, uint32_t readIndex,
                         int shiftX, int shiftY, Math::float2 center)
@@ -218,8 +219,8 @@ void OceanSurfSim::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* 
     dispatch(updateMaterial_, current_, 0, 0, center_);
     current_ ^= 1u;
 
-    renderer->Transition(cl, wave_[current_].Get(),
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    // The SRV handoff point (wave_[current_] to pixel-readable for the surface shaders).
+    renderer->EmitPoint(cl, uavPointIndex_ + 1u);
 }
 
 Math::float4 OceanSurfSim::GetWindowParams() const

@@ -1089,6 +1089,15 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
         for (std::uint32_t p = 0; p < cb.pointCount; ++p) {
             CompiledBarriers::Point& pt = cb.points[p];
             if (pt.emitted.load(std::memory_order_relaxed)) { continue; }
+            // Pass-flow S1: the view now keeps EMPTY points (the compile ate every barrier of a
+            // declared point) so EmitPoint markers stay 1:1 with declarations. They are
+            // transparent to this matcher: mark and move on, exactly as if they were not there —
+            // which is what the view used to enforce by omitting them.
+            if (pt.count == 0) {
+                bool notYetEmpty = false;
+                pt.emitted.compare_exchange_strong(notYetEmpty, true, std::memory_order_relaxed);
+                continue;
+            }
             bool names = false;
             for (std::uint32_t i2 = 0; i2 < pt.count && !names; ++i2) {
                 names = pt.entries[i2].Transition.pResource == res &&
@@ -1175,6 +1184,79 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
                   "use TransitionExplicit instead",
                   label, static_cast<unsigned>(after));
     RendererInvariantFailure(msg);
+}
+
+// Pass-flow S1 (docs/render_graph_pass_flow_plan.md): the marker realization of the dormant
+// ctx.Barrier(cl, point) design — see the header comment for the contract.
+void Renderer::EmitPoint(ID3D12GraphicsCommandList* cl, std::uint32_t point) {
+    CompiledBarriers* installed = CurrentThreadCompiledBarriers();
+    if (installed == nullptr || cl == nullptr) {
+        RendererInvariantFailure(
+            "Renderer::EmitPoint: no compiled barriers installed on this thread - "
+            "a marker outside a converted render-graph pass body");
+        return;
+    }
+    CompiledBarriers& cb = *installed;
+    cb.markerUsed.store(true, std::memory_order_relaxed);
+    if (point >= cb.pointCount) {
+        char msg[200];
+        std::snprintf(msg, sizeof(msg),
+                      "Renderer::EmitPoint: pass=%d marker point %u past the compiled count %u - "
+                      "Prepare declared fewer points than the body marks",
+                      cb.pass, point, cb.pointCount);
+        RendererInvariantFailure(msg);
+        return;
+    }
+    // Sweep everything before the marker: an empty point is a pure advance (the compile ate its
+    // barriers), a non-empty unemitted one means barriers were skipped — loud, not silent.
+    for (std::uint32_t p = 0; p < point; ++p) {
+        CompiledBarriers::Point& prev = cb.points[p];
+        if (prev.emitted.load(std::memory_order_relaxed)) { continue; }
+        if (prev.count == 0) {
+            bool notYetEmpty = false;
+            prev.emitted.compare_exchange_strong(notYetEmpty, true, std::memory_order_relaxed);
+            continue;
+        }
+        char msg[200];
+        std::snprintf(msg, sizeof(msg),
+                      "Renderer::EmitPoint: pass=%d marker point %u but earlier non-empty point %u "
+                      "was never emitted - barriers would be lost",
+                      cb.pass, point, p);
+        RendererInvariantFailure(msg);
+        return;
+    }
+    CompiledBarriers::Point& pt = cb.points[point];
+    bool notYet = false;
+    if (!pt.emitted.compare_exchange_strong(notYet, true, std::memory_order_relaxed)) {
+        char msg[160];
+        std::snprintf(msg, sizeof(msg),
+                      "Renderer::EmitPoint: pass=%d point %u emitted twice - duplicate marker or a "
+                      "named Transition already claimed it",
+                      cb.pass, point);
+        RendererInvariantFailure(msg);
+        return;
+    }
+    if (pt.count > 0) {
+        // Same emission as Transition's claimed branch: enhanced when available, legacy fallback
+        // so a translation gap can never become a LOST barrier.
+        bool emitted = false;
+        if (graphicsDevice_.UseEnhancedBarriers()) {
+            const auto isBufferFn = [](void* ctx, ID3D12Resource* r) {
+                return static_cast<Renderer*>(ctx)->IsResourceBuffer(r);
+            };
+            emitted = barriers::EmitEnhanced(AsCmdList7(cl), pt.entries, pt.count, isBufferFn, this);
+        }
+        if (!emitted) {
+            cl->ResourceBarrier(pt.count, pt.entries);
+            barriers::NoteLegacyEmit();
+        }
+    }
+    if (render::g_barrierFlipTrace) {
+        char m[160];
+        std::snprintf(m, sizeof(m), "[flip] pass=%d point %u/%u (%u barriers) marker\n",
+                      cb.pass, point, cb.pointCount, pt.count);
+        Renderer::DiagLog(m);
+    }
 }
 
 void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {

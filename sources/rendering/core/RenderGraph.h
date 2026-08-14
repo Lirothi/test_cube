@@ -70,7 +70,14 @@ namespace render {
 // frame. Turn it on while converting passes (step 5); it is the check that makes that
 // conversion safe, since a Prepare that disagrees with its Record produces wrong barriers
 // with no other symptom.
+// Pass-flow S1: default ON in Debug so a Prepare/Record mismatch surfaces on ANY editor run,
+// not only under --barrier-cmp. It is quiet when the engine is clean (logs only mismatches),
+// and Release keeps it off — the observation log + end-of-frame diff are Debug-priced.
+#ifdef _DEBUG
+inline bool g_barrierComparator = true;
+#else
 inline bool g_barrierComparator = false;
+#endif
 // Step 7: one line per frame with the compiled barrier count. DEFAULT OFF.
 inline bool g_barrierCompileLog = false;
 } // namespace render
@@ -390,6 +397,47 @@ public:
         if (passIndex >= passesNum_) { return; }
         if (!prepare_) { prepare_ = std::make_unique<PrepareState>(); }
         prepare_->fns[passIndex] = std::move(fn);
+    }
+
+    // Pass-flow S2 (docs/render_graph_pass_flow_plan.md): the RDG authoring shape — ONE builder
+    // per pass instead of a Prepare/Record pair kept in sync by discipline. The builder runs at
+    // Prepare time (serially, before any recording): it makes every frame decision as a LOCAL,
+    // declares points/uses from those locals via ctx.Use()/ctx.NextPoint(), may commit
+    // cross-frame state (ping-pong indices) immediately, and returns the record lambda capturing
+    // those locals BY VALUE. Prepare and Record cannot disagree because they are the same
+    // values; combined with EmitPoint markers (S1) the body names no resource and no state.
+    // Returning an empty ExecFn means "this pass does nothing this frame" — the body becomes a
+    // no-op, consistent with whatever the builder declared (normally nothing) before bailing.
+    //
+    //   rg.AddPass2(RenderPass::X, { prev }, [this](PassContext& ctx) -> ExecFn {
+    //       const bool work = WillWork();                  // decision, once
+    //       if (!work) { return {}; }
+    //       ctx.NextPoint();
+    //       const std::uint32_t point = *ctx.usePoint;     // for EmitPoint markers
+    //       ctx.Use(res, state);
+    //       return [this, work, point](PassContext c) {
+    //           /* open a CL via c, then c.renderer->EmitPoint(cl, point) and record */
+    //       };
+    //   });
+    //
+    // Implementation note: the pass is created with a placeholder body because RunPrepareOne
+    // skips a pass whose exec is empty; the builder's return REPLACES it. RunPrepares is serial
+    // and runs before any record task exists, so writing passes_[idx].exec there is safe.
+    using BuildFn = std::function<ExecFn(PassContext&)>;
+
+    size_t AddPass2(RenderPass name, std::initializer_list<size_t> prereqs, BuildFn builder)
+    {
+        return AddPass2Internal(name, prereqs, std::initializer_list<size_t>{}, {},
+            std::move(builder));
+    }
+
+    size_t AddPass2(RenderPass name,
+        std::initializer_list<size_t> prereqs,
+        std::initializer_list<size_t> mtDeps,
+        std::initializer_list<ResourceStateDecl> declares,
+        BuildFn builder)
+    {
+        return AddPass2Internal(name, prereqs, mtDeps, declares, std::move(builder));
     }
 
     // Command-list group brackets (step 5). Passes added between Begin/End share
@@ -926,24 +974,35 @@ private:
     // Step 7: flatten one pass's per-point compiled barriers into a contiguous view.
     //
     // The compile writes each pass's barriers into ONE contiguous run of the arena (points are
-    // filled in ascending order), so the view is just the span from the first non-empty point to
-    // the last — no copying. `claimed` rides alongside in the PrepareState so the flags reset with
-    // the compile, not per body.
+    // filled in ascending order), so the entries are direct arena slices — no copying. `emitted`
+    // rides alongside in the PrepareState so the flags reset with the compile, not per body.
+    //
+    // Pass-flow S1: the view keeps EMPTY points (count = 0, the compile ate every barrier of a
+    // declared point) up to the LAST point the pass declared uses for — EmitPoint markers carry
+    // absolute declaration indices, so the correspondence must be 1:1. The Transition matcher
+    // steps over empty points transparently, which reproduces exactly what omitting them used
+    // to do.
     void BuildPassBarrierView(size_t passIdx, Renderer::CompiledBarriers& out)
     {
         out.unmatched.store(0, std::memory_order_relaxed);
+        out.markerUsed.store(false, std::memory_order_relaxed);
+        const auto& slice = prepare_->slices[passIdx];
+        std::uint32_t declaredPoints = 0;
+        for (std::uint32_t i = 0; i < slice.count; ++i) {
+            const ResourceUse& use = prepare_->arena[slice.begin + i];
+            if (use.point < kResourceUsesPerPassBudget) {
+                declaredPoints = std::max(declaredPoints, use.point + 1u);
+            }
+        }
         auto& views = prepare_->barrierPointViews[passIdx];
-        std::uint32_t n = 0;
-        for (std::uint32_t p = 0; p < kResourceUsesPerPassBudget; ++p) {
-            const auto& slice = prepare_->barrierPoints[passIdx][p];
-            if (slice.count == 0) { continue; }
-            views[n].entries = &prepare_->barrierArena[slice.begin];
-            views[n].count = slice.count;
-            views[n].emitted.store(false, std::memory_order_relaxed);
-            ++n;
+        for (std::uint32_t p = 0; p < declaredPoints; ++p) {
+            const auto& sl = prepare_->barrierPoints[passIdx][p];
+            views[p].entries = sl.count > 0 ? &prepare_->barrierArena[sl.begin] : nullptr;
+            views[p].count = sl.count;
+            views[p].emitted.store(false, std::memory_order_relaxed);
         }
         out.points = views.data();
-        out.pointCount = n;
+        out.pointCount = declaredPoints;
         out.pass = static_cast<int>(passes_[passIdx].name); // --barrier-flip-trace label only
     }
 
@@ -975,13 +1034,22 @@ private:
                 continue;
             }
 
+            // Pass-flow S1: a body (or a sub-block of one) that used EmitPoint markers emits
+            // straight from the compile without feeding the observation log, and cannot diverge
+            // from its declarations by construction. Its declarations would read as "INFO extra"
+            // and a purely-marker body as SKIPPED — both meaningless for it — so those two
+            // directions are muted. The FATAL "MISSING" direction below stays fully armed: any
+            // remaining NAMED Transition call in the same pass is still checked.
+            const bool markerUsed =
+                prepare_->passBarriers[i].markerUsed.load(std::memory_order_relaxed);
+
             // The body performed NOTHING — it early-outed. One line instead of one per
             // registration: the useful fact is "this pass did not run", and a pass that skips
             // every frame would otherwise bury the log (VsmPageRender emitted 31k lines this
             // way). It also says plainly that the pass's registration is UNVERIFIED, which a
             // pile of benign "extra" lines does not.
             const std::uint32_t observedCount = obs.count.load(std::memory_order_relaxed);
-            if (observedCount == 0 && slice.count > 0) {
+            if (observedCount == 0 && slice.count > 0 && !markerUsed) {
                 LogComparator(passes_[i].name, "SKIPPED (body performed nothing - registration unverified)",
                               nullptr, D3D12_RESOURCE_STATE_COMMON);
                 obs.ran = false;
@@ -989,7 +1057,7 @@ private:
             }
 
             // Registered but never done.
-            for (std::uint32_t u = 0; u < slice.count; ++u) {
+            for (std::uint32_t u = 0; u < slice.count && !markerUsed; ++u) {
                 const ResourceUse& want = prepare_->arena[slice.begin + u];
                 bool found = false;
                 for (std::uint32_t o = 0; o < observedCount && !found; ++o) {
@@ -1199,6 +1267,27 @@ private:
     }
 
 private:
+    // Pass-flow S2: create the pass with a placeholder body (RunPrepareOne skips an empty exec),
+    // then install a Prepare that runs the builder and replaces the body with its return.
+    template <typename RangePrereqs, typename RangeDeps>
+    size_t AddPass2Internal(RenderPass name,
+        const RangePrereqs& prereqs,
+        const RangeDeps& deps,
+        std::initializer_list<ResourceStateDecl> declares,
+        BuildFn builder)
+    {
+        CPU_SCOPE(ProfilerScopes::kAddPass);
+        const size_t idx = AddPassInternal(name, prereqs, deps, declares,
+            [](PassContext) {});
+        SetPassPrepare(idx, [this, idx, builder = std::move(builder)](PassContext& ctx)
+        {
+            ExecFn exec = builder(ctx);
+            passes_[idx].exec = exec ? std::move(exec)
+                                     : ExecFn([](PassContext) {});
+        });
+        return idx;
+    }
+
     template <typename RangePrereqs, typename RangeDeps>
     size_t AddPassInternal(RenderPass name,
         const RangePrereqs& prereqs,

@@ -75,6 +75,11 @@ private:
     std::shared_ptr<Material> updateMaterial_;
     std::shared_ptr<Material> relocateMaterial_;
 
+    // Pass-flow S1 pilot: the absolute declaration index of this object's first barrier point
+    // within the shared compute pass (captured from *ctx.usePoint in PrepareCompute); the SRV
+    // handoff point is uavPointIndex_ + 1. RecordCompute emits both with EmitPoint markers.
+    std::uint32_t uavPointIndex_ = 0;
+
     Math::float2 center_ = Math::float2(0.0f, 0.0f);
     // Texel shift decided by TickWindow for this frame's Relocate (0 = no re-anchor).
     int pendingShiftX_ = 0;

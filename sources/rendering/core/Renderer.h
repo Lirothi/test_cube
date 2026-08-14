@@ -365,9 +365,24 @@ public:
         std::uint32_t              pointCount = 0;
         std::atomic<std::uint32_t> unmatched{ 0 };  // body wanted something not compiled
         int                        pass = -1;       // RenderPass enum, --barrier-flip-trace only
+        // Pass-flow S1: the body used EmitPoint markers. The comparator then skips the benign
+        // "INFO extra" direction and the SKIPPED heuristic for this pass — a marker body cannot
+        // diverge from the compile by construction and does not feed the observation log.
+        std::atomic<bool>          markerUsed{ false };
     };
     static void SetThreadCompiledBarriers(CompiledBarriers* cb);
     static CompiledBarriers* CurrentThreadCompiledBarriers();
+
+    // Pass-flow S1 (docs/render_graph_pass_flow_plan.md): emit the compiled point with the given
+    // DECLARATION index wholesale, without naming any resource or state — the marker realizes
+    // the dormant ctx.Barrier(cl, point) design from A.1s. The index is absolute (the value of
+    // *ctx.usePoint when the Prepare declared the point's uses), so a sub-block inside a shared
+    // pass (several objects declare into one pass) never depends on other blocks' tails. Earlier
+    // unemitted EMPTY points are swept emitted on the way (the compile ate their barriers);
+    // an earlier unemitted NON-empty point, a marker past the end, a double-emitted point, or no
+    // compiled barriers installed on this thread are invariant failures — each one is a
+    // conversion bug that would otherwise lose or reorder barriers silently.
+    void EmitPoint(ID3D12GraphicsCommandList* cl, std::uint32_t point);
 
     // Barrier-diagnostics sink for --barrier-cmp / --barrier-flip-trace: barrier_diag.log plus the
     // debugger. A file because the --scene-stress harness runs with no debugger attached.
