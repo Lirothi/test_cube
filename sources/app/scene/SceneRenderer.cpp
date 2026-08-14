@@ -715,32 +715,27 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // Rung 2 / Step 19: VSM page-request pass — reads the camera depth (after GBuffer), marks the
     // virtual pages the frame needs. Independent consumer of depth (its output is unused for now),
     // so it doesn't gate lighting. Manages the request-buffer UAV state itself.
-    auto pVsmPageRequest = rg.AddPass(RenderPass::Main_VsmPageRequest, { pGbuf },
-        { { D.depth.Get(), kSrvAll } },
-        [this, renderer](RenderGraphPassContext ctx) {
-            CPU_SCOPE(ProfilerScopes::kPassVsmPageRequest);
-            Pass_VsmPageRequest(renderer, ctx);
+    // pass-flow S3c: authored with AddPass2 — one gate decides declarations and record, and the
+    // barrier-point indices travel as a by-value capture. The depth read is registered by the
+    // builder itself (NOT via the declare list): this pass runs right after the G-buffer, which
+    // leaves depth in DEPTH_WRITE, and reading it without the graph transitioning it was GBV
+    // id=1358 on all three Deferred[N].Depth.
+    auto pVsmPageRequest = rg.AddPass2(RenderPass::Main_VsmPageRequest, { pGbuf },
+        [this, renderer](RenderGraphPassContext& ctx)
+            -> std::function<void(RenderGraphPassContext)> {
+            // `vsmSkipUpdate_` is decided before the graph is built and does not change during
+            // the frame, so this gate is exact.
+            if (!render::VsmActive() || vsmSkipUpdate_) { return {}; }
+            if (!frame_->vsm || !frame_->vsm->IsAllocated()) { return {}; }
+            ctx.Use(ctx.renderer->GetDeferredForFrame().depth.Get(), kSrvAll);
+            // VSM owns the buffers its Record* functions barrier, so it declares them itself.
+            const VirtualShadowMap::PageRequestPoints pts =
+                frame_->vsm->PrepareRequestPass(ctx);
+            return [this, renderer, pts](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassVsmPageRequest);
+                Pass_VsmPageRequest(renderer, c, pts);
+            };
         });
-    rg.SetPassPrepare(pVsmPageRequest, [this](RenderGraphPassContext& p) {
-        // Step 7: mirror BOTH of the body's gates. `vsmSkipUpdate_` is decided before the
-        // graph is built and does not change during the frame, so this is exact.
-        if (!render::VsmActive() || vsmSkipUpdate_) { return; }
-        // IsAllocated BEFORE UseDeclared: the body returns on it too, so declaring the depth read
-        // above this line registered a barrier the body would never emit.
-        if (!frame_->vsm || !frame_->vsm->IsAllocated()) { return; }
-        // The depth read is registered HERE rather than via UseDeclared, and the body performs the
-        // matching transition. It used to do NEITHER — the pass read the depth SRV and relied on
-        // some later pass having already moved depth to a read state. That reliance was wrong:
-        // this pass runs right after the G-buffer, which leaves depth in DEPTH_WRITE, and
-        // GPU-based validation reported the SRV-over-a-DEPTH_WRITE-resource every frame
-        // (id=1358, on all three Deferred[N].Depth). Reading a resource the graph has not
-        // transitioned is undefined however the barriers are emitted.
-        // UseDeclared is still not used: it would register the WHOLE declare list, and the point
-        // structure below belongs to VSM's own buffers.
-        p.Use(p.renderer->GetDeferredForFrame().depth.Get(), kSrvAll);
-        // VSM owns the buffers its Record* functions transition, so it registers them itself.
-        frame_->vsm->PrepareRequestPass(p);
-    });
     (void)pVsmPageRequest;
 
     // Rung 2 / Step 22: render shadow casters into the resident physical pages (depth-only into the
@@ -791,17 +786,20 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     {
         // No declared pool state: RecordPageRender transitions the pool DEPTH_WRITE itself (the
         // light passes declare it back to SRV). Ordering to the light passes is via their prereq.
-        pVsmPageRender = rg.AddPass(RenderPass::Main_VsmPageRender, { pVsmPageRequest },
-            [this, renderer](RenderGraphPassContext ctx) {
-                CPU_SCOPE(ProfilerScopes::kPassVsmPageRender);
-                Pass_VsmPageRender(renderer, ctx);
+        // pass-flow S3: authored with AddPass2 — ONE gate decides both the declarations and the
+        // record, and the PageRenderDecisions travel as a by-value lambda capture instead of a
+        // class-member bridge Prepare and Record could disagree over.
+        pVsmPageRender = rg.AddPass2(RenderPass::Main_VsmPageRender, { pVsmPageRequest },
+            [this, renderer](RenderGraphPassContext& ctx)
+                -> std::function<void(RenderGraphPassContext)> {
+                if (vsmSkipUpdate_ || !frame_->shadowGpu) { return {}; }
+                const VirtualShadowMap::PageRenderDecisions dec =
+                    frame_->vsm->PrepareRenderPass(ctx, frame_->shadowGpu, frame_->wind);
+                return [this, renderer, dec](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassVsmPageRender);
+                    Pass_VsmPageRender(renderer, c, dec);
+                };
             });
-        rg.SetPassPrepare(pVsmPageRender, [this](RenderGraphPassContext& p) {
-            // Same two gates as the body — see the request pass.
-            if (!render::VsmActive() || vsmSkipUpdate_) { return; }
-            if (!frame_->shadowGpu) { return; }
-            frame_->vsm->PrepareRenderPass(p, frame_->shadowGpu, frame_->wind);
-        });
     }
     (void)pVsmPageRender;
 
@@ -1617,15 +1615,15 @@ void SceneRenderer::Pass_ShadowCull(Renderer* renderer, RenderGraphPassContext c
     ctx.EndCL(t);
 }
 
-void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassContext ctx)
+void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassContext ctx,
+    const VirtualShadowMap::PageRequestPoints& pts)
 {
     // Rung 2 / Step 19b: mark the virtual shadow pages the visible frame needs. Runs after the
     // GBuffer (needs camera depth); output is the request bitfield, consumed by Step 20 (unused
     // yet — so the pass is gated OFF by default, Ctrl+V to exercise/measure). LOCAL lights only:
     // the view slots are [spots | point-faces] (NO CSM cascades — directional stays on Pass_CSM
     // until Step 24). Per-view viewProj + a mip/refDist LOD param drive the request shader.
-    if (!render::VsmActive() || vsmSkipUpdate_) { return; }
-    if (!renderer || !frame_->vsm || !frame_->vsm->IsAllocated()) { return; }
+    // pass-flow S3c: no gates here — the AddPass2 builder decided this pass runs and declared.
 
     const auto& D = renderer->GetDeferredForFrame();
     const UINT rw = renderer->GetRenderWidth();
@@ -1666,26 +1664,25 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassVsmPageRequest);
-        // Matches the Prepare above: this pass reads camera depth as an SRV, so it must be the one
-        // to move it there. It previously read it in whatever state the G-buffer left behind.
-        renderer->Transition(t.cl, D.depth.Get(),
-                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        // The base point moves camera depth to SRV (the G-buffer leaves it in DEPTH_WRITE) and
+        // the request buffer to UAV, in one marker.
+        renderer->EmitPoint(t.cl, pts.base);
         frame_->vsm->RecordPageRequest(renderer, t.cl, cb, D.depthSRV, rw, rh);
         // Step 20: allocate physical pages for the just-marked requests (same CL — request buffer
         // stays UAV between them). Add-dormant: nothing samples/renders the pages yet.
-        frame_->vsm->RecordPageAllocate(renderer, t.cl);
+        frame_->vsm->RecordPageAllocate(renderer, t.cl, pts);
     }
     ctx.EndCL(t);
 }
 
-void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContext ctx)
+void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContext ctx,
+    const VirtualShadowMap::PageRenderDecisions& dec)
 {
     // Rung 2 / Step 22: render casters into the resident VSM pages. Builds the LOCAL shadow views
     // (spots then point faces — same slot layout as Pass_VsmPageRequest), then RecordPageRender
     // does the GPU per-page setup + per-page ExecuteIndirect into the pool (DEPTH_WRITE via graph).
-    if (!render::VsmActive() || vsmSkipUpdate_) { return; }
-    if (!renderer || !frame_->vsm || !frame_->vsm->IsAllocated() || !frame_->shadowGpu) { return; }
+    // pass-flow S3: no gates here — the AddPass2 builder decided this pass runs, made the
+    // declarations, and captured `dec`; a second decision here could only disagree.
 
     std::array<vsm::ViewProjEntry, vsm::kMaxVirtualViews> views{};
     std::uint32_t slot = 0;
@@ -1710,7 +1707,8 @@ void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContex
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassVsmPageRender);
-        frame_->vsm->RecordPageRender(renderer, t.cl, frame_->shadowGpu, views.data(), slot, frame_->wind);
+        frame_->vsm->RecordPageRender(renderer, t.cl, frame_->shadowGpu, views.data(), slot,
+            frame_->wind, dec);
     }
     ctx.EndCL(t);
 }

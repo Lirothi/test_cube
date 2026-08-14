@@ -92,5 +92,37 @@ be reverted independently.
   OceanRenderable::PrepareCompute/RecordCompute (replaced by one `BuildSurfSimPass` bridge).
   Gates green: builds 0/0, Release stress CLEAN, Debug GBV stress CLEAN, comparator silent,
   surf-sim checkerboard identical in Debug with everything armed. Tonemap examined and
-  REJECTED as a candidate (see the finding above). Remaining: `Main_VsmPageRender`, its own
-  session — the largest and highest-value conversion.
+  REJECTED as a candidate (see the finding above).
+- S3 pilot #2 DONE (uncommitted) — **`Main_VsmPageRender` converted.** `PrepareRenderPass`
+  now RETURNS the `PageRenderDecisions` it declared from; the class-member bridge
+  (`pageRenderDecisions_`, `CurrentPageRenderDecisions`, the `valid` flag) is DELETED;
+  `ComputePageRenderDecisions` is pure/const; `RecordPageRender` takes `dec` as a parameter.
+  SceneRenderer authors the pass with AddPass2: one gate (`vsmSkipUpdate_`/shadowGpu, plus the
+  outer vsmActive) decides declarations AND record together, the decisions ride as a by-value
+  capture, and `Pass_VsmPageRender` lost its duplicated gates entirely (a second decision could
+  only disagree — under compiled barriers an early-out after declaring is the fatal case).
+  Gates: builds 0/0; Release stress CLEAN; Debug GBV stress CLEAN in BOTH shadow modes
+  (`--shadow-mode=legacy` too — the stress runs VSM by default and legacy exercises the
+  no-pass path); comparator silent in all runs; VSM shadows visually intact on wind_test.
+- S3b DONE (uncommitted) — **RecordPageRender converted to EmitPoint markers.**
+  `PageRenderDecisions` now also carries the ABSOLUTE declaration indices of the pass's points
+  (base / scatterWrite / scatterRead / cacheCopy / cacheRead / consume), captured by
+  PrepareRenderPass as it declares. The record body names NO resource and NO state: ~15 named
+  `Transition` calls became 6 markers (plus the untouched `UAVBarrier`s); the idempotent
+  physOwner re-assert on the resident-readback path is deleted outright.
+  **Latent bug found AND fixed by the conversion:** the caching snapshot declared
+  `physOwnerPrev → COPY_DEST` and `→ NPS` in ONE point while the copy records between them — a
+  point is emitted wholesale at its first match, so the copy would have seen NPS. Dormant only
+  because `g_pageCaching` defaults off. The declaration is now split into pointCacheCopy /
+  pointCacheRead around the copy. Gates re-run green (both builds, both stress modes, comparator
+  silent, shadows intact).
+- S3c DONE (uncommitted) — **`Main_VsmPageRequest` converted the same way.** New
+  `PageRequestPoints` (base / alloc / readback flag / readbackCopy / readbackRestore) returned
+  by `PrepareRequestPass`; the pass is authored with AddPass2 (one gate; the builder registers
+  the camera-depth read itself — the GBV id=1358 depth rationale carries over); the bodies
+  (`Pass_VsmPageRequest`, `RecordPageRequest`, `RecordPageAllocate`, `RecordDebugReadback`)
+  emit 4 markers and name no states; the one-shot readback decision travels as `pts.readback`
+  instead of re-evaluating `WillRecordDebugReadback` in the record. The readback's
+  interleaved copy/transition sequence was already point-safe (all three sources reach
+  COPY_SOURCE before the first copy) — the markers just make that explicit. Gates green (both
+  builds, both stress shadow modes, comparator silent, shadows intact). S3 COMPLETE.

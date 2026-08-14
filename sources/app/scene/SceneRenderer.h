@@ -92,8 +92,14 @@ private:
         const std::array<SceneView, kCascades>& cascadeViews);
     void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const SceneView& mainView);
-    void Pass_VsmPageRequest(Renderer* r, RenderGraphPassContext ctx);
-    void Pass_VsmPageRender(Renderer* r, RenderGraphPassContext ctx);
+    // pass-flow S3c: `pts` arrives from the AddPass2 builder's PrepareRequestPass call — the
+    // point indices the declarations were made under, captured by value into the record lambda.
+    void Pass_VsmPageRequest(Renderer* r, RenderGraphPassContext ctx,
+        const VirtualShadowMap::PageRequestPoints& pts);
+    // pass-flow S3: `dec` arrives from the AddPass2 builder's PrepareRenderPass call — the same
+    // values the declarations were made from, captured by value into the record lambda.
+    void Pass_VsmPageRender(Renderer* r, RenderGraphPassContext ctx,
+        const VirtualShadowMap::PageRenderDecisions& dec);
     void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,

@@ -220,12 +220,26 @@ public:
     // rather than exposing every buffer just so SceneRenderer can list them. The context type
     // is forward-declared — the definition lives in the .cpp, which keeps RenderGraph.h out of
     // this header (it already includes Renderer.h, so including it here would be circular).
-    void PrepareRequestPass(RenderGraphPassContext& ctx) const;
-    // Barrier plan D1.1: the page-render path's runtime decisions, taken ONCE per frame in
-    // PrepareRenderPass and READ by RecordPageRender. They used to be recomputed inside the record
-    // body, which forced Prepare to register the union of every reachable branch — benign under the
-    // tracker, fatal once barriers are compiled (the compile advances past barriers the body never
-    // emits). Deciding once is what makes the registration exact instead of conservative.
+    //
+    // pass-flow S3c: the request/alloc pass's barrier-point indices + the one-shot readback
+    // decision, captured by PrepareRequestPass as it declares and carried into the record lambda
+    // by the AddPass2 builder — the record bodies emit EmitPoint markers and name no states.
+    struct PageRequestPoints {
+        std::uint32_t base = 0;            // camera depth SRV + request buffer UAV
+        std::uint32_t alloc = 0;           // the six alloc buffers -> UAV
+        bool readback = false;             // this frame runs the one-shot debug readback
+        std::uint32_t readbackCopy = 0;    // request/counters/physOwner -> COPY_SOURCE
+        std::uint32_t readbackRestore = 0; // ...and back to canonical after the copies
+    };
+    // Declares this frame's exact uses and returns the point indices. The caller (the AddPass2
+    // builder) gates on VsmActive/IsAllocated BEFORE declaring anything, including the depth
+    // read it registers itself.
+    PageRequestPoints PrepareRequestPass(RenderGraphPassContext& ctx) const;
+    // Barrier plan D1.1 → pass-flow S3: the page-render path's runtime decisions, taken ONCE per
+    // frame by PrepareRenderPass and RETURNED to the caller — SceneRenderer's AddPass2 builder
+    // captures them into the record lambda, so Prepare and Record read the SAME values by
+    // construction (they used to travel through a class member, which is a bridge two code paths
+    // can still disagree over; a by-value capture cannot).
     struct PageRenderDecisions {
         bool caching = false;
         bool useMega = false;
@@ -233,12 +247,22 @@ public:
         bool compactArgs = false;
         bool scatterActive = false;
         std::uint32_t forceAll = 1u;
-        bool valid = false; // false => Prepare did not run this frame (pass will early-out)
+        // pass-flow S3b: the ABSOLUTE declaration indices of the pass's barrier points, captured
+        // by PrepareRenderPass as it declares them. RecordPageRender emits each with an EmitPoint
+        // marker — the record body names no resource and no state. Scatter/cache indices are only
+        // meaningful when their decision above is true.
+        std::uint32_t pointBase = 0;
+        std::uint32_t pointScatterWrite = 0;
+        std::uint32_t pointScatterRead = 0;
+        std::uint32_t pointCacheCopy = 0; // physOwnerPrev -> COPY_DEST, BEFORE the snapshot copy
+        std::uint32_t pointCacheRead = 0; // physOwnerPrev/perPageDirty -> NPS, AFTER the copy
+        std::uint32_t pointConsume = 0;
     };
-    const PageRenderDecisions& CurrentPageRenderDecisions() const { return pageRenderDecisions_; }
 
-    void PrepareRenderPass(RenderGraphPassContext& ctx, ShadowGpuData* shadowGpu,
-                           const vfx::WindState* wind);
+    // Registers this frame's exact resource uses AND returns the decisions they were derived
+    // from. Call only on frames the pass will record (the AddPass2 builder gates both at once).
+    PageRenderDecisions PrepareRenderPass(RenderGraphPassContext& ctx, ShadowGpuData* shadowGpu,
+                                          const vfx::WindState* wind);
     // Step 24b: free every VSM GPU allocation (Legacy mode / teardown). MUST be at GPU idle.
     void ReleaseResources();
     bool IsAllocated() const { return pagePool_ != nullptr && pageTable_ != nullptr; }
@@ -272,7 +296,8 @@ public:
     // allocate a physical page for each requested-but-not-resident page and append it to the
     // needs-render list (Step 22 input). Persists the page table + free-list/LRU state across
     // frames. Nothing samples/renders the pages yet (add-dormant). Also records the debug readback.
-    void RecordPageAllocate(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+    void RecordPageAllocate(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                            const PageRequestPoints& pts);
 
     // Step 22: render shadow casters into the resident physical pages. A setup compute builds a
     // per-page off-center projection + per-page indirect args (copied from Rung 0's per-view cull),
@@ -285,7 +310,7 @@ public:
     // foliage casters exactly like the gbuffer does.
     void RecordPageRender(Renderer* renderer, ID3D12GraphicsCommandList* cl, ShadowGpuData* shadowGpu,
                           const vsm::ViewProjEntry* views, std::uint32_t viewCount,
-                          const vfx::WindState* wind);
+                          const vfx::WindState* wind, const PageRenderDecisions& dec);
 
     // Step 19/20 (temporary): a few frames in, read back the request bitfield + allocation
     // counters and log the requested-page mip histogram + resident/newly-allocated/failed counts,
@@ -436,12 +461,13 @@ private:
     DebugStats                 stats_;
     std::vector<std::uint32_t> physOwnerSnapshot_; // kPoolPageCount, physical -> owning virtual page / INVALID
 
-    void RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCommandList* cl); // Step 20: copy request+counters
+    void RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                             const PageRequestPoints& pts); // Step 20: copy request+counters
     // Step 7: the gate RecordDebugReadback uses, shared with PrepareRequestPass so the two cannot
     // drift — a Prepare that registers what its Record skips is fatal once barriers are compiled.
     bool WillRecordDebugReadback(Renderer* renderer) const;
-    // D1.1: filled by PrepareRenderPass, read by RecordPageRender. Never written by Record.
-    void ComputePageRenderDecisions(ShadowGpuData* shadowGpu, const vfx::WindState* wind);
-    PageRenderDecisions pageRenderDecisions_;
+    // D1.1 → pass-flow S3: pure — returns the frame's decisions, stores nothing.
+    PageRenderDecisions ComputePageRenderDecisions(ShadowGpuData* shadowGpu,
+                                                   const vfx::WindState* wind) const;
     void EnsureAllocResources(Renderer* renderer); // create the alloc buffers + descriptors
 };
