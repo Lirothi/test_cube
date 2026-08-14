@@ -134,14 +134,15 @@ void OceanSurfSim::TickWindow(Math::float2 cameraXZ)
 }
 
 // Pass-flow S3 pilot: the whole pass in one builder — see the header comment. Decisions are
-// locals, the cross-frame state (ping-pong index, window centre, sim clock) is committed HERE,
-// the declarations are made from the same locals, and the returned record lambda captures them
-// by value. The record body names no resource: EmitPoint markers emit whatever the compile
-// produced for our two points.
+// locals, the cross-frame state (ping-pong index, window centre, sim clock, substep accumulator)
+// is committed HERE, the declarations are made from the same locals, and the returned record
+// lambda captures them by value. The record body names no resource: EmitPoint markers emit
+// whatever the compile produced for our two points.
 std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
-    RenderGraphPassContext& ctx, float timeSeconds)
+    RenderGraphPassContext& ctx, float timeSeconds, const ShoreDepthWindow& shore)
 {
-    if (!created_ || !updateMaterial_ || !relocateMaterial_)
+    if (!created_ || !updateMaterial_ || !relocateMaterial_ || shore.srv.ptr == 0 ||
+        shore.resource == nullptr)
     {
         return {};
     }
@@ -151,8 +152,6 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
     const int shiftX = pendingShiftX_;
     const int shiftY = pendingShiftY_;
     const uint32_t readIndex = current_;
-    const uint32_t afterRelocate = relocate ? (readIndex ^ 1u) : readIndex;
-    const uint32_t finalIndex = afterRelocate ^ 1u;
     if (relocate)
     {
         center_ = pendingCenter_;
@@ -160,26 +159,62 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
     const Math::float2 center = center_;
     pendingShiftX_ = 0;
     pendingShiftY_ = 0;
-    current_ = finalIndex; // committed before recording: GetWaveSrv is final from here on
-    const float dt = previousTime_ >= 0.0f ? std::max(0.0f, timeSeconds - previousTime_) : 0.0f;
+
+    // S1: fixed-substep catch-up (Crest's LodDataMgrPersistent cadence). A frozen clock
+    // (--wind-freeze) yields zero elapsed => zero substeps => the sim holds still with it.
+    const float elapsed =
+        previousTime_ >= 0.0f ? std::max(0.0f, timeSeconds - previousTime_) : 0.0f;
     previousTime_ = timeSeconds;
+    substepAccum_ = std::min(substepAccum_ + elapsed, kFixedDt * (2.0f * kMaxSubsteps));
+    int substeps = static_cast<int>(substepAccum_ / kFixedDt);
+    substeps = std::min(substeps, kMaxSubsteps);
+    substepAccum_ -= static_cast<float>(substeps) * kFixedDt;
+
+    // Poke (the S1 gate's test hump): a UI button press or the --ocean-surf-poke cadence,
+    // injected on the FIRST substep of this frame.
+    bool poke = ocean::g_surfSimPokeRequest;
+    if (ocean::g_surfSimPokeInterval > 0.0f &&
+        timeSeconds - lastAutoPoke_ >= ocean::g_surfSimPokeInterval)
+    {
+        poke = true;
+    }
+    float pokeAmp = 0.0f;
+    if (poke)
+    {
+        if (substeps == 0) { substeps = 1; } // a poke must land even on a frozen clock
+        ocean::g_surfSimPokeRequest = false;
+        lastAutoPoke_ = timeSeconds;
+        pokeAmp = 0.6f; // metres
+    }
+
+    if (substeps == 0 && !relocate)
+    {
+        return {}; // nothing to integrate: no dispatches, no declarations, no barriers
+    }
+
+    const uint32_t swaps = (relocate ? 1u : 0u) + static_cast<uint32_t>(substeps);
+    const uint32_t finalIndex = readIndex ^ (swaps & 1u);
+    current_ = finalIndex; // committed before recording: GetWaveSrv is final from here on
 
     // ---- declarations, from the same locals ----
-    // Everything is written as a UAV first (relocate and/or update)...
+    // Everything is written as a UAV first (relocate and/or the substep chain); the shore depth
+    // map is read at its canonical state (no barrier, the compile just sees the read)...
     ctx.NextPoint();
     const std::uint32_t uavPoint = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(wave_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(wave_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(foam_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(foam_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(shore.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     // ...then the frame's freshest height field is left readable for the surface's pixel shader.
     ctx.NextPoint();
     ctx.Use(wave_[finalIndex].Get(),
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
     // ---- record, capturing the decisions by value ----
-    return [this, timeSeconds, dt, relocate, shiftX, shiftY, center, readIndex,
-            uavPoint](RenderGraphPassContext c)
+    return [this, timeSeconds, relocate, shiftX, shiftY, center, readIndex, substeps, pokeAmp,
+            shore, uavPoint](RenderGraphPassContext c)
     {
         Renderer* renderer = c.renderer;
         auto t = c.BeginCL();
@@ -197,8 +232,10 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
 
             renderer->EmitPoint(cl, uavPoint);
 
+            auto srvTable = renderer->StageSrvUavTable({ shore.srv });
+
             auto dispatch = [&](const std::shared_ptr<Material>& material, uint32_t readIdx,
-                                int sx, int sy)
+                                int sx, int sy, float dt, float pokeMetres)
             {
                 auto uavTable = renderer->StageSrvUavTable({
                     waveUav_[readIdx], waveUav_[1u - readIdx],
@@ -211,11 +248,20 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
                     asUint(kTexelWorld),
                     asUint(center.x),
                     asUint(center.y),
-                    static_cast<uint32_t>(sx),
-                    static_cast<uint32_t>(sy),
                     asUint(timeSeconds),
                     asUint(dt),
+                    static_cast<uint32_t>(sx),
+                    static_cast<uint32_t>(sy),
+                    asUint(shore.center.x),
+                    asUint(shore.center.y),
+                    asUint(shore.invExtent),
+                    asUint(shore.zNear),
+                    asUint(shore.zFar),
+                    asUint(shore.camHeight),
+                    asUint(pokeMetres),
+                    0u,
                 };
+                rctx.srvTable[0] = srvTable.gpu;
                 rctx.uavTable[0] = uavTable.gpu;
                 material->Bind(cl, rctx);
                 cl->Dispatch(groups, groups, 1);
@@ -226,10 +272,14 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
             uint32_t read = readIndex;
             if (relocate)
             {
-                dispatch(relocateMaterial_, read, shiftX, shiftY);
+                dispatch(relocateMaterial_, read, shiftX, shiftY, 0.0f, 0.0f);
                 read ^= 1u;
             }
-            dispatch(updateMaterial_, read, 0, 0);
+            for (int i = 0; i < substeps; ++i)
+            {
+                dispatch(updateMaterial_, read, 0, 0, kFixedDt, i == 0 ? pokeAmp : 0.0f);
+                read ^= 1u;
+            }
 
             // The SRV handoff point (the final wave side to pixel-readable for the surface).
             renderer->EmitPoint(cl, uavPoint + 1u);

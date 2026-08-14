@@ -629,15 +629,26 @@ void OceanRenderable::PrepareCompute(RenderGraphPassContext& ctx)
 
 // surf sim injection (pass-flow S3 pilot): the surf sim is its OWN render-graph pass now,
 // authored with AddPass2 — this is its builder, gated on the same activity condition for both
-// the declarations and the record (one gate, not two).
+// the declarations and the record (one gate, not two). S1: it also assembles the shore-depth
+// window (the sim's wave speed is the shallow-water celerity read from that map).
 std::function<void(RenderGraphPassContext)> OceanRenderable::BuildSurfSimPass(
     RenderGraphPassContext& ctx)
 {
-    if (!SurfSimActive() || !surfSim_->IsReady())
+    if (!SurfSimActive() || !surfSim_->IsReady() || !simulation_)
     {
         return {};
     }
-    return surfSim_->BuildPass(ctx, elapsedTime_);
+    OceanSurfSim::ShoreDepthWindow shore;
+    shore.center = simulation_->GetShoreViewCenter();
+    const float halfExtent = std::max(simulation_->GetShoreDepthHalfExtent(), 1.0f);
+    shore.invExtent = 0.5f / halfExtent;
+    const Math::float2 range = simulation_->GetShoreDepthRange();
+    shore.zNear = range.x;
+    shore.zFar = range.y;
+    shore.camHeight = simulation_->GetShoreViewHeight();
+    shore.srv = simulation_->GetShoreDepthSrv();
+    shore.resource = simulation_->GetShoreDepthResource();
+    return surfSim_->BuildPass(ctx, elapsedTime_, shore);
 }
 
 void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)

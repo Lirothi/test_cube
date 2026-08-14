@@ -27,6 +27,15 @@ class Renderer;
 class Material;
 struct RenderGraphPassContext;
 
+namespace ocean
+{
+// surf sim S1: one-shot test-hump injection (the "Poke" button in the ocean window), consumed
+// by the sim's pass builder on the next frame. "--ocean-surf-poke=<sec>" auto-pokes on that
+// cadence so a headless phase series can watch a wave without a GUI.
+inline bool g_surfSimPokeRequest = false;
+inline float g_surfSimPokeInterval = 0.0f;
+}
+
 class OceanSurfSim
 {
 public:
@@ -39,14 +48,28 @@ public:
     // so the pass builder below sees the final answer.
     void TickWindow(Math::float2 cameraXZ);
 
+    // S1: everything the wave equation needs to read the shore depth map — the window transform
+    // (matching ShoreDepthUV in the surface shaders), the depth decode, and the SRV. Assembled
+    // by OceanRenderable from OceanSimulation's getters.
+    struct ShoreDepthWindow
+    {
+        Math::float2 center = Math::float2(0.0f, 0.0f);
+        float invExtent = 0.0f; // uv = offset * invExtent + 0.5
+        float zNear = 0.0f;
+        float zFar = 0.0f;
+        float camHeight = 0.0f;
+        D3D12_CPU_DESCRIPTOR_HANDLE srv{};
+        ID3D12Resource* resource = nullptr; // declared read-only at its canonical state
+    };
+
     // Pass-flow S3 pilot (docs/render_graph_pass_flow_plan.md): the whole pass is ONE builder.
-    // It runs at Prepare time: makes every frame decision as a local (relocate, ping-pong
-    // indices, dt), COMMITS the cross-frame state immediately, declares the barrier points from
-    // those same locals, and returns the record lambda capturing them by value — there is no
-    // separate Record to keep in sync, and the record body names no resource (EmitPoint
-    // markers). Returns an empty function when the sim should not run this frame.
+    // It runs at Prepare time: makes every frame decision as a local (relocate, substep count,
+    // ping-pong indices, poke), COMMITS the cross-frame state immediately, declares the barrier
+    // points from those same locals, and returns the record lambda capturing them by value —
+    // there is no separate Record to keep in sync, and the record body names no resource
+    // (EmitPoint markers). Returns an empty function when the sim should not run this frame.
     std::function<void(RenderGraphPassContext)> BuildPass(
-        RenderGraphPassContext& ctx, float timeSeconds);
+        RenderGraphPassContext& ctx, float timeSeconds, const ShoreDepthWindow& shore);
 
     // x,y: window centre (world XZ), z: 1 / half extent, w: texel world size — the surface
     // shaders' window transform (debug view now, foam consumption at S4).
@@ -64,6 +87,11 @@ private:
     // Snap step of the window centre, whole texels so Relocate shifts losslessly. 8 texels
     // (~7.8 m) keeps re-anchors rare at walking speeds.
     static constexpr float kSnapTexels = 8.0f;
+    // S1: the wave equation integrates on a FIXED substep (stability is a function of dt, so a
+    // frame-rate dt would make it a function of the frame rate), catching up to real time with
+    // at most kMaxSubsteps per frame — the Crest LodDataMgrPersistent cadence.
+    static constexpr float kFixedDt = 1.0f / 120.0f;
+    static constexpr int kMaxSubsteps = 4;
 
     GpuResource wave_[2];
     GpuResource foam_[2];
@@ -82,6 +110,8 @@ private:
     Math::float2 pendingCenter_ = Math::float2(0.0f, 0.0f);
     uint32_t current_ = 0;
     float previousTime_ = -1.0f;
+    float substepAccum_ = 0.0f;  // seconds of sim time not yet integrated
+    float lastAutoPoke_ = -1.0e9f; // sim-clock time of the last --ocean-surf-poke injection
     bool created_ = false;
     bool hasCenter_ = false;
 };

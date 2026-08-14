@@ -159,7 +159,20 @@ touched shader at every step; feature stays default-OFF throughout)
 
 ## Status
 
-- **S0 DONE + S0b verified (2026-08-14, uncommitted).** OceanSurfSim class (512²/500 m window,
+- **S1 DONE (2026-08-14, uncommitted).** The wave equation lives: five-point Laplacian on the
+  height/velocity pair, FIXED 1/120 s substeps with a 4-substep catch-up (a frozen clock stops
+  the sim with it; a poke forces one substep so it lands anyway), `c² = g·depth` from the shore
+  depth map (decode matches ShoreDepthUV/ShoreViewDepth; outside the window or far-plane =
+  deep), CFL clamp, absorbers on land / the window border / (implicitly) open water. Poke: UI
+  button + `--ocean-surf-poke=<sec>` cadence; 0.6 m Gaussian at the window centre. The pass
+  builder gained the substep decision (ping-pong parity = relocate + substeps) and a true no-op
+  frame (zero declarations when nothing integrates). GATE (25-frame real-time phase series,
+  judged as GIF): the ring spreads, the front compresses and slows over the shallows at the
+  waterline (refraction visible), the trough follows, everything decays with no instability;
+  builds 0/0, both stress gates CLEAN, comparator silent, Debug live-sim run clean. NOTE: the
+  poke lands at the WINDOW CENTRE (= under the camera), so its ring reaches the beach from open
+  water — waves that BREAK ONTO the shore are S2's spawner, not the poke. Relocate content
+  preservation still needs an in-editor fly-by check (headless cannot move the camera). OceanSurfSim class (512²/500 m window,
   WaveSim RG16F + SurfFoam R16F ping-pong pairs, texel-aligned snap + Relocate copy-shift),
   `ocean_surf_sim_cs.hlsl` (placeholder Update: world-anchored 4 m checkerboard; Relocate),
   `Ocean.SurfSim` GPU scope, `surfSimEnabled` config/JSON + both UIs, debug tint in the legacy

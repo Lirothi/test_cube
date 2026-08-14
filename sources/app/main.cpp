@@ -413,6 +413,11 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--ocean-surf-debug=")) {
             ocean::g_surfSimDebugView = std::atoi(flag + std::strlen("--ocean-surf-debug="));
         }
+        // surf sim S1: auto-poke cadence for headless wave captures (seconds between pokes).
+        if (const char* flag = std::strstr(lpCmdLine, "--ocean-surf-poke=")) {
+            ocean::g_surfSimPokeInterval =
+                (float)std::atof(flag + std::strlen("--ocean-surf-poke="));
+        }
         // "--trace=<frames>": headless equivalent of the CaptureTrace key.
         if (const char* flag = std::strstr(lpCmdLine, "--trace=")) {
             g_traceFrames = static_cast<uint32_t>(std::atoi(flag + std::strlen("--trace=")));

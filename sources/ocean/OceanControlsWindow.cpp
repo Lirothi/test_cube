@@ -1110,6 +1110,17 @@ namespace
             {
                 ocean::g_surfSimDebugView = surfSimView;
             }
+            // S1 gate: inject a test hump at the sim window's centre (i.e. under the camera).
+            if (ImGui::Button("Poke"))
+            {
+                ocean::g_surfSimPokeRequest = true;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Drop a 0.6 m Gaussian hump at the camera and watch the wave\n"
+                                  "equation carry it (debug view 1). Refraction bends it over\n"
+                                  "the shallows; land, borders and open water absorb it.");
+            }
         }
         // The two surface variants read DIFFERENT settings, so the section only shows the live
         // ones. The legacy (June-22) surface has its damping built in and exactly one authored

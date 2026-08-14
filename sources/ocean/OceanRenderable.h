@@ -56,6 +56,7 @@ inline int g_surfSimDebugView = 0;
 // config flag, not a variant.
 inline bool g_surfSimForce = false;
 
+
 // "--ocean-vs-depth-probe": A/B experiment, OFF. Replaces the world-space shore SDF with a
 // screen-space probe of the depth buffer, taken in the VERTEX shader, as the thing that decides
 // where the wave's vertical motion gets damped. Boot-only and a variant, because it changes which
