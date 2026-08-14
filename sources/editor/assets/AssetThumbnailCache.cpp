@@ -59,6 +59,7 @@ namespace editor_thumbnail_detail
         PreflightKind kind = PreflightKind::Mesh;
         std::uint64_t sourceWriteTime = 0;
         std::uint64_t registryRevision = 0;
+        std::uint64_t environmentSignature = 0;
         std::uint64_t token = 0;
         std::uint64_t epoch = 0;
     };
@@ -92,7 +93,7 @@ namespace editor_thumbnail_detail
 namespace
 {
     // Bump this whenever preview rendering or PNG encoding semantics change.
-    constexpr std::uint32_t kThumbnailSchemaVersion = 8;
+    constexpr std::uint32_t kThumbnailSchemaVersion = 9;
 
     // The render graph already occupies the worker pool. Keep filesystem and JSON
     // preflight work bounded so opening a large folder does not compete with it.
@@ -424,6 +425,10 @@ namespace
         HashText(signature, input.key);
         HashText(signature, input.path);
         HashValue(signature, input.sourceWriteTime);
+        if (input.kind == PreflightKind::Mesh || input.kind == PreflightKind::Material)
+        {
+            HashValue(signature, input.environmentSignature);
+        }
         if (input.kind == PreflightKind::Mesh)
         {
             HashText(signature, resolvedPath);
@@ -743,6 +748,7 @@ struct AssetThumbnailCache::GpuJob
     std::shared_ptr<MaterialData> material;
     std::vector<std::shared_ptr<MaterialData>> meshMaterials;
     Microsoft::WRL::ComPtr<ID3D12Resource> rendered;
+    Microsoft::WRL::ComPtr<ID3D12Resource> environmentResource;
     ThumbnailReadback readback;
     Microsoft::WRL::ComPtr<ID3D12Fence> fence;
     std::uint64_t fenceValue = 1;
@@ -758,6 +764,30 @@ AssetThumbnailCache::AssetThumbnailCache()
 }
 
 AssetThumbnailCache::~AssetThumbnailCache() = default;
+
+void AssetThumbnailCache::SetEnvironment(const TextureCube* environment,
+    const std::string& sourcePath,
+    std::uint64_t sourceWriteTime,
+    float exposure)
+{
+    environment_ = environment && environment->GetResource() ? environment : nullptr;
+    environmentExposure_ = std::max(0.0f, exposure);
+    if (!environment_)
+    {
+        environmentSignature_ = 0;
+        return;
+    }
+
+    std::uint64_t signature = kFnvOffset;
+    HashText(signature, sourcePath);
+    HashValue(signature, sourceWriteTime);
+    HashValue(signature, environmentExposure_);
+    HashValue(signature, environment_->GetWidth());
+    HashValue(signature, environment_->GetHeight());
+    HashValue(signature, environment_->GetMips());
+    HashValue(signature, environment_->GetFormat());
+    environmentSignature_ = signature;
+}
 
 void AssetThumbnailCache::StartPreviewInitialization(Renderer& renderer)
 {
@@ -815,6 +845,10 @@ void AssetThumbnailCache::QueuePreflight(const EditorAssetRecord& record,
     entry.generationKind = kind;
     entry.sourceWriteTime = record.fileWriteTime;
     entry.registryRevision = assetRegistryRevision;
+    entry.environmentSignature =
+        kind == PreflightKind::Mesh || kind == PreflightKind::Material
+            ? environmentSignature_
+            : 0;
     entry.preflightPending = true;
     ++entry.preflightToken;
     preflightQueue_.push_back({
@@ -823,6 +857,7 @@ void AssetThumbnailCache::QueuePreflight(const EditorAssetRecord& record,
         kind,
         record.fileWriteTime,
         assetRegistryRevision,
+        entry.environmentSignature,
         entry.preflightToken,
         preflightEpoch_
     });
@@ -908,6 +943,7 @@ void AssetThumbnailCache::LaunchPreflightJobs()
         input.kind = request.generationKind;
         input.sourceWriteTime = request.sourceWriteTime;
         input.registryRevision = request.registryRevision;
+        input.environmentSignature = request.environmentSignature;
         input.token = request.token;
         input.epoch = request.epoch;
 
@@ -992,7 +1028,8 @@ void AssetThumbnailCache::CommitPreflightResults(Renderer& renderer)
             entry.preflightToken != input.token ||
             entry.generationKind != input.kind ||
             entry.sourceWriteTime != input.sourceWriteTime ||
-            entry.registryRevision != input.registryRevision)
+            entry.registryRevision != input.registryRevision ||
+            entry.environmentSignature != input.environmentSignature)
         {
             continue;
         }
@@ -1046,6 +1083,7 @@ void AssetThumbnailCache::CommitPreflightResults(Renderer& renderer)
         load.generationKind = generationKind;
         load.sourceWriteTime = input.sourceWriteTime;
         load.cacheSignature = result.cache.signature;
+        load.environmentSignature = input.environmentSignature;
         load.sourcePath = input.path;
         load.path = result.resolvedPath.empty() ? input.path : result.resolvedPath;
         load.cachePath = result.cache.path;
@@ -1079,6 +1117,8 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
 
     const bool requiresPreflight = kind == PendingLoad::Kind::Mesh ||
         kind == PendingLoad::Kind::Material || kind == PendingLoad::Kind::Cube;
+    const bool usesEnvironment = kind == PendingLoad::Kind::Mesh ||
+        kind == PendingLoad::Kind::Material;
     const std::string& key = record.id.key;
     auto it = entries_.find(key);
     if (it == entries_.end())
@@ -1112,8 +1152,10 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
     {
         Entry& entry = it->second;
         const bool sourceChanged = entry.sourceWriteTime != record.fileWriteTime;
+        const bool environmentChanged = usesEnvironment &&
+            entry.environmentSignature != environmentSignature_;
         const bool registryChanged = entry.registryRevision != assetRegistryRevision;
-        if (sourceChanged)
+        if (sourceChanged || environmentChanged)
         {
             // Do not display a thumbnail from an edited source while a fresh
             // preflight determines the cache and dependency signature.
@@ -1206,7 +1248,8 @@ bool AssetThumbnailCache::CommitGpuJob(Renderer& renderer)
         Entry& entry = entryIt->second;
         const bool current = entry.state == State::Generating &&
             entry.sourceWriteTime == job->load.sourceWriteTime &&
-            entry.cacheSignature == job->load.cacheSignature;
+            entry.cacheSignature == job->load.cacheSignature &&
+            entry.environmentSignature == job->load.environmentSignature;
         if (current)
         {
             if (job->load.kind == PendingLoad::Kind::Texture ||
@@ -1399,6 +1442,13 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         {
             continue;
         }
+        const bool usesEnvironment = load.generationKind == PendingLoad::Kind::Mesh ||
+            load.generationKind == PendingLoad::Kind::Material;
+        if (usesEnvironment && load.environmentSignature != environmentSignature_)
+        {
+            it->second.state = State::Missing;
+            continue;
+        }
         entry = &it->second;
         entry->state = State::Generating;
         break;
@@ -1586,7 +1636,12 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
             }
             job->rendered = preview_->RecordThumbnail(renderer,
                 job->commands->CommandList(), *job->mesh, materials,
-                kPreviewRenderSize);
+                kPreviewRenderSize, {}, 0, nullptr,
+                environment_, environmentExposure_);
+            if (environment_ && environment_->GetResource())
+            {
+                job->environmentResource = environment_->GetResource();
+            }
         }
 
         job->ok = job->rendered != nullptr;

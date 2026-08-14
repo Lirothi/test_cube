@@ -394,6 +394,7 @@
     <ClInclude Include="sources/editor/assets/MaterialFileGen.h" />
     <ClInclude Include="sources/editor/ui/CommandHistoryPanel.h" />
     <ClInclude Include="sources/editor/ui/EditorDragDrop.h" />
+    <ClInclude Include="sources/editor/ui/EditorLightDirection.h" />
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />
     <ClInclude Include="sources/editor/scene/EnvironmentRuntime.h" />
     <ClInclude Include="sources/editor/serialization/LevelDocumentSerializer.h" />

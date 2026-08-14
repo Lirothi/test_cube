@@ -1471,17 +1471,6 @@ namespace
         return true;
     }
 
-    const char* ViewModeLabel(ContentBrowserPanel::ViewMode mode)
-    {
-        switch (mode)
-        {
-        case ContentBrowserPanel::ViewMode::List:    return "List";
-        case ContentBrowserPanel::ViewMode::Tiles:   return "Tiles";
-        case ContentBrowserPanel::ViewMode::Columns: return "Columns";
-        }
-        return "List";
-    }
-
     bool AnyTypeFilterActive(const bool* activeTypeFilters)
     {
         for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); ++i)
@@ -1543,8 +1532,6 @@ namespace
     void DrawActiveFilterChips(bool* activeTypeFilters)
     {
         bool any = false;
-        ImGui::TextUnformatted("Active Filters");
-        ImGui::SameLine();
         for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); ++i)
         {
             if (!activeTypeFilters[i])
@@ -1553,6 +1540,7 @@ namespace
             }
 
             any = true;
+            ImGui::SameLine();
             ImGui::PushID(i);
             std::string label(kTypeFilters[i].label);
             label += " x";
@@ -1561,30 +1549,15 @@ namespace
                 activeTypeFilters[i] = false;
             }
             ImGui::PopID();
-            ImGui::SameLine();
         }
 
         if (any)
         {
+            ImGui::SameLine();
             if (ImGui::SmallButton("Clear All"))
             {
                 ClearTypeFilters(activeTypeFilters);
             }
-        }
-        else
-        {
-            ImGui::TextDisabled("All Types");
-        }
-    }
-
-    void DisabledButtonWithTooltip(const char* label, const char* tooltip)
-    {
-        ImGui::BeginDisabled(true);
-        ImGui::Button(label);
-        ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        {
-            ImGui::SetTooltip("%s", tooltip);
         }
     }
 
@@ -1998,6 +1971,7 @@ namespace
 
         ImGuiTreeNodeFlags flags =
             ImGuiTreeNodeFlags_OpenOnArrow |
+            ImGuiTreeNodeFlags_OpenOnDoubleClick |
             ImGuiTreeNodeFlags_SpanFullWidth;
         if (folder.childPaths.empty())
         {
@@ -2923,11 +2897,9 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     bool requestNewCollection = false;
     int collectionToDelete = -1;
 
-    const float navHeight = ImGui::GetFrameHeightWithSpacing() * 4.4f;
+    const float navHeight = ImGui::GetFrameHeightWithSpacing() * 3.4f;
     ImGui::BeginChild("##navigationBar", ImVec2(0.0f, navHeight), true);
     ImGui::TextUnformatted("Navigation");
-    ImGui::SameLine();
-    DisabledButtonWithTooltip("Add", "Asset creation is planned for a later Content Browser step.");
     ImGui::SameLine();
     if (ImGui::Button("Import"))
     {
@@ -2937,9 +2909,6 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     {
         ImGui::SetTooltip("Open the Import Assets window (import_staging/ -> engine-ready assets).");
     }
-    ImGui::SameLine();
-    DisabledButtonWithTooltip("Save All", "Assets are raw files; save integration is not available yet.");
-
     ImGui::SameLine();
     const bool canGoBack = folderHistoryIndex_ > 0 && !folderHistory_.empty();
     ImGui::BeginDisabled(!canGoBack);
@@ -2980,6 +2949,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
     {
         ImGui::OpenPopup("##contentBrowserSettings");
     }
+    ImGui::SameLine();
+    ImGui::Checkbox("Include Subfolders##toolbar", &includeSubfolders_);
     if (ImGui::BeginPopup("##contentBrowserSettings"))
     {
         ImGui::TextUnformatted("View Options");
@@ -2994,7 +2965,6 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         }
         DisabledMenuItemWithTooltip("Columns", "Column view is planned after the list and tile data model settles.");
         ImGui::Separator();
-        ImGui::Checkbox("Include Subfolders", &includeSubfolders_);
         if (ImGui::MenuItem("New Collection..."))
         {
             requestNewCollection = true;
@@ -3038,10 +3008,6 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         }
         ImGui::EndPopup();
     }
-    ImGui::SameLine();
-    ImGui::Checkbox("Include Subfolders##toolbar", &includeSubfolders_);
-    ImGui::SameLine();
-    ImGui::TextDisabled("View: %s", ViewModeLabel(viewMode_));
     DrawActiveFilterChips(activeTypeFilters_);
     ImGui::EndChild();
 

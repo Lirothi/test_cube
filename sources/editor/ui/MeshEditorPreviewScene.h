@@ -11,6 +11,7 @@
 #include "imgui.h"
 
 class Renderer;
+class TextureCube;
 
 struct MeshEditorPreviewCamera
 {
@@ -23,10 +24,12 @@ struct MeshEditorPreviewCamera
 
 struct MeshEditorPreviewLight
 {
-    Math::float3 direction{ -0.4f, -0.8f, 0.5f };
+    Math::float3 direction{ -0.390360f, -0.780720f, 0.487950f };
     Math::float3 color{ 1.0f, 1.0f, 1.0f };
     float exposure = 1.0f;
     float ambient = 0.1f;
+    bool showPosition = false;
+    float positionDistance = 1.5f;
 };
 
 // A small isolated scene used by the Mesh Editor. Geometry and materials are
@@ -74,7 +77,9 @@ public:
         // rebuild the scene.
         const Math::float4* texOffsScaleOverride = nullptr,
         // Material slot to highlight while its Mesh Editor control is hovered (-1 = none).
-        int highlightMaterialSlot = -1);
+        int highlightMaterialSlot = -1,
+        const TextureCube* environment = nullptr,
+        float environmentExposure = 1.0f);
 
     // Release resources while the renderer is available. Used when switching
     // assets; normal application teardown already idles the GPU first.

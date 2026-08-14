@@ -25,6 +25,7 @@
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/ui/EditorDragDrop.h"
+#include "editor/ui/EditorLightDirection.h"
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
 #include "ocean/OceanRenderConfigJson.h"
@@ -546,7 +547,53 @@ namespace
             colorEdit();
             dragF("Exposure", "exposure", 1.0f, 0.05f, 0.0f, 100.0f);
             dragF("Ambient", "ambient", 0.05f, 0.005f, 0.0f, 10.0f);
-            dragF3("Direction", "direction", Math::float3(-1.0f, -1.0f, -1.0f), 0.01f);
+
+            Math::float3 rayDirection = EditorLightDirection::NormalizedRay(
+                JsonFloat3(p, "direction", Math::float3(-1.0f, -1.0f, -1.0f)));
+            float sourceAzimuth = 0.0f;
+            float sourceElevation = 0.0f;
+            EditorLightDirection::SourceAngles(
+                rayDirection, sourceAzimuth, sourceElevation);
+
+            {
+                const nlohmann::json beforeItem = p;
+                const bool changed = ImGui::DragFloat("Source azimuth (Y)",
+                    &sourceAzimuth, 0.5f, -180.0f, 180.0f, "%.1f deg",
+                    ImGuiSliderFlags_AlwaysClamp);
+                if (changed)
+                {
+                    rayDirection = EditorLightDirection::RayFromSourceAngles(
+                        sourceAzimuth, sourceElevation);
+                    p["direction"] = {
+                        rayDirection.x, rayDirection.y, rayDirection.z };
+                }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            {
+                const nlohmann::json beforeItem = p;
+                const bool changed = ImGui::DragFloat("Source elevation",
+                    &sourceElevation, 0.5f, -89.0f, 89.0f, "%.1f deg",
+                    ImGuiSliderFlags_AlwaysClamp);
+                if (changed)
+                {
+                    rayDirection = EditorLightDirection::RayFromSourceAngles(
+                        sourceAzimuth, sourceElevation);
+                    p["direction"] = {
+                        rayDirection.x, rayDirection.y, rayDirection.z };
+                }
+                trackContinuousEdit(beforeItem, changed);
+            }
+
+            rayDirection = EditorLightDirection::NormalizedRay(rayDirection);
+            ImGui::PushStyleColor(
+                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::InputFloat3("Normalized ray", &rayDirection.x, "%.3f",
+                ImGuiInputTextFlags_ReadOnly);
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("World-space direction in which the light rays travel.");
+            }
         }
         else if (env.type == "camera")
         {

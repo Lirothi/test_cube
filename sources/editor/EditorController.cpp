@@ -42,6 +42,7 @@
 #include "ocean/OceanRenderConfigJson.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
+#include "rendering/lighting/Skybox.h"
 #include "ocean/OceanSimulation.h"
 #include "app/Systems.h"
 
@@ -1219,7 +1220,9 @@ namespace
                     state.previewLight.color.y,
                     state.previewLight.color.z } },
                 { "exposure", state.previewLight.exposure },
-                { "ambient", state.previewLight.ambient }
+                { "ambient", state.previewLight.ambient },
+                { "showPosition", state.previewLight.showPosition },
+                { "positionDistance", state.previewLight.positionDistance }
             } }
         };
     }
@@ -1250,6 +1253,9 @@ namespace
                 state.previewLight.exposure);
             ReadFloatMember(*lightIt, "ambient", 0.0f, 10.0f,
                 state.previewLight.ambient);
+            ReadBoolMember(*lightIt, "showPosition", state.previewLight.showPosition);
+            ReadFloatMember(*lightIt, "positionDistance", 0.25f, 8.0f,
+                state.previewLight.positionDistance);
         }
         meshEditor.SetPersistentState(state);
     }
@@ -1358,7 +1364,9 @@ namespace
             a.previewLight.color.y == b.previewLight.color.y &&
             a.previewLight.color.z == b.previewLight.color.z &&
             a.previewLight.exposure == b.previewLight.exposure &&
-            a.previewLight.ambient == b.previewLight.ambient;
+            a.previewLight.ambient == b.previewLight.ambient &&
+            a.previewLight.showPosition == b.previewLight.showPosition &&
+            a.previewLight.positionDistance == b.previewLight.positionDistance;
     }
 
     void LoadEditorPanelState(bool& showContentBrowser,
@@ -2649,6 +2657,24 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             true,
             [this](EditorContext& panelCtx)
             {
+                const Skybox* skybox = panelCtx.scene.GetSkybox();
+                std::string skyboxPath;
+                std::uint64_t skyboxWriteTime = 0;
+                if (skybox)
+                {
+                    skyboxPath = std::filesystem::path(skybox->GetPath()).generic_string();
+                    if (const EditorAssetRecord* skyboxAsset =
+                            assetRegistry_.FindByPath(skyboxPath))
+                    {
+                        skyboxWriteTime = skyboxAsset->fileWriteTime;
+                    }
+                }
+                thumbnailCache_.SetEnvironment(
+                    skybox ? skybox->GetTex() : nullptr,
+                    skyboxPath,
+                    skyboxWriteTime,
+                    skybox ? skybox->GetExposure() : 1.0f);
+
                 const ContentBrowserAction action =
                     contentBrowser_.Draw(assetRegistry_, selectedAsset_, extensions_,
                         document_, selection_.Primary(), panelCtx.renderer, thumbnailCache_,
@@ -3339,6 +3365,33 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 }
                 ImGui::EndMenu();
             }
+            if (ImGui::BeginMenu("Window"))
+            {
+                const auto drawPanelMenuItem = [this](const char* panelId)
+                {
+                    IEditorPanel* panel = extensions_.FindPanel(panelId);
+                    if (!panel || !panel->ShowInWindowList())
+                    {
+                        return;
+                    }
+
+                    bool visible = panel->IsVisible();
+                    const std::string label(panel->Label());
+                    if (ImGui::MenuItem(label.c_str(), nullptr, &visible))
+                    {
+                        panel->SetVisible(visible);
+                    }
+                };
+                drawPanelMenuItem("contentBrowser");
+                drawPanelMenuItem("sceneOutliner");
+                drawPanelMenuItem("inspector");
+                drawPanelMenuItem("commandHistory");
+                drawPanelMenuItem("importAssets");
+                drawPanelMenuItem("meshEditor");
+                drawPanelMenuItem("materialEditor");
+                drawPanelMenuItem("levelErrors");
+                ImGui::EndMenu();
+            }
             ImGui::EndMenuBar();
         }
 
@@ -3566,32 +3619,6 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             }
             ImGui::EndPopup();
         }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Windows");
-        const auto drawPanelToggle = [this](const char* panelId)
-        {
-            IEditorPanel* panel = extensions_.FindPanel(panelId);
-            if (!panel || !panel->ShowInWindowList())
-            {
-                return;
-            }
-
-            bool visible = panel->IsVisible();
-            const std::string label(panel->Label());
-            if (ImGui::Checkbox(label.c_str(), &visible))
-            {
-                panel->SetVisible(visible);
-            }
-        };
-        drawPanelToggle("contentBrowser");
-        drawPanelToggle("sceneOutliner");
-        drawPanelToggle("inspector");
-        drawPanelToggle("commandHistory");
-        drawPanelToggle("importAssets");
-        drawPanelToggle("meshEditor");
-        drawPanelToggle("materialEditor");
-        drawPanelToggle("levelErrors");
 
         ImGui::Separator();
         ImGui::TextUnformatted("Selection");

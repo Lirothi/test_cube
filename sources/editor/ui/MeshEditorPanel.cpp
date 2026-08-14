@@ -9,8 +9,10 @@
 #include "app/scene/SceneObjectFactory.h"
 #include "editor/EditorContext.h"
 #include "editor/scene/EditorSceneDocument.h"
+#include "editor/ui/EditorLightDirection.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
+#include "rendering/lighting/Skybox.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 
 #include "imgui.h"
@@ -129,6 +131,53 @@ const char* PreviewModeLabel(EditorPreviewMode mode)
     }
 }
 
+void DrawLocalAxesOverlay(ImDrawList* drawList,
+    const ImVec2& previewMin,
+    const ImVec2& previewMax,
+    const MeshEditorPreviewCamera& camera)
+{
+    const float pitch = std::clamp(camera.pitch, -1.55334f, 1.55334f);
+    const float cosPitch = std::cos(pitch);
+    const Math::float3 cameraOffset(
+        cosPitch * std::sin(camera.yaw),
+        std::sin(pitch),
+        -cosPitch * std::cos(camera.yaw));
+    const Math::float3 worldUp(0.0f, 1.0f, 0.0f);
+    const Math::float3 right = cameraOffset.Cross(worldUp).Normalized();
+    const Math::float3 cameraUp = right.Cross(cameraOffset).Normalized();
+
+    const ImVec2 origin(previewMin.x + 34.0f, previewMax.y - 34.0f);
+    constexpr float kAxisLength = 23.0f;
+    struct Axis
+    {
+        Math::float3 direction;
+        ImU32 color;
+        const char* label;
+    };
+    const Axis axes[] = {
+        { Math::float3(1.0f, 0.0f, 0.0f), IM_COL32(235, 80, 80, 255), "X" },
+        { Math::float3(0.0f, 1.0f, 0.0f), IM_COL32(90, 210, 105, 255), "Y" },
+        { Math::float3(0.0f, 0.0f, 1.0f), IM_COL32(80, 145, 255, 255), "Z" }
+    };
+
+    drawList->PushClipRect(previewMin, previewMax, true);
+    for (const Axis& axis : axes)
+    {
+        const ImVec2 projected(
+            axis.direction.Dot(right),
+            -axis.direction.Dot(cameraUp));
+        const ImVec2 end(
+            origin.x + projected.x * kAxisLength,
+            origin.y + projected.y * kAxisLength);
+        drawList->AddLine(origin, end, IM_COL32(20, 20, 22, 220), 4.0f);
+        drawList->AddLine(origin, end, axis.color, 2.0f);
+        drawList->AddCircleFilled(end, 2.5f, axis.color);
+        drawList->AddText(ImVec2(end.x + 3.0f, end.y - 7.0f), axis.color, axis.label);
+    }
+    drawList->AddCircleFilled(origin, 2.5f, IM_COL32(230, 230, 230, 255));
+    drawList->PopClipRect();
+}
+
 void DrawMeshPreview(EditorContext& ctx,
     AssetRegistry& registry,
     MeshEditorPreviewScene& previewScene,
@@ -192,6 +241,8 @@ void DrawMeshPreview(EditorContext& ctx,
         std::round(requestedWidth * resolutionScale), 64.0f, 1024.0f));
     const std::uint32_t renderHeight = static_cast<std::uint32_t>(std::clamp(
         std::round(requestedHeight * resolutionScale), 64.0f, 1024.0f));
+    const Skybox* skybox = ctx.scene.GetSkybox();
+    const TextureCube* environment = skybox ? skybox->GetTex() : nullptr;
     const MeshEditorPreviewScene::View preview = previewScene.Update(ctx.renderer,
         path,
         geometry,
@@ -205,7 +256,9 @@ void DrawMeshPreview(EditorContext& ctx,
         mode,
         lod,
         texOffsScaleOverride,
-        highlightMaterialSlot);
+        highlightMaterialSlot,
+        environment,
+        skybox ? skybox->GetExposure() : 1.0f);
 
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
@@ -234,6 +287,8 @@ void DrawMeshPreview(EditorContext& ctx,
             nullptr,
             wrapWidth);
     }
+
+    DrawLocalAxesOverlay(drawList, min, max, camera);
 
     drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border));
     if (ImGui::Button("Frame"))
@@ -401,11 +456,15 @@ void MeshEditorPanel::SetPersistentState(const PersistentState& state)
 {
     previewPaneRatio_ = std::clamp(state.previewPaneRatio, 0.1f, 0.9f);
     previewLight_ = state.previewLight;
+    previewLight_.direction = EditorLightDirection::NormalizedRay(
+        previewLight_.direction, MeshEditorPreviewLight{}.direction);
     previewLight_.color.x = std::clamp(previewLight_.color.x, 0.0f, 1.0f);
     previewLight_.color.y = std::clamp(previewLight_.color.y, 0.0f, 1.0f);
     previewLight_.color.z = std::clamp(previewLight_.color.z, 0.0f, 1.0f);
     previewLight_.exposure = std::clamp(previewLight_.exposure, 0.0f, 100.0f);
     previewLight_.ambient = std::clamp(previewLight_.ambient, 0.0f, 10.0f);
+    previewLight_.positionDistance = std::clamp(
+        previewLight_.positionDistance, 0.25f, 8.0f);
 }
 
 void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* open,
@@ -511,7 +570,37 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     ImGui::ColorEdit3("Color", &previewLight_.color.x);
     ImGui::DragFloat("Exposure", &previewLight_.exposure, 0.05f, 0.0f, 100.0f);
     ImGui::DragFloat("Ambient", &previewLight_.ambient, 0.005f, 0.0f, 10.0f);
-    ImGui::DragFloat3("Direction", &previewLight_.direction.x, 0.01f);
+    float sourceAzimuth = 0.0f;
+    float sourceElevation = 0.0f;
+    EditorLightDirection::SourceAngles(
+        previewLight_.direction, sourceAzimuth, sourceElevation);
+    const bool azimuthChanged = ImGui::DragFloat("Source azimuth (Y)",
+        &sourceAzimuth, 0.5f, -180.0f, 180.0f, "%.1f deg",
+        ImGuiSliderFlags_AlwaysClamp);
+    const bool elevationChanged = ImGui::DragFloat("Source elevation",
+        &sourceElevation, 0.5f, -89.0f, 89.0f, "%.1f deg",
+        ImGuiSliderFlags_AlwaysClamp);
+    if (azimuthChanged || elevationChanged)
+    {
+        previewLight_.direction = EditorLightDirection::RayFromSourceAngles(
+            sourceAzimuth, sourceElevation);
+    }
+    Math::float3 normalizedRay = EditorLightDirection::NormalizedRay(
+        previewLight_.direction, MeshEditorPreviewLight{}.direction);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::InputFloat3("Normalized ray", &normalizedRay.x, "%.3f",
+        ImGuiInputTextFlags_ReadOnly);
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Mesh-local direction in which the light rays travel.");
+    }
+    ImGui::Checkbox("Show light position", &previewLight_.showPosition);
+    if (previewLight_.showPosition)
+    {
+        ImGui::DragFloat("Marker distance", &previewLight_.positionDistance,
+            0.05f, 0.25f, 8.0f, "%.2f radii");
+    }
     if (ImGui::Button("Reset preview light"))
     {
         previewLight_ = {};

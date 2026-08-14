@@ -11,6 +11,7 @@
 
 #include "editor/assets/EditorPreviewRenderer.h"
 #include "materials/MaterialData.h"
+#include "materials/TextureCube.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/UploadBatch.h"
@@ -65,7 +66,9 @@ bool SameLight(const MeshEditorPreviewLight& a,
             a.color.y == b.color.y &&
             a.color.z == b.color.z &&
             a.exposure == b.exposure &&
-            a.ambient == b.ambient;
+            a.ambient == b.ambient &&
+            a.showPosition == b.showPosition &&
+            a.positionDistance == b.positionDistance;
     }
 }
 
@@ -85,6 +88,8 @@ struct MeshEditorPreviewScene::Impl
     // leave the cached image on screen.
     std::array<Math::float4, render::kFrameCount> renderedTexOffsScale{};
     std::array<int, render::kFrameCount> renderedHighlights{ -1, -1, -1 };
+    std::array<ID3D12Resource*, render::kFrameCount> renderedEnvironments{};
+    std::array<float, render::kFrameCount> renderedEnvironmentExposures{};
     std::array<bool, render::kFrameCount> cameraValid{};
     std::string sourceSignature;
     std::string error;
@@ -131,6 +136,10 @@ struct MeshEditorPreviewScene::Impl
             error = "Referenced mesh geometry could not be loaded.";
             return false;
         }
+
+        // The directional light has no physical position. Its optional editor marker reuses the
+        // standard material-preview sphere and places it along the inverse light-ray direction.
+        previewRenderer.EnsureSphere(renderer, uploads);
 
         std::size_t materialSlotCount = 1;
         for (const Mesh::Submesh& submesh : mesh->GetSubmeshes())
@@ -180,7 +189,9 @@ struct MeshEditorPreviewScene::Impl
         EditorPreviewMode mode,
         std::uint32_t lod,
         const Math::float4* texOffsScaleOverride,
-        int highlightMaterialSlot)
+        int highlightMaterialSlot,
+        const TextureCube* environment,
+        float environmentExposure)
     {
         if (!loaded || !mesh || frameIndex >= render::kFrameCount)
         {
@@ -218,6 +229,8 @@ struct MeshEditorPreviewScene::Impl
         previewLight.color = light.color;
         previewLight.exposure = light.exposure;
         previewLight.ambient = light.ambient;
+        previewLight.showPosition = light.showPosition;
+        previewLight.positionDistance = light.positionDistance;
         Microsoft::WRL::ComPtr<ID3D12Resource> target =
             previewRenderer.RecordPreview(renderer,
                 commands->CommandList(),
@@ -232,7 +245,9 @@ struct MeshEditorPreviewScene::Impl
                 frameIndex,
                 targets[frameIndex].Get(),
                 texOffsScaleOverride,
-                highlightMaterialSlot);
+                highlightMaterialSlot,
+                environment,
+                environmentExposure);
         if (!target || !commands->Submit(&renderer))
         {
             error = "Could not submit the mesh preview render.";
@@ -248,6 +263,8 @@ struct MeshEditorPreviewScene::Impl
         renderedTexOffsScale[frameIndex] = texOffsScaleOverride
             ? *texOffsScaleOverride : Math::float4(0.0f, 0.0f, 1.0f, 1.0f);
         renderedHighlights[frameIndex] = highlightMaterialSlot;
+        renderedEnvironments[frameIndex] = environment ? environment->GetResource() : nullptr;
+        renderedEnvironmentExposures[frameIndex] = environmentExposure;
         cameraValid[frameIndex] = true;
         error.clear();
         return true;
@@ -287,6 +304,8 @@ void MeshEditorPreviewScene::Reset(Renderer& renderer)
     impl_->previewRenderer.Meshes().Clear();
     impl_->previewRenderer.Materials().ClearAll();
     impl_->cameraValid.fill(false);
+    impl_->renderedEnvironments.fill(nullptr);
+    impl_->renderedEnvironmentExposures.fill(0.0f);
     impl_->sourceSignature.clear();
     impl_->error.clear();
     impl_->loaded = false;
@@ -305,7 +324,9 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     EditorPreviewMode mode,
     std::uint32_t lod,
     const Math::float4* texOffsScaleOverride,
-    int highlightMaterialSlot)
+    int highlightMaterialSlot,
+    const TextureCube* environment,
+    float environmentExposure)
 {
     View view;
     const std::string signature = BuildSourceSignature(assetKey,
@@ -348,13 +369,18 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     const bool targetSizeChanged = impl_->targets[frameIndex] &&
         (impl_->targets[frameIndex]->GetDesc().Width != renderWidth ||
          impl_->targets[frameIndex]->GetDesc().Height != renderHeight);
+    ID3D12Resource* const environmentResource = environment
+        ? environment->GetResource()
+        : nullptr;
     if (!impl_->targets[frameIndex] || !impl_->cameraValid[frameIndex] ||
         targetSizeChanged || !SameCamera(impl_->renderedCameras[frameIndex], camera) ||
         !SameLight(impl_->renderedLights[frameIndex], light) ||
         impl_->renderedModes[frameIndex] != mode ||
         impl_->renderedLods[frameIndex] != lod ||
         !SameTexOffsScale(impl_->renderedTexOffsScale[frameIndex], texOffsScaleOverride) ||
-        impl_->renderedHighlights[frameIndex] != highlightMaterialSlot)
+        impl_->renderedHighlights[frameIndex] != highlightMaterialSlot ||
+        impl_->renderedEnvironments[frameIndex] != environmentResource ||
+        impl_->renderedEnvironmentExposures[frameIndex] != environmentExposure)
     {
         if (!impl_->RenderFrame(renderer,
                 frameIndex,
@@ -365,7 +391,9 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
                 mode,
                 lod,
                 texOffsScaleOverride,
-                highlightMaterialSlot))
+                highlightMaterialSlot,
+                environment,
+                environmentExposure))
         {
             view.state = State::Failed;
             view.error = impl_->error.c_str();

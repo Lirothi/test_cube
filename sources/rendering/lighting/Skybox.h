@@ -23,6 +23,7 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
     const TextureCube* GetTex() const { return &cube_; }
+    const std::wstring& GetPath() const { return path_; }
     float GetExposure() const { return exposure_; }
     void SetExposure(float exp) { exposure_ = exp; }
 

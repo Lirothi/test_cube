@@ -73,6 +73,14 @@ public:
     // editor frame before issuing any Request.
     void BeginFrame(Renderer& renderer);
 
+    // Select the scene environment used by generated mesh/material thumbnails.
+    // The source identity is folded into the persistent PNG key so previews from
+    // different skyboxes or exposures are never reused interchangeably.
+    void SetEnvironment(const TextureCube* environment,
+        const std::string& sourcePath,
+        std::uint64_t sourceWriteTime,
+        float exposure);
+
     // Request the thumbnail for a previewable asset (texture, mesh, material, or
     // cubemap)
     // and, when Ready, obtain a drawable per-frame ImGui id for it. Marks the
@@ -107,6 +115,7 @@ private:
         Kind generationKind = Kind::Texture; // source kind when `kind` is DiskCache
         std::uint64_t sourceWriteTime = 0;
         std::uint64_t cacheSignature = 0;
+        std::uint64_t environmentSignature = 0;
         std::string sourcePath;             // original asset path before resolution
         std::string path;                   // texture / mesh source file
         std::string cachePath;              // rendered cache PNG, if any
@@ -128,6 +137,7 @@ private:
             editor_thumbnail_detail::PreflightKind::Mesh;
         std::uint64_t sourceWriteTime = 0;
         std::uint64_t cacheSignature = 0;
+        std::uint64_t environmentSignature = 0;
         std::uint64_t registryRevision = 0;
         std::uint64_t preflightToken = 0;
         bool preflightPending = false;
@@ -144,6 +154,7 @@ private:
             editor_thumbnail_detail::PreflightKind::Mesh;
         std::uint64_t sourceWriteTime = 0;
         std::uint64_t registryRevision = 0;
+        std::uint64_t environmentSignature = 0;
         std::uint64_t token = 0;
         std::uint64_t epoch = 0;
     };
@@ -198,6 +209,9 @@ private:
     std::uint32_t lastPrewarmSlots_ = 0; // diagnostics: what the last prewarm actually saw
     std::uint32_t lastPrewarmDescs_ = 0;
     std::shared_ptr<EditorPreviewRenderer> preview_;
+    const TextureCube* environment_ = nullptr;
+    float environmentExposure_ = 1.0f;
+    std::uint64_t environmentSignature_ = 0;
     std::uint64_t frameCounter_ = 0;
     std::uint64_t preflightEpoch_ = 1;
 };

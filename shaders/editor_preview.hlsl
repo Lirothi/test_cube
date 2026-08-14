@@ -11,6 +11,7 @@
 cbuffer PreviewCB : register(b0)
 {
     row_major float4x4 gMVP;    // model * view * proj (row-vector convention)
+    row_major float4x4 gModel;  // object to preview-world
     float4 gLightDir;           // xyz = light ray direction, w = exposure
     float4 gEyePosition;        // xyz = preview camera position
     float4 gBaseColor;          // real material baseColor factor
@@ -24,12 +25,19 @@ cbuffer PreviewCB : register(b0)
     float4 gTerrainTiling;      // x = zone size, y = rotation radians, z = scale variance, w = blend
     float4 gTerrainEdgeParams;  // x = edge breakup, y = edge detail, zw reserved
     float4 gAmbient;            // rgb = light color, w = ambient intensity
+    float4 gEnvironmentParams;  // x = available, y = exposure, z = max mip, w reserved
     float4 gDebugParams;        // x = normal length, yzw = diagnostic line color
+    float4 gMarkerParams;       // x = light-position marker, yzw = marker color
+    float4 gSkyboxRight;
+    float4 gSkyboxUp;
+    float4 gSkyboxForward;
+    float4 gSkyboxParams;       // xy = horizontal/vertical tan half-FOV, z = exposure
 };
 
 Texture2D gAlbedo : register(t0);
 Texture2D gMR : register(t1);
 Texture2D gNormalMap : register(t2);
+TextureCube gEnvironment : register(t3);
 SamplerState gSampler : register(s0);
 
 struct VSInput
@@ -53,11 +61,10 @@ VSOutput VSMain(VSInput input)
 {
     VSOutput output;
     output.position = mul(float4(input.position, 1.0), gMVP);
-    // Preview meshes are drawn with an identity model transform. Keeping world-space data
-    // directly in the vertex payload leaves room in the 256-byte CB for shading-model params.
-    output.worldPos = input.position;
-    output.normalW = normalize(input.normal);
-    output.tangentW = float4(normalize(input.tangent.xyz), input.tangent.w);
+    output.worldPos = mul(float4(input.position, 1.0), gModel).xyz;
+    output.normalW = normalize(mul(float4(input.normal, 0.0), gModel).xyz);
+    output.tangentW = float4(
+        normalize(mul(float4(input.tangent.xyz, 0.0), gModel).xyz), input.tangent.w);
     output.uv = input.uv;
     return output;
 }
@@ -71,6 +78,8 @@ struct VertexNormalVSOutput
 VertexNormalVSOutput VertexNormalVS(VSInput input)
 {
     VertexNormalVSOutput output;
+    // Normal diagnostics are only emitted for the untransformed asset mesh. The light marker uses
+    // the regular triangle pipeline and must not make this GS path apply its model matrix twice.
     output.worldPos = input.position;
     output.normalW = normalize(input.normal);
     return output;
@@ -100,6 +109,17 @@ float4 DebugPS(float4 position : SV_POSITION) : SV_TARGET
 
 float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 {
+    if (gMarkerParams.x > 0.5)
+    {
+        const float3 markerNormal = normalize(input.normalW);
+        const float3 markerView = normalize(gEyePosition.xyz - input.worldPos);
+        const float facing = saturate(dot(markerNormal, markerView));
+        const float3 markerColor = max(gMarkerParams.yzw, float3(0.08, 0.08, 0.08));
+        const float sphereShade = 0.2 + 0.8 * sqrt(facing);
+        const float rim = pow(1.0 - facing, 3.0);
+        return float4(markerColor * sphereShade + rim * 0.25, 1.0);
+    }
+
     float2 uv = input.uv * gTexOffsScale.zw + gTexOffsScale.xy;
     const uint shadingModel = (uint)round(gSurfaceFlags.x);
     const bool terrain = shadingModel == kShadingModelTerrain;
@@ -215,6 +235,22 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         lit += (brdf.diffBRDF + brdf.specBRDF) * brdf.NdotL * radiance;
     }
 
+    // Metals have no diffuse ambient term, so without an environment they appear black except
+    // for the narrow direct-light highlight. Use the active scene skybox as a lightweight
+    // specular IBL; its mip chain supplies the roughness blur and Schlick Fresnel preserves the
+    // material's coloured metallic response.
+    if (gEnvironmentParams.x > 0.5)
+    {
+        const float3 reflectionDir = reflect(-V, N);
+        const float environmentMip = roughness * max(gEnvironmentParams.z, 0.0);
+        const float3 environmentRadiance = gEnvironment.SampleLevel(
+            gSampler, reflectionDir, environmentMip).rgb * gEnvironmentParams.y;
+        const float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
+        const float fresnelWeight = pow(1.0 - saturate(dot(N, V)), 5.0);
+        const float3 fresnel = f0 + (1.0 - f0) * fresnelWeight;
+        lit += environmentRadiance * fresnel * saturate(1.0 - roughness);
+    }
+
     // Mesh Editor: tint the submesh whose material slot / wind-foliage control is hovered, so it is
     // obvious WHICH part of the model a control affects. A rim term makes it readable even on a
     // submesh that is mostly facing away or in shadow.
@@ -263,6 +299,20 @@ float4 CubePSMain(CubeVSOutput input) : SV_TARGET
     const float2 faceUv = input.uv * 2.0 - 1.0;
     const float3 direction = normalize(float3(1.0, -faceUv.y, faceUv.x));
     return float4(gCube.SampleLevel(gSampler, direction, 0.0).rgb, 1.0);
+}
+
+float4 PreviewSkyboxPSMain(CubeVSOutput input) : SV_TARGET
+{
+    const float2 viewPlane = float2(
+        (input.uv.x * 2.0 - 1.0) * gSkyboxParams.x,
+        (1.0 - input.uv.y * 2.0) * gSkyboxParams.y);
+    const float3 direction = normalize(
+        gSkyboxForward.xyz +
+        gSkyboxRight.xyz * viewPlane.x +
+        gSkyboxUp.xyz * viewPlane.y);
+    const float3 color = gEnvironment.SampleLevel(gSampler, direction, 0.0).rgb *
+        max(gSkyboxParams.z, 0.0);
+    return float4(color, 1.0);
 }
 
 TextureCubeArray gCubeArray : register(t0);

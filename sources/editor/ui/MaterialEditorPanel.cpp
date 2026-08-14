@@ -280,6 +280,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
                     shadingModel = option.value;
                     shadingModelValid = true;
                     doc_["shadingModel"] = ShadingModelToString(option.value);
+                    doc_["twoSided"] = option.value == ShadingModel::TwoSidedFoliage;
                 }
                 if (selected) { ImGui::SetItemDefaultFocus(); }
             }
@@ -309,49 +310,55 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
                 : "Disable back-face culling and render both sides of every triangle.");
         }
 
-        static const float kSubsurfaceDef[3] = { 1.0f, 1.0f, 1.0f };
-        float subsurface[3];
-        ReadFloats(doc_, "subsurfaceColor", subsurface, 3, kSubsurfaceDef);
-        if (ImGui::ColorEdit3("Subsurface Color", subsurface))
+        if (foliage)
         {
-            WriteFloats(doc_, "subsurfaceColor", subsurface, 3);
-        }
-        float transmission = doc_.value("transmissionStrength", 0.0f);
-        if (ImGui::DragFloat("Transmission Strength", &transmission, 0.01f, 0.0f, 1.0f))
-        {
-            doc_["transmissionStrength"] = transmission;
-        }
-        const float serializedAlbedoPower = doc_.value("transmissionAlbedoPower", 0.6f);
-        float albedoPower = std::clamp(serializedAlbedoPower, 0.0f, 4.0f);
-        if (albedoPower != serializedAlbedoPower)
-        {
-            doc_["transmissionAlbedoPower"] = albedoPower;
-        }
-        if (ImGui::DragFloat("Transmission Albedo Power", &albedoPower, 0.01f, 0.0f, 4.0f,
-                             "%.3f", ImGuiSliderFlags_AlwaysClamp))
-        {
-            doc_["transmissionAlbedoPower"] = std::clamp(albedoPower, 0.0f, 4.0f);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("Nonlinear absorption derived from linear albedo (T = albedo^power).\n"
-                              "0 gives uniform transmission; larger values darken stems and veins.");
-        }
-        const float serializedNormalWeight = doc_.value("transmissionNormalWeight", 0.35f);
-        float normalWeight = std::clamp(serializedNormalWeight, 0.0f, 1.0f);
-        if (normalWeight != serializedNormalWeight)
-        {
-            doc_["transmissionNormalWeight"] = normalWeight;
-        }
-        if (ImGui::DragFloat("Transmission Normal Weight", &normalWeight, 0.01f, 0.0f, 1.0f,
-                             "%.3f", ImGuiSliderFlags_AlwaysClamp))
-        {
-            doc_["transmissionNormalWeight"] = std::clamp(normalWeight, 0.0f, 1.0f);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("0 keeps broad two-sided wrap; 1 uses abs(N.L) projected-area weighting.\n"
-                              "Fresnel still suppresses grazing-angle transmission.");
+            ImGui::Spacing();
+            ImGui::SeparatorText("Foliage");
+
+            static const float kSubsurfaceDef[3] = { 1.0f, 1.0f, 1.0f };
+            float subsurface[3];
+            ReadFloats(doc_, "subsurfaceColor", subsurface, 3, kSubsurfaceDef);
+            if (ImGui::ColorEdit3("Subsurface Color", subsurface))
+            {
+                WriteFloats(doc_, "subsurfaceColor", subsurface, 3);
+            }
+            float transmission = doc_.value("transmissionStrength", 0.0f);
+            if (ImGui::DragFloat("Transmission Strength", &transmission, 0.01f, 0.0f, 1.0f))
+            {
+                doc_["transmissionStrength"] = transmission;
+            }
+            const float serializedAlbedoPower = doc_.value("transmissionAlbedoPower", 0.6f);
+            float albedoPower = std::clamp(serializedAlbedoPower, 0.0f, 4.0f);
+            if (albedoPower != serializedAlbedoPower)
+            {
+                doc_["transmissionAlbedoPower"] = albedoPower;
+            }
+            if (ImGui::DragFloat("Transmission Albedo Power", &albedoPower, 0.01f, 0.0f, 4.0f,
+                                 "%.3f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["transmissionAlbedoPower"] = std::clamp(albedoPower, 0.0f, 4.0f);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Nonlinear absorption derived from linear albedo (T = albedo^power).\n"
+                                  "0 gives uniform transmission; larger values darken stems and veins.");
+            }
+            const float serializedNormalWeight = doc_.value("transmissionNormalWeight", 0.35f);
+            float normalWeight = std::clamp(serializedNormalWeight, 0.0f, 1.0f);
+            if (normalWeight != serializedNormalWeight)
+            {
+                doc_["transmissionNormalWeight"] = normalWeight;
+            }
+            if (ImGui::DragFloat("Transmission Normal Weight", &normalWeight, 0.01f, 0.0f, 1.0f,
+                                 "%.3f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["transmissionNormalWeight"] = std::clamp(normalWeight, 0.0f, 1.0f);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("0 keeps broad two-sided wrap; 1 uses abs(N.L) projected-area weighting.\n"
+                                  "Fresnel still suppresses grazing-angle transmission.");
+            }
         }
         if (terrain)
         {

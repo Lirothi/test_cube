@@ -35,8 +35,12 @@ namespace
     // more submeshes than the preview heap was sized for.
     constexpr std::uint32_t kPreviewMaterialSlots = 255;
     constexpr std::uint32_t kPreviewFallbackSlot = kPreviewMaterialSlots;
-    constexpr std::uint32_t kPreviewDrawSlots = kPreviewMaterialSlots + 1;
-    constexpr std::uint32_t kPreviewTexturesPerDraw = 3;
+    constexpr std::uint32_t kPreviewLightMarkerSlot = kPreviewFallbackSlot + 1;
+    constexpr std::uint32_t kPreviewSkyboxSlot = kPreviewLightMarkerSlot + 1;
+    constexpr std::uint32_t kPreviewDrawSlots = kPreviewSkyboxSlot + 1;
+    constexpr std::uint32_t kPreviewMaterialTexturesPerDraw = 3;
+    constexpr std::uint32_t kPreviewTexturesPerDraw = 4;
+    constexpr std::uint32_t kPreviewEnvironmentTexture = 3;
     constexpr std::uint32_t kPreviewSrvDescriptors =
         kPreviewDrawSlots * kPreviewTexturesPerDraw;
     constexpr std::uint32_t kPreviewConstantStride = 512;
@@ -45,6 +49,7 @@ namespace
     struct PreviewConstants
     {
         dx::XMFLOAT4X4 mvp;
+        dx::XMFLOAT4X4 model;
         dx::XMFLOAT4 lightDir;
         dx::XMFLOAT4 eyePosition;
         dx::XMFLOAT4 baseColor;
@@ -57,7 +62,13 @@ namespace
         dx::XMFLOAT4 terrainTiling; // x = zone size, y = rotation radians, z = scale variance, w = blend
         dx::XMFLOAT4 terrainEdgeParams; // x = edge breakup, y = edge detail, zw reserved
         dx::XMFLOAT4 ambient;
+        dx::XMFLOAT4 environmentParams; // x = available, y = exposure, z = max mip, w reserved
         dx::XMFLOAT4 debugParams; // x = normal length, yzw = diagnostic line color
+        dx::XMFLOAT4 markerParams; // x = light marker, yzw = marker color
+        dx::XMFLOAT4 skyboxRight;
+        dx::XMFLOAT4 skyboxUp;
+        dx::XMFLOAT4 skyboxForward;
+        dx::XMFLOAT4 skyboxParams; // xy = horizontal/vertical tan half-FOV, z = exposure
     };
     static_assert(sizeof(PreviewConstants) <= kPreviewConstantStride,
         "PreviewConstants must fit one aligned preview CB region.");
@@ -109,16 +120,17 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
     ComPtr<ID3DBlob> cubeVs = CompilePreviewShader("CubeVSMain", "vs_5_0");
     ComPtr<ID3DBlob> cubePs = CompilePreviewShader("CubePSMain", "ps_5_0");
     ComPtr<ID3DBlob> cubeArrayPs = CompilePreviewShader("CubeArrayPSMain", "ps_5_0");
+    ComPtr<ID3DBlob> skyboxPs = CompilePreviewShader("PreviewSkyboxPSMain", "ps_5_0");
     ComPtr<ID3DBlob> debugPs = CompilePreviewShader("DebugPS", "ps_5_0");
     ComPtr<ID3DBlob> vertexNormalVs = CompilePreviewShader("VertexNormalVS", "vs_5_0");
     ComPtr<ID3DBlob> vertexNormalGs = CompilePreviewShader("VertexNormalGS", "gs_5_0");
-    if (!vs || !ps || !cubeVs || !cubePs || !cubeArrayPs ||
+    if (!vs || !ps || !cubeVs || !cubePs || !cubeArrayPs || !skyboxPs ||
         !debugPs || !vertexNormalVs || !vertexNormalGs)
     {
         return false;
     }
 
-    // Root signature: CBV(b0) + table(SRV t0) + static linear sampler(s0).
+    // Root signature: CBV(b0) + table(SRV t0..t3) + static linear sampler(s0).
     D3D12_DESCRIPTOR_RANGE srvRange{};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srvRange.NumDescriptors = kPreviewTexturesPerDraw;
@@ -198,6 +210,15 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
     {
         return false;
     }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC lightMarkerPso = pso;
+    lightMarkerPso.DepthStencilState.DepthEnable = FALSE;
+    lightMarkerPso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    if (FAILED(device->CreateGraphicsPipelineState(&lightMarkerPso,
+            IID_PPV_ARGS(&lightMarkerPipeline_))))
+    {
+        return false;
+    }
     pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     if (FAILED(device->CreateGraphicsPipelineState(&pso,
             IID_PPV_ARGS(&doubleSidedPipeline_))))
@@ -251,6 +272,15 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
     cubePso.DSVFormat = DXGI_FORMAT_UNKNOWN;
     cubePso.SampleDesc.Count = 1;
     if (FAILED(device->CreateGraphicsPipelineState(&cubePso, IID_PPV_ARGS(&cubePipeline_))))
+    {
+        return false;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC skyboxPso = cubePso;
+    skyboxPso.PS = { skyboxPs->GetBufferPointer(), skyboxPs->GetBufferSize() };
+    skyboxPso.DSVFormat = kDepthFormat;
+    if (FAILED(device->CreateGraphicsPipelineState(&skyboxPso,
+            IID_PPV_ARGS(&skyboxPipeline_))))
     {
         return false;
     }
@@ -493,7 +523,9 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
     std::uint32_t size,
     const OrbitCamera& camera,
     std::uint32_t renderSlot,
-    ID3D12Resource* existingColorTarget)
+    ID3D12Resource* existingColorTarget,
+    const TextureCube* environment,
+    float environmentExposure)
 {
     return RecordPreview(renderer,
         cl,
@@ -506,7 +538,11 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
         EditorPreviewMode::Lit,
         0u,
         renderSlot,
-        existingColorTarget);
+        existingColorTarget,
+        nullptr,
+        -1,
+        environment,
+        environmentExposure);
 }
 
 Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
@@ -523,7 +559,9 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     std::uint32_t renderSlot,
     ID3D12Resource* existingColorTarget,
     const Math::float4* texOffsScaleOverride,
-    int highlightMaterialSlot)
+    int highlightMaterialSlot,
+    const TextureCube* environment,
+    float environmentExposure)
 {
     ID3D12Device* device = renderer.GetDevice();
     if (!initialized_ || !device || !cl || renderSlot >= renderSlots_.size())
@@ -573,6 +611,28 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     }
     radius = std::max(radius, 1.0e-3f);
 
+    dx::XMVECTOR lightDirection = dx::XMVectorSet(
+        light.direction.x, light.direction.y, light.direction.z, 0.0f);
+    if (dx::XMVectorGetX(dx::XMVector3LengthSq(lightDirection)) < 1.0e-8f)
+    {
+        lightDirection = dx::XMVectorSet(-0.4f, -0.8f, 0.5f, 0.0f);
+    }
+    lightDirection = dx::XMVector3Normalize(lightDirection);
+    const bool hasEnvironment = environment && environment->GetResource();
+
+    const bool drawLightPosition = light.showPosition && sphere_ &&
+        sphere_->GetVertexBufferResource() && sphere_->GetIndexBufferResource() &&
+        sphere_->GetIndexCount() > 0;
+    const float lightPositionDistance = std::clamp(light.positionDistance, 0.25f, 8.0f);
+    const float lightMarkerRadius = radius * 0.075f;
+    const float framingRadius = drawLightPosition
+        ? std::max(radius, radius * lightPositionDistance + lightMarkerRadius)
+        : radius;
+    const dx::XMVECTOR objectCenter =
+        dx::XMVectorSet(centerPt.x, centerPt.y, centerPt.z, 1.0f);
+    const dx::XMVECTOR lightPosition = dx::XMVectorSubtract(objectCenter,
+        dx::XMVectorScale(lightDirection, radius * lightPositionDistance));
+
     const float pitch = std::clamp(camera.pitch,
         dx::XMConvertToRadians(-89.0f), dx::XMConvertToRadians(89.0f));
     const float cosPitch = std::cos(pitch);
@@ -584,7 +644,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     const dx::XMVECTOR worldUp = dx::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
     const dx::XMVECTOR right = dx::XMVector3Normalize(dx::XMVector3Cross(offset, worldUp));
     const dx::XMVECTOR cameraUp = dx::XMVector3Normalize(dx::XMVector3Cross(right, offset));
-    dx::XMVECTOR center = dx::XMVectorSet(centerPt.x, centerPt.y, centerPt.z, 1.0f);
+    dx::XMVECTOR center = objectCenter;
     center = dx::XMVectorAdd(center, dx::XMVectorScale(right, camera.panX * radius));
     center = dx::XMVectorAdd(center, dx::XMVectorScale(cameraUp, camera.panY * radius));
     const float fovY = dx::XMConvertToRadians(35.0f);
@@ -593,26 +653,18 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
     const float horizontalHalfFov = std::atan(std::tan(fovY * 0.5f) * aspect);
     const float framingHalfFov = std::min(fovY * 0.5f, horizontalHalfFov);
-    const float framedDistance = radius / std::sin(framingHalfFov) *
+    const float framedDistance = framingRadius / std::sin(framingHalfFov) *
         std::clamp(camera.zoom, 0.12f, 8.0f);
     const dx::XMVECTOR framedEye =
         dx::XMVectorAdd(center, dx::XMVectorScale(offset, framedDistance));
-    const float framedNearZ = std::max(radius * 0.005f,
-        framedDistance - radius * 1.05f);
-    const float framedFarZ = std::max(framedNearZ + radius * 0.01f,
-        framedDistance + radius * 1.05f);
+    const float framedNearZ = std::max(framingRadius * 0.005f,
+        framedDistance - framingRadius * 1.05f);
+    const float framedFarZ = std::max(framedNearZ + framingRadius * 0.01f,
+        framedDistance + framingRadius * 1.05f);
     const dx::XMMATRIX framedView = dx::XMMatrixLookAtLH(framedEye, center, cameraUp);
     const dx::XMMATRIX proj = dx::XMMatrixPerspectiveFovLH(
         fovY, aspect, framedNearZ, framedFarZ);
     const dx::XMMATRIX mvp = dx::XMMatrixMultiply(framedView, proj);
-
-    dx::XMVECTOR lightDirection = dx::XMVectorSet(
-        light.direction.x, light.direction.y, light.direction.z, 0.0f);
-    if (dx::XMVectorGetX(dx::XMVector3LengthSq(lightDirection)) < 1.0e-8f)
-    {
-        lightDirection = dx::XMVectorSet(-0.4f, -0.8f, 0.5f, 0.0f);
-    }
-    lightDirection = dx::XMVector3Normalize(lightDirection);
 
     auto barrier = [cl](ID3D12Resource* res,
         D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
@@ -646,9 +698,64 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
     cl->SetGraphicsRootSignature(rootSignature_.Get());
-    cl->SetPipelineState(pipeline_.Get());
     ID3D12DescriptorHeap* heaps[] = { frame.srvHeap.Get() };
     cl->SetDescriptorHeaps(1, heaps);
+
+    const auto writeEnvironmentSrv = [&](std::uint32_t descriptorBase)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC environmentSrv{};
+        environmentSrv.Format = hasEnvironment
+            ? environment->GetFormat()
+            : DXGI_FORMAT_R8G8B8A8_UNORM;
+        environmentSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+        environmentSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        environmentSrv.TextureCube.MostDetailedMip = 0;
+        environmentSrv.TextureCube.MipLevels = hasEnvironment
+            ? std::max(environment->GetMips(), 1u)
+            : 1u;
+        environmentSrv.TextureCube.ResourceMinLODClamp = 0.0f;
+        D3D12_CPU_DESCRIPTOR_HANDLE environmentHandle = frame.srvCpuHandle;
+        environmentHandle.ptr += static_cast<SIZE_T>(
+            descriptorBase + kPreviewEnvironmentTexture) * srvDescriptorSize_;
+        device->CreateShaderResourceView(
+            hasEnvironment ? environment->GetResource() : nullptr,
+            &environmentSrv,
+            environmentHandle);
+    };
+
+    if (hasEnvironment)
+    {
+        const std::uint32_t descriptorBase =
+            kPreviewSkyboxSlot * kPreviewTexturesPerDraw;
+        writeEnvironmentSrv(descriptorBase);
+
+        PreviewConstants skyboxConstants{};
+        dx::XMStoreFloat4(&skyboxConstants.skyboxRight, right);
+        dx::XMStoreFloat4(&skyboxConstants.skyboxUp, cameraUp);
+        dx::XMStoreFloat4(&skyboxConstants.skyboxForward, dx::XMVectorNegate(offset));
+        const float tanHalfFov = std::tan(fovY * 0.5f);
+        skyboxConstants.skyboxParams = dx::XMFLOAT4{
+            tanHalfFov * aspect,
+            tanHalfFov,
+            std::max(0.0f, environmentExposure),
+            0.0f };
+        std::memcpy(frame.constantBufferMapped +
+            static_cast<std::size_t>(kPreviewSkyboxSlot) * kPreviewConstantStride,
+            &skyboxConstants,
+            sizeof(skyboxConstants));
+
+        D3D12_GPU_DESCRIPTOR_HANDLE skyboxGpuHandle = frame.srvGpuHandle;
+        skyboxGpuHandle.ptr += static_cast<UINT64>(descriptorBase) * srvDescriptorSize_;
+        cl->SetPipelineState(skyboxPipeline_.Get());
+        cl->SetGraphicsRootConstantBufferView(0,
+            frame.constantBuffer->GetGPUVirtualAddress() +
+            static_cast<UINT64>(kPreviewSkyboxSlot) * kPreviewConstantStride);
+        cl->SetGraphicsRootDescriptorTable(1, skyboxGpuHandle);
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        cl->DrawInstanced(3, 1, 0, 0);
+    }
+
+    cl->SetPipelineState(pipeline_.Get());
     // Bind the mesh IA directly (Mesh::Draw uses a global bind cache tied to the
     // main render's command list, which must not be touched here).
     const D3D12_VERTEX_BUFFER_VIEW& vbv = lodDraw.vertexBufferView;
@@ -699,8 +806,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                 : pipeline_.Get());
         }
 
-        ID3D12Resource* textures[kPreviewTexturesPerDraw]{};
-        DXGI_FORMAT formats[kPreviewTexturesPerDraw] = {
+        ID3D12Resource* textures[kPreviewMaterialTexturesPerDraw]{};
+        DXGI_FORMAT formats[kPreviewMaterialTexturesPerDraw] = {
             DXGI_FORMAT_R8G8B8A8_UNORM,
             DXGI_FORMAT_R8G8_UNORM,
             DXGI_FORMAT_R8G8B8A8_UNORM
@@ -726,7 +833,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
 
         const std::uint32_t descriptorBase = slot * kPreviewTexturesPerDraw;
         for (std::uint32_t textureIndex = 0;
-            textureIndex < kPreviewTexturesPerDraw;
+            textureIndex < kPreviewMaterialTexturesPerDraw;
             ++textureIndex)
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
@@ -742,8 +849,11 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             device->CreateShaderResourceView(textures[textureIndex], &srv, srvHandle);
         }
 
+        writeEnvironmentSrv(descriptorBase);
+
         PreviewConstants cb{};
         dx::XMStoreFloat4x4(&cb.mvp, mvp);
+        dx::XMStoreFloat4x4(&cb.model, dx::XMMatrixIdentity());
         dx::XMStoreFloat4(&cb.lightDir, lightDirection);
         cb.lightDir.w = std::max(0.0f, light.exposure);
         dx::XMStoreFloat4(&cb.eyePosition, framedEye);
@@ -836,6 +946,13 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             std::max(0.0f, light.color.y),
             std::max(0.0f, light.color.z),
             std::max(0.0f, light.ambient) };
+        cb.environmentParams = dx::XMFLOAT4{
+            hasEnvironment ? 1.0f : 0.0f,
+            std::max(0.0f, environmentExposure),
+            hasEnvironment
+                ? static_cast<float>(std::min(std::max(environment->GetMips(), 1u) - 1u, 5u))
+                : 0.0f,
+            0.0f };
         cb.debugParams = dx::XMFLOAT4{
             radius * 0.05f, 0.15f, 0.85f, 1.0f };
         std::memcpy(frame.constantBufferMapped +
@@ -865,6 +982,58 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             cl->IASetIndexBuffer(nullptr);
             cl->DrawInstanced(vertexCount, 1, 0, 0);
         }
+    }
+
+    if (drawLightPosition)
+    {
+        const Mesh::LodDrawInfo markerDraw = sphere_->GetLodDrawInfo(0);
+        const AABB& markerBounds = sphere_->GetBoundingBox();
+        const Math::float3 markerCenter = markerBounds.IsValid()
+            ? markerBounds.GetCenter()
+            : Math::float3(0.0f, 0.0f, 0.0f);
+        float markerSourceRadius = sphere_->GetBoundingSphereRadius();
+        if (markerSourceRadius <= 0.0f && markerBounds.IsValid())
+        {
+            markerSourceRadius = markerBounds.GetRadius();
+        }
+        markerSourceRadius = std::max(markerSourceRadius, 1.0e-3f);
+
+        dx::XMFLOAT3 lightPositionPt{};
+        dx::XMStoreFloat3(&lightPositionPt, lightPosition);
+        const float markerScale = lightMarkerRadius / markerSourceRadius;
+        const dx::XMMATRIX markerWorld = dx::XMMatrixMultiply(
+            dx::XMMatrixScaling(markerScale, markerScale, markerScale),
+            dx::XMMatrixTranslation(
+                lightPositionPt.x - markerCenter.x * markerScale,
+                lightPositionPt.y - markerCenter.y * markerScale,
+                lightPositionPt.z - markerCenter.z * markerScale));
+        const dx::XMMATRIX markerMvp = dx::XMMatrixMultiply(
+            dx::XMMatrixMultiply(markerWorld, framedView), proj);
+
+        PreviewConstants markerConstants{};
+        dx::XMStoreFloat4x4(&markerConstants.mvp, markerMvp);
+        dx::XMStoreFloat4x4(&markerConstants.model, markerWorld);
+        dx::XMStoreFloat4(&markerConstants.lightDir, lightDirection);
+        dx::XMStoreFloat4(&markerConstants.eyePosition, framedEye);
+        markerConstants.markerParams = dx::XMFLOAT4{
+            1.0f,
+            std::clamp(light.color.x, 0.0f, 1.0f),
+            std::clamp(light.color.y, 0.0f, 1.0f),
+            std::clamp(light.color.z, 0.0f, 1.0f) };
+        std::memcpy(frame.constantBufferMapped +
+            static_cast<std::size_t>(kPreviewLightMarkerSlot) * kPreviewConstantStride,
+            &markerConstants,
+            sizeof(markerConstants));
+
+        cl->SetPipelineState(lightMarkerPipeline_.Get());
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        cl->IASetVertexBuffers(0, 1, &markerDraw.vertexBufferView);
+        cl->IASetIndexBuffer(&markerDraw.indexBufferView);
+        cl->SetGraphicsRootConstantBufferView(0,
+            frame.constantBuffer->GetGPUVirtualAddress() +
+            static_cast<UINT64>(kPreviewLightMarkerSlot) * kPreviewConstantStride);
+        cl->SetGraphicsRootDescriptorTable(1, frame.srvGpuHandle);
+        cl->DrawIndexedInstanced(markerDraw.indexCount, 1, 0, 0, 0);
     }
 
     // Leave the thumbnail in a shader-read state, exactly like a loaded texture,

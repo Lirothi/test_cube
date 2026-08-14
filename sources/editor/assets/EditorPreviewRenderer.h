@@ -46,10 +46,12 @@ public:
 
     struct PreviewLight
     {
-        Math::float3 direction{ -0.4f, -0.8f, 0.5f };
+        Math::float3 direction{ -0.390360f, -0.780720f, 0.487950f };
         Math::float3 color{ 1.0f, 1.0f, 1.0f };
         float exposure = 1.0f;
         float ambient = 0.3f;
+        bool showPosition = false;
+        float positionDistance = 1.5f;
     };
 
     // Create the pipeline objects and independent per-frame render slots once.
@@ -96,7 +98,9 @@ public:
         std::uint32_t size,
         const OrbitCamera& camera = {},
         std::uint32_t renderSlot = 0,
-        ID3D12Resource* existingColorTarget = nullptr);
+        ID3D12Resource* existingColorTarget = nullptr,
+        const TextureCube* environment = nullptr,
+        float environmentExposure = 1.0f);
 
     // Rectangular variant used by resizable editor mini-scenes.
     Microsoft::WRL::ComPtr<ID3D12Resource> RecordPreview(Renderer& renderer,
@@ -118,7 +122,10 @@ public:
         // Mesh Editor hover highlight: index of the MATERIAL SLOT to tint, or -1 for none.
         // Matched against each submesh's materialSlot, so a slot spanning several submeshes
         // lights all of them.
-        int highlightMaterialSlot = -1);
+        int highlightMaterialSlot = -1,
+        // Optional scene environment used for metallic reflections and the preview background.
+        const TextureCube* environment = nullptr,
+        float environmentExposure = 1.0f);
 
     // Render the +X face of a cube texture into the standard 2D thumbnail
     // target. The caller submits `cl` and owns the returned color target.
@@ -159,6 +166,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> doubleSidedPipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> wireframePipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> vertexNormalsPipeline_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> lightMarkerPipeline_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> skyboxPipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cubePipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cubeArrayPipeline_;
     // Each swapchain frame gets independent descriptors, constants, and depth.
