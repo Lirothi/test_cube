@@ -284,6 +284,8 @@ public:
             shoreLegacyFoamParams2Handle_ = material->ComputeCBFieldHandle(0, "shoreLegacyFoamParams2");
             shoreLegacyDissipationParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreLegacyDissipationParams");
             surfSimParamsHandle_ = material->ComputeCBFieldHandle(0, "surfSimParams");
+            surfSimParams2Handle_ = material->ComputeCBFieldHandle(0, "surfSimParams2");
+            surfSimParams3Handle_ = material->ComputeCBFieldHandle(0, "surfSimParams3");
             shoreSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSamplingParams");
             sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
@@ -347,6 +349,8 @@ public:
             shoreLegacyFoamParams2Handle_ = {};
             shoreLegacyDissipationParamsHandle_ = {};
             surfSimParamsHandle_ = {};
+            surfSimParams2Handle_ = {};
+            surfSimParams3Handle_ = {};
             shoreSamplingParamsHandle_ = {};
             sunDirAmbientHandle_ = {};
             sunColorExposureHandle_ = {};
@@ -424,6 +428,8 @@ public:
         UpdateUniform(owner, shoreLegacyFoamParams2Handle_, material, owner_.GetShoreLegacyFoamParams2(), cbData);
         UpdateUniform(owner, shoreLegacyDissipationParamsHandle_, material, owner_.GetShoreLegacyDissipationParams(), cbData);
         UpdateUniform(owner, surfSimParamsHandle_, material, owner_.GetSurfSimParams(), cbData);
+        UpdateUniform(owner, surfSimParams2Handle_, material, owner_.GetSurfSimParams2(), cbData);
+        UpdateUniform(owner, surfSimParams3Handle_, material, owner_.GetSurfSimParams3(), cbData);
         UpdateUniform(owner, shoreSamplingParamsHandle_, material, owner_.GetShoreSamplingParams(), cbData);
         UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
@@ -492,6 +498,8 @@ private:
     Material::CBFieldHandle shoreLegacyFoamParams2Handle_{};
     Material::CBFieldHandle shoreLegacyDissipationParamsHandle_{};
     Material::CBFieldHandle surfSimParamsHandle_{};
+    Material::CBFieldHandle surfSimParams2Handle_{};
+    Material::CBFieldHandle surfSimParams3Handle_{};
     Material::CBFieldHandle shoreSamplingParamsHandle_{};
     Material::CBFieldHandle sunDirAmbientHandle_{};
     Material::CBFieldHandle sunColorExposureHandle_{};
@@ -671,8 +679,17 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildSurfSimPass(
     tuning.windCoupling = std::clamp(render.surfSimWindCoupling, 0.0f, 1.0f);
     tuning.depositStrength = std::clamp(render.surfSimDepositStrength, 0.0f, 5.0f);
     tuning.breakerGamma = std::clamp(render.surfSimBreakerGamma, 0.4f, 1.2f);
-    tuning.foamFadeRate = std::clamp(render.surfSimFoamFadeRate, 0.0f, 3.0f);
+    // The knob is authored as a TIME (seconds a full stamp takes to dissolve); the kernel
+    // integrates a linear rate.
+    tuning.foamFadeRate = 1.0f / std::clamp(render.surfSimFoamFadeTime, 0.2f, 30.0f);
     tuning.frontBreakup = std::clamp(render.surfSimFrontBreakup, 0.0f, 1.0f);
+    tuning.runInland = std::clamp(render.surfSimRunInland, 0.0f, 20.0f);
+    tuning.minSpawnDepth = std::clamp(render.surfSimMinSpawnDepth, 0.0f, 10.0f);
+    tuning.waveSigma = std::clamp(render.surfSimWaveSigma, 1.5f, 12.0f);
+    tuning.spawnDuration = std::clamp(render.surfSimSpawnDuration, 0.3f, 3.0f);
+    tuning.celerityFloor = std::clamp(render.surfSimCelerityFloor, 0.1f, 1.0f);
+    tuning.breakOnset = std::clamp(render.surfSimBreakOnset, 0.1f, 0.9f);
+    tuning.waveDamping = std::clamp(render.surfSimWaveDamping, 0.0f, 0.4f);
     // The shared contact-foam wind remap (see ShoreFoamWindAmount in the breakup include).
     const Math::float4 wind = GetShoreFoamWindParams();
     tuning.windAmount = std::clamp(
@@ -1374,6 +1391,37 @@ Math::float4 OceanRenderable::GetSurfSimParams() const
     Math::float4 params = surfSim_->GetWindowParams();
     params.w = static_cast<float>(ocean::g_surfSimDebugView);
     return params;
+}
+
+// surf sim injection (S4/S6): x = front breakup, y = tail breakup, z = tear patch scale (m),
+// w = wave displacement scale. Zeroed when the sim is off so every consumer's uniform branch
+// keeps the OFF path free.
+Math::float4 OceanRenderable::GetSurfSimParams2() const
+{
+    if (!SurfSimActive() || !surfSim_->IsReady())
+    {
+        return Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    const auto& render = GetRenderConfig();
+    return Math::float4(
+        std::clamp(render.surfSimFrontBreakup, 0.0f, 1.0f),
+        std::clamp(render.surfSimTailBreakup, 0.0f, 2.0f),
+        std::clamp(render.surfSimTearScale, 1.0f, 50.0f),
+        std::clamp(render.surfSimDisplacement, 0.0f, 2.0f));
+}
+
+// surf sim injection: y = cap width (value-age curve power; 1 = neutral). x/z/w spare.
+Math::float4 OceanRenderable::GetSurfSimParams3() const
+{
+    if (!SurfSimActive() || !surfSim_->IsReady())
+    {
+        return Math::float4(0.0f, 1.0f, 0.0f, 0.0f);
+    }
+    const auto& render = GetRenderConfig();
+    return Math::float4(
+        0.0f,
+        std::clamp(render.surfSimCapWidth, 0.25f, 4.0f),
+        0.0f, 0.0f);
 }
 
 bool OceanRenderable::SurfSimActive() const

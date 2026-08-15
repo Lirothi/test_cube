@@ -27,13 +27,14 @@ struct SurfSimCB
     float sdfCenterZ; float sdfInvExtent; float spawnCandX; float spawnCandZ;
     std::uint32_t spawnSlot; float spawnDistance; float segmentHalfLen; float spawnAmp;
     float spawnDuration; float spawnSigma; float depositStrength; float breakerGamma;
-    float foamFadeRate; float frontBreakup; float pad0; float pad1;
+    float foamFadeRate; float frontBreakup; float runInland; float minSpawnDepth;
+    float celerityFloor; float breakOnset; float waveDamping; float pad2;
 };
 
 // Shorter + tighter than the first guess: the packet travels WHILE it inflates, so a long
 // injection smears the hump and the peak lands well under the authored amplitude.
-constexpr float kSpawnDuration = 1.0f; // seconds of forcing per segment
-constexpr float kSpawnSigma = 4.0f;    // metres, across-segment width
+// Spawn duration and sigma are authored now (Tuning::spawnDuration / waveSigma) - the peak
+// width/height levers the user tunes.
 }
 
 void OceanSurfSim::EnsureResources(Renderer* renderer)
@@ -343,12 +344,17 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
             base.sdfInvExtent = shore.sdfInvExtent;
             base.spawnDistance = tuning.spawnDistance;
             base.segmentHalfLen = tuning.segmentLength * 0.5f;
-            base.spawnDuration = kSpawnDuration;
-            base.spawnSigma = kSpawnSigma;
+            base.spawnDuration = tuning.spawnDuration;
+            base.spawnSigma = tuning.waveSigma;
             base.depositStrength = tuning.depositStrength;
             base.breakerGamma = tuning.breakerGamma;
             base.foamFadeRate = tuning.foamFadeRate;
             base.frontBreakup = tuning.frontBreakup;
+            base.runInland = tuning.runInland;
+            base.minSpawnDepth = tuning.minSpawnDepth;
+            base.celerityFloor = tuning.celerityFloor;
+            base.breakOnset = tuning.breakOnset;
+            base.waveDamping = tuning.waveDamping;
 
             const auto srvs = { shore.srv, shore.sdfSrv, shore.breakupSrv };
             const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};

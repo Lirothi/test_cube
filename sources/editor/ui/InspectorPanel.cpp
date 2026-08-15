@@ -873,15 +873,84 @@ namespace
                             after["render"] = OceanRenderConfigJson::ToJson(afterRender);
                             executeChange(std::move(after), "Set Ocean Surf Sim Enabled");
                         }
+                        // Tooltip helper: annotates the LAST widget (the drag above it).
+                        auto tip = [](const char* text)
+                        {
+                            if (ImGui::IsItemHovered())
+                            {
+                                ImGui::SetTooltip("%s", text);
+                            }
+                        };
+                        // --- Spawner: where and what is born ---
                         renderDrag("Surf Spawn Distance", render.surfSimSpawnDistance, 0.25f, 5.0f, 200.0f);
+                        tip("Metres seaward of the waterline where a wave segment is born.\n"
+                            "Farther = longer travel, more refraction, more decay on the way in.");
                         renderDrag("Surf Segment Length", render.surfSimSegmentLength, 0.25f, 4.0f, 120.0f);
-                        renderDrag("Surf Wave Amplitude", render.surfSimWaveAmplitude, 0.005f, 0.0f, 2.0f);
+                        tip("Along-shore length of each spawned wavefront (m).\n"
+                            "30 = local roller, 100+ = a long wall across the beach.");
                         renderDrag("Surf Spawn Interval", render.surfSimSpawnInterval, 0.02f, 0.25f, 30.0f);
+                        tip("Seconds between spawns at FULL wind. The wave frequency lever.");
                         renderDrag("Surf Wind Coupling", render.surfSimWindCoupling, 0.005f, 0.0f, 1.0f);
-                        renderDrag("Surf Deposit Strength", render.surfSimDepositStrength, 0.01f, 0.0f, 5.0f);
+                        tip("How much wind drives the spawner. 1 = calm is silent, amplitude and\n"
+                            "cadence scale with wind; 0 = waves always come as authored.");
+                        renderDrag("Surf Min Spawn Depth (m)", render.surfSimMinSpawnDepth, 0.02f, 0.0f, 10.0f);
+                        tip("Bottom depth required under the WHOLE segment to be born.\n"
+                            "Kills births in lagoons, on shoal banks and in channels.");
+                        // --- Wave shape: peak width and height IN THE SIM (the cap follows) ---
+                        renderDrag("Surf Wave Amplitude", render.surfSimWaveAmplitude, 0.005f, 0.0f, 2.0f);
+                        tip("Injected height budget (m). It is the time-INTEGRAL of the forcing,\n"
+                            "not the visible peak - the actual crest is lower and depends on\n"
+                            "Wave Sigma / Spawn Duration.");
+                        renderDrag("Surf Wave Sigma (m)", render.surfSimWaveSigma, 0.02f, 1.5f, 12.0f);
+                        tip("Across-shore half-width of the injected hump - THE wavelength lever.\n"
+                            "Smaller = narrower, sharper, higher wave (same amplitude budget in\n"
+                            "less width) and a narrower foam cap. Below ~1.5 m the 1 m sim grid\n"
+                            "aliases.");
+                        renderDrag("Surf Spawn Duration (s)", render.surfSimSpawnDuration, 0.01f, 0.3f, 3.0f);
+                        tip("Seconds the hump inflates. Shorter = more compact, TALLER packet\n"
+                            "(less smearing while it departs); the amplitude integral is kept.");
+                        renderDrag("Surf Bore Floor (m)", render.surfSimCelerityFloor, 0.005f, 0.1f, 1.0f);
+                        tip("Minimum depth used for wave speed (c = sqrt(g*depth)).\n"
+                            "High = the front marches reliably to the waterline.\n"
+                            "Low = waves slow and COMPRESS on the shallows (shorter and steeper\n"
+                            "near shore) but spend longer dying in the strip.");
+                        renderDrag("Surf Wave Damping (1/s)", render.surfSimWaveDamping, 0.001f, 0.0f, 0.4f);
+                        tip("Open-water settle rate. Lower = waves survive the trip fuller;\n"
+                            "higher = calmer field between waves.");
+                        // --- Breaking and foam ---
                         renderDrag("Surf Breaker Gamma", render.surfSimBreakerGamma, 0.005f, 0.4f, 1.2f);
-                        renderDrag("Surf Foam Fade Rate", render.surfSimFoamFadeRate, 0.005f, 0.0f, 3.0f);
+                        tip("Surf breaker index H/d: the wave foams where its height exceeds\n"
+                            "gamma * depth (McCowan ~0.78). Lower = breaks earlier and farther\n"
+                            "out = wider foam band.");
+                        renderDrag("Surf Break Onset", render.surfSimBreakOnset, 0.005f, 0.1f, 0.9f);
+                        tip("Fraction of the breaker criterion where foam STARTS ramping in.\n"
+                            "Lower = foam appears on the approach = wider cap;\n"
+                            "higher = only right at the break = narrow cap.");
+                        renderDrag("Surf Deposit Strength", render.surfSimDepositStrength, 0.01f, 0.0f, 5.0f);
+                        tip("Peak foam a breaking crest stamps into the field\n"
+                            "(max() semantics, like the FFT whitecaps).");
+                        renderDrag("Surf Foam Fade Time (s)", render.surfSimFoamFadeTime, 0.01f, 0.2f, 30.0f);
+                        tip("Seconds a full-strength foam stamp takes to dissolve\n"
+                            "(linear decay behind the crest). The tail length lever.");
+                        // --- Foam look ---
                         renderDrag("Surf Front Breakup", render.surfSimFrontBreakup, 0.005f, 0.0f, 1.0f);
+                        tip("Tear of the FRESH foam (values near the stamp peak). 0 = solid cap.");
+                        renderDrag("Surf Tail Breakup", render.surfSimTailBreakup, 0.005f, 0.0f, 2.0f);
+                        tip("Tear of the decayed tail. Above 1 the threshold outgrows the\n"
+                            "pattern and even mid-fresh foam shreds.");
+                        renderDrag("Surf Cap Width", render.surfSimCapWidth, 0.005f, 0.25f, 4.0f);
+                        tip("Bends the value-age curve of the tear: > 1 keeps foam on the FRONT\n"
+                            "amount longer = wider dense zone; < 1 hands it to the tail sooner\n"
+                            "= narrower.");
+                        renderDrag("Surf Tear Scale (m)", render.surfSimTearScale, 0.05f, 1.0f, 50.0f);
+                        tip("Patch size of the drifting tear pattern (metres).");
+                        // --- Surface coupling ---
+                        renderDrag("Surf Wave Displacement", render.surfSimDisplacement, 0.005f, 0.0f, 2.0f);
+                        tip("How much of the sim wave height rides the water surface as vertex\n"
+                            "displacement. 0 = foam only, the surface stays flat.");
+                        renderDrag("Surf Run Inland (m)", render.surfSimRunInland, 0.05f, 0.0f, 20.0f);
+                        tip("Metres past the SDF waterline the wave may live - the VISIBLE water\n"
+                            "edge sits inland of the shore map's zero.");
                     }
                     // Mirrors OceanControlsWindow: the two surface variants read different
                     // settings, so only the live ones are shown per mode.

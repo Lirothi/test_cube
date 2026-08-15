@@ -383,12 +383,45 @@ namespace OceanRenderConfigJson
         render.surfSimBreakerGamma = std::clamp(
             ReadFloat(object, "surfSimBreakerGamma", render.surfSimBreakerGamma),
             0.4f, 1.2f);
-        render.surfSimFoamFadeRate = std::clamp(
-            ReadFloat(object, "surfSimFoamFadeRate", render.surfSimFoamFadeRate),
-            0.0f, 3.0f);
+        render.surfSimFoamFadeTime = std::clamp(
+            ReadFloat(object, "surfSimFoamFadeTime", render.surfSimFoamFadeTime),
+            0.2f, 30.0f);
         render.surfSimFrontBreakup = std::clamp(
             ReadFloat(object, "surfSimFrontBreakup", render.surfSimFrontBreakup),
             0.0f, 1.0f);
+        render.surfSimTailBreakup = std::clamp(
+            ReadFloat(object, "surfSimTailBreakup", render.surfSimTailBreakup),
+            0.0f, 2.0f);
+        render.surfSimTearScale = std::clamp(
+            ReadFloat(object, "surfSimTearScale", render.surfSimTearScale),
+            1.0f, 50.0f);
+        render.surfSimDisplacement = std::clamp(
+            ReadFloat(object, "surfSimDisplacement", render.surfSimDisplacement),
+            0.0f, 2.0f);
+        render.surfSimRunInland = std::clamp(
+            ReadFloat(object, "surfSimRunInland", render.surfSimRunInland),
+            0.0f, 20.0f);
+        render.surfSimMinSpawnDepth = std::clamp(
+            ReadFloat(object, "surfSimMinSpawnDepth", render.surfSimMinSpawnDepth),
+            0.0f, 10.0f);
+        render.surfSimCapWidth = std::clamp(
+            ReadFloat(object, "surfSimCapWidth", render.surfSimCapWidth),
+            0.25f, 4.0f);
+        render.surfSimWaveSigma = std::clamp(
+            ReadFloat(object, "surfSimWaveSigma", render.surfSimWaveSigma),
+            1.5f, 12.0f);
+        render.surfSimSpawnDuration = std::clamp(
+            ReadFloat(object, "surfSimSpawnDuration", render.surfSimSpawnDuration),
+            0.3f, 3.0f);
+        render.surfSimCelerityFloor = std::clamp(
+            ReadFloat(object, "surfSimCelerityFloor", render.surfSimCelerityFloor),
+            0.1f, 1.0f);
+        render.surfSimBreakOnset = std::clamp(
+            ReadFloat(object, "surfSimBreakOnset", render.surfSimBreakOnset),
+            0.1f, 0.9f);
+        render.surfSimWaveDamping = std::clamp(
+            ReadFloat(object, "surfSimWaveDamping", render.surfSimWaveDamping),
+            0.0f, 0.4f);
         render.causticsIntensity = std::max(
             0.0f, ReadFloat(object, "causticsIntensity", render.causticsIntensity));
         render.causticsScale = std::max(
@@ -553,8 +586,19 @@ namespace OceanRenderConfigJson
         out["surfSimWindCoupling"] = render.surfSimWindCoupling;
         out["surfSimDepositStrength"] = render.surfSimDepositStrength;
         out["surfSimBreakerGamma"] = render.surfSimBreakerGamma;
-        out["surfSimFoamFadeRate"] = render.surfSimFoamFadeRate;
+        out["surfSimFoamFadeTime"] = render.surfSimFoamFadeTime;
         out["surfSimFrontBreakup"] = render.surfSimFrontBreakup;
+        out["surfSimTailBreakup"] = render.surfSimTailBreakup;
+        out["surfSimTearScale"] = render.surfSimTearScale;
+        out["surfSimDisplacement"] = render.surfSimDisplacement;
+        out["surfSimRunInland"] = render.surfSimRunInland;
+        out["surfSimMinSpawnDepth"] = render.surfSimMinSpawnDepth;
+        out["surfSimCapWidth"] = render.surfSimCapWidth;
+        out["surfSimWaveSigma"] = render.surfSimWaveSigma;
+        out["surfSimSpawnDuration"] = render.surfSimSpawnDuration;
+        out["surfSimCelerityFloor"] = render.surfSimCelerityFloor;
+        out["surfSimBreakOnset"] = render.surfSimBreakOnset;
+        out["surfSimWaveDamping"] = render.surfSimWaveDamping;
         out["causticsIntensity"] = render.causticsIntensity;
         out["causticsScale"] = render.causticsScale;
         out["causticsSpeed"] = render.causticsSpeed;

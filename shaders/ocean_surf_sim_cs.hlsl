@@ -60,8 +60,15 @@ cbuffer SurfSimCB : register(b0)
     float FoamFadeRate;    // S3: foam/s LINEAR decay behind the crest (the FFT-foam pattern)
     float FrontBreakup;    // S3: 0..1 tear of the foam at CONSUMPTION (S4) — never in the sim,
                            // whose ~1 m texels alias the pattern into per-texel noise
-    float Pad0;
-    float Pad1;
+    float RunInland;       // metres past the SDF waterline the wave may live (0 = die at the
+                           // shore map's zero; the VISIBLE water edge sits inland of it)
+    float MinSpawnDepth;   // metres of bottom REQUIRED under a disturber to be born - no
+                           // births in lagoons, on shoal banks or in channels
+
+    float CelerityFloor;   // metres: minimum depth used for wave speed (the bore march floor)
+    float BreakOnset;      // fraction of the breaker criterion where foam starts ramping in
+    float WaveDamping;     // 1/s open-water settle rate
+    float Pad2;
 };
 
 Texture2D<float>    ShoreDepthTex : register(t0);
@@ -142,30 +149,71 @@ void Update(uint3 dispatchThreadId : SV_DispatchThreadID)
     const float2 world = WindowWorldPos(coord);
     const float depth = WaterDepthAt(world);
 
-    // Shallow-water celerity c^2 = g*depth, clamped by the CFL bound so an outlier depth can
-    // never blow the integration up (0.7 * dx / dt; generous at our texel/substep, kept anyway).
+    // The visible water edge sits INLAND of the shore map's zero (the legacy surface drapes
+    // past it), so the wave is allowed to live RunInland metres past the SDF waterline - the
+    // allowance feeds both the celerity (so the front can WALK inland) and the absorber below.
+    float inlandAllow = 0.0f;
+    [branch]
+    if (RunInland > 0.0f)
+    {
+        const float2 sdfUV = SdfUV(world);
+        if (all(sdfUV >= 0.0f) && all(sdfUV <= 1.0f))
+        {
+            const float sdfDist = ShoreSdfTex.SampleLevel(ClampSampler, sdfUV, 0).x;
+            inlandAllow = saturate((sdfDist + RunInland) / 1.5f); // ~1.5 m feather at the limit
+        }
+    }
+
+    // Shallow-water celerity c^2 = g*depth with an authored FLOOR in water (CelerityFloor):
+    // the linear c = sqrt(g*depth) freezes to a crawl on the last strip before the waterline,
+    // so waves died metres short of the beach - the floor keeps the front walking to the line
+    // and, within the inland allowance, PAST it. HIGH floor = the bore marches reliably; LOW
+    // floor = waves slow and COMPRESS on the shallows (shorter, steeper near shore) but decay
+    // longer. Deliberately NOT the finite-amplitude c^2 = g*(d + h): speeding up only the
+    // crests rectified repeated waves into a standing negative sheet ("drained lagoon") - the
+    // sim stays LINEAR. CFL-clamped so an outlier can never blow the integration up.
     const float cfl = 0.7f * TexelWorldSize / max(DeltaTime, 1e-4f);
-    float c2 = 9.81f * max(depth, 0.0f);
+    float c2 = 9.81f * (depth > 0.0f ? max(depth, CelerityFloor)
+                                     : CelerityFloor * inlandAllow);
     c2 = min(c2, cfl * cfl);
 
     v += c2 * laplacian / (TexelWorldSize * TexelWorldSize) * DeltaTime;
 
-    // Absorbers, not reflectors: land eats the wave (the run-up is S3's foam, not a bounce),
-    // and the window border eats it so a wave leaving the domain never echoes back. The land
-    // absorber hugs the WATERLINE (8 cm) — its first cut at 20 cm swallowed the whole breaking
-    // zone (h > gamma*depth is reachable at 15..40 cm for our wave heights), which is why S3's
-    // first gate produced ZERO foam.
-    const float landFade = saturate(depth / 0.08f);
+    // Absorbers, not reflectors: land eats the wave, and the window border eats it so a wave
+    // leaving the domain never echoes back. The land cut is the FINAL 3 cm of depth OR the
+    // inland allowance, whichever reaches further - together with the celerity floor this
+    // walks the front to the waterline (and RunInland metres past it) instead of dying on the
+    // 8 cm isobath. (A water-column-keyed absorber was tried and rejected with the nonlinear
+    // celerity - the asymmetry pumped a standing sheet.)
+    const float landFade = max(saturate(depth / 0.03f), inlandAllow);
     const int borderTexels = min(min(c.x, c.y), min(maxC - c.x, maxC - c.y));
     const float borderFade = saturate((float)borderTexels / 24.0f);
     const float fade = min(landFade, borderFade);
-    const float kBaseDamping = 0.15f;   // 1/s, open-water settle rate
     const float kAbsorbDamping = 10.0f; // 1/s inside an absorber
-    v *= max(0.0f, 1.0f - lerp(kAbsorbDamping, kBaseDamping, fade) * DeltaTime);
+    v *= max(0.0f, 1.0f - lerp(kAbsorbDamping, WaveDamping, fade) * DeltaTime);
 
     h += v * DeltaTime;
     // Heights decay too where absorbed, so land never accumulates a standing sheet.
     h *= lerp(max(0.0f, 1.0f - 8.0f * DeltaTime), 1.0f, fade);
+
+    // The wave equation has no mean reversion, so residue ACCUMULATES wherever the absorbers
+    // don't reach - the S6 displacement exposed both kinds (a drained beach with the contact
+    // rim hidden under the terrain, and a standing film riding on the sand):
+    //  - nearshore troughs FILL IN: the land absorber eats every arriving CREST but the
+    //    trailing trough survives; only h < 0 relaxes and only where depth < 0.6 m, so crests,
+    //    breaking and foam never feel it - a broken bore is a positive hump anyway;
+    //  - the beach DRAINS: past the waterline (the run-inland allowance has no absorber) any
+    //    residual film of either sign percolates away in ~a second, swash-style.
+    float relaxRate = 0.0f;
+    if (h < 0.0f)
+    {
+        relaxRate = 2.0f * saturate(1.0f - depth / 0.6f);
+    }
+    if (depth < 0.0f)
+    {
+        relaxRate = max(relaxRate, 1.5f);
+    }
+    h *= max(0.0f, 1.0f - relaxRate * DeltaTime);
 
     // S2: spawner forcing. Each live segment is a capsule Gaussian with a sin envelope whose
     // TIME INTEGRAL equals the authored amplitude (int sin(pi*tau) dtau * pi/2 = 1), so the
@@ -226,7 +274,7 @@ void Update(uint3 dispatchThreadId : SV_DispatchThreadID)
     // axis-aligned square.
     const float breakDepth = max(depth, 0.1f); // the waterline would divide by zero otherwise
     const float overload = h / (BreakerGamma * breakDepth);
-    const float kOnset = 0.5f; // fraction of the breaker index where whitecapping starts
+    const float kOnset = clamp(BreakOnset, 0.05f, 0.95f); // where whitecapping starts ramping
     float current = saturate((overload - kOnset) / (1.0f - kOnset));
     current *= current * saturate(h / 0.02f) * DepositStrength; // ripples never foam
     const float foam = max(current, FoamRead[coord] - FoamFadeRate * DeltaTime);
@@ -275,6 +323,52 @@ void Spawn(uint3 dispatchThreadId : SV_DispatchThreadID)
     const float2 shorePoint = cand - grad * dist;
     const float2 spawnPos = shorePoint + grad * SpawnDistance;
     const float2 toShore = -grad; // the direction the injected packet travels
+
+    // Birth gates (the user's atoll drawing): a disturber needs real surf water under and
+    // around it. Enough BOTTOM DEPTH along the whole segment - a lagoon, a shoal bank or the
+    // beach face fails, and a packet born on a bank would instantly satisfy the breaker
+    // criterion and stamp a giant foam blob instead of growing into a front by shoaling.
+    const float2 alongDir = float2(-toShore.y, toShore.x);
+    const float2 endA = spawnPos + alongDir * SegmentHalfLen;
+    const float2 endB = spawnPos - alongDir * SegmentHalfLen;
+    if (WaterDepthAt(spawnPos) < MinSpawnDepth ||
+        WaterDepthAt(endA) < 0.6f * MinSpawnDepth ||
+        WaterDepthAt(endB) < 0.6f * MinSpawnDepth)
+    {
+        return;
+    }
+    // And enough SDF CLEARANCE: in a channel between two spits the seaward walk lands next to
+    // the opposite shore - the point is nominally offshore but has no room for a wave.
+    const float2 spawnUV = SdfUV(spawnPos);
+    if (any(spawnUV < 0.02f) || any(spawnUV > 0.98f))
+    {
+        return;
+    }
+    const float clearance = ShoreSdfTex.SampleLevel(ClampSampler, spawnUV, 0).x;
+    if (clearance < 0.7f * SpawnDistance)
+    {
+        return;
+    }
+    // Fetch gate (the user's lagoon repro): a deep ENCLOSED pool passes both gates above - its
+    // depth is real and its centre is far from every shore, so no depth threshold can exclude
+    // it. Real surf needs open water for the wave to ARRIVE from: march seaward and require
+    // the coast NOT to close back in. In a lagoon (or behind a spit) a probe lands inland
+    // within a few steps; leaving the SDF window counts as open ocean.
+    const float probeStep = max(SpawnDistance, 50.0f);
+    [unroll]
+    for (uint p = 1; p <= 3; ++p)
+    {
+        const float2 probe = spawnPos + grad * (probeStep * (float)p);
+        const float2 probeUV = SdfUV(probe);
+        if (any(probeUV < 0.02f) || any(probeUV > 0.98f))
+        {
+            break;
+        }
+        if (ShoreSdfTex.SampleLevel(ClampSampler, probeUV, 0).x < 0.0f)
+        {
+            return;
+        }
+    }
 
     SpawnerSlot slot;
     slot.posDir = float4(spawnPos, toShore);

@@ -159,6 +159,107 @@ touched shader at every step; feature stays default-OFF throughout)
 
 ## Status
 
+- **Foam pair + cap/tail look — REVERTED WHOLESALE (2026-08-15).** Everything in this entry
+  was rolled back the same day at the user's demand ("сделал в бесконечно раз хуже"): the
+  RG16F pair went back to R16F, the curvature gate / Cap width / Cap boost knobs were deleted,
+  and consumption returned to the S6 threshold-tear (single value, front/tail blend by the
+  foam-value age proxy, all in the shore slot). The spawn gates, bore march, RunInland and the
+  residue relaxations from the entries below were KEPT — the user ordered those. The entry
+  stays for the record of dead ends only. The
+  foam field became the FFT whitecap PAIR (RG16F: x = CURRENT breaking activity, no decay,
+  alive only under the crest; y = PERSISTENT max()/linear-decay trail — the user's reference:
+  "в FFT пена так и работает, нам то же самое с длинным хвостом"). The sim gates the current
+  channel on crest CURVATURE (the Laplacian is in hand; a bore keeps h > gamma*d over tens of
+  metres of flat, curvature marks the breaking face) — knobs **Cap width** (1/m, higher =
+  narrower band) and **Cap boost** (gain so mid-band activity saturates), both in SurfSimCB.
+  CONSUMPTION after many dead ends (each documented in ocean-surf-sim-plan memory): coverage
+  and texture are DECOUPLED — coverage = max(cap, trail) so the band near the crest is always
+  solidly covered, and the LOOK is a literal two-texture lerp by the cap's share of the pixel:
+  dense FoamAlbedoTex on the cap, torn wind-scrolled ShoreFoamAlbedoTex on the tail
+  (`surfShare` blends over whatever albedo the pixel had). Tail coverage = persistent eroded
+  by the drifting ContactFoam pattern (Tail breakup; erosion carves at full strength - a
+  low-end value threshold kept fat caps solid, rejected twice). DEAD ENDS for the record:
+  slot/albedo routing through contactCoverage (the shore albedo renders as lace and tore the
+  crest; three routing variants all read identical to the user), the age-proxy tear (stamp
+  peaks vary, "assumes peak 1" broke), FoamTrailTex streak tail (user: textures swapped).
+  LESSON: when the argument is about which TEXTURE reads dense, verify with a capture per
+  texture and give the balance to KNOBS instead of bisecting look constants blind.
+  Requires an editor RESTART (foam texture format changed R16F -> RG16F).
+- **Spawn gates + bore march DONE (2026-08-14, uncommitted, user's atoll drawing).** The user's
+  ring-atoll repro: disturbers born inside the lagoon / in the channel between spits / on shoal
+  banks, a bank birth instantly satisfying the breaker criterion = a giant foam blob stamped at
+  once; and waves still dying before the visible edge. Fixes:
+  1. **Birth gates in `Spawn`**: bottom depth sampled at the segment centre AND both endpoints
+     must clear **Min spawn depth (m)** (surfSimMinSpawnDepth, default 1.2; endpoints at 60%) —
+     kills lagoon/bank births and the birth-explosion (a packet born in deep-enough water only
+     reaches the breaker criterion by SHOALING = the gradually-growing front the user asked
+     for); SDF clearance at the spawn point must be >= 0.7·SpawnDistance — kills channel births
+     (nominally offshore but next to the opposite shore).
+  2. **Bore march**: celerity floor 0.15 → 0.4 m (~2 m/s — a real broken bore moves at
+     sqrt(g·(d+H)), and at 1.2 m/s the base damping ate the front over its ~10 s crawl across
+     the last strip), base damping 0.15 → 0.08 1/s. Together with Run inland this carries the
+     front to the visible waterline.
+  UNITY REFERENCE (user asked): HDRP Water Decal "Shore Wave" deformer = an AUTHORED box
+  region — waves are periodic fronts translating along local X at authored speed, "Skipped
+  Waves" thins the cadence, "Blend Range" envelopes amplitude along the shore axis, and
+  "Breaking Range" is the key lifecycle: max amplitude at range start, surface foam generated
+  ONLY inside it, −70% amplitude at its end (docs.unity3d.com HDRP water-deform-a-water-surface;
+  source HLSL is not in the public Graphics repo). Our sim gets the same lifecycle from physics
+  (shoaling growth → breaker-index foam → absorber decay); their hand-placed regions map to our
+  birth gates. Gate (user's camera over the atoll, 28 s): lagoon and channel stay silent, foam
+  arrives as discrete wave-sized fronts on the outer shores, no giant blobs. dxc clean, builds
+  0/0 (stress skipped per gate discipline).
+- **S6 + reach/tear pass DONE (2026-08-14, uncommitted, user-driven).** Four user asks in one
+  increment:
+  1. *"Wave stops short of the beach"*: the linear c = sqrt(g*depth) froze to a crawl on the
+     last strip and the 8 cm land absorber walled it — FIX = celerity FLOOR in water
+     (c^2 = g*max(depth, 0.15 m), land stays 0) + absorber cut moved to the final 3 cm + the
+     **Run inland (m)** knob (surfSimRunInland, default 2): the wave may live N metres past
+     the SDF waterline (the VISIBLE water edge sits inland of the shore map's zero — the
+     user's report), allowance feeds both celerity and absorber, ~1.5 m feather.
+     REJECTED on the way: finite-amplitude c^2 = g*(d+h) + water-column absorber — speeding
+     up only crests RECTIFIED repeated waves into a standing negative sheet ("drained lagoon",
+     rim hidden under terrain). The sim stays LINEAR.
+  2. *Standing-residue physics* (exposed by the displacement consumer): the wave equation has
+     no mean reversion, so residue accumulates wherever absorbers don't reach. Two targeted
+     relaxations in Update: nearshore TROUGHS fill in (h < 0 only, depth < 0.6 m, 2/s — the
+     absorber eats every crest but the trailing trough survived and stacked) and the beach
+     DRAINS (past the waterline, either sign, 1.5/s — the run-inland strip has no absorber, a
+     film lingered on the sand). Crests/breaking/foam never feel either.
+  3. *Tear rework (user: "рвать как мы рвём у берега, фронт и хвост отдельно, + скейл")*:
+     SurfSimFoamCoverage now blends the tear amount from **Front breakup** (fresh foam >= 1)
+     to **Tail breakup** (decayed) using the foam value as the age proxy, and the threshold
+     pattern is ShoreFoamDissipationFactor's counter-drifting two-octave field (the SAME
+     mechanism that tears the contact rim — alive, not a frozen stencil) at the authored
+     **Tear scale (m)** patch scale. surfSimParams2 = (front, tail, scale, displacement).
+  4. *S6 displacement knob*: **Wave displacement** (surfSimDisplacement 0..2, default 1) — the
+     sim height field adds to the legacy VS vertical displacement AFTER the shore damping
+     (sampled at the same worldUV the PS reads as baseXZ, so hump and foam agree).
+  NOTE (not a bug): the contact rim vanished from gate captures because the user SAVED
+  wind_test.json with shoreLegacyContactFoamStrength = 0 (isolating the sim foam) — diagnosed
+  via a sim-OFF control frame after chasing phantom cbuffer-shift theories; ALWAYS diff the
+  level file before suspecting a regression when the user is tuning in-editor.
+  Gate (real shading, his saved tuning): foam rides each wave to the visible waterline, torn
+  organically front-vs-tail, humps visible via displacement, beach drains between waves.
+  dxc clean, builds 0/0 (stress runs skipped per the user's gate-discipline directive).
+- **S4 DONE (2026-08-14, uncommitted): legacy consumption.** The sim's foam field renders as
+  real shore foam. Injection is thin and tagged ("surf sim injection (S4)"): one cbuffer field
+  (`surfSimParams2`, x = front breakup), one helper (`SurfSimFoamCoverage` in
+  ocean_surface_legacy.hlsli), one additive line in `GetFoamData` — the sim coverage joins the
+  `contactCoverage` slot, so it automatically wears the shore foam albedo and its share of the
+  blend. The per-pixel TEAR lives here (never in the sim — texel aliasing, see S3.1): the
+  ContactFoam pattern (two rotated octaves, fixed 0.15 tiles/m) is a THRESHOLD the decaying
+  foam sinks through — a fresh stamp (>= 1) is solid whitewater, dissolving foam breaks into
+  patches that vanish darkest-first, so dissipation reads as structure instead of an alpha
+  fade. KNOB CHANGES (both user asks): `Foam fade time (s)` replaces the fade rate — seconds a
+  full stamp takes to dissolve (0.2..30, default 2.5; the kernel still integrates rate =
+  1/time), JSON key `surfSimFoamFadeTime` (no level carried the old key); spawn frequency is
+  `Spawn interval` + `Wind coupling` (unchanged, awaiting the user's tuning pass).
+  `FrontBreakup` now feeds the PS via `surfSimParams2.x` (name-reflected CB, zeroed when the
+  sim is off → the uniform branch keeps the OFF path free). GATE (real shading, no debug view,
+  30-frame series): until t≈14 s only the static contact rim exists; the arriving wave brings
+  a broad whitewater patch seaward of the rim, torn into organic patches as it decays, gone by
+  ~22 s. Builds 0/0, both stress gates CLEAN, comparator 0.
 - **S3.1 deposit REWORK (2026-08-14, uncommitted, user-driven): crest-provoked foam, the
   FFT-whitecap pattern.** The additive `foam += strength·sat(overload−1)·dt` behind a hard
   threshold looked like "говно" (user): the deposit depended on how long the front lingered

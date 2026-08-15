@@ -97,8 +97,19 @@ struct OceanRenderConfig
     // waves where they actually are.
     float surfSimDepositStrength = 1.0f; // peak foam a breaking crest stamps (max() semantics)
     float surfSimBreakerGamma = 0.5f;    // H/d breaker index (sim-tuned; McCowan is 0.78)
-    float surfSimFoamFadeRate = 0.4f;    // foam/s linear decay behind the crest
-    float surfSimFrontBreakup = 0.5f;    // 0..1 stripe tear
+    float surfSimFoamFadeTime = 2.5f;    // seconds a full-strength foam stamp takes to dissolve
+    float surfSimFrontBreakup = 0.5f;    // 0..1 tear of the fresh leading front
+    float surfSimTailBreakup = 0.7f;     // 0..1 tear of the decaying tail
+    float surfSimTearScale = 7.0f;       // metres, patch scale of the tear pattern
+    float surfSimDisplacement = 1.0f;    // 0..2, sim wave height -> vertex displacement scale
+    float surfSimRunInland = 2.0f;       // metres past the SDF waterline the wave may live
+    float surfSimMinSpawnDepth = 1.2f;   // metres of bottom required under a disturber to be born
+    float surfSimCapWidth = 1.0f;        // dense-zone width: >1 wider, <1 narrower (age-curve power)
+    float surfSimWaveSigma = 4.0f;       // m, across-shore half-width of the injected hump (wavelength lever)
+    float surfSimSpawnDuration = 1.0f;   // s the hump inflates (shorter = more compact packet)
+    float surfSimCelerityFloor = 0.4f;   // m, min depth for wave speed - bore march vs shore compression
+    float surfSimBreakOnset = 0.5f;      // fraction of the breaker criterion where foam starts (cap width lever)
+    float surfSimWaveDamping = 0.08f;    // 1/s open-water settle
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

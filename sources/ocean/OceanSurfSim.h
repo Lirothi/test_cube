@@ -86,6 +86,14 @@ public:
         float breakerGamma = 0.78f;   // surf breaker index H/d
         float foamFadeRate = 0.4f;    // foam/s linear decay behind the crest
         float frontBreakup = 0.5f;    // 0..1 tear of the deposit stripe
+        float runInland = 2.0f;       // metres past the SDF waterline the wave may live
+        float minSpawnDepth = 1.2f;   // metres of bottom required under a disturber to be born
+        // Shape of the injected wave (the peak width/height levers the user tunes):
+        float waveSigma = 4.0f;       // m across-shore half-width of the hump - the wavelength
+        float spawnDuration = 1.0f;   // s the hump inflates (shorter = more compact packet)
+        float celerityFloor = 0.4f;   // m minimum depth for wave speed (bore march floor)
+        float breakOnset = 0.5f;      // fraction of the breaker criterion where foam ramps in
+        float waveDamping = 0.08f;    // 1/s open-water settle
     };
 
     // Pass-flow S3 pilot (docs/render_graph_pass_flow_plan.md): the whole pass is ONE builder.

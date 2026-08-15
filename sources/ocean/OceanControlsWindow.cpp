@@ -1104,7 +1104,7 @@ namespace
         }
         {
             static const char* kSurfSimViews[] = {
-                "Off", "Sim height", "Sim velocity", "Shore SDF", "Shore depth map" };
+                "Off", "Sim height", "Sim foam", "Shore SDF", "Shore depth map" };
             int surfSimView = std::clamp(ocean::g_surfSimDebugView, 0, 4);
             if (ImGui::Combo("Surf sim debug view", &surfSimView, kSurfSimViews, 5))
             {
@@ -1118,8 +1118,19 @@ namespace
             drag("Wind coupling", render.surfSimWindCoupling, 0.005f, 0.0f, 1.0f);
             drag("Deposit strength", render.surfSimDepositStrength, 0.01f, 0.0f, 5.0f);
             drag("Breaker gamma", render.surfSimBreakerGamma, 0.005f, 0.4f, 1.2f);
-            drag("Foam fade rate", render.surfSimFoamFadeRate, 0.005f, 0.0f, 3.0f);
+            drag("Foam fade time (s)", render.surfSimFoamFadeTime, 0.01f, 0.2f, 30.0f);
             drag("Front breakup", render.surfSimFrontBreakup, 0.005f, 0.0f, 1.0f);
+            drag("Tail breakup", render.surfSimTailBreakup, 0.005f, 0.0f, 2.0f);
+            drag("Tear scale (m)", render.surfSimTearScale, 0.05f, 1.0f, 50.0f);
+            drag("Wave displacement", render.surfSimDisplacement, 0.005f, 0.0f, 2.0f);
+            drag("Run inland (m)", render.surfSimRunInland, 0.05f, 0.0f, 20.0f);
+            drag("Min spawn depth (m)", render.surfSimMinSpawnDepth, 0.02f, 0.0f, 10.0f);
+            drag("Wave sigma (m)", render.surfSimWaveSigma, 0.02f, 1.5f, 12.0f);
+            drag("Spawn duration (s)", render.surfSimSpawnDuration, 0.01f, 0.3f, 3.0f);
+            drag("Bore floor (m)", render.surfSimCelerityFloor, 0.005f, 0.1f, 1.0f);
+            drag("Wave damping (1/s)", render.surfSimWaveDamping, 0.001f, 0.0f, 0.4f);
+            drag("Break onset", render.surfSimBreakOnset, 0.005f, 0.1f, 0.9f);
+            drag("Cap width", render.surfSimCapWidth, 0.005f, 0.25f, 4.0f);
             // S1 gate: inject a test hump at the sim window's centre (i.e. under the camera).
             if (ImGui::Button("Poke"))
             {

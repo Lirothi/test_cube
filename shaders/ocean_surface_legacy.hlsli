@@ -67,6 +67,8 @@ cbuffer OceanCB : register(b0)
     float4 shoreFoamWindParams;        // shared with the modern surface (same C++ feed): x: wind force 0..1, y: calm threshold, z: full threshold
     float4 shoreSdfParams;             // surf sim injection (debug): shared name with the modern surface - x: centre x, y: centre z, z: inv extent, w: texel world size
     float4 surfSimParams;              // surf sim injection: xy: window centre, z: 1 / half extent, w: debug view (0 = off)
+    float4 surfSimParams2;             // surf sim injection (S4/S6): x: front breakup, y: tail breakup (0..2), z: tear patch scale (m), w: wave displacement scale
+    float4 surfSimParams3;             // surf sim injection: y: cap width (>1 wider dense zone, <1 narrower), xzw: spare
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed (shared with the modern surface)
     float4 shoreSlopeParams;           // z: edge soft depth = the contact foam's edge fade (shared with the modern surface)
     float4 depthTextureSize;           // xy: texel size, zw: texture size
@@ -539,6 +541,23 @@ VSOutput VSMain(VSInput input)
     displacement.xz *= horizontalAttenuation;
     //prevDisplacement *= attenuation;
 
+    // surf sim injection (S6): the sim's wave rides the surface — its height field adds to the
+    // vertical displacement AFTER the shore damping (the sim wave IS the nearshore wave the
+    // damping exists to remove), scaled by the authored knob. Sampled at the same worldUV the
+    // PS consumes as baseXZ, so the hump and its foam agree. (A display-side chopness lived
+    // here briefly and was removed at the user's call: peak shape must come from the SIM's
+    // authored injection - the foam criterion reads the field, cosmetics would lie to it.)
+    [branch]
+    if (surfSimParams.z > 0.0f && surfSimParams2.w > 0.0f)
+    {
+        const float2 simUV = (worldUV - surfSimParams.xy) * (surfSimParams.z * 0.5f) + 0.5f;
+        if (all(simUV >= 0.0f) && all(simUV <= 1.0f))
+        {
+            const float simHeight = SurfSimWaveTex.SampleLevel(LinearClampSampler, simUV, 0).x;
+            displacement.y += simHeight * surfSimParams2.w;
+        }
+    }
+
     float3 world = float3(baseWorld.x + displacement.x, displacement.y, baseWorld.z + displacement.z);
     //float3 prevWorldPos = float3(prevBaseWorld.x + prevDisplacement.x, prevDisplacement.y, prevBaseWorld.z + prevDisplacement.z);
     float3 prevWorldPos = world;
@@ -743,6 +762,57 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float sho
     return coverage * saturate(foamParams2.y * 10.0f);
 }
 
+// surf sim injection (S4): coverage from the surf sim's breaking-foam field. The field itself
+// is a SMOOTH physical quantity — the sim never tears it, because at its ~1 m texels any
+// pattern aliases into per-texel noise (soft squares under magnification). The tear happens
+// here, per PIXEL, as a THRESHOLD the decaying foam sinks through — a fresh stamp (>= 1) is
+// solid whitewater, dissolving foam breaks into patches that vanish darkest-first, so
+// dissipation reads as structure instead of an alpha fade.
+// FRONT and TAIL are torn by SEPARATE amounts: the foam value doubles as the age proxy
+// (fresh >= 1, dissipation sinks it toward 0), so the tear amount blends from
+// surfSimParams2.x on the leading front to surfSimParams2.y on the decayed tail. The pattern
+// is the shore dissipation include's counter-drifting two-octave field — the SAME breathing
+// patches that tear the contact rim — at the authored patch scale (surfSimParams2.z, metres),
+// so the tear itself is alive instead of a frozen stencil.
+float SurfSimFoamCoverage(float2 baseXZ)
+{
+    [branch]
+    if (surfSimParams.z <= 0.0f)
+    {
+        return 0.0f; // sim off this frame - zero cost beyond the uniform branch
+    }
+    const float2 simUV = (baseXZ - surfSimParams.xy) * (surfSimParams.z * 0.5f) + 0.5f;
+    if (any(simUV < 0.0f) || any(simUV > 1.0f))
+    {
+        return 0.0f;
+    }
+    const float foam = SurfSimFoamTex.SampleLevel(LinearClampSampler, simUV, 0);
+    if (foam <= 1e-3f)
+    {
+        return 0.0f;
+    }
+    // Front and tail torn by SEPARATE amounts: the foam value is the age proxy (a fresh stamp
+    // is >= 1, dissipation sinks it toward 0), so the tear amount blends from the front knob on
+    // fresh foam to the tail knob on decayed foam. The pattern is the shore dissipation
+    // include's counter-drifting two-octave field (the same "breathing patches" that tear the
+    // contact rim) at the authored patch scale - a moving threshold the decaying foam sinks
+    // through: patches vanish darkest-first and the tear itself is alive.
+    const float kDriftSpeed = 0.12f; // m/s, fixed like the include's shore usage
+    const float kContrast = 1.6f;
+    const float pattern = 1.0f - ShoreFoamDissipationFactor(
+        ContactFoamTex, LinearWrapSampler, baseXZ, simulationParams.z,
+        float4(max(surfSimParams2.z, 1.0f), kDriftSpeed, 1.0f, kContrast));
+    // Tail breakup runs 0..2 (NOT saturated): above 1 the threshold climbs past the pattern's
+    // range, so even mid-fresh foam tears - the "рвать сильнее" headroom. Cap width bends the
+    // value-age curve: > 1 keeps mid-fresh foam on the FRONT amount longer (wider dense
+    // zone), < 1 hands it to the tail sooner (narrower).
+    const float age = pow(saturate(foam), 1.0f / max(surfSimParams3.y, 0.05f));
+    const float tearAmount =
+        lerp(max(surfSimParams2.y, 0.0f), saturate(surfSimParams2.x), age);
+    const float threshold = tearAmount * pattern;
+    return saturate((foam - threshold) / max(1.0f - threshold, 1e-3f));
+}
+
 float Pow5(float x)
 {
     float x2 = x * x;
@@ -800,8 +870,11 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     if (foamParams2.y > 0.0f)
     {
         contactCoverage = ContactFoam(input.positionNDC, input.viewDepth, input.worldUV, input.shoreMapDepth);
-        data.coverage.x = saturate(data.coverage.x + contactCoverage);
     }
+    // surf sim injection (S4): the sim's breaking foam joins as another additive shore
+    // coverage source - same slot as contact foam, so it wears the shore foam albedo below.
+    contactCoverage = saturate(contactCoverage + SurfSimFoamCoverage(input.worldUV));
+    data.coverage.x = saturate(data.coverage.x + contactCoverage);
 
     float4 foamNormalWeights = saturate(float4(1.0f, 0.66f, 0.33f, 0.0f) + foamParams1.w) * activeCascades;
     float3 foamNormal = NormalFromDerivatives(input.derivatives, foamNormalWeights);
