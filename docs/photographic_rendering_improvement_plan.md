@@ -267,6 +267,8 @@ P0 Baseline and diagnostics
              |
              +--> P3 Tone map, color transform, and output encoding
                    |
+                   +--> P3B Local exposure (the "HDR photo" look)
+                   |
                    +--> P4 Separate camera, sun, and sky controls
                          |
                          +--> P5 Environment lighting integration [F7 + F8]
@@ -588,6 +590,68 @@ image so little (+0.08 stops on `overview`) — the two are cancelling.
 **Done when:** cloud and sand highlights retain structure, shaded foliage does not collapse to black, and neutral gray remains neutral at default white balance.
 
 **Verify:** grayscale ramp, saturated color chart/test material, P0 views, clipped-pixel ratio, native/DLSS parity, legacy-mode image comparison.
+
+---
+
+### P3B — Local exposure (the "HDR photo" look)
+
+**Depends on:** P3. **Not started.** Added 2026-08-15 after P2 measurement showed global exposure
+cannot reach the reference image, and after the user reported the exact symptom this exists to fix:
+looking into the sun over water crushes the whole frame, "and the eye is HDR".
+
+**The measurement that forces this step.** Dynamic spread, p99/p02, on the canonical views:
+
+| | p02 | median | p99 | spread |
+|---|---:|---:|---:|---:|
+| ours (`overview`, P0) | 0.0211 | 0.1131 | 0.5589 | **26.5x** |
+| `docs/ref/ref_wind_test.png` | 0.0152 | 0.1964 | 0.8137 | **53.6x** |
+
+The reference has a *higher* median and *deeper* blacks at the same time, over twice our dynamic
+spread. **A global exposure multiplier cannot produce that**: it slides the whole histogram, it
+cannot stretch it. Confirmed empirically — widening the metering window on `overview` raised the
+median from 0.113 to 0.152 but *reduced* the sub-2% shadow population from 1.72% to 1.11%, moving
+away from the reference's 3.42%. Brightening and deepening at once is not something one number can
+do. That is the whole argument for this step, and it is why P2's percentile work, while it fixed
+the crush, could never fix the look.
+
+**Goal:** preserve highlight and shadow detail simultaneously by varying exposure spatially, the way
+consumer "HDR photo" processing and the human retina both do (local, not global, adaptation).
+
+**Approach** (the established one; Unreal ships this as Local Exposure):
+
+1. Build a log-luminance image from the exposed HDR scene.
+2. Decompose it with an **edge-aware/bilateral** filter into a low-frequency *base* layer (large
+   scale illumination) and a *detail* residual.
+3. Compress **only the base layer** by an authored factor; optionally boost the detail layer.
+4. Recombine and apply as a per-pixel exposure offset on top of the global exposure from P2.
+
+Compressing only the base is the entire trick: it reduces the scene's dynamic range without
+touching micro-contrast, which is why the result reads as vivid rather than as the flat, haloed
+"HDR look" that gives local tone mapping a bad name.
+
+**Implement:**
+
+1. Half- or quarter-resolution log-luminance pyramid from the post-exposure, pre-tonemap scene.
+2. Edge-aware base extraction. Start with a separable bilateral or a blurred-guide approximation;
+   a full bilateral grid is a later optimisation, not a starting requirement.
+3. Separate highlight and shadow contrast-scale controls, plus a blend/strength control, all
+   defaulting to a **no-op** so the feature is off until deliberately enabled.
+4. Apply as a per-pixel multiplier in the tonemap, after the global exposure and before the curve.
+5. Debug views: base layer, detail layer, and the final per-pixel offset.
+
+**Interface contract:** at default settings the output is screenshot-equivalent to P3. The pass must
+be resolution-independent in cost like P2's metering.
+
+**Done when:** looking into the sun over water keeps the shaded side of the island readable while
+the glint stays bright, without the global exposure having to close down; and the canonical views'
+p99/p02 spread moves materially toward the reference's 53.6x.
+
+**Verify:** the `sun_glint` view specifically, plus halo inspection at high-contrast edges (the
+classic failure), camera-motion stability, native/DLSS parity, GPU timing. Provisional budget:
+0.40 ms.
+
+**Risk:** halos and the flat "tone-mapped HDR" cliche. Mitigation: compress the base layer only,
+keep defaults conservative, and judge on the reference rather than on the metrics alone.
 
 ---
 

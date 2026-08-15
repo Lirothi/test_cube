@@ -34,8 +34,15 @@ struct CameraExposureSettings
     // Histogram percentiles used to derive the metered luminance. Clipping the tails is what keeps
     // a sun glint or a patch of sky from dragging the whole frame, without hard-coding what water
     // or sky look like.
+    //
+    // The high percentile is the GLINT knob, and 0.80 is measured, not guessed. A sun-glint field
+    // covers 10-20% of the frame looking into the sun over water, so at 0.95 most of it still
+    // counts as scene brightness and the camera crushes the shaded island: median 0.157 -> 0.114 on
+    // the sun_glint view. At 0.80 the specular field is discarded and the median lands at 0.149,
+    // i.e. the crush is gone. Narkowicz recommends discarding 2-20% of the brightest samples; this
+    // sits at the top of that range because our content is water.
     float lowPercentile = 0.02f;
-    float highPercentile = 0.95f;
+    float highPercentile = 0.80f;
     // Adaptation rates in stops/second, separately controllable because the eye darkens much
     // faster than it brightens and a single rate always looks wrong in one direction.
     float speedUp = 3.0f;

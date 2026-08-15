@@ -315,7 +315,7 @@ struct ExposureMeteringConstants
     float minEv100 = -6.0f;
     float maxEv100 = 16.0f;
     float lowPercentile = 0.02f;
-    float highPercentile = 0.95f;
+    float highPercentile = 0.80f;
     float speedUp = 3.0f;
     float speedDown = 1.0f;
     float manualEv100 = 0.0f;

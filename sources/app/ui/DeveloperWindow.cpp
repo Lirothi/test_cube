@@ -447,8 +447,18 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::Checkbox("Enabled", &exposure.enabled);
                 ImGui::SameLine();
-                HelpMarker("Off = the exposure multiplier is exactly 1.0 and the metering pass does "
-                           "no GPU work, i.e. the pre-plan image.");
+                HelpMarker(
+                    "Master switch for the photographic camera.\n\n"
+                    "OFF: the exposure multiplier is exactly 1.0 and the metering pass does no GPU "
+                    "work at all (one empty command list, 0.001 ms). The image is bit-identical to "
+                    "what the renderer produced before this feature existed.\n\n"
+                    "ON: the scene is metered every frame and scene colour is multiplied by the "
+                    "adapted exposure just before the tone curve -- after the DLSS resolve, so the "
+                    "upscaler never sees an exposed image. Costs about 0.028 ms.\n\n"
+                    "NOTE: the directional light still carries its own legacy 'exposure' value "
+                    "(2.0 on wind_test). While that is still there, auto-exposure is partly "
+                    "cancelling it rather than replacing it, which is why turning this on barely "
+                    "changes the image. Separating the two is a later step of the plan.");
 
                 if (!exposure.enabled)
                 {
@@ -459,7 +469,15 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::Checkbox("Auto exposure", &exposure.autoExposure);
                 ImGui::SameLine();
-                HelpMarker("Off holds the manual EV below. On meters the scene each frame and adapts.");
+                HelpMarker(
+                    "ON: the scene is metered every frame from a 256x144 grid of samples, and the "
+                    "camera adapts towards the result at the speeds below.\n\n"
+                    "OFF: the camera is pinned to 'Manual EV100' with no adaptation at all -- use "
+                    "this when comparing two builds or hunting a lighting bug, because a moving "
+                    "camera makes every A/B unreadable.\n\n"
+                    "The sample grid is FIXED and normalised, not one sample per pixel. That is "
+                    "why the pass costs the same at 1080p and 4K, and why native and DLSS meter "
+                    "the identical positions and settle on the same value.");
 
                 ImGui::SeparatorText("Live");
                 if (readback.valid)
@@ -481,43 +499,116 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     renderer.Exposure().RequestReset();
                 }
+                ImGui::SameLine();
+                HelpMarker(
+                    "Adapted = what the camera is using right now. Target = where it is heading. "
+                    "Metered low/high = the scene-linear luminance at the two percentiles below, "
+                    "which is the actual window the average was taken over -- watch these while "
+                    "sweeping the percentile sliders to see what is being included.\n\n"
+                    "'Reset adaptation' snaps Adapted to Target instantly, the same thing that "
+                    "happens on level load, resize and camera cuts.");
 
                 ImGui::SeparatorText("Metering");
                 ImGui::SliderFloat("Compensation (EV)", &exposure.compensationEv, -8.0f, 8.0f, "%+.2f");
                 ImGui::SameLine();
-                HelpMarker("Positive = brighter image. Applied on top of the metered result.");
-                ImGui::SliderFloat("Low percentile", &exposure.lowPercentile, 0.0f, 0.5f, "%.3f");
+                HelpMarker(
+                    "Artistic offset in stops, applied on top of whatever the meter decided.\n\n"
+                    "POSITIVE = BRIGHTER image. (Internally it subtracts from the EV, because a "
+                    "higher EV means a more closed camera. The slider is in the direction you "
+                    "expect; the sign flip happens in the shader.)\n\n"
+                    "+1.0 doubles scene brightness, -1.0 halves it. This is the knob to reach for "
+                    "when the meter is technically right but the shot wants to be brighter or "
+                    "moodier -- it moves the whole image without changing how the meter behaves.");
+
+                ImGui::SliderFloat("Low percentile", &exposure.lowPercentile, 0.0f, 0.95f, "%.3f");
+                ImGui::SameLine();
+                HelpMarker(
+                    "Fraction of the DARKEST samples thrown away before averaging.\n\n"
+                    "0.02 keeps almost everything, so deep shade counts fully and the camera opens "
+                    "up to expose it. Raising it makes the meter ignore shadows and expose for the "
+                    "brighter subject instead -- the image gets DARKER overall but shadows stop "
+                    "dragging the exposure up.\n\n"
+                    "Reference: Narkowicz recommends discarding 50-80% of the darkest samples, and "
+                    "Unreal's histogram default has historically sat near 80%. Our 0.02 default is "
+                    "far more shadow-weighted than either; that is a deliberate starting point, "
+                    "not a tuned value.");
+
                 ImGui::SliderFloat("High percentile", &exposure.highPercentile, 0.5f, 1.0f, "%.3f");
                 ImGui::SameLine();
-                HelpMarker("Clipping both tails is what stops a sun glint or a patch of sky from "
-                           "dragging the whole frame. Widen them to meter more of the image.");
+                HelpMarker(
+                    "Fraction of samples kept from the bottom, i.e. everything ABOVE this is "
+                    "thrown away as 'too bright to meter'.\n\n"
+                    "THIS IS THE GLINT KNOB. A sun-glint field can be 10-20% of the frame, so with "
+                    "0.95 (discarding only the top 5%) most of the glint still counts as scene "
+                    "brightness and the camera closes down, crushing the shaded side of the "
+                    "island. Lowering it to ~0.80 discards the whole specular field and meters the "
+                    "water and sand instead.\n\n"
+                    "Narkowicz recommends discarding 2-20% of the brightest; Unreal's histogram "
+                    "default is around 98.3% for its own metering band. Sweep it while looking "
+                    "into the sun over water -- that is the view it exists for.");
 
                 ImGui::SeparatorText("Adaptation");
                 ImGui::SliderFloat("Speed up (stops/s)", &exposure.speedUp, 0.0f, 20.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker(
+                    "How fast the camera CLOSES when the scene gets brighter, in stops per second. "
+                    "This is the direction that fires when you turn to face the sun.\n\n"
+                    "The eye's light adaptation is much faster than its dark adaptation, which is "
+                    "why the default is 3 against 1. Set to 0 to freeze adaptation in this "
+                    "direction entirely.\n\n"
+                    "The step is capped per frame by a 0.1 s delta clamp, so a breakpoint or a long "
+                    "level load cannot resolve into one instant jump when rendering resumes.");
+
                 ImGui::SliderFloat("Speed down (stops/s)", &exposure.speedDown, 0.0f, 20.0f, "%.2f");
                 ImGui::SameLine();
-                HelpMarker("Up = the scene got brighter and the camera closes; down = the reverse. "
-                           "The eye's light adaptation is the fast direction, hence 3 vs 1.");
+                HelpMarker(
+                    "How fast the camera OPENS when the scene gets darker, in stops per second -- "
+                    "walking into shade, or turning away from the sun.\n\n"
+                    "Slower than 'up' by default (1 vs 3) because that is how the eye behaves and "
+                    "because a fast open makes shaded areas visibly 'bloom' open, which reads as a "
+                    "bug rather than as vision.");
 
                 ImGui::SeparatorText("Range");
                 ImGui::SliderFloat("Min EV100", &exposure.minEv100, -16.0f, 20.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker(
+                    "Hard floor on the adapted EV. A LOW value lets the camera open wide, which "
+                    "brightens dark scenes; raise it to stop the camera lifting night or deep "
+                    "shade into flat grey.\n\n"
+                    "This is a safety net, not a look. It cannot make different lighting "
+                    "conditions read differently from each other -- that needs a compensation "
+                    "curve, which this build does not have.");
+
                 ImGui::SliderFloat("Max EV100", &exposure.maxEv100, -16.0f, 20.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker(
+                    "Hard ceiling on the adapted EV, i.e. how far the camera may close down.\n\n"
+                    "LOWERING THIS IS THE BLUNT FIX FOR THE GLINT PROBLEM: cap it just above the "
+                    "value the readout shows on a normal view and the camera physically cannot "
+                    "crush the frame when you turn into the sun. Blunt because it clips the "
+                    "response rather than fixing what is being metered -- prefer the high "
+                    "percentile above for that.\n\n"
+                    "The -6..16 default spans 22 stops, which clamps nothing at all. Treat the "
+                    "defaults as 'off', not as 'tuned'.");
                 if (exposure.maxEv100 < exposure.minEv100)
                 {
                     std::swap(exposure.minEv100, exposure.maxEv100);
                 }
-                ImGui::SameLine();
-                HelpMarker("The default -6..16 span is 22 stops, i.e. it clamps nothing. Narrow it "
-                           "to stop the camera opening all the way up in a dark frame.");
 
                 ImGui::BeginDisabled(exposure.autoExposure);
                 ImGui::SliderFloat("Manual EV100", &exposure.manualEv100, -8.0f, 8.0f, "%.2f");
                 ImGui::EndDisabled();
                 ImGui::TextDisabled("Manual x%.5f", render::ExposureMultiplierFromEv100(exposure.manualEv100));
                 ImGui::SameLine();
-                HelpMarker("This renderer's HDR is NOT photometric: scene linear values sit around "
-                           "0.1-3, not thousands of cd/m2. EV100 0 is roughly the authored look; "
-                           "the textbook daylight value of 10 renders black.");
+                HelpMarker(
+                    "Fixed exposure used when 'Auto exposure' is off. Higher EV = DARKER image "
+                    "(a higher EV is a more closed camera); each +1 halves the brightness.\n\n"
+                    "WARNING: this renderer's HDR is NOT photometric. Scene-referred linear values "
+                    "here sit around 0.1-3, not the thousands of cd/m2 real luminance would give, "
+                    "so EV100 is relative to an arbitrary engine scale. EV 0 is roughly the "
+                    "authored look and auto settles near -0.3; the textbook daylight value of 10 "
+                    "renders a black screen. Any future 'sun intensity in lux' UI has to establish "
+                    "a scene-to-luminance scale first.");
 
                 ImGui::EndDisabled();
 

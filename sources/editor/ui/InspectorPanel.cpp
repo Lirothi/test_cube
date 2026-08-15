@@ -620,7 +620,7 @@ namespace
                 dragF("Min EV100", "minEv100", -6.0f, 0.1f, -16.0f, 20.0f, "%.2f");
                 dragF("Max EV100", "maxEv100", 16.0f, 0.1f, -16.0f, 20.0f, "%.2f");
                 dragF("Low Percentile", "lowPercentile", 0.02f, 0.005f, 0.0f, 1.0f, "%.3f");
-                dragF("High Percentile", "highPercentile", 0.95f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("High Percentile", "highPercentile", 0.80f, 0.005f, 0.0f, 1.0f, "%.3f");
                 dragF("Speed Up (stops/s)", "speedUp", 3.0f, 0.05f, 0.0f, 20.0f, "%.2f");
                 dragF("Speed Down (stops/s)", "speedDown", 1.0f, 0.05f, 0.0f, 20.0f, "%.2f");
             }

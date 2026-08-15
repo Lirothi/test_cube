@@ -8,7 +8,8 @@
   "referenceNote": "The image this plan aims at. Framed almost exactly like the 'overview' view, so the two compare directly; measured against the baseline in section 6 of the measurements report. Directional target only -- it is 2.22:1 with proportionally less sky than the 16:9 captures, and non-goal 1 rules out pixel matching.",
   "notes": [
     "atoll.json is deliberately NOT used: the user considers its environment unauthored. All canonical views live in wind_test.json.",
-    "wind_test.json is under active ocean tuning. If its environment block changes, the baseline must be recaptured and the commit above updated -- a level diff is the first thing to check before theorising about a renderer regression.",
+    "wind_test.json is under active tuning. If its environment block changes, the baseline must be recaptured and the commit above updated -- a level diff is the first thing to check before theorising about a renderer regression.",
+    "SINCE 2026-08-15 wind_test.json carries an ENABLED cameraExposure section. The captures in this baseline predate it, so they are the 'no camera' reference: correct for judging the P3 tone curve, but NOT a dormant-equivalence target any more. Gate dormant changes against a copy of the level with the cameraExposure section removed (tools can write one to logs/baseline/).",
     "--shadow-mode is pinned explicitly so the baseline does not silently move if the compiled default flips.",
     "--no-hud is required: the FPS/MS readout is composited into the captured backbuffer and differs between two runs of the same frozen frame."
   ],
