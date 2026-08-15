@@ -36,6 +36,9 @@ bool g_hudHidden = false;
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
+#if WITH_EDITOR
+#include "editor/EditorController.h"
+#endif
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "windowscodecs.lib")
@@ -340,7 +343,17 @@ void App::InitScene()
 
     if (!levelManager.HasLevel(JsonLevel::kName))
     {
-        const std::string bootLevel = g_bootLevelPath.empty() ? "data/levels/demo.json" : g_bootLevelPath;
+        std::string bootLevel = g_bootLevelPath;
+#if WITH_EDITOR
+        if (bootLevel.empty())
+        {
+            bootLevel = EditorController::LoadLastOpenedLevelPath();
+        }
+#endif
+        if (bootLevel.empty())
+        {
+            bootLevel = "data/levels/demo.json";
+        }
         levelManager.RegisterLevel<JsonLevel>(bootLevel);
     }
 

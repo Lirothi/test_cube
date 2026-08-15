@@ -2324,6 +2324,40 @@ namespace
     }
 }
 
+std::string EditorController::LoadLastOpenedLevelPath()
+{
+    const nlohmann::json root = LoadEditorStateJson();
+    const auto levelEditorIt = root.find("levelEditor");
+    if (levelEditorIt == root.end() || !levelEditorIt->is_object())
+    {
+        return {};
+    }
+
+    const auto recentIt = levelEditorIt->find("recentLevels");
+    if (recentIt == levelEditorIt->end() || !recentIt->is_array() || recentIt->empty() ||
+        !(*recentIt)[0].is_string())
+    {
+        return {};
+    }
+
+    const std::string path = NormalizeLevelPath((*recentIt)[0].get<std::string>());
+    if (!LevelFileExists(path))
+    {
+        return {};
+    }
+
+    // JsonLevel::Load currently has a void contract, so validate here before choosing the boot
+    // path. Otherwise malformed remembered JSON would leave the initial scene half-loaded and the
+    // LevelManager could not report the failure back to App::InitScene for a demo-level fallback.
+    std::ifstream file(path, std::ios::binary);
+    const nlohmann::json level = nlohmann::json::parse(
+        file,
+        nullptr,
+        false,
+        /*ignore_comments=*/true);
+    return level.is_object() ? path : std::string();
+}
+
 void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& request,
     bool loaded,
     Renderer& renderer,

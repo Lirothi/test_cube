@@ -34,6 +34,10 @@ struct LevelChangeRequest;
 class EditorController
 {
 public:
+    // The MRU list is already persisted in editor_state.json after every successful open/save.
+    // Startup uses its first valid entry unless an explicit --level override was supplied.
+    static std::string LoadLastOpenedLevelPath();
+
     bool IsOpen() const { return open_; }
     void SetOpen(bool open) { open_ = open; }
     void ToggleOpen() { open_ = !open_; }
