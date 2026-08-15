@@ -332,6 +332,56 @@ namespace OceanRenderConfigJson
                 object,
                 "shoreContactFoamPatternDensity",
                 legacyPatternDensity));
+        render.shoreWetnessDepositDepth = std::max(
+            0.001f,
+            ReadFloat(object, "shoreWetnessDepositDepth", render.shoreWetnessDepositDepth));
+        render.shoreWetnessWetTime = std::max(
+            0.05f,
+            ReadFloat(object, "shoreWetnessWetTime", render.shoreWetnessWetTime));
+        render.shoreWetnessDryTime = std::max(
+            0.05f,
+            ReadFloat(object, "shoreWetnessDryTime", render.shoreWetnessDryTime));
+        render.shoreWetnessDarkening = Math::Saturate(
+            ReadFloat(object, "shoreWetnessDarkening", render.shoreWetnessDarkening));
+        render.shoreWetnessReflectionStrength = std::clamp(
+            ReadFloat(
+                object,
+                "shoreWetnessReflectionStrength",
+                render.shoreWetnessReflectionStrength),
+            0.0f,
+            2.0f);
+        render.shoreWetnessEdgeOffset = std::clamp(
+            ReadFloat(object, "shoreWetnessEdgeOffset", render.shoreWetnessEdgeOffset),
+            0.0f,
+            20.0f);
+        render.shoreWetnessMaxSlopeDegrees = std::clamp(
+            ReadFloat(
+                object,
+                "shoreWetnessMaxSlopeDegrees",
+                render.shoreWetnessMaxSlopeDegrees),
+            0.0f,
+            89.0f);
+        render.shoreWetnessFallbackAboveWater = std::clamp(
+            ReadFloat(
+                object,
+                "shoreWetnessFallbackAboveWater",
+                render.shoreWetnessFallbackAboveWater),
+            0.0f,
+            20.0f);
+        render.shoreWetnessFallbackBelowWater = std::clamp(
+            ReadFloat(
+                object,
+                "shoreWetnessFallbackBelowWater",
+                render.shoreWetnessFallbackBelowWater),
+            0.0f,
+            50.0f);
+        render.shoreWetnessFallbackFadeStartPercent = std::clamp(
+            ReadFloat(
+                object,
+                "shoreWetnessFallbackFadeStartPercent",
+                render.shoreWetnessFallbackFadeStartPercent),
+            0.0f,
+            100.0f);
 
         render.windSpeed = std::max(
             0.0f, ReadFloat(object, "windSpeed", render.windSpeed));
@@ -568,6 +618,17 @@ namespace OceanRenderConfigJson
             render.shoreContactFoamNormalStrength;
         out["shoreContactFoamPatternScale"] = render.shoreContactFoamPatternScale;
         out["shoreContactFoamPatternDensity"] = render.shoreContactFoamPatternDensity;
+        out["shoreWetnessDepositDepth"] = render.shoreWetnessDepositDepth;
+        out["shoreWetnessWetTime"] = render.shoreWetnessWetTime;
+        out["shoreWetnessDryTime"] = render.shoreWetnessDryTime;
+        out["shoreWetnessDarkening"] = render.shoreWetnessDarkening;
+        out["shoreWetnessReflectionStrength"] = render.shoreWetnessReflectionStrength;
+        out["shoreWetnessEdgeOffset"] = render.shoreWetnessEdgeOffset;
+        out["shoreWetnessMaxSlopeDegrees"] = render.shoreWetnessMaxSlopeDegrees;
+        out["shoreWetnessFallbackAboveWater"] = render.shoreWetnessFallbackAboveWater;
+        out["shoreWetnessFallbackBelowWater"] = render.shoreWetnessFallbackBelowWater;
+        out["shoreWetnessFallbackFadeStartPercent"] =
+            render.shoreWetnessFallbackFadeStartPercent;
 
         out["windSpeed"] = render.windSpeed;
         out["wavesScale"] = render.wavesScale;

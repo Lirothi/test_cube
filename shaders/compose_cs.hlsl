@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -7,6 +7,7 @@
 // t5: Skybox cubemap
 // t6: Filtered reflection (premultiplied)
 // t7: GBAux (AO, indirect specular scale, shading model)
+// t8: persistent world-space shore wetness (R32_UINT, 0..65535)
 // u0: Scene color (HDR)
 
 #pragma pack_matrix(row_major)
@@ -21,6 +22,7 @@ Texture2D DepthT : register(t4);
 TextureCube SkyboxTex : register(t5);
 Texture2D ReflectionTexture : register(t6);
 Texture2D GBAux : register(t7);
+Texture2D<uint> ShoreWetness : register(t8);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -36,6 +38,9 @@ cbuffer PerFrame : register(b0)
     uint enableSkySpecular;
     float2 screenSize;
     float2 invScreenSize;
+    float4 shoreWetnessWindow;     // xy: centre, z: 1 / half extent, w: darkening
+    float4 shoreWetnessAppearance; // x: water-film reflection, yz: slope cutoff/full-wet normal Y, w: water level
+    float4 shoreWetnessFallback;   // xy: height above/below water, z: normalized fade start
 }
 
 static const float kEps = 1e-6;
@@ -52,6 +57,87 @@ float3 FresnelSchlick(float cosTheta, float3 F0)
 inline float ReadDepth(float2 uv)
 {
     return DepthT.SampleLevel(gSmpPoint, uv, 0).r; // Always sample LOD0, no bilinear
+}
+
+float SampleShoreWetness(float2 worldXZ, out float localCoverage)
+{
+    localCoverage = 0.0f;
+    if (shoreWetnessWindow.z <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    const float2 uv =
+        (worldXZ - shoreWetnessWindow.xy) * (shoreWetnessWindow.z * 0.5f) + 0.5f;
+    if (any(uv < 0.0f) || any(uv >= 1.0f))
+    {
+        return 0.0f;
+    }
+
+    uint width;
+    uint height;
+    ShoreWetness.GetDimensions(width, height);
+    const float2 edgeTexels = min(uv, 1.0f - uv) * float2(width, height);
+    const float edgeFade = smoothstep(0.0f, 24.0f, min(edgeTexels.x, edgeTexels.y));
+    localCoverage = edgeFade;
+    const float2 texel = uv * float2(width, height) - 0.5f;
+    // Shift the spline cell by half a texel so an exact texel centre gets symmetric weights.
+    const float2 splineTexel = texel - 0.5f;
+    const int2 base = int2(floor(splineTexel));
+    const float2 f = frac(splineTexel);
+    const int2 maximum = int2(width - 1u, height - 1u);
+    // Continuous quadratic B-spline: nine real texel fetches, unlike the previous four-tap
+    // bilinear read. This removes the 0.4 m history texels without introducing centre snapping.
+    const float3 weightsX = float3(
+        0.5f * (1.0f - f.x) * (1.0f - f.x),
+        0.75f - (f.x - 0.5f) * (f.x - 0.5f),
+        0.5f * f.x * f.x);
+    const float3 weightsY = float3(
+        0.5f * (1.0f - f.y) * (1.0f - f.y),
+        0.75f - (f.y - 0.5f) * (f.y - 0.5f),
+        0.5f * f.y * f.y);
+    float filteredWetness = 0.0f;
+    [unroll]
+    for (int y = 0; y < 3; ++y)
+    {
+        [unroll]
+        for (int x = 0; x < 3; ++x)
+        {
+            const int2 coord = clamp(base + int2(x, y), int2(0, 0), maximum);
+            filteredWetness +=
+                ShoreWetness.Load(int3(coord, 0)) * (1.0f / 65535.0f) *
+                weightsX[x] * weightsY[y];
+        }
+    }
+    return filteredWetness;
+}
+
+float SampleDistantShoreWetness(float worldY)
+{
+    const float aboveWater = max(shoreWetnessFallback.x, 0.0f);
+    const float belowWater = max(shoreWetnessFallback.y, 0.0f);
+    if (aboveWater + belowWater <= kEps)
+    {
+        return 0.0f;
+    }
+
+    const float signedHeight = worldY - shoreWetnessAppearance.w;
+    if (abs(signedHeight) <= kEps)
+    {
+        return 1.0f;
+    }
+
+    const float extent = signedHeight > 0.0f ? aboveWater : belowWater;
+    if (extent <= kEps)
+    {
+        return 0.0f;
+    }
+
+    const float normalizedHeight = abs(signedHeight) / extent;
+    const float fadeStart = saturate(shoreWetnessFallback.z);
+    // Above/Below are exact outer limits. Stay fully wet through Fade Start, then linearly reach
+    // zero at normalizedHeight == 1; never inflate the authored height interval.
+    return saturate((1.0f - normalizedHeight) / max(1.0f - fadeStart, kEps));
 }
 
 [numthreads(8,8,1)]
@@ -122,6 +208,43 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
         float3 spec = refl * F * pow(gloss, 1);
         color += spec;
+
+        if (shadingModel == kShadingModelTerrain)
+        {
+            const float slopeWeight = smoothstep(
+                shoreWetnessAppearance.y,
+                max(shoreWetnessAppearance.z, shoreWetnessAppearance.y + 1e-3f),
+                saturate(N_ws.y));
+            float localCoverage = 0.0f;
+            const float localWetness = saturate(SampleShoreWetness(Pw.xz, localCoverage));
+            const float distantWetness = SampleDistantShoreWetness(Pw.y);
+            const float historyHalfExtent = shoreWetnessWindow.z > kEps
+                ? rcp(shoreWetnessWindow.z)
+                : 0.0f;
+            const float3 cameraDelta = camPosWS - Pw;
+            const float distanceSq = dot(cameraDelta, cameraDelta);
+            const float fallbackStart = historyHalfExtent * 0.75f;
+            const float distanceFallback = historyHalfExtent > kEps
+                ? smoothstep(
+                    fallbackStart * fallbackStart,
+                    historyHalfExtent * historyHalfExtent,
+                    distanceSq)
+                : 1.0f;
+            // The history owns the near field. At the edge of its camera-centred window, or when
+            // an elevated camera puts the surface beyond the history's useful world-space range,
+            // crossfade into the height-only fallback. This keeps both the XZ border and a high
+            // aerial view from exposing the finite 206 m history field.
+            const float localAuthority = localCoverage * (1.0f - distanceFallback);
+            const float wetness =
+                saturate(lerp(distantWetness, localWetness, localAuthority)) * slopeWeight;
+            color *= 1.0f - wetness * saturate(shoreWetnessWindow.w);
+
+            // The darkening carries the dominant wet-sand read. A smaller, grazing-angle film
+            // reflection restores the wet highlight without changing the terrain material or its
+            // GBuffer layout.
+            const float3 filmF = FresnelSchlick(cosT, 0.02f.xxx);
+            color += refl * filmF * wetness * max(shoreWetnessAppearance.x, 0.0f);
+        }
     }
 
     SceneColor[dispatchThreadId.xy] = float4(color, 1.0);

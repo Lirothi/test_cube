@@ -301,6 +301,7 @@
     <ClCompile Include="sources/ocean/OceanSimulationConfig.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulation.cpp" />
     <ClCompile Include="sources/ocean/OceanSurfSim.cpp" />
+    <ClCompile Include="sources/ocean/OceanWetness.cpp" />
     <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp" />
     <ClCompile Include="sources/vfx/ParticlePresets.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp" />
@@ -461,6 +462,7 @@
     <ClInclude Include="sources/ocean/OceanSimulationConfig.h" />
     <ClInclude Include="sources/ocean/OceanSimulation.h" />
     <ClInclude Include="sources/ocean/OceanSurfSim.h" />
+    <ClInclude Include="sources/ocean/OceanWetness.h" />
     <ClInclude Include="sources/vfx/ParticleEmitterObject.h" />
     <ClInclude Include="sources/vfx/ParticlePresets.h" />
     <ClInclude Include="sources/vfx/ParticleTypes.h" />

@@ -119,6 +119,9 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle enableSkySpecular;
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
+    Material::CBFieldHandle shoreWetnessWindow;
+    Material::CBFieldHandle shoreWetnessAppearance;
+    Material::CBFieldHandle shoreWetnessFallback;
 
     void Populate(Material* material);
 };
@@ -246,6 +249,9 @@ struct ComposePassConstants
     uint32_t enableSkySpecular = 1u;
     float2 screenSize{};
     float2 invScreenSize{};
+    float4 shoreWetnessWindow{};
+    float4 shoreWetnessAppearance{};
+    float4 shoreWetnessFallback{};
 };
 
 struct FxaaPassConstants

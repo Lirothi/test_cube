@@ -10,6 +10,7 @@
 #include "materials/Texture2D.h"
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanSurfSim.h" // surf sim injection (docs/ocean_surf_sim_plan.md)
+#include "ocean/OceanWetness.h"
 
 class Camera;
 class SamplerManager;
@@ -93,6 +94,7 @@ public:
     // surf sim injection (pass-flow S3): the surf sim's own pass, authored with AddPass2 —
     // SceneRenderer calls this as the pass builder. Empty return = the sim is off this frame.
     std::function<void(RenderGraphPassContext)> BuildSurfSimPass(RenderGraphPassContext& ctx);
+    std::function<void(RenderGraphPassContext)> BuildWetnessPass(RenderGraphPassContext& ctx);
     void PrepareRender(RenderGraphPassContext& ctx) override;
     void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     // Only to give the surface draw a GPU scope — see the note on the definition.
@@ -124,6 +126,13 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE GetCausticsSrvCPU() const { return causticsTexture_.GetSRVCPU(); }
     // World-space Y of the still water plane. Everything below it receives caustics.
     float GetWaterLevel() const { return GetPosition().y; }
+
+    bool IsWetnessReady() const { return wetness_ && wetness_->IsReady(); }
+    ID3D12Resource* GetWetnessResource() const;
+    D3D12_CPU_DESCRIPTOR_HANDLE GetWetnessSrv() const;
+    Math::float4 GetWetnessComposeWindow() const;
+    Math::float4 GetWetnessComposeAppearance() const;
+    Math::float4 GetWetnessComposeFallback() const;
 
     void SetGridVertexDensity(uint32_t density);
 
@@ -176,6 +185,8 @@ private:
     Math::float4 GetSurfSimParams() const;  // surf sim injection
     Math::float4 GetSurfSimParams2() const; // surf sim injection (S4): x = front breakup
     Math::float4 GetSurfSimParams3() const; // surf sim injection: x = chopness, y = cap width
+    Math::float4 GetShoreWetnessParams() const;
+    Math::float4 GetShoreWetnessParams2() const;
     bool SurfSimActive() const;            // surf sim injection: config flag OR the boot force
     Math::float4 GetShoreSwashParams() const;
     Math::float4 GetShoreSamplingParams() const;
@@ -208,6 +219,7 @@ private:
     Scene* scene_ = nullptr;
     OceanSimulation* simulation_ = nullptr;
     std::unique_ptr<OceanSurfSim> surfSim_; // surf sim injection
+    std::unique_ptr<OceanWetness> wetness_;
 
     float elapsedTime_ = 0.0f;
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);

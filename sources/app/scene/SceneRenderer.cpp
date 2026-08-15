@@ -537,10 +537,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // AddPass2 — the builder makes the frame's decisions, declares from them and returns the
     // record lambda; there is no separate Prepare to mirror. Third member of the compute CL
     // group, so it records into the same command list right after the FFT dispatches.
-    rg.AddPass2(RenderPass::Main_SurfSim, { pCompute },
+    const size_t pSurfSim = rg.AddPass2(RenderPass::Main_SurfSim, { pCompute },
         [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->ocean) { return {}; }
             return frame_->ocean->BuildSurfSimPass(ctx);
+        });
+    const size_t pWetness = rg.AddPass2(RenderPass::Main_ShoreWetness, { pSurfSim },
+        [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            if (!frame_->ocean) { return {}; }
+            return frame_->ocean->BuildWetnessPass(ctx);
         });
     rg.EndCLGroup();
     // Measured: the prologue clear performs no transitions.
@@ -1020,7 +1025,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     // First-use states only; Compose transitions scene back to RENDER_TARGET
     // for the transparent pass at the end of its body.
-    auto pCompose = rg.AddPass(RenderPass::Main_Compose, { pBlur },
+    auto pCompose = rg.AddPass(RenderPass::Main_Compose, { pBlur, pWetness },
         { { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.gb2.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -1037,8 +1042,14 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // both early-outs and the success tail — so it is a second unconditional point.
     {
         ID3D12Resource* const composeScene = D.scene.Get();
-        rg.SetPassPrepare(pCompose, [composeScene](RenderGraphPassContext& p) {
+        rg.SetPassPrepare(pCompose, [this, composeScene](RenderGraphPassContext& p) {
             p.UseDeclared();
+            if (frame_->ocean && frame_->ocean->IsWetnessReady())
+            {
+                p.Use(
+                    frame_->ocean->GetWetnessResource(),
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
             p.NextPoint();
             p.Use(composeScene, D3D12_RESOURCE_STATE_RENDER_TARGET);
         });
@@ -3315,11 +3326,23 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(1.0f / width, 1.0f / height);
 
+        D3D12_CPU_DESCRIPTOR_HANDLE wetnessSrv = D.depthSRV;
+        if (frame_->ocean)
+        {
+            constants.shoreWetnessWindow = frame_->ocean->GetWetnessComposeWindow();
+            constants.shoreWetnessAppearance = frame_->ocean->GetWetnessComposeAppearance();
+            constants.shoreWetnessFallback = frame_->ocean->GetWetnessComposeFallback();
+            if (frame_->ocean->IsWetnessReady())
+            {
+                wetnessSrv = frame_->ocean->GetWetnessSrv();
+            }
+        }
+
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         RecordComputeDispatch(renderer, t.cl, composeMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteComposeConstants(constants, dest); },
             { D.lightSRV, D.gbSRV[2], D.gbSRV[0], D.gbSRV[1], D.depthSRV,
-              skybox->GetTex()->GetSRVCPU(), D.reflectionSRV, D.gbAuxSRV },
+              skybox->GetTex()->GetSRVCPU(), D.reflectionSRV, D.gbAuxSRV, wetnessSrv },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

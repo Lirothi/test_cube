@@ -286,6 +286,8 @@ public:
             surfSimParamsHandle_ = material->ComputeCBFieldHandle(0, "surfSimParams");
             surfSimParams2Handle_ = material->ComputeCBFieldHandle(0, "surfSimParams2");
             surfSimParams3Handle_ = material->ComputeCBFieldHandle(0, "surfSimParams3");
+            shoreWetnessParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreWetnessParams");
+            shoreWetnessParams2Handle_ = material->ComputeCBFieldHandle(0, "shoreWetnessParams2");
             shoreSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSamplingParams");
             sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
@@ -351,6 +353,8 @@ public:
             surfSimParamsHandle_ = {};
             surfSimParams2Handle_ = {};
             surfSimParams3Handle_ = {};
+            shoreWetnessParamsHandle_ = {};
+            shoreWetnessParams2Handle_ = {};
             shoreSamplingParamsHandle_ = {};
             sunDirAmbientHandle_ = {};
             sunColorExposureHandle_ = {};
@@ -430,6 +434,8 @@ public:
         UpdateUniform(owner, surfSimParamsHandle_, material, owner_.GetSurfSimParams(), cbData);
         UpdateUniform(owner, surfSimParams2Handle_, material, owner_.GetSurfSimParams2(), cbData);
         UpdateUniform(owner, surfSimParams3Handle_, material, owner_.GetSurfSimParams3(), cbData);
+        UpdateUniform(owner, shoreWetnessParamsHandle_, material, owner_.GetShoreWetnessParams(), cbData);
+        UpdateUniform(owner, shoreWetnessParams2Handle_, material, owner_.GetShoreWetnessParams2(), cbData);
         UpdateUniform(owner, shoreSamplingParamsHandle_, material, owner_.GetShoreSamplingParams(), cbData);
         UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
@@ -500,6 +506,8 @@ private:
     Material::CBFieldHandle surfSimParamsHandle_{};
     Material::CBFieldHandle surfSimParams2Handle_{};
     Material::CBFieldHandle surfSimParams3Handle_{};
+    Material::CBFieldHandle shoreWetnessParamsHandle_{};
+    Material::CBFieldHandle shoreWetnessParams2Handle_{};
     Material::CBFieldHandle shoreSamplingParamsHandle_{};
     Material::CBFieldHandle sunDirAmbientHandle_{};
     Material::CBFieldHandle sunColorExposureHandle_{};
@@ -553,6 +561,10 @@ void OceanRenderable::Init(Renderer* renderer,
     if (!surfSim_)
     {
         surfSim_ = std::make_unique<OceanSurfSim>();
+    }
+    if (!wetness_)
+    {
+        wetness_ = std::make_unique<OceanWetness>();
     }
 
     BuildMesh(renderer, uploadCmdList, uploadKeepAlive);
@@ -608,6 +620,10 @@ void OceanRenderable::Tick(float deltaTime)
     if (SurfSimActive())
     {
         surfSim_->TickWindow(viewerXZ_);
+    }
+    if (wetness_ && wetness_->IsReady())
+    {
+        wetness_->TickWindow(viewerXZ_);
     }
     UpdateClipLevels();
 }
@@ -700,6 +716,21 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildSurfSimPass(
     return surfSim_->BuildPass(ctx, elapsedTime_, shore, tuning);
 }
 
+std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWetnessPass(
+    RenderGraphPassContext& ctx)
+{
+    if (!wetness_ || !wetness_->IsReady())
+    {
+        return {};
+    }
+    const OceanRenderConfig& render = GetRenderConfig();
+    return wetness_->BuildUpdatePass(
+        ctx,
+        elapsedTime_,
+        std::max(render.shoreWetnessWetTime, 0.05f),
+        std::max(render.shoreWetnessDryTime, 0.05f));
+}
+
 void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)
 {
     if (!simulation_) { return; }
@@ -717,6 +748,10 @@ void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)
     if (ID3D12Resource* prevDisplacement = simulation_->GetPreviousDisplacementResource())
     {
         ctx.Use(prevDisplacement, srvState);
+    }
+    if (wetness_ && wetness_->IsReady())
+    {
+        ctx.Use(wetness_->GetCurrentStampResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 }
 
@@ -848,6 +883,11 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
 
+    if (wetness_ && wetness_->IsReady())
+    {
+        ctx.uavTable[0] = renderer->StageSrvUavTable({ wetness_->GetCurrentStampUav() }).gpu;
+    }
+
     const auto samplers = std::array{
         *SamplerManager::LinearWrap(),
         *SamplerManager::LinearClamp(),
@@ -941,6 +981,11 @@ void OceanRenderable::EnsureSimulationResources(Renderer* renderer)
     if (SurfSimActive())
     {
         surfSim_->EnsureResources(renderer);
+    }
+    if (wetness_)
+    {
+        wetness_->EnsureResources(renderer);
+        wetness_->TickWindow(viewerXZ_);
     }
 }
 
@@ -1424,9 +1469,85 @@ Math::float4 OceanRenderable::GetSurfSimParams3() const
         0.0f, 0.0f);
 }
 
+Math::float4 OceanRenderable::GetShoreWetnessParams() const
+{
+    if (!wetness_ || !wetness_->IsReady())
+    {
+        return Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    const Math::float4 window = wetness_->GetWindowParams();
+    return Math::float4(
+        window.x,
+        window.y,
+        window.z,
+        std::max(GetRenderConfig().shoreWetnessDepositDepth, 0.001f));
+}
+
+Math::float4 OceanRenderable::GetShoreWetnessParams2() const
+{
+    return Math::float4(
+        std::clamp(GetRenderConfig().shoreWetnessEdgeOffset, 0.0f, 20.0f),
+        0.0f,
+        0.0f,
+        0.0f);
+}
+
 bool OceanRenderable::SurfSimActive() const
 {
     return surfSim_ && (GetRenderConfig().surfSimEnabled || ocean::g_surfSimForce);
+}
+
+ID3D12Resource* OceanRenderable::GetWetnessResource() const
+{
+    return wetness_ ? wetness_->GetCurrentResource() : nullptr;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE OceanRenderable::GetWetnessSrv() const
+{
+    return wetness_ ? wetness_->GetCurrentSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+
+Math::float4 OceanRenderable::GetWetnessComposeWindow() const
+{
+    if (!wetness_ || !wetness_->IsReady())
+    {
+        return Math::float4(
+            0.0f,
+            0.0f,
+            0.0f,
+            std::clamp(GetRenderConfig().shoreWetnessDarkening, 0.0f, 1.0f));
+    }
+
+    const Math::float4 window = wetness_->GetWindowParams();
+    return Math::float4(
+        window.x,
+        window.y,
+        window.z,
+        std::clamp(GetRenderConfig().shoreWetnessDarkening, 0.0f, 1.0f));
+}
+
+Math::float4 OceanRenderable::GetWetnessComposeAppearance() const
+{
+    const float maxSlopeDegrees =
+        std::clamp(GetRenderConfig().shoreWetnessMaxSlopeDegrees, 0.0f, 89.0f);
+    const float fullWetSlopeDegrees = std::max(maxSlopeDegrees - 10.0f, 0.0f);
+    constexpr float kDegreesToRadians = 3.14159265358979323846f / 180.0f;
+    return Math::float4(
+        std::clamp(GetRenderConfig().shoreWetnessReflectionStrength, 0.0f, 2.0f),
+        std::cos(maxSlopeDegrees * kDegreesToRadians),
+        std::cos(fullWetSlopeDegrees * kDegreesToRadians),
+        GetWaterLevel());
+}
+
+Math::float4 OceanRenderable::GetWetnessComposeFallback() const
+{
+    const auto& render = GetRenderConfig();
+    return Math::float4(
+        std::clamp(render.shoreWetnessFallbackAboveWater, 0.0f, 20.0f),
+        std::clamp(render.shoreWetnessFallbackBelowWater, 0.0f, 50.0f),
+        std::clamp(render.shoreWetnessFallbackFadeStartPercent, 0.0f, 100.0f) * 0.01f,
+        0.0f);
 }
 
 Math::float4 OceanRenderable::GetShoreSamplingParams() const

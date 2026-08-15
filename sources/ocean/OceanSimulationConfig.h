@@ -153,6 +153,28 @@ struct OceanRenderConfig
     float shoreContactFoamPatternScale = 0.28f;
     float shoreContactFoamPatternDensity = 0.55f;
 
+    // Wet sand is a persistent world-space history stamped by the visible ordinary ocean sheet.
+    // It is independent of contact foam and SurfSim: it approaches the stamp over Wet Time; when
+    // the sheet retreats, the terrain remains dark/specular for Dry Time and then returns dry.
+    float shoreWetnessDepositDepth = 0.35f;
+    float shoreWetnessWetTime = 0.75f;
+    float shoreWetnessDryTime = 18.0f;
+    float shoreWetnessDarkening = 0.35f;
+    float shoreWetnessReflectionStrength = 0.35f;
+    // Legacy water fades visually before its geometry ends. Keep the wet stamp this many metres
+    // seaward from the authored SDF waterline so it follows the visible edge instead of leading it.
+    float shoreWetnessEdgeOffset = 0.5f;
+    // Reject the XZ-projected history on steep terrain and vertical walls.
+    float shoreWetnessMaxSlopeDegrees = 65.0f;
+    // Outside the camera-centred wetness history, keep distant terrain wet by height relative to
+    // the still ocean plane. The two extents are independent because a beach usually needs only a
+    // thin wet rim above sea level but a deeper submerged band below it. Fade Start is a percentage
+    // of either selected extent: the result stays fully wet before it, then falls linearly to zero
+    // exactly at Above/Below. Setting both extents to zero disables the fallback.
+    float shoreWetnessFallbackAboveWater = 0.35f;
+    float shoreWetnessFallbackBelowWater = 1.5f;
+    float shoreWetnessFallbackFadeStartPercent = 75.0f;
+
     float windSpeed = 12.0f;
     float wavesScale = 1.0f;
     float windAlignment = 0.5f;

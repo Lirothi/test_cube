@@ -11,7 +11,7 @@
 // numDescriptors 18: t16/t17 are the surf sim height and foam fields (surf sim injection) -
 // the C++ table always stages 18 entries, the modern RS keeps saying 16 and never addresses
 // the extras.
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=18, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=18, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -69,6 +69,8 @@ cbuffer OceanCB : register(b0)
     float4 surfSimParams;              // surf sim injection: xy: window centre, z: 1 / half extent, w: debug view (0 = off)
     float4 surfSimParams2;             // surf sim injection (S4/S6): x: front breakup, y: tail breakup (0..2), z: tear patch scale (m), w: wave displacement scale
     float4 surfSimParams3;             // surf sim injection: y: cap width (>1 wider dense zone, <1 narrower), xzw: spare
+    float4 shoreWetnessParams;         // xy: history centre, z: 1 / half extent, w: deposit depth
+    float4 shoreWetnessParams2;        // x: wetness edge offset from the SDF waterline (m)
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed (shared with the modern surface)
     float4 shoreSlopeParams;           // z: edge soft depth = the contact foam's edge fade (shared with the modern surface)
     float4 depthTextureSize;           // xy: texel size, zw: texture size
@@ -97,6 +99,7 @@ Texture2D OceanReflectionTexture : register(t15);
 // foam field (r: coverage).
 Texture2D<float2> SurfSimWaveTex : register(t16);
 Texture2D<float> SurfSimFoamTex : register(t17);
+RWTexture2D<uint> ShoreWetnessStampMap : register(u0);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointSampler : register(s2);
@@ -308,6 +311,25 @@ float2 ShoreSdfUV(float2 baseXZ)
 float ShoreViewDepth(float depthSample)
 {
     return lerp(shoreDepthParams.x, shoreDepthParams.y, depthSample);
+}
+
+float ShoreWaterDepthAt(float2 worldXZ)
+{
+    const float2 uv = ShoreDepthUV(worldXZ);
+    if (any(uv < 0.0f) || any(uv > 1.0f))
+    {
+        return 1000.0f;
+    }
+
+    const float shoreDepth = SampleShoreDepth(uv);
+    if (shoreDepth <= 0.0f)
+    {
+        return 1000.0f;
+    }
+
+    const float viewDepth = ShoreViewDepth(shoreDepth);
+    const float terrainHeight = shoreViewParams.z - viewDepth;
+    return -terrainHeight;
 }
 
 float ModifiedManhattanDistance(float3 a, float3 b)
@@ -1185,6 +1207,7 @@ struct PSOut
     float bias : SV_Target2;
 };
 
+[earlydepthstencil]
 [RootSignature(OCEAN_SURFACE_RS)]
 PSOut PSMain(VSOutput input)
 {
@@ -1201,18 +1224,7 @@ PSOut PSMain(VSOutput input)
     // water shallows over the normal fade depth - fine ripple detail dies first, the swell's
     // shape survives to the waterline. The same weights feed the foam cascades below, exactly
     // like the modern surface does.
-    float shorePixelDepth = 1000.0f;
-    float2 shoreUV = ShoreDepthUV(baseWorld.xz);
-    if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
-    {
-        float shoreDepth = SampleShoreDepth(shoreUV);
-        if (shoreDepth > 0.0f)
-        {
-            float viewDepth = ShoreViewDepth(shoreDepth);
-            float terrainHeight = shoreViewParams.z - viewDepth;
-            shorePixelDepth = -terrainHeight;
-        }
-    }
+    const float shorePixelDepth = ShoreWaterDepthAt(baseWorld.xz);
     float normalFade = smoothstep(
         0.0f, max(shoreLegacyDampParams.w, 0.01f), max(shorePixelDepth, 0.0f));
     float4 normalWeights = lerp(saturate(shoreNormalMinWeights), 1.0f.xxxx, normalFade);
@@ -1353,6 +1365,69 @@ PSOut PSMain(VSOutput input)
     float2 currUv = ClipToUV(input.positionNDC);
     float2 prevUv = ClipToUV(input.prevPositionNDC);
     float2 motion = currUv - prevUv;
+
+    // The classic surface has no run-up sheet, but its ordinary visible water still leaves a
+    // narrow trace at the waterline. The stamp and its depth lookup MUST use the same displaced
+    // XZ position: using baseXZ for depth while writing at worldPos translated the wet band by
+    // the wave's horizontal displacement, so the history visibly detached from the water edge.
+    // The 1000 m sentinel used outside the shore map naturally produces zero coverage here.
+    if (shoreWetnessParams.z > 0.0f)
+    {
+        const float wetnessDepth = ShoreWaterDepthAt(input.worldPos.xz);
+        float wetnessEdgeWeight = 1.0f;
+        const float wetnessEdgeOffset = max(shoreWetnessParams2.x, 0.0f);
+        const float2 wetnessSdfUV = ShoreSdfUV(input.worldPos.xz);
+        if (all(wetnessSdfUV >= 0.0f) && all(wetnessSdfUV <= 1.0f))
+        {
+            const float distanceToWaterline =
+                ShoreSdfTexture.SampleLevel(LinearClampSampler, wetnessSdfUV, 0).x;
+
+            // The SDF describes the STILL-water line, while legacy's two damp controls alter the
+            // already-displaced sheet: Y displacement changes where it intersects the bed and XZ
+            // displacement moves the fragment itself. Convert the actual displaced surface height
+            // to a horizontal shoreline shift using the local mean bed slope. Both inputs therefore
+            // affect the same dynamic signed distance that gates the wet stamp.
+            //
+            //     bed slope ~= vertical bed offset / horizontal distance to the waterline
+            //
+            // A flat beach turns a crest into a long run-up; a vertical wall produces almost no
+            // horizontal shift. The clamps only regularize the exact zero crossing and pathological
+            // terrain, while the hardware depth test still remains the final visibility authority.
+            const float slopeDistance = max(abs(distanceToWaterline), 0.25f);
+            const float meanBedSlope = clamp(abs(wetnessDepth) / slopeDistance, 0.02f, 8.0f);
+            const float displacedShoreShift = clamp(input.worldPos.y / meanBedSlope, -20.0f, 20.0f);
+            const float displacedDistanceToWaterline =
+                distanceToWaterline + displacedShoreShift;
+
+            // Keep the authored offset metric while softening the threshold over roughly one
+            // wetness texel. At offset zero the dynamic edge still follows crests and troughs.
+            const float edgeFeather = max(0.25f, wetnessEdgeOffset * 0.25f);
+            wetnessEdgeWeight = smoothstep(
+                wetnessEdgeOffset,
+                wetnessEdgeOffset + edgeFeather,
+                displacedDistanceToWaterline);
+        }
+        const float2 wetnessUV =
+            (input.worldPos.xz - shoreWetnessParams.xy) *
+                (shoreWetnessParams.z * 0.5f) + 0.5f;
+        const float coverage = wetnessEdgeWeight *
+            (1.0f - smoothstep(
+                0.0f,
+                max(shoreWetnessParams.w, 1e-3f),
+                max(wetnessDepth, 0.0f)));
+        if (coverage > 0.0f && all(wetnessUV >= 0.0f) && all(wetnessUV < 1.0f))
+        {
+            uint wetWidth;
+            uint wetHeight;
+            ShoreWetnessStampMap.GetDimensions(wetWidth, wetHeight);
+            const uint2 wetCoord = min(
+                uint2(wetnessUV * float2(wetWidth, wetHeight)),
+                uint2(wetWidth - 1u, wetHeight - 1u));
+            InterlockedMax(
+                ShoreWetnessStampMap[wetCoord],
+                (uint)round(saturate(coverage) * 65535.0f));
+        }
+    }
 
     //outColor = float4(attenuation.xxx, 1.0f);
 

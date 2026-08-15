@@ -384,6 +384,9 @@
     <ClCompile Include="sources/ocean/OceanSurfSim.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
+    <ClCompile Include="sources/ocean/OceanWetness.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
     <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp">
       <Filter>sources\vfx</Filter>
     </ClCompile>
@@ -798,6 +801,9 @@
       <Filter>sources\ocean</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanSurfSim.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/OceanWetness.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>
     <ClInclude Include="sources/vfx/ParticleEmitterObject.h">

@@ -141,6 +141,9 @@ void SceneComposeCBHandles::Populate(Material* material)
     enableSkySpecular = material->ComputeCB0FieldHandle("enableSkySpecular");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
+    shoreWetnessWindow = material->ComputeCB0FieldHandle("shoreWetnessWindow");
+    shoreWetnessAppearance = material->ComputeCB0FieldHandle("shoreWetnessAppearance");
+    shoreWetnessFallback = material->ComputeCB0FieldHandle("shoreWetnessFallback");
 }
 
 void SceneFxaaCBHandles::Populate(Material* material)
@@ -607,6 +610,11 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.enableSkySpecular, data.enableSkySpecular, dest);
     matComposeCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matComposeCS_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
+    matComposeCS_->UpdateCBField(handles.shoreWetnessWindow, data.shoreWetnessWindow, dest);
+    matComposeCS_->UpdateCBField(
+        handles.shoreWetnessAppearance, data.shoreWetnessAppearance, dest);
+    matComposeCS_->UpdateCBField(
+        handles.shoreWetnessFallback, data.shoreWetnessFallback, dest);
 }
 
 void SceneResourceBootstrapper::WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const

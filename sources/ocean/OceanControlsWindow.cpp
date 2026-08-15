@@ -1180,6 +1180,45 @@ namespace
             drag("Refraction soft edge distance", render.shoreEdgeSoftDepth, 0.001f, 0.0f, 0.25f);
             drag("Albedo scale", render.shoreContactFoamAlbedoScale, 0.01f, 0.001f, 10.0f);
             drag("Albedo scroll speed", render.shoreContactFoamAlbedoScrollSpeed, 0.01f, 0.0f, 10.0f);
+
+            if (ImGui::TreeNodeEx(
+                "Wet sand",
+                ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth))
+            {
+                drag("Deposit depth", render.shoreWetnessDepositDepth, 0.005f, 0.001f, 2.0f);
+                drag("Wet time (s)", render.shoreWetnessWetTime, 0.02f, 0.05f, 30.0f);
+                drag("Dry time (s)", render.shoreWetnessDryTime, 0.1f, 0.05f, 300.0f);
+                drag("Darkening", render.shoreWetnessDarkening, 0.005f, 0.0f, 1.0f);
+                drag(
+                    "Film reflection",
+                    render.shoreWetnessReflectionStrength,
+                    0.005f,
+                    0.0f,
+                    2.0f);
+                drag("Water edge offset (m)", render.shoreWetnessEdgeOffset, 0.01f, 0.0f, 20.0f);
+                drag("Max slope (deg)", render.shoreWetnessMaxSlopeDegrees, 0.25f, 0.0f, 89.0f);
+                ImGui::SeparatorText("Distant height fallback");
+                drag(
+                    "Above water (m)",
+                    render.shoreWetnessFallbackAboveWater,
+                    0.01f,
+                    0.0f,
+                    20.0f);
+                drag(
+                    "Below water (m)",
+                    render.shoreWetnessFallbackBelowWater,
+                    0.02f,
+                    0.0f,
+                    50.0f);
+                drag(
+                    "Fade start",
+                    render.shoreWetnessFallbackFadeStartPercent,
+                    0.25f,
+                    0.0f,
+                    100.0f,
+                    "%.0f %%");
+                ImGui::TreePop();
+            }
         }
         else
         {
@@ -1210,6 +1249,44 @@ namespace
             1.0f,
             2000.0f,
             "%.1f");
+
+        if (ImGui::TreeNodeEx(
+            "Wet sand",
+            ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth))
+        {
+            drag("Deposit depth", render.shoreWetnessDepositDepth, 0.005f, 0.001f, 2.0f);
+            drag("Wet time (s)", render.shoreWetnessWetTime, 0.02f, 0.05f, 30.0f);
+            drag("Dry time (s)", render.shoreWetnessDryTime, 0.1f, 0.05f, 300.0f);
+            drag("Darkening", render.shoreWetnessDarkening, 0.005f, 0.0f, 1.0f);
+            drag(
+                "Film reflection",
+                render.shoreWetnessReflectionStrength,
+                0.005f,
+                0.0f,
+                2.0f);
+            drag("Max slope (deg)", render.shoreWetnessMaxSlopeDegrees, 0.25f, 0.0f, 89.0f);
+            ImGui::SeparatorText("Distant height fallback");
+            drag(
+                "Above water (m)",
+                render.shoreWetnessFallbackAboveWater,
+                0.01f,
+                0.0f,
+                20.0f);
+            drag(
+                "Below water (m)",
+                render.shoreWetnessFallbackBelowWater,
+                0.02f,
+                0.0f,
+                50.0f);
+            drag(
+                "Fade start",
+                render.shoreWetnessFallbackFadeStartPercent,
+                0.25f,
+                0.0f,
+                100.0f,
+                "%.0f %%");
+            ImGui::TreePop();
+        }
 
         if (ImGui::TreeNodeEx(
             "Contact foam",

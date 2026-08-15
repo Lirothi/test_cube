@@ -988,6 +988,75 @@ namespace
                         renderDrag("Refraction Soft Edge Distance", render.shoreEdgeSoftDepth, 0.001f, 0.0f, 0.25f);
                         renderDrag("Albedo Scale", render.shoreContactFoamAlbedoScale, 0.01f, 0.001f, 10.0f);
                         renderDrag("Albedo Scroll Speed", render.shoreContactFoamAlbedoScrollSpeed, 0.01f, 0.0f, 10.0f);
+
+                        if (ImGui::TreeNodeEx(
+                            "Wet Sand",
+                            ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth))
+                        {
+                            renderDrag(
+                                "Deposit Depth",
+                                render.shoreWetnessDepositDepth,
+                                0.005f,
+                                0.001f,
+                                2.0f);
+                            renderDrag(
+                                "Wet Time (s)",
+                                render.shoreWetnessWetTime,
+                                0.02f,
+                                0.05f,
+                                30.0f);
+                            renderDrag(
+                                "Dry Time (s)",
+                                render.shoreWetnessDryTime,
+                                0.1f,
+                                0.05f,
+                                300.0f);
+                            renderDrag(
+                                "Darkening",
+                                render.shoreWetnessDarkening,
+                                0.005f,
+                                0.0f,
+                                1.0f);
+                            renderDrag(
+                                "Film Reflection",
+                                render.shoreWetnessReflectionStrength,
+                                0.005f,
+                                0.0f,
+                                2.0f);
+                            renderDrag(
+                                "Water Edge Offset (m)",
+                                render.shoreWetnessEdgeOffset,
+                                0.01f,
+                                0.0f,
+                                20.0f);
+                            renderDrag(
+                                "Max Slope (deg)",
+                                render.shoreWetnessMaxSlopeDegrees,
+                                0.25f,
+                                0.0f,
+                                89.0f);
+                            ImGui::SeparatorText("Distant Height Fallback");
+                            renderDrag(
+                                "Above Water (m)",
+                                render.shoreWetnessFallbackAboveWater,
+                                0.01f,
+                                0.0f,
+                                20.0f);
+                            renderDrag(
+                                "Below Water (m)",
+                                render.shoreWetnessFallbackBelowWater,
+                                0.02f,
+                                0.0f,
+                                50.0f);
+                            renderDrag(
+                                "Fade Start",
+                                render.shoreWetnessFallbackFadeStartPercent,
+                                0.25f,
+                                0.0f,
+                                100.0f,
+                                "%.0f %%");
+                            ImGui::TreePop();
+                        }
                     }
                     else
                     {
@@ -1018,6 +1087,69 @@ namespace
                         1.0f,
                         2000.0f,
                         "%.1f");
+
+                    if (ImGui::TreeNodeEx(
+                        "Wet Sand",
+                        ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth))
+                    {
+                        renderDrag(
+                            "Deposit Depth",
+                            render.shoreWetnessDepositDepth,
+                            0.005f,
+                            0.001f,
+                            2.0f);
+                        renderDrag(
+                            "Wet Time (s)",
+                            render.shoreWetnessWetTime,
+                            0.02f,
+                            0.05f,
+                            30.0f);
+                        renderDrag(
+                            "Dry Time (s)",
+                            render.shoreWetnessDryTime,
+                            0.1f,
+                            0.05f,
+                            300.0f);
+                        renderDrag(
+                            "Darkening",
+                            render.shoreWetnessDarkening,
+                            0.005f,
+                            0.0f,
+                            1.0f);
+                        renderDrag(
+                            "Film Reflection",
+                            render.shoreWetnessReflectionStrength,
+                            0.005f,
+                            0.0f,
+                            2.0f);
+                        renderDrag(
+                            "Max Slope (deg)",
+                            render.shoreWetnessMaxSlopeDegrees,
+                            0.25f,
+                            0.0f,
+                            89.0f);
+                        ImGui::SeparatorText("Distant Height Fallback");
+                        renderDrag(
+                            "Above Water (m)",
+                            render.shoreWetnessFallbackAboveWater,
+                            0.01f,
+                            0.0f,
+                            20.0f);
+                        renderDrag(
+                            "Below Water (m)",
+                            render.shoreWetnessFallbackBelowWater,
+                            0.02f,
+                            0.0f,
+                            50.0f);
+                        renderDrag(
+                            "Fade Start",
+                            render.shoreWetnessFallbackFadeStartPercent,
+                            0.25f,
+                            0.0f,
+                            100.0f,
+                            "%.0f %%");
+                        ImGui::TreePop();
+                    }
 
                     if (ImGui::TreeNodeEx(
                         "Contact Foam",

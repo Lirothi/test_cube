@@ -14,7 +14,7 @@
 #include "ocean_surface_legacy.hlsli"
 #else
 
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
@@ -60,6 +60,8 @@ cbuffer OceanCB : register(b0)
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed, z: signed-depth warp range, w: warp scale
     float4 shoreSlopeParams;           // xy: run-up slope fade gradient thresholds, z: edge soft depth, w: geometry fade distance
     float4 shoreSwashParams;           // x: swash amplitude, y: run-up slope smoothing baseline (shore-map texels), z: reference wave height at "full at wind"
+    float4 shoreWetnessParams;         // xy: history centre, z: 1 / half extent, w: deposit depth
+    float4 shoreWetnessParams2;        // x: legacy wetness edge offset from the SDF waterline (m)
     float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
@@ -99,6 +101,7 @@ Texture2D ShoreDepthTexture : register(t13);
 // DEPTH, which is what the shore map above is for.
 Texture2D ShoreSdfTexture : register(t14);
 Texture2D OceanReflectionTexture : register(t15);
+RWTexture2D<uint> ShoreWetnessStampMap : register(u0);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointClampSampler : register(s2);
@@ -745,6 +748,44 @@ float ContactFoamWindAmount()
     // way between the thresholds must give half the widths. smoothstep's S-curve made the middle
     // of the range behave nothing like the number on screen.
     return saturate((windForce - calmWind) / (fullWind - calmWind));
+}
+
+// Stamp the persistent wet-sand history from the ACTUAL visible water sheet. This is independent
+// of contact foam: the depth test decides whether the displaced sheet reached this pixel, while
+// signed shore depth only limits the stamp to the shallow run-up band.
+void StampShoreWetness(float2 worldXZ, float signedDepth, float shoreWeight)
+{
+    [branch]
+    if (shoreWetnessParams.z <= 0.0f || shoreWeight <= 1e-3f)
+    {
+        return;
+    }
+
+    const float2 uv =
+        (worldXZ - shoreWetnessParams.xy) * (shoreWetnessParams.z * 0.5f) + 0.5f;
+    [branch]
+    if (any(uv < 0.0f) || any(uv >= 1.0f))
+    {
+        return;
+    }
+
+    uint width;
+    uint height;
+    ShoreWetnessStampMap.GetDimensions(width, height);
+    const uint2 coord = min(
+        uint2(uv * float2(width, height)),
+        uint2(width - 1u, height - 1u));
+    const float coverage = saturate(shoreWeight) *
+        (1.0f - smoothstep(
+            0.0f,
+            max(shoreWetnessParams.w, 1e-3f),
+            max(signedDepth, 0.0f)));
+    const uint encoded = (uint)round(coverage * 65535.0f);
+    [branch]
+    if (encoded > 0u)
+    {
+        InterlockedMax(ShoreWetnessStampMap[coord], encoded);
+    }
 }
 
 [RootSignature(OCEAN_SURFACE_RS)]
@@ -2064,6 +2105,7 @@ struct PSOut
     float2 velocity : SV_Target1;
 };
 
+[earlydepthstencil]
 [RootSignature(OCEAN_SURFACE_RS)]
 PSOut PSMain(VSOutput input)
 {
@@ -2399,6 +2441,8 @@ PSOut PSMain(VSOutput input)
         outColor = float4(dbg, 1.0f);
     }
 #endif
+
+    StampShoreWetness(input.worldPos.xz, contactShoreDepth, shoreFieldWeight);
 
     PSOut o;
     o.color = outColor;
