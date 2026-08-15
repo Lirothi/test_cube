@@ -174,6 +174,10 @@ struct OceanRenderConfig
     float shoreWetnessFallbackAboveWater = 0.35f;
     float shoreWetnessFallbackBelowWater = 1.5f;
     float shoreWetnessFallbackFadeStartPercent = 75.0f;
+    // World-anchored XZ breakup of the ABOVE-water outer edge. Strength is the maximum fraction
+    // removed from Above Water (never added beyond it); Scale is metres per broad noise cell.
+    float shoreWetnessFallbackBreakupStrength = 0.35f;
+    float shoreWetnessFallbackBreakupScale = 8.0f;
 
     float windSpeed = 12.0f;
     float wavesScale = 1.0f;

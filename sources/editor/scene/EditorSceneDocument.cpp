@@ -301,6 +301,9 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     addSingleton("skybox", "skybox", "Skybox");
     addSingleton("ocean", "ocean", "Ocean");
     addSingleton("wind", "wind", "Wind"); // W2: global wind entity (round-trips; inspector in W6)
+    // P1: photographic camera. addSingleton only materialises an entity when the section is
+    // present, so a level that predates the plan gains nothing and saves back byte-identical.
+    addSingleton("cameraExposure", "cameraExposure", "Camera Exposure");
 }
 
 #endif // WITH_EDITOR

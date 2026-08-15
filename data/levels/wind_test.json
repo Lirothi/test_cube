@@ -13653,6 +13653,8 @@
       "shoreWetnessEdgeOffset": 0.30000001192092896,
       "shoreWetnessFallbackAboveWater": 0.029999999329447746,
       "shoreWetnessFallbackBelowWater": 0.5,
+      "shoreWetnessFallbackBreakupScale": 2.0,
+      "shoreWetnessFallbackBreakupStrength": 1.0,
       "shoreWetnessFallbackFadeStartPercent": 25.0,
       "shoreWetnessMaxSlopeDegrees": 40.0,
       "shoreWetnessReflectionStrength": 0.3499999940395355,

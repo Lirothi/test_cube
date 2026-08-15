@@ -1,5 +1,6 @@
 #include "app/AppController.h"
 
+#include "app/App.h" // g_hudHidden (--no-hud)
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
@@ -186,6 +187,12 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene) const
 {
     auto* tb = renderer.GetTextManager();
     tb->Begin(renderer.GetWidth(), renderer.GetHeight(), 1.0f);
+    // "--no-hud" (see App.h): Begin() still runs, so the buffer is emptied rather than left holding
+    // the previous frame's text; only the emission below is skipped.
+    if (g_hudHidden)
+    {
+        return;
+    }
     const float fps = renderer.GetFPS();
     const float frameMs = fps > 0.0f ? 1000.0f / fps : 0.0f;
     tb->AddTextfShadow(8, 8, 32.0f, float4(1, 1, 1, 0.6f), true, L"FPS:%.0f MS:%0.2f Scale:%0.2f", fps, frameMs, renderer.GetRenderResolutionScale());

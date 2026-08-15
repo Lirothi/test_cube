@@ -946,6 +946,12 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // instead of the screen-space source (mt-dep on Main_BuildAS; its TLAS SRV
     // bypasses the state tracker); None/SkyOnly clear the reflection buffer and
     // compose decides whether the skybox fallback is enabled.
+    // Compose samples the shore-wetness texture that Main_ShoreWetness writes, but Compose is a
+    // NON-FIRST member of this CL group and BeginCLGroup's contract allows an outside prereq only
+    // on the FIRST member — a grouped list records as one unit, so nothing can wait in its middle.
+    // The dependency therefore rides the group's first member, which orders the whole list after
+    // the wetness update and keeps Compose's guarantee. Reflection waiting too costs nothing:
+    // wetness is the tail of the early compute group and has long since finished.
     const bool useRtReflections = rtReflect && pBuildAS != (size_t)-1;
     const std::initializer_list<ResourceStateDecl> reflectDecls = {
         { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -959,7 +965,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         // write the premultiplied reflection straight into the main reflection target
         // (S12: the old temporal-denoise pass was an inert pass-through once glossy was
         // parked, so it was removed -- blur + compose consume `reflection` directly).
-        pReflectionSource = rg.AddPassMT(RenderPass::Main_RTReflections, { pSky }, { pSky, pBuildAS },
+        pReflectionSource = rg.AddPassMT(RenderPass::Main_RTReflections, { pSky, pWetness }, { pSky, pBuildAS },
             { { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -971,7 +977,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
     else if (clearReflections)
     {
-        pReflectionSource = rg.AddPass(RenderPass::Main_ReflectionSource, { pSky },
+        pReflectionSource = rg.AddPass(RenderPass::Main_ReflectionSource, { pSky, pWetness },
             { { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             [this, renderer](RenderGraphPassContext ctx) {
                 CPU_SCOPE(ProfilerScopes::kPassReflectionSource);
@@ -980,7 +986,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
     else
     {
-        pReflectionSource = rg.AddPass(RenderPass::Main_ReflectionSource, { pSky }, reflectDecls,
+        pReflectionSource = rg.AddPass(RenderPass::Main_ReflectionSource, { pSky, pWetness }, reflectDecls,
             [this, renderer](RenderGraphPassContext ctx) {
                 CPU_SCOPE(ProfilerScopes::kPassReflectionSource);
                 Pass_ScreenSpaceReflections(renderer, ctx, *frame_->camera);
@@ -1025,7 +1031,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
 
     // First-use states only; Compose transitions scene back to RENDER_TARGET
     // for the transparent pass at the end of its body.
-    auto pCompose = rg.AddPass(RenderPass::Main_Compose, { pBlur, pWetness },
+    // pWetness is deliberately NOT listed here: see the CL-group note above the reflection source.
+    // It is carried by the group's first member, which orders this whole list after it.
+    auto pCompose = rg.AddPass(RenderPass::Main_Compose, { pBlur },
         { { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.gb2.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -3332,6 +3340,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             constants.shoreWetnessWindow = frame_->ocean->GetWetnessComposeWindow();
             constants.shoreWetnessAppearance = frame_->ocean->GetWetnessComposeAppearance();
             constants.shoreWetnessFallback = frame_->ocean->GetWetnessComposeFallback();
+            constants.shoreWetnessBreakup = frame_->ocean->GetWetnessComposeBreakup();
             if (frame_->ocean->IsWetnessReady())
             {
                 wetnessSrv = frame_->ocean->GetWetnessSrv();

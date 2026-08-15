@@ -382,6 +382,18 @@ namespace OceanRenderConfigJson
                 render.shoreWetnessFallbackFadeStartPercent),
             0.0f,
             100.0f);
+        render.shoreWetnessFallbackBreakupStrength = Math::Saturate(
+            ReadFloat(
+                object,
+                "shoreWetnessFallbackBreakupStrength",
+                render.shoreWetnessFallbackBreakupStrength));
+        render.shoreWetnessFallbackBreakupScale = std::clamp(
+            ReadFloat(
+                object,
+                "shoreWetnessFallbackBreakupScale",
+                render.shoreWetnessFallbackBreakupScale),
+            0.1f,
+            500.0f);
 
         render.windSpeed = std::max(
             0.0f, ReadFloat(object, "windSpeed", render.windSpeed));
@@ -629,6 +641,10 @@ namespace OceanRenderConfigJson
         out["shoreWetnessFallbackBelowWater"] = render.shoreWetnessFallbackBelowWater;
         out["shoreWetnessFallbackFadeStartPercent"] =
             render.shoreWetnessFallbackFadeStartPercent;
+        out["shoreWetnessFallbackBreakupStrength"] =
+            render.shoreWetnessFallbackBreakupStrength;
+        out["shoreWetnessFallbackBreakupScale"] =
+            render.shoreWetnessFallbackBreakupScale;
 
         out["windSpeed"] = render.windSpeed;
         out["wavesScale"] = render.wavesScale;

@@ -2,7 +2,19 @@
 
 This document turns the current image-quality direction into a sequence of independently landable tasks. An AI executor should be able to select one named step, implement only that step against the contracts below, verify it, and stop without leaving the renderer in a half-migrated state.
 
-The visual reference is a bright tropical aerial scene. It is AI-generated, so the target is not pixel matching. The target is the same perceptual hierarchy: retained sky and sand highlights, readable shaded foliage, neutral daylight, believable sky fill, atmospheric depth, grounded contact, and stable water response.
+The visual reference is **`docs/ref/ref_wind_test.png`** — a bright tropical aerial scene framed almost exactly like the `overview` canonical view, which makes the two directly comparable. It is AI-generated, so the target is not pixel matching. The target is the same perceptual hierarchy: retained sky and sand highlights, readable shaded foliage, neutral daylight, believable sky fill, atmospheric depth, grounded contact, and stable water response.
+
+Measured against the P0 baseline with the same tooling (`docs/photographic_baseline_measurements.md`, section 7), the gap is **not** simply "the reference is brighter":
+
+| | ours (P0) | reference | |
+|---|---:|---:|---|
+| median luma | 0.113 | 0.196 | reference is 0.80 stops brighter |
+| p95 / p99 | 0.446 / 0.559 | 0.693 / 0.814 | reference actually uses the top of the range |
+| p02 | 0.0211 | 0.0152 | **our blacks are lifted, not the reference's** |
+| clipped % | 0.000 | 0.125 | a real camera clips a little, on purpose |
+| below 2% luma | 1.85% | 3.42% | the reference has *more* deep shadow |
+
+So the defect is **low contrast in both directions at once**: our highlights are compressed into the mid range while our blacks are milky. Brightening the image globally would make it worse. The fix is the exposure and tone-curve work in M1 (P2, P3), and the numbers above are the directional target for it — directional, because the reference is 2.22:1 with proportionally less sky than our 16:9 frame, and because non-goal 1 still stands.
 
 Last renderer audit: **2026-08-15**.
 
@@ -34,6 +46,7 @@ The first useful milestone is not “add every effect.” It is **M1: stable pho
 - Do not hide exposure problems with a level-specific LUT.
 - Do not feed the new camera exposure into DLSS until a dedicated A/B test proves that it does not reintroduce water smearing.
 - Do not combine unrelated material-content work with renderer infrastructure commits.
+- **Do not calibrate or gate this plan on night or overcast conditions.** The project has exactly one skybox and no time-of-day system, so neither condition exists as authored content: the dark test levels (`d_emissive_test`, `e1_particles_test`) still render the daylight sky and are box-on-a-plane scenes, not tropical ones. The whole plan is tuned and judged on the **sunset** condition in `wind_test.json`. Multi-condition exposure behaviour stays a documented design constraint (section 4, decision 5a) rather than a milestone, and becomes real work only once a night sky asset exists.
 
 ---
 
@@ -92,6 +105,7 @@ These decisions remain in force unless a step explicitly records new measured ev
 3. **Sun intensity, sky intensity, and camera exposure are separate settings.** Changing one must not silently rewrite the others.
 4. **Automatic exposure uses a log-luminance histogram, clipped percentiles, and temporal adaptation.** A single average luminance is too sensitive to the sun glint and sky. The histogram build and the exposure solve run **entirely on the GPU** into a small persistent resource consumed the same frame or with at most one frame of latency; no CPU readback or synchronization stall may sit on the frame path. Any CPU-visible copy is debug-only and asynchronous.
 5. **Exposure adaptation state is persistent and resettable.** Resize, camera cut, level load, and large teleports must not spend seconds adapting from stale history.
+5a. **Percentile metering alone cannot preserve the relative brightness of different lighting conditions.** Percentiles are scale-invariant by construction, so a correctly metered night and a correctly metered noon land on the same target and the camera flattens both into the same mid-grey. The mechanism that fixes it is an **exposure compensation curve** -- compensation as a function of the metered scene EV rather than a single scalar; clamps are a safety net, not a policy. This is recorded as a design constraint so P2 does not bake the flattening behaviour in as if it were correct. It is **not** an acceptance criterion in this plan: see the scope note in section 2.
 6. **IBL implementation comes from F7-F9 of `two_sided_foliage_and_ibl_plan.md`.** This plan only defines integration and acceptance criteria.
 7. **AO modulates indirect illumination only.** It must not blacken direct sun or emissive surfaces.
 8. **The first atmosphere implementation is analytic and inexpensive.** Volumetric froxels are a separate future project.
@@ -308,6 +322,26 @@ Line-ending check:
 
 ### P0 — Establish a deterministic image-quality baseline
 
+**STATUS: DONE 2026-08-15** (uncommitted). Manifest `docs/photographic_baseline_manifest.json`,
+driver `tools/photographic_baseline.py`, results `docs/photographic_baseline_measurements.md`,
+captures in `logs/baseline/` (gitignored). Three canonical views, all in `wind_test.json`
+(`atoll.json` excluded — unauthored environment), each captured native + DLSS Balanced. Added
+`--dlss=<mode>` and `--no-hud`, without which the plan's own native/DLSS matrix and every
+downstream screenshot-equivalence check were not capturable headlessly.
+
+Two findings that change how later steps must be read:
+- **The current image does not clip, it crushes.** Two of three views clip exactly 0.000% of
+  pixels; `shore_grove` puts 22% of the frame below 2% luma with p95 at 0.226. M1 will show up in
+  the dark%/p95 columns, not in clipped%.
+- **`Pass_Tonemap` is mostly DLSS.** 0.049 ms native vs 0.30-0.36 ms with DLSS on, because
+  `slEvaluateFeature` is recorded inside that scope. P3 replaces the curve and will barely move
+  this row; do not read a regression into it.
+
+Measured noise floor for "screenshot-equivalent" gates: two runs of the same frozen frame differ in
+0.099% of pixels, all below the horizon (ocean temporal state), with every metric stable to 5-6
+decimals. **Dormant-plumbing steps must therefore gate on metrics with a tolerance, not on bytes:**
+zero differing pixels above the horizon, and every section-2 metric within 1e-4.
+
 **Depends on:** nothing.
 
 **Goal:** make every later visual claim reproducible and measurable.
@@ -337,6 +371,73 @@ Line-ending check:
 ---
 
 ### P1 — Add dormant exposure resources and serialized settings
+
+**STATUS: DONE 2026-08-15** (uncommitted), except for one gate blocked by a pre-existing bug
+(see the end of this section).
+
+Done — implement items 1, 4, 5, 6:
+- `render::CameraExposureSettings` + EV100 conventions in `sources/rendering/core/PhotographicSettings.h`,
+  JSON round-trip in `PhotographicSettingsJson.h` (both in the vcxproj and .filters).
+- `Scene` owns one instance, mirroring `dirLight_`.
+- Level section `"cameraExposure"`: parsed in `JsonLevel.cpp`, a document singleton in
+  `EditorSceneDocument`, written by `LevelDocumentSerializer`, applied live by `EnvironmentRuntime`
+  (and reset to defaults on remove), an inspector drawer in `InspectorPanel`, and a
+  Create > Camera Exposure menu entry so a level can gain the section at all.
+- Read-only readout in the dev window's Render tab (both EV and the linear multiplier, per section
+  6.2); it never writes back, per the section 6.5 rule that debug views must not mutate level data.
+
+**Gated:** Debug + Release build clean. Screenshot equivalence against the P0 `overview/native`
+baseline, using the P0-defined tolerance, in **both** directions -- a level without the section and
+a level carrying one with deliberately malformed values (inverted EV range, inverted percentiles,
+negative speed, to exercise the boundary clamps): worst metric delta 5.4e-05 and 2.7e-05 against a
+1e-4 gate, and **zero** channel difference above the horizon in both. Residual is the P0 ocean
+jitter only.
+
+Done — implement items 2 and 3: `ExposureMetering` (`sources/rendering/core/ExposureMetering.{h,cpp}`,
+both in the vcxproj and .filters), owned by `Renderer`, holding a 256-bin log-luminance histogram
+and a 16-byte adapted-exposure record. Both are **raw** (byte-address) UAV buffers, not structured:
+`InterlockedAdd` needs raw or structured, and `ClearUnorderedAccessViewUint` — which is how P2 will
+clear the bins every frame — rejects structured buffers outright. Both are declared through
+`GpuResource::Attach` at `UNORDERED_ACCESS`, which is also their canonical resting state, so P2 adds
+no transition at either end. Nothing is dispatched, bound or transitioned yet.
+
+Lifecycle: created in `InitD3D12` unconditionally (~1 KB total — gating them on `enabled` would
+mean the dormant default exercises no lifecycle, which is the one thing this step exists to prove);
+released in `Shutdown` before `canonicalStates_.Clear()` so they undeclare themselves rather than
+being swept; the member is declared after `canonicalStates_` so reverse-order destruction still
+undeclares against a live registry if `Shutdown` never ran. The resources are resolution-independent,
+so `OnResize` deliberately does **not** recreate them and only calls `RequestReset()`; `JsonLevel::Load`
+does the same per section 6.4, so a level switch cannot spend seconds adapting from the previous
+level's brightness.
+
+**Gated:** Debug + Release build clean. Screenshot equivalence against the P0 baseline holds after
+the resource work (worst metric delta 2.7e-05 vs the 1e-4 gate, zero channel difference above the
+horizon). `--scene-stress=30` **CLEAN** in Release, exercising exactly the new lifecycle paths —
+ResizeWindow, ReloadLevel, SwitchLevel, DlssMode and shutdown — with `emit enhanced=8439 legacy=0`,
+i.e. the new declarations did not push the barrier compile onto the legacy path.
+
+**GBV gate: CLEAN** (`--scene-stress=8 --scene-stress-gbv`, Debug, `emit enhanced=3051 legacy=0`).
+This required first fixing a pre-existing bug that made the Debug build unable to render a single
+frame — see below; that fix is a separate logical change and is not part of this plan.
+
+#### Pre-existing Debug bug found and fixed while gating P1
+
+At `b3870af` the Debug build asserted on the first frame of every level:
+`RenderGraph::EndCLGroup` — "grouped pass (non-first) has a prereq from outside the group"
+(`RenderGraph.h:472`, from `SceneRenderer.cpp`). Confirmed pre-existing by building `b3870af` in a
+clean detached worktree with no local changes and reproducing it identically, so it is neither this
+plan's doing nor the parallel ocean work's.
+
+Cause: `Main_Compose` listed `pWetness` among its prereqs, but Compose is the third member of the
+reflection CL group while `pWetness` is the tail of the earlier compute group. `BeginCLGroup`'s
+contract allows an outside prereq only on a group's **first** member, because the group records as
+one command list and nothing can wait in its middle.
+
+Fix: the dependency moved to the group's first member (`Main_RTReflections` / `Main_ReflectionSource`,
+all three reflection-source variants), which orders the whole list after the wetness update and
+preserves exactly the guarantee Compose needed. Reflection now waits for wetness too, at no real
+cost — wetness is the tail of the early compute group and has long since finished. Release image is
+unchanged (same 2.7e-05 / zero-above-horizon gate), Release `--scene-stress=30` still CLEAN.
 
 **Depends on:** P0.
 

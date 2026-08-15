@@ -19,6 +19,7 @@
 #pragma warning(pop)
 
 #include "app/camera/Camera.h"
+#include "rendering/core/PhotographicSettingsJson.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectRegistry.h"
@@ -283,6 +284,24 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         dirLight.SetExposure(dl.value("exposure", 1.0f));
         dirLight.SetAmbient(enabled ? dl.value("ambient", 0.05f) : 0.0f);
         scene.SetDirectionalLight(dirLight);
+    }
+
+    // P1: photographic camera settings. A level without the section keeps the struct defaults,
+    // whose `enabled = false` reproduces the pre-plan image exactly -- that is the whole
+    // compatibility story for old levels, so there is deliberately no fallback to the directional
+    // light's legacy `exposure` here. P4 is where those two meet.
+    {
+        render::CameraExposureSettings exposure{};
+        if (j.contains("cameraExposure"))
+        {
+            render::PhotographicSettingsJson::ApplyOverrides(j["cameraExposure"], exposure);
+        }
+        scene.SetCameraExposure(exposure);
+        // Plan section 6.4: a level load invalidates the adapted value. Without this the camera
+        // would spend the first seconds of a new level adapting down from the previous one's
+        // brightness, which is exactly the "spend seconds adapting from stale history" that
+        // locked decision 5 rules out.
+        renderer.Exposure().RequestReset();
     }
 
     std::optional<json> freeCameraStart;

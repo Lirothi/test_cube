@@ -122,6 +122,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle shoreWetnessWindow;
     Material::CBFieldHandle shoreWetnessAppearance;
     Material::CBFieldHandle shoreWetnessFallback;
+    Material::CBFieldHandle shoreWetnessBreakup;
 
     void Populate(Material* material);
 };
@@ -252,6 +253,7 @@ struct ComposePassConstants
     float4 shoreWetnessWindow{};
     float4 shoreWetnessAppearance{};
     float4 shoreWetnessFallback{};
+    float4 shoreWetnessBreakup{};
 };
 
 struct FxaaPassConstants

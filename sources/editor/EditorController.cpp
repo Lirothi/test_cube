@@ -40,6 +40,7 @@
 #include "imgui.h"
 #include "ocean/OceanRenderable.h"
 #include "ocean/OceanRenderConfigJson.h"
+#include "rendering/core/PhotographicSettingsJson.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/lighting/Skybox.h"
@@ -362,6 +363,18 @@ namespace
             } }
         };
         return wind;
+    }
+
+    // P1: the photographic camera section. Seeded from the documented struct defaults, which means
+    // adding it to a level is a no-op on the image until someone ticks Enabled.
+    EditorObject BuildCameraExposureObject()
+    {
+        const render::CameraExposureSettings defaults{};
+        EditorObject exposure;
+        exposure.name = "Camera Exposure";
+        exposure.type = "cameraExposure";
+        exposure.properties = render::PhotographicSettingsJson::ToJson(defaults);
+        return exposure;
     }
 
     EditorObject BuildFreeCameraStartObject(const Scene& scene)
@@ -3300,6 +3313,14 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 {
                     commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                         BuildWindObject()));
+                }
+                // One photographic camera per level: it is the camera, not a light.
+                const bool hasCameraExposure = HasEnvironmentObject(document_, "cameraExposure");
+                if (MenuItemWithDisabledReason("Camera Exposure", !hasCameraExposure,
+                        "This level already has camera exposure settings."))
+                {
+                    commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                        BuildCameraExposureObject()));
                 }
                 if (ImGui::BeginMenu("VFX"))
                 {

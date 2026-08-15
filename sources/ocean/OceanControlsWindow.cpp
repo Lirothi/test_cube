@@ -1217,6 +1217,19 @@ namespace
                     0.0f,
                     100.0f,
                     "%.0f %%");
+                drag(
+                    "Breakup strength",
+                    render.shoreWetnessFallbackBreakupStrength,
+                    0.005f,
+                    0.0f,
+                    1.0f);
+                drag(
+                    "Breakup scale (m)",
+                    render.shoreWetnessFallbackBreakupScale,
+                    0.1f,
+                    0.1f,
+                    500.0f,
+                    "%.1f");
                 ImGui::TreePop();
             }
         }
@@ -1285,6 +1298,19 @@ namespace
                 0.0f,
                 100.0f,
                 "%.0f %%");
+            drag(
+                "Breakup strength",
+                render.shoreWetnessFallbackBreakupStrength,
+                0.005f,
+                0.0f,
+                1.0f);
+            drag(
+                "Breakup scale (m)",
+                render.shoreWetnessFallbackBreakupScale,
+                0.1f,
+                0.1f,
+                500.0f,
+                "%.1f");
             ImGui::TreePop();
         }
 

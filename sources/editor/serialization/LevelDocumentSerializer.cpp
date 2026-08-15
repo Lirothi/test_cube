@@ -43,6 +43,7 @@ namespace LevelDocumentSerializer
                 else if (env.type == "directionalLight") { out["directionalLight"] = env.properties; }
                 else if (env.type == "skybox") { out["skybox"] = env.properties; }
                 else if (env.type == "wind") { out["wind"] = env.properties; } // W2: round-trip the wind entity
+                else if (env.type == "cameraExposure") { out["cameraExposure"] = env.properties; } // P1
                 else if (env.type == "ocean")
                 {
                     nlohmann::json ocean = env.properties;

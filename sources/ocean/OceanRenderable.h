@@ -133,6 +133,7 @@ public:
     Math::float4 GetWetnessComposeWindow() const;
     Math::float4 GetWetnessComposeAppearance() const;
     Math::float4 GetWetnessComposeFallback() const;
+    Math::float4 GetWetnessComposeBreakup() const;
 
     void SetGridVertexDensity(uint32_t density);
 

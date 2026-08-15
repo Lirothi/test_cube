@@ -416,6 +416,36 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::TextDisabled("DLSS quality controls the render scale while active.");
                 }
 
+                // P1 readout for the dormant photographic camera (plan sections 6.2/6.5). Read-only
+                // on purpose: the values are authored per level in the inspector, and a debug view
+                // must not mutate serialised level settings.
+                ImGui::Separator();
+                {
+                    const render::CameraExposureSettings& exposure = scene.GetCameraExposure();
+                    if (!exposure.enabled)
+                    {
+                        ImGui::TextDisabled("Camera exposure: dormant (multiplier x%.3f)",
+                            render::kIdentityExposureMultiplier);
+                    }
+                    else if (exposure.autoExposure)
+                    {
+                        // No metered EV exists until P2 schedules the histogram, so the compensation
+                        // is all there is to show. Deliberately not faked into a plausible number.
+                        ImGui::Text("Camera exposure: auto, compensation %+.2f EV", exposure.compensationEv);
+                        ImGui::TextDisabled("Metered EV: not available until the P2 metering pass lands.");
+                        ImGui::TextDisabled("Clamp %.2f .. %.2f EV100, percentiles %.3f/%.3f, speed %.2f/%.2f",
+                            exposure.minEv100, exposure.maxEv100,
+                            exposure.lowPercentile, exposure.highPercentile,
+                            exposure.speedUp, exposure.speedDown);
+                    }
+                    else
+                    {
+                        ImGui::Text("Camera exposure: manual %.2f EV100 (multiplier x%.5f)",
+                            exposure.manualEv100,
+                            render::ExposureMultiplierFromEv100(exposure.manualEv100));
+                    }
+                }
+
                 ImGui::EndTabItem();
             }
 

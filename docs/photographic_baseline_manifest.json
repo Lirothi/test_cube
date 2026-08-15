@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "plan": "docs/photographic_rendering_improvement_plan.md",
+  "step": "P0",
+  "description": "Canonical image-quality baseline for the photographic lighting plan. Every later step compares against captures reproduced from this manifest; see tools/photographic_baseline.py.",
+  "baselineGitCommit": "b3870af",
+  "referenceImage": "docs/ref/ref_wind_test.png",
+  "referenceNote": "The image this plan aims at. Framed almost exactly like the 'overview' view, so the two compare directly; measured against the baseline in section 6 of the measurements report. Directional target only -- it is 2.22:1 with proportionally less sky than the 16:9 captures, and non-goal 1 rules out pixel matching.",
+  "notes": [
+    "atoll.json is deliberately NOT used: the user considers its environment unauthored. All canonical views live in wind_test.json.",
+    "wind_test.json is under active ocean tuning. If its environment block changes, the baseline must be recaptured and the commit above updated -- a level diff is the first thing to check before theorising about a renderer regression.",
+    "--shadow-mode is pinned explicitly so the baseline does not silently move if the compiled default flips.",
+    "--no-hud is required: the FPS/MS readout is composited into the captured backbuffer and differs between two runs of the same frozen frame."
+  ],
+  "recipe": {
+    "exe": "x64/Release/test_cube.exe",
+    "outputDir": "logs/baseline",
+    "level": "data/levels/wind_test.json",
+    "commonArgs": [
+      "--no-hud",
+      "--shadow-mode=vsm"
+    ],
+    "windFreezeSec": 10.0,
+    "shotDelaySec": 12.0,
+    "displayResolution": [2560, 1440],
+    "resolutionNote": "The window is sized from the desktop work area (App::InitWindow: 2560x1440 clamped to workArea.width-8, height = width * 9/16). A different display gives a different capture size; record the actual size with the captures."
+  },
+  "modes": [
+    {
+      "id": "native",
+      "dlssArg": "--dlss=off",
+      "description": "Native resolution, no upscaler. Render scale 1.0."
+    },
+    {
+      "id": "dlss_balanced",
+      "dlssArg": "--dlss=balanced",
+      "description": "The project's normal DLSS quality mode (the compiled default). Render scale ~0.58."
+    }
+  ],
+  "views": [
+    {
+      "id": "overview",
+      "title": "Atoll overview (front-lit)",
+      "camPos": [0.0, 60.0, -200.0],
+      "camRot": [0.1132, 0.0, 0.0, 0.9936],
+      "camDeg": { "pitch": 13.0, "yaw": 0.0 },
+      "role": "Plan P0 item 1: tropical exterior overview with sky, ocean, sand and foliage. Closest framing to the AI reference image.",
+      "watchFor": "Sand and cloud highlight structure, sky fill on shaded foliage, and the total absence of aerial perspective -- the distant ocean stays crisp all the way to the horizon."
+    },
+    {
+      "id": "shore_grove",
+      "title": "Shore palm grove (ground level)",
+      "camPos": [-30.74, 4.75, 70.7],
+      "camRot": [-0.0117, 0.9427, -0.0334, -0.3317],
+      "camDeg": null,
+      "role": "Plan P0 item 2: low camera with shaded foliage, beach contact and bright water. This is the level's own freeCameraStart, captured verbatim from the HUD.",
+      "watchFor": "Readability of foliage in shade, palm/sand contact grounding, and the warm sun-tinted ambient on the sand."
+    },
+    {
+      "id": "sun_glint",
+      "title": "Sun-facing glint field (back-lit)",
+      "camPos": [-130.0, 55.0, -110.0],
+      "camRot": [0.0947, 0.4203, -0.0442, 0.9013],
+      "camDeg": { "pitch": 12.0, "yaw": 50.0 },
+      "role": "Third view, added with reason (plan P0 allows this if recorded): P2 is explicitly judged on rejecting ocean glints through percentile clipping, and P8 on bloom not turning glints into a white fog bank. Neither of the two views above contains a specular glint field, so without this the acceptance criteria for two milestones would have no canonical frame.",
+      "watchFor": "Whole-frame exposure pumping across the glint field, back-lit shaded foliage collapsing to black, and highlight clipping on the water."
+    }
+  ]
+}

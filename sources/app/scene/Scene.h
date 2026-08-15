@@ -10,6 +10,7 @@
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "app/camera/Camera.h"
+#include "rendering/core/PhotographicSettings.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/LightManager.h"
@@ -32,6 +33,10 @@ public:
     const Camera& CameraRef() const { return camera_; }
 
     const DirectionalLight& GetDirectionalLight() const { return dirLight_; }
+    // P1: the level's photographic camera settings. Dormant by default (enabled = false), so this
+    // is pure state until P2 schedules the metering passes that read it.
+    const render::CameraExposureSettings& GetCameraExposure() const { return cameraExposure_; }
+    void SetCameraExposure(const render::CameraExposureSettings& settings) { cameraExposure_ = settings; }
     LightManager& GetLightManager() { return lightManager_; }
     const LightManager& GetLightManager() const { return lightManager_; }
     Skybox* GetSkybox() const { return skyBox_.get(); }
@@ -195,6 +200,7 @@ private:
     vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
 
     DirectionalLight dirLight_;
+    render::CameraExposureSettings cameraExposure_{}; // P1, dormant; see PhotographicSettings.h
 
     std::unique_ptr<Skybox> skyBox_;
 };

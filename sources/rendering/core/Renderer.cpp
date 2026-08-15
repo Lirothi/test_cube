@@ -122,6 +122,10 @@ void Renderer::Shutdown()
     // 2) Offscreen targets (G-Buffer/Light/Scene/Depth) — destroy these first
     DestroyDeferredTargets(); // properly resets resources and heaps, and clears knownStates_ :contentReference[oaicite:4]{index=4}
 
+    // 2b) P1: the persistent exposure buffers. Before the canonical clear below, so they undeclare
+    // themselves properly instead of being swept by it.
+    exposureMetering_.Release();
+
     // 3) Back buffers and RTV/DSV heaps
     swapchain_.ReleaseBuffers();
 
@@ -233,6 +237,11 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     samplerManager_.Init(GetDevice(), 512);
     InitImGui();
+
+    // P1: the persistent exposure buffers. Created unconditionally rather than when the feature is
+    // switched on -- they are about 1 KB, and gating them would mean the default (dormant) state
+    // exercises none of the lifecycle this step exists to prove.
+    exposureMetering_.EnsureResources(this);
 
     InitFence();
 }
@@ -902,6 +911,11 @@ void Renderer::OnResize(UINT width, UINT height) {
     CreateDepthResources(width_, height_);
     CreateDeferredTargets(width_, height_);
     AllocateDlssResourcesIfNeeded();
+
+    // P1 / plan section 6.4: the exposure buffers are resolution-independent, so a resize must NOT
+    // recreate them -- but the adapted value was metered from the old resolution's source, so the
+    // history is stale and has to be re-seeded rather than adapted from.
+    exposureMetering_.RequestReset();
 
     RefreshCurrentFrameCaches();
 }

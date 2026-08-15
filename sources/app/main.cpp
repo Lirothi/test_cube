@@ -422,6 +422,25 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--trace=")) {
             g_traceFrames = static_cast<uint32_t>(std::atoi(flag + std::strlen("--trace=")));
         }
+        // "--dlss=<off|perf|balanced|quality|ultraperf|ultraquality|dlaa>": boot upscaler mode, so a
+        // native-resolution capture no longer needs an F-key by hand (see App.h). An unrecognised
+        // value leaves the compiled default in place rather than failing — check the capture's
+        // render scale, not just the exit code, when a shot comes back at the wrong resolution.
+        if (const char* flag = std::strstr(lpCmdLine, "--dlss=")) {
+            const char* p = flag + std::strlen("--dlss=");
+            const auto is = [p](const char* name) { return std::strncmp(p, name, std::strlen(name)) == 0; };
+            if      (is("ultraperf"))    { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eUltraPerformance); }
+            else if (is("ultraquality")) { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eUltraQuality); }
+            else if (is("off"))          { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eOff); }
+            else if (is("perf"))         { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eMaxPerformance); }
+            else if (is("balanced"))     { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eBalanced); }
+            else if (is("quality"))      { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eMaxQuality); }
+            else if (is("dlaa"))         { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eDLAA); }
+        }
+        // "--no-hud": empty HUD text buffer, so a --shot carries no frame-varying FPS readout.
+        if (std::strstr(lpCmdLine, "--no-hud")) {
+            g_hudHidden = true;
+        }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-extent=")) {
             vsm::g_clipmapBaseExtent = (float)std::atof(flag + std::strlen("--vsm-extent="));
         }

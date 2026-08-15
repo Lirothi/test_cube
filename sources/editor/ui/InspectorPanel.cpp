@@ -387,6 +387,7 @@ namespace
             env.type == "skybox" ? "Edit Skybox" :
             env.type == "ocean" ? "Edit Ocean" :
             env.type == "wind" ? "Edit Wind" :
+            env.type == "cameraExposure" ? "Edit Camera Exposure" :
             "Edit Environment";
 
         const auto executeChange = [&](nlohmann::json after, const std::string& label)
@@ -600,6 +601,47 @@ namespace
             dragF("H FOV (deg)", "hfovDeg", 90.0f, 0.5f, 1.0f, 179.0f);
             dragF("Z Near", "zNear", 0.01f, 0.001f, 0.0001f, 100.0f);
             dragF("Z Far", "zFar", 10000.0f, 1.0f, 0.1f, 1000000.0f);
+        }
+        else if (env.type == "cameraExposure")
+        {
+            // P1: dormant. Everything here round-trips through the level and reaches
+            // Scene::SetCameraExposure, but nothing reads it yet -- the metering passes are P2.
+            checkB("Enabled", "enabled", false);
+            if (!p.value("enabled", false))
+            {
+                ImGui::TextDisabled("Dormant: exposure multiplier is exactly 1.0.");
+            }
+            checkB("Auto Exposure", "autoExposure", true);
+
+            const bool automatic = p.value("autoExposure", true);
+            if (automatic)
+            {
+                dragF("Compensation (EV)", "compensationEv", 0.0f, 0.05f, -8.0f, 8.0f, "%.2f");
+                dragF("Min EV100", "minEv100", -6.0f, 0.1f, -16.0f, 20.0f, "%.2f");
+                dragF("Max EV100", "maxEv100", 16.0f, 0.1f, -16.0f, 20.0f, "%.2f");
+                dragF("Low Percentile", "lowPercentile", 0.02f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("High Percentile", "highPercentile", 0.95f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("Speed Up (stops/s)", "speedUp", 3.0f, 0.05f, 0.0f, 20.0f, "%.2f");
+                dragF("Speed Down (stops/s)", "speedDown", 1.0f, 0.05f, 0.0f, 20.0f, "%.2f");
+            }
+            else
+            {
+                dragF("Manual EV100", "manualEv100", 10.0f, 0.05f, -16.0f, 20.0f, "%.2f");
+            }
+
+            // Plan section 6.2 wants both representations visible, because EV is the authored
+            // quantity but the linear multiplier is what a shader bug would show up in.
+            ImGui::Separator();
+            const float shownEv = automatic
+                ? JsonFloat(p, "compensationEv", 0.0f)
+                : JsonFloat(p, "manualEv100", 10.0f);
+            const float multiplier = p.value("enabled", false)
+                ? render::ExposureMultiplierFromEv100(shownEv)
+                : render::kIdentityExposureMultiplier;
+            ImGui::TextDisabled(automatic
+                ? "Compensation %.2f EV -> x%.5f (metered EV is runtime, see the dev window)"
+                : "Manual %.2f EV100 -> x%.5f",
+                shownEv, multiplier);
         }
         else if (env.type == "skybox")
         {
@@ -1055,6 +1097,19 @@ namespace
                                 0.0f,
                                 100.0f,
                                 "%.0f %%");
+                            renderDrag(
+                                "Breakup Strength",
+                                render.shoreWetnessFallbackBreakupStrength,
+                                0.005f,
+                                0.0f,
+                                1.0f);
+                            renderDrag(
+                                "Breakup Scale (m)",
+                                render.shoreWetnessFallbackBreakupScale,
+                                0.1f,
+                                0.1f,
+                                500.0f,
+                                "%.1f");
                             ImGui::TreePop();
                         }
                     }
@@ -1148,6 +1203,19 @@ namespace
                             0.0f,
                             100.0f,
                             "%.0f %%");
+                        renderDrag(
+                            "Breakup Strength",
+                            render.shoreWetnessFallbackBreakupStrength,
+                            0.005f,
+                            0.0f,
+                            1.0f);
+                        renderDrag(
+                            "Breakup Scale (m)",
+                            render.shoreWetnessFallbackBreakupScale,
+                            0.1f,
+                            0.1f,
+                            500.0f,
+                            "%.1f");
                         ImGui::TreePop();
                     }
 

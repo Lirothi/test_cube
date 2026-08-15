@@ -20,6 +20,7 @@
 #include "rendering/core/SwapchainManager.h"
 #include "rendering/core/FrameScheduler.h"
 #include "rendering/core/ResourceDeclarations.h"
+#include "rendering/core/ExposureMetering.h"
 #include "rendering/core/RenderTargetManager.h"
 #include "rendering/core/SubmitTimeline.h"
 #include "rendering/core/RenderConstants.h"
@@ -303,6 +304,11 @@ public:
     void SetPredictedState(ID3D12Resource* res, D3D12_RESOURCE_STATES s) { canonicalStates_.SetPredicted(res, s); }
     // For subsystems that create resources without a Renderer& (RenderTargetManager).
     ResourceDeclarations Declarations() { return ResourceDeclarations{ &canonicalStates_, canonicalStates_.Liveness() }; }
+
+    // P1: persistent eye-adaptation state. Dormant -- created and lifecycle-managed, never
+    // dispatched, until P2. See ExposureMetering.h.
+    ExposureMetering& Exposure() { return exposureMetering_; }
+    const ExposureMetering& Exposure() const { return exposureMetering_; }
     // Step 6 diagnostic: log every declared resource that did not END the frame at canonical.
     // Logging, not enforcing — each hit is either a mis-declaration or a resource that genuinely
     // needs an epilogue transition, and this is the step that finds them all.
@@ -603,6 +609,10 @@ private:
     std::vector<std::pair<ID3D12Resource*, CanonicalStateRegistry::Entry>> canonicalScratch_;
     // Per-name high-water mark of live entries: a leak is growth PAST it, not a steady count.
     std::vector<std::pair<std::string, int>> canonicalNetScratch_;
+    // MUST stay declared after canonicalStates_: ~ExposureMetering undeclares its buffers, and
+    // members are destroyed in reverse declaration order, so this has to go first. Shutdown()
+    // releases it explicitly anyway; this ordering only covers the path where Shutdown never ran.
+    ExposureMetering exposureMetering_;
     robin_hood::unordered_map<std::string, int> canonicalNetPeak_;
     unsigned canonicalLastDrift_ = ~0u;    // summary prints on change only — see the note there
     unsigned canonicalLastDeclared_ = ~0u;

@@ -432,6 +432,9 @@
     <ClCompile Include="sources/rendering/core/TextureCreate.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/ExposureMetering.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/Renderer.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
@@ -1030,6 +1033,15 @@
     </ClInclude>
     <ClInclude Include="sources/editor/ui/MeshEditorPreviewScene.h">
       <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/ExposureMetering.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/PhotographicSettings.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/PhotographicSettingsJson.h">
+      <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/Screenshot.h">
       <Filter>sources\rendering\core</Filter>

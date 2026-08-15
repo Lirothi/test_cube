@@ -41,6 +41,7 @@ cbuffer PerFrame : register(b0)
     float4 shoreWetnessWindow;     // xy: centre, z: 1 / half extent, w: darkening
     float4 shoreWetnessAppearance; // x: water-film reflection, yz: slope cutoff/full-wet normal Y, w: water level
     float4 shoreWetnessFallback;   // xy: height above/below water, z: normalized fade start
+    float4 shoreWetnessBreakup;    // x: upper-edge strength, y: broad XZ scale in metres
 }
 
 static const float kEps = 1e-6;
@@ -112,7 +113,26 @@ float SampleShoreWetness(float2 worldXZ, out float localCoverage)
     return filteredWetness;
 }
 
-float SampleDistantShoreWetness(float worldY)
+float WetnessBreakupHash(float2 cell)
+{
+    float3 p = frac(float3(cell.x, cell.y, cell.x) * 0.1031f);
+    p += dot(p, p.yzx + 33.33f);
+    return frac((p.x + p.y) * p.z);
+}
+
+float WetnessBreakupNoise(float2 position)
+{
+    const float2 cell = floor(position);
+    const float2 local = frac(position);
+    const float2 blend = local * local * (3.0f - 2.0f * local);
+    const float n00 = WetnessBreakupHash(cell);
+    const float n10 = WetnessBreakupHash(cell + float2(1.0f, 0.0f));
+    const float n01 = WetnessBreakupHash(cell + float2(0.0f, 1.0f));
+    const float n11 = WetnessBreakupHash(cell + float2(1.0f, 1.0f));
+    return lerp(lerp(n00, n10, blend.x), lerp(n01, n11, blend.x), blend.y);
+}
+
+float SampleDistantShoreWetness(float3 worldPosition)
 {
     const float aboveWater = max(shoreWetnessFallback.x, 0.0f);
     const float belowWater = max(shoreWetnessFallback.y, 0.0f);
@@ -121,7 +141,7 @@ float SampleDistantShoreWetness(float worldY)
         return 0.0f;
     }
 
-    const float signedHeight = worldY - shoreWetnessAppearance.w;
+    const float signedHeight = worldPosition.y - shoreWetnessAppearance.w;
     if (abs(signedHeight) <= kEps)
     {
         return 1.0f;
@@ -133,7 +153,29 @@ float SampleDistantShoreWetness(float worldY)
         return 0.0f;
     }
 
-    const float normalizedHeight = abs(signedHeight) / extent;
+    const float absoluteHeight = abs(signedHeight);
+    if (absoluteHeight >= extent)
+    {
+        return 0.0f;
+    }
+
+    float effectiveExtent = extent;
+    const float breakupStrength = saturate(shoreWetnessBreakup.x);
+    if (signedHeight > 0.0f && breakupStrength > kEps)
+    {
+        const float breakupScale = max(shoreWetnessBreakup.y, 0.1f);
+        const float2 breakupUv = worldPosition.xz / breakupScale;
+        const float broadNoise = WetnessBreakupNoise(breakupUv);
+        const float detailNoise = WetnessBreakupNoise(
+            breakupUv * 2.07f + float2(19.37f, -7.11f));
+        // A broad non-repeating field chooses how much of the authored ABOVE-water reach is
+        // removed at this XZ. Remapping leaves occasional full-length lobes, while the second
+        // octave prevents the outer contour from reading as a single smooth sine wave.
+        const float breakup = saturate((broadNoise * 0.72f + detailNoise * 0.28f - 0.2f) * 1.25f);
+        effectiveExtent *= 1.0f - breakupStrength * breakup;
+    }
+
+    const float normalizedHeight = absoluteHeight / max(effectiveExtent, kEps);
     const float fadeStart = saturate(shoreWetnessFallback.z);
     // Above/Below are exact outer limits. Stay fully wet through Fade Start, then linearly reach
     // zero at normalizedHeight == 1; never inflate the authored height interval.
@@ -217,7 +259,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 saturate(N_ws.y));
             float localCoverage = 0.0f;
             const float localWetness = saturate(SampleShoreWetness(Pw.xz, localCoverage));
-            const float distantWetness = SampleDistantShoreWetness(Pw.y);
+            const float distantWetness = SampleDistantShoreWetness(Pw);
             const float historyHalfExtent = shoreWetnessWindow.z > kEps
                 ? rcp(shoreWetnessWindow.z)
                 : 0.0f;

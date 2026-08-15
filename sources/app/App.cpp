@@ -27,6 +27,10 @@ double g_shotIntervalSec = 1.0;
 // Temporary VSM perf harness; see App.h.
 std::string g_profDumpPath;
 uint32_t g_traceFrames = 0;
+// Boot upscaler mode; see App.h. Set by main.cpp from "--dlss=<mode>". -1 = compiled default.
+int g_bootDlssMode = -1;
+// Empty-HUD capture mode; see App.h. Set by main.cpp from "--no-hud".
+bool g_hudHidden = false;
 
 #include "app/levels/JsonLevel.h"
 #include "rendering/core/Screenshot.h"
@@ -491,6 +495,14 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         Profiler::Get().SetThreadName("MainThread");
 
         InitScene();
+
+        // "--dlss=<mode>": apply the boot override once the device, the DLSS handler and the
+        // deferred targets exist, so this takes exactly the same path as the dev-window combo
+        // (resolution update + target recreation) rather than a second, untested init order.
+        if (g_bootDlssMode >= 0)
+        {
+            renderer.SetDlssMode(static_cast<sl::DLSSMode>(g_bootDlssMode));
+        }
 
         MSG msg = {};
         double lastTime = GetTimeSeconds();

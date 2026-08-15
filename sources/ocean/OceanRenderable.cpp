@@ -1550,6 +1550,16 @@ Math::float4 OceanRenderable::GetWetnessComposeFallback() const
         0.0f);
 }
 
+Math::float4 OceanRenderable::GetWetnessComposeBreakup() const
+{
+    const auto& render = GetRenderConfig();
+    return Math::float4(
+        Math::Saturate(render.shoreWetnessFallbackBreakupStrength),
+        std::clamp(render.shoreWetnessFallbackBreakupScale, 0.1f, 500.0f),
+        0.0f,
+        0.0f);
+}
+
 Math::float4 OceanRenderable::GetShoreSamplingParams() const
 {
     const float width = simulation_

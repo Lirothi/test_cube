@@ -14,6 +14,7 @@
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
 #include "editor/scene/EditorSceneDocument.h"
+#include "rendering/core/PhotographicSettingsJson.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/lighting/DirectionalLight.h"
@@ -200,6 +201,15 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         dl.SetAmbient(enabled ? JF(p, "ambient", 0.05f) : 0.0f);
         ctx.scene.SetDirectionalLight(dl);
     }
+    else if (env.type == "cameraExposure")
+    {
+        // P1: rebuilt from defaults on every edit rather than patched in place, so clearing a
+        // field in the inspector returns it to the documented default instead of keeping whatever
+        // the previous edit left behind.
+        render::CameraExposureSettings exposure{};
+        render::PhotographicSettingsJson::ApplyOverrides(p, exposure);
+        ctx.scene.SetCameraExposure(exposure);
+    }
     else if (env.type == "camera")
     {
         Camera& cam = ctx.scene.CameraRef();
@@ -324,6 +334,12 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
     {
         ctx.renderer.WaitForPreviousFrame();
         ctx.scene.SetSkybox(nullptr);
+    }
+    else if (env.type == "cameraExposure")
+    {
+        // P1: removing the section returns the scene to the dormant defaults, which is the same
+        // state a level that never had the section loads with.
+        ctx.scene.SetCameraExposure(render::CameraExposureSettings{});
     }
     else if (env.type == "wind")
     {

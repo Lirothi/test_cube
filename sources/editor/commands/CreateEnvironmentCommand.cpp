@@ -19,7 +19,8 @@ namespace
     {
         return object.type == "directionalLight" ||
             object.type == "skybox" ||
-            object.type == "camera";
+            object.type == "camera" ||
+            object.type == "cameraExposure"; // P1
     }
 
     bool DocumentHasOtherOfType(const EditorSceneDocument& document, const EditorObject& object)

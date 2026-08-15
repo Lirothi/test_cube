@@ -47,6 +47,20 @@ extern std::string g_profDumpPath;
 // trace the CaptureTrace key would, then exit once it has been written to traces/. 0 = disabled.
 extern uint32_t g_traceFrames;
 
+// "--dlss=<off|perf|balanced|quality|ultraperf|ultraquality|dlaa>": pick the upscaler mode at boot.
+// The build defaults to Balanced and the mode is otherwise only reachable through the F-keys or the
+// dev window, i.e. every native-resolution capture would need a keypress by hand — which makes the
+// native/DLSS pair the photographic-lighting plan is judged on impossible to capture headlessly.
+// Holds an sl::DLSSMode as int so this header stays free of the Streamline includes; -1 = leave the
+// compiled default alone.
+extern int g_bootDlssMode;
+
+// "--no-hud": build an EMPTY HUD text buffer. The FPS/MS readout is composited into the backbuffer
+// that "--shot" reads back, so it differs between two runs of the same frozen frame — which would
+// make every "no intentional image delta" check downstream diff the frame counter instead of the
+// image. Off by default: the HUD is what makes an exploratory shot carry its own camera.
+extern bool g_hudHidden;
+
 class App {
 public:
     ~App();
