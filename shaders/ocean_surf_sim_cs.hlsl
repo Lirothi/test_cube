@@ -277,7 +277,13 @@ void Update(uint3 dispatchThreadId : SV_DispatchThreadID)
     const float kOnset = clamp(BreakOnset, 0.05f, 0.95f); // where whitecapping starts ramping
     float current = saturate((overload - kOnset) / (1.0f - kOnset));
     current *= current * saturate(h / 0.02f) * DepositStrength; // ripples never foam
-    const float foam = max(current, FoamRead[coord] - FoamFadeRate * DeltaTime);
+    //const float foam = max(current, FoamRead[coord] - FoamFadeRate * DeltaTime);
+    
+    const float prev = FoamRead[coord];
+    const float decayRate =
+        FoamFadeRate * pow(saturate(prev), max(1.0f, 0.0f)); //hardcoded for now
+    const float foam = max(current, prev - decayRate * DeltaTime);
+    
     FoamWrite[coord] = min(foam, 1.5f);
 }
 

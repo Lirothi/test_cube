@@ -499,6 +499,7 @@ VSOutput VSMain(VSInput input)
     float verticalAttenuation = 1.0f;
     float horizontalAttenuation = 1.0f;
     float2 shoreUV = ShoreDepthUV(worldUV);
+    float simDisplacementFade = 1.0f;
     if (all(shoreUV >= 0.0f) && all(shoreUV <= 1.0f))
     {
         float shoreDepth = SampleShoreDepth(shoreUV);
@@ -510,6 +511,7 @@ VSOutput VSMain(VSInput input)
             float depthFade = saturate(waterDepth / max(shoreLegacyDampParams.z, 0.01f));
             verticalAttenuation = lerp(1.0f - saturate(shoreLegacyDampParams.x), 1.0f, depthFade);
             horizontalAttenuation = lerp(1.0f - saturate(shoreLegacyDampParams.y), 1.0f, depthFade);
+            simDisplacementFade = saturate(waterDepth / 0.15f);
         }
     }
     else
@@ -554,7 +556,7 @@ VSOutput VSMain(VSInput input)
         if (all(simUV >= 0.0f) && all(simUV <= 1.0f))
         {
             const float simHeight = SurfSimWaveTex.SampleLevel(LinearClampSampler, simUV, 0).x;
-            displacement.y += simHeight * surfSimParams2.w;
+            displacement.y += simHeight * surfSimParams2.w * simDisplacementFade;
         }
     }
 
@@ -781,12 +783,18 @@ float SurfSimFoamCoverage(float2 baseXZ)
     {
         return 0.0f; // sim off this frame - zero cost beyond the uniform branch
     }
-    const float2 simUV = (baseXZ - surfSimParams.xy) * (surfSimParams.z * 0.5f) + 0.5f;
+    float2 simUV = (baseXZ - surfSimParams.xy) * (surfSimParams.z * 0.5f) + 0.5f;
     if (any(simUV < 0.0f) || any(simUV > 1.0f))
     {
         return 0.0f;
     }
-    const float foam = SurfSimFoamTex.SampleLevel(LinearClampSampler, simUV, 0);
+    const float kHalfTexel = 0.5f / 512.0f;
+    const float foam = 0.25f *
+        (SurfSimFoamTex.SampleLevel(LinearClampSampler, simUV + float2(-kHalfTexel, -kHalfTexel), 0) +
+         SurfSimFoamTex.SampleLevel(LinearClampSampler, simUV + float2(kHalfTexel, -kHalfTexel), 0) +
+         SurfSimFoamTex.SampleLevel(LinearClampSampler, simUV + float2(-kHalfTexel, kHalfTexel), 0) +
+         SurfSimFoamTex.SampleLevel(LinearClampSampler, simUV + float2(kHalfTexel, kHalfTexel), 0));
+    
     if (foam <= 1e-3f)
     {
         return 0.0f;
