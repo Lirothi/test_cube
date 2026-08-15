@@ -192,6 +192,18 @@ static const float kSpecularMinPower = 64.0f;
 static const float kSpecularMaxPower = 512.0f;
 static const float kLodThreshold = 0.05f;
 
+// Keep the presentation boundary in step with the compute shader's 24-texel absorber. The
+// camera-following window eventually discards persistent wave/foam data in Relocate; fading the
+// sampled result first prevents that loss from reading as a moving square cut.
+float SurfSimWindowEdgeFade(float2 simUV)
+{
+    const float kResolution = 512.0f;
+    const float kFadeTexels = 24.0f;
+    const float2 edgeUV = min(simUV, 1.0f - simUV);
+    const float edgeTexels = min(edgeUV.x, edgeUV.y) * kResolution;
+    return smoothstep(0.5f, kFadeTexels, edgeTexels);
+}
+
 static const uint kGradientMaxKeys = 8u;
 
 struct Gradient
@@ -556,7 +568,8 @@ VSOutput VSMain(VSInput input)
         if (all(simUV >= 0.0f) && all(simUV <= 1.0f))
         {
             const float simHeight = SurfSimWaveTex.SampleLevel(LinearClampSampler, simUV, 0).x;
-            displacement.y += simHeight * surfSimParams2.w * simDisplacementFade;
+            displacement.y += simHeight * surfSimParams2.w * simDisplacementFade *
+                SurfSimWindowEdgeFade(simUV);
         }
     }
 
@@ -818,7 +831,8 @@ float SurfSimFoamCoverage(float2 baseXZ)
     const float tearAmount =
         lerp(max(surfSimParams2.y, 0.0f), saturate(surfSimParams2.x), age);
     const float threshold = tearAmount * pattern;
-    return saturate((foam - threshold) / max(1.0f - threshold, 1e-3f));
+    const float coverage = saturate((foam - threshold) / max(1.0f - threshold, 1e-3f));
+    return coverage * SurfSimWindowEdgeFade(simUV);
 }
 
 float Pow5(float x)
