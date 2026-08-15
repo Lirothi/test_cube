@@ -59,6 +59,23 @@ public:
     // fraction of a stop over the plan's metering range, and it is one thread group of 256.
     static constexpr UINT kHistogramBins = 256u;
 
+    // What the solve last wrote, read back from the GPU. Section 6.5 of the plan requires the dev
+    // UI to surface these, and without them the settings are being tuned blind.
+    struct Readback
+    {
+        float adaptedEv100 = 0.0f;
+        float lowLuminance = 0.0f;
+        float highLuminance = 0.0f;
+        float targetEv100 = 0.0f;
+        bool valid = false;
+    };
+    Readback LatestReadback() const;
+
+    // Records the 16-byte copy into this frame's ring slot. Called by the metering pass right
+    // after the solve; the resource state round-trip is declared by that pass.
+    void RecordReadbackCopy(ID3D12GraphicsCommandList* cl);
+    ID3D12Resource* ReadbackSource() const { return exposure_.Get(); }
+
 private:
     // RAW (byte-address) rather than structured, for two reasons that both bite in P2:
     // InterlockedAdd needs a raw or structured UAV, and ClearUnorderedAccessViewUint -- which is
@@ -74,6 +91,13 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE histogramUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE exposureSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE exposureUav_{};
+
+    // Readback ring. Four slots so the one we read is older than any frame still in flight, which
+    // is what makes reading it without a fence safe: it was written frames ago and has retired.
+    static constexpr UINT kReadbackSlots = 4u;
+    Microsoft::WRL::ComPtr<ID3D12Resource> readback_;
+    const float* readbackPtr_ = nullptr; // persistently mapped, 4 slots x 4 floats
+    std::uint64_t readbackFrame_ = 0;
 
     bool created_ = false;
     // Starts true: the buffers are created with undefined contents, so the very first solve in P2

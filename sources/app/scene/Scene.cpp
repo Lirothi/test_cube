@@ -965,6 +965,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.wind = &windState_; // W3: gbuffer per-view CB reads this
     frameData_.ocean = FindOceanRenderable(); // caustics source for the deferred lighting pass
     frameData_.settings = renderSettings_;
+    frameData_.cameraExposure = cameraExposure_;
 #if WITH_EDITOR
     frameData_.selectedEditorObjectIds = selectedEditorObjectIds_;
     frameData_.selectedEditorObjectCount = selectedEditorObjectCount_;

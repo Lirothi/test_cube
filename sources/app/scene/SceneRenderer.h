@@ -141,6 +141,9 @@ private:
 #if WITH_EDITOR
     void Pass_SelectionOutline(Renderer* r, RenderGraphPassContext ctx);
 #endif
+    // P2: clear + build the luminance histogram and solve the adapted exposure. Runs before the
+    // tonemap, which consumes the value it writes.
+    void Pass_ExposureMetering(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Debug(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask);
@@ -150,6 +153,11 @@ private:
     void EnsureFrameResources(Renderer* renderer);
 
     SceneResourceBootstrapper resources_{};
+
+    // P2: wall-clock stamp of the previous metering dispatch, for the adaptation rate. Negative =
+    // no previous frame. Kept here rather than derived from a frame counter so a stall (breakpoint,
+    // level load) shows up as a large delta that the cap below can clamp, per plan section 6.2.
+    double lastExposureTimeSeconds_ = -1.0;
 
     // The frame's main render graph, owned rather than built as a local in Render():
     // it is ~16 KB (MaxPasses x Pass, each holding a std::function), which on the stack

@@ -470,6 +470,67 @@ unchanged (same 2.7e-05 / zero-above-horizon gate), Release `--scene-stress=30` 
 
 ### P2 — Implement histogram metering and temporal eye adaptation
 
+**STATUS: DONE 2026-08-15** (uncommitted). All ten implement items.
+
+Shaders: `shaders/exposure_histogram_cs.hlsl` (`CSClear` + `CSBuild`) and
+`shaders/exposure_solve_cs.hlsl`. One new render-graph pass `Main_ExposureMetering`, scheduled
+between the scene and the tonemap and deliberately OUTSIDE the tonemap CL group — it is that
+group's external prereq, which the group contract only permits on a first member.
+
+**The metering samples a FIXED 256x144 normalised grid, not one thread per pixel.** That is what
+makes the pass cost the same at any resolution (item 1) and, more importantly, what makes native
+and DLSS meter *the same normalised positions* — so the section 6.3 parity contract holds by
+construction rather than by luck. Measured: native and DLSS settle on a median within **0.0000
+stops** of each other.
+
+Exposure is applied in `tonemap_cs.hlsl`, after the DLSS resolve that happens earlier in the same
+pass and immediately before the tone curve. The exposure record is bound as a **UAV, read-only**,
+purely so it never leaves its canonical `UNORDERED_ACCESS` state; an SRV binding would cost a
+transition down and back every frame for 16 bytes this pass does not write. NGX auto-exposure is
+untouched and nothing is tagged `kBufferTypeExposure` (item 10).
+
+**Gated.** Dormant path is screenshot-equivalent to the P0 baseline (worst metric 2.7e-05 against
+the 1e-4 gate, zero channel difference above the horizon). Manual EV sweep is monotonic and
+correctly signed — median 0.436 / 0.218 / 0.088 / 0.034 / 0.014 at EV -2/-1/0/+1/+2, i.e. higher EV
+is a darker image. Adaptation settles: 8 s and 20 s warmups on the same frozen frame land on an
+identical median, 0.00000 stops apart. On `sun_glint` the camera closes 0.46 stops and cuts clipped
+pixels from 0.044% to 0.007% without over-reacting, which is the percentile clipping doing its job
+(item 4) with no water or sky detection anywhere. Release `--scene-stress=30` CLEAN, Debug
+`--scene-stress=8 --scene-stress-gbv` CLEAN, Debug run of the enabled path exits 0 under the
+D3D12 debug layer.
+
+**Cost: 0.028 ms** for the whole metering pass against a 0.15 ms budget — 5x under. GPU.Frame
+1.600 -> 1.616. Dormant costs 0.001 ms (one empty command list).
+
+**Live tuning surface (dev window "Exposure" tab).** Every setting is a slider there, plus a live
+readback of what the solve actually produced: adapted EV100 and its linear multiplier, the target
+EV100, the metered low/high percentile luminance, a settled/adapting indicator and a "Reset
+adaptation" button. The readback is a 4-slot ring copied 16 bytes per frame (+0.002 ms) and read
+from the oldest slot, so no fence is needed. A "Copy JSON to clipboard" button emits the
+`cameraExposure` block ready to paste into a level — the tab edits **runtime** state only and
+deliberately does not write the level, which keeps section 6.5's "debug views must not mutate
+serialised settings" true while still being tunable. The tab is available in Release: this is the
+tuning surface, not an editor feature.
+
+#### Finding that changes P4: this renderer's HDR is NOT photometric
+
+Section 6.1's `manualEv100 = 10.0` default renders a **black screen**. EV100 10 means roughly
+10,000 cd/m^2, but scene-referred linear values here sit around 0.1-3 for a lit daylight surface,
+so the multiplier `1/(1.2*2^10)` = 0.0008 annihilates the image. EV100 in this engine is therefore
+relative to an arbitrary linear scale, not to real luminance. The default is now **0.0**, which
+measures just under the authored look; auto-exposure settles near -0.3.
+
+Consequences to carry into P4 and P11: the optional "lux-backed UI" in P4 item 1 is **not** free —
+it first requires establishing a scene-to-luminance scale, and until that exists, sun intensity in
+lux would be a label rather than a unit. The `minEv100 = -6 / maxEv100 = 16` defaults are likewise
+photometric assumptions; they remain deliberately wide (i.e. "off", per P1's note) and should be
+narrowed against measured values, not against textbook ones.
+
+One interaction worth stating plainly: with the camera enabled, the directional light's legacy
+`exposure = 2.0` is now being compensated for by auto-exposure rather than removed. That is exactly
+the double duty P4 exists to separate, and it is why enabling the camera on `wind_test` moves the
+image so little (+0.08 stops on `overview`) — the two are cancelling.
+
 **Depends on:** P1.
 
 **Goal:** generate a stable camera exposure from HDR scene luminance.

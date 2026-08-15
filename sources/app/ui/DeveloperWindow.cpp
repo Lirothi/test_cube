@@ -29,6 +29,20 @@
 
 namespace
 {
+    // Hoverable "(?)" next to a control. The exposure knobs are the kind where the wrong mental
+    // model costs an hour of tuning in the wrong direction, so they carry their explanation.
+    void HelpMarker(const char* text)
+    {
+        ImGui::TextDisabled("(?)");
+        if (ImGui::BeginItemTooltip())
+        {
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
+
     std::string NormalizeLevelPath(std::string path)
     {
         std::replace(path.begin(), path.end(), '\\', '/');
@@ -416,34 +430,122 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::TextDisabled("DLSS quality controls the render scale while active.");
                 }
 
-                // P1 readout for the dormant photographic camera (plan sections 6.2/6.5). Read-only
-                // on purpose: the values are authored per level in the inspector, and a debug view
-                // must not mutate serialised level settings.
-                ImGui::Separator();
+                ImGui::EndTabItem();
+            }
+
+            // P2: live tuning for the photographic camera. Its own tab because it is a whole
+            // control surface, not a readout, and because these knobs are meant to be swept while
+            // watching the frame. Everything here is RUNTIME state (Scene::CameraExposureRef) --
+            // it does not write the level, so a value worth keeping has to be copied into the
+            // level's cameraExposure section afterwards. The tab is deliberately available in
+            // Release: this is the tuning surface, not an editor feature.
+            if (ImGui::BeginTabItem("Exposure"))
+            {
+                render::CameraExposureSettings& exposure = scene.CameraExposureRef();
+                const ExposureMetering& metering = renderer.Exposure();
+                const ExposureMetering::Readback readback = metering.LatestReadback();
+
+                ImGui::Checkbox("Enabled", &exposure.enabled);
+                ImGui::SameLine();
+                HelpMarker("Off = the exposure multiplier is exactly 1.0 and the metering pass does "
+                           "no GPU work, i.e. the pre-plan image.");
+
+                if (!exposure.enabled)
                 {
-                    const render::CameraExposureSettings& exposure = scene.GetCameraExposure();
-                    if (!exposure.enabled)
-                    {
-                        ImGui::TextDisabled("Camera exposure: dormant (multiplier x%.3f)",
-                            render::kIdentityExposureMultiplier);
-                    }
-                    else if (exposure.autoExposure)
-                    {
-                        // No metered EV exists until P2 schedules the histogram, so the compensation
-                        // is all there is to show. Deliberately not faked into a plausible number.
-                        ImGui::Text("Camera exposure: auto, compensation %+.2f EV", exposure.compensationEv);
-                        ImGui::TextDisabled("Metered EV: not available until the P2 metering pass lands.");
-                        ImGui::TextDisabled("Clamp %.2f .. %.2f EV100, percentiles %.3f/%.3f, speed %.2f/%.2f",
-                            exposure.minEv100, exposure.maxEv100,
-                            exposure.lowPercentile, exposure.highPercentile,
-                            exposure.speedUp, exposure.speedDown);
-                    }
-                    else
-                    {
-                        ImGui::Text("Camera exposure: manual %.2f EV100 (multiplier x%.5f)",
-                            exposure.manualEv100,
-                            render::ExposureMultiplierFromEv100(exposure.manualEv100));
-                    }
+                    ImGui::TextDisabled("Dormant: multiplier x%.3f", render::kIdentityExposureMultiplier);
+                }
+
+                ImGui::BeginDisabled(!exposure.enabled);
+
+                ImGui::Checkbox("Auto exposure", &exposure.autoExposure);
+                ImGui::SameLine();
+                HelpMarker("Off holds the manual EV below. On meters the scene each frame and adapts.");
+
+                ImGui::SeparatorText("Live");
+                if (readback.valid)
+                {
+                    const float multiplier = render::ExposureMultiplierFromEv100(readback.adaptedEv100);
+                    ImGui::Text("Adapted   %+.3f EV100   (x%.5f)", readback.adaptedEv100, multiplier);
+                    ImGui::Text("Target    %+.3f EV100", readback.targetEv100);
+                    ImGui::Text("Metered   low %.5f   high %.5f  (scene linear)",
+                        readback.lowLuminance, readback.highLuminance);
+                    const float gap = readback.targetEv100 - readback.adaptedEv100;
+                    ImGui::TextDisabled(fabsf(gap) < 0.01f ? "settled" : "adapting (%+.2f EV to go)", gap);
+                }
+                else
+                {
+                    ImGui::TextDisabled("waiting for the first readback...");
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Reset adaptation"))
+                {
+                    renderer.Exposure().RequestReset();
+                }
+
+                ImGui::SeparatorText("Metering");
+                ImGui::SliderFloat("Compensation (EV)", &exposure.compensationEv, -8.0f, 8.0f, "%+.2f");
+                ImGui::SameLine();
+                HelpMarker("Positive = brighter image. Applied on top of the metered result.");
+                ImGui::SliderFloat("Low percentile", &exposure.lowPercentile, 0.0f, 0.5f, "%.3f");
+                ImGui::SliderFloat("High percentile", &exposure.highPercentile, 0.5f, 1.0f, "%.3f");
+                ImGui::SameLine();
+                HelpMarker("Clipping both tails is what stops a sun glint or a patch of sky from "
+                           "dragging the whole frame. Widen them to meter more of the image.");
+
+                ImGui::SeparatorText("Adaptation");
+                ImGui::SliderFloat("Speed up (stops/s)", &exposure.speedUp, 0.0f, 20.0f, "%.2f");
+                ImGui::SliderFloat("Speed down (stops/s)", &exposure.speedDown, 0.0f, 20.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker("Up = the scene got brighter and the camera closes; down = the reverse. "
+                           "The eye's light adaptation is the fast direction, hence 3 vs 1.");
+
+                ImGui::SeparatorText("Range");
+                ImGui::SliderFloat("Min EV100", &exposure.minEv100, -16.0f, 20.0f, "%.2f");
+                ImGui::SliderFloat("Max EV100", &exposure.maxEv100, -16.0f, 20.0f, "%.2f");
+                if (exposure.maxEv100 < exposure.minEv100)
+                {
+                    std::swap(exposure.minEv100, exposure.maxEv100);
+                }
+                ImGui::SameLine();
+                HelpMarker("The default -6..16 span is 22 stops, i.e. it clamps nothing. Narrow it "
+                           "to stop the camera opening all the way up in a dark frame.");
+
+                ImGui::BeginDisabled(exposure.autoExposure);
+                ImGui::SliderFloat("Manual EV100", &exposure.manualEv100, -8.0f, 8.0f, "%.2f");
+                ImGui::EndDisabled();
+                ImGui::TextDisabled("Manual x%.5f", render::ExposureMultiplierFromEv100(exposure.manualEv100));
+                ImGui::SameLine();
+                HelpMarker("This renderer's HDR is NOT photometric: scene linear values sit around "
+                           "0.1-3, not thousands of cd/m2. EV100 0 is roughly the authored look; "
+                           "the textbook daylight value of 10 renders black.");
+
+                ImGui::EndDisabled();
+
+                ImGui::SeparatorText("Level");
+                ImGui::TextDisabled("These are runtime values. To keep them, copy into the level's");
+                ImGui::TextDisabled("\"cameraExposure\" section (or edit it in the editor inspector).");
+                if (ImGui::SmallButton("Copy JSON to clipboard"))
+                {
+                    char json[512];
+                    std::snprintf(json, sizeof(json),
+                        "\"cameraExposure\": {\n"
+                        "  \"enabled\": %s,\n"
+                        "  \"autoExposure\": %s,\n"
+                        "  \"compensationEv\": %.4f,\n"
+                        "  \"minEv100\": %.4f,\n"
+                        "  \"maxEv100\": %.4f,\n"
+                        "  \"lowPercentile\": %.4f,\n"
+                        "  \"highPercentile\": %.4f,\n"
+                        "  \"speedUp\": %.4f,\n"
+                        "  \"speedDown\": %.4f,\n"
+                        "  \"manualEv100\": %.4f\n"
+                        "}",
+                        exposure.enabled ? "true" : "false",
+                        exposure.autoExposure ? "true" : "false",
+                        exposure.compensationEv, exposure.minEv100, exposure.maxEv100,
+                        exposure.lowPercentile, exposure.highPercentile,
+                        exposure.speedUp, exposure.speedDown, exposure.manualEv100);
+                    ImGui::SetClipboardText(json);
                 }
 
                 ImGui::EndTabItem();

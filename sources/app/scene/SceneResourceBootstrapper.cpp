@@ -161,6 +161,51 @@ void SceneFxaaCBHandles::Populate(Material* material)
     edgeThresholdMin = material->ComputeCB0FieldHandle("edgeThresholdMin");
 }
 
+void SceneTonemapCBHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material)
+    {
+        return;
+    }
+    exposureEnabled = material->ComputeCB0FieldHandle("exposureEnabled");
+}
+
+void SceneExposureHistogramCBHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material)
+    {
+        return;
+    }
+    sampleGridX = material->ComputeCB0FieldHandle("sampleGridX");
+    sampleGridY = material->ComputeCB0FieldHandle("sampleGridY");
+    minLogLum = material->ComputeCB0FieldHandle("minLogLum");
+    invLogLumRange = material->ComputeCB0FieldHandle("invLogLumRange");
+}
+
+void SceneExposureSolveCBHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material)
+    {
+        return;
+    }
+    minLogLum = material->ComputeCB0FieldHandle("minLogLum");
+    logLumRange = material->ComputeCB0FieldHandle("logLumRange");
+    lowPercentile = material->ComputeCB0FieldHandle("lowPercentile");
+    highPercentile = material->ComputeCB0FieldHandle("highPercentile");
+    compensationEv = material->ComputeCB0FieldHandle("compensationEv");
+    minEv100 = material->ComputeCB0FieldHandle("minEv100");
+    maxEv100 = material->ComputeCB0FieldHandle("maxEv100");
+    deltaTime = material->ComputeCB0FieldHandle("deltaTime");
+    speedUp = material->ComputeCB0FieldHandle("speedUp");
+    speedDown = material->ComputeCB0FieldHandle("speedDown");
+    manualEv100 = material->ComputeCB0FieldHandle("manualEv100");
+    autoExposure = material->ComputeCB0FieldHandle("autoExposure");
+    resetHistory = material->ComputeCB0FieldHandle("resetHistory");
+}
+
 #if WITH_EDITOR
 void SceneSelectionOutlineCBHandles::Populate(Material* material)
 {
@@ -269,6 +314,30 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         cd.shaderFile = L"shaders/fxaa_cs.hlsl";
         cd.csEntry = "CSMain";
         matFxaaCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
+    // P2: two entry points out of one histogram shader, plus the solve. Materials are keyed by
+    // (file, entry), so the clear and the build are separate Material objects over the same file.
+    if (!matExposureClearCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/exposure_histogram_cs.hlsl";
+        cd.csEntry = "CSClear";
+        matExposureClearCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    if (!matExposureBuildCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/exposure_histogram_cs.hlsl";
+        cd.csEntry = "CSBuild";
+        matExposureBuildCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    if (!matExposureSolveCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/exposure_solve_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matExposureSolveCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
     if (!matSSR_)
@@ -417,6 +486,9 @@ void SceneResourceBootstrapper::RefreshHandles()
     spotHandles_.Populate(matSpotLightCS_.get());
     composeHandles_.Populate(matComposeCS_.get());
     fxaaHandles_.Populate(matFxaaCS_.get());
+    tonemapHandles_.Populate(matTonemapCS_.get());
+    exposureHistogramHandles_.Populate(matExposureBuildCS_.get());
+    exposureSolveHandles_.Populate(matExposureSolveCS_.get());
     ssrHandles_.Populate(matSSR_.get());
     blurHandles_.Populate(matBlur_.get());
 #if WITH_EDITOR
@@ -462,6 +534,21 @@ UINT SceneResourceBootstrapper::GetComposeCBSizeBytes() const
 UINT SceneResourceBootstrapper::GetFxaaCBSizeBytes() const
 {
     return matFxaaCS_ ? matFxaaCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+UINT SceneResourceBootstrapper::GetTonemapCBSizeBytes() const
+{
+    return matTonemapCS_ ? matTonemapCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+UINT SceneResourceBootstrapper::GetExposureHistogramCBSizeBytes() const
+{
+    return matExposureBuildCS_ ? matExposureBuildCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+UINT SceneResourceBootstrapper::GetExposureSolveCBSizeBytes() const
+{
+    return matExposureSolveCS_ ? matExposureSolveCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 #if WITH_EDITOR
@@ -594,6 +681,53 @@ void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data
     matBlur_->UpdateCBField(handles.dir, data.direction, dest);
     matBlur_->UpdateCBField(handles.radius, data.radius, dest);
     matBlur_->UpdateCBField(handles.glossyScale, data.glossyScale, dest);
+}
+
+void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled, uint8_t* dest) const
+{
+    if (!matTonemapCS_ || !dest)
+    {
+        return;
+    }
+    matTonemapCS_->UpdateCBField(tonemapHandles_.exposureEnabled,
+        static_cast<uint32_t>(exposureEnabled ? 1u : 0u), dest);
+}
+
+void SceneResourceBootstrapper::WriteExposureHistogramConstants(uint8_t* dest) const
+{
+    if (!matExposureBuildCS_ || !dest)
+    {
+        return;
+    }
+    const auto& handles = exposureHistogramHandles_;
+    const float range = ExposureMeteringConstants::kMaxLogLum - ExposureMeteringConstants::kMinLogLum;
+    matExposureBuildCS_->UpdateCBField(handles.sampleGridX, ExposureMeteringConstants::kSampleGridX, dest);
+    matExposureBuildCS_->UpdateCBField(handles.sampleGridY, ExposureMeteringConstants::kSampleGridY, dest);
+    matExposureBuildCS_->UpdateCBField(handles.minLogLum, ExposureMeteringConstants::kMinLogLum, dest);
+    matExposureBuildCS_->UpdateCBField(handles.invLogLumRange, 1.0f / range, dest);
+}
+
+void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const
+{
+    if (!matExposureSolveCS_ || !dest)
+    {
+        return;
+    }
+    const auto& handles = exposureSolveHandles_;
+    const float range = ExposureMeteringConstants::kMaxLogLum - ExposureMeteringConstants::kMinLogLum;
+    matExposureSolveCS_->UpdateCBField(handles.minLogLum, ExposureMeteringConstants::kMinLogLum, dest);
+    matExposureSolveCS_->UpdateCBField(handles.logLumRange, range, dest);
+    matExposureSolveCS_->UpdateCBField(handles.lowPercentile, data.lowPercentile, dest);
+    matExposureSolveCS_->UpdateCBField(handles.highPercentile, data.highPercentile, dest);
+    matExposureSolveCS_->UpdateCBField(handles.compensationEv, data.compensationEv, dest);
+    matExposureSolveCS_->UpdateCBField(handles.minEv100, data.minEv100, dest);
+    matExposureSolveCS_->UpdateCBField(handles.maxEv100, data.maxEv100, dest);
+    matExposureSolveCS_->UpdateCBField(handles.deltaTime, data.deltaTime, dest);
+    matExposureSolveCS_->UpdateCBField(handles.speedUp, data.speedUp, dest);
+    matExposureSolveCS_->UpdateCBField(handles.speedDown, data.speedDown, dest);
+    matExposureSolveCS_->UpdateCBField(handles.manualEv100, data.manualEv100, dest);
+    matExposureSolveCS_->UpdateCBField(handles.autoExposure, data.autoExposure, dest);
+    matExposureSolveCS_->UpdateCBField(handles.resetHistory, data.resetHistory, dest);
 }
 
 void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const

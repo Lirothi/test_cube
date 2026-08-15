@@ -37,6 +37,10 @@ public:
     // is pure state until P2 schedules the metering passes that read it.
     const render::CameraExposureSettings& GetCameraExposure() const { return cameraExposure_; }
     void SetCameraExposure(const render::CameraExposureSettings& settings) { cameraExposure_ = settings; }
+    // Live tuning from the developer window. This is RUNTIME state only -- it does not write the
+    // level, so a tuned value has to be copied into the level's cameraExposure section (or the
+    // editor inspector) to survive a reload. Same deal as the ocean controls.
+    render::CameraExposureSettings& CameraExposureRef() { return cameraExposure_; }
     LightManager& GetLightManager() { return lightManager_; }
     const LightManager& GetLightManager() const { return lightManager_; }
     Skybox* GetSkybox() const { return skyBox_.get(); }

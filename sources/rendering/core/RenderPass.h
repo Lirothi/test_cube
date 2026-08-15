@@ -33,6 +33,7 @@ enum class RenderPass : uint16_t {
     Main_Transparent,
     Main_DebugDraw,
     Main_SelectionOutline,
+    Main_ExposureMetering, // P2: histogram + percentile solve, feeds the tonemap's exposure
     Main_Tonemap,
     Main_Debug,
     Main_Count,
@@ -88,6 +89,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_Transparent: return L"Transparent";
     case RenderPass::Main_DebugDraw: return L"DebugDraw";
     case RenderPass::Main_SelectionOutline: return L"SelectionOutline";
+    case RenderPass::Main_ExposureMetering: return L"ExposureMetering";
     case RenderPass::Main_Tonemap: return L"Tonemap";
     case RenderPass::Main_Debug: return L"Debug";
     case RenderPass::Epilogue_Overlay: return L"Overlay";

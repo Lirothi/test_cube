@@ -137,6 +137,43 @@ struct SceneFxaaCBHandles
     void Populate(Material* material);
 };
 
+// P2 photographic camera.
+struct SceneTonemapCBHandles
+{
+    Material::CBFieldHandle exposureEnabled;
+
+    void Populate(Material* material);
+};
+
+struct SceneExposureHistogramCBHandles
+{
+    Material::CBFieldHandle sampleGridX;
+    Material::CBFieldHandle sampleGridY;
+    Material::CBFieldHandle minLogLum;
+    Material::CBFieldHandle invLogLumRange;
+
+    void Populate(Material* material);
+};
+
+struct SceneExposureSolveCBHandles
+{
+    Material::CBFieldHandle minLogLum;
+    Material::CBFieldHandle logLumRange;
+    Material::CBFieldHandle lowPercentile;
+    Material::CBFieldHandle highPercentile;
+    Material::CBFieldHandle compensationEv;
+    Material::CBFieldHandle minEv100;
+    Material::CBFieldHandle maxEv100;
+    Material::CBFieldHandle deltaTime;
+    Material::CBFieldHandle speedUp;
+    Material::CBFieldHandle speedDown;
+    Material::CBFieldHandle manualEv100;
+    Material::CBFieldHandle autoExposure;
+    Material::CBFieldHandle resetHistory;
+
+    void Populate(Material* material);
+};
+
 #if WITH_EDITOR
 struct SceneSelectionOutlineCBHandles
 {
@@ -264,6 +301,29 @@ struct FxaaPassConstants
     float edgeThresholdMin = 0.0625f;
 };
 
+// P2 photographic camera. The log-luminance window is a compile-time constant of the metering,
+// not an authored setting: it only has to be wide enough to contain any scene the histogram will
+// ever see, and moving it would silently reinterpret every stored bin.
+struct ExposureMeteringConstants
+{
+    static constexpr uint32_t kSampleGridX = 256;
+    static constexpr uint32_t kSampleGridY = 144;
+    static constexpr float kMinLogLum = -10.0f; // log2 luminance
+    static constexpr float kMaxLogLum = 14.0f;  // 24 stops over 256 bins = 0.094 stops per bin
+
+    float compensationEv = 0.0f;
+    float minEv100 = -6.0f;
+    float maxEv100 = 16.0f;
+    float lowPercentile = 0.02f;
+    float highPercentile = 0.95f;
+    float speedUp = 3.0f;
+    float speedDown = 1.0f;
+    float manualEv100 = 0.0f;
+    float deltaTime = 0.0f;
+    uint32_t autoExposure = 1;
+    uint32_t resetHistory = 0;
+};
+
 #if WITH_EDITOR
 struct SelectionOutlinePassConstants
 {
@@ -297,6 +357,9 @@ public:
     std::shared_ptr<Material> GetComposeMaterial() const { return matComposeCS_; }
     std::shared_ptr<Material> GetTonemapMaterial() const { return matTonemapCS_; }
     std::shared_ptr<Material> GetFxaaMaterial() const { return matFxaaCS_; }
+    std::shared_ptr<Material> GetExposureClearMaterial() const { return matExposureClearCS_; }
+    std::shared_ptr<Material> GetExposureBuildMaterial() const { return matExposureBuildCS_; }
+    std::shared_ptr<Material> GetExposureSolveMaterial() const { return matExposureSolveCS_; }
     std::shared_ptr<Material> GetSsrMaterial() const { return matSSR_; }
     std::shared_ptr<Material> GetOceanReflectionMaterial() const { return matOceanReflection_; }
     std::shared_ptr<Material> GetBlurMaterial() const { return matBlur_; }
@@ -329,6 +392,9 @@ public:
     UINT GetBlurCBSizeBytes() const;
     UINT GetComposeCBSizeBytes() const;
     UINT GetFxaaCBSizeBytes() const;
+    UINT GetTonemapCBSizeBytes() const;
+    UINT GetExposureHistogramCBSizeBytes() const;
+    UINT GetExposureSolveCBSizeBytes() const;
 #if WITH_EDITOR
     UINT GetSelectionOutlineCBSizeBytes() const;
 #endif
@@ -340,6 +406,9 @@ public:
     void WriteBlurConstants(const BlurPassConstants& data, uint8_t* dest) const;
     void WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const;
     void WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const;
+    void WriteTonemapConstants(bool exposureEnabled, uint8_t* dest) const;
+    void WriteExposureHistogramConstants(uint8_t* dest) const;
+    void WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
 #if WITH_EDITOR
     void WriteSelectionOutlineConstants(const SelectionOutlinePassConstants& data, uint8_t* dest) const;
 #endif
@@ -357,6 +426,9 @@ private:
     std::shared_ptr<Material> matComposeCS_;
     std::shared_ptr<Material> matTonemapCS_;
     std::shared_ptr<Material> matFxaaCS_;
+    std::shared_ptr<Material> matExposureClearCS_;
+    std::shared_ptr<Material> matExposureBuildCS_;
+    std::shared_ptr<Material> matExposureSolveCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matOceanReflection_;
     std::shared_ptr<Material> matBlur_;
@@ -377,6 +449,9 @@ private:
     SceneBlurCBHandles blurHandles_{};
     SceneComposeCBHandles composeHandles_{};
     SceneFxaaCBHandles fxaaHandles_{};
+    SceneTonemapCBHandles tonemapHandles_{};
+    SceneExposureHistogramCBHandles exposureHistogramHandles_{};
+    SceneExposureSolveCBHandles exposureSolveHandles_{};
 #if WITH_EDITOR
     SceneSelectionOutlineCBHandles selectionOutlineHandles_{};
 #endif

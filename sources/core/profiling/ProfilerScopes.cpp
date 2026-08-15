@@ -75,6 +75,7 @@ const Profiler::ScopeNameKey kPassGlassReflections = Profiler::RegisterTraceLite
 const Profiler::ScopeNameKey kPassTransparent = Profiler::RegisterTraceLiteral(L"Pass_Transparent");
 const Profiler::ScopeNameKey kPassOceanReflection = Profiler::RegisterTraceLiteral(L"Pass_OceanReflection");
 const Profiler::ScopeNameKey kPassDebugDraw = Profiler::RegisterTraceLiteral(L"Pass_DebugDraw");
+const Profiler::ScopeNameKey kPassExposureMetering = Profiler::RegisterTraceLiteral(L"Pass_ExposureMetering");
 const Profiler::ScopeNameKey kPassTonemap = Profiler::RegisterTraceLiteral(L"Pass_Tonemap");
 const Profiler::ScopeNameKey kPassDebug = Profiler::RegisterTraceLiteral(L"Pass_Debug");
 const Profiler::ScopeNameKey kFrameAsyncWait = Profiler::RegisterTraceLiteral(L"Frame Async Wait");

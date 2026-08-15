@@ -85,6 +85,7 @@ extern const Profiler::ScopeNameKey kPassGlassReflections;
 extern const Profiler::ScopeNameKey kPassTransparent;
 extern const Profiler::ScopeNameKey kPassOceanReflection;
 extern const Profiler::ScopeNameKey kPassDebugDraw;
+extern const Profiler::ScopeNameKey kPassExposureMetering;
 extern const Profiler::ScopeNameKey kPassTonemap;
 extern const Profiler::ScopeNameKey kPassDebug;
 extern const Profiler::ScopeNameKey kFrameAsyncWait;

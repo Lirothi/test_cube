@@ -102,9 +102,64 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
     exposureUav_ = next();
     rawUav(exposure_.Get(), kExposureWords, exposureUav_);
 
+    // Readback ring for the dev UI. Tiny and persistently mapped, in the same shape the particle
+    // alive-count debug readback uses.
+    {
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_READBACK;
+
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = kExposureRecordBytes * kReadbackSlots;
+        rd.Height = 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT_UNKNOWN;
+        rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback_)));
+        readback_->SetName(L"Exposure.Readback");
+
+        void* mapped = nullptr;
+        ThrowIfFailed(readback_->Map(0, nullptr, &mapped));
+        readbackPtr_ = static_cast<const float*>(mapped);
+    }
+
     created_ = true;
     // Contents are undefined until something writes them, so the first P2 solve must seed.
     resetRequested_ = true;
+}
+
+void ExposureMetering::RecordReadbackCopy(ID3D12GraphicsCommandList* cl)
+{
+    if (!created_ || !readback_ || !cl)
+    {
+        return;
+    }
+    cl->CopyBufferRegion(readback_.Get(), (readbackFrame_ % kReadbackSlots) * kExposureRecordBytes,
+        exposure_.Get(), 0, kExposureRecordBytes);
+    ++readbackFrame_;
+}
+
+ExposureMetering::Readback ExposureMetering::LatestReadback() const
+{
+    Readback out{};
+    if (!readbackPtr_ || readbackFrame_ <= kReadbackSlots)
+    {
+        return out;
+    }
+    // Oldest slot: written kReadbackSlots-1 frames ago, so it has certainly retired. Reading the
+    // newest one would race the GPU.
+    const std::uint64_t slot = (readbackFrame_ + 1u) % kReadbackSlots;
+    const float* record = readbackPtr_ + slot * (kExposureRecordBytes / sizeof(float));
+    out.adaptedEv100 = record[0];
+    out.lowLuminance = record[1];
+    out.highLuminance = record[2];
+    out.targetEv100 = record[3];
+    out.valid = true;
+    return out;
 }
 
 void ExposureMetering::Release()
@@ -113,6 +168,13 @@ void ExposureMetering::Release()
     // canonical-state registry from holding a dangling pointer after a device loss.
     histogram_.Reset();
     exposure_.Reset();
+    if (readback_ && readbackPtr_)
+    {
+        readback_->Unmap(0, nullptr);
+    }
+    readbackPtr_ = nullptr;
+    readback_.Reset();
+    readbackFrame_ = 0;
     descriptorHeap_.Reset();
     histogramSrv_ = {};
     histogramUav_ = {};

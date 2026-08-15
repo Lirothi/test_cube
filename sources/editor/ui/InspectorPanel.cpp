@@ -626,7 +626,7 @@ namespace
             }
             else
             {
-                dragF("Manual EV100", "manualEv100", 10.0f, 0.05f, -16.0f, 20.0f, "%.2f");
+                dragF("Manual EV100", "manualEv100", 0.0f, 0.05f, -16.0f, 20.0f, "%.2f");
             }
 
             // Plan section 6.2 wants both representations visible, because EV is the authored
@@ -634,7 +634,7 @@ namespace
             ImGui::Separator();
             const float shownEv = automatic
                 ? JsonFloat(p, "compensationEv", 0.0f)
-                : JsonFloat(p, "manualEv100", 10.0f);
+                : JsonFloat(p, "manualEv100", 0.0f);
             const float multiplier = p.value("enabled", false)
                 ? render::ExposureMultiplierFromEv100(shownEv)
                 : render::kIdentityExposureMultiplier;

@@ -41,7 +41,16 @@ struct CameraExposureSettings
     float speedUp = 3.0f;
     float speedDown = 1.0f;
     // Used when autoExposure is false.
-    float manualEv100 = 10.0f;
+    //
+    // NOTE the default is 0, not the 10 a photometric pipeline would use. **This renderer's HDR is
+    // not in cd/m^2.** Scene-referred linear values here sit around 0.1-3 for a lit daylight
+    // surface, not the thousands real luminance would give, so EV100 is relative to the engine's
+    // arbitrary linear scale. Measured on wind_test: EV 0 lands just under the authored look and
+    // auto-exposure settles near -0.3; the photometric default of 10 renders a black screen
+    // (multiplier 1/(1.2*2^10) = 0.0008). Anything that later claims real-world units -- P4's
+    // optional lux-backed sun UI in particular -- has to establish a scene-to-luminance scale
+    // first, and this comment is the reason that is not free.
+    float manualEv100 = 0.0f;
 };
 
 // ---- EV100 conventions (plan section 6.2), documented once, here ----

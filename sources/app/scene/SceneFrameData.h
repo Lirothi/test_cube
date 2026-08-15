@@ -7,6 +7,7 @@
 
 #include "core/math/Math.h"
 #include "app/scene/SceneView.h"
+#include "rendering/core/PhotographicSettings.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumClipmapLevels (Step 24d)
 
@@ -126,4 +127,7 @@ struct SceneFrameData
     std::uint32_t selectionOutlineRadius = 1;
 
     SceneRenderSettings settings{};
+    // P2: the level's photographic camera settings, snapshotted with the rest of the frame so the
+    // metering pass reads a value that cannot change under it mid-frame.
+    render::CameraExposureSettings cameraExposure{};
 };

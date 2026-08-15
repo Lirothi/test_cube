@@ -14,6 +14,7 @@
 #include "app/camera/Camera.h"
 #include "app/Systems.h"
 #include "rendering/debug/DebugDraw.h"
+#include "core/Helpers.h" // GetTimeSeconds (P2 adaptation delta)
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
@@ -1240,8 +1241,37 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // DLSS output) and the backbuffer copy are handled inside the pass body.
     // CL group (step 5): the optional debug-texture draw follows tonemap on the
     // same target with no mtDeps; share one command list (Debug usually early-outs).
+    // P2: metering runs on the finished scene-referred HDR image, before the tone curve consumes
+    // it. Deliberately OUTSIDE the tonemap CL group: it is the group's external prereq, and the
+    // group contract only allows that on the first member (see the reflection group above).
+    // Scheduled unconditionally but early-outs in the body when the camera is dormant, so a
+    // disabled camera costs one empty command list rather than a graph-shape change per frame.
+    const size_t pExposure = rg.AddPass(RenderPass::Main_ExposureMetering, { pSelectionOutline },
+        { { D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
+        [this, renderer](RenderGraphPassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassExposureMetering);
+            Pass_ExposureMetering(renderer, ctx);
+        });
+    rg.SetPassPrepare(pExposure, [this](RenderGraphPassContext& p) {
+        // The histogram and exposure buffers rest at UNORDERED_ACCESS and are used at
+        // UNORDERED_ACCESS, so declaring them emits no barrier -- but declaring them is what makes
+        // them legal to touch at all, since an undeclared resource is an invariant failure.
+        if (!frame_->cameraExposure.enabled) { return; }
+        p.UseDeclared();
+        ExposureMetering& metering = p.renderer->Exposure();
+        if (!metering.IsReady()) { return; }
+        p.Use(metering.HistogramResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        // The dev-UI readback copy, then straight back to canonical so the tonemap's UAV binding
+        // needs no barrier of its own. Two points, because the body takes both states in order.
+        p.NextPoint();
+        p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        p.NextPoint();
+        p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    });
+
     rg.BeginCLGroup();
-    auto pTone = rg.AddPass(RenderPass::Main_Tonemap, { pSelectionOutline },
+    auto pTone = rg.AddPass(RenderPass::Main_Tonemap, { pExposure },
         { { D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
           { D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx); });
@@ -1252,6 +1282,13 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     rg.SetPassPrepare(pTone, [this](RenderGraphPassContext& p) {
         constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         p.UseDeclared(); // tonemap + fxaa -> UAV
+        // P2: the exposure record is bound to the tonemap dispatch on every path. It rests at
+        // UNORDERED_ACCESS and is used at UNORDERED_ACCESS, so this declares intent without
+        // emitting a barrier — but an undeclared resource would be an invariant failure.
+        if (ExposureMetering& metering = p.renderer->Exposure(); metering.IsReady())
+        {
+            p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
         const auto& DTM = p.renderer->GetDeferredForFrame();
         p.NextPoint();
         if (p.renderer->IsDlssActive())
@@ -3740,6 +3777,97 @@ void SceneRenderer::Pass_SelectionOutline(Renderer* renderer, RenderGraphPassCon
 }
 #endif
 
+void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    do
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassExposureMetering);
+        ctx.ApplyDeclaredStates(t.cl);
+
+        // Dormant camera: no dispatches at all. The pass still exists in the graph so its shape
+        // (and the barrier compile's cache key) does not change frame to frame; what it costs when
+        // disabled is one empty command list, not GPU work.
+        if (!frame_->cameraExposure.enabled)
+        {
+            break;
+        }
+
+        ExposureMetering& metering = renderer->Exposure();
+        auto clearMat = resources_.GetExposureClearMaterial();
+        auto buildMat = resources_.GetExposureBuildMaterial();
+        auto solveMat = resources_.GetExposureSolveMaterial();
+        if (!metering.IsReady() || !clearMat || !buildMat || !solveMat)
+        {
+            break;
+        }
+
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->BindDescriptorHeaps(t.cl);
+        const auto samplers = std::array{ *SamplerManager::LinearClamp() };
+        const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
+            renderer->GetSamplerManager()->GetTable(renderer, samplers);
+
+        // 1) Zero the bins. A dedicated dispatch rather than ClearUnorderedAccessViewUint, which
+        // needs a shader-visible descriptor for the UAV and rejects some buffer layouts outright.
+        // One 8x8 group covering 256 bins is not worth optimising further.
+        RecordComputeDispatch(renderer, t.cl, clearMat.get(),
+            { }, { metering.HistogramUav() }, samplerTable,
+            kComputeDispatchGroupSize, kComputeDispatchGroupSize,
+            metering.HistogramResource());
+
+        // 2) Accumulate. The source is the scene-referred HDR image BEFORE the tone curve and
+        // before any exposure has been applied to it.
+        const UINT histogramCb = resources_.GetExposureHistogramCBSizeBytes();
+        RecordComputeDispatch(renderer, t.cl, buildMat.get(), histogramCb,
+            [this](uint8_t* dest) { resources_.WriteExposureHistogramConstants(dest); },
+            { D.sceneSRV }, { metering.HistogramUav() }, samplerTable,
+            ExposureMeteringConstants::kSampleGridX, ExposureMeteringConstants::kSampleGridY,
+            metering.HistogramResource());
+
+        // 3) Solve + adapt.
+        ExposureMeteringConstants constants{};
+        const render::CameraExposureSettings& settings = frame_->cameraExposure;
+        constants.compensationEv = settings.compensationEv;
+        constants.minEv100 = settings.minEv100;
+        constants.maxEv100 = settings.maxEv100;
+        constants.lowPercentile = settings.lowPercentile;
+        constants.highPercentile = settings.highPercentile;
+        constants.speedUp = settings.speedUp;
+        constants.speedDown = settings.speedDown;
+        constants.manualEv100 = settings.manualEv100;
+        constants.autoExposure = settings.autoExposure ? 1u : 0u;
+
+        // Plan section 6.2: cap the adaptation delta so a debugger pause or a long level load does
+        // not resolve into one instantaneous jump the moment rendering resumes.
+        constexpr double kMaxAdaptationDeltaSeconds = 0.1;
+        const double now = GetTimeSeconds();
+        const double rawDelta = lastExposureTimeSeconds_ >= 0.0 ? (now - lastExposureTimeSeconds_) : 0.0;
+        lastExposureTimeSeconds_ = now;
+        constants.deltaTime = static_cast<float>(
+            std::clamp(rawDelta, 0.0, kMaxAdaptationDeltaSeconds));
+
+        // Consume rather than peek: the reset is a one-shot edge (level load, resize, teleport,
+        // first frame), and leaving it latched would pin the camera to the metered target forever.
+        constants.resetHistory = metering.ConsumeResetRequest() ? 1u : 0u;
+
+        const UINT solveCb = resources_.GetExposureSolveCBSizeBytes();
+        RecordComputeDispatch(renderer, t.cl, solveMat.get(), solveCb,
+            [this, &constants](uint8_t* dest) { resources_.WriteExposureSolveConstants(constants, dest); },
+            { metering.HistogramSrv() }, { metering.ExposureUav() }, samplerTable,
+            kComputeDispatchGroupSize, kComputeDispatchGroupSize,
+            metering.ExposureResource());
+
+        // 4) Round-trip 16 bytes to a readback ring so the dev window can show the adapted EV and
+        // the metered percentiles. Without it the settings would be tuned blind.
+        renderer->Transition(t.cl, metering.ExposureResource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        metering.RecordReadbackCopy(t.cl);
+        renderer->Transition(t.cl, metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    } while (false);
+    ctx.EndCL(t);
+}
+
 void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 {
     auto t = ctx.BeginCL();
@@ -3774,8 +3902,15 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         const D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = ranDlss ? D.dlssOutputSRV : D.sceneSRV;
         const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
         const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
-        RecordComputeDispatch(renderer, t.cl, tonemapMaterial.get(),
-            { tonemapSrc }, { D.tonemapUAV }, samplerTable,
+        // P2: exposure is applied here — after the DLSS resolve above, before the tone curve.
+        // The buffer is bound even while dormant so the descriptor table shape is constant; the
+        // shader multiplies by a literal 1.0 when the flag is 0.
+        ExposureMetering& metering = renderer->Exposure();
+        const bool applyExposure = frame_->cameraExposure.enabled && metering.IsReady();
+        const UINT tonemapCb = resources_.GetTonemapCBSizeBytes();
+        RecordComputeDispatch(renderer, t.cl, tonemapMaterial.get(), tonemapCb,
+            [this, applyExposure](uint8_t* dest) { resources_.WriteTonemapConstants(applyExposure, dest); },
+            { tonemapSrc }, { D.tonemapUAV, metering.ExposureUav() }, samplerTable,
             renderer->GetWidth(), renderer->GetHeight(),
             D.tonemap.Get());
 
