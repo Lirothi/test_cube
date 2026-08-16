@@ -270,6 +270,23 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
         environment_.push_back(std::move(e));
     };
 
+    // Always-present singleton: the renderer applies these settings whether or not the level
+    // mentions them, so a level without the section is not "without the feature" -- it is using
+    // the defaults. Materialising the entity anyway is what makes them visible and editable in the
+    // outliner; absent ones start empty and serialise as `{}`, which still means "defaults".
+    // Without this the camera and the colour pipeline were invisible in the editor while the dev
+    // window had every control, which is exactly how it looked like a missing feature.
+    auto addSingletonAlways = [this](const char* key, const char* type, const char* name)
+    {
+        EditorObject e;
+        e.id = AllocateId();
+        e.type = type;
+        e.name = name;
+        const auto it = rootJson_.find(key);
+        e.properties = (it != rootJson_.end() && it->is_object()) ? *it : nlohmann::json::object();
+        environment_.push_back(std::move(e));
+    };
+
     // Array section (spotLights/pointLights) -> one entity per element, in order.
     auto addArray = [this](const char* key, const char* type, const char* labelPrefix)
     {
@@ -303,9 +320,9 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     addSingleton("wind", "wind", "Wind"); // W2: global wind entity (round-trips; inspector in W6)
     // P1: photographic camera. addSingleton only materialises an entity when the section is
     // present, so a level that predates the plan gains nothing and saves back byte-identical.
-    addSingleton("cameraExposure", "cameraExposure", "Camera Exposure");
-    // P3C: the display transform (tone curve + colour grade).
-    addSingleton("colorPipeline", "colorPipeline", "Color Pipeline");
+    // Both of these are always in effect, so they are always listed -- see addSingletonAlways.
+    addSingletonAlways("cameraExposure", "cameraExposure", "Camera Exposure");
+    addSingletonAlways("colorPipeline", "colorPipeline", "Color Pipeline");
 }
 
 #endif // WITH_EDITOR

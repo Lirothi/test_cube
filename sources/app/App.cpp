@@ -220,6 +220,19 @@ namespace
         if (setting == "color.gradeGamma")      { c.gradeGamma = value;      return true; }
         if (setting == "color.gradeGain")       { c.gradeGain = value;       return true; }
         if (setting == "color.gradeOffset")     { c.gradeOffset = value;     return true; }
+        if (setting == "color.localHighlightContrast") { c.localHighlightContrast = value; return true; }
+        if (setting == "color.localShadowContrast")    { c.localShadowContrast = value;    return true; }
+        if (setting == "color.localDetailStrength")    { c.localDetailStrength = value;    return true; }
+        // Composite: both local contrast scales at once. The two are independent branches of the
+        // same function (base above / below middle grey), so sweeping them together is the only way
+        // to measure the base EXPANSION the plan's P3B target needs -- one knob alone can move only
+        // one end of the histogram, and the reference wants both ends moved in the same shot.
+        if (setting == "color.localContrast")
+        {
+            c.localHighlightContrast = value;
+            c.localShadowContrast = value;
+            return true;
+        }
         return false;
     }
 }

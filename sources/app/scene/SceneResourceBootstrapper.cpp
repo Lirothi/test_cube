@@ -183,6 +183,11 @@ void SceneTonemapCBHandles::Populate(Material* material)
     filmShoulder = material->ComputeCB0FieldHandle("filmShoulder");
     filmBlackClip = material->ComputeCB0FieldHandle("filmBlackClip");
     filmWhiteClip = material->ComputeCB0FieldHandle("filmWhiteClip");
+    localHighlightContrast = material->ComputeCB0FieldHandle("localHighlightContrast");
+    localShadowContrast = material->ComputeCB0FieldHandle("localShadowContrast");
+    localDetailStrength = material->ComputeCB0FieldHandle("localDetailStrength");
+    localHighlightThreshold = material->ComputeCB0FieldHandle("localHighlightThreshold");
+    localShadowThreshold = material->ComputeCB0FieldHandle("localShadowThreshold");
 }
 
 void SceneExposureHistogramCBHandles::Populate(Material* material)
@@ -200,6 +205,17 @@ void SceneExposureHistogramCBHandles::Populate(Material* material)
     maskInnerRadius = material->ComputeCB0FieldHandle("maskInnerRadius");
     maskOuterRadius = material->ComputeCB0FieldHandle("maskOuterRadius");
     maskSkyBias = material->ComputeCB0FieldHandle("maskSkyBias");
+}
+
+void SceneExposureBaseLumCBHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material)
+    {
+        return;
+    }
+    baseWidth = material->ComputeCB0FieldHandle("baseWidth");
+    baseHeight = material->ComputeCB0FieldHandle("baseHeight");
 }
 
 void SceneExposureSolveCBHandles::Populate(Material* material)
@@ -353,6 +369,13 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         cd.shaderFile = L"shaders/exposure_histogram_cs.hlsl";
         cd.csEntry = "CSBuild";
         matExposureBuildCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    if (!matExposureBaseLumCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/exposure_baselum_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matExposureBaseLumCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
     if (!matExposureSolveCS_)
     {
@@ -511,6 +534,7 @@ void SceneResourceBootstrapper::RefreshHandles()
     tonemapHandles_.Populate(matTonemapCS_.get());
     exposureHistogramHandles_.Populate(matExposureBuildCS_.get());
     exposureSolveHandles_.Populate(matExposureSolveCS_.get());
+    exposureBaseLumHandles_.Populate(matExposureBaseLumCS_.get());
     ssrHandles_.Populate(matSSR_.get());
     blurHandles_.Populate(matBlur_.get());
 #if WITH_EDITOR
@@ -566,6 +590,23 @@ UINT SceneResourceBootstrapper::GetTonemapCBSizeBytes() const
 UINT SceneResourceBootstrapper::GetExposureHistogramCBSizeBytes() const
 {
     return matExposureBuildCS_ ? matExposureBuildCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+UINT SceneResourceBootstrapper::GetExposureBaseLumCBSizeBytes() const
+{
+    return matExposureBaseLumCS_ ? matExposureBaseLumCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void SceneResourceBootstrapper::WriteExposureBaseLumConstants(uint8_t* dest) const
+{
+    if (!matExposureBaseLumCS_ || !dest)
+    {
+        return;
+    }
+    matExposureBaseLumCS_->UpdateCBField(exposureBaseLumHandles_.baseWidth,
+        ExposureMetering::kBaseLumWidth, dest);
+    matExposureBaseLumCS_->UpdateCBField(exposureBaseLumHandles_.baseHeight,
+        ExposureMetering::kBaseLumHeight, dest);
 }
 
 UINT SceneResourceBootstrapper::GetExposureSolveCBSizeBytes() const
@@ -731,6 +772,11 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
     matTonemapCS_->UpdateCBField(h.filmShoulder, color.filmShoulder, dest);
     matTonemapCS_->UpdateCBField(h.filmBlackClip, color.filmBlackClip, dest);
     matTonemapCS_->UpdateCBField(h.filmWhiteClip, color.filmWhiteClip, dest);
+    matTonemapCS_->UpdateCBField(h.localHighlightContrast, color.localHighlightContrast, dest);
+    matTonemapCS_->UpdateCBField(h.localShadowContrast, color.localShadowContrast, dest);
+    matTonemapCS_->UpdateCBField(h.localDetailStrength, color.localDetailStrength, dest);
+    matTonemapCS_->UpdateCBField(h.localHighlightThreshold, color.localHighlightThreshold, dest);
+    matTonemapCS_->UpdateCBField(h.localShadowThreshold, color.localShadowThreshold, dest);
 }
 
 void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMeteringConstants& data,

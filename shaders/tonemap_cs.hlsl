@@ -1,6 +1,9 @@
-#define TONEMAP_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), UAV(u1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define TONEMAP_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), UAV(u1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 Texture2D HDRColor : register(t0);
+// P3B: blurred base log-luminance, sampled bilinearly. The metering pass writes it and owns both
+// of its state transitions, so nothing here needs a barrier.
+Texture2D<float> BaseLogLumTex : register(t1);
 RWTexture2D<float4> LdrTarget : register(u0);
 // P2: the persistent exposure record, read-only here. Bound as a UAV rather than an SRV purely so
 // it never leaves its canonical UNORDERED_ACCESS state -- an SRV binding would cost a transition
@@ -38,6 +41,12 @@ cbuffer TonemapCB : register(b0)
     float filmShoulder;
     float filmBlackClip;
     float filmWhiteClip;
+    // P3B local exposure. All scales at 1 = no-op; the shader skips the block entirely.
+    float localHighlightContrast;
+    float localShadowContrast;
+    float localDetailStrength;
+    float localHighlightThreshold;
+    float localShadowThreshold;
     float tonemapPad3, tonemapPad4, tonemapPad5;
 };
 
@@ -45,6 +54,7 @@ cbuffer TonemapCB : register(b0)
 #include "agx.hlsli"
 #include "color_grade.hlsli"
 #include "film_curve.hlsli"
+#include "local_exposure.hlsli"
 
 // ---- named constants ----
 static const float kGammaOut = 2.2;
@@ -92,12 +102,17 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // Exposure applied exactly once, here, immediately before the tone curve.
     // Mirrors render::ExposureMultiplierFromEv100: m = kMiddleGrey * (S/K) / 2^EV100, with
     // kMiddleGrey = 0.18 and S/K = 8. If that changes, this changes with it.
+    // Kept so P3B can shift the base-luminance texture into the same space as this pixel: that
+    // texture stores the UNEXPOSED scene's log luminance, and comparing the two directly would make
+    // the detail term pure error.
+    float exposureMultiplier = 1.0f;
     if (exposureEnabled != 0)
     {
         const float ev100 = asfloat(ExposureValue.Load(0));
         if (!isnan(ev100) && !isinf(ev100))
         {
-            hdr *= (0.18f * 8.0f) / exp2(ev100);
+            exposureMultiplier = (0.18f * 8.0f) / exp2(ev100);
+            hdr *= exposureMultiplier;
         }
     }
 
@@ -114,6 +129,33 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (!ColorGradeIsNeutral(grade))
         {
             hdr = ApplyColorGrade(hdr, grade);
+        }
+    }
+
+    // P3B: local exposure. After the global exposure and the grade, before the curve -- the curve
+    // still needs a scene-referred image for its 0.18 fixed point to mean anything.
+    {
+        LocalExposureParams local;
+        local.highlightContrastScale = localHighlightContrast;
+        local.shadowContrastScale = localShadowContrast;
+        local.detailStrength = localDetailStrength;
+        local.blurredBlend = 1.0f;
+        local.highlightThreshold = localHighlightThreshold;
+        local.shadowThreshold = localShadowThreshold;
+
+        if (!LocalExposureIsNeutral(local))
+        {
+            const float lum = dot(hdr, float3(0.2126f, 0.7152f, 0.0722f));
+            if (lum > 1e-8f)
+            {
+                // Shift the stored (unexposed) base by the exposure this pixel received, so base
+                // and pixel live in the same space. The grade is NOT modelled here: it is a colour
+                // operation on top, and folding it in would mean re-deriving a blurred field per
+                // grade change for a base layer that is deliberately coarse.
+                const float baseLog = BaseLogLumTex.SampleLevel(gSmp, uv, 0)
+                                    + log2(max(exposureMultiplier, 1e-8f));
+                hdr *= LocalExposureMultiplier(log2(lum), baseLog, log2(0.18f), local);
+            }
         }
     }
 

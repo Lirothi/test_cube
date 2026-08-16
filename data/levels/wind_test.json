@@ -6,7 +6,7 @@
   },
   "cameraExposure": {
     "autoExposure": true,
-    "compensationEv": 0.0,
+    "compensationEv": -0.15000000596046448,
     "enabled": true,
     "highPercentile": 0.800000011920929,
     "lowPercentile": 0.15000000596046448,
@@ -16,6 +16,24 @@
     "minEv100": -6.0,
     "speedDown": 1.0,
     "speedUp": 3.0
+  },
+  "colorPipeline": {
+    "filmBlackClip": 0.0,
+    "filmShoulder": 0.25999999046325684,
+    "filmSlope": 0.8799999952316284,
+    "filmToe": 0.550000011920929,
+    "filmWhiteClip": 0.03999999910593033,
+    "gradeContrast": 1.149999976158142,
+    "gradeGain": 1.0,
+    "gradeGamma": 1.100000023841858,
+    "gradeOffset": 0.0,
+    "gradeSaturation": 1.2999999523162842,
+    "localDetailStrength": 1.0,
+    "localHighlightContrast": 0.8500000238418579,
+    "localHighlightThreshold": 0.5,
+    "localShadowContrast": 0.8999999761581421,
+    "localShadowThreshold": 0.5,
+    "toneCurve": "filmic"
   },
   "directionalLight": {
     "ambient": 0.10000000149011612,

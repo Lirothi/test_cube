@@ -26,6 +26,7 @@ COMPUTE_ENTRIES = [
     ("exposure_histogram_cs.hlsl", "CSClear"),
     ("exposure_histogram_cs.hlsl", "CSBuild"),
     ("exposure_solve_cs.hlsl", "CSMain"),
+    ("exposure_baselum_cs.hlsl", "CSMain"),
     ("tonemap_cs.hlsl", "CSMain"),
     ("fxaa_cs.hlsl", "CSMain"),
     ("compose_cs.hlsl", "CSMain"),

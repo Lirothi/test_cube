@@ -916,6 +916,15 @@ median 0.184 / p02 0.0250 / p99 0.776 / chroma 0.434 against the reference photo
 0.196 / 0.0152 / 0.814 / 0.445 — close on every axis, from controls alone, with no local exposure
 involved. That materially weakens the case for P3B; re-evaluate it only after the film curve lands.
 
+> **Re-evaluated 2026-08-16, after the curve landed: P3B was still worth building, but for a
+> narrower reason than originally argued.** The grade genuinely does stretch the histogram, so the
+> "only local exposure can do this" framing in P3B was too strong — global contrast around a pivot
+> stretches too. What survives is that the grade applies the *same* stretch to every pixel, so
+> pushing it far enough to reach the reference spread also pushes the brightest regions toward the
+> top of the range, whereas P3B's stretch is per-neighbourhood: it reached 52.9x spread on
+> `overview` with **zero clipped pixels**, and on `sun_glint` it cut clipping 65x while moving the
+> median 2%. Use the grade for the look and P3B for the range; they are not substitutes.
+
 **The UE film curve source is now available** at `D:\Programming\ue_autoexposure\` (in the folder
 root, not under the engine-relative paths): `TonemapCommon.ush` — `FilmToneMap` plus every helper
 it needs (`rgb_2_saturation`, `rgb_2_yc`, `sigmoid_shaper`, `glow_fwd`, `rgb_2_hue`, `center_hue`,
@@ -968,8 +977,14 @@ the crush, could never fix the look.
 **Goal:** preserve highlight and shadow detail simultaneously by varying exposure spatially, the way
 consumer "HDR photo" processing and the human retina both do (local, not global, adaptation).
 
-**Approach.** Follow the UE implementation (section 13 has the location) rather than inventing one;
-the maths below is read off `PostProcessHistogramCommon.ush` and `PostProcessLocalExposure.usf`.
+**Approach.** Follow the UE implementation (section 13 has the location) rather than inventing one.
+
+> **Provenance, stated honestly:** unlike P3C's film curve, the maths below was **not** read off the
+> UE source — `PostProcessHistogramCommon.ush` and `PostProcessLocalExposure.usf` are *not* in the
+> drop (see 13.0). It follows the published algorithm, and the shipped behaviour was verified by
+> measurement instead (see the status block). That is weaker evidence than a transcription: if the
+> two files ever land, diff `CalculateLogLocalExposure` against `shaders/local_exposure.hlsli`
+> before extending this step.
 
 The decomposition is a **bilateral grid**, not a 2D bilateral filter — that detail matters, because
 the grid is nearly free for us:
@@ -1002,6 +1017,87 @@ Compressing only `BaseCentered` while passing `Detail` through is the entire tri
 scene's dynamic range without touching micro-contrast, which is why the result reads as vivid
 rather than as the flat, haloed "HDR look". The thresholds exist so the effect can be held off
 until a pixel is far enough from middle grey, which is what stops mid-tones from being churned.
+
+**STATUS: DONE 2026-08-16, uncommitted. Gated and measured.** Defaults are a true no-op, so the
+step ships the capability and leaves the choice of values to level tuning.
+
+- `shaders/local_exposure.hlsli` — `LocalExposureMultiplier`, transcribed from UE's
+  `CalculateLogLocalExposure`: split log-luminance into base + detail, compress **only** the base by
+  a highlight/shadow contrast scale, pass the detail through, with a threshold region so mid-tones
+  are left alone. Neutral parameters return exactly 1.0.
+- `shaders/exposure_baselum_cs.hlsl` — the base layer, a 256x144 R16_FLOAT blurred **log**-luminance
+  image, box-filtered in log space (averaging linearly would let one bright sample dominate a
+  neighbourhood, which is the halo this exists to avoid). Designed to run **inside the existing
+  metering pass**, so it costs no extra pass, barrier or command list.
+
+**Deliberate scope decision: the base layer is a blur, not the bilateral grid.** UE blends between
+the two and falls back to the blur wherever the grid has no data, so blur-only is a configuration of
+the same algorithm rather than a different one. What it gives up is halo resistance at high-contrast
+edges. The grid remains the upgrade and stays cheap for us because the histogram pass already bins
+by log-luminance — but it needs the engine's first 3D texture, and doing that badly is expensive, so
+it is not the thing to start with.
+
+**Engine source this step touched** (per the user's standing rule that every step records its files):
+
+| File | What changed |
+|---|---|
+| `shaders/local_exposure.hlsli` | new — `LocalExposureMultiplier` + `LocalExposureIsNeutral` |
+| `shaders/exposure_baselum_cs.hlsl` | new — the 256x144 R16_FLOAT blurred log-luminance base |
+| `shaders/tonemap_cs.hlsl` | `t1` base-lum binding, 5 CB fields, apply block after the grade and before the curve |
+| `sources/rendering/core/ExposureMetering.h/.cpp` | `baseLum_` texture + SRV/UAV, descriptor heap 4 -> 6 |
+| `sources/rendering/core/PhotographicSettings.h` | 5 `local*` fields on `ColorPipelineSettings`, all neutral |
+| `sources/rendering/core/PhotographicSettingsJson.h` | parse / clamp / serialise |
+| `sources/app/scene/SceneResourceBootstrapper.h/.cpp` | base-lum material + CB, tonemap CB writes |
+| `sources/app/scene/SceneRenderer.cpp` | step "2b" dispatch inside `Pass_ExposureMetering`, declarations, tonemap SRV |
+| `sources/app/ui/DeveloperWindow.cpp` | sliders, tooltips, Off/Gentle/Strong presets |
+| `sources/editor/ui/InspectorPanel.cpp` | the same five controls on the Color Pipeline object |
+| `sources/app/App.cpp` | `--sweep` keys, incl. the composite `color.localContrast` |
+
+**The base-lum dispatch lives inside `Pass_ExposureMetering`, not in a pass of its own** — it reads
+exactly the source the histogram just read, so it costs no extra command list, barrier or graph
+node. It runs **unconditionally**, not gated on the settings being non-neutral: the settings are
+live-editable and a gated texture would be one frame stale the moment a slider moved. Measured
+cost of the whole metering pass (histogram + base + solve + readback copies) is **0.031 ms GPU** of
+a 1.686 ms frame, so the gate would be saving nothing worth a pop.
+
+**Measured: the two knobs are orthogonal, which is the whole claim.** `sun_glint`, native, one knob
+at a time:
+
+| | median | p05 | p95 | p99 | clip% | dark% |
+|---|---:|---:|---:|---:|---:|---:|
+| neutral | 0.1924 | 0.0339 | 0.7657 | 0.8781 | 0.194 | 3.245 |
+| highlight 0.55 | 0.1884 | 0.0336 | **0.5965** | **0.7835** | **0.003** | 3.252 |
+| shadow 0.55 | 0.2151 | **0.0556** | 0.7671 | 0.8790 | 0.194 | **0.929** |
+
+Highlight compression moves p95/p99/clip and leaves p05 and dark% untouched; shadow compression does
+the exact reverse. 65x less clipping on the glint field for a 2% median move.
+
+**The finding that matters, and it inverts the step's own assumption.** The plan above assumed the
+useful direction is *compression* (scales below 1). On the reference-framing `overview` view the
+useful direction is **expansion — scales above 1**, because our problem there was never too much
+range, it was too little. Sweeping both scales together (`--sweep=color.localContrast:...`):
+
+| both scales | p02 | median | p99 | spread | clip% |
+|---|---:|---:|---:|---:|---:|
+| 1.00 (neutral) | 0.0304 | 0.2016 | 0.7174 | 23.6x | 0.000 |
+| 1.20 | 0.0242 | 0.1941 | 0.7804 | 32.3x | 0.000 |
+| 1.35 | 0.0198 | 0.1886 | 0.8201 | 41.4x | 0.000 |
+| 1.50 | 0.0161 | 0.1831 | 0.8539 | **52.9x** | 0.000 |
+| **`ref_wind_test.png`** | **0.0152** | **0.1964** | **0.8137** | **53.6x** | — |
+
+At 1.5 the spread lands on the reference's 53.6x essentially exactly, from 23.6x, **while still
+clipping zero pixels** — the blacks deepen and the highlights rise in the same frame. That is the
+thing section P3B was written to make possible and that no global multiplier can do; the median sits
+0.013 low, which is about +0.1 EV of compensation away. 1.35 is the more conservative landing spot.
+
+**Halo check passed.** The `hl 1.0 -> 0.55` difference field on `sun_glint` is smooth, is exactly
+zero over the unaffected ocean, and shows **no positive rim** adjacent to the strongly-modified sky
+(max positive excursion 5/255 against a 55/255 negative swing). A blur-based base layer's classic
+failure did not appear at these strengths; judge again if anyone pushes past 1.5.
+
+**Still open (deliberately, not blocked):** the bilateral grid (the halo-resistant base layer, needs
+the engine's first 3D texture) and the three debug views. Neither is needed for the step to be
+useful, and the grid's value only shows up at strengths past what looks good here.
 
 **Engine readiness (audited 2026-08-15 — nothing is missing, one decision to make):**
 
@@ -1060,6 +1156,14 @@ p99/p02 spread moves materially toward the reference's 53.6x.
 **Verify:** the `sun_glint` view specifically, plus halo inspection at high-contrast edges (the
 classic failure), camera-motion stability, native/DLSS parity, GPU timing. Provisional budget:
 0.40 ms.
+
+**Verified 2026-08-16.** `tools/check_shaders.py` 9/9; Release + Debug both build; Release
+`--scene-stress=30` **CLEAN** (`enhanced=8439 legacy=0`); a plain Debug run exits 0 with asserts
+live. Dormant-equivalence holds: with the shipped neutral defaults the `overview/native` median is
+**0.2016**, identical to the pre-P3B capture, so the new CB fields did not disturb the grade or film
+parameters packed beside them. Cost **0.031 ms** for the whole metering pass against a 0.40 ms
+budget for this step alone. Halo and orthogonality results are in the status block above.
+`--sweep=color.localContrast:...` was added for this and is the fastest way to re-measure.
 
 **Risk:** halos and the flat "tone-mapped HDR" cliche. Mitigation: compress the base layer only,
 keep defaults conservative, and judge on the reference rather than on the metrics alone.
@@ -1434,7 +1538,10 @@ already cost this project a frame-wide pink tint once.
 | `PostProcessCombineLUTs.usf` / `.cpp` | how curve + grade are driven and baked into the LUT | **have** |
 | `ACESCommon.ush` | AP0/AP1 matrices, `AP1_RGB2Y`, and the helpers `rgb_2_saturation`, `rgb_2_yc`, `sigmoid_shaper`, `glow_fwd`, `rgb_2_hue`, `center_hue` | **have** |
 | `ACES/ACES_v1.3.ush` | referenced by TonemapCommon for the v1.3 output transforms; only needed if the ACES ODT path is ever wanted | not needed yet |
-| `PostProcessLocalExposure.cpp` | bilateral grid construction parameters for P3B, if P3B is revived | not needed yet |
+| `PostProcessHistogramCommon.ush` | `CalculateLogLocalExposure` — P3B shipped WITHOUT this file, from the published algorithm plus measurement. Diff it against `shaders/local_exposure.hlsli` before extending P3B | **wanted** |
+| `PostProcessLocalExposure.usf` | the local-exposure apply pass and the exposure-fusion alternative | **wanted** |
+| `PostProcessHistogram.usf` | the bilateral-grid write inside the histogram pass — the P3B upgrade needs it | wanted if the grid is built |
+| `PostProcessLocalExposure.cpp` | bilateral grid construction parameters | wanted if the grid is built |
 
 Everything is dropped in the **root** of `D:\Programming\ue_autoexposure\`, not under the
 engine-relative subpaths — look there first.

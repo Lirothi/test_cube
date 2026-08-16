@@ -59,6 +59,14 @@ public:
     // fraction of a stop over the plan's metering range, and it is one thread group of 256.
     static constexpr UINT kHistogramBins = 256u;
 
+    // P3B base log-luminance layer for local exposure. Same fixed grid the metering samples, so
+    // it is resolution-independent for the same reasons and needs no resize handling.
+    static constexpr UINT kBaseLumWidth = 256u;
+    static constexpr UINT kBaseLumHeight = 144u;
+    ID3D12Resource* BaseLumResource() const { return baseLum_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE BaseLumUav() const { return baseLumUav_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE BaseLumSrv() const { return baseLumSrv_; }
+
     // What the solve last wrote, read back from the GPU. Section 6.5 of the plan requires the dev
     // UI to surface these, and without them the settings are being tuned blind.
     struct Readback
@@ -91,6 +99,13 @@ private:
     // the metered low/high percentile luminance next to the adapted value, and keeping them in one
     // record avoids a second resource and a second readback for the sake of 12 bytes.
     GpuResource exposure_;
+
+    // Rests in NON_PIXEL_SHADER_RESOURCE, its READ state: the tonemap samples it every frame
+    // while only the metering pass writes it, so parking it in the read state means the tonemap
+    // needs no barrier and the write pass owns both transitions.
+    GpuResource baseLum_;
+    D3D12_CPU_DESCRIPTOR_HANDLE baseLumUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE baseLumSrv_{};
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE histogramSrv_{};

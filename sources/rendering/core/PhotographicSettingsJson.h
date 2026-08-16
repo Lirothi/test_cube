@@ -102,6 +102,11 @@ inline void ApplyOverrides(const nlohmann::json& j, ColorPipelineSettings& out)
     out.filmShoulder  = j.value("filmShoulder",  out.filmShoulder);
     out.filmBlackClip = j.value("filmBlackClip", out.filmBlackClip);
     out.filmWhiteClip = j.value("filmWhiteClip", out.filmWhiteClip);
+    out.localHighlightContrast  = j.value("localHighlightContrast",  out.localHighlightContrast);
+    out.localShadowContrast     = j.value("localShadowContrast",     out.localShadowContrast);
+    out.localDetailStrength     = j.value("localDetailStrength",     out.localDetailStrength);
+    out.localHighlightThreshold = j.value("localHighlightThreshold", out.localHighlightThreshold);
+    out.localShadowThreshold    = j.value("localShadowThreshold",    out.localShadowThreshold);
 
     out.agxSlope      = std::clamp(out.agxSlope,      0.0f, 4.0f);
     out.agxPower      = std::clamp(out.agxPower,      0.1f, 4.0f);
@@ -116,6 +121,11 @@ inline void ApplyOverrides(const nlohmann::json& j, ColorPipelineSettings& out)
     out.filmShoulder  = std::clamp(out.filmShoulder,  0.0f, 1.0f);
     out.filmBlackClip = std::clamp(out.filmBlackClip, 0.0f, 1.0f);
     out.filmWhiteClip = std::clamp(out.filmWhiteClip, 0.0f, 1.0f);
+    out.localHighlightContrast  = std::clamp(out.localHighlightContrast,  0.1f, 2.0f);
+    out.localShadowContrast     = std::clamp(out.localShadowContrast,     0.1f, 2.0f);
+    out.localDetailStrength     = std::clamp(out.localDetailStrength,     0.0f, 3.0f);
+    out.localHighlightThreshold = std::clamp(out.localHighlightThreshold, 0.0f, 8.0f);
+    out.localShadowThreshold    = std::clamp(out.localShadowThreshold,    0.0f, 8.0f);
 }
 
 inline nlohmann::json ToJson(const ColorPipelineSettings& s)
@@ -136,6 +146,11 @@ inline nlohmann::json ToJson(const ColorPipelineSettings& s)
         { "filmShoulder",  s.filmShoulder },
         { "filmBlackClip", s.filmBlackClip },
         { "filmWhiteClip", s.filmWhiteClip },
+        { "localHighlightContrast",  s.localHighlightContrast },
+        { "localShadowContrast",     s.localShadowContrast },
+        { "localDetailStrength",     s.localDetailStrength },
+        { "localHighlightThreshold", s.localHighlightThreshold },
+        { "localShadowThreshold",    s.localShadowThreshold },
     };
 }
 

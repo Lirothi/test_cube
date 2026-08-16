@@ -1262,11 +1262,14 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         if (!metering.IsReady()) { return; }
         p.Use(metering.HistogramResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        // P3B: the base layer leaves its resting read state only for this pass.
+        p.Use(metering.BaseLumResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         // The dev-UI readback copies, then straight back to canonical so the tonemap's UAV binding
         // needs no barrier of its own. Two points, because the body takes both states in order.
         p.NextPoint();
         p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
         p.Use(metering.HistogramResource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        p.Use(metering.BaseLumResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         p.NextPoint();
         p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         p.Use(metering.HistogramResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -3839,6 +3842,24 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
             ExposureMeteringConstants::kSampleGridX, ExposureMeteringConstants::kSampleGridY,
             metering.HistogramResource());
 
+        // 2b) P3B base log-luminance for local exposure. Written here rather than in a pass of
+        // its own because it reads exactly the source the histogram just read, so it costs no
+        // extra command list, barrier or scheduling node.
+        if (auto baseLumMat = resources_.GetExposureBaseLumMaterial())
+        {
+            renderer->Transition(t.cl, metering.BaseLumResource(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            RecordComputeDispatch(renderer, t.cl, baseLumMat.get(),
+                resources_.GetExposureBaseLumCBSizeBytes(),
+                [this](uint8_t* dest) { resources_.WriteExposureBaseLumConstants(dest); },
+                { D.sceneSRV }, { metering.BaseLumUav() }, samplerTable,
+                ExposureMetering::kBaseLumWidth, ExposureMetering::kBaseLumHeight,
+                metering.BaseLumResource());
+            // Straight back to its resting READ state, so the tonemap samples it with no barrier.
+            renderer->Transition(t.cl, metering.BaseLumResource(),
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+
         // 3) Solve + adapt.
         constants.compensationEv = settings.compensationEv;
         constants.minEv100 = settings.minEv100;
@@ -3945,7 +3966,7 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
             [this, applyExposure](uint8_t* dest) {
                 resources_.WriteTonemapConstants(applyExposure, frame_->colorPipeline, dest);
             },
-            { tonemapSrc }, { D.tonemapUAV, metering.ExposureUav() }, samplerTable,
+            { tonemapSrc, metering.BaseLumSrv() }, { D.tonemapUAV, metering.ExposureUav() }, samplerTable,
             renderer->GetWidth(), renderer->GetHeight(),
             D.tonemap.Get());
 

@@ -2,6 +2,7 @@
 
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/TextureCreate.h" // P3B base log-luminance texture
 
 using Microsoft::WRL::ComPtr;
 
@@ -56,7 +57,7 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.Value");
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors = 4; // histogram SRV/UAV + exposure SRV/UAV
+    heapDesc.NumDescriptors = 6; // histogram SRV/UAV + exposure SRV/UAV + base-lum SRV/UAV
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap_)));
@@ -101,6 +102,43 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
     rawSrv(exposure_.Get(), kExposureWords, exposureSrv_);
     exposureUav_ = next();
     rawUav(exposure_.Get(), kExposureWords, exposureUav_);
+
+    // P3B base log-luminance. Bilinear-sampled by the tonemap, so it needs a filterable format;
+    // R16_FLOAT is ample for a log quantity spanning roughly 24 stops.
+    {
+        D3D12_HEAP_PROPERTIES heapProps{};
+        heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = kBaseLumWidth;
+        desc.Height = kBaseLumHeight;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R16_FLOAT;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ComPtr<ID3D12Resource> resource;
+        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
+            desc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &resource));
+        baseLum_.Attach(renderer->Declarations(), std::move(resource),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"Exposure.BaseLogLum");
+
+        baseLumSrv_ = next();
+        D3D12_SHADER_RESOURCE_VIEW_DESC baseSrv{};
+        baseSrv.Format = DXGI_FORMAT_R16_FLOAT;
+        baseSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        baseSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        baseSrv.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(baseLum_.Get(), &baseSrv, baseLumSrv_);
+
+        baseLumUav_ = next();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC baseUav{};
+        baseUav.Format = DXGI_FORMAT_R16_FLOAT;
+        baseUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(baseLum_.Get(), nullptr, &baseUav, baseLumUav_);
+    }
 
     // Readback ring for the dev UI. Tiny and persistently mapped, in the same shape the particle
     // alive-count debug readback uses.
@@ -213,6 +251,9 @@ void ExposureMetering::Release()
     // canonical-state registry from holding a dangling pointer after a device loss.
     histogram_.Reset();
     exposure_.Reset();
+    baseLum_.Reset();
+    baseLumUav_ = {};
+    baseLumSrv_ = {};
     if (readback_ && readbackPtr_)
     {
         readback_->Unmap(0, nullptr);

@@ -439,6 +439,7 @@
     <ClInclude Include="sources/app/scene/SceneView.h" />
     <ClInclude Include="sources/app/Systems.h" />
     <ClInclude Include="sources/core/Helpers.h" />
+    <ClInclude Include="sources/core/StringMatch.h" />
     <ClInclude Include="sources/core/math/Frustum.h" />
     <ClInclude Include="sources/core/math/Math.h" />
     <ClInclude Include="sources/core/profiling/Profiler.h" />
@@ -573,6 +574,8 @@
     <None Include="shaders\ocean_reflection_cs.hlsl" />
     <None Include="shaders\ocean_surface.hlsl" />
     <None Include="shaders\ocean_surface_legacy.hlsli" />
+    <None Include="shaders\ocean_surface_pre_foam_rewrite.hlsl" />
+    <None Include="shaders\ocean_wetness_update_cs.hlsl" />
     <None Include="shaders\ocean_shore_foam_dissipation.hlsli" />
     <None Include="shaders\ocean_time_spectrum.hlsl" />
     <None Include="shaders\pointlight_color_fs.hlsl" />
@@ -586,6 +589,13 @@
     <None Include="shaders\ssr_trace_logmarch.hlsli" />
     <None Include="shaders\spotlight_cs.hlsl" />
     <None Include="shaders\tonemap_cs.hlsl" />
+    <None Include="shaders\agx.hlsli" />
+    <None Include="shaders\color_grade.hlsli" />
+    <None Include="shaders\film_curve.hlsli" />
+    <None Include="shaders\local_exposure.hlsli" />
+    <None Include="shaders\exposure_histogram_cs.hlsl" />
+    <None Include="shaders\exposure_solve_cs.hlsl" />
+    <None Include="shaders\exposure_baselum_cs.hlsl" />
     <None Include="shaders\fxaa_cs.hlsl" />
     <None Include="shaders\ui_rect.hlsl" />
     <None Include="shaders\utils.hlsli" />

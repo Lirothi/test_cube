@@ -369,6 +369,22 @@ namespace
     // entity's `properties` (round-tripped on save via the entity-driven
     // serializer) and patch the live runtime; lights/camera update instantly,
     // skybox texture edits rebuild the live skybox, and wind edits update the shared WindState.
+    // Mirrors the developer window's marker so the two surfaces explain a control identically --
+    // the inspector is where a look is made permanent, so it is the surface that most needs the
+    // explanation, not the least.
+    void InspectorHelp(const char* text)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::BeginItemTooltip())
+        {
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
+
     void DrawEnvironmentInspector(
         EditorContext& ctx,
         EditorCommandStack& commandStack,
@@ -646,9 +662,78 @@ namespace
                 ? render::ExposureMultiplierFromEv100(shownEv)
                 : render::kIdentityExposureMultiplier;
             ImGui::TextDisabled(automatic
-                ? "Compensation %.2f EV -> x%.5f (metered EV is runtime, see the dev window)"
+                ? "Compensation %.2f EV -> x%.5f"
                 : "Manual %.2f EV100 -> x%.5f",
                 shownEv, multiplier);
+
+            // Live metering state and the histogram, the same readouts the developer window shows.
+            // They belong here too: the percentile and mask sliders above are unreadable without
+            // seeing the distribution they are clipping.
+            const ExposureMetering& metering = ctx.renderer.Exposure();
+            const ExposureMetering::Readback readback = metering.LatestReadback();
+            ImGui::SeparatorText("Live");
+            if (readback.valid)
+            {
+                ImGui::Text("Adapted %+.3f EV100 (x%.5f)", readback.adaptedEv100,
+                    render::ExposureMultiplierFromEv100(readback.adaptedEv100));
+                ImGui::Text("Target  %+.3f EV100", readback.targetEv100);
+                ImGui::TextDisabled("Metered low %.5f  high %.5f (scene linear)",
+                    readback.lowLuminance, readback.highLuminance);
+                const float gap = readback.targetEv100 - readback.adaptedEv100;
+                ImGui::TextDisabled(fabsf(gap) < 0.01f ? "settled" : "adapting (%+.2f EV to go)", gap);
+            }
+            else
+            {
+                ImGui::TextDisabled("waiting for the first readback (enable the camera above)");
+            }
+            if (ImGui::SmallButton("Reset adaptation"))
+            {
+                ctx.renderer.Exposure().RequestReset();
+            }
+            InspectorHelp("Snaps the adapted value to the target instantly -- the same thing that "
+                          "happens on level load, resize and camera cuts.");
+
+            {
+                static float bins[ExposureMetering::kHistogramBins] = {};
+                UINT total = 0;
+                if (metering.LatestHistogram(bins, ExposureMetering::kHistogramBins, &total) && total > 0)
+                {
+                    constexpr int kBinCount = static_cast<int>(ExposureMetering::kHistogramBins);
+                    const ImVec2 size(ImGui::GetContentRegionAvail().x, 70.0f);
+                    const ImVec2 origin = ImGui::GetCursorScreenPos();
+                    ImGui::PlotHistogram("##inspectorHistogram", bins, kBinCount, 0, nullptr,
+                        0.0f, 1.0f, size);
+
+                    // Markers follow the CUMULATIVE distribution: placing them at
+                    // lowPercentile * binCount would simply misreport where the window sits.
+                    float sum = 0.0f;
+                    for (int i = 0; i < kBinCount; ++i) { sum += bins[i]; }
+                    const float invSum = sum > 0.0f ? 1.0f / sum : 0.0f;
+                    const float lowPct = JsonFloat(p, "lowPercentile", 0.15f);
+                    const float highPct = JsonFloat(p, "highPercentile", 0.80f);
+                    int loBin = 0;
+                    int hiBin = kBinCount - 1;
+                    bool haveLo = false;
+                    float cumulative = 0.0f;
+                    for (int i = 0; i < kBinCount; ++i)
+                    {
+                        cumulative += bins[i] * invSum;
+                        if (!haveLo && cumulative >= lowPct) { loBin = i; haveLo = true; }
+                        if (cumulative >= highPct) { hiBin = i; break; }
+                    }
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    const float binW = size.x / static_cast<float>(kBinCount);
+                    const float x0 = origin.x + binW * static_cast<float>(loBin);
+                    const float x1 = origin.x + binW * static_cast<float>(hiBin + 1);
+                    dl->AddRectFilled(ImVec2(x0, origin.y), ImVec2(x1, origin.y + size.y),
+                        IM_COL32(90, 170, 255, 40));
+                    ImGui::TextDisabled("blue = the window the percentiles actually meter");
+                }
+                else
+                {
+                    ImGui::TextDisabled("histogram appears once metering has run");
+                }
+            }
         }
         else if (env.type == "colorPipeline")
         {
@@ -667,28 +752,174 @@ namespace
                 trackContinuousEdit(beforeItem, changed);
             }
 
+            ImGui::SeparatorText("Local exposure");
+            dragF("Local Highlights", "localHighlightContrast", 1.0f, 0.01f, 0.1f, 2.0f, "%.3f");
+            InspectorHelp("Contrast scale for everything brighter than middle grey, judged by the "
+                          "BLURRED neighbourhood rather than the pixel. 1 = off.\n\n"
+                          "Below 1 COMPRESSES -- bright regions come down while their detail stays "
+                          "(measured on sun_glint: 0.55 cut clipping 65x for a 2% median move). "
+                          "Above 1 EXPANDS, which on wind_test is the more useful direction: this "
+                          "scene's problem is too little range, not too much. Either way it is the "
+                          "one thing a global exposure cannot do.");
+            dragF("Local Shadows", "localShadowContrast", 1.0f, 0.01f, 0.1f, 2.0f, "%.3f");
+            InspectorHelp("Same for everything darker than middle grey. Below 1 lifts shaded "
+                          "regions without touching the lit ones; above 1 deepens them, and being "
+                          "per-neighbourhood it deepens WITHOUT crushing the lit side.");
+            dragF("Local Detail", "localDetailStrength", 1.0f, 0.01f, 0.0f, 3.0f, "%.3f");
+            InspectorHelp("How much per-pixel detail survives the scaling. 1 = all of it, which is "
+                          "the point: scaling the blurred base while passing detail through "
+                          "untouched is what keeps micro-contrast.");
+            dragF("Local HL Threshold", "localHighlightThreshold", 0.0f, 0.05f, 0.0f, 8.0f, "%.2f");
+            dragF("Local SH Threshold", "localShadowThreshold", 0.0f, 0.05f, 0.0f, 8.0f, "%.2f");
+            InspectorHelp("Stops away from middle grey before the effect starts, so mid-tones -- "
+                          "usually the subject -- are left alone.");
+            {
+                // Mirrors the dev window's local-exposure presets exactly, including "Expand",
+                // which is the one measured against docs/ref/ref_wind_test.png.
+                struct LocalPreset { const char* name; float hl, sh, detail, hlT, shT; const char* tip; };
+                static const LocalPreset kLocal[] = {
+                    { "Off", 1.00f, 1.00f, 1.00f, 0.00f, 0.00f,
+                      "Neutral -- a true no-op, the shader skips the block entirely." },
+                    { "Gentle", 0.85f, 0.90f, 1.00f, 0.50f, 0.50f,
+                      "Mild COMPRESSION. Reach for it when a frame clips, e.g. into the sun over water." },
+                    { "Strong", 0.65f, 0.75f, 1.10f, 0.25f, 0.25f,
+                      "Heavy compression. Check the horizon for halos." },
+                    { "Expand", 1.35f, 1.35f, 1.00f, 0.00f, 0.00f,
+                      "The measured match to the reference: p99/p02 spread 23.6x -> 41.4x on the "
+                      "overview view with clipping still at 0.000%. 1.5 on both reaches 52.9x "
+                      "against the reference's 53.6x. Median drops a little -- about +0.1 EV back." },
+                };
+                ImGui::PushID("localPresets");
+                for (int i = 0; i < static_cast<int>(std::size(kLocal)); ++i)
+                {
+                    const LocalPreset& preset = kLocal[i];
+                    if (i != 0) { ImGui::SameLine(); }
+                    if (ImGui::SmallButton(preset.name))
+                    {
+                        nlohmann::json after = p;
+                        after["localHighlightContrast"] = preset.hl;
+                        after["localShadowContrast"] = preset.sh;
+                        after["localDetailStrength"] = preset.detail;
+                        after["localHighlightThreshold"] = preset.hlT;
+                        after["localShadowThreshold"] = preset.shT;
+                        executeChange(std::move(after), historyLabel);
+                    }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", preset.tip); }
+                }
+                ImGui::PopID();
+            }
+
             ImGui::SeparatorText("Colour grade (applies to every curve)");
-            dragF("Grade Saturation", "gradeSaturation", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
-            dragF("Grade Contrast", "gradeContrast", 1.0f, 0.01f, 0.1f, 4.0f, "%.3f");
-            dragF("Grade Gamma", "gradeGamma", 1.0f, 0.01f, 0.1f, 4.0f, "%.3f");
+            dragF("Grade Saturation", "gradeSaturation", 1.30f, 0.01f, 0.0f, 4.0f, "%.3f");
+            InspectorHelp("Chroma around luma, applied in linear BEFORE the curve -- the same place "
+                          "Unreal bakes it into its LUT. 1 = unchanged, 0 = greyscale.");
+            dragF("Grade Contrast", "gradeContrast", 1.15f, 0.01f, 0.1f, 4.0f, "%.3f");
+            InspectorHelp("Pivoted on middle grey (0.18), so raising it deepens shadows and lifts "
+                          "highlights while midtones stay put. This is the control that STRETCHES "
+                          "the histogram -- exposure can only slide it.");
+            dragF("Grade Gamma", "gradeGamma", 1.10f, 0.01f, 0.1f, 4.0f, "%.3f");
+            InspectorHelp("Midtone weighting. Above 1 opens midtones without moving black or white "
+                          "as much as gain would.");
             dragF("Grade Gain", "gradeGain", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+            InspectorHelp("Plain multiplier. Overlaps with exposure compensation -- prefer the "
+                          "camera's compensation for overall brightness or the two will fight.");
             dragF("Grade Offset", "gradeOffset", 0.0f, 0.001f, -1.0f, 1.0f, "%.4f");
+            InspectorHelp("Plain lift. Small positive values give the faded, milky-black film look; "
+                          "negative crushes the black point.");
+
+            // Same preset set as the developer window, written through the command stack so a
+            // preset is one undo step rather than five stray field edits.
+            {
+                struct GradePreset { const char* name; float sat, con, gam, gain, off; const char* tip; };
+                static const GradePreset kPresets[] = {
+                    { "Neutral", 1.00f, 1.00f, 1.00f, 1.00f, 0.000f,
+                      "No grading. Bit-identical to the ungraded image." },
+                    { "Vivid", 1.40f, 1.25f, 1.00f, 1.00f, 0.000f,
+                      "The measured match to the reference photograph. Set compensation to suit the "
+                      "CURVE: about -0.4 EV on Legacy, 0.0 on Filmic." },
+                    { "Punchy", 1.20f, 1.45f, 1.00f, 1.00f, 0.000f,
+                      "Contrast-forward rather than colour-forward." },
+                    { "Filmic", 1.10f, 1.05f, 1.00f, 1.00f, 0.015f,
+                      "The faded look -- the offset lifts the black point off zero." },
+                    { "Warm sand", 1.30f, 1.15f, 1.10f, 1.00f, 0.000f,
+                      "The default. Vivid with the midtones opened up so lit sand and foliage keep "
+                      "detail. Pairs with -0.15 EV on the Filmic curve." },
+                    { "Flat", 0.85f, 0.90f, 1.00f, 1.00f, 0.000f,
+                      "Deliberately washed out, for judging LIGHTING rather than look -- shading "
+                      "errors stop hiding behind the grade." },
+                };
+                ImGui::PushID("gradePresets");
+                for (int i = 0; i < static_cast<int>(std::size(kPresets)); ++i)
+                {
+                    const GradePreset& preset = kPresets[i];
+                    if (i != 0) { ImGui::SameLine(); }
+                    if (ImGui::SmallButton(preset.name))
+                    {
+                        nlohmann::json after = p;
+                        after["gradeSaturation"] = preset.sat;
+                        after["gradeContrast"] = preset.con;
+                        after["gradeGamma"] = preset.gam;
+                        after["gradeGain"] = preset.gain;
+                        after["gradeOffset"] = preset.off;
+                        executeChange(std::move(after), historyLabel);
+                    }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", preset.tip); }
+                }
+                ImGui::PopID();
+            }
 
             if (curveIndex == 2)
             {
                 ImGui::SeparatorText("Film curve (Unreal's controls)");
                 dragF("Film Slope", "filmSlope", 0.88f, 0.005f, 0.1f, 2.0f, "%.3f");
+                InspectorHelp("Steepness of the straight middle section, i.e. the curve's overall "
+                              "contrast. Unreal's default is 0.88.");
                 dragF("Film Toe", "filmToe", 0.55f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How much the shadows roll off. Higher keeps shadow detail and lifts "
+                              "the black end; lower crushes toward black sooner. Default 0.55.");
                 dragF("Film Shoulder", "filmShoulder", 0.26f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How much the highlights roll off. LOWER reaches white sooner, which "
+                              "is the knob to use when the image reads short of the reference at "
+                              "the top end. Default 0.26.");
                 dragF("Film Black Clip", "filmBlackClip", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How far below zero the toe may reach before clipping. Default 0.");
                 dragF("Film White Clip", "filmWhiteClip", 0.04f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How far above one the shoulder may reach. Default 0.04.");
+                if (ImGui::SmallButton("Unreal defaults"))
+                {
+                    nlohmann::json after = p;
+                    after["filmSlope"] = 0.88f;
+                    after["filmToe"] = 0.55f;
+                    after["filmShoulder"] = 0.26f;
+                    after["filmBlackClip"] = 0.0f;
+                    after["filmWhiteClip"] = 0.04f;
+                    executeChange(std::move(after), historyLabel);
+                }
             }
             else if (curveIndex == 1)
             {
                 ImGui::SeparatorText("AgX look");
                 dragF("AgX Slope", "agxSlope", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
                 dragF("AgX Power", "agxPower", 1.0f, 0.01f, 0.1f, 4.0f, "%.3f");
+                InspectorHelp("Contrast. NOTE it acts on the [0,1] log-encoded value, so raising it "
+                              "DARKENS -- unlike the grade contrast above, which pivots on middle "
+                              "grey. That is why the AgX 'punchy' look crushes the image.");
                 dragF("AgX Saturation", "agxSaturation", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+                ImGui::PushID("agxLook");
+                if (ImGui::SmallButton("Neutral"))
+                {
+                    nlohmann::json after = p;
+                    after["agxSlope"] = 1.0f; after["agxPower"] = 1.0f; after["agxSaturation"] = 1.0f;
+                    executeChange(std::move(after), historyLabel);
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Punchy"))
+                {
+                    nlohmann::json after = p;
+                    after["agxSlope"] = 1.0f; after["agxPower"] = 1.35f; after["agxSaturation"] = 1.4f;
+                    executeChange(std::move(after), historyLabel);
+                }
+                ImGui::PopID();
             }
         }
         else if (env.type == "skybox")

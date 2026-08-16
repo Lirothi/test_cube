@@ -156,6 +156,11 @@ struct SceneTonemapCBHandles
     Material::CBFieldHandle filmShoulder;
     Material::CBFieldHandle filmBlackClip;
     Material::CBFieldHandle filmWhiteClip;
+    Material::CBFieldHandle localHighlightContrast;
+    Material::CBFieldHandle localShadowContrast;
+    Material::CBFieldHandle localDetailStrength;
+    Material::CBFieldHandle localHighlightThreshold;
+    Material::CBFieldHandle localShadowThreshold;
 
     void Populate(Material* material);
 };
@@ -170,6 +175,15 @@ struct SceneExposureHistogramCBHandles
     Material::CBFieldHandle maskInnerRadius;
     Material::CBFieldHandle maskOuterRadius;
     Material::CBFieldHandle maskSkyBias;
+
+    void Populate(Material* material);
+};
+
+// P3B base log-luminance layer.
+struct SceneExposureBaseLumCBHandles
+{
+    Material::CBFieldHandle baseWidth;
+    Material::CBFieldHandle baseHeight;
 
     void Populate(Material* material);
 };
@@ -393,6 +407,7 @@ public:
     std::shared_ptr<Material> GetExposureClearMaterial() const { return matExposureClearCS_; }
     std::shared_ptr<Material> GetExposureBuildMaterial() const { return matExposureBuildCS_; }
     std::shared_ptr<Material> GetExposureSolveMaterial() const { return matExposureSolveCS_; }
+    std::shared_ptr<Material> GetExposureBaseLumMaterial() const { return matExposureBaseLumCS_; }
     std::shared_ptr<Material> GetSsrMaterial() const { return matSSR_; }
     std::shared_ptr<Material> GetOceanReflectionMaterial() const { return matOceanReflection_; }
     std::shared_ptr<Material> GetBlurMaterial() const { return matBlur_; }
@@ -428,6 +443,7 @@ public:
     UINT GetTonemapCBSizeBytes() const;
     UINT GetExposureHistogramCBSizeBytes() const;
     UINT GetExposureSolveCBSizeBytes() const;
+    UINT GetExposureBaseLumCBSizeBytes() const;
 #if WITH_EDITOR
     UINT GetSelectionOutlineCBSizeBytes() const;
 #endif
@@ -444,6 +460,7 @@ public:
                                uint8_t* dest) const;
     void WriteExposureHistogramConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
     void WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
+    void WriteExposureBaseLumConstants(uint8_t* dest) const;
 #if WITH_EDITOR
     void WriteSelectionOutlineConstants(const SelectionOutlinePassConstants& data, uint8_t* dest) const;
 #endif
@@ -464,6 +481,7 @@ private:
     std::shared_ptr<Material> matExposureClearCS_;
     std::shared_ptr<Material> matExposureBuildCS_;
     std::shared_ptr<Material> matExposureSolveCS_;
+    std::shared_ptr<Material> matExposureBaseLumCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matOceanReflection_;
     std::shared_ptr<Material> matBlur_;
@@ -487,6 +505,7 @@ private:
     SceneTonemapCBHandles tonemapHandles_{};
     SceneExposureHistogramCBHandles exposureHistogramHandles_{};
     SceneExposureSolveCBHandles exposureSolveHandles_{};
+    SceneExposureBaseLumCBHandles exposureBaseLumHandles_{};
 #if WITH_EDITOR
     SceneSelectionOutlineCBHandles selectionOutlineHandles_{};
 #endif
