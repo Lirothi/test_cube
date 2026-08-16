@@ -388,6 +388,7 @@ namespace
             env.type == "ocean" ? "Edit Ocean" :
             env.type == "wind" ? "Edit Wind" :
             env.type == "cameraExposure" ? "Edit Camera Exposure" :
+            env.type == "colorPipeline" ? "Edit Color Pipeline" :
             "Edit Environment";
 
         const auto executeChange = [&](nlohmann::json after, const std::string& label)
@@ -619,10 +620,16 @@ namespace
                 dragF("Compensation (EV)", "compensationEv", 0.0f, 0.05f, -8.0f, 8.0f, "%.2f");
                 dragF("Min EV100", "minEv100", -6.0f, 0.1f, -16.0f, 20.0f, "%.2f");
                 dragF("Max EV100", "maxEv100", 16.0f, 0.1f, -16.0f, 20.0f, "%.2f");
-                dragF("Low Percentile", "lowPercentile", 0.02f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("Low Percentile", "lowPercentile", 0.15f, 0.005f, 0.0f, 1.0f, "%.3f");
                 dragF("High Percentile", "highPercentile", 0.80f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("Meter Mask Strength", "meterMaskStrength", 0.7f, 0.01f, 0.0f, 1.0f, "%.3f");
+                dragF("Meter Mask Inner", "meterMaskInnerRadius", 0.35f, 0.01f, 0.0f, 2.0f, "%.3f");
+                dragF("Meter Mask Outer", "meterMaskOuterRadius", 1.0f, 0.01f, 0.0f, 2.0f, "%.3f");
+                dragF("Meter Mask Sky Bias", "meterMaskSkyBias", 0.6f, 0.01f, 0.0f, 1.0f, "%.3f");
                 dragF("Speed Up (stops/s)", "speedUp", 3.0f, 0.05f, 0.0f, 20.0f, "%.2f");
                 dragF("Speed Down (stops/s)", "speedDown", 1.0f, 0.05f, 0.0f, 20.0f, "%.2f");
+                dragF("Ease-in Distance", "adaptationStartDistance", 1.5f, 0.05f, 0.05f, 20.0f, "%.2f");
+                dragF("Black Bucket Influence", "blackBucketInfluence", 1.0f, 0.01f, 0.0f, 1.0f, "%.3f");
             }
             else
             {
@@ -642,6 +649,47 @@ namespace
                 ? "Compensation %.2f EV -> x%.5f (metered EV is runtime, see the dev window)"
                 : "Manual %.2f EV100 -> x%.5f",
                 shownEv, multiplier);
+        }
+        else if (env.type == "colorPipeline")
+        {
+            // P3C. Same set the dev window exposes, so a look tuned live can be written into the
+            // level here rather than only through the clipboard button.
+            const std::string curve = p.value("toneCurve", std::string("legacy"));
+            int curveIndex = (curve == "agx") ? 1 : ((curve == "filmic" || curve == "film") ? 2 : 0);
+            {
+                const nlohmann::json beforeItem = p;
+                const char* kCurveNames[] = { "Legacy (ACES fit)", "AgX", "Filmic (Unreal)" };
+                const bool changed = ImGui::Combo("Tone Curve", &curveIndex, kCurveNames, 3);
+                if (changed)
+                {
+                    p["toneCurve"] = (curveIndex == 1) ? "agx" : (curveIndex == 2 ? "filmic" : "legacy");
+                }
+                trackContinuousEdit(beforeItem, changed);
+            }
+
+            ImGui::SeparatorText("Colour grade (applies to every curve)");
+            dragF("Grade Saturation", "gradeSaturation", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+            dragF("Grade Contrast", "gradeContrast", 1.0f, 0.01f, 0.1f, 4.0f, "%.3f");
+            dragF("Grade Gamma", "gradeGamma", 1.0f, 0.01f, 0.1f, 4.0f, "%.3f");
+            dragF("Grade Gain", "gradeGain", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+            dragF("Grade Offset", "gradeOffset", 0.0f, 0.001f, -1.0f, 1.0f, "%.4f");
+
+            if (curveIndex == 2)
+            {
+                ImGui::SeparatorText("Film curve (Unreal's controls)");
+                dragF("Film Slope", "filmSlope", 0.88f, 0.005f, 0.1f, 2.0f, "%.3f");
+                dragF("Film Toe", "filmToe", 0.55f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("Film Shoulder", "filmShoulder", 0.26f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("Film Black Clip", "filmBlackClip", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("Film White Clip", "filmWhiteClip", 0.04f, 0.005f, 0.0f, 1.0f, "%.3f");
+            }
+            else if (curveIndex == 1)
+            {
+                ImGui::SeparatorText("AgX look");
+                dragF("AgX Slope", "agxSlope", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+                dragF("AgX Power", "agxPower", 1.0f, 0.01f, 0.1f, 4.0f, "%.3f");
+                dragF("AgX Saturation", "agxSaturation", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+            }
         }
         else if (env.type == "skybox")
         {

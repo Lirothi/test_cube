@@ -441,6 +441,27 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--no-hud")) {
             g_hudHidden = true;
         }
+        // "--sweep=<setting>:<v0>,<v1>,...": one process, one shot per value (see App.h). The value
+        // count drives --shot-count, so the caller does not have to keep the two in sync.
+        if (const char* flag = std::strstr(lpCmdLine, "--sweep=")) {
+            const char* p = flag + std::strlen("--sweep=");
+            const char* colon = std::strchr(p, ':');
+            const char* end = p;
+            while (*end && *end != ' ' && *end != '\t') { ++end; }
+            if (colon && colon < end) {
+                g_sweepSetting.assign(p, colon);
+                const char* v = colon + 1;
+                while (v < end) {
+                    g_sweepValues.push_back(static_cast<float>(std::atof(v)));
+                    const char* comma = std::strchr(v, ',');
+                    if (!comma || comma >= end) { break; }
+                    v = comma + 1;
+                }
+            }
+            if (!g_sweepValues.empty()) {
+                g_shotCount = static_cast<int>(g_sweepValues.size());
+            }
+        }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-extent=")) {
             vsm::g_clipmapBaseExtent = (float)std::atof(flag + std::strlen("--vsm-extent="));
         }

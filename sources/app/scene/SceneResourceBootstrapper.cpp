@@ -169,6 +169,20 @@ void SceneTonemapCBHandles::Populate(Material* material)
         return;
     }
     exposureEnabled = material->ComputeCB0FieldHandle("exposureEnabled");
+    toneCurve = material->ComputeCB0FieldHandle("toneCurve");
+    agxSlope = material->ComputeCB0FieldHandle("agxSlope");
+    agxPower = material->ComputeCB0FieldHandle("agxPower");
+    agxSaturation = material->ComputeCB0FieldHandle("agxSaturation");
+    gradeSaturation = material->ComputeCB0FieldHandle("gradeSaturation");
+    gradeContrast = material->ComputeCB0FieldHandle("gradeContrast");
+    gradeGamma = material->ComputeCB0FieldHandle("gradeGamma");
+    gradeGain = material->ComputeCB0FieldHandle("gradeGain");
+    gradeOffset = material->ComputeCB0FieldHandle("gradeOffset");
+    filmSlope = material->ComputeCB0FieldHandle("filmSlope");
+    filmToe = material->ComputeCB0FieldHandle("filmToe");
+    filmShoulder = material->ComputeCB0FieldHandle("filmShoulder");
+    filmBlackClip = material->ComputeCB0FieldHandle("filmBlackClip");
+    filmWhiteClip = material->ComputeCB0FieldHandle("filmWhiteClip");
 }
 
 void SceneExposureHistogramCBHandles::Populate(Material* material)
@@ -182,6 +196,10 @@ void SceneExposureHistogramCBHandles::Populate(Material* material)
     sampleGridY = material->ComputeCB0FieldHandle("sampleGridY");
     minLogLum = material->ComputeCB0FieldHandle("minLogLum");
     invLogLumRange = material->ComputeCB0FieldHandle("invLogLumRange");
+    maskStrength = material->ComputeCB0FieldHandle("maskStrength");
+    maskInnerRadius = material->ComputeCB0FieldHandle("maskInnerRadius");
+    maskOuterRadius = material->ComputeCB0FieldHandle("maskOuterRadius");
+    maskSkyBias = material->ComputeCB0FieldHandle("maskSkyBias");
 }
 
 void SceneExposureSolveCBHandles::Populate(Material* material)
@@ -204,6 +222,10 @@ void SceneExposureSolveCBHandles::Populate(Material* material)
     manualEv100 = material->ComputeCB0FieldHandle("manualEv100");
     autoExposure = material->ComputeCB0FieldHandle("autoExposure");
     resetHistory = material->ComputeCB0FieldHandle("resetHistory");
+    startDistance = material->ComputeCB0FieldHandle("startDistance");
+    exponentialUpM = material->ComputeCB0FieldHandle("exponentialUpM");
+    exponentialDownM = material->ComputeCB0FieldHandle("exponentialDownM");
+    blackBucketInfluence = material->ComputeCB0FieldHandle("blackBucketInfluence");
 }
 
 #if WITH_EDITOR
@@ -683,17 +705,36 @@ void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data
     matBlur_->UpdateCBField(handles.glossyScale, data.glossyScale, dest);
 }
 
-void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled, uint8_t* dest) const
+void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
+                                                      const render::ColorPipelineSettings& color,
+                                                      uint8_t* dest) const
 {
     if (!matTonemapCS_ || !dest)
     {
         return;
     }
-    matTonemapCS_->UpdateCBField(tonemapHandles_.exposureEnabled,
+    const auto& h = tonemapHandles_;
+    matTonemapCS_->UpdateCBField(h.exposureEnabled,
         static_cast<uint32_t>(exposureEnabled ? 1u : 0u), dest);
+    matTonemapCS_->UpdateCBField(h.toneCurve,
+        static_cast<uint32_t>(color.toneCurve), dest);
+    matTonemapCS_->UpdateCBField(h.agxSlope, color.agxSlope, dest);
+    matTonemapCS_->UpdateCBField(h.agxPower, color.agxPower, dest);
+    matTonemapCS_->UpdateCBField(h.agxSaturation, color.agxSaturation, dest);
+    matTonemapCS_->UpdateCBField(h.gradeSaturation, color.gradeSaturation, dest);
+    matTonemapCS_->UpdateCBField(h.gradeContrast, color.gradeContrast, dest);
+    matTonemapCS_->UpdateCBField(h.gradeGamma, color.gradeGamma, dest);
+    matTonemapCS_->UpdateCBField(h.gradeGain, color.gradeGain, dest);
+    matTonemapCS_->UpdateCBField(h.gradeOffset, color.gradeOffset, dest);
+    matTonemapCS_->UpdateCBField(h.filmSlope, color.filmSlope, dest);
+    matTonemapCS_->UpdateCBField(h.filmToe, color.filmToe, dest);
+    matTonemapCS_->UpdateCBField(h.filmShoulder, color.filmShoulder, dest);
+    matTonemapCS_->UpdateCBField(h.filmBlackClip, color.filmBlackClip, dest);
+    matTonemapCS_->UpdateCBField(h.filmWhiteClip, color.filmWhiteClip, dest);
 }
 
-void SceneResourceBootstrapper::WriteExposureHistogramConstants(uint8_t* dest) const
+void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMeteringConstants& data,
+                                                                uint8_t* dest) const
 {
     if (!matExposureBuildCS_ || !dest)
     {
@@ -705,6 +746,10 @@ void SceneResourceBootstrapper::WriteExposureHistogramConstants(uint8_t* dest) c
     matExposureBuildCS_->UpdateCBField(handles.sampleGridY, ExposureMeteringConstants::kSampleGridY, dest);
     matExposureBuildCS_->UpdateCBField(handles.minLogLum, ExposureMeteringConstants::kMinLogLum, dest);
     matExposureBuildCS_->UpdateCBField(handles.invLogLumRange, 1.0f / range, dest);
+    matExposureBuildCS_->UpdateCBField(handles.maskStrength, data.maskStrength, dest);
+    matExposureBuildCS_->UpdateCBField(handles.maskInnerRadius, data.maskInnerRadius, dest);
+    matExposureBuildCS_->UpdateCBField(handles.maskOuterRadius, data.maskOuterRadius, dest);
+    matExposureBuildCS_->UpdateCBField(handles.maskSkyBias, data.maskSkyBias, dest);
 }
 
 void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const
@@ -728,6 +773,10 @@ void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteri
     matExposureSolveCS_->UpdateCBField(handles.manualEv100, data.manualEv100, dest);
     matExposureSolveCS_->UpdateCBField(handles.autoExposure, data.autoExposure, dest);
     matExposureSolveCS_->UpdateCBField(handles.resetHistory, data.resetHistory, dest);
+    matExposureSolveCS_->UpdateCBField(handles.startDistance, data.startDistance, dest);
+    matExposureSolveCS_->UpdateCBField(handles.exponentialUpM, data.exponentialUpM, dest);
+    matExposureSolveCS_->UpdateCBField(handles.exponentialDownM, data.exponentialDownM, dest);
+    matExposureSolveCS_->UpdateCBField(handles.blackBucketInfluence, data.blackBucketInfluence, dest);
 }
 
 void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const

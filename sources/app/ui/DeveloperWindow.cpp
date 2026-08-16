@@ -508,6 +508,77 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "'Reset adaptation' snaps Adapted to Target instantly, the same thing that "
                     "happens on level load, resize and camera cuts.");
 
+                // Plan section 6.5 asks for a histogram visualisation, and the percentile sliders
+                // below are unreadable without one -- they clip a distribution you otherwise cannot
+                // see. Bins are normalised to the PEAK so the shape survives a big flat sky.
+                ImGui::SeparatorText("Histogram");
+                {
+                    static float bins[ExposureMetering::kHistogramBins] = {};
+                    UINT total = 0;
+                    if (metering.LatestHistogram(bins, ExposureMetering::kHistogramBins, &total) && total > 0)
+                    {
+                        const float minLog = ExposureMeteringConstants::kMinLogLum;
+                        const float maxLog = ExposureMeteringConstants::kMaxLogLum;
+
+                        const ImVec2 size(ImGui::GetContentRegionAvail().x, 90.0f);
+                        const ImVec2 origin = ImGui::GetCursorScreenPos();
+                        ImGui::PlotHistogram("##exposureHistogram", bins,
+                            ExposureMetering::kHistogramBins, 0, nullptr, 0.0f, 1.0f, size);
+
+                        // Shade what the percentiles actually keep. The window is defined on the
+                        // CUMULATIVE distribution, not on bin position, so the markers have to be
+                        // found by walking the bins -- placing them at lowPercentile * binCount
+                        // would simply lie. bins[] is peak-normalised, but the cumulative FRACTION
+                        // is scale-invariant, so normalising by their sum recovers it exactly.
+                        constexpr int kBinCount = static_cast<int>(ExposureMetering::kHistogramBins);
+                        float sum = 0.0f;
+                        for (int i = 0; i < kBinCount; ++i) { sum += bins[i]; }
+                        const float invSum = sum > 0.0f ? 1.0f / sum : 0.0f;
+
+                        int loBin = 0;
+                        int hiBin = kBinCount - 1;
+                        bool haveLo = false;
+                        float cumulative = 0.0f;
+                        for (int i = 0; i < kBinCount; ++i)
+                        {
+                            cumulative += bins[i] * invSum;
+                            if (!haveLo && cumulative >= exposure.lowPercentile) { loBin = i; haveLo = true; }
+                            if (cumulative >= exposure.highPercentile) { hiBin = i; break; }
+                        }
+
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        const float binW = size.x / static_cast<float>(kBinCount);
+                        const float x0 = origin.x + binW * static_cast<float>(loBin);
+                        const float x1 = origin.x + binW * static_cast<float>(hiBin + 1);
+                        dl->AddRectFilled(ImVec2(x0, origin.y), ImVec2(x1, origin.y + size.y),
+                            IM_COL32(90, 170, 255, 40));
+                        dl->AddLine(ImVec2(x0, origin.y), ImVec2(x0, origin.y + size.y), IM_COL32(90, 170, 255, 180));
+                        dl->AddLine(ImVec2(x1, origin.y), ImVec2(x1, origin.y + size.y), IM_COL32(90, 170, 255, 180));
+
+                        // Where the adapted exposure currently sits, in the same log-luminance axis.
+                        if (readback.valid)
+                        {
+                            const float meteredLog = readback.adaptedEv100 - 3.0f; // EV100 = log2(L)+3
+                            const float t01 = (meteredLog - minLog) / (maxLog - minLog);
+                            if (t01 >= 0.0f && t01 <= 1.0f)
+                            {
+                                const float mx = origin.x + size.x * t01;
+                                dl->AddLine(ImVec2(mx, origin.y), ImVec2(mx, origin.y + size.y),
+                                    IM_COL32(255, 210, 90, 220), 2.0f);
+                            }
+                        }
+
+                        ImGui::TextDisabled("%.0f .. %.0f log2 luminance   |   %u samples   |  "
+                                            "blue = metered window, yellow = adapted",
+                                            minLog, maxLog, total);
+                    }
+                    else
+                    {
+                        ImGui::TextDisabled("histogram available once metering has run "
+                                            "(enable the camera above)");
+                    }
+                }
+
                 ImGui::SeparatorText("Metering");
                 ImGui::SliderFloat("Compensation (EV)", &exposure.compensationEv, -8.0f, 8.0f, "%+.2f");
                 ImGui::SameLine();
@@ -518,7 +589,10 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "expect; the sign flip happens in the shader.)\n\n"
                     "+1.0 doubles scene brightness, -1.0 halves it. This is the knob to reach for "
                     "when the meter is technically right but the shot wants to be brighter or "
-                    "moodier -- it moves the whole image without changing how the meter behaves.");
+                    "moodier -- it moves the whole image without changing how the meter behaves.\n\n"
+                    "RE-CHECK THIS AFTER CHANGING THE TONE CURVE. The curves do not sit at the same "
+                    "brightness -- Filmic runs about 0.4 EV darker than Legacy on the same scene -- "
+                    "so a compensation tuned against one will stack with the other and overshoot.");
 
                 ImGui::SliderFloat("Low percentile", &exposure.lowPercentile, 0.0f, 0.95f, "%.3f");
                 ImGui::SameLine();
@@ -547,6 +621,41 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "default is around 98.3% for its own metering band. Sweep it while looking "
                     "into the sun over water -- that is the view it exists for.");
 
+                ImGui::SeparatorText("Weight mask (centre-weighted metering)");
+                ImGui::SliderFloat("Mask strength", &exposure.meterMaskStrength, 0.0f, 1.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker(
+                    "How much screen position affects a sample's weight in the meter. 0 = off, "
+                    "every sample counts equally (bit-identical to no mask).\n\n"
+                    "This is the PRINCIPLED fix for 'the sun or the sky drags the whole frame'. "
+                    "The percentile sliders throw bright samples away no matter where they are; "
+                    "this instead de-weights the parts of the frame that are not the subject, which "
+                    "is what a camera's centre-weighted meter does and what Unreal stores in a mask "
+                    "texture.\n\n"
+                    "Weights are floored at 0.05, so the frame edges still count a little rather "
+                    "than dropping out entirely.");
+                ImGui::BeginDisabled(exposure.meterMaskStrength <= 0.0f);
+                ImGui::SliderFloat("Mask inner radius", &exposure.meterMaskInnerRadius, 0.0f, 1.5f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker("Everything inside this radius keeps full weight. Fraction of the "
+                           "half-diagonal, so 1.0 is the frame corner.");
+                ImGui::SliderFloat("Mask outer radius", &exposure.meterMaskOuterRadius, 0.0f, 1.5f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker("Weight falls off to the floor by this radius. Must be larger than the "
+                           "inner one -- an inverted pair would weight the EDGES instead.");
+                if (exposure.meterMaskOuterRadius <= exposure.meterMaskInnerRadius)
+                {
+                    exposure.meterMaskOuterRadius = exposure.meterMaskInnerRadius + 0.01f;
+                }
+                ImGui::SliderFloat("Sky bias", &exposure.meterMaskSkyBias, 0.0f, 1.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker(
+                    "Extra de-weighting of the TOP half of the frame, fading in from the midline. "
+                    "A purely radial mask still lets the sky dominate the moment the camera tilts "
+                    "up -- and in an exterior the sky is almost always the brightest thing and "
+                    "almost never the subject. 0 = none.");
+                ImGui::EndDisabled();
+
                 ImGui::SeparatorText("Adaptation");
                 ImGui::SliderFloat("Speed up (stops/s)", &exposure.speedUp, 0.0f, 20.0f, "%.2f");
                 ImGui::SameLine();
@@ -560,6 +669,24 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "level load cannot resolve into one instant jump when rendering resumes.");
 
                 ImGui::SliderFloat("Speed down (stops/s)", &exposure.speedDown, 0.0f, 20.0f, "%.2f");
+                ImGui::SliderFloat("Ease-in distance (stops)", &exposure.adaptationStartDistance,
+                    0.05f, 8.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker(
+                    "Where adaptation switches from linear to exponential. Further from the target "
+                    "than this it runs at the constant rate above, so a big transition takes a "
+                    "predictable, bounded time; inside it the last stretch eases in.\n\n"
+                    "Without this, a purely linear adaptation arrives at full speed and stops dead, "
+                    "which reads as a mechanical snap rather than as an eye settling. Matches "
+                    "Unreal's r.EyeAdaptation.ExponentialTransitionDistance; 1.5 is their default.");
+                ImGui::SliderFloat("Black bucket influence", &exposure.blackBucketInfluence,
+                    0.0f, 1.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker(
+                    "Weight of the DARKEST histogram bucket. 1 = counts normally.\n\n"
+                    "Lower it when a scene has large regions of pure black — an unlit interior, "
+                    "letterboxing, geometry that never receives light — which would otherwise drag "
+                    "the meter toward exposing for nothing.");
                 ImGui::SameLine();
                 HelpMarker(
                     "How fast the camera OPENS when the scene gets darker, in stops per second -- "
@@ -612,14 +739,205 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::EndDisabled();
 
+                // P3: the display transform. Lives in the same tab because curve and exposure are
+                // judged together -- changing one without seeing the other is how you end up
+                // "fixing" a tone curve problem with exposure.
+                ImGui::SeparatorText("Tone curve");
+                {
+                    render::ColorPipelineSettings& color = scene.ColorPipelineRef();
+                    int curve = static_cast<int>(color.toneCurve);
+                    if (ImGui::RadioButton("Legacy (ACES fit)", &curve, 0)) { color.toneCurve = render::ToneCurve::LegacyAces; }
+                    ImGui::SameLine();
+                    if (ImGui::RadioButton("AgX", &curve, 1)) { color.toneCurve = render::ToneCurve::AgX; }
+                    ImGui::SameLine();
+                    if (ImGui::RadioButton("Filmic (Unreal)", &curve, 2)) { color.toneCurve = render::ToneCurve::Filmic; }
+                    ImGui::SameLine();
+                    HelpMarker(
+                        "LEGACY: the Narkowicz ACES fit plus pow(1/2.2), exactly what shipped "
+                        "before. It skews hue as it clips -- saturated cyans slide toward white "
+                        "with a magenta cast -- which is visible on our lagoon water. Kept so a "
+                        "suspected regression can be A/B'd against the curve; selecting it is "
+                        "bit-identical to the pre-P3 image.\n\n"
+                        "AGX: log-encode, sigmoid, and a chroma-attenuating inset matrix, then the "
+                        "real sRGB transfer function instead of pow(1/2.2). Highlights desaturate "
+                        "the way film does rather than snapping to a flat colour, and the sRGB "
+                        "curve's linear toe stops near-black being lifted -- our blacks measured "
+                        "MILKIER than the reference's, which is what that fixes.\n\n"
+                        "FILMIC: Unreal's own parameterised film curve, with their five controls "
+                        "below. Solved so 0.18 in gives 0.18 out however the knobs are set, which "
+                        "keeps it from fighting the exposure solve (that targets the same 0.18). "
+                        "The tonal response is faithful to theirs; the ACES glow module, red "
+                        "modifier and AP1 working space are not included, because those headers "
+                        "were not in the reference drop.");
+
+                    ImGui::BeginDisabled(color.toneCurve != render::ToneCurve::Filmic);
+                    ImGui::SliderFloat("Film slope", &color.filmSlope, 0.1f, 1.5f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("Steepness of the straight middle section, i.e. overall contrast of "
+                               "the curve. Unreal's default is 0.88.");
+                    ImGui::SliderFloat("Film toe", &color.filmToe, 0.0f, 1.0f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("How much the shadows roll off. Higher keeps more shadow detail and "
+                               "lifts the black end; lower crushes toward black sooner. Default 0.55.");
+                    ImGui::SliderFloat("Film shoulder", &color.filmShoulder, 0.0f, 1.0f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("How much the highlights roll off. Higher holds highlight detail "
+                               "longer before white; lower reaches white sooner. Default 0.26.");
+                    ImGui::SliderFloat("Film black clip", &color.filmBlackClip, 0.0f, 0.5f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("How far below zero the toe may reach before clipping. Default 0.");
+                    ImGui::SliderFloat("Film white clip", &color.filmWhiteClip, 0.0f, 0.5f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("How far above one the shoulder may reach. Default 0.04.");
+                    if (ImGui::SmallButton("Unreal defaults"))
+                    {
+                        color.filmSlope = 0.88f; color.filmToe = 0.55f; color.filmShoulder = 0.26f;
+                        color.filmBlackClip = 0.0f; color.filmWhiteClip = 0.04f;
+                    }
+                    ImGui::EndDisabled();
+
+                    ImGui::BeginDisabled(color.toneCurve != render::ToneCurve::AgX);
+                    ImGui::SliderFloat("Slope", &color.agxSlope, 0.0f, 2.0f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("Gain applied inside the AgX log domain before the power. 1.0 is "
+                               "neutral. Think 'exposure of the grade', not of the camera.");
+                    ImGui::SliderFloat("Power", &color.agxPower, 0.1f, 2.5f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("Contrast. Above 1 deepens shadows and firms up the midtones; the "
+                               "reference 'punchy' look uses about 1.35. This is the knob that "
+                               "makes the image read as vivid rather than flat.");
+                    ImGui::SliderFloat("Saturation", &color.agxSaturation, 0.0f, 2.0f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("Chroma multiplier around luma, applied in the log domain so it "
+                               "does not reintroduce the clipping AgX just removed. 1.0 neutral; "
+                               "the 'punchy' look uses about 1.4.");
+                    if (ImGui::SmallButton("Neutral"))
+                    {
+                        color.agxSlope = 1.0f; color.agxPower = 1.0f; color.agxSaturation = 1.0f;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Punchy"))
+                    {
+                        color.agxSlope = 1.0f; color.agxPower = 1.35f; color.agxSaturation = 1.4f;
+                    }
+                    ImGui::EndDisabled();
+
+                    // P3C. This is the half of Unreal's film pipeline that actually produces the
+                    // look; their curve on its own is not what makes their images punchy.
+                    ImGui::SeparatorText("Colour grade (pre-curve, works on BOTH curves)");
+                    ImGui::SliderFloat("Grade saturation", &color.gradeSaturation, 0.0f, 2.5f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker(
+                        "Chroma around luma, applied in scene-referred LINEAR before the tone "
+                        "curve — the same place Unreal bakes it into its LUT. 1 = unchanged, 0 = "
+                        "greyscale.\n\n"
+                        "Grading before the curve rather than after is the whole point: after it, "
+                        "you are pushing display code values whose range has already been "
+                        "compressed, and saturation stops behaving predictably near the top.");
+                    ImGui::SliderFloat("Grade contrast", &color.gradeContrast, 0.25f, 2.5f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker(
+                        "Contrast pivoted on middle grey (0.18), so raising it deepens shadows and "
+                        "lifts highlights while the midtones stay put.\n\n"
+                        "Pivoting on zero instead would just darken everything as contrast rises — "
+                        "which is exactly the trap the AgX 'punchy' preset above falls into, and "
+                        "why that preset crushes the image.");
+                    ImGui::SliderFloat("Grade gamma", &color.gradeGamma, 0.25f, 2.5f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("Midtone weighting. Above 1 lifts midtones without moving black or "
+                               "white as much as gain would.");
+                    ImGui::SliderFloat("Grade gain", &color.gradeGain, 0.0f, 2.5f, "%.3f");
+                    ImGui::SameLine();
+                    HelpMarker("Plain multiplier. Overlaps with exposure compensation — prefer the "
+                               "camera's compensation for overall brightness and keep this for the "
+                               "grade, or the two will fight.");
+                    ImGui::SliderFloat("Grade offset", &color.gradeOffset, -0.25f, 0.25f, "%.4f");
+                    ImGui::SameLine();
+                    HelpMarker("Plain lift. Small positive values give the faded, milky-black film "
+                               "look; negative values crush the black point.");
+                    // Presets as data rather than a wall of buttons. "Vivid" is the combination
+                    // that was measured against the reference photograph (median 0.184 / p02
+                    // 0.0250 / p99 0.776 / chroma 0.434 against its 0.196 / 0.0152 / 0.814 /
+                    // 0.445), not a guess; the others are steps around it.
+                    struct GradePreset
+                    {
+                        const char* name;
+                        float saturation, contrast, gamma, gain, offset;
+                        const char* tip;
+                    };
+                    static const GradePreset kGradePresets[] = {
+                        { "Neutral", 1.00f, 1.00f, 1.00f, 1.00f, 0.000f,
+                          "No grading at all. Bit-identical to the ungraded image -- the shader "
+                          "skips the whole block when every value is neutral." },
+                        { "Vivid",   1.40f, 1.25f, 1.00f, 1.00f, 0.000f,
+                          "The measured match to the reference photograph.\n\n"
+                          "Set exposure compensation to suit the CURVE, not this preset: about "
+                          "-0.4 EV on Legacy, and 0.0 on Filmic (which is darker to begin with, so "
+                          "the two would otherwise stack and land a full stop under)." },
+                        { "Punchy",  1.20f, 1.45f, 1.00f, 1.00f, 0.000f,
+                          "Contrast-forward rather than colour-forward: deeper blacks and harder "
+                          "highlights, with saturation left closer to neutral." },
+                        { "Filmic",  1.10f, 1.05f, 1.00f, 1.00f, 0.015f,
+                          "The faded look -- a small positive offset lifts the black point off "
+                          "zero, which is what makes film prints read as soft rather than digital." },
+                        { "Warm sand", 1.30f, 1.15f, 1.10f, 1.00f, 0.000f,
+                          "Vivid with the midtones opened up, so lit sand and foliage keep detail "
+                          "instead of racing to the highlight rolloff.\n\n"
+                          "The gamma lift makes this brighter than Vivid at the same setting: on "
+                          "Filmic it lands on the reference at about -0.15 EV of compensation, and "
+                          "roughly a third of a stop above it at 0.0." },
+                        { "Flat",    0.85f, 0.90f, 1.00f, 1.00f, 0.000f,
+                          "Deliberately washed out. Useful for judging LIGHTING rather than look: "
+                          "with contrast and saturation pulled down, shading errors stop hiding "
+                          "behind the grade." },
+                    };
+                    // Namespaced: "Neutral" and "Punchy" also exist as AgX-look buttons above, and
+                    // ImGui derives a widget's ID from its label, so without this the two pairs
+                    // collide and it (rightly) complains about conflicting IDs.
+                    ImGui::PushID("gradePresets");
+                    for (int i = 0; i < static_cast<int>(std::size(kGradePresets)); ++i)
+                    {
+                        const GradePreset& preset = kGradePresets[i];
+                        if (i != 0) { ImGui::SameLine(); }
+                        if (ImGui::SmallButton(preset.name))
+                        {
+                            color.gradeSaturation = preset.saturation;
+                            color.gradeContrast = preset.contrast;
+                            color.gradeGamma = preset.gamma;
+                            color.gradeGain = preset.gain;
+                            color.gradeOffset = preset.offset;
+                        }
+                        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", preset.tip); }
+                    }
+                    ImGui::PopID();
+                }
+
                 ImGui::SeparatorText("Level");
                 ImGui::TextDisabled("These are runtime values. To keep them, copy into the level's");
                 ImGui::TextDisabled("\"cameraExposure\" section (or edit it in the editor inspector).");
                 if (ImGui::SmallButton("Copy JSON to clipboard"))
                 {
-                    char json[512];
+                    const render::ColorPipelineSettings& color = scene.GetColorPipeline();
+                    char json[1024];
                     std::snprintf(json, sizeof(json),
-                        "\"cameraExposure\": {\n"
+                        "\"colorPipeline\": {\n"
+                        "  \"toneCurve\": \"%s\",\n"
+                        "  \"agxSlope\": %.4f,\n"
+                        "  \"agxPower\": %.4f,\n"
+                        "  \"agxSaturation\": %.4f,\n"
+                        "  \"gradeSaturation\": %.4f,\n"
+                        "  \"gradeContrast\": %.4f,\n"
+                        "  \"gradeGamma\": %.4f,\n"
+                        "  \"gradeGain\": %.4f,\n"
+                        "  \"gradeOffset\": %.4f\n"
+                        "},\n"
+                        "\"cameraExposure\": {\n",
+                        color.toneCurve == render::ToneCurve::AgX ? "agx" : "legacy",
+                        color.agxSlope, color.agxPower, color.agxSaturation,
+                        color.gradeSaturation, color.gradeContrast, color.gradeGamma,
+                        color.gradeGain, color.gradeOffset);
+                    const size_t used = std::strlen(json);
+                    std::snprintf(json + used, sizeof(json) - used,
                         "  \"enabled\": %s,\n"
                         "  \"autoExposure\": %s,\n"
                         "  \"compensationEv\": %.4f,\n"

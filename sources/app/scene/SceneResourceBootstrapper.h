@@ -9,6 +9,7 @@
 #include "core/math/Math.h"
 
 #include "app/scene/SceneRenderConfig.h"
+#include "rendering/core/PhotographicSettings.h" // P3: ColorPipelineSettings in the tonemap CB writer
 #include "materials/Material.h"
 
 class Renderer;
@@ -141,6 +142,20 @@ struct SceneFxaaCBHandles
 struct SceneTonemapCBHandles
 {
     Material::CBFieldHandle exposureEnabled;
+    Material::CBFieldHandle toneCurve;
+    Material::CBFieldHandle agxSlope;
+    Material::CBFieldHandle agxPower;
+    Material::CBFieldHandle agxSaturation;
+    Material::CBFieldHandle gradeSaturation;
+    Material::CBFieldHandle gradeContrast;
+    Material::CBFieldHandle gradeGamma;
+    Material::CBFieldHandle gradeGain;
+    Material::CBFieldHandle gradeOffset;
+    Material::CBFieldHandle filmSlope;
+    Material::CBFieldHandle filmToe;
+    Material::CBFieldHandle filmShoulder;
+    Material::CBFieldHandle filmBlackClip;
+    Material::CBFieldHandle filmWhiteClip;
 
     void Populate(Material* material);
 };
@@ -151,6 +166,10 @@ struct SceneExposureHistogramCBHandles
     Material::CBFieldHandle sampleGridY;
     Material::CBFieldHandle minLogLum;
     Material::CBFieldHandle invLogLumRange;
+    Material::CBFieldHandle maskStrength;
+    Material::CBFieldHandle maskInnerRadius;
+    Material::CBFieldHandle maskOuterRadius;
+    Material::CBFieldHandle maskSkyBias;
 
     void Populate(Material* material);
 };
@@ -170,6 +189,10 @@ struct SceneExposureSolveCBHandles
     Material::CBFieldHandle manualEv100;
     Material::CBFieldHandle autoExposure;
     Material::CBFieldHandle resetHistory;
+    Material::CBFieldHandle startDistance;
+    Material::CBFieldHandle exponentialUpM;
+    Material::CBFieldHandle exponentialDownM;
+    Material::CBFieldHandle blackBucketInfluence;
 
     void Populate(Material* material);
 };
@@ -311,10 +334,14 @@ struct ExposureMeteringConstants
     static constexpr float kMinLogLum = -10.0f; // log2 luminance
     static constexpr float kMaxLogLum = 14.0f;  // 24 stops over 256 bins = 0.094 stops per bin
 
-    float compensationEv = 0.0f;
+    float compensationEv = -0.15f;
     float minEv100 = -6.0f;
     float maxEv100 = 16.0f;
-    float lowPercentile = 0.02f;
+    float lowPercentile = 0.15f;
+    float maskStrength = 0.7f;
+    float maskInnerRadius = 0.35f;
+    float maskOuterRadius = 1.0f;
+    float maskSkyBias = 0.6f;
     float highPercentile = 0.80f;
     float speedUp = 3.0f;
     float speedDown = 1.0f;
@@ -322,6 +349,12 @@ struct ExposureMeteringConstants
     float deltaTime = 0.0f;
     uint32_t autoExposure = 1;
     uint32_t resetHistory = 0;
+    float startDistance = 1.5f;
+    // Slope-match factors so the exponential and linear halves of the adaptation join smoothly.
+    // Derived from speed and startDistance on the CPU (see SceneRenderer), exactly as UE does.
+    float exponentialUpM = 1.0f;
+    float exponentialDownM = 1.0f;
+    float blackBucketInfluence = 1.0f;
 };
 
 #if WITH_EDITOR
@@ -406,8 +439,10 @@ public:
     void WriteBlurConstants(const BlurPassConstants& data, uint8_t* dest) const;
     void WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const;
     void WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const;
-    void WriteTonemapConstants(bool exposureEnabled, uint8_t* dest) const;
-    void WriteExposureHistogramConstants(uint8_t* dest) const;
+    void WriteTonemapConstants(bool exposureEnabled,
+                               const render::ColorPipelineSettings& color,
+                               uint8_t* dest) const;
+    void WriteExposureHistogramConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
     void WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
 #if WITH_EDITOR
     void WriteSelectionOutlineConstants(const SelectionOutlinePassConstants& data, uint8_t* dest) const;

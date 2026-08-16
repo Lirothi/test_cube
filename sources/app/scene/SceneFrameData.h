@@ -130,4 +130,5 @@ struct SceneFrameData
     // P2: the level's photographic camera settings, snapshotted with the rest of the frame so the
     // metering pass reads a value that cannot change under it mid-frame.
     render::CameraExposureSettings cameraExposure{};
+    render::ColorPipelineSettings colorPipeline{};
 };

@@ -377,6 +377,17 @@ namespace
         return exposure;
     }
 
+    // P3C: the display transform section (tone curve + colour grade).
+    EditorObject BuildColorPipelineObject()
+    {
+        const render::ColorPipelineSettings defaults{};
+        EditorObject color;
+        color.name = "Color Pipeline";
+        color.type = "colorPipeline";
+        color.properties = render::PhotographicSettingsJson::ToJson(defaults);
+        return color;
+    }
+
     EditorObject BuildFreeCameraStartObject(const Scene& scene)
     {
         const Camera& camera = scene.CameraRef();
@@ -3355,6 +3366,13 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 {
                     commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                         BuildCameraExposureObject()));
+                }
+                const bool hasColorPipeline = HasEnvironmentObject(document_, "colorPipeline");
+                if (MenuItemWithDisabledReason("Color Pipeline", !hasColorPipeline,
+                        "This level already has a color pipeline."))
+                {
+                    commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                        BuildColorPipelineObject()));
                 }
                 if (ImGui::BeginMenu("VFX"))
                 {

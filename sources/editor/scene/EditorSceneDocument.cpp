@@ -304,6 +304,8 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     // P1: photographic camera. addSingleton only materialises an entity when the section is
     // present, so a level that predates the plan gains nothing and saves back byte-identical.
     addSingleton("cameraExposure", "cameraExposure", "Camera Exposure");
+    // P3C: the display transform (tone curve + colour grade).
+    addSingleton("colorPipeline", "colorPipeline", "Color Pipeline");
 }
 
 #endif // WITH_EDITOR

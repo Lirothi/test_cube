@@ -210,6 +210,13 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         render::PhotographicSettingsJson::ApplyOverrides(p, exposure);
         ctx.scene.SetCameraExposure(exposure);
     }
+    else if (env.type == "colorPipeline")
+    {
+        // P3C: rebuilt from defaults on every edit, same reasoning as cameraExposure above.
+        render::ColorPipelineSettings color{};
+        render::PhotographicSettingsJson::ApplyOverrides(p, color);
+        ctx.scene.SetColorPipeline(color);
+    }
     else if (env.type == "camera")
     {
         Camera& cam = ctx.scene.CameraRef();
@@ -340,6 +347,10 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
         // P1: removing the section returns the scene to the dormant defaults, which is the same
         // state a level that never had the section loads with.
         ctx.scene.SetCameraExposure(render::CameraExposureSettings{});
+    }
+    else if (env.type == "colorPipeline")
+    {
+        ctx.scene.SetColorPipeline(render::ColorPipelineSettings{});
     }
     else if (env.type == "wind")
     {

@@ -37,7 +37,13 @@ cbuffer ExposureSolveCB : register(b0)
     uint  autoExposure;   // 0 = hold manualEv100
 
     uint  resetHistory;   // 1 = seed from this frame's target instead of adapting
-    uint  pad0, pad1, pad2;
+    float startDistance;  // stops; beyond this the adaptation is linear, inside it exponential
+    // Slope-match factors, computed on the CPU because they depend only on speed and
+    // startDistance. They make the exponential's slope equal the linear's at the switch point, so
+    // the two halves join smoothly instead of visibly changing rate mid-transition.
+    float exponentialUpM;
+    float exponentialDownM;
+    float blackBucketInfluence;
 };
 
 static const uint kBins = 256u;
@@ -65,6 +71,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     // 256 serial iterations on one thread. Trivial next to the histogram build, and a parallel
     // prefix sum here would be more code than the work it saves.
+    // The darkest bucket can be scaled down: large regions of pure black (an unlit interior,
+    // letterboxing) would otherwise drag the meter toward exposing for nothing.
+    gBins[0] = (uint)((float)gBins[0] * saturate(blackBucketInfluence));
+
     uint total = 0u;
     for (uint b = 0u; b < kBins; ++b)
     {
@@ -85,8 +95,20 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
 
     const float totalF = (float)total;
-    const float loWanted = totalF * lowPercentile;
-    const float hiWanted = totalF * highPercentile;
+    // A collapsed or inverted percentile window selects no samples at all, which used to leave the
+    // weighted average at minLogLum and drive the exposure to the clamp -- a pure white frame. That
+    // is trivially reachable by dragging the two sliders together, so widen a degenerate window
+    // here rather than trusting every caller to keep them apart.
+    float lowPct = min(lowPercentile, highPercentile);
+    float highPct = max(lowPercentile, highPercentile);
+    if (highPct - lowPct < 0.01f)
+    {
+        const float mid = 0.5f * (lowPct + highPct);
+        lowPct = saturate(mid - 0.005f);
+        highPct = saturate(mid + 0.005f);
+    }
+    const float loWanted = totalF * lowPct;
+    const float hiWanted = totalF * highPct;
 
     // Walk the distribution once, accumulating only the part between the two percentiles. Bins are
     // weighted by their count so a wide flat region does not count the same as a narrow spike.
@@ -127,7 +149,16 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         hiLogLum = binLogLum;
     }
 
-    const float meteredLogLum = weight > 0.0f ? (weightedLogLum / weight) : minLogLum;
+    // Falling back to minLogLum on an empty window would ask the camera to expose pure black, i.e.
+    // open to the clamp and white out the frame. Hold the previous exposure instead.
+    if (weight <= 0.0f)
+    {
+        const float held = prevValid ? prevEv : clamp(0.0f, minEv100, maxEv100);
+        ExposureValue.Store(0, asuint(held));
+        ExposureValue.Store(12, asuint(held));
+        return;
+    }
+    const float meteredLogLum = weightedLogLum / weight;
 
     // EV100 = log2(L * S / K) with S = 100 and K = 12.5, i.e. log2(L) + 3. Mirrors
     // render::Ev100FromLuminance in PhotographicSettings.h; the two must not drift apart.
@@ -151,11 +182,26 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
     else
     {
-        // Linear in stops/second, which is what the setting claims to be. speedUp applies when the
-        // scene gets brighter (target EV rises) -- the eye's light adaptation is the fast direction.
-        const float rate = (targetEv > prevEv) ? speedUp : speedDown;
-        const float maxStep = max(rate, 0.0f) * max(deltaTime, 0.0f);
-        adapted = prevEv + clamp(targetEv - prevEv, -maxStep, maxStep);
+        // Hybrid, matching UE's ComputeEyeAdaptation. FAR from the target (more than startDistance
+        // stops) run linear, so a big transition takes a predictable, bounded time at the authored
+        // stops/second. CLOSE to it run exponential, so the last fraction of a stop eases in
+        // instead of arriving at full rate and stopping dead -- which is what a purely linear
+        // adaptation looks like, and it reads as a mechanical snap rather than as vision.
+        const float dt = max(deltaTime, 0.0f);
+        const float diff = targetEv - prevEv;
+        const float rate = (diff > 0.0f) ? speedUp : speedDown;
+        const float m    = (diff > 0.0f) ? exponentialUpM : exponentialDownM;
+
+        // NOTE: `linear` is an HLSL interpolation modifier and cannot be used as an identifier --
+        // it fails with "modifiers must appear before type", which reads nothing like a name
+        // clash. Same trap waits for `sample`, `centroid` and `precise`.
+        const float maxStep = max(rate, 0.0f) * dt;
+        const float linearStep = prevEv + clamp(diff, -maxStep, maxStep);
+
+        const float factor = 1.0f - exp2(-dt * max(rate, 0.0f));
+        const float exponentialStep = prevEv + diff * factor * m;
+
+        adapted = (abs(diff) > startDistance) ? linearStep : exponentialStep;
     }
     adapted = clamp(adapted, minEv100, maxEv100);
 

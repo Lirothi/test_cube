@@ -55,6 +55,23 @@ extern uint32_t g_traceFrames;
 // compiled default alone.
 extern int g_bootDlssMode;
 
+// "--sweep=<setting>:<v0>,<v1>,...": capture a settings sweep from ONE process run, instead of one
+// process launch per value. Sets the shot count from the value list, applies value[i] before shot i
+// and resets the exposure adaptation so each shot settles on its own value.
+//
+// Recognised settings (see App.cpp for the dispatch):
+//   exposure.lowPercentile  exposure.highPercentile  exposure.compensationEv
+//   exposure.manualEv100    exposure.minEv100        exposure.maxEv100
+//   exposure.speedUp        exposure.speedDown       exposure.enabled  exposure.autoExposure
+//   exposure.meterMaskStrength   exposure.meterMaskInnerRadius
+//   exposure.meterMaskOuterRadius exposure.meterMaskSkyBias
+//   color.toneCurve         color.agxSlope           color.agxPower    color.agxSaturation
+//
+// Example: --shot=out.png --sweep=exposure.lowPercentile:0.02,0.35,0.5,0.65 --shot-interval=2
+// writes out_00..out_03.png. Empty = disabled.
+extern std::string g_sweepSetting;
+extern std::vector<float> g_sweepValues;
+
 // "--no-hud": build an EMPTY HUD text buffer. The FPS/MS readout is composited into the backbuffer
 // that "--shot" reads back, so it differs between two runs of the same frozen frame — which would
 // make every "no intentional image delta" check downstream diff the frame counter instead of the

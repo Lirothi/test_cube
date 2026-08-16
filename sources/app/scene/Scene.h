@@ -41,6 +41,11 @@ public:
     // level, so a tuned value has to be copied into the level's cameraExposure section (or the
     // editor inspector) to survive a reload. Same deal as the ocean controls.
     render::CameraExposureSettings& CameraExposureRef() { return cameraExposure_; }
+
+    // P3: the display transform. Same ownership and live-tuning story as the exposure block above.
+    const render::ColorPipelineSettings& GetColorPipeline() const { return colorPipeline_; }
+    void SetColorPipeline(const render::ColorPipelineSettings& s) { colorPipeline_ = s; }
+    render::ColorPipelineSettings& ColorPipelineRef() { return colorPipeline_; }
     LightManager& GetLightManager() { return lightManager_; }
     const LightManager& GetLightManager() const { return lightManager_; }
     Skybox* GetSkybox() const { return skyBox_.get(); }
@@ -205,6 +210,7 @@ private:
 
     DirectionalLight dirLight_;
     render::CameraExposureSettings cameraExposure_{}; // P1, dormant; see PhotographicSettings.h
+    render::ColorPipelineSettings colorPipeline_{};   // P3; see PhotographicSettings.h
 
     std::unique_ptr<Skybox> skyBox_;
 };

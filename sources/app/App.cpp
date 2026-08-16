@@ -31,6 +31,9 @@ uint32_t g_traceFrames = 0;
 int g_bootDlssMode = -1;
 // Empty-HUD capture mode; see App.h. Set by main.cpp from "--no-hud".
 bool g_hudHidden = false;
+// Single-process settings sweep; see App.h. Set by main.cpp from "--sweep=<setting>:<v0>,...".
+std::string g_sweepSetting;
+std::vector<float> g_sweepValues;
 
 #include "app/levels/JsonLevel.h"
 #include "rendering/core/Screenshot.h"
@@ -175,6 +178,50 @@ namespace
 App::~App()
 {
     ReleaseLoadingScreen();
+}
+
+namespace
+{
+    // "--sweep": apply one value of the swept setting. Deliberately a flat if-chain over string
+    // names rather than a reflection system -- this is a capture harness, and a name that does not
+    // match should be loud and cheap to diagnose, not silently ignored.
+    // Returns false for an unknown name so the caller can say so once.
+    bool ApplySweepValue(Scene& scene, const std::string& setting, float value)
+    {
+        render::CameraExposureSettings& e = scene.CameraExposureRef();
+        render::ColorPipelineSettings& c = scene.ColorPipelineRef();
+
+        if (setting == "exposure.lowPercentile")   { e.lowPercentile = value;  return true; }
+        if (setting == "exposure.highPercentile")  { e.highPercentile = value; return true; }
+        if (setting == "exposure.compensationEv")  { e.compensationEv = value; return true; }
+        if (setting == "exposure.manualEv100")     { e.manualEv100 = value;    return true; }
+        if (setting == "exposure.minEv100")        { e.minEv100 = value;       return true; }
+        if (setting == "exposure.maxEv100")        { e.maxEv100 = value;       return true; }
+        if (setting == "exposure.speedUp")         { e.speedUp = value;        return true; }
+        if (setting == "exposure.meterMaskStrength")    { e.meterMaskStrength = value;    return true; }
+        if (setting == "exposure.meterMaskInnerRadius") { e.meterMaskInnerRadius = value; return true; }
+        if (setting == "exposure.meterMaskOuterRadius") { e.meterMaskOuterRadius = value; return true; }
+        if (setting == "exposure.meterMaskSkyBias")     { e.meterMaskSkyBias = value;     return true; }
+        if (setting == "exposure.speedDown")       { e.speedDown = value;      return true; }
+        if (setting == "exposure.adaptationStartDistance") { e.adaptationStartDistance = value; return true; }
+        if (setting == "exposure.blackBucketInfluence")    { e.blackBucketInfluence = value;    return true; }
+        if (setting == "exposure.enabled")         { e.enabled = value != 0.0f;      return true; }
+        if (setting == "exposure.autoExposure")    { e.autoExposure = value != 0.0f; return true; }
+        if (setting == "color.toneCurve")
+        {
+            c.toneCurve = (value != 0.0f) ? render::ToneCurve::AgX : render::ToneCurve::LegacyAces;
+            return true;
+        }
+        if (setting == "color.agxSlope")      { c.agxSlope = value;      return true; }
+        if (setting == "color.agxPower")      { c.agxPower = value;      return true; }
+        if (setting == "color.agxSaturation") { c.agxSaturation = value; return true; }
+        if (setting == "color.gradeSaturation") { c.gradeSaturation = value; return true; }
+        if (setting == "color.gradeContrast")   { c.gradeContrast = value;   return true; }
+        if (setting == "color.gradeGamma")      { c.gradeGamma = value;      return true; }
+        if (setting == "color.gradeGain")       { c.gradeGain = value;       return true; }
+        if (setting == "color.gradeOffset")     { c.gradeOffset = value;     return true; }
+        return false;
+    }
 }
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -602,10 +649,38 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             // the previous way to film the shore breathing was N full relaunches. The inter-shot
             // pause (--shot-interval) exists for the temporal stack: DLSS needs a few frames after
             // each time jump or every frame in the series carries the previous phase's ghost.
+            //
+            // "--sweep=<setting>:<v0>,..." reuses the same series machinery for SETTINGS instead of
+            // time: value[i] is applied before shot i and the exposure adaptation is reset so each
+            // shot settles on its own value. One boot for a whole slider sweep.
             if (!g_shotPath.empty())
             {
                 static double shotStart = GetTimeSeconds();
                 static int shotIndex = 0;
+                static int appliedSweepIndex = -1;
+                static bool sweepNameReported = false;
+
+                // Apply before the settle delay is judged, so the value is in place for the whole
+                // interval rather than only for the frame the shot is taken on.
+                if (!g_sweepSetting.empty() && shotIndex < static_cast<int>(g_sweepValues.size()) &&
+                    appliedSweepIndex != shotIndex)
+                {
+                    const float value = g_sweepValues[static_cast<size_t>(shotIndex)];
+                    const bool known = ApplySweepValue(scene, g_sweepSetting, value);
+                    if (!known && !sweepNameReported)
+                    {
+                        OutputDebugStringA(("[sweep] unknown setting: " + g_sweepSetting + "\n").c_str());
+                        sweepNameReported = true;
+                    }
+                    // The camera must not carry the previous value's adaptation into this shot.
+                    renderer.Exposure().RequestReset();
+                    appliedSweepIndex = shotIndex;
+                    char msg[160];
+                    std::snprintf(msg, sizeof(msg), "[sweep] shot %d: %s = %g\n",
+                        shotIndex, g_sweepSetting.c_str(), value);
+                    OutputDebugStringA(msg);
+                }
+
                 const double delay = shotIndex == 0 ? g_shotDelaySec : g_shotIntervalSec;
                 if (GetTimeSeconds() - shotStart >= delay)
                 {

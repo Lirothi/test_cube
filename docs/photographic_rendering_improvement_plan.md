@@ -265,9 +265,11 @@ P0 Baseline and diagnostics
        |
        +--> P2 Histogram metering and eye adaptation
              |
+             +--> P2B Metering refinements (weight mask, hybrid adaptation) [UE ref]
+             |
              +--> P3 Tone map, color transform, and output encoding
                    |
-                   +--> P3B Local exposure (the "HDR photo" look)
+                   +--> P3B Local exposure (the "HDR photo" look) [UE ref]
                    |
                    +--> P4 Separate camera, sun, and sky controls
                          |
@@ -566,7 +568,265 @@ image so little (+0.08 stops on `overview`) — the two are cancelling.
 
 ---
 
+### P2B — Metering refinements from the UE reference
+
+**STATUS: CLOSED 2026-08-15.** Items 1, 3, 5 and 6 implemented; item 2 deferred by section 2;
+item 4 **struck as based on a misreading** (see below). Plus the histogram visualisation, the
+`--sweep` harness and an offline shader compile check.
+
+- **Item 3, hybrid adaptation, DONE.** Beyond `adaptationStartDistance` stops from the target the
+  camera moves linearly (constant stops/second, so a large transition is time-bounded); inside it,
+  exponentially, so the last stretch eases in instead of arriving at full rate and stopping dead.
+  The slope-match factors are derived on the CPU exactly as UE derives them, which is what makes
+  the two halves join without a visible change of rate. Default distance 1.5 stops, matching
+  `r.EyeAdaptation.ExponentialTransitionDistance`. Verified converging: 8 s and 25 s warmups on the
+  same frozen frame land on an identical median.
+- **Item 5, black bucket influence, DONE.** Scales the darkest bucket's weight; 1.0 = unchanged.
+- **Item 4 was WRONG and is struck.** It claimed UE clamps the target but not the adapted value.
+  Re-reading the source: UE clamps **both** — `TargetAverageLuminance` at
+  `PostProcessEyeAdaptation.usf:172` and `SmoothedExposure` at `:184`. The "no clamping here"
+  comment applies *inside* `ComputeEyeAdaptation`, not to the caller, and the line above the second
+  clamp is a TODO wish rather than a decision. Our behaviour already matches UE; there was nothing
+  to change. Recorded rather than quietly deleted, because the misreading is instructive.
+
+- **Metering weight mask DONE.** The histogram now accumulates *weights* rather than counts, in
+  fixed point (256 units per 1.0 of weight; worst case 9.4M in one bin, three orders below uint32
+  overflow). The weight is procedural rather than a texture — a mask would have to be authored and
+  bound before it could be tried at all, and the radial shape is what one would contain anyway.
+  Controls: strength, inner/outer radius (fractions of the half-diagonal), and a **sky bias** that
+  additionally de-weights the top of the frame, because a purely radial mask still lets the sky
+  dominate the moment the camera tilts up. Floored at 0.05 as UE does. `strength = 0` returns
+  exactly 1.0 per sample, so off is bit-identical to the unweighted histogram.
+
+  Measured, strength sweep at sky bias 0.6 (median / sub-2% shadows):
+
+  | strength | grove | sun-facing glint |
+  |---|---|---|
+  | 0.00 | 0.1804 / 0.29 | 0.1093 / 4.03 |
+  | 0.35 | 0.1796 / 0.30 | 0.1180 / 3.75 |
+  | **0.70** | **0.1783 / 0.33** | **0.1340 / 3.36** |
+  | 1.00 | 0.1770 / 0.37 | 0.1571 / 2.93 |
+
+  **The mask barely touches the grove and moves the glint view by +0.29 stops at 0.7 — and that is
+  the correct result, not a weak one.** Shade fills the whole grove frame, so there is no bright
+  region to de-weight; that case belongs to the low percentile. The two knobs address two different
+  failures and the measurement separates them cleanly. Defaults are the measured configuration
+  (strength 0.7, sky bias 0.6), not rounded guesses.
+
+- **Middle grey fixed.** `kMiddleGrey = 0.18f` and `kEv100LuminanceScale = 8.0f` are now explicit
+  constants in `PhotographicSettings.h`, and `ExposureMultiplierFromEv100` is
+  `kMiddleGrey * (S/K) / 2^EV100` instead of the saturation-based `1/(1.2 * 2^EV100)` that silently
+  targeted 0.104. Mirrored in `tonemap_cs.hlsl`. Measured on the shore view: mean 0.1616 -> 0.2941,
+  median 0.1531 -> 0.2929 (about +0.94 stops once the tone curve's non-linearity is included).
+  The dormant path is unaffected and still bit-identical to the P0 baseline.
+- **Histogram plot in the dev window** (plan section 6.5). The 256 bins round-trip through the same
+  readback ring as the exposure record, peak-normalised so a big flat sky does not squash the shape.
+  The plot shades the window the percentiles actually keep — found by walking the **cumulative**
+  distribution, because placing the markers at `lowPercentile * binCount` would misreport them —
+  and marks where the adapted exposure sits on the same log-luminance axis.
+
+- **Low percentile default 0.02 -> 0.65, and a degenerate-window crash-to-white fixed.** The 0.02
+  default let essentially all shade into the meter, so a shaded frame dragged the camera wide open:
+  flying through the palm grove the median went 0.063 (camera off) -> **0.343** and the sub-2%
+  shadow population collapsed 22% -> 0.01%. That was the reported over-exposure. Narkowicz
+  recommends discarding 50-80% of the darkest samples; 0.65 is mid-band. Measured (high percentile
+  fixed at 0.80), median / sub-2% shadows, overview | grove:
+
+  | lowPercentile | overview | grove |
+  |---|---|---|
+  | 0.02 | 0.291 / 0.00 | 0.343 / 0.01 |
+  | 0.35 | 0.197 / 0.11 | 0.229 / 0.05 |
+  | 0.50 | 0.159 / 0.93 | 0.206 / 0.06 |
+  | **0.65** | 0.123 / 1.65 | 0.180 / 0.29 |
+  | 0.80 | 0.090 / 2.73 | 0.135 / 4.29 |
+  | *reference* | *0.196 / 3.42* | |
+
+  Note the tension this exposes: the **median** wants ~0.35-0.50 while the **shadow population**
+  wants 0.80. No single global value satisfies both, which is the concrete argument for items 1
+  (weight mask) and for P3B.
+- Separately, `exposure_solve_cs.hlsl` used to white out the frame when the two percentiles met
+  (empty window -> average falls back to minLogLum -> camera opens to the clamp). Trivially
+  reachable by dragging both sliders together. A degenerate window is now widened, and an empty
+  selection holds the previous exposure instead of exposing for black.
+
+**Note for the remaining items:** the baseline captures now predate the middle-grey fix, so anything
+comparing against them has to account for a ~0.9 stop offset, or recapture.
+
+#### Tooling: offline shader compile check (`tools/check_shaders.py`)
+
+**MSBuild does not compile HLSL in this project** — shaders compile at runtime. A syntax error
+therefore surfaces as a *silently missing feature* in Release (the material is null, its pass
+early-outs, and the frame merely looks wrong) and as an assert on a **constant-buffer field name**
+in Debug. Neither points at the actual error.
+
+That is not hypothetical: closing this step, `exposure_solve_cs.hlsl` failed to compile because a
+local was named `linear`, which is an HLSL interpolation modifier. Release ran happily with the
+metering solve simply not executing — the grove median silently read 0.104 instead of 0.178 — and
+Debug asserted inside `Material::ComputeCBFieldHandle` on the *first* field name, which looks like
+a constant-buffer problem and is not. `python tools/check_shaders.py` compiles every compute entry
+point with the SDK's dxc and reports the real error. **Run it after any shader edit**; it takes
+about a second. The same trap waits for `sample`, `centroid` and `precise`.
+
+#### Tooling: single-process settings sweeps (`--sweep`)
+
+Sweeping a setting used to mean one process launch per value — about 14 s each, plus boot variance
+between them. `--sweep=<setting>:<v0>,<v1>,...` reuses the `--shot-count` series machinery for
+settings instead of time: it sets the shot count from the value list, applies value[i] before shot i,
+resets the exposure adaptation so each shot settles on its own value, and waits `--shot-interval`.
+
+```
+--shot=out.png --sweep=exposure.lowPercentile:0.02,0.35,0.5,0.65,0.8 --shot-interval=2.5
+```
+
+Five values in **29 s from one boot** instead of ~70 s from five, and validated against the
+per-launch numbers: the first four medians reproduced to four decimals. Recognised settings are
+listed in `App.h`; an unknown name logs once rather than failing silently.
+
+
+
+**Depends on:** P2. **Not started.** Added 2026-08-15 after reading the UE5 auto-exposure sources the
+user supplied (see section 13 for where they live and a file map). Each item below is a
+concrete gap between our P2 and what UE ships, ordered by what it buys us.
+
+1. **Metering weight mask** — `AdaptationWeightTexture(ScreenUV)` in `PostProcessHistogram.usf`,
+   floored at 0.05 in `PostProcessEyeAdaptation.usf`. UE weights every histogram sample by a screen
+   mask, which is classic centre-weighted metering. **This is the principled fix for the glint
+   complaint**: instead of discarding bright samples globally (our high-percentile hack), you
+   de-weight the part of the frame the player is not looking at. Requires the histogram to
+   accumulate *weights* rather than counts — UE accumulates float weights in groupshared and
+   `InterlockedAdd`s fixed-point, which our raw-buffer histogram can do the same way. Note a
+   procedural centre-weight needs **no texture at all**, so the first version of this is a few
+   lines in the existing shader; a mask texture is only needed if the weighting has to be authored.
+2. **Exposure compensation curve** — `EyeAdaptation_ExposureCompensationCurve` multiplies the scalar
+   `ExposureCompensationSettings` (`PostProcessEyeAdaptation.usf:177`). This is exactly the
+   mechanism section 4 decision 5a says is required to keep lighting conditions apart, now
+   confirmed as the shipping approach rather than a guess. Still out of scope per section 2 until a
+   night sky exists, but the shape of the fix is no longer speculative.
+3. **Hybrid exponential/linear adaptation** — `ComputeEyeAdaptation` picks
+   `LinearAdaption` when `|log difference| > StartDistance` and `ExponentialAdaption`
+   (`1 - exp2(-dt * speed)`) otherwise. Ours is purely linear, so small corrections crawl in at
+   constant speed and then stop dead; the hybrid eases out naturally while still bounding the time
+   of large transitions. Cheap and a clear quality win.
+4. **Clamp the target, not the adapted value.** UE clamps `AverageSceneLuminance` into
+   min/max *before* deriving the target and deliberately does **not** clamp the smoothed result —
+   the comment in `PostProcessHistogramCommon.ush` says clamping it produces a harsh transition
+   when moving between volumes with different ranges. **We currently clamp the adapted value**, so
+   we have the behaviour they explicitly removed. Worth matching.
+5. **Black bucket influence** — `EyeAdaptation_BlackHistogramBucketInfluence` scales the weight of
+   the darkest bucket so a scene with large pure-black regions does not drag the meter. A one-line
+   knob once the histogram is weighted.
+6. **Middle grey — NOT equivalent, and this is a real bug.** UE computes
+   `TargetExposure = TargetAverageLuminance / 0.18`. Ours composes `Ev100FromLuminance = log2(L*8)`
+   with `ExposureMultiplierFromEv100 = 1/(1.2 * 2^EV)`, which maps the metered luminance to
+   `L / (9.6L) = 0.104`, not 0.18. **We are systematically 0.79 stops under-exposed** against the
+   convention every reference implementation and every artist assumes. Measured during P3: a
+   `compensationEv` of +0.79 puts the frame's mean and median essentially on the reference image's.
+   Fix by making 0.18 an explicit constant in the solve rather than a consequence of two composed
+   formulas — and note that changing it moves every level that has already been tuned around the
+   old value, so it needs a recapture of the P0-comparison set in the same change.
+
+**Done when:** looking into the sun over water no longer requires the high percentile to be tuned
+down to 0.80 to stay readable, because the mask is doing that work instead.
+
+---
+
 ### P3 — Replace the display transform with a controlled color pipeline
+
+**STATUS: DONE 2026-08-15** (uncommitted), with one finding that lands on P2B, not here.
+
+`shaders/agx.hlsli` + a branch in `tonemap_cs.hlsl`; `render::ColorPipelineSettings` (tone curve +
+AgX slope/power/saturation) serialised as a `colorPipeline` level section with the curve stored as
+a **name** (`"agx"` / `"legacy"`) so a level keeps meaning what it says; live controls in the dev
+window's Exposure tab, next to the exposure knobs on purpose — judging a curve without seeing the
+exposure is how a curve problem gets "fixed" with exposure.
+
+- **Legacy mode is bit-identical to the pre-P3 image** (verified: max channel delta 0 above the
+  horizon against the P0 baseline). That is the whole point of keeping it — a suspected regression
+  can be A/B'd against the curve instead of argued about.
+- The real **sRGB transfer function** replaces `pow(1/2.2)` on the AgX path. The two diverge most
+  in the deep shadows, where sRGB's linear toe stops near-black being lifted.
+- Highlight desaturation / gamut compression (P3 item 5) is **inherent to AgX's inset matrix**, not
+  bolted on afterwards.
+
+**Two bugs found and fixed during implementation, both of which tinted the frame pink:**
+
+1. **Two AgX variants, not interchangeable.** The three.js one converts to linear Rec.2020 first and
+   uses inset/outset matrices fitted for that space; the "minimal AgX" one uses matrices acting
+   directly on linear sRGB. The first implementation did both, transforming the primaries twice.
+2. **The outset matrix was transposed.** HLSL's `float3x3(...)` fills ROWS and `mul(M, v)` dots each
+   row with `v`; the GLSL references use `mat3(...)`, which fills COLUMNS. Transcribing their
+   literals in order silently transposes. Inset and outset are not symmetric, so a transposed
+   outset stops being the inset's inverse and leaves a residual colour transform: measured, neutral
+   white came out as **(1.091, 0.956, 0.953)** — red up 9%, green and blue down ~4.5%, i.e. a pink
+   cast on every neutral surface in the frame.
+
+**The lesson, and it is the reason bug 2 survived a first "fix":** a colour matrix must be checked
+numerically, not by eyeballing one frame. `inset * outset` must be the identity and white must stay
+white — two lines of arithmetic that would have caught this immediately, where a visual check after
+fixing bug 1 only showed "still pink" without saying why. `agx.hlsli` documents both traps and
+states the invariant at the matrices.
+
+**Measured, and it is not the flattering result.** `overview`, auto-exposure on, high percentile
+0.80:
+
+| | mean | median | p02 | p99 | dark% | p99/p02 |
+|---|---:|---:|---:|---:|---:|---:|
+| legacy | 0.2144 | 0.1523 | 0.0281 | 0.6327 | 1.11 | 22.5 |
+| AgX neutral | 0.1726 | 0.1422 | 0.0371 | 0.4309 | 0.14 | 11.6 |
+| AgX "punchy" (1.0/1.35/1.4) | 0.0809 | 0.0525 | 0.0077 | 0.2875 | 14.28 | 37.2 |
+| reference | 0.2679 | 0.1964 | 0.0152 | 0.8137 | 3.42 | 53.6 |
+
+On these **luminance** metrics AgX-neutral is further from the reference than the legacy fit: it is
+flatter (spread 11.6 vs 22.5) and its highlights land lower. That is AgX behaving as designed — it
+is a neutral base to grade on, not a look.
+
+#### DEFAULT REVERSED to the legacy ACES fit — decision recorded here per section 4
+
+The plan's P3 originally defaulted to AgX. That is overturned by measurement plus one fact about the
+target, and section 4 permits exactly this ("unless a step explicitly records new measured evidence
+and updates this document"). AgX stays implemented, correct, and one radio button away.
+
+1. **AgX protects against a problem we do not have.** Its value is graceful behaviour at clipping
+   and out-of-gamut. The P0 measurements show we clip **0.000%** of pixels on two of three canonical
+   views and 0.044% on the third. There is nothing for it to protect, and it charges contrast:
+   spread 10.9 vs the legacy fit's 18.1 on the same frame.
+2. **Correcting the exposure under-shoot makes it flatter, not better.** Measured, not assumed: AgX
+   at +0.79 EV gives median 0.233 but spread **7.7** — brighter and *more* washed, because the
+   content moves into the gentlest part of a 16.5-stop sigmoid while the blacks lift. A grade
+   (slope 1.15 / power 1.2 / sat 1.3) recovers to 12.3, still under legacy's 18.1. An earlier
+   prediction that the exposure fix would rescue AgX was wrong.
+3. **Unreal — the look being targeted — does not use AgX at all.** Zero occurrences in the engine
+   source. It ships an ACES-derived filmic curve with artist controls (Slope, Toe, Shoulder, Black
+   clip, White clip) plus colour grading, baked into a 3D LUT. Our legacy Narkowicz fit is an
+   approximation of that same ACES curve, which is why it reads closer to the target.
+
+**Revisit AgX at P11**, once P2B and P3B have pushed the image to actually use the top of the range
+and clipping starts to occur (the reference photograph clips 0.125%). At that point its highlight
+behaviour stops being theoretical.
+
+**Carry forward regardless of the curve:** the real sRGB transfer function is objectively more
+correct than `pow(1/2.2)` and is independent of which curve runs. It is currently tied to the AgX
+branch; it should be lifted out so both paths use it — with the caveat that doing so breaks the
+legacy path's bit-identity with the P0 baseline, so it needs its own recapture.
+
+#### Finding for P2B: our exposure under-shoots the 18% convention by ~0.8 stops
+
+`ExposureMultiplierFromEv100` is `1/(1.2 * 2^EV)`, the saturation-based formulation. Composed with
+`Ev100FromLuminance = log2(L*8)` it maps the metered luminance to `L / (9.6L) = 0.104` — but the
+photographic convention, and what UE uses (`TargetExposure = TargetAverageLuminance / 0.18`), is
+**0.18**. We are therefore systematically **0.79 stops under-exposed** relative to every reference
+implementation and every artist's expectation.
+
+Confirmed by sweep: AgX with `compensationEv = +0.79` lands mean 0.2572 / median 0.2252 against the
+reference's 0.2679 / 0.1964 — essentially on target, from a one-line constant. It also lifts p02 to
+0.0710 (reference 0.0152) and empties the deep shadows, which is the same lesson as before: a global
+multiplier slides the histogram, it cannot stretch it. **Fix the constant in P2B** (it is an
+exposure convention question, not a curve question), and expect the remaining gap — short highlights
+and milky blacks — to need P3B.
+
+---
+
+### P3 — original specification
 
 **Depends on:** P2.
 
@@ -590,6 +850,97 @@ image so little (+0.08 stops on `overview`) — the two are cancelling.
 **Done when:** cloud and sand highlights retain structure, shaded foliage does not collapse to black, and neutral gray remains neutral at default white balance.
 
 **Verify:** grayscale ramp, saturated color chart/test material, P0 views, clipped-pixel ratio, native/DLSS parity, legacy-mode image comparison.
+
+---
+
+### P3C — The Unreal film pipeline (curve controls + colour grading)
+
+**Depends on:** P3. **Not started.** Added 2026-08-15 after the user stated the target plainly —
+"I want it like Unreal" — and after checking the UE sources: **AgX appears nowhere in that engine**.
+
+What UE actually ships, and therefore what "like Unreal" means:
+
+1. **An ACES-derived filmic curve with five artist controls** — `FilmSlope`, `FilmToe`,
+   `FilmShoulder`, `FilmBlackClip`, `FilmWhiteClip` (`FPostProcessSettings`, category "Film").
+   Our fixed Narkowicz fit approximates the same curve but exposes **no** controls, so there is no
+   way to ask for more contrast at the curve level — which is exactly what the image needs.
+2. **Colour grading: saturation, contrast, gamma, gain, offset** — and each of those exists four
+   times over: a global set plus separate **Shadows / Midtones / Highlights** ranges. This is where
+   UE's "juicy" actually comes from; the curve alone does not produce it.
+3. **Both baked into a 3D LUT** (`CombineLUTs` -> `ColorGradingLUT`, a `Texture3D`), so the tonemap
+   shader is one LUT sample per pixel rather than a curve plus a grade evaluated per pixel.
+
+**STATUS: stages 1 (film curve) and 2 (colour grading) DONE 2026-08-15. Stages 3-4 not started.**
+
+**Stage 1, the film curve.** `shaders/film_curve.hlsli`, transcribed from `FilmToneMap`, selected
+by `ToneCurve::Filmic` alongside Legacy and AgX. Unreal's five controls — slope, toe, shoulder,
+black clip, white clip — with their defaults. Three segments solved in log10, with the match points
+solved so **0.18 in gives 0.18 out however the knobs are set**, which is what stops it fighting the
+exposure solve (that targets the same 0.18). Pre/post desaturation 0.96/0.93 included.
+
+Measured on `overview` against the reference photograph:
+
+| | median | p02 | p99 | chroma |
+|---|---:|---:|---:|---:|
+| legacy fit | 0.2711 | 0.0543 | 0.767 | 0.273 |
+| **Filmic (UE)** | **0.1889** | **0.0291** | 0.688 | 0.284 |
+| legacy + Vivid grade | 0.1842 | 0.0250 | 0.776 | 0.434 |
+| reference | 0.1964 | 0.0152 | 0.814 | 0.445 |
+
+The curve alone lands the median essentially on the reference (0.189 vs 0.196) and roughly halves
+the black-lift, with **no grading at all** — the tonal half of the gap closes with the curve, and
+the chroma half with the grade. They are complementary, not alternatives.
+
+**Not included, and it is a colour difference rather than a tonal one:** Unreal runs this in AP1
+working space with the ACES glow module and red modifier applied in AP0 first. `ACESCommon.ush` has
+since arrived, so this is now a contained follow-up rather than a blocker — see section 13.0.
+**Verify every matrix numerically when adding it** (round-trip to identity, white stays white); the
+AgX outset was silently transposed during P3 and tinted the whole frame pink.
+
+`shaders/color_grade.hlsli`: saturation, contrast, gamma, gain, offset, applied in scene-referred
+**linear before the tone curve** — the same place UE bakes it into its LUT. Grading after the curve
+would push display code values whose range is already compressed. Contrast pivots on middle grey
+(0.18, the same constant the exposure solve targets) so raising it stretches around the midtones
+instead of darkening everything — which is exactly the trap AgX's `power` look falls into. Works on
+**both** curves. Every value neutral by default, and the shader skips the whole block when they are,
+so a level that grades nothing is bit-identical.
+
+**Measured, and it does the thing global exposure could not.** Saturation moves chroma 0.273 ->
+0.398 while leaving the median at 0.271 -> 0.270, i.e. it does not touch brightness. Contrast at
+1.35 drops p02 0.0543 -> 0.0322 *and* lifts p99 0.767 -> 0.874 with the median almost still
+(0.2711 -> 0.2754): **it stretches the histogram rather than sliding it**, which is precisely what
+was missing when the only tool was a global multiplier.
+
+A combined grade (saturation 1.4, contrast 1.25, exposure compensation -0.4) lands at
+median 0.184 / p02 0.0250 / p99 0.776 / chroma 0.434 against the reference photograph's
+0.196 / 0.0152 / 0.814 / 0.445 — close on every axis, from controls alone, with no local exposure
+involved. That materially weakens the case for P3B; re-evaluate it only after the film curve lands.
+
+**The UE film curve source is now available** at `D:\Programming\ue_autoexposure\` (in the folder
+root, not under the engine-relative paths): `TonemapCommon.ush` — `FilmToneMap` plus every helper
+it needs (`rgb_2_saturation`, `rgb_2_yc`, `sigmoid_shaper`, `glow_fwd`, `rgb_2_hue`, `center_hue`,
+`AP1_RGB2Y`, the AP0/AP1 matrices) — with `PostProcessCombineLUTs.usf/.cpp` for how it is driven.
+The curve is: convert to AP1, ACES glow module and red modifier in AP0, pre-desaturate to 0.96,
+a three-segment toe/straight/shoulder curve in **log10** parameterised by
+`FilmSlope/FilmToe/FilmShoulder/FilmBlackClip/FilmWhiteClip` and matched so 0.18 in gives 0.18 out,
+post-desaturate to 0.93, returning AP1. **Transcribe the matrices numerically-verified** — an
+inset/outset pair was silently transposed during P3 and tinted the whole frame pink.
+
+**Implement, in this order — each stage is independently useful:**
+
+1. Replace the fixed Narkowicz fit with the parameterised filmic curve, defaulting to values that
+   reproduce today's image so the change is a no-op until a control is moved.
+2. Global grading: saturation / contrast / gamma / gain / offset, applied in a documented space.
+3. Per-range (shadows/midtones/highlights) grading, if the global set proves insufficient.
+4. The 3D LUT bake, as a **performance** step only — not for correctness. Worth noting the engine
+   now has approval for 3D textures (see P3B), so the same capability serves both.
+
+**Done when:** the canonical views can be pushed to the reference's contrast and saturation with
+curve and grade controls alone, without touching exposure to fake it.
+
+**Interface contract:** defaults reproduce the pre-P3C image. Grading is a *level* setting, not a
+renderer default — section 9's P11 rule that a level grade must not become a hidden global default
+still stands.
 
 ---
 
@@ -617,27 +968,87 @@ the crush, could never fix the look.
 **Goal:** preserve highlight and shadow detail simultaneously by varying exposure spatially, the way
 consumer "HDR photo" processing and the human retina both do (local, not global, adaptation).
 
-**Approach** (the established one; Unreal ships this as Local Exposure):
+**Approach.** Follow the UE implementation (section 13 has the location) rather than inventing one;
+the maths below is read off `PostProcessHistogramCommon.ush` and `PostProcessLocalExposure.usf`.
 
-1. Build a log-luminance image from the exposed HDR scene.
-2. Decompose it with an **edge-aware/bilateral** filter into a low-frequency *base* layer (large
-   scale illumination) and a *detail* residual.
-3. Compress **only the base layer** by an authored factor; optionally boost the detail layer.
-4. Recombine and apply as a per-pixel exposure offset on top of the global exposure from P2.
+The decomposition is a **bilateral grid**, not a 2D bilateral filter — that detail matters, because
+the grid is nearly free for us:
 
-Compressing only the base is the entire trick: it reduces the scene's dynamic range without
-touching micro-contrast, which is why the result reads as vivid rather than as the flat, haloed
-"HDR look" that gives local tone mapping a bad name.
+- The grid is a `Texture3D<float2>` of `(tileX, tileY, luminanceBin)` holding
+  `(sum of log-luminance, sample count)`, depth 32.
+- **UE builds it inside the histogram pass** (`PostProcessHistogram.usf:224` writes
+  `BilateralGridRWTexture[uint3(GroupId.xy, GroupIndex)] = float2(SumLuminance, Sum)`). Our P2
+  histogram pass already walks the scene and already bins by log-luminance, so the grid is close to
+  a by-product of work we do anyway.
+- Base log-luminance = `grid.x / grid.y` sampled trilinearly, with the z coordinate being the
+  histogram position of the pixel's own log-luminance. Where the cell is empty (`grid.y < 0.001`,
+  which happens because the grid is populated at half resolution) it falls back to a separately
+  blurred log-luminance, blended by `BlurredLuminanceBlend`.
+
+Then, per pixel (`CalculateLogLocalExposure`):
+
+```text
+Detail       = LogLum - BaseLogLum
+BaseCentered = BaseLogLum - LogMiddleGrey
+ContrastScale= BaseCentered > 0 ? HighlightContrastScale : ShadowContrastScale
+                                                    (+ a smoothstep threshold region)
+LogLocalLum  = LogMiddleGrey + ThresholdOffset
+             + BaseCentered * ContrastScale
+             + Detail * DetailStrength
+return exp2(LogLocalLum - LogLum)          // a per-pixel multiplier on scene colour
+```
+
+Compressing only `BaseCentered` while passing `Detail` through is the entire trick: it reduces the
+scene's dynamic range without touching micro-contrast, which is why the result reads as vivid
+rather than as the flat, haloed "HDR look". The thresholds exist so the effect can be held off
+until a pixel is far enough from middle grey, which is what stops mid-tones from being churned.
+
+**Engine readiness (audited 2026-08-15 — nothing is missing, one decision to make):**
+
+- **3D textures would be a first for this engine** — nothing creates or samples one today. Nothing
+  blocks it either: `render::CreateCommittedTexture` forwards a raw `D3D12_RESOURCE_DESC` (and
+  copies it field-by-field into `D3D12_RESOURCE_DESC1` on the enhanced path), so `TEXTURE3D` plus
+  `DepthOrArraySize` needs no wrapper change; descriptor staging and `GpuResource::Attach`/`Declare`
+  are dimension-agnostic. **The user has explicitly approved adding 3D texture support if this step
+  needs it (2026-08-15)**, so treat it as a normal piece of work: create the resource, add the SRV
+  and UAV view helpers next to the existing 2D ones, and note in the handoff that it is the
+  engine's first 3D resource so the next reader is not surprised.
+- **The sampler is already correct.** `SamplerManager::LinearClamp` is
+  `MIN_MAG_MIP_LINEAR` with `AddressU = AddressV = AddressW = CLAMP`, i.e. proper trilinear
+  filtering of the grid with a clamped W. No new sampler.
+- **The one real constraint: groupshared budget, and it forces a bin-count decision.** UE's grid
+  build keeps a **per-thread** histogram in groupshared —
+  `SharedHistogram[HISTOGRAM_SIZE][THREADGROUP_SIZEX][THREADGROUP_SIZEY]`. At their 64 bins with an
+  8x8 group that is 64*8*8 = 4096 uints = **16 KB**, inside the 32 KB limit. **Our histogram is
+  256 bins**, where the same structure would be 256*8*8 = 16384 uints = **64 KB, over the limit**.
+  UE additionally requires `THREADGROUP_SIZEX * THREADGROUP_SIZEY >= HISTOGRAM_SIZE` for the grid
+  write (one thread per bin emits one grid cell), and our dispatch helper mandates
+  `numthreads(8,8,1)` = 64 threads — which caps the grid path at 64 bins from the other direction
+  too. **So the grid path uses 64 bins.** That is almost certainly why UE picked 64 in the first
+  place. The global exposure histogram can stay at 256 if we want the extra percentile precision;
+  they are separate consumers of the same pass.
+- **Grid XY resolution falls out of the existing dispatch.** `BilateralGridRWTexture[uint3(GroupId.xy, GroupIndex)]`
+  makes the grid's XY the threadgroup count. Our fixed 256x144 sample grid at 8x8 groups gives
+  32x18 groups, so the grid is 32x18x64. Sensible without any new tuning.
 
 **Implement:**
 
-1. Half- or quarter-resolution log-luminance pyramid from the post-exposure, pre-tonemap scene.
-2. Edge-aware base extraction. Start with a separable bilateral or a blurred-guide approximation;
-   a full bilateral grid is a later optimisation, not a starting requirement.
-3. Separate highlight and shadow contrast-scale controls, plus a blend/strength control, all
-   defaulting to a **no-op** so the feature is off until deliberately enabled.
-4. Apply as a per-pixel multiplier in the tonemap, after the global exposure and before the curve.
-5. Debug views: base layer, detail layer, and the final per-pixel offset.
+1. Extend the P2 histogram pass to also populate a `Texture3D<float2>` bilateral grid, plus a
+   blurred log-luminance fallback texture. Restructuring the histogram into per-group groupshared
+   accumulation (instead of our current direct global atomics) is a prerequisite for the grid, and
+   is independently faster — far fewer global atomics.
+2. Apply pass: compute the base, evaluate `CalculateLogLocalExposure`, multiply scene colour.
+   Placed after the global exposure and before the tone curve.
+3. Controls, all defaulting to a **no-op** (contrast scales 1.0, detail strength 1.0, thresholds
+   such that nothing is affected): highlight/shadow contrast scale, detail strength, blurred-blend,
+   highlight/shadow threshold and threshold strength, middle-grey compensation.
+4. Debug views: base layer, detail layer, final per-pixel multiplier
+   (UE has `PostProcessVisualizeLocalExposure.usf` for exactly this).
+
+**Alternative worth knowing about:** UE also ships an **exposure-fusion** path
+(`FusionSetupCS` / `FusionBlendCS` in `PostProcessLocalExposure.usf`) — Mertens-style, blending
+three tone-mapped exposures with Gaussian weights around a target luminance through a Laplacian
+pyramid. It is the more expensive branch and is not the default. Do not build both.
 
 **Interface contract:** at default settings the output is screenshot-equivalent to P3. The pass must
 be resolution-independent in cost like P2's metering.
@@ -1005,3 +1416,48 @@ For the largest visual gain per unit of risk:
 13. P11 — final scene calibration and human sign-off.
 
 Do not start final level grading before M2. The fastest route to the target image is to make exposure and environment lighting coherent first, then judge which finishing features are still visibly necessary.
+
+---
+
+## 13. Reference implementation map
+
+### 13.0 Reference files this plan still needs
+
+Keep this list current. When a step is blocked on engine source that is not in the drop, name the
+**exact file** here rather than working around it or transcribing from memory — the drop lives on
+the user's machine and copying one more file is cheap, whereas a matrix reconstructed from memory
+already cost this project a frame-wide pink tint once.
+
+| File | Needed for | Status |
+|---|---|---|
+| `TonemapCommon.ush` | `FilmToneMap`, the parameterised film curve | **have** |
+| `PostProcessCombineLUTs.usf` / `.cpp` | how curve + grade are driven and baked into the LUT | **have** |
+| `ACESCommon.ush` | AP0/AP1 matrices, `AP1_RGB2Y`, and the helpers `rgb_2_saturation`, `rgb_2_yc`, `sigmoid_shaper`, `glow_fwd`, `rgb_2_hue`, `center_hue` | **have** |
+| `ACES/ACES_v1.3.ush` | referenced by TonemapCommon for the v1.3 output transforms; only needed if the ACES ODT path is ever wanted | not needed yet |
+| `PostProcessLocalExposure.cpp` | bilateral grid construction parameters for P3B, if P3B is revived | not needed yet |
+
+Everything is dropped in the **root** of `D:\Programming\ue_autoexposure\`, not under the
+engine-relative subpaths — look there first.
+
+
+
+The UE5 auto-exposure sources live **outside this repository**, at `D:\Programming\ue_autoexposure\`,
+deliberately so they are never committed here — they are third-party engine code kept for reading
+only. Engine-relative paths are intact under that root and its own `README.md` is the full index;
+the paths in the table below are relative to it. Reference material, not something to copy verbatim
+— UE's engine-side conventions do not map onto ours. The files that actually answer questions:
+
+| Question | File |
+|---|---|
+| Percentile trim + adaptation maths, local-exposure formula, all shared constants | `Engine/Shaders/Private/PostProcessHistogramCommon.ush` |
+| Histogram build, per-sample weighting, **and the bilateral-grid write** | `Engine/Shaders/Private/PostProcessHistogram.usf` |
+| Target luminance, middle-grey remap, compensation curve, output packing | `Engine/Shaders/Private/PostProcessEyeAdaptation.usf` |
+| Local exposure apply + the exposure-fusion alternative | `Engine/Shaders/Private/PostProcessLocalExposure.usf` |
+| Settings → shader parameters, all the `r.EyeAdaptation.*` knobs | `Engine/Source/Runtime/Renderer/Private/PostProcess/PostProcessEyeAdaptation.cpp` |
+| Where the passes sit in the frame graph | `Engine/Source/Runtime/Renderer/Private/PostProcess/PostProcessing.cpp` |
+| Artist-facing property set and defaults | `Engine/Source/Runtime/Engine/Classes/Engine/Scene.h` (`FPostProcessSettings`) |
+
+Two conventions of theirs are worth keeping in mind when reading: `View.OneOverPreExposure` appears
+everywhere because UE pre-exposes scene colour at write time (we do not — decision 1 keeps our HDR
+unexposed until the display transform), and their histogram is 64 buckets against our 256, so bucket
+counts are not comparable between the two.

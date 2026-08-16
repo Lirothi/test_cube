@@ -8,10 +8,11 @@
     "autoExposure": true,
     "compensationEv": 0.0,
     "enabled": true,
-    "highPercentile": 0.949999988079071,
-    "lowPercentile": 0.019999999552965164,
+    "highPercentile": 0.800000011920929,
+    "lowPercentile": 0.15000000596046448,
     "manualEv100": 0.0,
     "maxEv100": 16.0,
+    "meterMaskStrength": 0.699999988079071,
     "minEv100": -6.0,
     "speedDown": 1.0,
     "speedUp": 3.0

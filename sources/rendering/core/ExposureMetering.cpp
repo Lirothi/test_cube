@@ -125,6 +125,14 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         void* mapped = nullptr;
         ThrowIfFailed(readback_->Map(0, nullptr, &mapped));
         readbackPtr_ = static_cast<const float*>(mapped);
+
+        rd.Width = static_cast<UINT64>(kHistogramBins) * sizeof(std::uint32_t) * kReadbackSlots;
+        ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&histogramReadback_)));
+        histogramReadback_->SetName(L"Exposure.HistogramReadback");
+        void* mappedHist = nullptr;
+        ThrowIfFailed(histogramReadback_->Map(0, nullptr, &mappedHist));
+        histogramReadbackPtr_ = static_cast<const std::uint32_t*>(mappedHist);
     }
 
     created_ = true;
@@ -138,9 +146,46 @@ void ExposureMetering::RecordReadbackCopy(ID3D12GraphicsCommandList* cl)
     {
         return;
     }
-    cl->CopyBufferRegion(readback_.Get(), (readbackFrame_ % kReadbackSlots) * kExposureRecordBytes,
+    const UINT64 slot = readbackFrame_ % kReadbackSlots;
+    cl->CopyBufferRegion(readback_.Get(), slot * kExposureRecordBytes,
         exposure_.Get(), 0, kExposureRecordBytes);
+    if (histogramReadback_)
+    {
+        constexpr UINT64 kHistogramBytes =
+            static_cast<UINT64>(kHistogramBins) * sizeof(std::uint32_t);
+        cl->CopyBufferRegion(histogramReadback_.Get(), slot * kHistogramBytes,
+            histogram_.Get(), 0, kHistogramBytes);
+    }
     ++readbackFrame_;
+}
+
+bool ExposureMetering::LatestHistogram(float* outBins, UINT binCount, UINT* outTotal) const
+{
+    if (!histogramReadbackPtr_ || !outBins || binCount == 0 || readbackFrame_ <= kReadbackSlots)
+    {
+        return false;
+    }
+    // Same oldest-slot rule as LatestReadback: it retired frames ago, so no fence is needed.
+    const std::uint64_t slot = (readbackFrame_ + 1u) % kReadbackSlots;
+    const std::uint32_t* bins = histogramReadbackPtr_ + slot * kHistogramBins;
+
+    const UINT count = (binCount < kHistogramBins) ? binCount : kHistogramBins;
+    std::uint32_t total = 0;
+    std::uint32_t peak = 0;
+    for (UINT i = 0; i < kHistogramBins; ++i)
+    {
+        total += bins[i];
+        peak = (bins[i] > peak) ? bins[i] : peak;
+    }
+    // Normalised to the PEAK, not the total: a histogram is read for its shape, and one tall bin
+    // (a big flat sky) would otherwise flatten everything else into the axis.
+    const float inv = (peak > 0u) ? (1.0f / static_cast<float>(peak)) : 0.0f;
+    for (UINT i = 0; i < count; ++i)
+    {
+        outBins[i] = static_cast<float>(bins[i]) * inv;
+    }
+    if (outTotal) { *outTotal = total; }
+    return true;
 }
 
 ExposureMetering::Readback ExposureMetering::LatestReadback() const
@@ -174,6 +219,12 @@ void ExposureMetering::Release()
     }
     readbackPtr_ = nullptr;
     readback_.Reset();
+    if (histogramReadback_ && histogramReadbackPtr_)
+    {
+        histogramReadback_->Unmap(0, nullptr);
+    }
+    histogramReadbackPtr_ = nullptr;
+    histogramReadback_.Reset();
     readbackFrame_ = 0;
     descriptorHeap_.Reset();
     histogramSrv_ = {};

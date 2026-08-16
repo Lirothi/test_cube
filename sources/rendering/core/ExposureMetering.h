@@ -71,10 +71,16 @@ public:
     };
     Readback LatestReadback() const;
 
-    // Records the 16-byte copy into this frame's ring slot. Called by the metering pass right
-    // after the solve; the resource state round-trip is declared by that pass.
+    // Records the copies into this frame's ring slot: the 16-byte exposure record and the 256-bin
+    // histogram. Called by the metering pass right after the solve; the resource state round-trip
+    // is declared by that pass.
     void RecordReadbackCopy(ID3D12GraphicsCommandList* cl);
     ID3D12Resource* ReadbackSource() const { return exposure_.Get(); }
+
+    // The bins the last readback frame metered, normalised so the tallest is 1.0, for the dev
+    // window's plot. Returns false when no readback has landed yet. `outTotal` is the raw sample
+    // count, which is what makes a percentile marker meaningful.
+    bool LatestHistogram(float* outBins, UINT binCount, UINT* outTotal) const;
 
 private:
     // RAW (byte-address) rather than structured, for two reasons that both bite in P2:
@@ -97,6 +103,10 @@ private:
     static constexpr UINT kReadbackSlots = 4u;
     Microsoft::WRL::ComPtr<ID3D12Resource> readback_;
     const float* readbackPtr_ = nullptr; // persistently mapped, 4 slots x 4 floats
+    // Separate resource rather than a suffix on the one above: the histogram is 1 KB against the
+    // record's 16 bytes, and keeping them apart means the exposure readout costs one cache line.
+    Microsoft::WRL::ComPtr<ID3D12Resource> histogramReadback_;
+    const std::uint32_t* histogramReadbackPtr_ = nullptr; // 4 slots x kHistogramBins uints
     std::uint64_t readbackFrame_ = 0;
 
     bool created_ = false;

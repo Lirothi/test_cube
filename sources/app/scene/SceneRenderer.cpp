@@ -1262,12 +1262,14 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         if (!metering.IsReady()) { return; }
         p.Use(metering.HistogramResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        // The dev-UI readback copy, then straight back to canonical so the tonemap's UAV binding
+        // The dev-UI readback copies, then straight back to canonical so the tonemap's UAV binding
         // needs no barrier of its own. Two points, because the body takes both states in order.
         p.NextPoint();
         p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        p.Use(metering.HistogramResource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
         p.NextPoint();
         p.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        p.Use(metering.HistogramResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     });
 
     rg.BeginCLGroup();
@@ -3817,18 +3819,27 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
             kComputeDispatchGroupSize, kComputeDispatchGroupSize,
             metering.HistogramResource());
 
+        // The histogram build and the solve read one shared block, so it is filled before either
+        // dispatch -- the metering mask belongs to the build, the percentiles to the solve.
+        ExposureMeteringConstants constants{};
+        const render::CameraExposureSettings& settings = frame_->cameraExposure;
+        constants.maskStrength = settings.meterMaskStrength;
+        constants.maskInnerRadius = settings.meterMaskInnerRadius;
+        constants.maskOuterRadius = settings.meterMaskOuterRadius;
+        constants.maskSkyBias = settings.meterMaskSkyBias;
+
         // 2) Accumulate. The source is the scene-referred HDR image BEFORE the tone curve and
         // before any exposure has been applied to it.
         const UINT histogramCb = resources_.GetExposureHistogramCBSizeBytes();
         RecordComputeDispatch(renderer, t.cl, buildMat.get(), histogramCb,
-            [this](uint8_t* dest) { resources_.WriteExposureHistogramConstants(dest); },
+            [this, &constants](uint8_t* dest) {
+                resources_.WriteExposureHistogramConstants(constants, dest);
+            },
             { D.sceneSRV }, { metering.HistogramUav() }, samplerTable,
             ExposureMeteringConstants::kSampleGridX, ExposureMeteringConstants::kSampleGridY,
             metering.HistogramResource());
 
         // 3) Solve + adapt.
-        ExposureMeteringConstants constants{};
-        const render::CameraExposureSettings& settings = frame_->cameraExposure;
         constants.compensationEv = settings.compensationEv;
         constants.minEv100 = settings.minEv100;
         constants.maxEv100 = settings.maxEv100;
@@ -3838,6 +3849,24 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         constants.speedDown = settings.speedDown;
         constants.manualEv100 = settings.manualEv100;
         constants.autoExposure = settings.autoExposure ? 1u : 0u;
+        constants.blackBucketInfluence = settings.blackBucketInfluence;
+        constants.startDistance = settings.adaptationStartDistance;
+        // Slope-match factors for the hybrid adaptation, derived exactly as UE derives them: make
+        // the exponential's slope equal the linear's at the switch point so the two halves join
+        // without a visible change of rate. Evaluated at a small fixed dt rather than taking the
+        // limit, which is what UE does and is accurate enough at any real frame rate.
+        {
+            constexpr float kFrameTimeEps = 1.0f / 60.0f;
+            const auto slopeMatch = [](float speed, float startDistance)
+            {
+                const float safeSpeed = std::max(speed, 0.001f);
+                const float startTime = startDistance / safeSpeed;
+                const float denom = (1.0f - std::exp2(-kFrameTimeEps * safeSpeed)) * startTime;
+                return (denom > 1e-8f) ? (kFrameTimeEps / denom) : 1.0f;
+            };
+            constants.exponentialUpM = slopeMatch(settings.speedUp, constants.startDistance);
+            constants.exponentialDownM = slopeMatch(settings.speedDown, constants.startDistance);
+        }
 
         // Plan section 6.2: cap the adaptation delta so a debugger pause or a long level load does
         // not resolve into one instantaneous jump the moment rendering resumes.
@@ -3859,11 +3888,15 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
             kComputeDispatchGroupSize, kComputeDispatchGroupSize,
             metering.ExposureResource());
 
-        // 4) Round-trip 16 bytes to a readback ring so the dev window can show the adapted EV and
-        // the metered percentiles. Without it the settings would be tuned blind.
+        // 4) Round-trip the exposure record and the histogram bins to a readback ring, so the dev
+        // window can show the adapted EV and PLOT the histogram. Without it the metering knobs are
+        // being tuned blind -- the percentile sliders in particular are meaningless if you cannot
+        // see the distribution they are clipping.
         renderer->Transition(t.cl, metering.ExposureResource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        renderer->Transition(t.cl, metering.HistogramResource(), D3D12_RESOURCE_STATE_COPY_SOURCE);
         metering.RecordReadbackCopy(t.cl);
         renderer->Transition(t.cl, metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        renderer->Transition(t.cl, metering.HistogramResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     } while (false);
     ctx.EndCL(t);
 }
@@ -3909,7 +3942,9 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         const bool applyExposure = frame_->cameraExposure.enabled && metering.IsReady();
         const UINT tonemapCb = resources_.GetTonemapCBSizeBytes();
         RecordComputeDispatch(renderer, t.cl, tonemapMaterial.get(), tonemapCb,
-            [this, applyExposure](uint8_t* dest) { resources_.WriteTonemapConstants(applyExposure, dest); },
+            [this, applyExposure](uint8_t* dest) {
+                resources_.WriteTonemapConstants(applyExposure, frame_->colorPipeline, dest);
+            },
             { tonemapSrc }, { D.tonemapUAV, metering.ExposureUav() }, samplerTable,
             renderer->GetWidth(), renderer->GetHeight(),
             D.tonemap.Get());

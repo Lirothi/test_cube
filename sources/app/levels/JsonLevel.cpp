@@ -304,6 +304,16 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         renderer.Exposure().RequestReset();
     }
 
+    // P3: display transform. A level without the section gets the struct defaults, i.e. AgX.
+    {
+        render::ColorPipelineSettings color{};
+        if (j.contains("colorPipeline"))
+        {
+            render::PhotographicSettingsJson::ApplyOverrides(j["colorPipeline"], color);
+        }
+        scene.SetColorPipeline(color);
+    }
+
     std::optional<json> freeCameraStart;
     if (j.contains("objects") && j["objects"].is_array())
     {

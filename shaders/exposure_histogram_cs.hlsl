@@ -28,9 +28,48 @@ cbuffer ExposureHistogramCB : register(b0)
     uint sampleGridY;    // has no uint2 and a mismatched CB field would pack silently wrong
     float minLogLum;     // log2 luminance mapped to bin 0
     float invLogLumRange;// 1 / (maxLogLum - minLogLum)
+
+    // Metering weight mask. strength 0 makes MeteringWeight return exactly 1 for every sample, so
+    // the mask off is bit-identical to the unweighted histogram this replaced.
+    float maskStrength;
+    float maskInnerRadius;
+    float maskOuterRadius;
+    float maskSkyBias;
 };
 
 static const uint kBins = 256u;
+
+// Weights are accumulated as fixed point because InterlockedAdd has no float form. 256 units per
+// 1.0 of weight: with a 256x144 grid the worst case is 36864 * 256 = 9.4M in a single bin, three
+// orders of magnitude below uint32 overflow, and the quantisation (1/256 of one sample) is far
+// below anything a percentile can notice.
+static const float kWeightScale = 256.0f;
+
+// Centre-weighted metering, the thing a camera's meter does and what UE stores in a mask texture.
+// Procedural here: a texture would have to be authored and bound before it could be tried at all,
+// and the radial shape is what a mask would contain anyway.
+float MeteringWeight(float2 uv)
+{
+    if (maskStrength <= 0.0f)
+    {
+        return 1.0f;
+    }
+
+    // Distance from frame centre normalised so 1.0 is the corner.
+    const float2 d = uv - 0.5f;
+    const float r = length(d) / 0.7071068f;
+    const float radial = 1.0f - smoothstep(maskInnerRadius, maskOuterRadius, r);
+
+    // The sky is almost always the brightest thing in an exterior and almost never the subject, so
+    // a purely radial mask still lets it dominate the moment the camera tilts up. Fade linearly
+    // from the vertical midline to the top edge; below the midline this does nothing.
+    const float aboveMid = saturate((0.5f - uv.y) * 2.0f);
+    const float sky = 1.0f - maskSkyBias * aboveMid;
+
+    // Floor rather than zero (UE floors at 0.05 too): a subject that fills the frame border should
+    // still be metered, just quietly.
+    return max(lerp(1.0f, radial * sky, maskStrength), 0.05f);
+}
 
 [numthreads(8, 8, 1)]
 [RootSignature(EXPOSURE_HISTOGRAM_CS_RS)]
@@ -75,5 +114,9 @@ void CSBuild(uint3 dtid : SV_DispatchThreadID)
     const float t = saturate((logLum - minLogLum) * invLogLumRange);
     const uint bin = min((uint)(t * (float)(kBins - 1u) + 0.5f), kBins - 1u);
 
-    Histogram.InterlockedAdd(bin * 4u, 1u);
+    // Weighted rather than counted: this is what makes the mask above mean anything. The solve
+    // works on cumulative FRACTIONS of the total, so it needs no change -- the total is simply a
+    // sum of weights now instead of a sample count.
+    const uint weight = (uint)(MeteringWeight(uv) * kWeightScale + 0.5f);
+    Histogram.InterlockedAdd(bin * 4u, weight);
 }
