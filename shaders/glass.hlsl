@@ -1,9 +1,10 @@
 // t7 = GlassReflection: the off-screen RT glass reflection (S15b), computed by the
 // GlassReflGbuffer + GlassReflections passes and sampled here. It's a normal texture
 // (no RayQuery in this shader), so the glass PSO is identical on RT and non-RT HW.
-#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
+#include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
 #include "vsm_sample.hlsli"
 
 struct PointLightData
@@ -50,7 +51,7 @@ cbuffer GlassView : register(b1)
     float4 camPosSky;             // xyz = camera position, w = sky intensity
     float4 sunDirAmbient;         // xyz = sun direction, w = ambient intensity
     float4 sunColorExposure;      // xyz = sun color, w = sun exposure
-    float4 camDirWS;              // xyz = camera forward, w unused
+    float4 camDirWS;              // xyz = camera forward, w = P5 prefiltered sky mip count (0 = none)
     float4 screenSizeInv;         // xy = screen size, zw = inverse screen size
     float4 shadowAtlasSizeInv;    // xy = atlas size, zw = inverse atlas size
     float4 shadowBiasNDC;         // cascade depth bias
@@ -76,6 +77,9 @@ Texture2D GlassReflection : register(t7); // S15b: premultiplied off-screen RT g
 TextureCubeArray PointShadowCube : register(t8); // B3: omnidirectional point shadow depth cube (D16 -> R16)
 StructuredBuffer<uint> VsmPageTable : register(t9);  // Rung 2 / Step 21
 Texture2D VsmPool : register(t10);
+// P5: GGX-prefiltered sky. Inert unless skySpecMipCount says this level's sky has it, in which case
+// glass stops guessing `rough * 5` on the display cube and reads the shared environment.
+TextureCube SkySpecular : register(t11);
 
 SamplerState LinearSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
@@ -305,6 +309,7 @@ PSOut PSMain(VSOut i)
     float reflectionStrength = max(matExtra.y, 0.0f);
     float refractionDistortion = matExtra.z;
     float skyIntensity = camPosSky.w;
+    const float skySpecMipCount = camDirWS.w;
     float normalInfo = matExtra.w;
     float normalStrength = max(refractionDistortion, 0.0f);
 
@@ -440,7 +445,12 @@ PSOut PSMain(VSOut i)
     float3 skyRefl = 0.0f.xxx;
     if (lightCounts.w > 0.5f)
     {
-        skyRefl = SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
+        // P5: the shared roughness <-> mip mapping (ibl_common.hlsli), so glass, water and opaque
+        // surfaces all broaden their reflections by the same rule.
+        skyRefl = (skySpecMipCount > 0.0f)
+            ? SkySpecular.SampleLevel(EnvSampler, reflectionDir,
+                                      IblMipFromRoughness(rough, skySpecMipCount)).rgb * skyIntensity
+            : SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
     }
     float3 envRefl = skyRefl;
     // S15b off-screen RT reflection: the GlassReflGbuffer + GlassReflections passes traced this

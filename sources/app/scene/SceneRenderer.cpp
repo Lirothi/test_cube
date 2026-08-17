@@ -279,7 +279,11 @@ namespace
         float3 camDir = camera.GetDirection();
         if (camDir.Length() > Math::EPS) { camDir = camDir.Normalized(); }
         else { camDir = float3(0.0f, 0.0f, 1.0f); }
-        vc.camDirWS = float4(camDir, 0.0f);
+        // P5: w carries the prefiltered sky's mip count so glass can use the shared
+        // roughness <-> mip mapping. 0 means this sky has no derivatives and glass keeps its
+        // old guess. The slot was documented as unused.
+        vc.camDirWS = float4(camDir,
+            (frame.skybox && frame.skybox->HasIbl()) ? (float)frame.skybox->GetSpecMips() : 0.0f);
 
         const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
         const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));

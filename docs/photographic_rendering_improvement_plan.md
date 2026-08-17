@@ -1320,7 +1320,40 @@ the switches have been signed off.
 
 ---
 
-### P5 — Integrate physically coherent diffuse and specular IBL
+### P5 — Integrate physically coherent diffuse and specular IBL — DONE (2026-08-17, uncommitted)
+
+Requirements 1-4 and 6 came with F7/F8. Requirement 5 -- ocean and glass sharing the common
+environment's intensity and roughness semantics -- was closed separately, and it is where the last
+guessed constants lived:
+
+| consumer | before | after |
+|---|---|---|
+| compose (opaque) | `rough * kSkyRoughMaxMip` on the display cube | prefiltered cube, `IblMipFromRoughness` |
+| ocean, modern variant | `rough * kSkyRoughMaxMip` | same shared mapping |
+| ocean, LEGACY variant (the shipping one) | hardcoded **mip 3**, no relation to roughness at all | roughness from the Bruneton **slope variance**, then the shared mapping |
+| ocean foam fill | blurriest mip of the DISPLAY cube | the real cosine-convolved **irradiance cube** |
+| glass | `rough * 5.0` | same shared mapping |
+
+**The legacy ocean had no per-pixel roughness** -- it is a Bruneton model, which is why a fixed mip
+was there in the first place. Rather than invent one, it now uses the physical quantity roughness
+stands for and which that model already computes: `sqrt(slopeVarianceSquared)` is an RMS microfacet
+slope, clamped to 0.02..0.6 because open water is a near-mirror and the variance spikes on crests.
+
+Every consumer also honours the level's sky intensity now; the ocean sampled the raw cube before,
+so one control used to mean two different things depending on which surface you looked at.
+
+**Measured** (identical sky, wind_test, adaptation off): mean |delta| 0.60/255, 10.2% of pixels,
+sky background untouched (+0.00 -- it does not go through these paths), water +0.20, island +1.14.
+Modest, and honestly so: this scene's water is near-mirror where the old fixed mip was already
+close, and it has no glossy props. The change is a semantics fix, not a look upgrade -- it shows on
+a roughness sweep, which is what the Verify list below asks for and what the scene lacks.
+
+**Still open, deliberately:** `kSkyRoughMaxMip` survives in compose and the modern ocean as the
+fallback for skies with no derivatives. It is no longer used by any sky that has them.
+
+---
+
+### P5 (original specification)
 
 **Depends on:** P4 and `two_sided_foliage_and_ibl_plan.md` F7-F8.
 

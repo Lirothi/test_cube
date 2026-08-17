@@ -14,10 +14,11 @@
 #include "ocean_surface_legacy.hlsli"
 #else
 
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=20, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
+#include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
 
 cbuffer OceanCB : register(b0)
 {
@@ -66,7 +67,7 @@ cbuffer OceanCB : register(b0)
     // P4: how bright this level's sky is. compose already scaled its sky samples by
     // `skyboxIntensity`; the ocean did not, so the water kept reflecting the raw cube and the
     // control meant two different things depending on which surface you looked at.
-    float4 skyParams;                  // x: sky intensity, yzw: reserved
+    float4 skyParams;                  // x: sky intensity, y: prefiltered mip count (0 = none), zw: reserved
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
     float4 deepScatterColor;           // xyz: deep scatter tint, w: unused
@@ -89,6 +90,12 @@ Texture2DArray<float4> PrevDisplacementDerivatives : register(t1);
 Texture2DArray<float4> FoamTurbulence : register(t2);
 Texture2D SceneColorTexture : register(t3);
 TextureCube SkyboxTexture : register(t4);
+// P5/F8: the shared environment. `SkySpecular` is the GGX-prefiltered radiance whose mip IS a
+// roughness (see ibl_common.hlsli), `SkyIrradiance` is the cosine-convolved fill. Both are inert
+// unless skyParams.y says this level's sky was imported with them, in which case the water stops
+// guessing a mip off the display cube and reads the same environment every other surface does.
+TextureCube SkySpecular : register(t18);
+TextureCube SkyIrradiance : register(t19);
 Texture2D DistantRoughnessMap : register(t5);
 Texture2D FoamDetailMap : register(t6);
 Texture2D FoamAlbedoTex : register(t7);
@@ -1851,7 +1858,13 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
 // own foam tuning keeps deciding the level.
 float3 SkyFillRadiance(float3 normal)
 {
-    const float3 sky = SkyboxTexture.SampleLevel(LinearClampSampler, normal, kSkyRoughMaxMip).rgb * skyParams.x;
+    // P5: the real cosine-convolved irradiance when this sky has it. That is what "the sky arriving
+    // at a surface with this normal" actually means -- the blurriest mip of the DISPLAY cube was
+    // only ever an impression of it, and it is the last place the water guessed instead of reading
+    // the shared environment.
+    const float3 sky = (skyParams.y > 0.0f)
+        ? SkyIrradiance.SampleLevel(LinearClampSampler, normal, 0).rgb * skyParams.x
+        : SkyboxTexture.SampleLevel(LinearClampSampler, normal, kSkyRoughMaxMip).rgb * skyParams.x;
     // A black or absent cubemap falls back to the old constant, so a level without a skybox keeps
     // lit foam instead of losing its surf entirely.
     const float lum = dot(sky, float3(0.2126f, 0.7152f, 0.0722f));
@@ -1970,8 +1983,18 @@ float3 Reflection(const LightingInput li, float roughness)
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
     float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
 
-    float skyMip = roughness * kSkyRoughMaxMip;
-    float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, skyMip).rgb * skyParams.x;
+    // P5: the prefiltered cube indexed by the shared mapping, so water and land broaden their
+    // reflections identically. Without derivatives this falls back to the old guess.
+    float3 skySample;
+    if (skyParams.y > 0.0f)
+    {
+        const float specMip = IblMipFromRoughness(roughness, skyParams.y);
+        skySample = SkySpecular.SampleLevel(LinearClampSampler, reflectDir, specMip).rgb * skyParams.x;
+    }
+    else
+    {
+        skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, roughness * kSkyRoughMaxMip).rgb * skyParams.x;
+    }
     float2 reflectionUV = li.screenUV + OceanReflectionUvOffset(li, adjustedNormal);
     float edgeFade = OceanReflectionEdgeFade(reflectionUV);
     float4 oceanReflection = OceanReflectionTexture.SampleLevel(LinearClampSampler, saturate(reflectionUV), 0);

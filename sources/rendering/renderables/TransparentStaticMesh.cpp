@@ -231,18 +231,28 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     {
         return;
     }
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 11> srvs{
+    // P5 (t11): the GGX-prefiltered sky. Falls back to the display cube so the table is never
+    // half-populated; the shader gates on camDirWS.w (the mip count), which is 0 without it.
+    const D3D12_CPU_DESCRIPTOR_HANDLE skyDisplaySrv =
+        sky ? sky->GetTex()->GetSRVCPU() : deferred.sceneSRV;
+    const D3D12_CPU_DESCRIPTOR_HANDLE skySpecSrv =
+        (sky && sky->HasIbl() && sky->GetSpecTex()->GetSRVCPU().ptr != 0)
+            ? sky->GetSpecTex()->GetSRVCPU()
+            : skyDisplaySrv;
+
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 12> srvs{
         sceneColorSrv,
         deferred.shadowSRV,
         deferred.spotShadowSRV,
-        sky ? sky->GetTex()->GetSRVCPU() : deferred.sceneSRV,
+        skyDisplaySrv,
         lights.GetPointLightSrv(renderer->GetCurrentFrameIndex()),
         lights.GetSpotLightSrv(renderer->GetCurrentFrameIndex()),
         normalSrv,
         glassReflSrv,
         deferred.pointShadowSRV,          // t8: omnidirectional point shadow cube (B3)
         renderer->GetVsmPageTableSrv(),   // t9: VSM page table
-        renderer->GetVsmPoolSrv()         // t10: VSM pool
+        renderer->GetVsmPoolSrv(),        // t10: VSM pool
+        skySpecSrv                        // t11: P5 prefiltered sky
     };
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs).gpu;
 

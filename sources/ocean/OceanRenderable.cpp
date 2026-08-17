@@ -775,7 +775,7 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
     // Slots 17/18 = the surf sim height and foam fields (surf sim injection): declared by the
     // LEGACY RS only; the modern RS still says 16 and simply never addresses the extras.
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 18> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 20> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -883,6 +883,18 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
     pushSrv(surfWaveSrv);
     pushSrv(surfFoamSrv);
+
+    // P5 (t18/t19): the shared environment. Fall back to the display cube so the table is never
+    // half-populated; the shader gates on skyParams.y, which is 0 without derivatives.
+    D3D12_CPU_DESCRIPTOR_HANDLE specSrv = skySrv;
+    D3D12_CPU_DESCRIPTOR_HANDLE irrSrv = skySrv;
+    if (sky && sky->HasIbl())
+    {
+        if (sky->GetSpecTex()->GetSRVCPU().ptr != 0) { specSrv = sky->GetSpecTex()->GetSRVCPU(); }
+        if (sky->GetIrradianceTex()->GetSRVCPU().ptr != 0) { irrSrv = sky->GetIrradianceTex()->GetSRVCPU(); }
+    }
+    pushSrv(specSrv);
+    pushSrv(irrSrv);
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
@@ -1597,11 +1609,16 @@ Math::float4 OceanRenderable::GetSkyParams() const
     // cubemap while every other surface honoured the level's sky intensity, so one control meant
     // two different things depending on where you were looking.
     float intensity = 1.0f;
+    float specMips = 0.0f; // 0 = this sky has no prefiltered derivatives; the shader keeps its old path
     if (scene_)
     {
-        if (const Skybox* sky = scene_->GetSkybox()) { intensity = sky->GetExposure(); }
+        if (const Skybox* sky = scene_->GetSkybox())
+        {
+            intensity = sky->GetExposure();
+            if (sky->HasIbl()) { specMips = (float)sky->GetSpecMips(); }
+        }
     }
-    return Math::float4(intensity, 0.0f, 0.0f, 0.0f);
+    return Math::float4(intensity, specMips, 0.0f, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetSunColorExposure() const

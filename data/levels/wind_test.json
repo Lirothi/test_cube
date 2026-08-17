@@ -62,7 +62,7 @@
       -0.5
     ],
     "exposure": 2.0,
-    "skyFillIntensity": 1.0
+    "skyFillIntensity": 0.5
   },
   "objects": [
     {
