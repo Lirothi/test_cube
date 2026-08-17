@@ -58,7 +58,10 @@ public:
 
     // Register one schema-v2 material file immediately. The editor uses this after creating,
     // duplicating, or renaming a material so it can be assigned without restarting the level.
-    bool LoadPresetFromFile(const std::wstring& path);
+    // `registerAs` empty = key the preset by the file's stem (the startup scan). The lazy
+    // per-name path passes the name the level wrote, which may contain a subfolder -- see the
+    // comment at the definition for why keying on the stem there loses the material silently.
+    bool LoadPresetFromFile(const std::wstring& path, const std::string& registerAs = {});
 
     // I2: drop the cached MaterialData for a name so the next GetOrCreate rebuilds it (after its
     // definition or textures changed on disk). Live objects keep their shared_ptr until respawned.

@@ -1351,6 +1351,12 @@ a roughness sweep, which is what the Verify list below asks for and what the sce
 **Still open, deliberately:** `kSkyRoughMaxMip` survives in compose and the modern ocean as the
 fallback for skies with no derivatives. It is no longer used by any sky that has them.
 
+**The Verify list's roughness sweep now exists as a gate**, which closes the one thing this step
+could not check on wind_test: `data/levels/roughness_sweep.json` (3 rows x 8 spheres, dielectric /
+white metal / copper, against the sky and nothing else) plus `tools/roughness_sweep.py`, which
+renders it and asserts that per-sphere high-frequency energy falls monotonically along each row.
+Exit 0 = pass. Run it after any change to the bake, the roughness/mip mapping or the split-sum.
+
 ---
 
 ### P5 (original specification)

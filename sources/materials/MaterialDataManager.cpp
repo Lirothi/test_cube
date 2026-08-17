@@ -193,7 +193,7 @@ bool MaterialDataManager::LoadPresetsFromDirectory(const std::wstring& directory
     return loaded > 0;
 }
 
-bool MaterialDataManager::LoadPresetFromFile(const std::wstring& path)
+bool MaterialDataManager::LoadPresetFromFile(const std::wstring& path, const std::string& registerAs)
 {
     namespace fs = std::filesystem;
     const fs::path materialPath(path);
@@ -225,7 +225,14 @@ bool MaterialDataManager::LoadPresetFromFile(const std::wstring& path)
         return false;
     }
 
-    RegisterPreset(materialPath.stem().string(), ParseMaterialPresetJson(json));
+    // Register under the caller's name when it gave one. The lazy path looks a preset up by the
+    // name a level wrote -- which may carry a SUBFOLDER, e.g. `_sweep/d0` -- and then concatenates
+    // `data/materials/<name>.json`. Keying on the file's stem instead would register `d0`, the
+    // find() right after would miss, and the object would silently render with no material at all:
+    // the level looks like it lost its geometry. The startup scan passes no name and keeps the
+    // stem, which is the same thing for a flat folder.
+    RegisterPreset(registerAs.empty() ? materialPath.stem().string() : registerAs,
+                   ParseMaterialPresetJson(json));
     return true;
 }
 
@@ -264,7 +271,7 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     auto pit = presets_.find(name);
     if (pit == presets_.end()) {
         const std::wstring path = L"data/materials/" + std::wstring(name.begin(), name.end()) + L".json";
-        if (LoadPresetFromFile(path)) {
+        if (LoadPresetFromFile(path, name)) {
             pit = presets_.find(name);
         }
         if (pit == presets_.end()) {
