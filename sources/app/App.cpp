@@ -197,6 +197,17 @@ namespace
         // in lighting_cs, which is a camera control wearing a light's name.
         if (setting == "light.exposure") { scene.DirectionalLightRef().SetExposure(value); return true; }
         if (setting == "light.ambient")  { scene.DirectionalLightRef().SetAmbient(value);  return true; }
+        if (setting == "light.sunTemperatureK")
+        {
+            scene.DirectionalLightRef().SetUseSunTemperature(value > 0.0f);
+            if (value > 0.0f) { scene.DirectionalLightRef().SetSunTemperatureK(value); }
+            return true;
+        }
+        if (setting == "light.skyFillIntensity")
+        {
+            scene.DirectionalLightRef().SetSkyFillIntensity(value);
+            return true;
+        }
         if (setting == "light.skyIntensity")
         {
             if (Skybox* sky = scene.GetSkybox()) { sky->SetExposure(value); }
@@ -214,32 +225,34 @@ namespace
             scene.DirectionalLightRef().SetExposure(value);
             return true;
         }
-        if (setting == "light.ambientTintedBySun")
+        if (setting == "light.sunTemperatureK")
         {
-            scene.DirectionalLightRef().SetAmbientTintedBySun(value != 0.0f);
+            scene.DirectionalLightRef().SetUseSunTemperature(value > 0.0f);
+            if (value > 0.0f) { scene.DirectionalLightRef().SetSunTemperatureK(value); }
             return true;
         }
-        // P4 measurement hook: blend the fill colour from the sun's hue (0) toward a daylight sky
-        // blue (1) at MATCHED luminance, so the sweep isolates the hue change from a brightness
-        // change. Turning the tint off on its own is deliberately a no-op -- this is what actually
-        // shows what a sky-coloured fill looks like.
-        if (setting == "light.ambientSkyBlue")
+        if (setting == "light.skyFillIntensity")
         {
-            DirectionalLight& dl = scene.DirectionalLightRef();
-            const Math::float3 sun = dl.GetEffectiveColor();
-            const float lum = 0.2126f * sun.x + 0.7152f * sun.y + 0.0722f * sun.z;
-            // CIE-ish overcast/clear-sky ratio, normalised to unit luma so only the hue moves.
-            const Math::float3 skyHue{ 0.45f, 0.66f, 1.0f };
-            const float skyLum = 0.2126f * skyHue.x + 0.7152f * skyHue.y + 0.0722f * skyHue.z;
-            const Math::float3 sky{ skyHue.x * lum / skyLum, skyHue.y * lum / skyLum, skyHue.z * lum / skyLum };
-            const float t = value;
-            dl.SetAmbientTintedBySun(false);
-            dl.SetAmbientColor({ sun.x + (sky.x - sun.x) * t,
-                                 sun.y + (sky.y - sun.y) * t,
-                                 sun.z + (sky.z - sun.z) * t });
+            scene.DirectionalLightRef().SetSkyFillIntensity(value);
             return true;
         }
-
+        if (setting == "light.skyIntensity")
+        {
+            if (Skybox* sky = scene.GetSkybox()) { sky->SetExposure(value); }
+            return true;
+        }
+        if (setting == "light.sunIntensity") { scene.DirectionalLightRef().SetSunIntensity(value); return true; }
+        // P4 equivalence probe: put the scene back into the LEGACY split -- unit sun intensity with
+        // the factor on the retired whole-scene multiplier. If the migration folds correctly this
+        // must be pixel-identical to the pre-P4 capture, which is what proves the fold rather than
+        // arguing about it. Kept because it is the only way to re-prove the fold after any change
+        // to a light consumer.
+        if (setting == "light.legacySplit")
+        {
+            scene.DirectionalLightRef().SetSunIntensity(1.0f);
+            scene.DirectionalLightRef().SetExposure(value);
+            return true;
+        }
         if (setting == "exposure.lowPercentile")   { e.lowPercentile = value;  return true; }
         if (setting == "exposure.highPercentile")  { e.highPercentile = value; return true; }
         if (setting == "exposure.compensationEv")  { e.compensationEv = value; return true; }

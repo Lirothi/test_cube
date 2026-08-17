@@ -647,7 +647,49 @@ panel.
 
 ---
 
-### F8 — Runtime split-sum IBL and irradiance ambient
+### F8 — Runtime split-sum IBL and irradiance ambient — DONE (2026-08-17, uncommitted)
+
+**Status.** Both halves landed. A sky WITHOUT F7 derivatives is untouched — verified by re-capturing
+an identical probe level on the pre-F8 and post-F8 binaries: **mean |delta| 0.0001/255, 0.000% of
+pixels past the noise floor.** That is the compatibility contract, and it is what lets this ship
+without re-importing every level first.
+
+**Specular.** `compose_cs` samples the prefiltered cube by perceptual roughness across its REAL mip
+count (`skySpecMipCount`, from `TextureCube::GetMips`), and evaluates
+`refl * (F0 * brdf.x + brdf.y)`. The `FresnelSchlick` call and the `pow(gloss, 1)` fade are both
+gone on that path: the LUT already integrates Fresnel and the geometry term, so keeping them applied
+Fresnel twice, and the gloss fade only ever existed to hide that a box-filtered mip is not a rough
+lobe. `kSkyRoughMaxMip = 5` survives ONLY as the legacy fallback constant.
+Measured against the legacy path with an identical cube: **11.1% of pixels move, max 129/255**, sky
+background unchanged (it does not go through this path), which is the right footprint.
+
+**Diffuse.** `lighting_cs` samples the irradiance cube along the surface normal instead of the flat
+`ambient * ambientRgb`. Measured: shadow **B/R 1.704 -> 2.590** (shaded surfaces now read the blue
+sky they can see), sub-2% pixels 1.49% -> 1.01%, median 0.2599 -> 0.3026. **This is a look change and
+needs the user's eye**, which is why the plan allowed splitting it out.
+
+**Three bugs, all of the same shape: a silent fallback that looks like "the step did nothing."**
+1. `_diffuse.dds` (RGBA16F) and `brdf_lut.dds` (RG16F) were saved with DirectXTex's LEGACY FourCC
+   header (113 and 112) because both formats have one; `TextureCube`/`Texture2D` require DX10. Fixed
+   by saving with `DDS_FLAGS_FORCE_DX10_EXT`. BC6H has no legacy code, so the spec cube loaded fine
+   and masked the problem.
+2. `Texture2D`'s `MapDXGIToPair` knew only RGBA8 and the BC family, so a valid DX10 RG16F LUT was
+   rejected. Added the float formats.
+3. The first irradiance version dropped `albedo * (1 - metal)` — the local `ambient` in lighting_cs
+   already carries them — which made the fill a material-independent grey wash. The version before
+   that kept `ambient` as a multiplier, which is a FRACTION OF THE SUN COLOUR and meaningless
+   against an absolute irradiance: it buried the fill ~20x too deep.
+
+**`logs/ibl.log` now records which path each level took** (`split-sum ON  spec=1 diffuse=1 lut=1
+specMips=8`, or the fallback line). Without it these three bugs were indistinguishable from "F8 has
+no visible effect" in a headless capture. Check it first when the IBL appears inert.
+
+**The LUT is found beside the cube first, then in `textures/`** so a freshly baked sky folder (or a
+staging directory) is self-contained and testable without installing anything.
+
+---
+
+### F8 (original specification)
 
 - **Depends:** F1, F7.
 - **Goal:** Replace ordinary sky mips and `Fresnel*(1-roughness)` with proper prefiltered specular IBL.

@@ -1656,6 +1656,13 @@ already cost this project a frame-wide pink tint once.
 | `PostProcessCombineLUTs.usf` / `.cpp` | how curve + grade are driven and baked into the LUT | **have** |
 | `ACESCommon.ush` | AP0/AP1 matrices, `AP1_RGB2Y`, and the helpers `rgb_2_saturation`, `rgb_2_yc`, `sigmoid_shaper`, `glow_fwd`, `rgb_2_hue`, `center_hue` | **have** |
 | `ACES/ACES_v1.3.ush` | referenced by TonemapCommon for the v1.3 output transforms; only needed if the ACES ODT path is ever wanted | not needed yet |
+| `PostProcessAmbientOcclusion.usf` + `.ush` + `.cpp` | **P6B GTAO**: horizon-based AO, the half-res + edge-aware upsample scheme, and the bilateral/temporal filtering | **have**, in `ue_ssao_ssgi/` |
+| `SSRTDiffuseIndirect.usf`, `SSRTRayCast.ush`, `SSRTReflections.usf`, `ScreenSpaceRayTracing.cpp` | screen-space GI/reflection tracing — P9A's cheap bounce, and a cross-check for our SSR | **have**, in `ue_ssao_ssgi/` |
+| the whole `SSD*` set + `ScreenSpaceDenoise.cpp` | the screen-space denoiser P6B needs — and the one the RT plan's S11 failed to hand-roll (1spp glossy + DLSS jitter = dancing noise) | **have**, in `ue_ssao_ssgi/` |
+| `DiffuseIndirectComposite.usf`, `IndirectLightRendering.cpp`, `CompositionLighting.cpp` | how indirect diffuse/specular/AO are composited — the contract P6A, P6B and P9 all plug into | **have**, in `ue_ssao_ssgi/` |
+| `ReflectionEnvironmentShaders.usf`, `SkyLightingShared.ush` | diffing F8's split-sum against the original. **Arrived 2026-08-17 and immediately earned its keep** — three real differences found (log vs linear roughness/mip mapping, cosine distribution at roughness>0.99, per-sample source mip from the solid-angle ratio) | **have**, in `ue_misc/` |
+| `ReflectionEnvironmentShared.ush` | the body of `ComputeReflectionCaptureRoughnessFromMip` — the log roughness/mip mapping itself. Referenced by the file above but not defined in it, and it is the one difference worth acting on | **wanted** |
+| `MaterialTemplate.ush` | `MaterialExpressionBlackBody`, the Planckian locus the sun's colour-temperature control is transcribed from | **have** |
 | `PostProcessHistogramCommon.ush` | `CalculateLogLocalExposure` — P3B shipped WITHOUT this file, from the published algorithm plus measurement. Diff it against `shaders/local_exposure.hlsli` before extending P3B | **wanted** |
 | `PostProcessLocalExposure.usf` | the local-exposure apply pass and the exposure-fusion alternative | **wanted** |
 | `PostProcessHistogram.usf` | the bilateral-grid write inside the histogram pass — the P3B upgrade needs it | wanted if the grid is built |

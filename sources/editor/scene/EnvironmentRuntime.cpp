@@ -213,8 +213,9 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         {
             dl.MigrateLegacyExposure(JF(p, "exposure", 1.0f));
         }
-        dl.SetAmbientColor(JF3(p, "ambientColor", dl.GetAmbientColor()));
-        dl.SetAmbientTintedBySun(p.value("ambientTintedBySun", true));
+        dl.SetSkyFillIntensity(JF(p, "skyFillIntensity", 1.0f));
+        dl.SetUseSunTemperature(p.value("useSunTemperature", false));
+        dl.SetSunTemperatureK(JF(p, "sunTemperatureK", 6500.0f));
         ctx.scene.SetDirectionalLight(dl);
     }
     else if (env.type == "cameraExposure")

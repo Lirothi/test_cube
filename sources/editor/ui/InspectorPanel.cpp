@@ -23,7 +23,6 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
-#include "rendering/lighting/DirectionalLight.h" // P4: DefaultSkyFillColor, shared with the runtime
 #include "editor/commands/SetMeshAssetCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
@@ -584,6 +583,22 @@ namespace
             // the value the migration folded in -- so the row opens showing what is on screen, and
             // the first drag writes `sunIntensity` without the image jumping. Once that key exists
             // the legacy field is ignored (JsonLevel and EnvironmentRuntime both branch on it).
+            checkB("Use Colour Temperature", "useSunTemperature", false);
+            if (p.value("useSunTemperature", false))
+            {
+                dragF("Temperature (K)", "sunTemperatureK", 6500.0f, 25.0f, 1000.0f, 15000.0f, "%.0f");
+            }
+            InspectorHelp(
+                "Tints the sun by a black-body temperature, multiplying the colour above. OFF by "
+                "default, so the authored colour is used as-is.\n\n"
+                "1700 candle, 2700 tungsten, 4000 cool white, 5500 midday sun, 6500 D65 (neutral "
+                "here), 7500+ overcast/shade blue.\n\n"
+                "The locus is Unreal's, minus its Stefan-Boltzmann brightness term, and the result "
+                "is renormalised to unit luminance -- so this changes HUE ONLY. Without that, 3000K "
+                "would arrive about a stop darker than 6500K and you would have to chase every "
+                "temperature change with an intensity change.\n\n"
+                "Valid 1000-15000K; outside that the fit bends back on itself, so it is clamped.");
+
             const float legacyExposure = JsonFloat(p, "exposure", 1.0f);
             dragF("Sun Intensity", "sunIntensity", legacyExposure, 0.05f, 0.0f, 100.0f);
             InspectorHelp(
@@ -598,38 +613,17 @@ namespace
             InspectorHelp("Sky fill intensity -- the light everything gets from the sky rather than "
                           "from the sun. Independent of Sun Intensity.");
 
-            checkB("Tint Ambient By Sun", "ambientTintedBySun", true);
+            dragF("Sky Fill Intensity", "skyFillIntensity", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
             InspectorHelp(
-                "Legacy behaviour, ON by default because turning it off changes the image.\n\n"
-                "Lighting computed the fill as `ambient * sunColor`, so at sunset the shaded side "
-                "of everything went ORANGE -- but in reality shadowed surfaces are lit by the blue "
-                "sky, not by the sun they cannot see. Untick this to use Ambient Color instead, "
-                "which is the physically sensible fill and a deliberate retune.");
-            {
-                // Shown ALWAYS, not only when the tint is off: hiding it meant unticking the box
-                // revealed a control the user had to go looking for, so the switch read as dead.
-                // Disabled while the tint drives the fill, so the relationship is visible instead.
-                const bool tinted = p.value("ambientTintedBySun", true);
-                const Math::float3 sunCol = JsonFloat3(p, "color", Math::float3(1.0f, 1.0f, 1.0f));
-                const float sunI = JsonFloat(p, "sunIntensity", legacyExposure);
-                const Math::float3 sunEff(sunCol.x * sunI, sunCol.y * sunI, sunCol.z * sunI);
-                // Same default the runtime seeds, via the shared helper, so the row and the image
-                // cannot disagree.
-                const Math::float3 def = DirectionalLight::DefaultSkyFillColor(sunEff);
-                const Math::float3 ac = tinted ? sunEff : JsonFloat3(p, "ambientColor", def);
-
-                const nlohmann::json beforeItem = p;
-                float acv[3] = { ac.x, ac.y, ac.z };
-                ImGui::BeginDisabled(tinted);
-                const bool changed = ImGui::ColorEdit3("Ambient Color", acv);
-                ImGui::EndDisabled();
-                if (changed && !tinted) { p["ambientColor"] = { acv[0], acv[1], acv[2] }; }
-                trackContinuousEdit(beforeItem, changed && !tinted);
-                InspectorHelp("The fill's own colour, used when the tint above is OFF. It starts at "
-                              "a daylight sky blue matched to the sun's LUMINANCE, so switching the "
-                              "tint off changes hue and not brightness. Full blue is usually too "
-                              "much on a warm scene -- drag it back toward the sun's hue to taste.");
-            }
+                "How much of the SKY'S OWN measured irradiance reaches diffuse surfaces. Only "
+                "active when this level's sky was imported with its IBL derivatives -- check "
+                "logs/ibl.log if you are not sure which path a level took.\n\n"
+                "1 = the irradiance cube at face value, which is the physical answer. It is a "
+                "separate control from Ambient above on purpose: Ambient means 'this fraction of "
+                "the SUN colour bounces around', a number authored against a different equation "
+                "entirely, and reusing it here would bury the fill about twenty times too deep.\n\n"
+                "Ambient still drives the flat fallback fill on levels whose sky has no "
+                "derivatives.");
 
             if (p.contains("sunIntensity"))
             {

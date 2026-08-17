@@ -38,10 +38,32 @@ public:
     const Math::float3& GetColor() const;
     void SetColor(const Math::float3& color);
 
+    // Colour temperature, in Kelvin. OFF by default: the authored colour is used as-is, so no level
+    // changes until someone asks for it.
+    //
+    // The locus is UE's `MaterialExpressionBlackBody` (MaterialTemplate.ush) -- the CIE 1960 UCS
+    // rational fit, u/v -> xy -> XYZ -> linear sRGB -- but WITHOUT its `pow(0.0004*T, 4)` tail.
+    // That tail is Stefan-Boltzmann radiant emittance: physically right for a black body, wrong for
+    // a light's temperature control, where it would make 3000K a hundred times dimmer than 6500K
+    // and the dial would read as a brightness slider that also happens to change hue. UE's own
+    // light temperature (FLinearColor::MakeFromColorTemperature) leaves it out for the same reason.
+    // The result is renormalised to unit luminance, so temperature moves HUE and nothing else --
+    // brightness stays where sunIntensity put it.
+    bool GetUseSunTemperature() const { return useSunTemperature_; }
+    void SetUseSunTemperature(bool use) { useSunTemperature_ = use; }
+    float GetSunTemperatureK() const { return sunTemperatureK_; }
+    void SetSunTemperatureK(float kelvin) { sunTemperatureK_ = kelvin; }
+    // Unit-luminance RGB for the current temperature; (1,1,1) when the control is off.
+    Math::float3 GetTemperatureRgb() const;
+
     // The sun colour with its intensity already folded in -- what every shader should light with.
     // Kept as a derived accessor rather than baking it into color_ so the editor still round-trips
     // the authored colour and intensity separately.
-    Math::float3 GetEffectiveColor() const { return color_ * sunIntensity_; }
+    Math::float3 GetEffectiveColor() const
+    {
+        const Math::float3 t = GetTemperatureRgb();
+        return Math::float3(color_.x * t.x, color_.y * t.y, color_.z * t.z) * sunIntensity_;
+    }
 
     float GetSunIntensity() const { return sunIntensity_; }
     void SetSunIntensity(float intensity) { sunIntensity_ = intensity; }
@@ -56,37 +78,25 @@ public:
     float GetAmbient() const;
     void SetAmbient(float ambient);
 
-    // P4: the fill's own colour. Legacy lighting tinted ALL ambient by the sun colour
-    // (`color = ambient * lightRgb` in lighting_cs), which is why shaded sand went orange at sunset
-    // instead of sky-blue. Migration seeds this WITH the sun colour so nothing changes; untick
-    // `ambientTintedBySun` to get a real sky-coloured fill, which is a deliberate retune.
-    const Math::float3& GetAmbientColor() const { return ambientColor_; }
-    void SetAmbientColor(const Math::float3& color) { ambientColor_ = color; }
-    bool GetAmbientTintedBySun() const { return ambientTintedBySun_; }
-    void SetAmbientTintedBySun(bool tinted) { ambientTintedBySun_ = tinted; }
-    // The colour a sky fill should default to: daylight-sky hue, rescaled to the SAME luminance as
-    // the sun colour handed in. Matching the luminance is the point -- unticking the tint is then a
-    // pure hue change, so it cannot be mistaken for "the de-tint made everything dark", while still
-    // visibly doing what the switch says it does. Shared with the inspector so the row it shows and
-    // the value the runtime uses cannot drift apart.
-    static Math::float3 DefaultSkyFillColor(const Math::float3& sunEffective)
-    {
-        const float lum = 0.2126f * sunEffective.x + 0.7152f * sunEffective.y + 0.0722f * sunEffective.z;
-        const Math::float3 hue{ 0.45f, 0.66f, 1.0f }; // clear-sky ratio
-        const float hueLum = 0.2126f * hue.x + 0.7152f * hue.y + 0.0722f * hue.z;
-        const float k = (hueLum > 0.0f) ? (lum / hueLum) : 0.0f;
-        return Math::float3(hue.x * k, hue.y * k, hue.z * k);
-    }
+    // The colour of the FLAT fallback fill, i.e. the sun colour with its intensity folded in.
+    //
+    // There used to be an `ambientTintedBySun` switch and an authored `ambientColor` beside it, so
+    // a level could give its shadows a sky-blue fill instead of a sun-tinted one. F8 retired them:
+    // once a sky supplies real irradiance, lighting_cs takes that branch and never reads this at
+    // all, and the importer now produces the derivatives for every sky it converts. Keeping a pair
+    // of controls that do nothing on any converted level -- greyed out or not -- is worse than not
+    // having them, so they are gone. This remains for levels with no derivatives (and for no sky
+    // at all), where it reproduces exactly what those levels always rendered.
+    Math::float3 GetEffectiveAmbientColor() const { return GetEffectiveColor(); }
 
-    // What a shader should actually multiply the fill by, honouring the tint switch.
-    // The tinted branch returns the EFFECTIVE sun colour, intensity included: legacy lighting_cs
-    // computed the fill as `ambient * lightRgb` and then multiplied the lot by `exposure`, so the
-    // fill did carry the sun's intensity. Returning the raw colour here would quietly darken every
-    // shaded surface on any level whose legacy exposure was not 1.
-    Math::float3 GetEffectiveAmbientColor() const
-    {
-        return ambientTintedBySun_ ? GetEffectiveColor() : ambientColor_;
-    }
+    // F8: strength of the SKY IRRADIANCE fill, used when the level's sky brought prefiltered
+    // derivatives with it. Deliberately a SEPARATE field from `ambient`, not a reuse of it:
+    // `ambient` means "this fraction of the sun colour bounces around", a number authored against a
+    // completely different equation. Multiplying an absolute measured irradiance by a level's 0.05
+    // buries the fill about twenty times too deep -- which is exactly what the first version of F8
+    // did. 1 = the sky's own irradiance, physically what the cube says.
+    float GetSkyFillIntensity() const { return skyFillIntensity_; }
+    void SetSkyFillIntensity(float v) { skyFillIntensity_ = v; }
 
     // NOTE (P4, corrected 2026-08-16): there was a `unifiedSkyFill` switch here, on the premise that
     // the ocean's sky fill disagreed with the opaque one. That premise was WRONG, and measuring it
@@ -114,8 +124,9 @@ private:
     float exposure_;
     float ambient_;
     float sunIntensity_ = 1.0f;
-    Math::float3 ambientColor_{ 1.0f, 1.0f, 1.0f };
-    bool ambientTintedBySun_ = true;  // legacy behaviour; false is the P4 retune
+    float skyFillIntensity_ = 1.0f;   // F8; 1 = the irradiance cube taken at face value
+    bool  useSunTemperature_ = false; // off = the authored colour is used as-is
+    float sunTemperatureK_ = 6500.0f; // ~D65, i.e. a no-op hue once normalised
     std::uint32_t transformVersion_ = 0; // Step 11: bumped on SetDirection
 };
 

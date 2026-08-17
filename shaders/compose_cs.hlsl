@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -8,11 +8,15 @@
 // t6: Filtered reflection (premultiplied)
 // t7: GBAux (AO, indirect specular scale, shading model)
 // t8: persistent world-space shore wetness (R32_UINT, 0..65535)
+// t9:  F8 GGX-prefiltered sky radiance (mip m <-> roughness m/(mips-1))
+// t10: F8 cosine-convolved sky irradiance (already divided by PI)
+// t11: F8 split-sum environment BRDF (RG16F, x = scale on F0, y = bias)
 // u0: Scene color (HDR)
 
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
+#include "ibl_common.hlsli"
 
 Texture2D LightTarget : register(t0);
 Texture2D GB2 : register(t1);
@@ -23,6 +27,9 @@ TextureCube SkyboxTex : register(t5);
 Texture2D ReflectionTexture : register(t6);
 Texture2D GBAux : register(t7);
 Texture2D<uint> ShoreWetness : register(t8);
+TextureCube SkySpecular : register(t9);
+TextureCube SkyIrradiance : register(t10);
+Texture2D BrdfLut : register(t11);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -36,6 +43,10 @@ cbuffer PerFrame : register(b0)
     float skyboxIntensity; // 1.0
     float3 camPosWS;
     uint enableSkySpecular;
+    // F8. 0 = this sky has no prefiltered derivatives, so the legacy mip-chain path runs and the
+    // image is unchanged. > 0 = the real mip count of the prefiltered cube, which is what replaces
+    // the guessed `kSkyRoughMaxMip` below.
+    uint skySpecMipCount;
     float2 screenSize;
     float2 invScreenSize;
     float4 shoreWetnessWindow;     // xy: centre, z: 1 / half extent, w: darkening
@@ -48,6 +59,10 @@ static const float kEps = 1e-6;
 
 // Roughness->mip scale for the skybox fallback. The cube has an 11-mip chain; this
 // matches glass.hlsl (rough*5) so opaque and glass sky reflections blur identically.
+// Legacy sky roughness ceiling, used ONLY when a sky has no F7 derivatives. It was always a guess:
+// the display cube's mip chain is a box filter, so treating mip N as "roughness N/5" approximates a
+// GGX lobe with a square one. F8's prefiltered cube is the real answer; this stays as the fallback
+// for skies imported before it existed.
 static const float kSkyRoughMaxMip = 5.0;
 
 float3 FresnelSchlick(float cosTheta, float3 F0)
@@ -232,10 +247,22 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // mirror-sharp horizon next to the roughness-blurred SSR/RT reflection. The `gloss`
         // term below fades the reflection out as rough->1, so the very blurry upper mips are
         // only lightly weighted.
+        const float cosT = saturate(dot(N_ws, Vw));
+        const bool useSplitSum = (skySpecMipCount > 0u);
+
         float3 skyCol = 0.0f.xxx;
         if (enableSkySpecular != 0u)
         {
-            skyCol = SkyboxTex.SampleLevel(gSmp, Rw, rough * kSkyRoughMaxMip).rgb * skyboxIntensity;
+            // F8: index the PREFILTERED cube by perceptual roughness across its real mip count.
+            // Its last mip is roughness 1 by construction, so no constant has to be guessed.
+            // Unreal's logarithmic mapping, so a mip always means the same roughness whatever the
+            // mip count -- see ibl_common.hlsli. The bake uses the exact inverse.
+            const float mip = useSplitSum
+                ? IblMipFromRoughness(rough, (float)skySpecMipCount)
+                : rough * kSkyRoughMaxMip;
+            skyCol = useSplitSum
+                ? SkySpecular.SampleLevel(gSmp, Rw, mip).rgb * skyboxIntensity
+                : SkyboxTex.SampleLevel(gSmp, Rw, mip).rgb * skyboxIntensity;
         }
 
         // Skybox as fallback: (ssrColor*α + sky*(1-α)). Apply the material
@@ -244,11 +271,22 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float3 refl = reflectionRGB + skyCol * (1.0 - reflectionA);
         refl *= indirectSpecularScale;
 
-        float cosT = saturate(dot(N_ws, Vw));
-        float3 F = FresnelSchlick(cosT, F0);
-        float gloss = saturate(1.0 - rough);
-
-        float3 spec = refl * F * pow(gloss, 1);
+        float3 spec;
+        if (useSplitSum)
+        {
+            // Split sum: the LUT already integrates Fresnel and the geometry term over the lobe,
+            // so multiplying by FresnelSchlick again would apply Fresnel twice. The old
+            // `pow(gloss, 1)` fade goes with it -- it existed to hide the fact that a box-filtered
+            // mip is not a rough lobe, and a real prefilter does not need hiding.
+            const float2 ab = BrdfLut.SampleLevel(gSmp, float2(cosT, rough), 0).rg;
+            spec = refl * (F0 * ab.x + ab.y);
+        }
+        else
+        {
+            float3 F = FresnelSchlick(cosT, F0);
+            float gloss = saturate(1.0 - rough);
+            spec = refl * F * pow(gloss, 1);
+        }
         color += spec;
 
         if (shadingModel == kShadingModelTerrain)

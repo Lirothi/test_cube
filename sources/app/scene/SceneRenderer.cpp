@@ -2497,6 +2497,13 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         // trailing `* exposure` behaved -- hence the migration leaves `ambient` untouched.
         constants.lightRgb = dirLight.GetEffectiveColor();
         constants.ambientRgb = dirLight.GetEffectiveAmbientColor();
+        // F8: a real sky fill whenever this level's sky brought prefiltered derivatives with it.
+        const Skybox* iblSky = frame_->skybox;
+        constants.skyIrradianceEnabled = (iblSky && iblSky->HasIbl()) ? 1u : 0u;
+        // Sky intensity (how bright this sky is) times the fill strength (how much of it the
+        // diffuse response takes). Two different questions, so two fields.
+        constants.skyIrradianceScale =
+            (iblSky ? iblSky->GetExposure() : 1.0f) * dirLight.GetSkyFillIntensity();
         constants.exposure = dirLight.GetExposure();
         constants.camPos = camera.GetPosition();
         constants.camDir = camDir;
@@ -2578,7 +2585,13 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
               vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t6 (inert in Legacy)
               vsmDir ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv(),     // t7 (inert in Legacy)
               D.gbAuxSRV,                                                             // t8
-              causticsSrv.ptr != 0 ? causticsSrv : renderer->VsmDummyTexSrv() },      // t9 (inert without water)
+              causticsSrv.ptr != 0 ? causticsSrv : renderer->VsmDummyTexSrv(),        // t9 (inert without water)
+              // t10: F8 sky irradiance. The dummy keeps the VOLATILE table fully populated on a
+              // level whose sky has no derivatives; `skyIrradianceEnabled` is 0 there, so it is
+              // never sampled.
+              (frame_->skybox && frame_->skybox->HasIbl())
+                  ? frame_->skybox->GetIrradianceTex()->GetSRVCPU()
+                  : renderer->VsmDummyTexSrv() },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -3381,6 +3394,9 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         constants.camPos = camera.GetPosition();
         constants.enableSkySpecular =
             frame_->settings.reflectionSource != ReflectionSource::None ? 1u : 0u;
+        // F8: non-zero switches compose onto the split-sum path. Zero when this sky has no
+        // prefiltered derivatives, which keeps every pre-F7 level rendering exactly as it did.
+        constants.skySpecMipCount = skybox->HasIbl() ? skybox->GetSpecMips() : 0u;
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(1.0f / width, 1.0f / height);
 
@@ -3400,8 +3416,15 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         RecordComputeDispatch(renderer, t.cl, composeMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteComposeConstants(constants, dest); },
+            // t9..t11 are the F8 IBL set. When this sky has none they are filled with the display
+            // cube and the depth SRV: the table must be fully populated (a null descriptor in a
+            // VOLATILE range is undefined), and the shader never reads them because
+            // `skySpecMipCount` is 0.
             { D.lightSRV, D.gbSRV[2], D.gbSRV[0], D.gbSRV[1], D.depthSRV,
-              skybox->GetTex()->GetSRVCPU(), D.reflectionSRV, D.gbAuxSRV, wetnessSrv },
+              skybox->GetTex()->GetSRVCPU(), D.reflectionSRV, D.gbAuxSRV, wetnessSrv,
+              skybox->HasIbl() ? skybox->GetSpecTex()->GetSRVCPU() : skybox->GetTex()->GetSRVCPU(),
+              skybox->HasIbl() ? skybox->GetIrradianceTex()->GetSRVCPU() : skybox->GetTex()->GetSRVCPU(),
+              skybox->HasIbl() ? skybox->GetBrdfLut()->GetSRVCPU() : D.depthSRV },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

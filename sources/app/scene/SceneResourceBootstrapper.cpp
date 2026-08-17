@@ -24,6 +24,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     ambient = material->ComputeCB0FieldHandle("ambientIntensity");
     lightRgb = material->ComputeCB0FieldHandle("lightRgb");
     ambientRgb = material->ComputeCB0FieldHandle("ambientRgb");
+    skyIrradianceEnabled = material->ComputeCB0FieldHandle("skyIrradianceEnabled");
+    skyIrradianceScale = material->ComputeCB0FieldHandle("skyIrradianceScale");
     exposure = material->ComputeCB0FieldHandle("exposure");
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     camDir = material->ComputeCB0FieldHandle("camDirWS");
@@ -140,6 +142,7 @@ void SceneComposeCBHandles::Populate(Material* material)
     skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     enableSkySpecular = material->ComputeCB0FieldHandle("enableSkySpecular");
+    skySpecMipCount = material->ComputeCB0FieldHandle("skySpecMipCount");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
     shoreWetnessWindow = material->ComputeCB0FieldHandle("shoreWetnessWindow");
@@ -634,6 +637,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.ambient, data.ambient, dest);
     matLighting_->UpdateCBField(handles.lightRgb, data.lightRgb, dest);
     matLighting_->UpdateCBField(handles.ambientRgb, data.ambientRgb, dest);
+    matLighting_->UpdateCBField(handles.skyIrradianceEnabled, data.skyIrradianceEnabled, dest);
+    matLighting_->UpdateCBField(handles.skyIrradianceScale, data.skyIrradianceScale, dest);
     matLighting_->UpdateCBField(handles.exposure, data.exposure, dest);
     matLighting_->UpdateCBField(handles.camPos, data.camPos, dest);
     matLighting_->UpdateCBField(handles.camDir, data.camDir, dest);
@@ -841,6 +846,7 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.skyboxIntensity, data.skyboxIntensity, dest);
     matComposeCS_->UpdateCBField(handles.camPos, data.camPos, dest);
     matComposeCS_->UpdateCBField(handles.enableSkySpecular, data.enableSkySpecular, dest);
+    matComposeCS_->UpdateCBField(handles.skySpecMipCount, data.skySpecMipCount, dest);
     matComposeCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matComposeCS_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
     matComposeCS_->UpdateCBField(handles.shoreWetnessWindow, data.shoreWetnessWindow, dest);

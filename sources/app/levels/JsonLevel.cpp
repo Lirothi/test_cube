@@ -311,10 +311,9 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         {
             dirLight.MigrateLegacyExposure(dl.value("exposure", 1.0f));
         }
-        // Defaults come from the light's current state, which the migration has already seeded with
-        // the effective sun colour -- so an absent `ambientColor` still means "no change".
-        dirLight.SetAmbientColor(ToFloat3(dl.value("ambientColor", json::array()), dirLight.GetAmbientColor()));
-        dirLight.SetAmbientTintedBySun(dl.value("ambientTintedBySun", true));
+        dirLight.SetSkyFillIntensity(dl.value("skyFillIntensity", 1.0f));
+        dirLight.SetUseSunTemperature(dl.value("useSunTemperature", false));
+        dirLight.SetSunTemperatureK(dl.value("sunTemperatureK", 6500.0f));
         scene.SetDirectionalLight(dirLight);
     }
 

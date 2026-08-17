@@ -592,6 +592,7 @@
     <None Include="shaders\color_grade.hlsli" />
     <None Include="shaders\film_curve.hlsli" />
     <None Include="shaders\local_exposure.hlsli" />
+    <None Include="shaders\ibl_common.hlsli" />
     <None Include="shaders\exposure_histogram_cs.hlsl" />
     <None Include="shaders\exposure_solve_cs.hlsl" />
     <None Include="shaders\exposure_baselum_cs.hlsl" />

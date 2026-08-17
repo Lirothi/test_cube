@@ -329,8 +329,7 @@ namespace
             // absent -- it is the legacy whole-scene multiplier and writing it would only invite
             // someone to tune a control that no longer does anything once sunIntensity exists.
             { "sunIntensity", 1.0f },
-            { "ambient", 0.05f },
-            { "ambientTintedBySun", true }
+            { "ambient", 0.05f }
         };
         return light;
     }
@@ -776,8 +775,7 @@ namespace
             { "direction", nlohmann::json::array({ -1.5f, -0.7f, -0.5f }) },
             { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
             { "sunIntensity", 1.0f }, // P4: new-model field, see BuildDirectionalLightObject
-            { "ambient", 0.05f },
-            { "ambientTintedBySun", true }
+            { "ambient", 0.05f }
         };
         root["spotLights"] = nlohmann::json::array();
         root["pointLights"] = nlohmann::json::array();

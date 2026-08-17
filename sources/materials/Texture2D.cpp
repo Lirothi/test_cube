@@ -159,6 +159,15 @@ namespace {
         case DXGI_FORMAT_R8G8B8A8_UNORM:
         case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
             out = { DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, false, 4 }; return true;
+        // Uncompressed float data. Added for F8's split-sum BRDF LUT (RG16F): the loader knew only
+        // RGBA8 and the BC family, so a perfectly valid DX10 file was rejected and the IBL path
+        // silently fell back. No sRGB variant exists for float formats -- they are data, not colour.
+        case DXGI_FORMAT_R16G16_FLOAT:
+            out = { DXGI_FORMAT_R16G16_TYPELESS, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_UNKNOWN, false, 4 }; return true;
+        case DXGI_FORMAT_R16G16B16A16_FLOAT:
+            out = { DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_UNKNOWN, false, 8 }; return true;
+        case DXGI_FORMAT_R32G32B32A32_FLOAT:
+            out = { DXGI_FORMAT_R32G32B32A32_TYPELESS, DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_UNKNOWN, false, 16 }; return true;
         case DXGI_FORMAT_BC1_UNORM:
         case DXGI_FORMAT_BC1_UNORM_SRGB:
             out = { DXGI_FORMAT_BC1_TYPELESS, DXGI_FORMAT_BC1_UNORM, DXGI_FORMAT_BC1_UNORM_SRGB, true, 8 }; return true;

@@ -4,12 +4,31 @@
 #include "rendering/core/FrameResource.h"
 #include "app/camera/Camera.h"
 
+#include <cstdio>
+#include "core/diagnostics/DiagPaths.h"
+#include <filesystem>
 #include <memory>
+#include <system_error>
 
 using Microsoft::WRL::ComPtr;
 
 namespace
 {
+// Which IBL path a level took gets asked about after the fact, from a headless capture, so
+// it goes to the diagnostic log as well as the debugger. A silent fallback to the legacy
+// mip chain is exactly the thing that looks like "F8 did nothing".
+void LogIbl(const char* text)
+{
+    OutputDebugStringA(text);
+    OutputDebugStringA("\n");
+    std::FILE* f = nullptr;
+    if (fopen_s(&f, diag::LogPath("ibl.log").c_str(), "a") == 0 && f)
+    {
+        std::fprintf(f, "%s\n", text);
+        std::fclose(f);
+    }
+}
+
 class SkyboxUniformBinder final : public RenderableObject::UniformBinder
 {
 public:
@@ -74,6 +93,59 @@ void Skybox::Init(Renderer* renderer,
     // If the texture has not been loaded via LoadDDS yet, we can optionally try it here
     if (!cube_.GetResource() && !path_.empty()) {
         (void)cube_.CreateFromDDS(renderer, uploadCmdList, path_, uploadKeepAlive);
+    }
+
+    // F8: pick up the F7 IBL siblings, if this sky was imported with them. Discovery is by NAME
+    // rather than by a level field on purpose -- the importer writes them next to the cube, so a
+    // path is all the information needed, and a level cannot get into a state where it points at a
+    // sky whose derivatives belong to a different one.
+    //
+    // All three must load or none is used. A half-set would mean sampling a prefiltered cube with
+    // no BRDF term, which is not "slightly wrong", it is a different lighting model.
+    if (!hasIbl_ && cube_.GetResource() && !path_.empty())
+    {
+        const std::filesystem::path base(path_);
+        std::filesystem::path stem = base;
+        stem.replace_extension();
+        const std::wstring specPath = stem.wstring() + L"_spec.dds";
+        const std::wstring diffPath = stem.wstring() + L"_diffuse.dds";
+        // Scene independent and shared, so it normally lives in the textures root -- but look
+        // beside the cube first, so a sky folder straight out of the importer (or a staging
+        // directory) is self-contained and testable without installing anything.
+        std::error_code ec;
+        const std::wstring lutBeside = (base.parent_path() / L"brdf_lut.dds").wstring();
+        const std::wstring lutPath = std::filesystem::exists(lutBeside, ec)
+            ? lutBeside
+            : std::wstring(L"textures/brdf_lut.dds");
+
+        ec.clear();
+        const bool filesPresent =
+            std::filesystem::exists(specPath, ec) &&
+            std::filesystem::exists(diffPath, ec) &&
+            std::filesystem::exists(lutPath, ec);
+
+        if (filesPresent)
+        {
+            const bool specOk = specCube_.CreateFromDDS(renderer, uploadCmdList, specPath, uploadKeepAlive);
+            const bool diffOk = irradianceCube_.CreateFromDDS(renderer, uploadCmdList, diffPath, uploadKeepAlive);
+            Texture2D::CreateDesc lutDesc;
+            lutDesc.path = lutPath;
+            lutDesc.usage = Texture2D::Usage::LinearData;
+            const bool lutOk = brdfLut_.CreateFromFile(renderer, uploadCmdList, lutDesc, uploadKeepAlive);
+            hasIbl_ = specOk && diffOk && lutOk;
+
+            char msg[512];
+            std::snprintf(msg, sizeof(msg),
+                "[ibl] %s  spec=%d diffuse=%d lut=%d  specMips=%u",
+                hasIbl_ ? "split-sum ON" : "FAILED, falling back to the sky mip chain",
+                (int)specOk, (int)diffOk, (int)lutOk, specCube_.GetMips());
+            LogIbl(msg);
+        }
+        else
+        {
+            LogIbl("[ibl] no F7 derivatives beside this skybox; using the legacy sky mip "
+                   "chain (re-import the HDRI to get them)");
+        }
     }
 
     // Build the cube geometry

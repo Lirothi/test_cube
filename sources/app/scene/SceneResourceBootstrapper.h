@@ -23,6 +23,8 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle ambient;
     Material::CBFieldHandle lightRgb;
     Material::CBFieldHandle ambientRgb; // P4: the fill's own colour, see DirectionalLight
+    Material::CBFieldHandle skyIrradianceEnabled; // F8
+    Material::CBFieldHandle skyIrradianceScale;   // F8
     Material::CBFieldHandle exposure;
     Material::CBFieldHandle camPos;
     Material::CBFieldHandle camDir;
@@ -119,6 +121,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle skyboxIntensity;
     Material::CBFieldHandle camPos;
     Material::CBFieldHandle enableSkySpecular;
+    Material::CBFieldHandle skySpecMipCount; // F8
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
     Material::CBFieldHandle shoreWetnessWindow;
@@ -230,6 +233,9 @@ struct LightingPassConstants
     float3 ambient{};
     float3 lightRgb{};
     float3 ambientRgb{ 1.0f, 1.0f, 1.0f }; // P4: sun colour by default, see GetEffectiveAmbientColor
+    // F8: 0 keeps the flat fill, i.e. every level without prefiltered sky derivatives.
+    uint32_t skyIrradianceEnabled = 0u;
+    float skyIrradianceScale = 1.0f;
     float exposure = 1.0f;
     float3 camPos{};
     float3 camDir{};
@@ -324,6 +330,9 @@ struct ComposePassConstants
     float skyboxIntensity = 1.0f;
     float3 camPos{};
     uint32_t enableSkySpecular = 1u;
+    // F8: 0 = no prefiltered derivatives for this sky, so compose keeps the legacy mip-chain
+    // path and the image is unchanged. Otherwise the prefiltered cube's real mip count.
+    uint32_t skySpecMipCount = 0u;
     float2 screenSize{};
     float2 invScreenSize{};
     float4 shoreWetnessWindow{};

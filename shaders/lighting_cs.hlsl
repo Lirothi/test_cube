@@ -24,6 +24,9 @@ StructuredBuffer<uint> VsmPageTable : register(t6); // Rung 2 / Step 24f: direct
 Texture2D VsmPool : register(t7);                    // VSM physical page pool depth
 Texture2D GBAux : register(t8);
 Texture2D CausticsAtlas : register(t9);
+// F8: cosine-convolved sky irradiance, already divided by PI, so a Lambertian surface multiplies
+// its albedo by this directly. Inert unless `skyIrradianceEnabled` says the level has one.
+TextureCube SkyIrradiance : register(t10);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -42,6 +45,13 @@ cbuffer PerFrame : register(b0)
     // legacy `ambient * lightRgb` tinting exactly; a level that turns the tint off gets a real
     // sky colour here instead, so shaded sand reads blue at sunset rather than orange.
     float3 ambientRgb;
+    // F8: 0 = flat fill (ambientRgb), the pre-F8 behaviour. 1 = sample the real sky irradiance in
+    // the surface normal's direction, which is what makes a sky-facing surface catch the sky and a
+    // downward-facing one catch the ground -- the thing one flat number can never express.
+    uint skyIrradianceEnabled;
+    // The level's sky intensity, so the irradiance cube honours the same control the background,
+    // compose and the ocean do.
+    float skyIrradianceScale;
 
     float4x4 invView;
     float4x4 invProj;
@@ -234,7 +244,7 @@ CausticsParams LoadCausticsParams()
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 
@@ -296,7 +306,27 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     bi.V = V;
     bi.L = L;
 
-    float3 color = ambient * ambientRgb;
+    // Sky fill.
+    //
+    // Legacy: `ambient` is a FRACTION OF THE SUN COLOUR (`ambient * ambientRgb`), a number authored
+    // to mean "this much of the sun's light bounces around". Once the source is the sky's measured
+    // irradiance that fraction has no meaning -- reusing it multiplies an absolute radiance by
+    // 0.05..0.1 and buries the fill about twenty times too deep, which is exactly what the first
+    // version of this did. So the IBL branch uses the irradiance AS the fill and the level's
+    // `ambient` stays what it always was: the strength of the flat fallback.
+    // NOTE the local `ambient` above already carries albedo * (1 - metal) * ambientIntensity, so the
+    // IBL branch has to re-apply albedo and the metal gate itself -- dropping them makes the fill
+    // independent of the material, which reads as a uniform grey wash over the whole scene.
+    float3 color;
+    if (skyIrradianceEnabled != 0u)
+    {
+        const float3 irradiance = SkyIrradiance.SampleLevel(gSmpLinearWrap, N, 0).rgb;
+        color = albedo * (1.0 - metal) * irradiance * skyIrradianceScale;
+    }
+    else
+    {
+        color = ambient * ambientRgb;
+    }
 
     // S0.3: seed the debug cascade with the one the split selection picks, so surfaces that never
     // sample a shadow (facing away from the sun) still show their zone. A real sample below

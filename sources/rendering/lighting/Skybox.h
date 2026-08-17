@@ -4,6 +4,7 @@
 #include <string>
 #include "rendering/renderables/RenderableObject.h"
 #include "materials/TextureCube.h"
+#include "materials/Texture2D.h"
 #include "rendering/descriptors/SamplerManager.h"
 
 class Skybox : public RenderableObject {
@@ -23,6 +24,21 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
     const TextureCube* GetTex() const { return &cube_; }
+
+    // F8 split-sum IBL. Loaded from siblings of `path_` produced by F7:
+    //   <stem>_spec.dds     GGX-prefiltered radiance, mip m <-> roughness m/(mips-1)
+    //   <stem>_diffuse.dds  cosine-convolved irradiance (already divided by PI)
+    //   textures/brdf_lut.dds  the shared, scene-independent environment BRDF
+    // All three are OPTIONAL: a sky imported before F7 simply has none, `HasIbl()` stays false and
+    // every consumer keeps the pre-F8 behaviour. That fallback is the compatibility story, so it
+    // must stay cheap to check and impossible to half-enter -- hence one flag for all three.
+    bool HasIbl() const { return hasIbl_; }
+    const TextureCube* GetSpecTex() const { return &specCube_; }
+    const TextureCube* GetIrradianceTex() const { return &irradianceCube_; }
+    const Texture2D* GetBrdfLut() const { return &brdfLut_; }
+    // Real mip count of the prefiltered cube. This is what retires the hardcoded
+    // `kSkyRoughMaxMip = 5` that both compose and the ocean used to guess with.
+    UINT GetSpecMips() const { return specCube_.GetMips(); }
     const std::wstring& GetPath() const { return path_; }
     float GetExposure() const { return exposure_; }
     void SetExposure(float exp) { exposure_ = exp; }
@@ -41,6 +57,10 @@ private:
 
 private:
     TextureCube cube_;
+    TextureCube specCube_;
+    TextureCube irradianceCube_;
+    Texture2D brdfLut_;
+    bool hasIbl_ = false;
     std::wstring path_;
     float exposure_ = 1.0f;
 };

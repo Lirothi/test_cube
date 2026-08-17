@@ -1035,9 +1035,23 @@ bool BuildPrefilteredSpecular(const ScratchImage& srcCubeMips, int baseFace, Scr
 
     const size_t srcMips = srcCubeMips.GetMetadata().mipLevels;
 
+    // Roughness per mip: the EXACT INVERSE of `IblMipFromRoughness` in shaders/ibl_common.hlsli,
+    // which is Unreal's logarithmic mapping (ReflectionEnvironmentShared.ush). Mirrored here rather
+    // than shared because the importer is CPU-side; if either side changes, both change, and the
+    // symptom of them disagreeing is invisible -- the reflections merely look slightly wrong.
+    const auto roughnessFromMip = [mipCount](size_t mip)
+    {
+        constexpr float kRoughestMip = 1.0f;
+        constexpr float kMipScale = 1.2f;
+        const float levelFrom1x1 = (float)mipCount - 1.0f - (float)mip;
+        return std::min(1.0f, std::exp2((kRoughestMip - levelFrom1x1) / kMipScale));
+    };
+
     for (size_t mip = 0; mip < mipCount; ++mip)
     {
-        const float roughness = (mipCount > 1) ? (float)mip / (float)(mipCount - 1) : 0.0f;
+        // Mip 0 stays a straight copy. Their mapping puts it at roughness ~0.03, which for a GGX
+        // lobe is within a hair of a mirror, and a copy is both sharper and cheaper.
+        const float roughness = (mip == 0) ? 0.0f : roughnessFromMip(mip);
         const int size = std::max(1, baseFace >> (int)mip);
         // Sample budget grows with the lobe: a mirror needs one tap, a rough lobe needs many.
         const int sampleCount = (mip == 0) ? 1 : (int)std::min<size_t>(512, 64u << std::min<size_t>(mip, 3));
@@ -1260,7 +1274,10 @@ bool BuildBrdfLut(const fs::path& out, int size, Log& log)
 
     std::error_code ec;
     fs::create_directories(out.parent_path(), ec);
-    hr = SaveToDDSFile(*half.GetImage(0, 0, 0), DDS_FLAGS_NONE, out.wstring().c_str());
+    // FORCE_DX10: RG16_FLOAT has a legacy FourCC (112), so DirectXTex would write the old header
+    // form and Texture2D's DDS loader -- which requires DX10 -- would refuse the file. That is
+    // exactly how the first F8 run ended up with lut=0 and a silent fallback.
+    hr = SaveToDDSFile(*half.GetImage(0, 0, 0), DDS_FLAGS_FORCE_DX10_EXT, out.wstring().c_str());
     if (FAILED(hr)) { log.Line("ibl FAIL save brdf lut " + Hex(hr)); return false; }
     log.Line("  ok  ibl brdf " + std::to_string(size) + "^2 RG16F -> " + Narrow(out.filename().wstring()));
     return true;
@@ -1288,7 +1305,10 @@ bool SaveHdrCube(const ScratchImage& cube, const fs::path& out, Log& log, const 
                  DXGI_FORMAT_R16G16B16A16_FLOAT, TEX_FILTER_DEFAULT, TEX_THRESHOLD_DEFAULT, half);
     if (SUCCEEDED(hr))
     {
-        hr = SaveToDDSFile(half.GetImages(), half.GetImageCount(), half.GetMetadata(), DDS_FLAGS_NONE, out.wstring().c_str());
+        // FORCE_DX10 for the same reason as the LUT: RGBA16F has a legacy FourCC (113) and the
+        // TextureCube loader requires a DX10 header.
+        hr = SaveToDDSFile(half.GetImages(), half.GetImageCount(), half.GetMetadata(),
+                           DDS_FLAGS_FORCE_DX10_EXT, out.wstring().c_str());
     }
     if (FAILED(hr)) { log.Line(std::string(tag) + " FAIL save " + Hex(hr)); return false; }
     return true;

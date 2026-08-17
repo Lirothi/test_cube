@@ -23,6 +23,9 @@
     "speedUp": 3.0
   },
   "colorPipeline": {
+    "agxPower": 1.350000023841858,
+    "agxSaturation": 1.399999976158142,
+    "agxSlope": 1.0,
     "filmBlackClip": 0.0,
     "filmShoulder": 0.25999999046325684,
     "filmSlope": 0.8799999952316284,
@@ -42,6 +45,12 @@
   },
   "directionalLight": {
     "ambient": 0.10000000149011612,
+    "ambientColor": [
+      0.6877076625823975,
+      0.027416912838816643,
+      0.61970454454422
+    ],
+    "ambientTintedBySun": true,
     "color": [
       1.0,
       0.7519378662109375,
@@ -52,7 +61,8 @@
       -0.699999988079071,
       -0.5
     ],
-    "exposure": 2.0
+    "exposure": 2.0,
+    "skyFillIntensity": 1.0
   },
   "objects": [
     {
