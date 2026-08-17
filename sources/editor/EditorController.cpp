@@ -325,8 +325,12 @@ namespace
             { "enabled", true },
             { "direction", nlohmann::json::array({ -1.5f, -0.7f, -0.5f }) },
             { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
-            { "exposure", 1.0f },
-            { "ambient", 0.05f }
+            // P4: a freshly created sun is authored in the new model. `exposure` is deliberately
+            // absent -- it is the legacy whole-scene multiplier and writing it would only invite
+            // someone to tune a control that no longer does anything once sunIntensity exists.
+            { "sunIntensity", 1.0f },
+            { "ambient", 0.05f },
+            { "ambientTintedBySun", true }
         };
         return light;
     }
@@ -771,8 +775,9 @@ namespace
         root["directionalLight"] = {
             { "direction", nlohmann::json::array({ -1.5f, -0.7f, -0.5f }) },
             { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
-            { "exposure", 1.0f },
-            { "ambient", 0.05f }
+            { "sunIntensity", 1.0f }, // P4: new-model field, see BuildDirectionalLightObject
+            { "ambient", 0.05f },
+            { "ambientTintedBySun", true }
         };
         root["spotLights"] = nlohmann::json::array();
         root["pointLights"] = nlohmann::json::array();

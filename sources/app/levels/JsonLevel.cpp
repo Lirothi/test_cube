@@ -281,8 +281,29 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         dirLight.SetDirection(ToFloat3(dl.value("direction", json::array()), float3(0.0f, -1.0f, 0.0f)).Normalized());
         // A disabled sun contributes nothing (direct color + ambient zeroed).
         dirLight.SetColor(enabled ? ToFloat3(dl.value("color", json::array()), float3(1.0f, 1.0f, 1.0f)) : float3(0.0f, 0.0f, 0.0f));
-        dirLight.SetExposure(dl.value("exposure", 1.0f));
         dirLight.SetAmbient(enabled ? dl.value("ambient", 0.05f) : 0.0f);
+        // P4: `sunIntensity` is the field going forward; `exposure` is the legacy whole-scene
+        // multiplier. A level carrying only the old field is migrated losslessly (see
+        // DirectionalLight::MigrateLegacyExposure) so its image does not move. A level carrying the
+        // new field skips the migration entirely -- writing BOTH means the new one wins, because a
+        // level that has been converted should not keep paying for the old semantics.
+        //
+        // ONLY the sun intensity branches. The fill fields below are read UNCONDITIONALLY: they are
+        // orthogonal to how the intensity was authored, and gating them on `sunIntensity` made them
+        // dead on every existing level -- ticking the boxes in the inspector did nothing at all,
+        // because every shipped level still carries the legacy field.
+        if (dl.contains("sunIntensity"))
+        {
+            dirLight.SetSunIntensity(dl.value("sunIntensity", 1.0f));
+        }
+        else
+        {
+            dirLight.MigrateLegacyExposure(dl.value("exposure", 1.0f));
+        }
+        // Defaults come from the light's current state, which the migration has already seeded with
+        // the effective sun colour -- so an absent `ambientColor` still means "no change".
+        dirLight.SetAmbientColor(ToFloat3(dl.value("ambientColor", json::array()), dirLight.GetAmbientColor()));
+        dirLight.SetAmbientTintedBySun(dl.value("ambientTintedBySun", true));
         scene.SetDirectionalLight(dirLight);
     }
 

@@ -33,6 +33,10 @@ public:
     const Camera& CameraRef() const { return camera_; }
 
     const DirectionalLight& GetDirectionalLight() const { return dirLight_; }
+    // P4 measurement hook: the sweep harness needs to drive the sun's own controls to measure how
+    // much of the level's `exposure` the auto-exposure silently cancels. Runtime only -- like the
+    // camera settings above, nothing here writes the level.
+    DirectionalLight& DirectionalLightRef() { return dirLight_; }
     // P1: the level's photographic camera settings. Dormant by default (enabled = false), so this
     // is pure state until P2 schedules the metering passes that read it.
     const render::CameraExposureSettings& GetCameraExposure() const { return cameraExposure_; }

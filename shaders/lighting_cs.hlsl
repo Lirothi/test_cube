@@ -38,6 +38,10 @@ cbuffer PerFrame : register(b0)
     float exposure;
     float3 camPosWS;
     float3 camDirWS;
+    // P4: the sky fill's own colour. Defaults to the effective sun colour, which reproduces the
+    // legacy `ambient * lightRgb` tinting exactly; a level that turns the tint off gets a real
+    // sky colour here instead, so shaded sand reads blue at sunset rather than orange.
+    float3 ambientRgb;
 
     float4x4 invView;
     float4x4 invProj;
@@ -292,7 +296,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     bi.V = V;
     bi.L = L;
 
-    float3 color = ambient * lightRgb;
+    float3 color = ambient * ambientRgb;
 
     // S0.3: seed the debug cascade with the one the split selection picks, so surfaces that never
     // sample a shadow (facing away from the sun) still show their zone. A real sample below

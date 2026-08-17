@@ -1090,6 +1090,12 @@ clipping zero pixels** — the blacks deepen and the highlights rise in the same
 thing section P3B was written to make possible and that no global multiplier can do; the median sits
 0.013 low, which is about +0.1 EV of compensation away. 1.35 is the more conservative landing spot.
 
+> **Numbers above were taken with both thresholds at 0.** The level has since been authored with
+> the "Gentle" preset, whose thresholds are 0.5, and a threshold delays the effect: re-measured on
+> the committed level the same sweep gives 1.0 -> 23.6x, 1.2 -> 28.4x, 1.35 -> 33.1x, 1.5 -> 38.7x,
+> still at 0.000% clipping. Both sets are correct measurements of different configurations — when
+> quoting a spread, quote the thresholds with it.
+
 **Halo check passed.** The `hl 1.0 -> 0.55` difference field on `sun_glint` is smooth, is exactly
 zero over the unaffected ocean, and shows **no positive rim** adjacent to the strongly-modified sky
 (max positive excursion 5/255 against a 55/255 negative swing). A blur-based base layer's classic
@@ -1172,7 +1178,9 @@ keep defaults conservative, and judge on the reference rather than on the metric
 
 ### P4 — Separate camera exposure from sun and sky intensity
 
-**Depends on:** P3.
+**Depends on:** P3. **STATUS: DONE 2026-08-16, uncommitted.** The architecture landed with a
+PROVEN-lossless migration; the two genuinely-visible corrections ship behind switches that are OFF,
+so the retune this step's acceptance calls for is a deliberate act rather than a surprise.
 
 **Goal:** make lighting controls physically understandable and stop using directional-light exposure as a camera substitute.
 
@@ -1182,7 +1190,12 @@ keep defaults conservative, and judge on the reference rather than on the metric
 - `sources/rendering/lighting/Skybox.h/.cpp`;
 - environment runtime/editor/JSON migration;
 - `shaders/lighting_cs.hlsl`;
-- every other `exposure` consumer — census at the time of writing: `shaders/skybox.hlsl`, `shaders/glass.hlsl`, `shaders/rt_reflections_cs.hlsl`, `shaders/editor_preview.hlsl`, and all three ocean surface variants (`shaders/ocean_surface.hlsl`, `shaders/ocean_surface_legacy.hlsli`, `shaders/ocean_surface_pre_foam_rewrite.hlsl`). The migration must cover all of them or explicitly gate the stragglers; re-run the census (search shaders for `exposure`) before starting.
+- every other `exposure` consumer — census at the time of writing: `shaders/skybox.hlsl`, `shaders/glass.hlsl`, `shaders/rt_reflections_cs.hlsl`, `shaders/editor_preview.hlsl`, and all three ocean surface variants (`shaders/ocean_surface.hlsl`, `shaders/ocean_surface_legacy.hlsli`). Census RE-RUN 2026-08-16:
+`ocean_surface_pre_foam_rewrite.hlsl` was a dead pre-rewrite backup referenced by nothing and has
+been deleted (recoverable from commit `6322c18`), so the list above is now the whole set. Two more
+C++ owners the original list missed: `OceanRenderable::GetSunDirAmbient/GetSunColorExposure` build
+the ocean's constants from the light directly, and missing them is what made the first migration
+attempt non-lossless. The migration must cover all of them or explicitly gate the stragglers; re-run the census (search shaders for `exposure`) before starting.
 
 **Implement:**
 
@@ -1197,6 +1210,111 @@ keep defaults conservative, and judge on the reference rather than on the metric
 **Interface contract:** doubling sun intensity changes direct solar illumination, not sky/background brightness or camera response.
 
 **Done when:** the canonical level can be balanced with neutral daylight and readable shadows without using a warm global ambient multiplier.
+
+---
+
+#### What shipped, and the measurement that reframed the step
+
+**The step's own premise, measured.** Before writing anything, `--sweep=light.exposure` on
+`wind_test` (auto-exposure on, `overview`):
+
+| `directionalLight.exposure` | median | p02 | p99 |
+|---|---:|---:|---:|
+| 1.0 | 0.2175 | 0.0194 | 0.7232 |
+| 2.0 (the level's own) | 0.2023 | 0.0322 | 0.6777 |
+| 4.0 | 0.2020 | 0.0423 | 0.6140 |
+
+Doubling the sun moves the median by **0.0003**. The metering cancels it completely. What it does
+still move is p02 and p99 — because it scales the sun and the ambient but NOT the sky background,
+the spot/point lights or emissive. So post-P1-P3 that field is not a brightness control at all any
+more: it is a **scene-versus-sky ratio** control wearing a camera's name. That is a sharper argument
+for this step than the one written above, and it is the one to quote.
+
+**The migration is lossless, and the plan's claim that it could not be is wrong.** Every consumer
+has the same algebraic shape — lighting_cs computes `(ambient*lightRgb + SUM brdf*lightRgb*shadow) *
+exposure`, and the ocean, glass and RT paths all light with `sunColor * exposure` — so the multiplier
+moves INTO the colour and out of the trailing multiply for an identical product. `sunIntensity =
+exposure`, colour handed out as `GetEffectiveColor()`, `exposure` retired to 1.0. **`ambient` must
+be left alone**: the fill term is `ambient * lightRgb`, so it picks the factor up through the colour
+already, and scaling it too would square it on every shaded surface.
+
+Proven rather than argued: `--sweep=light.legacySplit:2.0` puts the running scene back into the
+legacy configuration, and against the migrated default it measures **mean |delta| = 0.0016/255,
+0.11% of pixels touched at all** — i.e. the particle jitter floor, which an unrelated two-run
+determinism check independently put at the same level.
+
+**What is NOT lossless, and is therefore off by default:**
+
+- `ambientTintedBySun` (default **true** = legacy). Lighting tinted the whole fill by the sun colour,
+  so at sunset the shaded side of everything went orange, when in reality a shadowed surface is lit
+  by the blue sky it can see and not by the sun it cannot. Unticking it uses `ambientColor`, which
+  defaults to `DirectionalLight::DefaultSkyFillColor` — a daylight sky hue rescaled to the SUN's
+  luminance, so the switch is a pure hue change that cannot be misread as a brightness bug.
+  **Two bugs were shipped here and fixed the same day, both found by the user flipping the boxes:**
+  (1) the three fill fields were parsed only inside the `if (contains("sunIntensity"))` branch, so
+  on every existing level — all of which still carry the legacy field — the checkboxes were never
+  read at all. Only the INTENSITY may branch; the fill fields are orthogonal and are now read
+  unconditionally in both load paths. (2) the colour was originally seeded to the effective sun
+  colour, making the switch a deliberate no-op; that was over-cautious, and a control that does
+  nothing is worse than one that does too much.
+  Measured on `shore_grove`, driven through the real level JSON rather than the setters: the darkest
+  15% of pixels move **B/R 0.089 -> 0.449** while the frame median holds (0.2077 -> 0.2073), mean
+  |delta| 19.1/255. A pure hue change in the shadows, which is exactly the intent. At full blue it
+  is too much for this level — around a third to half of the way reads right; that is a taste call,
+  hence the colour picker. The picker is shown ALWAYS and merely disabled while the tint drives the
+  fill: hiding it until the box was unticked was what made the switch feel dead.
+- `unifiedSkyFill` — **built, then REMOVED the same day, because its premise was wrong.** The claim
+  was that the ocean's sky fill disagreed with the opaque one. It has no sky fill: in both ocean
+  variants the `ambient` value reaches exactly one function, `LitFoamColor`, where it multiplies a
+  hardcoded `kSkyColor`. It lights FOAM and nothing else, and the water surface's "ambient" was a
+  constant baked into the shader. There was nothing for a boolean to reconcile, and it measured at
+  mean |delta| 0.004 for exactly that reason. Deleted rather than kept as a control that lies.
+
+**The hardcoded sky is gone (user request, same session).** `SkyFillRadiance(normal)` samples the
+real cubemap at its blurriest mip as a crude irradiance lookup — the same texture the roughness-1
+reflection already uses, so it costs one sample and no new binding — falling back to the old
+constant only for a black or absent skybox. Applied to **both** ocean variants. Measured on the foam
+pixels themselves, with the shoreline band enabled: B/R 0.905 -> 0.886, luma 189.8 -> 187.6. Small,
+and honestly so: the foam's sky term weighs only `ambient (0.1) + 0.3 * (1 - n.y)` against a
+dominant sun term, and this level's skybox happens to sit close to the constant in both hue and
+magnitude. What changes is that the foam now *tracks* the sky at all — under a night or overcast
+cubemap it used to stay lit by a daylight blue. Giving the water SURFACE real sky lighting is P5.
+
+Three things this cost, worth remembering:
+- **The compiled default is `g_shoreRunup = false`, i.e. the LEGACY ocean** — `ocean_surface_legacy.hlsli`
+  is what ships, despite being documented as a byte-faithful baseline of commit `3e54d5d`. Editing
+  only the modern variant changes nothing on screen. Both are now edited; that file's "verbatim"
+  contract is deliberately broken and the header says so.
+- **`wind_test` ships `shoreLegacyContactFoamStrength = 0.0`** — there is no contact foam at all
+  until it is raised (~0.1). The canonical `overview` and `shore_grove` views contain almost no
+  foam either, so foam measurements taken there measure noise. Use cam `0,9,-128` rot
+  `0.1045,0,0,0.9945`: a shallow beach with the band across the whole frame.
+- I first normalised the sky sample to the old constant's luminance to protect existing tuning, and
+  added a `--ocean-foam-sky-raw` flag to A/B it. Measured difference on foam: ~4/255. Both the
+  normalisation and the flag were deleted. Measure before shipping a knob.
+
+**Files this step needed** (per the user's standing rule):
+`sources/rendering/lighting/DirectionalLight.h/.cpp` (the model + the migration),
+`sources/app/levels/JsonLevel.cpp` and `sources/editor/scene/EnvironmentRuntime.cpp` (both load
+paths, branching on `sunIntensity` presence), `sources/app/scene/SceneRenderer.cpp` (4 constant
+sites: ocean/glass view constants, lighting_cs, and BOTH RT reflection blocks),
+`sources/ocean/OceanRenderable.cpp` (the ocean's own constants — the site that broke the first
+attempt), `sources/app/scene/SceneResourceBootstrapper.h/.cpp` (`ambientRgb` field + handle + write),
+`shaders/lighting_cs.hlsl` (`ambientRgb` in the CB, fill term uses it),
+`sources/editor/ui/InspectorPanel.cpp` and `sources/editor/EditorController.cpp` (controls and
+new-object defaults; the serializer needed nothing, it writes `env.properties` verbatim),
+`sources/app/App.cpp` + `sources/app/scene/Scene.h` (sweep keys, incl. the `light.legacySplit` and
+`light.ambientSkyBlue` measurement probes).
+
+**Level compatibility:** a level carrying only `exposure` is migrated on load; a level carrying
+`sunIntensity` is taken at face value and its `exposure` is ignored. The inspector seeds the Sun
+Intensity row from the legacy value, so the first drag does not make the image jump. No level file
+was rewritten by this step.
+
+**Left for a follow-up:** items 3 and 4 of the list above are delivered as switches rather than as
+the new unconditional behaviour, and the spot/point passes still bypass the sun intensity entirely
+(they always did). Retiring `exposure` from the level JSON altogether is a mechanical follow-up once
+the switches have been signed off.
 
 **Verify:** old-level migration comparison; toggle each control independently; inspect opaque/ocean/glass parity; editor save/reload and undo/redo.
 

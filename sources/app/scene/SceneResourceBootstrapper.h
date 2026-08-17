@@ -22,6 +22,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle sunDir;
     Material::CBFieldHandle ambient;
     Material::CBFieldHandle lightRgb;
+    Material::CBFieldHandle ambientRgb; // P4: the fill's own colour, see DirectionalLight
     Material::CBFieldHandle exposure;
     Material::CBFieldHandle camPos;
     Material::CBFieldHandle camDir;
@@ -228,6 +229,7 @@ struct LightingPassConstants
     float3 sunDir{};
     float3 ambient{};
     float3 lightRgb{};
+    float3 ambientRgb{ 1.0f, 1.0f, 1.0f }; // P4: sun colour by default, see GetEffectiveAmbientColor
     float exposure = 1.0f;
     float3 camPos{};
     float3 camDir{};

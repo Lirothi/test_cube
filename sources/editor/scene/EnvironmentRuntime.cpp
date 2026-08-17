@@ -197,8 +197,21 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         DirectionalLight dl;
         dl.SetDirection(JF3(p, "direction", Math::float3(-1.0f, -1.0f, -1.0f)).Normalized());
         dl.SetColor(enabled ? JF3(p, "color", Math::float3(1.0f, 1.0f, 1.0f)) : Math::float3(0.0f, 0.0f, 0.0f));
-        dl.SetExposure(JF(p, "exposure", 1.0f));
         dl.SetAmbient(enabled ? JF(p, "ambient", 0.05f) : 0.0f);
+        // P4: mirrors JsonLevel exactly -- `sunIntensity` present means the level is converted and
+        // the legacy multiplier is ignored; absent means migrate it losslessly. ONLY the intensity
+        // branches; the fill fields are read unconditionally, because gating them here is what made
+        // the inspector checkboxes inert on every legacy level.
+        if (p.contains("sunIntensity"))
+        {
+            dl.SetSunIntensity(JF(p, "sunIntensity", 1.0f));
+        }
+        else
+        {
+            dl.MigrateLegacyExposure(JF(p, "exposure", 1.0f));
+        }
+        dl.SetAmbientColor(JF3(p, "ambientColor", dl.GetAmbientColor()));
+        dl.SetAmbientTintedBySun(p.value("ambientTintedBySun", true));
         ctx.scene.SetDirectionalLight(dl);
     }
     else if (env.type == "cameraExposure")

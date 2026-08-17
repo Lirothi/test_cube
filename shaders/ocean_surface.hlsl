@@ -203,7 +203,13 @@ struct BrunetonInputs
     float2 slopeVarianceSquared;
 };
 
-static const float3 kSkyColor = float3(0.24f, 0.38f, 0.55f);
+// P4: the foam's sky term used to be the hardcoded constant `float3(0.24, 0.38, 0.55)`, which meant
+// the surf stayed the same shade of blue-grey at noon, at sunset and under any skybox the level
+// happened to load. It is now sampled from the real cubemap -- see SkyFillRadiance below. The
+// constant survives ONLY as the reference magnitude the new path is normalised against, so swapping
+// in the real sky changes the HUE and the response to the environment without changing the overall
+// foam brightness that the shore was tuned at.
+static const float3 kLegacyFoamSkyColor = float3(0.24f, 0.38f, 0.55f);
 static const float kSpecularMinPower = 64.0f;
 static const float kSpecularMaxPower = 512.0f;
 static const float kSkyRoughMaxMip = 5.0f;
@@ -1830,11 +1836,29 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     return data;
 }
 
+// The sky radiance arriving at a surface with this normal, as a crude irradiance lookup: the
+// blurriest mip of the real skybox in the normal's direction. Same cubemap and same mip the
+// roughness-1 reflection already uses, so it costs one extra sample and no new binding.
+//
+// Normalised to the luminance of the old hardcoded constant. That is deliberate: an HDR skybox can
+// sit anywhere on the scale, and feeding its raw magnitude straight in would rescale every foam
+// pixel on every existing level -- a brightness change nobody asked for, on top of the colour change
+// that is the actual point. So the sky decides the HUE and the relative response, and the level's
+// own foam tuning keeps deciding the level.
+float3 SkyFillRadiance(float3 normal)
+{
+    const float3 sky = SkyboxTexture.SampleLevel(LinearClampSampler, normal, kSkyRoughMaxMip).rgb;
+    // A black or absent cubemap falls back to the old constant, so a level without a skybox keeps
+    // lit foam instead of losing its surf entirely.
+    const float lum = dot(sky, float3(0.2126f, 0.7152f, 0.0722f));
+    return (lum > 1e-5f) ? sky : kLegacyFoamSkyColor;
+}
+
 float3 LitFoamColor(const LightingInput li, const FoamData foamData)
 {
     float ndotl = (0.2f + 0.8f * saturate(dot(foamData.normal, -li.mainLight.direction)))
         * li.mainLight.shadowAttenuation;
-    float3 skyAmbient = kSkyColor * (li.ambient + 0.3f * (1.0f - foamData.normal.y));
+    float3 skyAmbient = SkyFillRadiance(foamData.normal) * (li.ambient + 0.3f * (1.0f - foamData.normal.y));
     return foamData.albedo * foamTint.rgb * (ndotl * li.mainLight.color + skyAmbient);
 }
 

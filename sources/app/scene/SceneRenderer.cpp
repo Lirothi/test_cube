@@ -268,8 +268,12 @@ namespace
         if (frame.dirLight)
         {
             const DirectionalLight& dirLight = *frame.dirLight;
+            // P4: the ocean and glass paths compute `sunColor.xyz * sunColor.w`, so handing them
+            // the effective colour with a retired 1.0 multiplier is the same product they had.
+            // The fill reaches only `LitFoamColor` in the ocean shaders and the glass tint -- the
+            // water surface itself has no sky fill at all. See the note in DirectionalLight.h.
             vc.sunDirAmbient = float4(dirLight.GetDirection(), dirLight.GetAmbient());
-            vc.sunColorExposure = float4(dirLight.GetColor(), dirLight.GetExposure());
+            vc.sunColorExposure = float4(dirLight.GetEffectiveColor(), dirLight.GetExposure());
         }
 
         float3 camDir = camera.GetDirection();
@@ -2488,7 +2492,11 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         const float3 camDir = camera.GetDirection();
         constants.sunDir = dirLight.GetDirection();
         constants.ambient = dirLight.GetAmbient();
-        constants.lightRgb = dirLight.GetColor();
+        // P4: the sun intensity rides in the colour. lighting_cs multiplies BOTH its fill term
+        // (`ambient * lightRgb`) and its direct term by this, which is exactly how the legacy
+        // trailing `* exposure` behaved -- hence the migration leaves `ambient` untouched.
+        constants.lightRgb = dirLight.GetEffectiveColor();
+        constants.ambientRgb = dirLight.GetEffectiveAmbientColor();
         constants.exposure = dirLight.GetExposure();
         constants.camPos = camera.GetPosition();
         constants.camDir = camDir;
@@ -2958,7 +2966,7 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         const DirectionalLight& dl = *frame_->dirLight;
         c.sunDirWS = dl.GetDirection();
         c.ambientIntensity = dl.GetAmbient();
-        c.lightRgb = dl.GetColor();
+        c.lightRgb = dl.GetEffectiveColor(); // P4: sun intensity folded in, see lighting_cs
         c.exposure = dl.GetExposure();
         c.depthA = zNear / (zNear - zFar);
         c.depthB = (zNear * zFar) / (zFar - zNear);
@@ -3115,7 +3123,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         const DirectionalLight& dl = *frame_->dirLight;
         c.sunDirWS = dl.GetDirection();
         c.ambientIntensity = dl.GetAmbient();
-        c.lightRgb = dl.GetColor();
+        c.lightRgb = dl.GetEffectiveColor(); // P4: sun intensity folded in, see lighting_cs
         c.exposure = dl.GetExposure();
         c.depthA = zNear / (zNear - zFar);
         c.depthB = (zNear * zFar) / (zFar - zNear);

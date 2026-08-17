@@ -23,6 +23,7 @@ void SceneLightingCBHandles::Populate(Material* material)
     sunDir = material->ComputeCB0FieldHandle("sunDirWS");
     ambient = material->ComputeCB0FieldHandle("ambientIntensity");
     lightRgb = material->ComputeCB0FieldHandle("lightRgb");
+    ambientRgb = material->ComputeCB0FieldHandle("ambientRgb");
     exposure = material->ComputeCB0FieldHandle("exposure");
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     camDir = material->ComputeCB0FieldHandle("camDirWS");
@@ -632,6 +633,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.sunDir, data.sunDir, dest);
     matLighting_->UpdateCBField(handles.ambient, data.ambient, dest);
     matLighting_->UpdateCBField(handles.lightRgb, data.lightRgb, dest);
+    matLighting_->UpdateCBField(handles.ambientRgb, data.ambientRgb, dest);
     matLighting_->UpdateCBField(handles.exposure, data.exposure, dest);
     matLighting_->UpdateCBField(handles.camPos, data.camPos, dest);
     matLighting_->UpdateCBField(handles.camDir, data.camDir, dest);

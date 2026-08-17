@@ -1580,6 +1580,8 @@ Math::float4 OceanRenderable::GetSunDirAmbient() const
     {
         const auto& light = scene_->GetDirectionalLight();
         dir = light.GetDirection();
+        // P4: this reaches ONLY `LitFoamColor` in ocean_surface.hlsl -- it is a foam sky term, not
+        // a fill for the water surface. See the note in DirectionalLight.h.
         ambient = light.GetAmbient();
     }
     return Math::float4(dir.x, dir.y, dir.z, ambient);
@@ -1592,7 +1594,9 @@ Math::float4 OceanRenderable::GetSunColorExposure() const
     if (scene_)
     {
         const auto& light = scene_->GetDirectionalLight();
-        color = light.GetColor();
+        // P4: the shader computes `xyz * w`, so the sun intensity riding in the colour with a
+        // retired 1.0 multiplier is the same product the legacy pair produced.
+        color = light.GetEffectiveColor();
         exposure = light.GetExposure();
     }
     return Math::float4(color.x, color.y, color.z, exposure);

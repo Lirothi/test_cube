@@ -49,3 +49,20 @@ void DirectionalLight::SetAmbient(float ambient)
     ambient_ = ambient;
 }
 
+void DirectionalLight::MigrateLegacyExposure(float legacyExposure)
+{
+    // Fold the multiplier into the intensity. Every shader that lit with `sunColor * exposure` now
+    // lights with `sunColor * sunIntensity` for an identical product, and the opaque fill term
+    // (`ambient * lightRgb`) picks the factor up through the colour -- so `ambient_` is left alone
+    // on purpose. Scaling it here too would square the factor on shaded surfaces.
+    sunIntensity_ = legacyExposure;
+
+    // Seed the fill colour with a daylight sky at the sun's own luminance. Seeding the SUN colour
+    // instead (the first attempt) made unticking the tint a no-op, which is a switch that does
+    // nothing -- and a control that does nothing is worse than one that does too much. Matching
+    // luminance keeps it a pure hue change, so it cannot be misread as a brightness bug.
+    ambientColor_ = DefaultSkyFillColor(GetEffectiveColor());
+
+    // Retired. Left at 1.0 so a consumer that still multiplies by it is a no-op, not a regression.
+    exposure_ = 1.0f;
+}

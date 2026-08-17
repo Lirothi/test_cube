@@ -1138,9 +1138,6 @@
     <None Include="shaders\ocean_surface_legacy.hlsli">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\ocean_surface_pre_foam_rewrite.hlsl">
-      <Filter>shaders</Filter>
-    </None>
     <None Include="shaders\ocean_wetness_update_cs.hlsl">
       <Filter>shaders</Filter>
     </None>

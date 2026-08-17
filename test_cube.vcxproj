@@ -574,7 +574,6 @@
     <None Include="shaders\ocean_reflection_cs.hlsl" />
     <None Include="shaders\ocean_surface.hlsl" />
     <None Include="shaders\ocean_surface_legacy.hlsli" />
-    <None Include="shaders\ocean_surface_pre_foam_rewrite.hlsl" />
     <None Include="shaders\ocean_wetness_update_cs.hlsl" />
     <None Include="shaders\ocean_shore_foam_dissipation.hlsli" />
     <None Include="shaders\ocean_time_spectrum.hlsl" />

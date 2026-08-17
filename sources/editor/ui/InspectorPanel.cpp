@@ -21,6 +21,7 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
+#include "rendering/lighting/DirectionalLight.h" // P4: DefaultSkyFillColor, shared with the runtime
 #include "editor/commands/SetMeshAssetCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
@@ -563,8 +564,64 @@ namespace
         else if (env.type == "directionalLight")
         {
             colorEdit();
-            dragF("Exposure", "exposure", 1.0f, 0.05f, 0.0f, 100.0f);
+            // P4. The default handed to the drag is the level's LEGACY `exposure`, which is exactly
+            // the value the migration folded in -- so the row opens showing what is on screen, and
+            // the first drag writes `sunIntensity` without the image jumping. Once that key exists
+            // the legacy field is ignored (JsonLevel and EnvironmentRuntime both branch on it).
+            const float legacyExposure = JsonFloat(p, "exposure", 1.0f);
+            dragF("Sun Intensity", "sunIntensity", legacyExposure, 0.05f, 0.0f, 100.0f);
+            InspectorHelp(
+                "How bright the sun is. This is NOT a camera control -- the camera lives on the "
+                "Camera Exposure object and meters the frame by itself.\n\n"
+                "It replaces the old `exposure` field, which multiplied the sun AND the ambient "
+                "while leaving the sky background, spot/point lights and emissive alone. With auto "
+                "exposure on, that field stopped changing brightness at all (the metering cancels "
+                "it) and only changed the RATIO between lit geometry and sky -- a confusing thing "
+                "for a control with that name.");
             dragF("Ambient", "ambient", 0.05f, 0.005f, 0.0f, 10.0f);
+            InspectorHelp("Sky fill intensity -- the light everything gets from the sky rather than "
+                          "from the sun. Independent of Sun Intensity.");
+
+            checkB("Tint Ambient By Sun", "ambientTintedBySun", true);
+            InspectorHelp(
+                "Legacy behaviour, ON by default because turning it off changes the image.\n\n"
+                "Lighting computed the fill as `ambient * sunColor`, so at sunset the shaded side "
+                "of everything went ORANGE -- but in reality shadowed surfaces are lit by the blue "
+                "sky, not by the sun they cannot see. Untick this to use Ambient Color instead, "
+                "which is the physically sensible fill and a deliberate retune.");
+            {
+                // Shown ALWAYS, not only when the tint is off: hiding it meant unticking the box
+                // revealed a control the user had to go looking for, so the switch read as dead.
+                // Disabled while the tint drives the fill, so the relationship is visible instead.
+                const bool tinted = p.value("ambientTintedBySun", true);
+                const Math::float3 sunCol = JsonFloat3(p, "color", Math::float3(1.0f, 1.0f, 1.0f));
+                const float sunI = JsonFloat(p, "sunIntensity", legacyExposure);
+                const Math::float3 sunEff(sunCol.x * sunI, sunCol.y * sunI, sunCol.z * sunI);
+                // Same default the runtime seeds, via the shared helper, so the row and the image
+                // cannot disagree.
+                const Math::float3 def = DirectionalLight::DefaultSkyFillColor(sunEff);
+                const Math::float3 ac = tinted ? sunEff : JsonFloat3(p, "ambientColor", def);
+
+                const nlohmann::json beforeItem = p;
+                float acv[3] = { ac.x, ac.y, ac.z };
+                ImGui::BeginDisabled(tinted);
+                const bool changed = ImGui::ColorEdit3("Ambient Color", acv);
+                ImGui::EndDisabled();
+                if (changed && !tinted) { p["ambientColor"] = { acv[0], acv[1], acv[2] }; }
+                trackContinuousEdit(beforeItem, changed && !tinted);
+                InspectorHelp("The fill's own colour, used when the tint above is OFF. It starts at "
+                              "a daylight sky blue matched to the sun's LUMINANCE, so switching the "
+                              "tint off changes hue and not brightness. Full blue is usually too "
+                              "much on a warm scene -- drag it back toward the sun's hue to taste.");
+            }
+
+            if (p.contains("sunIntensity"))
+            {
+                ImGui::TextDisabled("legacy 'exposure' present but ignored");
+                InspectorHelp("This object carries the new Sun Intensity, so the old whole-scene "
+                              "`exposure` field no longer does anything. Delete it from the level "
+                              "JSON whenever you next hand-edit the file.");
+            }
 
             Math::float3 rayDirection = EditorLightDirection::NormalizedRay(
                 JsonFloat3(p, "direction", Math::float3(-1.0f, -1.0f, -1.0f)));
