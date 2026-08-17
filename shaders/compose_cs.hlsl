@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -30,6 +30,8 @@ Texture2D<uint> ShoreWetness : register(t8);
 TextureCube SkySpecular : register(t9);
 TextureCube SkyIrradiance : register(t10);
 Texture2D BrdfLut : register(t11);
+// P6B item 7: dynamic screen-space AO at RENDER resolution, gated by `gtaoEnabled`.
+Texture2D GtaoTex : register(t12);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -47,6 +49,9 @@ cbuffer PerFrame : register(b0)
     // image is unchanged. > 0 = the real mip count of the prefiltered cube, which is what replaces
     // the guessed `kSkyRoughMaxMip` below.
     uint skySpecMipCount;
+    // P6B items 6-7: the same pair lighting_cs takes. See CombinedAo there for the rule.
+    uint gtaoEnabled;
+    float gtaoStrength;
     float2 screenSize;
     float2 invScreenSize;
     float4 shoreWetnessWindow;     // xy: centre, z: 1 / half extent, w: darkening
@@ -197,6 +202,23 @@ float SampleDistantShoreWetness(float3 worldPosition)
     return saturate((1.0f - normalizedHeight) / max(1.0f - fadeStart, kEps));
 }
 
+// P6B item 6 -- MUST match lighting_cs::CombinedAo. Product of the material's own cavity term
+// and the screen-space estimate (UE's DiffuseIndirectComposite.usf:371), scaled by
+// `gtaoStrength` (their AmbientOcclusionStaticFraction). Bounded, monotonic, identity at 1.
+float CombinedAo(float materialAo, float2 uv)
+{
+    if (gtaoEnabled == 0u)
+    {
+        return materialAo;
+    }
+    // `strength` scales the DYNAMIC term only. UE's AmbientOcclusionStaticFraction damps the whole
+    // product, but here the material term already shipped in F9 and is not this step's to switch
+    // off: at strength 0 this must be an EXACT no-op against the pre-P6B build, and the sweep
+    // level's AO row is what proves it (damping the product moved it by 177/255).
+    const float dynamicAo = saturate(GtaoTex.SampleLevel(gSmpPoint, uv, 0).r);
+    return saturate(materialAo * lerp(1.0f, dynamicAo, saturate(gtaoStrength)));
+}
+
 [numthreads(8,8,1)]
 [RootSignature(COMPOSE_CS_RS)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
@@ -271,7 +293,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // traced the geometry that AO is a stand-in for -- so darkening it would double-count the
         // occlusion. The plan is explicit that widening this to all indirect methods needs its own
         // A/B, and this is the conservative half.
-        skyCol *= IblSpecularOcclusion(cosT, materialAo, rough);
+        skyCol *= IblSpecularOcclusion(cosT, CombinedAo(materialAo, uv), rough);
 
         // Skybox as fallback: (ssrColor*α + sky*(1-α)). Apply the material
         // control after the source/fallback blend so None, SkyOnly, SSR and RT

@@ -467,6 +467,24 @@ int WINAPI WinMain(
                 g_shotCount = static_cast<int>(g_sweepValues.size());
             }
         }
+        // "--set=<name>:<value>[;<name>:<value>...]": hold settings at fixed values for the run,
+        // from the same name table --sweep uses. See App.h.
+        if (const char* flag = std::strstr(lpCmdLine, "--set=")) {
+            const char* p = flag + std::strlen("--set=");
+            const char* end = p;
+            while (*end && *end != ' ' && *end != '\t') { ++end; }
+            while (p < end) {
+                const char* semi = std::strchr(p, ';');
+                const char* itemEnd = (semi && semi < end) ? semi : end;
+                const char* colon = std::strchr(p, ':');
+                if (colon && colon < itemEnd) {
+                    g_fixedSettings.emplace_back(std::string(p, colon),
+                                                 static_cast<float>(std::atof(colon + 1)));
+                }
+                if (itemEnd >= end) { break; }
+                p = itemEnd + 1;
+            }
+        }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-extent=")) {
             vsm::g_clipmapBaseExtent = (float)std::atof(flag + std::strlen("--vsm-extent="));
         }

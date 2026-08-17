@@ -50,6 +50,10 @@ inline constexpr DXGI_FORMAT kObjectIdFormat         = DXGI_FORMAT_R32_UINT;
 inline constexpr DXGI_FORMAT kLightTargetFormat      = DXGI_FORMAT_R16G16B16A16_FLOAT;
 inline constexpr DXGI_FORMAT kSceneColorFormat       = DXGI_FORMAT_R16G16B16A16_FLOAT;
 inline constexpr DXGI_FORMAT kReflectionFormat              = DXGI_FORMAT_R8G8B8A8_UNORM;
+// P6B ambient occlusion. One channel: AO is a visibility fraction in [0,1], and 8 bits of it sits
+// below the noise floor of any screen-space estimate -- the denoiser is what decides the quality
+// here, not the storage.
+inline constexpr DXGI_FORMAT kGtaoFormat                    = DXGI_FORMAT_R8_UNORM;
 inline constexpr DXGI_FORMAT kReflectionScratchFormat          = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 } // namespace render

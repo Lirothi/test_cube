@@ -716,6 +716,9 @@
     <ClInclude Include="sources/app/scene/SceneFrameData.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/scene/GtaoSettingsJson.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/scene/SceneRenderConfig.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
@@ -1193,6 +1196,18 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\ibl_common.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\gtao_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\gtao_filter_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\gtao_temporal_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\gtao_upsample_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\exposure_histogram_cs.hlsl">

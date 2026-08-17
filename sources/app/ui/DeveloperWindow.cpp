@@ -117,6 +117,21 @@ namespace
 
 }
 
+// Hover text for a developer-window control. Kept deliberately blunt about GPU cost: several of
+// these knobs are linear in frame time and nothing about the label says so.
+static void DevHelp(const char* text)
+{
+    if (!ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        return;
+    }
+    ImGui::BeginTooltip();
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+}
+
 void DeveloperWindow::RefreshLevelList()
 {
     availableLevelPaths_.clear();
@@ -283,6 +298,67 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     static_cast<double>(render::g_renderStats.lastPrimitives) / 1.0e6);
 
                 ImGui::Checkbox("Trace capture window", &traceWindowOpen_);
+
+                // P6B. The chain produces a render-resolution AO target that NOTHING samples yet
+                // (items 6-7 are the consumption step), so these controls change the debug view and
+                // the GPU cost and nothing else. That is stated on screen rather than left for the
+                // user to discover: a control whose effect is invisible reads as a broken control.
+                // P6B: edits go to the SCENE copy, because these are LEVEL settings (saved with
+                // the level like exposure and the colour pipeline). `settings.gtao` is only the
+                // per-frame transport and is overwritten from the scene every push.
+                GtaoSettings& gtao = scene.GtaoRef();
+                ImGui::SeparatorText("Ambient occlusion (GTAO)");
+                ImGui::Checkbox("GTAO enabled", &gtao.enabled);
+                DevHelp("Ground-truth screen-space ambient occlusion. Whole chain ~0.12 ms at the defaults (2 directions x 6 steps, half render resolution). These are LEVEL settings - save them by adding the \"Ambient Occlusion (GTAO)\" environment object in the editor.");
+                ImGui::BeginDisabled(!gtao.enabled);
+                ImGui::Checkbox("Denoise", &gtao.denoise);
+                DevHelp("Bilateral 5x5 across depth and normal. ~0.017 ms. Removes ~40% of the raw noise.");
+                ImGui::SameLine();
+                ImGui::Checkbox("Temporal", &gtao.temporal);
+                DevHelp("Accumulates over frames - what makes a 2x6-tap estimate usable. ~0.012 ms plus one extra half-res target.");
+                // The radius is in WORLD units, but it is clamped to at least `numSteps` pixels, so
+                // below ~1 m it stops having any authority at distance. See the plan's P6B section.
+                ImGui::SliderFloat("AO world radius", &gtao.worldRadius, 0.05f, 8.0f, "%.2f m");
+                DevHelp("Occlusion reach in METRES, so contacts do not breathe as the camera moves. FREE in GPU cost. Loses authority below ~1 m: the radius is floored at Steps pixels, so at distance it stops being a world radius.");
+                ImGui::SliderFloat("AO thickness", &gtao.thickness, 0.0f, 1.0f, "%.2f");
+                DevHelp("1 = occluders are fully solid behind their silhouette, so foliage casts a slab behind every leaf. UE equivalent works out to 0.75. FREE.");
+                // OFF matches UE (r.GTAO.UseNormals = 0). ON feeds the integral the normal-mapped
+                // normal while the horizon search still walks bare depth, which reads as occlusion
+                // wherever the two disagree — kept only so the difference can be seen.
+                ImGui::Checkbox("AO normal from G-buffer (not UE default)", &gtao.useGBufferNormal);
+                DevHelp("OFF matches UE. The horizon search walks DEPTH, so the integral needs the geometric normal; ON feeds it the normal-mapped one and reads as occlusion wherever they disagree (measured AO 0.35 on a fully open dune). Comparison only.");
+                ImGui::SliderFloat("AO intensity", &gtao.intensity, 0.1f, 4.0f, "%.2f");
+                DevHelp("Exponent on the occlusion term - above 1 deepens, below 1 lifts. FREE.");
+                // UE's AmbientOcclusionStaticFraction. 0 is an exact no-op, so this is the A/B
+                // knob for "how much does the scene actually want this".
+                ImGui::SliderFloat("AO strength (applied)", &gtao.strength, 0.0f, 1.0f, "%.2f");
+                DevHelp("How much of the DYNAMIC occlusion reaches the image. 0 is an exact no-op - material AO still applies. FREE: the pass runs either way, so this is the A/B knob, not the off switch.");
+                {
+                    int angles = static_cast<int>(gtao.numAngles);
+                    if (ImGui::SliderInt("AO directions", &angles, 1, 8))
+                    {
+                        gtao.numAngles = static_cast<uint32_t>(std::max(1, angles));
+                    }
+                    DevHelp("Screen directions per pixel. Cost is LINEAR - doubling this roughly doubles the raw pass. 2 is the UE default and leans on the temporal stage.");
+                    int steps = static_cast<int>(gtao.numSteps);
+                    if (ImGui::SliderInt("AO steps", &steps, 2, 16))
+                    {
+                        gtao.numSteps = static_cast<uint32_t>(std::max(1, steps));
+                    }
+                    DevHelp("Taps along each direction. Also LINEAR in cost, and it doubles as the floor on the pixel radius, so raising it widens the reach at distance too.");
+                }
+                ImGui::BeginDisabled(!gtao.temporal);
+                ImGui::SliderFloat("AO temporal blend", &gtao.temporalBlendWeight, 0.02f, 1.0f, "%.3f");
+                DevHelp("Weight of the CURRENT frame. 0.1 (UE default) is roughly a 10-frame history. Higher = more responsive, noisier. FREE.");
+                // How far history may deviate from this frame before it is clamped. Below ~0.2 the
+                // history stops accumulating on this engine (DLSS jitter widens the per-frame
+                // spread past the window); above ~0.5 the clamp stops protecting against ghosting.
+                ImGui::SliderFloat("AO temporal clamp", &gtao.temporalClampRange, 0.05f, 1.0f, "%.2f");
+                DevHelp("How far history may deviate before being clamped back, with a still camera. Below ~0.2 the history stops accumulating here (DLSS jitter widens the spread past the window); above ~0.5 the clamp stops guarding against ghosting. FREE.");
+                ImGui::EndDisabled();
+                ImGui::TextDisabled("Lighting does not consume this yet (P6B items 6-7).");
+                ImGui::TextDisabled("To see it: Debug tab -> Fullscreen debug texture -> GTAO.");
+                ImGui::EndDisabled();
 
                 ImGui::Separator();
 
@@ -1135,6 +1211,23 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     renderer.SetWireframeMode(wireframe);
                 }
                 bool textureViewerOpen = textureDebugViewer_.IsOpen();
+                // Render-resolution targets are re-sampled at a different sub-pixel offset every
+                // frame, so a half-res intermediate (GTAO, SSR) shimmers while you stare at it.
+                // This holds the grid still. DLSS needs that jitter, so its own output loses its
+                // anti-aliasing while this is on — hence the warning rather than a silent toggle.
+                {
+                    bool jitterPaused = renderer.IsJitterPaused();
+                    ImGui::BeginDisabled(!renderer.IsDlssActive());
+                    if (ImGui::Checkbox("Pause DLSS jitter (steady preview)", &jitterPaused))
+                    {
+                        renderer.SetJitterPaused(jitterPaused);
+                    }
+                    ImGui::EndDisabled();
+                    if (jitterPaused && renderer.IsDlssActive())
+                    {
+                        ImGui::TextDisabled("  DLSS is reconstructing without jitter: expect aliasing.");
+                    }
+                }
                 if (ImGui::Checkbox("Texture inspector [F4]", &textureViewerOpen))
                 {
                     textureDebugViewer_.SetOpen(textureViewerOpen);
@@ -1152,6 +1245,14 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 #endif
                 ImGui::Checkbox("Fullscreen debug texture", &settings.debugTexMode);
+                ImGui::BeginDisabled(!settings.debugTexMode);
+                // Mirrors SceneRenderer::PickDebugTexTarget — keep the order identical.
+                static const char* kDebugTexLabels[] = {
+                    "Cascade shadow atlas", "GTAO raw", "GTAO denoised", "GTAO temporal",
+                    "GTAO upsampled" };
+                ImGui::Combo("Debug texture", &settings.debugTexTarget, kDebugTexLabels,
+                             IM_ARRAYSIZE(kDebugTexLabels));
+                ImGui::EndDisabled();
                 ImGui::Checkbox("Profiler overlay", &settings.showProfiler);
 #if WITH_EDITOR
                 ImGui::Checkbox("GPU instancing [F12]", &render::g_instancingEnabled);

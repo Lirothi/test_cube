@@ -1,4 +1,5 @@
 #include "editor/EditorController.h"
+#include "app/scene/GtaoSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -389,6 +390,18 @@ namespace
         color.type = "colorPipeline";
         color.properties = render::PhotographicSettingsJson::ToJson(defaults);
         return color;
+    }
+
+    // P6B. Seeded from the SCENE's current values, not from struct defaults: the dev window edits
+    // the scene copy live, so "add the object" should capture what is on screen rather than snapping
+    // the level back to neutral.
+    EditorObject BuildGtaoObject(const Scene& scene)
+    {
+        EditorObject gtao;
+        gtao.name = "Ambient Occlusion (GTAO)";
+        gtao.type = "gtao";
+        gtao.properties = GtaoSettingsJson::ToJson(scene.GetGtao());
+        return gtao;
     }
 
     EditorObject BuildFreeCameraStartObject(const Scene& scene)
@@ -1165,6 +1178,7 @@ namespace
             { "lightsExpanded", state.lightsGroupOpen },
             { "camerasExpanded", state.camerasGroupOpen },
             { "environmentExpanded", state.environmentGroupOpen },
+            { "postProcessExpanded", state.postProcessGroupOpen },
             { "otherExpanded", state.otherGroupOpen },
             { "trackSelection", state.trackSelection }
         };
@@ -1182,6 +1196,7 @@ namespace
         ReadBoolMember(value, "lightsExpanded", state.lightsGroupOpen);
         ReadBoolMember(value, "camerasExpanded", state.camerasGroupOpen);
         ReadBoolMember(value, "environmentExpanded", state.environmentGroupOpen);
+        ReadBoolMember(value, "postProcessExpanded", state.postProcessGroupOpen);
         ReadBoolMember(value, "otherExpanded", state.otherGroupOpen);
         ReadBoolMember(value, "trackSelection", state.trackSelection);
         panel.SetPersistentState(state);
@@ -1366,6 +1381,7 @@ namespace
             a.lightsGroupOpen == b.lightsGroupOpen &&
             a.camerasGroupOpen == b.camerasGroupOpen &&
             a.environmentGroupOpen == b.environmentGroupOpen &&
+            a.postProcessGroupOpen == b.postProcessGroupOpen &&
             a.otherGroupOpen == b.otherGroupOpen &&
             a.trackSelection == b.trackSelection;
     }
@@ -3369,6 +3385,13 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 {
                     commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                         BuildCameraExposureObject()));
+                }
+                const bool hasGtao = HasEnvironmentObject(document_, "gtao");
+                if (MenuItemWithDisabledReason("Ambient Occlusion (GTAO)", !hasGtao,
+                        "This level already has a GTAO block."))
+                {
+                    commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                        BuildGtaoObject(scene)));
                 }
                 const bool hasColorPipeline = HasEnvironmentObject(document_, "colorPipeline");
                 if (MenuItemWithDisabledReason("Color Pipeline", !hasColorPipeline,

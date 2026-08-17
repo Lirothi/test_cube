@@ -150,6 +150,14 @@ public:
 
     const DeferredTargets& GetDeferredForFrame() const { return rtManager_.Deferred(currentFrameIndex_); }
 
+    // P6B: the set the PREVIOUS frame rendered into. The frame index cycles 0..kFrameCount-1 in
+    // order, so this is genuinely frame N-1 and not "some earlier frame" — which is what a temporal
+    // history has to be. Only the GTAO history is read this way; everything else in a Deferred set
+    // is written and consumed inside one frame.
+    const DeferredTargets& GetDeferredForPrevFrame() const {
+        return rtManager_.Deferred((currentFrameIndex_ + render::kFrameCount - 1u) % render::kFrameCount);
+    }
+
     // Step 24c: full-res (Legacy) vs 1x1 (VSM) legacy spot/point shadow atlases — the shadow-mode
     // reconcile calls this at GPU idle so only the active mode's shadow memory is resident.
     void SetLocalShadowResidency(bool full) { if (GetDevice()) { rtManager_.SetLocalShadowResidency(GetDevice(), Declarations(), full); } }
@@ -448,6 +456,10 @@ public:
     void UpdateDlssCameraData(const Camera& camera);
     bool EvaluateDLSS(ID3D12GraphicsCommandList* cl);
     bool IsDlssActive() const;
+    // Debug: freeze the sub-pixel jitter so render-resolution targets stop shimmering in the
+    // texture inspector. See DlssHandler::SetJitterPaused for what it costs.
+    void SetJitterPaused(bool paused);
+    bool IsJitterPaused() const;
     bool IsDlssAvailable() const;
     void SetDlssActive(bool active);
     void SetDlssMode(sl::DLSSMode mode);

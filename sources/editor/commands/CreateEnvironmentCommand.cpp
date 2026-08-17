@@ -21,7 +21,8 @@ namespace
             object.type == "skybox" ||
             object.type == "camera" ||
             object.type == "cameraExposure" || // P1
-            object.type == "colorPipeline";    // P3C
+            object.type == "colorPipeline" ||  // P3C
+            object.type == "gtao";             // P6B
     }
 
     bool DocumentHasOtherOfType(const EditorSceneDocument& document, const EditorObject& object)

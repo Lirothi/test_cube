@@ -28,7 +28,11 @@ struct ResourceStateDecl {
     ID3D12Resource* resource = nullptr;   // null entries are skipped
     D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
 };
-using ResourceStateDeclList = tc::inl_vector<ResourceStateDecl, 10>;
+// Capacity 10 was exactly the VSM-mode lighting pass's declaration count, so P6B item 7 adding
+// ONE more (the AO target it now samples) overflowed it. inl_vector only ASSERTS on overflow,
+// which means Debug aborts and RELEASE SILENTLY CORRUPTS -- the Release build looked fine and
+// was writing past the inline storage. Sized with headroom rather than to the current maximum.
+using ResourceStateDeclList = tc::inl_vector<ResourceStateDecl, 16>;
 
 // --- Barrier plan, Part A step A.1s (see docs/enhanced_barriers_migration_plan.md) ---
 //

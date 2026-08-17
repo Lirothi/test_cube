@@ -31,6 +31,10 @@ public:
 #endif
 
     const SceneRenderSettings& Settings() const { return settings_; }
+    // The app layer OWNS these and re-pushes them into the Scene every Tick, so anything that
+    // wants a live change (the --sweep harness, the developer window) has to write HERE.
+    // Writing Scene::RenderSettingsRef would survive exactly one frame.
+    SceneRenderSettings& SettingsRef() { return settings_; }
 
 private:
     void ScheduleHudBuild(Renderer& renderer, const Scene& scene);

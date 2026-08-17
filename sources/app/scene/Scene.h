@@ -128,7 +128,20 @@ public:
 
     // Render/debug toggles are owned by the app layer (AppController) and pushed
     // here each frame; PrepareViews snapshots them into SceneFrameData.
-    void SetRenderSettings(const SceneRenderSettings& settings) { renderSettings_ = settings; }
+    // P6B: the AO settings belong to the LEVEL, like cameraExposure and colorPipeline, not to the
+    // app's runtime toggles — they describe how this scene should look, and a level has to be able
+    // to save them. AppController still owns the rest of SceneRenderSettings and re-pushes it every
+    // Tick, so `gtao` is deliberately overwritten from here on the way in: the app's copy is a
+    // transport, this is the source of truth.
+    const GtaoSettings& GetGtao() const { return gtao_; }
+    void SetGtao(const GtaoSettings& s) { gtao_ = s; }
+    GtaoSettings& GtaoRef() { return gtao_; }
+
+    void SetRenderSettings(const SceneRenderSettings& settings)
+    {
+        renderSettings_ = settings;
+        renderSettings_.gtao = gtao_;
+    }
     const SceneRenderSettings& GetRenderSettings() const { return renderSettings_; }
 
     const SceneFrameData& FrameData() const { return frameData_; }
@@ -215,6 +228,7 @@ private:
     DirectionalLight dirLight_;
     render::CameraExposureSettings cameraExposure_{}; // P1, dormant; see PhotographicSettings.h
     render::ColorPipelineSettings colorPipeline_{};   // P3; see PhotographicSettings.h
+    GtaoSettings gtao_{};                             // P6B; level-scoped, see GetGtao
 
     std::unique_ptr<Skybox> skyBox_;
 };

@@ -72,6 +72,13 @@ extern int g_bootDlssMode;
 extern std::string g_sweepSetting;
 extern std::vector<float> g_sweepValues;
 
+// "--set=<name>:<value>[;<name>:<value>...]": pin settings for the whole run, using the SAME name
+// table --sweep uses. --sweep varies exactly one setting; anything else a measurement needs held at
+// a non-default value had no way in at all, so an A/B that needed two switches (a feature on AND
+// the debug view that shows it) could only be done by editing defaults and rebuilding. Applied once,
+// after the first level is up, and before the first shot's settle delay.
+extern std::vector<std::pair<std::string, float>> g_fixedSettings;
+
 // "--no-hud": build an EMPTY HUD text buffer. The FPS/MS readout is composited into the backbuffer
 // that "--shot" reads back, so it differs between two runs of the same frozen frame — which would
 // make every "no intentional image delta" check downstream diff the frame counter instead of the

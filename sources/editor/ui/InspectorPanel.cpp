@@ -1,4 +1,5 @@
 #include "editor/ui/InspectorPanel.h"
+#include "app/scene/GtaoSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -411,6 +412,18 @@ namespace
         nlohmann::json& propertiesBeforeEdit)
     {
         nlohmann::json& p = env.properties;
+
+        // Cap the width of every control in this inspector. ImGui defaults to roughly 65% of the
+        // panel, which on a wide docked Inspector drags each slider halfway across the screen and
+        // pushes its label out of eyeshot. A fixed cap keeps label and value together; the panel can
+        // still be narrower, hence the min().
+        const float controlWidth = std::min(220.0f, std::max(120.0f, ImGui::GetContentRegionAvail().x * 0.5f));
+        ImGui::PushItemWidth(controlWidth);
+        struct ItemWidthScope
+        {
+            ~ItemWidthScope() { ImGui::PopItemWidth(); }
+        } itemWidthScope;
+
         const std::string historyLabel =
             env.type == "pointLight" ? "Edit Point Light" :
             env.type == "spotLight" ? "Edit Spot Light" :
@@ -421,6 +434,7 @@ namespace
             env.type == "wind" ? "Edit Wind" :
             env.type == "cameraExposure" ? "Edit Camera Exposure" :
             env.type == "colorPipeline" ? "Edit Color Pipeline" :
+            env.type == "gtao" ? "Edit Ambient Occlusion" :
             "Edit Environment";
 
         const auto executeChange = [&](nlohmann::json after, const std::string& label)
@@ -700,17 +714,35 @@ namespace
             const bool automatic = p.value("autoExposure", true);
             if (automatic)
             {
+                ImGui::SeparatorText("Target");
                 dragF("Compensation (EV)", "compensationEv", 0.0f, 0.05f, -8.0f, 8.0f, "%.2f");
+                InspectorHelp("Offsets whatever the meter decides. This is the artistic knob - "
+                              "negative darkens the whole image, positive lifts it.");
+                ImGui::SeparatorText("Range (clamps on the metered result)");
                 dragF("Min EV100", "minEv100", -6.0f, 0.1f, -16.0f, 20.0f, "%.2f");
                 dragF("Max EV100", "maxEv100", 16.0f, 0.1f, -16.0f, 20.0f, "%.2f");
+                ImGui::SeparatorText("Metering (which pixels set the exposure)");
                 dragF("Low Percentile", "lowPercentile", 0.15f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("The histogram window the meter averages between. Widening it makes "
+                              "exposure react to more of the frame; narrowing it makes the meter "
+                              "pickier and steadier.");
                 dragF("High Percentile", "highPercentile", 0.80f, 0.005f, 0.0f, 1.0f, "%.3f");
+                ImGui::SeparatorText("Weight mask (centre-weighted metering)");
                 dragF("Meter Mask Strength", "meterMaskStrength", 0.7f, 0.01f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How strongly the frame edges are discounted. 0 meters the whole "
+                              "frame evenly, which lets a bright sky at the top drag the whole "
+                              "image dark.");
                 dragF("Meter Mask Inner", "meterMaskInnerRadius", 0.35f, 0.01f, 0.0f, 2.0f, "%.3f");
                 dragF("Meter Mask Outer", "meterMaskOuterRadius", 1.0f, 0.01f, 0.0f, 2.0f, "%.3f");
                 dragF("Meter Mask Sky Bias", "meterMaskSkyBias", 0.6f, 0.01f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("Extra discount applied to the upper part of the frame, on top of the "
+                              "radial mask. This is the sky-specific version of the same problem.");
+                ImGui::SeparatorText("Adaptation (how fast it moves)");
                 dragF("Speed Up (stops/s)", "speedUp", 3.0f, 0.05f, 0.0f, 20.0f, "%.2f");
+                InspectorHelp("Rate towards a BRIGHTER target (stepping into sun). Faster than "
+                              "the down rate on purpose - that asymmetry is how a real eye behaves.");
                 dragF("Speed Down (stops/s)", "speedDown", 1.0f, 0.05f, 0.0f, 20.0f, "%.2f");
+                InspectorHelp("Rate towards a DARKER target (stepping into shade).");
                 dragF("Ease-in Distance", "adaptationStartDistance", 1.5f, 0.05f, 0.05f, 20.0f, "%.2f");
                 dragF("Black Bucket Influence", "blackBucketInfluence", 1.0f, 0.01f, 0.0f, 1.0f, "%.3f");
             }
@@ -859,6 +891,117 @@ namespace
                     ImGui::TextDisabled("histogram appears once metering has run");
                 }
             }
+        }
+        else if (env.type == "gtao")
+        {
+            // P6B. Every tooltip states the PERFORMANCE consequence as well as the look one, because
+            // three of these knobs are linear in GPU cost and that is not guessable from the name.
+            {
+                const nlohmann::json beforeItem = p;
+                bool gtaoEnabled = p.value("enabled", false);
+                const bool changed = ImGui::Checkbox("Enabled", &gtaoEnabled);
+                if (changed) { p["enabled"] = gtaoEnabled; }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Ground-truth screen-space ambient occlusion. The whole chain costs about "
+                          "0.12 ms at the defaults (2 directions x 6 steps, half render resolution). "
+                          "Off schedules no pass at all, rather than a pass that writes 1.");
+
+            ImGui::SeparatorText("Look");
+            dragF("Strength", "strength", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("How much of the DYNAMIC occlusion reaches the image. 0 is an exact no-op: "
+                          "material AO from the G-buffer still applies, so this cannot switch off "
+                          "what F9 already did. FREE - the pass runs either way.");
+            dragF("World Radius", "worldRadius", 0.75f, 0.01f, 0.05f, 8.0f, "%.2f m");
+            InspectorHelp("Occlusion reach in METRES, so contacts do not grow and shrink as the "
+                          "camera moves. FREE in GPU cost. Note it loses authority below about 1 m: "
+                          "the search radius is floored at Steps pixels, so past a modest distance it "
+                          "stops being a world radius at all.");
+            dragF("Intensity", "intensity", 1.0f, 0.01f, 0.1f, 4.0f, "%.2f");
+            InspectorHelp("Exponent on the occlusion term - above 1 deepens, below 1 lifts. FREE.");
+            dragF("Thickness", "thickness", 0.6f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("How solid an occluder is assumed to be behind its silhouette. 1 = fully "
+                          "solid, so foliage casts a slab behind every leaf; low values keep leaves "
+                          "thin. UE equivalent works out to 0.75. FREE.");
+
+            ImGui::SeparatorText("Quality (these cost GPU time)");
+            {
+                const nlohmann::json beforeItem = p;
+                int angles = static_cast<int>(p.value("numAngles", 2u));
+                const bool changed = ImGui::SliderInt("Directions", &angles, 1, 8);
+                if (changed) { p["numAngles"] = static_cast<std::uint32_t>(angles < 1 ? 1 : angles); }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Screen directions searched per pixel. Cost is LINEAR in this - doubling it "
+                          "roughly doubles the raw pass. 2 is the UE default (r.GTAO.NumAngles) and "
+                          "leans on the temporal stage to average the rest over time.");
+            {
+                const nlohmann::json beforeItem = p;
+                int steps = static_cast<int>(p.value("numSteps", 6u));
+                const bool changed = ImGui::SliderInt("Steps", &steps, 2, 16);
+                if (changed) { p["numSteps"] = static_cast<std::uint32_t>(steps < 1 ? 1 : steps); }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Taps along each direction. Also LINEAR in cost, and it doubles as the floor "
+                          "on the pixel radius - so raising it widens the reach at distance as a side "
+                          "effect.");
+            dragF("Fade Start", "fadeStart", 60.0f, 0.5f, 0.0f, 500.0f, "%.0f m");
+            InspectorHelp("Distance where AO begins fading out; beyond it the estimate is mostly noise "
+                          "anyway. Pulling both fades IN is the cheapest quality trade here - faded "
+                          "pixels still run the pass, but stop contributing artefacts.");
+            dragF("Fade End", "fadeEnd", 120.0f, 0.5f, 0.0f, 1000.0f, "%.0f m");
+            InspectorHelp("Distance where AO is gone entirely.");
+
+            ImGui::SeparatorText("Filtering");
+            {
+                const nlohmann::json beforeItem = p;
+                bool denoise = p.value("denoise", true);
+                const bool changed = ImGui::Checkbox("Denoise", &denoise);
+                if (changed) { p["denoise"] = denoise; }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Bilateral 5x5 across depth and normal, about 0.017 ms. Removes roughly 40% "
+                          "of the raw noise; off is immediately visible as per-pixel grain.");
+            {
+                const nlohmann::json beforeItem = p;
+                bool temporal = p.value("temporal", true);
+                const bool changed = ImGui::Checkbox("Temporal", &temporal);
+                if (changed) { p["temporal"] = temporal; }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Accumulates over frames, which is what makes a 2x6-tap estimate usable at "
+                          "all. About 0.012 ms plus one extra half-res target. Off is noisier than any "
+                          "setting above can compensate for.");
+            dragF("Temporal Blend", "temporalBlendWeight", 0.1f, 0.005f, 0.02f, 1.0f, "%.3f");
+            InspectorHelp("Weight of the CURRENT frame. 0.1 (the UE default) is roughly a 10-frame "
+                          "history. Higher is more responsive and noisier. FREE.");
+            dragF("Temporal Clamp", "temporalClampRange", 0.35f, 0.01f, 0.05f, 1.0f, "%.2f");
+            InspectorHelp("How far history may deviate before it is clamped back, with a still camera. "
+                          "Below about 0.2 the history stops accumulating on this engine (DLSS jitter "
+                          "widens the per-frame spread past the window); above about 0.5 the clamp "
+                          "stops protecting against ghosting. FREE.");
+            dragF("Filter Plane Tolerance", "filterPlaneTolerance", 0.05f, 0.005f, 0.005f, 1.0f, "%.3f m");
+            InspectorHelp("Metres a neighbour may sit off the fitted plane before the denoise drops it. "
+                          "Too small leaves grazing floors noisy, too large blurs away the contacts. "
+                          "FREE.");
+            dragF("Upsample Tolerance", "upsampleTolerance", 0.02f, 0.002f, 0.002f, 1.0f, "%.3f");
+            InspectorHelp("Depth tolerance of the edge-aware upsample, as a FRACTION of the pixel "
+                          "depth. Large values degrade it to plain bilinear, which spreads occlusion "
+                          "past silhouettes. FREE.");
+
+            ImGui::SeparatorText("Advanced");
+            {
+                const nlohmann::json beforeItem = p;
+                bool gbufferNormal = p.value("useGBufferNormal", false);
+                const bool changed = ImGui::Checkbox("Normal from G-buffer", &gbufferNormal);
+                if (changed) { p["useGBufferNormal"] = gbufferNormal; }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("OFF matches UE (r.GTAO.UseNormals = 0) and is almost certainly what you "
+                          "want: the horizon search walks the DEPTH buffer, so the integral has to be "
+                          "given the geometric normal. ON feeds it the normal-mapped one instead, "
+                          "which reads as occlusion wherever the two disagree - on detail-mapped sand "
+                          "that measured AO 0.35 on a fully open dune. Kept only for comparison.");
         }
         else if (env.type == "colorPipeline")
         {

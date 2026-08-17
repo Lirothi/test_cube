@@ -1,4 +1,5 @@
 #include "editor/scene/EnvironmentRuntime.h"
+#include "app/scene/GtaoSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -237,6 +238,15 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         }
         ctx.scene.SetCameraExposure(exposure);
     }
+    else if (env.type == "gtao")
+    {
+        // P6B: rebuilt from defaults on every edit, same reasoning as the two blocks around it --
+        // a field the document does not carry must land on the struct default, not on whatever the
+        // previous edit left behind.
+        GtaoSettings gtao{};
+        GtaoSettingsJson::ApplyOverrides(p, gtao);
+        ctx.scene.SetGtao(gtao);
+    }
     else if (env.type == "colorPipeline")
     {
         // P3C: rebuilt from defaults on every edit, same reasoning as cameraExposure above.
@@ -387,6 +397,10 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
         // P1: removing the section returns the scene to the dormant defaults, which is the same
         // state a level that never had the section loads with.
         ctx.scene.SetCameraExposure(render::CameraExposureSettings{});
+    }
+    else if (env.type == "gtao")
+    {
+        ctx.scene.SetGtao(GtaoSettings{});
     }
     else if (env.type == "colorPipeline")
     {

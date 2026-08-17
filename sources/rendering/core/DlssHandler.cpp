@@ -183,7 +183,9 @@ void DlssHandler::OnBeginFrame()
 
     if (IsActive())
     {
-        jitterPixels_ = GenerateJitterSample();
+        // Paused: hold the offset at zero on BOTH sides. The Halton index is deliberately not
+        // advanced, so unpausing resumes the sequence where it left off rather than jumping.
+        jitterPixels_ = jitterPaused_ ? Math::float2(0.0f, 0.0f) : GenerateJitterSample();
         constants_.jitterOffset = sl::float2(jitterPixels_.x, jitterPixels_.y);
         //constants_.motionVectorsJittered = sl::Boolean::eTrue;
         constants_.motionVectorsJittered = sl::Boolean::eFalse;

@@ -46,6 +46,11 @@ namespace
         Lights,
         Cameras,
         Environment,
+        // P6B+: the post-process block. These are not placed in the world and have no transform;
+        // they are the level-wide look settings, and there is one of each. Grouping them apart
+        // from Environment keeps a list that only grows (P7 fog, P8 bloom, P9 GI are all coming)
+        // from burying the objects that DO sit somewhere.
+        PostProcess,
         Other
     };
 
@@ -195,6 +200,11 @@ namespace
         if (object.type == "skybox" || object.type == "ocean" || object.type == "wind")
         {
             return OutlinerGroup::Environment;
+        }
+        if (object.type == "cameraExposure" || object.type == "colorPipeline" ||
+            object.type == "gtao")
+        {
+            return OutlinerGroup::PostProcess;
         }
         return OutlinerGroup::Other;
     }
@@ -377,6 +387,7 @@ SceneOutlinerPanel::PersistentState SceneOutlinerPanel::GetPersistentState() con
         lightsGroupOpen_,
         camerasGroupOpen_,
         environmentGroupOpen_,
+        postProcessGroupOpen_,
         otherGroupOpen_,
         trackSelection_
     };
@@ -388,6 +399,7 @@ void SceneOutlinerPanel::SetPersistentState(const PersistentState& state)
     lightsGroupOpen_ = state.lightsGroupOpen;
     camerasGroupOpen_ = state.camerasGroupOpen;
     environmentGroupOpen_ = state.environmentGroupOpen;
+    postProcessGroupOpen_ = state.postProcessGroupOpen;
     otherGroupOpen_ = state.otherGroupOpen;
     trackSelection_ = state.trackSelection;
 }
@@ -504,6 +516,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         case OutlinerGroup::Lights:      lightsGroupOpen_ = true; break;
         case OutlinerGroup::Cameras:     camerasGroupOpen_ = true; break;
         case OutlinerGroup::Environment: environmentGroupOpen_ = true; break;
+        case OutlinerGroup::PostProcess: postProcessGroupOpen_ = true; break;
         case OutlinerGroup::Other:       otherGroupOpen_ = true; break;
         }
     }
@@ -514,6 +527,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     std::vector<OutlinerRowRef>& lights = scratchLights_;
     std::vector<OutlinerRowRef>& cameras = scratchCameras_;
     std::vector<OutlinerRowRef>& environmentRows = scratchEnvironment_;
+    std::vector<OutlinerRowRef>& postProcessRows = scratchPostProcess_;
     std::vector<OutlinerRowRef>& other = scratchOther_;
 
     // Rebuild the filtered row buckets only when something they depend on changed.
@@ -544,6 +558,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         lights.clear();
         cameras.clear();
         environmentRows.clear();
+        postProcessRows.clear();
         other.clear();
         const auto addVisibleRow = [&](EditorObject& object, bool environment)
         {
@@ -558,6 +573,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             case OutlinerGroup::Lights:      group = &lights; break;
             case OutlinerGroup::Cameras:     group = &cameras; break;
             case OutlinerGroup::Environment: group = &environmentRows; break;
+            case OutlinerGroup::PostProcess: group = &postProcessRows; break;
             case OutlinerGroup::Other:       group = &other; break;
             }
             if (group)
@@ -604,6 +620,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         lights.size() +
         cameras.size() +
         environmentRows.size() +
+        postProcessRows.size() +
         other.size());
     ImGui::Text("Showing %d of %d rows", visibleRows, totalRows);
     if (selectedExists)
@@ -647,6 +664,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             SortRows(lights, sortSpecs);
             SortRows(cameras, sortSpecs);
             SortRows(environmentRows, sortSpecs);
+            SortRows(postProcessRows, sortSpecs);
             SortRows(other, sortSpecs);
             if (sortSpecs)
             {
@@ -676,6 +694,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         appendDisplayedRows(lights, lightsGroupOpen_);
         appendDisplayedRows(cameras, camerasGroupOpen_);
         appendDisplayedRows(environmentRows, environmentGroupOpen_);
+        appendDisplayedRows(postProcessRows, postProcessGroupOpen_);
         appendDisplayedRows(other, otherGroupOpen_);
 
         const auto selectRow = [&](EditorObjectId id)
@@ -920,7 +939,8 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         const auto drawGroup = [&](const char* id,
             const char* label,
             const std::vector<OutlinerRowRef>& rows,
-            bool& groupOpen)
+            bool& groupOpen,
+            const char* tooltip = nullptr)
         {
             if (rows.empty())
             {
@@ -937,6 +957,14 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                 ImGuiTreeNodeFlags_NoTreePushOnOpen;
             const bool openNow =
                 ImGui::TreeNodeEx(id, groupFlags, "%s (%zu)", label, rows.size());
+            if (tooltip != nullptr && ImGui::IsItemHovered())
+            {
+                ImGui::BeginTooltip();
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+                ImGui::TextUnformatted(tooltip);
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
             if (ImGui::IsItemToggledOpen())
             {
                 groupOpen = openNow;
@@ -988,10 +1016,17 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         };
 
         drawGroup("##badAssetsGroup", "Bad Assets", badAssets, badAssetsGroupOpen_);
-        drawGroup("##meshesGroup", "Meshes", meshes, meshesGroupOpen_);
-        drawGroup("##lightsGroup", "Lights", lights, lightsGroupOpen_);
+        drawGroup("##meshesGroup", "Meshes", meshes, meshesGroupOpen_,
+            "Placed geometry.");
+        drawGroup("##lightsGroup", "Lights", lights, lightsGroupOpen_,
+            "The directional light plus every placed point and spot light.");
         drawGroup("##camerasGroup", "Cameras", cameras, camerasGroupOpen_);
-        drawGroup("##environmentGroup", "Environment", environmentRows, environmentGroupOpen_);
+        drawGroup("##environmentGroup", "Environment", environmentRows, environmentGroupOpen_,
+            "Things that exist in the world and have a place in it: the sky, the ocean, the wind.");
+        drawGroup("##postProcessGroup", "Post Process", postProcessRows, postProcessGroupOpen_,
+            "Level-wide look settings, applied to the whole frame rather than placed anywhere: "
+            "camera exposure, the display transform, ambient occlusion. One of each per level, "
+            "always in effect. Saved with the level like any other object."); // P6B+
         drawGroup("##otherGroup", "Other", other, otherGroupOpen_);
 
         ImGui::EndTable();

@@ -817,6 +817,111 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
     (void)pVsmPageRender;
 
+    // P6B: AO reads the G-buffer normal and depth and writes its own half-res target, so it only
+    // has to order after the G-buffer. Lighting and compose consume it, so they order after this.
+    // Skipped entirely when disabled -- an unregistered pass costs nothing, whereas a registered
+    // one still pays its barriers.
+    // AddPass2: the builder makes the decision ONCE and declares from it, so a disabled frame
+    // declares nothing and the body is empty -- no separate Prepare to keep in sync, which is the
+    // whole point of the form.
+    const size_t pGtao = rg.AddPass2(RenderPass::Main_Gtao, { pGbuf },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const GtaoSettings& s = frame_->settings.gtao;
+            const auto& D = renderer->GetDeferredForFrame();
+            const auto& P = renderer->GetDeferredForPrevFrame();
+            // Every material and every handle the chain needs, checked HERE rather than in the
+            // body: a body that early-outs after the declarations have been made loses the pass's
+            // barriers silently. Deciding once is the whole reason this is an AddPass2.
+            const bool ready = s.enabled && resources_.GetGtaoMaterial() &&
+                resources_.GetGtaoFilterMaterial() && resources_.GetGtaoTemporalMaterial() &&
+                resources_.GetGtaoUpsampleMaterial() && resources_.GetGtaoCBSizeBytes() != 0u &&
+                resources_.GetGtaoFilterCBSizeBytes() != 0u &&
+                resources_.GetGtaoTemporalCBSizeBytes() != 0u &&
+                resources_.GetGtaoUpsampleCBSizeBytes() != 0u &&
+                D.depthSRV.ptr != 0 && D.gbSRV[1].ptr != 0 && D.gbSRV[3].ptr != 0 &&
+                D.gtaoUAV.ptr != 0 && D.gtaoFilteredUAV.ptr != 0 &&
+                D.gtaoHistoryUAV.ptr != 0 && D.gtaoUpsampledUAV.ptr != 0 &&
+                P.gtaoHistorySRV.ptr != 0;
+            if (!ready)
+            {
+                // Nothing declared, nothing recorded — and the history counter resets, so the
+                // temporal stage re-seeds instead of reading a frame that was never written.
+                gtaoHistoryFrames_ = 0u;
+                return {};
+            }
+
+            GtaoChain chain{};
+            chain.denoise = s.denoise;
+            chain.temporal = s.temporal;
+            chain.frameIndex = gtaoFrameCounter_++;
+
+            // Cross-frame state is committed HERE, in the serial Prepare, not in the body.
+            const uint32_t aoW = std::max(1u, (renderer->GetRenderWidth() + 1u) / 2u);
+            const uint32_t aoH = std::max(1u, (renderer->GetRenderHeight() + 1u) / 2u);
+            if (aoW != gtaoHistoryWidth_ || aoH != gtaoHistoryHeight_)
+            {
+                gtaoHistoryWidth_ = aoW;
+                gtaoHistoryHeight_ = aoH;
+                gtaoHistoryFrames_ = 0u; // the whole Deferred set was recreated: no valid history
+            }
+            chain.historyValid = chain.temporal && gtaoHistoryFrames_ > 0u;
+            gtaoHistoryFrames_ = chain.temporal ? std::min(gtaoHistoryFrames_ + 1u, 4u) : 0u;
+
+            // --- declarations, from the same decision ---
+            // The chain's own targets are declared NON_PIXEL only: every reader of them is a
+            // compute shader, here and in the consumers P6B item 7 will add. Declaring kSrvAll
+            // instead would leave them one state away from their canonical at frame end for no
+            // reader's benefit — which --canonical-check duly reported. The G-buffer inputs keep
+            // kSrvAll because the later forward passes really do sample them from a pixel shader.
+            constexpr D3D12_RESOURCE_STATES kAoRead = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            ctx.NextPoint();
+            chain.pointRaw = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(D.gb1.Get(), kSrvAll);
+            ctx.Use(D.depth.Get(), kSrvAll);
+            ctx.Use(D.gtao.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+            // Each stage reads what the previous one wrote, so every stage boundary is a
+            // UAV -> SRV flip on one target and a fresh UAV on the next. The source chain below
+            // has to match the record body's exactly; both read it off `chain`.
+            if (chain.denoise)
+            {
+                ctx.NextPoint();
+                chain.pointDenoise = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(D.gtao.Get(), kAoRead);
+                ctx.Use(D.gtaoFiltered.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            }
+            if (chain.temporal)
+            {
+                ctx.NextPoint();
+                chain.pointTemporal = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(chain.denoise ? D.gtaoFiltered.Get() : D.gtao.Get(), kAoRead);
+                // The previous frame's accumulation. It rests shader-readable (the upsample read
+                // it last frame), so this usually compiles to no barrier at all — but declaring it
+                // is what makes that a fact the compile knows rather than an assumption.
+                ctx.Use(P.gtaoHistory.Get(), kAoRead);
+                ctx.Use(D.gbVelocity.Get(), kSrvAll);
+                ctx.Use(D.gtaoHistory.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            }
+            ctx.NextPoint();
+            chain.pointUpsample = ctx.usePoint ? *ctx.usePoint : 0u;
+            ID3D12Resource* const upsampleSrc = chain.temporal ? D.gtaoHistory.Get()
+                : (chain.denoise ? D.gtaoFiltered.Get() : D.gtao.Get());
+            ctx.Use(upsampleSrc, kAoRead);
+            ctx.Use(D.gtaoUpsampled.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+            // ...and back to its resting state. Every other target in this chain ends the frame
+            // shader-readable because the next stage reads it; the last one has no next stage, so
+            // it says so explicitly instead of resting as a UAV.
+            ctx.NextPoint();
+            chain.pointRestore = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(D.gtaoUpsampled.Get(), kAoRead);
+
+            return [this, renderer, chain](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassGtao);
+                Pass_Gtao(renderer, c, *frame_->camera, chain);
+            };
+        });
+
     auto lightFn = [this, renderer](RenderGraphPassContext ctx) {
         CPU_SCOPE(ProfilerScopes::kPassLighting);
         Pass_Lighting(renderer, ctx, *frame_->camera);
@@ -824,22 +929,26 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     size_t pLight;
     // Step 24f: in VSM mode the directional shader samples the clipmap (VSM page pool + table), so it
     // must order AFTER the page render and declare those SRV-readable. Legacy = the CSM-only decls.
+    // P6B item 7: lighting now SAMPLES the AO target, so it must order after the chain that writes
+    // it. Until this step the AO pass was a leaf nobody depended on, and the two were free to run
+    // concurrently -- correct only while nothing read the result.
     if (vsmActive && pVsmPageRender != static_cast<size_t>(-1))
     {
         ID3D12Resource* vpool = frame_->vsm->PagePool();
         ID3D12Resource* vpt = frame_->vsm->PageTable();
-        pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf, pVsmPageRender }, { pShadow },
+        pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf, pVsmPageRender, pGtao }, { pShadow },
             { { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
               { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
               { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { vpool, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { vpt, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.gtaoUpsampled.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             lightFn);
     }
     else
     {
-        pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf }, { pShadow },
+        pLight = rg.AddPassMT(RenderPass::Main_Lighting, { pGbuf, pGtao }, { pShadow },
             { { D.gb0.Get(), kSrvAll },
               { D.gb1.Get(), kSrvAll },
               { D.gb2.Get(), kSrvAll },
@@ -847,6 +956,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
               { D.gbAux.Get(), kSrvAll },
               { D.depth.Get(), kSrvAll },
               { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.gtaoUpsampled.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             lightFn);
     }
@@ -1050,6 +1160,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
           { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.reflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          // P6B item 7: compose samples the AO for specular occlusion. Ordering to the AO pass is
+          // transitive through lighting, which now depends on it directly.
+          { D.gtaoUpsampled.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.scene.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         [this, renderer](RenderGraphPassContext ctx) {
             CPU_SCOPE(ProfilerScopes::kPassCompose);
@@ -1337,12 +1450,32 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         p.Use(fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     });
 
+    const DebugTexPick debugPick = PickDebugTexTarget(D, frame_->settings.debugTexTarget);
+    const bool debugTexOn = frame_->settings.debugTexMode && debugPick.resource != nullptr &&
+                            debugPick.srv.ptr != 0;
+    // The state this target rests in, which is where the blit has to put it back. Read from the
+    // registry rather than assumed, because the list spans targets with different resting states.
+    const D3D12_RESOURCE_STATES debugCanon =
+        debugPick.resource ? renderer->GetCanonicalState(debugPick.resource)
+                           : D3D12_RESOURCE_STATE_COMMON;
     const size_t pDebug = rg.AddPass(RenderPass::Main_Debug, { pTone },
-        [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassDebug); Pass_Debug(renderer, ctx); });
+        [this, renderer, debugTexOn, debugPick, debugCanon](RenderGraphPassContext ctx) {
+            CPU_SCOPE(ProfilerScopes::kPassDebug);
+            Pass_Debug(renderer, ctx, debugTexOn, debugPick, debugCanon);
+        });
     rg.EndCLGroup();
-    // The debug blit binds the backbuffer RTV/DSV and draws a triangle; RecordBindDefaultsNoClear
-    // sets targets and viewport only, so the pass performs no transitions at all.
-    rg.SetPassPrepare(pDebug, [](RenderGraphPassContext&) {});
+    // The blit binds the backbuffer RTV/DSV and draws a triangle, so the only state it needs is the
+    // one texture it samples — in a PIXEL shader, which is why it must be declared rather than
+    // assumed (it used to be assumed, and got away with it because the shadow atlas happened to be
+    // readable). It then puts the target BACK: the overlay's texture inspector transitions out of a
+    // resource's CANONICAL state without transitioning back, so every graph pass has to leave its
+    // resources where the registry says they rest.
+    rg.SetPassPrepare(pDebug, [debugTexOn, debugPick, debugCanon](RenderGraphPassContext& p) {
+        if (!debugTexOn) { return; }
+        p.Use(debugPick.resource, kSrvAll);
+        p.NextPoint();
+        p.Use(debugPick.resource, debugCanon);
+    });
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     rg.ExecuteParallel(renderer, TaskSystem::Get());
@@ -2454,6 +2587,145 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     rgGB.Execute(renderer);
 }
 
+// P6B. The whole AO chain records into ONE command list: raw estimate -> bilateral denoise ->
+// temporal accumulation -> edge-aware upsample. Four dispatches of ~0.03 ms each do not each
+// deserve their own pass and their own command list; the stage boundaries are ordinary barrier
+// points, exactly as the reflection blur ping-pongs its two dispatches inside one pass.
+//
+// NO EARLY RETURN AFTER BeginCL. Every gate was evaluated in the builder, which declared from the
+// same decision; a body that stopped half way through would leave declared barrier points
+// unemitted, and the pass after this one would read a target the compile believes was already
+// transitioned. `chain` is that decision, arrived by value.
+void SceneRenderer::Pass_Gtao(Renderer* renderer, RenderGraphPassContext ctx, const Camera& camera,
+    const GtaoChain& chain)
+{
+    auto material = resources_.GetGtaoMaterial();
+    const UINT cbSize = resources_.GetGtaoCBSizeBytes();
+
+    const auto& D = renderer->GetDeferredForFrame();
+    const auto& P = renderer->GetDeferredForPrevFrame();
+
+    const UINT aoW = std::max(1u, (renderer->GetRenderWidth() + 1u) / 2u);
+    const UINT aoH = std::max(1u, (renderer->GetRenderHeight() + 1u) / 2u);
+
+    GtaoPassConstants c{};
+    c.view = camera.GetViewMatrix();
+    c.invProj = camera.GetInvProjMatrix();
+    c.aoSize = float2(static_cast<float>(aoW), static_cast<float>(aoH));
+    c.invAoSize = float2(1.0f / static_cast<float>(aoW), 1.0f / static_cast<float>(aoH));
+    // The engine's standard linearisation pair, same as the RT passes use.
+    const float zNear = camera.GetZNear();
+    const float zFar = camera.GetZFar();
+    c.depthA = zNear / (zNear - zFar);
+    c.depthB = (zNear * zFar) / (zFar - zNear);
+    const GtaoSettings& s = frame_->settings.gtao;
+    c.worldRadius = s.worldRadius;
+    c.thickness = s.thickness;
+    c.intensity = s.intensity;
+    c.fadeStart = s.fadeStart;
+    c.fadeEnd = s.fadeEnd;
+    c.numAngles = s.numAngles;
+    c.numSteps = s.numSteps;
+    // The vertical half-FOV reciprocal turns a world radius into pixels; the shader multiplies it
+    // by the AO height, so it must be the VERTICAL one whatever the aspect ratio is. The camera
+    // stores the HORIZONTAL fov, so derive it through the aspect ratio.
+    const float aspect = static_cast<float>(renderer->GetRenderWidth()) /
+                         static_cast<float>(std::max(1u, renderer->GetRenderHeight()));
+    const float tanHalfV = std::tan(camera.GetHFov() * 0.5f) / std::max(aspect, 1e-4f);
+    c.invTanHalfFovY = 1.0f / std::max(tanHalfV, 1e-4f);
+    // Rotates the sampling directions frame to frame, which is what gives the temporal step
+    // something to average instead of a fixed pattern. Committed in the builder.
+    c.frameIndex = chain.frameIndex;
+    c.useGBufferNormal = s.useGBufferNormal ? 1u : 0u;
+
+    // Shared by all three filter kernels; only the sizes and the stage's own field differ.
+    GtaoFilterConstants f{};
+    f.aoSize = c.aoSize;
+    f.invAoSize = c.invAoSize;
+    f.outSize = c.aoSize;
+    f.invOutSize = c.invAoSize;
+    f.depthA = c.depthA;
+    f.depthB = c.depthB;
+    f.planeTolerance = std::max(s.filterPlaneTolerance, 1e-4f);
+    f.blendWeight = std::clamp(s.temporalBlendWeight, 0.0f, 1.0f);
+    f.upsampleTolerance = std::max(s.upsampleTolerance, 1e-4f);
+    f.historyValid = chain.historyValid ? 1u : 0u;
+    f.filterRadius = std::min(s.filterRadius, 4u);
+    f.temporalClampRange = std::clamp(s.temporalClampRange, 0.0f, 1.0f);
+
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassGtao);
+        const auto samplerDescs = std::array{ *SamplerManager::PointClamp(), *SamplerManager::LinearClamp() };
+        const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+        // 1. raw horizon-search AO.
+        renderer->EmitPoint(t.cl, chain.pointRaw);
+        RecordComputeDispatch(renderer, t.cl, material.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteGtaoConstants(c, dest); },
+            { D.depthSRV, D.gbSRV[1] },
+            { D.gtaoUAV },
+            samplerTable,
+            aoW, aoH,
+            D.gtao.Get());
+
+        // The stage that produced what comes next. Kept as one variable so the record order and
+        // the builder's declaration order cannot disagree about which target is being read.
+        D3D12_CPU_DESCRIPTOR_HANDLE srcSRV = D.gtaoSRV;
+
+        // 2. bilateral denoise.
+        if (chain.denoise)
+        {
+            renderer->EmitPoint(t.cl, chain.pointDenoise);
+            RecordComputeDispatch(renderer, t.cl, resources_.GetGtaoFilterMaterial().get(),
+                resources_.GetGtaoFilterCBSizeBytes(),
+                [&](uint8_t* dest) { resources_.WriteGtaoFilterConstants(f, dest); },
+                { srcSRV, D.depthSRV, D.gbSRV[1] },
+                { D.gtaoFilteredUAV },
+                samplerTable,
+                aoW, aoH,
+                D.gtaoFiltered.Get());
+            srcSRV = D.gtaoFilteredSRV;
+        }
+
+        // 3. temporal accumulation against the previous frame's result.
+        if (chain.temporal)
+        {
+            renderer->EmitPoint(t.cl, chain.pointTemporal);
+            RecordComputeDispatch(renderer, t.cl, resources_.GetGtaoTemporalMaterial().get(),
+                resources_.GetGtaoTemporalCBSizeBytes(),
+                [&](uint8_t* dest) { resources_.WriteGtaoTemporalConstants(f, dest); },
+                { srcSRV, P.gtaoHistorySRV, D.gbSRV[3] },
+                { D.gtaoHistoryUAV },
+                samplerTable,
+                aoW, aoH,
+                D.gtaoHistory.Get());
+            srcSRV = D.gtaoHistorySRV;
+        }
+
+        // 4. edge-aware upsample to the render resolution. Runs unconditionally: whatever the
+        // chain produced, the consumers (P6B item 7) sample one target at one resolution.
+        renderer->EmitPoint(t.cl, chain.pointUpsample);
+        f.outSize = float2(static_cast<float>(renderer->GetRenderWidth()),
+                           static_cast<float>(renderer->GetRenderHeight()));
+        f.invOutSize = float2(1.0f / std::max(f.outSize.x, 1.0f), 1.0f / std::max(f.outSize.y, 1.0f));
+        RecordComputeDispatch(renderer, t.cl, resources_.GetGtaoUpsampleMaterial().get(),
+            resources_.GetGtaoUpsampleCBSizeBytes(),
+            [&](uint8_t* dest) { resources_.WriteGtaoUpsampleConstants(f, dest); },
+            { srcSRV, D.depthSRV },
+            { D.gtaoUpsampledUAV },
+            samplerTable,
+            renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+            D.gtaoUpsampled.Get());
+
+        // Back to the resting state the rest of the engine assumes for it.
+        renderer->EmitPoint(t.cl, chain.pointRestore);
+    }
+    ctx.EndCL(t);
+}
+
 void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
@@ -2506,6 +2778,10 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         constants.skyIrradianceEnabled = (iblSky && iblSky->HasIbl()) ? 1u : 0u;
         // Sky intensity (how bright this sky is) times the fill strength (how much of it the
         // diffuse response takes). Two different questions, so two fields.
+        // P6B items 6-7. The pass writes gtaoUpsampled only when it runs, so `enabled` gates the
+        // read rather than relying on the target holding 1.
+        constants.gtaoEnabled = frame_->settings.gtao.enabled ? 1u : 0u;
+        constants.gtaoStrength = std::clamp(frame_->settings.gtao.strength, 0.0f, 1.0f);
         constants.skyIrradianceScale =
             (iblSky ? iblSky->GetExposure() : 1.0f) * dirLight.GetSkyFillIntensity();
         constants.exposure = dirLight.GetExposure();
@@ -2595,7 +2871,12 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
               // never sampled.
               (frame_->skybox && frame_->skybox->HasIbl())
                   ? frame_->skybox->GetIrradianceTex()->GetSRVCPU()
-                  : renderer->VsmDummyTexSrv() },
+                  : renderer->VsmDummyTexSrv(),
+              // t11: P6B dynamic AO at render resolution. Bound unconditionally to keep the
+              // VOLATILE range fully populated; `gtaoEnabled` is 0 when the pass did not run, and
+              // the shader does not sample it then -- which matters, because the target holds
+              // whatever was last left in it rather than 1.
+              D.gtaoUpsampledSRV },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -3401,6 +3682,8 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         // F8: non-zero switches compose onto the split-sum path. Zero when this sky has no
         // prefiltered derivatives, which keeps every pre-F7 level rendering exactly as it did.
         constants.skySpecMipCount = skybox->HasIbl() ? skybox->GetSpecMips() : 0u;
+        constants.gtaoEnabled = frame_->settings.gtao.enabled ? 1u : 0u;
+        constants.gtaoStrength = std::clamp(frame_->settings.gtao.strength, 0.0f, 1.0f);
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(1.0f / width, 1.0f / height);
 
@@ -3428,7 +3711,8 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
               skybox->GetTex()->GetSRVCPU(), D.reflectionSRV, D.gbAuxSRV, wetnessSrv,
               skybox->HasIbl() ? skybox->GetSpecTex()->GetSRVCPU() : skybox->GetTex()->GetSRVCPU(),
               skybox->HasIbl() ? skybox->GetIrradianceTex()->GetSRVCPU() : skybox->GetTex()->GetSRVCPU(),
-              skybox->HasIbl() ? skybox->GetBrdfLut()->GetSRVCPU() : D.depthSRV },
+              skybox->HasIbl() ? skybox->GetBrdfLut()->GetSRVCPU() : D.depthSRV,
+              D.gtaoUpsampledSRV }, // t12: P6B dynamic AO, gated by `gtaoEnabled`
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -4064,25 +4348,48 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
     ctx.EndCL(t);
 }
 
-void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
+// Which resource + SRV the fullscreen debug blit shows, from SceneRenderSettings::debugTexTarget.
+// One function so the pass body and its declaration list cannot disagree about the answer.
+SceneRenderer::DebugTexPick SceneRenderer::PickDebugTexTarget(
+    const RenderTargetManager::DeferredTargets& D, int index)
 {
-    if (!frame_->settings.debugTexMode)
+    switch (index)
+    {
+    case 1: return { D.gtao.Get(), D.gtaoSRV };
+    case 2: return { D.gtaoFiltered.Get(), D.gtaoFilteredSRV };
+    case 3: return { D.gtaoHistory.Get(), D.gtaoHistorySRV };
+    case 4: return { D.gtaoUpsampled.Get(), D.gtaoUpsampledSRV };
+    default: return { D.shadow.Get(), D.shadowSRV };
+    }
+}
+
+// `on`, `pick` and `canonical` are decided in Render(), where the declarations are made from the
+// same values — the body must not re-derive them, or the two could disagree and the pass would emit
+// barriers for a resource it never touches.
+void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx, bool on,
+    const DebugTexPick& pick, D3D12_RESOURCE_STATES canonical)
+{
+    if (!on)
     {
         return;
     }
-    const auto& D = renderer->GetDeferredForFrame();
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     do
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassDebug);
+        // The blit reads in a PIXEL shader while these targets rest NON_PIXEL readable, so the
+        // state has to be declared. It did not used to be: the pass read the shadow atlas with no
+        // declaration at all and got away with it.
+        // Same value Render() declares this pass's first point with (its local `kSrvAll`).
+        renderer->Transition(t.cl, pick.resource,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         renderer->RecordBindDefaultsNoClear(t.cl);
 
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
-        rc.srvTable[0] = renderer->StageSrvUavTable({ D.shadowSRV }).gpu; // t0
-        //rc.srvTable[0] = renderer->StageSrvUavTable({ D.gbSRV[3] }).gpu; // t0
+        rc.srvTable[0] = renderer->StageSrvUavTable({ pick.srv }).gpu; // t0
         const auto debugSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, debugSamplers);
 
@@ -4096,6 +4403,11 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx)
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         t.cl->DrawInstanced(3, 1, 0, 0);
     } while (false);
+
+    // OUTSIDE the do-block on purpose: the `break` above (no debug material) must not skip the
+    // restore. Once the declarations are made, every declared point has to be emitted, or the next
+    // frame's barriers are compiled against a state the resource never reached.
+    renderer->Transition(t.cl, pick.resource, canonical);
 
     ctx.EndCL(t);
 }

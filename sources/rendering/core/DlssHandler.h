@@ -32,6 +32,18 @@ public:
 
     Math::float2 GetCurrentJitterPixels() const { return jitterPixels_; }
 
+    // Debug: hold the sub-pixel jitter at zero. Every render-resolution target is re-sampled at a
+    // different sub-pixel offset each frame, which is exactly what makes a half-res intermediate
+    // (GTAO, SSR) shimmer when you sit and stare at it in the texture inspector. Pausing freezes
+    // the sample grid so the target can actually be read.
+    //
+    // Both sides are held together — the projection AND the jitterOffset handed to DLSS — because
+    // zeroing only one would tell DLSS to reconstruct against an offset the frame was not rendered
+    // with. DLSS itself NEEDS the jitter, so with this on its output loses its anti-aliasing and
+    // goes crawly; that is the honest cost of the switch and it is stated in the UI.
+    void SetJitterPaused(bool paused) { jitterPaused_ = paused; }
+    bool IsJitterPaused() const { return jitterPaused_; }
+
     bool IsActive() const;
     void SetActive(bool active);
     bool IsAvailable() const { return available_; }
@@ -59,6 +71,7 @@ private:
     UINT dlssRenderWidth_ = 0;
     UINT dlssRenderHeight_ = 0;
     Math::float2 jitterPixels_ = Math::float2(0.0f, 0.0f);
+    bool jitterPaused_ = false;
     uint32_t haltonIndex_ = 0;
     static constexpr uint32_t kHaltonSequenceLength_ = 1024;
 

@@ -542,6 +542,22 @@ void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
     imguiLayer_.Render(commandList);
+    // ...and put every one of them BACK. This used to be left undone, which was silently fine only
+    // while every previewable target rested in a state sharing PIXEL_SHADER_RESOURCE's barrier
+    // LAYOUT — NON_PIXEL_SHADER_RESOURCE does (both are D3D12_BARRIER_LAYOUT_SHADER_RESOURCE), so
+    // the leftover state was invisible to the enhanced-barrier validator. It is NOT fine for a
+    // target resting in UNORDERED_ACCESS (tonemap, fxaa, and briefly the GTAO output): the next
+    // frame's compiled barrier claims a UAV before-state against a resource the inspector left in
+    // the SHADER_RESOURCE layout, which is INCOMPATIBLE_BARRIER_LAYOUT and a debug-layer break.
+    //
+    // Restoring here rather than constraining what a target may rest in keeps the rule where it
+    // belongs: the graph decides resting states, and this out-of-graph peek borrows and returns.
+    // For editor-owned textures the canonical IS PixelShaderResource, so both calls are no-ops.
+    for (ID3D12Resource* resource : pendingImGuiTextureResources_)
+    {
+        TransitionExplicit(commandList, resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                           GetCanonicalState(resource));
+    }
     pendingImGuiTextureResources_.clear();
 }
 
@@ -1440,6 +1456,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.reflectionScratch = render::kReflectionScratchFormat;
     formats.oceanReflection = render::kReflectionFormat;
     formats.backbufferResource = render::kBackbufferResourceFormat;
+    formats.gtao = render::kGtaoFormat;
 
     RenderTargetManager::Sizes sizes{};
     sizes.renderWidth = rtWidth;
@@ -1450,6 +1467,9 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     sizes.reflectionHeight = reflectionTextureHeight_;
     sizes.oceanReflectionWidth = oceanReflectionTextureWidth_;
     sizes.oceanReflectionHeight = oceanReflectionTextureHeight_;
+    // P6B: half the RENDER resolution, rounded up so a 1-pixel target never becomes 0.
+    sizes.gtaoWidth = std::max(1u, (rtWidth + 1u) / 2u);
+    sizes.gtaoHeight = std::max(1u, (rtHeight + 1u) / 2u);
 
     rtManager_.Create(GetDevice(), formats, sizes, Declarations());
 }
@@ -1669,6 +1689,16 @@ bool Renderer::IsDlssActive() const
 bool Renderer::IsDlssAvailable() const
 {
     return dlssHandler_ && dlssHandler_->IsAvailable();
+}
+
+void Renderer::SetJitterPaused(bool paused)
+{
+    if (dlssHandler_) { dlssHandler_->SetJitterPaused(paused); }
+}
+
+bool Renderer::IsJitterPaused() const
+{
+    return dlssHandler_ && dlssHandler_->IsJitterPaused();
 }
 
 void Renderer::SetDlssActive(bool active)

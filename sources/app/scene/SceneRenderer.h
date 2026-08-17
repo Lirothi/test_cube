@@ -100,6 +100,50 @@ private:
     // values the declarations were made from, captured by value into the record lambda.
     void Pass_VsmPageRender(Renderer* r, RenderGraphPassContext ctx,
         const VirtualShadowMap::PageRenderDecisions& dec);
+    // P6B: rotates the AO sampling directions per frame; the temporal step averages them.
+    uint32_t gtaoFrameCounter_ = 0u;
+    // P6B item 4: how many consecutive frames the temporal stage has run at the current AO size.
+    // 0 means the history texture holds nothing this frame may read — the first frame after a
+    // resize, a level switch, or the stage being switched on.
+    uint32_t gtaoHistoryFrames_ = 0u;
+    uint32_t gtaoHistoryWidth_ = 0u;
+    uint32_t gtaoHistoryHeight_ = 0u;
+
+    // P6B: the AO chain's decision, made ONCE in the AddPass2 builder (which runs serially, before
+    // any recording) and carried into the record body by value. `point*` are the barrier-point
+    // indices the declarations were made under; the body emits exactly those.
+    struct GtaoChain
+    {
+        bool denoise = false;
+        bool temporal = false;
+        bool historyValid = false;
+        uint32_t frameIndex = 0u;
+        uint32_t pointRaw = 0u;
+        uint32_t pointDenoise = 0u;
+        uint32_t pointTemporal = 0u;
+        uint32_t pointUpsample = 0u;
+        // The chain's last write leaves `gtaoUpsampled` a UAV; this point puts it back
+        // shader-readable, which is its canonical. See the RenderTargetManager comment: the
+        // texture inspector transitions FROM the canonical without transitioning back, so a target
+        // that rests in a different barrier layout than SHADER_RESOURCE breaks the next frame.
+        uint32_t pointRestore = 0u;
+    };
+
+    // P6B: screen-space ambient occlusion, half res, between the G-buffer and lighting.
+    void Pass_Gtao(Renderer* r, RenderGraphPassContext ctx, const Camera& camera,
+        const GtaoChain& chain);
+
+    // The fullscreen debug blit's subject, resolved from SceneRenderSettings::debugTexTarget.
+    // Static + shared by the pass body and its declaration list, so the state that gets declared is
+    // always the state that gets sampled.
+    struct DebugTexPick
+    {
+        ID3D12Resource* resource = nullptr;
+        D3D12_CPU_DESCRIPTOR_HANDLE srv{};
+    };
+    static DebugTexPick PickDebugTexTarget(const RenderTargetManager::DeferredTargets& D, int index);
+    void Pass_Debug(Renderer* r, RenderGraphPassContext ctx, bool on, const DebugTexPick& pick,
+        D3D12_RESOURCE_STATES canonical);
     void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera);
     void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,
@@ -145,7 +189,6 @@ private:
     // tonemap, which consumes the value it writes.
     void Pass_ExposureMetering(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx);
-    void Pass_Debug(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask);
 
     // Barrier plan step 4: create/grow everything the pass bodies used to create lazily,

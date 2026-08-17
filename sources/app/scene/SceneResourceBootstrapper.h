@@ -25,6 +25,8 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle ambientRgb; // P4: the fill's own colour, see DirectionalLight
     Material::CBFieldHandle skyIrradianceEnabled; // F8
     Material::CBFieldHandle skyIrradianceScale;   // F8
+    Material::CBFieldHandle gtaoEnabled;         // P6B
+    Material::CBFieldHandle gtaoStrength;        // P6B
     Material::CBFieldHandle exposure;
     Material::CBFieldHandle camPos;
     Material::CBFieldHandle camDir;
@@ -122,6 +124,8 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle camPos;
     Material::CBFieldHandle enableSkySpecular;
     Material::CBFieldHandle skySpecMipCount; // F8
+    Material::CBFieldHandle gtaoEnabled;    // P6B
+    Material::CBFieldHandle gtaoStrength;   // P6B
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
     Material::CBFieldHandle shoreWetnessWindow;
@@ -227,6 +231,65 @@ struct SceneSelectionOutlineCBHandles
 };
 #endif
 
+// P6B GTAO. Mirrors the `GtaoCB` in shaders/gtao_cs.hlsl.
+struct GtaoPassConstants
+{
+    mat4 view{};
+    mat4 invProj{};
+    float2 aoSize{};
+    float2 invAoSize{};
+    float depthA = 0.0f;
+    float depthB = 0.0f;
+    // World units, not pixels: a pixel radius makes occlusion grow and shrink with camera distance,
+    // which reads as the whole scene breathing.
+    float worldRadius = 0.75f;
+    float thickness = 0.6f;
+    float intensity = 1.0f;
+    float fadeStart = 60.0f;
+    float fadeEnd = 120.0f;
+    float invTanHalfFovY = 1.0f;
+    uint32_t numAngles = 2u;
+    uint32_t numSteps = 6u;
+    uint32_t frameIndex = 0u;
+    // 0 = geometric normal rebuilt from depth (UE's default, r.GTAO.UseNormals=0).
+    uint32_t useGBufferNormal = 0u;
+};
+
+struct GtaoHandles
+{
+    Material::CBFieldHandle view, invProj, aoSize, invAoSize, depthA, depthB;
+    Material::CBFieldHandle worldRadius, thickness, intensity, fadeStart, fadeEnd;
+    Material::CBFieldHandle invTanHalfFovY, numAngles, numSteps, frameIndex, useGBufferNormal;
+    void Populate(Material* material);
+};
+
+// P6B items 3-5. ONE layout shared by the denoise, temporal and upsample kernels (`GtaoFilterCB`
+// in all three shaders): they need overlapping subsets, and one struct with one writer is one
+// place to keep in sync instead of three that drift.
+struct GtaoFilterConstants
+{
+    float2 aoSize{};        // half-res AO grid
+    float2 invAoSize{};
+    float2 outSize{};       // == aoSize for denoise/temporal, render resolution for the upsample
+    float2 invOutSize{};
+    float depthA = 0.0f;
+    float depthB = 0.0f;
+    float planeTolerance = 0.05f;
+    float blendWeight = 0.1f;
+    float upsampleTolerance = 0.02f;
+    uint32_t historyValid = 0u;
+    uint32_t filterRadius = 2u;
+    float temporalClampRange = 0.35f;
+};
+
+struct GtaoFilterHandles
+{
+    Material::CBFieldHandle aoSize, invAoSize, outSize, invOutSize, depthA, depthB;
+    Material::CBFieldHandle planeTolerance, blendWeight, upsampleTolerance;
+    Material::CBFieldHandle historyValid, filterRadius, temporalClampRange;
+    void Populate(Material* material);
+};
+
 struct LightingPassConstants
 {
     float3 sunDir{};
@@ -236,6 +299,10 @@ struct LightingPassConstants
     // F8: 0 keeps the flat fill, i.e. every level without prefiltered sky derivatives.
     uint32_t skyIrradianceEnabled = 0u;
     float skyIrradianceScale = 1.0f;
+    // P6B items 6-7: dynamic AO. `enabled` 0 means the target is unread (it is not written when the
+    // pass is off); `strength` is UE's AmbientOcclusionStaticFraction.
+    uint32_t gtaoEnabled = 0u;
+    float gtaoStrength = 1.0f;
     float exposure = 1.0f;
     float3 camPos{};
     float3 camDir{};
@@ -333,6 +400,9 @@ struct ComposePassConstants
     // F8: 0 = no prefiltered derivatives for this sky, so compose keeps the legacy mip-chain
     // path and the image is unchanged. Otherwise the prefiltered cube's real mip count.
     uint32_t skySpecMipCount = 0u;
+    // P6B items 6-7, same pair as the lighting CB.
+    uint32_t gtaoEnabled = 0u;
+    float gtaoStrength = 1.0f;
     float2 screenSize{};
     float2 invScreenSize{};
     float4 shoreWetnessWindow{};
@@ -419,6 +489,18 @@ public:
     std::shared_ptr<Material> GetExposureBuildMaterial() const { return matExposureBuildCS_; }
     std::shared_ptr<Material> GetExposureSolveMaterial() const { return matExposureSolveCS_; }
     std::shared_ptr<Material> GetExposureBaseLumMaterial() const { return matExposureBaseLumCS_; }
+    std::shared_ptr<Material> GetGtaoMaterial() const { return matGtaoCS_; }
+    UINT GetGtaoCBSizeBytes() const;
+    void WriteGtaoConstants(const GtaoPassConstants& data, uint8_t* dest) const;
+    std::shared_ptr<Material> GetGtaoFilterMaterial() const { return matGtaoFilterCS_; }
+    std::shared_ptr<Material> GetGtaoTemporalMaterial() const { return matGtaoTemporalCS_; }
+    std::shared_ptr<Material> GetGtaoUpsampleMaterial() const { return matGtaoUpsampleCS_; }
+    UINT GetGtaoFilterCBSizeBytes() const;
+    UINT GetGtaoTemporalCBSizeBytes() const;
+    UINT GetGtaoUpsampleCBSizeBytes() const;
+    void WriteGtaoFilterConstants(const GtaoFilterConstants& data, uint8_t* dest) const;
+    void WriteGtaoTemporalConstants(const GtaoFilterConstants& data, uint8_t* dest) const;
+    void WriteGtaoUpsampleConstants(const GtaoFilterConstants& data, uint8_t* dest) const;
     std::shared_ptr<Material> GetSsrMaterial() const { return matSSR_; }
     std::shared_ptr<Material> GetOceanReflectionMaterial() const { return matOceanReflection_; }
     std::shared_ptr<Material> GetBlurMaterial() const { return matBlur_; }
@@ -496,6 +578,10 @@ private:
     std::shared_ptr<Material> matExposureBuildCS_;
     std::shared_ptr<Material> matExposureSolveCS_;
     std::shared_ptr<Material> matExposureBaseLumCS_;
+    std::shared_ptr<Material> matGtaoCS_;
+    std::shared_ptr<Material> matGtaoFilterCS_;
+    std::shared_ptr<Material> matGtaoTemporalCS_;
+    std::shared_ptr<Material> matGtaoUpsampleCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matOceanReflection_;
     std::shared_ptr<Material> matBlur_;
@@ -510,6 +596,12 @@ private:
 #endif
 
     SceneLightingCBHandles lightingHandles_{};
+    GtaoHandles gtaoHandles_{};
+    // Same layout, three materials: field handles are per-material, so the shared struct still
+    // needs one handle set each.
+    GtaoFilterHandles gtaoFilterHandles_{};
+    GtaoFilterHandles gtaoTemporalHandles_{};
+    GtaoFilterHandles gtaoUpsampleHandles_{};
     ScenePointLightCBHandles pointHandles_{};
     SceneSpotLightCBHandles spotHandles_{};
     SceneSsrCBHandles ssrHandles_{};

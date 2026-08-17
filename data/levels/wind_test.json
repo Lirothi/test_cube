@@ -64,6 +64,12 @@
     "exposure": 2.0,
     "skyFillIntensity": 0.699999988079071
   },
+  "gtao": {
+    "enabled": true,
+    "intensity": 1.5,
+    "thickness": 0.75,
+    "worldRadius": 1.0
+  },
   "objects": [
     {
       "enabled": true,

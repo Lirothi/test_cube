@@ -323,6 +323,7 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     // Both of these are always in effect, so they are always listed -- see addSingletonAlways.
     addSingletonAlways("cameraExposure", "cameraExposure", "Camera Exposure");
     addSingletonAlways("colorPipeline", "colorPipeline", "Color Pipeline");
+    addSingletonAlways("gtao", "gtao", "Ambient Occlusion (GTAO)"); // P6B
 }
 
 #endif // WITH_EDITOR

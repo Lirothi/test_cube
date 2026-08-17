@@ -18,6 +18,7 @@ enum class RenderPass : uint16_t {
     Main_ObjectIdReadback,
     Main_VsmPageRequest,
     Main_VsmPageRender,
+    Main_Gtao,   // P6B screen-space ambient occlusion, between the G-buffer and lighting
     Main_Lighting,
     Main_SpotLights,
     Main_PointLights,
@@ -74,6 +75,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_ObjectIdReadback: return L"ObjectIdReadback";
     case RenderPass::Main_VsmPageRequest: return L"VsmPageRequest";
     case RenderPass::Main_VsmPageRender: return L"VsmPageRender";
+    case RenderPass::Main_Gtao: return L"Gtao";
     case RenderPass::Main_Lighting: return L"Lighting";
     case RenderPass::Main_SpotLights: return L"SpotLights";
     case RenderPass::Main_PointLights: return L"PointLights";

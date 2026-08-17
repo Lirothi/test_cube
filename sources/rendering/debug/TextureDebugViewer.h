@@ -38,6 +38,10 @@ public:
         DepthCopy,
         ShadowAtlas,
         OceanShoreDepth,
+        Gtao,
+        GtaoFiltered,
+        GtaoHistory,
+        GtaoUpsampled,
         Count
     };
 

@@ -437,6 +437,46 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateDepth(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.depth, DeferredDsvSlot::GlassReflDepth, DeferredSrvSlot::GlassReflDepth, f, D.glassReflDepth, D.glassReflDepthDSV, D.glassReflDepthSRV);
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::GlassReflection, DeferredSrvSlot::GlassReflectionUAV, f, D.glassReflection, D.glassReflectionSRV, D.glassReflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
 
+        // P6B: half-resolution AO, sized off the RENDER resolution (not the display one) because it
+        // is consumed by lighting/compose, which run before the upscaler.
+        currentTargetWidth = std::max(1u, sizes.gtaoWidth);
+        currentTargetHeight = std::max(1u, sizes.gtaoHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.gtao,
+            DeferredSrvSlot::Gtao, DeferredSrvSlot::GtaoUAV, f, D.gtao, D.gtaoSRV, D.gtaoUAV,
+            sizes.gtaoWidth, sizes.gtaoHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.gtao,
+            DeferredSrvSlot::GtaoFiltered, DeferredSrvSlot::GtaoFilteredUAV, f,
+            D.gtaoFiltered, D.gtaoFilteredSRV, D.gtaoFilteredUAV,
+            sizes.gtaoWidth, sizes.gtaoHeight);
+        // The temporal history is the one deferred target read ACROSS frames (frame N samples the
+        // copy frame N-1 wrote, from the previous Deferred set). Nothing else about it is special:
+        // it rests shader-readable like its siblings, so the compile sees UAV -> SRV inside the
+        // pass and SRV -> UAV two frames later, both from ordinary declarations.
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.gtao,
+            DeferredSrvSlot::GtaoHistory, DeferredSrvSlot::GtaoHistoryUAV, f,
+            D.gtaoHistory, D.gtaoHistorySRV, D.gtaoHistoryUAV,
+            sizes.gtaoWidth, sizes.gtaoHeight);
+
+        // The upsampled result is at RENDER resolution: it is consumed by lighting and compose,
+        // which run before the upscaler.
+        //
+        // Rests SHADER-READABLE, and that is not a free choice. `Renderer::RenderImGui` shows a
+        // target in the texture inspector with
+        // `TransitionExplicit(cl, res, GetCanonicalState(res), PIXEL_SHADER_RESOURCE)` — it takes
+        // the CANONICAL as the before-state and does not transition back. That is only sound while
+        // the canonical shares a barrier LAYOUT with PIXEL_SHADER_RESOURCE, which
+        // NON_PIXEL_SHADER_RESOURCE does (both are D3D12_BARRIER_LAYOUT_SHADER_RESOURCE) and
+        // UNORDERED_ACCESS does not. Resting this target as a UAV made the inspector leave it in
+        // the SHADER_RESOURCE layout while the next frame's compiled barrier still claimed
+        // UNORDERED_ACCESS — INCOMPATIBLE_BARRIER_LAYOUT, and a debug-layer break. Pass_Gtao
+        // therefore transitions it back here at the end of its chain.
+        currentTargetWidth = std::max(1u, sizes.renderWidth);
+        currentTargetHeight = std::max(1u, sizes.renderHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.gtao,
+            DeferredSrvSlot::GtaoUpsampled, DeferredSrvSlot::GtaoUpsampledUAV, f,
+            D.gtaoUpsampled, D.gtaoUpsampledSRV, D.gtaoUpsampledUAV,
+            sizes.renderWidth, sizes.renderHeight);
+
         currentTargetWidth = displayWidthClamped;
         currentTargetHeight = displayHeightClamped;
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.sceneColor, DeferredSrvSlot::DLSSOutput, DeferredSrvSlot::DLSSOutputUAV, f, D.dlssOutput, D.dlssOutputSRV, D.dlssOutputUAV, displayWidthClamped, displayHeightClamped);
@@ -493,6 +533,10 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.glassReflNormal.Get(), L"GlassReflNormal", kNps);
         nameRes(D.glassReflDepth.Get(), L"GlassReflDepth", kNps);
         nameRes(D.glassReflection.Get(), L"GlassReflection", kPs);
+        nameRes(D.gtao.Get(), L"Gtao", kNps);
+        nameRes(D.gtaoFiltered.Get(), L"GtaoFiltered", kNps);
+        nameRes(D.gtaoHistory.Get(), L"GtaoHistory", kNps);
+        nameRes(D.gtaoUpsampled.Get(), L"GtaoUpsampled", kNps);
         // Tonemap/FXAA end as the compute outputs they are — the resolve flips them back.
         nameRes(D.tonemap.Get(), L"Tonemap", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         nameRes(D.fxaa.Get(), L"Fxaa", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);

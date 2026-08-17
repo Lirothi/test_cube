@@ -1416,7 +1416,325 @@ the numbers. Against this step's own four requirements:
 
 ---
 
-### P6B — Add dynamic GTAO with edge-aware temporal filtering
+### P6B — Add dynamic GTAO with edge-aware temporal filtering — IN PROGRESS (2026-08-17)
+
+**P6B IS COMPLETE (items 1-8).** What follows was written as the steps landed; the consumption
+section at the end covers items 6-7.
+
+**The producing side (items 1-5, and 8).** The chain
+runs raw estimate -> bilateral denoise -> temporal accumulation -> edge-aware upsample and lands a
+render-resolution AO target that **nobody samples**. That is the point: every step so far is
+measurable and none of them can change a pixel, so items 6-7 are a pure consumption change against
+a receiver F9 already built.
+
+| item | state |
+|---|---|
+| 1. GTAO at half res from linear depth + geometric normal | **done** |
+| 2. radius in world/view units, not pixels | **done** |
+| 3. bilateral denoise on depth/normal discontinuities | **done** |
+| 4. temporal accumulation + disocclusion rejection | **done** |
+| 5. edge-aware upsample to lighting resolution | **done** |
+| 6. combine with material AO by a documented, bounded rule | **done** |
+| 7. apply only to indirect diffuse + specular occlusion | **done** |
+| 8. raw / denoised / history-weight / combined debug views | **done for all four stages** |
+
+**Implementation.** Four compute kernels, one render-graph pass.
+
+| stage | shader | source |
+|---|---|---|
+| raw | `shaders/gtao_cs.hlsl` | UE `GTAOCombinedPSandCS` + `SearchForLargestAngleDual` + `ComputeInnerIntegral` |
+| denoise | `shaders/gtao_filter_cs.hlsl` | UE `GTAOSpatialFilterCS`, minus the LDS staging, plus a normal term |
+| temporal | `shaders/gtao_temporal_cs.hlsl` | UE `GTAOTemporalFilterPSAndCS` + `ReadHistoryClamp` |
+| upsample | `shaders/gtao_upsample_cs.hlsl` | **not** UE — joint bilateral (see below) |
+
+*Raw*: for each of N screen directions, walk outward in BOTH directions for the largest elevation
+angle any sample subtends, then project the normal into that walk's plane and evaluate the visible
+arc in closed form. That closed form is what makes it "ground truth" rather than the
+hemisphere-sampling guess SSAO does.
+
+*Denoise*: **the bilateral weight is against a fitted plane, not against the centre depth**, and
+**the plane is fitted in DEVICE z**. Both are UE's and both matter: a floor at a grazing angle has a
+huge depth range inside a 5x5 window, so a plain `|z - zCentre|` test refuses to blur it exactly
+where the noise is worst; and device z is an affine function of `1/viewZ`, which interpolates
+linearly in screen space, so a plane really is a plane in device z and the two-tap extrapolation is
+exact for one. The tolerance is authored in WORLD metres and converted per pixel
+(`metres * depthB / linearZ^2`), because a fixed device-z tolerance means a different physical
+distance at every depth. Added beyond UE: a **normal** term, since the plan asks for normal
+discontinuities and depth alone cannot separate the two faces of a convex edge.
+
+*Temporal*: the raw pass already rotates its direction set by `frameIndex`, so consecutive frames
+estimate the same occlusion from different directions — averaging them is what buys a 2x6-tap pass
+the quality of a much wider one. Reprojection is by `gbVelocity` alone (every G-buffer variant here
+writes velocity for every pixel, sky included, so UE's `ClipToPrevClip` fallback would only be a
+second disagreeing source of truth). Disocclusion is UE's test — sample the velocity at the SOURCE
+location and ask whether it moves like this pixel — **with one correction**: their `CompareVeloc`
+sums the components (`abs(V12.x + V12.y)`), which cancels for a difference of `(+a, -a)`, i.e.
+reports perfect agreement for two velocities 90 degrees apart. Uses `length()`.
+
+*Upsample*: deliberately NOT UE's. Their shipping `GTAOUpsamplePSAndCS` is a five-tap box average
+with no depth term, and the `SmartUpsample` that would have been the reference is inside `#if 0`.
+This is the standard joint-bilateral upsample with depth as the guide, plus a nearest-depth fallback
+for a destination pixel no half-res texel sampled.
+
+**Structure.** All four dispatches record into ONE command list under one `AddPass2` pass: the
+builder decides the chain once, declares each stage's UAV->SRV flip at its own barrier point, and
+the record body emits exactly those points with `EmitPoint`. Four dispatches of ~0.03 ms do not each
+deserve a command list; this is the same shape the reflection blur uses to ping-pong its two
+dispatches inside one pass. **A body that early-returned half way would leave declared points
+unemitted**, so every gate — materials, CB sizes, descriptor handles — is evaluated in the builder.
+
+**AN ENGINE INVARIANT THIS STEP DISCOVERED THE HARD WAY (user hit it as a debug-layer break in the
+texture inspector).** `Renderer::RenderImGui` displays a preview with
+`TransitionExplicit(cl, res, GetCanonicalState(res), PIXEL_SHADER_RESOURCE)` — it uses the resource's
+CANONICAL state as the before-state and never transitions back. That is only sound because
+`NON_PIXEL_SHADER_RESOURCE` and `PIXEL_SHADER_RESOURCE` share one enhanced-barrier layout
+(`D3D12_BARRIER_LAYOUT_SHADER_RESOURCE`). So: **a deferred target that can be shown in the inspector
+must rest in a state whose layout is SHADER_RESOURCE.** `gtaoUpsampled` had been made to rest as a
+UAV — saving one barrier, and honestly reflecting where the frame left it — which put the inspector's
+transition into a different layout and left the next frame's compiled barrier claiming
+`UNORDERED_ACCESS` against a resource already in `SHADER_RESOURCE`: `INCOMPATIBLE_BARRIER_LAYOUT`.
+It now rests NPS and `Pass_Gtao` transitions it back at the end of its chain. Note the fullscreen
+debug blit does NOT go through that path, which is why every headless run was clean while the
+inspector broke.
+
+**And then the general fix, which is where it belonged**: `RenderImGui` now transitions every preview
+resource BACK to its canonical after `imguiLayer_.Render`. That removes the constraint entirely
+rather than restricting what a target may rest in — `tonemap` and `fxaa` also rest as UAVs and are
+also in the inspector's list, so the same break was reachable through them and is now closed too.
+The graph decides resting states; an out-of-graph peek borrows and returns.
+
+**Targets.** `gtao` (raw), `gtaoFiltered`, `gtaoHistory`, all half render res, plus `gtaoUpsampled`
+at render res. `gtaoHistory` is the one deferred target read ACROSS frames:
+`Renderer::GetDeferredForPrevFrame()` returns frame N-1's set (the frame index cycles in order, so
+it is genuinely the previous frame). Nothing about that needs special handling — the compile sees
+UAV -> SRV inside the pass and SRV -> UAV two frames later, from ordinary declarations, and the
+fixed-point property the barrier cache needs holds because the resource begins and ends each frame
+shader-readable. `historyValid` is 0 on the first frame after a resize, a level switch or the stage
+being switched on, and the kernel then seeds from this frame instead of reading a texture that was
+never written.
+
+**Settings live on `SceneRenderSettings::gtao`, and the app layer owns them.** `AppController`
+re-pushes the whole struct into the Scene every Tick, so a live change (the `--sweep` harness, the
+developer window) must write `AppController::SettingsRef()`. Writing `Scene`'s copy survives
+exactly one frame -- that is why there is no mutable accessor there.
+
+**A NORMALISATION BUG THE FIRST MEASUREMENTS HID, found because the user asked what the diagonal
+banding in the raw debug view was.** UE scale the arc integral by `2/PI` at the end of the raw pass
+(`PostProcessAmbientOcclusion.usf:908`) and then multiply by `PI/2` again at the top of their
+SPATIAL FILTER (`SumAO *= (PI/2.0)`). The pair cancels. Transcribing only the first half left the
+whole chain darkened by a constant **1/1.571**: an open beach read AO **0.637**, i.e. exactly `2/PI`,
+where an unoccluded surface must read 1.0. Nothing downstream would have flagged it — the AO "worked",
+it was just uniformly too dark, and consuming it at item 7 would have tinted the entire frame.
+
+Fixed by dropping the `2/PI` in the raw kernel rather than reintroducing `PI/2` in the filter,
+because this engine's denoise stage is OPTIONAL (`gtao.denoise`) and `intensity` is applied in the
+raw kernel: a normalisation that only holds when a later optional pass runs is one waiting to be
+switched off. **Every stage now carries AO in [0,1] with "unoccluded" meaning exactly 1.**
+
+Verified two ways. Simulating the kernel against an analytic unoccluded plane returns **0.9999** for
+the bare integral at every tilt (0, 30, 60 degrees) and depth (10 m, 60 m). On the engine, flat sand
+went from linear AO 0.6412 to **0.9619** — the shortfall from 1.0 being genuine occlusion from the
+surrounding palms. The give-away in the old numbers, in hindsight, was `occluded %` sitting at
+**95%** on a frame that is mostly open beach; it now reads **58%**.
+
+*(Note for reading any of these captures: the debug blit writes to an sRGB backbuffer, so an 8-bit
+value of 208 is linear 0.816, not 0.816 of the AO range. The measurements below are in the capture's
+8-bit space, which is fine for relative comparisons and wrong for absolute AO.)*
+
+**Measured** (wind_test, 2560x1440, defaults 2 angles x 6 steps, 5x5 filter, blend 0.1). Each stage
+captured through the debug blit and measured as *hf* = mean `|x - boxblur(x)|`, the noise the
+filters exist to remove:
+
+| stage | mean | hf (noise) | p01 | occluded % | grad p99.9 |
+|---|---|---|---|---|---|
+| raw | 0.9764 | 0.00699 | 0.788 | 28.54 | 0.139 |
+| + denoise | 0.9768 | **0.00411** (-41%) | 0.824 | 26.54 | 0.114 |
+| + temporal | 0.9735 | **0.00232** (-67% cumulative) | 0.867 | 35.32 | 0.055 |
+| upsampled (render res) | 0.9733 | 0.00323 | 0.859 | 35.09 | **0.080** |
+
+The mean moves by 0.003 (0.8/255) across the whole chain: these are denoisers, not a gain change.
+The p01 tail RISES while `occluded %` does not fall — the noise floor's dark excursions are being
+averaged away, not the contacts. **The upsample's rise in `hf` and peak gradient is the point, and
+the A/B proves it is edge-awareness rather than just more pixels**: same source data, only
+`gtao.upsampleTolerance` changed, 0.02 (edge-aware) vs 1000 (degenerates to plain bilinear) gives
+grad p99.9 **0.080 vs 0.049** — 64% more edge preserved.
+
+**THE NORMAL SOURCE WAS WRONG, and it cost more than everything else on this page combined.** The
+user asked whether a dark wedge across an open dune was expected. It was not: on that view the AO
+read a median of **0.352** and a 90th percentile of **0.638** on a surface with nothing above it.
+
+`r.GTAO.UseNormals` defaults to **0** in UE — they derive the normal from the DEPTH buffer, and only
+optionally read the G-buffer. This implementation read the G-buffer from the start, which means it
+fed the arc integral a NORMAL-MAPPED normal while the horizon search walks bare depth. The integral
+then computes the visible arc of a surface the search never looked at, so wherever the shading
+normal tilts away from the geometric one, part of the hemisphere falls "below the surface" and reads
+as occlusion. On a detail-mapped surface like sand that is not a subtle bias — it is most of the
+signal. Switched to the depth-derived normal (UE's `TakeSmallerAbsDelta` cross-product
+reconstruction), kept behind `gtao.useGBufferNormal` purely so the two can be compared:
+
+| view | metric | G-buffer normal | depth-derived |
+|---|---|---|---|
+| dune (open slope) | median AO | 0.352 | **1.000** |
+| dune (open slope) | p10 AO | 0.040 | **0.956** |
+| palms on sand | pixels below 0.9 | 48.0% | **15.9%** |
+| palms on sand | pixels below 0.6 | 13.1% | **0.19%** |
+| palms on sand | p01 (deepest contacts) | 0.227 | 0.701 |
+
+The last row is the one that says this is a fix and not just a brightening: the deepest contacts are
+still occluded, they just no longer sit inside a scene-wide false darkening. Raw noise also fell by
+more than half (hf 0.01537 -> 0.00699) — the G-buffer normal was injecting the normal map's own
+high-frequency detail into an occlusion estimate.
+
+**The regular grid visible in the RAW debug view is the sampling pattern, and it is supposed to be
+there.** Characterised because it looked alarming: period 8.56 display px, stripes at 16.5 degrees,
+a smooth wave of 12.4 levels peak-to-peak (so a real signal, not 8-bit quantisation — the patch
+occupies 40 distinct levels). It moves every frame from two deliberate sources: `frameIndex` rotates
+the direction set (which is precisely what gives the temporal stage something to average — a
+stationary pattern would average to itself), and DLSS's sub-pixel jitter moves the depth buffer the
+search reads. Neither is a defect and neither is a transcription error: `r.GTAO.NumAngles` is 2 in
+UE too, the pass order matches (search -> spatial -> temporal -> upsample), and the radius clamp is
+theirs verbatim. **The chain removes it**: peak-to-peak 12.4 -> 1.47 levels, and frame-to-frame
+motion on flat sand goes from **2.921/255 in raw to 0.000/255 at the end of the chain** over 6 frames
+with a static camera and frozen wind.
+
+**Cost** (GPU, same run each time, `--profdump`):
+
+| config | `Pass_Gtao` | GPU.Frame |
+|---|---|---|
+| off | — | 2.699 ms |
+| raw only | 0.087 ms | 2.856 ms |
+| + denoise | 0.104 ms | 2.858 ms |
+| full chain | **0.116 ms** | 2.872 ms |
+
+**Feature-off equivalence.** Measured on `roughness_sweep` (a static level — wind_test's ocean and
+wind sims are wall-clock driven, so two runs of it differ by more than this change does, and
+comparing across them measures the harness): off vs on **0.0334/255**, against an off-vs-off control
+of **0.0656/255**. The change is half the harness's own run-to-run floor.
+
+**DISTANT FLICKER, reported by the user from the `GTAO combined` view, and what it turned out to be.**
+Reproducing his exact viewpoint (`--cam-pos` / `--cam-rot` from the HUD) and measuring frame-to-frame
+standard deviation by distance band, with a static camera and frozen wind so any motion is the
+estimator's own:
+
+| stage | far (y 25-50%) | mid | near (y 75-100%) |
+|---|---|---|---|
+| raw | 9.763 | 5.432 | 4.376 |
+| denoised | 7.436 | 0.980 | 0.699 |
+| temporal | 4.729 | 0.181 | **0.063** |
+
+Near the camera the chain kills flicker by a factor of 70; at distance only by two. Three candidate
+causes were tested and two were wrong:
+
+* **Not the estimator's parameters.** `numSteps` 12, `numAngles` 4, `worldRadius` 2.0 and
+  `temporalBlendWeight` 0.03 all moved far-band flicker by under 6%; two of them made it worse.
+* **Not the direction-rotation cycle**, though that WAS a real transcription error and is now fixed.
+  UE take the per-frame rotation from a six-entry table (`Rots[Frame % 6]`, i.e. 30/150/90/120/60/0
+  degrees visited out of order) and the offset from a four-entry one; I had written
+  `(frameIndex & 63) * PI/64`, a 64-frame ramp walked in order, so a ~10-frame history saw a narrow
+  sliding subset of directions instead of a complete spread. Correcting it to their tables changed
+  far flicker by 3.5% (5.227 -> 5.044) — worth having for fidelity, but it is not the cause, and it
+  is recorded here as such rather than presented as the fix.
+* **It is DLSS's jitter, and the temporal clamp was too tight to absorb it.** With DLSS off, far-band
+  flicker on the combined target drops from **4.555 to 1.294**. The depth buffer moves by a sub-pixel
+  every frame (correctly — the AO reconstructs from the same jittered projection it was rendered
+  with), so at distance, where the depth gradient is steep and the geometry is thin, each frame is a
+  materially different estimate. UE's `RangeVal` of 0.1 is a window our per-frame spread simply
+  exceeds, so the history was being clamped back onto each noisy frame instead of accumulating.
+
+`temporalClampRange` is now a setting (`gtao.temporalClampRange`, sweep key and slider), **default
+0.35, a measured deviation from UE's 0.1**: far flicker 0.1 -> 4.600, 0.35 -> 2.935, 1.0 -> 2.501.
+1.0 is barely better than 0.35 and removes the clamp entirely, so 0.35 is where the curve bends.
+Checked for the obvious cost — ghosting — two ways: on wind-moved foliage, per-frame detail falls
+3.84 -> 2.76 -> 2.58 across the three settings, but with frozen wind (so the time-average IS the
+true structure) the structure's own detail reads 2.96 / 2.50 / 2.66, i.e. non-monotonic and flat.
+What the wider window removes is noise, not structure. Shipped result by band:
+
+| | y 0-25% | y 25-50% | y 50-75% | y 75-100% |
+|---|---|---|---|---|
+| clamp 0.1 | 4.617 | 5.227 | 0.623 | 0.067 |
+| clamp 0.35 | **2.767** | **3.081** | **0.390** | **0.043** |
+
+**Still open:** this is measured with a STATIC camera. Under camera motion `range` closes to zero by
+design (`lerp(range, 0, velocityMag)`), so the temporal stage disables itself exactly when
+reprojection is least trustworthy — the flicker will return in motion, and whether that matters is a
+judgement to make after item 7, when the AO is modulating indirect light and passing through DLSS's
+own temporal filter rather than being viewed raw.
+
+**ITEMS 6-7: THE COMBINE RULE AND THE CONSUMERS.**
+
+The rule is UE's, from `DiffuseIndirectComposite.usf:371`
+(`lerp(1, MaterialAO * DynamicAO, AOMask * AmbientOcclusionStaticFraction)`): **a product**. That is
+the right shape because the two terms describe INDEPENDENT occluders — the material's own cavities,
+which no depth buffer can see, and the geometry around the pixel, which no baked map can see. It is
+bounded in [0,1] by construction, monotonic in both inputs, and an exact identity when either input
+is 1. (`min` was the alternative: it never double-counts, but it also refuses to let a cavity deepen
+a real contact, which is the case this pass exists to render.)
+
+**One deliberate deviation.** UE's `AmbientOcclusionStaticFraction` damps the WHOLE product. Here
+`gtao.strength` damps only the DYNAMIC term, because the material term already shipped in F9 and is
+not this step's to switch off. That distinction is not cosmetic — it is what makes `strength = 0` an
+exact no-op against the pre-P6B build, and the sweep level's AO row is what caught the first version
+getting it wrong (damping the product moved that row by **177/255**).
+
+Applied in two places, both on INDIRECT light only:
+* `lighting_cs` multiplies the indirect diffuse fill (irradiance cube and flat fallback alike).
+* `compose_cs` feeds `IblSpecularOcclusion(NoV, combined, roughness)` on the fallback sky. RT/SSR
+  hits are still left alone — they traced the geometry the AO stands in for.
+
+Direct sun, spot, point and emissive are untouched, per the plan.
+
+**Ordering.** `Main_Lighting` now takes `Main_Gtao` as a prerequisite. Until this step the AO pass
+was a leaf nobody depended on and the two were free to run concurrently — correct only while nothing
+read the result. Compose inherits the ordering transitively.
+
+**Measured.** Feature-off equivalence on the static sweep level: `strength = 0` vs `gtao.enabled = 0`
+is **0.0613/255** against an off-vs-off control of **0.0589/255** — an exact no-op within the
+harness floor. Applied on wind_test (same binary, frozen wind, `strength` 0 vs 1): mean |delta|
+**1.735/255** over 93.6% of pixels, strongest in the canopy (2.077) and weakest on open sand
+(1.516), with overall luminance moving **-0.03%**. That last number is the point: this darkens
+contacts, it does not dim the scene.
+
+**A BUG THIS STEP EXPOSED IN THE RENDER GRAPH ITSELF.** `ResourceStateDeclList` was
+`inl_vector<ResourceStateDecl, 10>`, and the VSM-mode lighting pass declared exactly 10 states.
+Adding the AO target made it 11. `inl_vector` only ASSERTS on overflow — so Debug aborted (exit 3,
+no message, since RendererInvariantFailure only writes to OutputDebugString) while **Release
+silently wrote past the inline storage and looked fine**. Capacity is now 16, sized with headroom
+rather than to the current maximum. Worth remembering: a Release build that passes every gate proves
+nothing about a container whose bounds check compiles out.
+
+**KNOWN LIMITATION, item 2 is weaker than it reads.** `worldRadius` has little authority at its
+default: 0.2 and 0.75 are indistinguishable on sand (8-bit 208.39 vs 208.35) and only 4.0 moves it
+(203.16). The cause is the radius clamp,
+`pixelRadius = max(min(worldRadiusAdj / linearZ, 256), numSteps)` — the lower bound in `numSteps`
+means that beyond a modest distance the radius is fixed in PIXELS, not world units, which is the
+"scene breathing" item 2 exists to prevent. The clamp is UE's verbatim
+(`PostProcessAmbientOcclusion.usf:875`), but this pass runs at half resolution, so in full-frame
+terms the floor bites twice as hard as it does for them. Not addressed here; it wants its own
+measurement against a moving camera, since the symptom is temporal.
+
+**Inspect it**: texture debug viewer -> Lighting -> "GTAO" / "GTAO denoised" / "GTAO temporal" /
+"GTAO combined". Headless, the fullscreen debug blit now takes a target:
+`--set=gtao.enabled:1;debug.texMode:1;debug.tex:N` with N = 1..4 (0 = the cascade shadow atlas it
+was hardwired to). Sweep keys: `gtao.enabled/worldRadius/thickness/intensity/numAngles/numSteps`,
+`gtao.denoise/temporal/filterRadius/filterPlaneTolerance/temporalBlendWeight/upsampleTolerance`.
+
+**Two pieces of harness this step added, because without them items 3-5 could not be measured:**
+* **`--set=<name>:<value>[;...]`** pins settings for a whole run using the same name table `--sweep`
+  uses. `--sweep` varies exactly one setting, so an A/B needing two switches at once (a feature on
+  AND the debug view that shows it) previously required editing defaults and rebuilding.
+* **`SceneRenderSettings::debugTexTarget`** — the fullscreen debug blit used to be hardwired to the
+  cascade shadow atlas, so a half-res intermediate could only ever be judged by eye in the GUI. It
+  now also DECLARES the texture it samples; it never did, and got away with it because the shadow
+  atlas happened to be readable.
+
+**What is NOT verified here, and needs the user's eye:** camera-motion behaviour. A headless shot
+has a static camera, so the disocclusion path is exercised only by wind-moved foliage. The plan's
+"no camera-motion crawling" criterion is judged by moving the camera in the editor with the debug
+view on "GTAO temporal".
+
+---
+
+### P6B (original specification)
 
 **Depends on:** P6A.
 
@@ -1440,6 +1758,51 @@ the numbers. Against this step's own four requirements:
 **Done when:** palm/terrain and rock/sand contacts read clearly, with no dark outlines against sky and no camera-motion crawling.
 
 **Verify:** still and moving camera, native/DLSS, thin geometry, horizon, depth discontinuities, feature-off equivalence, GPU timing.
+
+---
+
+### P6C — Build an HZB depth pyramid — NEXT (queued 2026-08-18 at the user's request)
+
+**Depends on:** nothing. **Consumers:** P6B's horizon search, the existing SSR march, and P9's
+screen-space GI — which is the reason it is worth building rather than a micro-optimisation.
+
+**Why.** The engine has no depth pyramid at all today (checked: no HZB, no depth mips, nothing for
+occlusion culling either). Three places want one:
+
+* **P6B GTAO.** UE's shipping horizon search is `SearchForLargestAngleDual_HZB` — at large step
+  radii it reads a coarser mip instead of mip 0. Two effects: cache locality (consecutive taps at a
+  large radius land far apart and miss), and aggregation (a coarse mip averages, so the estimate
+  stops aliasing). Ours reads flat depth, which is recorded as a known divergence in P6B.
+* **SSR.** `ssr_cs` marches a fixed coarse loop then refines. A pyramid turns that into a proper
+  hierarchical march: fewer steps AND fewer missed intersections, which is a quality win, not only
+  a speed one.
+* **P9 SSGI.** The whole `SSRT*` set in the reference drop is built on HZB — there it is part of the
+  tracing algorithm, not an optimisation.
+
+**Honest scoping note.** On P6B alone this would buy close to nothing: the pass costs 0.116 ms at
+2 angles x 6 steps, and the remaining flicker comes from reprojection under camera motion, not from
+depth sampling. It is queued as INFRASTRUCTURE for the three consumers together, and P6B should be
+retrofitted onto it rather than the pyramid being justified by P6B.
+
+**Implement:**
+
+1. A `hzb` target: R32_FLOAT (or R16), half render resolution at mip 0, full mip chain down to 1x1.
+2. One compute pass after the G-buffer that reduces the depth buffer into mip 0, then successive
+   mips. Prefer a single-dispatch multi-mip reduction over one dispatch per mip.
+3. Decide and DOCUMENT the reduction operator: `min` (closest) is what a conservative occlusion test
+   wants; UE's HZB is min for culling. A horizon search wants the same. State it once, in the shader.
+4. Handle non-power-of-two sizes explicitly — the classic source of a half-texel drift that only
+   shows at the frame edge.
+5. Retrofit the GTAO horizon search onto it (`SearchForLargestAngleDual_HZB`), selecting the mip
+   from the step radius the way the reference does.
+6. Retrofit the SSR march.
+
+**Interface contract:** disabling HZB consumption is screenshot-equivalent to the current build.
+The pyramid is built whether or not anyone consumes it, so the build cost is measured separately.
+
+**Verify:** mip-chain correctness against a CPU reduction of the same depth buffer (an invariant with
+a known answer, not a look test); GTAO before/after on the roughness sweep and wind_test; SSR
+before/after; GPU cost of the build pass on its own.
 
 ---
 
@@ -1493,6 +1856,49 @@ the numbers. Against this step's own four requirements:
 **Done when:** sunlit water and cloud edges gain a restrained optical response while sand/foliage texture remains visible.
 
 **Verify:** exposure sweep, isolated HDR emissive test, ocean glint motion, native/DLSS stability, GPU timing.
+
+---
+
+### P8B — Fold the post-process sections into one object — AFTER P8 (queued 2026-08-18)
+
+**Depends on:** P7 and P8, deliberately. The set of settings is still growing; building the
+container before it stops growing means building it twice, and dragging every already-authored level
+through two migrations instead of one.
+
+**The problem.** Level-wide look settings arrive as one top-level JSON section and one editor
+environment singleton EACH: `cameraExposure` (P1), `colorPipeline` (P3), `gtao` (P6B), with P7's
+atmosphere, P8's bloom and P9's GI still to come. Six objects in the outliner, none of which is
+placed anywhere, all of which are always in effect.
+
+**What this is NOT.** Not a copy of Unreal's PostProcessVolume. `FPostProcessSettings` carries **479**
+`bOverride_` flags, and that is not bureaucracy — it is the price of SPATIAL blending: once more than
+one volume can apply, every property must record whether it was set or inherited, or "exposure is 0
+here on purpose" cannot be told from "nobody touched exposure". Add `Priority`, `BlendRadius`,
+`BlendWeight`, `bUnbound` and a per-frame interpolation of the whole set. We have no overlapping
+volumes and no place that needs different settings, so all of that would be paid for nothing.
+
+Worth stating plainly: **the engine already has an unbound volume** — one always-in-effect set per
+level. It is simply spread across six names instead of one.
+
+**Implement:**
+
+1. One `postProcess` section and one environment object holding the existing groups as sub-objects,
+   so the inspector can present them as collapsing headers rather than six outliner entries.
+2. Keep READING the old top-level sections, mapping them onto the new structure. Levels already
+   authored must load unchanged and only pick up the new shape when re-saved.
+3. Round-trip test: load an old level, save it, load the result — the settings must compare equal.
+   That is the gate, not a look test.
+4. Retire the per-setting environment singletons from the outliner once (2) is proven.
+
+**Explicitly out of scope, and the trigger that would change that:** spatial volumes with priority
+and blend radius. The one plausible case in this project is the camera going UNDERWATER, where the
+grade, exposure and AO all want different values. That is a single boundary and is far better served
+by a threshold on camera height against the water plane than by a general volume system. Revisit only
+if a second such case appears.
+
+**Interim, done 2026-08-18:** the outliner groups these under a "Post Process" node with a tooltip
+explaining what the group is, which removes the visual clutter without touching the level format or
+requiring any migration.
 
 ---
 
@@ -1713,7 +2119,7 @@ already cost this project a frame-wide pink tint once.
 | the whole `SSD*` set + `ScreenSpaceDenoise.cpp` | the screen-space denoiser P6B needs — and the one the RT plan's S11 failed to hand-roll (1spp glossy + DLSS jitter = dancing noise) | **have**, in `ue_ssao_ssgi/` |
 | `DiffuseIndirectComposite.usf`, `IndirectLightRendering.cpp`, `CompositionLighting.cpp` | how indirect diffuse/specular/AO are composited — the contract P6A, P6B and P9 all plug into | **have**, in `ue_ssao_ssgi/` |
 | `ReflectionEnvironmentShaders.usf`, `SkyLightingShared.ush` | diffing F8's split-sum against the original. **Arrived 2026-08-17 and immediately earned its keep** — three real differences found (log vs linear roughness/mip mapping, cosine distribution at roughness>0.99, per-sample source mip from the solid-angle ratio) | **have**, in `ue_misc/` |
-| `ReflectionEnvironmentShared.ush` | the body of `ComputeReflectionCaptureRoughnessFromMip` — the log roughness/mip mapping itself. Referenced by the file above but not defined in it, and it is the one difference worth acting on | **wanted** |
+| `ReflectionEnvironmentShared.ush` | the body of `ComputeReflectionCaptureRoughnessFromMip` — the log roughness/mip mapping itself. Transcribed and shipped 2026-08-17 | **have**, in `ue_misc/` |
 | `MaterialTemplate.ush` | `MaterialExpressionBlackBody`, the Planckian locus the sun's colour-temperature control is transcribed from | **have** |
 | `PostProcessHistogramCommon.ush` | `CalculateLogLocalExposure` — P3B shipped WITHOUT this file, from the published algorithm plus measurement. Diff it against `shaders/local_exposure.hlsli` before extending P3B | **wanted** |
 | `PostProcessLocalExposure.usf` | the local-exposure apply pass and the exposure-fusion alternative | **wanted** |
@@ -1722,6 +2128,18 @@ already cost this project a frame-wide pink tint once.
 
 Everything is dropped in the **root** of `D:\Programming\ue_autoexposure\`, not under the
 engine-relative subpaths — look there first.
+
+**2026-08-17: `D:\Programming\ue_strip\` supersedes the three partial drops.** ~26.6k files: the
+whole `Shaders/Private` tree (`Bloom/`, `PostProcessing/`, `SkyAtmosphere.usf`, `HeightFogCommon.ush`,
+`Lumen/`, `ACES/`, `RayTracing/`, `Nanite/`, …) plus `Source/Runtime/Renderer` and
+`Source/Runtime/Engine`. Engine-relative paths are intact, so a file wanted above can be located by
+its UE path directly. It settled an open question the same day it arrived:
+`CompositionLighting/PostProcessAmbientOcclusion.cpp` — absent from `ue_ssao_ssgi/` — carries
+**`AmbientOcclusionTemporalBlendWeight = 0.1f`** (`Engine/Private/Scene.cpp:535`, clamped to
+[0.01, 1], UI max 0.5) and `r.GTAO.FilterWidth = 5`. That replaced a guessed 0.15 in P6B item 4 and
+confirmed the 5x5 kernel in item 3. **Look here first**; the older drops stay listed only because
+paths elsewhere in this document already point at them. P7 (`SkyAtmosphere*`, `HeightFogCommon.ush`)
+and P8 (`Bloom/`) are no longer blocked on a drop.
 
 
 

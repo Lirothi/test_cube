@@ -16,6 +16,7 @@
 #pragma warning(push)
 #pragma warning(disable: 26819)
 #include "third_party/json/json.hpp"
+#include "app/scene/GtaoSettingsJson.h"
 #pragma warning(pop)
 
 #include "app/camera/Camera.h"
@@ -340,6 +341,17 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         // brightness, which is exactly the "spend seconds adapting from stale history" that
         // locked decision 5 rules out.
         renderer.Exposure().RequestReset();
+    }
+
+    // P6B: screen-space AO. A level without the section keeps the struct defaults, whose
+    // `enabled = false` reproduces the pre-P6B image exactly.
+    {
+        GtaoSettings gtao{};
+        if (j.contains("gtao"))
+        {
+            GtaoSettingsJson::ApplyOverrides(j["gtao"], gtao);
+        }
+        scene.SetGtao(gtao);
     }
 
     // P3: display transform. A level without the section gets the struct defaults, i.e. AgX.

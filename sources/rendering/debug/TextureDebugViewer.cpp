@@ -1,4 +1,5 @@
 #include "rendering/debug/TextureDebugViewer.h"
+#include "rendering/core/RenderConstants.h" // P6B: kGtaoFormat for the AO row
 
 #include <algorithm>
 #include <array>
@@ -166,6 +167,10 @@ namespace
         case TextureDebugViewer::Target::GlassReflNormal: return "Glass Refl Normal";
         case TextureDebugViewer::Target::GlassReflDepth: return "Glass Refl Depth";
         case TextureDebugViewer::Target::GlassReflection: return "Glass Reflection";
+        case TextureDebugViewer::Target::Gtao: return "GTAO";
+        case TextureDebugViewer::Target::GtaoFiltered: return "GTAO denoised";
+        case TextureDebugViewer::Target::GtaoHistory: return "GTAO temporal";
+        case TextureDebugViewer::Target::GtaoUpsampled: return "GTAO combined";
         case TextureDebugViewer::Target::GBuffer0: return "GBuffer 0";
         case TextureDebugViewer::Target::GBuffer1: return "GBuffer 1";
         case TextureDebugViewer::Target::ShadingModel: return "Shading Model ID";
@@ -206,6 +211,10 @@ namespace
             MakeTarget(TextureDebugViewer::Target::GlassReflNormal, "Reflection", "Glass G-buffer: front-face world normal (S15b prepass input).", D.glassReflNormal.Get(), renderer.GetGBuffer1Format()),
             MakeTarget(TextureDebugViewer::Target::GlassReflDepth, "Reflection", "Glass G-buffer: front-face depth (S15b reflection ray origin).", D.glassReflDepth.Get(), renderer.GetDepthSrvFormat()),
             MakeTarget(TextureDebugViewer::Target::GlassReflection, "Reflection", "Off-screen glass reflection (RT or SSR) sampled by the forward glass pass.", D.glassReflection.Get(), renderer.GetReflectionFormat()),
+            MakeTarget(TextureDebugViewer::Target::Gtao, "Lighting", "P6B screen-space ambient occlusion, RAW, half render resolution. White = unoccluded. Expected to be noisy - this is the estimate before any filtering. Blank/white everywhere means the pass is disabled (SceneRenderSettings::gtao.enabled).", D.gtao.Get(), render::kGtaoFormat),
+            MakeTarget(TextureDebugViewer::Target::GtaoFiltered, "Lighting", "P6B AO after the bilateral denoise (half res). Compare against RAW: the per-pixel grain should be gone while the contact darkening stays put. Stale when gtao.denoise is off.", D.gtaoFiltered.Get(), render::kGtaoFormat),
+            MakeTarget(TextureDebugViewer::Target::GtaoHistory, "Lighting", "P6B AO after temporal accumulation (half res); also next frame's history. Under a moving camera the disocclusion band behind an occluder falls back to the un-accumulated estimate. Stale when gtao.temporal is off.", D.gtaoHistory.Get(), render::kGtaoFormat),
+            MakeTarget(TextureDebugViewer::Target::GtaoUpsampled, "Lighting", "P6B AO at render resolution after the edge-aware upsample - the target lighting and compose will consume. Silhouettes should be crisp: a soft dark fringe against the sky means the depth-aware weights are not firing.", D.gtaoUpsampled.Get(), render::kGtaoFormat),
             MakeTarget(TextureDebugViewer::Target::GBuffer0, "GBuffer", "Albedo RGB, metalness A.", D.gb0.Get(), renderer.GetGBuffer0Format()),
             MakeTarget(TextureDebugViewer::Target::GBuffer1, "GBuffer", "Encoded normal RGB; alpha is unused.", D.gb1.Get(), renderer.GetGBuffer1Format()),
             MakeTarget(TextureDebugViewer::Target::ShadingModel, "GBuffer", "Four-bit shading-model ID scale from GBAux.b: black=0 Default Lit, 1/15 gray=1 Two-Sided Foliage, 2/15 gray=2 Terrain, 3..15 are reserved.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),

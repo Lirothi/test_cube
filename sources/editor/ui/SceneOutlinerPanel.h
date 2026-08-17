@@ -43,6 +43,7 @@ public:
         bool lightsGroupOpen = true;
         bool camerasGroupOpen = true;
         bool environmentGroupOpen = true;
+        bool postProcessGroupOpen = true;
         bool otherGroupOpen = true;
         bool trackSelection = true;
     };
@@ -77,6 +78,7 @@ private:
     bool lightsGroupOpen_ = true;
     bool camerasGroupOpen_ = true;
     bool environmentGroupOpen_ = true;
+    bool postProcessGroupOpen_ = true;
     bool otherGroupOpen_ = true;
     bool trackSelection_ = true;
     int typeFilterIndex_ = 0;
@@ -93,6 +95,7 @@ private:
     std::vector<OutlinerRowRef> scratchLights_;
     std::vector<OutlinerRowRef> scratchCameras_;
     std::vector<OutlinerRowRef> scratchEnvironment_;
+    std::vector<OutlinerRowRef> scratchPostProcess_;
     std::vector<OutlinerRowRef> scratchOther_;
     std::vector<EditorObjectId> scratchDisplayedOrder_;
 

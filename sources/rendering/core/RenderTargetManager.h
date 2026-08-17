@@ -51,6 +51,19 @@ public:
         GpuResource glassReflNormal; // glass front-face world normal
         GpuResource glassReflDepth;  // glass front-face depth (R32 SRV)
         GpuResource glassReflection; // premultiplied glass reflection
+        // P6B: half-resolution screen-space ambient occlusion (GTAO). Half res because the signal
+        // is low frequency and the pass is bandwidth bound; the edge-aware upsample is what puts it
+        // back on geometry edges. R8_UNORM: AO is a visibility fraction in [0,1] and 8 bits of it
+        // is below the noise of any screen-space estimate.
+        GpuResource gtao;
+        // P6B items 3-5: the rest of the AO chain. `gtaoFiltered` is the bilateral denoise output,
+        // `gtaoHistory` the temporal accumulation (this frame's result AND next frame's history --
+        // the previous frame's copy lives in the previous Deferred set, see
+        // Renderer::GetDeferredForPrevFrame), and `gtaoUpsampled` the render-resolution result the
+        // lighting/compose consumers will sample.
+        GpuResource gtaoFiltered;
+        GpuResource gtaoHistory;
+        GpuResource gtaoUpsampled;
 
         // CPU descriptors
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
@@ -83,6 +96,10 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE glassReflNormalRTV{}, glassReflNormalSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE glassReflDepthDSV{}, glassReflDepthSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE glassReflectionSRV{}, glassReflectionUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE gtaoSRV{}, gtaoUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE gtaoFilteredSRV{}, gtaoFilteredUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE gtaoHistorySRV{}, gtaoHistoryUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE gtaoUpsampledSRV{}, gtaoUpsampledUAV{};
 
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
         UINT spotShadowRes = 512;
@@ -106,6 +123,7 @@ public:
         DXGI_FORMAT reflectionScratch;
         DXGI_FORMAT oceanReflection;
         DXGI_FORMAT backbufferResource; // tonemap/FXAA targets
+        DXGI_FORMAT gtao;               // P6B ambient occlusion
     };
 
     struct Sizes {
@@ -113,6 +131,7 @@ public:
         UINT displayWidth = 1, displayHeight = 1;   // window resolution (tonemap/FXAA/DLSS out)
         UINT reflectionWidth = 1, reflectionHeight = 1;
         UINT oceanReflectionWidth = 1, oceanReflectionHeight = 1;
+        UINT gtaoWidth = 1, gtaoHeight = 1;
     };
 
     void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls);
@@ -137,7 +156,7 @@ private:
 #endif
         Light, Scene, GlassReflNormal, Count
     };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;

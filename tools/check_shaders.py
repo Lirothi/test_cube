@@ -32,6 +32,10 @@ COMPUTE_ENTRIES = [
     ("compose_cs.hlsl", "CSMain"),
     ("lighting_cs.hlsl", "CSMain"),
     ("ssr_cs.hlsl", "CSMain"),
+    ("gtao_cs.hlsl", "CSMain"),
+    ("gtao_filter_cs.hlsl", "CSMain"),
+    ("gtao_temporal_cs.hlsl", "CSMain"),
+    ("gtao_upsample_cs.hlsl", "CSMain"),
 ]
 
 

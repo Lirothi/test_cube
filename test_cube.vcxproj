@@ -432,6 +432,7 @@
     <ClInclude Include="sources/app/scene/SceneObjectFactory.h" />
     <ClInclude Include="sources/app/scene/SceneObjectRegistry.h" />
     <ClInclude Include="sources/app/scene/SceneFrameData.h" />
+    <ClInclude Include="sources/app/scene/GtaoSettingsJson.h" />
     <ClInclude Include="sources/app/scene/SceneRenderConfig.h" />
     <ClInclude Include="sources/app/scene/SceneRenderer.h" />
     <ClInclude Include="sources/app/scene/SceneRenderQueue.h" />
@@ -593,6 +594,10 @@
     <None Include="shaders\film_curve.hlsli" />
     <None Include="shaders\local_exposure.hlsli" />
     <None Include="shaders\ibl_common.hlsli" />
+    <None Include="shaders\gtao_cs.hlsl" />
+    <None Include="shaders\gtao_filter_cs.hlsl" />
+    <None Include="shaders\gtao_temporal_cs.hlsl" />
+    <None Include="shaders\gtao_upsample_cs.hlsl" />
     <None Include="shaders\exposure_histogram_cs.hlsl" />
     <None Include="shaders\exposure_solve_cs.hlsl" />
     <None Include="shaders\exposure_baselum_cs.hlsl" />

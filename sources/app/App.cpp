@@ -34,6 +34,8 @@ bool g_hudHidden = false;
 // Single-process settings sweep; see App.h. Set by main.cpp from "--sweep=<setting>:<v0>,...".
 std::string g_sweepSetting;
 std::vector<float> g_sweepValues;
+// Fixed settings for the whole run; see App.h. Set by main.cpp from "--set=<name>:<value>;...".
+std::vector<std::pair<std::string, float>> g_fixedSettings;
 
 #include "app/levels/JsonLevel.h"
 #include "rendering/lighting/Skybox.h" // --sweep=light.skyIntensity
@@ -187,7 +189,8 @@ namespace
     // names rather than a reflection system -- this is a capture harness, and a name that does not
     // match should be loud and cheap to diagnose, not silently ignored.
     // Returns false for an unknown name so the caller can say so once.
-    bool ApplySweepValue(Scene& scene, const std::string& setting, float value)
+    bool ApplySweepValue(Scene& scene, SceneRenderSettings& renderSettings,
+                         const std::string& setting, float value)
     {
         render::CameraExposureSettings& e = scene.CameraExposureRef();
         render::ColorPipelineSettings& c = scene.ColorPipelineRef();
@@ -197,6 +200,30 @@ namespace
         // in lighting_cs, which is a camera control wearing a light's name.
         if (setting == "light.exposure") { scene.DirectionalLightRef().SetExposure(value); return true; }
         if (setting == "light.ambient")  { scene.DirectionalLightRef().SetAmbient(value);  return true; }
+        // P6B: the AO pass and its knobs, so a sweep can measure it before it is wired into
+        // lighting. `gtao.enabled` is the A/B switch the plan requires before it becomes default.
+        if (setting == "gtao.enabled")     { scene.GtaoRef().enabled = value != 0.0f; return true; }
+        if (setting == "gtao.worldRadius") { scene.GtaoRef().worldRadius = value;     return true; }
+        if (setting == "gtao.thickness")   { scene.GtaoRef().thickness = value;       return true; }
+        if (setting == "gtao.intensity")   { scene.GtaoRef().intensity = value;       return true; }
+        if (setting == "gtao.numAngles")   { scene.GtaoRef().numAngles = (uint32_t)std::max(1.0f, value); return true; }
+        if (setting == "gtao.numSteps")    { scene.GtaoRef().numSteps = (uint32_t)std::max(1.0f, value);  return true; }
+        // Items 3-5: one key per filter stage, so a sweep can isolate the denoise from the
+        // temporal from the upsample instead of measuring the whole chain at once.
+        if (setting == "gtao.denoise")     { scene.GtaoRef().denoise = value != 0.0f; return true; }
+        if (setting == "gtao.temporal")    { scene.GtaoRef().temporal = value != 0.0f; return true; }
+        if (setting == "gtao.filterRadius") { scene.GtaoRef().filterRadius = (uint32_t)std::max(0.0f, value); return true; }
+        if (setting == "gtao.filterPlaneTolerance") { scene.GtaoRef().filterPlaneTolerance = value; return true; }
+        if (setting == "gtao.temporalBlendWeight") { scene.GtaoRef().temporalBlendWeight = value; return true; }
+        if (setting == "gtao.temporalClampRange") { scene.GtaoRef().temporalClampRange = value; return true; }
+        if (setting == "gtao.useGBufferNormal") { scene.GtaoRef().useGBufferNormal = value != 0.0f; return true; }
+        if (setting == "gtao.strength") { scene.GtaoRef().strength = value; return true; }
+        if (setting == "gtao.upsampleTolerance") { scene.GtaoRef().upsampleTolerance = value; return true; }
+        // The fullscreen debug blit, so a half-res intermediate can be captured headlessly instead
+        // of only judged by eye in the GUI. `debug.tex` = 0 shadow atlas, 1 GTAO raw, 2 denoised,
+        // 3 temporal, 4 upsampled; `debug.texMode` turns the blit on.
+        if (setting == "debug.texMode")    { renderSettings.debugTexMode = value != 0.0f; return true; }
+        if (setting == "debug.tex")        { renderSettings.debugTexTarget = (int)value; return true; }
         if (setting == "light.sunTemperatureK")
         {
             scene.DirectionalLightRef().SetUseSunTemperature(value > 0.0f);
@@ -720,6 +747,27 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 scene.Render(&renderer);
             }
 
+            // "--set=<name>:<value>;...": pin settings for the run. Applied once, here, because the
+            // scene has to exist first — several names in the table reach through it. Same
+            // dispatcher as --sweep, so a name works in both or in neither.
+            if (!g_fixedSettings.empty())
+            {
+                static bool fixedApplied = false;
+                if (!fixedApplied)
+                {
+                    fixedApplied = true;
+                    for (const auto& kv : g_fixedSettings)
+                    {
+                        const bool known = ApplySweepValue(scene, appController_.SettingsRef(),
+                                                           kv.first, kv.second);
+                        char msg[192];
+                        std::snprintf(msg, sizeof(msg), "[set] %s = %g%s\n", kv.first.c_str(),
+                                      kv.second, known ? "" : "  (UNKNOWN SETTING)");
+                        OutputDebugStringA(msg);
+                    }
+                }
+            }
+
             // "--shot=<path>": after the warmup delay (ocean/particle sim settling), grab the
             // just-presented backbuffer to a PNG and quit. Reliable on the flip-model swapchain.
             //
@@ -746,7 +794,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     appliedSweepIndex != shotIndex)
                 {
                     const float value = g_sweepValues[static_cast<size_t>(shotIndex)];
-                    const bool known = ApplySweepValue(scene, g_sweepSetting, value);
+                    const bool known = ApplySweepValue(scene, appController_.SettingsRef(),
+                                                      g_sweepSetting, value);
                     if (!known && !sweepNameReported)
                     {
                         OutputDebugStringA(("[sweep] unknown setting: " + g_sweepSetting + "\n").c_str());

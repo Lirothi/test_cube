@@ -26,6 +26,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     ambientRgb = material->ComputeCB0FieldHandle("ambientRgb");
     skyIrradianceEnabled = material->ComputeCB0FieldHandle("skyIrradianceEnabled");
     skyIrradianceScale = material->ComputeCB0FieldHandle("skyIrradianceScale");
+    gtaoEnabled = material->ComputeCB0FieldHandle("gtaoEnabled");
+    gtaoStrength = material->ComputeCB0FieldHandle("gtaoStrength");
     exposure = material->ComputeCB0FieldHandle("exposure");
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     camDir = material->ComputeCB0FieldHandle("camDirWS");
@@ -143,6 +145,8 @@ void SceneComposeCBHandles::Populate(Material* material)
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     enableSkySpecular = material->ComputeCB0FieldHandle("enableSkySpecular");
     skySpecMipCount = material->ComputeCB0FieldHandle("skySpecMipCount");
+    gtaoEnabled = material->ComputeCB0FieldHandle("gtaoEnabled");
+    gtaoStrength = material->ComputeCB0FieldHandle("gtaoStrength");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
     shoreWetnessWindow = material->ComputeCB0FieldHandle("shoreWetnessWindow");
@@ -389,6 +393,38 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matExposureSolveCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    if (!matGtaoCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/gtao_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matGtaoCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
+    if (!matGtaoFilterCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/gtao_filter_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matGtaoFilterCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
+    if (!matGtaoTemporalCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/gtao_temporal_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matGtaoTemporalCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
+    if (!matGtaoUpsampleCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/gtao_upsample_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matGtaoUpsampleCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     if (!matSSR_)
     {
         Material::ComputeDesc cd{};
@@ -539,6 +575,10 @@ void SceneResourceBootstrapper::RefreshHandles()
     exposureHistogramHandles_.Populate(matExposureBuildCS_.get());
     exposureSolveHandles_.Populate(matExposureSolveCS_.get());
     exposureBaseLumHandles_.Populate(matExposureBaseLumCS_.get());
+    gtaoHandles_.Populate(matGtaoCS_.get());
+    gtaoFilterHandles_.Populate(matGtaoFilterCS_.get());
+    gtaoTemporalHandles_.Populate(matGtaoTemporalCS_.get());
+    gtaoUpsampleHandles_.Populate(matGtaoUpsampleCS_.get());
     ssrHandles_.Populate(matSSR_.get());
     blurHandles_.Populate(matBlur_.get());
 #if WITH_EDITOR
@@ -596,6 +636,125 @@ UINT SceneResourceBootstrapper::GetExposureHistogramCBSizeBytes() const
     return matExposureBuildCS_ ? matExposureBuildCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
+void GtaoHandles::Populate(Material* material)
+{
+    if (!material) { return; }
+    view = material->ComputeCB0FieldHandle("view");
+    invProj = material->ComputeCB0FieldHandle("invProj");
+    aoSize = material->ComputeCB0FieldHandle("aoSize");
+    invAoSize = material->ComputeCB0FieldHandle("invAoSize");
+    depthA = material->ComputeCB0FieldHandle("depthA");
+    depthB = material->ComputeCB0FieldHandle("depthB");
+    worldRadius = material->ComputeCB0FieldHandle("worldRadius");
+    thickness = material->ComputeCB0FieldHandle("thickness");
+    intensity = material->ComputeCB0FieldHandle("intensity");
+    fadeStart = material->ComputeCB0FieldHandle("fadeStart");
+    fadeEnd = material->ComputeCB0FieldHandle("fadeEnd");
+    invTanHalfFovY = material->ComputeCB0FieldHandle("invTanHalfFovY");
+    numAngles = material->ComputeCB0FieldHandle("numAngles");
+    numSteps = material->ComputeCB0FieldHandle("numSteps");
+    frameIndex = material->ComputeCB0FieldHandle("frameIndex");
+    useGBufferNormal = material->ComputeCB0FieldHandle("useGBufferNormal");
+}
+
+UINT SceneResourceBootstrapper::GetGtaoCBSizeBytes() const
+{
+    return matGtaoCS_ ? matGtaoCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void SceneResourceBootstrapper::WriteGtaoConstants(const GtaoPassConstants& d, uint8_t* dest) const
+{
+    if (!matGtaoCS_ || !dest) { return; }
+    const auto& h = gtaoHandles_;
+    matGtaoCS_->UpdateCBField(h.view, d.view, dest);
+    matGtaoCS_->UpdateCBField(h.invProj, d.invProj, dest);
+    matGtaoCS_->UpdateCBField(h.aoSize, d.aoSize, dest);
+    matGtaoCS_->UpdateCBField(h.invAoSize, d.invAoSize, dest);
+    matGtaoCS_->UpdateCBField(h.depthA, d.depthA, dest);
+    matGtaoCS_->UpdateCBField(h.depthB, d.depthB, dest);
+    matGtaoCS_->UpdateCBField(h.worldRadius, d.worldRadius, dest);
+    matGtaoCS_->UpdateCBField(h.thickness, d.thickness, dest);
+    matGtaoCS_->UpdateCBField(h.intensity, d.intensity, dest);
+    matGtaoCS_->UpdateCBField(h.fadeStart, d.fadeStart, dest);
+    matGtaoCS_->UpdateCBField(h.fadeEnd, d.fadeEnd, dest);
+    matGtaoCS_->UpdateCBField(h.invTanHalfFovY, d.invTanHalfFovY, dest);
+    matGtaoCS_->UpdateCBField(h.numAngles, d.numAngles, dest);
+    matGtaoCS_->UpdateCBField(h.numSteps, d.numSteps, dest);
+    matGtaoCS_->UpdateCBField(h.frameIndex, d.frameIndex, dest);
+    matGtaoCS_->UpdateCBField(h.useGBufferNormal, d.useGBufferNormal, dest);
+}
+
+void GtaoFilterHandles::Populate(Material* material)
+{
+    if (!material) { return; }
+    aoSize = material->ComputeCB0FieldHandle("aoSize");
+    invAoSize = material->ComputeCB0FieldHandle("invAoSize");
+    outSize = material->ComputeCB0FieldHandle("outSize");
+    invOutSize = material->ComputeCB0FieldHandle("invOutSize");
+    depthA = material->ComputeCB0FieldHandle("depthA");
+    depthB = material->ComputeCB0FieldHandle("depthB");
+    planeTolerance = material->ComputeCB0FieldHandle("planeTolerance");
+    blendWeight = material->ComputeCB0FieldHandle("blendWeight");
+    upsampleTolerance = material->ComputeCB0FieldHandle("upsampleTolerance");
+    historyValid = material->ComputeCB0FieldHandle("historyValid");
+    filterRadius = material->ComputeCB0FieldHandle("filterRadius");
+    temporalClampRange = material->ComputeCB0FieldHandle("temporalClampRange");
+}
+
+namespace
+{
+// The three P6B filter kernels declare the SAME cbuffer, so one writer serves all of them; only
+// the (material, handles) pair differs. Written out rather than repeated three times because the
+// failure mode of a drifting copy is a field that silently keeps its default.
+void WriteGtaoFilterCB(Material* material, const GtaoFilterHandles& h,
+                       const GtaoFilterConstants& d, uint8_t* dest)
+{
+    if (!material || !dest) { return; }
+    material->UpdateCBField(h.aoSize, d.aoSize, dest);
+    material->UpdateCBField(h.invAoSize, d.invAoSize, dest);
+    material->UpdateCBField(h.outSize, d.outSize, dest);
+    material->UpdateCBField(h.invOutSize, d.invOutSize, dest);
+    material->UpdateCBField(h.depthA, d.depthA, dest);
+    material->UpdateCBField(h.depthB, d.depthB, dest);
+    material->UpdateCBField(h.planeTolerance, d.planeTolerance, dest);
+    material->UpdateCBField(h.blendWeight, d.blendWeight, dest);
+    material->UpdateCBField(h.upsampleTolerance, d.upsampleTolerance, dest);
+    material->UpdateCBField(h.historyValid, d.historyValid, dest);
+    material->UpdateCBField(h.filterRadius, d.filterRadius, dest);
+    material->UpdateCBField(h.temporalClampRange, d.temporalClampRange, dest);
+}
+} // namespace
+
+UINT SceneResourceBootstrapper::GetGtaoFilterCBSizeBytes() const
+{
+    return matGtaoFilterCS_ ? matGtaoFilterCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+UINT SceneResourceBootstrapper::GetGtaoTemporalCBSizeBytes() const
+{
+    return matGtaoTemporalCS_ ? matGtaoTemporalCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+UINT SceneResourceBootstrapper::GetGtaoUpsampleCBSizeBytes() const
+{
+    return matGtaoUpsampleCS_ ? matGtaoUpsampleCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void SceneResourceBootstrapper::WriteGtaoFilterConstants(const GtaoFilterConstants& d, uint8_t* dest) const
+{
+    WriteGtaoFilterCB(matGtaoFilterCS_.get(), gtaoFilterHandles_, d, dest);
+}
+
+void SceneResourceBootstrapper::WriteGtaoTemporalConstants(const GtaoFilterConstants& d, uint8_t* dest) const
+{
+    WriteGtaoFilterCB(matGtaoTemporalCS_.get(), gtaoTemporalHandles_, d, dest);
+}
+
+void SceneResourceBootstrapper::WriteGtaoUpsampleConstants(const GtaoFilterConstants& d, uint8_t* dest) const
+{
+    WriteGtaoFilterCB(matGtaoUpsampleCS_.get(), gtaoUpsampleHandles_, d, dest);
+}
+
 UINT SceneResourceBootstrapper::GetExposureBaseLumCBSizeBytes() const
 {
     return matExposureBaseLumCS_ ? matExposureBaseLumCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
@@ -639,6 +798,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.ambientRgb, data.ambientRgb, dest);
     matLighting_->UpdateCBField(handles.skyIrradianceEnabled, data.skyIrradianceEnabled, dest);
     matLighting_->UpdateCBField(handles.skyIrradianceScale, data.skyIrradianceScale, dest);
+    matLighting_->UpdateCBField(handles.gtaoEnabled, data.gtaoEnabled, dest);
+    matLighting_->UpdateCBField(handles.gtaoStrength, data.gtaoStrength, dest);
     matLighting_->UpdateCBField(handles.exposure, data.exposure, dest);
     matLighting_->UpdateCBField(handles.camPos, data.camPos, dest);
     matLighting_->UpdateCBField(handles.camDir, data.camDir, dest);
@@ -847,6 +1008,8 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.camPos, data.camPos, dest);
     matComposeCS_->UpdateCBField(handles.enableSkySpecular, data.enableSkySpecular, dest);
     matComposeCS_->UpdateCBField(handles.skySpecMipCount, data.skySpecMipCount, dest);
+    matComposeCS_->UpdateCBField(handles.gtaoEnabled, data.gtaoEnabled, dest);
+    matComposeCS_->UpdateCBField(handles.gtaoStrength, data.gtaoStrength, dest);
     matComposeCS_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matComposeCS_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
     matComposeCS_->UpdateCBField(handles.shoreWetnessWindow, data.shoreWetnessWindow, dest);

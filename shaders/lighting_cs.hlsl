@@ -27,6 +27,10 @@ Texture2D CausticsAtlas : register(t9);
 // F8: cosine-convolved sky irradiance, already divided by PI, so a Lambertian surface multiplies
 // its albedo by this directly. Inert unless `skyIrradianceEnabled` says the level has one.
 TextureCube SkyIrradiance : register(t10);
+// P6B item 7: dynamic screen-space AO at RENDER resolution. Read only when `gtaoEnabled`;
+// the target is not written at all when the pass is off, so an unconditional read would be
+// sampling whatever was left in it.
+Texture2D GtaoTex : register(t11);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -52,6 +56,10 @@ cbuffer PerFrame : register(b0)
     // The level's sky intensity, so the irradiance cube honours the same control the background,
     // compose and the ocean do.
     float skyIrradianceScale;
+    // P6B item 6/7. `gtaoEnabled` 0 leaves the target unread (it is not written when the pass is
+    // off). `gtaoStrength` is UE's AmbientOcclusionStaticFraction: lerp(1, ao, strength).
+    uint gtaoEnabled;
+    float gtaoStrength;
 
     float4x4 invView;
     float4x4 invProj;
@@ -93,6 +101,23 @@ cbuffer PerFrame : register(b0)
 }
 
 static const float pcfRadius = 1.0f;
+
+// P6B item 6 -- the one place the two occlusion terms meet. Shared shape with compose_cs; if this
+// rule ever changes, both change together or the diffuse and specular halves disagree about how
+// occluded a pixel is.
+float CombinedAo(float materialAo, float2 uv)
+{
+    if (gtaoEnabled == 0u)
+    {
+        return materialAo;
+    }
+    // `strength` scales the DYNAMIC term only. UE's AmbientOcclusionStaticFraction damps the whole
+    // product, but here the material term already shipped in F9 and is not this step's to switch
+    // off: at strength 0 this must be an EXACT no-op against the pre-P6B build, and the sweep
+    // level's AO row is what proves it (damping the product moved it by 177/255).
+    const float dynamicAo = saturate(GtaoTex.SampleLevel(gSmpPoint, uv, 0).r);
+    return saturate(materialAo * lerp(1.0f, dynamicAo, saturate(gtaoStrength)));
+}
 
 int ChooseCascadeIndex(float3 Pws)
 {
@@ -244,7 +269,7 @@ CausticsParams LoadCausticsParams()
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 
@@ -329,11 +354,19 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     {
         color = ambient * ambientRgb;
     }
-    // F9: material AO. It occludes INDIRECT DIFFUSE and nothing else -- the sun, the local lights
-    // and emissive are direct and a cavity map has no business dimming them. `gbAux.r` has carried
-    // this since F3 and nothing read it until now; 1 is the default, so a material that does not
-    // author AO is bit-identical to before.
-    color *= materialAo;
+    // F9 + P6B items 6-7: occlude INDIRECT DIFFUSE and nothing else. The sun, the local lights and
+    // emissive are direct, and neither a cavity map nor a screen-space estimate has any business
+    // dimming them.
+    //
+    // THE COMBINE RULE IS A PRODUCT, and it is UE's (DiffuseIndirectComposite.usf:371,
+    // `lerp(1, MaterialAO * DynamicAO, AOMask * AmbientOcclusionStaticFraction)`). A product is the
+    // right shape because the two terms describe INDEPENDENT occluders: the material's own cavities,
+    // which no depth buffer can see, and the geometry around this pixel, which no baked map can see.
+    // It is bounded in [0,1] by construction, monotonic in both inputs, and each input is an exact
+    // identity at 1 -- so a scene with neither term is bit-identical to the build before this.
+    // (`min` was the alternative: it never double-counts, but it also refuses to let a cavity deepen
+    // a contact, which is exactly the case this pass exists to render.)
+    color *= CombinedAo(materialAo, uv);
 
     // S0.3: seed the debug cascade with the one the split selection picks, so surfaces that never
     // sample a shadow (facing away from the sun) still show their zone. A real sample below
