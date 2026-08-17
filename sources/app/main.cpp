@@ -171,6 +171,11 @@ int WINAPI WinMain(
         if (const char* m = std::strstr(lpCmdLine, "--sky-face=")) {
             opts.skyboxFaceSize = std::atoi(m + std::strlen("--sky-face="));
         }
+        // "--sky-target=<median luminance>": sky calibration target, 0 to keep the source's own
+        // radiance. See ImportOptions::skyTargetMedianLuma.
+        if (const char* m = std::strstr(lpCmdLine, "--sky-target=")) {
+            opts.skyTargetMedianLuma = (float)std::atof(m + std::strlen("--sky-target="));
+        }
         opts.highQuality = std::strstr(lpCmdLine, "--high") != nullptr; // opt-in exhaustive BC7
         opts.flipGreen   = std::strstr(lpCmdLine, "--flip-green") != nullptr;
         opts.bc5Normal   = std::strstr(lpCmdLine, "--bc5-normal") != nullptr;

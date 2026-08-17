@@ -36,6 +36,7 @@ std::string g_sweepSetting;
 std::vector<float> g_sweepValues;
 
 #include "app/levels/JsonLevel.h"
+#include "rendering/lighting/Skybox.h" // --sweep=light.skyIntensity
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
@@ -196,6 +197,11 @@ namespace
         // in lighting_cs, which is a camera control wearing a light's name.
         if (setting == "light.exposure") { scene.DirectionalLightRef().SetExposure(value); return true; }
         if (setting == "light.ambient")  { scene.DirectionalLightRef().SetAmbient(value);  return true; }
+        if (setting == "light.skyIntensity")
+        {
+            if (Skybox* sky = scene.GetSkybox()) { sky->SetExposure(value); }
+            return true;
+        }
         if (setting == "light.sunIntensity") { scene.DirectionalLightRef().SetSunIntensity(value); return true; }
         // P4 equivalence probe: put the scene back into the LEGACY split -- unit sun intensity with
         // the factor on the retired whole-scene multiplier. If the migration folds correctly this
@@ -263,17 +269,22 @@ namespace
         if (setting == "color.gradeGamma")      { c.gradeGamma = value;      return true; }
         if (setting == "color.gradeGain")       { c.gradeGain = value;       return true; }
         if (setting == "color.gradeOffset")     { c.gradeOffset = value;     return true; }
-        if (setting == "color.localHighlightContrast") { c.localHighlightContrast = value; return true; }
-        if (setting == "color.localShadowContrast")    { c.localShadowContrast = value;    return true; }
-        if (setting == "color.localDetailStrength")    { c.localDetailStrength = value;    return true; }
+        // P3B moved onto the camera. The `color.*` spellings are kept as aliases so older notes,
+        // scripts and the plan's recorded sweeps keep resolving.
+        if (setting == "exposure.localHighlightContrast" || setting == "color.localHighlightContrast")
+        { e.localHighlightContrast = value; return true; }
+        if (setting == "exposure.localShadowContrast" || setting == "color.localShadowContrast")
+        { e.localShadowContrast = value; return true; }
+        if (setting == "exposure.localDetailStrength" || setting == "color.localDetailStrength")
+        { e.localDetailStrength = value; return true; }
         // Composite: both local contrast scales at once. The two are independent branches of the
         // same function (base above / below middle grey), so sweeping them together is the only way
         // to measure the base EXPANSION the plan's P3B target needs -- one knob alone can move only
         // one end of the histogram, and the reference wants both ends moved in the same shot.
-        if (setting == "color.localContrast")
+        if (setting == "exposure.localContrast" || setting == "color.localContrast")
         {
-            c.localHighlightContrast = value;
-            c.localShadowContrast = value;
+            e.localHighlightContrast = value;
+            e.localShadowContrast = value;
             return true;
         }
         return false;

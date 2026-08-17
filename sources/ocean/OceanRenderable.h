@@ -193,6 +193,9 @@ private:
     Math::float4 GetShoreSamplingParams() const;
     Math::float4 GetSunDirAmbient() const;
     Math::float4 GetSunColorExposure() const;
+    // P4: the level's sky intensity, so the water scales its skybox samples by the same number
+    // compose does. x = intensity, yzw reserved.
+    Math::float4 GetSkyParams() const;
     Math::float4 GetDeepScatterColor() const;
     Math::float4 GetSssColor() const;
     Math::float4 GetDiffuseColor() const;

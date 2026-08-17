@@ -67,6 +67,12 @@ private:
     void PollImport(AssetRegistry& registry, bool& finishedOut);
     void OpenImportDialog(const Item& item); // texture sets: choose files + preset before importing
     void DrawImportDialog();
+    // Skybox import asks its own two questions -- cube face size and the calibration target -- in a
+    // modal, the same way meshes and texture sets do. They used to sit in the shared Options block,
+    // where they were noise for every other asset kind and easy to miss for the one kind that needs
+    // them.
+    void OpenSkyboxImportDialog(const Item& item);
+    void DrawSkyboxImportDialog();
     void OpenMeshImportDialog(const Item& item);
     void DrawMeshImportDialog(AssetRegistry& registry);
     bool RecreateMeshAssets(const Item& item, float spawnScale,
@@ -86,6 +92,10 @@ private:
     // Options (mirror assets::ImportOptions).
     int  maxTextureSize_ = 2048;
     bool highQuality_ = false;
+    // Sky calibration target (median luminance). HDRI libraries are not calibrated to the engine's
+    // linear scale, so this is the dial that decides how bright an imported sky is. 0 = keep the
+    // source's own radiance. See ImportOptions::skyTargetMedianLuma.
+    float skyTargetMedianLuma_ = 0.18f;
     bool flipGreen_ = false;
     bool centerNormals_ = true; // re-center normal maps with a DC "purple cast" lean (threshold-gated)
     bool moveIntoProject_ = true;
@@ -117,6 +127,8 @@ private:
 
     // Import dialog (texture sets only): pick which images to convert + whether to make a preset.
     bool showImportDialog_ = false;
+    bool showSkyboxImportDialog_ = false;
+    Item skyboxDialogItem_{};
     Item dialogItem_;
     std::vector<DialogFile> dialogFiles_;
     bool dialogCreatePreset_ = true;

@@ -2,6 +2,8 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <cctype>
+#include <string_view>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -45,6 +47,20 @@
 
 namespace
 {
+    // Case-insensitive suffix test, for hiding the IBL sibling cubes from the sky picker.
+    bool EndsWithSuffix(std::string_view value, std::string_view suffix)
+    {
+        if (value.size() < suffix.size()) { return false; }
+        const size_t off = value.size() - suffix.size();
+        for (size_t i = 0; i < suffix.size(); ++i)
+        {
+            const char a = static_cast<char>(std::tolower(static_cast<unsigned char>(value[off + i])));
+            const char b = static_cast<char>(std::tolower(static_cast<unsigned char>(suffix[i])));
+            if (a != b) { return false; }
+        }
+        return true;
+    }
+
     float JsonFloat(const nlohmann::json& p, const char* key, float def)
     {
         const auto it = p.find(key);
@@ -723,6 +739,64 @@ namespace
                 : "Manual %.2f EV100 -> x%.5f",
                 shownEv, multiplier);
 
+            ImGui::SeparatorText("Local exposure");
+            dragF("Local Highlights", "localHighlightContrast", 1.0f, 0.01f, 0.1f, 2.0f, "%.3f");
+            InspectorHelp("Contrast scale for everything brighter than middle grey, judged by the "
+                          "BLURRED neighbourhood rather than the pixel. 1 = off.\n\n"
+                          "Below 1 COMPRESSES -- bright regions come down while their detail stays "
+                          "(measured on sun_glint: 0.55 cut clipping 65x for a 2% median move). "
+                          "Above 1 EXPANDS, which on wind_test is the more useful direction: this "
+                          "scene's problem is too little range, not too much. Either way it is the "
+                          "one thing a global exposure cannot do.");
+            dragF("Local Shadows", "localShadowContrast", 1.0f, 0.01f, 0.1f, 2.0f, "%.3f");
+            InspectorHelp("Same for everything darker than middle grey. Below 1 lifts shaded "
+                          "regions without touching the lit ones; above 1 deepens them, and being "
+                          "per-neighbourhood it deepens WITHOUT crushing the lit side.");
+            dragF("Local Detail", "localDetailStrength", 1.0f, 0.01f, 0.0f, 3.0f, "%.3f");
+            InspectorHelp("How much per-pixel detail survives the scaling. 1 = all of it, which is "
+                          "the point: scaling the blurred base while passing detail through "
+                          "untouched is what keeps micro-contrast.");
+            dragF("Local HL Threshold", "localHighlightThreshold", 0.0f, 0.05f, 0.0f, 8.0f, "%.2f");
+            dragF("Local SH Threshold", "localShadowThreshold", 0.0f, 0.05f, 0.0f, 8.0f, "%.2f");
+            InspectorHelp("Stops away from middle grey before the effect starts, so mid-tones -- "
+                          "usually the subject -- are left alone.");
+            {
+                // Mirrors the dev window's local-exposure presets exactly, including "Expand",
+                // which is the one measured against docs/ref/ref_wind_test.png.
+                struct LocalPreset { const char* name; float hl, sh, detail, hlT, shT; const char* tip; };
+                static const LocalPreset kLocal[] = {
+                    { "Off", 1.00f, 1.00f, 1.00f, 0.00f, 0.00f,
+                      "Neutral -- a true no-op, the shader skips the block entirely." },
+                    { "Gentle", 0.85f, 0.90f, 1.00f, 0.50f, 0.50f,
+                      "Mild COMPRESSION. Reach for it when a frame clips, e.g. into the sun over water." },
+                    { "Strong", 0.65f, 0.75f, 1.10f, 0.25f, 0.25f,
+                      "Heavy compression. Check the horizon for halos." },
+                    { "Expand", 1.35f, 1.35f, 1.00f, 0.00f, 0.00f,
+                      "The measured match to the reference: p99/p02 spread 23.6x -> 41.4x on the "
+                      "overview view with clipping still at 0.000%. 1.5 on both reaches 52.9x "
+                      "against the reference's 53.6x. Median drops a little -- about +0.1 EV back." },
+                };
+                ImGui::PushID("localPresets");
+                for (int i = 0; i < static_cast<int>(std::size(kLocal)); ++i)
+                {
+                    const LocalPreset& preset = kLocal[i];
+                    if (i != 0) { ImGui::SameLine(); }
+                    if (ImGui::SmallButton(preset.name))
+                    {
+                        nlohmann::json after = p;
+                        after["localHighlightContrast"] = preset.hl;
+                        after["localShadowContrast"] = preset.sh;
+                        after["localDetailStrength"] = preset.detail;
+                        after["localHighlightThreshold"] = preset.hlT;
+                        after["localShadowThreshold"] = preset.shT;
+                        executeChange(std::move(after), historyLabel);
+                    }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", preset.tip); }
+                }
+                ImGui::PopID();
+            }
+
+
             // Live metering state and the histogram, the same readouts the developer window shows.
             // They belong here too: the percentile and mask sliders above are unreadable without
             // seeing the distribution they are clipping.
@@ -807,63 +881,6 @@ namespace
                     p["toneCurve"] = (curveIndex == 1) ? "agx" : (curveIndex == 2 ? "filmic" : "legacy");
                 }
                 trackContinuousEdit(beforeItem, changed);
-            }
-
-            ImGui::SeparatorText("Local exposure");
-            dragF("Local Highlights", "localHighlightContrast", 1.0f, 0.01f, 0.1f, 2.0f, "%.3f");
-            InspectorHelp("Contrast scale for everything brighter than middle grey, judged by the "
-                          "BLURRED neighbourhood rather than the pixel. 1 = off.\n\n"
-                          "Below 1 COMPRESSES -- bright regions come down while their detail stays "
-                          "(measured on sun_glint: 0.55 cut clipping 65x for a 2% median move). "
-                          "Above 1 EXPANDS, which on wind_test is the more useful direction: this "
-                          "scene's problem is too little range, not too much. Either way it is the "
-                          "one thing a global exposure cannot do.");
-            dragF("Local Shadows", "localShadowContrast", 1.0f, 0.01f, 0.1f, 2.0f, "%.3f");
-            InspectorHelp("Same for everything darker than middle grey. Below 1 lifts shaded "
-                          "regions without touching the lit ones; above 1 deepens them, and being "
-                          "per-neighbourhood it deepens WITHOUT crushing the lit side.");
-            dragF("Local Detail", "localDetailStrength", 1.0f, 0.01f, 0.0f, 3.0f, "%.3f");
-            InspectorHelp("How much per-pixel detail survives the scaling. 1 = all of it, which is "
-                          "the point: scaling the blurred base while passing detail through "
-                          "untouched is what keeps micro-contrast.");
-            dragF("Local HL Threshold", "localHighlightThreshold", 0.0f, 0.05f, 0.0f, 8.0f, "%.2f");
-            dragF("Local SH Threshold", "localShadowThreshold", 0.0f, 0.05f, 0.0f, 8.0f, "%.2f");
-            InspectorHelp("Stops away from middle grey before the effect starts, so mid-tones -- "
-                          "usually the subject -- are left alone.");
-            {
-                // Mirrors the dev window's local-exposure presets exactly, including "Expand",
-                // which is the one measured against docs/ref/ref_wind_test.png.
-                struct LocalPreset { const char* name; float hl, sh, detail, hlT, shT; const char* tip; };
-                static const LocalPreset kLocal[] = {
-                    { "Off", 1.00f, 1.00f, 1.00f, 0.00f, 0.00f,
-                      "Neutral -- a true no-op, the shader skips the block entirely." },
-                    { "Gentle", 0.85f, 0.90f, 1.00f, 0.50f, 0.50f,
-                      "Mild COMPRESSION. Reach for it when a frame clips, e.g. into the sun over water." },
-                    { "Strong", 0.65f, 0.75f, 1.10f, 0.25f, 0.25f,
-                      "Heavy compression. Check the horizon for halos." },
-                    { "Expand", 1.35f, 1.35f, 1.00f, 0.00f, 0.00f,
-                      "The measured match to the reference: p99/p02 spread 23.6x -> 41.4x on the "
-                      "overview view with clipping still at 0.000%. 1.5 on both reaches 52.9x "
-                      "against the reference's 53.6x. Median drops a little -- about +0.1 EV back." },
-                };
-                ImGui::PushID("localPresets");
-                for (int i = 0; i < static_cast<int>(std::size(kLocal)); ++i)
-                {
-                    const LocalPreset& preset = kLocal[i];
-                    if (i != 0) { ImGui::SameLine(); }
-                    if (ImGui::SmallButton(preset.name))
-                    {
-                        nlohmann::json after = p;
-                        after["localHighlightContrast"] = preset.hl;
-                        after["localShadowContrast"] = preset.sh;
-                        after["localDetailStrength"] = preset.detail;
-                        after["localHighlightThreshold"] = preset.hlT;
-                        after["localShadowThreshold"] = preset.shT;
-                        executeChange(std::move(after), historyLabel);
-                    }
-                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", preset.tip); }
-                }
-                ImGui::PopID();
             }
 
             ImGui::SeparatorText("Colour grade (applies to every curve)");
@@ -981,6 +998,18 @@ namespace
         }
         else if (env.type == "skybox")
         {
+            dragF("Intensity", "intensity", 1.0f, 0.01f, 0.0f, 8.0f, "%.3f");
+            InspectorHelp(
+                "How bright this level's sky is, on the engine's linear scale. 1 = the cubemap's "
+                "own radiance, untouched.\n\n"
+                "It exists because HDRI libraries are not calibrated to our scale. Measured on "
+                "citrus_orchard_puresky_4k: the sky's median luminance is 0.657, and the default "
+                "manual exposure multiplier is 1.44, which puts 48.6% of the sky above 1.0 BEFORE "
+                "the tone curve runs. No curve can undo that -- it needs less light, not a "
+                "different shoulder. Around 0.45 brings that sky back under the knee.\n\n"
+                "Auto exposure used to hide this by metering it away. That is exactly why it must "
+                "not be the only thing holding the image together: turn adaptation off and the "
+                "scene should still be photographable.");
             const std::string current = p.value("texture", std::string());
             const std::string currentLabel = current.empty()
                 ? std::string("(none)")
@@ -994,6 +1023,16 @@ namespace
                     if (rec.id.type != EditorAssetType::Texture ||
                         !rec.texture.valid ||
                         rec.texture.kind != EditorTextureKind::TextureCube)
+                    {
+                        continue;
+                    }
+                    // F7 ships SERVICE cubes beside every sky -- the GGX-prefiltered `_spec` and
+                    // the cosine-convolved `_diffuse`. They are cubemaps, so they pass the filter
+                    // above, but choosing one as the level's sky is never what anyone wants: the
+                    // first is a blurred stack indexed by roughness, the second is a 32^2 blob.
+                    // Hide them; the runtime finds them from the display cube's name by itself.
+                    if (EndsWithSuffix(rec.id.key, "_spec.dds") ||
+                        EndsWithSuffix(rec.id.key, "_diffuse.dds"))
                     {
                         continue;
                     }

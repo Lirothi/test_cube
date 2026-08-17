@@ -104,6 +104,9 @@ namespace
         auto skybox = std::make_unique<Skybox>(Widen(texture));
         skybox->Init(&ctx.renderer, uploads.CommandList(), uploads.KeepAlive());
         uploads.SubmitAndWait(&ctx.renderer);
+        // See JsonLevel: HDRI libraries are not calibrated to the engine's linear scale, so the
+        // level says how bright its sky is. 1 = the cubemap untouched.
+        skybox->SetExposure(JF(p, "intensity", 1.0f));
         ctx.scene.SetSkybox(std::move(skybox));
     }
 
@@ -221,6 +224,16 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         // the previous edit left behind.
         render::CameraExposureSettings exposure{};
         render::PhotographicSettingsJson::ApplyOverrides(p, exposure);
+        // The P3B fields moved here from the Color Pipeline object; an unconverted document still
+        // has them over there, so lift them rather than snapping the level back to neutral.
+        for (const EditorObject& other : ctx.document.Environment())
+        {
+            if (other.type == "colorPipeline")
+            {
+                render::PhotographicSettingsJson::MigrateLegacyLocalExposure(other.properties, p, exposure);
+                break;
+            }
+        }
         ctx.scene.SetCameraExposure(exposure);
     }
     else if (env.type == "colorPipeline")
@@ -229,6 +242,19 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         render::ColorPipelineSettings color{};
         render::PhotographicSettingsJson::ApplyOverrides(p, color);
         ctx.scene.SetColorPipeline(color);
+        // Legacy documents still carry the local-exposure fields here; keep the camera in step so
+        // an old level behaves the same as before the move until it is re-saved.
+        for (const EditorObject& other : ctx.document.Environment())
+        {
+            if (other.type == "cameraExposure")
+            {
+                render::CameraExposureSettings exposure{};
+                render::PhotographicSettingsJson::ApplyOverrides(other.properties, exposure);
+                render::PhotographicSettingsJson::MigrateLegacyLocalExposure(p, other.properties, exposure);
+                ctx.scene.SetCameraExposure(exposure);
+                break;
+            }
+        }
     }
     else if (env.type == "camera")
     {

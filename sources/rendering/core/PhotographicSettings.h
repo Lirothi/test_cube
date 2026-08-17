@@ -117,6 +117,29 @@ struct CameraExposureSettings
     // optional lux-backed sun UI in particular -- has to establish a scene-to-luminance scale
     // first, and this comment is the reason that is not free.
     float manualEv100 = 0.0f;
+
+    // P3B local exposure. It lives HERE, on the camera, and not on the colour pipeline: it is an
+    // exposure operation -- it decides how many stops a REGION of the frame receives -- and Unreal
+    // files it under exposure for the same reason. It was originally put on ColorPipelineSettings
+    // only because it is evaluated in the tonemap shader next to the grade, which is a fact about
+    // the implementation and not about what the control is. A level that still carries the fields
+    // in its `colorPipeline` block is read from there and re-saved here.
+    //
+    // A global exposure can only SLIDE the histogram; this varies exposure spatially, which is what
+    // lets shadow and highlight detail coexist the way an "HDR photo" does. Log-luminance is split
+    // into a blurred BASE and a DETAIL residual, only the base is scaled, and the detail goes back
+    // untouched -- that is what keeps micro-contrast and stops the flat "tone-mapped HDR" cliche.
+    //
+    // Neutral (every scale 1) is the default and a true no-op: the shader skips the block entirely.
+    // BELOW 1 compresses that end of the range; ABOVE 1 expands it, which on a scene whose problem
+    // is too little range rather than too much is the more useful direction.
+    float localHighlightContrast = 1.0f;
+    float localShadowContrast = 1.0f;
+    float localDetailStrength = 1.0f;
+    // Stops away from middle grey before the effect starts, so mid-tones -- usually the subject --
+    // are left alone rather than churned.
+    float localHighlightThreshold = 0.0f;
+    float localShadowThreshold = 0.0f;
 };
 
 // Display transform (plan section 6.1 / step P3).
@@ -188,23 +211,6 @@ struct ColorPipelineSettings
     float filmShoulder = 0.26f;
     float filmBlackClip = 0.0f;
     float filmWhiteClip = 0.04f;
-
-    // P3B local exposure. A global exposure can only SLIDE the histogram; this varies exposure
-    // spatially, which is what lets shadow and highlight detail coexist the way an "HDR photo"
-    // does. Log-luminance is split into a blurred BASE and a DETAIL residual, only the base is
-    // compressed, and the detail goes back untouched -- that is what keeps micro-contrast and
-    // stops the result looking like the flat "tone-mapped HDR" cliche.
-    //
-    // Neutral (every scale 1) is the default and a true no-op: the shader skips the block, so a
-    // level that does not ask for it is bit-identical. Values BELOW 1 compress that end of the
-    // range; 0.8 on highlights is a reasonable first try.
-    float localHighlightContrast = 1.0f;
-    float localShadowContrast = 1.0f;
-    float localDetailStrength = 1.0f;
-    // Stops away from middle grey before compression starts, so mid-tones -- usually the subject --
-    // are left alone rather than churned.
-    float localHighlightThreshold = 0.0f;
-    float localShadowThreshold = 0.0f;
 };
 
 // ---- EV100 conventions (plan section 6.2), documented once, here ----

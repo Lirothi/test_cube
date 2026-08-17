@@ -857,6 +857,443 @@ XMFLOAT3 CubeFaceDir(int face, float u, float v)
     }
 }
 
+//=============================================================================
+// F7 — offline IBL derivatives for split-sum image-based lighting.
+//
+// The display cube's ordinary mip chain is a BOX FILTER, not a GGX prefilter. The engine has been
+// treating it as one (`skyMip = roughness * kSkyRoughMaxMip` in the ocean, the same trick in
+// compose), which is why rough reflections read as "small sky" rather than as a broadened lobe.
+// These three resources are what a correct split-sum evaluation needs:
+//
+//   <stem>_spec.dds     GGX-prefiltered radiance. Mip m corresponds to roughness m/(mips-1), so the
+//                       runtime indexes it by perceptual roughness directly instead of guessing.
+//   <stem>_diffuse.dds  cosine-convolved irradiance, tiny (it is a 9-coefficient-worth signal), read
+//                       with the surface normal to replace the flat ambient constant.
+//   textures/brdf_lut.dds  the split-sum environment BRDF, indexed by (NoV, roughness). Scene
+//                       independent, generated once and shared by every level.
+//
+// Everything here is deterministic: fixed Hammersley sequences, fixed sample counts, no RNG. Two
+// imports of the same source produce byte-identical outputs, which is what makes the "did the
+// importer change?" question answerable by hashing.
+//=============================================================================
+
+// Scan a float32 image set for the failures that make an IBL bake silently useless: NaN/Inf from a
+// divide by a zero weight, and negatives from a filter that overshot. Also reports mean luminance,
+// which is the energy check -- a prefiltered mip must stay near the level below it, and a cosine
+// convolution must land near the source's average. Cheap enough to run on every bake.
+struct FloatStats { double meanLuma; float maxComp; size_t nonFinite; size_t negative; };
+
+FloatStats ScanFloatImages(const Image* images, size_t count)
+{
+    FloatStats s{ 0.0, 0.0f, 0, 0 };
+    double sum = 0.0;
+    size_t n = 0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        const Image& img = images[i];
+        for (size_t y = 0; y < img.height; ++y)
+        {
+            const float* row = reinterpret_cast<const float*>(img.pixels + y * img.rowPitch);
+            for (size_t x = 0; x < img.width; ++x)
+            {
+                const float* p = row + x * 4;
+                for (int c = 0; c < 3; ++c)
+                {
+                    if (!std::isfinite(p[c])) { ++s.nonFinite; continue; }
+                    if (p[c] < 0.0f) { ++s.negative; }
+                    if (p[c] > s.maxComp) { s.maxComp = p[c]; }
+                }
+                if (std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]))
+                {
+                    sum += 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+                    ++n;
+                }
+            }
+        }
+    }
+    s.meanLuma = (n > 0) ? sum / (double)n : 0.0;
+    return s;
+}
+
+std::string StatsLine(const FloatStats& s)
+{
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "meanLuma=%.5f max=%.3f nonFinite=%zu negative=%zu",
+                  s.meanLuma, s.maxComp, s.nonFinite, s.negative);
+    return buf;
+}
+
+// Direction -> cube face + face-local uv in [0,1]. The inverse of CubeFaceDir above; the two must
+// agree exactly or every prefiltered texel lands in the wrong place.
+void DirToFaceUV(const XMFLOAT3& d, int& face, float& u, float& v)
+{
+    const float ax = std::fabs(d.x), ay = std::fabs(d.y), az = std::fabs(d.z);
+    float ma;
+    float sc, tc;
+    if (ax >= ay && ax >= az)
+    {
+        ma = ax;
+        if (d.x > 0.0f) { face = 0; sc = -d.z; tc = -d.y; }
+        else            { face = 1; sc =  d.z; tc = -d.y; }
+    }
+    else if (ay >= az)
+    {
+        ma = ay;
+        if (d.y > 0.0f) { face = 2; sc = d.x; tc =  d.z; }
+        else            { face = 3; sc = d.x; tc = -d.z; }
+    }
+    else
+    {
+        ma = az;
+        if (d.z > 0.0f) { face = 4; sc =  d.x; tc = -d.y; }
+        else            { face = 5; sc = -d.x; tc = -d.y; }
+    }
+    u = 0.5f * (sc / ma + 1.0f);
+    v = 0.5f * (tc / ma + 1.0f);
+}
+
+// Bilinear sample of one mip of a float32 cube, by direction. Edges clamp inside the face rather
+// than reaching across the seam: the alternative is a per-edge neighbour table, and at the face
+// sizes and blur radii here the visible difference is nil while the bug surface is not.
+void SampleCubeDir(const ScratchImage& cube, size_t mip, const XMFLOAT3& dir, float out[3])
+{
+    XMFLOAT3 d = dir;
+    const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    if (len > 0.0f) { d.x /= len; d.y /= len; d.z /= len; }
+
+    int face; float u, v;
+    DirToFaceUV(d, face, u, v);
+
+    const Image* img = cube.GetImage(mip, (size_t)face, 0);
+    const float fx = u * (float)img->width - 0.5f;
+    const float fy = v * (float)img->height - 0.5f;
+    const int x0 = (int)std::floor(fx), y0 = (int)std::floor(fy);
+    const float tx = fx - (float)x0, ty = fy - (float)y0;
+
+    const auto clampi = [](int a, int lo, int hi) { return a < lo ? lo : (a > hi ? hi : a); };
+    const int xs[2] = { clampi(x0, 0, (int)img->width - 1), clampi(x0 + 1, 0, (int)img->width - 1) };
+    const int ys[2] = { clampi(y0, 0, (int)img->height - 1), clampi(y0 + 1, 0, (int)img->height - 1) };
+
+    float acc[3] = { 0.0f, 0.0f, 0.0f };
+    const float wx[2] = { 1.0f - tx, tx };
+    const float wy[2] = { 1.0f - ty, ty };
+    for (int j = 0; j < 2; ++j)
+    {
+        const float* row = reinterpret_cast<const float*>(img->pixels + (size_t)ys[j] * img->rowPitch);
+        for (int i = 0; i < 2; ++i)
+        {
+            const float w = wx[i] * wy[j];
+            const float* p = row + (size_t)xs[i] * 4;
+            acc[0] += p[0] * w; acc[1] += p[1] * w; acc[2] += p[2] * w;
+        }
+    }
+    out[0] = acc[0]; out[1] = acc[1]; out[2] = acc[2];
+}
+
+// Van der Corput radical inverse — the low-discrepancy half of Hammersley.
+float RadicalInverseVdC(uint32_t bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return (float)bits * 2.3283064365386963e-10f;
+}
+
+// GGX importance sample around +Z, then rotated into the frame of N by the caller.
+XMFLOAT3 ImportanceSampleGGX(float u1, float u2, float roughness, const XMFLOAT3& n)
+{
+    const float a = roughness * roughness;
+    const float phi = 6.2831853071795864f * u1;
+    const float cosTheta = std::sqrt((1.0f - u2) / (1.0f + (a * a - 1.0f) * u2));
+    const float sinTheta = std::sqrt(std::max(0.0f, 1.0f - cosTheta * cosTheta));
+
+    const XMFLOAT3 h{ sinTheta * std::cos(phi), sinTheta * std::sin(phi), cosTheta };
+
+    const XMFLOAT3 up = std::fabs(n.z) < 0.999f ? XMFLOAT3{ 0.0f, 0.0f, 1.0f } : XMFLOAT3{ 1.0f, 0.0f, 0.0f };
+    XMFLOAT3 tx{ up.y * n.z - up.z * n.y, up.z * n.x - up.x * n.z, up.x * n.y - up.y * n.x };
+    const float tl = std::sqrt(tx.x * tx.x + tx.y * tx.y + tx.z * tx.z);
+    tx.x /= tl; tx.y /= tl; tx.z /= tl;
+    const XMFLOAT3 ty{ n.y * tx.z - n.z * tx.y, n.z * tx.x - n.x * tx.z, n.x * tx.y - n.y * tx.x };
+
+    return { tx.x * h.x + ty.x * h.y + n.x * h.z,
+             tx.y * h.x + ty.y * h.y + n.y * h.z,
+             tx.z * h.x + ty.z * h.y + n.z * h.z };
+}
+
+// GGX-prefiltered radiance cube. Mip m <-> roughness m / (mipCount - 1); mip 0 is a straight copy so
+// a mirror surface still reads the sharp sky. N = V = R is the standard split-sum approximation --
+// it loses stretched grazing reflections and is what every real-time implementation ships.
+bool BuildPrefilteredSpecular(const ScratchImage& srcCubeMips, int baseFace, ScratchImage& out, Log& log)
+{
+    size_t mipCount = 1;
+    while ((baseFace >> mipCount) >= 8 && mipCount < 9) { ++mipCount; }
+
+    HRESULT hr = out.InitializeCube(DXGI_FORMAT_R32G32B32A32_FLOAT, (size_t)baseFace, (size_t)baseFace, 1, mipCount);
+    if (FAILED(hr)) { log.Line("ibl FAIL init spec cube " + Hex(hr)); return false; }
+
+    const size_t srcMips = srcCubeMips.GetMetadata().mipLevels;
+
+    for (size_t mip = 0; mip < mipCount; ++mip)
+    {
+        const float roughness = (mipCount > 1) ? (float)mip / (float)(mipCount - 1) : 0.0f;
+        const int size = std::max(1, baseFace >> (int)mip);
+        // Sample budget grows with the lobe: a mirror needs one tap, a rough lobe needs many.
+        const int sampleCount = (mip == 0) ? 1 : (int)std::min<size_t>(512, 64u << std::min<size_t>(mip, 3));
+
+        tbb::parallel_for(0, 6, [&](int f)
+        {
+            const Image* dst = out.GetImage(mip, (size_t)f, 0);
+            for (int y = 0; y < size; ++y)
+            {
+                float* row = reinterpret_cast<float*>(dst->pixels + (size_t)y * dst->rowPitch);
+                const float vv = 2.0f * ((float)y + 0.5f) / (float)size - 1.0f;
+                for (int x = 0; x < size; ++x)
+                {
+                    const float uu = 2.0f * ((float)x + 0.5f) / (float)size - 1.0f;
+                    XMFLOAT3 n = CubeFaceDir(f, uu, vv);
+                    const float nl = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+                    n.x /= nl; n.y /= nl; n.z /= nl;
+
+                    float* px = row + (size_t)x * 4;
+                    if (mip == 0)
+                    {
+                        SampleCubeDir(srcCubeMips, 0, n, px);
+                        px[3] = 1.0f;
+                        continue;
+                    }
+
+                    float acc[3] = { 0.0f, 0.0f, 0.0f };
+                    float wsum = 0.0f;
+                    for (int s = 0; s < sampleCount; ++s)
+                    {
+                        const float u1 = (float)s / (float)sampleCount;
+                        const float u2 = RadicalInverseVdC((uint32_t)s);
+                        const XMFLOAT3 h = ImportanceSampleGGX(u1, u2, roughness, n);
+                        const float ndoth = n.x * h.x + n.y * h.y + n.z * h.z;
+                        // L = reflect(-N, H) with V == N
+                        const XMFLOAT3 l{ 2.0f * ndoth * h.x - n.x,
+                                          2.0f * ndoth * h.y - n.y,
+                                          2.0f * ndoth * h.z - n.z };
+                        const float ndotl = n.x * l.x + n.y * l.y + n.z * l.z;
+                        if (ndotl <= 0.0f) { continue; }
+
+                        // Read from a coarser source mip for the wide lobes: a box-filtered tap of an
+                        // already-blurred level is a far better estimate of that solid angle than a
+                        // point sample of mip 0, and it is what keeps the fireflies out.
+                        const size_t srcMip = std::min(srcMips - 1, (size_t)(roughness * (float)(srcMips - 1) * 0.75f));
+                        float c[3];
+                        SampleCubeDir(srcCubeMips, srcMip, l, c);
+                        acc[0] += c[0] * ndotl; acc[1] += c[1] * ndotl; acc[2] += c[2] * ndotl;
+                        wsum += ndotl;
+                    }
+                    const float inv = (wsum > 0.0f) ? 1.0f / wsum : 0.0f;
+                    px[0] = acc[0] * inv; px[1] = acc[1] * inv; px[2] = acc[2] * inv; px[3] = 1.0f;
+                }
+            }
+        });
+        {
+            const Image* mipImgs[6];
+            Image mipCopy[6];
+            for (int f = 0; f < 6; ++f) { mipCopy[f] = *out.GetImage(mip, (size_t)f, 0); }
+            (void)mipImgs;
+            const FloatStats st = ScanFloatImages(mipCopy, 6);
+            log.Line("  ibl spec   mip " + std::to_string(mip) + "  " + std::to_string(size) + "^2" +
+                     "  rough=" + std::to_string(roughness) + "  samples=" + std::to_string(sampleCount) +
+                     "  " + StatsLine(st));
+        }
+    }
+    return true;
+}
+
+// Cosine-convolved irradiance cube. Brute-force over a coarse source level with real solid-angle
+// weights rather than importance sampling: at 32^2 output against a 32^2 source that is 6k x 6k
+// dot products, which is nothing, and it removes sampling noise from the one resource whose whole
+// job is to be smooth.
+bool BuildIrradianceCube(const ScratchImage& srcCubeMips, int outFace, ScratchImage& out, Log& log)
+{
+    HRESULT hr = out.InitializeCube(DXGI_FORMAT_R32G32B32A32_FLOAT, (size_t)outFace, (size_t)outFace, 1, 1);
+    if (FAILED(hr)) { log.Line("ibl FAIL init irradiance cube " + Hex(hr)); return false; }
+
+    // Pick the source mip whose face is closest to 32 texels: fine enough for the sky's low-frequency
+    // content, coarse enough that the double loop stays trivial.
+    const size_t srcMips = srcCubeMips.GetMetadata().mipLevels;
+    size_t srcMip = 0;
+    while (srcMip + 1 < srcMips && (int)srcCubeMips.GetImage(srcMip, 0, 0)->width > 32) { ++srcMip; }
+    const int ss = (int)srcCubeMips.GetImage(srcMip, 0, 0)->width;
+
+    // Precompute source directions, radiance and solid angles once.
+    struct Tap { XMFLOAT3 dir; float rgb[3]; float sa; };
+    std::vector<Tap> taps;
+    taps.reserve((size_t)ss * ss * 6);
+    for (int f = 0; f < 6; ++f)
+    {
+        const Image* img = srcCubeMips.GetImage(srcMip, (size_t)f, 0);
+        for (int y = 0; y < ss; ++y)
+        {
+            const float* row = reinterpret_cast<const float*>(img->pixels + (size_t)y * img->rowPitch);
+            const float vv = 2.0f * ((float)y + 0.5f) / (float)ss - 1.0f;
+            for (int x = 0; x < ss; ++x)
+            {
+                const float uu = 2.0f * ((float)x + 0.5f) / (float)ss - 1.0f;
+                XMFLOAT3 d = CubeFaceDir(f, uu, vv);
+                const float l2 = d.x * d.x + d.y * d.y + d.z * d.z;
+                const float l = std::sqrt(l2);
+                Tap t;
+                t.dir = { d.x / l, d.y / l, d.z / l };
+                // Differential solid angle of a cube texel: (2/n)^2 * (1 / |d|^3), with |d| the
+                // UN-normalised face direction. Dropping this weights the corners like the centres
+                // and tilts the whole integral.
+                const float texel = 2.0f / (float)ss;
+                t.sa = (texel * texel) / (l2 * l);
+                const float* p = row + (size_t)x * 4;
+                t.rgb[0] = p[0]; t.rgb[1] = p[1]; t.rgb[2] = p[2];
+                taps.push_back(t);
+            }
+        }
+    }
+
+    tbb::parallel_for(0, 6, [&](int f)
+    {
+        const Image* dst = out.GetImage(0, (size_t)f, 0);
+        for (int y = 0; y < outFace; ++y)
+        {
+            float* row = reinterpret_cast<float*>(dst->pixels + (size_t)y * dst->rowPitch);
+            const float vv = 2.0f * ((float)y + 0.5f) / (float)outFace - 1.0f;
+            for (int x = 0; x < outFace; ++x)
+            {
+                const float uu = 2.0f * ((float)x + 0.5f) / (float)outFace - 1.0f;
+                XMFLOAT3 n = CubeFaceDir(f, uu, vv);
+                const float nl = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+                n.x /= nl; n.y /= nl; n.z /= nl;
+
+                float acc[3] = { 0.0f, 0.0f, 0.0f };
+                for (const Tap& t : taps)
+                {
+                    const float ndotl = n.x * t.dir.x + n.y * t.dir.y + n.z * t.dir.z;
+                    if (ndotl <= 0.0f) { continue; }
+                    const float w = ndotl * t.sa;
+                    acc[0] += t.rgb[0] * w; acc[1] += t.rgb[1] * w; acc[2] += t.rgb[2] * w;
+                }
+                // Store IRRADIANCE / PI, i.e. the value a Lambertian surface multiplies its albedo
+                // by directly. Folding the 1/pi in here keeps the shader from having to remember it.
+                const float k = 1.0f / 3.14159265358979f;
+                float* px = row + (size_t)x * 4;
+                px[0] = acc[0] * k; px[1] = acc[1] * k; px[2] = acc[2] * k; px[3] = 1.0f;
+            }
+        }
+    });
+    {
+        const FloatStats st = ScanFloatImages(out.GetImages(), out.GetImageCount());
+        // The source's own average over ALL SIX faces at the mip we integrated -- a single face is
+        // not the cube's average and comparing against it makes the energy check meaningless.
+        Image srcFaces[6];
+        for (int f = 0; f < 6; ++f) { srcFaces[f] = *srcCubeMips.GetImage(srcMip, (size_t)f, 0); }
+        const FloatStats src = ScanFloatImages(srcFaces, 6);
+        log.Line("  ibl diffuse " + std::to_string(outFace) + "^2 x6  from src mip " +
+                 std::to_string(srcMip) + " (" + std::to_string(ss) + "^2)  " + StatsLine(st) +
+                 "  [src face0 meanLuma=" + std::to_string(src.meanLuma) + "]");
+    }
+    return true;
+}
+
+// Split-sum environment BRDF: x = scale on F0, y = bias. Scene independent, so it is written once to
+// textures/brdf_lut.dds and shared. Smith-GGX height-correlated visibility, matching the direct
+// lighting in lighting_cs.
+bool BuildBrdfLut(const fs::path& out, int size, Log& log)
+{
+    ScratchImage lut;
+    HRESULT hr = lut.Initialize2D(DXGI_FORMAT_R32G32_FLOAT, (size_t)size, (size_t)size, 1, 1);
+    if (FAILED(hr)) { log.Line("ibl FAIL init brdf lut " + Hex(hr)); return false; }
+
+    const Image* img = lut.GetImage(0, 0, 0);
+    tbb::parallel_for(0, size, [&](int y)
+    {
+        float* row = reinterpret_cast<float*>(img->pixels + (size_t)y * img->rowPitch);
+        const float roughness = ((float)y + 0.5f) / (float)size;
+        for (int x = 0; x < size; ++x)
+        {
+            const float ndotv = ((float)x + 0.5f) / (float)size;
+            const XMFLOAT3 v{ std::sqrt(std::max(0.0f, 1.0f - ndotv * ndotv)), 0.0f, ndotv };
+            const XMFLOAT3 n{ 0.0f, 0.0f, 1.0f };
+
+            float a = 0.0f, b = 0.0f;
+            const int kSamples = 1024;
+            const float alpha = roughness * roughness;
+            // IBL variant of the Smith k is alpha/2, with alpha = roughness^2. Squaring alpha here
+            // (k = roughness^4 / 2) makes k far too small, G far too large, and the LUT returns
+            // A + B up to 7.7 against a physical ceiling of 1 -- which is exactly what the first
+            // bake produced. The spec cube looked perfect at the same time; only the A+B check
+            // caught it.
+            const float k = alpha / 2.0f;
+            for (int s = 0; s < kSamples; ++s)
+            {
+                const float u1 = (float)s / (float)kSamples;
+                const float u2 = RadicalInverseVdC((uint32_t)s);
+                const XMFLOAT3 h = ImportanceSampleGGX(u1, u2, roughness, n);
+                const float vdoth = v.x * h.x + v.y * h.y + v.z * h.z;
+                const XMFLOAT3 l{ 2.0f * vdoth * h.x - v.x, 2.0f * vdoth * h.y - v.y, 2.0f * vdoth * h.z - v.z };
+                const float ndotl = std::max(0.0f, l.z);
+                const float ndoth = std::max(0.0f, h.z);
+                const float vh = std::max(0.0f, vdoth);
+                if (ndotl <= 0.0f) { continue; }
+
+                const float gv = ndotv / (ndotv * (1.0f - k) + k);
+                const float gl = ndotl / (ndotl * (1.0f - k) + k);
+                const float g = gv * gl;
+                const float gVis = (g * vh) / std::max(1e-6f, ndoth * ndotv);
+                const float fc = std::pow(1.0f - vh, 5.0f);
+                a += (1.0f - fc) * gVis;
+                b += fc * gVis;
+            }
+            row[(size_t)x * 2 + 0] = a / (float)kSamples;
+            row[(size_t)x * 2 + 1] = b / (float)kSamples;
+        }
+    });
+
+    // RG16_FLOAT as the plan specifies: the values live in [0,1] and half precision is ample, while
+    // the file stays 128 KB instead of 512 KB.
+    ScratchImage half;
+    hr = Convert(*img, DXGI_FORMAT_R16G16_FLOAT, TEX_FILTER_DEFAULT, TEX_THRESHOLD_DEFAULT, half);
+    if (FAILED(hr)) { log.Line("ibl FAIL convert brdf lut " + Hex(hr)); return false; }
+
+    std::error_code ec;
+    fs::create_directories(out.parent_path(), ec);
+    hr = SaveToDDSFile(*half.GetImage(0, 0, 0), DDS_FLAGS_NONE, out.wstring().c_str());
+    if (FAILED(hr)) { log.Line("ibl FAIL save brdf lut " + Hex(hr)); return false; }
+    log.Line("  ok  ibl brdf " + std::to_string(size) + "^2 RG16F -> " + Narrow(out.filename().wstring()));
+    return true;
+}
+
+// Save a float32 cube as BC6H_UF16 with the same RGBA16F fallback the display cube uses.
+bool SaveHdrCube(const ScratchImage& cube, const fs::path& out, Log& log, const char* tag, bool compress)
+{
+    HRESULT hr = E_FAIL;
+    if (compress)
+    {
+        ScratchImage bc;
+        hr = CompressBlocks(cube.GetImages(), cube.GetImageCount(), cube.GetMetadata(),
+                            DXGI_FORMAT_BC6H_UF16, TEX_COMPRESS_DEFAULT | TEX_COMPRESS_PARALLEL,
+                            bc, log, tag);
+        if (SUCCEEDED(hr))
+        {
+            hr = SaveToDDSFile(bc.GetImages(), bc.GetImageCount(), bc.GetMetadata(), DDS_FLAGS_NONE, out.wstring().c_str());
+            if (SUCCEEDED(hr)) { return true; }
+        }
+        log.Line(std::string(tag) + " WARN BC6H " + Hex(hr) + " — saving RGBA16F fallback");
+    }
+    ScratchImage half;
+    hr = Convert(cube.GetImages(), cube.GetImageCount(), cube.GetMetadata(),
+                 DXGI_FORMAT_R16G16B16A16_FLOAT, TEX_FILTER_DEFAULT, TEX_THRESHOLD_DEFAULT, half);
+    if (SUCCEEDED(hr))
+    {
+        hr = SaveToDDSFile(half.GetImages(), half.GetImageCount(), half.GetMetadata(), DDS_FLAGS_NONE, out.wstring().c_str());
+    }
+    if (FAILED(hr)) { log.Line(std::string(tag) + " FAIL save " + Hex(hr)); return false; }
+    return true;
+}
+
 bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
 {
     const std::wstring w = in.wstring();
@@ -908,6 +1345,57 @@ bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
         }
     });
 
+    // 3b) CALIBRATE. See ImportOptions::skyTargetMedianLuma for why this happens here and not on
+    // the camera. Applied to the float cube BEFORE the mip chain, so the display texture, its mips
+    // and every F7 derivative inherit one consistent scale.
+    if (opts.skyTargetMedianLuma > 0.0f)
+    {
+        std::vector<float> lum;
+        lum.reserve((size_t)face * face * 6);
+        for (int f = 0; f < 6; ++f)
+        {
+            const Image* img = cube.GetImage(0, (size_t)f, 0);
+            for (int y = 0; y < face; ++y)
+            {
+                const float* row = reinterpret_cast<const float*>(img->pixels + (size_t)y * img->rowPitch);
+                for (int x = 0; x < face; ++x)
+                {
+                    const float* px = row + (size_t)x * 4;
+                    lum.push_back(0.2126f * px[0] + 0.7152f * px[1] + 0.0722f * px[2]);
+                }
+            }
+        }
+        const size_t mid = lum.size() / 2;
+        std::nth_element(lum.begin(), lum.begin() + mid, lum.end());
+        const float median = lum[mid];
+        if (median > 1e-6f)
+        {
+            const float scale = opts.skyTargetMedianLuma / median;
+            tbb::parallel_for(0, 6, [&](int f)
+            {
+                const Image* img = cube.GetImage(0, (size_t)f, 0);
+                for (int y = 0; y < face; ++y)
+                {
+                    float* row = reinterpret_cast<float*>(img->pixels + (size_t)y * img->rowPitch);
+                    for (int x = 0; x < face; ++x)
+                    {
+                        float* px = row + (size_t)x * 4;
+                        px[0] *= scale; px[1] *= scale; px[2] *= scale;
+                    }
+                }
+            });
+            char msg[192];
+            std::snprintf(msg, sizeof(msg),
+                "  sky calib  median %.4f -> %.4f  scale x%.4f  (%+.2f EV)",
+                median, opts.skyTargetMedianLuma, scale, std::log2(scale));
+            log.Line(msg);
+        }
+        else
+        {
+            log.Line("  sky calib  SKIPPED: source median luminance is ~0");
+        }
+    }
+
     // 4) Mip chain, then BC6H_UF16 compress (unsigned half — sky radiance is non-negative).
     ScratchImage cubeMips;
     hr = GenerateMipMaps(cube.GetImages(), cube.GetImageCount(), cube.GetMetadata(),
@@ -942,6 +1430,50 @@ bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
     log.Line(std::string(ok ? "  ok  skybox  " : "  WARN skybox ") + std::to_string(face) + "^2 x6" +
              "  fmt=" + std::to_string((int)check.format) + "  mips=" + std::to_string(check.mipLevels) +
              "  -> " + Narrow(out.filename().wstring()));
+    if (!ok) { return false; }
+
+    // F7: the split-sum derivatives, from the same float32 cube the display texture came from. The
+    // display cube is untouched -- these are SIBLINGS, so a level that has not been converted keeps
+    // loading exactly what it loads today and the runtime falls back (F8's job).
+    {
+        fs::path specOut = out; specOut.replace_filename(out.stem().wstring() + L"_spec.dds");
+        fs::path diffOut = out; diffOut.replace_filename(out.stem().wstring() + L"_diffuse.dds");
+
+        ScratchImage spec;
+        if (BuildPrefilteredSpecular(cubeMips, face, spec, log))
+        {
+            if (SaveHdrCube(spec, specOut, log, "ibl spec", true))
+            {
+                TexMetadata sm{};
+                const bool sok = SUCCEEDED(GetMetadataFromDDSFile(specOut.wstring().c_str(), DDS_FLAGS_NONE, sm)) && sm.IsCubemap();
+                log.Line(std::string(sok ? "  ok  ibl spec " : "  WARN ibl spec ") + std::to_string(face) + "^2 x6" +
+                         "  fmt=" + std::to_string((int)sm.format) + "  mips=" + std::to_string(sm.mipLevels) +
+                         "  -> " + Narrow(specOut.filename().wstring()));
+            }
+        }
+
+        ScratchImage irr;
+        // 32^2 faces: the cosine convolution is a low-frequency signal, and anything larger is
+        // storing noise-free duplicates of its own neighbours. Left UNCOMPRESSED -- BC6H on a
+        // 32^2 cube saves 100 KB and costs banding on the one resource that must stay smooth.
+        if (BuildIrradianceCube(cubeMips, 32, irr, log))
+        {
+            if (SaveHdrCube(irr, diffOut, log, "ibl diffuse", false))
+            {
+                TexMetadata dm{};
+                const bool dok = SUCCEEDED(GetMetadataFromDDSFile(diffOut.wstring().c_str(), DDS_FLAGS_NONE, dm)) && dm.IsCubemap();
+                log.Line(std::string(dok ? "  ok  ibl diff " : "  WARN ibl diff ") + "32^2 x6" +
+                         "  fmt=" + std::to_string((int)dm.format) +
+                         "  -> " + Narrow(diffOut.filename().wstring()));
+            }
+        }
+
+        // Scene independent, so it is written next to the cube AND is safe to copy to textures/ once.
+        // Regenerated on every skybox import because it is cheap (~1024 samples x 256^2) and because
+        // a stale LUT is invisible until it is wrong.
+        fs::path lutOut = out; lutOut.replace_filename(L"brdf_lut.dds");
+        BuildBrdfLut(lutOut, 256, log);
+    }
     return ok;
 }
 

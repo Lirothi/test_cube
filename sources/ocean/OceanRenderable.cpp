@@ -291,6 +291,7 @@ public:
             shoreSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSamplingParams");
             sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
+            skyParamsHandle_ = material->ComputeCBFieldHandle(0, "skyParams");
             deepScatterColorHandle_ = material->ComputeCBFieldHandle(0, "deepScatterColor");
             sssColorHandle_ = material->ComputeCBFieldHandle(0, "sssColor");
             diffuseColorHandle_ = material->ComputeCBFieldHandle(0, "diffuseColor");
@@ -358,6 +359,7 @@ public:
             shoreSamplingParamsHandle_ = {};
             sunDirAmbientHandle_ = {};
             sunColorExposureHandle_ = {};
+            skyParamsHandle_ = {};
             deepScatterColorHandle_ = {};
             sssColorHandle_ = {};
             diffuseColorHandle_ = {};
@@ -439,6 +441,7 @@ public:
         UpdateUniform(owner, shoreSamplingParamsHandle_, material, owner_.GetShoreSamplingParams(), cbData);
         UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
+        UpdateUniform(owner, skyParamsHandle_, material, owner_.GetSkyParams(), cbData);
         UpdateUniform(owner, deepScatterColorHandle_, material, owner_.GetDeepScatterColor(), cbData);
         UpdateUniform(owner, sssColorHandle_, material, owner_.GetSssColor(), cbData);
         UpdateUniform(owner, diffuseColorHandle_, material, owner_.GetDiffuseColor(), cbData);
@@ -511,6 +514,7 @@ private:
     Material::CBFieldHandle shoreSamplingParamsHandle_{};
     Material::CBFieldHandle sunDirAmbientHandle_{};
     Material::CBFieldHandle sunColorExposureHandle_{};
+    Material::CBFieldHandle skyParamsHandle_{};
     Material::CBFieldHandle deepScatterColorHandle_{};
     Material::CBFieldHandle sssColorHandle_{};
     Material::CBFieldHandle diffuseColorHandle_{};
@@ -1585,6 +1589,19 @@ Math::float4 OceanRenderable::GetSunDirAmbient() const
         ambient = light.GetAmbient();
     }
     return Math::float4(dir.x, dir.y, dir.z, ambient);
+}
+
+Math::float4 OceanRenderable::GetSkyParams() const
+{
+    // Mirrors what compose does with `skyboxIntensity`. Without this the water reflected the raw
+    // cubemap while every other surface honoured the level's sky intensity, so one control meant
+    // two different things depending on where you were looking.
+    float intensity = 1.0f;
+    if (scene_)
+    {
+        if (const Skybox* sky = scene_->GetSkybox()) { intensity = sky->GetExposure(); }
+    }
+    return Math::float4(intensity, 0.0f, 0.0f, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetSunColorExposure() const

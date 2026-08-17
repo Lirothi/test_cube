@@ -739,6 +739,89 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::EndDisabled();
 
+                // P3B local exposure. It belongs with the CAMERA, not the grade: it decides how
+                // many stops a REGION of the frame receives. It sat under the colour pipeline until
+                // the user pointed out the mismatch -- that placement was about where the shader
+                // evaluates it, not about what it is.
+                ImGui::SeparatorText("Local exposure");
+                ImGui::SliderFloat("Local highlights", &exposure.localHighlightContrast, 0.1f, 2.0f, "%.3f");
+                ImGui::SameLine();
+                HelpMarker(
+                    "Contrast scale for everything brighter than middle grey, judged by the "
+                    "BLURRED neighbourhood rather than the pixel. 1 = off.\n\n"
+                    "BELOW 1 compresses: bright regions come down while their detail stays -- "
+                    "sky and sunlit sand keep texture instead of racing to white. Measured on "
+                    "sun_glint, 0.55 cut clipping 65x for a 2% median move.\n\n"
+                    "ABOVE 1 EXPANDS, and on wind_test that is the more useful direction -- "
+                    "this scene's problem is too little range, not too much. Either way it is "
+                    "the one thing a global exposure cannot do: it changes exposure differently "
+                    "in different parts of the same frame.");
+                ImGui::SliderFloat("Local shadows", &exposure.localShadowContrast, 0.1f, 2.0f, "%.3f");
+                ImGui::SameLine();
+                HelpMarker("Same for everything darker than middle grey. Below 1 lifts shaded "
+                           "regions without touching the lit ones -- the palm grove interior "
+                           "opening up while the beach stays put. Above 1 deepens them instead, "
+                           "and because it is per-neighbourhood it deepens WITHOUT crushing the "
+                           "lit side, which a global contrast cannot manage.");
+                ImGui::SliderFloat("Local detail", &exposure.localDetailStrength, 0.0f, 2.0f, "%.3f");
+                ImGui::SameLine();
+                HelpMarker("How much of the per-pixel detail survives the compression. 1 = all "
+                           "of it, which is the point: compressing the base while passing "
+                           "detail through is what keeps micro-contrast. Above 1 exaggerates "
+                           "it and starts to look artificial.");
+                ImGui::SliderFloat("Local hl threshold", &exposure.localHighlightThreshold, 0.0f, 4.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker("Stops above middle grey before highlight compression starts. Keeps "
+                           "mid-tones -- usually the subject -- untouched.");
+                ImGui::SliderFloat("Local sh threshold", &exposure.localShadowThreshold, 0.0f, 4.0f, "%.2f");
+                ImGui::SameLine();
+                HelpMarker("Same below middle grey.");
+                ImGui::PushID("localPresets");
+                if (ImGui::SmallButton("Off"))
+                {
+                    exposure.localHighlightContrast = 1.0f; exposure.localShadowContrast = 1.0f;
+                    exposure.localDetailStrength = 1.0f;
+                    exposure.localHighlightThreshold = 0.0f; exposure.localShadowThreshold = 0.0f;
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Gentle"))
+                {
+                    exposure.localHighlightContrast = 0.85f; exposure.localShadowContrast = 0.9f;
+                    exposure.localDetailStrength = 1.0f;
+                    exposure.localHighlightThreshold = 0.5f; exposure.localShadowThreshold = 0.5f;
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Strong"))
+                {
+                    exposure.localHighlightContrast = 0.65f; exposure.localShadowContrast = 0.75f;
+                    exposure.localDetailStrength = 1.1f;
+                    exposure.localHighlightThreshold = 0.25f; exposure.localShadowThreshold = 0.25f;
+                }
+                ImGui::SameLine();
+                // The measured match to docs/ref/ref_wind_test.png. Expansion, not compression:
+                // on this level the histogram was too NARROW (23.6x p99/p02 against the
+                // reference's 53.6x), so the scales go above 1. At 1.35 the spread reaches
+                // 41.4x and at 1.5 it reaches 52.9x, both still clipping 0.000% of the frame.
+                if (ImGui::SmallButton("Expand (ref match)"))
+                {
+                    exposure.localHighlightContrast = 1.35f; exposure.localShadowContrast = 1.35f;
+                    exposure.localDetailStrength = 1.0f;
+                    exposure.localHighlightThreshold = 0.0f; exposure.localShadowThreshold = 0.0f;
+                }
+                ImGui::PopID();
+                ImGui::SameLine();
+                HelpMarker(
+                    "Off / Gentle / Strong COMPRESS the range (scales below 1) -- reach for "
+                    "those when a frame clips, e.g. looking into the sun over water.\n\n"
+                    "Expand does the reverse and is the one measured against "
+                    "docs/ref/ref_wind_test.png: on the overview view it takes the p99/p02 "
+                    "spread from 23.6x to 41.4x (1.5 on both scales reaches 52.9x against the "
+                    "reference's 53.6x), and clipping stays at 0.000% the whole way. The median "
+                    "drops slightly -- about +0.1 EV of compensation puts it back.\n\n"
+                    "Watch the horizon and the island silhouette for halos when pushing past "
+                    "1.5; the base layer is a blur, not a bilateral grid.");
+
+                
                 // P3: the display transform. Lives in the same tab because curve and exposure are
                 // judged together -- changing one without seeing the other is how you end up
                 // "fixing" a tone curve problem with exposure.
@@ -824,84 +907,6 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                     // P3C. This is the half of Unreal's film pipeline that actually produces the
                     // look; their curve on its own is not what makes their images punchy.
-                    ImGui::SeparatorText("Local exposure");
-                    ImGui::SliderFloat("Local highlights", &color.localHighlightContrast, 0.1f, 2.0f, "%.3f");
-                    ImGui::SameLine();
-                    HelpMarker(
-                        "Contrast scale for everything brighter than middle grey, judged by the "
-                        "BLURRED neighbourhood rather than the pixel. 1 = off.\n\n"
-                        "BELOW 1 compresses: bright regions come down while their detail stays -- "
-                        "sky and sunlit sand keep texture instead of racing to white. Measured on "
-                        "sun_glint, 0.55 cut clipping 65x for a 2% median move.\n\n"
-                        "ABOVE 1 EXPANDS, and on wind_test that is the more useful direction -- "
-                        "this scene's problem is too little range, not too much. Either way it is "
-                        "the one thing a global exposure cannot do: it changes exposure differently "
-                        "in different parts of the same frame.");
-                    ImGui::SliderFloat("Local shadows", &color.localShadowContrast, 0.1f, 2.0f, "%.3f");
-                    ImGui::SameLine();
-                    HelpMarker("Same for everything darker than middle grey. Below 1 lifts shaded "
-                               "regions without touching the lit ones -- the palm grove interior "
-                               "opening up while the beach stays put. Above 1 deepens them instead, "
-                               "and because it is per-neighbourhood it deepens WITHOUT crushing the "
-                               "lit side, which a global contrast cannot manage.");
-                    ImGui::SliderFloat("Local detail", &color.localDetailStrength, 0.0f, 2.0f, "%.3f");
-                    ImGui::SameLine();
-                    HelpMarker("How much of the per-pixel detail survives the compression. 1 = all "
-                               "of it, which is the point: compressing the base while passing "
-                               "detail through is what keeps micro-contrast. Above 1 exaggerates "
-                               "it and starts to look artificial.");
-                    ImGui::SliderFloat("Local hl threshold", &color.localHighlightThreshold, 0.0f, 4.0f, "%.2f");
-                    ImGui::SameLine();
-                    HelpMarker("Stops above middle grey before highlight compression starts. Keeps "
-                               "mid-tones -- usually the subject -- untouched.");
-                    ImGui::SliderFloat("Local sh threshold", &color.localShadowThreshold, 0.0f, 4.0f, "%.2f");
-                    ImGui::SameLine();
-                    HelpMarker("Same below middle grey.");
-                    ImGui::PushID("localPresets");
-                    if (ImGui::SmallButton("Off"))
-                    {
-                        color.localHighlightContrast = 1.0f; color.localShadowContrast = 1.0f;
-                        color.localDetailStrength = 1.0f;
-                        color.localHighlightThreshold = 0.0f; color.localShadowThreshold = 0.0f;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("Gentle"))
-                    {
-                        color.localHighlightContrast = 0.85f; color.localShadowContrast = 0.9f;
-                        color.localDetailStrength = 1.0f;
-                        color.localHighlightThreshold = 0.5f; color.localShadowThreshold = 0.5f;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("Strong"))
-                    {
-                        color.localHighlightContrast = 0.65f; color.localShadowContrast = 0.75f;
-                        color.localDetailStrength = 1.1f;
-                        color.localHighlightThreshold = 0.25f; color.localShadowThreshold = 0.25f;
-                    }
-                    ImGui::SameLine();
-                    // The measured match to docs/ref/ref_wind_test.png. Expansion, not compression:
-                    // on this level the histogram was too NARROW (23.6x p99/p02 against the
-                    // reference's 53.6x), so the scales go above 1. At 1.35 the spread reaches
-                    // 41.4x and at 1.5 it reaches 52.9x, both still clipping 0.000% of the frame.
-                    if (ImGui::SmallButton("Expand (ref match)"))
-                    {
-                        color.localHighlightContrast = 1.35f; color.localShadowContrast = 1.35f;
-                        color.localDetailStrength = 1.0f;
-                        color.localHighlightThreshold = 0.0f; color.localShadowThreshold = 0.0f;
-                    }
-                    ImGui::PopID();
-                    ImGui::SameLine();
-                    HelpMarker(
-                        "Off / Gentle / Strong COMPRESS the range (scales below 1) -- reach for "
-                        "those when a frame clips, e.g. looking into the sun over water.\n\n"
-                        "Expand does the reverse and is the one measured against "
-                        "docs/ref/ref_wind_test.png: on the overview view it takes the p99/p02 "
-                        "spread from 23.6x to 41.4x (1.5 on both scales reaches 52.9x against the "
-                        "reference's 53.6x), and clipping stays at 0.000% the whole way. The median "
-                        "drops slightly -- about +0.1 EV of compensation puts it back.\n\n"
-                        "Watch the horizon and the island silhouette for halos when pushing past "
-                        "1.5; the base layer is a blur, not a bilateral grid.");
-
                     ImGui::SeparatorText("Colour grade (pre-curve, works on BOTH curves)");
                     ImGui::SliderFloat("Grade saturation", &color.gradeSaturation, 0.0f, 2.5f, "%.3f");
                     ImGui::SameLine();

@@ -457,8 +457,11 @@ public:
     void WriteBlurConstants(const BlurPassConstants& data, uint8_t* dest) const;
     void WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const;
     void WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const;
+    // P3B lives on the CAMERA now, so the tonemap needs both blocks: the colour pipeline for the
+    // curve and grade, the camera for the local-exposure scales.
     void WriteTonemapConstants(bool exposureEnabled,
                                const render::ColorPipelineSettings& color,
+                               const render::CameraExposureSettings& camera,
                                uint8_t* dest) const;
     void WriteExposureHistogramConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
     void WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;

@@ -63,6 +63,10 @@ cbuffer OceanCB : register(b0)
     float4 shoreWetnessParams;         // xy: history centre, z: 1 / half extent, w: deposit depth
     float4 shoreWetnessParams2;        // x: legacy wetness edge offset from the SDF waterline (m)
     float4 shoreSamplingParams;        // xy: shore-depth texel size, zw: shore-depth texel world size
+    // P4: how bright this level's sky is. compose already scaled its sky samples by
+    // `skyboxIntensity`; the ocean did not, so the water kept reflecting the raw cube and the
+    // control meant two different things depending on which surface you looked at.
+    float4 skyParams;                  // x: sky intensity, yzw: reserved
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
     float4 deepScatterColor;           // xyz: deep scatter tint, w: unused
@@ -1847,7 +1851,7 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
 // own foam tuning keeps deciding the level.
 float3 SkyFillRadiance(float3 normal)
 {
-    const float3 sky = SkyboxTexture.SampleLevel(LinearClampSampler, normal, kSkyRoughMaxMip).rgb;
+    const float3 sky = SkyboxTexture.SampleLevel(LinearClampSampler, normal, kSkyRoughMaxMip).rgb * skyParams.x;
     // A black or absent cubemap falls back to the old constant, so a level without a skybox keeps
     // lit foam instead of losing its surf entirely.
     const float lum = dot(sky, float3(0.2126f, 0.7152f, 0.0722f));
@@ -1967,7 +1971,7 @@ float3 Reflection(const LightingInput li, float roughness)
     float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
 
     float skyMip = roughness * kSkyRoughMaxMip;
-    float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, skyMip).rgb;
+    float3 skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, skyMip).rgb * skyParams.x;
     float2 reflectionUV = li.screenUV + OceanReflectionUvOffset(li, adjustedNormal);
     float edgeFade = OceanReflectionEdgeFade(reflectionUV);
     float4 oceanReflection = OceanReflectionTexture.SampleLevel(LinearClampSampler, saturate(reflectionUV), 0);
@@ -2096,7 +2100,7 @@ float4 HorizonBlend(const LightingInput li)
     }
 
     float3 dir = -float3(li.viewDir.x, 0.0f, li.viewDir.z);
-    float3 horizonColor = SkyboxTexture.SampleLevel(LinearClampSampler, dir, 0).rgb;
+    float3 horizonColor = SkyboxTexture.SampleLevel(LinearClampSampler, dir, 0).rgb * skyParams.x;
     return float4(horizonColor, blend);
 }
 

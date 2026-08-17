@@ -205,6 +205,17 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     {
         auto skybox = std::make_unique<Skybox>(Widen(j["skybox"]["texture"].get<std::string>()));
         skybox->Init(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
+        // How bright this level's sky is, on the engine's linear scale. Default 1 = the cubemap's
+        // own radiance, untouched, which is what every level got before this field existed.
+        //
+        // It has to be authorable because HDRI libraries are not calibrated to our scale: measured
+        // on `citrus_orchard_puresky_4k`, the sky's median luminance is 0.657, and with the default
+        // manual exposure multiplier of 1.44 that puts 48.6% of the sky ABOVE 1.0 before the tone
+        // curve even runs -- a blowout no curve can undo. Auto-exposure used to hide this by
+        // metering it away, which is precisely why it must not be the only thing holding the image
+        // together. Same reasoning as P4's sunIntensity: the scene says how bright its lights are,
+        // the camera decides how to photograph them.
+        skybox->SetExposure(j["skybox"].value("intensity", 1.0f));
         scene.SetSkybox(std::move(skybox));
     }
 
@@ -316,6 +327,13 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         if (j.contains("cameraExposure"))
         {
             render::PhotographicSettingsJson::ApplyOverrides(j["cameraExposure"], exposure);
+        }
+        // The P3B local-exposure fields used to live in `colorPipeline`; lift them if this level
+        // still writes them there. Done AFTER the camera parse so an explicit new-block value wins.
+        if (j.contains("colorPipeline"))
+        {
+            render::PhotographicSettingsJson::MigrateLegacyLocalExposure(
+                j["colorPipeline"], j.contains("cameraExposure") ? j["cameraExposure"] : nlohmann::json::object(), exposure);
         }
         scene.SetCameraExposure(exposure);
         // Plan section 6.4: a level load invalidates the adapted value. Without this the camera

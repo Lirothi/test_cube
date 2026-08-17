@@ -966,7 +966,11 @@ std::string ImportPanel::ProjectDest(const Item& item) const
     {
     case Kind::Mesh:       return (fs::path(kModelsRoot) / item.name).string();
     case Kind::TextureSet: return (fs::path(kTexturesRoot) / item.name).string();
-    case Kind::Skybox:     return (fs::path(kTexturesRoot) / (item.name + ".dds")).string();
+    // A skybox used to be a single .dds and so got a bare filename in the textures root. Since F7
+    // it is a SET -- the display cube plus its GGX-prefiltered and irradiance siblings -- which is
+    // exactly what the TextureSet rule above exists for, so it gets a folder too. The scene
+    // independent brdf_lut.dds is NOT part of the set and stays in the textures root.
+    case Kind::Skybox:     return (fs::path(kTexturesRoot) / item.name).string();
     }
     return (fs::path(kModelsRoot) / item.name).string();
 }
@@ -1050,18 +1054,11 @@ bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& r
         fs::path outputRelative;
         bool isProjectResource = false;
         ec.clear();
-        if (item.kind == Kind::Skybox)
-        {
-            isProjectResource = fs::equivalent(fs::path(asset.path), destination, ec);
-            if (isProjectResource) { outputRelative = destination.filename(); }
-        }
-        else
-        {
-            ec.clear();
-            outputRelative = fs::absolute(asset.path, ec).lexically_normal().lexically_relative(
-                fs::absolute(destination, ec).lexically_normal());
-            isProjectResource = !ec && IsSafeRelativePath(outputRelative);
-        }
+        // Every kind's destination is a DIRECTORY now (skyboxes included, see ProjectDest), so one
+        // containment test covers all of them.
+        outputRelative = fs::absolute(asset.path, ec).lexically_normal().lexically_relative(
+            fs::absolute(destination, ec).lexically_normal());
+        isProjectResource = !ec && IsSafeRelativePath(outputRelative);
 
         // Material presets and staging records represent the whole import. The
         // texture/mesh records below are true per-resource reimports.
@@ -1097,7 +1094,7 @@ bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& r
                 return false;
             }
             if (!RemoveOutputFromManifest(
-                    ImportManifestPath(destination, item.kind == Kind::Skybox),
+                    ImportManifestPath(destination, false),
                     outputRelative.generic_string(), asset.importSourceFiles))
             {
                 status_ = "Removed output, but failed to update its import manifest.";
@@ -1275,6 +1272,7 @@ void ImportPanel::BeginImport(const Item& item,
     // Snapshot options for the worker (avoid racing the UI).
     assets::ImportOptions opt;
     opt.maxTextureSize = maxTextureSize_;
+    opt.skyTargetMedianLuma = skyTargetMedianLuma_;
     opt.highQuality = highQuality_;
     opt.flipGreen = flipGreen_;
     opt.centerNormals = centerNormals_;
@@ -1292,8 +1290,7 @@ void ImportPanel::BeginImport(const Item& item,
     if (activeMergeManifest_)
     {
         const fs::path destination(ProjectDest(item));
-        const fs::path manifestPath = ImportManifestPath(
-            destination, item.kind == Kind::Skybox);
+        const fs::path manifestPath = ImportManifestPath(destination, false);
         std::error_code manifestEc;
         if (!fs::is_regular_file(manifestPath, manifestEc))
         {
@@ -1346,6 +1343,90 @@ void ImportPanel::OpenImportDialog(const Item& item)
     std::sort(dialogFiles_.begin(), dialogFiles_.end(),
         [](const DialogFile& a, const DialogFile& b) { return a.rel < b.rel; });
     showImportDialog_ = true;
+}
+
+void ImportPanel::OpenSkyboxImportDialog(const Item& item)
+{
+    skyboxDialogItem_ = item;
+    showSkyboxImportDialog_ = true;
+}
+
+void ImportPanel::DrawSkyboxImportDialog()
+{
+    if (showSkyboxImportDialog_)
+    {
+        ImGui::OpenPopup("Import Skybox");
+        showSkyboxImportDialog_ = false; // OpenPopup latches it open until the popup closes
+    }
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const ImVec2 center(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f);
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_FirstUseEver);
+
+    if (!ImGui::BeginPopupModal("Import Skybox", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        return;
+    }
+
+    ImGui::Text("Import '%s'", skyboxDialogItem_.name.c_str());
+    ImGui::Separator();
+
+    ImGui::SetNextItemWidth(140.0f);
+    const char* faces[] = { "512", "1024", "2048" };
+    int faceIdx = skyboxFaceSize_ >= 2048 ? 2 : (skyboxFaceSize_ >= 1024 ? 1 : 0);
+    if (ImGui::Combo("Cube face size", &faceIdx, faces, 3))
+    {
+        skyboxFaceSize_ = faceIdx == 2 ? 2048 : (faceIdx == 1 ? 1024 : 512);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Edge of one cube face, in texels. The prefiltered specular sibling inherits it and "
+            "spends 8 mips getting down to roughness 1, so this is also the sharpness ceiling for "
+            "mirror reflections.");
+    }
+
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SliderFloat("Sky brightness", &skyTargetMedianLuma_, 0.0f, 0.6f, "%.3f");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Middle grey")) { skyTargetMedianLuma_ = 0.18f; }
+    ImGui::TextWrapped(
+        "Calibration target: the MEDIAN luminance the cubemap is scaled to. HDRI libraries are not "
+        "calibrated to this engine's linear scale -- Poly Haven skies land around 0.6-0.9, and the "
+        "manual exposure multiplier is 0.18*8 = 1.44, so an un-normalised sky puts roughly half its "
+        "pixels above 1.0 before the tone curve even runs.");
+    ImGui::TextWrapped(
+        "The scale goes on the CUBE, so it reaches every consumer at once: background, ocean "
+        "reflection, compose, and the prefiltered IBL siblings. Correcting this on the camera "
+        "instead would darken the whole scene to fix one asset.");
+    ImGui::TextWrapped(
+        "0.18 = middle grey and is the default. Lower darkens the sky AND everything the sky "
+        "lights, because it also feeds the water's reflection and the ambient fill. 0 disables "
+        "calibration and keeps the source's own radiance.");
+    if (skyTargetMedianLuma_ <= 0.0f)
+    {
+        ImGui::TextDisabled("Calibration OFF: the source's radiance is written as-is.");
+    }
+    ImGui::TextDisabled("The applied factor is logged as 'sky calib ... (+/-N.NN EV)'.");
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Also writes the IBL siblings: _spec (GGX-prefiltered), _diffuse "
+                        "(irradiance), and the shared brdf_lut.");
+
+    ImGui::Spacing();
+    if (ImGui::Button("Import", ImVec2(120.0f, 0.0f)))
+    {
+        ImGui::CloseCurrentPopup();
+        BeginImport(skyboxDialogItem_, {}, true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f)))
+    {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void ImportPanel::DrawImportDialog()
@@ -1671,25 +1752,66 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
         {
             if (activeItem_.kind == Kind::Skybox)
             {
-                // RunImport wrote <staging>/<name>.dds next to the source .hdr; move that one file.
+                // RunImport wrote <staging>/<name>.dds next to the source .hdr, PLUS the F7 IBL
+                // derivatives (<name>_spec.dds, <name>_diffuse.dds) and the scene-independent
+                // brdf_lut.dds. All of them have to travel, or the level installs a sky whose
+                // split-sum siblings are still sitting in staging and the runtime silently falls
+                // back to the box-filtered mip chain -- the exact failure F7/F8 exist to remove.
+                fs::create_directories(fs::path(dst).parent_path(), ec);
+
+                const auto moveOne = [&](const fs::path& from, const fs::path& to) -> bool
+                {
+                    std::error_code mec;
+                    if (!fs::exists(from, mec)) { return false; }
+                    mec.clear();
+                    fs::rename(from, to, mec);
+                    if (mec) // cross-volume rename can fail — fall back to copy + delete
+                    {
+                        mec.clear();
+                        fs::copy_file(from, to, fs::copy_options::overwrite_existing, mec);
+                        if (!mec)
+                        {
+                            std::error_code removeEc;
+                            fs::remove(from, removeEc);
+                        }
+                    }
+                    if (mec) { return false; }
+                    projectOutputs.insert(NormalizeRelativePath(to.filename()));
+                    return true;
+                };
+
+                // dst is the SET FOLDER (textures/<name>/). The cube keeps its own name inside it
+                // so the level path stays self-describing: textures/<name>/<name>.dds.
                 fs::path produced = fs::path(activeItem_.path);
                 produced.replace_extension(".dds");
-                fs::create_directories(fs::path(dst).parent_path(), ec);
-                fs::rename(produced, dst, ec);
-                if (ec) // cross-volume rename can fail — fall back to copy + delete
-                {
-                    ec.clear();
-                    fs::copy_file(produced, dst, fs::copy_options::overwrite_existing, ec);
-                    if (!ec)
-                    {
-                        std::error_code removeEc;
-                        fs::remove(produced, removeEc);
-                    }
-                }
-                finalizeFailed = static_cast<bool>(ec);
+                const fs::path stagingDir = produced.parent_path();
+                const std::wstring stem = produced.stem().wstring();
+                const fs::path dstDir(dst);
+                fs::create_directories(dstDir, ec);
+
+                finalizeFailed = !moveOne(produced, dstDir / (stem + L".dds"));
                 if (!finalizeFailed)
                 {
-                    projectOutputs.insert(NormalizeRelativePath(dst.filename()));
+                    // Siblings keep the cube's stem so the runtime finds them from the level's
+                    // skybox path by name alone.
+                    moveOne(stagingDir / (stem + L"_spec.dds"), dstDir / (stem + L"_spec.dds"));
+                    moveOne(stagingDir / (stem + L"_diffuse.dds"), dstDir / (stem + L"_diffuse.dds"));
+                    // Scene independent and shared by every level -- it belongs to no single sky,
+                    // so it goes to the textures ROOT rather than into this set's folder.
+                    std::error_code lutEc;
+                    const fs::path lutSrc = stagingDir / L"brdf_lut.dds";
+                    if (fs::exists(lutSrc, lutEc))
+                    {
+                        const fs::path lutDst = fs::path(kTexturesRoot) / L"brdf_lut.dds";
+                        lutEc.clear();
+                        fs::rename(lutSrc, lutDst, lutEc);
+                        if (lutEc)
+                        {
+                            lutEc.clear();
+                            fs::copy_file(lutSrc, lutDst, fs::copy_options::overwrite_existing, lutEc);
+                            if (!lutEc) { std::error_code rm; fs::remove(lutSrc, rm); }
+                        }
+                    }
                 }
             }
             else
@@ -1769,9 +1891,8 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
             }
             if (!finalizeFailed)
             {
-                const bool outputIsFile = activeItem_.kind == Kind::Skybox;
                 finalizeFailed = !WriteImportManifest(workerManifestJson_, projectOutputs,
-                    fs::path(activeItem_.path), ImportManifestPath(dst, outputIsFile),
+                    fs::path(activeItem_.path), ImportManifestPath(dst, false),
                     activeMergeManifest_, activeRemovedSources_, activeMeshSpawnScale_,
                     activeMeshSplitGltf_, activeMeshSplitNodes_);
             }
@@ -1899,14 +2020,6 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
         if (ImGui::Combo("Max texture size", &sizeIdx, sizes, 3))
         {
             maxTextureSize_ = sizeIdx == 2 ? 4096 : (sizeIdx == 1 ? 2048 : 1024);
-        }
-        ImGui::SameLine(0.0f, 24.0f);
-        ImGui::SetNextItemWidth(120.0f);
-        const char* faces[] = { "512", "1024", "2048" };
-        int faceIdx = skyboxFaceSize_ >= 2048 ? 2 : (skyboxFaceSize_ >= 1024 ? 1 : 0);
-        if (ImGui::Combo("Skybox face size", &faceIdx, faces, 3))
-        {
-            skyboxFaceSize_ = faceIdx == 2 ? 2048 : (faceIdx == 1 ? 1024 : 512);
         }
         ImGui::Checkbox("High-quality BC7 (slower)", &highQuality_);
         ImGui::SameLine(0.0f, 24.0f);
@@ -2056,6 +2169,7 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
                     // Each asset type asks only for the decisions relevant to it.
                     if (it.kind == Kind::TextureSet) { OpenImportDialog(it); }
                     else if (it.kind == Kind::Mesh) { OpenMeshImportDialog(it); }
+                    else if (it.kind == Kind::Skybox) { OpenSkyboxImportDialog(it); }
                     else { BeginImport(it, {}, true); }
                 }
                 ImGui::EndDisabled();
@@ -2094,6 +2208,7 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
     }
 
     DrawImportDialog();     // texture-set pick-files + preset modal
+    DrawSkyboxImportDialog(); // cube face size + sky calibration modal
     DrawMeshImportDialog(registry); // per-mesh spawn-size normalization modal
 
     ImGui::End();

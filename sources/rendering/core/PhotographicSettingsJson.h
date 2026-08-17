@@ -59,6 +59,17 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     out.speedUp   = std::max(out.speedUp,   0.0f);
     out.speedDown = std::max(out.speedDown, 0.0f);
 
+    out.localHighlightContrast  = j.value("localHighlightContrast",  out.localHighlightContrast);
+    out.localShadowContrast     = j.value("localShadowContrast",     out.localShadowContrast);
+    out.localDetailStrength     = j.value("localDetailStrength",     out.localDetailStrength);
+    out.localHighlightThreshold = j.value("localHighlightThreshold", out.localHighlightThreshold);
+    out.localShadowThreshold    = j.value("localShadowThreshold",    out.localShadowThreshold);
+    out.localHighlightContrast  = std::clamp(out.localHighlightContrast,  0.1f, 2.0f);
+    out.localShadowContrast     = std::clamp(out.localShadowContrast,     0.1f, 2.0f);
+    out.localDetailStrength     = std::clamp(out.localDetailStrength,     0.0f, 3.0f);
+    out.localHighlightThreshold = std::clamp(out.localHighlightThreshold, 0.0f, 8.0f);
+    out.localShadowThreshold    = std::clamp(out.localShadowThreshold,    0.0f, 8.0f);
+
     out.adaptationStartDistance = std::clamp(out.adaptationStartDistance, 0.01f, 20.0f);
     out.blackBucketInfluence    = std::clamp(out.blackBucketInfluence, 0.0f, 1.0f);
     out.meterMaskStrength = std::clamp(out.meterMaskStrength, 0.0f, 1.0f);
@@ -72,6 +83,36 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     {
         out.meterMaskOuterRadius = out.meterMaskInnerRadius + 0.01f;
     }
+}
+
+// P3B fields moved from `colorPipeline` to `cameraExposure` (they are an exposure operation, not a
+// grade). Levels written before the move still carry them in the old block, so JsonLevel and the
+// editor runtime call this AFTER parsing both sections: anything still sitting in `colorPipeline`
+// is lifted onto the camera. Absent keys change nothing, so a converted level is unaffected and
+// re-saving writes them in the new place.
+inline void MigrateLegacyLocalExposure(const nlohmann::json& colorPipelineJson,
+                                       const nlohmann::json& cameraJson,
+                                       CameraExposureSettings& camera)
+{
+    if (!colorPipelineJson.is_object())
+    {
+        return;
+    }
+    // ONLY lift a key the camera block does not already own. Lifting unconditionally means the
+    // stale `colorPipeline` copy overwrites whatever was just edited on the camera -- which is
+    // exactly what happened: every inspector edit was stomped back by the old value and the
+    // control looked dead.
+    const auto lift = [&](const char* key, float& dst)
+    {
+        if (cameraJson.is_object() && cameraJson.contains(key)) { return; }
+        const auto it = colorPipelineJson.find(key);
+        if (it != colorPipelineJson.end() && it->is_number()) { dst = it->get<float>(); }
+    };
+    lift("localHighlightContrast",  camera.localHighlightContrast);
+    lift("localShadowContrast",     camera.localShadowContrast);
+    lift("localDetailStrength",     camera.localDetailStrength);
+    lift("localHighlightThreshold", camera.localHighlightThreshold);
+    lift("localShadowThreshold",    camera.localShadowThreshold);
 }
 
 // P3. The tone curve serialises as a NAME, not an index: a level that says "agx" keeps meaning
@@ -102,11 +143,6 @@ inline void ApplyOverrides(const nlohmann::json& j, ColorPipelineSettings& out)
     out.filmShoulder  = j.value("filmShoulder",  out.filmShoulder);
     out.filmBlackClip = j.value("filmBlackClip", out.filmBlackClip);
     out.filmWhiteClip = j.value("filmWhiteClip", out.filmWhiteClip);
-    out.localHighlightContrast  = j.value("localHighlightContrast",  out.localHighlightContrast);
-    out.localShadowContrast     = j.value("localShadowContrast",     out.localShadowContrast);
-    out.localDetailStrength     = j.value("localDetailStrength",     out.localDetailStrength);
-    out.localHighlightThreshold = j.value("localHighlightThreshold", out.localHighlightThreshold);
-    out.localShadowThreshold    = j.value("localShadowThreshold",    out.localShadowThreshold);
 
     out.agxSlope      = std::clamp(out.agxSlope,      0.0f, 4.0f);
     out.agxPower      = std::clamp(out.agxPower,      0.1f, 4.0f);
@@ -121,11 +157,6 @@ inline void ApplyOverrides(const nlohmann::json& j, ColorPipelineSettings& out)
     out.filmShoulder  = std::clamp(out.filmShoulder,  0.0f, 1.0f);
     out.filmBlackClip = std::clamp(out.filmBlackClip, 0.0f, 1.0f);
     out.filmWhiteClip = std::clamp(out.filmWhiteClip, 0.0f, 1.0f);
-    out.localHighlightContrast  = std::clamp(out.localHighlightContrast,  0.1f, 2.0f);
-    out.localShadowContrast     = std::clamp(out.localShadowContrast,     0.1f, 2.0f);
-    out.localDetailStrength     = std::clamp(out.localDetailStrength,     0.0f, 3.0f);
-    out.localHighlightThreshold = std::clamp(out.localHighlightThreshold, 0.0f, 8.0f);
-    out.localShadowThreshold    = std::clamp(out.localShadowThreshold,    0.0f, 8.0f);
 }
 
 inline nlohmann::json ToJson(const ColorPipelineSettings& s)
@@ -146,11 +177,6 @@ inline nlohmann::json ToJson(const ColorPipelineSettings& s)
         { "filmShoulder",  s.filmShoulder },
         { "filmBlackClip", s.filmBlackClip },
         { "filmWhiteClip", s.filmWhiteClip },
-        { "localHighlightContrast",  s.localHighlightContrast },
-        { "localShadowContrast",     s.localShadowContrast },
-        { "localDetailStrength",     s.localDetailStrength },
-        { "localHighlightThreshold", s.localHighlightThreshold },
-        { "localShadowThreshold",    s.localShadowThreshold },
     };
 }
 
@@ -160,6 +186,11 @@ inline nlohmann::json ToJson(const CameraExposureSettings& s)
         { "enabled",        s.enabled },
         { "autoExposure",   s.autoExposure },
         { "compensationEv", s.compensationEv },
+        { "localHighlightContrast",  s.localHighlightContrast },
+        { "localShadowContrast",     s.localShadowContrast },
+        { "localDetailStrength",     s.localDetailStrength },
+        { "localHighlightThreshold", s.localHighlightThreshold },
+        { "localShadowThreshold",    s.localShadowThreshold },
         { "minEv100",       s.minEv100 },
         { "maxEv100",       s.maxEv100 },
         { "lowPercentile",  s.lowPercentile },

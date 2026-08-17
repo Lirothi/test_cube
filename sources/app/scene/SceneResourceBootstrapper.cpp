@@ -750,6 +750,7 @@ void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data
 
 void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
                                                       const render::ColorPipelineSettings& color,
+                                                      const render::CameraExposureSettings& camera,
                                                       uint8_t* dest) const
 {
     if (!matTonemapCS_ || !dest)
@@ -774,11 +775,11 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
     matTonemapCS_->UpdateCBField(h.filmShoulder, color.filmShoulder, dest);
     matTonemapCS_->UpdateCBField(h.filmBlackClip, color.filmBlackClip, dest);
     matTonemapCS_->UpdateCBField(h.filmWhiteClip, color.filmWhiteClip, dest);
-    matTonemapCS_->UpdateCBField(h.localHighlightContrast, color.localHighlightContrast, dest);
-    matTonemapCS_->UpdateCBField(h.localShadowContrast, color.localShadowContrast, dest);
-    matTonemapCS_->UpdateCBField(h.localDetailStrength, color.localDetailStrength, dest);
-    matTonemapCS_->UpdateCBField(h.localHighlightThreshold, color.localHighlightThreshold, dest);
-    matTonemapCS_->UpdateCBField(h.localShadowThreshold, color.localShadowThreshold, dest);
+    matTonemapCS_->UpdateCBField(h.localHighlightContrast, camera.localHighlightContrast, dest);
+    matTonemapCS_->UpdateCBField(h.localShadowContrast, camera.localShadowContrast, dest);
+    matTonemapCS_->UpdateCBField(h.localDetailStrength, camera.localDetailStrength, dest);
+    matTonemapCS_->UpdateCBField(h.localHighlightThreshold, camera.localHighlightThreshold, dest);
+    matTonemapCS_->UpdateCBField(h.localShadowThreshold, camera.localShadowThreshold, dest);
 }
 
 void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMeteringConstants& data,

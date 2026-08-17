@@ -551,7 +551,79 @@ and every `--shot` run exited 0.
 
 ---
 
-### F7 — Offline GGX sky derivatives and BRDF LUT
+### F7 — Offline GGX sky derivatives and BRDF LUT — DONE (2026-08-17, uncommitted)
+
+**Status.** Implemented in `sources/assets/AssetImporter.cpp` and baked from
+`import_staging/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.hdr` (the source of the sky
+`wind_test` currently uses). Runtime is untouched — these are siblings, so every level still loads
+exactly what it loaded before. F8 is what consumes them.
+
+Produced, next to the display cube:
+
+| file | format | size |
+|---|---|---|
+| `<stem>_spec.dds` | BC6H_UF16 cube, 1024^2, **8 mips = roughness 0 .. 1** | 8.4 MB |
+| `<stem>_diffuse.dds` | RGBA16F cube, 32^2, uncompressed | 49 KB |
+| `brdf_lut.dds` | RG16_FLOAT 256^2 | 262 KB |
+
+**Verified by numbers, not by "the file exists".** A `ScanFloatImages` pass runs on every bake and
+logs mean luminance, max component, non-finite and negative counts per mip:
+
+- **Energy preserved across the prefilter:** meanLuma 0.8448 -> 0.8364 over all 8 mips (-1%). A GGX
+  prefilter must redistribute radiance, not change its average.
+- **Max component falls monotonically** 60.36 -> 10.06 -> 3.63 -> 2.25 -> 1.86 -> 1.62 -> 1.57 ->
+  1.53: the sun disc spreading over a widening lobe, which is the signature the step exists to get.
+- **Zero non-finite, zero negative** at every mip of every resource.
+- **Irradiance lands at 0.8370** against the specular tail's 0.8364 — independent integrations
+  converging on the sky's average radiance, which is the cross-check that they agree.
+- **BRDF LUT matches the published split-sum figure:** A in [0.009, 1.000], B in [0, 0.988],
+  **A + B <= 1.0002** (fp16 rounding). A+B = 1.000 at every NoV for roughness -> 0; falls with
+  roughness, the known single-scattering energy loss.
+
+**A bug this caught, worth the cost of writing the checks.** The first bake used
+`k = alpha*alpha/2` for the Smith term where the IBL variant is `k = alpha/2` (alpha = roughness^2).
+G came out far too large and the LUT returned **A + B up to 7.73** against a ceiling of 1. The
+specular cube looked perfect in the same run — only the A+B assertion found it. Do not accept an
+offline bake on the basis that it produced files.
+
+**Deliberate choices.** Mip 0 of the specular cube is a straight copy (a mirror must stay sharp).
+Wide lobes read from a coarser SOURCE mip, which is what keeps fireflies out. The irradiance cube is
+left uncompressed: BC6H would save 100 KB and cost banding on the one resource whose whole job is to
+be smooth. Sampling is deterministic (Hammersley, fixed counts), so two imports are byte-identical.
+
+**Install path (fixed in the same session, after the user asked).** The editor's Import panel only
+ever moved ONE file for a skybox (`produced.replace_extension(".dds")`), so the F7 siblings would
+have been left in staging and the runtime would have silently fallen back to the box-filtered mip
+chain — the exact failure this step exists to remove. `ImportPanel` now installs the whole set.
+
+**Layout changed with it (user's call, 2026-08-17): a skybox now gets a FOLDER.** It used to get a
+bare filename in the textures root because it was a single file; since F7 it is a set, which is
+precisely what the existing `TextureSet -> textures/<name>/` rule is for. New imports produce:
+
+```
+textures/<name>/<name>.dds          display cube
+textures/<name>/<name>_spec.dds     GGX-prefiltered
+textures/<name>/<name>_diffuse.dds  irradiance
+textures/brdf_lut.dds               scene independent -- belongs to no single sky, stays at the root
+```
+
+Sites this touched in `ImportPanel.cpp`: `ProjectDest`, the stale-output containment test (skyboxes
+now use the same directory test as every other kind, so its special case is gone), two
+`ImportManifestPath(..., outputIsFile)` calls and the manifest write — all four now pass `false`
+because every kind's destination is a directory. `AssetRegistry::ImportManifestPath` already
+auto-detects file-vs-folder, so **already-installed flat skyboxes keep being recognised**; what does
+change is that the panel now reports them as not-yet-imported, because `ProjectDest` points at a
+folder that does not exist yet. Re-importing installs the folder version and leaves the old flat
+`.dds` orphaned for the user to delete.
+
+**Still the user's decision:** nothing under `textures/` was written or moved by this work, and the
+level still points at `textures/skybox.dds`. After a panel import the level's skybox has to be
+repointed (inspector -> Skybox -> texture list); there is no "assign to level" action in the import
+panel.
+
+---
+
+### F7 (original specification)
 
 - **Depends:** F0; serialize with F10 because both touch the importer.
 - **Goal:** Produce the resources required for split-sum IBL without changing runtime shading yet.

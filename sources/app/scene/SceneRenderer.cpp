@@ -3972,7 +3972,8 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         const UINT tonemapCb = resources_.GetTonemapCBSizeBytes();
         RecordComputeDispatch(renderer, t.cl, tonemapMaterial.get(), tonemapCb,
             [this, applyExposure](uint8_t* dest) {
-                resources_.WriteTonemapConstants(applyExposure, frame_->colorPipeline, dest);
+                resources_.WriteTonemapConstants(applyExposure, frame_->colorPipeline,
+                                                 frame_->cameraExposure, dest);
             },
             { tonemapSrc, metering.BaseLumSrv() }, { D.tonemapUAV, metering.ExposureUav() }, samplerTable,
             renderer->GetWidth(), renderer->GetHeight(),
