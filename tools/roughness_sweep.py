@@ -138,7 +138,8 @@ def analyze() -> int:
         rows.setdefault(key, []).append((name, float(vals.mean()), float(detail[mask].std()),
                                          rgb.mean(0)))
 
-    labels = {"d": "dielectric 0.18 grey", "m": "white metal", "c": "copper metal"}
+    labels = {"d": "dielectric 0.18 grey", "m": "white metal", "c": "copper metal",
+              "a": "F9 material AO sweep (roughness fixed)"}
     failures = 0
     for key, entries in rows.items():
         print(f"\n{labels.get(key, key)}")
@@ -148,14 +149,28 @@ def analyze() -> int:
             rb = rgb[0] / max(rgb[2], 1e-6)
             print(f"  {name:>22} {mean:>8.4f} {std:>9.4f} {rb:>7.3f}")
             detail.append(std)
-        # Monotonic decrease is the property under test. Allow a small tolerance: the sky is not
-        # uniform, so a sphere can catch a slightly busier patch than its neighbour.
-        bad = [i for i in range(1, len(detail)) if detail[i] > detail[i - 1] * 1.15]
-        if bad:
-            failures += 1
-            print(f"  DETAIL NOT MONOTONIC at index {bad} -- prefilter and sampler disagree?")
+        # Each row asserts on the quantity IT is about.
+        if key == "a":
+            # AO row: roughness is fixed, so detail is not the subject -- and it actually RISES as
+            # the spheres darken, because these numbers come from the final image and the tone
+            # curve is steeper down there, so the same scene-linear variation reads as a larger
+            # display-linear one. The property under test is that occlusion darkens the sphere.
+            means = [m for _, m, _, _ in entries]
+            bad = [i for i in range(1, len(means)) if means[i] > means[i - 1]]
+            if bad:
+                failures += 1
+                print(f"  MEAN NOT FALLING at index {bad} -- material AO is not reaching indirect light?")
+            else:
+                print(f"  mean falls {means[0]:.4f} -> {means[-1]:.4f} as AO 1 -> 0, monotonic  OK")
         else:
-            print(f"  detail falls {detail[0]:.4f} -> {detail[-1]:.4f}, monotonic  OK")
+            # Roughness rows: detail must fall. Small tolerance -- the sky is not uniform, so a
+            # sphere can catch a slightly busier patch than its neighbour.
+            bad = [i for i in range(1, len(detail)) if detail[i] > detail[i - 1] * 1.15]
+            if bad:
+                failures += 1
+                print(f"  DETAIL NOT MONOTONIC at index {bad} -- prefilter and sampler disagree?")
+            else:
+                print(f"  detail falls {detail[0]:.4f} -> {detail[-1]:.4f}, monotonic  OK")
     return failures
 
 

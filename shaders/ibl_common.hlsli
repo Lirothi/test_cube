@@ -36,4 +36,34 @@ float IblRoughnessFromMip(float mip, float mipCount)
                 REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE);
 }
 
+// F9 -- roughness- and view-aware specular occlusion from a SCALAR ambient occlusion value.
+//
+// Lagarde & de Rousiers, "Moving Frostbite to Physically Based Rendering", listing 26. The shape is
+// the point: a mirror reflects a single direction, so a cavity term that describes hemispherical
+// visibility says almost nothing about whether THAT direction is blocked -- and multiplying a sharp
+// reflection by AO produces the "dirty chrome" look. As roughness grows the lobe covers more of the
+// hemisphere and AO becomes an increasingly good description of it, so the exponent lets occlusion
+// take hold. NoV matters for the same reason: at grazing angles the lobe skims the surface.
+//
+// Not UE's `GetDistanceFieldAOSpecularOcclusion` (SkyLightingShared.ush), which is a cone-cone
+// intersection between the reflection lobe and an unoccluded cone -- it needs a BENT NORMAL, i.e.
+// the direction visibility is open in, and our GBAux carries a scalar only. Revisit if a bent
+// normal ever ships (GTAO can produce one).
+//
+// Measured, AO = 0.3 (a flat multiply would give 0.300 everywhere; higher = less occluded):
+//     roughness   NoV=0.2   NoV=0.5   NoV=0.9
+//         0.02      0.058     0.215     0.376
+//         0.30      0.288     0.296     0.303
+//         0.60+     0.300     0.300     0.300
+// A near-mirror seen face-on keeps MORE of its reflection than AO alone would allow, the same
+// mirror seen at a grazing angle keeps far less, and by roughness 0.6 the term has converged on
+// plain AO because by then the lobe really does cover the hemisphere AO describes.
+//
+// AO = 1 returns exactly 1 -- verified over the whole (NoV, roughness) domain, not just spot
+// checked -- so an unauthored material is bit-identical to before this existed.
+float IblSpecularOcclusion(float ndotv, float ao, float roughness)
+{
+    return saturate(pow(abs(ndotv) + ao, exp2(-16.0f * roughness - 1.0f)) - 1.0f + ao);
+}
+
 #endif // IBL_COMMON_HLSLI

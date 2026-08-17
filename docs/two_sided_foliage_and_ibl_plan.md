@@ -720,7 +720,55 @@ staging directory) is self-contained and testable without installing anything.
 
 ---
 
-### F9 — Material AO and roughness-aware specular occlusion
+### F9 — Material AO and roughness-aware specular occlusion — DONE (2026-08-17, uncommitted)
+
+**Half of this was already in the tree and doing nothing.** F3 landed `GBAux.r` as scalar material
+AO and the GBuffer has written it ever since; grepping the consumers found **none** -- compose read
+`.g` and `.b`, lighting read `.b` and `.a`, and `.r` was written every frame and dropped. So F9 was
+not "add AO", it was "start reading it", plus the specular half.
+
+**Diffuse.** `lighting_cs` multiplies the indirect diffuse fill -- irradiance-cube or flat fallback
+-- by `gbAux.r`. Nothing else: the sun, spot/point lights and emissive are direct, and a cavity map
+has no business dimming them.
+
+**Specular.** `IblSpecularOcclusion(NoV, AO, roughness)` in `shaders/ibl_common.hlsli`, applied in
+compose to the **fallback sky only**. Lagarde & de Rousiers, *Moving Frostbite to PBR*, listing 26.
+NOT UE's `GetDistanceFieldAOSpecularOcclusion` from the newly supplied `SkyLightingShared.ush`:
+that is a cone-cone intersection between the reflection lobe and an unoccluded cone and needs a
+BENT NORMAL, which our GBAux does not carry. Worth revisiting if GTAO (P6B) ever produces one.
+
+Measured, AO = 0.3 (a flat multiply would read 0.300 everywhere; higher = less occluded):
+
+| roughness | NoV=0.2 | NoV=0.5 | NoV=0.9 |
+|---|---:|---:|---:|
+| 0.02 | 0.058 | 0.215 | **0.376** |
+| 0.30 | 0.288 | 0.296 | 0.303 |
+| 0.60+ | 0.300 | 0.300 | 0.300 |
+
+A near-mirror seen face-on keeps MORE of its reflection than AO alone would allow -- which is the
+whole point, since multiplying a sharp reflection by a hemispherical cavity term is what produces
+the "dirty chrome" look -- and by roughness 0.6 the term has converged on plain AO, because by then
+the lobe really does cover the hemisphere AO describes.
+
+**RT/SSR hits are deliberately left alone.** They traced the geometry AO is a stand-in for, so
+occluding them would double-count. The plan asks for a separate A/B before widening this, and this
+is the conservative half.
+
+**Interface contract verified, not spot-checked.** `IblSpecularOcclusion(NoV, 1, roughness) == 1`
+exactly, evaluated over the whole domain (2001 x 501 samples, min = max = 1.0), and the diffuse side
+is a multiply by 1. No material outside the test level authors a non-unit AO, so every existing
+level is bit-identical.
+
+**Verify.** `data/levels/roughness_sweep.json` gained a fourth row: eight spheres at a fixed
+roughness 0.30 with AO swept 1 -> 0, and `tools/roughness_sweep.py` asserts the mean falls
+monotonically (0.4176 -> 0.0937). At AO = 0 the sphere is not black -- direct sun survives, which is
+the stated contract. The gate is row-aware now: roughness rows assert on high-frequency detail, the
+AO row on mean, because detail actually RISES across the AO row -- these numbers come from the final
+image and the tone curve is steeper in the shadows, so the same scene-linear variation reads larger.
+
+---
+
+### F9 (original specification)
 
 - **Depends:** F3, F8.
 - **Goal:** Reduce indirect-sky leaking in locally occluded areas without suppressing direct highlights.

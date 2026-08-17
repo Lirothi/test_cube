@@ -1382,7 +1382,20 @@ Exit 0 = pass. Run it after any change to the bake, the roughness/mip mapping or
 
 ---
 
-### P6A — Consume material AO through one indirect-light contract
+### P6A — Consume material AO through one indirect-light contract — DONE (2026-08-17, uncommitted)
+
+Its source of truth is F9 in `docs/two_sided_foliage_and_ibl_plan.md`, which is done; see there for
+the numbers. Against this step's own four requirements:
+1. `GBAux.r` modulates diffuse IBL -- done, in `lighting_cs`, both the irradiance and flat paths.
+2. Specular occlusion is view/roughness-aware, not a raw AO multiply -- `IblSpecularOcclusion`.
+3. Direct sun, local lights, emissive and the sky background are untouched -- by construction, the
+   term is applied only to the indirect diffuse fill and the fallback sky reflection.
+4. AO = 1 is screenshot-equivalent -- proven analytically over the whole domain, and no shipped
+   material authors a non-unit AO.
+
+---
+
+### P6A (original specification)
 
 **Depends on:** P5 and `two_sided_foliage_and_ibl_plan.md` F9.
 

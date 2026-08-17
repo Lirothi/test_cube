@@ -214,6 +214,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 payload = GB2.SampleLevel(gSmp, uv, 0).rgb;
     float4 gbAux = GBAux.SampleLevel(gSmpPoint, uv, 0);
     float indirectSpecularScale = saturate(gbAux.g);
+    // F9: scalar material AO, written since F3, consumed from here on.
+    const float materialAo = saturate(gbAux.r);
     uint shadingModel = DecodeShadingModel(gbAux.b);
     float3 color = lit;
     if (shadingModel != kShadingModelTwoSidedFoliage)
@@ -264,6 +266,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 ? SkySpecular.SampleLevel(gSmp, Rw, mip).rgb * skyboxIntensity
                 : SkyboxTex.SampleLevel(gSmp, Rw, mip).rgb * skyboxIntensity;
         }
+
+        // F9: occlude the FALLBACK SKY only. An RT or SSR hit already knows what it saw -- it
+        // traced the geometry that AO is a stand-in for -- so darkening it would double-count the
+        // occlusion. The plan is explicit that widening this to all indirect methods needs its own
+        // A/B, and this is the conservative half.
+        skyCol *= IblSpecularOcclusion(cosT, materialAo, rough);
 
         // Skybox as fallback: (ssrColor*α + sky*(1-α)). Apply the material
         // control after the source/fallback blend so None, SkyOnly, SSR and RT

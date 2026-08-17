@@ -287,6 +287,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     uint shadingModel = DecodeShadingModel(gbAux.b);
     const bool isFoliage = (shadingModel == kShadingModelTwoSidedFoliage);
     const float transmissionNormalWeight = saturate(gbAux.a);
+    // F9: scalar material AO, written by the GBuffer since F3. Default 1 = no occlusion.
+    const float materialAo = saturate(gbAux.r);
     float3 subsurface = 0.0f.xxx;
     if (isFoliage)
     {
@@ -327,6 +329,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     {
         color = ambient * ambientRgb;
     }
+    // F9: material AO. It occludes INDIRECT DIFFUSE and nothing else -- the sun, the local lights
+    // and emissive are direct and a cavity map has no business dimming them. `gbAux.r` has carried
+    // this since F3 and nothing read it until now; 1 is the default, so a material that does not
+    // author AO is bit-identical to before.
+    color *= materialAo;
 
     // S0.3: seed the debug cascade with the one the split selection picks, so surfaces that never
     // sample a shadow (facing away from the sun) still show their zone. A real sample below

@@ -1,0 +1,14 @@
+{
+  "tint": [
+    0.6,
+    0.6,
+    0.6,
+    1.0
+  ],
+  "metalRough": [
+    0.0,
+    0.3
+  ],
+  "ambientOcclusion": 0.25,
+  "normalIsRG": false
+}
