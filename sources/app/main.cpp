@@ -478,10 +478,16 @@ int WINAPI WinMain(
         }
         // "--set=<name>:<value>[;<name>:<value>...]": hold settings at fixed values for the run,
         // from the same name table --sweep uses. See App.h.
-        if (const char* flag = std::strstr(lpCmdLine, "--set=")) {
+        // EVERY occurrence, not just the first. This used to be a single strstr, so a command line
+        // with two `--set=` flags silently applied one and dropped the other -- and a measurement
+        // taken that way reports the settings you TYPED, not the ones that ran. Cost me an A/B.
+        // The documented `--set=a:1;b:2` form still works; the loop just also accepts the other one.
+        for (const char* flag = std::strstr(lpCmdLine, "--set="); flag != nullptr;
+             flag = std::strstr(flag, "--set=")) {
             const char* p = flag + std::strlen("--set=");
             const char* end = p;
             while (*end && *end != ' ' && *end != '\t') { ++end; }
+            flag = end; // resume scanning after this flag's value
             while (p < end) {
                 const char* semi = std::strchr(p, ';');
                 const char* itemEnd = (semi && semi < end) ? semi : end;

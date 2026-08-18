@@ -47,12 +47,23 @@ static const uint SSR_TECHNIQUE_UE = 1u;
 #error SSR_LOGMARCH_BATCH4 requires SSR_LOGMARCH_OPTIMIZED
 #endif
 
-static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
-static const int ssrRefineSteps = 16; // number of refinement iterations
-#if SSR_LOGMARCH_OPTIMIZED
-static const int ssrOptimizedRefineSteps = 12; // conservative sub-pixel refinement budget
+// The two budgets that decide what this tracer costs. COMPILE-TIME on purpose: they were briefly
+// runtime (constant-buffer) knobs, and the measurement said a dynamic loop bound costs ~4% of the
+// pass because the compiler loses the trip count -- 0.0710/0.0740/0.0740/0.0750 ms compiled versus
+// 0.0770/0.0770 in a CB. Overridable from the material's defines, so the P14 ablation is
+// still reproducible without editing this file: refine 0 takes the hit at the coarse crossing
+// (uvHigh/depthHigh are already seeded from it), coarse 0 leaves nothing but the pass's setup.
+#ifndef SSR_LOGMARCH_COARSE_STEPS
+#define SSR_LOGMARCH_COARSE_STEPS 128
 #endif
-static const int ssrLogMarchSteps = 128; // number of logarithmic steps for the hybrid tracer
+#ifndef SSR_LOGMARCH_REFINE_STEPS
+#define SSR_LOGMARCH_REFINE_STEPS 12
+#endif
+
+static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
+static const int ssrRefineSteps = 16; // number of refinement iterations (LEGACY path only)
+static const int ssrOptimizedRefineSteps = SSR_LOGMARCH_REFINE_STEPS; // sub-pixel refinement budget
+static const int ssrLogMarchSteps = SSR_LOGMARCH_COARSE_STEPS; // coarse steps for the hybrid tracer
 static const float ssrMinStrideVS = 0.05f; // minimum ray step in view space
 static const float ssrStrideGrowth = 1.02f; // multiplicative stride growth per step
 static const float ssrThicknessVS = 0.05f; // thickness (view units)

@@ -476,6 +476,10 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         // Independent opt-ins: optimized keeps the legacy fallback; Batch4 only reschedules coarse reads.
         cd.defines.emplace_back("SSR_LOGMARCH_OPTIMIZED", "1");
         cd.defines.emplace_back("SSR_LOGMARCH_BATCH4", "1");
+        // The tracer's two budgets, stated here so the P14 ablation is reproducible without
+        // editing a shader. Compile-time on purpose: a constant-buffer bound cost ~4%.
+        cd.defines.emplace_back("SSR_LOGMARCH_COARSE_STEPS", "128");
+        cd.defines.emplace_back("SSR_LOGMARCH_REFINE_STEPS", "12");
         matSSR_ = mm->GetOrCreateCompute(renderer, cd);
     }
 

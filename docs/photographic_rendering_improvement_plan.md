@@ -2742,6 +2742,84 @@ unchanged from baseline, and Debug GBV reports only the pre-existing id=1328 war
 P12.2. Note for whoever runs that gate next: `--gbv` on a Release binary validates NOTHING, because
 the debug layer and `SetEnableGPUBasedValidation` sit under `#ifdef _DEBUG`.
 
+### P14 — Where the log march's time actually goes, and what that says about HZB skipping — MEASURED (2026-08-18)
+
+A proposal came in to add conservative empty-space skipping over the CLOSEST pyramid, with every
+candidate confirmed against full-resolution depth. The chain choice is right (closest = `max` device
+Z under reversed-Z = the NEAREST surface, which is what "is the ray in front of everything in this
+tile" needs). Before implementing it, the log march was priced by ablation, because a skip only ever
+buys back time spent marching through empty space.
+
+Two compile-time budgets were added to `ssr_trace_logmarch.hlsli` — `SSR_LOGMARCH_COARSE_STEPS` and
+`SSR_LOGMARCH_REFINE_STEPS`, both stated at their defaults in `SceneResourceBootstrapper`. Refine 0
+takes the hit at the coarse crossing (`uvHigh`/`depthHigh` are already seeded from it); coarse 0
+leaves nothing but the pass's own setup. `ssr_bronze_palms`, level default camera, wind frozen,
+native resolution, SSR forced, GTAO off, `--trace=120`, median of 122 GPU samples per config:
+
+| coarse × refine | `Pass_ReflectionSource` |
+|---|---:|
+| 0 × – (setup only) | 0.0100 ms |
+| 64 × 0 | 0.0420 ms |
+| 128 × 0 | 0.0530 ms |
+| 64 × 12 | 0.0590 ms |
+| **128 × 12 (shipping)** | **0.0740 ms** |
+
+Which decomposes exactly (the parts sum to the whole, which is the check that the ablation is sound):
+
+* setup / G-buffer read / write — **0.0100 ms, 13.5%**
+* coarse steps 1–64 — **0.0320 ms, 43%**
+* coarse steps 65–128 — **0.0110 ms, 15%**
+* 12 bisection steps — **0.0210 ms, 28%**
+
+**The coarse loop is NOT exhaustion-dominated.** Doubling the budget from 64 to 128 costs only 34% of
+what the first 64 cost, so most rays leave it early — on a hit or by walking off screen — and only a
+minority run deep. That deep tail, 15% of the pass, is the ENTIRE budget an empty-space skip can
+target. Bisection, the second-largest block at 28%, is untouched by any skip: it is sub-pixel
+refinement AFTER a crossing is known.
+
+**And the prerequisite is not free.** The closest chain is not built at all today
+(`ssrHizActive_ = false`, SceneRenderer.cpp — nothing reads it since the HiZ tracer left the SSR
+path). Enabling `writeClosest` moved `Pass_Hzb` from **0.0350 to 0.0430 ms**, so the second pyramid
+costs **+0.0080 ms** every frame.
+
+**Verdict: a PERFECT skip nets 0.0110 − 0.0080 = +0.003 ms, about 4% of the pass** — and that ceiling
+assumes the traversal itself is free, which is exactly the assumption `shaders/ssr_trace_hiz.hlsli`
+already disproved (dependent per-mip reads and divergent loop counts, against a coarse loop whose
+measured wins came from INDEPENDENT batched reads). The idea is sound in general; on this pass, in
+this engine, it is chasing 15% and paying 11% of it up front. If the coarse march is to be attacked,
+the honest target is steps 1–64 (43%), and the cheap shape is UE's own: one FIXED-mip probe used to
+advance the stride, not a hierarchy walk.
+
+**THE BUDGETS STAY COMPILE-TIME, AND THE MEASUREMENT IS WHY.** They were made runtime knobs first —
+`SceneRenderSettings::ssrLogMarch`, constant-buffer fields, `--set=ssr.logSteps`/`ssr.logRefine`, two
+developer-window sliders, the ocean pass following the same settings. It worked, and
+`--set=ssr.logRefine:0` reproduced the 128×0 row of the table above exactly (**0.0535 ms** at runtime
+versus **0.0530 ms** compiled). Then it was priced:
+
+| budgets | `Pass_ReflectionSource` |
+|---|---:|
+| compiled in | 0.0710 / 0.0740 / 0.0740 / 0.0750 ms |
+| in the constant buffer | 0.0770 / 0.0770 ms |
+
+**+0.003 ms, about +4%**, repeatable to the digit — a dynamic loop bound costs the compiler the trip
+count. So the whole runtime path was reverted: settings struct, CB fields, `--set` keys and sliders
+all removed rather than left inert, because a knob nobody can turn is worse than no knob. A fixed
+compile-time bound with a runtime `break` would not have recovered it either; the break defeats the
+unrolling exactly as the dynamic bound does.
+
+What survives is the useful half: `SSR_LOGMARCH_COARSE_STEPS` and `SSR_LOGMARCH_REFINE_STEPS`, stated
+at their defaults in `SceneResourceBootstrapper`'s material description. Still compile-time, so the
+budgets cost nothing, but the ablation above is reproducible by editing two numbers and rebuilding
+rather than by rewriting the tracer.
+
+**HARNESS BUG FOUND AND FIXED WHILE DOING THIS.** `--set=` was parsed with a single `strstr`, so only
+the FIRST `--set=` flag on a command line was applied and any further ones were silently dropped —
+the documented `--set=a:1;b:2` form worked, two separate flags did not. That is how the first attempt
+at this measurement ended up profiling `Pass_RTReflections` (the level defaults to
+`ReflectionSource::RT`) while believing it had forced SSR: the log said the settings that were TYPED,
+not the ones that ran. `main.cpp` now loops over every occurrence. Any earlier measurement in this
+document that passed two `--set=` flags should be re-read with that in mind.
+
 ## 10. Global acceptance checklist
 
 ### Exposure and color
