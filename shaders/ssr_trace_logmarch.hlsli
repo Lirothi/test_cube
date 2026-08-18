@@ -1,6 +1,11 @@
 #ifndef SSR_TRACE_LOGMARCH_HLSLI
 #define SSR_TRACE_LOGMARCH_HLSLI
 
+// Mirrors `SsrTechnique` in SceneFrameData.h. It lives in the shared trace header rather than in
+// one host shader because more than one pass now chooses between the two searches.
+static const uint SSR_TECHNIQUE_LOGMARCH = 0u;
+static const uint SSR_TECHNIQUE_UE = 1u;
+
 #ifndef SSR_TRACE_PROJ
 #define SSR_TRACE_PROJ proj
 #endif

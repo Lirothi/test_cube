@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -97,6 +98,49 @@ inline void ApplyUeSsrQualityPreset(UeSsrSettings& settings, UeSsrQualityPreset 
     }
 }
 
+// The clamped numbers the shaders actually receive. Two passes trace with this tracer now -- the
+// deferred SSR dispatch and the ocean's planar reflection -- and a second copy of these clamps is
+// a second thing to drift, so the resolve lives beside the settings it resolves.
+// Deliberately carries NO defaults: ResolveUeSsrSettings assigns every field, and a second set of
+// initializers here would be a second place for a default to drift out of step with UeSsrSettings
+// above -- which is the only place a default actually lives.
+struct ResolvedUeSsrSettings
+{
+    uint32_t numSteps;
+    uint32_t numRays;
+    uint32_t glossyRays;
+    float startMipLevel;
+    float slopeCompareToleranceScale;
+    uint32_t confirmRetries;
+    uint32_t refineSteps;
+};
+
+inline ResolvedUeSsrSettings ResolveUeSsrSettings(const UeSsrSettings& s)
+{
+    ResolvedUeSsrSettings r{};
+    // The march consumes its samples in batches of four, so a budget that is not a multiple of
+    // four would be rounded up inside the loop anyway. Round here, where it is visible.
+    const uint32_t requestedSteps = std::clamp(s.numSteps, 4u, 64u);
+    r.numSteps = std::min(64u, (requestedSteps + 3u) & ~3u);
+    r.numRays = std::clamp(s.numRays, 1u, 12u);
+    r.glossyRays = s.glossyRays ? 1u : 0u;
+    r.startMipLevel = std::clamp(s.startMipLevel, 0.0f, 4.0f);
+    r.slopeCompareToleranceScale = std::clamp(s.slopeCompareToleranceScale, 0.25f, 8.0f);
+    r.confirmRetries = std::clamp(s.confirmRetries, 0u, 8u);
+    r.refineSteps = std::clamp(s.refineSteps, 0u, 8u);
+    return r;
+}
+
+// SSRTReflections.usf collapses the whole multi-ray budget into ONE mirror ray below roughness 0.1
+// and caps that ray at 24 steps. A reflector that IS a plane is always that case, so a pass which
+// traces a plane resolves the rule here instead of carrying a ray count it can never use into the
+// shader. Same arithmetic as the roughness branch in ssr_cs.hlsl -- keep the two in step.
+inline uint32_t UeSsrMirrorRaySteps(const ResolvedUeSsrSettings& r)
+{
+    return (r.glossyRays != 0u && r.numRays > 1u) ? std::min(r.numSteps * r.numRays, 24u)
+                                                  : r.numSteps;
+}
+
 // Where surface reflections come from (S8). None disables both traced/screen
 // reflections and the skybox fallback; SkyOnly keeps only the skybox fallback;
 // SSR is screen-space; RT is hardware ray-traced (Tier-1). RT is only honored when
@@ -174,6 +218,11 @@ struct GtaoSettings
 struct SceneRenderSettings
 {
     GtaoSettings gtao{};
+    // STAYS LogMarch. The UE march is finished and correct after P13, and it is the cheaper search,
+    // but on WATER the log march's dense mask is markedly the better picture -- and water is the
+    // largest reflective surface in this project's scenes. The UE march is selectable everywhere
+    // (`ssr.technique`), including the ocean plane; it is not the default. Do not flip this back on
+    // the strength of the cost numbers alone: the comparison that decided it was the image.
     SsrTechnique ssrTechnique = SsrTechnique::LogMarch;
     UeSsrSettings ssrUe{};
     // SSR temporal resolve. A screen-space ray is violently sensitive to its own start, so under

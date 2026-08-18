@@ -57,11 +57,10 @@ cbuffer PerFrame : register(b0)
 
 static const float kEps = 1e-6f;
 
-// Mirrors SsrTechnique in SceneFrameData.h. (A third option, a fixed-step screen-space march after
+// SSR_TECHNIQUE_* moved into ssr_trace_logmarch.hlsli below -- the ocean's planar reflection picks
+// between the same two searches now. (A third option, a fixed-step screen-space march after
 // Lettier's article, was removed with P6C step 6: LogMarch strictly dominated it and a third path
 // turned every SSR comparison into a three-way.)
-static const uint SSR_TECHNIQUE_LOGMARCH = 0u;
-static const uint SSR_TECHNIQUE_UE = 1u;
 
 float  DepthToViewZ_Fast(float d){ return depthB / (d - depthA); }
 float3 ReconstructPosVS(float2 uv, float d){

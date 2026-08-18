@@ -189,6 +189,9 @@ namespace
         mat4   clipmapViewProj[8];    // Step 24f: directional clipmap level viewProjs
     };
 
+    // MIRRORS the OceanReflectionCB in shaders/ocean_reflection_cs.hlsl. This one is uploaded by
+    // raw memcpy rather than through named field handles, so the offsets have to agree: every
+    // block below is laid out to land on the same 16-byte rows HLSL packs it into.
     struct OceanReflectionConstants
     {
         mat4 view{};
@@ -202,7 +205,28 @@ namespace
         float2 outputSize{};
         float3 camPosWS{};
         float waterHeight = 0.0f;
+        // P13: the ocean plane traces with the same search the deferred SSR pass uses.
+        uint32_t technique = 0u;
+        uint32_t useHzb = 0u;
+        uint32_t hzbMipCount = 1u;
+        uint32_t frameIndexMod8 = 0u;
+        float2 hzbSize{};
+        float2 hzbInvSize{};
+        float ueStartMipLevel = 0.0f;
+        float ueSlopeCompareToleranceScale = 4.0f;
+        uint32_t ueConfirmRetries = 0u;
+        uint32_t ueRefineSteps = 0u;
+        uint32_t ueNumSteps = 8u;
+        uint32_t pad0 = 0u;
+        uint32_t pad1 = 0u;
+        uint32_t pad2 = 0u;
     };
+
+    // A memcpy'd constant buffer has no field names to bind by, so nothing but this catches a
+    // member added on one side only. 368 = 256 matrices + 48 scalars/vectors + 64 of P13 block.
+    static_assert(sizeof(OceanReflectionConstants) == 368,
+        "OceanReflectionConstants must stay byte-identical to OceanReflectionCB in "
+        "shaders/ocean_reflection_cs.hlsl -- it is uploaded by raw memcpy.");
 
     template <typename T>
     D3D12_GPU_VIRTUAL_ADDRESS UploadFrameCB(Renderer* renderer, const T& data)
@@ -1409,6 +1433,13 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         p.NextPoint();
         p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        // P13: the UE search reads the furthest pyramid here too. Already its resting state, so
+        // this declares a fact rather than requesting a barrier -- and it is NOT re-declared at
+        // point 3, because nothing downstream reads the pyramid from a pixel shader.
+        if (DT.hzb.Get())
+        {
+            p.Use(DT.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
         p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         // 3. makePixelReadable: all three become PS-readable for the forward draws.
         p.NextPoint();
@@ -3450,14 +3481,14 @@ void SceneRenderer::FillSsrHzbConstants(Renderer* renderer, SsrPassConstants& c)
 void SceneRenderer::FillSsrUeConstants(SsrPassConstants& c, bool useRoughnessTexture) const
 {
     const UeSsrSettings& s = frame_->settings.ssrUe;
-    const uint32_t requestedSteps = std::clamp(s.numSteps, 4u, 64u);
-    c.ueNumSteps = std::min(64u, (requestedSteps + 3u) & ~3u);
-    c.ueNumRays = std::clamp(s.numRays, 1u, 12u);
-    c.ueGlossyRays = s.glossyRays ? 1u : 0u;
-    c.ueStartMipLevel = std::clamp(s.startMipLevel, 0.0f, 4.0f);
-    c.ueSlopeCompareToleranceScale = std::clamp(s.slopeCompareToleranceScale, 0.25f, 8.0f);
-    c.ueConfirmRetries = std::clamp(s.confirmRetries, 0u, 8u);
-    c.ueRefineSteps = std::clamp(s.refineSteps, 0u, 8u);
+    const ResolvedUeSsrSettings r = ResolveUeSsrSettings(s);
+    c.ueNumSteps = r.numSteps;
+    c.ueNumRays = r.numRays;
+    c.ueGlossyRays = r.glossyRays;
+    c.ueStartMipLevel = r.startMipLevel;
+    c.ueSlopeCompareToleranceScale = r.slopeCompareToleranceScale;
+    c.ueConfirmRetries = r.confirmRetries;
+    c.ueRefineSteps = r.refineSteps;
     c.ueUseRoughnessTexture = useRoughnessTexture && s.useSurfaceRoughness ? 1u : 0u;
     c.ueRoughnessOverride = std::clamp(s.roughnessOverride, 0.0f, 1.0f);
 }
@@ -4255,6 +4286,12 @@ void SceneRenderer::RecordOceanReflection(Renderer* renderer, ID3D12GraphicsComm
 
     renderer->Transition(cl, D.sceneOpaque.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer->Transition(cl, D.depthCopy.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // P13: already this pyramid's resting state, so it compiles to no barrier -- emitting it is
+    // what keeps the pass's declaration and its command list telling the same story.
+    if (D.hzb.Get())
+    {
+        renderer->Transition(cl, D.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
     renderer->Transition(cl, D.oceanReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     auto material = resources_.GetOceanReflectionMaterial();
@@ -4289,10 +4326,30 @@ void SceneRenderer::RecordOceanReflection(Renderer* renderer, ID3D12GraphicsComm
     constants.camPosWS = camera.GetPosition();
     constants.waterHeight = 0.0f;
 
+    // P13. Same technique switch, same pyramid, same phase sequence as Pass_ScreenSpaceReflections
+    // -- so `ssr.technique` moves the ocean with everything else instead of leaving one surface on
+    // the old search. `useHzb` is "does a pyramid exist", which is what makes the log march the
+    // automatic fallback on the first frame.
+    const bool hzbReady = D.hzb.Get() != nullptr && D.hzbSRV.ptr != 0 && D.hzbMips > 0u;
+    const ResolvedUeSsrSettings ue = ResolveUeSsrSettings(frame_->settings.ssrUe);
+    constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
+    constants.useHzb = hzbReady ? 1u : 0u;
+    constants.hzbMipCount = std::max(1u, D.hzbMips);
+    constants.frameIndexMod8 = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 7ull);
+    constants.hzbSize = float2(static_cast<float>(D.hzbWidth), static_cast<float>(D.hzbHeight));
+    constants.hzbInvSize = float2(D.hzbWidth > 0u ? 1.0f / static_cast<float>(D.hzbWidth) : 0.0f,
+        D.hzbHeight > 0u ? 1.0f / static_cast<float>(D.hzbHeight) : 0.0f);
+    constants.ueStartMipLevel = ue.startMipLevel;
+    constants.ueSlopeCompareToleranceScale = ue.slopeCompareToleranceScale;
+    constants.ueConfirmRetries = ue.confirmRetries;
+    constants.ueRefineSteps = ue.refineSteps;
+    constants.ueNumSteps = UeSsrMirrorRaySteps(ue);
+
     const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
     RecordComputeDispatch(renderer, cl, material.get(), cbSize,
         [&](uint8_t* dest) { std::memcpy(dest, &constants, sizeof(constants)); },
-        { D.sceneOpaqueSRV, D.depthCopySRV },
+        // t0 opaque scene colour, t1 opaque depth copy, t2 the FURTHEST pyramid (P13).
+        { D.sceneOpaqueSRV, D.depthCopySRV, hzbReady ? D.hzbSRV : D.depthCopySRV },
         { D.oceanReflectionUAV },
         renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
         renderer->GetOceanReflectionTextureWidth(), renderer->GetOceanReflectionTextureHeight(),

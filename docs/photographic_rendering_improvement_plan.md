@@ -2527,6 +2527,32 @@ Release GPU profiles measured `Pass_ReflectionSource` at **0.146-0.147 ms** for 
 **0.152-0.154 ms** sequential, a small but repeatable **4-5%** gain in this view. DLSS-quality runs
 were close to the profiler noise floor, so no larger speedup is claimed.
 
+**THE OCEAN PLANE NOW FOLLOWS THE SAME TECHNIQUE SWITCH, AND LOGMARCH REMAINS THE DEFAULT.**
+`ocean_reflection_cs.hlsl` traced the log march unconditionally, so `ssr.technique` moved every
+surface in the frame EXCEPT the largest reflective one -- the control did not tell the truth. It now
+takes the same branch as `ssr_cs.hlsl`: t2 binds the furthest pyramid, the constant block carries
+the identical technique/pyramid/`ueX` values, and `useHzb == 0` still falls back to the log march.
+Two details are specific to this pass. The reflector is the water PLANE, not the displaced surface
+(the wave normal is applied later, when the ocean shader samples this buffer), so it is always UE's
+Roughness < 0.1 case: the ray count collapses on the CPU via `UeSsrMirrorRaySteps` and never reaches
+the shader. And the noise is seeded with the dispatch's own integer coordinates rather than
+`uv * screenSize`, because this target can be scaled below render resolution and a stride above one
+texel re-correlates the interleaved-gradient phase -- the exact defect P13 fixed. The clamps that
+both passes share moved into `ResolveUeSsrSettings` so there is one copy of them.
+
+**The default stays `SsrTechnique::LogMarch`, decided by the image, not by the cost.** The UE march
+is correct after P13 and it is the cheaper search, but on water the log march's dense mask is
+markedly the better picture, and water is the largest reflective surface in these scenes. Measured
+on `atoll` with frozen wind, DLSS off and GTAO off: the run-to-run noise floor is **0.0397%** of
+pixels changed, the default frame versus an explicit `ssr.technique:0` differs on **0.0203%** (below
+the floor, i.e. the ocean's default path is unchanged by this work), and `ssr.technique:1` moves
+**0.53%** of pixels -- the switch is live and now includes the water. Gates: both configurations
+build, 17/17 shaders compile (`ocean_reflection_cs.hlsl` was missing from `tools/check_shaders.py`
+and is now listed), the barrier comparator reports **0 MISSING** with the off-canonical set
+unchanged from baseline, and Debug GBV reports only the pre-existing id=1328 warnings tracked as
+P12.2. Note for whoever runs that gate next: `--gbv` on a Release binary validates NOTHING, because
+the debug layer and `SetEnableGPUBasedValidation` sit under `#ifdef _DEBUG`.
+
 ## 10. Global acceptance checklist
 
 ### Exposure and color
