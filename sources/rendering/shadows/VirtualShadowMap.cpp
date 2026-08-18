@@ -65,8 +65,10 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
+        // P12.2: COMMON at creation. Buffers are ALWAYS created in COMMON by D3D12 (GBV id=1328);
+        // the resting state is declared below, and first use promotes into it.
         if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(pageTable_.GetAddressOfForCreate()))) || !pageTable_)
+                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(pageTable_.GetAddressOfForCreate()))) || !pageTable_)
         {
             pageTable_.Reset();
             pagePool_.Reset();
@@ -89,7 +91,7 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
         if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(requestBuffer_.GetAddressOfForCreate()))) || !requestBuffer_)
+                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(requestBuffer_.GetAddressOfForCreate()))) || !requestBuffer_)
         {
             requestBuffer_.Reset(); pageTable_.Reset(); pagePool_.Reset();
             return;
@@ -180,13 +182,18 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
 
 namespace
 {
-    // A persistent DEFAULT-heap RWStructuredBuffer<uint>[numUints] (ALLOW_UNORDERED_ACCESS,
-    // created COMMON). Used for the Step-20 allocation state buffers.
-    // `initial` is the resource's RESTING state (step 7 prereq): created directly there, so
-    // creation == canonical and the compile can seed from the canonical table on frame 1.
+    // A persistent DEFAULT-heap RWStructuredBuffer<uint>[numUints] (ALLOW_UNORDERED_ACCESS).
+    // Used for the Step-20 allocation state buffers.
+    //
+    // P12.2: this used to take the resting state and pass it as InitialState, on the belief that a
+    // buffer is "created directly there". It is not -- D3D12 creates EVERY buffer in COMMON and
+    // ignores the request (GBV id=1328), so the parameter described something that never happened.
+    // It is gone rather than defaulted, because a parameter the driver discards is a parameter that
+    // misleads its next reader. The resting state is still declared, at the Attach on each caller,
+    // which is the fact the canonical registry actually stores; state promotion makes the first use
+    // correct from COMMON.
     Microsoft::WRL::ComPtr<ID3D12Resource> CreateUavUintBuffer(ID3D12Device* dev,
-        std::uint32_t numUints, const wchar_t* name,
-        D3D12_RESOURCE_STATES initial = D3D12_RESOURCE_STATE_COMMON)
+        std::uint32_t numUints, const wchar_t* name)
     {
         Microsoft::WRL::ComPtr<ID3D12Resource> res;
         D3D12_HEAP_PROPERTIES heap{};
@@ -202,7 +209,7 @@ namespace
         bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
-                initial, nullptr, IID_PPV_ARGS(res.GetAddressOf()))) || !res)
+                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(res.GetAddressOf()))) || !res)
         {
             return nullptr;
         }
@@ -268,11 +275,11 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
     ID3D12Device* dev = renderer->GetDevice();
 
     // Same story as PageProj: the multi-draw path leaves this in COPY_SOURCE. Combined.
-    physOwner_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwner", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr);
-    physLastFrame_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysLastFrame", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
-    freeList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.FreeList", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
-    needsRender_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.NeedsRender", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
-    allocCounters_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.AllocCounters", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    physOwner_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwner"), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr);
+    physLastFrame_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysLastFrame"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    freeList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.FreeList"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    needsRender_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.NeedsRender"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    allocCounters_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.AllocCounters"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
     if (!physOwner_ || !physLastFrame_ || !freeList_ || !needsRender_ || !allocCounters_)
     {
         physOwner_.Reset(); physLastFrame_.Reset(); freeList_.Reset();
@@ -519,6 +526,13 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     // Consume: args + per-instance stream + projection, then the pool as the depth target.
     ctx.NextPoint();
     d.pointConsume = ctx.usePoint ? *ctx.usePoint : 0u;
+    // P12.1: hand the Rung 0 args BACK. This pass borrows them as an SRV at its first point above,
+    // and it is the only pass that reads them in any state other than their resting one. Returning
+    // them here is what makes the resting state deterministic: without it the buffer ended the
+    // frame in whichever state the last-scheduled toucher happened to leave, which differed by
+    // level and by whether this pass was built at all. It is also the state the spot/point shadow
+    // passes -- scheduled AFTER this one -- ExecuteIndirect from.
+    ctx.Use(shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     ctx.Use(pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     if (d.compactArgs) { ctx.Use(pageArgCount_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT); }
     // pageProj goes to an SRV on the single-draw path and to a per-page root CBV on the loop.
@@ -710,7 +724,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     const std::uint32_t argUints = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) / 4; // 5
     if (!pageDrawArgs_ || groups > renderGroups_)
     {
-        pageDrawArgs_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups * argUints, L"VSM.PageDrawArgs", D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, nullptr);
+        pageDrawArgs_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups * argUints, L"VSM.PageDrawArgs"), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, nullptr);
         renderGroups_ = groups;
         pageDrawArgsUav_ = {}; // force descriptor rebuild
     }
@@ -720,7 +734,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         // Step 7 prereq: g_pageDrawSingle is RUNTIME-toggleable, and the two paths rest this
         // buffer in different states. Both are READ states and legally combine, so one
         // declaration covers either path and no re-declaration on toggle is needed.
-        pageProj_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * 64u, L"VSM.PageProj", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, nullptr);
+        pageProj_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * 64u, L"VSM.PageProj"), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, nullptr);
         pageProjUav_ = {};
     }
     // Per-page-cull plan (Step 1): per (page, caster-slot) visible list, sized pool-pages x casters.
@@ -728,7 +742,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     if (!pageVisibleList_ || casters > renderCasters_)
     {
         const std::uint32_t cap = casters > 0u ? casters : 1u;
-        pageVisibleList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * cap, L"VSM.PageVisibleList", D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, nullptr);
+        pageVisibleList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * cap, L"VSM.PageVisibleList"), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, nullptr);
         renderCasters_ = cap;
         pageVisibleListUav_ = {}; // force descriptor rebuild
     }
@@ -736,30 +750,30 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     // physOwnerPrev_ = last frame's physOwner (new-page detect); perPageDirty_ = per-page dirty bit.
     if (!physOwnerPrev_)
     {
-        physOwnerPrev_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwnerPrev", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+        physOwnerPrev_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwnerPrev"), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
         physOwnerPrevSrv_ = {};
     }
     if (!perPageDirty_)
     {
-        perPageDirty_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PerPageDirty", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+        perPageDirty_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PerPageDirty"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
         perPageDirtyUav_ = {}; perPageDirtySrv_ = {};
     }
     // Compacted draw args: the append counter / ExecuteIndirect count buffer (element 0 only).
     if (!pageArgCount_)
     {
-        pageArgCount_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.PageArgCount", D3D12_RESOURCE_STATE_UNORDERED_ACCESS), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+        pageArgCount_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.PageArgCount"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
         pageArgCountUav_ = {};
     }
     // Spatial scatter cull: per (page, mesh-group) count/cursor + per-page dynamic-overlap flag.
     if (!pageGroupCount_ || groups > scatterGroups_)
     {
-        pageGroupCount_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups, L"VSM.PageGroupCount", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+        pageGroupCount_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups, L"VSM.PageGroupCount"), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
         scatterGroups_ = groups;
         pageGroupCountUav_ = {}; pageGroupCountSrv_ = {};
     }
     if (!pageScatterDyn_)
     {
-        pageScatterDyn_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PageScatterDyn", D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+        pageScatterDyn_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PageScatterDyn"), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
         pageScatterDynUav_ = {}; pageScatterDynSrv_ = {};
     }
     if (!pageDrawArgs_ || !pageProj_ || !physOwnerPrev_ || !perPageDirty_ ||

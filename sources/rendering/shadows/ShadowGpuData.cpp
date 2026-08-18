@@ -391,6 +391,23 @@ void ShadowGpuData::PrepareCullPass(RenderGraphPassContext& ctx) const
                 if (!giBuf || gc.obj->GetInstanceCasterSrv().ptr == 0) { continue; }
                 ctx.Use(giBuf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             }
+
+            // ...and hand each one BACK. This buffer belongs to the object, not to the cull: its
+            // owner declares the resting state and its own draw restores it. But that draw is
+            // CONDITIONAL — a GPU-instanced object the camera does not draw this frame never runs
+            // GpuInstancedModels::PrepareRender, while this scatter reads it regardless. The flip
+            // trace shows exactly that: on `demo` the only two touches in a frame are the rotation
+            // compute (UAV) and this scatter (NON_PIXEL), and nothing ever moves it back, so the
+            // frame ended off-canonical. Restoring to the OWNER'S declared state rather than a
+            // literal keeps this honest if that owner ever changes where it rests.
+            ctx.NextPoint();
+            for (const GiCaster& gc : giCasters_)
+            {
+                if (!gc.obj || gc.count == 0) { continue; }
+                ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource();
+                if (!giBuf || gc.obj->GetInstanceCasterSrv().ptr == 0) { continue; }
+                ctx.Use(giBuf, ctx.renderer->GetCanonicalState(giBuf));
+            }
         }
 
         ctx.NextPoint();
@@ -935,15 +952,19 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     const size_t numViews = render::kMaxShadowViews;
     const size_t groups = std::max<size_t>(numMeshGroups_, 1);
     const size_t casters = std::max<size_t>(count_, 1); // TOTAL (static + GI): visible-list + unified width
-    // NOTE (2026-08-18): --canonical-check reports this buffer off-canonical on some frames and
-    // not others, and FLIPPING the declaration to INDIRECT_ARGUMENT just reverses the report
-    // (canonical=0x200 actual=0x40) instead of clearing it. So the label is not the bug: the
-    // buffer genuinely rests in DIFFERENT states depending on whether RecordCull ran, since that
-    // body early-outs on `count_ == 0 || numMeshGroups_ == 0` while its closing transition to
-    // INDIRECT_ARGUMENT only happens when it does not. Fixing it means giving the resource one
-    // resting state on EVERY frame, which belongs with the cull's own flow, not here. Left as-is
-    // deliberately; the check is telling the truth.
-    EnsureUavRing(renderer, indirectArgs_, numViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"ShadowGpuData.IndirectArgs");
+    // P12.1. This buffer USED to declare NON_PIXEL_SHADER_RESOURCE and drifted: --canonical-check
+    // reported it off-canonical on some levels and not others, and flipping the label alone merely
+    // reversed the report. The cause is that it had TWO last-touchers, not one. RecordCull closes
+    // by leaving it in INDIRECT_ARGUMENT (below), while VirtualShadowMap::PrepareRenderPass borrows
+    // it as an SRV -- so whichever ran last decided the resting state, and whether the VSM page
+    // render pass exists at all depends on VsmActive() && IsAllocated() && !vsmSkipUpdate_. Hence
+    // one level rested INDIRECT_ARGUMENT and another NON_PIXEL_SHADER_RESOURCE.
+    //
+    // The fix is the rule its two siblings below already follow: DECLARE THE STATE THE OWNER LEAVES
+    // IT IN, and make every borrower hand it back. This is an indirect-argument buffer, the cull
+    // ends there, and VSM now restores it at its consume point (VirtualShadowMap.cpp). Compare
+    // VSM.PageDrawArgs, which declares INDIRECT_ARGUMENT and never drifted.
+    EnsureUavRing(renderer, indirectArgs_, numViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.IndirectArgs");
     EnsureUavRing(renderer, visibleList_, numViews * casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.VisibleList");
     EnsureUavRing(renderer, indirectCounts_, numViews * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"ShadowGpuData.IndirectCounts");
     // Step 2 (GI→VSM): DEFAULT-heap mirrors of instances_/bounds_, sized to `casters` per region.
@@ -1564,6 +1585,17 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             }
             renderer->UAVBarrier(cl, instancesUnified_.buffer.Get());
             renderer->UAVBarrier(cl, boundsUnified_.buffer.Get());
+
+            // The hand-back PrepareCullPass registers, in the same order and with the same skips.
+            // The scatter is done with these buffers here; leaving them in the state IT wanted made
+            // the resting state depend on whether the owner's (conditional) draw ran afterwards.
+            for (const GiCaster& gc : giCasters_)
+            {
+                if (!gc.obj || gc.count == 0) { continue; }
+                ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource();
+                if (!giBuf || gc.obj->GetInstanceCasterSrv().ptr == 0) { continue; }
+                renderer->Transition(cl, giBuf, renderer->GetCanonicalState(giBuf));
+            }
         }
 
         renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);

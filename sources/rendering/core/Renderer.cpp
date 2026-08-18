@@ -15,6 +15,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
+#include "materials/Texture2D.h" // shared-texture cache stats reported at shutdown
 #include "rendering/core/DlssHandler.h"
 #include "streamline/include/sl.h"
 
@@ -109,7 +110,24 @@ void Renderer::Shutdown()
 
     debugDrawSystem_.Shutdown();
     materialManager_.Clear();
+    // Report the shared-texture cache BEFORE the material caches drop their last references, or
+    // the live-entry count is always zero and the line says nothing.
+    {
+        std::uint32_t saved = 0, loaded = 0;
+        std::size_t entries = 0;
+        Texture2D::CacheStats(saved, loaded, entries);
+        char line[192];
+        std::snprintf(line, sizeof(line),
+                      "[texcache] %u loads, %u shared (GPU copies avoided), %zu live entries\n",
+                      loaded, saved, entries);
+        OutputDebugStringA(line);
+        if (FILE* f = nullptr; fopen_s(&f, diag::LogPath("texcache.log").c_str(), "w") == 0 && f) {
+            std::fputs(line, f);
+            std::fclose(f);
+        }
+    }
     materialDataManager_.ClearAll();
+    Texture2D::ClearCache();
     meshManager_.Clear();
     textManager_.Clear();
     fontManager_.Clear();
@@ -991,11 +1009,14 @@ void Renderer::ReportOffCanonicalStates() {
         Renderer::DiagLogOnce(msg);
     }
 
-    // Step 6b part 2: name the LEAK. Every resource has a unique debug name, so two live entries
-    // sharing one name means an earlier resource was never unregistered — the dangling keys that
-    // crashed the reporter and that let a recycled address inherit a stale canonical. Printing
-    // the duplicated names says exactly which owners fail to unregister, instead of guessing at
-    // ~60 declaration sites. Throttled: this walks the table twice.
+    // Step 6b part 2: name the resources that share a debug name. The original premise here was
+    // "every resource has a unique debug name, so two live entries sharing one means an earlier one
+    // was never unregistered" — the dangling keys that crashed the reporter and let a recycled
+    // address inherit a stale canonical. That premise is FALSE for assets: a debug name is the
+    // asset path, and two materials naming one texture file are two legitimate live entries. So
+    // this reports the duplication and leaves the verdict to the reader (see below). It still says
+    // exactly WHICH names to look at, instead of guessing at ~60 declaration sites.
+    // Throttled: this walks the table twice.
     // Triggered by the table CHANGING SIZE, which is precisely when something was declared or
     // failed to be forgotten. A fixed frame-count throttle was wrong: the stress harness runs
     // only a handful of frames per churn op, so a 240-frame tick never fired.
@@ -1017,8 +1038,23 @@ void Renderer::ReportOffCanonicalStates() {
             // Growing past a previous high-water mark. The first sighting of a name is not
             // interesting (every resource declares once), so only report from the second on.
             if (net < 2) { continue; }
+            // NOT called a leak, because this cannot tell one apart from a duplicate. Both look
+            // identical here -- N live entries under one debug name -- and the honest reading is
+            // usually the boring one. Measured on `demo`: damaged_plaster_normal.dds sat at 4
+            // because FOUR distinct materials name that file (two presets plus three inline object
+            // materials) and MaterialDataManager caches by MATERIAL NAME, so each loads its own
+            // copy; bronze_*.dds sat at 2 for the same reason. Nothing was leaking.
+            //
+            // HOW TO TELL THEM APART: count the referrers in data/ first. A count that MATCHES the
+            // number of things naming the asset is duplication -- wasted VRAM, fixable only by a
+            // texture cache keyed on path+usage, not by chasing lifetimes. A count that keeps
+            // climbing with no new referrer, or that survives the thing that owned it, is the leak.
+            // A level-switching `--scene-stress` run is the discriminator: declares outrunning
+            // forgets climb across iterations, duplication stays flat at the single-level value.
             char dup[240];
-            std::snprintf(dup, sizeof(dup), "[canonical] LEAK %s: live entries grew to %d\n",
+            std::snprintf(dup, sizeof(dup),
+                          "[canonical] duplicate-name %s: %d live entries "
+                          "(check the referrer count before reading this as a leak)\n",
                           name.c_str(), net);
             Renderer::DiagLogOnce(dup);
         }

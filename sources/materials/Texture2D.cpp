@@ -466,25 +466,118 @@ bool Texture2D::DecodeToMips(const CreateDesc& desc,
     return true;
 }
 
+namespace {
+
+// The shared-texture cache. Identity is texdecode::Key — the SAME struct the decode cache keys on,
+// deliberately: path plus the three parameters that change the decoded pixels. Reusing it means the
+// two caches cannot drift into disagreeing about what "the same texture" is.
+//
+// WEAK references. The cache is an index, not an owner: a shared texture lives exactly as long as
+// the last Texture2D viewing it, so a level switch frees VRAM on the same schedule it always did
+// and nothing accumulates. The cost is that a dead entry lingers as an expired weak_ptr until it is
+// looked up again or Erased below.
+struct SharedTexKeyHash
+{
+    std::size_t operator()(const texdecode::Key& k) const noexcept
+    {
+        std::size_t h = std::hash<std::wstring>{}(k.path);
+        h ^= std::hash<std::uint32_t>{}(static_cast<std::uint32_t>(k.usage)) + 0x9e3779b97f4a7c15ull +
+             (h << 6) + (h >> 2);
+        h ^= std::hash<bool>{}(k.normalIsRG) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+        h ^= std::hash<float>{}(k.alphaCoverageCutoff) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
+std::mutex gSharedTexMutex;
+std::unordered_map<texdecode::Key, std::weak_ptr<Texture2D>, SharedTexKeyHash> gSharedTex;
+std::uint32_t gSharedTexSaved = 0;  // loads turned into views — the copies NOT made
+std::uint32_t gSharedTexLoaded = 0; // loads that actually reached the device
+
+} // namespace
+
+void Texture2D::ClearCache()
+{
+    std::lock_guard<std::mutex> lk(gSharedTexMutex);
+    gSharedTex.clear();
+}
+
+void Texture2D::CacheStats(std::uint32_t& saved, std::uint32_t& loaded, std::size_t& entries)
+{
+    std::lock_guard<std::mutex> lk(gSharedTexMutex);
+    saved = gSharedTexSaved;
+    loaded = gSharedTexLoaded;
+    entries = 0;
+    for (const auto& [key, weak] : gSharedTex) { (void)key; if (!weak.expired()) { ++entries; } }
+}
+
 bool Texture2D::CreateFromFile(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmd,
     const CreateDesc& desc,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
-    debugName_ = L"Tex2D:" + desc.path; // distinct per texture — see the header
     // H2: prefer a sibling ".dds" next to the requested source (the H1 importer writes mipped BC DDS
     // beside the original PNG/JPG). This keeps glTF material URIs and preset paths byte-identical —
     // the DDS simply "appears" and is picked up here. Falls back to the source (WIC) with a one-time
     // "unmipped" warning. Already-".dds" requests (e.g. hand-authored presets) skip this untouched.
-    CreateDesc d = desc;
-    if (!EndsWithNoCase(d.path, L".dds")) {
-        const std::wstring sibling = DdsSiblingPath(d.path);
+    //
+    // RESOLVED FIRST, because the resolution is part of the identity: a preset naming "x.png" and
+    // one naming "x.dds" load the same bytes, and keying on the requested path would give them
+    // separate GPU copies — the exact duplication this cache exists to remove.
+    CreateDesc resolved = desc;
+    if (!EndsWithNoCase(resolved.path, L".dds")) {
+        const std::wstring sibling = DdsSiblingPath(resolved.path);
         const bool useDds = !sibling.empty() && FileExistsW(sibling);
-        LogTextureResolveOnce(d.path, sibling, useDds);
+        LogTextureResolveOnce(resolved.path, sibling, useDds);
         if (useDds) {
-            d.path = sibling;
+            resolved.path = sibling;
         }
     }
+
+    texdecode::Key key{};
+    key.path = resolved.path;
+    key.usage = resolved.usage;
+    key.normalIsRG = resolved.normalIsRG;
+    key.alphaCoverageCutoff = resolved.alphaCoverageCutoff;
+
+    {
+        std::lock_guard<std::mutex> lk(gSharedTexMutex);
+        auto it = gSharedTex.find(key);
+        if (it != gSharedTex.end()) {
+            if (std::shared_ptr<Texture2D> hit = it->second.lock()) {
+                shared_ = std::move(hit);
+                debugName_ = shared_->debugName_;
+                ++gSharedTexSaved;
+                return true;
+            }
+            gSharedTex.erase(it); // the last owner released it; reload below
+        }
+    }
+
+    // MISS. The lock is NOT held across the load: uploads touch the device and a command list, and
+    // this is only ever called from the thread that owns that list. Two threads missing the same
+    // key would each load, which costs a duplicate rather than corrupting anything — the map insert
+    // below is what settles who is cached.
+    auto owner = std::make_shared<Texture2D>();
+    if (!owner->LoadFromFileUncached_(renderer, uploadCmd, resolved, keepAlive)) {
+        return false; // a failed load is never cached: the next caller must be free to retry
+    }
+    {
+        std::lock_guard<std::mutex> lk(gSharedTexMutex);
+        gSharedTex[key] = owner;
+        ++gSharedTexLoaded;
+    }
+    debugName_ = owner->debugName_;
+    shared_ = std::move(owner);
+    return true;
+}
+
+bool Texture2D::LoadFromFileUncached_(Renderer* renderer,
+    ID3D12GraphicsCommandList* uploadCmd,
+    const CreateDesc& d,
+    std::vector<ComPtr<ID3D12Resource>>* keepAlive)
+{
+    debugName_ = L"Tex2D:" + d.path; // distinct per texture — see the header
 
     // DDS uses a separate path
     if (EndsWithNoCase(d.path, L".dds")) {
@@ -573,6 +666,10 @@ void Texture2D::CreateFromRGBA8(Renderer* renderer,
 
 D3D12_GPU_DESCRIPTOR_HANDLE Texture2D::GetSRVForFrame(Renderer* r)
 {
+    // A view forwards to the owner, so the per-frame descriptor copy below happens ONCE for all
+    // materials sharing the texture instead of once per material.
+    if (shared_) { return shared_->GetSRVForFrame(r); }
+
     // Keyed on the MONOTONIC frame number, not GetCurrentFrameIndex().
     //
     // The descriptor ring is reset per frame, and GetCurrentFrameIndex() is the frame-IN-FLIGHT

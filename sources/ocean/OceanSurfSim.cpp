@@ -95,8 +95,10 @@ void OceanSurfSim::EnsureResources(Renderer* renderer)
         bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         bufDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         ComPtr<ID3D12Resource> res;
+        // P12.2: COMMON at creation -- D3D12 ignores a buffer's initial state and warns (id=1328);
+        // the resting declaration below is the one that matters and is unchanged.
         ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&res)));
+            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&res)));
         spawners_.Attach(renderer->Declarations(), std::move(res),
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Ocean.SurfSimSpawners");
     }

@@ -843,14 +843,23 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
     jumpDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     jumpDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
+    // Despite the A/B naming these two do NOT share a resting state, and only slot 0 is scratch.
+    // The jump-flood ping-pongs between them, but the resolve always writes slot 1, `shoreSdfSrv_`
+    // is created on slot 1, and BuildShoreSdf ends by putting slot 1 into the shader-read state --
+    // where it then SITS, for every frame until the shore area moves again. Slot 0 really does rest
+    // in UAV. Declaring both UAV therefore left slot 1 permanently off-canonical.
+    // Textures honour their creation state, so it is stated here to match the declaration.
+    constexpr D3D12_RESOURCE_STATES kSdfResultRest =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     for (int i = 0; i < 2; ++i)
     {
+        const D3D12_RESOURCE_STATES rest =
+            (i == 0) ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : kSdfResultRest;
         Microsoft::WRL::ComPtr<ID3D12Resource> jumpRes;
         ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, jumpDesc,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &jumpRes));
+                rest, nullptr, &jumpRes));
         shoreSdfJump_[i].Attach(renderer->Declarations(), std::move(jumpRes),
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            i == 0 ? L"Ocean.ShoreSdfJumpA" : L"Ocean.ShoreSdfJumpB");
+            rest, i == 0 ? L"Ocean.ShoreSdfJumpA" : L"Ocean.ShoreSdfJumpB");
     }
 }
 

@@ -30,9 +30,12 @@ namespace
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
         ComPtr<ID3D12Resource> resource;
+        // P12.2: COMMON, not UNORDERED_ACCESS. D3D12 creates every BUFFER in COMMON and ignores the
+        // requested initial state (GBV id=1328); asking for UAV told the canonical registry a state
+        // the driver never applied. The first UAV write promotes it, so nothing else changes.
         ThrowIfFailed(device->CreateCommittedResource(
             &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            D3D12_RESOURCE_STATE_COMMON, nullptr,
             IID_PPV_ARGS(resource.GetAddressOf())));
         return resource;
     }
@@ -47,8 +50,9 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
 
     ID3D12Device* device = renderer->GetDevice();
 
-    // UNORDERED_ACCESS is both the creation and the canonical resting state: every future consumer
-    // is a compute dispatch, so declaring anything else would just add a barrier at each end.
+    // UNORDERED_ACCESS is the canonical RESTING state: every future consumer is a compute dispatch,
+    // so declaring anything else would just add a barrier at each end. It stays exactly as it was --
+    // P12.2 changed only the CREATION argument inside CreateRawUavBuffer, which is a different fact.
     histogram_.Attach(renderer->Declarations(),
         CreateRawUavBuffer(device, static_cast<UINT64>(kHistogramBins) * sizeof(std::uint32_t)),
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.Histogram");

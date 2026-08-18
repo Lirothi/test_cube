@@ -2,6 +2,7 @@
 #include <wrl.h>
 #include <d3d12.h>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include <string>
 
@@ -41,11 +42,28 @@ public:
         };
 
 public:
-        // Load the file inside Texture2D (WIC -> RGBA8 for common formats, DDS without transcoding)
+        // Load the file inside Texture2D (WIC -> RGBA8 for common formats, DDS without transcoding).
+        //
+        // SHARED BY (resolved path, usage, normalIsRG, alphaCoverageCutoff) — the same identity the
+        // decode cache uses, because those are exactly the inputs that change the PIXELS. Two
+        // materials naming one file get ONE GPU texture and one SRV; this object becomes a view of
+        // it. Measured on `demo` before the cache: four materials named damaged_plaster_normal.dds
+        // and each held its own 684 KB copy, which is what the canonical registry's duplicate-name
+        // counter had been reporting for months.
+        //
+        // The cache holds WEAK references, so a texture dies with its last owner and a level switch
+        // frees VRAM exactly as it did before. A failed load is never cached.
         bool CreateFromFile(Renderer* renderer,
                 ID3D12GraphicsCommandList* uploadCmd,
                 const CreateDesc& desc,
                 std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
+
+        // Drop the shared-texture cache's own bookkeeping. Entries are weak, so this frees nothing
+        // by itself — it exists so shutdown does not walk a map of dangling weak_ptrs.
+        static void ClearCache();
+        // Since process start. `entries` counts live shared textures; `saved` is the number of
+        // loads the cache turned into views, i.e. the GPU copies that were NOT made.
+        static void CacheStats(std::uint32_t& saved, std::uint32_t& loaded, std::size_t& entries);
 
         // Legacy path: create from an RGBA8 buffer (kept for compatibility)
         // `debugLabel` identifies THIS texture (a font name, say). It matters beyond readability:
@@ -63,13 +81,17 @@ public:
         // Obtain the SRV GPU handle in the current frame's shader-visible heap
         D3D12_GPU_DESCRIPTOR_HANDLE GetSRVForFrame(Renderer* renderer);
 
-        // CPU SRV if you need to copy it into your own tables
-        D3D12_CPU_DESCRIPTOR_HANDLE GetSRVCPU() const { return srvCPU_; }
+        // Every accessor reads through Source_(): when this object is a VIEW of a cached texture,
+        // the resource, descriptor and metadata all live in the shared instance. Reading the local
+        // members instead would silently hand back a null resource on a cache hit.
 
-	ID3D12Resource* GetResource() const { return tex_.Get(); }
-	UINT GetWidth() const { return width_; }
-	UINT GetHeight() const { return height_; }
-	DXGI_FORMAT GetSrvFormat() const { return srvFormat_; }
+        // CPU SRV if you need to copy it into your own tables
+        D3D12_CPU_DESCRIPTOR_HANDLE GetSRVCPU() const { return Source_().srvCPU_; }
+
+	ID3D12Resource* GetResource() const { return Source_().tex_.Get(); }
+	UINT GetWidth() const { return Source_().width_; }
+	UINT GetHeight() const { return Source_().height_; }
+	DXGI_FORMAT GetSrvFormat() const { return Source_().srvFormat_; }
 
         // NEVER decode on this thread: inside this scope, CreateFromFile asks the decode cache
         // instead and, when the image is not ready yet, FAILS the load and records it. The caller
@@ -127,7 +149,21 @@ private:
 
         // Create the CPU SRV
         void CreateCpuSrv_(Renderer* renderer, DXGI_FORMAT srvFmt, UINT mipLevels);
+
+        // The instance that actually OWNS the GPU objects: the shared one when this is a view of a
+        // cached texture, otherwise this object. A shared instance never itself has `shared_` set,
+        // so this recurses at most once.
+        const Texture2D& Source_() const { return shared_ ? *shared_ : *this; }
+        // Everything CreateFromFile used to do, minus the cache lookup. Runs on a cache miss only.
+        bool LoadFromFileUncached_(Renderer* renderer,
+                ID3D12GraphicsCommandList* uploadCmd,
+                const CreateDesc& resolvedDesc,
+                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 private:
+        // Non-null when this object is a VIEW of a cached texture rather than the owner of one. It
+        // is also the keep-alive: the cache itself only holds weak references, so the shared
+        // texture lives exactly as long as the last material pointing at it.
+        std::shared_ptr<Texture2D> shared_;
         GpuResource tex_;
         // Step 6b: a DISTINCT debug name per texture. Every texture used to be called
         // "Tex2D_RESOURCE", which made them indistinguishable in DRED/the debug layer and made

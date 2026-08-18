@@ -49,21 +49,36 @@ void OceanWetness::EnsureResources(Renderer* renderer)
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
+    // The two halves of this ping-pong REST IN DIFFERENT STATES, and each half's resting state is
+    // the same whichever side of the swap it is playing this frame. Getting that distinction wrong
+    // is what made --canonical-check report all four every frame:
+    //
+    //  * history: BuildUpdatePass leaves the read slot NON_PIXEL and ends by putting the write slot
+    //    there too, and Compose then reads the current one as an SRV -- so BOTH histories rest in
+    //    NON_PIXEL_SHADER_RESOURCE, on every frame, regardless of parity. Declaring UAV described
+    //    the state they are in for one dispatch, not the one they sit in.
+    //  * stamp: the ocean's own draw stamps into the CURRENT one as a UAV, so UAV is right for it --
+    //    but the other one used to be abandoned in NON_PIXEL, which is why the report alternated
+    //    between StampA and StampB. BuildUpdatePass now hands the read slot back (see below), so
+    //    both rest in UAV and this declaration is true for either.
+    //
+    // These are TEXTURES: unlike buffers (P12.2), their creation state is honoured, so it has to
+    // match the declaration or the first compiled barrier transitions from a state nothing is in.
+    constexpr D3D12_RESOURCE_STATES kHistoryRest = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    constexpr D3D12_RESOURCE_STATES kStampRest = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     for (int i = 0; i < 2; ++i)
     {
         ComPtr<ID3D12Resource> resource;
         ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
-            desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &resource));
+            desc, kHistoryRest, nullptr, &resource));
         history_[i].Attach(renderer->Declarations(), std::move(resource),
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            i == 0 ? L"Ocean.WetnessA" : L"Ocean.WetnessB");
+            kHistoryRest, i == 0 ? L"Ocean.WetnessA" : L"Ocean.WetnessB");
 
         ComPtr<ID3D12Resource> stampResource;
         ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
-            desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &stampResource));
+            desc, kStampRest, nullptr, &stampResource));
         stamp_[i].Attach(renderer->Declarations(), std::move(stampResource),
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            i == 0 ? L"Ocean.WetnessStampA" : L"Ocean.WetnessStampB");
+            kStampRest, i == 0 ? L"Ocean.WetnessStampA" : L"Ocean.WetnessStampB");
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
@@ -210,6 +225,10 @@ std::function<void(RenderGraphPassContext)> OceanWetness::BuildUpdatePass(
     ctx.NextPoint();
     ctx.Use(history_[writeIndex].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     ctx.Use(stamp_[writeIndex].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // Hand the READ stamp back. Without this the slot the update sampled was abandoned in
+    // NON_PIXEL while its partner sat in UAV, so each stamp's resting state flipped with the
+    // parity of the swap and neither could match one declaration. Both rest in UAV now.
+    ctx.Use(stamp_[readIndex].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     return [this, readIndex, writeIndex, shiftX, shiftY, wetAmount, dryAmount,
                clearHistory, updatePoint]

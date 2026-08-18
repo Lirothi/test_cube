@@ -589,8 +589,12 @@ void OceanRenderable::Init(Renderer* renderer,
         tex.CreateFromFile(renderer, uploadCmdList, desc, uploadKeepAlive);
     };
 
-    loadTexture(distantRoughnessTexture_, L"textures/ocean/wind_gusts.png", Texture2D::Usage::LinearData);
-    loadTexture(foamDetailTexture_, L"textures/ocean/wind_gusts.png", Texture2D::Usage::LinearData);
+    // ONE load, bound to two shader slots. `DistantRoughnessMap` (t5) and `FoamDetailMap` (t6) are
+    // separate inputs to ocean_surface.hlsl, but both are currently authored from wind_gusts.png
+    // with the same usage -- so this used to create two identical GPU textures, which is what the
+    // canonical registry's per-name leak counter was reporting as "grew to 2". It was telling the
+    // truth. Give the two slots different assets and this becomes two loads again; until then, one.
+    loadTexture(gustNoiseTexture_, L"textures/ocean/wind_gusts.png", Texture2D::Usage::LinearData);
     loadTexture(foamAlbedoTexture_, L"textures/ocean/FoamAlbedo.png", Texture2D::Usage::AlbedoSRGB);
     loadTexture(foamUnderwaterTexture_, L"textures/ocean/UnderwaterFoam.png", Texture2D::Usage::AlbedoSRGB);
     loadTexture(foamTrailTexture_, L"textures/ocean/FoamTrail.png", Texture2D::Usage::LinearData);
@@ -833,8 +837,10 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
     pushSrv(skySrv);
 
-    pushTexture(distantRoughnessTexture_);
-    pushTexture(foamDetailTexture_);
+    // t5 DistantRoughnessMap and t6 FoamDetailMap — the same asset today, so the same texture is
+    // bound twice rather than loaded twice. The table shape is unchanged.
+    pushTexture(gustNoiseTexture_);
+    pushTexture(gustNoiseTexture_);
     pushTexture(foamAlbedoTexture_);
     pushTexture(foamUnderwaterTexture_);
     pushTexture(foamTrailTexture_);

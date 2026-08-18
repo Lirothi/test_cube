@@ -1594,6 +1594,17 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             p.NextPoint();
             p.Use(DTM.dlssOutput.Get(), kNps);
         }
+        else
+        {
+            // Hand the forward targets back. The transparent pass ends with depth as DEPTH_WRITE
+            // and velocity as RENDER_TARGET because that is what it drew into, and with DLSS on
+            // EvaluateDLSS returns both to a read state as a side effect of consuming them. With
+            // DLSS off nothing did, so the frame ended off-canonical on all three frame sets --
+            // an invariant that must not depend on which upscaler path is selected. Gated on the
+            // SAME predicate as the body's matching transitions, so the two cannot disagree.
+            p.Use(DTM.gbVelocity.Get(), kNps);
+            p.Use(DTM.depth.Get(), kNps);
+        }
         p.Use(DTM.scene.Get(), kNps); // the non-DLSS tonemap source
         p.NextPoint();
         // The body needs ALL of these, not just the setting — gating on the setting alone
@@ -4735,6 +4746,14 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
             {
                 renderer->Transition(t.cl, D.dlssOutput.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             }
+        }
+        else
+        {
+            // The other half of the Prepare's `else` above: DLSS's own evaluate performs these two
+            // (DlssHandler::EvaluateDLSS) because it reads depth and velocity; without it the frame
+            // had no owner for handing them back and ended with the forward targets still bound.
+            renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
         if (!ranDlss)
         {

@@ -2340,7 +2340,7 @@ This is intentionally split into independently landable substeps. Stop after the
 
 ---
 
-### P12 — Two correctness defects the diagnostics report every frame — QUEUED (2026-08-18)
+### P12 — Two correctness defects the diagnostics report every frame — DONE (2026-08-18)
 
 Neither is caused by this plan's work; both were INVISIBLE until the barrier/canonical logs stopped
 repeating themselves (2.2 MB and 3779 lines per eight-second run collapsed to five distinct lines,
@@ -2388,6 +2388,195 @@ InitialState is honoured, so this must not be applied blindly to every call site
 **Verify:** `logs/gbv.log` is empty on a `--gbv` run; `--scene-stress=30` CLEAN; `--canonical-check`
 unchanged. Do it as ONE change with the gates in between, not folded into unrelated work: it touches
 the state every one of those resources starts life in.
+
+**OUTCOME — P12.1. The diagnosis above named only half the cause, and the missing half is why the
+label looked like the bug.** The args buffer had TWO last-touchers, not one. `RecordCull` closes by
+leaving it in INDIRECT_ARGUMENT, and `VirtualShadowMap::PrepareRenderPass` separately borrows it as
+an SRV (`NON_PIXEL_SHADER_RESOURCE`) and never handed it back. Whichever ran last set the resting
+state -- and whether the VSM page-render pass exists at all depends on
+`VsmActive() && IsAllocated() && !vsmSkipUpdate_`. So `atoll` rested NON_PIXEL (matching the old
+declaration, no report) while `d_emissive_test` rested INDIRECT_ARGUMENT (report), and flipping the
+label just swapped which of the two complained. The fix is both halves at once: declare
+INDIRECT_ARGUMENT -- the rule its siblings `VisibleList` and `IndirectCounts` already follow, which
+is *declare the state the owner leaves it in* -- and add the hand-back at VSM's consume point, which
+is also the state the spot/point shadow passes scheduled after it ExecuteIndirect from.
+Measured: `d_emissive_test` went from alternating `0 / 1 of 137` to a flat **0 of 137**; `new1` from
+5 to 4 of 153; `atoll` unchanged at 4 of 198; `ShadowGpuData.IndirectArgs` no longer appears on any
+level, including across 30 `--scene-stress` iterations of level switch / reload / resize / DLSS-mode
+churn -- the scenario that exercises AND skips the cull. **0 MISSING** throughout.
+
+**OUTCOME — P12.2. The second half of the recipe above was wrong, and following it literally would
+have done damage.** "Change the matching `DeclareCreated`/`Attach` call so the registry is told
+COMMON too" cannot be done, because the registry is never told a creation state:
+`ResourceDeclarations::Declare(res, creationState, canonicalState)` begins with `(void)creationState;`
+and stores only the canonical one, seeding `predicted` from it. Passing COMMON there is a no-op --
+and passing COMMON as the *canonical* argument, which is the natural misreading, would have declared
+every one of these buffers to rest in COMMON and produced a flood of new off-canonical reports. The
+real change is the `CreateCommittedResource` InitialState argument and nothing else.
+It is also far narrower than "roughly 30 sites": the six warned variants come from exactly five
+creation points -- `ExposureMetering::CreateRawUavBuffer`, `OceanSurfSim`'s spawner buffer,
+`VSM.PageTable`, `VSM.PageRequest`, and `VirtualShadowMap::CreateUavUintBuffer`, whose thirteen
+callers account for the other four variants. The helper's `initial` parameter was **removed** rather
+than defaulted: it claimed the buffer was "created directly there", which is precisely what D3D12
+does not do, and a parameter the driver discards misleads its next reader. Buffers that legitimately
+keep a non-COMMON initial state and must NOT be touched: UPLOAD heaps (`GENERIC_READ` is required),
+READBACK heaps (`COPY_DEST` is required), and raytracing acceleration-structure results
+(`RAYTRACING_ACCELERATION_STRUCTURE` is required and cannot be transitioned into) -- AS *scratch* was
+already COMMON for this same reason. Textures are unaffected, as noted above.
+Result: `logs/gbv.log` is not created at all on a `--gbv` run (zero messages, previously six),
+`--scene-stress=30` reports `verdict: CLEAN`, and `--canonical-check` is unchanged.
+
+**TRAP FOR THE NEXT PERSON:** `--gbv` on a **Release** binary validates NOTHING. The debug layer and
+`SetEnableGPUBasedValidation` live under `#ifdef _DEBUG` in `GraphicsDevice::InitDevice`, so a
+Release run produces an empty `gbv.log` whether or not anything is wrong. Run the Debug binary.
+
+**P12.3 — the ocean ping-pong textures (same defect class, fixed with P12).** `Ocean.WetnessA/B`,
+`Ocean.WetnessStampA/B` and `Ocean.ShoreSdfJumpB` all declared UAV and rested elsewhere. The A/B
+naming made them look like one problem; they were three, and only one was really about parity:
+
+* **History (`WetnessA/B`) — never a parity problem, just mis-declared.** `BuildUpdatePass` leaves
+  the read slot NON_PIXEL and ends by putting the write slot there too, and `Main_Compose` then
+  reads the current one as an SRV. BOTH rest in NON_PIXEL every frame, whichever side of the swap
+  they are on. UAV described the state they hold for one dispatch, not the one they sit in.
+* **Stamp (`WetnessStampA/B`) — the genuine parity case.** The ocean's own draw stamps into the
+  CURRENT slot as a UAV, so UAV is right for it, but the other slot was abandoned in NON_PIXEL --
+  hence a report that alternated between StampA and StampB as `current_` flipped. `BuildUpdatePass`
+  now hands the read slot back to UAV at its closing point, so both rest in UAV and one declaration
+  is true for either. Same fix shape as P12.1: the borrower returns what it borrowed.
+* **`ShoreSdfJumpB` — not a ping-pong slot at all.** Despite the A/B naming, the jump flood
+  ping-pongs but the resolve ALWAYS writes slot 1, `shoreSdfSrv_` is created on slot 1, and
+  `BuildShoreSdf` ends by putting slot 1 into NON_PIXEL|PIXEL, where it then sits for every frame
+  until the shore area moves. Slot 0 genuinely rests in UAV. Declared per slot now.
+
+These are TEXTURES, so unlike P12.2's buffers their creation state IS honoured and had to be moved
+to match each new declaration -- otherwise the first compiled barrier transitions from a state
+nothing is in. Result: `atoll` and `new1` both report `frame end: 0 of N off-canonical`,
+`--scene-stress=30` is `CLEAN` with 0 MISSING, and Debug `--gbv` still produces no log at all.
+
+**P12.4 — the forward targets under `--dlss=off`.** `Deferred[N].Depth` (`canonical=0x40 actual=0x10`,
+DEPTH_WRITE) and `Deferred[N].GBVelocity` (`actual=0x4`, RENDER_TARGET), on all three frame sets.
+Third instance of the same shape as P12.1 and P12.3: **the resting state depended on which optional
+consumer happened to run.** The transparent pass ends with both bound as forward targets because
+that is what it drew into, and `DlssHandler::EvaluateDLSS` returns them to a read state as a side
+effect of consuming them -- so with DLSS on the invariant held by accident, and with DLSS off there
+was no owner at all. Fixed by giving the `else` branch of the tonemap pass the same hand-back the
+DLSS branch already performs, declared in `Prepare` and emitted in the body, both gated on the same
+`IsDlssActive()` predicate so the two cannot disagree. Two barriers per frame on a non-shipping path,
+which is the honest price of an invariant that must not depend on the upscaler.
+Verified at the same camera with `--dlss=off` AND `--dlss=quality`: both `frame end: 0 of 198`.
+`--scene-stress=30`, whose churn includes DLSS-mode switches, is `CLEAN` and reports `0 of N` on
+every distinct line -- no `off-canonical` entry survives anywhere. Debug `--gbv` with `--dlss=off`
+produces no log.
+
+**WITH P12.1/P12.3/P12.4 THE `--canonical-check` REPORT IS EMPTY.** That is the point of the exercise:
+the diagnostic now carries information again, so the next entry that appears is a real finding rather
+than one more line people have learned to scroll past. All three defects were the same mistake in
+different clothes -- a resource whose resting state was decided by whoever touched it last, when the
+set of touchers is conditional. The rule that fixes all three: **declare the state the OWNER leaves
+it in, and make every conditional borrower hand it back.**
+
+**P12.5 — the "LEAK" counter: one real duplicate, and a diagnostic that was lying about the rest.**
+The per-name counter reported five names. Only ONE was a defect, and none of the five was a leak.
+
+* **REAL, fixed: `Tex2D:textures/ocean/wind_gusts.png` x2.** `OceanRenderable` loaded the same file,
+  with the same usage, into two members — `distantRoughnessTexture_` and `foamDetailTexture_` — for
+  ocean_surface.hlsl's `DistantRoughnessMap` (t5) and `FoamDetailMap` (t6). Two byte-identical GPU
+  textures. Now one `gustNoiseTexture_` bound to both slots; the descriptor table shape is unchanged.
+  Verified invisible: the pre/post difference (41.5% of pixels touched, mean 0.500) is BELOW the
+  noise floor of the same settings (42.5%, mean 0.505 — DLSS and GTAO are frame-indexed, so at
+  default settings that floor is enormous and any A/B taken there must quote it).
+* **NOT leaks: `damaged_plaster_normal.dds` x4, `bronze_albedo/mr/normal.dds` x2, and
+  `GpuInstanced.Instances` x2.** These come from the `demo` level ALONE — they were only ever seen
+  in a stress log because that harness loads `demo`. The referrers explain the counts exactly: four
+  distinct materials name the plaster normal (presets `damaged_plaster.json` +
+  `damaged_plaster_rg.json`, plus three inline object materials in `demo.json`), two name each
+  bronze map (`bronze.json` + `bronze_copy11.json`). `MaterialDataManager` caches by MATERIAL NAME
+  and each `MaterialData` owns its own `Texture2D`, so one file shared by N materials is N GPU
+  copies by construction. Across 30 level-switching `--scene-stress` iterations the counts stayed
+  FLAT at those single-level values and never climbed — which is what proves declares and forgets
+  are balanced. Nothing is leaking.
+
+The counter's premise ("a debug name is unique, so two live entries mean one was never forgotten")
+is false for assets, whose debug name is the asset PATH. It now reports `duplicate-name ... N live
+entries (check the referrer count before reading this as a leak)` and the code says how to tell the
+two apart: count the referrers in `data/` — a count that MATCHES them is duplication, a count that
+climbs with no new referrer is the leak, and a level-switching stress run is the discriminator.
+
+**P12.6 — the shared-texture cache (closes the duplication P12.5 measured).** `Texture2D` now shares
+file-backed textures. Identity is `texdecode::Key` — the SAME struct the decode cache keys on
+(resolved path, usage, normalIsRG, alphaCoverageCutoff), reused deliberately so the two caches cannot
+drift into disagreeing about what "the same texture" is.
+
+Three decisions worth keeping:
+
+* **The cache lives INSIDE `Texture2D`, not above it.** A `TextureCache` returning
+  `shared_ptr<Texture2D>` would have meant changing every owner (`MaterialData` holds its three
+  textures BY VALUE) and every `md->albedo.GetSRVCPU()` call site across SceneRenderer,
+  GBufferRenderable, EditorPreviewRenderer and more. Instead a `Texture2D` becomes a VIEW: it holds
+  a `shared_ptr` to the owning instance, and every accessor reads through `Source_()`. Not one call
+  site changed. `GetSRVForFrame` forwards too, so the per-frame descriptor copy happens once for all
+  materials sharing the texture rather than once per material.
+* **The map holds WEAK references.** The cache is an index, not an owner: a texture lives exactly as
+  long as the last material viewing it, so a level switch frees VRAM on the schedule it always did.
+  Proven, not assumed: after 30 level-switching `--scene-stress` iterations the live-entry count
+  settles at 12 — it does not climb.
+* **The DDS sibling is resolved BEFORE the key is built.** A preset naming `x.png` and one naming
+  `x.dds` load the same bytes; keying on the requested path would have given them separate copies,
+  which is the exact duplication this exists to remove. A failed load is never cached.
+
+Measured. `demo`: **19 loads, 6 shared** — six 684 KB GPU copies not made, ~4 MB. Across the
+30-iteration stress churn: **89 loads, 24 shared**. `atoll`: 55 loads, 0 shared, correctly — it never
+had duplicate textures. Every `Tex2D:` duplicate-name line is gone from `--canonical-check`.
+
+**Pixel-neutral, verified against the noise floor the right way.** The first attempt compared
+captures taken at DEFAULT settings and produced 86% of pixels changed against a 71% floor — a
+"signal" that was entirely the capture recipe: `demo` animates, and without `--wind-freeze --dlss=off
+--set=gtao.enabled:0` the floor swamps everything. Redone deterministically, with the cache bypassed
+in the SAME binary (a temporary early-out, removed again after the measurement — repeat it by
+guarding the map lookup in `Texture2D::CreateFromFile`): cache ON vs OFF is mean **0.233** / 6.05% of
+pixels against a floor of mean **0.225** / 5.92%, and a second pairing lands at 0.078 / 3.58%, i.e.
+CLOSER than the floor pair to each other. The bypass run reports `25 loads, 0 shared` versus
+`19 loads, 6 shared`, which is what proves the lever actually moved.
+
+Gates: both configurations build, `--scene-stress=30` `CLEAN`, `frame end: 0 of N` on every line,
+Debug `--gbv` produces no log.
+
+**P12.7 — `GpuInstanced.Instances`. The fourth and last of the class, and the one where GUESSING THE
+CAUSE WAS WRONG.** Debug on `demo` reported `canonical=0xC0 actual=0x40`, Release on `demo` and Debug
+on `atoll` clean. The obvious reading — "the GI→VSM scatter declares NON_PIXEL, the draw declares
+NON_PIXEL|PIXEL, whichever runs last wins" — was only half right, and the half that was wrong is the
+half that mattered. `--barrier-flip-trace` settled it in one run: across a whole frame the buffer is
+touched exactly TWICE.
+
+    [flip] pass=2 ... asked GpuInstanced.Instances 0x8    <- Main_ObjectCompute, the rotation compute
+    [flip] pass=6 ... asked GpuInstanced.Instances 0x40   <- Main_ShadowCull, the GI scatter
+
+There is no 0xC0 transition in the frame AT ALL. `GpuInstancedModels::PrepareRender` is not merely
+losing a race — it never runs, because the camera does not draw those objects. So the buffer is not
+"left by the last of two writers", it is left by the only reader that is UNCONDITIONAL, while the
+owner's restore is conditional on being drawn. Trace the resource before theorising about ordering;
+the trace named the answer in one run, where reading the two declaration sites suggested the wrong
+one.
+
+Fixed the same way as P12.1 and P12.3: the borrower returns what it borrowed. `PrepareCullPass` gains
+a closing point that hands each GI caster's instance buffer back, and `RecordCull` performs the
+matching transitions in the same order with the same skips. The target is
+`Renderer::GetCanonicalState(giBuf)`, not a literal — the buffer belongs to the object, so the cull
+restores it to wherever its OWNER declared it rests, and that stays true if the owner ever moves.
+
+Verified: Debug `demo` `frame end: 0 of 170` (was 2), Release `demo` and the 30-iteration stress both
+`0 of N` with `CLEAN` and no `MISSING`, Debug `--gbv` produces no log. Pixel-neutral on the
+deterministic recipe — mean **0.052** / 2.77% of pixels against a floor of **0.225** / 5.92%, with the
+second pairing landing exactly on the floor. The surviving `duplicate-name GpuInstanced.Instances: 2`
+line is correct and not a defect: `demo` really does have two GPU-instanced objects.
+
+**NOT A DEFECT, do not "fix" it by muting:** the three surviving `INFO extra (registered, pass did
+not perform)` lines — `Ocean.Wetness*` from `Main_Compose` (24), `Ocean.WetnessStamp*` from
+`Main_Transparent` (30), `Exposure.Value` from `Main_Tonemap` (34). That direction fires when a pass
+DECLARES a state but its body never calls a named `Renderer::Transition`; all three bodies simply
+bind the resource, which is correct. `RenderGraph.h` mutes the direction only for bodies that drive
+`EmitPoint` markers. They alternate A/B because the declaration names the CURRENT slot. The FATAL
+direction (`MISSING`) is what these runs are gated on, and it is silent.
 
 ### P13 — Fix the UE SSR march: its reflections come out SLANTED — DONE (2026-08-18)
 

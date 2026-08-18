@@ -245,13 +245,15 @@ private:
     bool clipMapHasHistory_ = false;
     float cascadesFadeScale_ = 20.0f;
 
-    Texture2D foamDetailTexture_;
+    // Feeds BOTH ocean_surface.hlsl's DistantRoughnessMap (t5) and FoamDetailMap (t6): the two
+    // slots are authored from the same asset, so one texture is bound twice instead of the file
+    // being loaded into two identical GPU resources.
+    Texture2D gustNoiseTexture_;
     Texture2D foamAlbedoTexture_;
     Texture2D foamUnderwaterTexture_;
     Texture2D foamTrailTexture_;
     Texture2D shoreFoamBreakupMaskTexture_;
     Texture2D shoreFoamAlbedoTexture_;
-    Texture2D distantRoughnessTexture_;
     Texture2D causticsTexture_;
 
     Math::float2 foamTrailTextureSize0_ = Math::float2(100.0f, 50.0f);
