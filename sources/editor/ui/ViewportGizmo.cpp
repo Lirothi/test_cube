@@ -25,6 +25,8 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
+#include "app/scene/SceneObjectFactory.h"
+#include "rendering/core/UploadBatch.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/ui/EditorDragDrop.h"
 #include "rendering/core/Renderer.h"
@@ -170,6 +172,80 @@ namespace
         return nullptr;
     }
 
+    // ---- drag-to-spawn preview -------------------------------------------------------------
+    //
+    // The real mesh, spawned into the SCENE (not the document) while the drag is over the
+    // viewport, so what you see under the cursor is what lands. Scene-only means the outliner and
+    // the save path never see it, and the command stack stays clean: the actual spawn on drop is
+    // still the ordinary SpawnMeshCommand, so undo behaves exactly as before.
+    //
+    // The id sits far above anything the document allocates. It has to be excluded from the
+    // placement raycast as well -- otherwise the preview is the surface under the cursor and it
+    // climbs its own back, which is what Scene::RaycastEditorObject's `ignoredObjectId` is for.
+    constexpr Scene::SceneObjectId kSpawnPreviewId = 0xFFFF'FFFF'0000'0001ull;
+
+    struct SpawnPreviewState
+    {
+        bool alive = false;
+        std::string assetKey; // rebuild only when the dragged asset actually changes
+    };
+    SpawnPreviewState g_spawnPreview;
+
+    void ClearSpawnPreview(EditorContext& ctx)
+    {
+        if (!g_spawnPreview.alive)
+        {
+            return;
+        }
+        ctx.scene.RemoveEditorObject(kSpawnPreviewId);
+        g_spawnPreview = SpawnPreviewState{};
+    }
+
+    // Places the preview at `position`, building it first if this is a new asset. Returns false
+    // when the mesh could not be created -- the caller then just shows the tooltip, as before.
+    bool UpdateSpawnPreview(EditorContext& ctx,
+                            const IEditorObjectFactory& factory,
+                            const EditorAssetRecord& record,
+                            const AssetRegistry& registry,
+                            const Math::float3& position)
+    {
+        if (g_spawnPreview.alive && g_spawnPreview.assetKey == record.id.key)
+        {
+            RenderableObjectBase* runtime = ctx.scene.FindEditorObject(kSpawnPreviewId);
+            if (RenderableObject* ro = runtime ? runtime->AsRenderableObject() : nullptr)
+            {
+                ro->SetPosition(position); // the cheap path: every frame of the drag lands here
+                return true;
+            }
+            ClearSpawnPreview(ctx); // it went away underneath us; fall through and rebuild
+        }
+
+        ClearSpawnPreview(ctx);
+        const nlohmann::json objectJson =
+            factory.BuildDefaultJson(&record, ctx, registry, &position);
+        std::unique_ptr<RenderableObjectBase> runtime =
+            SceneObjectFactory::CreateStaticMeshFromJson(objectJson);
+        if (!runtime)
+        {
+            return false;
+        }
+        UploadBatch uploads;
+        if (!uploads.Begin(&ctx.renderer))
+        {
+            return false;
+        }
+        const bool added = ctx.scene.AddInitializedEditorObject(
+            ctx.renderer, uploads, kSpawnPreviewId, std::move(runtime));
+        uploads.SubmitAndWait(&ctx.renderer);
+        if (!added)
+        {
+            return false;
+        }
+        g_spawnPreview.alive = true;
+        g_spawnPreview.assetKey = record.id.key;
+        return true;
+    }
+
     void DrawViewportDropTarget(EditorContext& ctx,
         EditorCommandStack& commandStack,
         const AssetRegistry& registry,
@@ -189,11 +265,20 @@ namespace
             return;
         }
 
+        // The drag can end anywhere -- Esc, a drop over a panel, a release outside the window --
+        // and none of those reach the delivery branch below. Tying teardown to "is a drag in
+        // flight at all" is what stops a cancelled drag leaving a ghost mesh in the level.
+        if (!ImGui::IsDragDropActive())
+        {
+            ClearSpawnPreview(ctx);
+        }
+
         const ImRect targetRect(
             viewport->Pos,
             ImVec2(viewport->Pos.x + width, viewport->Pos.y + height));
         if (!ImGui::BeginDragDropTargetViewport(viewport, &targetRect))
         {
+            ClearSpawnPreview(ctx); // dragged back out of the viewport
             return;
         }
 
@@ -256,35 +341,55 @@ namespace
                     2.0f);
                 if (record->id.type == EditorAssetType::Mesh)
                 {
-                    ImGui::SetTooltip("Spawn %s", record->displayName.c_str());
+                    // The placement point, recomputed every frame of the drag. It was already
+                    // computed here on delivery; hoisting it out of that branch is what lets the
+                    // preview stand exactly where the spawn will land, by construction rather
+                    // than by two copies of the same arithmetic agreeing.
+                    Math::float3 positionHint;
+                    const Math::float3* positionHintPtr = nullptr;
+                    Math::float3 rayOrigin;
+                    Math::float3 rayDirection;
+                    if (BuildViewportCursorRay(ctx.scene.CameraRef(),
+                            ImGui::GetIO().MousePos,
+                            viewport->Pos,
+                            width,
+                            height,
+                            rayOrigin,
+                            rayDirection))
+                    {
+                        float hitDistance = 0.0f;
+                        // Ignore the preview itself: it is a scene object like any other, so
+                        // without this it becomes the surface under the cursor and climbs itself.
+                        if (ctx.scene.RaycastEditorObject(rayOrigin, rayDirection, &hitDistance,
+                                kSpawnPreviewId) != 0 &&
+                            std::isfinite(hitDistance))
+                        {
+                            positionHint = rayOrigin + rayDirection * hitDistance;
+                            positionHintPtr = &positionHint;
+                        }
+                    }
+
                     if (payload->IsDelivery())
                     {
-                        Math::float3 positionHint;
-                        const Math::float3* positionHintPtr = nullptr;
-                        Math::float3 rayOrigin;
-                        Math::float3 rayDirection;
-                        if (BuildViewportCursorRay(ctx.scene.CameraRef(),
-                                ImGui::GetIO().MousePos,
-                                viewport->Pos,
-                                width,
-                                height,
-                                rayOrigin,
-                                rayDirection))
-                        {
-                            float hitDistance = 0.0f;
-                            if (ctx.scene.RaycastEditorObject(
-                                    rayOrigin, rayDirection, &hitDistance) != 0 &&
-                                std::isfinite(hitDistance))
-                            {
-                                positionHint = rayOrigin + rayDirection * hitDistance;
-                                positionHintPtr = &positionHint;
-                            }
-                        }
-
+                        // Remove the preview BEFORE the real spawn, so the two never coexist.
+                        ClearSpawnPreview(ctx);
                         nlohmann::json objectJson =
                             factory->BuildDefaultJson(record, ctx, registry, positionHintPtr);
                         commandStack.Execute(ctx,
                             std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
+                    }
+                    else if (positionHintPtr)
+                    {
+                        ImGui::SetTooltip("Spawn %s", record->displayName.c_str());
+                        UpdateSpawnPreview(ctx, *factory, *record, registry, positionHint);
+                    }
+                    else
+                    {
+                        // Nothing under the cursor to place on: no preview, and say so rather
+                        // than leaving a stale ghost from the last position that did hit.
+                        ClearSpawnPreview(ctx);
+                        ImGui::SetTooltip("Spawn %s  (point at a surface)",
+                            record->displayName.c_str());
                     }
                 }
                 else

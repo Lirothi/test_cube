@@ -33,3 +33,9 @@ Model Information:
 * source:	https://sketchfab.com/3d-models/rock-boulder-2-game-ready-asset-70fd18ec2a4a4d378d9d8c1ba878dcbc
 * author:	Pixel Life (https://sketchfab.com/pixellife)
 
+## tent
+Model Information:
+* title:	Tent
+* source:	https://sketchfab.com/3d-models/tent-fa46028e8d3849399ba5271df07ed99c
+* author:	Gajk.Mv (https://sketchfab.com/Gajk.Mv)
+

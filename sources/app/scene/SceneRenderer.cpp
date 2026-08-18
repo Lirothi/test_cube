@@ -522,6 +522,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         ssrHistoryWidth_ = rw;
         ssrHistoryHeight_ = rh;
     }
+    // P7: hand the ocean this frame's medium. Once per frame, from the one place that owns the
+    // render settings, so the water and the opaque compose pass are always given the same numbers.
+    if (frame.ocean)
+    {
+        const AtmospherePacked fog =
+            PackAtmosphere(frame.settings.atmosphere, frame.dirLight != nullptr);
+        frame.ocean->SetAtmosphereParams(fog.params0, fog.params1);
+        frame.ocean->SetAtmosphereDebugView(g_atmosphereDebugView);
+    }
     // UE's SSRT color resolve is a separate temporal consumer: after finding a hit in CURRENT
     // depth it reprojects that hit into the PREVIOUS temporal SceneColor. Our Deferred.scene is
     // produced every frame, so validity must not depend on the optional reflection temporal pass.
@@ -4148,6 +4157,26 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         constants.gtaoStrength = std::clamp(frame_->settings.gtao.strength, 0.0f, 1.0f);
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(1.0f / width, 1.0f / height);
+
+        // P7 aerial perspective. Disabled, or with no directional light to colour the scattering,
+        // the density goes to zero and compose skips the block entirely -- the whole feature is
+        // gated on that one number, so "off" is genuinely the pre-P7 image and not a near-miss.
+        {
+            const AtmospherePacked fog =
+                PackAtmosphere(frame_->settings.atmosphere, frame_->dirLight != nullptr);
+            constants.fogParams0 = fog.params0;
+            constants.fogParams1 = fog.params1;
+            constants.fogDebugView = g_atmosphereDebugView;
+            if (frame_->dirLight)
+            {
+                // GetDirection() is the direction the light TRAVELS; the scattering lobe is keyed
+                // on the angle between the view ray and the direction TO the sun, so negate here
+                // rather than in the shader where the sign would be one more thing to get wrong.
+                const float3 toSun = -frame_->dirLight->GetDirection();
+                constants.fogSunDir = float4(toSun, 0.0f);
+                constants.fogSunColor = float4(frame_->dirLight->GetEffectiveColor(), 0.0f);
+            }
+        }
 
         D3D12_CPU_DESCRIPTOR_HANDLE wetnessSrv = D.depthSRV;
         if (frame_->ocean)

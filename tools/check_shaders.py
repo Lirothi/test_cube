@@ -20,8 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SHADERS = PROJECT_ROOT / "shaders"
 
-# (file, entry point). Only compute shaders are listed: the graphics ones take preprocessor
-# permutations from the material system that are not reproducible from the command line.
+# (file, entry point). Compute shaders, which need no permutation to build.
 COMPUTE_ENTRIES = [
     ("exposure_histogram_cs.hlsl", "CSClear"),
     ("exposure_histogram_cs.hlsl", "CSBuild"),
@@ -42,6 +41,24 @@ COMPUTE_ENTRIES = [
     ("gtao_upsample_cs.hlsl", "CSMain"),
     ("hzb_build_cs.hlsl", "CSMain"),
     ("debug_preview_cs.hlsl", "CSMain"),
+]
+
+
+# (file, target, entry, defines, label). Graphics shaders were left out of this tool on the belief
+# that their material permutations "are not reproducible from the command line". For the ocean that
+# was not true -- its two whole surfaces are chosen by ONE define -- and the cost of believing it
+# was that ocean_surface.hlsl's modern variant stopped compiling (a kSkyRoughMaxMip redefinition,
+# left behind when F8 moved that constant into ibl_common.hlsli) and NOBODY NOTICED. That variant
+# is off by default, so the only symptom was `--ocean-runup-shore` drawing no water at all.
+#
+# Only permutations a single flag selects belong here. A shader whose defines really do come from
+# runtime material state still cannot be checked this way, and listing it would make this tool lie
+# about its own coverage.
+GRAPHICS_ENTRIES = [
+    ("ocean_surface.hlsl", "vs_6_0", "VSMain", [], "runup"),
+    ("ocean_surface.hlsl", "ps_6_0", "PSMain", [], "runup"),
+    ("ocean_surface.hlsl", "vs_6_0", "VSMain", ["OCEAN_SHORE_RUNUP=0"], "legacy"),
+    ("ocean_surface.hlsl", "ps_6_0", "PSMain", ["OCEAN_SHORE_RUNUP=0"], "legacy"),
 ]
 
 
@@ -84,6 +101,28 @@ def main() -> int:
         else:
             failures += 1
             print(f"FAIL  {name}:{entry}")
+            for line in (result.stderr or result.stdout).splitlines()[:12]:
+                print(f"      {line}")
+
+    for name, target, entry, defines, label in GRAPHICS_ENTRIES:
+        if needle and needle not in name.lower():
+            continue
+        path = SHADERS / name
+        if not path.exists():
+            print(f"SKIP  {name} (missing)")
+            continue
+        checked += 1
+        cmd = [str(dxc), "-T", target, "-E", entry]
+        for d in defines:
+            cmd += ["-D", d]
+        cmd += [str(path), "-Fo", "NUL"]
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=SHADERS)
+        tag = f"{name}:{entry}[{label}]"
+        if result.returncode == 0:
+            print(f"ok    {tag}")
+        else:
+            failures += 1
+            print(f"FAIL  {tag}")
             for line in (result.stderr or result.stdout).splitlines()[:12]:
                 print(f"      {line}")
 

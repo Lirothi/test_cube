@@ -588,6 +588,7 @@
     <None Include="shaders\ssr_cs.hlsl" />
     <None Include="shaders\ssr_temporal_cs.hlsl" />
     <None Include="shaders\ssr_trace_hiz.hlsli" />
+    <None Include="shaders\atmosphere.hlsli" />
     <None Include="shaders\ssr_trace_ue.hlsli" />
     <None Include="shaders\ssr_trace_logmarch.hlsli" />
     <None Include="shaders\spotlight_cs.hlsl" />

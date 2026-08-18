@@ -489,8 +489,16 @@ struct SharedTexKeyHash
     }
 };
 
+struct SharedTexEntry
+{
+    std::weak_ptr<Texture2D> texture;
+    // The frame the upload was RECORDED on. A texture is only safe to hand to a second consumer
+    // once that recording has been executed -- see the guard in CreateFromFile.
+    std::uint64_t createdFrame = 0;
+};
+
 std::mutex gSharedTexMutex;
-std::unordered_map<texdecode::Key, std::weak_ptr<Texture2D>, SharedTexKeyHash> gSharedTex;
+std::unordered_map<texdecode::Key, SharedTexEntry, SharedTexKeyHash> gSharedTex;
 std::uint32_t gSharedTexSaved = 0;  // loads turned into views — the copies NOT made
 std::uint32_t gSharedTexLoaded = 0; // loads that actually reached the device
 
@@ -508,7 +516,7 @@ void Texture2D::CacheStats(std::uint32_t& saved, std::uint32_t& loaded, std::siz
     saved = gSharedTexSaved;
     loaded = gSharedTexLoaded;
     entries = 0;
-    for (const auto& [key, weak] : gSharedTex) { (void)key; if (!weak.expired()) { ++entries; } }
+    for (const auto& [key, e] : gSharedTex) { (void)key; if (!e.texture.expired()) { ++entries; } }
 }
 
 bool Texture2D::CreateFromFile(Renderer* renderer,
@@ -540,17 +548,38 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     key.normalIsRG = resolved.normalIsRG;
     key.alphaCoverageCutoff = resolved.alphaCoverageCutoff;
 
+    // NOT SAFE TO SHARE WITHIN THE FRAME IT WAS UPLOADED ON, which is what makes this a frame
+    // check rather than a plain lookup.
+    //
+    // The upload records COPY_DEST -> shader-read on the CALLER'S command list, and the callers do
+    // not share one: the editor's thumbnail jobs each own an UploadBatch, the game path rides the
+    // frame's upload list. Handing consumer B a texture that consumer A uploaded means B binds a
+    // resource whose transition lives on A's list -- and if A's list has not executed yet, the
+    // layout is still the creation layout. That is exactly the crash this guard exists for:
+    //
+    //   Barrier layout(D3D12_BARRIER_LAYOUT_COMMON), 'Tex2D:models/tent/textures/Ropes_baseColor.dds'
+    //   does not match expected layout (D3D12_BARRIER_LAYOUT_SHADER_RESOURCE) ... list 'Overlay'
+    //
+    // A same-frame second request therefore loads its OWN copy -- which is precisely the behaviour
+    // that existed before this cache, so it is safe by construction. From the next frame on, the
+    // recording has been submitted and everyone shares.
+    const std::uint64_t frame = renderer ? renderer->GetTotalFrameNumber() : 0;
     {
         std::lock_guard<std::mutex> lk(gSharedTexMutex);
         auto it = gSharedTex.find(key);
         if (it != gSharedTex.end()) {
-            if (std::shared_ptr<Texture2D> hit = it->second.lock()) {
-                shared_ = std::move(hit);
-                debugName_ = shared_->debugName_;
-                ++gSharedTexSaved;
-                return true;
+            if (std::shared_ptr<Texture2D> hit = it->second.texture.lock()) {
+                if (frame > it->second.createdFrame) {
+                    shared_ = std::move(hit);
+                    debugName_ = shared_->debugName_;
+                    ++gSharedTexSaved;
+                    return true;
+                }
+                // Uploaded this frame by someone else: fall through and load a private copy.
             }
-            gSharedTex.erase(it); // the last owner released it; reload below
+            else {
+                gSharedTex.erase(it); // the last owner released it; reload below
+            }
         }
     }
 
@@ -564,7 +593,7 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     }
     {
         std::lock_guard<std::mutex> lk(gSharedTexMutex);
-        gSharedTex[key] = owner;
+        gSharedTex[key] = SharedTexEntry{ owner, frame };
         ++gSharedTexLoaded;
     }
     debugName_ = owner->debugName_;

@@ -1,0 +1,10 @@
+{
+  "geometry": "models/tent/tent.mesh.bin",
+  "materials": [
+    "tent_0",
+    "tent_1",
+    "tent_2"
+  ],
+  "source": "import_staging\\tent\\scene.gltf",
+  "texOffsScale": null
+}

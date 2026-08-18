@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -137,6 +138,21 @@ public:
 
     void SetGridVertexDensity(uint32_t density);
 
+    // P7. Pushed per frame from SceneRenderer rather than read from the scene, because aerial
+    // perspective is an APP-layer render setting and the ocean layer should not learn about
+    // SceneRenderSettings to get at it. Pre-packed by PackAtmosphere so the water and the opaque
+    // compose pass cannot disagree about the medium they are both sitting in.
+    void SetAtmosphereParams(const Math::float4& params0, const Math::float4& params1)
+    {
+        atmosphereParams0_ = params0;
+        atmosphereParams1_ = params1;
+    }
+    Math::float4 GetAtmosphereParams0() const { return atmosphereParams0_; }
+    Math::float4 GetAtmosphereParams1() const { return atmosphereParams1_; }
+    // P7 item 8. A debug view, so it rides the global rather than the level-saved settings.
+    void SetAtmosphereDebugView(std::uint32_t v) { atmosphereDebugView_ = v; }
+    std::uint32_t GetAtmosphereDebugView() const { return atmosphereDebugView_; }
+
 private:
     struct ClipLevel
     {
@@ -225,6 +241,9 @@ private:
     std::unique_ptr<OceanSurfSim> surfSim_; // surf sim injection
     std::unique_ptr<OceanWetness> wetness_;
 
+    Math::float4 atmosphereParams0_{}; // density 0 = disabled, which is the default
+    Math::float4 atmosphereParams1_{};
+    std::uint32_t atmosphereDebugView_ = 0u;
     float elapsedTime_ = 0.0f;
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);
     float viewerHeight_ = 0.0f;

@@ -27,6 +27,12 @@ public:
     // frame (the caller refreshes the AssetRegistry).
     bool Draw(AssetRegistry& registry, bool* open);
 
+    // Name of the asset the LAST completed import wrote (the folder/file stem, so
+    // models/<name>.mesh.json and the split-node models/<name>_<part>.mesh.json both start with
+    // it). Valid when Draw() returned true; the caller uses it to refresh exactly the placed
+    // instances that changed rather than every static mesh in the level.
+    const std::string& LastImportedName() const { return lastImportedName_; }
+
     // Reimports only the content-browser resource and its actual source
     // dependencies. Deleted sources remove only their mapped output.
     bool BeginReimport(const EditorAssetRecord& asset, AssetRegistry& registry);
@@ -110,6 +116,7 @@ private:
     std::atomic<int> progressTotal_{ 0 };  // total convertible textures (0 until the worker scans)
     std::string workerManifestJson_;       // source snapshot built by worker after successful import
     Item activeItem_;
+    std::string lastImportedName_;
     std::vector<std::string> activeTargetOutputs_;
     std::vector<std::string> activeRemovedSources_;
     // True for any non-full import (dialog subset or per-resource reimport): the manifest is
@@ -139,6 +146,18 @@ private:
     Item meshDialogItem_;
     bool meshDialogNormalizeSpawn_ = false;
     float meshDialogTargetM_ = 6.0f;
+    // How the unit correction is expressed. Target-side is the readable one when you know the real
+    // object ("this crate is 1.2 m"); the plain multiplier is the one you want when the asset is
+    // simply in the wrong unit and 0.01 is the whole answer.
+    enum class MeshScaleMode { TargetSide, Multiplier };
+    MeshScaleMode meshDialogScaleMode_ = MeshScaleMode::TargetSide;
+    float meshDialogMultiplier_ = 0.01f;
+    // true = fold the factor into the VERTICES at bake time (the mesh becomes metres and instances
+    // spawn at scale 1); false = the old behaviour, a spawnScale on the asset that leaves model
+    // space in the source unit.
+    bool meshDialogBakeIntoVertices_ = true;
+    float meshDialogBakeScale_ = 1.0f;
+    float meshDialogPendingSpawnScale_ = 0.0f;
     bool meshDialogSplitTopLevelNodes_ = false;
     // LOD generation knobs for this import (defaults = the shipped chain; see MeshLoadOptions).
     // Read straight by RecreateMeshAssets, which is where every mesh bake funnels through.

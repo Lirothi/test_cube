@@ -22,6 +22,19 @@ struct MeshLoadOptions {
     // bake falls back to the per-component ramp.
     std::vector<float> slotFoliage;
 
+    // Uniform factor applied to VERTEX POSITIONS at bake time, so an asset authored in the wrong
+    // unit (centimetres is the common one -- the tent bakes at 418 x 227 x 284) comes out of the
+    // bake already in metres. The alternative the importer used to offer, a `spawnScale` on the
+    // asset, only ever corrected the SPAWN: every instance carried scale 0.0107, the mesh's own
+    // numbers stayed in centimetres, and anything reading model space (bounds, the editor's size
+    // readout, a hand-placed instance) still saw the wrong unit.
+    //
+    // Applied before the wind bake and before LOD generation, because both are unit-aware: the
+    // sway extent is in metres and the LOD error budgets are taken against mesh extents.
+    // Positions only -- normals and tangents are directions and a uniform POSITIVE scale leaves
+    // them alone. Non-positive values are ignored rather than flipping winding silently.
+    float bakeScale = 1.0f;
+
     // --- LOD generation knobs (exposed per-import in the mesh import window) ---------------------
     // Defaults reproduce the shipped chain exactly: per-level target ratios 0.5/0.25/0.12 at error
     // budgets 0.02/0.05/0.12 (relative to mesh extents), with meshopt's safe options.

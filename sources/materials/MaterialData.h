@@ -136,6 +136,11 @@ public:
     std::string   emissiveTexPath;         // resolved path, empty if none (Part D loads it)
 
     // Texture ownership
+    // The shaders declare albedo/MR/normal at consecutive FIXED registers, so the table is
+    // always this wide -- see GatherGBufferSRVs for why a skipped slot was a bug.
+    static constexpr size_t kGBufferSrvCount = 3;
+    size_t GatherGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst) const;
+
     bool      hasAlbedo = false;
     bool      hasMR     = false;
     bool      hasNormal = false;

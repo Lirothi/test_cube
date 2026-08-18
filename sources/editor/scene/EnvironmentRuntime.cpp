@@ -1,5 +1,6 @@
 #include "editor/scene/EnvironmentRuntime.h"
 #include "app/scene/GtaoSettingsJson.h"
+#include "app/scene/AtmosphereSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -247,6 +248,15 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         GtaoSettingsJson::ApplyOverrides(p, gtao);
         ctx.scene.SetGtao(gtao);
     }
+    else if (env.type == "atmosphere")
+    {
+        // P7: rebuilt from defaults on every edit, same reasoning as the blocks around it -- a
+        // field the document does not carry must land on the struct default, not on whatever the
+        // previous edit left behind.
+        AtmosphereSettings atmosphere{};
+        AtmosphereSettingsJson::ApplyOverrides(p, atmosphere);
+        ctx.scene.SetAtmosphere(atmosphere);
+    }
     else if (env.type == "colorPipeline")
     {
         // P3C: rebuilt from defaults on every edit, same reasoning as cameraExposure above.
@@ -401,6 +411,10 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
     else if (env.type == "gtao")
     {
         ctx.scene.SetGtao(GtaoSettings{});
+    }
+    else if (env.type == "atmosphere")
+    {
+        ctx.scene.SetAtmosphere(AtmosphereSettings{});
     }
     else if (env.type == "colorPipeline")
     {

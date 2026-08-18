@@ -17,6 +17,7 @@
 #pragma warning(disable: 26819)
 #include "third_party/json/json.hpp"
 #include "app/scene/GtaoSettingsJson.h"
+#include "app/scene/AtmosphereSettingsJson.h"
 #pragma warning(pop)
 
 #include "app/camera/Camera.h"
@@ -352,6 +353,13 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             GtaoSettingsJson::ApplyOverrides(j["gtao"], gtao);
         }
         scene.SetGtao(gtao);
+
+        AtmosphereSettings atmosphere{};
+        if (j.contains("atmosphere"))
+        {
+            AtmosphereSettingsJson::ApplyOverrides(j["atmosphere"], atmosphere);
+        }
+        scene.SetAtmosphere(atmosphere);
     }
 
     // P3: display transform. A level without the section gets the struct defaults, i.e. AgX.

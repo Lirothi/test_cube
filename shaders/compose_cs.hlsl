@@ -17,6 +17,7 @@
 
 #include "utils.hlsli"
 #include "ibl_common.hlsli"
+#include "atmosphere.hlsli"
 
 Texture2D LightTarget : register(t0);
 Texture2D GB2 : register(t1);
@@ -58,6 +59,15 @@ cbuffer PerFrame : register(b0)
     float4 shoreWetnessAppearance; // x: water-film reflection, yz: slope cutoff/full-wet normal Y, w: water level
     float4 shoreWetnessFallback;   // xy: height above/below water, z: normalized fade start
     float4 shoreWetnessBreakup;    // x: upper-edge strength, y: broad XZ scale in metres
+    // P7 aerial perspective. `fogParams0.x` = 0 disables it, and the whole block below is then
+    // skipped -- which is the interface contract's "screenshot-equivalent to M2".
+    float4 fogParams0;   // x: density, y: height falloff, z: reference height, w: start distance
+    float4 fogParams1;   // x: max opacity, y: sun scatter strength, z: sun scatter exponent
+    float4 fogSunDir;    // xyz: direction TO the sun (world)
+    float4 fogSunColor;  // rgb: the sun's effective colour
+    // P7 item 8. 0 = normal, 1 = transmittance, 2 = in-scattering. Rides the fog block so a view
+    // costs nothing when the fog is off -- and shows nothing either, which is the honest answer.
+    uint fogDebugView;
 }
 
 static const float kEps = 1e-6;
@@ -324,6 +334,63 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             // GBuffer layout.
             const float3 filmF = FresnelSchlick(cosT, 0.02f.xxx);
             color += refl * filmF * wetness * max(shoreWetnessAppearance.x, 0.0f);
+        }
+    }
+
+    // P7: aerial perspective, applied LAST and only to real geometry. Background pixels already
+    // hold the skybox, which IS the horizon colour -- fogging them would blend the sky towards
+    // itself and, with the sun lobe added, quietly brighten the whole sky (plan item 6).
+    // A debug view must not leave the pixels it does NOT describe showing the ordinary image: sky
+    // and water are not opaque at compose time and so never enter the block below, and left as the
+    // normal scene they read as "no fog here" instead of "not measured here". Black says the
+    // second one.
+    if (fogDebugView != 0u && !(z > kEps && fogParams0.x > 0.0f))
+    {
+        color = 0.0.xxx;
+    }
+
+    if (z > kEps && fogParams0.x > 0.0f)
+    {
+        AtmosphereParams fog;
+        fog.density = fogParams0.x;
+        fog.heightFalloff = fogParams0.y;
+        fog.referenceHeight = fogParams0.z;
+        fog.startDistance = fogParams0.w;
+        fog.maxOpacity = fogParams1.x;
+        fog.sunScatterStrength = fogParams1.y;
+        fog.sunScatterExponent = fogParams1.z;
+        fog.sunScatterStartDistance = fogParams1.w;
+
+        const float3 Pw = ReconstructPosWS(uv, z, invProj, invView);
+        const float3 toPoint = Pw - camPosWS;
+        const float dist = length(toPoint);
+        const float3 viewDir = dist > kEps ? toPoint / dist : float3(0.0, 0.0, 1.0);
+
+        const float fogShared = AtmosphereSharedIntegral(dist, camPosWS.y, Pw.y, fog);
+        const float tau = AtmosphereOpticalDepth(fogShared, dist, fog);
+        const float transmittance = AtmosphereTransmittance(tau, fog.maxOpacity);
+
+        // The sky sampled ALONG THE VIEW RAY, at a roughness-free mip: this is the fog's own
+        // colour, so a distant surface converges on exactly the sky pixel it sits against.
+        const float3 skyAlongView = SkyboxTex.SampleLevel(gSmp, viewDir, 0).rgb * skyboxIntensity;
+        const float3 inscatter = AtmosphereInscatter(skyAlongView, fogSunColor.rgb,
+                                                     dot(viewDir, fogSunDir.xyz), fogShared, dist, fog);
+
+        if (fogDebugView == 1u)
+        {
+            // What the SURFACE keeps. White = the air is doing nothing here, black = fully hidden.
+            color = transmittance.xxx;
+        }
+        else if (fogDebugView == 2u)
+        {
+            // What the AIR adds, already weighted by coverage -- i.e. the term actually summed
+            // into the image, not the raw scattering colour. Reading the unweighted one would say
+            // the fog is bright everywhere including where it contributes nothing.
+            color = inscatter * (1.0 - transmittance);
+        }
+        else
+        {
+            color = color * transmittance + inscatter * (1.0 - transmittance);
         }
     }
 

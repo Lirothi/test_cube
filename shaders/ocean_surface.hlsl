@@ -19,6 +19,7 @@
 
 #include "utils.hlsli"
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
+#include "atmosphere.hlsli" // P7: the same medium compose applies to opaque geometry
 
 cbuffer OceanCB : register(b0)
 {
@@ -70,6 +71,11 @@ cbuffer OceanCB : register(b0)
     float4 skyParams;                  // x: sky intensity, y: prefiltered mip count (0 = none), zw: reserved
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
+    // P7 aerial perspective, packed by PackAtmosphere -- the SAME numbers compose gets.
+    float4 fogParams0;                 // x: density, y: height falloff, z: reference height, w: start distance
+    float4 fogParams1;                 // x: max opacity, y: sun scatter strength, z: sun scatter exponent
+    uint fogDebugView;                 // P7 item 8: 0 normal, 1 transmittance, 2 in-scattering
+    uint3 _fogDebugPad;
     float4 deepScatterColor;           // xyz: deep scatter tint, w: unused
     float4 sssColor;                   // xyz: subsurface scattering tint, w: unused
     float4 diffuseColor;               // xyz: diffuse tint, w: unused
@@ -223,7 +229,12 @@ struct BrunetonInputs
 static const float3 kLegacyFoamSkyColor = float3(0.24f, 0.38f, 0.55f);
 static const float kSpecularMinPower = 64.0f;
 static const float kSpecularMaxPower = 512.0f;
-static const float kSkyRoughMaxMip = 5.0f;
+// kSkyRoughMaxMip is NOT redeclared here: F8 moved it into ibl_common.hlsli, which this file
+// includes, and the local copy left behind made this variant fail to compile outright --
+// "redefinition of 'kSkyRoughMaxMip'". Nothing caught it because the modern surface is off by
+// default (`ocean::g_shoreRunup`) and graphics shaders were not in tools/check_shaders.py, so a
+// variant that had not built for some time still looked fine: the legacy branch is `#else`-d out
+// of the failure and is what everyone was running.
 static const float kLodThreshold = 0.05f;
 
 static const uint kGradientMaxKeys = 8u;
@@ -2146,7 +2157,48 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
     float3 color = specular + lerp(refracted, reflected, fresnel);
     //color = fresnel.xxx;
     color = lerp(color, foamLitColor, foamData.coverage.x);
-    color = lerp(color, horizon.rgb, horizon.a);
+
+    // P7. The ocean's OWN horizon fade and the global aerial perspective are the same effect
+    // authored twice, so exactly one of them runs. With fog off (density 0) this is byte-for-byte
+    // the tuned behaviour that shipped; with fog on, the water joins the medium the opaque pass is
+    // already in, instead of fading to a separately-authored horizon colour beside a fogged island.
+    if (fogParams0.x > 0.0f)
+    {
+        AtmosphereParams fog;
+        fog.density = fogParams0.x;
+        fog.heightFalloff = fogParams0.y;
+        fog.referenceHeight = fogParams0.z;
+        fog.startDistance = fogParams0.w;
+        fog.maxOpacity = fogParams1.x;
+        fog.sunScatterStrength = fogParams1.y;
+        fog.sunScatterExponent = fogParams1.z;
+        fog.sunScatterStartDistance = fogParams1.w;
+
+        // `viewDir` here points FROM the camera towards the surface, which is the direction the
+        // sky must be sampled along for the fog to agree with the pixel behind it.
+        const float3 viewRay = normalize(macroLi.positionWS - macroLi.cameraPos);
+        const float fogShared = AtmosphereSharedIntegral(macroLi.viewDist, macroLi.cameraPos.y,
+                                                      macroLi.positionWS.y, fog);
+        const float tau = AtmosphereOpticalDepth(fogShared, macroLi.viewDist, fog);
+        const float transmittance = AtmosphereTransmittance(tau, fog.maxOpacity);
+        const float3 skyAlongView = SkyboxTexture.SampleLevel(LinearClampSampler, viewRay, 0).rgb *
+                                    skyParams.x;
+        const float3 toSun = -normalize(sunDirAmbient.xyz);
+        const float3 inscatter = AtmosphereInscatter(skyAlongView,
+                                                     sunColorExposure.xyz * sunColorExposure.w,
+                                                     dot(viewRay, toSun), fogShared,
+                                                     macroLi.viewDist, fog);
+        if (fogDebugView == 1u)      { color = transmittance.xxx; }
+        else if (fogDebugView == 2u) { color = inscatter * (1.0f - transmittance); }
+        else { color = color * transmittance + inscatter * (1.0f - transmittance); }
+    }
+    else
+    {
+        color = lerp(color, horizon.rgb, horizon.a);
+        // Same rule compose follows: a debug view must not leave un-measured pixels showing the
+        // ordinary image, or "no fog" and "not part of this view" look identical.
+        if (fogDebugView != 0u) { color = 0.0f.xxx; }
+    }
     return color;
 }
 

@@ -89,21 +89,46 @@ void MaterialData::ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const
     defs.emplace_back("SHADING_MODEL_ID", std::to_string(static_cast<uint32_t>(shadingModel)));
 }
 
+// The material textures in the FIXED order the shaders declare them (albedo, MR, normal) --
+// gbuffer.hlsl binds t0/t1/t2 and gbuffer_inst.hlsl t1/t2/t3, and a register is a POSITION.
+//
+// This used to skip absent textures and pack densely, which silently shifted every later texture
+// down a slot. A material with an albedo and a normal but NO MR -- the tent presets are exactly
+// that, `useMR: false` with a hand-set roughness -- therefore bound its NORMAL map as gMR and left
+// gNormalMap pointing at whatever the descriptor ring happened to hold. `texFlags` saved the MR
+// read (it multiplies the sampled value by 0), but the normal branch is gated ON, so the shader
+// sampled an unwritten descriptor: a different stale texture every frame, which is precisely the
+// flicker that was reported.
+//
+// Absent slots are filled with a sibling's SRV rather than a dedicated dummy texture. The content
+// is irrelevant -- `texFlags` guarantees the shader discards it -- and what actually matters is
+// that the descriptor is VALID and the positions are right. A material with no textures at all
+// still returns 0 and stages nothing, which is what it did before and is safe for the same reason.
+size_t MaterialData::GatherGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst) const
+{
+    D3D12_CPU_DESCRIPTOR_HANDLE filler{};
+    if (hasAlbedo)      { filler = albedo.GetSRVCPU(); }
+    else if (hasNormal) { filler = normal.GetSRVCPU(); }
+    else if (hasMR)     { filler = mr.GetSRVCPU(); }
+    if (filler.ptr == 0)
+    {
+        return 0;
+    }
+    dst[0] = hasAlbedo ? albedo.GetSRVCPU() : filler;
+    dst[1] = hasMR     ? mr.GetSRVCPU()     : filler;
+    dst[2] = hasNormal ? normal.GetSRVCPU() : filler;
+    return kGBufferSrvCount;
+}
+
 size_t MaterialData::AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& dst, size_t offset) const
 {
-    size_t appended = 0;
-    if (hasAlbedo) { dst[offset + appended++] = albedo.GetSRVCPU(); }
-    if (hasMR)     { dst[offset + appended++] = mr.GetSRVCPU(); }
-    if (hasNormal) { dst[offset + appended++] = normal.GetSRVCPU(); }
-    return appended;
+    return GatherGBufferSRVs(dst.data() + offset);
 }
 
 size_t MaterialData::AppendGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst, size_t& inoutCount) const
 {
-    size_t appended = 0;
-    if (hasAlbedo) { dst[inoutCount++] = albedo.GetSRVCPU(); ++appended; }
-    if (hasMR)     { dst[inoutCount++] = mr.GetSRVCPU();     ++appended; }
-    if (hasNormal) { dst[inoutCount++] = normal.GetSRVCPU(); ++appended; }
+    const size_t appended = GatherGBufferSRVs(dst + inoutCount);
+    inoutCount += appended;
     return appended;
 }
 
@@ -117,10 +142,7 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
     }
     else {
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> srvs{};
-        size_t count = 0;
-        if (hasAlbedo) { srvs[count] = albedo.GetSRVCPU(); ++count; }
-        if (hasMR)     { srvs[count] = mr.GetSRVCPU(); ++count; }
-        if (hasNormal) { srvs[count] = normal.GetSRVCPU(); ++count; }
+        const size_t count = GatherGBufferSRVs(srvs.data());
         if (count > 0) {
             auto tbl = r->StageSrvUavTable(srvs, count);
             ctx.srvTable[srvTableRegister] = tbl.gpu;

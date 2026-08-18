@@ -435,6 +435,7 @@ namespace
             env.type == "cameraExposure" ? "Edit Camera Exposure" :
             env.type == "colorPipeline" ? "Edit Color Pipeline" :
             env.type == "gtao" ? "Edit Ambient Occlusion" :
+            env.type == "atmosphere" ? "Edit Aerial Perspective" :
             "Edit Environment";
 
         const auto executeChange = [&](nlohmann::json after, const std::string& label)
@@ -1014,6 +1015,69 @@ namespace
                           "given the geometric normal. ON feeds it the normal-mapped one instead, "
                           "which reads as occlusion wherever the two disagree - on detail-mapped sand "
                           "that measured AO 0.35 on a fully open dune. Kept only for comparison.");
+        }
+        else if (env.type == "atmosphere")
+        {
+            // P7. The model is transcribed from UE's HeightFogCommon.ush, so each tooltip names the
+            // UE parameter it corresponds to -- and, where a UE default does NOT carry over, says
+            // why. That distinction is the whole reason these numbers are not simply theirs.
+            {
+                const nlohmann::json beforeItem = p;
+                bool fogEnabled = p.value("enabled", false);
+                const bool changed = ImGui::Checkbox("Enabled", &fogEnabled);
+                if (changed) { p["enabled"] = fogEnabled; }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Global analytic height fog, applied to opaque geometry in compose AND to "
+                          "the ocean surface, which share one packed parameter set so the water and "
+                          "the land cannot end up in different weather. Off by default: it is a real "
+                          "image change and earns its default with an explicit A/B. Off costs "
+                          "nothing - the shader skips the whole block on a zero density.");
+
+            ImGui::SeparatorText("Medium");
+            dragF("Density", "density", 0.004f, 0.0002f, 0.0f, 0.05f, "%.4f");
+            InspectorHelp("UE's FogDensity: extinction per world unit at the reference height. This "
+                          "is the main dial. THEIR DEFAULT (0.02) DOES NOT TRANSFER - UE author "
+                          "against a centimetre world and this engine is in metres, so the shape of "
+                          "the curve is theirs but the magnitude is ours to tune.");
+            dragF("Height Falloff", "heightFalloff", 0.02f, 0.001f, 0.0f, 0.2f, "%.3f");
+            InspectorHelp("UE's FogHeightFalloff, base 2. How fast density thins with altitude; 0 "
+                          "makes it a uniform distance fog. This term is what keeps a high camera "
+                          "from getting a flat screen-space wash - looking down from altitude, most "
+                          "of the ray is already in thin air. Same unit caveat as Density.");
+            dragF("Reference Height", "referenceHeight", 0.0f, 0.5f, -100.0f, 500.0f, "%.1f m");
+            InspectorHelp("World Y at which Density is exactly the authored value. Sea level here. "
+                          "UE call this the fog actor's own height.");
+            dragF("Start Distance", "startDistance", 25.0f, 0.5f, 0.0f, 500.0f, "%.0f m");
+            InspectorHelp("UE's StartDistance: fog-free air in front of the camera, so near contrast "
+                          "survives. Their default is 0; this project starts at 25 m because the "
+                          "canonical views put the beach within a few tens of metres.");
+            dragF("Max Opacity", "maxOpacity", 0.9f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("UE's FogMaxOpacity, and note what it actually does: it is a FLOOR on "
+                          "transmittance, clipping the far end of the curve, not a scale on "
+                          "coverage that would bend the whole curve. 0 makes the fog a no-op while "
+                          "still enabled, which is a free A/B lever.");
+
+            ImGui::SeparatorText("Sun in-scattering");
+            dragF("Sun Scatter", "sunScatterStrength", 0.35f, 0.01f, 0.0f, 3.0f, "%.2f");
+            InspectorHelp("Weight of the forward-scattered sun added on top of the sky colour, so "
+                          "looking into the sun warms the haze and looking away from it does not. "
+                          "Judge it on wind_test's sun_glint view - no other canonical view has a "
+                          "sun field to read it against.");
+            dragF("Sun Scatter Tightness", "sunScatterExponent", 4.0f, 0.25f, 1.0f, 64.0f, "%.0f");
+            InspectorHelp("UE's DirectionalInscatteringExponent, and their default of 4 IS used "
+                          "here: it is dimensionless, so unlike density it transfers unchanged. "
+                          "Higher = a tighter glow around the sun.");
+            dragF("Sun Scatter Start", "sunScatterStartDistance", 100.0f, 1.0f, 0.0f, 1000.0f, "%.0f m");
+            InspectorHelp("UE's DirectionalInscatteringStartDistance: the sun lobe builds up on its "
+                          "OWN line integral past this distance, so it does not tint the near "
+                          "field. Theirs is 10000 in centimetres.");
+
+            ImGui::TextDisabled("Fog colour comes from the SKY along the view ray, not an authored");
+            ImGui::TextDisabled("colour as in UE - that is what removes the horizon seam by");
+            ImGui::TextDisabled("construction instead of by tuning.");
+            ImGui::TextDisabled("Fix exposure when comparing: auto-exposure reacts to fog and");
+            ImGui::TextDisabled("shifts the WHOLE frame, sky included.");
         }
         else if (env.type == "colorPipeline")
         {

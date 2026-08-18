@@ -123,6 +123,9 @@ namespace Math
         float3& operator+=(const float3& o) { x += o.x; y += o.y; z += o.z; return *this; }
         
         float3 operator-(const float3& o) const { return { x - o.x, y - o.y, z - o.z }; }
+        // Unary negate. The binary form has always been here; without its unary partner every
+        // "the other way along this vector" site had to spell out three components by hand.
+        float3 operator-() const { return { -x, -y, -z }; }
         float3& operator-=(const float3& o) { x -= o.x; y -= o.y; z -= o.z; return *this; }
         
         float3 operator*(float s) const { return { x * s, y * s, z * s }; }

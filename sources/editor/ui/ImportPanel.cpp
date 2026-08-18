@@ -11,6 +11,7 @@
 #include "assets/AssetImporter.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/MaterialFileGen.h" // I3: write named material files from glTF at import
+#include "materials/Texture2D.h"          // shared-texture cache: dropped when files change on disk
 #include "rendering/meshes/MeshManager.h" // CountSubmeshes for the slot count; ParseFileCpu to size an .obj
 #include "meshoptimizer.h"                // meshopt_Simplify* flags for the LOD import options
 #include <cfloat>
@@ -819,6 +820,10 @@ namespace
         bakeOpt.lodRatioScale = lodOpt.lodRatioScale;
         bakeOpt.lodErrorScale = lodOpt.lodErrorScale;
         bakeOpt.lodSimplifyOptions = lodOpt.lodSimplifyOptions;
+        // Unit correction baked into the vertices (see MeshLoadOptions::bakeScale). Rides the same
+        // channel as the LOD knobs, and like them it is part of HashOptions, so changing it makes
+        // an existing .mesh.bin stale instead of being silently reused.
+        bakeOpt.bakeScale = lodOpt.bakeScale;
         if (asset.contains("recomputeNormalSlots") && asset["recomputeNormalSlots"].is_array())
         {
             for (const nlohmann::json& s : asset["recomputeNormalSlots"])
@@ -987,6 +992,7 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
     lodOpt.lodSimplifyOptions =
         (meshDialogLodPermissive_ ? meshopt_SimplifyPermissive : 0u) |
         (meshDialogLodPrune_ ? meshopt_SimplifyPrune : 0u);
+    lodOpt.bakeScale = meshDialogBakeScale_;
 
     std::error_code relEc;
     const fs::path rel = fs::relative(
@@ -1575,20 +1581,78 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
         meshDialogNormalizeSpawn_ = false;
     }
 
-    ImGui::BeginDisabled(meshDialogItem_.worldSizeM <= 0.0f);
-    ImGui::Checkbox("Normalize spawn size", &meshDialogNormalizeSpawn_);
+    // A multiplier needs no measured size, so only the target-side mode depends on the bounds.
+    const bool haveSize = meshDialogItem_.worldSizeM > 0.0f;
+    ImGui::Checkbox("Correct scale", &meshDialogNormalizeSpawn_);
     ImGui::BeginDisabled(!meshDialogNormalizeSpawn_);
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::InputFloat("Target longest side (m)", &meshDialogTargetM_,
-        0.0f, 0.0f, "%.2f");
-    meshDialogTargetM_ = std::clamp(meshDialogTargetM_, 0.1f, 1000.0f);
-    if (meshDialogNormalizeSpawn_ && meshDialogItem_.worldSizeM > 0.0f)
+
+    int mode = static_cast<int>(meshDialogScaleMode_);
+    ImGui::BeginDisabled(!haveSize);
+    if (ImGui::RadioButton("Target longest side", &mode, 0))
     {
-        ImGui::TextDisabled("Default spawn scale: %.6f",
-            meshDialogTargetM_ / meshDialogItem_.worldSizeM);
+        meshDialogScaleMode_ = MeshScaleMode::TargetSide;
     }
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Multiplier", &mode, 1))
+    {
+        meshDialogScaleMode_ = MeshScaleMode::Multiplier;
+    }
+    if (!haveSize && meshDialogScaleMode_ == MeshScaleMode::TargetSide)
+    {
+        meshDialogScaleMode_ = MeshScaleMode::Multiplier; // the only mode that still works
+    }
+
+    float factor = 1.0f;
+    if (meshDialogScaleMode_ == MeshScaleMode::TargetSide)
+    {
+        ImGui::SetNextItemWidth(110.0f);
+        ImGui::InputFloat("Target longest side (m)", &meshDialogTargetM_, 0.0f, 0.0f, "%.2f");
+        meshDialogTargetM_ = std::clamp(meshDialogTargetM_, 0.1f, 1000.0f);
+        factor = haveSize ? meshDialogTargetM_ / meshDialogItem_.worldSizeM : 1.0f;
+    }
+    else
+    {
+        ImGui::SetNextItemWidth(110.0f);
+        ImGui::InputFloat("Multiply by", &meshDialogMultiplier_, 0.0f, 0.0f, "%.4f");
+        meshDialogMultiplier_ = std::clamp(meshDialogMultiplier_, 0.0001f, 10000.0f);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("cm -> m")) { meshDialogMultiplier_ = 0.01f; }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The usual case: the asset was authored in centimetres.");
+        }
+        factor = meshDialogMultiplier_;
+    }
+
+    ImGui::Checkbox("Bake into vertices", &meshDialogBakeIntoVertices_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "ON  - the factor is applied to the VERTEX POSITIONS when the .mesh.bin is baked.\n"
+            "      The mesh ends up in metres and instances spawn at scale 1, so bounds, the\n"
+            "      size readout and anything else reading model space all agree.\n\n"
+            "OFF - the old behaviour: a spawnScale on the asset. It corrects only the SPAWN;\n"
+            "      model space stays in the source unit, which is why the tent mesh measures\n"
+            "      418 x 227 x 284 and every instance carries scale 0.0107.\n\n"
+            "Changing the factor re-bakes: it is part of the geometry freshness hash.");
+    }
+    if (haveSize)
+    {
+        ImGui::TextDisabled("%.3f m -> %.3f m   (x %.6f)", meshDialogItem_.worldSizeM,
+            meshDialogItem_.worldSizeM * factor, factor);
+    }
+    else
+    {
+        ImGui::TextDisabled("x %.6f", factor);
+    }
     ImGui::EndDisabled();
+
+    // What the confirm path consumes. Exactly one of the two is non-neutral.
+    meshDialogBakeScale_ = (meshDialogNormalizeSpawn_ && meshDialogBakeIntoVertices_)
+        ? factor : 1.0f;
+    meshDialogPendingSpawnScale_ = (meshDialogNormalizeSpawn_ && !meshDialogBakeIntoVertices_)
+        ? factor : 0.0f;
 
     if (meshDialogTopLevelNodes_.size() > 1)
     {
@@ -1676,9 +1740,9 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     }
     ImGui::Separator();
 
-    const float selectedSpawnScale =
-        meshDialogNormalizeSpawn_ && meshDialogItem_.worldSizeM > 0.0f ?
-        meshDialogTargetM_ / meshDialogItem_.worldSizeM : 0.0f;
+    // Zero when the correction went into the vertices -- the asset must NOT also carry a
+    // spawnScale, or the factor would be applied twice.
+    const float selectedSpawnScale = meshDialogPendingSpawnScale_;
     const std::vector<std::string> selectedSplitNodes =
         meshDialogSplitTopLevelNodes_ ? meshDialogTopLevelNodes_ :
         std::vector<std::string>{};
@@ -1921,11 +1985,18 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
         {
             WriteCreditsEntry(activeItem_.name, activeItem_.license);
         }
+        // The files under models/ and textures/ have just been REPLACED, so every texture the
+        // shared cache is still indexing by that path now describes the previous import. Dropping
+        // the index frees nothing (it holds weak references only) -- it just stops the next load
+        // from being answered with the pre-import image, which is what a re-import into an OPEN
+        // level would otherwise look like: the asset changes on disk and nothing on screen moves.
+        Texture2D::ClearCache();
         registry.Refresh();
         Rescan(); // pick up the new alreadyInProject state
         status_ = finalizeFailed ? ("Import FINALIZE FAILED for " + activeItem_.name) :
             ("Imported " + activeItem_.name + "  " + destLabel);
         statusIsError_ = finalizeFailed;
+        lastImportedName_ = finalizeFailed ? std::string() : activeItem_.name;
         finishedOut = !finalizeFailed;
     }
     else

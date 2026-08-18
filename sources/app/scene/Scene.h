@@ -137,10 +137,17 @@ public:
     void SetGtao(const GtaoSettings& s) { gtao_ = s; }
     GtaoSettings& GtaoRef() { return gtao_; }
 
+    // P7: aerial perspective is level-scoped for exactly the reasons above -- it describes how this
+    // scene should look, and a level has to be able to save it.
+    const AtmosphereSettings& GetAtmosphere() const { return atmosphere_; }
+    void SetAtmosphere(const AtmosphereSettings& s) { atmosphere_ = s; }
+    AtmosphereSettings& AtmosphereRef() { return atmosphere_; }
+
     void SetRenderSettings(const SceneRenderSettings& settings)
     {
         renderSettings_ = settings;
         renderSettings_.gtao = gtao_;
+        renderSettings_.atmosphere = atmosphere_;
     }
     const SceneRenderSettings& GetRenderSettings() const { return renderSettings_; }
 
@@ -229,6 +236,7 @@ private:
     render::CameraExposureSettings cameraExposure_{}; // P1, dormant; see PhotographicSettings.h
     render::ColorPipelineSettings colorPipeline_{};   // P3; see PhotographicSettings.h
     GtaoSettings gtao_{};                             // P6B; level-scoped, see GetGtao
+    AtmosphereSettings atmosphere_{};                 // P7; level-scoped, see GetAtmosphere
 
     std::unique_ptr<Skybox> skyBox_;
 };

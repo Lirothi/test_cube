@@ -67,7 +67,7 @@
   "gtao": {
     "enabled": true,
     "intensity": 1.5,
-    "thickness": 0.75,
+    "thickness": 0.800000011920929,
     "worldRadius": 1.0
   },
   "objects": [
@@ -944,9 +944,9 @@
       "mesh": "models/coconut_palm.mesh.json",
       "name": "staticMesh #26 Copy",
       "position": [
-        71.11200714111328,
+        73.81199645996094,
         1.3499999046325684,
-        40.125946044921875
+        41.22594451904297
       ],
       "rotationDeg": [
         0.0,
@@ -13563,6 +13563,126 @@
         1.0000001192092896,
         1.0,
         1.0000001192092896
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 691,
+      "materials": [
+        "tent_0",
+        "tent_1",
+        "tent_2"
+      ],
+      "mesh": "models/tent.mesh.json",
+      "name": "staticMesh #691",
+      "position": [
+        72.7710952758789,
+        1.359809160232544,
+        36.354286193847656
+      ],
+      "rotationDeg": [
+        0.0,
+        59.99996566772461,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 702,
+      "materials": [
+        "tent_0",
+        "tent_1",
+        "tent_2"
+      ],
+      "mesh": "models/tent.mesh.json",
+      "name": "staticMesh #691 Copy",
+      "position": [
+        70.7710952758789,
+        1.3598084449768066,
+        40.45429229736328
+      ],
+      "rotationDeg": [
+        0.0,
+        59.99996566772461,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 712,
+      "mesh": "models/rock_boulder_2_game_ready_asset.mesh.json",
+      "name": "staticMesh #712",
+      "position": [
+        72.10753631591797,
+        1.3800396919250488,
+        38.68039321899414
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        0.5999999642372131,
+        0.5999999642372131,
+        0.5999999642372131
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 714,
+      "mesh": "models/rocks_node_Rock01.mesh.json",
+      "name": "staticMesh #714",
+      "position": [
+        75.925048828125,
+        1.8239691257476807,
+        36.487159729003906
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 715,
+      "mesh": "models/rocks_node_Rock02.mesh.json",
+      "name": "staticMesh #715",
+      "position": [
+        69.52151489257813,
+        1.2626217603683472,
+        42.9476432800293
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
       ],
       "type": "staticMesh"
     }

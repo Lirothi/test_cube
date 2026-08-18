@@ -324,6 +324,7 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     addSingletonAlways("cameraExposure", "cameraExposure", "Camera Exposure");
     addSingletonAlways("colorPipeline", "colorPipeline", "Color Pipeline");
     addSingletonAlways("gtao", "gtao", "Ambient Occlusion (GTAO)"); // P6B
+    addSingletonAlways("atmosphere", "atmosphere", "Aerial Perspective"); // P7
 }
 
 #endif // WITH_EDITOR

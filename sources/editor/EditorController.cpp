@@ -1,5 +1,6 @@
 #include "editor/EditorController.h"
 #include "app/scene/GtaoSettingsJson.h"
+#include "app/scene/AtmosphereSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
+#include "rendering/meshes/MeshManager.h" // import completion drops the geometry cache
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "editor/EditorContext.h"
@@ -396,6 +398,56 @@ namespace
     // P6B. Seeded from the SCENE's current values, not from struct defaults: the dev window edits
     // the scene copy live, so "add the object" should capture what is on screen rather than snapping
     // the level back to neutral.
+        // Rebuild every placed staticMesh whose mesh asset path starts with `assetPrefix`, so a
+    // re-imported asset is picked up by copies already in the level and not only by new spawns.
+    // Returns how many were refreshed.
+    int RespawnPlacedMeshes(EditorContext& ctx, const std::string& assetPrefix)
+    {
+        const auto normalize = [](std::string s)
+        {
+            std::replace(s.begin(), s.end(), '\\', '/');
+            return s;
+        };
+        const std::string want = normalize(assetPrefix);
+
+        std::vector<EditorObjectId> targets;
+        for (const EditorObject& obj : ctx.document.Objects())
+        {
+            if (obj.type != "staticMesh") { continue; }
+            const std::string m = normalize(obj.properties.value("mesh", std::string()));
+            if (!m.empty() && m.rfind(want, 0) == 0) { targets.push_back(obj.id); }
+        }
+        if (targets.empty()) { return 0; }
+
+        // One GPU sync and one upload batch for the whole set, not per object: a grove is dozens
+        // of instances and a stall each would be visible.
+        ctx.renderer.WaitForPreviousFrame();
+        UploadBatch uploads;
+        if (!uploads.Begin(&ctx.renderer)) { return 0; }
+
+        int applied = 0;
+        for (const EditorObjectId id : targets)
+        {
+            if (ctx.scene.FindEditorObject(id.value) == nullptr) { continue; } // disabled: no runtime
+            const EditorObject* obj = ctx.document.Find(id);
+            if (!obj) { continue; }
+            const nlohmann::json json = EditorSceneDocument::ObjectToJson(*obj);
+            std::unique_ptr<RenderableObjectBase> runtime =
+                SceneObjectFactory::CreateStaticMeshFromJson(json);
+            if (!runtime) { continue; }
+            ctx.scene.RemoveEditorObject(id.value);
+            ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime));
+            ++applied;
+        }
+        uploads.SubmitAndWait(&ctx.renderer);
+        if (applied > 0)
+        {
+            ctx.scene.RefreshShadowGpuForEditor(ctx.renderer);
+            ctx.scene.InvalidateRaytracing();
+        }
+        return applied;
+    }
+
     EditorObject BuildGtaoObject(const Scene& scene)
     {
         EditorObject gtao;
@@ -403,6 +455,17 @@ namespace
         gtao.type = "gtao";
         gtao.properties = GtaoSettingsJson::ToJson(scene.GetGtao());
         return gtao;
+    }
+
+    // P7. Seeded from the SCENE's current values for the same reason BuildGtaoObject is: the
+    // developer window edits that copy live, so "add the object" should capture what is on screen.
+    EditorObject BuildAtmosphereObject(const Scene& scene)
+    {
+        EditorObject atmosphere;
+        atmosphere.name = "Aerial Perspective";
+        atmosphere.type = "atmosphere";
+        atmosphere.properties = AtmosphereSettingsJson::ToJson(scene.GetAtmosphere());
+        return atmosphere;
     }
 
     EditorObject BuildFreeCameraStartObject(const Scene& scene)
@@ -2843,11 +2906,49 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             "Import Assets",
             &showImportPanel_,
             true,
-            [this](EditorContext& /*panelCtx*/)
+            [this](EditorContext& panelCtx)
             {
                 // H3: importer window. It refreshes the AssetRegistry itself on completion; the
                 // 2s poll picks up the new DDS/models entries too.
-                importPanel_.Draw(assetRegistry_, &showImportPanel_);
+                if (importPanel_.Draw(assetRegistry_, &showImportPanel_))
+                {
+                    // A re-import REPLACES models/<name>.mesh.bin, but MeshManager keys its cache
+                    // on that path -- so without this the editor keeps handing out the geometry it
+                    // loaded before the bake and every new spawn is the OLD mesh until a restart.
+                    // Visible the moment a bake changes the VERTICES rather than just a material:
+                    // re-baking a rock to metres still spawned it at the original size.
+                    //
+                    // Clearing the map drops only the manager's own references. Objects already
+                    // placed hold their own shared_ptr and keep the geometry they were built with,
+                    // which is the same rule the shared-texture cache follows: the next LOAD is
+                    // fresh, existing instances are left alone until they are respawned.
+                    if (MeshManager* meshes = panelCtx.renderer.GetMeshManager())
+                    {
+                        meshes->Clear();
+                    }
+
+                    // Dropping the cache only fixes the NEXT load. Instances already standing in
+                    // the level hold their own shared_ptr to the geometry they were built with, so
+                    // without this a re-import that changed the vertices leaves every placed copy
+                    // at the old size and only new spawns look right -- which is worse than not
+                    // updating at all, because the level now disagrees with itself.
+                    //
+                    // Respawning from the document is the same live-apply the Mesh Editor performs
+                    // on save (MeshEditorPanel::ApplyToScene), for the same reason and with the
+                    // same follow-ups: it bypasses the command stack, so the shadow caster set and
+                    // the raytracing acceleration structure have to be rebuilt explicitly.
+                    //
+                    // Scoped by NAME rather than refreshing every static mesh: an import touches
+                    // one asset, and a level with a few hundred placed props should not pay a full
+                    // reload for it. The prefix covers both models/<name>.mesh.json and the
+                    // split-node models/<name>_<part>.mesh.json that "Split by top-level nodes"
+                    // produces.
+                    const std::string& imported = importPanel_.LastImportedName();
+                    if (!imported.empty())
+                    {
+                        RespawnPlacedMeshes(panelCtx, "models/" + imported);
+                    }
+                }
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(

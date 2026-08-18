@@ -172,6 +172,11 @@ void SceneComposeCBHandles::Populate(Material* material)
     shoreWetnessAppearance = material->ComputeCB0FieldHandle("shoreWetnessAppearance");
     shoreWetnessFallback = material->ComputeCB0FieldHandle("shoreWetnessFallback");
     shoreWetnessBreakup = material->ComputeCB0FieldHandle("shoreWetnessBreakup");
+    fogParams0 = material->ComputeCB0FieldHandle("fogParams0");
+    fogParams1 = material->ComputeCB0FieldHandle("fogParams1");
+    fogSunDir = material->ComputeCB0FieldHandle("fogSunDir");
+    fogSunColor = material->ComputeCB0FieldHandle("fogSunColor");
+    fogDebugView = material->ComputeCB0FieldHandle("fogDebugView");
 }
 
 void SceneFxaaCBHandles::Populate(Material* material)
@@ -1174,6 +1179,11 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
         handles.shoreWetnessFallback, data.shoreWetnessFallback, dest);
     matComposeCS_->UpdateCBField(
         handles.shoreWetnessBreakup, data.shoreWetnessBreakup, dest);
+    matComposeCS_->UpdateCBField(handles.fogParams0, data.fogParams0, dest);
+    matComposeCS_->UpdateCBField(handles.fogParams1, data.fogParams1, dest);
+    matComposeCS_->UpdateCBField(handles.fogSunDir, data.fogSunDir, dest);
+    matComposeCS_->UpdateCBField(handles.fogSunColor, data.fogSunColor, dest);
+    matComposeCS_->UpdateCBField(handles.fogDebugView, data.fogDebugView, dest);
 }
 
 void SceneResourceBootstrapper::WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const

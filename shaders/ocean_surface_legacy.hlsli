@@ -16,6 +16,7 @@
 
 #include "utils.hlsli" // renamed since June; the only include fix
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
+#include "atmosphere.hlsli" // P7: the same medium the modern surface and compose use
 
 cbuffer OceanCB : register(b0)
 {
@@ -53,6 +54,11 @@ cbuffer OceanCB : register(b0)
     float4 skyParams;                  // x: sky intensity, y: prefiltered mip count (0 = none), zw: reserved
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
+    // P7 aerial perspective, packed by PackAtmosphere -- the SAME numbers compose gets.
+    float4 fogParams0;                 // x: density, y: height falloff, z: reference height, w: start distance
+    float4 fogParams1;                 // x: max opacity, y: sun scatter strength, z: sun scatter exponent
+    uint fogDebugView;                 // P7 item 8: 0 normal, 1 transmittance, 2 in-scattering
+    uint3 _fogDebugPad;
     float4 deepScatterColor;           // xyz: deep scatter tint, w: unused
     float4 sssColor;                   // xyz: subsurface scattering tint, w: unused
     float4 diffuseColor;               // xyz: diffuse tint, w: unused
@@ -1249,7 +1255,47 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
     float3 color = specular + lerp(refracted, reflected, fresnel);
     //color = fresnel.xxx;
     color = lerp(color, foamLitColor, foamData.coverage.x);
-    color = lerp(color, horizon.rgb, horizon.a);
+
+    // P7. Identical to the modern surface's ending, and it has to be: this variant is the one that
+    // actually runs today (`ocean::g_shoreRunup` defaults false), so fogging only the other one
+    // would have shipped a feature that never executes. Exactly one of the ocean's own horizon
+    // fade and the global aerial perspective runs; with fog off this is the tuned behaviour
+    // unchanged, byte for byte.
+    if (fogParams0.x > 0.0f)
+    {
+        AtmosphereParams fog;
+        fog.density = fogParams0.x;
+        fog.heightFalloff = fogParams0.y;
+        fog.referenceHeight = fogParams0.z;
+        fog.startDistance = fogParams0.w;
+        fog.maxOpacity = fogParams1.x;
+        fog.sunScatterStrength = fogParams1.y;
+        fog.sunScatterExponent = fogParams1.z;
+        fog.sunScatterStartDistance = fogParams1.w;
+
+        const float3 viewRay = normalize(li.positionWS - li.cameraPos);
+        const float fogShared = AtmosphereSharedIntegral(li.viewDist, li.cameraPos.y,
+                                                      li.positionWS.y, fog);
+        const float tau = AtmosphereOpticalDepth(fogShared, li.viewDist, fog);
+        const float transmittance = AtmosphereTransmittance(tau, fog.maxOpacity);
+        const float3 skyAlongView = SkyboxTexture.SampleLevel(LinearClampSampler, viewRay, 0).rgb *
+                                    skyParams.x;
+        const float3 toSun = -normalize(sunDirAmbient.xyz);
+        const float3 inscatter = AtmosphereInscatter(skyAlongView,
+                                                     sunColorExposure.xyz * sunColorExposure.w,
+                                                     dot(viewRay, toSun), fogShared,
+                                                     li.viewDist, fog);
+        if (fogDebugView == 1u)      { color = transmittance.xxx; }
+        else if (fogDebugView == 2u) { color = inscatter * (1.0f - transmittance); }
+        else { color = color * transmittance + inscatter * (1.0f - transmittance); }
+    }
+    else
+    {
+        color = lerp(color, horizon.rgb, horizon.a);
+        // Same rule compose follows: a debug view must not leave un-measured pixels showing the
+        // ordinary image, or "no fog" and "not part of this view" look identical.
+        if (fogDebugView != 0u) { color = 0.0f.xxx; }
+    }
     return color;
 }
 

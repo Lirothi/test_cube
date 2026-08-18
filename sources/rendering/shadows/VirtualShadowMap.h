@@ -119,7 +119,7 @@ namespace vsm
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
     inline float         g_clipmapBaseExtent = 12.0f;
     // Step 24f: directional-clipmap NDC depth bias (against shadow acne). Tunable at the visual gate.
-    inline float         g_clipmapDepthBias = 0.0003f;
+    inline float         g_clipmapDepthBias = 0.0001f;
     // Step 24f: directional-clipmap normal offset in TEXELS — scaled per level by world-units-per-texel
     // (fine near, coarse far), so the receiver clears its own surface at every level. Tunable.
     inline float         g_clipmapNormalBias = 2.0f;

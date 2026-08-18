@@ -276,6 +276,50 @@ namespace
             return true;
         }
         if (setting == "ssr.ueStartMip") { renderSettings.ssrUe.startMipLevel = value; return true; }
+        // P7 aerial perspective. `atmosphere.enabled` is the gate; the rest are the model's own
+        // parameters, so a sweep can find defaults without a rebuild.
+        if (setting == "atmosphere.enabled")
+        {
+            scene.AtmosphereRef().enabled = value != 0.0f;
+            return true;
+        }
+        if (setting == "atmosphere.density") { scene.AtmosphereRef().density = value; return true; }
+        if (setting == "atmosphere.debugView")
+        {
+            g_atmosphereDebugView = static_cast<uint32_t>(std::max(0.0f, value));
+            return true;
+        }
+        if (setting == "atmosphere.heightFalloff")
+        {
+            scene.AtmosphereRef().heightFalloff = value;
+            return true;
+        }
+        if (setting == "atmosphere.referenceHeight")
+        {
+            scene.AtmosphereRef().referenceHeight = value;
+            return true;
+        }
+        if (setting == "atmosphere.startDistance")
+        {
+            scene.AtmosphereRef().startDistance = value;
+            return true;
+        }
+        if (setting == "atmosphere.maxOpacity") { scene.AtmosphereRef().maxOpacity = value; return true; }
+        if (setting == "atmosphere.sunScatter")
+        {
+            scene.AtmosphereRef().sunScatterStrength = value;
+            return true;
+        }
+        if (setting == "atmosphere.sunScatterExp")
+        {
+            scene.AtmosphereRef().sunScatterExponent = value;
+            return true;
+        }
+        if (setting == "atmosphere.sunScatterStart")
+        {
+            scene.AtmosphereRef().sunScatterStartDistance = value;
+            return true;
+        }
         if (setting == "ssr.ueTolerance") { renderSettings.ssrUe.slopeCompareToleranceScale = value; return true; }
         if (setting == "ssr.ueConfirmRetries")
         {

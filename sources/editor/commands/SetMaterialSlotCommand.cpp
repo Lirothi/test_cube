@@ -7,6 +7,7 @@
 
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
+#include "editor/scene/EditorSceneDocument.h"
 #include "editor/EditorContext.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
@@ -70,9 +71,35 @@ bool SetMaterialSlotCommand::Apply(EditorContext& ctx, const std::string& materi
         slotCount = std::max(slotCount, obj->properties["materials"].size());
     }
 
-    // Synthesize the array from the current effective state: slot 0 inherits the scalar
-    // "material" (or "auto"), the rest default to "auto" (pull from the glTF).
-    const std::string slot0Default = obj->properties.value("material", std::string("auto"));
+    // Synthesize the array from the CURRENT EFFECTIVE state -- which is not the same as the
+    // object's own properties.
+    //
+    // An object that names a mesh asset inherits that asset's `materials` list: the factory folds
+    // models/<name>.mesh.json UNDER the object's keys, so a freshly spawned tent draws with
+    // tent_0/tent_1/tent_2 while `obj->properties` carries no `materials` at all. Synthesizing the
+    // untouched slots as the literal "auto" therefore did not preserve the status quo, it ERASED
+    // it: editing one slot wrote "auto" over the other two, and they fell back to the glTF
+    // auto-material. It looked correct only once every slot had been assigned by hand at least
+    // once, because by then the array existed and this loop had something real to copy.
+    //
+    // Resolving through the same fold the factory uses is what makes "leave the others alone"
+    // actually leave them alone.
+    const nlohmann::json effective =
+        SceneObjectFactory::ResolveMeshAsset(EditorSceneDocument::ObjectToJson(*obj));
+    const auto inherited = [&effective](size_t index) -> const nlohmann::json*
+    {
+        auto it = effective.find("materials");
+        if (it == effective.end() || !it->is_array() || index >= it->size() ||
+            !(*it)[index].is_string())
+        {
+            return nullptr;
+        }
+        return &(*it)[index];
+    };
+    const std::string slot0Default = obj->properties.contains("material")
+        ? obj->properties.value("material", std::string("auto"))
+        : effective.value("material", std::string("auto"));
+
     nlohmann::json materials = nlohmann::json::array();
     for (size_t i = 0; i < slotCount; ++i)
     {
@@ -82,6 +109,10 @@ bool SetMaterialSlotCommand::Apply(EditorContext& ctx, const std::string& materi
             obj->properties["materials"][i].is_string())
         {
             materials.push_back(obj->properties["materials"][i]);
+        }
+        else if (const nlohmann::json* fromAsset = inherited(i))
+        {
+            materials.push_back(*fromAsset);
         }
         else
         {

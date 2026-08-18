@@ -141,6 +141,58 @@ inline uint32_t UeSsrMirrorRaySteps(const ResolvedUeSsrSettings& r)
                                                   : r.numSteps;
 }
 
+// P7 -- global analytic aerial perspective. SHIPS DISABLED: it is a real image change, and this
+// plan's own rule (the one GTAO and the P3B local exposure already follow) is that such a change
+// earns its default with an explicit A/B rather than arriving switched on. With `enabled` false the
+// density reaching the shader is 0 and compose skips the whole block, which is the interface
+// contract's "screenshot-equivalent to M2".
+struct AtmosphereSettings
+{
+    bool enabled = false;
+    // Extinction per world unit AT `referenceHeight`. The defaults below are a starting point for
+    // tuning on the atoll, NOT a measured result -- they have never been looked at with fog on.
+    float density = 0.004f;
+    // e-folding rate with world height. 0 makes the medium height-invariant (uniform distance fog).
+    float heightFalloff = 0.02f;
+    float referenceHeight = 0.0f;   // sea level in this project's scenes
+    float startDistance = 25.0f;    // fog-free air, so near beach contrast survives
+    float maxOpacity = 0.9f;        // distance never fully flattens shape
+    float sunScatterStrength = 0.35f;
+    // UE's DirectionalInscatteringExponent default, which is dimensionless and so transfers
+    // unchanged (their density/falloff do not -- see the units note in atmosphere.hlsli).
+    float sunScatterExponent = 4.0f;
+    // UE keep the sun lobe out of the near field with a distance of its own
+    // (DirectionalInscatteringStartDistance). Theirs is 10000 in a centimetre world.
+    float sunScatterStartDistance = 100.0f;
+};
+
+// P7 item 8. Deliberately NOT part of AtmosphereSettings: that struct is serialized into the level,
+// and a debug view saved into a level is a trap -- the same reasoning that keeps
+// ocean::g_foamDebugView out of OceanRenderConfig. 0 = normal, 1 = transmittance, 2 = in-scattering.
+inline uint32_t g_atmosphereDebugView = 0u;
+
+// The exact numbers the shaders receive. TWO passes apply aerial perspective -- compose, for opaque
+// geometry, and the ocean's forward surface -- and the plan's own warning about this feature is that
+// duplicated fog terms drift apart. So the packing lives here, once, and both callers use it.
+// `hasSun` false zeroes the density: with no directional light there is nothing to colour the
+// in-scattering with, and a fog that ignores that would tint the world with a stale sun.
+struct AtmospherePacked
+{
+    float4 params0{}; // density, height falloff, reference height, start distance
+    float4 params1{}; // max opacity, sun scatter strength, sun scatter exponent
+};
+
+inline AtmospherePacked PackAtmosphere(const AtmosphereSettings& a, bool hasSun)
+{
+    const bool on = a.enabled && hasSun && a.density > 0.0f;
+    AtmospherePacked p{};
+    p.params0 = float4(on ? std::max(a.density, 0.0f) : 0.0f, std::max(a.heightFalloff, 0.0f),
+                       a.referenceHeight, std::max(a.startDistance, 0.0f));
+    p.params1 = float4(std::clamp(a.maxOpacity, 0.0f, 1.0f), std::max(a.sunScatterStrength, 0.0f),
+                       std::max(a.sunScatterExponent, 1.0f), std::max(a.sunScatterStartDistance, 0.0f));
+    return p;
+}
+
 // Where surface reflections come from (S8). None disables both traced/screen
 // reflections and the skybox fallback; SkyOnly keeps only the skybox fallback;
 // SSR is screen-space; RT is hardware ray-traced (Tier-1). RT is only honored when
@@ -218,6 +270,7 @@ struct GtaoSettings
 struct SceneRenderSettings
 {
     GtaoSettings gtao{};
+    AtmosphereSettings atmosphere{};
     // STAYS LogMarch. The UE march is finished and correct after P13, and it is the cheaper search,
     // but on WATER the log march's dense mask is markedly the better picture -- and water is the
     // largest reflective surface in this project's scenes. The UE march is selectable everywhere

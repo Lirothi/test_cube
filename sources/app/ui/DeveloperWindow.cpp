@@ -395,6 +395,68 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::Separator();
 
+                // P7 aerial perspective. Edits go to the PER-FRAME settings, not to a scene copy,
+                // because there is no environment object for this yet -- so these survive until the
+                // level is reloaded and no further. That is on screen below rather than left to be
+                // discovered when a tuned sky comes back empty.
+                {
+                    // Edits go to the SCENE copy: it is the source of truth and the app's
+                    // SceneRenderSettings is only a transport that gets overwritten from here
+                    // every push. Same reasoning as GtaoRef above.
+                    AtmosphereSettings& atmo = scene.AtmosphereRef();
+                    ImGui::SeparatorText("Aerial perspective (P7)");
+                    ImGui::Checkbox("Fog enabled", &atmo.enabled);
+                    DevHelp("Global analytic height fog on opaque geometry AND the ocean surface, "
+                            "which share one packed parameter set so they cannot disagree. Off by "
+                            "default: it is a real image change and earns its default with an A/B. "
+                            "Level settings - save them by adding the \"Aerial Perspective\" "
+                            "environment object in the editor.");
+                    ImGui::BeginDisabled(!atmo.enabled);
+                    ImGui::SliderFloat("Fog density", &atmo.density, 0.0f, 0.05f, "%.4f");
+                    DevHelp("Extinction per world unit AT the reference height. This is the main "
+                            "dial; everything else shapes it. 0 disables the whole block.");
+                    ImGui::SliderFloat("Height falloff", &atmo.heightFalloff, 0.0f, 0.2f, "%.3f");
+                    DevHelp("How fast density thins with altitude. 0 makes it a uniform distance "
+                            "fog. This term is what stops a high camera getting a flat screen-space "
+                            "wash: looking down from altitude most of the ray is in thin air.");
+                    ImGui::SliderFloat("Reference height", &atmo.referenceHeight, -50.0f, 200.0f, "%.1f m");
+                    DevHelp("World Y at which 'density' is exactly the value above. Sea level here.");
+                    ImGui::SliderFloat("Start distance", &atmo.startDistance, 0.0f, 300.0f, "%.0f m");
+                    DevHelp("Fog-free air in front of the camera, so near contrast survives.");
+                    ImGui::SliderFloat("Max opacity", &atmo.maxOpacity, 0.0f, 1.0f, "%.2f");
+                    DevHelp("Ceiling on coverage, so distance never fully flattens shape. At 0 the "
+                            "fog is a no-op even while enabled - useful as an A/B lever.");
+                    ImGui::SliderFloat("Sun scatter", &atmo.sunScatterStrength, 0.0f, 3.0f, "%.2f");
+                    DevHelp("Forward-scattered sun added on top of the sky colour, so looking into "
+                            "the sun warms the haze and looking away from it does not.");
+                    ImGui::SliderFloat("Sun scatter tightness", &atmo.sunScatterExponent, 1.0f, 64.0f, "%.0f");
+                    DevHelp("UE's DirectionalInscatteringExponent; their default is 4. Higher = a tighter glow around the sun.");
+                    ImGui::SliderFloat("Sun scatter start", &atmo.sunScatterStartDistance, 0.0f, 500.0f, "%.0f m");
+                    DevHelp("UE keep the sun lobe out of the near field with a distance of its own (DirectionalInscatteringStartDistance).");
+                    static const char* kFogViews[] = { "Normal", "Transmittance", "In-scattering" };
+                    int fogView = static_cast<int>(g_atmosphereDebugView);
+                    if (ImGui::Combo("Fog debug view", &fogView, kFogViews, 3))
+                    {
+                        g_atmosphereDebugView = static_cast<uint32_t>(fogView);
+                    }
+                    DevHelp("Transmittance = what the SURFACE keeps (brighter: the air does less "
+                            "here). In-scattering = what the AIR adds, already weighted by "
+                            "coverage, so it is the term actually summed into the image rather "
+                            "than the raw scattering colour. Only OPAQUE pixels participate - sky "
+                            "and water are black because they are not measured, not because they "
+                            "have no fog. READ THESE AS RELATIVE: the view is written into scene "
+                            "colour, so exposure and the tone curve still run on it and 1.0 is "
+                            "not white by construction. Not saved with the level.");
+                    ImGui::EndDisabled();
+                    ImGui::TextDisabled("Model transcribed from UE HeightFogCommon.ush. Their density/");
+                    ImGui::TextDisabled("falloff numbers do NOT transfer - UE author in centimetres.");
+                    ImGui::TextDisabled("Judge on wind_test: overview / shore_grove / sun_glint.");
+                    ImGui::TextDisabled("Fix exposure while comparing - auto-exposure reacts to fog");
+                    ImGui::TextDisabled("and shifts the WHOLE frame, sky included.");
+                }
+
+                ImGui::Separator();
+
                 const bool dlssAvailable = renderer.IsDlssAvailable();
                 ImGui::Text("DLSS status: %s", renderer.IsDlssActive() ? "Active" : (dlssAvailable ? "Inactive" : "Unavailable"));
 

@@ -161,6 +161,9 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
     // Only the wood/foliage PATTERN reaches the baked geometry, not the weights: hashing the raw
     // floats would invalidate every .bin whenever an artist nudges a slider that the runtime reads
     // anyway. Bit i = "slot i is foliage".
+    // The bake scale CHANGES THE VERTICES, so it has to invalidate an existing .bin -- otherwise
+    // re-importing at a new unit silently reuses geometry baked at the old one.
+    h = Fnv1a(&opt.bakeScale, sizeof(opt.bakeScale), h);
     uint64_t pattern = 0;
     for (size_t i = 0; i < opt.slotFoliage.size() && i < 64; ++i)
     {
@@ -845,6 +848,18 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
 {
     MeshCpuData cpu;
     if (!ParseFileCpu(srcPath, cpu, opt)) { return false; } // parse glTF + regen normals/tangents (CPU)
+
+    // Unit correction into the GEOMETRY. Before everything below, so the wind bake's metre-based
+    // sway extent and the LOD error budgets both see the final scale.
+    if (opt.bakeScale > 0.0f && opt.bakeScale != 1.0f)
+    {
+        for (VertexPNTUV& v : cpu.vertices)
+        {
+            v.position.x *= opt.bakeScale;
+            v.position.y *= opt.bakeScale;
+            v.position.z *= opt.bakeScale;
+        }
+    }
 
     std::vector<Mesh::Submesh> lod0Subs = cpu.submeshes;
     if (lod0Subs.empty())

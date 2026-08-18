@@ -2159,7 +2159,7 @@ before/after; GPU cost of the build pass on its own.
 
 ---
 
-### P7 — Add global analytic aerial perspective
+### P7 — Add global analytic aerial perspective — DONE (2026-08-19)
 
 **Depends on:** P4; evaluate after P5 for final balance.
 
@@ -2183,6 +2183,65 @@ before/after; GPU cost of the build pass on its own.
 **Done when:** distant geometry approaches the horizon color smoothly while near beach contrast remains intact.
 
 **Verify:** low/high camera, look toward/away from sun, sky seam, ocean horizon parity, native/DLSS, GPU timing.
+
+**OUTCOME. Transcribed from UE, not derived.** The first version here was written from first
+principles and differed from `HeightFogCommon.ush` in four ways that all mattered, every one of them
+now corrected in `shaders/atmosphere.hlsli`:
+
+1. **Base 2, not e.** UE integrate and transmit in `exp2`. That rescales what `density` MEANS by
+   ln2, so a model written in `exp` cannot be compared against their numbers at all.
+2. **The removable singularity takes a Taylor expansion, not a constant.** At Falloff -> 0 the
+   integral tends to ln2, and UE carry the first-order term so the branch is continuous in the
+   derivative. A hard 1.0 there is both the wrong limit and a visible crease.
+3. **The Falloff clamp is load-bearing** (`max(-127, ...)`): without it `exp2` of a large negative
+   number gives a horizon line of NaNs.
+4. **`FogMaxOpacity` is a FLOOR ON TRANSMITTANCE, not a scale on coverage.** Scaling `(1 - t)`
+   bends the whole curve where UE clip its far end -- a different image everywhere, not just at
+   distance.
+
+**Defaults: only the dimensionless one transfers.** `DirectionalInscatteringExponent = 4` is used as
+theirs. `FogDensity = 0.02` / `FogHeightFalloff = 0.2` do NOT: UE author against a CENTIMETRE world
+and this engine is metres. No conversion factor was invented -- the shape of the model is UE's, the
+magnitudes are this project's to tune.
+
+**One deliberate departure.** The in-scattering colour is the sky sampled DOWN THE VIEW RAY, where
+UE use an authored `FogInscatteringColor`. That is what satisfies item 4 by construction: at grazing
+angles the fog colour and the pixel behind it converge on the same sample, so there is no seam to
+tune away.
+
+**The ocean shares the medium, and exactly one horizon term runs.** The water's own `HorizonBlend`
+and the global fog are the same effect authored twice, so the fog branch replaces it rather than
+stacking on it. BOTH surfaces carry it -- `ocean_surface.hlsl` and `ocean_surface_legacy.hlsli` --
+which matters because `ocean::g_shoreRunup` defaults FALSE and the legacy file is the one that
+actually runs; fogging only the modern one would have shipped a feature that never executes.
+`PackAtmosphere` produces the numbers once for both compose and the water, so they cannot disagree.
+
+**Level-scoped, like GTAO.** `Scene::AtmosphereRef` is the source of truth, `AtmosphereSettingsJson`
+is the single mapping all three consumers go through, the environment object is "Aerial Perspective"
+(always listed, with both the apply and the RESET-on-delete branches), and the developer window and
+inspector edit the scene copy rather than the per-frame transport.
+
+**Debug views (item 8)** are a `fogDebugView` mode on compose and on both ocean surfaces:
+transmittance and coverage-weighted in-scattering. Two limitations are stated in the tooltip rather
+than left to be discovered: un-measured pixels are painted BLACK (so "no fog" and "not part of this
+view" cannot be confused), and the view is written into scene colour, so exposure and the tone curve
+still run on it -- read it as relative, not as a number.
+
+**Measured** on `wind_test` / `overview`, wind frozen, exposure fixed:
+* fog OFF versus the pre-P7 build: **0.03% of pixels**, lower water 0.00% -- the interface
+  contract's "screenshot-equivalent" holds, and the ocean's tuned look is untouched.
+* fog ON: 71% of pixels move, sky 0.10-0.18% (i.e. the noise floor -- the sky is correctly excluded).
+* GPU: `Pass_Compose` **0.0410 -> 0.0440 ms (+0.003)**; the whole GPU frame is 1.806 -> 1.800 ms,
+  i.e. inside run-to-run noise. Captured at native and at DLSS Quality.
+
+**THE TRAP THIS FEATURE SETS, and it cost an hour before it was spotted:** AUTO-EXPOSURE REACTS TO
+FOG. The first A/B reported 99.9% of pixels changed INCLUDING THE SKY, which reads exactly like a
+broken background test -- the sky was being fogged. It was not: fog moves the frame's average
+luminance, metering follows, and every pixel shifts. With `exposure.autoExposure:0` the sky sits at
+0.139% (the floor) and the gating was correct all along. Any fog comparison MUST fix exposure first.
+
+**Left for later, deliberately:** density defaults are a starting point and have never been tuned on
+the canonical views; that is the user's pass, and the knobs exist for it.
 
 ---
 
