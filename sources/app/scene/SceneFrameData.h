@@ -62,7 +62,7 @@ struct UeSsrSettings
     // Our full-depth guard layered over UE's coarse HZB result. Zero retries is the unmodified UE
     // acceptance rule. Nonzero values refine a candidate against full-res depth and keep marching
     // after a rejected coarse hit instead of turning it into a permanent hole.
-    uint32_t confirmRetries = 1u;
+    uint32_t confirmRetries = 0u;
     uint32_t refineSteps = 4u;
 };
 
