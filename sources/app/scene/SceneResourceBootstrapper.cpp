@@ -121,6 +121,7 @@ void SceneSsrCBHandles::Populate(Material* material)
     technique = material->ComputeCB0FieldHandle("tech");
     useHzb = material->ComputeCB0FieldHandle("useHzb");
     hzbMipCount = material->ComputeCB0FieldHandle("hzbMipCount");
+    frameIndexMod8 = material->ComputeCB0FieldHandle("frameIndexMod8");
     hzbSize = material->ComputeCB0FieldHandle("hzbSize");
     hzbInvSize = material->ComputeCB0FieldHandle("hzbInvSize");
 }
@@ -461,6 +462,9 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         Material::ComputeDesc cd{};
         cd.shaderFile = L"shaders/ssr_cs.hlsl";
         cd.csEntry = "CSMain";
+        // Independent opt-ins: optimized keeps the legacy fallback; Batch4 only reschedules coarse reads.
+        cd.defines.emplace_back("SSR_LOGMARCH_OPTIMIZED", "1");
+        cd.defines.emplace_back("SSR_LOGMARCH_BATCH4", "1");
         matSSR_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
@@ -469,6 +473,8 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         Material::ComputeDesc cd{};
         cd.shaderFile = L"shaders/ocean_reflection_cs.hlsl";
         cd.csEntry = "CSMain";
+        cd.defines.emplace_back("SSR_LOGMARCH_OPTIMIZED", "1");
+        cd.defines.emplace_back("SSR_LOGMARCH_BATCH4", "1");
         matOceanReflection_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
@@ -1019,6 +1025,7 @@ void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, 
     matSSR_->UpdateCBField(handles.technique, data.technique, dest);
     matSSR_->UpdateCBField(handles.useHzb, data.useHzb, dest);
     matSSR_->UpdateCBField(handles.hzbMipCount, data.hzbMipCount, dest);
+    matSSR_->UpdateCBField(handles.frameIndexMod8, data.frameIndexMod8, dest);
     matSSR_->UpdateCBField(handles.hzbSize, data.hzbSize, dest);
     matSSR_->UpdateCBField(handles.hzbInvSize, data.hzbInvSize, dest);
 }

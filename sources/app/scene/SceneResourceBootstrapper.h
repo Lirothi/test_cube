@@ -106,7 +106,7 @@ struct SceneSsrCBHandles
     Material::CBFieldHandle invScreenSize;
     Material::CBFieldHandle technique;
     // P6C step 6: the HiZ tracer's view of the CLOSEST depth pyramid.
-    Material::CBFieldHandle useHzb, hzbMipCount, hzbSize, hzbInvSize;
+    Material::CBFieldHandle useHzb, hzbMipCount, frameIndexMod8, hzbSize, hzbInvSize;
 
     void Populate(Material* material);
 };
@@ -449,6 +449,7 @@ struct SsrPassConstants
     // that was not built this frame can never be traced against.
     uint32_t useHzb = 0;
     uint32_t hzbMipCount = 1;
+    uint32_t frameIndexMod8 = 0;
     float2 hzbSize{};     // mip 0 dimensions in texels
     float2 hzbInvSize{};  // 1/hzbSize -- the tracer works in tile units, so it needs both
 };

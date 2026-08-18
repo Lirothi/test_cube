@@ -33,7 +33,7 @@ cbuffer PerFrame : register(b0)
     // 0 = no depth pyramid exists yet (before the first build), so the UE march must not read it.
     uint     useHzb;
     uint     hzbMipCount;
-    uint     _pad0;
+    uint     frameIndexMod8;
     float2   hzbSize;     // pyramid mip 0, in texels (HALF the render resolution)
     float2   hzbInvSize;
 }
@@ -89,7 +89,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         SSRHit ssr;
         if (tech == SSR_TECHNIQUE_UE && useHzb != 0u)
         {
-            ssr = TraceSSR_UeHzb(Pv, Nv, uv, depth, float2(dispatchThreadId.xy));
+            ssr = TraceSSR_UeHzb(Pv, Nv, uv, depth, float2(dispatchThreadId.xy), frameIndexMod8);
         }
         else
         {

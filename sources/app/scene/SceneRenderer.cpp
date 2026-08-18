@@ -3448,6 +3448,7 @@ void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphP
             constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
             constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
         constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
+        constants.frameIndexMod8 = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 7ull);
         FillSsrHzbConstants(renderer, constants);
 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
@@ -3786,6 +3787,7 @@ void SceneRenderer::Pass_GlassReflectionsSSR(Renderer* renderer, RenderGraphPass
             constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
             constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
         constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
+        constants.frameIndexMod8 = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 7ull);
         FillSsrHzbConstants(renderer, constants);
 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };

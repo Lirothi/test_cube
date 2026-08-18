@@ -2350,17 +2350,16 @@ InitialState is honoured, so this must not be applied blindly to every call site
 unchanged. Do it as ONE change with the gates in between, not folded into unrelated work: it touches
 the state every one of those resources starts life in.
 
-### P13 — Fix the UE SSR march: its reflections come out SLANTED — QUEUED (2026-08-18)
+### P13 — Fix the UE SSR march: its reflections come out SLANTED — DONE (2026-08-18)
 
 `shaders/ssr_trace_ue.hlsli` transcribes Unreal's own SSR ray cast (SSRT/SSRTRayCast.ush,
-`InitScreenSpaceRayFromWorldSpace` + `CastScreenSpaceRay`). It runs, it is 7.6x cheaper than the log
-march (`Pass_ReflectionSource` 0.159 -> 0.021 ms), and its output is WRONG in a way that is obvious
-by eye and invisible to the metric that was used on it.
+`InitScreenSpaceRayFromWorldSpace` + `CastScreenSpaceRay`). It ran much cheaper than the log march,
+but its output was wrong in a way that was obvious by eye and invisible to the original metric.
 
-**THE SYMPTOM IS GEOMETRIC, AND IT IS THE THING TO CHASE.** A vertical trunk reflected in a
-horizontal mirror must come back VERTICAL. Ours come back **slanted, and torn**, with the skew
-growing along the reflection. A sideways drift proportional to distance travelled is a systematic
-error in the ray's screen-space X step relative to its Y step -- not a tuning problem.
+**THE SYMPTOM LOOKED GEOMETRIC.** A vertical trunk reflected in a horizontal mirror must come back
+vertical. Ours came back slanted and torn, with a regular diagonal comb growing along long grazing
+reflections. The projected ray itself was ultimately correct; the coherent sampling field made its
+misses line up in the ray direction and impersonate a slope error.
 
 **HOW NOT TO CHASE IT.** Five hypotheses were tested and killed by measurement; do not re-run them:
 
@@ -2383,14 +2382,74 @@ cannot see a wrong image. Judge it by looking, and measure with something that h
 POSITION -- e.g. compare the traced hit UV against the analytically reflected position on a flat
 floor, where the right answer is a closed form and the error has a direction.
 
-**Suggested first move:** instrument one pixel. Take a floor pixel with a known normal, compute the
-reflected ray's screen path analytically, and print the march's `rayStepUVz` and successive
-`samplesUV` beside it. The skew has a sign and a magnitude; that comparison names which term carries
-it in one run, where six parameter sweeps did not.
+**ROOT CAUSE AND FIX, PART 1 -- SPACE.** UE phase their fixed samples with noise evaluated at integer
+pixel coordinates (`InterleavedGradientNoise(SvPosition.xy, ...)`). The port reused `Hash12`, but
+called it as `Hash12(pixelCoord * invScreenSize)`. Adjacent pixels therefore differed by roughly one
+texel divided by the render extent before hashing and received strongly correlated phases. On a long
+ray, the same one of 16 sparse intervals won across a whole neighbourhood, producing the diagonal
+comb. Pixel-scale decorrelation removes that coherent slope.
 
-**If it cannot be found:** delete the technique rather than ship a control that is worse than the
-default (see the "controls must not lie" rule). The file keeps the transcription and the full list
-of what was ruled out, so a later attempt starts from the evidence rather than from zero.
+**ROOT CAUSE AND FIX, PART 2 -- TIME.** The integer-coordinate fix was necessary but incomplete: it
+left the same fine-grained holes in all frames, so `ssr_temporal_cs.hlsl` had no complementary ray
+samples to accumulate. UE do not use a static phase. `SSRTReflections.usf` passes
+`View.StateFrameIndexMod8` to `InterleavedGradientNoise`; `SceneRendering.cpp` sets that field to
+`FrameIndex % 8`, and the SSR TAA/denoiser consumes the eight interleaved results. The port now carries
+the renderer's modulo-8 frame index in the SSR constant buffer and uses UE's exact
+`RandomInterleavedGradientNoise.ush` formula. Opaque and glass SSR receive the same frame seed. The
+eight-frame cycle moves the one-ray/16-step lattice through complementary positions without changing
+the ray, tolerance, mip, or number of depth taps.
+
+**VERIFIED ON THE REPORTED VIEW.** `data/levels/ssr_bronze_palms.json`, camera position
+`5.89, 0.21, 8.07`, quaternion `0.0023, 0.9947, 0.0234, -0.0998`, wind frozen. With temporal resolve
+disabled, the before hit mask has the reported parallel diagonal streaks; after the spatial change
+they are gone and reflected trunks remain vertical. A second A/B kept temporal enabled and compared
+the old static phase with the modulo-8 UE sequence. Mean total variation of the fullscreen hit-mask
+capture fell from **0.015603 to 0.013864 (-11.1%)** and mean absolute Laplacian from **0.005677 to
+0.004858 (-14.4%)**: fewer one-pixel discontinuities, not just a different random pattern. The
+modulo-8 result also differs from the static result on 11.5% of pixels by more than 5%, confirming
+that temporal accumulation receives genuinely complementary samples. Release_Editor compiled and
+ran the shader successfully. The current Release GPU profile measures `Pass_ReflectionSource` at
+**0.026 ms** and `Pass_Reflection.Temporal` at **0.013 ms**. The earlier same-view comparison measured
+**0.035 ms** for UE march versus **0.185 ms** for log march (**5.3x cheaper**); the phase sequence
+adds only the seven-ALU UE noise expression and no depth fetches.
+
+**OPTIONAL LOGMARCH FAST PATH.** The main SSR material now compiles
+`SSR_LOGMARCH_OPTIMIZED=1`; `ssr_trace_logmarch.hlsli` defaults it to 0, so omitting the material
+define restores the legacy 16-step algorithm. The optimized permutation keeps all 128 coarse samples,
+the stride/thickness growth, hit test, and visibility calculation. It makes two targeted changes:
+
+1. Because this renderer uses reversed Z, `rayViewZ > sceneViewZ` is exactly equivalent to
+   `rayDeviceZ < sceneDeviceZ`. Coarse misses and bisection decisions are therefore made directly in
+   device Z, avoiding a reciprocal per sampled depth; the accepted hit is still converted to view Z
+   for the authored world-space thickness.
+2. Bisection uses 12 iterations instead of 16. At the source depth resolution the last four steps
+   are far below a pixel and changed no visible structure in the reported scene. Both the main SSR
+   and ocean reflection materials now opt in; the reported strict A/B below covers the main output.
+
+Strict A/B used the reported camera and frozen wind with DLSS and temporal disabled, so projection
+jitter and history could not hide a difference. Against the original raw hit-mask capture, mean
+absolute 8-bit error is **0.0231 / 255**; only **0.719%** of pixels change at all and **0.105%** differ
+by more than 5/255. The two masks are visually indistinguishable. Repeated Release GPU profiles put
+the legacy path at **0.210-0.243 ms** and the conservative 12-step permutation at **0.158-0.162 ms**
+(roughly **23-35% faster** in this view). A more elaborate homogeneous-ray/same-texel solve was
+tested and removed: its extra live state/register pressure erased the saved work.
+
+**OPTIONAL LOGMARCH BATCH4 SCHEDULE.** The coarse loop also has an independent
+`SSR_LOGMARCH_BATCH4` permutation. The include defaults it to 0 and rejects enabling it without
+`SSR_LOGMARCH_OPTIMIZED`; both the main SSR and ocean reflection materials opt in with
+`SSR_LOGMARCH_BATCH4=1`. The permutation advances the exact scalar stride/thickness recurrence
+four times into compact `float4` state, projects the four candidates, then issues all four depth
+reads before consuming the first result. Only the request schedule changes: the earliest valid
+crossing still enters the same 12-step refinement and hit builder. The terminal batch may therefore
+over-fetch at most three depth taps, but it cannot select a later crossing.
+
+The deterministic raw-mask A/B used the reported camera, frozen wind, native resolution, temporal
+off, and DLSS off. Against the sequential optimized permutation, mean absolute 8-bit error is
+**0.000793 / 255** over RGB; **0.0603%** of pixels change at all, **0.00502%** differ by more than
+1/255, and **0.00174%** differ by more than 5/255 (maximum channel delta 12). Two repeated native
+Release GPU profiles measured `Pass_ReflectionSource` at **0.146-0.147 ms** for Batch4 versus
+**0.152-0.154 ms** sequential, a small but repeatable **4-5%** gain in this view. DLSS-quality runs
+were close to the profiler noise floor, so no larger speedup is claimed.
 
 ## 10. Global acceptance checklist
 

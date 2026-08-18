@@ -25,8 +25,28 @@
 #define SSR_TRACE_RECONSTRUCT_POS_VS(uv, depthRaw) ReconstructPosVS(uv, depthRaw)
 #endif
 
+// Opt-in from the host shader's compile defines. The legacy math and 16-step refinement remain
+// selected when this is 0, so the optimization can be A/B tested without changing any setting.
+#ifndef SSR_LOGMARCH_OPTIMIZED
+#define SSR_LOGMARCH_OPTIMIZED 0
+#endif
+
+// Independent experiment layered on the optimized path: issue four coarse depth reads before
+// consuming their results, matching UE's latency-hiding shape. Keep it off unless the material
+// explicitly requests the permutation; it may read up to three taps beyond an early hit.
+#ifndef SSR_LOGMARCH_BATCH4
+#define SSR_LOGMARCH_BATCH4 0
+#endif
+
+#if SSR_LOGMARCH_BATCH4 && !SSR_LOGMARCH_OPTIMIZED
+#error SSR_LOGMARCH_BATCH4 requires SSR_LOGMARCH_OPTIMIZED
+#endif
+
 static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
 static const int ssrRefineSteps = 16; // number of refinement iterations
+#if SSR_LOGMARCH_OPTIMIZED
+static const int ssrOptimizedRefineSteps = 12; // conservative sub-pixel refinement budget
+#endif
 static const int ssrLogMarchSteps = 128; // number of logarithmic steps for the hybrid tracer
 static const float ssrMinStrideVS = 0.05f; // minimum ray step in view space
 static const float ssrStrideGrowth = 1.02f; // multiplicative stride growth per step
@@ -78,6 +98,66 @@ SSRHit BuildSsrHit(float3 pivot, float3 unitPositionFrom, float3 Pv, float2 uv, 
     return outv;
 }
 
+#if SSR_LOGMARCH_BATCH4
+// Batch4 changes only the coarse request schedule. Once its first crossing is known, refinement is
+// the same optimized bisection used by the scalar path and returns the same hit/miss decision.
+SSRHit RefineSsrLogMarchBatchHit(float3 Pv, float3 unitPositionFrom, float3 pivot, float3 origin,
+                                float tPrev, float tCurr, float thick, float2 firstHitUV,
+                                float firstHitDepthRaw, float firstHitViewZ)
+{
+    SSRHit outv;
+    outv.uv = 0.0f.xx;
+    outv.visibility = 0.0f;
+    outv.hit = 0;
+
+    float tLow = tPrev;
+    float tHigh = tCurr;
+    float2 uvHigh = firstHitUV;
+    float depthHighRaw = firstHitDepthRaw;
+    float hitHighViewZ = firstHitViewZ;
+
+    for (int j = 0; j < ssrOptimizedRefineSteps; ++j)
+    {
+        const float tMid = 0.5f * (tLow + tHigh);
+        const float3 midVS = origin + pivot * tMid;
+        const float4 midClip = mul(float4(midVS, 1.0f), SSR_TRACE_PROJ);
+        if (midClip.w <= 0.0f)
+        {
+            tHigh = tMid;
+            continue;
+        }
+
+        const float invMidW = rcp(midClip.w);
+        const float2 midUV = float2(midClip.x, -midClip.y) * (0.5f * invMidW) + 0.5f;
+        if (any(midUV < 0.0f) || any(midUV > 1.0f))
+        {
+            tHigh = tMid;
+            continue;
+        }
+
+        const float midDepthRaw = SSR_TRACE_READ_DEPTH(midUV);
+        if (midClip.z * invMidW < midDepthRaw)
+        {
+            tHigh = tMid;
+            uvHigh = midUV;
+            depthHighRaw = midDepthRaw;
+            hitHighViewZ = midVS.z;
+        }
+        else
+        {
+            tLow = tMid;
+        }
+    }
+
+    const float diffHigh = hitHighViewZ - SSR_TRACE_DEPTH_TO_VIEW_Z(depthHighRaw);
+    if (diffHigh < thick)
+    {
+        return BuildSsrHit(pivot, unitPositionFrom, Pv, uvHigh, depthHighRaw, thick, diffHigh);
+    }
+    return outv;
+}
+#endif
+
 // Hybrid logarithmic screen-space tracing inspired by Mara & McGuire's
 // "Efficient GPU Screen-Space Ray Tracing".
 SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
@@ -105,6 +185,90 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
     float tCurr = step;
     float thick = ssrThicknessVS;
 
+#if SSR_LOGMARCH_BATCH4
+    // The t/stride sequence is depth-independent, so four candidates can be projected and sampled
+    // together. All four reads are deliberately issued before the first result is inspected; that
+    // exposes texture latency but can over-fetch by up to three taps on the terminal batch.
+    for (int i = 0; i < ssrLogMarchSteps; i += 4)
+    {
+        // Build the same recurrence explicitly, but keep only compact float4 state. The first
+        // version carried four arrays of per-candidate state and lost to register pressure.
+        const float step1 = step * ssrStrideGrowth;
+        const float t1 = tCurr + step1;
+        const float step2 = step1 * ssrStrideGrowth;
+        const float t2 = t1 + step2;
+        const float step3 = step2 * ssrStrideGrowth;
+        const float t3 = t2 + step3;
+        const float step4 = step3 * ssrStrideGrowth;
+
+        const float thickGrowth = ssrStrideGrowth * 1.01f;
+        const float thick1 = thick * thickGrowth;
+        const float thick2 = thick1 * thickGrowth;
+        const float thick3 = thick2 * thickGrowth;
+        const float thick4 = thick3 * thickGrowth;
+
+        const float4 tValues = float4(tCurr, t1, t2, t3);
+        const float4 tPrevValues = float4(tPrev, tCurr, t1, t2);
+        const float4 thickValues = float4(thick, thick1, thick2, thick3);
+        float2 sampleUV[4];
+        float4 sampleDeviceZ;
+        float4 depthRaw;
+        bool sampleValid[4];
+
+        bool validPrefix = true;
+
+        [unroll] for (uint k = 0u; k < 4u; ++k)
+        {
+            const float3 sampleVS = origin + pivot * tValues[k];
+            const float4 sampleClip = mul(float4(sampleVS, 1.0f), SSR_TRACE_PROJ);
+
+            bool valid = validPrefix && tValues[k] <= ssrMaxDistanceVS && sampleClip.w > 0.0f;
+            float2 uv = 0.0f.xx;
+            float deviceZ = 0.0f;
+            if (valid)
+            {
+                const float invW = rcp(sampleClip.w);
+                uv = float2(sampleClip.x, -sampleClip.y) * (0.5f * invW) + 0.5f;
+                valid = !any(uv < 0.0f) && !any(uv > 1.0f);
+                deviceZ = sampleClip.z * invW;
+            }
+
+            sampleValid[k] = valid;
+            validPrefix = valid;
+            sampleUV[k] = valid ? uv : 0.0f.xx;
+            sampleDeviceZ[k] = deviceZ;
+        }
+
+        // Separate unrolled loop is intentional: no crossing decision depends on an earlier read,
+        // so DXC/hardware can keep all four texture requests in flight together.
+        [unroll] for (uint readIndex = 0u; readIndex < 4u; ++readIndex)
+        {
+            depthRaw[readIndex] = SSR_TRACE_READ_DEPTH(sampleUV[readIndex]);
+        }
+
+        [unroll] for (uint hitIndex = 0u; hitIndex < 4u; ++hitIndex)
+        {
+            if (sampleValid[hitIndex] && sampleDeviceZ[hitIndex] < depthRaw[hitIndex])
+            {
+                return RefineSsrLogMarchBatchHit(
+                    Pv, unitPositionFrom, pivot, origin,
+                    tPrevValues[hitIndex], tValues[hitIndex], thickValues[hitIndex],
+                    sampleUV[hitIndex], depthRaw[hitIndex],
+                    origin.z + pivot.z * tValues[hitIndex]);
+            }
+        }
+
+        if (!sampleValid[3])
+        {
+            break;
+        }
+
+        step = step4;
+        tPrev = t3;
+        tCurr = t3 + step4;
+        thick = thick4;
+    }
+#else
     for (int i = 0; i < ssrLogMarchSteps && tCurr <= ssrMaxDistanceVS; ++i)
     {
         float3 sampleVS = origin + pivot * tCurr;
@@ -114,8 +278,13 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
             break;
         }
 
+#if SSR_LOGMARCH_OPTIMIZED
+        const float invSampleW = rcp(sampleClip.w);
+        float2 sampleUV = float2(sampleClip.x, -sampleClip.y) * (0.5f * invSampleW) + 0.5f;
+#else
         float2 sampleUV = float2(sampleClip.x / sampleClip.w * 0.5f + 0.5f,
                                  -sampleClip.y / sampleClip.w * 0.5f + 0.5f);
+#endif
 
         if (any(sampleUV < 0.0f) || any(sampleUV > 1.0f))
         {
@@ -123,18 +292,35 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
         }
 
         float depthRaw = SSR_TRACE_READ_DEPTH(sampleUV);
+#if SSR_LOGMARCH_OPTIMIZED
+        // Under reversed Z this is exactly the same crossing test as comparing linear view depth,
+        // but it reuses clip.w and avoids DepthToViewZ's reciprocal on every coarse miss.
+        const bool crossedSurface = sampleClip.z * invSampleW < depthRaw;
+        float depthDiff = 0.0f;
+#else
         float depthLin = SSR_TRACE_DEPTH_TO_VIEW_Z(depthRaw);
         float depthDiff = sampleVS.z - depthLin;
+        const bool crossedSurface = depthDiff > 0.0f;
+#endif
 
-        if (depthDiff > 0.0f)
+        if (crossedSurface)
         {
             float tLow = tPrev;
             float tHigh = tCurr;
             float2 uvHigh = sampleUV;
             float depthHighRaw = depthRaw;
+#if SSR_LOGMARCH_OPTIMIZED
+            float hitHighViewZ = sampleVS.z;
+#else
             float diffHigh = depthDiff;
+#endif
 
-            for (int j = 0; j < ssrRefineSteps; ++j)
+#if SSR_LOGMARCH_OPTIMIZED
+            const int refineSteps = ssrOptimizedRefineSteps;
+#else
+            const int refineSteps = ssrRefineSteps;
+#endif
+            for (int j = 0; j < refineSteps; ++j)
             {
                 float tMid = 0.5f * (tLow + tHigh);
                 float3 midVS = origin + pivot * tMid;
@@ -145,8 +331,13 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
                     continue;
                 }
 
+#if SSR_LOGMARCH_OPTIMIZED
+                const float invMidW = rcp(midClip.w);
+                float2 midUV = float2(midClip.x, -midClip.y) * (0.5f * invMidW) + 0.5f;
+#else
                 float2 midUV = float2(midClip.x / midClip.w * 0.5f + 0.5f,
                                       -midClip.y / midClip.w * 0.5f + 0.5f);
+#endif
 
                 if (any(midUV < 0.0f) || any(midUV > 1.0f))
                 {
@@ -155,15 +346,24 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
                 }
 
                 float midDepthRaw = SSR_TRACE_READ_DEPTH(midUV);
+#if SSR_LOGMARCH_OPTIMIZED
+                const bool midCrossedSurface = midClip.z * invMidW < midDepthRaw;
+#else
                 float midDepthLin = SSR_TRACE_DEPTH_TO_VIEW_Z(midDepthRaw);
                 float diffMid = midVS.z - midDepthLin;
+                const bool midCrossedSurface = diffMid > 0.0f;
+#endif
 
-                if (diffMid > 0.0f)
+                if (midCrossedSurface)
                 {
                     tHigh = tMid;
                     uvHigh = midUV;
                     depthHighRaw = midDepthRaw;
+#if SSR_LOGMARCH_OPTIMIZED
+                    hitHighViewZ = midVS.z;
+#else
                     diffHigh = diffMid;
+#endif
                 }
                 else
                 {
@@ -171,6 +371,9 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
                 }
             }
 
+#if SSR_LOGMARCH_OPTIMIZED
+            const float diffHigh = hitHighViewZ - SSR_TRACE_DEPTH_TO_VIEW_Z(depthHighRaw);
+#endif
             if (diffHigh < thick)
             {
                 return BuildSsrHit(pivot, unitPositionFrom, Pv, uvHigh, depthHighRaw, thick, diffHigh);
@@ -184,6 +387,7 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
         thick *= ssrStrideGrowth * 1.01f;
         tCurr += step;
     }
+#endif
 
     return outv;
 }

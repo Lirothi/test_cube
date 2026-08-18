@@ -20,37 +20,44 @@
 //   * and it reads the FURTHEST pyramid (`EHZBType::FurthestHZB`, ScreenSpaceRayTracing.cpp) --
 //     the same one our GTAO already builds. The closest chain is not needed here at all.
 //
-// STATUS: NOT THE DEFAULT, AND THREE HYPOTHESES FOR WHY HAVE BEEN KILLED BY MEASUREMENT:
+// P13 STATUS: THE SLANTED-STREAK DEFECT IS FIXED. The ray geometry was correct; the sampling
+// phase was not. This port fed Hash12(pixelCoord * invScreenSize), while UE feed their noise
+// function integer pixel coordinates. Adjacent pixels therefore received almost the same phase,
+// and 16 sparse samples along long grazing rays lined up into the coherent diagonal comb visible
+// in the raw hit mask. Hashing pixelCoord directly decorrelates the miss/error field spatially:
+// the comb disappears, vertical reflected trunks stay vertical, and the existing blur/temporal
+// resolve can filter the remaining fine-grained noise. This changes no depth taps and measured
+// 0.035 ms versus the log march's 0.185 ms on the P13 Release capture.
+//
+// UE also changes that phase every frame: `InterleavedGradientNoise(SvPosition.xy,
+// View.StateFrameIndexMod8)`. A spatial-only hash leaves the same 16 holes in every frame, so the
+// temporal pass cannot recover the missing samples and merely preserves a pixel-torn lattice.
+// The exact modulo-8 UE sequence below lets eight temporal frames cover complementary positions
+// along the ray, again without adding a single depth tap per frame.
+//
+// Three earlier hypotheses were killed by measurement and remain recorded so they are not retried:
 //   1. self-intersection at the origin -> starting the ray offset along the normal (what the log
 //      march does) changed agreement by 0.2 points. Not it.
 //   2. steps too coarse -> 16 to 32 bought 3 points (68->71). Wrong slope for a parameter fix.
 //   3. the ray stretching past its geometric length (bExtendRayToScreenBorder) -> clamping the
 //      clip factor to 1 made it WORSE, 68 -> 39. The stretch is load-bearing, not the bug.
-// The buffer itself shows the shape of the failure: hits land on the PALMS (short ray, fine step,
-// so it finds a neighbouring frond) while the mirror floor gets a ray stretched across the frame
-// with 16 samples on it -- the diagonal streaks. Whatever is missing is structural and has not been
-// found; do not resume this by turning knobs.
 //
-// ORIGINAL NOTE -- measured, not guessed. Scored against the log march
+// HISTORICAL NOTE -- measured, not guessed. Scored against the log march
 // as the reference (hit-mask IoU on four grazing viewpoints of ssr_bronze_palms): **68-72% at UE's
 // 16 steps, 71-75% at 32**, where the bar was 90%. The mask comes out torn, and ~20% of its hits
 // are ones the log march does not make, including hits ABOVE the horizon -- on the palms
 // themselves, which read as a tree reflecting itself.
 //
-// The cause is NOT in the transcription. It is that this tracer is HALF A PAIR: in
-// SSRTReflections.usf every hit goes straight into `ReprojectHit` (velocity-reprojected into the
-// PREVIOUS frame) and the whole output is flagged `SSR_OUTPUT_FOR_DENOISER`. Unreal never show this
-// buffer; a torn mask is its normal state and the second half is what makes it whole. Our log
-// march is self-contained and its mask is dense, so comparing the two raw is comparing a half to a
-// whole. Finishing this means the SSR temporal resolve (reprojection + clamp, the shape
-// gtao_temporal_cs.hlsl already has), not more steps -- 16->32 bought 3 points of agreement, which
-// is the wrong slope for a parameter fix.
+// This tracer is still HALF A PAIR in another sense: in SSRTReflections.usf every hit goes through
+// `ReprojectHit` and the output is filtered. The existing ssr_temporal_cs.hlsl remains required for
+// stability under projection jitter. Temporal filtering hid some of the old comb, but could not
+// make a spatially correlated sampling pattern geometrically correct; the phase fix belongs here.
 //
 // Requires from the host shader: SSRHit / BuildSsrHit / the ssr* constants (ssr_trace_logmarch),
 // `HzbFurthest`, `gSmpPoint`, `proj`, `hzbSize`, `hzbInvSize`.
 
-// UE's shipping values. NumSteps is their highest single-ray quality; SlopeCompareToleranceScale is
-// 4 for SSR (2 for SSGI). The mip creep per two samples is `(8/NumSteps) * Roughness`.
+// Current port values. Sixteen steps is UE quality 2's single-ray count; their quality 4 mirror
+// path caps the combined ray budget at 24. SlopeCompareToleranceScale is 4 for SSR (2 for SSGI).
 static const uint  ssrUeNumSteps = 16u;
 static const float ssrUeStartMipLevel = 0.0f;
 static const float ssrUeSlopeCompareToleranceScale = 4.0f;
@@ -65,7 +72,17 @@ float SsrUeStepFactorToClipAtScreenEdge(float2 rayStartScreen, float2 rayStepScr
     return min(s.x, s.y) / rayStepScreenInvFactor;
 }
 
-SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, float2 pixelCoord)
+// RandomInterleavedGradientNoise.ush verbatim. The integer pixel coordinate removes spatial
+// correlation; FrameId changes the fixed-step phase over UE's eight-frame temporal cycle.
+float SsrUeInterleavedGradientNoise(float2 uv, float frameId)
+{
+    uv += frameId * (float2(47.0f, 17.0f) * 0.695f);
+    const float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
+    return frac(magic.z * frac(dot(uv, magic.xy)));
+}
+
+SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, float2 pixelCoord,
+                      uint frameIndexMod8)
 {
     SSRHit outv;
     outv.uv = startUv;
@@ -129,9 +146,10 @@ SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, 
     compareTolerance *= step;
     rayStepUVz *= step;
 
-    // Dither the phase so the fixed step pattern does not band; UE take this from a blue-noise
-    // table, we reuse the log march's hash so the two techniques share the same noise character.
-    const float stepOffset = Hash12(pixelCoord * SSR_TRACE_INV_SCREEN_SIZE) - 0.5f;
+    // Dither the phase so the fixed step pattern does not band. UE feeds integer PIXEL coordinates
+    // and StateFrameIndexMod8 to this noise. Normalising the coordinates by screen size correlates
+    // adjacent pixels; omitting the frame index repeats the same sparse holes forever.
+    const float stepOffset = SsrUeInterleavedGradientNoise(pixelCoord, (float)frameIndexMod8) - 0.5f;
     const float3 rayUVz = rayStartUVz + rayStepUVz * stepOffset;
 
     // Roughness would creep the mip upward by (8/NumSteps)*Roughness every two samples. The SSR
