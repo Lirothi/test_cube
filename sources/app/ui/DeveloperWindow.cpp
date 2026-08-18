@@ -97,6 +97,14 @@ namespace
         "UE SSR (HZB march)",
     };
 
+    constexpr const char* kUeSsrQualityLabels[] = {
+        "Custom",
+        "UE Low (8x1)",
+        "UE Medium (16x1)",
+        "UE High (8x4)",
+        "UE Epic (12x12)",
+    };
+
     const char* DlssModeLabel(sl::DLSSMode mode)
     {
         for (const DlssModeOption& option : kDlssModes)
@@ -447,14 +455,98 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     settings.ssrTechnique = static_cast<SsrTechnique>(ssrTechnique);
                 }
-                DevHelp("How the reflection ray searches for its hit. Log March takes a fixed "
-                        "number of growing steps against flat depth, so a thin object that falls "
-                        "between two steps is missed. HiZ walks the depth pyramid instead: coarse "
-                        "tiles over empty space, fine tiles once something is in the way -- fewer "
-                        "taps AND no skipped surfaces. Perf: HiZ is cheaper in open views and more "
-                        "variable in cluttered ones; it also makes Pass_Hzb build a second pyramid "
-                        "(the AO section builds the first), which nothing else needs. "
-                        "Only affects the SSR reflection source, not RT.");
+                DevHelp("How the reflection ray searches for its hit. Log March takes 128 growing "
+                        "view-space steps against full depth. UE SSR follows SSRTReflections.usf: "
+                        "8/12/16 fixed screen-space steps issued in Batch4 against the FURTHEST HZB "
+                        "at a mostly fixed mip, with roughness-aware High/Epic ray counts. It is "
+                        "usually cheaper but deliberately approximate. Only affects SSR, not RT.");
+
+                if (settings.ssrTechnique == SsrTechnique::UeHzb)
+                {
+                    UeSsrSettings& ue = settings.ssrUe;
+                    int preset = static_cast<int>(ue.preset);
+                    if (preset < 0 || preset >= static_cast<int>(UeSsrQualityPreset::Count))
+                    {
+                        preset = 0;
+                    }
+                    if (ImGui::Combo("UE SSR quality", &preset, kUeSsrQualityLabels,
+                                     static_cast<int>(UeSsrQualityPreset::Count)))
+                    {
+                        ApplyUeSsrQualityPreset(ue, static_cast<UeSsrQualityPreset>(preset));
+                    }
+                    DevHelp("The actual SSRTReflections.usf presets. High/Epic use 4/12 GGX rays "
+                            "only at roughness >= 0.1; smoother surfaces collapse the whole budget "
+                            "to one 24-step mirror ray, exactly as UE do.");
+
+                    if (ImGui::TreeNode("UE SSR advanced"))
+                    {
+                        int steps = static_cast<int>(ue.numSteps);
+                        if (ImGui::SliderInt("UE steps / ray", &steps, 4, 64))
+                        {
+                            ue.numSteps = static_cast<uint32_t>(std::min(64, (steps + 3) & ~3));
+                            ue.preset = UeSsrQualityPreset::Custom;
+                        }
+                        DevHelp("Rounded up to a multiple of four because UE issue depth requests "
+                                "in Batch4. More steps fill thin/far silhouettes and narrow the "
+                                "per-step depth interval; cost is linear per ray.");
+
+                        int rays = static_cast<int>(ue.numRays);
+                        if (ImGui::SliderInt("UE rays / pixel", &rays, 1, 12))
+                        {
+                            ue.numRays = static_cast<uint32_t>(rays);
+                            ue.preset = UeSsrQualityPreset::Custom;
+                        }
+                        DevHelp("Used only with glossy rays. Cost is rays x steps; 12x12 is UE Epic "
+                                "and is intentionally expensive on rough reflectors.");
+
+                        if (ImGui::Checkbox("UE roughness GGX rays", &ue.glossyRays))
+                        {
+                            ue.preset = UeSsrQualityPreset::Custom;
+                        }
+                        DevHelp("OFF traces one geometric mirror ray. ON importance-samples the "
+                                "reflector roughness when Rays > 1; roughness < 0.1 still collapses "
+                                "to UE's one 24-step mirror ray.");
+
+                        ImGui::Checkbox("UE use surface roughness", &ue.useSurfaceRoughness);
+                        DevHelp("Normally reads packed roughness from GB0, matching UE. Disable to "
+                                "force one value below -- useful for proving which quality branch "
+                                "is active without editing a material.");
+                        ImGui::BeginDisabled(ue.useSurfaceRoughness);
+                        ImGui::SliderFloat("UE roughness override", &ue.roughnessOverride,
+                                           0.0f, 1.0f, "%.2f");
+                        ImGui::EndDisabled();
+
+                        ImGui::SliderFloat("UE start mip", &ue.startMipLevel, 0.0f, 4.0f, "%.2f");
+                        DevHelp("UE hard-code 1. Mip 0 is tighter and preserves thin shapes but "
+                                "finds fewer conservative candidates; higher mips reach more but "
+                                "broaden the candidate footprint.");
+
+                        ImGui::SliderFloat("UE depth tolerance", &ue.slopeCompareToleranceScale,
+                                           0.25f, 8.0f, "%.2f");
+                        DevHelp("UE hard-code 4. Lower values reduce stretched masks and false "
+                                "thickness, at the cost of more misses. Extra steps are the safer "
+                                "way to lower this.");
+
+                        int retries = static_cast<int>(ue.confirmRetries);
+                        if (ImGui::SliderInt("UE confirm retries", &retries, 0, 8))
+                        {
+                            ue.confirmRetries = static_cast<uint32_t>(retries);
+                        }
+                        DevHelp("0 is stock UE: accept the first coarse HZB hit. Above zero, confirm "
+                                "against full depth and continue after this many rejected coarse "
+                                "candidates instead of turning the first rejection into a hole.");
+
+                        int refine = static_cast<int>(ue.refineSteps);
+                        if (ImGui::SliderInt("UE full-depth refine", &refine, 0, 8))
+                        {
+                            ue.refineSteps = static_cast<uint32_t>(refine);
+                        }
+                        DevHelp("Subdivides each coarse candidate interval against full-resolution "
+                                "depth. Tightens balls/leaves and recovers a real crossing hidden "
+                                "inside a mip1 tile. Paid only when a coarse candidate exists.");
+                        ImGui::TreePop();
+                    }
+                }
 
                 ImGui::Checkbox("SSR temporal resolve", &settings.ssrTemporal);
                 DevHelp("Accumulates the screen-space reflection over time instead of showing each "
@@ -1305,7 +1397,7 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // Mirrors SceneRenderer::PickDebugTexTarget — keep the order identical.
                 static const char* kDebugTexLabels[] = {
                     "Cascade shadow atlas", "GTAO raw", "GTAO denoised", "GTAO temporal",
-                    "GTAO upsampled", "HZB furthest (AO)", "Scene depth", "HZB closest (SSR)",
+                    "GTAO upsampled", "HZB furthest (AO + UE SSR)", "Scene depth", "HZB closest (debug/P9)",
                     "SSR hit mask (alpha)" };
 
                 ImGui::SeparatorText("Fullscreen debug view");

@@ -134,10 +134,14 @@ private:
     void Pass_SsrTemporal(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Hzb(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
 
-    // P6C step 6: fills the HiZ tracer's half of the SSR constants. ONE definition, called by the
-    // opaque and the glass dispatch, so the two can never disagree about whether the closest
+    // P6C step 6: fills the HZB tracer's half of the SSR constants. ONE definition, called by the
+    // opaque and the glass dispatch, so the two can never disagree about whether the furthest
     // pyramid exists this frame.
     void FillSsrHzbConstants(Renderer* r, SsrPassConstants& c) const;
+    void FillSsrUeConstants(SsrPassConstants& c, bool useRoughnessTexture) const;
+    // UE SSRT hit-color path: supplies the current->previous clip transform and whether the
+    // previous Deferred.scene is safe to sample. Shared by opaque and glass SSR.
+    void FillSsrReprojectionConstants(const Camera& camera, SsrPassConstants& c) const;
 
     // The texture inspector's preview, resampled through our own shader so it can be brightened.
     void Pass_DebugPreview(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
@@ -249,6 +253,14 @@ private:
     uint32_t ssrHistoryFrames_ = 0u;
     uint32_t ssrHistoryWidth_ = 0u;
     uint32_t ssrHistoryHeight_ = 0u;
+    // UE samples the previous temporal SceneColor at the reprojected HIT, independently of the
+    // later SSR temporal resolve. Track that history even while the temporal reflection filter is
+    // disabled, because Deferred.scene is produced every frame.
+    bool ssrSceneColorHistoryValid_ = false;
+    uint32_t ssrSceneColorHistoryFrames_ = 0u;
+    uint32_t ssrSceneColorHistoryWidth_ = 0u;
+    uint32_t ssrSceneColorHistoryHeight_ = 0u;
+    uint64_t ssrSceneColorCameraRevision_ = 0u;
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)
     struct RtBindlessObjectCache
     {

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "app/camera/Camera.h"
+#include "app/App.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
@@ -2661,7 +2662,15 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
             NormalizeLevelPath(std::string(levelManager.GetActiveLevelSourcePath()));
         if (!activeLevelPath.empty() && document_.LoadFromLevelFile(activeLevelPath))
         {
-            if (RestoreLevelCameraState(renderer, scene, document_.LevelPath()))
+            // App applies --cam-pos/--cam-rot after level loading. A saved editor pose must not
+            // silently overwrite that explicit headless-test camera during the editor's first
+            // initialization. Mark it as observed either way so the temporary CLI pose is not
+            // autosaved back into editor_state.json.
+            if (!g_camOverride && RestoreLevelCameraState(renderer, scene, document_.LevelPath()))
+            {
+                markCameraStateSaved(document_.LevelPath(), CaptureLevelCameraState(scene.CameraRef()));
+            }
+            else if (g_camOverride)
             {
                 markCameraStateSaved(document_.LevelPath(), CaptureLevelCameraState(scene.CameraRef()));
             }

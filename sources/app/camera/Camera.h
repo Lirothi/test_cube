@@ -1,5 +1,6 @@
 #pragma once
 #include <DirectXMath.h>
+#include <cstdint>
 #include "core/math/Math.h"
 #include "rendering/RenderLayers.h"
 #include "app/scene/SceneView.h"
@@ -79,6 +80,10 @@ public:
     const mat4& GetViewProjMatrixNoJitter() const { return nonJitteredViewProj_; }
     const mat4& GetPrevViewProjMatrixNoJitter() const { return prevNonJitteredViewProj_; }
     void ResetHistory();
+    // Changes whenever an explicit camera cut invalidates all previous-frame reprojection data.
+    // Temporal consumers compare this revision instead of trying to infer a cut from a large
+    // camera delta (a fast, continuous move is still valid history).
+    uint64_t GetHistoryRevision() const { return historyRevision_; }
 
     const float3& GetDirection() const { return dir_; }
 
@@ -136,6 +141,7 @@ private:
     float moveSpeedMultiplier_ = 1.0f;
     uint32_t renderLayerMask_ = kRenderLayerAll;
     bool hasPrevViewProj_ = false;
+    uint64_t historyRevision_ = 0u;
 
     void ClampPitch() {
         const float limit = XM_PIDIV2 - 0.01f;

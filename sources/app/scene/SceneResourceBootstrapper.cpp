@@ -112,6 +112,7 @@ void SceneSsrCBHandles::Populate(Material* material)
     proj = material->ComputeCB0FieldHandle("proj");
     invView = material->ComputeCB0FieldHandle("invView");
     invProj = material->ComputeCB0FieldHandle("invProj");
+    clipToPrevClip = material->ComputeCB0FieldHandle("clipToPrevClip");
     depthA = material->ComputeCB0FieldHandle("depthA");
     depthB = material->ComputeCB0FieldHandle("depthB");
     zNear = material->ComputeCB0FieldHandle("zNear");
@@ -124,6 +125,16 @@ void SceneSsrCBHandles::Populate(Material* material)
     frameIndexMod8 = material->ComputeCB0FieldHandle("frameIndexMod8");
     hzbSize = material->ComputeCB0FieldHandle("hzbSize");
     hzbInvSize = material->ComputeCB0FieldHandle("hzbInvSize");
+    sceneColorHistoryValid = material->ComputeCB0FieldHandle("sceneColorHistoryValid");
+    ueNumSteps = material->ComputeCB0FieldHandle("ueNumSteps");
+    ueNumRays = material->ComputeCB0FieldHandle("ueNumRays");
+    ueGlossyRays = material->ComputeCB0FieldHandle("ueGlossyRays");
+    ueStartMipLevel = material->ComputeCB0FieldHandle("ueStartMipLevel");
+    ueSlopeCompareToleranceScale = material->ComputeCB0FieldHandle("ueSlopeCompareToleranceScale");
+    ueConfirmRetries = material->ComputeCB0FieldHandle("ueConfirmRetries");
+    ueRefineSteps = material->ComputeCB0FieldHandle("ueRefineSteps");
+    ueUseRoughnessTexture = material->ComputeCB0FieldHandle("ueUseRoughnessTexture");
+    ueRoughnessOverride = material->ComputeCB0FieldHandle("ueRoughnessOverride");
 }
 
 void SceneBlurCBHandles::Populate(Material* material)
@@ -1016,6 +1027,7 @@ void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, 
     matSSR_->UpdateCBField(handles.proj, data.proj, dest);
     matSSR_->UpdateCBField(handles.invView, data.invView, dest);
     matSSR_->UpdateCBField(handles.invProj, data.invProj, dest);
+    matSSR_->UpdateCBField(handles.clipToPrevClip, data.clipToPrevClip, dest);
     matSSR_->UpdateCBField(handles.depthA, data.depthA, dest);
     matSSR_->UpdateCBField(handles.depthB, data.depthB, dest);
     matSSR_->UpdateCBField(handles.zNear, data.zNear, dest);
@@ -1028,6 +1040,16 @@ void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, 
     matSSR_->UpdateCBField(handles.frameIndexMod8, data.frameIndexMod8, dest);
     matSSR_->UpdateCBField(handles.hzbSize, data.hzbSize, dest);
     matSSR_->UpdateCBField(handles.hzbInvSize, data.hzbInvSize, dest);
+    matSSR_->UpdateCBField(handles.sceneColorHistoryValid, data.sceneColorHistoryValid, dest);
+    matSSR_->UpdateCBField(handles.ueNumSteps, data.ueNumSteps, dest);
+    matSSR_->UpdateCBField(handles.ueNumRays, data.ueNumRays, dest);
+    matSSR_->UpdateCBField(handles.ueGlossyRays, data.ueGlossyRays, dest);
+    matSSR_->UpdateCBField(handles.ueStartMipLevel, data.ueStartMipLevel, dest);
+    matSSR_->UpdateCBField(handles.ueSlopeCompareToleranceScale, data.ueSlopeCompareToleranceScale, dest);
+    matSSR_->UpdateCBField(handles.ueConfirmRetries, data.ueConfirmRetries, dest);
+    matSSR_->UpdateCBField(handles.ueRefineSteps, data.ueRefineSteps, dest);
+    matSSR_->UpdateCBField(handles.ueUseRoughnessTexture, data.ueUseRoughnessTexture, dest);
+    matSSR_->UpdateCBField(handles.ueRoughnessOverride, data.ueRoughnessOverride, dest);
 }
 
 void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data, uint8_t* dest) const

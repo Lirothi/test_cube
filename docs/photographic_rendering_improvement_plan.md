@@ -2114,6 +2114,45 @@ second tap still lands in `reflection`, so compose is untouched. History validit
 the reflection SIZE, so a resize or a level switch seeds from this frame instead of reading a
 stale-sized texture. Knobs: `ssr.temporal`, `ssr.temporalBlend`, `ssr.temporalClampExpand`.
 
+**UE HIT REPROJECTION WAS A SEPARATE MISSING HALF, NOT THE FILTER ABOVE.** The live UE path in
+`SSRTReflections.usf` does not shade a hit from current SceneColor. It calls
+`SSRTRayCast.ush::ReprojectHit`, first projecting the complete current `HitUVz` through
+`View.ClipToPrevClip`, then overriding that camera result with the velocity sampled AT THE HIT, and
+finally samples the previous temporal SceneColor. It also takes the minimum of the current- and
+previous-screen vignettes. `ScreenSpaceRayTracing.cpp` binds current SceneColor plus dummy velocity
+only when no previous temporal history exists.
+
+That path is now present in `ssr_cs.hlsl` for the UE technique only:
+
+* t5 is the previous frame set's full-HDR `Deferred.scene`; t6 is the current RG16F G-buffer
+  velocity (`currUv - prevUv`). Opaque and glass SSR declare and bind both resources.
+* `clipToPrevClip = invProj * invView * prevView * prevProj` is the camera fallback. Our velocity is
+  not UE-encoded and has no validity bit, so non-zero velocity subtracts directly from hit UV and
+  cleared zero uses the matrix result.
+* The ray result now retains device Z, so reprojection consumes the same full `HitUVz` UE use.
+  Previous SceneColor is bilinear-sampled, negative/NaN HDR is forced to black in the same shape as
+  UE's `SampleScreenColor`, and the two-frame vignette multiplies opacity.
+* SceneColor history is independent of `ssr.temporal`: `Deferred.scene` exists every frame. First
+  frame, resize, level reset, and an explicit `Camera::ResetHistory()` cut seed from current
+  `LightTarget`; a camera history revision prevents a stale previous image after teleports.
+
+The new high oblique report also exposed two older source deviations: the port had HZB start mip 0
+instead of UE's 1 and a generic 100-unit ray length instead of UE's `WorldTMax = SceneDepth`. Both
+are restored. Mirror-smooth surfaces use UE quality 4's collapsed 24-step budget rather than
+quality 2's 16. Because our HZB mip 0 already reduces a 2x2 block and there is no later off-screen
+fallback, the accepted coarse candidate gets one full-resolution depth confirmation; this rejects
+the most obvious foreign-depth curtains for one extra tap, without changing the 24 coarse steps.
+
+RT at the exact reported camera (`0.58,12.85,18.30`, quaternion
+`0.0142,0.9737,-0.2182,0.0634`) proves that the long reflected projection on this view is real --
+the RT image extends just as far -- while the remaining softness/torn detail is the fixed-step
+screen-space technique failing to resolve thin alpha-tested foliage, not reprojection inventing the
+length. Final measured GPU cost at DLSS Quality render scale 0.58: `Pass_ReflectionSource` 0.024 ms,
+`Pass_Reflection.Temporal` 0.017 ms. The exact camera gate also found and fixed a harness bug:
+`Release_Editor` restored its
+saved editor camera after the CLI override, so `--cam-pos/--cam-rot` now explicitly win and are not
+autosaved back to editor state.
+
 **Verify:** mip-chain correctness against a CPU reduction of the same depth buffer (an invariant with
 a known answer, not a look test); GTAO before/after on the roughness sweep and wind_test; SSR
 before/after; GPU cost of the build pass on its own.
@@ -2412,6 +2451,43 @@ ran the shader successfully. The current Release GPU profile measures `Pass_Refl
 **0.026 ms** and `Pass_Reflection.Temporal` at **0.013 ms**. The earlier same-view comparison measured
 **0.035 ms** for UE march versus **0.185 ms** for log march (**5.3x cheaper**); the phase sequence
 adds only the seven-ALU UE noise expression and no depth fetches.
+
+**UE QUALITY MODES AND ROBUST HIT CONFIRMATION (2026-08-18).** The port now exposes the actual
+`r.SSR.Quality` layouts from `SSRTReflections.usf`, rather than a single approximate quality:
+
+| preset | steps per ray | rays per pixel | rough reflection sampling |
+|---|---:|---:|---|
+| Low | 8 | 1 | no |
+| Medium | 16 | 1 | no |
+| High | 8 | 4 | visible-normal GGX |
+| Epic | 12 | 12 | visible-normal GGX |
+
+High and Epic read material roughness from GBuffer0 and use UE's PCG/Hammersley visible-GGX
+sampling. As in UE, surfaces below roughness 0.1 collapse the whole quality budget into one mirror
+ray, capped at 24 steps. This avoids paying for identical rays on the polished ocean while retaining
+the real multi-ray path for rough reflectors. Glass currently uses the explicit roughness override
+because its reflection prepass does not carry GBuffer0 roughness.
+
+The developer window exposes the preset plus Custom controls for steps, rays, GGX sampling, surface
+roughness/override, start mip, depth tolerance, confirmation retries, and full-depth refinement. The
+same values are scriptable as `ssr.ueQuality`, `ssr.ueSteps`, `ssr.ueRays`, `ssr.ueGlossy`,
+`ssr.ueUseSurfaceRoughness`, `ssr.ueRoughnessOverride`, `ssr.ueStartMip`, `ssr.ueTolerance`,
+`ssr.ueConfirmRetries`, and `ssr.ueRefineSteps`.
+
+Stock UE accepts the first coarse HZB overlap, which is fast but can stretch thin foliage and spheres
+along the ray. Setting confirmation retries to zero reproduces that rule. The default robust extension
+(`confirmRetries=4`, `refineSteps=4`) checks a coarse candidate against full-resolution depth,
+subdivides its local interval, and continues marching when the candidate is rejected instead of
+turning an early false overlap into either an elongated hit or a miss. Start mip 1 and depth tolerance
+scale 4 remain UE's defaults.
+
+The second reported view was reproduced exactly at camera `-11.32, 0.82, -35.25`, quaternion
+`-0.0183, -0.1453, -0.0027, 0.9892`, with frozen wind. The robust path tightens the long sphere and
+foliage streaks while retaining more distant hits than the log march; it cannot recover geometry that
+never exists in screen space. At DLSS render scale 0.58, Epic on the polished ocean measured
+`Pass_ReflectionSource` at **0.185 ms** and temporal resolve at **0.015 ms**. Forcing roughness 0.35
+to exercise the full 12-ray Epic path measured **0.385 ms**; that is a deliberately expensive quality
+mode, not the normal smooth-ocean cost.
 
 **OPTIONAL LOGMARCH FAST PATH.** The main SSR material now compiles
 `SSR_LOGMARCH_OPTIMIZED=1`; `ssr_trace_logmarch.hlsli` defaults it to 0, so omitting the material

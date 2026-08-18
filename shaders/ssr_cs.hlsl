@@ -1,4 +1,4 @@
-#define SSR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define SSR_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget            (HDR color sampled at the marched hit)
 // t1: GB1 (reflector normal.rgb, shading model ID in A; SSR currently consumes RGB only)
 // t2: Depth  (R32F) marched against in screen space (the OPAQUE scene depth)
@@ -8,6 +8,9 @@
 // t4: Hzb (P6C) -- the FURTHEST depth pyramid (min device Z), the same one GTAO reads. That is
 //     what Unreal's own SSR binds (EHZBType::FurthestHZB); it is used as cheap pre-filtered depth,
 //     not as a hierarchy. Built from the same opaque depth as t2.
+// t5: previous full-HDR SceneColor (UE's temporal SceneColor input)
+// t6: current G-buffer motion, currUv - prevUv
+// t7: GB0 packed roughness/metallic; UE High/Epic use roughness for their GGX ray directions
 // u0: SSR output (premultiplied RGBA)
 // s0: LinearClamp, s1: PointClamp
 
@@ -19,6 +22,9 @@ Texture2D   GB1         : register(t1);
 Texture2D   DepthT      : register(t2);
 Texture2D   OriginDepthT : register(t3);
 Texture2D   HzbFurthest : register(t4);
+Texture2D   PrevSceneColor : register(t5);
+Texture2D   VelocityT    : register(t6);
+Texture2D   GB0          : register(t7);
 RWTexture2D<float4> SsrOut : register(u0);
 SamplerState gSmp       : register(s0);
 SamplerState gSmpPoint  : register(s1);
@@ -26,6 +32,7 @@ SamplerState gSmpPoint  : register(s1);
 cbuffer PerFrame : register(b0)
 {
     float4x4 view, proj, invView, invProj;
+    float4x4 clipToPrevClip;
     float    depthA, depthB, zNear, zFar;
     float2   screenSize;
     float2   invScreenSize;
@@ -36,6 +43,16 @@ cbuffer PerFrame : register(b0)
     uint     frameIndexMod8;
     float2   hzbSize;     // pyramid mip 0, in texels (HALF the render resolution)
     float2   hzbInvSize;
+    uint     sceneColorHistoryValid;
+    uint     ueNumSteps;
+    uint     ueNumRays;
+    uint     ueGlossyRays;
+    float    ueStartMipLevel;
+    float    ueSlopeCompareToleranceScale;
+    uint     ueConfirmRetries;
+    uint     ueRefineSteps;
+    uint     ueUseRoughnessTexture;
+    float    ueRoughnessOverride;
 }
 
 static const float kEps = 1e-6f;
@@ -54,6 +71,71 @@ float3 ReconstructPosVS(float2 uv, float d){
 float  ReadDepth(float2 uv){ return DepthT.SampleLevel(gSmpPoint, uv, 0).r; }
 #include "ssr_trace_logmarch.hlsli"
 #include "ssr_trace_ue.hlsli" // Unreal's own SSR ray cast; reuses SSRHit / BuildSsrHit above
+
+// Port of SSRT/SSRTRayCast.ush::ComputeHitVignetteFromScreenPos. It rejects both a hit that
+// leaves the current view and its reprojected location leaving the previous view.
+float ComputeUeHitVignette(float2 screenPos)
+{
+    float2 vignette = saturate(abs(screenPos) * 5.0f - 4.0f);
+    return saturate(1.0f - dot(vignette, vignette));
+}
+
+// Port of SSRT/SSRTRayCast.ush::ReprojectHit adapted to this renderer's plain RG16F velocity.
+// UE's encoded velocity has an explicit validity sentinel; ours is cleared to zero, so zero uses
+// the camera transform. A nonzero value is already currUv-prevUv and can be subtracted directly.
+void ReprojectUeHit(float3 hitUVz, out float2 prevUV, out float vignette)
+{
+    const float2 thisScreen = UVtoNDC(hitUVz.xy);
+    const float4 thisClip = float4(thisScreen, hitUVz.z, 1.0f);
+    const float4 prevClip = mul(thisClip, clipToPrevClip);
+    const bool validPrevClip = abs(prevClip.w) > kEps;
+    float2 prevScreen = validPrevClip ? prevClip.xy / prevClip.w : float2(2.0f, 2.0f);
+    prevUV = NDCToUV(prevScreen);
+
+    const float2 velocity = VelocityT.SampleLevel(gSmpPoint, hitUVz.xy, 0.0f).xy;
+    if (any(abs(velocity) > 1.0e-7f))
+    {
+        prevUV = hitUVz.xy - velocity;
+        prevScreen = UVtoNDC(prevUV);
+    }
+
+    vignette = min(ComputeUeHitVignette(thisScreen), ComputeUeHitVignette(prevScreen));
+}
+
+float SsrUeLuminance(float3 c)
+{
+    return dot(c, float3(0.2126f, 0.7152f, 0.0722f));
+}
+
+float4 ResolveUeHit(SSRHit ssr, bool compressForMultiRay)
+{
+    float vis = ssr.visibility;
+    float3 c;
+    if (sceneColorHistoryValid != 0u)
+    {
+        float2 prevUV;
+        float hitVignette;
+        ReprojectUeHit(float3(ssr.uv, ssr.deviceZ), prevUV, hitVignette);
+        // Mirrors UE SampleScreenColor: bilinear history sample, NaNs/negative HDR -> black.
+        c = PrevSceneColor.SampleLevel(gSmp, prevUV, 0.0f).rgb;
+        c = -min(-c, 0.0f);
+        vis *= hitVignette;
+    }
+    else
+    {
+        uint renderWidth, renderHeight;
+        LightTarget.GetDimensions(renderWidth, renderHeight);
+        int2 ip = int2(ssr.uv * float2(renderWidth, renderHeight) + 0.5f);
+        ip = clamp(ip, int2(0, 0), int2(int(renderWidth) - 1, int(renderHeight) - 1));
+        c = LightTarget.Load(int3(ip, 0)).rgb;
+    }
+
+    if (compressForMultiRay)
+    {
+        c *= rcp(1.0f + SsrUeLuminance(c));
+    }
+    return float4(c * vis, vis);
+}
 
 [numthreads(8, 8, 1)]
 [RootSignature(SSR_CS_RS)]
@@ -86,24 +168,75 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float3 Pv   = ReconstructPosVS(uv, depth);
         float3 Nv   = normalize(mul(N_ws, (float3x3)view));
 
-        SSRHit ssr;
         if (tech == SSR_TECHNIQUE_UE && useHzb != 0u)
         {
-            ssr = TraceSSR_UeHzb(Pv, Nv, uv, depth, float2(dispatchThreadId.xy), frameIndexMod8);
+            const float roughness = ueUseRoughnessTexture != 0u
+                ? saturate(UnpackRM(GB0.SampleLevel(gSmpPoint, uv, 0.0f).a).x)
+                : saturate(ueRoughnessOverride);
+            const float3 unitPositionFrom = normalize(Pv);
+            const float3 viewToCamera = -unitPositionFrom;
+
+            uint numSteps = clamp(ueNumSteps, 4u, 64u);
+            uint numRays = ueGlossyRays != 0u ? clamp(ueNumRays, 1u, 12u) : 1u;
+            bool glossy = ueGlossyRays != 0u && numRays > 1u;
+
+            // SSRTReflections.usf collapses High/Epic's multi-ray budget into one 24-step
+            // geometric mirror ray below roughness 0.1.
+            if (glossy && roughness < 0.1f)
+            {
+                numSteps = min(numSteps * numRays, 24u);
+                numRays = 1u;
+                glossy = false;
+            }
+
+            const float3x3 tangentBasis = SsrUeTangentBasis(Nv);
+            const float3 tangentV = mul(tangentBasis, viewToCamera);
+            const uint2 random = SsrUeRand3DPCG16(
+                int3(int2(dispatchThreadId.xy), (int)frameIndexMod8)).xy;
+
+            [loop] for (uint rayIndex = 0u; rayIndex < numRays; ++rayIndex)
+            {
+                float3 rayDirection;
+                if (glossy)
+                {
+                    const float2 e = SsrUeHammersley16(rayIndex, numRays, random);
+                    const float alpha = roughness * roughness;
+                    const float3 tangentH = SsrUeImportanceSampleVisibleGGX(e, alpha, tangentV);
+                    const float3 h = mul(tangentH, tangentBasis);
+                    rayDirection = normalize(2.0f * dot(viewToCamera, h) * h - viewToCamera);
+                }
+                else
+                {
+                    rayDirection = normalize(reflect(unitPositionFrom, Nv));
+                }
+
+                const SSRHit ssr = TraceSSR_UeHzbRay(
+                    Pv, unitPositionFrom, rayDirection, roughness, uv,
+                    float2(dispatchThreadId.xy), frameIndexMod8, numSteps);
+                if (ssr.hit != 0)
+                {
+                    result += ResolveUeHit(ssr, glossy);
+                }
+            }
+
+            result *= rcp((float)max(numRays, 1u));
+            if (glossy)
+            {
+                result.rgb *= rcp(max(1.0f - SsrUeLuminance(result.rgb), 1.0e-3f));
+            }
         }
         else
         {
             // LogMarch, and the safety net for a frame with no pyramid yet.
             float2 seed = float2(dispatchThreadId.xy);
-            ssr = TraceSSR_LogMarch(Pv, Nv, seed);
-        }
-        if (ssr.hit != 0)
-        {
-            int2 ip = int2(ssr.uv * float2(renderWidth, renderHeight) + 0.5);
-            ip = clamp(ip, int2(0, 0), int2(int(renderWidth) - 1, int(renderHeight) - 1));
-            float3 c = LightTarget.Load(int3(ip, 0)).rgb;
-            float vis = ssr.visibility;
-            result = float4(c * vis, vis);
+            const SSRHit ssr = TraceSSR_LogMarch(Pv, Nv, seed);
+            if (ssr.hit != 0)
+            {
+                int2 ip = int2(ssr.uv * float2(renderWidth, renderHeight) + 0.5f);
+                ip = clamp(ip, int2(0, 0), int2(int(renderWidth) - 1, int(renderHeight) - 1));
+                const float3 c = LightTarget.Load(int3(ip, 0)).rgb;
+                result = float4(c * ssr.visibility, ssr.visibility);
+            }
         }
     }
 

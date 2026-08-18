@@ -232,13 +232,61 @@ namespace
                 ? (ReflectionSource)r : ReflectionSource::RT;
             return true;
         }
-        // P6C step 6: which screen-space search the reflection ray uses. 0 = log march (fixed
-        // growing steps against flat depth), 1 = HiZ (walks the closest depth pyramid). The A/B
-        // switch for the SSR retrofit, and the only way to compare the two INSIDE ONE BINARY.
+        // P6C/P13: which screen-space search the reflection ray uses. 0 = log march (fixed growing
+        // steps against full depth), 1 = UE SSRT fixed-step Batch4 march against the furthest HZB.
+        // The A/B switch for the SSR retrofit, and the only way to compare both inside one binary.
         // Only has an effect when render.reflectionSource is 2 (SSR).
         if (setting == "ssr.temporal")   { renderSettings.ssrTemporal = value != 0.0f; return true; }
         if (setting == "ssr.temporalBlend") { renderSettings.ssrTemporalBlendWeight = value; return true; }
         if (setting == "ssr.temporalClampExpand") { renderSettings.ssrTemporalClampExpand = value; return true; }
+        if (setting == "ssr.ueQuality")
+        {
+            const uint32_t q = static_cast<uint32_t>(std::max(0.0f, value));
+            ApplyUeSsrQualityPreset(renderSettings.ssrUe,
+                q < static_cast<uint32_t>(UeSsrQualityPreset::Count)
+                    ? static_cast<UeSsrQualityPreset>(q) : UeSsrQualityPreset::Epic);
+            return true;
+        }
+        if (setting == "ssr.ueSteps")
+        {
+            renderSettings.ssrUe.numSteps = static_cast<uint32_t>(std::max(4.0f, value));
+            renderSettings.ssrUe.preset = UeSsrQualityPreset::Custom;
+            return true;
+        }
+        if (setting == "ssr.ueRays")
+        {
+            renderSettings.ssrUe.numRays = static_cast<uint32_t>(std::max(1.0f, value));
+            renderSettings.ssrUe.preset = UeSsrQualityPreset::Custom;
+            return true;
+        }
+        if (setting == "ssr.ueGlossy")
+        {
+            renderSettings.ssrUe.glossyRays = value != 0.0f;
+            renderSettings.ssrUe.preset = UeSsrQualityPreset::Custom;
+            return true;
+        }
+        if (setting == "ssr.ueUseSurfaceRoughness")
+        {
+            renderSettings.ssrUe.useSurfaceRoughness = value != 0.0f;
+            return true;
+        }
+        if (setting == "ssr.ueRoughnessOverride")
+        {
+            renderSettings.ssrUe.roughnessOverride = value;
+            return true;
+        }
+        if (setting == "ssr.ueStartMip") { renderSettings.ssrUe.startMipLevel = value; return true; }
+        if (setting == "ssr.ueTolerance") { renderSettings.ssrUe.slopeCompareToleranceScale = value; return true; }
+        if (setting == "ssr.ueConfirmRetries")
+        {
+            renderSettings.ssrUe.confirmRetries = static_cast<uint32_t>(std::max(0.0f, value));
+            return true;
+        }
+        if (setting == "ssr.ueRefineSteps")
+        {
+            renderSettings.ssrUe.refineSteps = static_cast<uint32_t>(std::max(0.0f, value));
+            return true;
+        }
         if (setting == "ssr.technique")
         {
             const uint32_t t = (uint32_t)std::max(0.0f, value);

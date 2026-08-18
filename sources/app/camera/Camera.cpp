@@ -117,4 +117,5 @@ void Camera::ResetHistory()
     prevNonJitteredProj_ = nonJitteredProj_;
     prevNonJitteredViewProj_ = nonJitteredViewProj_;
     hasPrevViewProj_ = true;
+    ++historyRevision_;
 }

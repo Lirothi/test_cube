@@ -33,6 +33,70 @@ enum class SsrTechnique : uint32_t
     Count
 };
 
+// The quality permutations in UE's SSRTReflections.usf. Custom is entered automatically when a
+// developer edits the ray budget instead of selecting one of the source presets.
+enum class UeSsrQualityPreset : uint32_t
+{
+    Custom = 0,
+    Low = 1,     // 8 steps, 1 mirror ray
+    Medium = 2,  // 16 steps, 1 mirror ray
+    High = 3,    // 8 steps, 4 roughness-aware GGX rays
+    Epic = 4,    // 12 steps, 12 roughness-aware GGX rays
+    Count
+};
+
+struct UeSsrSettings
+{
+    UeSsrQualityPreset preset = UeSsrQualityPreset::High;
+    uint32_t numSteps = 8u;
+    uint32_t numRays = 4u;
+    bool glossyRays = true;
+    bool useSurfaceRoughness = true;
+    float roughnessOverride = 0.0f;
+
+    // These are hard-coded in stock UE. They are exposed here because they control the tradeoff
+    // visible in grazing mirror views: coarse coverage versus exact silhouette ownership.
+    float startMipLevel = 0.0f;
+    float slopeCompareToleranceScale = 4.0f;
+
+    // Our full-depth guard layered over UE's coarse HZB result. Zero retries is the unmodified UE
+    // acceptance rule. Nonzero values refine a candidate against full-res depth and keep marching
+    // after a rejected coarse hit instead of turning it into a permanent hole.
+    uint32_t confirmRetries = 1u;
+    uint32_t refineSteps = 4u;
+};
+
+inline void ApplyUeSsrQualityPreset(UeSsrSettings& settings, UeSsrQualityPreset preset)
+{
+    settings.preset = preset;
+    switch (preset)
+    {
+    case UeSsrQualityPreset::Low:
+        settings.numSteps = 8u;
+        settings.numRays = 1u;
+        settings.glossyRays = false;
+        break;
+    case UeSsrQualityPreset::Medium:
+        settings.numSteps = 16u;
+        settings.numRays = 1u;
+        settings.glossyRays = false;
+        break;
+    case UeSsrQualityPreset::High:
+        settings.numSteps = 8u;
+        settings.numRays = 4u;
+        settings.glossyRays = true;
+        break;
+    case UeSsrQualityPreset::Epic:
+        settings.numSteps = 12u;
+        settings.numRays = 12u;
+        settings.glossyRays = true;
+        break;
+    case UeSsrQualityPreset::Custom:
+    case UeSsrQualityPreset::Count:
+        break;
+    }
+}
+
 // Where surface reflections come from (S8). None disables both traced/screen
 // reflections and the skybox fallback; SkyOnly keeps only the skybox fallback;
 // SSR is screen-space; RT is hardware ray-traced (Tier-1). RT is only honored when
@@ -111,6 +175,7 @@ struct SceneRenderSettings
 {
     GtaoSettings gtao{};
     SsrTechnique ssrTechnique = SsrTechnique::LogMarch;
+    UeSsrSettings ssrUe{};
     // SSR temporal resolve. A screen-space ray is violently sensitive to its own start, so under
     // DLSS's per-frame jitter the raw buffer boils even with a still camera; Unreal never show
     // theirs unfiltered either. Defaults ON -- see ssr_temporal_cs.hlsl.
@@ -128,7 +193,7 @@ struct SceneRenderSettings
     //   0 = cascade shadow atlas (what it always showed)
     //   1 = GTAO raw   2 = GTAO denoised   3 = GTAO temporal   4 = GTAO upsampled (render res)
     //   5 = HZB furthest (mip selected by debugTexMip)   6 = scene depth
-    //   7 = HZB closest (only built while the HiZ SSR technique is the reflection source)
+    //   7 = HZB closest (debug/P9; UE SSR reads target 5, the furthest chain)
     //   8 = the reflection buffer's ALPHA, i.e. which pixels' rays found a hit
     int debugTexTarget = 0;
     // Mip shown for a target that has a chain (P6C HZB). Ignored by single-level targets.

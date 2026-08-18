@@ -56,11 +56,9 @@
 // Requires from the host shader: SSRHit / BuildSsrHit / the ssr* constants (ssr_trace_logmarch),
 // `HzbFurthest`, `gSmpPoint`, `proj`, `hzbSize`, `hzbInvSize`.
 
-// Current port values. Sixteen steps is UE quality 2's single-ray count; their quality 4 mirror
-// path caps the combined ray budget at 24. SlopeCompareToleranceScale is 4 for SSR (2 for SSGI).
-static const uint  ssrUeNumSteps = 16u;
-static const float ssrUeStartMipLevel = 0.0f;
-static const float ssrUeSlopeCompareToleranceScale = 4.0f;
+// The host supplies UE's quality permutation (steps/rays/glossy) plus the source constants that
+// are useful to expose while diagnosing grazing reflections. Stock UE hard-code StartMipLevel=1
+// and SlopeCompareToleranceScale=4. Their quality mappings live in SceneFrameData.h.
 
 // Scale-down factor that makes RayStepScreen end exactly on the viewport edge, so `NumSteps`
 // always spans the VISIBLE part of the ray instead of wasting most of them off screen. Verbatim.
@@ -81,16 +79,166 @@ float SsrUeInterleavedGradientNoise(float2 uv, float frameId)
     return frac(magic.z * frac(dot(uv, magic.xy)));
 }
 
-SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, float2 pixelCoord,
-                      uint frameIndexMod8)
+// RandomPCG.ush::Rand3DPCG16, MonteCarlo.ush::Hammersley16 and the Duff tangent basis. These are
+// the exact building blocks SSRTReflections.usf use for High/Epic roughness-aware ray directions.
+uint3 SsrUeRand3DPCG16(int3 p)
+{
+    uint3 v = uint3(p);
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    return v >> 16u;
+}
+
+float2 SsrUeHammersley16(uint index, uint numSamples, uint2 random)
+{
+    const float e1 = frac((float)index / max((float)numSamples, 1.0f) +
+                          (float)random.x * (1.0f / 65536.0f));
+    const float e2 = (float)((reversebits(index) >> 16u) ^ random.y) * (1.0f / 65536.0f);
+    return float2(e1, e2);
+}
+
+float3x3 SsrUeTangentBasis(float3 tangentZ)
+{
+    const float signZ = tangentZ.z >= 0.0f ? 1.0f : -1.0f;
+    const float a = -rcp(signZ + tangentZ.z);
+    const float b = tangentZ.x * tangentZ.y * a;
+    const float3 tangentX = float3(1.0f + signZ * a * tangentZ.x * tangentZ.x,
+                                   signZ * b, -signZ * tangentZ.x);
+    const float3 tangentY = float3(b, signZ + a * tangentZ.y * tangentZ.y, -tangentZ.y);
+    return float3x3(tangentX, tangentY, tangentZ);
+}
+
+// MonteCarlo.ush::ImportanceSampleVisibleGGX. SSR only consumes the sampled micronormal; its PDF
+// is omitted because UE defer the environment BRDF to composition too.
+float3 SsrUeImportanceSampleVisibleGGX(float2 e, float alpha, float3 v)
+{
+    const float2 alpha2 = max(alpha, 1.0e-4f).xx;
+    const float3 vh = normalize(float3(alpha2 * v.xy, v.z));
+    const float phi = 6.28318530718f * e.x;
+
+    const float a = saturate(alpha);
+    const float s = 1.0f + length(v.xy);
+    const float aSq = a * a;
+    const float sSq = s * s;
+    const float k = (sSq - aSq * sSq) / max(sSq + aSq * v.z * v.z, 1.0e-6f);
+    const float z = lerp(1.0f, -k * vh.z, e.y);
+    const float sinTheta = sqrt(saturate(1.0f - z * z));
+    float3 h = float3(sinTheta * cos(phi), sinTheta * sin(phi), z) + vh;
+    h = normalize(float3(alpha2 * h.xy, max(0.0f, h.z)));
+    return h;
+}
+
+bool SsrUeReadExactRaySample(float3 rayUVz, float3 rayStepUVz, float time,
+                             out float3 sampleUVz, out float depthDiff)
+{
+    sampleUVz = rayUVz + rayStepUVz * time;
+    if (any(sampleUVz.xy < 0.0f) || any(sampleUVz.xy > 1.0f))
+    {
+        depthDiff = 0.0f;
+        return false;
+    }
+
+    const float exactDepth = ReadDepth(sampleUVz.xy);
+    depthDiff = sampleUVz.z - exactDepth;
+    return exactDepth != 0.0f;
+}
+
+bool SsrUeExactDepthAccept(float depthDiff, float tolerance)
+{
+    return abs(depthDiff + tolerance) < tolerance;
+}
+
+// A coarse HZB tile says that some surface in its footprint may cross the ray. It does not prove
+// the returned exact pixel owns that surface. Resolve the candidate on mip0/full depth; a rejected
+// candidate is allowed to fall through to later coarse samples instead of becoming a permanent
+// hole. `refineSteps` is additional local subdivision; the accepted thickness shrinks with it.
+bool SsrUeResolveCoarseCandidate(float3 rayUVz, float3 rayStepUVz,
+                                 float time0, float time1,
+                                 float coarseDiff0, float coarseDiff1,
+                                 float coarseTolerance, uint refineSteps,
+                                 out float3 hitUVz, out float acceptedTolerance)
+{
+    const uint safeRefineSteps = min(refineSteps, 8u);
+    acceptedTolerance = coarseTolerance / max((float)safeRefineSteps, 1.0f);
+
+    const float denom = coarseDiff0 - coarseDiff1;
+    const float timeLerp = abs(denom) > 1.0e-8f ? saturate(coarseDiff0 / denom) : 1.0f;
+    const float coarseTime = lerp(time0, time1, timeLerp);
+    float exactDiff = 0.0f;
+    if (SsrUeReadExactRaySample(rayUVz, rayStepUVz, coarseTime, hitUVz, exactDiff) &&
+        SsrUeExactDepthAccept(exactDiff, acceptedTolerance))
+    {
+        return true;
+    }
+
+    if (safeRefineSteps == 0u)
+    {
+        return false;
+    }
+
+    bool previousValid = false;
+    float previousTime = time0;
+    float previousDiff = 0.0f;
+    [loop] for (uint s = 0u; s <= safeRefineSteps; ++s)
+    {
+        const float t = lerp(time0, time1, (float)s / (float)safeRefineSteps);
+        float3 sampleUVz;
+        float sampleDiff = 0.0f;
+        const bool valid = SsrUeReadExactRaySample(rayUVz, rayStepUVz, t, sampleUVz, sampleDiff);
+        if (valid && SsrUeExactDepthAccept(sampleDiff, acceptedTolerance))
+        {
+            hitUVz = sampleUVz;
+            return true;
+        }
+
+        // Reversed Z: positive is in front of scene depth, negative is behind. Interpolate the
+        // first exact sign change and verify that point once more to avoid accepting a depth edge.
+        if (valid && previousValid && previousDiff >= 0.0f && sampleDiff < 0.0f)
+        {
+            const float crossingDenom = previousDiff - sampleDiff;
+            const float crossingAlpha = crossingDenom > 1.0e-8f
+                ? saturate(previousDiff / crossingDenom) : 1.0f;
+            const float crossingTime = lerp(previousTime, t, crossingAlpha);
+            float crossingDiff = 0.0f;
+            if (SsrUeReadExactRaySample(rayUVz, rayStepUVz, crossingTime,
+                                        hitUVz, crossingDiff) &&
+                SsrUeExactDepthAccept(crossingDiff, acceptedTolerance))
+            {
+                return true;
+            }
+        }
+
+        previousValid = valid;
+        previousTime = t;
+        previousDiff = sampleDiff;
+    }
+    return false;
+}
+
+SSRHit SsrUeBuildHit(float3 Pv, float3 unitPositionFrom, float3 pivot,
+                     float3 hitUVz, float compareTolerance)
+{
+    const float hitViewZ = DepthToViewZ_Fast(hitUVz.z);
+    const float behindViewZ = DepthToViewZ_Fast(max(hitUVz.z - 2.0f * compareTolerance, 1e-6f));
+    const float thicknessVS = max(abs(behindViewZ - hitViewZ), 1e-4f);
+    return BuildSsrHit(pivot, unitPositionFrom, Pv, hitUVz.xy, hitUVz.z,
+                       thicknessVS, 0.0f);
+}
+
+SSRHit TraceSSR_UeHzbRay(float3 Pv, float3 unitPositionFrom, float3 pivot, float roughness,
+                         float2 startUv, float2 pixelCoord, uint frameIndexMod8, uint requestedSteps)
 {
     SSRHit outv;
     outv.uv = startUv;
+    outv.deviceZ = 0.0f;
     outv.visibility = 0.0f;
     outv.hit = 0;
 
-    const float3 unitPositionFrom = normalize(Pv);
-    const float3 pivot = normalize(reflect(unitPositionFrom, Nv));
     if (pivot.z <= 0.0f)
     {
         return outv; // same rejection the other tracer applies, so an A/B compares the SEARCH only
@@ -100,19 +248,12 @@ SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, 
     // We are already in view space, so their TranslatedWorldToView is the identity here and
     // TranslatedWorldToClip is just `proj`.
     //
-    // NOTE THE RAY LENGTH: UE pass `WorldTMax = SceneDepth`, i.e. THE RAY IS AS LONG AS THE PIXEL
-    // IS FAR. A reflection on a surface 40 units away searches 40 units, not a fixed 100. That one
-    // choice is most of why 16 steps is enough for them -- the step size scales with the scene.
-    // THE RAY LENGTH IS UE'S ONE ASSUMPTION THAT DOES NOT TRANSFER, and the aim probe is what
-    // showed it: their `WorldTMax = SceneDepth` says a surface searches as far as it is from the
-    // camera. That is reasonable when reflections are a supporting effect -- a near surface only
-    // reflects near things. Here the reflector IS the scene: floor a metre from the camera has to
-    // reflect palms thirty metres away, and with WorldTMax = 1m the ray stops long before them.
-    // Measured: the UE march's hits sat systematically CLOSER than the log march's (median vertical
-    // aim -0.233 vs -0.288) and its spurious downward hits clustered in the near-floor bands.
-    // So the search distance comes from the same budget the log march uses.
+    // UE passes WorldTMax = SceneDepth: the ray budget scales with the reflector's distance from
+    // the camera. Keeping the generic 100-unit LogMarch budget here made the 16 fixed samples far
+    // too permissive on high, oblique views and produced the long false-hit curtains reported by
+    // the user. This technique is the UE technique, so retain its coupled distance assumption.
     const float sceneDepth = Pv.z;
-    const float worldTMax = ssrMaxDistanceVS;
+    const float worldTMax = sceneDepth;
     const float rayEndDistance = (pivot.z < 0.0f)
         ? min(-0.95f * sceneDepth / pivot.z, worldTMax)
         : worldTMax;
@@ -134,7 +275,8 @@ SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, 
     rayStepScreen *= SsrUeStepFactorToClipAtScreenEdge(rayStartScreen.xy, rayStepScreen.xy);
 
     float compareTolerance = max(abs(rayStepScreen.z),
-                                 (rayStartScreen.z - rayDepthScreen.z) * ssrUeSlopeCompareToleranceScale);
+                                 (rayStartScreen.z - rayDepthScreen.z) *
+                                 ueSlopeCompareToleranceScale);
 
     // --- CastScreenSpaceRay -------------------------------------------------------------------
     // Their HZB covers a sub-rect of its texture and needs UvFactor/InvFactor; ours covers the
@@ -142,7 +284,8 @@ SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, 
     float3 rayStartUVz = float3(rayStartScreen.xy * float2(0.5f, -0.5f) + 0.5f, rayStartScreen.z);
     float3 rayStepUVz = float3(rayStepScreen.xy * float2(0.5f, -0.5f), rayStepScreen.z);
 
-    const float step = 1.0f / (float)ssrUeNumSteps;
+    const uint numSteps = clamp(requestedSteps, 4u, 64u);
+    const float step = 1.0f / (float)numSteps;
     compareTolerance *= step;
     rayStepUVz *= step;
 
@@ -152,22 +295,20 @@ SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, 
     const float stepOffset = SsrUeInterleavedGradientNoise(pixelCoord, (float)frameIndexMod8) - 0.5f;
     const float3 rayUVz = rayStartUVz + rayStepUVz * stepOffset;
 
-    // Roughness would creep the mip upward by (8/NumSteps)*Roughness every two samples. The SSR
-    // pass has no roughness bound (it reads GB1's normal only) and the reflection is blurred by
-    // roughness afterwards anyway, so this stays at the mirror case UE take for Roughness < 0.1.
-    const float level = ssrUeStartMipLevel;
+    float level = min(ueStartMipLevel, (float)max((int)hzbMipCount - 1, 0));
 
     float lastDiff = 0.0f;
-    bool foundHit = false;
     float4 sampleDepthDiff = 0.0f.xxxx;
     bool4 sampleHit = bool4(false, false, false, false);
-    uint i = 0u;
+    uint rejectedCandidates = 0u;
+    float2 lastUv = startUv;
 
     // Batches of four, exactly as UE do -- four samples issued together hide each other's latency.
-    for (i = 0u; i < ssrUeNumSteps; i += 4u)
+    [loop] for (uint i = 0u; i < numSteps; i += 4u)
     {
         float4 samplesZ;
         float2 samplesUV[4];
+        float4 samplesMip;
         [unroll] for (uint j = 0u; j < 4u; ++j)
         {
             const float t = (float)i + (float)(j + 1u);
@@ -175,10 +316,16 @@ SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, 
             samplesZ[j] = rayUVz.z + t * rayStepUVz.z;
         }
 
+        samplesMip.xy = level;
+        level += (8.0f / (float)numSteps) * saturate(roughness);
+        samplesMip.zw = level;
+        level += (8.0f / (float)numSteps) * saturate(roughness);
+
         float4 sampleDepth;
         [unroll] for (uint k = 0u; k < 4u; ++k)
         {
-            sampleDepth[k] = HzbFurthest.SampleLevel(gSmpPoint, samplesUV[k], level).r;
+            sampleDepth[k] = HzbFurthest.SampleLevel(gSmpPoint, samplesUV[k],
+                min(samplesMip[k], (float)max((int)hzbMipCount - 1, 0))).r;
         }
 
         sampleDepthDiff = samplesZ - sampleDepth;
@@ -187,45 +334,49 @@ SSRHit TraceSSR_UeHzb(float3 Pv, float3 Nv, float2 startUv, float startDeviceZ, 
         sampleHit = and(abs(sampleDepthDiff + compareTolerance) < compareTolerance,
                         sampleDepth != 0.0f);
 
-        [unroll] for (uint m = 0u; m < 4u; ++m)
+        [unroll] for (uint candidate = 0u; candidate < 4u; ++candidate)
         {
-            foundHit = foundHit || sampleHit[m];
+            if (!sampleHit[candidate])
+            {
+                continue;
+            }
+
+            const float time0 = (float)(i + candidate);
+            const float time1 = time0 + 1.0f;
+            const float depthDiff0 = candidate == 0u ? lastDiff : sampleDepthDiff[candidate - 1u];
+            const float depthDiff1 = sampleDepthDiff[candidate];
+            float3 hitUVz;
+            float acceptedTolerance = compareTolerance;
+
+            if (ueConfirmRetries == 0u)
+            {
+                const float denom = depthDiff0 - depthDiff1;
+                const float timeLerp = abs(denom) > 1.0e-8f
+                    ? saturate(depthDiff0 / denom) : 1.0f;
+                hitUVz = rayUVz + rayStepUVz * lerp(time0, time1, timeLerp);
+                return SsrUeBuildHit(Pv, unitPositionFrom, pivot, hitUVz, acceptedTolerance);
+            }
+
+            if (SsrUeResolveCoarseCandidate(rayUVz, rayStepUVz, time0, time1,
+                                            depthDiff0, depthDiff1, compareTolerance,
+                                            ueRefineSteps, hitUVz, acceptedTolerance))
+            {
+                return SsrUeBuildHit(Pv, unitPositionFrom, pivot, hitUVz, acceptedTolerance);
+            }
+
+            ++rejectedCandidates;
+            if (rejectedCandidates > ueConfirmRetries)
+            {
+                return outv;
+            }
         }
-        if (foundHit)
-        {
-            break;
-        }
+
         lastDiff = sampleDepthDiff.w;
+        lastUv = samplesUV[3];
     }
 
-    if (!foundHit)
-    {
-        outv.uv = (rayUVz + rayStepUVz * (float)i).xy;
-        return outv;
-    }
-
-    // Which of the four hit first, and the pair of depth differences that straddle the surface.
-    float depthDiff0 = sampleDepthDiff[2];
-    float depthDiff1 = sampleDepthDiff[3];
-    float time0 = 3.0f;
-    if (sampleHit[2]) { depthDiff0 = sampleDepthDiff[1]; depthDiff1 = sampleDepthDiff[2]; time0 = 2.0f; }
-    if (sampleHit[1]) { depthDiff0 = sampleDepthDiff[0]; depthDiff1 = sampleDepthDiff[1]; time0 = 1.0f; }
-    if (sampleHit[0]) { depthDiff0 = lastDiff;           depthDiff1 = sampleDepthDiff[0]; time0 = 0.0f; }
-    time0 += (float)i;
-
-    // Line-segment intersection between the two straddling samples: one lerp instead of a binary
-    // search. UE tried a binary search here and left it disabled -- the `#if 0` is still in their
-    // source -- because the interpolation is as good and costs four fewer taps.
-    const float timeLerp = saturate(depthDiff0 / (depthDiff0 - depthDiff1));
-    const float3 hitUVz = rayUVz + rayStepUVz * (time0 + timeLerp);
-
-    // Hand the result to the SHARED fade so a technique A/B differs only in the search. The
-    // thickness the fade wants is in view units; the tolerance is in device Z, so convert the
-    // interval this hit was accepted within.
-    const float hitViewZ = DepthToViewZ_Fast(hitUVz.z);
-    const float behindViewZ = DepthToViewZ_Fast(max(hitUVz.z - 2.0f * compareTolerance, 1e-6f));
-    const float thicknessVS = max(abs(behindViewZ - hitViewZ), 1e-4f);
-    return BuildSsrHit(pivot, unitPositionFrom, Pv, hitUVz.xy, hitUVz.z, thicknessVS, 0.0f);
+    outv.uv = lastUv;
+    return outv;
 }
 
 #endif // SSR_TRACE_UE_HLSLI

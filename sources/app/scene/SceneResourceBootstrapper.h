@@ -98,6 +98,7 @@ struct SceneSsrCBHandles
     Material::CBFieldHandle proj;
     Material::CBFieldHandle invView;
     Material::CBFieldHandle invProj;
+    Material::CBFieldHandle clipToPrevClip;
     Material::CBFieldHandle depthA;
     Material::CBFieldHandle depthB;
     Material::CBFieldHandle zNear;
@@ -105,8 +106,13 @@ struct SceneSsrCBHandles
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
     Material::CBFieldHandle technique;
-    // P6C step 6: the HiZ tracer's view of the CLOSEST depth pyramid.
+    // UE SSRT marches the furthest-depth HZB; the closest pyramid is retained for debug/P9.
     Material::CBFieldHandle useHzb, hzbMipCount, frameIndexMod8, hzbSize, hzbInvSize;
+    Material::CBFieldHandle sceneColorHistoryValid;
+    Material::CBFieldHandle ueNumSteps, ueNumRays, ueGlossyRays;
+    Material::CBFieldHandle ueStartMipLevel, ueSlopeCompareToleranceScale;
+    Material::CBFieldHandle ueConfirmRetries, ueRefineSteps;
+    Material::CBFieldHandle ueUseRoughnessTexture, ueRoughnessOverride;
 
     void Populate(Material* material);
 };
@@ -316,7 +322,7 @@ struct HzbPassConstants
     uint2 dstSize{ 1u, 1u };
     uint2 srcSize{ 1u, 1u };
     uint32_t fromDepth = 0u;
-    uint32_t writeClosest = 0u; // P6C step 6: build the CLOSEST chain too (SSR's march reads it)
+    uint32_t writeClosest = 0u; // Build the CLOSEST chain for debug/P9; UE SSR reads FURTHEST.
     uint32_t pad1 = 0u, pad2 = 0u;
 };
 
@@ -438,6 +444,8 @@ struct SsrPassConstants
     mat4 proj{};
     mat4 invView{};
     mat4 invProj{};
+    // UE SSRT ReprojectHit camera fallback: current jittered clip -> previous jittered clip.
+    mat4 clipToPrevClip{};
     float depthA = 0.0f;
     float depthB = 0.0f;
     float zNear = 0.1f;
@@ -452,6 +460,17 @@ struct SsrPassConstants
     uint32_t frameIndexMod8 = 0;
     float2 hzbSize{};     // mip 0 dimensions in texels
     float2 hzbInvSize{};  // 1/hzbSize -- the tracer works in tile units, so it needs both
+    // Previous full-HDR SceneColor can be sampled only after one matching-size frame and no cut.
+    uint32_t sceneColorHistoryValid = 0;
+    uint32_t ueNumSteps = 8u;
+    uint32_t ueNumRays = 4u;
+    uint32_t ueGlossyRays = 1u;
+    float ueStartMipLevel = 0.0f;
+    float ueSlopeCompareToleranceScale = 2.0f;
+    uint32_t ueConfirmRetries = 0u;
+    uint32_t ueRefineSteps = 4u;
+    uint32_t ueUseRoughnessTexture = 1u;
+    float ueRoughnessOverride = 0.0f;
 };
 
 struct BlurPassConstants

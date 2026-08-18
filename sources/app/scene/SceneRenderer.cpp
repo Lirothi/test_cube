@@ -369,6 +369,16 @@ void SceneRenderer::Reset()
     asScratchRetireFrame_ = 0;
     rtInstances_.clear();
     rtBindlessObjectCache_.clear();
+    ssrTemporalActive_ = false;
+    ssrHistoryValid_ = false;
+    ssrHistoryFrames_ = 0u;
+    ssrHistoryWidth_ = 0u;
+    ssrHistoryHeight_ = 0u;
+    ssrSceneColorHistoryValid_ = false;
+    ssrSceneColorHistoryFrames_ = 0u;
+    ssrSceneColorHistoryWidth_ = 0u;
+    ssrSceneColorHistoryHeight_ = 0u;
+    ssrSceneColorCameraRevision_ = 0u;
     frame_ = nullptr;
 }
 
@@ -488,6 +498,23 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         ssrHistoryWidth_ = rw;
         ssrHistoryHeight_ = rh;
     }
+    // UE's SSRT color resolve is a separate temporal consumer: after finding a hit in CURRENT
+    // depth it reprojects that hit into the PREVIOUS temporal SceneColor. Our Deferred.scene is
+    // produced every frame, so validity must not depend on the optional reflection temporal pass.
+    // A cut revision is explicit; a resize and the first frame seed from current Light instead.
+    {
+        const UINT rw = renderer->GetRenderWidth();
+        const UINT rh = renderer->GetRenderHeight();
+        const uint64_t cameraRevision = frame.camera ? frame.camera->GetHistoryRevision() : 0u;
+        const bool sameHistory = frame.camera && ssrSceneColorHistoryFrames_ > 0u &&
+            ssrSceneColorHistoryWidth_ == rw && ssrSceneColorHistoryHeight_ == rh &&
+            ssrSceneColorCameraRevision_ == cameraRevision;
+        ssrSceneColorHistoryValid_ = sameHistory;
+        ssrSceneColorHistoryFrames_ = frame.camera ? (sameHistory ? ssrSceneColorHistoryFrames_ + 1u : 1u) : 0u;
+        ssrSceneColorHistoryWidth_ = rw;
+        ssrSceneColorHistoryHeight_ = rh;
+        ssrSceneColorCameraRevision_ = cameraRevision;
+    }
     if (rtBuildAS && !asManagerInited_)
     {
         asManager_.Init(renderer->GetDevice5());
@@ -523,6 +550,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // are registered as first-use states on each pass's main command list; the
     // actual barriers are injected between command lists at submit time.
     const auto& D = renderer->GetDeferredForFrame();
+    const auto& P = renderer->GetDeferredForPrevFrame();
     constexpr D3D12_RESOURCE_STATES kSrvAll =
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
@@ -1132,11 +1160,14 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     const bool useRtReflections = rtReflect && pBuildAS != (size_t)-1;
     const std::initializer_list<ResourceStateDecl> reflectDecls = {
         { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+        { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+        { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+        { P.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         // P6C step 6: the HiZ tracer's pyramid. Already its resting state, so this compiles to no
         // barrier -- declaring it is what makes that a fact the compile knows.
-        { D.hzbClosest.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+        { D.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } };
     size_t pReflectionSource; // node the blur depends on (reflection chain end)
     if (useRtReflections)
@@ -1314,7 +1345,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             // P6C step 6: only the SSR variant reads it, but the RT variant declaring a resource
             // already in that state costs nothing and keeps ONE decl list for both branches.
-            { D.hzbClosest.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            { D.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             { D.glassReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } };
         if (useRtReflections && pBuildAS != (size_t)-1)
         {
@@ -1330,7 +1361,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         {
             // SSR mode: dispatch ssr_cs over the glass G-buffer (no TLAS, works on all HW).
             pGlassReflect = rg.AddPass(RenderPass::Main_GlassReflections, { pGlassGbuf },
-                glassReflDecls,
+                { { D.glassReflNormal.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                  { D.glassReflDepth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                  { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                  { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                  { D.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                  { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                  { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                  { P.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                  { D.glassReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
                 [this, renderer](RenderGraphPassContext ctx) {
                     CPU_SCOPE(ProfilerScopes::kPassGlassReflections);
                     Pass_GlassReflectionsSSR(renderer, ctx, *frame_->camera);
@@ -3387,9 +3426,8 @@ void SceneRenderer::Pass_Skybox(Renderer* renderer, RenderGraphPassContext ctx,
 // P6C step 6. The HiZ tracer's half of the SSR constants, in one place because the opaque and the
 // glass dispatch both need it and a second copy is a second thing to forget.
 //
-// `useHzb` is deliberately NOT "is the HiZ technique selected" -- it is "was the closest chain
-// written this frame", which is the same flag the pyramid build used. When it is 0 the shader
-// silently runs the log march instead of tracing a chain full of last-frame's (or nobody's) data.
+// `useHzb` is the UE-technique selector. The tracer reads the furthest-depth chain that GTAO already
+// builds every frame; the closest chain is not part of this path.
 //
 // KNOWN APPROXIMATION: the pyramid's mip 0 is ceil(renderWidth/2), so at an ODD render width it
 // covers half a texel more than the depth buffer and the screen->pyramid UV mapping is off by
@@ -3407,6 +3445,30 @@ void SceneRenderer::FillSsrHzbConstants(Renderer* renderer, SsrPassConstants& c)
     c.hzbSize = float2(static_cast<float>(D.hzbWidth), static_cast<float>(D.hzbHeight));
     c.hzbInvSize = float2(D.hzbWidth > 0u ? 1.0f / static_cast<float>(D.hzbWidth) : 0.0f,
                           D.hzbHeight > 0u ? 1.0f / static_cast<float>(D.hzbHeight) : 0.0f);
+}
+
+void SceneRenderer::FillSsrUeConstants(SsrPassConstants& c, bool useRoughnessTexture) const
+{
+    const UeSsrSettings& s = frame_->settings.ssrUe;
+    const uint32_t requestedSteps = std::clamp(s.numSteps, 4u, 64u);
+    c.ueNumSteps = std::min(64u, (requestedSteps + 3u) & ~3u);
+    c.ueNumRays = std::clamp(s.numRays, 1u, 12u);
+    c.ueGlossyRays = s.glossyRays ? 1u : 0u;
+    c.ueStartMipLevel = std::clamp(s.startMipLevel, 0.0f, 4.0f);
+    c.ueSlopeCompareToleranceScale = std::clamp(s.slopeCompareToleranceScale, 0.25f, 8.0f);
+    c.ueConfirmRetries = std::clamp(s.confirmRetries, 0u, 8u);
+    c.ueRefineSteps = std::clamp(s.refineSteps, 0u, 8u);
+    c.ueUseRoughnessTexture = useRoughnessTexture && s.useSurfaceRoughness ? 1u : 0u;
+    c.ueRoughnessOverride = std::clamp(s.roughnessOverride, 0.0f, 1.0f);
+}
+
+void SceneRenderer::FillSsrReprojectionConstants(const Camera& camera, SsrPassConstants& c) const
+{
+    // Row-vector convention, matching UE's View.ClipToPrevClip transform:
+    // current clip -> current view -> world -> previous view -> previous clip.
+    c.clipToPrevClip = camera.GetInvProjMatrix() * camera.GetInvViewMatrix() *
+        camera.GetPrevViewMatrix() * camera.GetPrevProjMatrix();
+    c.sceneColorHistoryValid = ssrSceneColorHistoryValid_ ? 1u : 0u;
 }
 
 void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphPassContext ctx,
@@ -3450,12 +3512,17 @@ void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphP
         constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
         constants.frameIndexMod8 = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 7ull);
         FillSsrHzbConstants(renderer, constants);
+        FillSsrUeConstants(constants, true);
+        FillSsrReprojectionConstants(camera, constants);
 
+        const auto& P = renderer->GetDeferredForPrevFrame();
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         RecordComputeDispatch(renderer, t.cl, ssrMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
-            // t0 Light, t1 GB1, t2 march depth, t3 origin depth (== t2 for opaque), t4 closest HZB
-            { D.lightSRV, D.gbSRV[1], D.depthSRV, D.depthSRV, D.hzbSRV },
+            // t0 Light, t1 GB1, t2 march depth, t3 origin depth (==t2), t4 HZB,
+            // t5 previous full-HDR SceneColor, t6 current motion vectors, t7 GB0 roughness.
+            { D.lightSRV, D.gbSRV[1], D.depthSRV, D.depthSRV, D.hzbSRV,
+              P.sceneSRV, D.gbSRV[3], D.gbSRV[0] },
             { D.reflectionUAV },                           // u0 output
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetReflectionTextureWidth(), renderer->GetReflectionTextureHeight(),
@@ -3789,12 +3856,19 @@ void SceneRenderer::Pass_GlassReflectionsSSR(Renderer* renderer, RenderGraphPass
         constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
         constants.frameIndexMod8 = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 7ull);
         FillSsrHzbConstants(renderer, constants);
+        // The glass prepass stores only its normal+depth. Keep the historical mirror assumption
+        // until its material roughness is added to that compact G-buffer.
+        FillSsrUeConstants(constants, false);
+        FillSsrReprojectionConstants(camera, constants);
 
+        const auto& P = renderer->GetDeferredForPrevFrame();
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         RecordComputeDispatch(renderer, t.cl, ssrMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
-            // t0 lit, t1 glass normal, t2 opaque(march), t3 glass(origin), t4 closest HZB
-            { D.lightSRV, D.glassReflNormalSRV, D.depthSRV, D.glassReflDepthSRV, D.hzbSRV },
+            // t0 lit, t1 glass normal, t2 opaque(march), t3 glass(origin), t4 HZB,
+            // t5 previous full-HDR SceneColor, t6 current opaque velocity, t7 unused GB0.
+            { D.lightSRV, D.glassReflNormalSRV, D.depthSRV, D.glassReflDepthSRV, D.hzbSRV,
+              P.sceneSRV, D.gbSRV[3], D.gbSRV[0] },
             { D.glassReflectionUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetReflectionTextureWidth(), renderer->GetReflectionTextureHeight(),
@@ -4707,8 +4781,7 @@ SceneRenderer::DebugTexPick SceneRenderer::PickDebugTexTarget(
     case 4: return { D.gtaoUpsampled.Get(), D.gtaoUpsampledSRV };
     case 5: return { D.hzb.Get(), D.hzbSRV };     // P6C, mip chosen by debugTexMip
     case 6: return { D.depth.Get(), D.depthSRV }; // the pyramid's source, for checking it against
-    // P6C step 6: the CLOSEST chain. Only written on frames the HiZ tracer runs, so on any other
-    // frame this deliberately shows whatever was last built rather than pretending to be live.
+    // CLOSEST is retained as a debug/P9 resource; the current UE SSR path reads FURTHEST instead.
     case 7: return { D.hzbClosest.Get(), D.hzbClosestSRV };
     // The reflection buffer itself, shown as ALPHA = the ray's visibility. This is the only view
     // that answers "did the ray find anything" WITHOUT the answer being filtered through shading,

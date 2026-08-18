@@ -59,6 +59,8 @@ static const float ssrGrazingMaxZ = 0.05f; // Fully enable reflections by this v
 struct SSRHit
 {
     float2 uv;
+    // Device-Z on the ray at the accepted hit. UE reprojects the complete HitUVz, not just UV.
+    float deviceZ;
     float visibility;
     int hit;
 };
@@ -81,6 +83,7 @@ SSRHit BuildSsrHit(float3 pivot, float3 unitPositionFrom, float3 Pv, float2 uv, 
 {
     SSRHit outv;
     outv.uv = uv;
+    outv.deviceZ = depthRaw;
 
     float visibility = 1.0f;
     float3 positionTo = SSR_TRACE_RECONSTRUCT_POS_VS(uv, depthRaw);
@@ -107,6 +110,7 @@ SSRHit RefineSsrLogMarchBatchHit(float3 Pv, float3 unitPositionFrom, float3 pivo
 {
     SSRHit outv;
     outv.uv = 0.0f.xx;
+    outv.deviceZ = 0.0f;
     outv.visibility = 0.0f;
     outv.hit = 0;
 
@@ -164,6 +168,7 @@ SSRHit TraceSSR_LogMarch(float3 Pv, float3 Nv, float2 pixelCoord)
 {
     SSRHit outv;
     outv.uv = 0.0f.xx;
+    outv.deviceZ = 0.0f;
     outv.visibility = 0.0f;
     outv.hit = 0;
 
