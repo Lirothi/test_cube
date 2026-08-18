@@ -427,6 +427,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateSrvTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.sceneColor, DeferredSrvSlot::SceneOpaque, f, D.sceneOpaque, D.sceneOpaqueSRV);
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::Reflection, DeferredSrvSlot::ReflectionUAV, f, D.reflection, D.reflectionSRV, D.reflectionUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflectionScratch, DeferredSrvSlot::ReflectionScratch, DeferredSrvSlot::ReflectionScratchUAV, f, D.reflectionScratch, D.reflectionScratchSRV, D.reflectionScratchUAV, sizes.reflectionWidth, sizes.reflectionHeight);
+        // SSR temporal history. Same format and size as the reflection buffer it accumulates.
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::ReflectionHistory, DeferredSrvSlot::ReflectionHistoryUAV, f, D.reflectionHistory, D.reflectionHistorySRV, D.reflectionHistoryUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.oceanReflection, DeferredSrvSlot::OceanReflection, DeferredSrvSlot::OceanReflectionUAV, f, D.oceanReflection, D.oceanReflectionSRV, D.oceanReflectionUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
 
         // S15 off-screen glass reflections (reflection res): a glass G-buffer (front-face
@@ -476,6 +478,94 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             DeferredSrvSlot::GtaoUpsampled, DeferredSrvSlot::GtaoUpsampledUAV, f,
             D.gtaoUpsampled, D.gtaoUpsampledSRV, D.gtaoUpsampledUAV,
             sizes.renderWidth, sizes.renderHeight);
+
+        // P6C: the hierarchical depth pyramid. The BUILD holds the whole chain in UNORDERED_ACCESS
+        // (this engine's barrier layer transitions whole resources, so writing mip N while reading
+        // mip N-1 needs one state that permits both), but it RESTS shader-readable because GTAO
+        // samples it as an ordinary mipped SRV -- and because the texture inspector transitions out
+        // of a resource's canonical without transitioning back, which is only sound for a canonical
+        // whose barrier layout is SHADER_RESOURCE.
+        {
+            UINT w = std::max(1u, sizes.hzbWidth);
+            UINT h = std::max(1u, sizes.hzbHeight);
+            UINT mips = 1;
+            while (((w >> mips) > 0 || (h >> mips) > 0) && mips < kHzbMaxMips)
+            {
+                ++mips;
+            }
+
+            D3D12_RESOURCE_DESC rd{};
+            rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            rd.Width = w;
+            rd.Height = h;
+            rd.DepthOrArraySize = 1;
+            rd.MipLevels = static_cast<UINT16>(mips);
+            rd.Format = formats.hzb;
+            rd.SampleDesc.Count = 1;
+            rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+            // The two pyramids differ only in the reduction operator the shader applies, so they
+            // are created by one helper -- a second copy of this block would be a second place for
+            // a format or a mip count to drift.
+            auto createPyramid = [&](GpuResource& res,
+                                     D3D12_CPU_DESCRIPTOR_HANDLE& srv,
+                                     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kHzbMaxMips>& mipUavs,
+                                     DeferredSrvSlot srvSlot,
+                                     DeferredSrvSlot firstUavSlot)
+            {
+                ThrowIfFailed(render::CreateCommittedTexture(dev,
+                    heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+                    res.GetAddressOfForCreate()));
+                res.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+
+                D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+                sd.Format = formats.hzb;
+                sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                sd.Texture2D.MipLevels = mips;
+                srv = DeferredSrvCPU(f, srvSlot);
+                dev->CreateShaderResourceView(res.Get(), &sd, srv);
+
+                for (UINT m = 0; m < kHzbMaxMips; ++m)
+                {
+                    // Slots past the real mip count still get a descriptor, pointed at the last
+                    // valid mip. A VOLATILE descriptor table may not contain a hole, and a stale
+                    // handle is exactly the kind of thing that reads as "works until the
+                    // resolution changes".
+                    D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+                    ud.Format = formats.hzb;
+                    ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                    ud.Texture2D.MipSlice = (m < mips) ? m : (mips - 1);
+                    mipUavs[m] = DeferredSrvCPU(f, static_cast<DeferredSrvSlot>(
+                        static_cast<UINT>(firstUavSlot) + m));
+                    dev->CreateUnorderedAccessView(res.Get(), nullptr, &ud, mipUavs[m]);
+                }
+            };
+
+            createPyramid(D.hzb, D.hzbSRV, D.hzbMipUAV,
+                DeferredSrvSlot::Hzb, DeferredSrvSlot::HzbMipUav0);
+            createPyramid(D.hzbClosest, D.hzbClosestSRV, D.hzbClosestMipUAV,
+                DeferredSrvSlot::HzbClosest, DeferredSrvSlot::HzbClosestMipUav0);
+
+            D.hzbMips = mips;
+            D.hzbWidth = w;
+            D.hzbHeight = h;
+        }
+
+        // Inspector preview. Rests SHADER-READABLE: the overlay transitions FROM a resource's
+        // canonical into PIXEL_SHADER_RESOURCE without transitioning back, which is only sound when
+        // the canonical already shares that barrier layout.
+        currentTargetWidth = kDebugPreviewSize;
+        currentTargetHeight = kDebugPreviewSize;
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.debugPreview,
+            DeferredSrvSlot::DebugPreview, DeferredSrvSlot::DebugPreviewUAV, f,
+            D.debugPreview, D.debugPreviewSRV, D.debugPreviewUAV,
+            kDebugPreviewSize, kDebugPreviewSize);
+        // Address only; the view itself is written per frame by the preview pass.
+        D.debugPreviewSrcSRV = DeferredSrvCPU(f, DeferredSrvSlot::DebugPreviewSrc);
 
         currentTargetWidth = displayWidthClamped;
         currentTargetHeight = displayHeightClamped;
@@ -528,6 +618,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.dlssOutput.Get(), L"DlssOutput", kNps);
         nameRes(D.reflection.Get(), L"Reflection", kNps);
         nameRes(D.reflectionScratch.Get(), L"ReflectionScratch", kNps);
+        nameRes(D.reflectionHistory.Get(), L"ReflectionHistory", kNps);
         // Sampled by the forward ocean/glass draws, so they rest PIXEL-readable, not NPS.
         nameRes(D.oceanReflection.Get(), L"OceanReflection", kPs);
         nameRes(D.glassReflNormal.Get(), L"GlassReflNormal", kNps);
@@ -537,6 +628,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gtaoFiltered.Get(), L"GtaoFiltered", kNps);
         nameRes(D.gtaoHistory.Get(), L"GtaoHistory", kNps);
         nameRes(D.gtaoUpsampled.Get(), L"GtaoUpsampled", kNps);
+        nameRes(D.hzb.Get(), L"Hzb", kNps);
+        nameRes(D.hzbClosest.Get(), L"HzbClosest", kNps);
+        nameRes(D.debugPreview.Get(), L"DebugPreview", kNps);
         // Tonemap/FXAA end as the compute outputs they are — the resolve flips them back.
         nameRes(D.tonemap.Get(), L"Tonemap", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         nameRes(D.fxaa.Get(), L"Fxaa", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -777,6 +871,7 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         collect(D.fxaa);
         collect(D.reflection);
         collect(D.reflectionScratch);
+        collect(D.reflectionHistory);
         collect(D.oceanReflection);
         collect(D.shadow);
         collect(D.spotShadow);

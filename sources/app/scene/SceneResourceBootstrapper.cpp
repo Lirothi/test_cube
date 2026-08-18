@@ -53,6 +53,9 @@ void SceneLightingCBHandles::Populate(Material* material)
     causticsParams1 = material->ComputeCB0FieldHandle("causticsParams1");
     causticsParams2 = material->ComputeCB0FieldHandle("causticsParams2");
     csmDebugMode = material->ComputeCB0FieldHandle("csmDebugMode");
+    enableSkySpecular = material->ComputeCB0FieldHandle("enableSkySpecular");
+    skySpecMipCount = material->ComputeCB0FieldHandle("skySpecMipCount");
+    skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
 }
 
 void ScenePointLightCBHandles::Populate(Material* material)
@@ -116,6 +119,10 @@ void SceneSsrCBHandles::Populate(Material* material)
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
     technique = material->ComputeCB0FieldHandle("tech");
+    useHzb = material->ComputeCB0FieldHandle("useHzb");
+    hzbMipCount = material->ComputeCB0FieldHandle("hzbMipCount");
+    hzbSize = material->ComputeCB0FieldHandle("hzbSize");
+    hzbInvSize = material->ComputeCB0FieldHandle("hzbInvSize");
 }
 
 void SceneBlurCBHandles::Populate(Material* material)
@@ -417,12 +424,36 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matGtaoTemporalCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    if (!matSsrTemporalCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/ssr_temporal_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matSsrTemporalCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     if (!matGtaoUpsampleCS_)
     {
         Material::ComputeDesc cd{};
         cd.shaderFile = L"shaders/gtao_upsample_cs.hlsl";
         cd.csEntry = "CSMain";
         matGtaoUpsampleCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
+    if (!matHzbCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/hzb_build_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matHzbCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
+    if (!matDebugPreviewCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/debug_preview_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matDebugPreviewCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
     if (!matSSR_)
@@ -578,7 +609,10 @@ void SceneResourceBootstrapper::RefreshHandles()
     gtaoHandles_.Populate(matGtaoCS_.get());
     gtaoFilterHandles_.Populate(matGtaoFilterCS_.get());
     gtaoTemporalHandles_.Populate(matGtaoTemporalCS_.get());
+    ssrTemporalHandles_.Populate(matSsrTemporalCS_.get());
     gtaoUpsampleHandles_.Populate(matGtaoUpsampleCS_.get());
+    hzbHandles_.Populate(matHzbCS_.get());
+    debugPreviewHandles_.Populate(matDebugPreviewCS_.get());
     ssrHandles_.Populate(matSSR_.get());
     blurHandles_.Populate(matBlur_.get());
 #if WITH_EDITOR
@@ -655,6 +689,9 @@ void GtaoHandles::Populate(Material* material)
     numSteps = material->ComputeCB0FieldHandle("numSteps");
     frameIndex = material->ComputeCB0FieldHandle("frameIndex");
     useGBufferNormal = material->ComputeCB0FieldHandle("useGBufferNormal");
+    useHzb = material->ComputeCB0FieldHandle("useHzb");
+    hzbMipBias = material->ComputeCB0FieldHandle("hzbMipBias");
+    hzbMipCount = material->ComputeCB0FieldHandle("hzbMipCount");
 }
 
 UINT SceneResourceBootstrapper::GetGtaoCBSizeBytes() const
@@ -682,6 +719,9 @@ void SceneResourceBootstrapper::WriteGtaoConstants(const GtaoPassConstants& d, u
     matGtaoCS_->UpdateCBField(h.numSteps, d.numSteps, dest);
     matGtaoCS_->UpdateCBField(h.frameIndex, d.frameIndex, dest);
     matGtaoCS_->UpdateCBField(h.useGBufferNormal, d.useGBufferNormal, dest);
+    matGtaoCS_->UpdateCBField(h.useHzb, d.useHzb, dest);
+    matGtaoCS_->UpdateCBField(h.hzbMipBias, d.hzbMipBias, dest);
+    matGtaoCS_->UpdateCBField(h.hzbMipCount, d.hzbMipCount, dest);
 }
 
 void GtaoFilterHandles::Populate(Material* material)
@@ -724,6 +764,81 @@ void WriteGtaoFilterCB(Material* material, const GtaoFilterHandles& h,
     material->UpdateCBField(h.temporalClampRange, d.temporalClampRange, dest);
 }
 } // namespace
+
+void DebugPreviewHandles::Populate(Material* material)
+{
+    if (!material) { return; }
+    previewSize = material->ComputeCB0FieldHandle("previewSize");
+    gain = material->ComputeCB0FieldHandle("gain");
+    stretch = material->ComputeCB0FieldHandle("stretch");
+    showAlpha = material->ComputeCB0FieldHandle("showAlpha");
+}
+
+UINT SceneResourceBootstrapper::GetDebugPreviewCBSizeBytes() const
+{
+    return matDebugPreviewCS_
+        ? matDebugPreviewCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void SceneResourceBootstrapper::WriteDebugPreviewConstants(const DebugPreviewConstants& d,
+    uint8_t* dest) const
+{
+    if (!matDebugPreviewCS_ || !dest) { return; }
+    matDebugPreviewCS_->UpdateCBField(debugPreviewHandles_.previewSize, d.previewSize, dest);
+    matDebugPreviewCS_->UpdateCBField(debugPreviewHandles_.gain, d.gain, dest);
+    matDebugPreviewCS_->UpdateCBField(debugPreviewHandles_.stretch, d.stretch, dest);
+    matDebugPreviewCS_->UpdateCBField(debugPreviewHandles_.showAlpha, d.showAlpha, dest);
+}
+
+void HzbHandles::Populate(Material* material)
+{
+    if (!material) { return; }
+    dstSize = material->ComputeCB0FieldHandle("dstSize");
+    srcSize = material->ComputeCB0FieldHandle("srcSize");
+    fromDepth = material->ComputeCB0FieldHandle("fromDepth");
+    writeClosest = material->ComputeCB0FieldHandle("writeClosest");
+}
+
+UINT SceneResourceBootstrapper::GetHzbCBSizeBytes() const
+{
+    return matHzbCS_ ? matHzbCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void SsrTemporalHandles::Populate(Material* material)
+{
+    if (!material) { return; }
+    texSize = material->ComputeCB0FieldHandle("texSize");
+    invTexSize = material->ComputeCB0FieldHandle("invTexSize");
+    blendWeight = material->ComputeCB0FieldHandle("blendWeight");
+    historyValid = material->ComputeCB0FieldHandle("historyValid");
+    clampExpand = material->ComputeCB0FieldHandle("clampExpand");
+}
+
+UINT SceneResourceBootstrapper::GetSsrTemporalCBSizeBytes() const
+{
+    return matSsrTemporalCS_
+        ? matSsrTemporalCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void SceneResourceBootstrapper::WriteSsrTemporalConstants(const SsrTemporalConstants& d,
+                                                          uint8_t* dest) const
+{
+    if (!matSsrTemporalCS_ || !dest) { return; }
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.texSize, d.texSize, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.invTexSize, d.invTexSize, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.blendWeight, d.blendWeight, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.historyValid, d.historyValid, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.clampExpand, d.clampExpand, dest);
+}
+
+void SceneResourceBootstrapper::WriteHzbConstants(const HzbPassConstants& d, uint8_t* dest) const
+{
+    if (!matHzbCS_ || !dest) { return; }
+    matHzbCS_->UpdateCBField(hzbHandles_.dstSize, d.dstSize, dest);
+    matHzbCS_->UpdateCBField(hzbHandles_.srcSize, d.srcSize, dest);
+    matHzbCS_->UpdateCBField(hzbHandles_.fromDepth, d.fromDepth, dest);
+    matHzbCS_->UpdateCBField(hzbHandles_.writeClosest, d.writeClosest, dest);
+}
 
 UINT SceneResourceBootstrapper::GetGtaoFilterCBSizeBytes() const
 {
@@ -832,6 +947,9 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);
     matLighting_->UpdateCBField(handles.causticsParams2, data.causticsParams2, dest);
     matLighting_->UpdateCBField(handles.csmDebugMode, data.csmDebugMode, dest);
+    matLighting_->UpdateCBField(handles.enableSkySpecular, data.enableSkySpecular, dest);
+    matLighting_->UpdateCBField(handles.skySpecMipCount, data.skySpecMipCount, dest);
+    matLighting_->UpdateCBField(handles.skyboxIntensity, data.skyboxIntensity, dest);
     for (size_t i = 0; i < data.clipmapViewProj.size(); ++i)
     {
         matLighting_->UpdateCBField(handles.clipmapViewProj, data.clipmapViewProj[i], dest, static_cast<uint32_t>(i));
@@ -899,6 +1017,10 @@ void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, 
     matSSR_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matSSR_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
     matSSR_->UpdateCBField(handles.technique, data.technique, dest);
+    matSSR_->UpdateCBField(handles.useHzb, data.useHzb, dest);
+    matSSR_->UpdateCBField(handles.hzbMipCount, data.hzbMipCount, dest);
+    matSSR_->UpdateCBField(handles.hzbSize, data.hzbSize, dest);
+    matSSR_->UpdateCBField(handles.hzbInvSize, data.hzbInvSize, dest);
 }
 
 void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data, uint8_t* dest) const

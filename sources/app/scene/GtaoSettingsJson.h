@@ -38,6 +38,8 @@ inline void ApplyOverrides(const nlohmann::json& j, GtaoSettings& s)
     s.temporalClampRange = j.value("temporalClampRange", s.temporalClampRange);
     s.upsampleTolerance = j.value("upsampleTolerance", s.upsampleTolerance);
     s.useGBufferNormal = j.value("useGBufferNormal", s.useGBufferNormal);
+    s.useHzb = j.value("useHzb", s.useHzb);
+    s.hzbMipBias = j.value("hzbMipBias", s.hzbMipBias);
 }
 
 inline nlohmann::json ToJson(const GtaoSettings& s)
@@ -60,6 +62,8 @@ inline nlohmann::json ToJson(const GtaoSettings& s)
     j["temporalClampRange"] = s.temporalClampRange;
     j["upsampleTolerance"] = s.upsampleTolerance;
     j["useGBufferNormal"] = s.useGBufferNormal;
+    j["useHzb"] = s.useHzb;
+    j["hzbMipBias"] = s.hzbMipBias;
     return j;
 }
 

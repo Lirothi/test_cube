@@ -1112,7 +1112,11 @@ private:
         char msg[320];
         std::snprintf(msg, sizeof(msg), "[barrier-cmp] pass=%d %s res=%s state=0x%X\n",
                       static_cast<int>(pass), what, label, static_cast<unsigned>(state));
-        Renderer::DiagLog(msg);
+        // ONCE per distinct line. The comparator runs every frame, so the two long-standing benign
+        // divergences (Exposure.Value, Ocean.Wetness*) otherwise write one line each per frame and
+        // bury anything new in the middle of them. The SKIPPED direction above already had to
+        // solve the same problem by hand (VsmPageRender, 31k lines).
+        Renderer::DiagLogOnce(msg);
     }
 
     // Step 3: run one pass body with its transitions observed, when it has a Prepare and

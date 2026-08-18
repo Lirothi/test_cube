@@ -10,6 +10,7 @@
 #include <wincodec.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <fstream>
 #include <cstring>
@@ -539,9 +540,24 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
 void Texture2D::CreateFromRGBA8(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmd,
     const void* rgba8, UINT width, UINT height,
-    std::vector<ComPtr<ID3D12Resource>>* keepAlive)
+    std::vector<ComPtr<ID3D12Resource>>* keepAlive,
+    const wchar_t* debugLabel)
 {
-    debugName_ = L"Tex2D:<rgba8>";
+    if (debugLabel != nullptr && debugLabel[0] != L'\0')
+    {
+        debugName_ = std::wstring(L"Tex2D:") + debugLabel;
+    }
+    else
+    {
+        // A serial rather than the old shared "Tex2D:<rgba8>". Every memory-built texture used to
+        // answer to that one name, so N of them read as an N-way leak in the canonical registry's
+        // per-name count — three font atlases were reported as "live entries grew to 3" for the
+        // whole life of the project. Unique-but-anonymous is the safe fallback; a caller that
+        // wants the report to be READABLE passes a label.
+        static std::atomic<unsigned> serial{ 0 };
+        debugName_ = L"Tex2D:<rgba8#" +
+                     std::to_wstring(serial.fetch_add(1u, std::memory_order_relaxed)) + L">";
+    }
     // Default to a linear UNORM SRV (suitable for normal/MR/linear data)
     DXGI_FORMAT resFmt = DXGI_FORMAT_R8G8B8A8_TYPELESS;
     DXGI_FORMAT srvFmt = DXGI_FORMAT_R8G8B8A8_UNORM;

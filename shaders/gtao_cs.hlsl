@@ -1,4 +1,4 @@
-#define GTAO_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define GTAO_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 
 #pragma pack_matrix(row_major)
 
@@ -26,6 +26,9 @@
 
 Texture2D DepthTex : register(t0);
 Texture2D GB1 : register(t1);
+// P6C: the hierarchical depth pyramid. Mip 0 is the SAME grid this pass runs on, so the UVs need no
+// remapping between them -- that alignment is why the pyramid is sized off the AO resolution.
+Texture2D HzbTex : register(t2);
 RWTexture2D<float> AoTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -49,6 +52,11 @@ cbuffer GtaoCB : register(b0)
     uint     numSteps;    // horizon-search taps per direction
     uint     frameIndex;  // rotates the noise so the temporal pass has something to average
     uint     useGBufferNormal; // 0 = derive the normal from depth (UE's default), 1 = read GB1
+    // P6C retrofit. 0 = walk the flat depth buffer (the pre-P6C behaviour, kept for A/B).
+    uint     useHzb;
+    uint     hzbMipBias;  // added to every step's mip; UE tie this to their quality level
+    uint     hzbMipCount; // clamp, so a step can never ask for a level that was not built
+    uint     pad1;
 };
 
 static const float kPi = 3.14159265358979f;
@@ -191,10 +199,26 @@ float2 SearchLargestAngleDual(uint steps, float2 baseUv, float2 screenDir, float
         uvOffset.y *= -1.0f;
         const float4 uv2 = baseUv.xyxy + float4(uvOffset.xy, -uvOffset.xy);
 
+        // MIP PER STEP, from UE's SearchForLargestAngleDual_HZB: the further a step reaches, the
+        // coarser the level it reads. Two things fall out of that. The taps stop scattering across
+        // memory -- a far step on mip 0 lands nowhere near the previous one -- and a coarse level
+        // AGGREGATES, so the estimate stops aliasing off whatever single texel the step happened to
+        // hit. Their schedule exactly: bias, then +1 at the third tap, +2 from the fifth on.
+        float mip = (float)hzbMipBias;
+        if (i == 2u) { mip += 1.0f; }
+        if (i > 3u) { mip += 2.0f; }
+        mip = min(mip, (float)hzbMipCount - 1.0f);
+
         [unroll] for (int side = 0; side < 2; ++side)
         {
             const float2 uv = (side == 0) ? uv2.xy : uv2.zw;
-            const float3 v = ViewPosFromUv(uv, LinearDepthAt(uv)) - viewPos;
+            // The pyramid holds the FURTHEST device Z of each tile, which is the conservative
+            // direction here: a coarse tile then under-estimates how much sky it blocks, so a low
+            // mip cannot invent occlusion out of geometry too small to matter at its scale.
+            const float sampleZ = (useHzb != 0u)
+                ? LinearFromDevice(HzbTex.SampleLevel(gSmpPoint, uv, mip).r)
+                : LinearDepthAt(uv);
+            const float3 v = ViewPosFromUv(uv, sampleZ) - viewPos;
             const float lenSq = dot(v, v);
             const float ooLen = rsqrt(lenSq + 1e-4f);
             float ang = dot(v, viewDir) * ooLen;

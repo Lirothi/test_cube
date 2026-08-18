@@ -20,10 +20,16 @@ class ShadowGpuData;
 class VirtualShadowMap;
 namespace vfx { struct WindState; } // W3: global wind, read when building the gbuffer per-view CB
 
+// The screen-space search a reflection ray uses. (The Lettier tracer was the third option and was
+// removed with P6C step 6 -- it was a fixed-step screen-space march that LogMarch strictly
+// dominates, and keeping a third code path alive made every SSR A/B a three-way.)
 enum class SsrTechnique : uint32_t
 {
-    Lettier = 0,
-    LogMarch = 1,
+    LogMarch = 0,
+    // Unreal's OWN SSR ray cast (SSRT/SSRTRayCast.ush): a fixed-step screen-space march reading
+    // the FURTHEST pyramid at a fixed mip. Not the same thing as their TraceHZB, which is a Lumen
+    // screen trace. Falls back to LogMarch on a frame where no pyramid was built.
+    UeHzb = 1,
     Count
 };
 
@@ -63,6 +69,12 @@ struct GtaoSettings
     // DEPTH buffer, so feeding the integral a normal-mapped normal describes a surface the search
     // never saw, and every detail-mapped texel loses part of its hemisphere to "below the surface".
     bool useGBufferNormal = false;
+    // P6C: walk the depth pyramid instead of flat depth. Default ON once measured; the switch stays
+    // so the two can be compared in one binary.
+    bool useHzb = true;
+    // Added to every step's mip. UE tie this to their quality level: 2 at their lowest (4 taps),
+    // 1 at 6 taps, 0 from 8 taps up. Higher = cheaper and blurrier.
+    uint32_t hzbMipBias = 0u;
 
     // --- items 3-5: the filter chain. Each stage is separately switchable so the A/B the plan
     // asks for can isolate one at a time; the chain always ends in the render-resolution target.
@@ -99,6 +111,14 @@ struct SceneRenderSettings
 {
     GtaoSettings gtao{};
     SsrTechnique ssrTechnique = SsrTechnique::LogMarch;
+    // SSR temporal resolve. A screen-space ray is violently sensitive to its own start, so under
+    // DLSS's per-frame jitter the raw buffer boils even with a still camera; Unreal never show
+    // theirs unfiltered either. Defaults ON -- see ssr_temporal_cs.hlsl.
+    bool ssrTemporal = true;
+    // UE's AA_LERP 8 for ETAAPassConfig::ScreenSpaceReflections: this frame is worth 1/8.
+    float ssrTemporalBlendWeight = 0.125f;
+    // How much the neighbourhood clamp box may widen when the camera is still (0 = never).
+    float ssrTemporalClampExpand = 0.5f;
     bool doFxaa = false;
     bool debugTexMode = false;
     // Which target the fullscreen debug blit shows. It used to be hardwired to the cascade shadow
@@ -107,7 +127,12 @@ struct SceneRenderSettings
     // is what every one of these is.
     //   0 = cascade shadow atlas (what it always showed)
     //   1 = GTAO raw   2 = GTAO denoised   3 = GTAO temporal   4 = GTAO upsampled (render res)
+    //   5 = HZB furthest (mip selected by debugTexMip)   6 = scene depth
+    //   7 = HZB closest (only built while the HiZ SSR technique is the reflection source)
+    //   8 = the reflection buffer's ALPHA, i.e. which pixels' rays found a hit
     int debugTexTarget = 0;
+    // Mip shown for a target that has a chain (P6C HZB). Ignored by single-level targets.
+    int debugTexMip = 0;
     bool showProfiler = false;
     // S8: the reflection source. Default RT (today's behavior). RT runs the
     // Tier-1 ray-traced pass instead of SSR; SkyOnly clears the reflection buffer

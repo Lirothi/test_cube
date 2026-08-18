@@ -93,8 +93,8 @@ namespace
     };
 
     constexpr const char* kSsrTechniqueLabels[] = {
-        "Lettier",
         "Log March",
+        "UE SSR (HZB march)",
     };
 
     const char* DlssModeLabel(sl::DLSSMode mode)
@@ -269,6 +269,14 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
     if (!open_)
     {
         textureDebugViewer_.Draw(renderer, GetOceanShoreDepthResource());
+    // The inspector cannot brighten its own preview (ImGui clamps the image tint), so it can hand
+    // the request over to the fullscreen view, which draws through a shader we control.
+    if (const int requested = textureDebugViewer_.TakeFullscreenRequest(); requested >= 0)
+    {
+        settings.debugTexTarget = requested;
+        settings.debugTexMip = textureDebugViewer_.RequestedMip();
+        settings.debugTexMode = true;
+    }
         oceanControlsWindow_.Draw(renderer);
         DrawTraceControls();
         return;
@@ -326,6 +334,23 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // normal while the horizon search still walks bare depth, which reads as occlusion
                 // wherever the two disagree — kept only so the difference can be seen.
                 ImGui::Checkbox("AO normal from G-buffer (not UE default)", &gtao.useGBufferNormal);
+                ImGui::Checkbox("AO uses depth pyramid (HZB)", &gtao.useHzb);
+                DevHelp("Walk the horizon search over the HZB instead of flat depth: far steps read a "
+                        "coarser mip, which both aggregates (less aliasing) and stops the taps "
+                        "scattering across memory. Measured -22% on Pass_Gtao, and it under-estimates "
+                        "occlusion slightly by design - the pyramid keeps the FURTHEST depth per tile.");
+                ImGui::BeginDisabled(!gtao.useHzb);
+                {
+                    int bias = static_cast<int>(gtao.hzbMipBias);
+                    if (ImGui::SliderInt("AO HZB mip bias", &bias, 0, 4))
+                    {
+                        gtao.hzbMipBias = static_cast<uint32_t>(std::max(0, bias));
+                    }
+                }
+                DevHelp("Added to every step's mip. Higher = cheaper and smoother, but occlusion "
+                        "keeps thinning: measured pixels-below-0.9 18.4% (off) -> 15.8% (bias 0) -> "
+                        "12.3% (bias 1). UE tie this to quality level: 0 from 8 taps up, 1 at 6.");
+                ImGui::EndDisabled();
                 DevHelp("OFF matches UE. The horizon search walks DEPTH, so the integral needs the geometric normal; ON feeds it the normal-mapped one and reads as occlusion wherever they disagree (measured AO 0.35 on a fully open dune). Comparison only.");
                 ImGui::SliderFloat("AO intensity", &gtao.intensity, 0.1f, 4.0f, "%.2f");
                 DevHelp("Exponent on the occlusion term - above 1 deepens, below 1 lifts. FREE.");
@@ -357,7 +382,7 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 DevHelp("How far history may deviate before being clamped back, with a still camera. Below ~0.2 the history stops accumulating here (DLSS jitter widens the spread past the window); above ~0.5 the clamp stops guarding against ghosting. FREE.");
                 ImGui::EndDisabled();
                 ImGui::TextDisabled("Lighting does not consume this yet (P6B items 6-7).");
-                ImGui::TextDisabled("To see it: Debug tab -> Fullscreen debug texture -> GTAO.");
+                ImGui::TextDisabled("To see the AO itself: Debug tab -> Show -> \"GTAO ...\".");
                 ImGui::EndDisabled();
 
                 ImGui::Separator();
@@ -422,6 +447,39 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     settings.ssrTechnique = static_cast<SsrTechnique>(ssrTechnique);
                 }
+                DevHelp("How the reflection ray searches for its hit. Log March takes a fixed "
+                        "number of growing steps against flat depth, so a thin object that falls "
+                        "between two steps is missed. HiZ walks the depth pyramid instead: coarse "
+                        "tiles over empty space, fine tiles once something is in the way -- fewer "
+                        "taps AND no skipped surfaces. Perf: HiZ is cheaper in open views and more "
+                        "variable in cluttered ones; it also makes Pass_Hzb build a second pyramid "
+                        "(the AO section builds the first), which nothing else needs. "
+                        "Only affects the SSR reflection source, not RT.");
+
+                ImGui::Checkbox("SSR temporal resolve", &settings.ssrTemporal);
+                DevHelp("Accumulates the screen-space reflection over time instead of showing each "
+                        "frame raw. A reflected ray is violently sensitive to where it starts, so "
+                        "under DLSS's per-frame jitter the raw buffer boils even with a still "
+                        "camera -- measured 7.9x less frame-to-frame movement in the reflections "
+                        "with this on. Unreal never display their SSR unfiltered either. "
+                        "Perf: ~0.014 ms. Off = see the tracer's raw output, which is what you "
+                        "want when judging a tracer rather than the picture.");
+                ImGui::BeginDisabled(!settings.ssrTemporal);
+                {
+                    ImGui::SetNextItemWidth(140.0f);
+                    ImGui::SliderFloat("SSR temporal blend", &settings.ssrTemporalBlendWeight,
+                                       0.02f, 1.0f, "%.3f");
+                    DevHelp("Weight of the CURRENT frame. UE use 1/8 = 0.125 for their SSR TAA "
+                            "config. Lower = longer history, steadier but slower to react; 1 = no "
+                            "accumulation at all.");
+                    ImGui::SetNextItemWidth(140.0f);
+                    ImGui::SliderFloat("SSR temporal clamp expand", &settings.ssrTemporalClampExpand,
+                                       0.0f, 2.0f, "%.2f");
+                    DevHelp("How far the neighbourhood clamp box may widen when the camera is "
+                            "still. 0 = clamp hard to this frame's 3x3 box always (least ghosting, "
+                            "least accumulation); higher lets a still camera keep a longer history.");
+                }
+                ImGui::EndDisabled();
 
                 float ssrScale = renderer.GetReflectionTextureScale().x;
                 if (ImGui::SliderFloat("Reflection resolution", &ssrScale, 0.25f, 1.0f, "%.2f"))
@@ -1244,15 +1302,83 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     editorController.SetOpen(levelEditorOpen);
                 }
 #endif
-                ImGui::Checkbox("Fullscreen debug texture", &settings.debugTexMode);
-                ImGui::BeginDisabled(!settings.debugTexMode);
                 // Mirrors SceneRenderer::PickDebugTexTarget — keep the order identical.
                 static const char* kDebugTexLabels[] = {
                     "Cascade shadow atlas", "GTAO raw", "GTAO denoised", "GTAO temporal",
-                    "GTAO upsampled" };
-                ImGui::Combo("Debug texture", &settings.debugTexTarget, kDebugTexLabels,
-                             IM_ARRAYSIZE(kDebugTexLabels));
+                    "GTAO upsampled", "HZB furthest (AO)", "Scene depth", "HZB closest (SSR)",
+                    "SSR hit mask (alpha)" };
+
+                ImGui::SeparatorText("Fullscreen debug view");
+                // Picking a target TURNS THE VIEW ON. Two separate controls where one is useless
+                // without the other is not two controls, it is one control and a trap: the combo
+                // silently did nothing until the checkbox above it was found.
+                if (ImGui::Combo("Show", &settings.debugTexTarget, kDebugTexLabels,
+                                 IM_ARRAYSIZE(kDebugTexLabels)))
+                {
+                    settings.debugTexMode = true;
+                }
+                DevHelp("Replaces the whole frame with the chosen render target. Picking one here "
+                        "switches the view on; use Off below to get the scene back.");
+
+                ImGui::BeginDisabled(settings.debugTexTarget != 5 && settings.debugTexTarget != 7);
+                ImGui::SliderInt("HZB mip", &settings.debugTexMip, 0, 12);
                 ImGui::EndDisabled();
+                DevHelp("Which level of the depth pyramid to show. Mip 0 is half the render "
+                        "resolution, and each level halves again. Depth-like targets go through a "
+                        "monotone pow() stretch, or reversed-Z would blit as a black rectangle. "
+                        "Furthest is what the AO horizon search reads; Closest is what the HiZ "
+                        "reflection march reads, and it is only built while that technique is the "
+                        "active reflection source.");
+
+                if (settings.debugTexMode)
+                {
+                    if (ImGui::Button("Off (show the scene)"))
+                    {
+                        settings.debugTexMode = false;
+                    }
+                    ImGui::SameLine();
+                    // Say what is actually on screen, including the grid size -- "GTAO raw" alone
+                    // does not tell you that you are looking at a half-resolution target.
+                    const unsigned halfW = (renderer.GetRenderWidth() + 1u) / 2u;
+                    const unsigned halfH = (renderer.GetRenderHeight() + 1u) / 2u;
+                    switch (settings.debugTexTarget)
+                    {
+                    case 1: case 2: case 3:
+                        ImGui::Text("showing %s  (%ux%u, half res)",
+                                    kDebugTexLabels[settings.debugTexTarget], halfW, halfH);
+                        break;
+                    case 4: case 6:
+                        ImGui::Text("showing %s  (%ux%u, render res)",
+                                    kDebugTexLabels[settings.debugTexTarget],
+                                    renderer.GetRenderWidth(), renderer.GetRenderHeight());
+                        break;
+                    case 8:
+                        ImGui::Text("showing %s  (%ux%u)  white = the ray hit something",
+                                    kDebugTexLabels[settings.debugTexTarget],
+                                    renderer.GetReflectionTextureWidth(),
+                                    renderer.GetReflectionTextureHeight());
+                        break;
+                    case 5: case 7:
+                        ImGui::Text("showing %s mip %d  (%ux%u)",
+                                    settings.debugTexTarget == 5 ? "furthest" : "closest",
+                                    settings.debugTexMip,
+                                    std::max(1u, halfW >> settings.debugTexMip),
+                                    std::max(1u, halfH >> settings.debugTexMip));
+                        break;
+                    default:
+                        ImGui::Text("showing %s", kDebugTexLabels[settings.debugTexTarget]);
+                        break;
+                    }
+
+                    // The AO targets are only written while the pass runs. Without this the view is
+                    // whatever was last left in the texture, which reads as "the feature is broken".
+                    if (settings.debugTexTarget >= 1 && settings.debugTexTarget <= 4 &&
+                        !scene.GetGtao().enabled)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
+                            "GTAO is OFF (Render tab) - this target is stale, not empty.");
+                    }
+                }
                 ImGui::Checkbox("Profiler overlay", &settings.showProfiler);
 #if WITH_EDITOR
                 ImGui::Checkbox("GPU instancing [F12]", &render::g_instancingEnabled);

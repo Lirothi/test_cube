@@ -52,6 +52,8 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle causticsParams1;
     Material::CBFieldHandle causticsParams2;
     Material::CBFieldHandle csmDebugMode;      // S0.3: Legacy CSM cascade-tint visualization
+    // The sky's indirect specular, moved here from compose so the SSR pass can see it.
+    Material::CBFieldHandle enableSkySpecular, skySpecMipCount, skyboxIntensity;
 
     void Populate(Material* material);
 };
@@ -103,6 +105,8 @@ struct SceneSsrCBHandles
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
     Material::CBFieldHandle technique;
+    // P6C step 6: the HiZ tracer's view of the CLOSEST depth pyramid.
+    Material::CBFieldHandle useHzb, hzbMipCount, hzbSize, hzbInvSize;
 
     void Populate(Material* material);
 };
@@ -253,6 +257,11 @@ struct GtaoPassConstants
     uint32_t frameIndex = 0u;
     // 0 = geometric normal rebuilt from depth (UE's default, r.GTAO.UseNormals=0).
     uint32_t useGBufferNormal = 0u;
+    // P6C retrofit: sample the depth pyramid instead of flat depth during the horizon walk.
+    uint32_t useHzb = 0u;
+    uint32_t hzbMipBias = 0u;
+    uint32_t hzbMipCount = 1u;
+    uint32_t pad1 = 0u;
 };
 
 struct GtaoHandles
@@ -260,6 +269,7 @@ struct GtaoHandles
     Material::CBFieldHandle view, invProj, aoSize, invAoSize, depthA, depthB;
     Material::CBFieldHandle worldRadius, thickness, intensity, fadeStart, fadeEnd;
     Material::CBFieldHandle invTanHalfFovY, numAngles, numSteps, frameIndex, useGBufferNormal;
+    Material::CBFieldHandle useHzb, hzbMipBias, hzbMipCount;
     void Populate(Material* material);
 };
 
@@ -280,6 +290,56 @@ struct GtaoFilterConstants
     uint32_t historyValid = 0u;
     uint32_t filterRadius = 2u;
     float temporalClampRange = 0.35f;
+};
+
+// P6C hierarchical depth. Mirrors `HzbCB` in shaders/hzb_build_cs.hlsl.
+// SSR temporal resolve. Mirrors `SsrTemporalCB` in shaders/ssr_temporal_cs.hlsl.
+struct SsrTemporalConstants
+{
+    float2 texSize{ 1.0f, 1.0f };
+    float2 invTexSize{ 1.0f, 1.0f };
+    // UE's `AA_LERP 8` for ETAAPassConfig::ScreenSpaceReflections: this frame is worth 1/8.
+    float blendWeight = 0.125f;
+    uint32_t historyValid = 0u;
+    float clampExpand = 0.5f;
+    float pad0 = 0.0f;
+};
+
+struct SsrTemporalHandles
+{
+    Material::CBFieldHandle texSize, invTexSize, blendWeight, historyValid, clampExpand;
+    void Populate(Material* material);
+};
+
+struct HzbPassConstants
+{
+    uint2 dstSize{ 1u, 1u };
+    uint2 srcSize{ 1u, 1u };
+    uint32_t fromDepth = 0u;
+    uint32_t writeClosest = 0u; // P6C step 6: build the CLOSEST chain too (SSR's march reads it)
+    uint32_t pad1 = 0u, pad2 = 0u;
+};
+
+// Texture-inspector preview. Mirrors `PreviewCB` in shaders/debug_preview_cs.hlsl.
+struct DebugPreviewConstants
+{
+    uint2 previewSize{ 1u, 1u };
+    float gain = 1.0f;
+    uint32_t stretch = 0u;
+    uint32_t showAlpha = 0u;
+    uint32_t pad0 = 0u, pad1 = 0u, pad2 = 0u;
+};
+
+struct DebugPreviewHandles
+{
+    Material::CBFieldHandle previewSize, gain, stretch, showAlpha;
+    void Populate(Material* material);
+};
+
+struct HzbHandles
+{
+    Material::CBFieldHandle dstSize, srcSize, fromDepth, writeClosest;
+    void Populate(Material* material);
 };
 
 struct GtaoFilterHandles
@@ -330,6 +390,11 @@ struct LightingPassConstants
     float4 causticsParams1{};   // depth fade, surface fade, up-facing gate, bias
     float4 causticsParams2{};   // dispersion, second-layer blend, time, world metres per pixel
     uint32_t csmDebugMode = 0;  // S0.3: 0 = off, 1 = cascade tint (Legacy CSM only)
+    // Mirrors the same three fields in ComposePassConstants; both passes must agree or the sky
+    // term one adds and the other subtracts stop cancelling.
+    uint32_t enableSkySpecular = 1;
+    uint32_t skySpecMipCount = 0;
+    float skyboxIntensity = 1.0f;
 };
 
 struct PointLightPassConstants
@@ -380,7 +445,12 @@ struct SsrPassConstants
     float2 screenSize{};
     float2 invScreenSize{};
     uint32_t technique = 0;
-    float techniquePadding[3] = {};
+    // P6C step 6. `useHzb` = 0 makes the HiZ technique fall back to the log march, so a pyramid
+    // that was not built this frame can never be traced against.
+    uint32_t useHzb = 0;
+    uint32_t hzbMipCount = 1;
+    float2 hzbSize{};     // mip 0 dimensions in texels
+    float2 hzbInvSize{};  // 1/hzbSize -- the tracer works in tile units, so it needs both
 };
 
 struct BlurPassConstants
@@ -494,7 +564,16 @@ public:
     void WriteGtaoConstants(const GtaoPassConstants& data, uint8_t* dest) const;
     std::shared_ptr<Material> GetGtaoFilterMaterial() const { return matGtaoFilterCS_; }
     std::shared_ptr<Material> GetGtaoTemporalMaterial() const { return matGtaoTemporalCS_; }
+    std::shared_ptr<Material> GetSsrTemporalMaterial() const { return matSsrTemporalCS_; }
     std::shared_ptr<Material> GetGtaoUpsampleMaterial() const { return matGtaoUpsampleCS_; }
+    std::shared_ptr<Material> GetHzbMaterial() const { return matHzbCS_; }
+    std::shared_ptr<Material> GetDebugPreviewMaterial() const { return matDebugPreviewCS_; }
+    UINT GetDebugPreviewCBSizeBytes() const;
+    void WriteDebugPreviewConstants(const DebugPreviewConstants& data, uint8_t* dest) const;
+    UINT GetHzbCBSizeBytes() const;
+    void WriteHzbConstants(const HzbPassConstants& data, uint8_t* dest) const;
+    UINT GetSsrTemporalCBSizeBytes() const;
+    void WriteSsrTemporalConstants(const SsrTemporalConstants& data, uint8_t* dest) const;
     UINT GetGtaoFilterCBSizeBytes() const;
     UINT GetGtaoTemporalCBSizeBytes() const;
     UINT GetGtaoUpsampleCBSizeBytes() const;
@@ -581,7 +660,10 @@ private:
     std::shared_ptr<Material> matGtaoCS_;
     std::shared_ptr<Material> matGtaoFilterCS_;
     std::shared_ptr<Material> matGtaoTemporalCS_;
+    std::shared_ptr<Material> matSsrTemporalCS_;
     std::shared_ptr<Material> matGtaoUpsampleCS_;
+    std::shared_ptr<Material> matHzbCS_;
+    std::shared_ptr<Material> matDebugPreviewCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matOceanReflection_;
     std::shared_ptr<Material> matBlur_;
@@ -602,6 +684,9 @@ private:
     GtaoFilterHandles gtaoFilterHandles_{};
     GtaoFilterHandles gtaoTemporalHandles_{};
     GtaoFilterHandles gtaoUpsampleHandles_{};
+    HzbHandles hzbHandles_{};
+    SsrTemporalHandles ssrTemporalHandles_{};
+    DebugPreviewHandles debugPreviewHandles_{};
     ScenePointLightCBHandles pointHandles_{};
     SceneSpotLightCBHandles spotHandles_{};
     SceneSsrCBHandles ssrHandles_{};

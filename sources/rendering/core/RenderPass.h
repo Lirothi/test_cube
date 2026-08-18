@@ -19,11 +19,14 @@ enum class RenderPass : uint16_t {
     Main_VsmPageRequest,
     Main_VsmPageRender,
     Main_Gtao,   // P6B screen-space ambient occlusion, between the G-buffer and lighting
+    Main_Hzb,    // P6C hierarchical depth pyramid, built from the G-buffer depth
+    Main_DebugPreview, // texture-inspector preview, drawn through our own shader
     Main_Lighting,
     Main_SpotLights,
     Main_PointLights,
     Main_Skybox,
     Main_ReflectionSource,
+    Main_ReflectionTemporal, // SSR temporal resolve, between the trace and the glossy blur
     Main_ReflectionBlur,
     Main_Compose,
     Main_RTReflections,
@@ -76,11 +79,14 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_VsmPageRequest: return L"VsmPageRequest";
     case RenderPass::Main_VsmPageRender: return L"VsmPageRender";
     case RenderPass::Main_Gtao: return L"Gtao";
+    case RenderPass::Main_Hzb: return L"Hzb";
+    case RenderPass::Main_DebugPreview: return L"DebugPreview";
     case RenderPass::Main_Lighting: return L"Lighting";
     case RenderPass::Main_SpotLights: return L"SpotLights";
     case RenderPass::Main_PointLights: return L"PointLights";
     case RenderPass::Main_Skybox: return L"Skybox";
     case RenderPass::Main_ReflectionSource: return L"ReflectionSource";
+    case RenderPass::Main_ReflectionTemporal: return L"Reflection.Temporal";
     case RenderPass::Main_ReflectionBlur: return L"Reflection.Blur";
     case RenderPass::Main_Compose: return L"Compose";
     case RenderPass::Main_RTReflections: return L"RTReflections";

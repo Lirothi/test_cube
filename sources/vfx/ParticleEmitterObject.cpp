@@ -1,9 +1,11 @@
 #include "vfx/ParticleEmitterObject.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include <Windows.h>
@@ -171,16 +173,23 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
     // frame leaves them, while the dead list and counter never leave the sim.
     constexpr D3D12_RESOURCE_STATES kParticleRest = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const ResourceDeclarations decls = renderer->Declarations();
+    // PER EMITTER, not per class. The canonical registry's leak check counts live entries by debug
+    // NAME, so N emitters all calling their buffer "vfx.particles" report as an N-way leak that is
+    // not there -- three emitters on e1_particles_test read as "grew to 3" for each of the three
+    // buffers. Same false positive the font atlases had, same fix: make the name identify the
+    // instance. It also makes DRED and the debug layer name WHICH emitter faulted.
+    static std::atomic<unsigned> emitterSerial{ 0 };
+    const std::wstring tag = std::to_wstring(emitterSerial.fetch_add(1u, std::memory_order_relaxed));
     particles_.Attach(decls, std::move(particlesRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        kParticleRest, L"vfx.particles");
+        kParticleRest, (L"vfx.particles#" + tag).c_str());
     deadList_.Attach(decls, std::move(deadListRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        L"vfx.deadList");
+        (L"vfx.deadList#" + tag).c_str());
     deadCount_.Attach(decls, std::move(deadCountRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        L"vfx.deadCount");
+        (L"vfx.deadCount#" + tag).c_str());
     if (sortedRes)
     {
         sorted_.Attach(decls, std::move(sortedRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            kParticleRest, L"vfx.sorted");
+            kParticleRest, (L"vfx.sorted#" + tag).c_str());
     }
 
     // Debug alive-count readback ring (tiny, persistently mapped).

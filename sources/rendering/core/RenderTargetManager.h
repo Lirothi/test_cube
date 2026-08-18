@@ -13,15 +13,24 @@
 // shadow atlases, reflection/tonemap/FXAA/DLSS intermediates) and the CPU-only
 // RTV/DSV/SRV descriptor heaps that view them. Formats and sizes are supplied
 // by the caller (Renderer), which remains the single home for them.
+// P6C: enough levels to take a 4K render resolution's half-res mip 0 (1920x1080) down to 1x1,
+// which needs 11; 13 leaves headroom and costs nothing but descriptor slots.
+inline constexpr unsigned kHzbMaxMips = 13;
+
+// Inspector preview surface. Square and fixed: the inspector draws it with the SOURCE aspect
+// ratio, so this only sets sampling density, and a fixed size means no reallocation when the
+// selected target changes.
+inline constexpr unsigned kDebugPreviewSize = 1024;
+
 class RenderTargetManager
 {
 public:
     struct DeferredTargets {
         static constexpr size_t kResourceCount =
 #if WITH_EDITOR
-            23; // Runtime targets plus the editor-only objectID target.
+            26; // Runtime targets plus the editor-only objectID target.
 #else
-            22;
+            25;
 #endif
         // Resources
         GpuResource gb0;   // albedo+metal
@@ -64,6 +73,24 @@ public:
         GpuResource gtaoFiltered;
         GpuResource gtaoHistory;
         GpuResource gtaoUpsampled;
+        // SSR temporal resolve: the accumulated reflection. This frame's output AND next frame's
+        // history (the previous frame's copy lives in the previous Deferred set -- see
+        // Renderer::GetDeferredForPrevFrame), exactly like gtaoHistory.
+        GpuResource reflectionHistory;
+        // P6C: hierarchical depth pyramid. Mip 0 is HALF the render resolution (each texel reduces
+        // a 2x2 depth quad), deliberately the same grid the GTAO chain already runs on. The
+        // reduction is MIN of device Z = the FURTHEST surface in the tile under reversed-Z; see the
+        // shader for why a horizon search wants that and a ray march wants the opposite.
+        GpuResource hzb;
+        // P6C step 6: the SECOND pyramid, reduced with MAX of device Z = the CLOSEST surface in the
+        // tile. A ray march needs this one and a horizon search needs the other: a march must never
+        // skip past a surface the tile really contains, an AO search must never invent one. Same
+        // dimensions, same mip count, built by the same dispatch.
+        GpuResource hzbClosest;
+        // The texture inspector's preview surface. ImGui can only tint an image by a value it
+        // packs to 8 bits, so anything needing to BRIGHTEN a target has to happen before ImGui
+        // sees it; the inspector resamples into this and ImGui draws it untinted.
+        GpuResource debugPreview;
 
         // CPU descriptors
         D3D12_CPU_DESCRIPTOR_HANDLE gbRTV[4]{};
@@ -84,6 +111,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE fxaaSRV{}, fxaaUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionSRV{}, reflectionUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionScratchSRV{}, reflectionScratchUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE reflectionHistorySRV{}, reflectionHistoryUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSRV{}, oceanReflectionUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxShadowedSpotLights> spotShadowDSV{};
@@ -100,6 +128,14 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE gtaoFilteredSRV{}, gtaoFilteredUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE gtaoHistorySRV{}, gtaoHistoryUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE gtaoUpsampledSRV{}, gtaoUpsampledUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE hzbSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE hzbClosestSRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE debugPreviewSRV{}, debugPreviewUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE debugPreviewSrcSRV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kHzbMaxMips> hzbMipUAV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kHzbMaxMips> hzbClosestMipUAV{};
+        UINT hzbMips = 0;                 // levels actually created for the current size
+        UINT hzbWidth = 1, hzbHeight = 1; // mip 0 dimensions
 
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
         UINT spotShadowRes = 512;
@@ -124,6 +160,8 @@ public:
         DXGI_FORMAT oceanReflection;
         DXGI_FORMAT backbufferResource; // tonemap/FXAA targets
         DXGI_FORMAT gtao;               // P6B ambient occlusion
+        DXGI_FORMAT hzb;                // P6C hierarchical depth
+        DXGI_FORMAT debugPreview;       // texture-inspector preview (RGBA8)
     };
 
     struct Sizes {
@@ -132,6 +170,7 @@ public:
         UINT reflectionWidth = 1, reflectionHeight = 1;
         UINT oceanReflectionWidth = 1, oceanReflectionHeight = 1;
         UINT gtaoWidth = 1, gtaoHeight = 1;
+        UINT hzbWidth = 1, hzbHeight = 1;   // P6C mip 0 (half the render resolution)
     };
 
     void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls);
@@ -156,7 +195,22 @@ private:
 #endif
         Light, Scene, GlassReflNormal, Count
     };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, Count };
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, ReflectionHistory, ReflectionHistoryUAV,
+    // P6C hierarchical depth. One SRV over the whole chain plus one UAV PER MIP: the build writes
+    // mip N while reading mip N-1, and this engine's barrier layer transitions whole resources
+    // (ALL_SUBRESOURCES), so the chain stays in UNORDERED_ACCESS for the duration of the build and
+    // the mips talk to each other through UAVs instead of a per-subresource SRV flip.
+    Hzb, HzbClosest,
+    DebugPreview, DebugPreviewUAV,
+    // The SOURCE the inspector picked. No view is created up front -- the preview pass
+    // rebuilds one here each frame for whatever target, mip and swizzle was requested.
+    DebugPreviewSrc,
+    HzbMipUav0, HzbMipUav1, HzbMipUav2, HzbMipUav3, HzbMipUav4, HzbMipUav5, HzbMipUav6,
+    HzbMipUav7, HzbMipUav8, HzbMipUav9, HzbMipUav10, HzbMipUav11, HzbMipUav12,
+    HzbClosestMipUav0, HzbClosestMipUav1, HzbClosestMipUav2, HzbClosestMipUav3, HzbClosestMipUav4,
+    HzbClosestMipUav5, HzbClosestMipUav6, HzbClosestMipUav7, HzbClosestMipUav8, HzbClosestMipUav9,
+    HzbClosestMipUav10, HzbClosestMipUav11, HzbClosestMipUav12,
+    Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;

@@ -1,4 +1,5 @@
 #include "rendering/core/Renderer.h"
+#include <unordered_set>
 #include "core/diagnostics/DiagPaths.h"
 #include "rendering/core/RendererInvariantFailure.h"
 #include "rendering/core/BarrierTranslation.h"
@@ -140,6 +141,16 @@ void Renderer::Shutdown()
     // 6) Frame resources: reset pool usage and clear the upload ring
     // (the actual ComPtrs release when Renderer is destroyed, but this removes dependencies)
     frameScheduler_.ResetFrameState(GetDevice());
+
+    // 6b) The two lazily-created, renderer-lifetime objects. Left to ~Renderer they were still
+    // alive when ReportLiveObjects() runs — that call sits in the DESTRUCTOR BODY, which executes
+    // before any member is destroyed — so every debug run ended with three "Live ..." warnings:
+    // these two plus the device, whose refcount of 2 was exactly the references they held. Three
+    // permanent entries in a leak report is how a real leak goes unnoticed, which is the same
+    // reason the barrier log now collapses its repeats. Both are recreated on demand, so nothing
+    // downstream depends on them surviving this far.
+    vsmDummyHeap_.Reset();
+    drawIndexedCmdSig_.Reset();
 
     // 7) Fence/Queue
     frameScheduler_.ReleaseFence();
@@ -331,6 +342,11 @@ void Renderer::BeginFrame() {
     CPU_SCOPE(ProfilerScopes::kRendererBeginFrame);
     // Wait for the GPU using its back buffer fence value
     WaitForFrame(currentFrameIndex_);
+
+    // The inspector re-states its preview request every frame it is open, so clearing here means a
+    // CLOSED inspector stops the pass instead of leaving it resampling the last target forever.
+    // Order matters and holds: BeginFrame -> UI building (which may re-request) -> Scene::Render.
+    debugPreviewRequest_ = {};
 
     if (dlssHandler_)
     {
@@ -972,7 +988,7 @@ void Renderer::ReportOffCanonicalStates() {
         char msg[320];
         std::snprintf(msg, sizeof(msg), "[canonical] off-canonical res=%s canonical=0x%X actual=0x%X\n",
                       entry.name, static_cast<unsigned>(entry.state), static_cast<unsigned>(actual));
-        Renderer::DiagLog(msg);
+        Renderer::DiagLogOnce(msg);
     }
 
     // Step 6b part 2: name the LEAK. Every resource has a unique debug name, so two live entries
@@ -1004,7 +1020,7 @@ void Renderer::ReportOffCanonicalStates() {
             char dup[240];
             std::snprintf(dup, sizeof(dup), "[canonical] LEAK %s: live entries grew to %d\n",
                           name.c_str(), net);
-            Renderer::DiagLog(dup);
+            Renderer::DiagLogOnce(dup);
         }
 
         unsigned anonymous = 0;
@@ -1017,7 +1033,7 @@ void Renderer::ReportOffCanonicalStates() {
         char anon[160];
         std::snprintf(anon, sizeof(anon), "[canonical] %u named + %u UNNAMED entries declared\n",
                       static_cast<unsigned>(canonicalNetScratch_.size()), anonymous);
-        Renderer::DiagLog(anon);
+        Renderer::DiagLogOnce(anon);
     }
 
     // One summary line so an empty log is distinguishable from a check that never ran — the same
@@ -1031,7 +1047,7 @@ void Renderer::ReportOffCanonicalStates() {
         char summary[160];
         std::snprintf(summary, sizeof(summary), "[canonical] frame end: %u of %u declared resources off-canonical\n",
                       drifted, declaredCount);
-        Renderer::DiagLog(summary);
+        Renderer::DiagLogOnce(summary);
     }
 }
 
@@ -1065,6 +1081,30 @@ void Renderer::DiagLog(const char* line) {
     if (f == nullptr) { fopen_s(&f, diag::LogPath("barrier_diag.log").c_str(), "w"); }
     if (f != nullptr) { std::fputs(line, f); std::fflush(f); }
     OutputDebugStringA(line);
+}
+
+// Same sink, but a line that is IDENTICAL to one already written is dropped.
+//
+// Every one of these diagnostics is evaluated per frame, so a single standing condition writes a
+// line per frame forever: an eight-second headless run produced 3779 lines of which SEVEN were
+// distinct, and the two that mattered (an off-canonical resource and a leak) sat in the middle of
+// three thousand copies of "0 of 176 off-canonical". A per-frame repeat carries no information the
+// first line did not — these report STATE, not events — so the whole log becomes the set of
+// conditions that occurred, which is what anyone reading it actually wants.
+//
+// Deliberately keyed on the FORMATTED TEXT: any number that moves (a leak count climbing, a drift
+// count changing) makes a new line and still gets through, so a condition that is developing is
+// never the thing that gets swallowed.
+void Renderer::DiagLogOnce(const char* line) {
+    static std::mutex mtx;
+    static std::unordered_set<std::string> seen;
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        // Past the cap everything prints again: losing a diagnostic is worse than repeating one,
+        // so the overflow direction is "say too much", never "go quiet".
+        if (seen.size() < 8192 && !seen.insert(line).second) { return; }
+    }
+    DiagLog(line);
 }
 
 void Renderer::TransitionExplicit(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
@@ -1457,6 +1497,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.oceanReflection = render::kReflectionFormat;
     formats.backbufferResource = render::kBackbufferResourceFormat;
     formats.gtao = render::kGtaoFormat;
+    formats.hzb = render::kHzbFormat;
+    formats.debugPreview = render::kDebugPreviewFormat;
 
     RenderTargetManager::Sizes sizes{};
     sizes.renderWidth = rtWidth;
@@ -1470,6 +1512,10 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     // P6B: half the RENDER resolution, rounded up so a 1-pixel target never becomes 0.
     sizes.gtaoWidth = std::max(1u, (rtWidth + 1u) / 2u);
     sizes.gtaoHeight = std::max(1u, (rtHeight + 1u) / 2u);
+    // P6C: the pyramid deliberately shares mip 0 with the GTAO grid, so a horizon search can move
+    // between "the depth I sampled" and "the tile that contains it" without a second mapping.
+    sizes.hzbWidth = sizes.gtaoWidth;
+    sizes.hzbHeight = sizes.gtaoHeight;
 
     rtManager_.Create(GetDevice(), formats, sizes, Declarations());
 }
@@ -1689,6 +1735,18 @@ bool Renderer::IsDlssActive() const
 bool Renderer::IsDlssAvailable() const
 {
     return dlssHandler_ && dlssHandler_->IsAvailable();
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE Renderer::MakeDebugPreviewSourceSrv(
+    ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& desc)
+{
+    const D3D12_CPU_DESCRIPTOR_HANDLE handle =
+        rtManager_.Deferred(currentFrameIndex_).debugPreviewSrcSRV;
+    if (resource && handle.ptr != 0 && GetDevice())
+    {
+        GetDevice()->CreateShaderResourceView(resource, &desc, handle);
+    }
+    return handle;
 }
 
 void Renderer::SetJitterPaused(bool paused)

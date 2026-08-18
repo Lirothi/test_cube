@@ -1382,7 +1382,7 @@ Exit 0 = pass. Run it after any change to the bake, the roughness/mip mapping or
 
 ---
 
-### P6A — Consume material AO through one indirect-light contract — DONE (2026-08-17, uncommitted)
+### P6A — Consume material AO through one indirect-light contract — DONE (2026-08-17, committed)
 
 Its source of truth is F9 in `docs/two_sided_foliage_and_ibl_plan.md`, which is done; see there for
 the numbers. Against this step's own four requirements:
@@ -1416,7 +1416,7 @@ the numbers. Against this step's own four requirements:
 
 ---
 
-### P6B — Add dynamic GTAO with edge-aware temporal filtering — IN PROGRESS (2026-08-17)
+### P6B — Add dynamic GTAO with edge-aware temporal filtering — COMPLETE (items 1-8, 2026-08-17)
 
 **P6B IS COMPLETE (items 1-8).** What follows was written as the steps landed; the consumption
 section at the end covers items 6-7.
@@ -1761,7 +1761,7 @@ view on "GTAO temporal".
 
 ---
 
-### P6C — Build an HZB depth pyramid — NEXT (queued 2026-08-18 at the user's request)
+### P6C — Build an HZB depth pyramid — COMPLETE (steps 1-6, 2026-08-18)
 
 **Depends on:** nothing. **Consumers:** P6B's horizon search, the existing SSR march, and P9's
 screen-space GI — which is the reason it is worth building rather than a micro-optimisation.
@@ -1775,7 +1775,7 @@ occlusion culling either). Three places want one:
   stops aliasing). Ours reads flat depth, which is recorded as a known divergence in P6B.
 * **SSR.** `ssr_cs` marches a fixed coarse loop then refines. A pyramid turns that into a proper
   hierarchical march: fewer steps AND fewer missed intersections, which is a quality win, not only
-  a speed one.
+  a speed one. Needs the CLOSEST pyramid, not the one GTAO wants — see (3).
 * **P9 SSGI.** The whole `SSRT*` set in the reference drop is built on HZB — there it is part of the
   tracing algorithm, not an optimisation.
 
@@ -1789,16 +1789,330 @@ retrofitted onto it rather than the pyramid being justified by P6B.
 1. A `hzb` target: R32_FLOAT (or R16), half render resolution at mip 0, full mip chain down to 1x1.
 2. One compute pass after the G-buffer that reduces the depth buffer into mip 0, then successive
    mips. Prefer a single-dispatch multi-mip reduction over one dispatch per mip.
-3. Decide and DOCUMENT the reduction operator: `min` (closest) is what a conservative occlusion test
-   wants; UE's HZB is min for culling. A horizon search wants the same. State it once, in the shader.
+3. Decide and DOCUMENT the reduction operator. **This was stated wrong when the step was queued and
+   is corrected here.** With reversed-Z, `min(deviceZ)` is the FURTHEST surface, not the closest, and
+   UE build TWO pyramids for that reason:
+   * **Furthest** (`min` deviceZ) — what `GetHZBParametersForAO` binds, i.e. what a horizon search
+     wants. Taking the furthest depth in a tile UNDER-estimates occlusion, so a coarse mip cannot
+     invent contact shadows from geometry too small to matter at that scale.
+   * **Closest** (`max` deviceZ) — what `HZBTracing.ush` binds, i.e. what a ray march wants, so a
+     step cannot tunnel through a surface the tile does contain.
+   Our consumers therefore do NOT share one pyramid: GTAO needs Furthest, SSR and P9 need Closest.
+   Build **Furthest first** (GTAO is the only consumer that exists today) and add Closest with the
+   SSR retrofit — the kernel writes one more UAV, so the second pyramid is an addition, not a
+   rewrite. Do not build a pyramid nobody reads yet.
 4. Handle non-power-of-two sizes explicitly — the classic source of a half-texel drift that only
    shows at the frame edge.
 5. Retrofit the GTAO horizon search onto it (`SearchForLargestAngleDual_HZB`), selecting the mip
    from the step radius the way the reference does.
-6. Retrofit the SSR march.
+6. Retrofit the SSR march — which first needs the Closest pyramid from (3).
 
 **Interface contract:** disabling HZB consumption is screenshot-equivalent to the current build.
 The pyramid is built whether or not anyone consumes it, so the build cost is measured separately.
+
+**BUILT AND VERIFIED (steps 1-4).** `shaders/hzb_build_cs.hlsl`, one dispatch per level inside one
+render-graph pass (`Main_Hzb`, ordered after the G-buffer). Mip 0 is half the render resolution --
+deliberately the same grid the GTAO chain already runs on, so a horizon search can move between "the
+depth I sampled" and "the tile that contains it" without a second mapping. R32_FLOAT rather than UE's
+fp16: the pyramid stores DEVICE Z, whose useful precision under reversed-Z sits near 0, which is
+exactly where 16-bit floats are coarsest.
+
+**The whole chain lives in UNORDERED_ACCESS for the duration of the build.** This engine's barrier
+layer transitions whole resources (ALL_SUBRESOURCES), so it cannot hold mip N-1 in SHADER_RESOURCE
+while mip N is a UAV. Reading the source mip through its own UAV sidesteps that completely and costs
+nothing -- a RWTexture2D is readable -- and the levels are separated by UAV barriers rather than
+transitions. One dispatch per mip instead of UE's four-mips-per-dispatch groupshared reduction: the
+levels are tiny, the barriers are cheap, and this version can be checked line for line against a CPU
+reduction. The batched form is a drop-in replacement for that loop if the build ever measures as
+significant.
+
+**Odd extents are handled explicitly** (plan item 4): halving an odd dimension drops a row or column,
+whose texels would then never reach any mip -- a silent hole at the frame edge that only appears at
+particular resolutions. The last texel along an odd axis folds the leftover neighbours in.
+
+**THE INVARIANT, and it passes exactly.** Mip N+1 must be the 2x2 min-reduction of mip N:
+
+| check | texels | exact |
+|---|---|---|
+| mip 0 -> 1 | 230400 | **100.00%** |
+| mip 1 -> 2 | 57600 | **100.00%** |
+| mip 2 -> 3 | 14400 | **100.00%** |
+| mip 3 -> 4 | 3600 | **100.00%** |
+| mip 4 -> 5 | 880 | **100.00%** |
+
+max error 0 throughout. Mip 0 against the depth buffer itself is **100.00%, max error 0** on a level
+with no transparent geometry.
+
+**Two measurement traps this hit first, both worth remembering:**
+* The first run scored 75-88%, and the fault was the MEASUREMENT. The debug blit stretched each mip
+  with a LINEAR sampler, so no sample ever landed on a texel centre. The blit now uses POINT for the
+  depth-like targets, and the same comparison became exact. (The pow() stretch it applies is
+  deliberately MONOTONE, which is what makes checking a min-reduction on the displayed values
+  equivalent to checking it on the raw ones.)
+* Mip 0 vs depth reads 93% on wind_test, and that is CORRECT, not a bug: the pyramid is built right
+  after the G-buffer, while the blit shows the FINAL depth, into which the transparent pass has since
+  written the ocean. The mismatches are strictly one-sided (the pyramid is always the further of the
+  two) and vanish on a level without transparency. Also: the mips must be captured in ONE process
+  with `--dlss=off`, or DLSS's per-frame jitter makes two captures two different depth buffers.
+
+**Cost:** `Pass_Hzb` **0.030 ms** GPU / 0.064 ms CPU at 2560x1440 with DLSS off (11 levels from
+1280x720). GTAO for scale, same frame: 0.111 ms.
+
+**Nothing consumes it yet** -- the only reader is the debug blit -- so the interface contract holds
+trivially and steps 5-6 (the GTAO and SSR retrofits) are separately measurable.
+
+**Inspect it:** developer window -> Debug -> Fullscreen debug texture -> "HZB (depth pyramid)", with
+the "HZB mip" slider; "Scene depth" is next to it for comparison. Headless:
+`--set=debug.texMode:1;debug.tex:5;debug.texMip:N` (and `debug.tex:6` for depth).
+
+**STEP 5 DONE: THE GTAO RETROFIT, AND IT PAYS FOR THE PYRAMID.** The horizon search now reads the
+pyramid, taking a coarser mip the further a step reaches -- UE's schedule exactly
+(`SearchForLargestAngleDual_HZB`): the bias, +1 at the third tap, +2 from the fifth on. Two effects,
+and the second is the one that matters more than it sounds: far steps stop scattering across memory,
+and a coarse level AGGREGATES, so the estimate stops aliasing off whichever single texel a long step
+happened to land on.
+
+Measured on wind_test at 2560x1440 with DLSS off, same binary, `gtao.useHzb` 0 vs 1:
+
+| | Pass_Gtao | + Pass_Hzb | hf (noise) | pixels below 0.9 | p01 |
+|---|---|---|---|---|---|
+| flat depth | 0.337 ms | 0.373 ms | 0.01166 | 18.41% | 0.509 |
+| **HZB, bias 0** | **0.263 ms** | **0.298 ms** | **0.01039** | 15.75% | 0.552 |
+| HZB, bias 1 | — | — | 0.00870 | 12.27% | 0.610 |
+
+**-22% on the AO pass, and -20% even counting the pyramid's own build** -- so the pyramid pays for
+itself with one consumer, before SSR or P9 touch it. Noise falls 11% as well.
+
+The occlusion does thin slightly (18.4% -> 15.8% of pixels below 0.9), and that is the pyramid
+working as designed rather than a regression: it stores the FURTHEST depth per tile, so a coarse
+level under-estimates rather than inventing contacts. `hzbMipBias` is the dial on that trade --
+bias 1 is cheaper and smoother still, but thins occlusion to 12.3%, which is why the default is 0.
+
+**Also changed here:** the pyramid now RESTS shader-readable (`Pass_Hzb` transitions back at the end
+of its build) instead of resting as a UAV, because it has a real SRV consumer now -- and because a
+target the texture inspector can show must rest in a state whose barrier layout is SHADER_RESOURCE.
+
+**A measurement trap worth recording:** the first A/B was shot from the dune viewpoint and showed
+0.01/255 difference. That view has almost no occlusion to begin with (1.7% of pixels below 0.9), so
+there was nothing for either method to disagree about. Re-measured on the default view, where the
+palms actually occlude, and the difference is real.
+
+**Knobs:** `gtao.useHzb` (default ON) and `gtao.hzbMipBias` (default 0), in the developer window, the
+editor inspector, the level JSON and the `--set`/`--sweep` harness.
+
+**STEP 6 DONE: THE SSR RETROFIT. 3.1x CHEAPER *AND* IT FINDS MORE.**
+
+The second pyramid exists now -- same dispatch, one more `max`, its own target. The CLOSEST
+reduction (max device Z = the NEAREST surface in a tile) is what a ray march needs and the exact
+opposite of what the horizon search needs: if a march read the furthest depth, a tile holding a near
+railing and a far wall would report the wall and the ray would tunnel through the railing. The
+closest chain is built ONLY on frames a screen-space march is the active reflection source
+(`writeClosest`), from ONE flag (`SceneRenderer::ssrHizActive_`) shared by the build and both SSR
+dispatches -- two independent evaluations of "is HiZ on" is how a pass ends up tracing a chain
+nobody filled in.
+
+`shaders/ssr_trace_hiz.hlsli` is UE's `TraceHZB` (HZBTracing.ush) transcribed, not approximated:
+stackless traversal walking tile boundaries, ascending a mip on every skipped tile and descending on
+every candidate, ending when it drops below mip 0. UE's shipping constants for reflections
+(`MaxIterations` 50, `RelativeDepthThickness` 0.005). It reuses `BuildSsrHit` from the log march, so
+a technique A/B compares the SEARCH and nothing else. **The Lettier tracer was deleted** in the same
+change: LogMarch strictly dominated it and a third path made every SSR comparison a three-way.
+
+Measured on `data/levels/ssr_bronze_palms.json`, 2560x1440, DLSS off, GTAO off, exposure locked,
+same binary:
+
+| | Pass_ReflectionSource | Pass_Hzb | both | GPU.Frame | SSR pixels with a hit | mean ray visibility |
+|---|---|---|---|---|---|---|
+| Log March | 0.108 ms | 0.035 ms | 0.143 ms | 0.770 ms | 22.28% | 0.0614 |
+| **HiZ** | **0.035 ms** | 0.043 ms | **0.078 ms** | **0.702 ms** | **23.85%** | **0.0730** |
+
+**3.1x off the reflection pass, -45% counting the second pyramid it needs, -8.8% of the whole GPU
+frame** -- and it is not paying for that with misses: **7.0% more pixels find a hit**, mean ray
+visibility is up 19%, and fully-visible pixels go from 0.22% to 0.52%. This is the
+quality-*and*-speed case the step was queued on, and the first time the pyramid pays for itself
+twice. 17.48% of pixels change against a noise floor of 0.0043%.
+
+**THE MEASUREMENT NEEDED THREE NEW THINGS, and none was optional:**
+* **`--set=render.reflectionSource:N`** (0 None, 1 SkyOnly, 2 SSR, 3 RT). The default is RT and this
+  machine has RT hardware, so the screen-space path NEVER RUNS by default -- there was no headless
+  way to exercise, measure or gate SSR at all. The first "HiZ" capture of this step had quietly been
+  tracing the TLAS. Paired with `--set=ssr.technique:N` for the A/B inside one binary.
+* **Debug target 8 = the reflection buffer's ALPHA**, i.e. the ray's own visibility. Inferring
+  coverage from the composited frame does not work: an attempt to mask "reflective pixels" by
+  differencing against SkyOnly marked 94% of the frame, because SkyOnly also changes the
+  sky-specular fallback on every surface. The hit mask answers the question before shading, the
+  glossy blur and compose can launder it -- and it is bit-identical across processes, which is what
+  makes the coverage numbers above exact rather than indicative.
+* **`data/levels/ssr_bronze_palms.json`.** A screen-space ray only shows a difference where there is
+  a wide glossy near-horizontal reflector AND thin geometry standing on it; no existing level had
+  both (wind_test's sand is not a mirror, roughness_sweep's spheres have nothing to reflect).
+  Polished bronze floor, ~60 palms in three rings, wind strength 0, no ocean, exposure locked.
+
+**PETER PANNING, and it was a transcription bug of exactly the kind [[transcription-half-a-pair]]
+warns about.** The user spotted it by eye before any metric did -- reflections detached from the base
+of every trunk, floating. Two halves of UE's self-intersection slack do not survive the move:
+1. UE fade the slack over the first 10% of the RAY (`saturate(t*10)`). Fine for a short probe ray;
+   here a grazing reflection across a mirror floor is clipped to the whole screen, so 10% of it is
+   metres of world and every genuine contact inside that stretch is suppressed. Fixed by fading over
+   TEXELS TRAVELLED from the origin (3 texels), which is what the artefact is actually about -- it
+   is local to the reflector's own neighbourhood.
+2. UE scale device Z (`tileZ *= 0.99`). Device Z is not linear in distance, so a fixed percentage is
+   a hair near the camera and a chasm at range. Converted to a view-space push of the same relative
+   size: `deviceZ' = depthA + (deviceZ - depthA) / (1 + slack)`.
+
+**THE PYRAMID INVARIANT, and it passes exactly.** The closest pyramid must be >= the furthest one
+everywhere (max >= min), and both must bracket the depth buffer:
+
+| | closest >= furthest | strictly greater | worst violation |
+|---|---|---|---|
+| mip 0 | **100.000%** | 8.22% | 0 |
+| mip 1 | **100.000%** | 17.10% | 0 |
+| mip 2 | **100.000%** | 25.73% | 0 |
+
+"Strictly greater" rising with the mip is the pyramid working: a coarser tile spans more depth. The
+means bracket correctly too -- furthest 67.47 < depth 70.32 < closest 72.73, same monotone stretch.
+
+**THREE MEASUREMENT TRAPS IN ONE STEP. Suspect the measurement first.**
+* The invariant above first read 24% and looked like a broken reduction. It was the debug blit: its
+  depth-stretch list was hardcoded `target == 5 || target == 6`, the new target 7 was not in it, so
+  the closest pyramid blitted raw and came out with a range of 0..2/255. One predicate now covers
+  all three depth-like targets.
+* **A DEBUG RUN THAT NEVER RAN.** The first Debug gate on this level asserted at startup and wrote no
+  screenshot, and the `barrier_diag.log` read afterwards had been written by the OTHER run in the
+  same command -- so a "clean barrier gate" was reported for a path that had not executed. The
+  assert was the level's own doing (`"ocean": {"enabled": false}` -- the loader takes a BOOLEAN to
+  switch the ocean off, and an ocean OBJECT without a preset path trips an assert; Release swallows
+  it and renders correctly, which is how a level looks fine and is still malformed). **Check the
+  artefact exists, not just that the log looks clean.**
+* **The shaded frame is not deterministic, and the first pixel statistics were near the noise
+  floor.** Two IDENTICAL runs differed on 8.8% of pixels. `--shot-delay` is wall-clock seconds, so
+  each run captures a different frame index, and two things are frame-indexed: auto-exposure (a
+  temporal feedback loop) and GTAO's rotating noise + temporal history. With exposure locked and
+  GTAO off the floor drops to 0.0043% / max 5. **The deterministic recipe is
+  `--dlss=off --set=gtao.enabled:0` on a level with auto-exposure off** -- without it, any shaded
+  A/B smaller than ~9% of pixels is measuring the harness.
+
+**STEP 6 FOLLOW-UP: BANDING UNDER DLSS, AND THE TRAVERSAL NOW DESCENDS TO MIP -1.**
+
+The user found horizontal bands across the far reflections on a GRAZING view with DLSS on. The
+bisection that isolates the cause: **LogMarch + DLSS is clean, HiZ + DLSS is banded, and BOTH are
+clean with DLSS off.** So it was not DLSS misbehaving and not a temporal problem in general -- it
+was this tracer's own quantisation being exposed by the jitter. The traversal only ever answered to
+the granularity of a mip-0 tile, and mip 0 is HALF the depth resolution: sub-pixel jitter moves the
+ray start, a moved start falls into the neighbouring tile, and the hit jumps a WHOLE TILE. The
+accumulator averages those discrete answers and paints bands. The log march has no such steps --
+its bisection is continuous in the start position, which is exactly why it was clean.
+
+Fixed the way UE fix it: `HZB_TRACE_INCLUDE_FULL_RES_DEPTH`, i.e. let the traversal descend to a
+virtual **mip -1** whose "tile" is one depth-buffer texel. Cost `Pass_ReflectionSource` 0.035 ->
+0.038 ms; bands gone at both views.
+
+**TWO WRONG TURNS ON THE WAY, both worth keeping:**
+* **A bisection bolted on after the traversal instead of a level inside it.** It refined between
+  `lastAboveSurfaceT` and `t` -- and `t` is NOT a point behind the surface, because the loop leaves
+  `t` alone whenever the ray is already below it. With a broken bracket the search converges
+  wherever it likes and the thickness test accepts it: hits went 23.85% -> 36.62% and mean
+  visibility 0.073 -> 0.209, i.e. mostly invented, and the banding got worse rather than better.
+* **Skipping the self-intersection slack on mip -1.** It sounded principled -- a single depth texel
+  summarises nothing, so there is no tile to be wrong about -- and it put BLACK BANDS across the
+  whole floor on the main view while looking perfect on the grazing one. A grazing ray runs within
+  a texel of the surface it left for a long way and re-intersects it at any resolution. The slack
+  is about the ray hugging its own reflector, not about tile summarisation, which is why it fades
+  over DISTANCE TRAVELLED and applies at every level. Hits with the slack back: 23.15% -- so the
+  40.83% measured without it was self-intersection counting as reflection.
+
+**And a lesson about the view, not the code:** the no-slack build looked *better* than correct on
+the grazing view and was catastrophic on the level's own camera. One viewpoint is not a test.
+
+**FOLLOW-UP: THE SKY'S INDIRECT SPECULAR MOVED FROM COMPOSE INTO LIGHTING.**
+
+The user's third observation: the ocean's planar reflection shows other objects WITH their own
+reflections, while in our screen-space reflection the bronze spheres are black discs with a
+highlight. Cause is pass order, not the tracer. `Main_Lighting` -> `Main_Skybox` ->
+`Main_ReflectionSource` -> `Main_Compose`: SSR samples the LIGHT target, and the sky's indirect
+specular was added only in compose. A metal has no diffuse, so until compose ran it had nothing in
+the light buffer except its direct highlight -- hence black. The ocean looked right because it
+samples `sceneOpaque`, a copy of the composed frame.
+
+The sky term does NOT depend on the reflection, so there is no cycle: it just sat on the wrong side
+of the pass that needs it. It is computed in `lighting_cs` now, and compose adds only the
+DIFFERENCE a reflection makes:
+
+    lighting : skyCol            * weight
+    compose  : (hit - skyCol*a)  * weight
+    total    : (hit + skyCol*(1-a)) * weight     <- exactly what compose alone used to produce
+
+Both sides call `IblSkyRadiance` / `IblSpecularWeight` in `ibl_common.hlsli` -- the identity only
+holds while they agree, so neither open-codes it. `kSkyRoughMaxMip` and `FresnelSchlick` moved there
+with them. Added to lighting: t12 prefiltered sky, t13 BRDF LUT, t14 raw sky cube, an s3 sampler,
+and three constants mirroring compose's.
+
+**Verified by A/B inside ONE BINARY** (shaders compile at load, so the old split was restored by
+editing HLSL only, captured, and restored again), on ssr_bronze_palms, DLSS off, GTAO off, exposure
+locked:
+
+| mode | differing pixels | mean \|d\| | max |
+|---|---|---|---|
+| **SkyOnly** (no tracing at all -- must be neutral) | 1.28% | 0.004 | **2/255** |
+| RT | 19.8% | 0.548 | 68 |
+| HiZ SSR | 8.1% | 0.143 | 119 |
+
+SkyOnly at max 2/255 is the neutrality proof -- floating-point ordering through an RGBA16F target,
+nothing more. **RT changing is CORRECT and was not anticipated:** `rt_reflections_cs` samples the
+light target too, so hardware-traced reflections got the same fix for free.
+
+**A TRAP WORTH KEEPING: the two passes had different SAMPLERS.** The first attempt read the BRDF LUT
+through lighting's only linear sampler, which is LinearWRAP (it exists for the caustics flipbook).
+The LUT is a 2D table indexed by (NdotV, roughness); wrapping it returns the wrong Fresnel at both
+edges, and SkyOnly -- which must be bit-neutral -- came out 3.4% different with max 70/255. Added a
+LinearCLAMP at s3. **Two passes that must agree numerically have to agree about their samplers too,
+and that is invisible in the formula.**
+
+**A measurement note:** the first "neutrality" check compared against captures taken BEFORE the test
+level locked its exposure, and read 99% different -- nothing to do with the change. The A/B has to
+hold everything else fixed, including the level file.
+
+**SSR TEMPORAL RESOLVE (`shaders/ssr_temporal_cs.hlsl`, pass `Main_ReflectionTemporal`).**
+
+The instability the user reported first -- reflections boiling while the camera turns -- is not a
+tracer bug and no tracer fixes it. A screen-space ray is violently sensitive to its own start: at a
+grazing angle DLSS's sub-pixel jitter moves the reflected hit by tens of pixels every frame, and
+DLSS cannot resolve that downstream either, because the motion vectors it gets describe the
+REFLECTOR while the reflected image moves to a completely different law.
+
+**CHECKED AGAINST UE FIRST, AND THEIR SSR FILTER IS NOT THEIR GTAO FILTER.** SSR goes through their
+TAA as `ETAAPassConfig::ScreenSpaceReflections` = TemporalAA.usf `TAA_PASS_CONFIG == 3`:
+
+    AA_HISTORY_PAYLOAD (HISTORY_PAYLOAD_RGB_OPACITY)   colour AND opacity filtered together
+    AA_DYNAMIC 1                                       reproject by velocity
+    AA_FILTERED 1
+    AA_LERP 8                                          this frame is worth 1/8
+    AA_YCOCG 1                                         CLAMP IN YCoCg, NOT IN RGB
+
+Two of those a GTAO-shaped filter would have got wrong, and both are implemented as written: the
+neighbourhood clamp happens **in YCoCg** (clamping RGB per channel pulls one channel back and not
+the others, which shifts hue -- coloured fringing a luminance/chroma split does not produce; their
+exact non-normalised RGBToYCoCg/YCoCgToRGB pair is reproduced), and the blend is **1/8** rather than
+a number chosen by taste. Reprojection, the disocclusion test and the per-tap clamped history read
+keep the shape of `gtao_temporal_cs.hlsl`.
+
+**MEASURED -- this is the whole point of the pass.** Two runs of the same still camera with DLSS on,
+shot 1 of the user's viewpoints, difference between the two frames (lower = less boiling):
+
+| | whole frame | reflection band | worst pixel in band |
+|---|---|---|---|
+| temporal OFF | 0.756 | 1.119 | 49/255 |
+| **temporal ON** | **0.207** | **0.142** | **12/255** |
+
+**7.9x less frame-to-frame movement in the reflections**, and the reflections themselves read
+denser -- the torn look of the raw buffer is what the resolve exists to close. Cost
+`Pass_Reflection.Temporal` **0.014 ms**.
+
+Wiring: the resolve writes `reflectionHistory`, which is both this frame's result and next frame's
+history (per-frame set, exactly like `gtaoHistory`), and the blur's first tap reads it. The blur's
+second tap still lands in `reflection`, so compose is untouched. History validity is tracked against
+the reflection SIZE, so a resize or a level switch seeds from this frame instead of reading a
+stale-sized texture. Knobs: `ssr.temporal`, `ssr.temporalBlend`, `ssr.temporalClampExpand`.
 
 **Verify:** mip-chain correctness against a CPU reduction of the same depth buffer (an invariant with
 a known answer, not a look test); GTAO before/after on the roughness sweep and wind_test; SSR
@@ -1987,6 +2301,97 @@ This is intentionally split into independently landable substeps. Stop after the
 
 ---
 
+### P12 — Two correctness defects the diagnostics report every frame — QUEUED (2026-08-18)
+
+Neither is caused by this plan's work; both were INVISIBLE until the barrier/canonical logs stopped
+repeating themselves (2.2 MB and 3779 lines per eight-second run collapsed to five distinct lines,
+`Renderer::DiagLogOnce`). They are queued here rather than left in a log nobody reads, because a
+diagnostic that always has entries in it is a diagnostic people learn to skip.
+
+**P12.1 — `ShadowGpuData.IndirectArgs` rests in two different states.**
+
+    [canonical] off-canonical res=ShadowGpuData.IndirectArgs canonical=0x40 actual=0x200
+
+0x40 is NON_PIXEL_SHADER_RESOURCE (what it is declared as), 0x200 INDIRECT_ARGUMENT. Reproduces on
+every level including untouched HEAD ones (d_emissive_test, new1), and the frame-end summary
+alternates `0 of N` / `1 of N`, so it is off-canonical on SOME frames and not others.
+
+**DO NOT "FIX" IT BY FLIPPING THE DECLARATION -- that was tried and it merely reverses the report**
+(`canonical=0x200 actual=0x40`). The buffer genuinely rests in different states depending on whether
+`RecordCull` ran: that body early-outs on `count_ == 0 || numMeshGroups_ == 0`, while its closing
+transition to INDIRECT_ARGUMENT (ShadowGpuData.cpp, "leave the args in INDIRECT_ARGUMENT") only
+happens when it does not. The fix belongs in the cull's flow -- give the resource ONE resting state
+on every frame, whichever way the body goes -- not in the label. Compare `VSM.PageDrawArgs`, which
+declares INDIRECT_ARGUMENT and is consistent about it.
+
+**Verify:** `--canonical-check` reports `frame end: 0 of N off-canonical` on every frame of a run
+that both exercises and skips the cull (a level switch does both). No new `MISSING` lines.
+
+**P12.2 — `InitialState` passed for BUFFERS, which D3D12 ignores.**
+
+    [gbv] WARNING id=1328: CreateCommittedResource: Ignoring InitialState <X>.
+                           Buffers are effectively created in state COMMON.
+
+Six distinct variants, from `--gbv` on any level. Not an error: D3D12 always creates buffers in
+COMMON regardless of what is asked for, and state promotion makes the first use correct anyway,
+which is why this has never broken anything. It is still worth closing, because the canonical
+registry is told the buffer was created in state X while the driver created it in COMMON -- the
+declaration and the reality disagree, and that is exactly the class of quiet mismatch the canonical
+check exists to catch. It also keeps `gbv.log` non-empty, which costs the same attention P12.1 does.
+
+The fix is mechanical but WIDE: pass `D3D12_RESOURCE_STATE_COMMON` at every buffer
+`CreateCommittedResource` AND change the matching `DeclareCreated`/`Attach` call so the registry is
+told COMMON too. Roughly 30 sites across VirtualShadowMap, ShadowGpuData, ExposureMetering,
+LightManager, FrameResource, ParticleEmitterObject, TextManager, BindlessTable,
+AccelerationStructure, DebugDraw, OceanSurfSim and Profiler. Textures are NOT affected -- their
+InitialState is honoured, so this must not be applied blindly to every call site.
+
+**Verify:** `logs/gbv.log` is empty on a `--gbv` run; `--scene-stress=30` CLEAN; `--canonical-check`
+unchanged. Do it as ONE change with the gates in between, not folded into unrelated work: it touches
+the state every one of those resources starts life in.
+
+### P13 — Fix the UE SSR march: its reflections come out SLANTED — QUEUED (2026-08-18)
+
+`shaders/ssr_trace_ue.hlsli` transcribes Unreal's own SSR ray cast (SSRT/SSRTRayCast.ush,
+`InitScreenSpaceRayFromWorldSpace` + `CastScreenSpaceRay`). It runs, it is 7.6x cheaper than the log
+march (`Pass_ReflectionSource` 0.159 -> 0.021 ms), and its output is WRONG in a way that is obvious
+by eye and invisible to the metric that was used on it.
+
+**THE SYMPTOM IS GEOMETRIC, AND IT IS THE THING TO CHASE.** A vertical trunk reflected in a
+horizontal mirror must come back VERTICAL. Ours come back **slanted, and torn**, with the skew
+growing along the reflection. A sideways drift proportional to distance travelled is a systematic
+error in the ray's screen-space X step relative to its Y step -- not a tuning problem.
+
+**HOW NOT TO CHASE IT.** Five hypotheses were tested and killed by measurement; do not re-run them:
+
+| tried | result |
+|---|---|
+| self-intersection at the origin (offset the start along the normal) | agreement moved 0.2 points |
+| steps too coarse (16 -> 32) | +3 points |
+| the ray stretching past its geometric length (clamp the clip factor to 1) | **worse**, 68 -> 39 |
+| ray length (`WorldTMax = SceneDepth` -> the shared budget) | +0.1 points |
+| HZB mip 1 -> mip 0 | +2 points |
+
+And the reduction is NOT the difference: their `FurthestHZBOutput_0 = MinDeviceZ` (HZB.usf) is
+exactly ours.
+
+**AND DO NOT SCORE IT THE WAY IT WAS SCORED.** Hit-mask IoU against another tracer says nothing
+about whether a reflection is in the right PLACE: this march scored 79.1% against hardware RT versus
+the log march's 70.7% purely because its mask is WIDER (36.98% vs 31.48% of frame), so it covers
+more of RT's hits by area while the reflections inside it are slanted rubbish. A pixel-count metric
+cannot see a wrong image. Judge it by looking, and measure with something that has a notion of
+POSITION -- e.g. compare the traced hit UV against the analytically reflected position on a flat
+floor, where the right answer is a closed form and the error has a direction.
+
+**Suggested first move:** instrument one pixel. Take a floor pixel with a known normal, compute the
+reflected ray's screen path analytically, and print the march's `rayStepUVz` and successive
+`samplesUV` beside it. The skew has a sign and a magnitude; that comparison names which term carries
+it in one run, where six parameter sweeps did not.
+
+**If it cannot be found:** delete the technique rather than ship a control that is worse than the
+default (see the "controls must not lie" rule). The file keeps the transcription and the full list
+of what was ruled out, so a later attempt starts from the evidence rather than from zero.
+
 ## 10. Global acceptance checklist
 
 ### Exposure and color
@@ -2099,6 +2504,11 @@ Do not start final level grading before M2. The fastest route to the target imag
 
 ---
 
+
+**P12 and P13 (the sections above) are independent of the photographic order** and can
+land whenever: P12.1 is a shadow-cull flow fix, P12.2 a mechanical buffer-state sweep. Neither
+blocks P7-P11, and neither should be folded into one of them. P13 is the SSR tracer defect and
+is likewise standalone -- the default reflection path does not depend on it.
 ## 13. Reference implementation map
 
 ### 13.0 Reference files this plan still needs

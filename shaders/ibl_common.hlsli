@@ -66,4 +66,56 @@ float IblSpecularOcclusion(float ndotv, float ao, float roughness)
     return saturate(pow(abs(ndotv) + ao, exp2(-16.0f * roughness - 1.0f)) - 1.0f + ao);
 }
 
+// Mip guessed for a RAW skybox cube, i.e. one that arrived without prefiltered derivatives. A real
+// prefilter maps roughness to mip by construction (IblMipFromRoughness) and needs no guess.
+static const float kSkyRoughMaxMip = 5.0;
+
+float3 FresnelSchlick(float cosTheta, float3 F0)
+{
+    return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE SKY'S INDIRECT SPECULAR, SPLIT ACROSS TWO PASSES.
+//
+// It used to live entirely in compose. That put it AFTER the screen-space reflection pass, which
+// samples the LIGHT target -- so a metal seen in a reflection was a black disc with a highlight,
+// because a metal has no diffuse and its only other contribution had not been added yet. The
+// lighting pass adds it now, and compose adds the DIFFERENCE the reflection makes:
+//
+//     lighting : skyCol            * weight
+//     compose  : (hit - skyCol*a)  * weight
+//     total    : (hit + skyCol*(1-a)) * weight     <- what compose alone used to produce
+//
+// The identity only holds while both sides compute `skyCol` and `weight` the same way, so both
+// come from here and neither pass open-codes them.
+// ---------------------------------------------------------------------------------------------
+
+// The radiance arriving from the sky along R. `specMipCount` 0 means this level's sky has no
+// prefiltered derivatives, and the raw cube is sampled at a guessed mip instead.
+float3 IblSkyRadiance(TextureCube prefiltered, TextureCube rawSky, SamplerState smp,
+                      float3 R, float roughness, uint specMipCount, float intensity)
+{
+    const bool useSplitSum = (specMipCount > 0u);
+    const float mip = useSplitSum ? IblMipFromRoughness(roughness, (float)specMipCount)
+                                  : roughness * kSkyRoughMaxMip;
+    const float3 radiance = useSplitSum ? prefiltered.SampleLevel(smp, R, mip).rgb
+                                        : rawSky.SampleLevel(smp, R, mip).rgb;
+    return radiance * intensity;
+}
+
+// What a radiance value reflecting off this surface is multiplied by to become indirect specular.
+// With a real prefilter the split-sum LUT already integrates Fresnel AND the geometry term over
+// the lobe, so applying Fresnel again would apply it twice.
+float3 IblSpecularWeight(Texture2D brdfLut, SamplerState smp, float3 F0, float cosT,
+                         float roughness, uint specMipCount)
+{
+    if (specMipCount > 0u)
+    {
+        const float2 ab = brdfLut.SampleLevel(smp, float2(cosT, roughness), 0).rg;
+        return F0 * ab.x + ab.y;
+    }
+    return FresnelSchlick(cosT, F0) * saturate(1.0 - roughness);
+}
+
 #endif // IBL_COMMON_HLSLI

@@ -586,6 +586,9 @@
     <None Include="shaders\shader_comp.hlsl" />
     <None Include="shaders\skybox.hlsl" />
     <None Include="shaders\ssr_cs.hlsl" />
+    <None Include="shaders\ssr_temporal_cs.hlsl" />
+    <None Include="shaders\ssr_trace_hiz.hlsli" />
+    <None Include="shaders\ssr_trace_ue.hlsli" />
     <None Include="shaders\ssr_trace_logmarch.hlsli" />
     <None Include="shaders\spotlight_cs.hlsl" />
     <None Include="shaders\tonemap_cs.hlsl" />
@@ -598,6 +601,8 @@
     <None Include="shaders\gtao_filter_cs.hlsl" />
     <None Include="shaders\gtao_temporal_cs.hlsl" />
     <None Include="shaders\gtao_upsample_cs.hlsl" />
+    <None Include="shaders\hzb_build_cs.hlsl" />
+    <None Include="shaders\debug_preview_cs.hlsl" />
     <None Include="shaders\exposure_histogram_cs.hlsl" />
     <None Include="shaders\exposure_solve_cs.hlsl" />
     <None Include="shaders\exposure_baselum_cs.hlsl" />

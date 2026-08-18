@@ -296,6 +296,15 @@ int WINAPI WinMain(
             }
             return RunSceneStress(hInstance, nShowCmd, iterations, /*gbvContinue=*/gbv);
         }
+
+        // "--gbv" on an ORDINARY run. GBV was reachable only through the stress harness, and the
+        // harness drives its own levels and never sees `--set`, so any pass behind a setting —
+        // the whole screen-space reflection path, for one, since the default reflection source is
+        // RT — could not be GPU-validated at all. Same switch, before device creation; Debug only,
+        // because that is where the debug layer itself is enabled.
+        if (std::strstr(lpCmdLine, "--gbv") != nullptr) {
+            GraphicsDevice::EnableGbvForStress(true);
+        }
     }
 
     // "--level=<path>" overrides the boot level (headless verification of a specific level).

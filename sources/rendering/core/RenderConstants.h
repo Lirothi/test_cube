@@ -54,6 +54,13 @@ inline constexpr DXGI_FORMAT kReflectionFormat              = DXGI_FORMAT_R8G8B8
 // below the noise floor of any screen-space estimate -- the denoiser is what decides the quality
 // here, not the storage.
 inline constexpr DXGI_FORMAT kGtaoFormat                    = DXGI_FORMAT_R8_UNORM;
+// P6C hierarchical depth. R32_FLOAT, not the fp16 UE uses: the pyramid stores DEVICE Z, whose
+// useful precision under reversed-Z sits near 0 for distant geometry, and 16-bit floats have
+// their coarsest spacing exactly there. The extra bandwidth is a half-res chain; correctness
+// first, and the format is a one-line change if it ever measures as a bottleneck.
+inline constexpr DXGI_FORMAT kHzbFormat                     = DXGI_FORMAT_R32_FLOAT;
+// Inspector preview: plain 8-bit colour, because ImGui draws it directly.
+inline constexpr DXGI_FORMAT kDebugPreviewFormat            = DXGI_FORMAT_R8G8B8A8_UNORM;
 inline constexpr DXGI_FORMAT kReflectionScratchFormat          = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 } // namespace render

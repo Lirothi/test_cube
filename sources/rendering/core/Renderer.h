@@ -233,6 +233,7 @@ public:
     float GetRenderResolutionScale() const { return renderResolutionScale_; }
     Math::float2 GetCameraJitter() const;
 
+
     // NVIDIA-recommended texture mip bias when rendering below display resolution for DLSS:
     // log2(renderWidth / displayWidth), negative — the upscaler reconstructs display-res detail,
     // so sampling one mip sharper keeps textures from going soft. Quantized to 0.25 steps
@@ -401,6 +402,11 @@ public:
     // Barrier-diagnostics sink for --barrier-cmp / --barrier-flip-trace: barrier_diag.log plus the
     // debugger. A file because the --scene-stress harness runs with no debugger attached.
     static void DiagLog(const char* line);
+    // Same sink, dropping a line identical to one already written. These diagnostics report STATE
+    // and are evaluated every frame, so without this one standing condition buries the log (3779
+    // lines, 7 distinct, in an 8-second run). Keyed on the formatted text, so any moving number
+    // still gets through.
+    static void DiagLogOnce(const char* line);
 
     // Carries both the log and the compiled barriers onto a fan-out worker (see TransitionLogScope).
     struct CompiledBarrierScope {
@@ -458,6 +464,24 @@ public:
     bool IsDlssActive() const;
     // Debug: freeze the sub-pixel jitter so render-resolution targets stop shimmering in the
     // texture inspector. See DlssHandler::SetJitterPaused for what it costs.
+    // The texture inspector's preview request, left during UI building and consumed by the
+    // preview pass later in the SAME frame (the developer window is drawn before Scene::Render).
+    // `resource` null = nothing to do. See shaders/debug_preview_cs.hlsl for why this exists.
+    struct DebugPreviewRequest
+    {
+        ID3D12Resource* resource = nullptr;
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        float gain = 1.0f;
+        bool stretch = false;
+        bool showAlpha = false;
+    };
+    void RequestDebugPreview(const DebugPreviewRequest& req) { debugPreviewRequest_ = req; }
+    const DebugPreviewRequest& DebugPreviewRequestRef() const { return debugPreviewRequest_; }
+    void ClearDebugPreviewRequest() { debugPreviewRequest_ = {}; }
+    // Builds the requested view into the per-frame scratch slot and hands back its handle.
+    D3D12_CPU_DESCRIPTOR_HANDLE MakeDebugPreviewSourceSrv(
+        ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& desc);
+
     void SetJitterPaused(bool paused);
     bool IsJitterPaused() const;
     bool IsDlssAvailable() const;
@@ -531,6 +555,8 @@ public:
     }
 
 private:
+    // Texture-inspector preview request; see RequestDebugPreview.
+    DebugPreviewRequest debugPreviewRequest_{};
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 

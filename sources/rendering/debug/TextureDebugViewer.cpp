@@ -124,13 +124,15 @@ namespace
     }
 
     D3D12_SHADER_RESOURCE_VIEW_DESC MakeSrvDesc(const TargetView& view,
-        TextureDebugViewer::ChannelMode channelMode)
+        TextureDebugViewer::ChannelMode channelMode, UINT mip = 0)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
         desc.Format = view.srvFormat;
         desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         desc.Shader4ComponentMapping = ComponentMapping(channelMode, view.srvFormat);
-        desc.Texture2D.MostDetailedMip = 0;
+        // A one-level view of the CHOSEN mip, so the preview shows that level's own texels rather
+        // than the whole chain filtered down to the widget size.
+        desc.Texture2D.MostDetailedMip = mip;
         desc.Texture2D.MipLevels = 1;
         desc.Texture2D.PlaneSlice = 0;
         desc.Texture2D.ResourceMinLODClamp = 0.0f;
@@ -171,6 +173,8 @@ namespace
         case TextureDebugViewer::Target::GtaoFiltered: return "GTAO denoised";
         case TextureDebugViewer::Target::GtaoHistory: return "GTAO temporal";
         case TextureDebugViewer::Target::GtaoUpsampled: return "GTAO combined";
+        case TextureDebugViewer::Target::Hzb: return "HZB furthest (AO)";
+        case TextureDebugViewer::Target::HzbClosest: return "HZB closest (SSR)";
         case TextureDebugViewer::Target::GBuffer0: return "GBuffer 0";
         case TextureDebugViewer::Target::GBuffer1: return "GBuffer 1";
         case TextureDebugViewer::Target::ShadingModel: return "Shading Model ID";
@@ -215,6 +219,8 @@ namespace
             MakeTarget(TextureDebugViewer::Target::GtaoFiltered, "Lighting", "P6B AO after the bilateral denoise (half res). Compare against RAW: the per-pixel grain should be gone while the contact darkening stays put. Stale when gtao.denoise is off.", D.gtaoFiltered.Get(), render::kGtaoFormat),
             MakeTarget(TextureDebugViewer::Target::GtaoHistory, "Lighting", "P6B AO after temporal accumulation (half res); also next frame's history. Under a moving camera the disocclusion band behind an occluder falls back to the un-accumulated estimate. Stale when gtao.temporal is off.", D.gtaoHistory.Get(), render::kGtaoFormat),
             MakeTarget(TextureDebugViewer::Target::GtaoUpsampled, "Lighting", "P6B AO at render resolution after the edge-aware upsample - the target lighting and compose will consume. Silhouettes should be crisp: a soft dark fringe against the sky means the depth-aware weights are not firing.", D.gtaoUpsampled.Get(), render::kGtaoFormat),
+            MakeTarget(TextureDebugViewer::Target::Hzb, "Depth", "P6C hierarchical depth pyramid, FURTHEST variant: each level is the 2x2 MIN of the previous, which under reversed-Z is the furthest surface in the tile. That is what a horizon search wants -- a coarse tile then UNDER-estimates occlusion, so it cannot invent contact shadows. GTAO reads this one. Mip 0 is half the render resolution; pick the level with the Mip control. Built right after the G-buffer, so it holds OPAQUE depth only and will legitimately disagree with \"Depth\" wherever the transparent pass wrote water or glass. Reversed-Z device depth sits within a hair of 0, so raise Gain or switch on Depth stretch or this reads as a black rectangle.", D.hzb.Get(), render::kHzbFormat),
+            MakeTarget(TextureDebugViewer::Target::HzbClosest, "Depth", "P6C step 6: the same pyramid reduced with MAX device Z = the NEAREST surface in each tile. A ray march wants this one, so that a long step cannot tunnel through a surface the tile really contains -- the exact opposite of what the AO search wants, which is why there are two. ONLY BUILT while the HiZ SSR technique is the active reflection source; on any other frame this shows whatever was last written, not live data. Same black-by-nature caveat: use Gain or Depth stretch.", D.hzbClosest.Get(), render::kHzbFormat),
             MakeTarget(TextureDebugViewer::Target::GBuffer0, "GBuffer", "Albedo RGB, metalness A.", D.gb0.Get(), renderer.GetGBuffer0Format()),
             MakeTarget(TextureDebugViewer::Target::GBuffer1, "GBuffer", "Encoded normal RGB; alpha is unused.", D.gb1.Get(), renderer.GetGBuffer1Format()),
             MakeTarget(TextureDebugViewer::Target::ShadingModel, "GBuffer", "Four-bit shading-model ID scale from GBAux.b: black=0 Default Lit, 1/15 gray=1 Two-Sided Foliage, 2/15 gray=2 Terrain, 3..15 are reserved.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
@@ -344,6 +350,56 @@ void TextureDebugViewer::Draw(Renderer& renderer, ID3D12Resource* oceanShoreDept
     ImGui::EndDisabled();
 
     ImGui::Checkbox("Image border", &showBorder_);
+
+    // Mip picker: only meaningful for a target that HAS a chain, which today is the HZB alone.
+    const UINT mipCount = (selected && selected->resource)
+        ? std::max<UINT>(1u, selected->resource->GetDesc().MipLevels)
+        : 1u;
+    if (mip_ > static_cast<int>(mipCount) - 1) { mip_ = static_cast<int>(mipCount) - 1; }
+    ImGui::BeginDisabled(mipCount <= 1);
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::SliderInt("Mip", &mip_, 0, static_cast<int>(mipCount) - 1);
+    ImGui::EndDisabled();
+
+    // Brightness and the depth stretch, both applied by OUR preview shader (see
+    // debug_preview_cs.hlsl). They cannot be done with ImGui's image tint: that is packed to 8 bits
+    // and saturates at 1.0, so the first version of this slider was bit-identical to doing nothing.
+    ImGui::SetNextItemWidth(140.0f);
+    ImGui::DragFloat("Gain", &gain_, 0.05f, 0.001f, 100000.0f, "%.3gx",
+                     ImGuiSliderFlags_Logarithmic);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("1x")) { gain_ = 1.0f; }
+    ImGui::SameLine();
+    ImGui::Checkbox("Depth stretch", &stretch_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Monotone pow(1/8). Reversed-Z device depth keeps its whole useful range "
+                          "within a hair of 0, so a linear preview of a depth target is black. "
+                          "Monotone on purpose: min/max relationships survive it.");
+    }
+
+    // Only the targets the fullscreen view knows about; its list is a different (shorter) one.
+    {
+        const int fsTarget =
+            (target_ == Target::Gtao) ? 1 :
+            (target_ == Target::GtaoFiltered) ? 2 :
+            (target_ == Target::GtaoHistory) ? 3 :
+            (target_ == Target::GtaoUpsampled) ? 4 :
+            (target_ == Target::Hzb) ? 5 :
+            (target_ == Target::Depth) ? 6 :
+            (target_ == Target::HzbClosest) ? 7 : -1;
+        ImGui::BeginDisabled(fsTarget < 0);
+        if (ImGui::Button("Show fullscreen"))
+        {
+            fullscreenRequest_ = fsTarget;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled(fsTarget >= 0
+            ? "(same target, full window instead of this panel)"
+            : "(no fullscreen equivalent for this target)");
+    }
+
     ImGui::Separator();
 
     ID3D12Resource* resource = selected ? selected->resource : nullptr;
@@ -359,7 +415,12 @@ void TextureDebugViewer::Draw(Renderer& renderer, ID3D12Resource* oceanShoreDept
             ? (static_cast<double>(width) * height * arraySize * bpp) / (8.0 * 1024.0 * 1024.0)
             : 0.0;
 
-        ImGui::Text("Size: %ux%u", width, height);
+        const UINT shownMip = static_cast<UINT>(std::max(0, mip_));
+        ImGui::Text("Size: %ux%u", std::max(1u, width >> shownMip), std::max(1u, height >> shownMip));
+        if (mipCount > 1)
+        {
+            ImGui::Text("Mip %u of %u  (base %ux%u)", shownMip, mipCount - 1, width, height);
+        }
         ImGui::Text("Array slices: %u", arraySize);
         ImGui::Text("Aspect: %.3f", static_cast<double>(width) / static_cast<double>(height));
         ImGui::Text("Resource: %s", FormatName(resourceDesc.Format));
@@ -397,8 +458,28 @@ void TextureDebugViewer::Draw(Renderer& renderer, ID3D12Resource* oceanShoreDept
     {
         const uint32_t width = static_cast<uint32_t>(std::max<UINT64>(resourceDesc.Width, 1));
         const uint32_t height = std::max<uint32_t>(resourceDesc.Height, 1);
-        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = MakeSrvDesc(*selected, effectiveChannelMode);
-        const ImTextureID textureId = renderer.CreateImGuiTextureId(resource, srvDesc);
+        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc =
+            MakeSrvDesc(*selected, effectiveChannelMode, static_cast<UINT>(std::max(0, mip_)));
+
+        // Hand the pass what to resample, then display ITS output. The pass runs later this frame
+        // (the developer window is built before Scene::Render), so what ImGui ends up sampling is
+        // this frame's preview, not a stale one.
+        Renderer::DebugPreviewRequest req{};
+        req.resource = resource;
+        req.srv = srvDesc;
+        req.gain = gain_;
+        req.stretch = stretch_;
+        req.showAlpha = (effectiveChannelMode == TextureDebugViewer::ChannelMode::Raw);
+        renderer.RequestDebugPreview(req);
+
+        const auto& targets = renderer.GetDeferredForFrame();
+        D3D12_SHADER_RESOURCE_VIEW_DESC previewSrv{};
+        previewSrv.Format = render::kDebugPreviewFormat;
+        previewSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        previewSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        previewSrv.Texture2D.MipLevels = 1;
+        const ImTextureID textureId =
+            renderer.CreateImGuiTextureId(targets.debugPreview.Get(), previewSrv);
 
         ImVec2 available = ImGui::GetContentRegionAvail();
         ImVec2 imageSize = FitAspect(available, width, height);

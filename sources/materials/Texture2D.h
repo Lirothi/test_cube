@@ -48,10 +48,17 @@ public:
                 std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 
         // Legacy path: create from an RGBA8 buffer (kept for compatibility)
+        // `debugLabel` identifies THIS texture (a font name, say). It matters beyond readability:
+        // the canonical registry's leak check counts live entries per debug NAME, so several
+        // textures sharing one name read as a leak that is not there — the same false positive
+        // step 6b removed for file-backed textures by naming them after their path. A texture
+        // built from memory has no path, so the caller has to supply the identity; without one
+        // this falls back to a per-texture serial, which is unique but says nothing.
         void CreateFromRGBA8(Renderer* renderer,
                 ID3D12GraphicsCommandList* uploadCmd,
                 const void* rgba8, UINT width, UINT height,
-                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
+                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive,
+                const wchar_t* debugLabel = nullptr);
 
         // Obtain the SRV GPU handle in the current frame's shader-visible heap
         D3D12_GPU_DESCRIPTOR_HANDLE GetSRVForFrame(Renderer* renderer);

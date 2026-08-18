@@ -129,6 +129,53 @@ namespace
         }
         lock.clear(std::memory_order_release);
     }
+
+    // GBV's own reporting channel. Deliberately NOT filtered to the barrier-interop ids the trace
+    // above cares about: the point of GPU-based validation is the messages nobody predicted.
+    // Identical texts are collapsed for the same reason the barrier log collapses them -- a
+    // per-draw complaint repeats every frame and buries whatever came next.
+    void CALLBACK GbvMessageCallback(D3D12_MESSAGE_CATEGORY,
+                                     D3D12_MESSAGE_SEVERITY severity,
+                                     D3D12_MESSAGE_ID id,
+                                     LPCSTR description,
+                                     void*)
+    {
+        if (severity != D3D12_MESSAGE_SEVERITY_ERROR &&
+            severity != D3D12_MESSAGE_SEVERITY_CORRUPTION &&
+            severity != D3D12_MESSAGE_SEVERITY_WARNING) {
+            return;
+        }
+
+        static std::atomic_flag lock = ATOMIC_FLAG_INIT;
+        while (lock.test_and_set(std::memory_order_acquire)) {}
+        {
+            static char seen[128][160] = {};
+            static int seenCount = 0;
+            char key[160] = "";
+            std::snprintf(key, sizeof(key), "%d:%.140s", static_cast<int>(id),
+                          description ? description : "");
+            bool duplicate = false;
+            for (int i = 0; i < seenCount && !duplicate; ++i) {
+                duplicate = (std::strcmp(seen[i], key) == 0);
+            }
+            if (!duplicate) {
+                if (seenCount < 128) { strncpy_s(seen[seenCount++], key, _TRUNCATE); }
+                const char* sev = (severity == D3D12_MESSAGE_SEVERITY_CORRUPTION) ? "CORRUPTION"
+                                : (severity == D3D12_MESSAGE_SEVERITY_ERROR)      ? "ERROR"
+                                                                                  : "WARNING";
+                char msg[4096];
+                std::snprintf(msg, sizeof(msg), "[gbv] %s id=%d: %s\n", sev, static_cast<int>(id),
+                              description ? description : "");
+                FILE* f = nullptr;
+                if (fopen_s(&f, diag::LogPath("gbv.log").c_str(), "a") == 0 && f) {
+                    std::fputs(msg, f);
+                    std::fclose(f);
+                }
+                OutputDebugStringA(msg);
+            }
+        }
+        lock.clear(std::memory_order_release);
+    }
 #endif
 }
 
@@ -286,6 +333,20 @@ void GraphicsDevice::SetupDebugBreaks()
             info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
             info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
             // Add filters for noisy messages if desired
+        }
+
+        // GBV on an ordinary run has nowhere to report to: the stress harness drains the info
+        // queue itself, and a normal run does not, so every message would go to a debugger that
+        // is not attached. Break-on-error is already off under GBV (see above), which means
+        // WITHOUT this the validation runs and says nothing at all. One callback, one file.
+        if (g_gbvForStress.load(std::memory_order_relaxed)) {
+            Microsoft::WRL::ComPtr<ID3D12InfoQueue1> gbvQueue;
+            if (SUCCEEDED(device_.As(&gbvQueue))) {
+                std::remove(diag::LogPath("gbv.log").c_str()); // fresh per run
+                DWORD gbvCookie = 0;
+                gbvQueue->RegisterMessageCallback(&GbvMessageCallback,
+                                                  D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &gbvCookie);
+            }
         }
 
         // Step 15: the message CALLBACK runs on the thread that raised the message, at the point

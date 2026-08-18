@@ -217,13 +217,42 @@ namespace
         if (setting == "gtao.temporalBlendWeight") { scene.GtaoRef().temporalBlendWeight = value; return true; }
         if (setting == "gtao.temporalClampRange") { scene.GtaoRef().temporalClampRange = value; return true; }
         if (setting == "gtao.useGBufferNormal") { scene.GtaoRef().useGBufferNormal = value != 0.0f; return true; }
+        if (setting == "gtao.useHzb") { scene.GtaoRef().useHzb = value != 0.0f; return true; }
+        if (setting == "gtao.hzbMipBias") { scene.GtaoRef().hzbMipBias = (uint32_t)std::max(0.0f, value); return true; }
         if (setting == "gtao.strength") { scene.GtaoRef().strength = value; return true; }
         if (setting == "gtao.upsampleTolerance") { scene.GtaoRef().upsampleTolerance = value; return true; }
+        // Where surface reflections come from: 0 None, 1 SkyOnly, 2 SSR, 3 RT. The DEFAULT IS RT,
+        // and on RT-capable hardware that means the screen-space path never runs -- so without this
+        // key there is no headless way to exercise, measure or gate SSR at all. (Found the hard way
+        // in P6C step 6: a "HiZ" capture that had quietly been tracing the TLAS.)
+        if (setting == "render.reflectionSource")
+        {
+            const uint32_t r = (uint32_t)std::max(0.0f, value);
+            renderSettings.reflectionSource = r < (uint32_t)ReflectionSource::Count
+                ? (ReflectionSource)r : ReflectionSource::RT;
+            return true;
+        }
+        // P6C step 6: which screen-space search the reflection ray uses. 0 = log march (fixed
+        // growing steps against flat depth), 1 = HiZ (walks the closest depth pyramid). The A/B
+        // switch for the SSR retrofit, and the only way to compare the two INSIDE ONE BINARY.
+        // Only has an effect when render.reflectionSource is 2 (SSR).
+        if (setting == "ssr.temporal")   { renderSettings.ssrTemporal = value != 0.0f; return true; }
+        if (setting == "ssr.temporalBlend") { renderSettings.ssrTemporalBlendWeight = value; return true; }
+        if (setting == "ssr.temporalClampExpand") { renderSettings.ssrTemporalClampExpand = value; return true; }
+        if (setting == "ssr.technique")
+        {
+            const uint32_t t = (uint32_t)std::max(0.0f, value);
+            renderSettings.ssrTechnique = t < (uint32_t)SsrTechnique::Count
+                ? (SsrTechnique)t : SsrTechnique::LogMarch;
+            return true;
+        }
         // The fullscreen debug blit, so a half-res intermediate can be captured headlessly instead
         // of only judged by eye in the GUI. `debug.tex` = 0 shadow atlas, 1 GTAO raw, 2 denoised,
-        // 3 temporal, 4 upsampled; `debug.texMode` turns the blit on.
+        // 3 temporal, 4 upsampled, 5 HZB furthest, 6 scene depth, 7 HZB closest;
+        // `debug.texMode` turns the blit on.
         if (setting == "debug.texMode")    { renderSettings.debugTexMode = value != 0.0f; return true; }
         if (setting == "debug.tex")        { renderSettings.debugTexTarget = (int)value; return true; }
+        if (setting == "debug.texMip")     { renderSettings.debugTexMip = (int)value; return true; }
         if (setting == "light.sunTemperatureK")
         {
             scene.DirectionalLightRef().SetUseSunTemperature(value > 0.0f);

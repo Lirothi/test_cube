@@ -35,7 +35,10 @@ COMPUTE_ENTRIES = [
     ("gtao_cs.hlsl", "CSMain"),
     ("gtao_filter_cs.hlsl", "CSMain"),
     ("gtao_temporal_cs.hlsl", "CSMain"),
+    ("ssr_temporal_cs.hlsl", "CSMain"),
     ("gtao_upsample_cs.hlsl", "CSMain"),
+    ("hzb_build_cs.hlsl", "CSMain"),
+    ("debug_preview_cs.hlsl", "CSMain"),
 ]
 
 

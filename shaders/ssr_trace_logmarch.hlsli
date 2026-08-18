@@ -28,7 +28,7 @@
 static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
 static const int ssrRefineSteps = 16; // number of refinement iterations
 static const int ssrLogMarchSteps = 128; // number of logarithmic steps for the hybrid tracer
-static const float ssrMinStrideVS = 0.01f; // minimum ray step in view space
+static const float ssrMinStrideVS = 0.05f; // minimum ray step in view space
 static const float ssrStrideGrowth = 1.02f; // multiplicative stride growth per step
 static const float ssrThicknessVS = 0.05f; // thickness (view units)
 static const float ssrEdgeFadePx = 32.0f; // Smooth fade width near the screen border in pixels

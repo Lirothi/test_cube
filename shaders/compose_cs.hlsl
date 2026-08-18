@@ -64,16 +64,8 @@ static const float kEps = 1e-6;
 
 // Roughness->mip scale for the skybox fallback. The cube has an 11-mip chain; this
 // matches glass.hlsl (rough*5) so opaque and glass sky reflections blur identically.
-// Legacy sky roughness ceiling, used ONLY when a sky has no F7 derivatives. It was always a guess:
-// the display cube's mip chain is a box filter, so treating mip N as "roughness N/5" approximates a
-// GGX lobe with a square one. F8's prefiltered cube is the real answer; this stays as the fallback
-// for skies imported before it existed.
-static const float kSkyRoughMaxMip = 5.0;
-
-float3 FresnelSchlick(float cosTheta, float3 F0)
-{
-    return F0 + (1.0.xxx - F0) * pow(1.0 - cosTheta, 5.0);
-}
+// `kSkyRoughMaxMip` (the legacy roughness ceiling for a sky with no F7 derivatives) and
+// `FresnelSchlick` moved to ibl_common.hlsli when the lighting pass started needing them too.
 
 inline float ReadDepth(float2 uv)
 {
@@ -272,21 +264,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // term below fades the reflection out as rough->1, so the very blurry upper mips are
         // only lightly weighted.
         const float cosT = saturate(dot(N_ws, Vw));
-        const bool useSplitSum = (skySpecMipCount > 0u);
 
         float3 skyCol = 0.0f.xxx;
         if (enableSkySpecular != 0u)
         {
-            // F8: index the PREFILTERED cube by perceptual roughness across its real mip count.
-            // Its last mip is roughness 1 by construction, so no constant has to be guessed.
-            // Unreal's logarithmic mapping, so a mip always means the same roughness whatever the
-            // mip count -- see ibl_common.hlsli. The bake uses the exact inverse.
-            const float mip = useSplitSum
-                ? IblMipFromRoughness(rough, (float)skySpecMipCount)
-                : rough * kSkyRoughMaxMip;
-            skyCol = useSplitSum
-                ? SkySpecular.SampleLevel(gSmp, Rw, mip).rgb * skyboxIntensity
-                : SkyboxTex.SampleLevel(gSmp, Rw, mip).rgb * skyboxIntensity;
+            skyCol = IblSkyRadiance(SkySpecular, SkyboxTex, gSmp, Rw, rough,
+                                    skySpecMipCount, skyboxIntensity);
         }
 
         // F9: occlude the FALLBACK SKY only. An RT or SSR hit already knows what it saw -- it
@@ -295,29 +278,16 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // A/B, and this is the conservative half.
         skyCol *= IblSpecularOcclusion(cosT, CombinedAo(materialAo, uv), rough);
 
-        // Skybox as fallback: (ssrColor*α + sky*(1-α)). Apply the material
-        // control after the source/fallback blend so None, SkyOnly, SSR and RT
-        // share the same response without changing analytic direct specular.
-        float3 refl = reflectionRGB + skyCol * (1.0 - reflectionA);
+        // ONLY THE DIFFERENCE THE REFLECTION MAKES. The sky term is already in the light target --
+        // the lighting pass adds it now, so that the screen-space reflection pass, which samples
+        // that target, sees a metal with its environment on it instead of a black disc. The blend
+        // is unchanged in total: lighting contributed sky*weight, this contributes
+        // (hit - sky*alpha)*weight, and the two sum to the old (hit + sky*(1-alpha))*weight.
+        // Where a reflection found nothing (alpha 0) this is exactly zero, which is what makes
+        // None/SkyOnly/RT screenshot-identical to the build before the move.
+        float3 refl = reflectionRGB - skyCol * reflectionA;
         refl *= indirectSpecularScale;
-
-        float3 spec;
-        if (useSplitSum)
-        {
-            // Split sum: the LUT already integrates Fresnel and the geometry term over the lobe,
-            // so multiplying by FresnelSchlick again would apply Fresnel twice. The old
-            // `pow(gloss, 1)` fade goes with it -- it existed to hide the fact that a box-filtered
-            // mip is not a rough lobe, and a real prefilter does not need hiding.
-            const float2 ab = BrdfLut.SampleLevel(gSmp, float2(cosT, rough), 0).rg;
-            spec = refl * (F0 * ab.x + ab.y);
-        }
-        else
-        {
-            float3 F = FresnelSchlick(cosT, F0);
-            float gloss = saturate(1.0 - rough);
-            spec = refl * F * pow(gloss, 1);
-        }
-        color += spec;
+        color += refl * IblSpecularWeight(BrdfLut, gSmp, F0, cosT, rough, skySpecMipCount);
 
         if (shadingModel == kShadingModelTerrain)
         {

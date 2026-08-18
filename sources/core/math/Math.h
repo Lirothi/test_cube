@@ -83,6 +83,31 @@ namespace Math
         static float2 Lerp(const float2& a, const float2& b, float t) { return a + (b - a) * t; }
     };
 
+    // Integer vectors, for constant-buffer fields that are genuinely counts or texel coordinates.
+    // Layout matches HLSL's `uint2`/`int2` exactly, which is what Material::UpdateCBField needs --
+    // it memcpys sizeof(T) into the reflected field.
+    //
+    // These exist because a CB that wants `uint2 dstSize` should say so. Flattening it into two
+    // scalars on the C++ side to dodge a missing type makes the struct stop mirroring the shader,
+    // and the mirror is the only thing keeping the two in step.
+    struct uint2 {
+        std::uint32_t x, y;
+        uint2() : x(0), y(0) {}
+        uint2(std::uint32_t _x, std::uint32_t _y) : x(_x), y(_y) {}
+        explicit uint2(std::uint32_t _v) : x(_v), y(_v) {}
+        bool operator==(const uint2& o) const { return x == o.x && y == o.y; }
+        bool operator!=(const uint2& o) const { return !(*this == o); }
+    };
+
+    struct int2 {
+        std::int32_t x, y;
+        int2() : x(0), y(0) {}
+        int2(std::int32_t _x, std::int32_t _y) : x(_x), y(_y) {}
+        explicit int2(std::int32_t _v) : x(_v), y(_v) {}
+        bool operator==(const int2& o) const { return x == o.x && y == o.y; }
+        bool operator!=(const int2& o) const { return !(*this == o); }
+    };
+
     struct float3 {
         float x, y, z;
         float3() : x(0), y(0), z(0) {}

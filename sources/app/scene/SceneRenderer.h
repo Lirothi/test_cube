@@ -129,6 +129,19 @@ private:
         uint32_t pointRestore = 0u;
     };
 
+    // P6C: the hierarchical depth pyramid. `mipCount` is decided in the builder so the record body
+    // dispatches exactly the levels that were declared.
+    void Pass_SsrTemporal(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_Hzb(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
+
+    // P6C step 6: fills the HiZ tracer's half of the SSR constants. ONE definition, called by the
+    // opaque and the glass dispatch, so the two can never disagree about whether the closest
+    // pyramid exists this frame.
+    void FillSsrHzbConstants(Renderer* r, SsrPassConstants& c) const;
+
+    // The texture inspector's preview, resampled through our own shader so it can be brightened.
+    void Pass_DebugPreview(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
+
     // P6B: screen-space ambient occlusion, half res, between the G-buffer and lighting.
     void Pass_Gtao(Renderer* r, RenderGraphPassContext ctx, const Camera& camera,
         const GtaoChain& chain);
@@ -224,6 +237,18 @@ private:
     bool asVramLogged_ = false;    // S13: one-time AS VRAM accounting log
     bool rtReflectActive_ = false; // S15: RT reflections active this frame (for glass)
     bool glassReflActive_ = false; // S15b: traced glass reflections active (RT or SSR)
+    // P6C step 6: does anything trace the CLOSEST depth pyramid this frame? ONE flag, read by the
+    // pyramid build (whether to write that chain at all) and by both SSR dispatches (whether the
+    // HiZ tracer may run). Two independent evaluations of "is HiZ on" is how a pass ends up
+    // tracing a chain nobody filled in.
+    bool ssrHizActive_ = false;
+    // SSR temporal resolve: whether it ran this frame (the blur's input depends on it) and whether
+    // the previous frame left a history worth reading.
+    bool ssrTemporalActive_ = false;
+    bool ssrHistoryValid_ = false;
+    uint32_t ssrHistoryFrames_ = 0u;
+    uint32_t ssrHistoryWidth_ = 0u;
+    uint32_t ssrHistoryHeight_ = 0u;
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)
     struct RtBindlessObjectCache
     {

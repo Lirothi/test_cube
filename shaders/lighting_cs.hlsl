@@ -11,6 +11,7 @@
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
+#include "ibl_common.hlsli"
 #include "vsm_sample.hlsli"
 #include "caustics.hlsli"
 
@@ -31,11 +32,27 @@ TextureCube SkyIrradiance : register(t10);
 // the target is not written at all when the pass is off, so an unconditional read would be
 // sampling whatever was left in it.
 Texture2D GtaoTex : register(t11);
+// The sky's INDIRECT SPECULAR moved here from compose. It has to be added before the screen-space
+// reflection pass runs, because that pass samples this very target: with the term still in compose,
+// a metal seen inside a reflection was a black disc with a highlight -- a metal has no diffuse, so
+// until this is added it has nothing else in the light buffer at all. See ibl_common.hlsli for the
+// split and why the total is unchanged.
+// t12: GGX-prefiltered sky radiance   t13: split-sum environment BRDF   t14: the raw sky cube,
+// used only by levels whose sky arrived without prefiltered derivatives.
+TextureCube SkySpecular : register(t12);
+Texture2D BrdfLut : register(t13);
+TextureCube SkyboxTex : register(t14);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
 SamplerComparisonState gSmpLinear : register(s1);
 SamplerState gSmpLinearWrap : register(s2);
+// s3: LinearCLAMP. The BRDF LUT is a 2D table indexed by (NdotV, roughness) and MUST be clamped --
+// reading it through the caustics sampler (LinearWrap, the only linear one this pass had) wraps
+// both edges and quietly returns the wrong Fresnel there. compose has always read it clamped, and
+// the two passes now have to agree exactly or the sky term one adds and the other subtracts stop
+// cancelling.
+SamplerState gSmpLinearClamp : register(s3);
 
 cbuffer PerFrame : register(b0)
 {
@@ -98,6 +115,12 @@ cbuffer PerFrame : register(b0)
     // S0.3: Legacy CSM debug visualization. 0 = off, 1 = tint by the RESOLVED cascade.
     // Always 0 in VSM mode (the CPU side forces it), so the branch below is dead there.
     uint csmDebugMode;
+    // The sky specular block, mirroring compose's own fields so both passes agree by construction.
+    // `skySpecMipCount` 0 also selects the raw-cube fallback path (see IblSkyRadiance).
+    uint enableSkySpecular;
+    uint skySpecMipCount;
+    float skyboxIntensity;
+    float _padSkySpec;
 }
 
 static const float pcfRadius = 1.0f;
@@ -269,9 +292,9 @@ CausticsParams LoadCausticsParams()
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
-    "DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+    "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
 [RootSignature(LIGHTING_RS)]
 [numthreads(8,8,1)]
@@ -444,5 +467,26 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         color *= kCascadeTint[clamp(csmCascade, 0, 4)];
     }
 
-    LightTarget[dispatchThreadId.xy] = float4(color * exposure, 1.0);
+    // INDIRECT SKY SPECULAR, added AFTER the exposure multiply on purpose: compose used to add it
+    // to an already-exposed light value and never scaled it, so folding it in before the multiply
+    // would change every existing frame. Same inputs and same helpers as compose, so the two sum
+    // to exactly what compose alone used to produce.
+    float3 skySpecular = 0.0f.xxx;
+    if (enableSkySpecular != 0u)
+    {
+        const float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
+        const float3 R = NormalizeSafe(reflect(-V, N), N);
+        float3 skyCol = IblSkyRadiance(SkySpecular, SkyboxTex, gSmpLinearClamp, R, rough,
+                                       skySpecMipCount, skyboxIntensity);
+        const float cosT = saturate(dot(N, V));
+        // F9: the FALLBACK SKY is the only indirect specular that gets occluded -- a traced hit
+        // already saw the geometry AO stands in for. compose applies the identical line to the
+        // term it subtracts, so the two stay each other's exact inverse.
+        skyCol *= IblSpecularOcclusion(cosT, CombinedAo(materialAo, uv), rough);
+        const float indirectSpecularScale = saturate(gbAux.g);
+        skySpecular = skyCol * indirectSpecularScale *
+                      IblSpecularWeight(BrdfLut, gSmpLinearClamp, F0, cosT, rough, skySpecMipCount);
+    }
+
+    LightTarget[dispatchThreadId.xy] = float4(color * exposure + skySpecular, 1.0);
 }

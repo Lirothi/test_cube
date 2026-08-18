@@ -935,6 +935,14 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     const size_t numViews = render::kMaxShadowViews;
     const size_t groups = std::max<size_t>(numMeshGroups_, 1);
     const size_t casters = std::max<size_t>(count_, 1); // TOTAL (static + GI): visible-list + unified width
+    // NOTE (2026-08-18): --canonical-check reports this buffer off-canonical on some frames and
+    // not others, and FLIPPING the declaration to INDIRECT_ARGUMENT just reverses the report
+    // (canonical=0x200 actual=0x40) instead of clearing it. So the label is not the bug: the
+    // buffer genuinely rests in DIFFERENT states depending on whether RecordCull ran, since that
+    // body early-outs on `count_ == 0 || numMeshGroups_ == 0` while its closing transition to
+    // INDIRECT_ARGUMENT only happens when it does not. Fixing it means giving the resource one
+    // resting state on EVERY frame, which belongs with the cull's own flow, not here. Left as-is
+    // deliberately; the check is telling the truth.
     EnsureUavRing(renderer, indirectArgs_, numViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"ShadowGpuData.IndirectArgs");
     EnsureUavRing(renderer, visibleList_, numViews * casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.VisibleList");
     EnsureUavRing(renderer, indirectCounts_, numViews * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"ShadowGpuData.IndirectCounts");

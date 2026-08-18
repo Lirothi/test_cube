@@ -466,6 +466,28 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // the glass reflection prepass; the forward shader uses the cubemap only in
     // SkyOnly and suppresses it in None via lightCounts.w.
     glassReflActive_ = !clearReflections;
+    // NOTHING READS THE CLOSEST PYRAMID ANY MORE, so it is not built. The stackless HiZ traversal
+    // was its only consumer and it is gone: Unreal's own SSR marches the FURTHEST chain (the one
+    // GTAO already builds) at a fixed mip, and a `max`-reduced chain answers a question no pass
+    // now asks. The target, its descriptors and the shader's `writeClosest` path all stay --
+    // P9's screen-space GI is the next consumer and wants exactly this chain.
+    ssrHizActive_ = false;
+    // SSR TEMPORAL RESOLVE. Only for the screen-space source: RT traces the TLAS and does not have
+    // this instability, and None/SkyOnly dispatch nothing to filter. The history is per-frame-set
+    // like the GTAO one, so it is only valid once a previous frame at THIS reflection size has
+    // written it -- a resize or a level switch has to seed instead of reading garbage.
+    ssrTemporalActive_ = frame.settings.ssrTemporal && !clearReflections && !rtReflect;
+    {
+        const UINT rw = renderer->GetReflectionTextureWidth();
+        const UINT rh = renderer->GetReflectionTextureHeight();
+        ssrHistoryValid_ = ssrTemporalActive_ && ssrHistoryFrames_ > 0u &&
+                           ssrHistoryWidth_ == rw && ssrHistoryHeight_ == rh;
+        ssrHistoryFrames_ = ssrTemporalActive_
+            ? ((ssrHistoryWidth_ == rw && ssrHistoryHeight_ == rh) ? ssrHistoryFrames_ + 1u : 1u)
+            : 0u;
+        ssrHistoryWidth_ = rw;
+        ssrHistoryHeight_ = rh;
+    }
     if (rtBuildAS && !asManagerInited_)
     {
         asManager_.Init(renderer->GetDevice5());
@@ -824,7 +846,40 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // AddPass2: the builder makes the decision ONCE and declares from it, so a disabled frame
     // declares nothing and the body is empty -- no separate Prepare to keep in sync, which is the
     // whole point of the form.
-    const size_t pGtao = rg.AddPass2(RenderPass::Main_Gtao, { pGbuf },
+    // P6C: the depth pyramid. Ordered after the G-buffer (it reduces the depth buffer) and before
+    // anything that would consume it -- GTAO's horizon search (step 5) and SSR's HiZ march (step 6).
+    const size_t pHzb = rg.AddPass2(RenderPass::Main_Hzb, { pGbuf },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const auto& D = renderer->GetDeferredForFrame();
+            if (!resources_.GetHzbMaterial() || resources_.GetHzbCBSizeBytes() == 0u ||
+                D.depthSRV.ptr == 0 || D.hzb.Get() == nullptr || D.hzbClosest.Get() == nullptr ||
+                D.hzbMips == 0)
+            {
+                return {};
+            }
+            ctx.NextPoint();
+            const uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(D.depth.Get(), kSrvAll);
+            // The whole chain in ONE state for the whole build; the mips are separated by UAV
+            // barriers, not transitions. See the shader header for why.
+            ctx.Use(D.hzb.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            // The closest chain is declared UNCONDITIONALLY, even on frames the shader does not
+            // write it. Its descriptors sit in the same VOLATILE table either way, and a barrier
+            // set that changes with a UI setting is exactly the kind of thing that compiles fine
+            // and then breaks the one configuration nobody screenshots.
+            ctx.Use(D.hzbClosest.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            // ...and back to their resting state, which is what GTAO, SSR and the inspector read.
+            ctx.NextPoint();
+            ctx.Use(D.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ctx.Use(D.hzbClosest.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            return [this, renderer, point](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassHzb);
+                Pass_Hzb(renderer, c, point);
+            };
+        });
+
+    // P6C: the horizon search reads the pyramid, so GTAO orders after the build.
+    const size_t pGtao = rg.AddPass2(RenderPass::Main_Gtao, { pGbuf, pHzb },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const GtaoSettings& s = frame_->settings.gtao;
             const auto& D = renderer->GetDeferredForFrame();
@@ -850,6 +905,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 return {};
             }
 
+            constexpr D3D12_RESOURCE_STATES kAoRead = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             GtaoChain chain{};
             chain.denoise = s.denoise;
             chain.temporal = s.temporal;
@@ -873,11 +929,13 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             // instead would leave them one state away from their canonical at frame end for no
             // reader's benefit — which --canonical-check duly reported. The G-buffer inputs keep
             // kSrvAll because the later forward passes really do sample them from a pixel shader.
-            constexpr D3D12_RESOURCE_STATES kAoRead = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             ctx.NextPoint();
             chain.pointRaw = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(D.gb1.Get(), kSrvAll);
             ctx.Use(D.depth.Get(), kSrvAll);
+            // The pyramid rests in this state, so this normally compiles to no barrier -- declaring
+            // it is what makes that a fact the compile knows rather than an assumption.
+            ctx.Use(D.hzb.Get(), kAoRead);
             ctx.Use(D.gtao.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
             // Each stage reads what the previous one wrote, so every stage boundary is a
@@ -1076,6 +1134,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+        // P6C step 6: the HiZ tracer's pyramid. Already its resting state, so this compiles to no
+        // barrier -- declaring it is what makes that a fact the compile knows.
+        { D.hzbClosest.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } };
     size_t pReflectionSource; // node the blur depends on (reflection chain end)
     if (useRtReflections)
@@ -1105,7 +1166,10 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
     else
     {
-        pReflectionSource = rg.AddPass(RenderPass::Main_ReflectionSource, { pSky, pWetness }, reflectDecls,
+        // P6C step 6: the HiZ technique marches the depth pyramid, so this orders after the build.
+        // The GLASS SSR pass needs the same guarantee and gets it transitively -- it hangs off
+        // Compose, which hangs off the blur, which hangs off this node.
+        pReflectionSource = rg.AddPass(RenderPass::Main_ReflectionSource, { pSky, pWetness, pHzb }, reflectDecls,
             [this, renderer](RenderGraphPassContext ctx) {
                 CPU_SCOPE(ProfilerScopes::kPassReflectionSource);
                 Pass_ScreenSpaceReflections(renderer, ctx, *frame_->camera);
@@ -1115,10 +1179,29 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // so one Prepare covers all three.
     rg.SetPassPrepare(pReflectionSource, [](RenderGraphPassContext& p) { p.UseDeclared(); });
 
+    // SSR temporal resolve, between the trace and the glossy blur. Skipped entirely when it is not
+    // active -- an unregistered pass costs nothing, a registered one still pays its barriers.
+    size_t pReflectionFiltered = pReflectionSource;
+    if (ssrTemporalActive_)
+    {
+        pReflectionFiltered = rg.AddPass(RenderPass::Main_ReflectionTemporal, { pReflectionSource },
+            { { D.reflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.reflectionHistory.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+            [this, renderer](RenderGraphPassContext ctx) {
+                CPU_SCOPE(ProfilerScopes::kPassReflectionTemporal);
+                Pass_SsrTemporal(renderer, ctx);
+            });
+        rg.SetPassPrepare(pReflectionFiltered, [](RenderGraphPassContext& p) { p.UseDeclared(); });
+    }
+
     // First-use states only; the blur ping-pongs reflection<->scratch states between
     // its two dispatches inside the pass body.
-    auto pBlur = rg.AddPass(RenderPass::Main_ReflectionBlur, { pReflectionSource },
+    auto pBlur = rg.AddPass(RenderPass::Main_ReflectionBlur, { pReflectionFiltered },
         { { D.reflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          // The resolve's output is the blur's first input; declared unconditionally so the
+          // compiled barrier set does not change with a UI toggle.
+          { D.reflectionHistory.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.reflectionScratch.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
           { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } }, // S16: roughness drives glossy blur
         [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassReflectionBlur); Pass_ReflectionBlur(renderer, ctx); });
@@ -1136,8 +1219,10 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         ID3D12Resource* const blurRefl = D.reflection.Get();
         ID3D12Resource* const blurScratch = D.reflectionScratch.Get();
         ID3D12Resource* const blurGb0 = D.gb0.Get();
-        rg.SetPassPrepare(pBlur, [this, blurRefl, blurScratch, blurGb0](RenderGraphPassContext& p) {
+        ID3D12Resource* const blurHistory = D.reflectionHistory.Get();
+        rg.SetPassPrepare(pBlur, [this, blurRefl, blurScratch, blurGb0, blurHistory](RenderGraphPassContext& p) {
             p.Use(blurRefl, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(blurHistory, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             p.Use(blurScratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             p.Use(blurGb0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             if (resources_.GetBlurMaterial() && resources_.GetBlurCBSizeBytes() != 0) {
@@ -1227,6 +1312,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             { D.glassReflDepth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            // P6C step 6: only the SSR variant reads it, but the RT variant declaring a resource
+            // already in that state costs nothing and keeps ONE decl list for both branches.
+            { D.hzbClosest.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             { D.glassReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } };
         if (useRtReflections && pBuildAS != (size_t)-1)
         {
@@ -1374,11 +1462,20 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             Pass_ExposureMetering(renderer, ctx);
         });
     rg.SetPassPrepare(pExposure, [this](RenderGraphPassContext& p) {
+        // UNCONDITIONAL, and it has to be: the body calls ApplyDeclaredStates BEFORE it checks
+        // whether the camera is dormant, so `scene -> NON_PIXEL_SHADER_RESOURCE` happens on every
+        // frame including the ones with no dispatches. Returning above this left the body
+        // performing a transition the compile had never registered -- the comparator's FATAL
+        // direction, "MISSING (performed, never registered) res=Deferred[N].Scene", which is the
+        // one that means the barrier would simply not be emitted once the compiled arrays are
+        // authoritative. It only reproduced on a level with NO cameraExposure block at all
+        // (d_emissive_test), and it was invisible until the diagnostics stopped repeating
+        // themselves 3779 times a run.
+        p.UseDeclared();
         // The histogram and exposure buffers rest at UNORDERED_ACCESS and are used at
         // UNORDERED_ACCESS, so declaring them emits no barrier -- but declaring them is what makes
         // them legal to touch at all, since an undeclared resource is an invariant failure.
         if (!frame_->cameraExposure.enabled) { return; }
-        p.UseDeclared();
         ExposureMetering& metering = p.renderer->Exposure();
         if (!metering.IsReady()) { return; }
         p.Use(metering.HistogramResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1449,6 +1546,34 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         p.NextPoint();
         p.Use(fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     });
+
+    // The inspector's preview. Must complete before the overlay draws ImGui, which is what will
+    // sample it. The request was left during UI building, which happens before Scene::Render.
+    const size_t pDebugPreview = rg.AddPass2(RenderPass::Main_DebugPreview, { pTone },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const auto& DD = renderer->GetDeferredForFrame();
+            const Renderer::DebugPreviewRequest& req = renderer->DebugPreviewRequestRef();
+            if (req.resource == nullptr || !resources_.GetDebugPreviewMaterial() ||
+                resources_.GetDebugPreviewCBSizeBytes() == 0u || DD.debugPreviewUAV.ptr == 0)
+            {
+                return {};
+            }
+            ctx.NextPoint();
+            const uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+            // The SOURCE is whatever the user picked and is deliberately NOT declared: it can be
+            // any target, in any of several resting states, and the graph would have to model all
+            // of them. It is transitioned explicitly from its canonical and back, the same way the
+            // overlay borrows a texture for display.
+            ctx.Use(DD.debugPreview.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint();
+            ctx.Use(DD.debugPreview.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            return [this, renderer, point](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassDebug);
+                Pass_DebugPreview(renderer, c, point);
+            };
+        });
+    (void)pDebugPreview;
 
     const DebugTexPick debugPick = PickDebugTexTarget(D, frame_->settings.debugTexTarget);
     const bool debugTexOn = frame_->settings.debugTexMode && debugPick.resource != nullptr &&
@@ -2587,6 +2712,118 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     rgGB.Execute(renderer);
 }
 
+// The inspector preview. See shaders/debug_preview_cs.hlsl for why this pass exists at all:
+// ImGui can only multiply an image by an 8-bit tint, so brightening has to happen before ImGui.
+void SceneRenderer::Pass_DebugPreview(Renderer* renderer, RenderGraphPassContext ctx, uint32_t point)
+{
+    const auto& D = renderer->GetDeferredForFrame();
+    const Renderer::DebugPreviewRequest& req = renderer->DebugPreviewRequestRef();
+
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassDebug);
+        renderer->EmitPoint(t.cl, point);
+
+        // Borrow the source: canonical -> readable, and put it back below. Explicit because the
+        // source is user-chosen and the graph does not model it.
+        const D3D12_RESOURCE_STATES srcCanonical = renderer->GetCanonicalState(req.resource);
+        Renderer::TransitionExplicit(t.cl, req.resource, srcCanonical,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        // A one-off SRV for exactly the view the inspector asked for (mip + channel swizzle).
+        const D3D12_CPU_DESCRIPTOR_HANDLE srcSrv =
+            renderer->MakeDebugPreviewSourceSrv(req.resource, req.srv);
+
+        DebugPreviewConstants c{};
+        c.previewSize = uint2{ kDebugPreviewSize, kDebugPreviewSize };
+        c.gain = req.gain;
+        c.stretch = req.stretch ? 1u : 0u;
+        c.showAlpha = req.showAlpha ? 1u : 0u;
+
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
+        RecordComputeDispatch(renderer, t.cl, resources_.GetDebugPreviewMaterial().get(),
+            resources_.GetDebugPreviewCBSizeBytes(),
+            [&](uint8_t* dest) { resources_.WriteDebugPreviewConstants(c, dest); },
+            { srcSrv },
+            { D.debugPreviewUAV },
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            kDebugPreviewSize, kDebugPreviewSize,
+            D.debugPreview.Get());
+
+        Renderer::TransitionExplicit(t.cl, req.resource,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, srcCanonical);
+
+        // ...and the preview itself back to shader-readable for ImGui.
+        renderer->EmitPoint(t.cl, point + 1u);
+    }
+    ctx.EndCL(t);
+}
+
+// P6C. Builds the whole mip chain in one command list: one dispatch per level, each reading the
+// previous level through its UAV and separated by a UAV barrier. One dispatch per mip rather than
+// UE's four-mips-per-dispatch groupshared reduction -- the levels are tiny and the barriers are
+// cheap, and this version can be checked against a CPU reduction line for line. If the build ever
+// measures as significant, the batched form is a drop-in replacement for this loop.
+void SceneRenderer::Pass_Hzb(Renderer* renderer, RenderGraphPassContext ctx, uint32_t point)
+{
+    auto material = resources_.GetHzbMaterial();
+    const UINT cbSize = resources_.GetHzbCBSizeBytes();
+    const auto& D = renderer->GetDeferredForFrame();
+
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassHzb);
+        renderer->EmitPoint(t.cl, point);
+
+        const auto samplerDescs = std::array{ *SamplerManager::PointClamp() };
+        const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+        UINT srcW = renderer->GetRenderWidth();
+        UINT srcH = renderer->GetRenderHeight();
+        for (UINT mip = 0; mip < D.hzbMips; ++mip)
+        {
+            const UINT dstW = std::max(1u, D.hzbWidth >> mip);
+            const UINT dstH = std::max(1u, D.hzbHeight >> mip);
+
+            HzbPassConstants c{};
+            c.dstSize = uint2{ dstW, dstH };
+            c.srcSize = uint2{ srcW, srcH };
+            c.fromDepth = (mip == 0) ? 1u : 0u;
+            c.writeClosest = ssrHizActive_ ? 1u : 0u;
+
+            // u0/u2 are the source mips. For mip 0 the source is the depth SRV instead, but the
+            // table must stay fully populated, so they are bound to mip 0 as inert placeholders.
+            const D3D12_CPU_DESCRIPTOR_HANDLE srcUav =
+                (mip == 0) ? D.hzbMipUAV[0] : D.hzbMipUAV[mip - 1];
+            const D3D12_CPU_DESCRIPTOR_HANDLE srcUavClosest =
+                (mip == 0) ? D.hzbClosestMipUAV[0] : D.hzbClosestMipUAV[mip - 1];
+
+            RecordComputeDispatch(renderer, t.cl, material.get(), cbSize,
+                [&](uint8_t* dest) { resources_.WriteHzbConstants(c, dest); },
+                { D.depthSRV },
+                { srcUav, D.hzbMipUAV[mip], srcUavClosest, D.hzbClosestMipUAV[mip] },
+                samplerTable,
+                dstW, dstH,
+                D.hzb.Get()); // UAV barrier: the next level reads what this one just wrote
+            if (ssrHizActive_)
+            {
+                // Same reason, second resource: RecordComputeDispatch only barriers one.
+                renderer->UAVBarrier(t.cl, D.hzbClosest.Get());
+            }
+
+            srcW = dstW;
+            srcH = dstH;
+        }
+
+        // Back to shader-readable for this frame's consumers.
+        renderer->EmitPoint(t.cl, point + 1u);
+    }
+    ctx.EndCL(t);
+}
+
 // P6B. The whole AO chain records into ONE command list: raw estimate -> bilateral denoise ->
 // temporal accumulation -> edge-aware upsample. Four dispatches of ~0.03 ms each do not each
 // deserve their own pass and their own command list; the stage boundaries are ordinary barrier
@@ -2637,6 +2874,10 @@ void SceneRenderer::Pass_Gtao(Renderer* renderer, RenderGraphPassContext ctx, co
     // something to average instead of a fixed pattern. Committed in the builder.
     c.frameIndex = chain.frameIndex;
     c.useGBufferNormal = s.useGBufferNormal ? 1u : 0u;
+    // P6C: only walk the pyramid if one was actually built this frame.
+    c.useHzb = (s.useHzb && D.hzbMips > 0u) ? 1u : 0u;
+    c.hzbMipBias = s.hzbMipBias;
+    c.hzbMipCount = std::max(1u, D.hzbMips);
 
     // Shared by all three filter kernels; only the sizes and the stage's own field differ.
     GtaoFilterConstants f{};
@@ -2665,7 +2906,7 @@ void SceneRenderer::Pass_Gtao(Renderer* renderer, RenderGraphPassContext ctx, co
         renderer->EmitPoint(t.cl, chain.pointRaw);
         RecordComputeDispatch(renderer, t.cl, material.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteGtaoConstants(c, dest); },
-            { D.depthSRV, D.gbSRV[1] },
+            { D.depthSRV, D.gbSRV[1], D.hzbSRV },
             { D.gtaoUAV },
             samplerTable,
             aoW, aoH,
@@ -2784,6 +3025,14 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         constants.gtaoStrength = std::clamp(frame_->settings.gtao.strength, 0.0f, 1.0f);
         constants.skyIrradianceScale =
             (iblSky ? iblSky->GetExposure() : 1.0f) * dirLight.GetSkyFillIntensity();
+        // The sky's indirect SPECULAR, moved out of compose so the screen-space reflection pass
+        // (which samples this target) sees a metal with its environment on it. These three MUST
+        // match compose's own values exactly -- one pass adds the term, the other subtracts the
+        // part a reflection replaced, and they only cancel while both agree.
+        constants.enableSkySpecular =
+            frame_->settings.reflectionSource != ReflectionSource::None ? 1u : 0u;
+        constants.skySpecMipCount = (iblSky && iblSky->HasIbl()) ? iblSky->GetSpecMips() : 0u;
+        constants.skyboxIntensity = iblSky ? iblSky->GetExposure() : 1.0f;
         constants.exposure = dirLight.GetExposure();
         constants.camPos = camera.GetPosition();
         constants.camDir = camDir;
@@ -2858,7 +3107,10 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
 
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
                                               *SamplerManager::ComparisonLinearClamp(),
-                                              *SamplerManager::LinearWrap() };
+                                              *SamplerManager::LinearWrap(),
+                                              // s3: the BRDF LUT and the sky cubes, read exactly
+                                              // as compose reads them -- clamped, not wrapped.
+                                              *SamplerManager::LinearClamp() };
         RecordComputeDispatch(renderer, t.cl, lighting.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteLightingConstants(constants, dest); },
             { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.shadowSRV,
@@ -2876,7 +3128,17 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
               // VOLATILE range fully populated; `gtaoEnabled` is 0 when the pass did not run, and
               // the shader does not sample it then -- which matters, because the target holds
               // whatever was last left in it rather than 1.
-              D.gtaoUpsampledSRV },
+              D.gtaoUpsampledSRV,
+              // t12/t13/t14: the sky specular set, mirroring compose. All three are bound
+              // unconditionally to keep the VOLATILE range populated; `enableSkySpecular` and
+              // `skySpecMipCount` decide whether any of them is sampled, exactly as in compose.
+              (frame_->skybox && frame_->skybox->HasIbl())
+                  ? frame_->skybox->GetSpecTex()->GetSRVCPU()
+                  : renderer->VsmDummyTexSrv(),
+              (frame_->skybox && frame_->skybox->HasIbl())
+                  ? frame_->skybox->GetBrdfLut()->GetSRVCPU()
+                  : renderer->VsmDummyTexSrv(),
+              frame_->skybox ? frame_->skybox->GetTex()->GetSRVCPU() : renderer->VsmDummyTexSrv() },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -3122,6 +3384,31 @@ void SceneRenderer::Pass_Skybox(Renderer* renderer, RenderGraphPassContext ctx,
     renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
 
+// P6C step 6. The HiZ tracer's half of the SSR constants, in one place because the opaque and the
+// glass dispatch both need it and a second copy is a second thing to forget.
+//
+// `useHzb` is deliberately NOT "is the HiZ technique selected" -- it is "was the closest chain
+// written this frame", which is the same flag the pyramid build used. When it is 0 the shader
+// silently runs the log march instead of tracing a chain full of last-frame's (or nobody's) data.
+//
+// KNOWN APPROXIMATION: the pyramid's mip 0 is ceil(renderWidth/2), so at an ODD render width it
+// covers half a texel more than the depth buffer and the screen->pyramid UV mapping is off by
+// 1/renderWidth at the far edge. UE carry an explicit factor for this because their HZB covers an
+// arbitrary viewport rect; ours always covers the whole target, the error is sub-texel, and it
+// moves where a ray samples rather than whether it hits.
+void SceneRenderer::FillSsrHzbConstants(Renderer* renderer, SsrPassConstants& c) const
+{
+    const auto& D = renderer->GetDeferredForFrame();
+    // The FURTHEST chain, which is built on every frame -- so this is really just "does the pyramid
+    // exist", and the fallback to the log march only ever fires before the first build.
+    const bool ready = D.hzb.Get() != nullptr && D.hzbSRV.ptr != 0 && D.hzbMips > 0u;
+    c.useHzb = ready ? 1u : 0u;
+    c.hzbMipCount = std::max(1u, D.hzbMips);
+    c.hzbSize = float2(static_cast<float>(D.hzbWidth), static_cast<float>(D.hzbHeight));
+    c.hzbInvSize = float2(D.hzbWidth > 0u ? 1.0f / static_cast<float>(D.hzbWidth) : 0.0f,
+                          D.hzbHeight > 0u ? 1.0f / static_cast<float>(D.hzbHeight) : 0.0f);
+}
+
 void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera)
 {
@@ -3161,11 +3448,13 @@ void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphP
             constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
             constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
         constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
+        FillSsrHzbConstants(renderer, constants);
 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         RecordComputeDispatch(renderer, t.cl, ssrMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
-            { D.lightSRV, D.gbSRV[1], D.depthSRV, D.depthSRV }, // t0 Light, t1 GB1, t2 march depth, t3 origin depth (== t2 for opaque)
+            // t0 Light, t1 GB1, t2 march depth, t3 origin depth (== t2 for opaque), t4 closest HZB
+            { D.lightSRV, D.gbSRV[1], D.depthSRV, D.depthSRV, D.hzbSRV },
             { D.reflectionUAV },                           // u0 output
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetReflectionTextureWidth(), renderer->GetReflectionTextureHeight(),
@@ -3497,11 +3786,13 @@ void SceneRenderer::Pass_GlassReflectionsSSR(Renderer* renderer, RenderGraphPass
             constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
             constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
         constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
+        FillSsrHzbConstants(renderer, constants);
 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
         RecordComputeDispatch(renderer, t.cl, ssrMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
-            { D.lightSRV, D.glassReflNormalSRV, D.depthSRV, D.glassReflDepthSRV }, // t0 lit, t1 glass normal, t2 opaque(march), t3 glass(origin)
+            // t0 lit, t1 glass normal, t2 opaque(march), t3 glass(origin), t4 closest HZB
+            { D.lightSRV, D.glassReflNormalSRV, D.depthSRV, D.glassReflDepthSRV, D.hzbSRV },
             { D.glassReflectionUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetReflectionTextureWidth(), renderer->GetReflectionTextureHeight(),
@@ -3592,6 +3883,55 @@ void SceneRenderer::Pass_ClearReflections(Renderer* renderer, RenderGraphPassCon
     ctx.EndCL(t);
 }
 
+// SSR temporal resolve. Reads this frame's raw reflection and the PREVIOUS frame's accumulation,
+// writes the accumulation for this frame -- which is both what the blur consumes and what the next
+// frame reads back. Unreal run their SSR through TAA as ETAAPassConfig::ScreenSpaceReflections for
+// the same reason; see the shader for the configuration that comes from.
+void SceneRenderer::Pass_SsrTemporal(Renderer* renderer, RenderGraphPassContext ctx)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    do
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassReflectionTemporal);
+        const auto& D = renderer->GetDeferredForFrame();
+        const auto& P = renderer->GetDeferredForPrevFrame();
+        ctx.ApplyDeclaredStates(t.cl);
+
+        auto material = resources_.GetSsrTemporalMaterial();
+        const UINT cbSize = resources_.GetSsrTemporalCBSizeBytes();
+        if (!material || cbSize == 0)
+        {
+            break;
+        }
+
+        const UINT w = renderer->GetReflectionTextureWidth();
+        const UINT h = renderer->GetReflectionTextureHeight();
+
+        SsrTemporalConstants c{};
+        c.texSize = float2(static_cast<float>(w), static_cast<float>(h));
+        c.invTexSize = float2(w > 0 ? 1.0f / static_cast<float>(w) : 0.0f,
+                              h > 0 ? 1.0f / static_cast<float>(h) : 0.0f);
+        c.blendWeight = std::clamp(frame_->settings.ssrTemporalBlendWeight, 0.01f, 1.0f);
+        c.clampExpand = std::max(0.0f, frame_->settings.ssrTemporalClampExpand);
+        // A history that does not exist yet is worse than none: seeding from this frame is what
+        // makes the first frame after a resize or a level switch noisy-but-correct instead of
+        // whatever the texture happened to hold.
+        c.historyValid = ssrHistoryValid_ ? 1u : 0u;
+
+        const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
+                                              *SamplerManager::LinearClamp() };
+        RecordComputeDispatch(renderer, t.cl, material.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteSsrTemporalConstants(c, dest); },
+            { D.reflectionSRV, P.reflectionHistorySRV, D.gbSRV[3] }, // t0 raw, t1 history, t2 velocity
+            { D.reflectionHistoryUAV },
+            renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+            w, h,
+            D.reflectionHistory.Get());
+    } while (false);
+    ctx.EndCL(t);
+}
+
 void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassContext ctx)
 {
     //return;
@@ -3625,7 +3965,11 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
         blurConstants.glossyScale = std::max(0.0f, frame_->settings.reflectionGlossyScale);
         RecordComputeDispatch(renderer, t.cl, blurMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteBlurConstants(blurConstants, dest); },
-            { D.reflectionSRV, D.gbSRV[0] }, { D.reflectionScratchUAV }, samplerTable, // t0 reflection, t1 GB0 (roughness)
+            // The temporal resolve, when it ran, leaves its result in reflectionHistory -- so that
+            // is the blur's input. The second (vertical) tap still lands in `reflection`, which is
+            // what compose reads, so nothing downstream changes.
+            { ssrTemporalActive_ ? D.reflectionHistorySRV : D.reflectionSRV, D.gbSRV[0] },
+            { D.reflectionScratchUAV }, samplerTable, // t0 reflection, t1 GB0 (roughness)
             ssrWidth, ssrHeight,
             D.reflectionScratch.Get());
 
@@ -4359,6 +4703,15 @@ SceneRenderer::DebugTexPick SceneRenderer::PickDebugTexTarget(
     case 2: return { D.gtaoFiltered.Get(), D.gtaoFilteredSRV };
     case 3: return { D.gtaoHistory.Get(), D.gtaoHistorySRV };
     case 4: return { D.gtaoUpsampled.Get(), D.gtaoUpsampledSRV };
+    case 5: return { D.hzb.Get(), D.hzbSRV };     // P6C, mip chosen by debugTexMip
+    case 6: return { D.depth.Get(), D.depthSRV }; // the pyramid's source, for checking it against
+    // P6C step 6: the CLOSEST chain. Only written on frames the HiZ tracer runs, so on any other
+    // frame this deliberately shows whatever was last built rather than pretending to be live.
+    case 7: return { D.hzbClosest.Get(), D.hzbClosestSRV };
+    // The reflection buffer itself, shown as ALPHA = the ray's visibility. This is the only view
+    // that answers "did the ray find anything" WITHOUT the answer being filtered through shading,
+    // the glossy blur and compose -- which is what a tracer A/B actually needs to compare.
+    case 8: return { D.reflection.Get(), D.reflectionSRV };
     default: return { D.shadow.Get(), D.shadowSRV };
     }
 }
@@ -4389,8 +4742,38 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx, b
         auto h = renderer->GetRenderContextPool()->Acquire();
         auto& rc = h.ref();
 
+        // Mip selection + the depth stretch. Reversed-Z device depth would otherwise blit as a
+        // black rectangle, and an unreadable debug view is not a debug view.
+        struct DebugTexCB
+        {
+            std::uint32_t mipLevel;
+            std::uint32_t depthStretch;
+            std::uint32_t showAlpha;
+            std::uint32_t pad1;
+        } cb{};
+        const int target = frame_->settings.debugTexTarget;
+        // The depth-like targets: both pyramids and the depth buffer they come from. Keep this ONE
+        // predicate -- when the closest pyramid was added as target 7 and only this list was
+        // missed, its capture came out with a value range of 0..2/255 and read as a broken
+        // reduction rather than as an unstretched one.
+        const bool depthLike = (target == 5 || target == 6 || target == 7);
+        cb.mipLevel = static_cast<std::uint32_t>(std::max(0, frame_->settings.debugTexMip));
+        cb.depthStretch = depthLike ? 1u : 0u;
+        cb.showAlpha = (target == 8) ? 1u : 0u; // the reflection buffer's hit mask
+        {
+            auto cbAlloc = renderer->GetFrameResource()->AllocDynamic(
+                sizeof(DebugTexCB), render::kConstantBufferAlignment);
+            std::memcpy(cbAlloc.cpu, &cb, sizeof(cb));
+            rc.cbv[0] = cbAlloc.gpu;
+        }
+
         rc.srvTable[0] = renderer->StageSrvUavTable({ pick.srv }).gpu; // t0
-        const auto debugSamplers = std::array{ *SamplerManager::LinearClamp() };
+        // POINT for the depth-like targets: they are inspected texel by texel (and verified against
+        // a CPU reduction), and a linear stretch would blend neighbouring texels into every sample,
+        // which is exactly what makes such a check impossible. Linear stays for the smooth targets.
+        const auto debugSamplers = depthLike
+            ? std::array{ *SamplerManager::PointClamp() }
+            : std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, debugSamplers);
 
         auto debugMaterial = resources_.GetDebugMaterial();
