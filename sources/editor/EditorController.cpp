@@ -1,6 +1,5 @@
 #include "editor/EditorController.h"
 #include "app/scene/GtaoSettingsJson.h"
-#include "app/scene/AtmosphereSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -457,16 +456,9 @@ namespace
         return gtao;
     }
 
-    // P7. Seeded from the SCENE's current values for the same reason BuildGtaoObject is: the
-    // developer window edits that copy live, so "add the object" should capture what is on screen.
-    EditorObject BuildAtmosphereObject(const Scene& scene)
-    {
-        EditorObject atmosphere;
-        atmosphere.name = "Aerial Perspective";
-        atmosphere.type = "atmosphere";
-        atmosphere.properties = AtmosphereSettingsJson::ToJson(scene.GetAtmosphere());
-        return atmosphere;
-    }
+    // P7 has no BuildAtmosphereObject on purpose: EditorSceneDocument materialises the "atmosphere"
+    // entity with addSingletonAlways, so every level already carries one and an "Add" menu item for
+    // it could only ever render disabled.
 
     EditorObject BuildFreeCameraStartObject(const Scene& scene)
     {

@@ -143,7 +143,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle shoreWetnessFallback;
     Material::CBFieldHandle shoreWetnessBreakup;
     // P7 aerial perspective.
-    Material::CBFieldHandle fogParams0, fogParams1, fogSunDir, fogSunColor, fogDebugView;
+    Material::CBFieldHandle fogParams0, fogParams1, fogParams2, fogSunDir, fogSunColor, fogDebugView;
 
     void Populate(Material* material);
 };
@@ -502,7 +502,8 @@ struct ComposePassConstants
     float4 shoreWetnessFallback{};
     float4 shoreWetnessBreakup{};
     float4 fogParams0{};   // density, height falloff, reference height, start distance
-    float4 fogParams1{};   // max opacity, sun scatter strength, sun scatter exponent
+    float4 fogParams1{};   // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
+    float4 fogParams2{};   // sky blur, yzw reserved
     float4 fogSunDir{};
     float4 fogSunColor{};
     uint32_t fogDebugView = 0u;

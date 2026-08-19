@@ -1,4 +1,16 @@
 {
+  "atmosphere": {
+    "density": 0.004000000189989805,
+    "enabled": true,
+    "heightFalloff": 0.05999999865889549,
+    "maxOpacity": 1.0,
+    "skyBackScatter": 0.4000000059604645,
+    "skyBlur": 0.30000001192092896,
+    "startDistance": 5.0,
+    "sunScatterExponent": 8.0,
+    "sunScatterStartDistance": 100.0,
+    "sunScatterStrength": 0.3499999940395355
+  },
   "camera": {
     "hfovDeg": 90.0,
     "zFar": 10000.0,

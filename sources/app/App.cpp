@@ -320,6 +320,12 @@ namespace
             scene.AtmosphereRef().sunScatterStartDistance = value;
             return true;
         }
+        if (setting == "atmosphere.skyBlur") { scene.AtmosphereRef().skyBlur = value; return true; }
+        if (setting == "atmosphere.backScatter")
+        {
+            scene.AtmosphereRef().skyBackScatter = value;
+            return true;
+        }
         if (setting == "ssr.ueTolerance") { renderSettings.ssrUe.slopeCompareToleranceScale = value; return true; }
         if (setting == "ssr.ueConfirmRetries")
         {

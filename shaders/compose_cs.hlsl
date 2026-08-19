@@ -62,7 +62,8 @@ cbuffer PerFrame : register(b0)
     // P7 aerial perspective. `fogParams0.x` = 0 disables it, and the whole block below is then
     // skipped -- which is the interface contract's "screenshot-equivalent to M2".
     float4 fogParams0;   // x: density, y: height falloff, z: reference height, w: start distance
-    float4 fogParams1;   // x: max opacity, y: sun scatter strength, z: sun scatter exponent
+    float4 fogParams1;   // x: max opacity, y: sun scatter strength, z: sun scatter exponent, w: sun scatter start
+    float4 fogParams2;   // x: sky blur (roughness at the lightly-fogged end), yzw reserved
     float4 fogSunDir;    // xyz: direction TO the sun (world)
     float4 fogSunColor;  // rgb: the sun's effective colour
     // P7 item 8. 0 = normal, 1 = transmittance, 2 = in-scattering. Rides the fog block so a view
@@ -360,6 +361,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         fog.sunScatterStrength = fogParams1.y;
         fog.sunScatterExponent = fogParams1.z;
         fog.sunScatterStartDistance = fogParams1.w;
+        fog.skyBackScatter = fogParams2.y;
 
         const float3 Pw = ReconstructPosWS(uv, z, invProj, invView);
         const float3 toPoint = Pw - camPosWS;
@@ -368,13 +370,19 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
         const float fogShared = AtmosphereSharedIntegral(dist, camPosWS.y, Pw.y, fog);
         const float tau = AtmosphereOpticalDepth(fogShared, dist, fog);
-        const float transmittance = AtmosphereTransmittance(tau, fog.maxOpacity);
+        const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
+        const float transmittance = AtmosphereTransmittance(tau, minT);
 
-        // The sky sampled ALONG THE VIEW RAY, at a roughness-free mip: this is the fog's own
-        // colour, so a distant surface converges on exactly the sky pixel it sits against.
-        const float3 skyAlongView = SkyboxTex.SampleLevel(gSmp, viewDir, 0).rgb * skyboxIntensity;
+        // The sky sampled ALONG THE VIEW RAY: this is the fog's own colour, so a distant surface
+        // converges on the sky it sits against instead of on an authored constant as in UE. Both
+        // the blur and the sun lobe fade out as the fog saturates -- see AtmosphereHeadroom.
+        const float headroom = AtmosphereHeadroom(transmittance, minT);
+        const float3 skyAlongView = IblSkyRadiance(SkySpecular, SkyboxTex, gSmp, viewDir,
+                                                   AtmosphereSkyRoughness(headroom, fogParams2.x),
+                                                   skySpecMipCount, skyboxIntensity);
         const float3 inscatter = AtmosphereInscatter(skyAlongView, fogSunColor.rgb,
-                                                     dot(viewDir, fogSunDir.xyz), fogShared, dist, fog);
+                                                     dot(viewDir, fogSunDir.xyz), fogShared, dist,
+                                                     headroom, fog);
 
         if (fogDebugView == 1u)
         {

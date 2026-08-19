@@ -528,7 +528,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     {
         const AtmospherePacked fog =
             PackAtmosphere(frame.settings.atmosphere, frame.dirLight != nullptr);
-        frame.ocean->SetAtmosphereParams(fog.params0, fog.params1);
+        frame.ocean->SetAtmosphereParams(fog.params0, fog.params1, fog.params2);
         frame.ocean->SetAtmosphereDebugView(g_atmosphereDebugView);
     }
     // UE's SSRT color resolve is a separate temporal consumer: after finding a hit in CURRENT
@@ -4166,6 +4166,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
                 PackAtmosphere(frame_->settings.atmosphere, frame_->dirLight != nullptr);
             constants.fogParams0 = fog.params0;
             constants.fogParams1 = fog.params1;
+            constants.fogParams2 = fog.params2;
             constants.fogDebugView = g_atmosphereDebugView;
             if (frame_->dirLight)
             {

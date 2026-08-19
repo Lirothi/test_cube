@@ -202,7 +202,7 @@ namespace
             return OutlinerGroup::Environment;
         }
         if (object.type == "cameraExposure" || object.type == "colorPipeline" ||
-            object.type == "gtao")
+            object.type == "gtao" || object.type == "atmosphere")
         {
             return OutlinerGroup::PostProcess;
         }

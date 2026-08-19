@@ -56,7 +56,8 @@ cbuffer OceanCB : register(b0)
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
     // P7 aerial perspective, packed by PackAtmosphere -- the SAME numbers compose gets.
     float4 fogParams0;                 // x: density, y: height falloff, z: reference height, w: start distance
-    float4 fogParams1;                 // x: max opacity, y: sun scatter strength, z: sun scatter exponent
+    float4 fogParams1;                 // x: max opacity, y: sun scatter strength, z: sun scatter exponent, w: sun scatter start
+    float4 fogParams2;                 // x: sky blur (roughness at the lightly-fogged end), yzw reserved
     uint fogDebugView;                 // P7 item 8: 0 normal, 1 transmittance, 2 in-scattering
     uint3 _fogDebugPad;
     float4 deepScatterColor;           // xyz: deep scatter tint, w: unused
@@ -1272,19 +1273,26 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
         fog.sunScatterStrength = fogParams1.y;
         fog.sunScatterExponent = fogParams1.z;
         fog.sunScatterStartDistance = fogParams1.w;
+        fog.skyBackScatter = fogParams2.y;
 
         const float3 viewRay = normalize(li.positionWS - li.cameraPos);
         const float fogShared = AtmosphereSharedIntegral(li.viewDist, li.cameraPos.y,
                                                       li.positionWS.y, fog);
         const float tau = AtmosphereOpticalDepth(fogShared, li.viewDist, fog);
-        const float transmittance = AtmosphereTransmittance(tau, fog.maxOpacity);
-        const float3 skyAlongView = SkyboxTexture.SampleLevel(LinearClampSampler, viewRay, 0).rgb *
-                                    skyParams.x;
+        const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
+        const float transmittance = AtmosphereTransmittance(tau, minT);
+        // Blur and sun lobe both fade as the fog saturates, through the SAME helpers compose uses --
+        // water and land must agree here or they meet at the shoreline in different weather.
+        const float headroom = AtmosphereHeadroom(transmittance, minT);
+        const float3 skyAlongView = IblSkyRadiance(SkySpecular, SkyboxTexture, LinearClampSampler,
+                                                   viewRay,
+                                                   AtmosphereSkyRoughness(headroom, fogParams2.x),
+                                                   (uint)skyParams.y, skyParams.x);
         const float3 toSun = -normalize(sunDirAmbient.xyz);
         const float3 inscatter = AtmosphereInscatter(skyAlongView,
                                                      sunColorExposure.xyz * sunColorExposure.w,
                                                      dot(viewRay, toSun), fogShared,
-                                                     li.viewDist, fog);
+                                                     li.viewDist, headroom, fog);
         if (fogDebugView == 1u)      { color = transmittance.xxx; }
         else if (fogDebugView == 2u) { color = inscatter * (1.0f - transmittance); }
         else { color = color * transmittance + inscatter * (1.0f - transmittance); }

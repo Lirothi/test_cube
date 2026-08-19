@@ -1044,7 +1044,15 @@ namespace
             InspectorHelp("UE's FogHeightFalloff, base 2. How fast density thins with altitude; 0 "
                           "makes it a uniform distance fog. This term is what keeps a high camera "
                           "from getting a flat screen-space wash - looking down from altitude, most "
-                          "of the ray is already in thin air. Same unit caveat as Density.");
+                          "of the ray is already in thin air. Same unit caveat as Density.\n\n"
+                          "IT ALSO SETS HOW THIN THE LAYER IS, and a thin layer seen from above "
+                          "collapses into a BRIGHT LINE ON THE HORIZON. Density halves every "
+                          "1/falloff metres, so 0.058 is a 17 m layer: from 80 m up the whole sea "
+                          "sits at transmittance ~0.9 and the only ray that accumulates any depth "
+                          "is the one aimed exactly at the horizon. Measured at 82 m, the luminance "
+                          "step across the horizon row was 25.7/255 at 0.058 and 1.6 at 0.030. If "
+                          "the camera flies, keep this near 0.02-0.03; a thin ground layer is a "
+                          "look for a camera that stays inside it.");
             dragF("Reference Height", "referenceHeight", 0.0f, 0.5f, -100.0f, 500.0f, "%.1f m");
             InspectorHelp("World Y at which Density is exactly the authored value. Sea level here. "
                           "UE call this the fog actor's own height.");
@@ -1056,7 +1064,16 @@ namespace
             InspectorHelp("UE's FogMaxOpacity, and note what it actually does: it is a FLOOR on "
                           "transmittance, clipping the far end of the curve, not a scale on "
                           "coverage that would bend the whole curve. 0 makes the fog a no-op while "
-                          "still enabled, which is a free A/B lever.");
+                          "still enabled, which is a free A/B lever.\n\n"
+                          "THE CEILING IS RELEASED AGAIN DEEP INTO THE FOG, and without that the "
+                          "whole range below 1 was unusable: the sky is never fogged - it IS fog of "
+                          "infinite depth - so it ignores the ceiling, while the water at the "
+                          "horizon kept (1 - maxOpacity) of its own colour and the two could not "
+                          "meet. Measured at 25 m, the luminance step across the horizon row at "
+                          "0.70 was 9.9/255 and is now 2.65, which is what 1.00 gives. The ceiling "
+                          "still does its job where it means something - at 25 m, 0.70 against 1.00 "
+                          "moves 21% of the frame, and that difference sits in the FAR and middle "
+                          "thirds, not on the horizon line.");
 
             ImGui::SeparatorText("Sun in-scattering");
             dragF("Sun Scatter", "sunScatterStrength", 0.35f, 0.01f, 0.0f, 3.0f, "%.2f");
@@ -1071,11 +1088,41 @@ namespace
             dragF("Sun Scatter Start", "sunScatterStartDistance", 100.0f, 1.0f, 0.0f, 1000.0f, "%.0f m");
             InspectorHelp("UE's DirectionalInscatteringStartDistance: the sun lobe builds up on its "
                           "OWN line integral past this distance, so it does not tint the near "
-                          "field. Theirs is 10000 in centimetres.");
+                          "field. Theirs is 10000 in centimetres. The lobe then FADES BACK OUT as "
+                          "the fog saturates, which UE's does not: their base colour is an authored "
+                          "constant with no sun in it, ours is the sky, which already has the sun's "
+                          "glow. A lobe surviving to the horizon would add it twice - and only to "
+                          "geometry, never to the sky pixel beside it, which reads as a hard warm "
+                          "band stopping dead at the horizon line.");
+
+            ImGui::SeparatorText("Sky sampling");
+            dragF("Back Scatter", "skyBackScatter", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("The phase function, as how bright the haze is with the sun BEHIND you "
+                          "relative to looking into it. 1 = flat: identical haze whichever way you "
+                          "face, which is what this shipped with. Real haze is forward-peaked, so "
+                          "below 1 a backlit shore stays thick while flying away from the island "
+                          "with the sun behind you no longer sinks it into blue milk - at the SAME "
+                          "density. It is deliberately NOT a second density: density is extinction, "
+                          "and a directional one would change how much of the far island survives "
+                          "rather than only its colour, so shapes would fade in and out as you pan. "
+                          "0.4-0.6 is a normal haze; fades out with distance, where the sky sample "
+                          "already carries its own anisotropy.");
+            dragF("Sky Blur", "skyBlur", 0.5f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("How blurred the sky is where it is read as the fog's COLOUR, expressed as "
+                          "a roughness. 0 samples it sharp, and then the fog is literally a picture "
+                          "of what stands behind the surface - cloud edges and the sunset band print "
+                          "themselves onto the palms in front of them. Only the lightly-fogged end "
+                          "is blurred: a fully fogged pixel always converges on the sharp sky, "
+                          "because the sky IS fog of infinite depth and anything else seams at the "
+                          "horizon. FREE - it is a mip choice, not an extra sample.");
 
             ImGui::TextDisabled("Fog colour comes from the SKY along the view ray, not an authored");
             ImGui::TextDisabled("colour as in UE - that is what removes the horizon seam by");
             ImGui::TextDisabled("construction instead of by tuning.");
+            // The debug views deliberately live only in the dev window: they are a viewing mode,
+            // not level data, and putting them on the object would invite them into the save.
+            ImGui::TextDisabled("Debug views (transmittance / in-scattering) are in the F1 window,");
+            ImGui::TextDisabled("Render tab - they are a viewing mode, not level data.");
             ImGui::TextDisabled("Fix exposure when comparing: auto-exposure reacts to fog and");
             ImGui::TextDisabled("shifts the WHOLE frame, sky included.");
         }

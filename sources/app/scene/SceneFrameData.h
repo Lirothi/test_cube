@@ -164,6 +164,18 @@ struct AtmosphereSettings
     // UE keep the sun lobe out of the near field with a distance of its own
     // (DirectionalInscatteringStartDistance). Theirs is 10000 in a centimetre world.
     float sunScatterStartDistance = 100.0f;
+    // How blurred the sky is when it is read as the FOG'S COLOUR, as a roughness fed to the same
+    // IblSkyRadiance everything else uses. Only the LIGHTLY fogged end is blurred by it -- see
+    // AtmosphereSkyRoughness in atmosphere.hlsli. 0 restores the original mip-0 read, which prints
+    // the clouds onto whatever stands in front of them.
+    float skyBlur = 0.5f;
+    // The phase function, as "how bright the haze is with the sun BEHIND you" relative to looking
+    // into it. Ships at 1.0 = flat = the pre-phase image, because it is a real look change and this
+    // plan's rule is that those earn their default with an A/B. Below 1 the same air glows backlit
+    // and stays dim front-lit, which is what real haze does -- and it is the RIGHT knob for that,
+    // because a directional DENSITY would change extinction and make distant shapes fade in and out
+    // as the camera pans.
+    float skyBackScatter = 1.0f;
 };
 
 // P7 item 8. Deliberately NOT part of AtmosphereSettings: that struct is serialized into the level,
@@ -179,7 +191,8 @@ inline uint32_t g_atmosphereDebugView = 0u;
 struct AtmospherePacked
 {
     float4 params0{}; // density, height falloff, reference height, start distance
-    float4 params1{}; // max opacity, sun scatter strength, sun scatter exponent
+    float4 params1{}; // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
+    float4 params2{}; // sky blur, sky back-scatter, zw reserved
 };
 
 inline AtmospherePacked PackAtmosphere(const AtmosphereSettings& a, bool hasSun)
@@ -190,6 +203,8 @@ inline AtmospherePacked PackAtmosphere(const AtmosphereSettings& a, bool hasSun)
                        a.referenceHeight, std::max(a.startDistance, 0.0f));
     p.params1 = float4(std::clamp(a.maxOpacity, 0.0f, 1.0f), std::max(a.sunScatterStrength, 0.0f),
                        std::max(a.sunScatterExponent, 1.0f), std::max(a.sunScatterStartDistance, 0.0f));
+    p.params2 = float4(std::clamp(a.skyBlur, 0.0f, 1.0f),
+                       std::clamp(a.skyBackScatter, 0.0f, 1.0f), 0.0f, 0.0f);
     return p;
 }
 

@@ -293,6 +293,7 @@ public:
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
             atmosphereParams0Handle_ = material->ComputeCBFieldHandle(0, "fogParams0");
             atmosphereParams1Handle_ = material->ComputeCBFieldHandle(0, "fogParams1");
+            atmosphereParams2Handle_ = material->ComputeCBFieldHandle(0, "fogParams2");
             atmosphereDebugViewHandle_ = material->ComputeCBFieldHandle(0, "fogDebugView");
             skyParamsHandle_ = material->ComputeCBFieldHandle(0, "skyParams");
             deepScatterColorHandle_ = material->ComputeCBFieldHandle(0, "deepScatterColor");
@@ -364,6 +365,7 @@ public:
             sunColorExposureHandle_ = {};
             atmosphereParams0Handle_ = {};
             atmosphereParams1Handle_ = {};
+            atmosphereParams2Handle_ = {};
             atmosphereDebugViewHandle_ = {};
             skyParamsHandle_ = {};
             deepScatterColorHandle_ = {};
@@ -449,6 +451,7 @@ public:
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
         UpdateUniform(owner, atmosphereParams0Handle_, material, owner_.GetAtmosphereParams0(), cbData);
         UpdateUniform(owner, atmosphereParams1Handle_, material, owner_.GetAtmosphereParams1(), cbData);
+        UpdateUniform(owner, atmosphereParams2Handle_, material, owner_.GetAtmosphereParams2(), cbData);
         UpdateUniform(owner, atmosphereDebugViewHandle_, material, owner_.GetAtmosphereDebugView(), cbData);
         UpdateUniform(owner, skyParamsHandle_, material, owner_.GetSkyParams(), cbData);
         UpdateUniform(owner, deepScatterColorHandle_, material, owner_.GetDeepScatterColor(), cbData);
@@ -501,6 +504,7 @@ private:
     Material::CBFieldHandle subsurfaceParamsHandle_{};
     Material::CBFieldHandle heightFogParamsHandle_{};
     Material::CBFieldHandle atmosphereParams0Handle_{}, atmosphereParams1Handle_{};
+    Material::CBFieldHandle atmosphereParams2Handle_{};
     Material::CBFieldHandle atmosphereDebugViewHandle_{};
     Material::CBFieldHandle normalSamplingParamsHandle_{};
     Material::CBFieldHandle shoreBehaviorParams0Handle_{};
