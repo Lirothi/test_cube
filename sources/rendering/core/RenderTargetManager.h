@@ -17,6 +17,12 @@
 // which needs 11; 13 leaves headroom and costs nothing but descriptor slots.
 inline constexpr unsigned kHzbMaxMips = 13;
 
+// P8: bloom pyramid levels. Mip 0 is half the DISPLAY resolution (bloom runs after the upscaler),
+// so 8 levels take 1280x720 down to 5x3 -- past that the taps are wider than the screen and the
+// level contributes a constant. Same shape as the HZB chain: one SRV over the whole thing, one UAV
+// per mip, and the whole chain sits in UNORDERED_ACCESS while it is built.
+inline constexpr unsigned kBloomMaxMips = 8;
+
 // Inspector preview surface. Square and fixed: the inspector draws it with the SOURCE aspect
 // ratio, so this only sets sampling density, and a fixed size means no reallocation when the
 // selected target changes.
@@ -87,6 +93,12 @@ public:
         // skip past a surface the tile really contains, an AO search must never invent one. Same
         // dimensions, same mip count, built by the same dispatch.
         GpuResource hzbClosest;
+        // P8: the bloom pyramid's two chains. `bloomDown` holds the thresholded image reduced level
+        // by level, `bloomUp` the tent reconstruction on the way back; the upsample of level N reads
+        // BOTH up[N+1] and down[N], which is why one ping-ponged chain would not do. Mip 0 of
+        // `bloomUp` is what the tonemap samples.
+        GpuResource bloomDown;
+        GpuResource bloomUp;
         // The texture inspector's preview surface. ImGui can only tint an image by a value it
         // packs to 8 bits, so anything needing to BRIGHTEN a target has to happen before ImGui
         // sees it; the inspector resamples into this and ImGui draws it untinted.
@@ -137,6 +149,14 @@ public:
         UINT hzbMips = 0;                 // levels actually created for the current size
         UINT hzbWidth = 1, hzbHeight = 1; // mip 0 dimensions
 
+        // P8 bloom pyramid, at DISPLAY resolution: it runs after the upscaler, on the same image
+        // the tonemap reads.
+        D3D12_CPU_DESCRIPTOR_HANDLE bloomDownSRV{}, bloomUpSRV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kBloomMaxMips> bloomDownMipUAV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kBloomMaxMips> bloomUpMipUAV{};
+        UINT bloomMips = 0;
+        UINT bloomWidth = 1, bloomHeight = 1; // mip 0 dimensions
+
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
         UINT spotShadowRes = 512;
         UINT pointShadowRes = 256; // per cube face
@@ -161,6 +181,7 @@ public:
         DXGI_FORMAT backbufferResource; // tonemap/FXAA targets
         DXGI_FORMAT gtao;               // P6B ambient occlusion
         DXGI_FORMAT hzb;                // P6C hierarchical depth
+        DXGI_FORMAT bloom;              // P8 bloom pyramid (HDR)
         DXGI_FORMAT debugPreview;       // texture-inspector preview (RGBA8)
     };
 
@@ -171,6 +192,9 @@ public:
         UINT oceanReflectionWidth = 1, oceanReflectionHeight = 1;
         UINT gtaoWidth = 1, gtaoHeight = 1;
         UINT hzbWidth = 1, hzbHeight = 1;   // P6C mip 0 (half the render resolution)
+        // P8 mip 0, half the DISPLAY resolution: bloom runs after the upscaler, so it is sized off
+        // the image the tonemap actually reads, not off the internal render target.
+        UINT bloomWidth = 1, bloomHeight = 1;
     };
 
     void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls);
@@ -210,6 +234,14 @@ private:
     HzbClosestMipUav0, HzbClosestMipUav1, HzbClosestMipUav2, HzbClosestMipUav3, HzbClosestMipUav4,
     HzbClosestMipUav5, HzbClosestMipUav6, HzbClosestMipUav7, HzbClosestMipUav8, HzbClosestMipUav9,
     HzbClosestMipUav10, HzbClosestMipUav11, HzbClosestMipUav12,
+    // P8 bloom. Two chains: DOWN carries the thresholded image reduced level by level, UP carries
+    // the tent reconstruction walking back. They are separate resources rather than one ping-ponged
+    // chain because the upsample of level N reads BOTH up[N+1] and down[N].
+    BloomDown, BloomUp,
+    BloomDownMipUav0, BloomDownMipUav1, BloomDownMipUav2, BloomDownMipUav3,
+    BloomDownMipUav4, BloomDownMipUav5, BloomDownMipUav6, BloomDownMipUav7,
+    BloomUpMipUav0, BloomUpMipUav1, BloomUpMipUav2, BloomUpMipUav3,
+    BloomUpMipUav4, BloomUpMipUav5, BloomUpMipUav6, BloomUpMipUav7,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

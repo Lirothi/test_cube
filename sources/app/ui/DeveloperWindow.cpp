@@ -484,6 +484,39 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::TextDisabled("and shifts the WHOLE frame, sky included.");
                 }
 
+                // P8 bloom. Edits go to the SCENE copy for the same reason the two blocks above do.
+                {
+                    BloomSettings& bloom = scene.BloomRef();
+                    ImGui::SeparatorText("Bloom (P8)");
+                    ImGui::Checkbox("Bloom enabled", &bloom.enabled);
+                    DevHelp("Exposure-aware HDR bloom: threshold, a half-resolution pyramid, and a "
+                            "tent reconstruction, composited before the tone curve. Off by default "
+                            "and off costs nothing - no pass is scheduled and no pyramid is "
+                            "touched. NOTHING SET HERE IS SAVED; the level's values live on the "
+                            "\"Bloom\" object under Post-Process in the editor outliner.");
+                    ImGui::BeginDisabled(!bloom.enabled);
+                    ImGui::SliderFloat("Bloom intensity", &bloom.intensity, 0.0f, 2.0f, "%.3f");
+                    DevHelp("Weight of the halo added back to the scene. 0 is an exact no-op and "
+                            "skips the whole chain.");
+                    ImGui::SliderFloat("Bloom threshold", &bloom.threshold, 0.0f, 8.0f, "%.2f");
+                    DevHelp("Luminance AFTER exposure at which bloom starts - UE's BloomThreshold, "
+                            "in UE's units. Being post-exposure is the point: a darker scene keeps "
+                            "the same bloom rather than silently losing it.");
+                    ImGui::SliderFloat("Bloom soft knee", &bloom.softKnee, 0.05f, 4.0f, "%.2f");
+                    DevHelp("Slope of the ramp above the threshold. UE hardwire 0.5. Higher is a "
+                            "harder cut, lower a longer shoulder.");
+                    ImGui::SliderFloat("Bloom radius", &bloom.radius, 0.0f, 4.0f, "%.2f");
+                    DevHelp("Tap spacing of the tent upsample, in destination texels. Spreads the "
+                            "same energy wider - it does not brighten.");
+                    ImGui::Checkbox("Firefly clamp", &bloom.fireflyClamp);
+                    DevHelp("Karis average on the FIRST downsample: each tap weighted by "
+                            "1/(1+luma), so one blown-out texel cannot dominate its tile. This is "
+                            "what keeps moving sun glints on water from pumping the whole bloom.");
+                    ImGui::EndDisabled();
+                    ImGui::TextDisabled("Runs after DLSS, before the tone curve. Judge it on");
+                    ImGui::TextDisabled("wind_test: sun_glint first - that view is the failure case.");
+                }
+
                 ImGui::Separator();
 
                 const bool dlssAvailable = renderer.IsDlssAvailable();

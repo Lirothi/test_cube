@@ -108,7 +108,7 @@ These decisions remain in force unless a step explicitly records new measured ev
 5a. **Percentile metering alone cannot preserve the relative brightness of different lighting conditions.** Percentiles are scale-invariant by construction, so a correctly metered night and a correctly metered noon land on the same target and the camera flattens both into the same mid-grey. The mechanism that fixes it is an **exposure compensation curve** -- compensation as a function of the metered scene EV rather than a single scalar; clamps are a safety net, not a policy. This is recorded as a design constraint so P2 does not bake the flattening behaviour in as if it were correct. It is **not** an acceptance criterion in this plan: see the scope note in section 2.
 6. **IBL implementation comes from F7-F9 of `two_sided_foliage_and_ibl_plan.md`.** This plan only defines integration and acceptance criteria.
 7. **AO modulates indirect illumination only.** It must not blacken direct sun or emissive surfaces.
-8. **The first atmosphere implementation is analytic and inexpensive.** Volumetric froxels are a separate future project.
+8. **The first atmosphere implementation is analytic and inexpensive.** Volumetric froxels are a separate step, **P15**, queued 2026-08-19 after P7 shipped and the user asked for UE's volumetric fog. It does not replace the analytic model: the volume is the near slab and the analytic fog stays as the far field, which is how UE compose the two.
 9. **Bloom is subtle, HDR, and exposure-aware.** It cannot be used to mask clipping or a poor tone curve.
 10. **Every visual step has an off switch or legacy fallback until final sign-off.**
 11. **Every step is independently buildable and revertible.** Dormant plumbing must be screenshot-equivalent by default.
@@ -280,8 +280,14 @@ P0 Baseline and diagnostics
                          |             +--> P6B Dynamic GTAO
                          |
                          +--> P7 Global aerial perspective
+                         |     |
+                         |     +--> P15 Volumetric fog, froxel volume [UE ref] (near slab; P7 stays as the far field)
                          |
                          +--> P8 Exposure-aware bloom
+                         |     |
+                         |     +--> P8B Post-process settings container
+                         |           |
+                         |           +--> P8C Lens flares, bokeh scatter [UE ref]
                          |
                          +--> P9 Diffuse GI / ground-bounce progression
                          |
@@ -2178,7 +2184,7 @@ before/after; GPU cost of the build pass on its own.
 7. Expose density, height falloff, start distance, max opacity, and sun-scatter strength with conservative defaults.
 8. Add transmittance and in-scattering debug views.
 
-**Interface contract:** disabling atmosphere is screenshot-equivalent to M2. The first implementation does not allocate a 3D froxel volume.
+**Interface contract:** disabling atmosphere is screenshot-equivalent to M2. The first implementation does not allocate a 3D froxel volume — that is **P15**, which keeps this model as its far field rather than replacing it.
 
 **Done when:** distant geometry approaches the horizon color smoothly while near beach contrast remains intact.
 
@@ -2245,7 +2251,7 @@ the canonical views; that is the user's pass, and the knobs exist for it.
 
 ---
 
-### P8 — Add exposure-aware HDR bloom and glare
+### P8 — Add exposure-aware HDR bloom and glare — DONE (2026-08-19)
 
 **Depends on:** P3.
 
@@ -2268,6 +2274,61 @@ the canonical views; that is the user's pass, and the knobs exist for it.
 **Done when:** sunlit water and cloud edges gain a restrained optical response while sand/foliage texture remains visible.
 
 **Verify:** exposure sweep, isolated HDR emissive test, ocean glint motion, native/DLSS stability, GPU timing.
+
+**OUTCOME. The threshold is transcribed from UE's `BloomSetupCommon` (PostProcessBloom.usf) and the
+composite from their tonemapper; the pyramid is the Call of Duty one the spec asks for.**
+
+* **Threshold against EXPOSED luminance**, which is what makes the step "exposure-aware" rather than
+  "a blur": `saturate((Luminance(c) * ExposureScale - threshold) * knee) * c`. Authored in the units
+  the VIEWER sees, so a scene that gets darker keeps its bloom instead of quietly losing it, while
+  the OUTPUT stays in scene units so one global exposure still covers scene and bloom alike. `knee`
+  is exposed where UE hardwire 0.5 -- it is the difference between a hard cut and a shoulder, and
+  hardwiring it would be a control that lies about being tunable.
+* **The composite is UE's, including what it deliberately omits** (`PostProcessTonemap.usf:515-518`):
+  bloom receives the GLOBAL exposure but NOT the local exposure and NOT the colour grade. A halo that
+  spread from elsewhere is not part of this pixel's neighbourhood, which is what local exposure is a
+  function of. Added before the curve, because bloom is scene-referred light.
+* **Pyramid**: 13-tap downsample (Jimenez, SIGGRAPH 2014) with a Karis average on the FIRST level
+  only, then a 3x3 tent upsample whose weights sum to exactly 1, so walking back up neither gains nor
+  loses energy. `radius` spaces the taps in DESTINATION texels, which is what makes it mean the same
+  thing at every level.
+* **Two chains, not one ping-pong**: the upsample of level N reads BOTH up[N+1] and down[N]. Built
+  entirely in UNORDERED_ACCESS with UAV barriers between levels, reading each source through its own
+  UAV -- the HZB pyramid's construction, for the identical reason (this barrier layer transitions
+  whole resources).
+* **Where it runs**: inside `Pass_Tonemap`, between the DLSS evaluate and the tone curve, because
+  both of those live in that pass. Sized off the DISPLAY resolution, so the pyramid does not change
+  shape with the DLSS quality mode while the image it describes does not.
+
+**Measured** (`wind_test`, wind frozen, exposure pinned, DLSS off), bloom off vs on at intensity 0.6
+and threshold 1.0:
+
+| view | changed | mean | max | clipped |
+|---|---:|---:|---:|---:|
+| `sun_glint` | 67.7% | 5.29 | 111 | 0.92% |
+| `overview` | 14.9% | 0.15 | 53 | 0.000% |
+
+That contrast IS the acceptance criterion: the glint field responds, the view without a glint field
+barely moves, i.e. the effect is not a screen-wide wash. **GPU: `Pass_Bloom` 0.067 ms**, identical on
+both views (it is resolution-bound, not content-bound); the frame goes 1.78 -> 1.83 ms. With bloom
+off, `Pass_Bloom` does not appear in the profiler dump at all -- the interface contract's "schedules
+no unnecessary active work" is observable, not merely asserted.
+
+**The firefly clamp cannot be judged from a still.** On a frozen frame it moves the mean by 0.2/255;
+what it is for is the TEMPORAL case -- a sun glint crossing a texel boundary pumping the whole
+pyramid -- which a single capture cannot show. It defaults ON for that reason, and the honest state
+of the evidence is that the still says almost nothing about it.
+
+**THE TRAP THIS STEP SET, and it is a gate defect as much as a code one: A COMPUTE ENTRY WITH NO
+`[RootSignature]` ATTRIBUTE COMPILES.** `check_shaders.py` reported a clean 22/22 while the engine
+could not build the PSO at all -- `Material::CreateCompute` fails, KEEPS the Material object, and
+leaves its pipeline state null, so a `!= nullptr` gate passed and the pass dispatched with no
+pipeline. Symptom was exit 122 and no screenshot, with nothing in any log. Two fixes, both kept:
+the gate now checks `GetPipelineState() != nullptr`, and **`check_shaders.py` now fails an entry
+that compiles without the attribute** (verified by stripping it and watching the tool fail).
+
+**Left for the user:** intensity/threshold defaults are a starting point, not a tuned result. Ships
+DISABLED, like P7.
 
 ---
 
@@ -2311,6 +2372,89 @@ if a second such case appears.
 **Interim, done 2026-08-18:** the outliner groups these under a "Post Process" node with a tooltip
 explaining what the group is, which removes the visual clutter without touching the level format or
 requiring any migration.
+
+---
+
+### P8C — Lens flares, UE's bokeh-scatter implementation — NOT STARTED (queued 2026-08-19)
+
+**Depends on:** P8 for the pyramid it reads, and scheduled AFTER P8B on purpose -- it adds another
+group of level settings, and adding it before the container exists means authoring the migration
+twice.
+
+**Goal:** the optical response of the LENS, on top of P8's response of the sensor. A sunset over
+water is the one condition this project actually ships, and it is exactly the condition a lens
+answers to: a bright glint should throw a shaped ghost, not only a symmetric halo.
+
+**What UE actually do, and it is NOT what "lens flare" usually means** (`PostProcessLensFlares.usf`,
+which is in the drop): there are no hand-placed ghosts along the sun-to-centre axis. It is a **bokeh
+scatter**:
+
+1. Take a DOWNSAMPLED frame -- for us, one level of the bloom pyramid P8 already builds, so the
+   expensive half of this feature is already paid for.
+2. Cut it into tiles (`TileSize`, `TileCount`). Every tile becomes one quad, positioned where the
+   tile is, coloured by the tile, scaled by `KernelSize`.
+3. Tiles below `Threshold` collapse to zero size (`ThresholdScale`), so only bright ones scatter.
+4. Each quad is textured by a **bokeh kernel** -- the aperture's shape. That is where the hexagon or
+   the circle comes from; there is no analytic ghost anywhere.
+5. Colour is scaled by `KernelAreaInverse`, i.e. energy is conserved as the kernel grows.
+6. A double `DiscMask(ScreenPos) * DiscMask(ScreenPos * 0.8)` fades the whole thing towards the
+   screen edge, which is what stops the scatter from reading as a rectangular overlay.
+7. The result is composited INTO the bloom target (`LensFlareCopyBloomPS`), not carried as a second
+   layer. One texture reaches the tonemap either way.
+
+UE also offer a compute path (`LENS_FLARE_BLUR_CS`) that writes packed half-float quads into a vertex
+buffer for the VS to read -- worth having only if the tile count ever makes the draw the bottleneck.
+Start with the plain instanced-quad VS.
+
+**Implement:**
+
+1. A source level from the bloom `down` chain (a level, not a new reduction) plus the tile grid.
+2. The scatter pass: instanced quads, additive blend, bokeh kernel, threshold, `KernelAreaInverse`,
+   both disc masks.
+3. Composite into the bloom `up` chain's mip 0, so the tonemap keeps reading exactly one texture and
+   `bloomIntensity` still scales the whole optical response.
+4. Controls: intensity, threshold, kernel size, and the per-ghost tints. Ships DISABLED.
+5. The bokeh kernel: generate it procedurally (an N-sided aperture with a controllable blade count
+   and rotation) rather than importing a texture. That keeps the feature free of a content
+   dependency, and blade count is a better control than a bitmap anyway.
+
+**Interface contract:** disabled schedules no pass and produces the P8 image exactly; with P8 itself
+disabled this cannot run at all, because it has no pyramid to read.
+
+**Done when:** the sun's glint field on `sun_glint` throws shaped ghosts that hold still relative to
+the water and slide correctly as the camera turns, without the frame acquiring a permanent veil.
+
+**Verify:** `sun_glint` first and `overview` as the control (the same pairing P8 used); a camera
+ROTATION sequence rather than a still, for the reason in the next paragraph; native and DLSS; GPU
+timing of the scatter pass on its own.
+
+**WHAT THIS PROJECT ALREADY KNOWS AND THE SPEC SHOULD NOT REDISCOVER:**
+
+* **UE's threshold is a HARD CUT** (`ThresholdScale = (Luminance < Threshold) ? 0 : 1`) and this
+  scene is the worst case for it. P8's notes already record that a sun glint crossing a texel
+  boundary pumps the pyramid; here that same glint makes a whole quad appear and vanish between
+  frames. Soften it the way P8's bloom threshold is softened (a knee, not a step), keep the
+  Karis-averaged level as the source, and judge it on MOTION -- a still cannot show this.
+* **The threshold must be measured against EXPOSED luminance**, exactly as P8's is, or it means a
+  different thing at every time of day. UE compare a raw luminance here because their input is
+  already pre-exposed; ours is not.
+* **Fix exposure before any A/B** (`--set=exposure.autoExposure:0 --dlss=off`). Same trap, third
+  time of asking.
+* **Cheap adjacent win, if it is wanted:** UE's `BloomDirtMask` is one multiply in the tonemap --
+  `Bloom = RawBloom * (1 + Dirt * Tint)` -- and needs no new pass at all. It is a content-dependent
+  look (it needs a dirt texture), so it is deliberately not folded into this step.
+
+**THE ALTERNATIVE, and it is a real fork:** UE's other bloom path is FFT **convolution** bloom
+(`Shaders/Private/Bloom/*`, also in the drop), which convolves the frame with an arbitrary kernel
+image and so produces true anamorphic streaks and starbursts, flares included, from one physically
+meaningful input. It is considerably more expensive and needs an FFT this engine does not have.
+Bokeh scatter is the right first implementation; convolution is the thing to reach for only if the
+scatter's ghosts read as decoration rather than as optics.
+
+**Reference files:** `PostProcessLensFlares.usf` **have**; `LensDistortion.ush` **have** (for the
+chromatic edge treatment, if that is ever wanted). `PostProcessLensFlares.cpp` is **NOT** in the drop
+and carries the per-ghost tint/scale table (`LensFlareTints[8]`) and the axis mirroring -- ask for it
+before inventing those numbers.
 
 ---
 
@@ -2879,6 +3023,113 @@ at this measurement ended up profiling `Pass_RTReflections` (the level defaults 
 not the ones that ran. `main.cpp` now loops over every occurrence. Any earlier measurement in this
 document that passed two `--set=` flags should be re-read with that in mind.
 
+---
+
+### P15 — Volumetric fog: a UE-style froxel volume — NOT STARTED (queued 2026-08-19)
+
+**Depends on:** P7 (the medium's parameters and their level plumbing already exist), P4 (exposure),
+and the shadow work (VSM/CSM) because the whole point of the volume is that light in it is
+*shadowed*. Independent of P8-P11; it does not block them and they do not block it.
+
+**Goal:** light shafts through the palm canopy, shadowed haze, fog that local lights actually
+illuminate, and a ground layer that has thickness instead of being a per-pixel function of distance.
+P7 gives every pixel the same haze whatever is between it and the sun; this step is what makes the
+air itself part of the lighting.
+
+**Why it is a separate step and not "P7 done properly":** P7 is an analytic integral with no memory
+of the scene, so it costs a handful of ALU in passes that already have depth bound. A froxel volume
+is four new passes, three 3D targets and a temporal history. **The analytic fog does not get
+retired** — it stays as the far field, exactly as in UE, where the volume covers the near range
+(`r.VolumetricFog.Distance`, 6000 uu ≈ 60 m by default) and the exponential height fog carries
+everything beyond it.
+
+**Touch candidates:** new `shaders/volumetric_fog_*.hlsl` (four entry points), `RenderTargetManager`
+(three volume targets + history), `SceneRenderer` (pass registration and the barrier declarations),
+`AtmosphereSettings`/`AtmosphereSettingsJson`/inspector (the volume's own knobs), `compose_cs.hlsl`
+and both ocean surfaces (the lookup), `LightManager` (local-light injection).
+
+**Implement, in UE's own four stages** (`VolumetricFog.usf`; each of ours should keep the UE name in
+a comment so the correspondence survives):
+
+1. **Voxelize the medium — `MaterialSetupCS`.** Write `VBufferA` = scattering RGB + extinction A and
+   `VBufferB` = emissive RGB + phase g, from the SAME `AtmosphereParams` the analytic model uses, so
+   the two cannot describe different air. UE's froxel grid is `GridPixelSize` screen pixels wide
+   (8-16) with `GridSizeZ` slices (64), distributed **logarithmically**:
+   `ZSlice = log2(depth * GridZParams.x + GridZParams.y) * GridZParams.z` (`Common.ush:2379`). Do not
+   invent a distribution — the log layout is what makes 64 slices enough.
+2. **Inject shadowed local lights — `InjectShadowedLocalLightPS` + `WriteToBoundingSphereVS`.** Only
+   the froxels inside a light's bounding sphere are touched, rasterised via that sphere rather than
+   dispatched over the whole grid. Our spot/point shadows already exist (see
+   [[spot-lights-refactor-plan]]); this is where they earn a second use.
+3. **Light the froxels — `LightScatteringCS`.** Directional light with its shadow term, local lights,
+   and the sky, each weighted by the **Henyey-Greenstein phase function**
+   (`ParticipatingMediaCommon.ush:91`) against the froxel's view vector. UE reproject the previous
+   frame's `LightScatteringHistory` here and super-sample only on a history miss
+   (`HISTORY_MISS_SUPER_SAMPLE_COUNT`) — the volume is too coarse and too noisy to be believable
+   without that, so temporal reprojection is part of the step, not a later optimisation.
+4. **Integrate along Z — `FinalIntegrationCS`.** Front-to-back accumulation into
+   `IntegratedLightScattering` (RGB = in-scattered light, A = transmittance), using Frostbite's
+   energy-conserving form UE call out in the comment:
+   `(S - S*T) / max(extinction, 1e-5)` rather than `S * stepLength`. Near fade-in is applied here
+   (`VolumetricFogNearFadeInDistanceInv`), which is why the consumer's start-distance test can be a
+   step function.
+
+**Then the lookup, and this is the part that keeps P7 intact.** UE's `CombineVolumetricFog`
+(`HeightFogCommon.ush:420`) is one line worth transcribing exactly:
+
+```hlsl
+return float4(VolFog.rgb + GlobalFog.rgb * VolFog.a, VolFog.a * GlobalFog.a);
+```
+
+The volume is the NEAR slab and the analytic fog is what lies beyond it, attenuated by the slab's
+transmittance. Both consumers we already have — `compose_cs.hlsl` for opaque and both ocean surfaces
+— gain the same 3D lookup at `ComputeVolumeUVFromNDC`'s UV, and the existing analytic block becomes
+the `GlobalFog` term rather than being replaced.
+
+**Interface contract:** with the volume disabled, the frame is screenshot-equivalent to P7 and **no
+3D target is allocated** — same rule GTAO follows (off schedules no pass, rather than a pass that
+writes a neutral value). Ships disabled.
+
+**Done when:** the sun through the grove casts visible shafts that move correctly with the camera and
+with wind-driven canopy motion; a spot light at night lights the air around it; and the P7 image is
+reproduced exactly when the volume is off.
+
+**Verify:** the three canonical `wind_test` views plus a night/spot-light view; camera inside and
+above the layer (the 82 m case in P7's notes); native and DLSS; GPU timing of each of the four
+passes separately; `--canonical-check` clean (this step adds resources and passes, so the full
+barrier gate applies, unlike P7's shader-only edits).
+
+**WHAT THIS PROJECT ALREADY KNOWS THAT CHANGES THE SPEC — read before starting:**
+
+* **`skyBackScatter` is a stand-in for exactly what stage 3 does properly.** P7 added it because the
+  analytic model has no phase function: it fakes the forward-peaked lobe by scaling the sky term with
+  view-to-sun angle. Inside the volume the real HG phase applies per froxel, so the two must not both
+  run — the volume's `PhaseG` is the honest parameter and `skyBackScatter` stays as the far field's
+  approximation of it. Give them one authored control if the numbers can be made to agree.
+* **`maxOpacity` has no business in the volume.** Its floor exists to keep distant shapes from
+  vanishing in the analytic model, and P7's `AtmosphereMinTransmittance` already has to release it
+  with depth to stop the horizon seaming. The volume's transmittance is a real integral; do not clip
+  it.
+* **The sky is never fogged, and that is still true.** The volume covers a near range and background
+  pixels are not in it; the debug views must keep painting un-measured pixels black for the same
+  reason P7's do.
+* **Fix exposure before any A/B** (`--set=exposure.autoExposure:0 --dlss=off`). A volume changes
+  average luminance more than P7 did, so metering will otherwise move the whole frame — including the
+  sky — and the first measurement will look like a broken background test. This cost an hour on P7.
+* **UE store `IntegratedLightScattering` PRE-EXPOSED** and divide it out at the lookup
+  (`OneOverPreExposure`). Decide this deliberately given P4's exposure split; storing linear radiance
+  in an FP16 volume is the thing pre-exposure exists to protect against.
+* **Budget it before building it.** At 2560x1440 with a 16-pixel grid and 64 slices that is
+  160x90x64 = 920k froxels; two RGBA16F volumes plus the integrated one plus history is roughly
+  22 MB, and stages 1/3/4 each dispatch over the whole grid. If the measured cost lands far above
+  P7's +0.003 ms on `Pass_Compose`, the grid size is the first dial, not the feature.
+
+**Reference files needed from the drop** (all present in `ue_strip/Shaders/Private` as of
+2026-08-19): `VolumetricFog.usf`, `VolumetricFogVoxelization.usf`, `VolumetricFogLightFunction.usf`,
+`ParticipatingMediaCommon.ush`, and `HeightFogCommon.ush` (already used by P7). The C++ side
+(`VolumetricFog.cpp`, for the grid setup and the cvar defaults) is **not** in the drop — ask for it
+before guessing at `GridZParams`.
+
 ## 10. Global acceptance checklist
 
 ### Exposure and color
@@ -2987,6 +3238,15 @@ For the largest visual gain per unit of risk:
 12. P9B-P9C — probe GI only if the accepted image still lacks indirect depth and the performance budget allows it.
 13. P11 — final scene calibration and human sign-off.
 
+P8B and then P8C (lens flares) slot in after P8 whenever the bloom look has been signed off; neither
+blocks P9-P11.
+
+**P15 (volumetric fog) sits outside this ordering.** It is the largest single piece of new
+infrastructure the plan carries — four passes, three volume targets, a temporal history — and it buys
+light shafts and shadowed haze rather than correctness. Take it when the analytic look has been
+tuned and found wanting, not before: P7's own knobs (density, height falloff, back-scatter, sky blur)
+cover a lot of what "we need volumetrics" usually means, and they cost nothing.
+
 Do not start final level grading before M2. The fastest route to the target image is to make exposure and environment lighting coherent first, then judge which finishing features are still visibly necessary.
 
 ---
@@ -3022,6 +3282,14 @@ already cost this project a frame-wide pink tint once.
 | `PostProcessLocalExposure.usf` | the local-exposure apply pass and the exposure-fusion alternative | **wanted** |
 | `PostProcessHistogram.usf` | the bilateral-grid write inside the histogram pass — the P3B upgrade needs it | wanted if the grid is built |
 | `PostProcessLocalExposure.cpp` | bilateral grid construction parameters | wanted if the grid is built |
+| `VolumetricFog.usf` | **P15**: all four froxel stages — `MaterialSetupCS`, `InjectShadowedLocalLightPS`, `LightScatteringCS`, `FinalIntegrationCS`, plus the Frostbite energy-conserving integration | **have** |
+| `VolumetricFogVoxelization.usf`, `VolumetricFogLightFunction.usf` | P15: voxelising fog volumes, and light functions inside the volume | **have** |
+| `ParticipatingMediaCommon.ush` | P15: `HenyeyGreensteinPhase` — the real phase function `skyBackScatter` currently approximates | **have** |
+| `PostProcessLensFlares.usf` | **P8C**: the bokeh-scatter flare -- tile grid, threshold, `KernelAreaInverse`, the double `DiscMask`, and the composite back into bloom | **have** |
+| `LensDistortion.ush` | P8C, optional: the chromatic/edge treatment | **have** |
+| `PostProcessLensFlares.cpp` | P8C: the per-ghost tint and scale table (`LensFlareTints[8]`) and the axis mirroring. **The shader does not contain these** -- ask before inventing them | **wanted** |
+| `Bloom/*.usf` (`BloomDownsampleKernel`, `BloomResizeKernel`, `BloomFinalizeApplyConstants`, ...) | P8C's alternative: FFT convolution bloom, for true starbursts from a kernel image | **have** |
+| `VolumetricFog.cpp` | P15: grid setup (`GridPixelSize`, `GridSizeZ`, `Distance`), the `GridZParams` derivation, and the cvar defaults. **The shader alone does not say how the log Z distribution is built** — ask for this file before guessing | **wanted** |
 
 Everything is dropped in the **root** of `D:\Programming\ue_autoexposure\`, not under the
 engine-relative subpaths — look there first.

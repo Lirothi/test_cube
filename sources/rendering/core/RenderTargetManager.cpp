@@ -555,6 +555,76 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D.hzbHeight = h;
         }
 
+        // P8: the bloom pyramid. Same construction as the HZB chain above -- one SRV over the whole
+        // thing, one UAV per mip, built entirely in UNORDERED_ACCESS -- but sized off the DISPLAY
+        // resolution, because bloom runs after the upscaler on the image the tonemap reads.
+        {
+            UINT w = std::max(1u, sizes.bloomWidth);
+            UINT h = std::max(1u, sizes.bloomHeight);
+            UINT mips = 1;
+            while (((w >> mips) > 0 && (h >> mips) > 0) && mips < kBloomMaxMips)
+            {
+                ++mips;
+            }
+
+            D3D12_RESOURCE_DESC rd{};
+            rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            rd.Width = w;
+            rd.Height = h;
+            rd.DepthOrArraySize = 1;
+            rd.MipLevels = static_cast<UINT16>(mips);
+            rd.Format = formats.bloom;
+            rd.SampleDesc.Count = 1;
+            rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+            auto createBloomChain = [&](GpuResource& res,
+                                        D3D12_CPU_DESCRIPTOR_HANDLE& srv,
+                                        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kBloomMaxMips>& mipUavs,
+                                        DeferredSrvSlot srvSlot,
+                                        DeferredSrvSlot firstUavSlot)
+            {
+                ThrowIfFailed(render::CreateCommittedTexture(dev,
+                    heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+                    res.GetAddressOfForCreate()));
+                res.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+
+                D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+                sd.Format = formats.bloom;
+                sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                sd.Texture2D.MipLevels = mips;
+                srv = DeferredSrvCPU(f, srvSlot);
+                dev->CreateShaderResourceView(res.Get(), &sd, srv);
+
+                for (UINT m = 0; m < kBloomMaxMips; ++m)
+                {
+                    // Same rule as the HZB chain: slots past the real mip count still get a valid
+                    // descriptor, aimed at the last real mip. A VOLATILE table may not have a hole.
+                    D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+                    ud.Format = formats.bloom;
+                    ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                    ud.Texture2D.MipSlice = (m < mips) ? m : (mips - 1);
+                    mipUavs[m] = DeferredSrvCPU(f, static_cast<DeferredSrvSlot>(
+                        static_cast<UINT>(firstUavSlot) + m));
+                    dev->CreateUnorderedAccessView(res.Get(), nullptr, &ud, mipUavs[m]);
+                }
+            };
+
+            currentTargetWidth = w;
+            currentTargetHeight = h;
+            createBloomChain(D.bloomDown, D.bloomDownSRV, D.bloomDownMipUAV,
+                DeferredSrvSlot::BloomDown, DeferredSrvSlot::BloomDownMipUav0);
+            createBloomChain(D.bloomUp, D.bloomUpSRV, D.bloomUpMipUAV,
+                DeferredSrvSlot::BloomUp, DeferredSrvSlot::BloomUpMipUav0);
+
+            D.bloomMips = mips;
+            D.bloomWidth = w;
+            D.bloomHeight = h;
+        }
+
         // Inspector preview. Rests SHADER-READABLE: the overlay transitions FROM a resource's
         // canonical into PIXEL_SHADER_RESOURCE without transitioning back, which is only sound when
         // the canonical already shares that barrier layout.
@@ -628,6 +698,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gtaoFiltered.Get(), L"GtaoFiltered", kNps);
         nameRes(D.gtaoHistory.Get(), L"GtaoHistory", kNps);
         nameRes(D.gtaoUpsampled.Get(), L"GtaoUpsampled", kNps);
+        nameRes(D.bloomDown.Get(), L"BloomDown", kNps);
+        nameRes(D.bloomUp.Get(), L"BloomUp", kNps);
         nameRes(D.hzb.Get(), L"Hzb", kNps);
         nameRes(D.hzbClosest.Get(), L"HzbClosest", kNps);
         nameRes(D.debugPreview.Get(), L"DebugPreview", kNps);

@@ -47,6 +47,7 @@ namespace LevelDocumentSerializer
                 else if (env.type == "colorPipeline") { out["colorPipeline"] = env.properties; } // P3C
                 else if (env.type == "gtao") { out["gtao"] = env.properties; } // P6B
                 else if (env.type == "atmosphere") { out["atmosphere"] = env.properties; } // P7
+                else if (env.type == "bloom") { out["bloom"] = env.properties; } // P8
                 else if (env.type == "ocean")
                 {
                     nlohmann::json ocean = env.properties;

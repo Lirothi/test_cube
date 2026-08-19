@@ -143,11 +143,19 @@ public:
     void SetAtmosphere(const AtmosphereSettings& s) { atmosphere_ = s; }
     AtmosphereSettings& AtmosphereRef() { return atmosphere_; }
 
+    // P8 bloom. Same ownership rule as the two above: the SCENE copy is the source of truth and
+    // SceneRenderSettings is only the per-frame transport, so the dev window, `--set` and the
+    // editor all edit this one.
+    const BloomSettings& GetBloom() const { return bloom_; }
+    void SetBloom(const BloomSettings& s) { bloom_ = s; }
+    BloomSettings& BloomRef() { return bloom_; }
+
     void SetRenderSettings(const SceneRenderSettings& settings)
     {
         renderSettings_ = settings;
         renderSettings_.gtao = gtao_;
         renderSettings_.atmosphere = atmosphere_;
+        renderSettings_.bloom = bloom_;
     }
     const SceneRenderSettings& GetRenderSettings() const { return renderSettings_; }
 
@@ -237,6 +245,7 @@ private:
     render::ColorPipelineSettings colorPipeline_{};   // P3; see PhotographicSettings.h
     GtaoSettings gtao_{};                             // P6B; level-scoped, see GetGtao
     AtmosphereSettings atmosphere_{};                 // P7; level-scoped, see GetAtmosphere
+    BloomSettings bloom_{};                           // P8; level-scoped, see GetBloom
 
     std::unique_ptr<Skybox> skyBox_;
 };

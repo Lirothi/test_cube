@@ -1,9 +1,13 @@
-#define TONEMAP_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), UAV(u1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define TONEMAP_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), UAV(u1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 Texture2D HDRColor : register(t0);
 // P3B: blurred base log-luminance, sampled bilinearly. The metering pass writes it and owns both
 // of its state transitions, so nothing here needs a barrier.
 Texture2D<float> BaseLogLumTex : register(t1);
+// P8: mip 0 of the bloom pyramid's UP chain, at HALF this target's resolution -- sampled
+// bilinearly, which is the last upsample step and is why it is an SRV here rather than another UAV.
+// Bound to an inert 1x1 when bloom is off; `bloomIntensity` 0 is what actually disables it.
+Texture2D BloomTex : register(t2);
 RWTexture2D<float4> LdrTarget : register(u0);
 // P2: the persistent exposure record, read-only here. Bound as a UAV rather than an SRV purely so
 // it never leaves its canonical UNORDERED_ACCESS state -- an SRV binding would cost a transition
@@ -47,7 +51,9 @@ cbuffer TonemapCB : register(b0)
     float localDetailStrength;
     float localHighlightThreshold;
     float localShadowThreshold;
-    float tonemapPad3, tonemapPad4, tonemapPad5;
+    // P8. 0 = no bloom is read at all, which is the interface contract's exact no-op.
+    float bloomIntensity;
+    float tonemapPad4, tonemapPad5;
 };
 
 #include "utils.hlsli"
@@ -157,6 +163,22 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 hdr *= LocalExposureMultiplier(log2(lum), baseLog, log2(0.18f), local);
             }
         }
+    }
+
+    // P8: bloom, added AFTER the grade and the local exposure and BEFORE the curve. That placement
+    // is UE's, and both halves of it matter (PostProcessTonemap.usf):
+    //
+    //     FinalLinearColor  = SceneColor * SceneColorTint * (GlobalExposure * ... * LocalExposure);
+    //     FinalLinearColor += Bloom * (GlobalExposure * ...);
+    //
+    // The bloom gets the GLOBAL exposure -- it must, it was extracted from an image that had not
+    // been exposed yet -- but NOT the local one and not the colour grade: local exposure is a
+    // per-pixel contrast operator derived from THIS pixel's neighbourhood, and a halo that spread
+    // from somewhere else is not part of that neighbourhood. Before the curve, because bloom is
+    // scene-referred light and the curve is what maps scene-referred light to the display.
+    if (bloomIntensity > 0.0f)
+    {
+        hdr += BloomTex.SampleLevel(gSmp, uv, 0).rgb * (bloomIntensity * exposureMultiplier);
     }
 
     float3 ldr;

@@ -23,7 +23,8 @@ namespace
             object.type == "cameraExposure" || // P1
             object.type == "colorPipeline" ||  // P3C
             object.type == "gtao" ||           // P6B
-            object.type == "atmosphere";       // P7
+            object.type == "atmosphere" ||     // P7
+            object.type == "bloom";            // P8
     }
 
     bool DocumentHasOtherOfType(const EditorSceneDocument& document, const EditorObject& object)

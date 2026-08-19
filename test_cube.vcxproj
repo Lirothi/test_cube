@@ -603,6 +603,7 @@
     <None Include="shaders\gtao_temporal_cs.hlsl" />
     <None Include="shaders\gtao_upsample_cs.hlsl" />
     <None Include="shaders\hzb_build_cs.hlsl" />
+    <None Include="shaders\bloom_cs.hlsl" />
     <None Include="shaders\debug_preview_cs.hlsl" />
     <None Include="shaders\exposure_histogram_cs.hlsl" />
     <None Include="shaders\exposure_solve_cs.hlsl" />

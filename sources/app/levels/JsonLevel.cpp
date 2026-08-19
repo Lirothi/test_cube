@@ -18,6 +18,7 @@
 #include "third_party/json/json.hpp"
 #include "app/scene/GtaoSettingsJson.h"
 #include "app/scene/AtmosphereSettingsJson.h"
+#include "app/scene/BloomSettingsJson.h"
 #pragma warning(pop)
 
 #include "app/camera/Camera.h"
@@ -360,6 +361,14 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             AtmosphereSettingsJson::ApplyOverrides(j["atmosphere"], atmosphere);
         }
         scene.SetAtmosphere(atmosphere);
+
+        // P8: a level without the section gets the struct defaults, i.e. bloom OFF.
+        BloomSettings bloom{};
+        if (j.contains("bloom"))
+        {
+            BloomSettingsJson::ApplyOverrides(j["bloom"], bloom);
+        }
+        scene.SetBloom(bloom);
     }
 
     // P3: display transform. A level without the section gets the struct defaults, i.e. AgX.

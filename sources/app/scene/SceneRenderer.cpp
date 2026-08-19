@@ -506,6 +506,25 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // now asks. The target, its descriptors and the shader's `writeClosest` path all stay --
     // P9's screen-space GI is the next consumer and wants exactly this chain.
     ssrHizActive_ = false;
+    // P8 bloom. Gated on everything the body needs, not just the setting: the material and its CB
+    // have to exist, the pyramid has to have been created, and a zero intensity is the plan's
+    // "schedules no unnecessary active work" -- with it off nothing is dispatched and the tonemap
+    // reads a literal 0 for the term.
+    {
+        const auto& DB = renderer->GetDeferredForFrame();
+        // The material EXISTING is not the same as it being usable: Material::CreateCompute keeps
+        // the object and leaves the PSO null when the shader fails to build, so a null-check alone
+        // dispatches with no pipeline state. That cost a debug session -- the shader was missing its
+        // [RootSignature] attribute, which dxc compiles happily and check_shaders therefore passed.
+        const auto bloomMaterial = resources_.GetBloomMaterial();
+        bloomActive_ = frame.settings.bloom.enabled &&
+                       frame.settings.bloom.intensity > 0.0f &&
+                       bloomMaterial != nullptr &&
+                       bloomMaterial->GetPipelineState() != nullptr &&
+                       resources_.GetBloomCBSizeBytes() > 0u &&
+                       DB.bloomMips > 0u && DB.bloomDown.Get() != nullptr &&
+                       DB.bloomUp.Get() != nullptr;
+    }
     // SSR TEMPORAL RESOLVE. Only for the screen-space source: RT traces the TLAS and does not have
     // this instability, and None/SkyOnly dispatch nothing to filter. The history is per-frame-set
     // like the GTAO one, so it is only valid once a previous frame at THIS reflection size has
@@ -1615,6 +1634,19 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             p.Use(DTM.depth.Get(), kNps);
         }
         p.Use(DTM.scene.Get(), kNps); // the non-DLSS tonemap source
+        // P8: the bloom pyramid, built between the upscale above and the tone curve below. Both
+        // chains go to UNORDERED_ACCESS for the build and come back shader-readable -- the same
+        // shape as the HZB pyramid, and for the same reason: a level reads the level above it
+        // through its own UAV because this barrier layer transitions whole resources.
+        if (bloomActive_)
+        {
+            p.NextPoint();
+            p.Use(DTM.bloomDown.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            p.Use(DTM.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            p.NextPoint();
+            p.Use(DTM.bloomUp.Get(), kNps);   // the tonemap samples mip 0
+            p.Use(DTM.bloomDown.Get(), kNps); // back to canonical
+        }
         p.NextPoint();
         // The body needs ALL of these, not just the setting — gating on the setting alone
         // registered the FXAA resolve source on frames the FXAA pass could not run.
@@ -4759,6 +4791,126 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
     ctx.EndCL(t);
 }
 
+// P8 -- the bloom pyramid, recorded into the tonemap pass's own command list.
+//
+// Three stages, one shader, one PSO (bloom_cs.hlsl selects on `stage`):
+//   setup      the exposed HDR image, thresholded, into down[0]
+//   downsample down[i-1] -> down[i], the 13-tap filter, Karis-averaged on the first level only
+//   upsample   up[i+1] tented + down[i] -> up[i], walking back to mip 0
+//
+// The levels talk to each other through their own UAVs and are separated by UAV BARRIERS, not
+// transitions -- identical to Pass_Hzb, and for the identical reason. The two chain transitions
+// (in and out of UNORDERED_ACCESS) are the pair declared in the tonemap Prepare.
+//
+// NO EARLY RETURN: every gate was evaluated into `bloomActive_` before the graph was built, and the
+// Prepare declared from that same flag. Stopping half way here would leave a declared barrier point
+// unemitted.
+void SceneRenderer::Bloom_Build(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                D3D12_CPU_DESCRIPTOR_HANDLE hdrSource)
+{
+    const auto& D = renderer->GetDeferredForFrame();
+    auto material = resources_.GetBloomMaterial();
+    const UINT cbSize = resources_.GetBloomCBSizeBytes();
+    const BloomSettings& settings = frame_->settings.bloom;
+
+    GPU_SCOPE(cl, ProfilerScopes::kPassBloom);
+
+    renderer->Transition(cl, D.bloomDown.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, D.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
+    const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
+        renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+    ExposureMetering& metering = renderer->Exposure();
+    // The SAME predicate the tonemap uses for its own exposure. If these two disagreed, the
+    // threshold would be measured against one exposure and the image against another.
+    const bool applyExposure = frame_->cameraExposure.enabled && metering.IsReady();
+
+    const auto mipSize = [&](UINT mip) {
+        return uint2{ std::max(1u, D.bloomWidth >> mip), std::max(1u, D.bloomHeight >> mip) };
+    };
+
+    auto dispatch = [&](const BloomPassConstants& c, UINT dstW, UINT dstH,
+                        D3D12_CPU_DESCRIPTOR_HANDLE src,
+                        D3D12_CPU_DESCRIPTOR_HANDLE dst,
+                        D3D12_CPU_DESCRIPTOR_HANDLE add,
+                        ID3D12Resource* barrierRes) {
+        RecordComputeDispatch(renderer, cl, material.get(), cbSize,
+            [&](uint8_t* dest) { resources_.WriteBloomConstants(c, dest); },
+            { hdrSource },
+            { src, dst, add, metering.ExposureUav() },
+            samplerTable, dstW, dstH, barrierRes);
+    };
+
+    // ---- stage 0: threshold into down[0] ----
+    {
+        const uint2 dst = mipSize(0);
+        BloomPassConstants c{};
+        c.stage = 0u;
+        c.exposureEnabled = applyExposure ? 1u : 0u;
+        c.dstSize = dst;
+        c.srcSize = uint2{ renderer->GetWidth(), renderer->GetHeight() };
+        c.threshold = std::max(settings.threshold, 0.0f);
+        c.softKnee = std::max(settings.softKnee, 1.0e-4f);
+        c.radius = settings.radius;
+        c.fireflyClamp = settings.fireflyClamp ? 1u : 0u;
+        // u0 is unused by this stage but the table may not have a hole, so it is aimed at the
+        // destination -- a descriptor that is valid and inert.
+        dispatch(c, dst.x, dst.y, D.bloomDownMipUAV[0], D.bloomDownMipUAV[0],
+                 D.bloomDownMipUAV[0], D.bloomDown.Get());
+    }
+
+    // ---- stage 1: down the chain ----
+    for (UINT mip = 1; mip < D.bloomMips; ++mip)
+    {
+        const uint2 dst = mipSize(mip);
+        BloomPassConstants c{};
+        c.stage = 1u;
+        c.exposureEnabled = 0u;
+        c.dstSize = dst;
+        c.srcSize = mipSize(mip - 1);
+        c.threshold = settings.threshold;
+        c.softKnee = settings.softKnee;
+        c.radius = settings.radius;
+        // Karis on the FIRST reduction only: it is there to stop one blown-out texel from
+        // dominating, and deeper in the chain it would just eat energy the tent needs.
+        c.fireflyClamp = (mip == 1u && settings.fireflyClamp) ? 1u : 0u;
+        dispatch(c, dst.x, dst.y, D.bloomDownMipUAV[mip - 1], D.bloomDownMipUAV[mip],
+                 D.bloomDownMipUAV[mip], D.bloomDown.Get());
+    }
+
+    // ---- stage 2: back up, accumulating ----
+    //
+    // The coarsest level of the UP chain is seeded from the DOWN chain by an upsample whose source
+    // IS its own destination level: with `radius` taps on a level that is a few texels across the
+    // tent is a no-op in all but name, and seeding this way avoids a second shader stage that would
+    // exist only to copy one tiny mip.
+    for (int mip = static_cast<int>(D.bloomMips) - 2; mip >= 0; --mip)
+    {
+        const UINT m = static_cast<UINT>(mip);
+        const uint2 dst = mipSize(m);
+        BloomPassConstants c{};
+        c.stage = 2u;
+        c.exposureEnabled = 0u;
+        c.dstSize = dst;
+        c.srcSize = mipSize(m + 1u);
+        c.threshold = settings.threshold;
+        c.softKnee = settings.softKnee;
+        c.radius = std::max(settings.radius, 0.0f);
+        c.fireflyClamp = 0u;
+        // The source is the coarser level of the UP chain -- except at the top, where the UP chain
+        // holds nothing yet and the DOWN chain's coarsest level is the seed.
+        const bool seeding = (m + 1u == D.bloomMips - 1u);
+        const D3D12_CPU_DESCRIPTOR_HANDLE src =
+            seeding ? D.bloomDownMipUAV[m + 1u] : D.bloomUpMipUAV[m + 1u];
+        dispatch(c, dst.x, dst.y, src, D.bloomUpMipUAV[m], D.bloomDownMipUAV[m], D.bloomUp.Get());
+    }
+
+    renderer->Transition(cl, D.bloomUp.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    renderer->Transition(cl, D.bloomDown.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+}
+
 void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 {
     auto t = ctx.BeginCL();
@@ -4800,6 +4952,13 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 
         const D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = ranDlss ? D.dlssOutputSRV : D.sceneSRV;
         const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
+        // P8: build the bloom pyramid off whatever the tonemap is about to read. It has to be here
+        // rather than in a pass of its own, because the DLSS evaluate above lives inside THIS pass:
+        // bloom must see the upscaled image, and the tonemap must see the bloom.
+        if (bloomActive_)
+        {
+            Bloom_Build(renderer, t.cl, tonemapSrc);
+        }
         const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
         // P2: exposure is applied here — after the DLSS resolve above, before the tone curve.
         // The buffer is bound even while dormant so the descriptor table shape is constant; the
@@ -4809,10 +4968,15 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         const UINT tonemapCb = resources_.GetTonemapCBSizeBytes();
         RecordComputeDispatch(renderer, t.cl, tonemapMaterial.get(), tonemapCb,
             [this, applyExposure](uint8_t* dest) {
+                // The intensity is taken from the GATE, not from the setting: if the chain did not
+                // run this frame, the pyramid holds the previous frame's image (or nothing at all),
+                // and a non-zero intensity here would composite it.
+                const float bloom = bloomActive_ ? frame_->settings.bloom.intensity : 0.0f;
                 resources_.WriteTonemapConstants(applyExposure, frame_->colorPipeline,
-                                                 frame_->cameraExposure, dest);
+                                                 frame_->cameraExposure, bloom, dest);
             },
-            { tonemapSrc, metering.BaseLumSrv() }, { D.tonemapUAV, metering.ExposureUav() }, samplerTable,
+            { tonemapSrc, metering.BaseLumSrv(), D.bloomUpSRV },
+            { D.tonemapUAV, metering.ExposureUav() }, samplerTable,
             renderer->GetWidth(), renderer->GetHeight(),
             D.tonemap.Get());
 

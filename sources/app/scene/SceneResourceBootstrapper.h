@@ -181,6 +181,7 @@ struct SceneTonemapCBHandles
     Material::CBFieldHandle localDetailStrength;
     Material::CBFieldHandle localHighlightThreshold;
     Material::CBFieldHandle localShadowThreshold;
+    Material::CBFieldHandle bloomIntensity; // P8
 
     void Populate(Material* material);
 };
@@ -347,6 +348,28 @@ struct DebugPreviewHandles
 struct HzbHandles
 {
     Material::CBFieldHandle dstSize, srcSize, fromDepth, writeClosest;
+    void Populate(Material* material);
+};
+
+// P8 bloom. Mirrors `BloomCB` in shaders/bloom_cs.hlsl -- one struct for all three stages, because
+// they are one shader and one PSO; `stage` selects which of the three produces the destination.
+struct BloomPassConstants
+{
+    uint32_t stage = 0u;            // 0 setup, 1 downsample, 2 upsample
+    uint32_t exposureEnabled = 0u;
+    uint2 dstSize{ 1u, 1u };
+    uint2 srcSize{ 1u, 1u };
+    float threshold = 1.0f;
+    float softKnee = 0.5f;
+    float radius = 1.0f;
+    uint32_t fireflyClamp = 1u;
+    uint32_t pad0 = 0u, pad1 = 0u;
+};
+
+struct BloomHandles
+{
+    Material::CBFieldHandle stage, exposureEnabled, dstSize, srcSize;
+    Material::CBFieldHandle threshold, softKnee, radius, fireflyClamp;
     void Populate(Material* material);
 };
 
@@ -595,11 +618,14 @@ public:
     std::shared_ptr<Material> GetSsrTemporalMaterial() const { return matSsrTemporalCS_; }
     std::shared_ptr<Material> GetGtaoUpsampleMaterial() const { return matGtaoUpsampleCS_; }
     std::shared_ptr<Material> GetHzbMaterial() const { return matHzbCS_; }
+    std::shared_ptr<Material> GetBloomMaterial() const { return matBloomCS_; }
     std::shared_ptr<Material> GetDebugPreviewMaterial() const { return matDebugPreviewCS_; }
     UINT GetDebugPreviewCBSizeBytes() const;
     void WriteDebugPreviewConstants(const DebugPreviewConstants& data, uint8_t* dest) const;
     UINT GetHzbCBSizeBytes() const;
     void WriteHzbConstants(const HzbPassConstants& data, uint8_t* dest) const;
+    UINT GetBloomCBSizeBytes() const;
+    void WriteBloomConstants(const BloomPassConstants& data, uint8_t* dest) const;
     UINT GetSsrTemporalCBSizeBytes() const;
     void WriteSsrTemporalConstants(const SsrTemporalConstants& data, uint8_t* dest) const;
     UINT GetGtaoFilterCBSizeBytes() const;
@@ -660,6 +686,7 @@ public:
     void WriteTonemapConstants(bool exposureEnabled,
                                const render::ColorPipelineSettings& color,
                                const render::CameraExposureSettings& camera,
+                               float bloomIntensity,
                                uint8_t* dest) const;
     void WriteExposureHistogramConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
     void WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
@@ -691,6 +718,7 @@ private:
     std::shared_ptr<Material> matSsrTemporalCS_;
     std::shared_ptr<Material> matGtaoUpsampleCS_;
     std::shared_ptr<Material> matHzbCS_;
+    std::shared_ptr<Material> matBloomCS_;
     std::shared_ptr<Material> matDebugPreviewCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matOceanReflection_;
@@ -713,6 +741,7 @@ private:
     GtaoFilterHandles gtaoTemporalHandles_{};
     GtaoFilterHandles gtaoUpsampleHandles_{};
     HzbHandles hzbHandles_{};
+    BloomHandles bloomHandles_{};
     SsrTemporalHandles ssrTemporalHandles_{};
     DebugPreviewHandles debugPreviewHandles_{};
     ScenePointLightCBHandles pointHandles_{};

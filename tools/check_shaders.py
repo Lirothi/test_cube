@@ -41,6 +41,7 @@ COMPUTE_ENTRIES = [
     ("gtao_upsample_cs.hlsl", "CSMain"),
     ("hzb_build_cs.hlsl", "CSMain"),
     ("debug_preview_cs.hlsl", "CSMain"),
+    ("bloom_cs.hlsl", "CSMain"),
 ]
 
 
@@ -97,7 +98,18 @@ def main() -> int:
             capture_output=True, text=True, cwd=SHADERS,
         )
         if result.returncode == 0:
-            print(f"ok    {name}:{entry}")
+            # COMPILING IS NOT ENOUGH. dxc accepts a compute entry with no [RootSignature]
+            # attribute; the engine does not -- Material::CreateCompute fails to build the PSO,
+            # keeps the Material object, and leaves its pipeline state null. The pass then
+            # dispatches with no PSO. P8 lost a debug session to exactly that with this tool
+            # reporting a clean 22/22, so the attribute is checked here rather than trusted.
+            src = path.read_text(encoding="utf-8", errors="ignore")
+            if f"void {entry}(" in src and "[RootSignature(" not in src:
+                failures += 1
+                print(f"FAIL  {name}:{entry} -- compiles, but has no [RootSignature] attribute;"
+                      f" the engine cannot build a PSO from it")
+            else:
+                print(f"ok    {name}:{entry}")
         else:
             failures += 1
             print(f"FAIL  {name}:{entry}")

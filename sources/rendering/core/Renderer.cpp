@@ -1534,6 +1534,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.backbufferResource = render::kBackbufferResourceFormat;
     formats.gtao = render::kGtaoFormat;
     formats.hzb = render::kHzbFormat;
+    formats.bloom = render::kBloomFormat;
     formats.debugPreview = render::kDebugPreviewFormat;
 
     RenderTargetManager::Sizes sizes{};
@@ -1552,6 +1553,11 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     // between "the depth I sampled" and "the tile that contains it" without a second mapping.
     sizes.hzbWidth = sizes.gtaoWidth;
     sizes.hzbHeight = sizes.gtaoHeight;
+    // P8: half the DISPLAY resolution, not the render one. Bloom runs after the upscaler, on the
+    // same image the tonemap reads -- sizing it off `rtWidth` would make the pyramid change shape
+    // with the DLSS quality mode while the image it describes did not.
+    sizes.bloomWidth = std::max(1u, (displayWidth + 1u) / 2u);
+    sizes.bloomHeight = std::max(1u, (displayHeight + 1u) / 2u);
 
     rtManager_.Create(GetDevice(), formats, sizes, Declarations());
 }

@@ -436,6 +436,7 @@ namespace
             env.type == "colorPipeline" ? "Edit Color Pipeline" :
             env.type == "gtao" ? "Edit Ambient Occlusion" :
             env.type == "atmosphere" ? "Edit Aerial Perspective" :
+            env.type == "bloom" ? "Edit Bloom" :
             "Edit Environment";
 
         const auto executeChange = [&](nlohmann::json after, const std::string& label)
@@ -1125,6 +1126,64 @@ namespace
             ImGui::TextDisabled("Render tab - they are a viewing mode, not level data.");
             ImGui::TextDisabled("Fix exposure when comparing: auto-exposure reacts to fog and");
             ImGui::TextDisabled("shifts the WHOLE frame, sky included.");
+        }
+        else if (env.type == "bloom")
+        {
+            // P8. Every tooltip says where the number is measured, because the two that matter --
+            // threshold and intensity -- are in units that are easy to assume wrongly.
+            {
+                const nlohmann::json beforeItem = p;
+                bool bloomEnabled = p.value("enabled", false);
+                const bool changed = ImGui::Checkbox("Enabled", &bloomEnabled);
+                if (changed) { p["enabled"] = bloomEnabled; }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Exposure-aware HDR bloom: a threshold pass, a half-resolution pyramid "
+                          "and a tent reconstruction, composited into the image BEFORE the tone "
+                          "curve. Off schedules no pass at all rather than a pass that adds zero, "
+                          "so off genuinely costs nothing.");
+
+            ImGui::SeparatorText("Extraction");
+            dragF("Threshold", "threshold", 1.0f, 0.01f, 0.0f, 16.0f, "%.2f");
+            InspectorHelp("Luminance at which bloom starts, measured AFTER exposure - UE's "
+                          "BloomThreshold, in the same units. That is what makes it mean one thing "
+                          "across a sunset and a noon: the number is in the brightness the VIEWER "
+                          "sees, so a scene getting darker does not quietly lose its bloom.");
+            dragF("Soft Knee", "softKnee", 0.5f, 0.01f, 0.05f, 4.0f, "%.2f");
+            InspectorHelp("Slope of the ramp above the threshold; UE hardwire 0.5, which is the "
+                          "default here. Lower = a longer shoulder, so highlights ease into the "
+                          "bloom instead of switching on at a fixed brightness.");
+            {
+                const nlohmann::json beforeItem = p;
+                bool firefly = p.value("fireflyClamp", true);
+                const bool changed = ImGui::Checkbox("Firefly Clamp", &firefly);
+                if (changed) { p["fireflyClamp"] = firefly; }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Karis average on the FIRST downsample only: each tap is weighted by "
+                          "1/(1+luma), so one blown-out texel is averaged DOWN instead of surviving "
+                          "the whole pyramid. This is the setting that decides whether moving sun "
+                          "glints on water sparkle or pump the entire frame, which is the specific "
+                          "failure this step was warned about. Deeper levels do not use it - there "
+                          "it would only eat energy the tent needs.");
+
+            ImGui::SeparatorText("Reconstruction");
+            dragF("Intensity", "intensity", 0.25f, 0.005f, 0.0f, 4.0f, "%.3f");
+            InspectorHelp("Weight of the bloom added back, in scene units. It receives the same "
+                          "GLOBAL exposure the scene does, but not the local exposure and not the "
+                          "colour grade - a halo that spread from elsewhere is not part of this "
+                          "pixel's neighbourhood. 0 is an exact no-op and skips the chain.");
+            dragF("Radius", "radius", 1.0f, 0.01f, 0.0f, 4.0f, "%.2f");
+            InspectorHelp("Tap spacing of the tent upsample, in DESTINATION texels, so it means the "
+                          "same thing at every level and at every resolution. It spreads the same "
+                          "energy wider rather than adding any: widen it and the halo gets larger "
+                          "and fainter, it does not get brighter.");
+
+            ImGui::TextDisabled("Runs after the upscaler on the image the tone curve reads,");
+            ImGui::TextDisabled("so the pyramid is sized off the DISPLAY resolution and does");
+            ImGui::TextDisabled("not change shape with the DLSS quality mode.");
+            ImGui::TextDisabled("Fix exposure when comparing: bloom moves average luminance");
+            ImGui::TextDisabled("and auto-exposure will chase it.");
         }
         else if (env.type == "colorPipeline")
         {

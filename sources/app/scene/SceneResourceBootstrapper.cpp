@@ -221,6 +221,7 @@ void SceneTonemapCBHandles::Populate(Material* material)
     localDetailStrength = material->ComputeCB0FieldHandle("localDetailStrength");
     localHighlightThreshold = material->ComputeCB0FieldHandle("localHighlightThreshold");
     localShadowThreshold = material->ComputeCB0FieldHandle("localShadowThreshold");
+    bloomIntensity = material->ComputeCB0FieldHandle("bloomIntensity");
 }
 
 void SceneExposureHistogramCBHandles::Populate(Material* material)
@@ -466,6 +467,14 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matHzbCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    if (!matBloomCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/bloom_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matBloomCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     if (!matDebugPreviewCS_)
     {
         Material::ComputeDesc cd{};
@@ -639,6 +648,7 @@ void SceneResourceBootstrapper::RefreshHandles()
     ssrTemporalHandles_.Populate(matSsrTemporalCS_.get());
     gtaoUpsampleHandles_.Populate(matGtaoUpsampleCS_.get());
     hzbHandles_.Populate(matHzbCS_.get());
+    bloomHandles_.Populate(matBloomCS_.get());
     debugPreviewHandles_.Populate(matDebugPreviewCS_.get());
     ssrHandles_.Populate(matSSR_.get());
     blurHandles_.Populate(matBlur_.get());
@@ -831,6 +841,24 @@ UINT SceneResourceBootstrapper::GetHzbCBSizeBytes() const
     return matHzbCS_ ? matHzbCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
+void BloomHandles::Populate(Material* material)
+{
+    if (!material) { return; }
+    stage = material->ComputeCB0FieldHandle("stage");
+    exposureEnabled = material->ComputeCB0FieldHandle("exposureEnabled");
+    dstSize = material->ComputeCB0FieldHandle("dstSize");
+    srcSize = material->ComputeCB0FieldHandle("srcSize");
+    threshold = material->ComputeCB0FieldHandle("threshold");
+    softKnee = material->ComputeCB0FieldHandle("softKnee");
+    radius = material->ComputeCB0FieldHandle("radius");
+    fireflyClamp = material->ComputeCB0FieldHandle("fireflyClamp");
+}
+
+UINT SceneResourceBootstrapper::GetBloomCBSizeBytes() const
+{
+    return matBloomCS_ ? matBloomCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
 void SsrTemporalHandles::Populate(Material* material)
 {
     if (!material) { return; }
@@ -865,6 +893,19 @@ void SceneResourceBootstrapper::WriteHzbConstants(const HzbPassConstants& d, uin
     matHzbCS_->UpdateCBField(hzbHandles_.srcSize, d.srcSize, dest);
     matHzbCS_->UpdateCBField(hzbHandles_.fromDepth, d.fromDepth, dest);
     matHzbCS_->UpdateCBField(hzbHandles_.writeClosest, d.writeClosest, dest);
+}
+
+void SceneResourceBootstrapper::WriteBloomConstants(const BloomPassConstants& d, uint8_t* dest) const
+{
+    if (!matBloomCS_ || !dest) { return; }
+    matBloomCS_->UpdateCBField(bloomHandles_.stage, d.stage, dest);
+    matBloomCS_->UpdateCBField(bloomHandles_.exposureEnabled, d.exposureEnabled, dest);
+    matBloomCS_->UpdateCBField(bloomHandles_.dstSize, d.dstSize, dest);
+    matBloomCS_->UpdateCBField(bloomHandles_.srcSize, d.srcSize, dest);
+    matBloomCS_->UpdateCBField(bloomHandles_.threshold, d.threshold, dest);
+    matBloomCS_->UpdateCBField(bloomHandles_.softKnee, d.softKnee, dest);
+    matBloomCS_->UpdateCBField(bloomHandles_.radius, d.radius, dest);
+    matBloomCS_->UpdateCBField(bloomHandles_.fireflyClamp, d.fireflyClamp, dest);
 }
 
 UINT SceneResourceBootstrapper::GetGtaoFilterCBSizeBytes() const
@@ -1078,6 +1119,7 @@ void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data
 void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
                                                       const render::ColorPipelineSettings& color,
                                                       const render::CameraExposureSettings& camera,
+                                                      float bloomIntensity,
                                                       uint8_t* dest) const
 {
     if (!matTonemapCS_ || !dest)
@@ -1107,6 +1149,7 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
     matTonemapCS_->UpdateCBField(h.localDetailStrength, camera.localDetailStrength, dest);
     matTonemapCS_->UpdateCBField(h.localHighlightThreshold, camera.localHighlightThreshold, dest);
     matTonemapCS_->UpdateCBField(h.localShadowThreshold, camera.localShadowThreshold, dest);
+    matTonemapCS_->UpdateCBField(h.bloomIntensity, bloomIntensity, dest);
 }
 
 void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMeteringConstants& data,

@@ -178,6 +178,33 @@ struct AtmosphereSettings
     float skyBackScatter = 1.0f;
 };
 
+// P8 -- exposure-aware HDR bloom. SHIPS DISABLED, same rule the rest of this plan follows: a real
+// image change earns its default with an explicit A/B rather than arriving switched on. With
+// `enabled` false no pass is scheduled at all and no pyramid is touched, which is the plan's
+// "intensity = 0 schedules no unnecessary active work".
+struct BloomSettings
+{
+    bool enabled = false;
+    // Weight of the bloom added back to the scene, in scene units. UE's BloomIntensity default is
+    // 0.675 against their own extraction; ours is deliberately lower until it has been judged on the
+    // canonical views, because the plan's own warning for this step is that ocean glints must not
+    // turn the frame into a white fog bank.
+    float intensity = 0.25f;
+    // Luminance AFTER exposure at which bloom starts. In the same units the viewer sees, which is
+    // what stops a darker scene from silently losing its bloom -- see the transcription note in
+    // bloom_cs.hlsl.
+    float threshold = 1.0f;
+    // Slope of the ramp above the threshold. 0.5 is UE's hardwired value.
+    float softKnee = 0.5f;
+    // Tap spacing of the tent upsample, in destination texels. Wider = a broader, softer halo at the
+    // same intensity; it does not change the total energy, only how far it is spread.
+    float radius = 1.0f;
+    // Karis average on the first downsample: weight each tap by 1/(1+luma) so a single blown-out
+    // texel cannot dominate its tile. This is what keeps moving sun glints on water from pumping the
+    // whole bloom, and it is why this defaults ON.
+    bool fireflyClamp = true;
+};
+
 // P7 item 8. Deliberately NOT part of AtmosphereSettings: that struct is serialized into the level,
 // and a debug view saved into a level is a trap -- the same reasoning that keeps
 // ocean::g_foamDebugView out of OceanRenderConfig. 0 = normal, 1 = transmittance, 2 = in-scattering.
@@ -286,6 +313,7 @@ struct SceneRenderSettings
 {
     GtaoSettings gtao{};
     AtmosphereSettings atmosphere{};
+    BloomSettings bloom{};
     // STAYS LogMarch. The UE march is finished and correct after P13, and it is the cheaper search,
     // but on WATER the log march's dense mask is markedly the better picture -- and water is the
     // largest reflective surface in this project's scenes. The UE march is selectable everywhere

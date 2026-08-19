@@ -133,6 +133,10 @@ private:
     // dispatches exactly the levels that were declared.
     void Pass_SsrTemporal(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Hzb(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
+    // P8: the bloom pyramid. Not a pass of its own -- it records into the tonemap pass's list,
+    // between the DLSS evaluate and the tone curve, because both of those live in that pass.
+    void Bloom_Build(Renderer* r, ID3D12GraphicsCommandList* cl,
+                     D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
 
     // P6C step 6: fills the HZB tracer's half of the SSR constants. ONE definition, called by the
     // opaque and the glass dispatch, so the two can never disagree about whether the furthest
@@ -246,6 +250,11 @@ private:
     // HiZ tracer may run). Two independent evaluations of "is HiZ on" is how a pass ends up
     // tracing a chain nobody filled in.
     bool ssrHizActive_ = false;
+    // P8: does the bloom chain run this frame? ONE flag, decided where the graph is built and read
+    // by BOTH the tonemap pass's Prepare (which declares the pyramid's barrier points) and its body
+    // (which emits them). Two independent evaluations is how a body ends up emitting a barrier the
+    // compile never registered -- see the note on Pass_Gtao's `chain`.
+    bool bloomActive_ = false;
     // SSR temporal resolve: whether it ran this frame (the blur's input depends on it) and whether
     // the previous frame left a history worth reading.
     bool ssrTemporalActive_ = false;

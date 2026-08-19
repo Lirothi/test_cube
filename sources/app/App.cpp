@@ -321,6 +321,22 @@ namespace
             return true;
         }
         if (setting == "atmosphere.skyBlur") { scene.AtmosphereRef().skyBlur = value; return true; }
+        // P8 bloom. `bloom.enabled` is the gate; the rest are the extraction and the pyramid, so
+        // a sweep can find defaults without a rebuild.
+        if (setting == "bloom.enabled")
+        {
+            scene.BloomRef().enabled = value != 0.0f;
+            return true;
+        }
+        if (setting == "bloom.intensity") { scene.BloomRef().intensity = value; return true; }
+        if (setting == "bloom.threshold") { scene.BloomRef().threshold = value; return true; }
+        if (setting == "bloom.softKnee") { scene.BloomRef().softKnee = value; return true; }
+        if (setting == "bloom.radius") { scene.BloomRef().radius = value; return true; }
+        if (setting == "bloom.firefly")
+        {
+            scene.BloomRef().fireflyClamp = value != 0.0f;
+            return true;
+        }
         if (setting == "atmosphere.backScatter")
         {
             scene.AtmosphereRef().skyBackScatter = value;

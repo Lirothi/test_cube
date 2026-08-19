@@ -1,15 +1,23 @@
 {
   "atmosphere": {
-    "density": 0.004000000189989805,
+    "density": 0.003000000026077032,
     "enabled": true,
     "heightFalloff": 0.05999999865889549,
-    "maxOpacity": 1.0,
+    "maxOpacity": 0.8999999761581421,
     "skyBackScatter": 0.4000000059604645,
     "skyBlur": 0.30000001192092896,
     "startDistance": 5.0,
     "sunScatterExponent": 8.0,
     "sunScatterStartDistance": 100.0,
     "sunScatterStrength": 0.3499999940395355
+  },
+  "bloom": {
+    "enabled": true,
+    "fireflyClamp": true,
+    "intensity": 0.25,
+    "radius": 1.0,
+    "softKnee": 0.5,
+    "threshold": 1.0
   },
   "camera": {
     "hfovDeg": 90.0,
@@ -13832,11 +13840,11 @@
       "shoreSwashAmplitude": 0.800000011920929,
       "shoreVerticalFadeDepth": 5.0,
       "shoreWetnessDarkening": 0.3499999940395355,
-      "shoreWetnessDepositDepth": 0.5,
+      "shoreWetnessDepositDepth": 1.0,
       "shoreWetnessDryTime": 4.0,
       "shoreWetnessEdgeOffset": 0.30000001192092896,
       "shoreWetnessFallbackAboveWater": 0.029999999329447746,
-      "shoreWetnessFallbackBelowWater": 0.5,
+      "shoreWetnessFallbackBelowWater": 1.0,
       "shoreWetnessFallbackBreakupScale": 2.0,
       "shoreWetnessFallbackBreakupStrength": 1.0,
       "shoreWetnessFallbackFadeStartPercent": 25.0,

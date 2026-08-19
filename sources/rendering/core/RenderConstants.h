@@ -59,6 +59,12 @@ inline constexpr DXGI_FORMAT kGtaoFormat                    = DXGI_FORMAT_R8_UNO
 // their coarsest spacing exactly there. The extra bandwidth is a half-res chain; correctness
 // first, and the format is a one-line change if it ever measures as a bottleneck.
 inline constexpr DXGI_FORMAT kHzbFormat                     = DXGI_FORMAT_R32_FLOAT;
+// P8 bloom pyramid. HDR and half-float: the chain carries scene-referred radiance ABOVE the
+// threshold, which is exactly the range an 8-bit or UNORM format cannot hold. Same format as the
+// scene colour it is extracted from, so nothing is quantised on the way in. It is also read through
+// its own UAV (see bloom_cs.hlsl), which needs TypedUAVLoadAdditionalFormats -- already relied on by
+// the ocean's mip chain, which uses this same format.
+inline constexpr DXGI_FORMAT kBloomFormat                   = DXGI_FORMAT_R16G16B16A16_FLOAT;
 // Inspector preview: plain 8-bit colour, because ImGui draws it directly.
 inline constexpr DXGI_FORMAT kDebugPreviewFormat            = DXGI_FORMAT_R8G8B8A8_UNORM;
 inline constexpr DXGI_FORMAT kReflectionScratchFormat          = DXGI_FORMAT_R8G8B8A8_UNORM;
