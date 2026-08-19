@@ -20,6 +20,31 @@
 #define REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE 1.2f
 
 // Absolute mip to sample for a given perceptual roughness. `mipCount` is the cube's real mip count.
+// A BLURRED SKY SAMPLE MAY NOT RUN AWAY FROM THE SKY IT IS BLURRING.
+//
+// Prefiltering integrates a lobe. When the sky holds a sun hundreds of thousands of times brighter
+// than the sky around it, that integral is the SUN in every direction the lobe can reach, and what
+// comes back stops being a picture of the sky: reflections and fog turn into a flat bright wash
+// while the sky next to them stays blue. The invariant it breaks is the one anybody checks first --
+// the water just below the horizon must match the sky just above it.
+//
+// So bound it by the SHARP sample in the same direction, which is exactly the sky it has to agree
+// with. Looking at plain sky, the blurred value cannot exceed it by more than the headroom a real
+// blur needs. Looking INTO the sun, the sharp sample is enormous too, the bound does nothing, and
+// the glitter survives -- which is correct, because there the sky really is that bright.
+static const float kIblBlurHeadroom = 2.0f;
+
+float3 IblClampToSharp(float3 blurred, float3 sharp)
+{
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+    const float ceiling = dot(max(sharp, 0.0f.xxx), kLuma) * kIblBlurHeadroom;
+    const float lum = dot(max(blurred, 0.0f.xxx), kLuma);
+    if (lum <= ceiling || lum < 1.0e-6f) { return blurred; }
+    // Scaled, not clipped per channel: clipping drags the hue towards whichever channel saturated
+    // first, and the COLOUR is the whole reason the sky is sampled at all.
+    return blurred * (ceiling / lum);
+}
+
 float IblMipFromRoughness(float roughness, float mipCount)
 {
     const float levelFrom1x1 = REFLECTION_CAPTURE_ROUGHEST_MIP -

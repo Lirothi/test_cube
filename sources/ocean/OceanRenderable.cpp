@@ -788,7 +788,12 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     const auto& deferred = renderer->GetDeferredForFrame();
     Skybox* sky = scene_ ? scene_->GetSkybox() : nullptr;
 
-    auto fallbackSrv = deferred.sceneSRV;
+    // The stand-in for any slot this draw does not fill. It must be a resource that is SHADER-
+    // READABLE while the transparent pass runs, and `scene` is NOT: compose writes it as a UAV, so
+    // GPU-based validation flags every fallback-filled slot as a read in the wrong layout
+    // (id=1358). `sceneOpaque` is the copy this very shader samples for refraction, so it is
+    // readable here by construction.
+    auto fallbackSrv = deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : deferred.sceneSRV;
 
     // MUST match numDescriptors in OCEAN_SURFACE_RS. Pushing past the end is a silent buffer
     // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
@@ -897,7 +902,7 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // foam consumption).
     D3D12_CPU_DESCRIPTOR_HANDLE surfWaveSrv = fallbackSrv;
     D3D12_CPU_DESCRIPTOR_HANDLE surfFoamSrv = fallbackSrv;
-    if (surfSim_ && surfSim_->IsReady())
+    if (surfSim_ && surfSim_->IsReady() && surfSim_->HasSimulated())
     {
         if (surfSim_->GetWaveSrv().ptr != 0) { surfWaveSrv = surfSim_->GetWaveSrv(); }
         if (surfSim_->GetSurfFoamSrv().ptr != 0) { surfFoamSrv = surfSim_->GetSurfFoamSrv(); }

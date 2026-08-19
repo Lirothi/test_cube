@@ -65,6 +65,11 @@ inline constexpr DXGI_FORMAT kHzbFormat                     = DXGI_FORMAT_R32_FL
 // its own UAV (see bloom_cs.hlsl), which needs TypedUAVLoadAdditionalFormats -- already relied on by
 // the ocean's mip chain, which uses this same format.
 inline constexpr DXGI_FORMAT kBloomFormat                   = DXGI_FORMAT_R16G16B16A16_FLOAT;
+// P8C convolution bloom: the complex grid the transform runs on. THIRTY-TWO bit, unlike the
+// pyramid next door: a 1024-point transform accumulates across ten stages, and half floats lose
+// enough there to show as a ring around a bright source. Two complex numbers per texel
+// (.xy = R + iG, .zw = B + i0).
+inline constexpr DXGI_FORMAT kBloomFftFormat                = DXGI_FORMAT_R32G32B32A32_FLOAT;
 // Inspector preview: plain 8-bit colour, because ImGui draws it directly.
 inline constexpr DXGI_FORMAT kDebugPreviewFormat            = DXGI_FORMAT_R8G8B8A8_UNORM;
 inline constexpr DXGI_FORMAT kReflectionScratchFormat          = DXGI_FORMAT_R8G8B8A8_UNORM;

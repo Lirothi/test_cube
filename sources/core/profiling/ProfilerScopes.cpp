@@ -61,6 +61,7 @@ const Profiler::ScopeNameKey kPassHzb = Profiler::RegisterTraceLiteral(L"Pass_Hz
 // P8: recorded inside Pass_Tonemap, so it needs its own scope to be readable at all --
 // Pass_Tonemap is already dominated by the DLSS evaluate (see the note in that pass).
 const Profiler::ScopeNameKey kPassBloom = Profiler::RegisterTraceLiteral(L"Pass_Bloom");
+const Profiler::ScopeNameKey kPassBloomConv = Profiler::RegisterTraceLiteral(L"Pass_BloomConv");
 const Profiler::ScopeNameKey kPassLighting = Profiler::RegisterTraceLiteral(L"Pass_Lighting");
 const Profiler::ScopeNameKey kPassSpotShadow = Profiler::RegisterTraceLiteral(L"Pass_SpotShadows");
 const Profiler::ScopeNameKey kPassPointShadow = Profiler::RegisterTraceLiteral(L"Pass_PointShadows");

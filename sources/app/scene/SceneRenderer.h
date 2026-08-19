@@ -13,6 +13,7 @@
 #include "rendering/rt/ReflectionHistory.h"
 #include "core/task/TaskSystem.h"
 #include "app/scene/SceneFrameData.h"
+#include "materials/Texture2D.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneResourceBootstrapper.h"
 
@@ -137,6 +138,16 @@ private:
     // between the DLSS evaluate and the tone curve, because both of those live in that pass.
     void Bloom_Build(Renderer* r, ID3D12GraphicsCommandList* cl,
                      D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
+    // The thresholded DOWN chain on its own. Split out because BOTH methods need it: the pyramid
+    // builds on it, and the convolution -- which has no pyramid of its own -- needs it as the SOFT
+    // source its ghosts are gathered from. Assumes bloomDown is already UNORDERED_ACCESS.
+    // `mipCount` 0 means the whole chain, which is what the pyramid needs; the convolution's ghost
+    // source asks for only the levels it samples.
+    void Bloom_Downsample(Renderer* r, ID3D12GraphicsCommandList* cl,
+                          D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, float threshold, UINT mipCount);
+    // P8C: the convolution alternative. Same slot, same output texture.
+    void Bloom_Convolve(Renderer* r, ID3D12GraphicsCommandList* cl,
+                        D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
 
     // P6C step 6: fills the HZB tracer's half of the SSR constants. ONE definition, called by the
     // opaque and the glass dispatch, so the two can never disagree about whether the furthest
@@ -255,6 +266,37 @@ private:
     // (which emits them). Two independent evaluations is how a body ends up emitting a barrier the
     // compile never registered -- see the note on Pass_Gtao's `chain`.
     bool bloomActive_ = false;
+    // P8C: which bloom method this frame runs. Read by the tonemap Prepare AND its body, so the
+    // declared resources and the emitted barriers cannot disagree.
+    bool bloomConvolution_ = false;
+    // The kernel's spectrum is a pure function of these, so it is only rebuilt when one moves.
+    struct BloomKernelKey
+    {
+        uint32_t width = 0u, height = 0u;
+        float radius = 0.0f;
+        uint32_t blades = 0u;
+        float rotation = 0.0f;
+        float spokeStrength = 0.0f, spokeLength = 0.0f, spokeWidth = 0.0f;
+        float anamorphic = 0.0f, anamorphicLength = 0.0f, chroma = 0.0f;
+        bool operator==(const BloomKernelKey& o) const
+        {
+            return width == o.width && height == o.height && radius == o.radius &&
+                   blades == o.blades && rotation == o.rotation &&
+                   spokeStrength == o.spokeStrength && spokeLength == o.spokeLength &&
+                   spokeWidth == o.spokeWidth && anamorphic == o.anamorphic &&
+                   anamorphicLength == o.anamorphicLength && chroma == o.chroma;
+        }
+    };
+    // ONE KEY PER FRAME SLOT, not one for the renderer. The kernel spectrum lives in
+    // DeferredTargets, which is per-frame -- a single key meant slot 0 built the kernel and slots 1
+    // and 2 convolved against an empty texture, i.e. two frames in three had no bloom at all. That
+    // is what the first convolution captures actually showed.
+    std::array<BloomKernelKey, render::kFrameCount> bloomKernelKeys_{};
+    // The authored ghost sprite sheet. Loaded once, lazily, the same way the editor's icon atlas
+    // is: a PNG loads directly (Texture2D decodes non-DDS), so this needs no import step.
+    Texture2D flareAtlas_;
+    bool flareAtlasReady_ = false;
+    bool flareAtlasTried_ = false;
     // SSR temporal resolve: whether it ran this frame (the blur's input depends on it) and whether
     // the previous frame left a history worth reading.
     bool ssrTemporalActive_ = false;

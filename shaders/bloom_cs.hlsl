@@ -84,7 +84,29 @@ float3 LoadSrc(int2 p)
 float3 Setup(uint2 pixel)
 {
     const float2 uv = (float2(pixel) + 0.5f) / float2(dstSize);
-    const float3 color = HDRColor.SampleLevel(gSmp, uv, 0).rgb;
+
+    // FOUR TAPS, KARIS-AVERAGED, NOT ONE. This grid is half the source's resolution, so a single
+    // sample looks at one of the four source texels the destination covers and ignores the rest. An
+    // ocean glint is one or two pixels wide and moves every frame; sampled that way it drops in and
+    // out of the set, and since it sits far above the threshold its entire contribution flickers
+    // with it. That was a real, reported artefact, not a theoretical one.
+    //
+    // The weights are the Karis average (1/(1+luma)) rather than a plain box, for the same reason
+    // the first downsample uses it: a box would keep the flicker and merely quarter it, because one
+    // blown-out texel still dominates the mean.
+    const float2 quarter = 0.25f / float2(dstSize);
+    const float3 t0 = HDRColor.SampleLevel(gSmp, uv + float2(-quarter.x, -quarter.y), 0).rgb;
+    const float3 t1 = HDRColor.SampleLevel(gSmp, uv + float2(quarter.x, -quarter.y), 0).rgb;
+    const float3 t2 = HDRColor.SampleLevel(gSmp, uv + float2(-quarter.x, quarter.y), 0).rgb;
+    const float3 t3 = HDRColor.SampleLevel(gSmp, uv + float2(quarter.x, quarter.y), 0).rgb;
+
+    // A PLAIN BOX HERE, AND KARIS ONLY ONE LEVEL LATER. Karis-averaging at this stage was tried and
+    // is wrong: weighting by 1/(1+luma) turns a 100x glint against three dark neighbours into ~1,
+    // i.e. it does not clamp the highlight, it DELETES it -- and the highlight is the entire reason
+    // the pass exists. The box already breaks the sampling correlation that made the flicker
+    // visible; the first downsample then applies Karis to data that has been averaged rather than
+    // point-sampled, which is where it belongs.
+    const float3 color = (t0 + t1 + t2 + t3) * 0.25f;
 
     float exposureMultiplier = 1.0f;
     if (exposureEnabled != 0u)
@@ -99,6 +121,21 @@ float3 Setup(uint2 pixel)
         }
     }
 
+    // THRESHOLD < 0 MEANS NO THRESHOLD, and that is UE's DEFAULT, not an escape hatch.
+    // `FPostProcessSettings::BloomThreshold` ships at -1.0 (Scene.cpp:423) and their own
+    // documentation for it reads: "-1: all pixels affect bloom equally (physically correct, faster
+    // as a threshold pass is omitted)". They mean it -- a lens scatters light from EVERYTHING in
+    // front of it, not only from whatever passes a brightness test, so a threshold is an artistic
+    // control that trades physical behaviour for a cheaper, punchier look.
+    //
+    // It also changes how bloom answers to exposure. With a threshold, raising exposure pushes more
+    // pixels over the line AND scales what was already over it, so bloom grows faster than the
+    // image does. Without one, bloom is exactly linear in exposure: twice as bright a scene, twice
+    // as much bloom, no step.
+    if (threshold < 0.0f)
+    {
+        return color;
+    }
     const float exposedLuma = Luma(color) * exposureMultiplier;
     const float amount = saturate((exposedLuma - threshold) * max(softKnee, 1.0e-4f));
     return amount * color;

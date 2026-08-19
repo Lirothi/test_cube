@@ -1172,11 +1172,27 @@ namespace
                           "so off genuinely costs nothing.");
 
             ImGui::SeparatorText("Extraction");
-            dragF("Threshold", "threshold", 1.0f, 0.01f, 0.0f, 16.0f, "%.2f");
+            dragF("Threshold", "threshold", -1.0f, 0.01f, -1.0f, 16.0f, "%.2f");
             InspectorHelp("Luminance at which bloom starts, measured AFTER exposure - UE's "
-                          "BloomThreshold, in the same units. That is what makes it mean one thing "
-                          "across a sunset and a noon: the number is in the brightness the VIEWER "
-                          "sees, so a scene getting darker does not quietly lose its bloom.");
+                          "BloomThreshold, in the same units. Being post-exposure is what makes one "
+                          "number mean the same thing across a sunset and a noon.\n\n"
+                          "NEGATIVE DISABLES IT, and that is UE's own default (-1 in Scene.cpp), "
+                          "documented there as \"all pixels affect bloom equally (physically "
+                          "correct)\". A lens scatters light from EVERYTHING in front of it, not "
+                          "only from whatever passes a brightness test.\n\n"
+                          "It also decides how bloom answers to EXPOSURE. With a threshold, raising "
+                          "exposure both scales the pixels already over the line and pushes new "
+                          "ones over it, so bloom grows faster than the image does. At -1 the "
+                          "response is exactly linear: twice the exposure, twice the bloom, no "
+                          "step.\n\n"
+                          "ON THIS PROJECT'S CONTENT, -1 COSTS YOU THE RAYS. Measured on "
+                          "sun_glint: the sun region is only about 20x the sky region, where a real "
+                          "HDR sky puts the solar disc thousands of times above it. The sky fills "
+                          "half the frame, so its TOTAL energy swamps the sun and the convolution "
+                          "reads as a uniform veil -- the veil lifted the DARKS by 8.3/255 while "
+                          "lifting the area around the sun by only 6.6. A positive threshold is "
+                          "what isolates the point source, and it is why this ships at 1.0 rather "
+                          "than at UE's default.");
             dragF("Soft Knee", "softKnee", 0.5f, 0.01f, 0.05f, 4.0f, "%.2f");
             InspectorHelp("Slope of the ramp above the threshold; UE hardwire 0.5, which is the "
                           "default here. Lower = a longer shoulder, so highlights ease into the "
@@ -1206,6 +1222,125 @@ namespace
                           "same thing at every level and at every resolution. It spreads the same "
                           "energy wider rather than adding any: widen it and the halo gets larger "
                           "and fainter, it does not get brighter.");
+
+            ImGui::SeparatorText("Method");
+            {
+                const nlohmann::json beforeItem = props;
+                int method = static_cast<int>(tgt().value("method", 0u));
+                const char* kMethods[] = { "Standard (pyramid)", "Convolution (FFT)" };
+                const bool changed = ImGui::Combo("Method", &method, kMethods, 2);
+                if (changed) { tgt()["method"] = static_cast<std::uint32_t>(method < 0 ? 0 : method); }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("STANDARD is the mip pyramid: cheap, symmetric, and structurally incapable "
+                          "of a streak -- a stack of Gaussians has no shape to give.\n\n"
+                          "CONVOLUTION replaces every bright pixel with a copy of an aperture image, "
+                          "via two Fourier transforms and one complex multiply. Halo, starburst and "
+                          "the rays from the iris blades all come out of that ONE kernel and are "
+                          "consistent with each other by construction, instead of being three "
+                          "effects tuned into agreement. It costs more and runs on a quarter-"
+                          "resolution grid; a scene with no bright highlights cannot tell them "
+                          "apart, which is why Standard is the default.");
+
+            if (tgt().value("method", 0u) == 1u)
+            {
+                ImGui::SeparatorText("Aperture (convolution only)");
+                dragF("Kernel Radius", "convKernelRadius", 0.004f, 0.0002f, 0.0005f, 0.02f, "%.4f");
+                InspectorHelp("Radius of the kernel's bright CORE, as a fraction of the convolution "
+                              "grid. Small numbers are correct here: the visible glare comes from "
+                              "the skirt, not the core. MEASURED -- at 0.12 the normalised kernel "
+                              "peaks at 1.4e-05 and only 4% of its energy sits within 32 texels, so "
+                              "every highlight is spread into a flat wash and no halo is visible at "
+                              "all. At 0.004 the core carries 14% inside two texels and 65% inside "
+                              "eight, which is what reads as glare.");
+                {
+                    const nlohmann::json beforeItem = props;
+                    int blades = static_cast<int>(tgt().value("convBlades", 6u));
+                    const bool changed = ImGui::SliderInt("Blades", &blades, 0, 12);
+                    if (changed) { tgt()["convBlades"] = static_cast<std::uint32_t>(blades < 0 ? 0 : blades); }
+                    trackContinuousEdit(beforeItem, changed);
+                }
+                InspectorHelp("Number of iris blades, and THE control that decides whether there "
+                              "is a star at all. The kernel is the diffraction pattern of this "
+                              "shape, so: 0 (or 1-2) is a round hole and gives a halo with NO rays; "
+                              "an EVEN count gives that many rays; an ODD count gives twice as many, "
+                              "because opposite parallel edges throw rays that land on top of each "
+                              "other. Measured here: 5 -> 10 rays, 6 -> 6, 8 -> 8. Photography "
+                              "agrees -- a nine-bladed lens is sold as making an eighteen-point "
+                              "star.");
+                dragF("Blade Rotation", "convBladeRotation", 0.0f, 0.01f, -3.2f, 3.2f, "%.2f rad");
+                InspectorHelp("Turns the star. Free, and the only way to stop the rays lining up "
+                              "with the horizon.");
+
+                ImGui::SeparatorText("Rays");
+                // The kernel is the diffraction pattern of the aperture, so every one of these
+                // shapes the HOLE and the pattern follows. UE have no equivalent -- their star
+                // comes out of a painted BloomConvolutionTexture and has no parameters at all.
+                dragF("Spoke Strength", "convSpokeStrength", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+                InspectorHelp("How STRAIGHT the blades are, blending the polygon against a circle. "
+                              "A circle has no straight edges and therefore throws no rays, so 0 "
+                              "really is 'no star' -- turn this down rather than dropping Blades to "
+                              "0 if you want to keep the blade count for the ghosts. Measured on an "
+                              "isolated flare: angular contrast around the sun goes 0.7 at 0 to 1.3 "
+                              "at 1, against 72 for a full hard-edged iris.");
+                dragF("Spoke Length", "convSpokeLength", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+                InspectorHelp("How far the rays reach, by APODIZING the aperture edge. A hard edge "
+                              "is a step, and a step's transform has the long 1/r^2 tails that ARE "
+                              "the rays; feathering the edge shortens them. It is how an apodizing "
+                              "filter kills diffraction spikes on a real lens. Measured: a ray "
+                              "reaches 180 px at 0.2 and 760 px at 1.0.");
+                dragF("Spoke Width", "convSpokeWidth", 0.0f, 0.02f, 0.0f, 4.0f, "%.2f");
+                InspectorHelp("Ray thickness, by BOWING each blade. A spike's angular width goes as "
+                              "one over the coherent straight length, so a curved blade -- which is "
+                              "what a real iris has -- shortens that length and broadens the ray. 0 "
+                              "is dead straight blades and the thinnest rays.");
+
+                ImGui::SeparatorText("Anamorphic and chroma");
+                dragF("Anamorphic", "convAnamorphic", 0.25f, 0.01f, 0.0f, 3.0f, "%.2f");
+                InspectorHelp("Strength of the single long HORIZONTAL streak -- the anamorphic bar. "
+                              "It is a separate term from the spokes because a real anamorphic "
+                              "lens squeezes one axis only, which no symmetric star can imitate.");
+                dragF("Anamorphic Length", "convAnamorphicLength", 0.28f, 0.005f, 0.01f, 0.6f, "%.3f");
+                InspectorHelp("How far the bar runs across the grid. This is the control that "
+                              "decides whether it reads as a lens or as a light leak.");
+                dragF("Chroma", "convChroma", 0.6f, 0.01f, 0.0f, 3.0f, "%.2f");
+                InspectorHelp("How much WIDER the blue kernel is than red and green, which is what "
+                              "gives the halo a cool fringe and the bar its traditional blue. Free: "
+                              "the complex packing carries (R + iG) in one lane and B in the other, "
+                              "so blue can have its own kernel at no cost. R and G cannot be "
+                              "separated from each other -- that would need a third transform.");
+
+                ImGui::SeparatorText("Ghosts");
+                {
+                    const nlohmann::json beforeItem = props;
+                    int ghosts = static_cast<int>(tgt().value("convGhosts", 3u));
+                    const bool changed = ImGui::SliderInt("Ghost Count", &ghosts, 0, 6);
+                    if (changed) { tgt()["convGhosts"] = static_cast<std::uint32_t>(ghosts < 0 ? 0 : ghosts); }
+                    trackContinuousEdit(beforeItem, changed);
+                }
+                InspectorHelp("The reflections between lens elements, DRAWN as polygons of the "
+                              "iris at computed positions -- which is what a photograph of one "
+                              "shows. They are not part of the convolution and cannot be: a "
+                              "convolution is shift-invariant, while a ghost moves the OPPOSITE way "
+                              "to its source because it is a reflection through the frame centre. "
+                              "Their shape follows Blades and Spoke Strength, so the chain and the "
+                              "star always come from the same aperture. Positions and tints are "
+                              "UE's LensFlareTints[8].");
+                dragF("Ghost Spacing", "convGhostSpacing", 0.45f, 0.01f, 0.05f, 1.5f, "%.2f");
+                InspectorHelp("One multiplier over UE's whole scale table, so the chain can be "
+                              "pulled in or spread out without editing eight entries. Their table "
+                              "puts two ghosts on the SAME side of the centre as the source and six "
+                              "mirrored, at -4.9x to +1.4x -- which is why a real chain has big "
+                              "soft discs far out and small tight ones near the light.");
+                dragF("Ghost Size", "convGhostBokeh", 3.0f, 0.05f, 0.0f, 32.0f, "%.2f %%");
+                InspectorHelp("Sprite radius as a percent of frame width -- UE's LensFlareBokehSize, "
+                              "same units and same default of 3. Bigger copies are correspondingly "
+                              "dimmer, because it is the same light over more area.");
+                dragF("Ghost Intensity", "convGhostIntensity", 0.6f, 0.01f, 0.0f, 3.0f, "%.2f");
+                InspectorHelp("Brightness of the chain. The colour comes from the source itself, so "
+                              "a dimmer sun throws dimmer ghosts and a sky with nothing above the "
+                              "bloom threshold throws none at all.");
+            }
 
             ImGui::TextDisabled("Runs after the upscaler on the image the tone curve reads,");
             ImGui::TextDisabled("so the pyramid is sized off the DISPLAY resolution and does");

@@ -1284,8 +1284,73 @@ bool BuildBrdfLut(const fs::path& out, int size, Log& log)
 }
 
 // Save a float32 cube as BC6H_UF16 with the same RGBA16F fallback the display cube uses.
-bool SaveHdrCube(const ScratchImage& cube, const fs::path& out, Log& log, const char* tag, bool compress)
+// The ceiling of every HDR container this importer writes: BC6H_UF16 encodes its endpoints as
+// 16-bit floats, and the RGBA16F fallback is 16-bit floats outright. Same number for both.
+constexpr float kMaxHalfFloat = 65504.0f;
+
+// CLAMP WHERE THE DATA ENTERS THE CONTAINER -- UE's rule, and the reason is not "tidiness".
+//
+// BC6H builds a 4x4 block from two endpoints. An endpoint the format cannot represent does not
+// merely round: it takes the whole block with it, and the block collapses to one flat extreme
+// value. A coarse mip then magnifies that block across a large solid angle, which is how a sky
+// whose sun sits above the ceiling paints solid achromatic slabs into reflections and fog. It was
+// measured here as spec mip 0 at 524,711 and mip 1 at 135,530 against a ceiling of 65,504; the
+// previous sky never showed it because its peak was ~34.
+//
+// Nothing is lost that the engine could have carried: scene colour is R16G16B16A16_FLOAT, so the
+// same ceiling applies at the other end of the pipe. What is above it was never going to arrive --
+// today it arrives as garbage instead of as a clamp.
+//
+// UE do exactly this, in ReflectionEnvironmentShaders.usf:219, gated by a flag whose call site
+// (ReflectionEnvironmentCapture.cpp:728) is commented "Rendering into an FP16 texture." Their
+// MaxHalfFloat is the same 65504 (Common.ush:142). They clamp on the way INTO the scratch cube and
+// filter from the clamped copy, so the mip chain and the prefilter both see clamped data; this
+// mirrors that, which is why it runs on the mip chain rather than on each file as it is written.
+void ClampToFp16Range(ScratchImage& img, Log& log, const char* tag)
 {
+    if (img.GetMetadata().format != DXGI_FORMAT_R32G32B32A32_FLOAT)
+    {
+        log.Line(std::string("  ") + tag + " clamp SKIPPED: not R32G32B32A32_FLOAT");
+        return;
+    }
+
+    size_t clamped = 0;
+    float peak = 0.0f;
+    const Image* images = img.GetImages();
+    for (size_t i = 0; i < img.GetImageCount(); ++i)
+    {
+        const Image& im = images[i];
+        for (size_t y = 0; y < im.height; ++y)
+        {
+            float* row = reinterpret_cast<float*>(im.pixels + y * im.rowPitch);
+            for (size_t x = 0; x < im.width; ++x)
+            {
+                float* px = row + x * 4;
+                // RGB only. Alpha is 1 here and UE clamp theirs to 1 for the same reason.
+                for (int c = 0; c < 3; ++c)
+                {
+                    if (px[c] > peak) { peak = px[c]; }
+                    if (px[c] > kMaxHalfFloat) { px[c] = kMaxHalfFloat; ++clamped; }
+                }
+            }
+        }
+    }
+
+    char msg[192];
+    std::snprintf(msg, sizeof(msg), "  %s clamp  ceiling %.0f  peak was %.1f  channels clamped %zu%s",
+                  tag, kMaxHalfFloat, peak, clamped,
+                  clamped ? "  <-- the container could not have held these" : "  (nothing to do)");
+    log.Line(msg);
+}
+
+bool SaveHdrCube(ScratchImage& cube, const fs::path& out, Log& log, const char* tag, bool compress)
+{
+    // The container boundary itself, so no future caller can write an HDR cube past the ceiling.
+    // With the source chain already clamped this normally finds nothing -- a weighted average of
+    // clamped values cannot exceed the clamp -- and that is the point: it is an invariant, not a
+    // fix-up.
+    ClampToFp16Range(cube, log, tag);
+
     HRESULT hr = E_FAIL;
     if (compress)
     {
@@ -1421,6 +1486,10 @@ bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
     hr = GenerateMipMaps(cube.GetImages(), cube.GetImageCount(), cube.GetMetadata(),
                          TEX_FILTER_DEFAULT, 0, cubeMips);
     if (FAILED(hr)) { log.Line("skybox FAIL mips " + Hex(hr)); return false; }
+
+    // Everything downstream -- this file AND the prefilter that reads `cubeMips` as its source --
+    // works from the clamped chain, which is the shape of UE's CopyCubemapToScratchCubemap.
+    ClampToFp16Range(cubeMips, log, "skybox");
 
     fs::path out = in; out.replace_extension(L".dds");
     ScratchImage bc;

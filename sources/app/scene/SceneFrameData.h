@@ -190,9 +190,22 @@ struct BloomSettings
     // canonical views, because the plan's own warning for this step is that ocean glints must not
     // turn the frame into a white fog bank.
     float intensity = 0.25f;
-    // Luminance AFTER exposure at which bloom starts. In the same units the viewer sees, which is
-    // what stops a darker scene from silently losing its bloom -- see the transcription note in
-    // bloom_cs.hlsl.
+    // Luminance AFTER exposure at which bloom starts, in the units the viewer sees -- which is what
+    // stops a darker scene from silently losing its bloom.
+    //
+    // NEGATIVE MEANS NO THRESHOLD AT ALL, and -1 is UE's own default
+    // (`FPostProcessSettings::BloomThreshold`, Scene.cpp:423), described there as "all pixels affect
+    // bloom equally (physically correct)". A lens scatters light from everything in front of it, so
+    // thresholding is an artistic choice; it also makes bloom grow FASTER than exposure does,
+    // because raising exposure both scales the pixels already over the line and pushes new ones
+    // over it. At -1 the response is exactly linear in exposure.
+    // SHIPPED POSITIVE, EVEN THOUGH -1 IS UE'S DEFAULT, and the reason is this project's CONTENT.
+    // Measured on wind_test/sun_glint: the sun region is only about 20x the sky region, where a real
+    // HDR sky puts the solar disc thousands of times above it. The sky fills half the frame, so at
+    // -1 its TOTAL energy swamps the sun even though each of its pixels is dimmer -- the convolution
+    // then reads as a uniform veil and the rays disappear (measured: veil on darks 8.3 vs lift near
+    // the sun 6.6, i.e. the wrong way round). -1 is the physically correct setting and stays
+    // available; it needs a sky with a real solar disc to look like anything.
     float threshold = 1.0f;
     // Slope of the ramp above the threshold. 0.5 is UE's hardwired value.
     float softKnee = 0.5f;
@@ -203,6 +216,49 @@ struct BloomSettings
     // texel cannot dominate its tile. This is what keeps moving sun glints on water from pumping the
     // whole bloom, and it is why this defaults ON.
     bool fireflyClamp = true;
+
+    // P8C: which method FILLS the bloom texture. The tonemap is unaware of this -- it samples one
+    // texture either way, and `intensity` scales both.
+    //   0 = the P8 pyramid: cheap, symmetric, and structurally incapable of a streak.
+    //   1 = FFT convolution with a generated aperture: streaks, starburst and halo out of one
+    //       kernel, at the cost of two transforms per frame.
+    // Pyramid stays the default: convolution is heavier and a scene with no bright highlights
+    // cannot tell them apart.
+    uint32_t method = 0u;
+    // Aperture blades. 0 = a round iris (halo only); N >= 3 gives 2N rays, which is what a real
+    // polygonal iris does -- the rays fall between the blades, not along them.
+    uint32_t convBlades = 6u;
+    float convBladeRotation = 0.0f;
+    // Kernel reach, as a FRACTION of the convolution grid's width. The transform is padded by this
+    // much, so raising it costs transform size, not just brightness.
+    // MEASURED, not guessed: at 0.12 the normalised kernel peaks at 1.4e-05 and only 4% of its
+    // energy sits within 32 texels of the centre, so the convolution spreads every highlight into a
+    // flat wash and no halo is visible at all. A bloom kernel has to be a SPIKE with a faint skirt --
+    // at 0.004/3.0 the spike carries 14% of the energy inside two texels and 65% inside eight,
+    // which is what reads as glare. See scratchpad/kernel_probe.py for the sweep.
+    float convKernelRadius = 0.004f;
+    // Falloff exponent of the kernel's skirt. A real lens's glare is a bright core plus a long
+    // power-law tail, and the tail is what is actually visible; lower = wider, hazier glare.
+    // The spokes -- what actually makes a star rather than a halo. An angular modulation of a
+    // radial profile cannot: a spoke is a SLOW falloff along a direction and a FAST one across it.
+    // Measured on-spoke vs 45-degrees-off at 30 texels: 1.0x radial-only, ~200x with these.
+    // The anamorphic bar: one long thin horizontal streak, blue by tradition and by `convChroma`.
+    // Ray shaping, all of it applied to the IRIS. 0 strength is a round hole and no star.
+    float convSpokeStrength = 1.0f;
+    float convSpokeLength = 1.0f;
+    float convSpokeWidth = 0.0f;
+    float convAnamorphic = 0.25f;
+    float convAnamorphicLength = 0.28f;
+    // How much wider the blue kernel is than red/green. The packing gives two independent complex
+    // lanes, so blue gets its own kernel for free; R and G cannot be separated from each other.
+    float convChroma = 0.6f;
+    // Lens ghosts. NOT part of the convolution -- a convolution is shift-invariant and a ghost is a
+    // reflection through the frame centre, so they are gathered in the resolve.
+    uint32_t convGhosts = 3u;
+    float convGhostSpacing = 0.45f;
+    // Sprite radius as a PERCENT of frame width -- UE's LensFlareBokehSize, default 3.
+    float convGhostBokeh = 3.0f;
+    float convGhostIntensity = 0.6f;
 };
 
 // P7 item 8. Deliberately NOT part of AtmosphereSettings: that struct is serialized into the level,

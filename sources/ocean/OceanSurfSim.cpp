@@ -284,12 +284,37 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
 
     if (substeps == 0 && !relocate && !spawn)
     {
-        return {}; // nothing to integrate: no dispatches, no declarations, no barriers
+        // NOTHING TO INTEGRATE -- but the fields still have to be READABLE, because the ocean
+        // surface samples them every frame regardless. Their canonical state is UNORDERED_ACCESS
+        // (they are written by compute), so simply returning here left the surface sampling a
+        // resource in the wrong layout: GPU-based validation reports it as id=1358 against
+        // `ocean_surface_legacy.hlsli`, and `--wind-freeze` makes it the normal case rather than a
+        // rare one, because a frozen clock is exactly when there are no substeps.
+        //
+        // So the dispatches are still skipped and only the hand-over is declared. `current_` is
+        // deliberately NOT touched: no integration happened, so the freshest field is the one the
+        // previous frame produced.
+        ctx.NextPoint();
+        const std::uint32_t readablePoint = ctx.usePoint ? *ctx.usePoint : 0u;
+        ctx.Use(wave_[current_].Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        ctx.Use(foam_[current_].Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        return [readablePoint](RenderGraphPassContext c)
+        {
+            auto t = c.BeginCL();
+            {
+                GPU_SCOPE(t.cl, ProfilerScopes::kOceanSurfSim);
+                c.renderer->EmitPoint(t.cl, readablePoint);
+            }
+            c.EndCL(t);
+        };
     }
 
     const uint32_t swaps = (relocate ? 1u : 0u) + static_cast<uint32_t>(substeps);
     const uint32_t finalIndex = readIndex ^ (swaps & 1u);
     current_ = finalIndex; // committed before recording: GetWaveSrv is final from here on
+    everSimulated_ = true; // the fields are handed over readable from this frame on
 
     // ---- declarations, from the same locals ----
     // Everything is written as a UAV first (spawn, relocate and/or the substep chain); the

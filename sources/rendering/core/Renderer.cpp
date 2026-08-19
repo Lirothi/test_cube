@@ -1535,6 +1535,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.gtao = render::kGtaoFormat;
     formats.hzb = render::kHzbFormat;
     formats.bloom = render::kBloomFormat;
+    formats.bloomFft = render::kBloomFftFormat;
     formats.debugPreview = render::kDebugPreviewFormat;
 
     RenderTargetManager::Sizes sizes{};
@@ -1558,6 +1559,24 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     // with the DLSS quality mode while the image it describes did not.
     sizes.bloomWidth = std::max(1u, (displayWidth + 1u) / 2u);
     sizes.bloomHeight = std::max(1u, (displayHeight + 1u) / 2u);
+    // P8C: the convolution runs on a QUARTER-resolution frame, as UE's does -- a full-resolution
+    // transform buys nothing visible for a low-frequency effect and costs multiples. The grid is
+    // that image rounded UP to a power of two with 25% headroom, and the headroom IS the zero pad:
+    // without it the transform's circular convolution would wrap a streak from one screen edge to
+    // the other. At 2560x1440 this lands on a 640x360 image inside a 1024x512 grid.
+    {
+        const UINT imageW = std::max(16u, (displayWidth + 3u) / 4u);
+        const UINT imageH = std::max(16u, (displayHeight + 3u) / 4u);
+        const auto nextPow2 = [](UINT v) {
+            UINT p = 16u;
+            while (p < v && p < 2048u) { p <<= 1u; }
+            return p;
+        };
+        sizes.bloomFftImageWidth = imageW;
+        sizes.bloomFftImageHeight = imageH;
+        sizes.bloomFftWidth = nextPow2((imageW * 5u) / 4u);
+        sizes.bloomFftHeight = nextPow2((imageH * 5u) / 4u);
+    }
 
     rtManager_.Create(GetDevice(), formats, sizes, Declarations());
 }

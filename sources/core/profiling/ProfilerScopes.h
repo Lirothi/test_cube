@@ -69,6 +69,7 @@ extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassGtao;
 extern const Profiler::ScopeNameKey kPassHzb;
 extern const Profiler::ScopeNameKey kPassBloom;
+extern const Profiler::ScopeNameKey kPassBloomConv;
 extern const Profiler::ScopeNameKey kPassLighting;
 extern const Profiler::ScopeNameKey kPassSpotShadow;
 extern const Profiler::ScopeNameKey kPassPointShadow;

@@ -197,6 +197,37 @@ float AtmosphereTransmittance(float opticalDepth, float minTransmittance)
 // over an infinite one you are looking at the sky, whose own anisotropy is already baked into the
 // sample. Hence `headroom` again -- the same fade the sun lobe and the sky blur use, and the same
 // reason. 1.0 is the neutral value and reproduces the pre-phase image exactly.
+// THE FOG'S SKY SAMPLE MAY NOT CARRY THE SUN.
+//
+// `skyBlur` makes the fog read the sky at a coarse mip, and a coarse mip of a sky whose sun is
+// hundreds of thousands of times the median sky IS the sun: its energy is spread flat across the
+// whole texel. One such texel covers a large solid angle, so it lands as a solid achromatic slab
+// painted over whatever the fog sits in front of. It appeared the moment the level moved to an HDRI
+// with a physically intense sun (measured: sun/median 337,000x, against 16x for the previous one),
+// and pinning the roughness to zero restores the water EXACTLY to its fog-off value, which is what
+// identifies the sample rather than anything else in the fog.
+//
+// The blur cannot simply be turned off: it is what stopped the sky printing its own detail onto the
+// foliage through the fog. So the sample is blurred AND bounded, by the invariant this file already
+// commits to -- the fog CONVERGES ON THE SKY IT SITS AGAINST. The unblurred sample in the same
+// direction IS that sky. Looking at plain sky, blurring must not make the fog several times
+// brighter than the sky behind it; that excess is the sun leaking in. Looking INTO the sun the
+// unblurred sample is enormous too, the bound does nothing, and the fog stays bright -- which is
+// correct, because there the air really is that bright.
+//
+// It is the same double-count the sun lobe had to be faded for: the base colour is the sky, the sky
+// already contains the sun's glow, and anything that smears the sun further into it adds the sun a
+// second time.
+static const float kFogSkySunHeadroom = 2.0f;
+
+float3 AtmosphereClampSkySample(float3 blurred, float3 unblurred)
+{
+    // One implementation, in ibl_common.hlsli. The fog and the water hit the same wall and must not
+    // drift apart: if they disagreed, the sea and the air above it would answer to the same sky
+    // differently and meet at the horizon in different weather.
+    return IblClampToSharp(blurred, unblurred);
+}
+
 float3 AtmosphereInscatter(float3 skyAlongView, float3 sunColor, float viewDotSun,
                            float opticalDepthShared, float distance, float headroom,
                            AtmosphereParams p)

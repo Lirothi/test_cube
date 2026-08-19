@@ -498,16 +498,45 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SliderFloat("Bloom intensity", &bloom.intensity, 0.0f, 2.0f, "%.3f");
                     DevHelp("Weight of the halo added back to the scene. 0 is an exact no-op and "
                             "skips the whole chain.");
-                    ImGui::SliderFloat("Bloom threshold", &bloom.threshold, 0.0f, 8.0f, "%.2f");
-                    DevHelp("Luminance AFTER exposure at which bloom starts - UE's BloomThreshold, "
-                            "in UE's units. Being post-exposure is the point: a darker scene keeps "
-                            "the same bloom rather than silently losing it.");
+                    ImGui::SliderFloat("Bloom threshold", &bloom.threshold, -1.0f, 8.0f, "%.2f");
+                    DevHelp("Luminance AFTER exposure at which bloom starts. NEGATIVE disables the "
+                            "threshold entirely, which is UE's default (-1) and which they call "
+                            "physically correct - a lens scatters everything, not just what passes "
+                            "a test. It also makes bloom exactly LINEAR in exposure; with a "
+                            "threshold, raising exposure grows bloom faster than the image.");
                     ImGui::SliderFloat("Bloom soft knee", &bloom.softKnee, 0.05f, 4.0f, "%.2f");
                     DevHelp("Slope of the ramp above the threshold. UE hardwire 0.5. Higher is a "
                             "harder cut, lower a longer shoulder.");
                     ImGui::SliderFloat("Bloom radius", &bloom.radius, 0.0f, 4.0f, "%.2f");
                     DevHelp("Tap spacing of the tent upsample, in destination texels. Spreads the "
                             "same energy wider - it does not brighten.");
+                    {
+                        int method = static_cast<int>(bloom.method);
+                        const char* kMethods[] = { "Standard (pyramid)", "Convolution (FFT)" };
+                        if (ImGui::Combo("Bloom method", &method, kMethods, 2))
+                        {
+                            bloom.method = static_cast<std::uint32_t>(method < 0 ? 0 : method);
+                        }
+                    }
+                    DevHelp("Standard = the mip pyramid. Convolution = two Fourier transforms and a "
+                            "complex multiply against a generated aperture, which is where streaks "
+                            "and the starburst come from. Convolution runs on a quarter-resolution "
+                            "grid and costs more; the kernel's own transform is cached until its "
+                            "parameters change.");
+                    if (bloom.method == 1u)
+                    {
+                        ImGui::SliderFloat("Kernel radius", &bloom.convKernelRadius, 0.0005f, 0.02f, "%.4f");
+                        DevHelp("Core radius as a fraction of the grid. Small is correct - the glare "
+                                "is the skirt. At 0.12 only 4% of the kernel's energy sits within 32 "
+                                "texels and the result is a flat wash.");
+                        int blades = static_cast<int>(bloom.convBlades);
+                        if (ImGui::SliderInt("Blades", &blades, 0, 12))
+                        {
+                            bloom.convBlades = static_cast<std::uint32_t>(blades < 0 ? 0 : blades);
+                        }
+                        DevHelp("N blades give 2N rays, falling BETWEEN the blades.");
+                        ImGui::SliderFloat("Blade rotation", &bloom.convBladeRotation, -3.2f, 3.2f, "%.2f");
+                    }
                     ImGui::Checkbox("Firefly clamp", &bloom.fireflyClamp);
                     DevHelp("Karis average on the FIRST downsample: each tap weighted by "
                             "1/(1+luma), so one blown-out texel cannot dominate its tile. This is "

@@ -25,6 +25,20 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     s.softKnee = j.value("softKnee", s.softKnee);
     s.radius = j.value("radius", s.radius);
     s.fireflyClamp = j.value("fireflyClamp", s.fireflyClamp);
+    s.method = j.value("method", s.method);
+    s.convBlades = j.value("convBlades", s.convBlades);
+    s.convBladeRotation = j.value("convBladeRotation", s.convBladeRotation);
+    s.convKernelRadius = j.value("convKernelRadius", s.convKernelRadius);
+    s.convSpokeStrength = j.value("convSpokeStrength", s.convSpokeStrength);
+    s.convSpokeLength = j.value("convSpokeLength", s.convSpokeLength);
+    s.convSpokeWidth = j.value("convSpokeWidth", s.convSpokeWidth);
+    s.convAnamorphic = j.value("convAnamorphic", s.convAnamorphic);
+    s.convAnamorphicLength = j.value("convAnamorphicLength", s.convAnamorphicLength);
+    s.convChroma = j.value("convChroma", s.convChroma);
+    s.convGhosts = j.value("convGhosts", s.convGhosts);
+    s.convGhostSpacing = j.value("convGhostSpacing", s.convGhostSpacing);
+    s.convGhostBokeh = j.value("convGhostBokeh", s.convGhostBokeh);
+    s.convGhostIntensity = j.value("convGhostIntensity", s.convGhostIntensity);
 }
 
 inline nlohmann::json ToJson(const BloomSettings& s)
@@ -36,6 +50,20 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["softKnee"] = s.softKnee;
     j["radius"] = s.radius;
     j["fireflyClamp"] = s.fireflyClamp;
+    j["method"] = s.method;
+    j["convBlades"] = s.convBlades;
+    j["convBladeRotation"] = s.convBladeRotation;
+    j["convKernelRadius"] = s.convKernelRadius;
+    j["convSpokeStrength"] = s.convSpokeStrength;
+    j["convSpokeLength"] = s.convSpokeLength;
+    j["convSpokeWidth"] = s.convSpokeWidth;
+    j["convAnamorphic"] = s.convAnamorphic;
+    j["convAnamorphicLength"] = s.convAnamorphicLength;
+    j["convChroma"] = s.convChroma;
+    j["convGhosts"] = s.convGhosts;
+    j["convGhostSpacing"] = s.convGhostSpacing;
+    j["convGhostBokeh"] = s.convGhostBokeh;
+    j["convGhostIntensity"] = s.convGhostIntensity;
     return j;
 }
 

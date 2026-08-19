@@ -625,6 +625,30 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D.bloomHeight = h;
         }
 
+        // P8C: the convolution grids. Three of them -- two ping-ponged through the transform, one
+        // holding the kernel's cached spectrum -- all at the padded power-of-two size. They rest
+        // shader-readable like everything else here, and the transform flips them to UAV for its
+        // own duration.
+        {
+            const UINT fw = std::max(1u, sizes.bloomFftWidth);
+            const UINT fh = std::max(1u, sizes.bloomFftHeight);
+            currentTargetWidth = fw;
+            currentTargetHeight = fh;
+            CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.bloomFft,
+                DeferredSrvSlot::BloomFftA, DeferredSrvSlot::BloomFftAUAV, f,
+                D.bloomFftA, D.bloomFftASRV, D.bloomFftAUAV, fw, fh);
+            CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.bloomFft,
+                DeferredSrvSlot::BloomFftB, DeferredSrvSlot::BloomFftBUAV, f,
+                D.bloomFftB, D.bloomFftBSRV, D.bloomFftBUAV, fw, fh);
+            CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.bloomFft,
+                DeferredSrvSlot::BloomFftKernel, DeferredSrvSlot::BloomFftKernelUAV, f,
+                D.bloomFftKernel, D.bloomFftKernelSRV, D.bloomFftKernelUAV, fw, fh);
+            D.bloomFftWidth = fw;
+            D.bloomFftHeight = fh;
+            D.bloomFftImageWidth = std::max(1u, sizes.bloomFftImageWidth);
+            D.bloomFftImageHeight = std::max(1u, sizes.bloomFftImageHeight);
+        }
+
         // Inspector preview. Rests SHADER-READABLE: the overlay transitions FROM a resource's
         // canonical into PIXEL_SHADER_RESOURCE without transitioning back, which is only sound when
         // the canonical already shares that barrier layout.
@@ -698,6 +722,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gtaoFiltered.Get(), L"GtaoFiltered", kNps);
         nameRes(D.gtaoHistory.Get(), L"GtaoHistory", kNps);
         nameRes(D.gtaoUpsampled.Get(), L"GtaoUpsampled", kNps);
+        nameRes(D.bloomFftA.Get(), L"BloomFftA", kNps);
+        nameRes(D.bloomFftB.Get(), L"BloomFftB", kNps);
+        nameRes(D.bloomFftKernel.Get(), L"BloomFftKernel", kNps);
         nameRes(D.bloomDown.Get(), L"BloomDown", kNps);
         nameRes(D.bloomUp.Get(), L"BloomUp", kNps);
         nameRes(D.hzb.Get(), L"Hzb", kNps);

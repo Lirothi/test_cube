@@ -23,6 +23,11 @@ inline constexpr unsigned kHzbMaxMips = 13;
 // per mip, and the whole chain sits in UNORDERED_ACCESS while it is built.
 inline constexpr unsigned kBloomMaxMips = 8;
 
+// P8C: the convolution transform is one thread per element PAIR, so a group is half the longest
+// scan line it must handle. 1024 is D3D12's ceiling on group size, which puts the largest usable
+// transform at 2048 -- well past what a quarter-resolution frame needs.
+inline constexpr unsigned kBloomFftThreads = 1024;
+
 // Inspector preview surface. Square and fixed: the inspector draws it with the SOURCE aspect
 // ratio, so this only sets sampling density, and a fixed size means no reallocation when the
 // selected target changes.
@@ -99,6 +104,10 @@ public:
         // `bloomUp` is what the tonemap samples.
         GpuResource bloomDown;
         GpuResource bloomUp;
+        // P8C: two ping-pong grids for the transform, plus the kernel's cached spectrum.
+        GpuResource bloomFftA;
+        GpuResource bloomFftB;
+        GpuResource bloomFftKernel;
         // The texture inspector's preview surface. ImGui can only tint an image by a value it
         // packs to 8 bits, so anything needing to BRIGHTEN a target has to happen before ImGui
         // sees it; the inspector resamples into this and ImGui draws it untinted.
@@ -157,6 +166,12 @@ public:
         UINT bloomMips = 0;
         UINT bloomWidth = 1, bloomHeight = 1; // mip 0 dimensions
 
+        D3D12_CPU_DESCRIPTOR_HANDLE bloomFftASRV{}, bloomFftAUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE bloomFftBSRV{}, bloomFftBUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE bloomFftKernelSRV{}, bloomFftKernelUAV{};
+        UINT bloomFftWidth = 1, bloomFftHeight = 1;
+        UINT bloomFftImageWidth = 1, bloomFftImageHeight = 1;
+
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
         UINT spotShadowRes = 512;
         UINT pointShadowRes = 256; // per cube face
@@ -182,6 +197,7 @@ public:
         DXGI_FORMAT gtao;               // P6B ambient occlusion
         DXGI_FORMAT hzb;                // P6C hierarchical depth
         DXGI_FORMAT bloom;              // P8 bloom pyramid (HDR)
+        DXGI_FORMAT bloomFft;           // P8C convolution grid (complex, 32-bit)
         DXGI_FORMAT debugPreview;       // texture-inspector preview (RGBA8)
     };
 
@@ -195,6 +211,11 @@ public:
         // P8 mip 0, half the DISPLAY resolution: bloom runs after the upscaler, so it is sized off
         // the image the tonemap actually reads, not off the internal render target.
         UINT bloomWidth = 1, bloomHeight = 1;
+        // P8C: the padded power-of-two grid the convolution runs on, and how much of it the
+        // downscaled frame occupies. The difference between them IS the zero pad, which is what
+        // makes the convolution linear instead of wrapping around the screen edge.
+        UINT bloomFftWidth = 1, bloomFftHeight = 1;
+        UINT bloomFftImageWidth = 1, bloomFftImageHeight = 1;
     };
 
     void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls);
@@ -242,6 +263,8 @@ private:
     BloomDownMipUav4, BloomDownMipUav5, BloomDownMipUav6, BloomDownMipUav7,
     BloomUpMipUav0, BloomUpMipUav1, BloomUpMipUav2, BloomUpMipUav3,
     BloomUpMipUav4, BloomUpMipUav5, BloomUpMipUav6, BloomUpMipUav7,
+    // P8C convolution grids.
+    BloomFftA, BloomFftAUAV, BloomFftB, BloomFftBUAV, BloomFftKernel, BloomFftKernelUAV,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

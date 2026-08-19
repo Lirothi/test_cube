@@ -373,6 +373,63 @@ struct BloomHandles
     void Populate(Material* material);
 };
 
+// P8C. Mirrors `BloomFftCB` in shaders/bloom_fft_cs.hlsl.
+struct BloomFftConstants
+{
+    uint2 transformSize{ 1u, 1u };
+    uint32_t isVertical = 0u;
+    uint32_t isInverse = 0u;
+    uint32_t multiplyByKernel = 0u;
+    uint32_t pad0 = 0u, pad1 = 0u, pad2 = 0u;
+};
+
+struct BloomFftHandles
+{
+    Material::CBFieldHandle transformSize, isVertical, isInverse, multiplyByKernel;
+    void Populate(Material* material);
+};
+
+// P8C. Mirrors `BloomConvCB` in shaders/bloom_conv_cs.hlsl.
+struct BloomConvConstants
+{
+    uint32_t convStage = 0u;
+    uint32_t exposureEnabled = 0u;
+    uint2 transformSize{ 1u, 1u };
+    uint2 imageSize{ 1u, 1u };
+    uint2 sourceSize{ 1u, 1u };
+    float threshold = 1.0f;
+    float softKnee = 0.5f;
+    float kernelRadius = 64.0f;
+    uint32_t blades = 6u;
+    float bladeRotation = 0.0f;
+    float spokeStrength = 1.0f;
+    float spokeLength = 1.0f;
+    float spokeWidth = 0.0f;
+    float anamorphic = 0.8f;
+    float anamorphicLength = 0.28f;
+    float chroma = 0.6f;
+    uint32_t ghostCount = 3u;
+    float ghostSpacing = 0.45f;
+    float ghostIntensity = 0.25f;
+    float ghostBokeh = 0.03f;
+    float sunUV[2] = { 0.5f, 0.5f };
+    float sunOnScreen = 0.0f;
+    float apertureScale = 1.0f;
+    uint32_t psfLane = 0u;
+};
+
+struct BloomConvHandles
+{
+    Material::CBFieldHandle convStage, exposureEnabled, transformSize, imageSize, sourceSize;
+    Material::CBFieldHandle threshold, softKnee, kernelRadius, blades, bladeRotation;
+    Material::CBFieldHandle spokeStrength, spokeLength, spokeWidth;
+    Material::CBFieldHandle anamorphic, anamorphicLength, chroma;
+    Material::CBFieldHandle ghostCount, ghostSpacing, ghostIntensity, ghostBokeh;
+    Material::CBFieldHandle sunUV, sunOnScreen;
+    Material::CBFieldHandle apertureScale, psfLane;
+    void Populate(Material* material);
+};
+
 struct GtaoFilterHandles
 {
     Material::CBFieldHandle aoSize, invAoSize, outSize, invOutSize, depthA, depthB;
@@ -619,6 +676,8 @@ public:
     std::shared_ptr<Material> GetGtaoUpsampleMaterial() const { return matGtaoUpsampleCS_; }
     std::shared_ptr<Material> GetHzbMaterial() const { return matHzbCS_; }
     std::shared_ptr<Material> GetBloomMaterial() const { return matBloomCS_; }
+    std::shared_ptr<Material> GetBloomFftMaterial() const { return matBloomFftCS_; }
+    std::shared_ptr<Material> GetBloomConvMaterial() const { return matBloomConvCS_; }
     std::shared_ptr<Material> GetDebugPreviewMaterial() const { return matDebugPreviewCS_; }
     UINT GetDebugPreviewCBSizeBytes() const;
     void WriteDebugPreviewConstants(const DebugPreviewConstants& data, uint8_t* dest) const;
@@ -626,6 +685,10 @@ public:
     void WriteHzbConstants(const HzbPassConstants& data, uint8_t* dest) const;
     UINT GetBloomCBSizeBytes() const;
     void WriteBloomConstants(const BloomPassConstants& data, uint8_t* dest) const;
+    UINT GetBloomFftCBSizeBytes() const;
+    void WriteBloomFftConstants(const BloomFftConstants& data, uint8_t* dest) const;
+    UINT GetBloomConvCBSizeBytes() const;
+    void WriteBloomConvConstants(const BloomConvConstants& data, uint8_t* dest) const;
     UINT GetSsrTemporalCBSizeBytes() const;
     void WriteSsrTemporalConstants(const SsrTemporalConstants& data, uint8_t* dest) const;
     UINT GetGtaoFilterCBSizeBytes() const;
@@ -719,6 +782,8 @@ private:
     std::shared_ptr<Material> matGtaoUpsampleCS_;
     std::shared_ptr<Material> matHzbCS_;
     std::shared_ptr<Material> matBloomCS_;
+    std::shared_ptr<Material> matBloomFftCS_;
+    std::shared_ptr<Material> matBloomConvCS_;
     std::shared_ptr<Material> matDebugPreviewCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matOceanReflection_;
@@ -742,6 +807,8 @@ private:
     GtaoFilterHandles gtaoUpsampleHandles_{};
     HzbHandles hzbHandles_{};
     BloomHandles bloomHandles_{};
+    BloomFftHandles bloomFftHandles_{};
+    BloomConvHandles bloomConvHandles_{};
     SsrTemporalHandles ssrTemporalHandles_{};
     DebugPreviewHandles debugPreviewHandles_{};
     ScenePointLightCBHandles pointHandles_{};

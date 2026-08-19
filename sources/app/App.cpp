@@ -332,6 +332,41 @@ namespace
         if (setting == "bloom.threshold") { scene.BloomRef().threshold = value; return true; }
         if (setting == "bloom.softKnee") { scene.BloomRef().softKnee = value; return true; }
         if (setting == "bloom.radius") { scene.BloomRef().radius = value; return true; }
+        // P8C: 0 = the pyramid, 1 = FFT convolution.
+        if (setting == "bloom.method")
+        {
+            scene.BloomRef().method = static_cast<uint32_t>(std::max(0.0f, value));
+            return true;
+        }
+        if (setting == "bloom.blades")
+        {
+            scene.BloomRef().convBlades = static_cast<uint32_t>(std::max(0.0f, value));
+            return true;
+        }
+        if (setting == "bloom.bladeRotation") { scene.BloomRef().convBladeRotation = value; return true; }
+        if (setting == "bloom.kernelRadius") { scene.BloomRef().convKernelRadius = value; return true; }
+        if (setting == "bloom.spokes") { scene.BloomRef().convSpokeStrength = value; return true; }
+        if (setting == "bloom.spokeLength") { scene.BloomRef().convSpokeLength = value; return true; }
+        if (setting == "bloom.spokeWidth") { scene.BloomRef().convSpokeWidth = value; return true; }
+        if (setting == "bloom.anamorphic") { scene.BloomRef().convAnamorphic = value; return true; }
+        if (setting == "bloom.anamorphicLength")
+        {
+            scene.BloomRef().convAnamorphicLength = value;
+            return true;
+        }
+        if (setting == "bloom.chroma") { scene.BloomRef().convChroma = value; return true; }
+        if (setting == "bloom.ghosts")
+        {
+            scene.BloomRef().convGhosts = static_cast<uint32_t>(std::max(0.0f, value));
+            return true;
+        }
+        if (setting == "bloom.ghostSpacing") { scene.BloomRef().convGhostSpacing = value; return true; }
+        if (setting == "bloom.ghostBokeh") { scene.BloomRef().convGhostBokeh = value; return true; }
+        if (setting == "bloom.ghostIntensity")
+        {
+            scene.BloomRef().convGhostIntensity = value;
+            return true;
+        }
         if (setting == "bloom.firefly")
         {
             scene.BloomRef().fireflyClamp = value != 0.0f;

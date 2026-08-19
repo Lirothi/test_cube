@@ -42,6 +42,8 @@ COMPUTE_ENTRIES = [
     ("hzb_build_cs.hlsl", "CSMain"),
     ("debug_preview_cs.hlsl", "CSMain"),
     ("bloom_cs.hlsl", "CSMain"),
+    ("bloom_fft_cs.hlsl", "CSMain"),
+    ("bloom_conv_cs.hlsl", "CSMain"),
 ]
 
 

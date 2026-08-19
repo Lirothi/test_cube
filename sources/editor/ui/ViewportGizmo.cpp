@@ -712,15 +712,46 @@ void ViewportGizmo::Update(EditorContext& ctx,
     // Wireframe shape for the SELECTED light (point = sphere at radius, spot =
     // cone at range/outer-angle), via the debug-draw system. Independent of the
     // icon atlas and of on-screen culling; the debug-draw pass clips it in 3D.
+    // WHERE THE SUN IS AIMED, drawn against the sky so the authored direction can be matched to the
+    // sun the HDRI actually contains. The two are independent -- one is a vector in the level, the
+    // other is painted into the texture -- and when they disagree the shadows come from a sun that
+    // is not the one on screen. Measured in wind_test: the light pointed at uv (0.638, 0.633) while
+    // the sun sat at (0.341, 0.501), and nothing in the editor said so.
+    const auto DrawDirectionalLightProxy = [](EditorContext& c, EditorObject& env,
+                                              const Math::float4& col, DebugDrawSystem& dd)
+    {
+        Math::float3 dir(0.0f, -1.0f, 0.0f);
+        const auto dirIt = env.properties.find("direction");
+        if (dirIt != env.properties.end() && dirIt->is_array() && dirIt->size() >= 3u)
+        {
+            dir = Math::float3((*dirIt)[0].get<float>(), (*dirIt)[1].get<float>(),
+                               (*dirIt)[2].get<float>());
+        }
+        // The authored vector is where the light TRAVELS, so the sun is the other way -- the same
+        // negation the shaders apply to sunDirAmbient.
+        const Math::float3 toSun = (dir * -1.0f).Normalized();
+
+        // A directional light has no position, so the marker rides with the camera: that keeps it
+        // at a fixed place on screen for a given direction, which is what makes it comparable to
+        // the sky behind it. Well inside the 10000 far plane.
+        const Math::float3 eye = c.scene.CameraRef().GetPosition();
+        const float kDistance = 3000.0f;
+        // THE SUN'S REAL ANGULAR DIAMETER, 0.53 degrees. Sizing the ring to it turns "close enough?"
+        // into a yes/no: the ring either covers the disc or it does not.
+        const float kSunHalfAngle = 0.00462f;
+        const Math::float3 centre = eye + toSun * kDistance;
+        dd.AddSphere(centre, kDistance * kSunHalfAngle, col, /*wireframe=*/true);
+        // A wider guide ring, so there is something to steer by while the small one is still off
+        // screen or lost in the glare.
+        dd.AddSphere(centre, kDistance * kSunHalfAngle * 10.0f,
+                     Math::float4(col.x, col.y, col.z, 0.35f), /*wireframe=*/true);
+    };
+
     if (DebugDrawSystem* dd = ctx.renderer.GetDebugDrawSystem())
     {
         for (EditorObject& env : ctx.document.Environment())
         {
             if (ctx.selection.Primary().value != env.id.value) { continue; }
-
-            const auto posIt = env.properties.find("position");
-            if (posIt == env.properties.end() || !posIt->is_array() || posIt->size() < 3u) { break; }
-            const Math::float3 pos((*posIt)[0].get<float>(), (*posIt)[1].get<float>(), (*posIt)[2].get<float>());
 
             Math::float4 col(1.0f, 0.85f, 0.25f, 1.0f);
             const auto colIt = env.properties.find("color");
@@ -728,6 +759,20 @@ void ViewportGizmo::Update(EditorContext& ctx,
             {
                 col = Math::float4((*colIt)[0].get<float>(), (*colIt)[1].get<float>(), (*colIt)[2].get<float>(), 1.0f);
             }
+
+            // BEFORE the position lookup, because a directional light HAS no position -- it is the
+            // one environment type EditorSceneDocument marks that way, and the guard below breaks
+            // out of the loop when `position` is missing. Putting the branch after it made it
+            // unreachable for the only object it was written for.
+            if (env.type == "directionalLight")
+            {
+                DrawDirectionalLightProxy(ctx, env, col, *dd);
+                break;
+            }
+
+            const auto posIt = env.properties.find("position");
+            if (posIt == env.properties.end() || !posIt->is_array() || posIt->size() < 3u) { break; }
+            const Math::float3 pos((*posIt)[0].get<float>(), (*posIt)[1].get<float>(), (*posIt)[2].get<float>());
 
             if (env.type == "pointLight")
             {

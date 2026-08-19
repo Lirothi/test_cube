@@ -2001,7 +2001,10 @@ float3 Reflection(const LightingInput li, float roughness)
     if (skyParams.y > 0.0f)
     {
         const float specMip = IblMipFromRoughness(roughness, skyParams.y);
-        skySample = SkySpecular.SampleLevel(LinearClampSampler, reflectDir, specMip).rgb * skyParams.x;
+        // Bounded by the sharp sample in the same direction: the water must reflect the SKY.
+        skySample = IblClampToSharp(
+            SkySpecular.SampleLevel(LinearClampSampler, reflectDir, specMip).rgb,
+            SkySpecular.SampleLevel(LinearClampSampler, reflectDir, 0.0f).rgb) * skyParams.x;
     }
     else
     {
@@ -2187,10 +2190,12 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
         // Blur and sun lobe both fade as the fog saturates, through the SAME helpers compose uses --
         // water and land must agree here or they meet at the shoreline in different weather.
         const float headroom = AtmosphereHeadroom(transmittance, minT);
-        const float3 skyAlongView = IblSkyRadiance(SkySpecular, SkyboxTexture, LinearClampSampler,
-                                                   viewRay,
-                                                   AtmosphereSkyRoughness(headroom, fogParams2.x),
-                                                   (uint)skyParams.y, skyParams.x);
+        const float3 skyAlongView = AtmosphereClampSkySample(
+            IblSkyRadiance(SkySpecular, SkyboxTexture, LinearClampSampler, viewRay,
+                           AtmosphereSkyRoughness(headroom, fogParams2.x),
+                           (uint)skyParams.y, skyParams.x),
+            IblSkyRadiance(SkySpecular, SkyboxTexture, LinearClampSampler, viewRay,
+                           0.0f, (uint)skyParams.y, skyParams.x));
         const float3 toSun = -normalize(sunDirAmbient.xyz);
         const float3 inscatter = AtmosphereInscatter(skyAlongView,
                                                      sunColorExposure.xyz * sunColorExposure.w,
@@ -2439,7 +2444,13 @@ PSOut PSMain(VSOutput input)
         color = lerp(softEdgeRefraction, color, refractionEdgeWeight);
     }
     
-    float4 outColor = float4(saturate(color), 1.0f);
+    // NOT saturate(): this writes into the HDR scene target (R16G16B16A16_FLOAT), and clamping to
+    // 1.0 here capped the water at a value the sky is free to exceed. The reflection could then
+    // never match the sky it reflects -- the horizon showed a pale plate against a brighter sky,
+    // and no amount of work on the cubemap, the mip or the roughness could close a gap that was
+    // being imposed after all of them. Only the low end is clamped, which is what the rest of the
+    // renderer does.
+    float4 outColor = float4(max(color, 0.0f.xxx), 1.0f);
 
     float2 currUv = ClipToUV(input.positionNDC);
     float2 prevUv = ClipToUV(input.prevPositionNDC);

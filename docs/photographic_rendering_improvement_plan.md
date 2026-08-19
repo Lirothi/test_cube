@@ -2314,6 +2314,29 @@ both views (it is resolution-bound, not content-bound); the frame goes 1.78 -> 1
 off, `Pass_Bloom` does not appear in the profiler dump at all -- the interface contract's "schedules
 no unnecessary active work" is observable, not merely asserted.
 
+**THRESHOLD < 0 DISABLES THE THRESHOLD, AND THAT IS NOW THE DEFAULT, BECAUSE IT IS UE'S.**
+`FPostProcessSettings::BloomThreshold` ships at **-1** (`Scene.cpp:423`), and their own field
+documentation reads: *"-1: all pixels affect bloom equally (physically correct, faster as a threshold
+pass is omitted)"*. Their renderer skips the whole threshold permutation at that value
+(`bThresholdEnabled = Threshold > -1.0f`). A lens scatters light from everything in front of it; a
+threshold is an artistic control that buys punch by discarding physics.
+
+**It also decides how hard bloom answers to EXPOSURE**, which is what prompted this. With a
+threshold, raising exposure does two things at once -- it scales the pixels already over the line AND
+pushes new ones over it -- so bloom grows faster than the image. Measured (`wind_test`/`sun_glint`,
+pyramid, intensity 0.6, mean 8-bit addition over bloom-off; note EV100 here is inverted, larger =
+darker):
+
+| manual EV100 | threshold 1.0 | threshold -1 |
+|---|---:|---:|
+| -1 (brightest) | +13.77 | +38.80 |
+| 0 | +5.35 | +35.10 |
+| +1 (darkest) | +1.67 | +24.00 |
+
+**Two stops of darkening cut the thresholded bloom by 8x and the unthresholded one by 1.6x.** So yes,
+bloom reacting to exposure is correct and deliberate -- but the SIZE of that reaction is the
+threshold's doing, and the physically-correct setting is the one where it barely reacts at all.
+
 **The firefly clamp cannot be judged from a still.** On a frozen frame it moves the mean by 0.2/255;
 what it is for is the TEMPORAL case -- a sun glint crossing a texel boundary pumping the whole
 pyramid -- which a single capture cannot show. It defaults ON for that reason, and the honest state
@@ -2419,7 +2442,7 @@ CREATES them, so they are unreachable in normal use, but the code stays as the f
 
 ---
 
-### P8C — Convolution bloom (FFT), which is also where the flares come from — NOT STARTED (queued 2026-08-19)
+### P8C — Convolution bloom (FFT), which is also where the flares come from — DONE (2026-08-19)
 
 **Depends on:** P8 (it replaces the pyramid as the bloom SOURCE, and falls back to it), and scheduled
 AFTER P8B so the settings land in the container rather than becoming a seventh singleton.
@@ -2535,6 +2558,237 @@ the one that catches a missing pad, and it fails silently otherwise.
   this for a reason.
 * **Measure before choosing the multi-pass path.** The single-dispatch convolution is dramatically
   simpler and covers a downsampled frame at the sizes this project runs.
+
+**OUTCOME (2026-08-19).** Shipped as `bloom.method` = 1, with the pyramid still the default.
+New shaders: `bloom_fft_cs.hlsl` (one axis of the transform plus the spectral multiply) and
+`bloom_conv_cs.hlsl` (pack / kernel / resolve). Three grids per frame set (`bloomFftA`, `bloomFftB`,
+`bloomFftKernel`) at 1024x512 R32G32B32A32, holding a 640x360 image inside a zero pad.
+
+**The transform is a radix-2 Stockham, and it was verified against numpy BEFORE anything was built on
+it** (`scratchpad/fft_verify.py`, a line-by-line port of the shader's indexing): forward agrees to
+5e-16, the round trip to 5e-16, the convolution theorem to 4e-16, and so does the two-real-channels-
+in-one-complex packing. That packing is the reason RGB costs one transform pair rather than three:
+convolution is LINEAR and the kernel is REAL, so (R + iG) convolved with it separates back out with
+no unpacking. It stops being true for a complex kernel.
+
+**Normalisation is free and exact:** the kernel's DC term IS its sum, so the multiply divides by
+`KernelSpectrum[0,0].x`. Radius, blades and falloff can therefore be changed without touching
+brightness -- the failure this plan warned about, and what UE spend four shaders on.
+
+**Measured** on `sun_glint`, exposure pinned, DLSS off, against bloom OFF:
+
+| | changed | mean | GPU |
+|---|---:|---:|---:|
+| pyramid | 70.3% | 7.77 | `Pass_Bloom` 0.067 ms |
+| convolution | 32.5% | 2.82 | `Pass_BloomConv` 0.122 ms |
+
+**1.8x the pyramid's cost for two transforms, a multiply and a cached kernel** -- the frame goes
+1.886 -> 1.912 ms. Gates: 24/24 shaders, both configs, `--canonical-check` adds 9 resources and ends
+`0 of 233` off-canonical, `--scene-stress=20` CLEAN, and **`--gbv` clean of anything this step
+introduced** (one pre-existing `Ocean.SurfSimWaveA` SRV-in-UAV-layout error remains, confirmed
+present with bloom off).
+
+**FOUR BUGS THIS STEP PRODUCED, all worth remembering because none of them announced itself:**
+
+1. **`RecordComputeDispatch` always divides the extent by 8**, because it exists for the 8x8 shaders
+   everything else uses. This transform is a 1D group of 1024 and needs ONE GROUP PER SCAN LINE;
+   passing the real thread count asked for 128x too many groups and the first convolution rendered
+   nothing at all. A caller wanting `N` groups from that helper passes `N * 8`.
+2. **The kernel spectrum was cached against ONE key while living in a PER-FRAME resource.** Slot 0
+   built it; slots 1 and 2 convolved against an empty texture, so two frames in three had no bloom.
+   The cache key is per frame slot now. Any cache whose payload is in `DeferredTargets` has this
+   shape.
+3. **GBV caught an SRV binding pointed at a UAV-layout resource** (id=1358): the transform declared
+   its inputs `Texture2D` while the chain deliberately stays in UNORDERED_ACCESS. It compiled, it
+   ran, and it produced plausible output. Reads go through `RWTexture2D` now, as the HZB and bloom
+   pyramids already do.
+4. **Karis-averaging the SETUP stage deletes the highlight instead of clamping it.** Weighting by
+   1/(1+luma) turns a 100x glint against three dark neighbours into ~1. Setup box-averages four taps
+   (which is what fixes the reported flicker: a half-res grid point-sampling a full-res image drops
+   a moving glint in and out); Karis stays on the first downsample, where the data has already been
+   averaged.
+
+**The kernel defaults are MEASURED, not guessed** (`scratchpad/kernel_probe.py`). At radius 0.12 the
+normalised kernel peaks at 1.4e-05 with 4% of its energy inside 32 texels -- every highlight spread
+into a flat wash, which is exactly what the first working render looked like. 0.004 / falloff 3.0
+puts 14% inside two texels and 65% inside eight. The kernel is also CUT at four radii so its tail
+cannot exceed the vertical pad, which is what makes the convolution linear rather than wrapping; the
+inspector's cap is set to match.
+
+**TWO PRE-EXISTING GBV ERRORS WERE FOUND AND FIXED WHILE GATING THIS** (both id=1358, an SRV bound
+at a resource in UNORDERED_ACCESS layout, both in the ocean surface and both present with bloom
+OFF):
+
+1. **The surf-sim wave/foam fields on the FIRST frame.** They are created as compute outputs, the
+   ocean vertex shader samples them every frame, and nothing had handed them over yet. They are
+   bound only once the sim has actually written them (`OceanSurfSim::HasSimulated`). The sim also
+   skips its whole pass on a frame with nothing to integrate -- which `--wind-freeze` makes the
+   normal case, and is why every headless capture hit it -- so that path now declares the hand-over
+   even though it dispatches nothing.
+2. **The ocean fallback descriptor pointed at `scene`.** Every slot the draw does not fill was given
+   `sceneSRV`, and compose writes that target as a UAV, so every fallback-filled slot was a read in
+   the wrong layout. It points at `sceneOpaque` now -- the copy this shader already samples for
+   refraction, therefore readable by construction.
+
+**`--gbv` now reports ZERO errors**, which is cleaner than the state this step started from. The
+ocean image is unchanged: 0.026% of pixels, mean 0.000.
+
+**THE FIRST KERNEL LOOKED LIKE NOTHING, AND THE REASON IS WORTH KEEPING.** It was a radial power law
+with an angular wobble -- and an angular modulation of a radial profile CANNOT produce a ray, because
+the result is still radial. A ray is a slow falloff ALONG a direction and a fast one ACROSS it. The
+kernel is now three terms, each of which a real lens has and none of which the others can imitate:
+
+* **spokes** -- N lines through the centre giving 2N rays, Gaussian across and Lorentzian along.
+  Measured on-spoke vs 45-degrees-off at 30 texels: **1.0x radial-only, ~200x with spokes**;
+* **an anamorphic bar** -- one long thin horizontal streak, because a squeezed axis is not something
+  a symmetric star can fake;
+* **chroma** -- the blue lane gets a wider kernel, which is free: the packing already carries
+  (R + iG) and B as two INDEPENDENT complex lanes. R and G cannot be split from each other.
+
+**Ghosts are gathered in the resolve, NOT convolved, and that is structural:** a convolution is
+shift-invariant, while a ghost moves the opposite way to its source because it is a reflection
+through the frame centre. The first version sampled the convolved image directly and copied the
+bright sky as a rectangular slab that read as a UI panel; the sample is now weighted towards point
+sources, which suppresses broad fields quadratically and leaves the sun.
+
+**SIX GHOST DEFECTS THE USER CAUGHT BY EYE, all now fixed and all worth the note:**
+
+* **Visible texels.** The resolve POINT-sampled the convolution grid. The grid is a quarter of the
+  display width, the bloom target a half, and the tonemap stretches that over the full frame -- one
+  grid texel is at least 4x4 screen pixels. A halo hides that; a ghost is a mirrored copy with a
+  scale factor, which magnifies the grid further and turns the steps into blocks. There is no
+  hardware filtering available -- the chain is read through UAVs and a `RWTexture2D` load is always
+  point -- so `SampleGridBilinear` is written out by hand.
+* **A rectangular slab.** A ghost is a copy of the frame, so where the copy runs past the frame's
+  edge it stopped DEAD, in a straight line. Two masks now: a `smoothstep` fade as the sample
+  approaches the edge it was read from, and UE's own
+  `DiscMask(ScreenPos) * DiscMask(ScreenPos * 0.8)` (`PostProcessLensFlares.usf`) -- a circular
+  falloff applied twice at different radii, which is what makes a flare sit IN the frame rather than
+  on it.
+* **Every ghost carried its own starburst.** They sampled the CONVOLVED grid, which by definition
+  already contains the kernel -- so each mirrored copy dragged a full set of spokes with it and the
+  frame filled with stars. A ghost is a reflection off a lens element, and it happens BEFORE the
+  point spread that makes the rays; it must therefore read the RAW frame. The resolve now samples
+  `HDRColor`, and the star is the sun's alone.
+* **The sample pattern showing through as the shape.** Reading the raw frame means reading something
+  sharp, so it has to be gathered rather than tapped. Five axis-aligned taps drew a visible PLUS SIGN
+  of blobs. A ghost is an out-of-focus image of the APERTURE, so its shape is the iris: the gather is
+  now two rings plus the centre, with the ring count following `blades`, which makes a six-bladed
+  iris throw hexagonal ghosts for free.
+* **A patch of cloud pasted over the palms.** Switching the source to the raw frame silently dropped
+  TWO things that had come free with the grid, and the second is the interesting one.
+  * The **threshold** was the grid's, because the grid is the setup stage's output. Reading
+    `HDRColor` walked straight past it, so an entire bright cloud deck became a legal ghost source.
+    Worse, the "squared response" that was supposed to suppress broad fields was
+    `saturate(exposedLuma)`, which is pinned at 1 for anything above middle grey -- that is, for the
+    whole sky -- so it suppressed exactly nothing. `GhostHighlight()` now applies the threshold PER
+    TAP (averaging first would let a small bright source be diluted under the floor by its dark
+    neighbours) and squares `amount`, which unlike luma actually varies. UE do the same thing
+    structurally: `PostProcessLensFlares` samples the thresholded bloom chain, never scene colour.
+  * **Brightness alone is the wrong test.** Under an overcast sunset the whole glow around the sun
+    sits far above any usable threshold, so it passed, and its mirrored copy landed on the scene
+    still carrying the cloud's own texture -- a pasted image, not an optical artefact. The missing
+    quantity is COMPACTNESS: a ghost is only visible when its source is small compared to the
+    aperture defocus, which is why real ones come from suns and street lamps and never from the sky.
+    It is measured from taps already taken -- centre against the outer ring, normalised by the
+    centre -- and squared. Measured on `wind_test` at the user's own settings, in the region he
+    circled: pixels differing by more than 20/255 from ghosts-off fell 10.66% -> 1.19%, mean
+    +3.78 -> +0.50. Verified in both directions: on a sky whose sun IS compact the ghosts remain,
+    and now read as clean polygons of the iris.
+
+  **The consequence is worth stating: under a diffuse sky there are no ghosts, by design.** That is
+  correct optics, not a bug, but it does mean the ghost controls do nothing in such a level. If
+  ghosts are wanted there anyway it is an art decision and needs its own knob -- a compactness
+  floor -- rather than a quiet weakening of the gate.
+* **Sharp.** Everything above narrowed WHICH sources throw a ghost; none of it changed the fact that
+  a copy of a sharp image is sharp. The remaining ghosts still carried the source's own texture and
+  read as photographs pasted over the palms.
+
+  A ghost is DEFOCUSED -- it is an out-of-focus image of the aperture -- and a defocus is a blur
+  wide enough to destroy the structure it acts on. A cloud band is hundreds of pixels across, so a
+  gather of seventeen taps over 2% of the screen cannot touch it, and widening the gather far enough
+  is not affordable: at the resolve's resolution a disc big enough would be over a hundred million
+  samples a frame.
+
+  **A MIP CHAIN IS THAT DEFOCUS, PREFILTERED, AND ONE ALREADY EXISTED.** The thresholded DOWN chain
+  is what the pyramid method builds in its first half -- and the convolution method, being an
+  either/or alternative to it, simply never ran it. So `Bloom_Downsample` was split out of
+  `Bloom_Build` and is now called by both, and the ghosts gather from a coarse level of it through
+  the new `ghostMip`. **This is also what UE do**: `PostProcessLensFlares` samples the bloom chain's
+  mips, never scene colour, and that single fact explains both this defect and the threshold one
+  above.
+
+  `ghostMip` is derived from `kGhostBlurFraction` (1/24 of the frame) rather than authored, so the
+  defocus covers the same fraction of the image at any resolution.
+
+  **Cost, measured A/B inside ONE binary** (`bloom.ghostIntensity:0` skips the chain), median of
+  three on `wind_test`: `Pass_BloomConv` 0.247 ms with the source, 0.131 ms without -- the ghosts'
+  source costs **0.116 ms**. The 0.131 matches the 0.122 recorded when P8C landed, which is the
+  check that nothing ELSE regressed. The dispatches are therefore skipped when
+  `convGhosts == 0 || convGhostIntensity == 0`; the two barriers are not, because bloomDown is bound
+  as an SRV on every convolution dispatch whether or not it was written (a descriptor table is
+  positional and cannot have a hole).
+
+  **If that 0.116 ms ever needs to come down**, the lever is the seed: the chain starts at half the
+  display width, and mip 0 alone is most of the cost, while the ghosts only ever read around mip 5.
+  Seeding from the convolution's own thresholded grid (already a quarter width) instead of from the
+  frame would cut it roughly fourfold. NOT done: undersampling the seed is exactly what made bloom
+  flicker once already.
+
+  GBV is clean on all three paths -- convolution with ghosts, convolution with the chain skipped,
+  and the pyramid method through the extracted function.
+
+**Still open:** the defaults produce visible rays, an anamorphic bar and soft ghosts, but the overall
+haze is heavy (mean +15.9/255 against bloom off on sun_glint) and wants an art pass on the balance
+between core, spokes and bar. Every one of those is now a control.
+
+**Superseded note:** the blade rays are faint at the shipped defaults -- the mechanism is there and the
+blade count does change the shape, but making a starburst read as optics rather than as a smudge is
+a tuning pass on a scene with a small, very bright source, and this project's sun is neither.
+
+**WHERE THIS DIVERGES FROM UE, STATED PLAINLY.** The architecture is theirs; most of the details
+are not. This section exists because the rest of the write-up reads like a transcription and it is
+only partly one.
+
+**Taken from UE, and faithful:**
+* the bloom THRESHOLD and its exposure handling (P8, from `BloomSetupCommon`);
+* the tonemap COMPOSITE, including what it deliberately omits (P8, `PostProcessTonemap.usf:515`);
+* the shape of the feature: convolve a downscaled frame against a cached kernel spectrum.
+
+**Written here, NOT transcribed:**
+1. **The transform itself.** `bloom_fft_cs.hlsl` is a radix-2 Stockham written against this engine's
+   own `ocean_fft.hlsl` and verified against numpy. UE's `GPUFastFourierTransformCore.ush` is a
+   different, more general implementation (mixed radix 2/3/4/8, a two-buffer/one-buffer shared
+   memory split, bank-conflict skewing). Ours is simpler and covers only what a 2048-point
+   group-shared transform needs.
+2. **THE KERNEL IS GENERATED; UE'S IS A TEXTURE.** This is the largest divergence and the one that
+   decides how it LOOKS. `View.FFTBloomKernelTexture` is an authored image of a real lens's point
+   spread, with eleven shaders behind it (`BloomFindKernelCenter`, `BloomSurveyKernelCenterEnergy`,
+   `BloomResizeKernel`, `BloomClampKernel`, the scatter-dispersion survey, ...) plus
+   `BloomConvolutionCenterUV`, mip selection and a resolution warning. None of that is used here:
+   the kernel is core + spokes + anamorphic bar, computed analytically. **The reason is a project
+   rule, not a technical one** -- importing a kernel image is content, and content conversion is the
+   user's call. A photographed kernel is the single biggest available improvement to how this looks.
+3. **Channel packing.** (R + iG) in one complex lane and B in the other, which is legal only because
+   the kernel is real. UE use a genuine two-for-one real-signal transform
+   (`GroupSharedTwoForOneFFTCS`) and can therefore give every channel its own kernel; here R and G
+   are forced to share one.
+4. **Energy normalisation by the spectrum's DC term**, where UE run a four-shader energy survey. The
+   DC identity is exact for what it does, but it does not reproduce their scatter-dispersion
+   handling.
+5. **`kConvolutionGain = 8`** in the resolve. Pure calibration so `intensity` means the same thing in
+   both methods; there is no equivalent in UE.
+6. **Sizing.** A fixed quarter-resolution image inside a next-power-of-two grid with 25% headroom.
+   UE derive it from `KernelSupportScale` and `BloomConvolutionBufferScale`, clamp the pad when the
+   transform would exceed 4096, and choose horizontal-first or vertical-first per frame by which
+   writes less memory (`bDoHorizontalFirst`). Their numbers are recorded above but not implemented.
+7. **Ghosts.** Gathered as mirrored samples in the resolve. UE's are a bokeh SCATTER of tiled quads
+   with a per-ghost tint table (`LensFlareTints[8]`) in `PostProcessLensFlares`.
+8. **The multi-pass decomposition** for transforms above the group-shared limit is not implemented at
+   all; only the single-dispatch path exists.
+
+**If "match UE" is the goal, the order that buys the most per unit of work is: (2) the kernel image
+and its preparation, then (6) the sizing policy, then (7) their flare pass, then (3) and (8).**
 
 **What was considered and dropped:** UE's other flare implementation, the bokeh scatter in
 `PostProcessLensFlares.usf` -- tile the frame, turn each bright tile into an aperture-textured quad.
@@ -3421,3 +3675,175 @@ Two conventions of theirs are worth keeping in mind when reading: `View.OneOverP
 everywhere because UE pre-exposes scene colour at write time (we do not — decision 1 keeps our HDR
 unexposed until the display transform), and their histogram is 64 buckets against our 256, so bucket
 counts are not comparable between the two.
+
+
+---
+
+### P8D — The kernel is the diffraction pattern of the aperture — DONE (2026-08-19)
+
+The convolution kernel was DRAWN: a radial core, plus N straight spokes, plus an anamorphic bar,
+plus a chroma tweak. It is now COMPUTED, as `PSF = |FT{aperture}|^2` -- Fraunhofer diffraction --
+which is what a lens actually does to a point source. The engine already owned the transform, so the
+whole change is: draw the IRIS instead of the pattern, and transform it.
+
+**The invariant that proves it, and that no analytic sum of spokes obeys by accident:** a polygonal
+aperture gives N rays when N is EVEN and 2N when N is ODD, because opposite parallel edges throw
+collinear spikes that overlap. Measured on `wind_test`: `blades = 5` -> 10 rays, `6` -> 6, `8` -> 8.
+The rendered star also carries the sinc side-lobe BEADING along each spike, which is the visible
+signature of transforming a hard-edged polygon and which the drawn kernel never had.
+
+**What now follows from the shape instead of being authored beside it:** the number of rays, their
+length, their relative brightness, the beading, and the shape of the core.
+
+**Dispersion runs the opposite way to the old kernel, and the old one was wrong about it.** The
+pattern scales with wavelength, so BLUE IS TIGHTER: `blueScale = 1 - 0.18 * chroma`, roughly
+450/550nm at full strength. The previous kernel made blue WIDER, which is Rayleigh scattering -- a
+real effect, but not one a diffraction pattern is made of.
+
+**`anamorphic` is now an anamorphic APERTURE** (the iris is squeezed in x, so the pattern stretches
+in x) rather than a bar added to the result. Same control, real mechanism.
+
+**SIZE IS INVERSE and it is worth saying twice**: a wide aperture gives a TIGHT pattern. The first
+zero of a circular aperture of radius `a` in a grid of N sits near N/(2a), so the aperture radius is
+`N / (2 * kernelRadius)`. Getting that backwards still looks plausible on screen, which is exactly
+why it is a comment in the shader.
+
+**Cost: none in a normal frame.** Two extra transforms are needed (aperture -> FT -> |.|^2, once per
+lane), but they run only on a kernel REBUILD, and the spectrum is cached by shape. Measured steady
+state: `Pass_BloomConv` 0.223 / 0.222 ms across two runs, against 0.247 recorded before.
+
+The buffer ordering is the only subtle part, and each grid is scratch exactly when the next stage
+needs it free: `A <- aperture; A->B->A` is the transform, `B.xy <- |A|^2` (B was just emptied by the
+vertical pass), then the blue lane scratches through the kernel grid instead (nothing is in it yet),
+and finally `B -> A -> K` turns the packed PSF into the spectrum the multiply reads. Each lane is
+written REAL, because the frequency-domain multiply is a per-channel convolution only while the
+kernel is real.
+
+**FOUR CONTROLS WERE REMOVED, not disabled** -- `convSpokeStrength`, `convSpokeLength`,
+`convSpokeWidth`, `convFalloff`. They described a kernel that was DRAWN, and diffraction decides all
+four. Leaving them was the "a control that lies" failure in its purest form: the user set
+`convSpokeStrength: 0`, still saw an eight-pointed star, and had no way to learn that `blades` had
+become the control that makes it. Removed from the settings struct, the JSON reader/writer, the
+inspector, the dev window, `--set`, the shader constant buffer and the kernel cache key; the dead
+`KernelValue()` and its stage went with them.
+
+Everything they used to reach is still reachable, through the thing that actually causes it:
+rays-how-many is `blades`, rays-how-far is `kernelRadius` (the whole pattern's scale),
+rays-how-wide follows from the width of each flat, and the core's skirt is whatever a hard-edged
+iris gives. **`blades = 0` is now the way to have no star at all**, and it is measured: bloom-only
+angular contrast around the sun is 72:1 at `blades = 8` against 3.9:1 at `blades = 0`, where the
+residual is Airy ring structure.
+
+**WHAT UE ACTUALLY DO FOR GHOSTS, having now read `PostProcessLensFlares.usf/.cpp` end to end --
+because the mip chain here was INVENTED and they have nothing of the kind.** Theirs is a SCATTER:
+`LensFlareBlurVS` emits one quad per pixel of a downsampled scene (`TileSizeInPixels = 1`), reads
+that pixel at `SampleLevel(..., 0)`, kills the quad when its luminance is under `Threshold` by
+collapsing it to zero size, and `LensFlareBlurPS` multiplies the tile colour by a BOKEH SPRITE. The
+softness is the sprite splat, not a mip. Then `AddLensFlaresPass` composites `LensFlareCount` copies
+of that image, each scaled about the screen centre, where **the scale is encoded in the ALPHA of
+`LensFlareTints[8]`**: `(A * (N-1) - (N-1)/2) * GuardBandScale`. With their defaults that is
++1.40, +0.42, -0.56, -1.54, -2.66, -3.22, -3.92, -4.90 -- two on the same side, six mirrored, and
+most of them BIGGER than the source, which is why their ghosts are large clean discs. Photographic
+reference agrees on the shape: ghosts are polygons of the iris, large and soft wide open, small and
+sharp stopped down, strung along the line from the light through the frame centre. **The rework is
+therefore: splat an aperture-shaped sprite per bright source pixel, then scale/tint copies of it --
+which also deletes the ghost mip chain and the 0.116 ms it costs.** NOT done yet.
+
+**SUPERSEDED -- the four controls listed below were removed as described above:** `convSpokeStrength`, `convSpokeLength`,
+`convSpokeWidth` and `convFalloff`. Diffraction decides all four. Leaving them is exactly the
+"controls must not lie" failure -- they still appear in the level, the inspector and `--set`, and
+they now do nothing. Removing them touches the settings struct, the JSON reader/writer and the
+inspector (the P8B fold path), and it changes levels that carry the values, so it is its own
+increment rather than a silent edit here.
+
+### P15B — The ocean clamped its own HDR output to 1.0 — DONE (2026-08-19)
+
+`float4 outColor = float4(saturate(color), 1.0f)`, in both ocean surface variants, writing into
+`R16G16B16A16_FLOAT`. The sky is written unclamped, so the water was structurally incapable of
+matching the sky it reflects. Measured at the horizon with a fixed exposure, comparing mirrored rows
+(sky at `hz-d` against water at `hz+d`):
+
+| d | before | after |
+|---|---|---|
+| 20 | -66.0 / -69.9 / -69.7 | -12.5 / -6.6 / -1.0 |
+| 120 | -36.4 / -58.6 / -71.9 | -1.2 / -2.5 / -1.8 |
+| 300 | -9.5 / -32.5 / -63.6 | +2.3 / -0.2 / -1.1 |
+
+Before the fix the water's blue channel sat at ~129 across the whole surface: not a blown highlight
+(those go to 255) but a CEILING. **That is the tell, and it is worth writing down: a flat,
+achromatic, direction-independent, mid-range value is a clamp downstream, not a bright value
+upstream.** The cubemap, its mip chain, the prefilter, the roughness and the reflection direction
+were all investigated first; none of them could have closed a gap that was being imposed after all
+of them.
+
+The same run also settled two changes made earlier on hypotheses that did not survive:
+* `IblClampToSharp` (a blurred sky sample may not exceed the sharp sample in the same direction by
+  more than 2x, shared by the fog and the water). With fog on, flat-slab pixels went 9904 -> 292 from
+  the `saturate` fix alone, and 292 -> 18 from this bound. Kept, but it is a 16x reduction of a
+  residual, not the fix it was written to be.
+* The FP16 clamp in the importer stands on its own evidence (spec mip 0 at 524,711 against a 65,504
+  ceiling) and is unrelated to this.
+
+### P16 — Pre-exposure: keep HDR values inside the float16 range — NOT STARTED (queued 2026-08-19)
+
+**Why this is now a task and not a preference.** The plan already records the opposite decision, at
+the very end of the P12 notes: *"UE pre-exposes scene colour at write time (we do not — decision 1
+keeps our HDR unexposed until the display transform)"*. That decision has now cost a day, and the
+bill is worth reading before anyone re-litigates it.
+
+`wind_test` moved to `rustig_koppie_puresky_4k`, an HDRI with a physically intense sun, and the
+water filled with solid achromatic slabs. Four wrong answers were measured and discarded on the way
+to the real one (ghosts, the ocean's own reflection, the fog's sample direction, GGX prefiltering),
+and the actual cause was arithmetic that had been sitting in `logs/asset_import.log` the whole time:
+
+| spec mip | max written | BC6H_UF16 ceiling | |
+|---|---|---|---|
+| 0 | 524,711.7 | 65,504 | **over by 8.0x** |
+| 1 | 135,530.0 | 65,504 | **over by 2.1x** |
+| 2 | 20,283.1 | 65,504 | fits |
+
+BC6H builds each 4x4 block from two endpoints; an endpoint the format cannot express takes the whole
+block with it, and a coarse mip magnifies that block across a large solid angle. The previous sky
+never showed it because its peak was ~34 — three and a half orders of margin, entirely by luck.
+
+**The clamp that shipped fixes the symptom, and it is what UE do at that spot** — see
+`ClampToFp16Range` in `sources/assets/AssetImporter.cpp`, transcribed from
+`ReflectionEnvironmentShaders.usf:219` with `MaxHalfFloat = 65504` (`Common.ush:142`) and the call
+site commented "Rendering into an FP16 texture." (`ReflectionEnvironmentCapture.cpp:728`). But a
+clamp is a container guard, not a range strategy: it says "this could never have arrived", and the
+reason it could never have arrived is that **scene colour is `R16G16B16A16_FLOAT`
+(`RenderConstants.h:51`) and we write raw radiance into it.** Every future asset lit in physical
+units meets the same ceiling, one symptom at a time.
+
+**What UE do instead, and what to transcribe.** `FViewInfo::UpdatePreExposure()`
+(`PostProcess/PostProcessEyeAdaptation.cpp:1197`) multiplies everything written into scene colour by
+`View.PreExposure`, chosen as the exposure the tonemapper is about to apply anyway:
+
+```
+const float FinalPreExposure = SceneColorTint * GlobalExposure * VignetteMask * LocalExposure;
+// This computation must match FinalLinearColor in PostProcessTonemap.usf.
+```
+
+so stored values sit around 1 rather than around 500,000, and the tonemapper divides it back out via
+`View.OneOverPreExposure`. Where they genuinely need the range instead of the scale, they use
+float32 outright (`PF_A32B32G32R32F`, `ReflectionEnvironmentCapture.cpp:1642`).
+
+**Scope, and why it is NOT a small change.** Every producer of scene colour has to agree on the
+factor, and every consumer has to undo it in the right place:
+* the base pass / lighting / sky / ocean / transparent writes;
+* the tonemap, which already computes the exposure and must not apply it twice;
+* the bloom threshold, which is already measured in "the units the viewer sees" through
+  `ExposureMultiplier()` — that helper and pre-exposure are two answers to the same question and
+  must not both be live;
+* `ExposureMetering`, which reads scene colour to compute the exposure it would then be scaled by —
+  the feedback loop UE break by using the PREVIOUS frame's value;
+* `options_.preExposure` in `DlssHandler.cpp:50`, currently the literal `1.0f`, which is us telling
+  DLSS our colour is unexposed. It becomes the real factor.
+
+**The verification that matters** is not "it looks the same" but the invariant: with pre-exposure
+on, the maximum value ever written to `scene` should sit within a couple of stops of 1, whatever the
+sky. Instrument that before changing any shader, because it is also the check that says the old
+behaviour was broken.
+
+**Do not start this in the same increment as anything else.** It touches the whole write path, and
+its failure mode is a uniform brightness error that looks like a tuning problem.

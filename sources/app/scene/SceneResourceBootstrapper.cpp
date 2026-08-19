@@ -475,6 +475,22 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matBloomCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    if (!matBloomFftCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/bloom_fft_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matBloomFftCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
+    if (!matBloomConvCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/bloom_conv_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matBloomConvCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     if (!matDebugPreviewCS_)
     {
         Material::ComputeDesc cd{};
@@ -649,6 +665,8 @@ void SceneResourceBootstrapper::RefreshHandles()
     gtaoUpsampleHandles_.Populate(matGtaoUpsampleCS_.get());
     hzbHandles_.Populate(matHzbCS_.get());
     bloomHandles_.Populate(matBloomCS_.get());
+    bloomFftHandles_.Populate(matBloomFftCS_.get());
+    bloomConvHandles_.Populate(matBloomConvCS_.get());
     debugPreviewHandles_.Populate(matDebugPreviewCS_.get());
     ssrHandles_.Populate(matSSR_.get());
     blurHandles_.Populate(matBlur_.get());
@@ -859,6 +877,54 @@ UINT SceneResourceBootstrapper::GetBloomCBSizeBytes() const
     return matBloomCS_ ? matBloomCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
+void BloomFftHandles::Populate(Material* material)
+{
+    if (!material) { return; }
+    transformSize = material->ComputeCB0FieldHandle("transformSize");
+    isVertical = material->ComputeCB0FieldHandle("isVertical");
+    isInverse = material->ComputeCB0FieldHandle("isInverse");
+    multiplyByKernel = material->ComputeCB0FieldHandle("multiplyByKernel");
+}
+
+UINT SceneResourceBootstrapper::GetBloomFftCBSizeBytes() const
+{
+    return matBloomFftCS_ ? matBloomFftCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void BloomConvHandles::Populate(Material* material)
+{
+    if (!material) { return; }
+    convStage = material->ComputeCB0FieldHandle("convStage");
+    exposureEnabled = material->ComputeCB0FieldHandle("exposureEnabled");
+    transformSize = material->ComputeCB0FieldHandle("transformSize");
+    imageSize = material->ComputeCB0FieldHandle("imageSize");
+    sourceSize = material->ComputeCB0FieldHandle("sourceSize");
+    threshold = material->ComputeCB0FieldHandle("threshold");
+    softKnee = material->ComputeCB0FieldHandle("softKnee");
+    kernelRadius = material->ComputeCB0FieldHandle("kernelRadius");
+    blades = material->ComputeCB0FieldHandle("blades");
+    bladeRotation = material->ComputeCB0FieldHandle("bladeRotation");
+    spokeStrength = material->ComputeCB0FieldHandle("spokeStrength");
+    spokeLength = material->ComputeCB0FieldHandle("spokeLength");
+    spokeWidth = material->ComputeCB0FieldHandle("spokeWidth");
+    anamorphic = material->ComputeCB0FieldHandle("anamorphic");
+    anamorphicLength = material->ComputeCB0FieldHandle("anamorphicLength");
+    chroma = material->ComputeCB0FieldHandle("chroma");
+    ghostCount = material->ComputeCB0FieldHandle("ghostCount");
+    ghostSpacing = material->ComputeCB0FieldHandle("ghostSpacing");
+    ghostIntensity = material->ComputeCB0FieldHandle("ghostIntensity");
+    ghostBokeh = material->ComputeCB0FieldHandle("ghostBokeh");
+    sunUV = material->ComputeCB0FieldHandle("sunUV");
+    sunOnScreen = material->ComputeCB0FieldHandle("sunOnScreen");
+    apertureScale = material->ComputeCB0FieldHandle("apertureScale");
+    psfLane = material->ComputeCB0FieldHandle("psfLane");
+}
+
+UINT SceneResourceBootstrapper::GetBloomConvCBSizeBytes() const
+{
+    return matBloomConvCS_ ? matBloomConvCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
 void SsrTemporalHandles::Populate(Material* material)
 {
     if (!material) { return; }
@@ -893,6 +959,45 @@ void SceneResourceBootstrapper::WriteHzbConstants(const HzbPassConstants& d, uin
     matHzbCS_->UpdateCBField(hzbHandles_.srcSize, d.srcSize, dest);
     matHzbCS_->UpdateCBField(hzbHandles_.fromDepth, d.fromDepth, dest);
     matHzbCS_->UpdateCBField(hzbHandles_.writeClosest, d.writeClosest, dest);
+}
+
+void SceneResourceBootstrapper::WriteBloomFftConstants(const BloomFftConstants& d, uint8_t* dest) const
+{
+    if (!matBloomFftCS_ || !dest) { return; }
+    matBloomFftCS_->UpdateCBField(bloomFftHandles_.transformSize, d.transformSize, dest);
+    matBloomFftCS_->UpdateCBField(bloomFftHandles_.isVertical, d.isVertical, dest);
+    matBloomFftCS_->UpdateCBField(bloomFftHandles_.isInverse, d.isInverse, dest);
+    matBloomFftCS_->UpdateCBField(bloomFftHandles_.multiplyByKernel, d.multiplyByKernel, dest);
+}
+
+void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants& d, uint8_t* dest) const
+{
+    if (!matBloomConvCS_ || !dest) { return; }
+    const auto& h = bloomConvHandles_;
+    matBloomConvCS_->UpdateCBField(h.convStage, d.convStage, dest);
+    matBloomConvCS_->UpdateCBField(h.exposureEnabled, d.exposureEnabled, dest);
+    matBloomConvCS_->UpdateCBField(h.transformSize, d.transformSize, dest);
+    matBloomConvCS_->UpdateCBField(h.imageSize, d.imageSize, dest);
+    matBloomConvCS_->UpdateCBField(h.sourceSize, d.sourceSize, dest);
+    matBloomConvCS_->UpdateCBField(h.threshold, d.threshold, dest);
+    matBloomConvCS_->UpdateCBField(h.softKnee, d.softKnee, dest);
+    matBloomConvCS_->UpdateCBField(h.kernelRadius, d.kernelRadius, dest);
+    matBloomConvCS_->UpdateCBField(h.blades, d.blades, dest);
+    matBloomConvCS_->UpdateCBField(h.bladeRotation, d.bladeRotation, dest);
+    matBloomConvCS_->UpdateCBField(h.spokeStrength, d.spokeStrength, dest);
+    matBloomConvCS_->UpdateCBField(h.spokeLength, d.spokeLength, dest);
+    matBloomConvCS_->UpdateCBField(h.spokeWidth, d.spokeWidth, dest);
+    matBloomConvCS_->UpdateCBField(h.anamorphic, d.anamorphic, dest);
+    matBloomConvCS_->UpdateCBField(h.anamorphicLength, d.anamorphicLength, dest);
+    matBloomConvCS_->UpdateCBField(h.chroma, d.chroma, dest);
+    matBloomConvCS_->UpdateCBField(h.ghostCount, d.ghostCount, dest);
+    matBloomConvCS_->UpdateCBField(h.ghostSpacing, d.ghostSpacing, dest);
+    matBloomConvCS_->UpdateCBField(h.ghostIntensity, d.ghostIntensity, dest);
+    matBloomConvCS_->UpdateCBField(h.ghostBokeh, d.ghostBokeh, dest);
+    matBloomConvCS_->UpdateCBField(h.sunUV, Math::float2(d.sunUV[0], d.sunUV[1]), dest);
+    matBloomConvCS_->UpdateCBField(h.sunOnScreen, d.sunOnScreen, dest);
+    matBloomConvCS_->UpdateCBField(h.apertureScale, d.apertureScale, dest);
+    matBloomConvCS_->UpdateCBField(h.psfLane, d.psfLane, dest);
 }
 
 void SceneResourceBootstrapper::WriteBloomConstants(const BloomPassConstants& d, uint8_t* dest) const

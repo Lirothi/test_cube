@@ -43,6 +43,12 @@ public:
     // only while the feature is enabled, so OFF never allocates.
     void EnsureResources(Renderer* renderer);
     bool IsReady() const { return created_; }
+    // Has the sim actually WRITTEN its fields yet? Creation leaves them in UNORDERED_ACCESS (they
+    // are compute outputs), and the ocean surface samples them as SRVs every frame -- so on the
+    // very first frame, before any pass has handed them over, that read is against the wrong
+    // layout. GPU-based validation reports it as id=1358 once per run, which is exactly the shape
+    // of a first-frame bug. The surface falls back to its neutral texture until this turns true.
+    bool HasSimulated() const { return everSimulated_; }
 
     // CPU-side window follow. Decides this frame's re-anchor BEFORE the render graph is built,
     // so the pass builder below sees the final answer.
@@ -160,6 +166,7 @@ private:
     uint32_t nextSpawnSlot_ = 0;    // CPU round-robin into the GPU slot buffer
     uint32_t spawnSeed_ = 0x12345u; // xorshift state for candidate placement
     bool created_ = false;
+    bool everSimulated_ = false;
     bool hasCenter_ = false;
     // First frame after creation runs a full-clear Relocate (shift >= Resolution): committed
     // heaps are NOT guaranteed zeroed — the foam pair held NaN garbage that survived every

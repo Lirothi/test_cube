@@ -18,9 +18,9 @@
       0.6279069781303406
     ],
     "direction": [
-      -1.5,
-      -0.699999988079071,
-      -0.5
+      -0.5046558976173401,
+      -0.4740854799747467,
+      -0.7215021848678589
     ],
     "exposure": 2.0,
     "skyFillIntensity": 0.699999988079071
@@ -13713,13 +13713,13 @@
       ],
       "fogDensity": 0.10000000149011612,
       "horizonFogDistanceScale": 2.5,
-      "horizonFogStrength": 0.5,
+      "horizonFogStrength": 0.009999999776482582,
       "macroNormalMipBiasDlss": 0.0,
       "macroNormalMipBiasNative": 1.0,
       "minMeshScale": 15.0,
       "reflectionNormalStrength": 0.10000000149011612,
       "roughnessDistance": 150.0,
-      "roughnessScale": 0.699999988079071,
+      "roughnessScale": 0.20000000298023224,
       "scatterSpread": 0.20000000298023224,
       "shoreBottomClearance": 0.10499999672174454,
       "shoreContactFoamAlbedoScale": 0.5,
@@ -13833,26 +13833,41 @@
   "postProcess": {
     "atmosphere": {
       "density": 0.003000000026077032,
-      "enabled": true,
+      "enabled": false,
       "heightFalloff": 0.05999999865889549,
       "maxOpacity": 0.8999999761581421,
       "skyBackScatter": 0.4000000059604645,
       "skyBlur": 0.30000001192092896,
-      "startDistance": 5.0,
+      "startDistance": 10.0,
       "sunScatterExponent": 8.0,
       "sunScatterStartDistance": 100.0,
       "sunScatterStrength": 0.3499999940395355
     },
     "bloom": {
+      "convAnamorphic": 0.30000001192092896,
+      "convAnamorphicLength": 0.20999999344348907,
+      "convBladeRotation": 0.0,
+      "convBlades": 8,
+      "convChroma": 0.10000000149011612,
+      "convFalloff": 3.0,
+      "convGhostBokeh": 3.450000047683716,
+      "convGhostIntensity": 0.33000001311302185,
+      "convGhostSpacing": 0.44999998807907104,
+      "convGhosts": 0,
+      "convKernelRadius": 0.0015999999595806003,
+      "convSpokeLength": 0.8999999761581421,
+      "convSpokeStrength": 0.4000000059604645,
+      "convSpokeWidth": 4.0,
       "enabled": true,
       "fireflyClamp": true,
-      "intensity": 0.25,
+      "intensity": 0.02500000037252903,
+      "method": 0,
       "radius": 1.0,
       "softKnee": 0.5,
       "threshold": 1.0
     },
     "cameraExposure": {
-      "autoExposure": true,
+      "autoExposure": false,
       "compensationEv": -0.15000000596046448,
       "enabled": true,
       "highPercentile": 0.800000011920929,
@@ -13862,7 +13877,7 @@
       "localShadowContrast": 0.8999999761581421,
       "localShadowThreshold": 0.5,
       "lowPercentile": 0.15000000596046448,
-      "manualEv100": 0.0,
+      "manualEv100": 2.0,
       "maxEv100": 16.0,
       "meterMaskStrength": 0.699999988079071,
       "minEv100": -6.0,
@@ -13895,10 +13910,14 @@
       "intensity": 1.5,
       "thickness": 0.800000011920929,
       "worldRadius": 1.0
-    }
+    },
+    "localDetailStrength": 1.0,
+    "localHighlightThreshold": 0.5,
+    "localShadowContrast": 0.8999999761581421,
+    "localShadowThreshold": 0.5
   },
   "skybox": {
-    "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds"
+    "texture": "textures/rustig_koppie_puresky_4k/rustig_koppie_puresky_4k.dds"
   },
   "spotLights": [],
   "wind": {

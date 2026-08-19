@@ -377,9 +377,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // converges on the sky it sits against instead of on an authored constant as in UE. Both
         // the blur and the sun lobe fade out as the fog saturates -- see AtmosphereHeadroom.
         const float headroom = AtmosphereHeadroom(transmittance, minT);
-        const float3 skyAlongView = IblSkyRadiance(SkySpecular, SkyboxTex, gSmp, viewDir,
-                                                   AtmosphereSkyRoughness(headroom, fogParams2.x),
-                                                   skySpecMipCount, skyboxIntensity);
+        const float3 skyAlongView = AtmosphereClampSkySample(
+            IblSkyRadiance(SkySpecular, SkyboxTex, gSmp, viewDir,
+                           AtmosphereSkyRoughness(headroom, fogParams2.x),
+                           skySpecMipCount, skyboxIntensity),
+            IblSkyRadiance(SkySpecular, SkyboxTex, gSmp, viewDir,
+                           0.0f, skySpecMipCount, skyboxIntensity));
         const float3 inscatter = AtmosphereInscatter(skyAlongView, fogSunColor.rgb,
                                                      dot(viewDir, fogSunDir.xyz), fogShared, dist,
                                                      headroom, fog);
