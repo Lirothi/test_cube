@@ -321,11 +321,41 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     // P1: photographic camera. addSingleton only materialises an entity when the section is
     // present, so a level that predates the plan gains nothing and saves back byte-identical.
     // Both of these are always in effect, so they are always listed -- see addSingletonAlways.
-    addSingletonAlways("cameraExposure", "cameraExposure", "Camera Exposure");
-    addSingletonAlways("colorPipeline", "colorPipeline", "Color Pipeline");
-    addSingletonAlways("gtao", "gtao", "Ambient Occlusion (GTAO)"); // P6B
-    addSingletonAlways("atmosphere", "atmosphere", "Aerial Perspective"); // P7
-    addSingletonAlways("bloom", "bloom", "Bloom"); // P8
+    // P8B: ONE object for every level-wide look setting, instead of one per group. The five
+    // groups became five outliner entries that were never placed anywhere and were always in
+    // effect -- the engine already had an unbound post-process volume, it was just spelled out in
+    // five names.
+    //
+    // MIGRATION IS ON LOAD, not on save: a level authored against the old top-level sections is
+    // read into this object here, and only takes the new shape in the file when it is next saved.
+    // That is why the fallback below reads the legacy key -- deleting it would silently reset every
+    // level that predates this step.
+    {
+        EditorObject e;
+        e.id = AllocateId();
+        e.type = "postProcess";
+        e.name = "Post Process";
+        e.properties = nlohmann::json::object();
+
+        const auto folded = rootJson_.find("postProcess");
+        const bool haveFolded = folded != rootJson_.end() && folded->is_object();
+        for (const char* key : { "cameraExposure", "colorPipeline", "gtao", "atmosphere", "bloom" })
+        {
+            if (haveFolded)
+            {
+                const auto sub = folded->find(key);
+                if (sub != folded->end() && sub->is_object())
+                {
+                    e.properties[key] = *sub;
+                    continue;
+                }
+            }
+            const auto legacy = rootJson_.find(key);
+            e.properties[key] = (legacy != rootJson_.end() && legacy->is_object())
+                ? *legacy : nlohmann::json::object();
+        }
+        environment_.push_back(std::move(e));
+    }
 }
 
 #endif // WITH_EDITOR

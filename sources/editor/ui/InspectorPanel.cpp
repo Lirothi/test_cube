@@ -411,7 +411,25 @@ namespace
         EditorObjectId& activeEditObject,
         nlohmann::json& propertiesBeforeEdit)
     {
-        nlohmann::json& p = env.properties;
+        nlohmann::json& props = env.properties;
+        // P8B: WHICH sub-object the widgets below write to. Empty = the object's own properties,
+        // which is every environment type that owns its settings directly. The folded "postProcess"
+        // object points this at each group in turn, so the five settings blocks are reused as they
+        // are instead of being rewritten against a nested path.
+        //
+        // Undo snapshots and the command payload stay on `props` REGARDLESS: EditEnvironmentCommand
+        // replaces an object's whole property set, so handing it a group would delete its siblings.
+        std::string groupKey;
+        const auto tgt = [&]() -> nlohmann::json& {
+            return groupKey.empty() ? props : props[groupKey];
+        };
+        // `after` for the commands that build one by copy-then-mutate.
+        const auto withField = [&](const char* key, nlohmann::json value) {
+            nlohmann::json after = props;
+            if (groupKey.empty()) { after[key] = std::move(value); }
+            else { after[groupKey][key] = std::move(value); }
+            return after;
+        };
 
         // Cap the width of every control in this inspector. ImGui defaults to roughly 65% of the
         // panel, which on a wide docked Inspector drags each slider halfway across the screen and
@@ -437,13 +455,14 @@ namespace
             env.type == "gtao" ? "Edit Ambient Occlusion" :
             env.type == "atmosphere" ? "Edit Aerial Perspective" :
             env.type == "bloom" ? "Edit Bloom" :
+            env.type == "postProcess" ? "Edit Post Process" :
             "Edit Environment";
 
         const auto executeChange = [&](nlohmann::json after, const std::string& label)
         {
             commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
                 env.id,
-                p,
+                props,
                 std::move(after),
                 label));
         };
@@ -469,7 +488,7 @@ namespace
                 commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
                     env.id,
                     before,
-                    p,
+                    props,
                     historyLabel));
                 activeEditObject = EditorObjectId{};
             }
@@ -480,11 +499,10 @@ namespace
             env.type == "directionalLight" || env.type == "ocean";
         if (showEnabled && supportsEnable)
         {
-            bool enabled = p.value("enabled", true);
+            bool enabled = tgt().value("enabled", true);
             if (ImGui::Checkbox("Enabled", &enabled))
             {
-                nlohmann::json after = p;
-                after["enabled"] = enabled;
+                nlohmann::json after = withField("enabled", enabled);
                 executeChange(
                     std::move(after),
                     enabled ? "Enable Environment" : "Disable Environment");
@@ -494,226 +512,66 @@ namespace
 
         auto colorEdit = [&]()
         {
-            const nlohmann::json beforeItem = p;
-            const Math::float3 c = JsonFloat3(p, "color", Math::float3(1.0f, 1.0f, 1.0f));
+            const nlohmann::json beforeItem = props;
+            const Math::float3 c = JsonFloat3(tgt(), "color", Math::float3(1.0f, 1.0f, 1.0f));
             float cv[3] = { c.x, c.y, c.z };
             const bool changed = ImGui::ColorEdit3("Color", cv);
-            if (changed) { p["color"] = { cv[0], cv[1], cv[2] }; }
+            if (changed) { tgt()["color"] = { cv[0], cv[1], cv[2] }; }
             trackContinuousEdit(beforeItem, changed);
         };
         auto dragF = [&](const char* label, const char* key, float def, float speed, float lo, float hi,
                          const char* fmt = "%.3f")
         {
-            const nlohmann::json beforeItem = p;
-            float v = JsonFloat(p, key, def);
+            const nlohmann::json beforeItem = props;
+            float v = JsonFloat(tgt(), key, def);
             const bool changed = ImGui::DragFloat(label, &v, speed, lo, hi, fmt);
-            if (changed) { p[key] = v; }
+            if (changed) { tgt()[key] = v; }
             trackContinuousEdit(beforeItem, changed);
         };
         auto dragF3 = [&](const char* label, const char* key, const Math::float3& def, float speed)
         {
-            const nlohmann::json beforeItem = p;
-            const Math::float3 d3 = JsonFloat3(p, key, def);
+            const nlohmann::json beforeItem = props;
+            const Math::float3 d3 = JsonFloat3(tgt(), key, def);
             float v[3] = { d3.x, d3.y, d3.z };
             const bool changed = ImGui::DragFloat3(label, v, speed);
-            if (changed) { p[key] = { v[0], v[1], v[2] }; }
+            if (changed) { tgt()[key] = { v[0], v[1], v[2] }; }
             trackContinuousEdit(beforeItem, changed);
         };
         auto checkB = [&](const char* label, const char* key, bool def)
         {
-            bool v = p.value(key, def);
+            bool v = tgt().value(key, def);
             if (ImGui::Checkbox(label, &v))
             {
-                nlohmann::json after = p;
-                after[key] = v;
+                nlohmann::json after = withField(key, v);
                 executeChange(std::move(after), historyLabel);
             }
         };
 
-        if (env.type == "pointLight")
-        {
-            colorEdit();
-            dragF("Intensity", "intensity", 1.0f, 0.1f, 0.0f, 1000.0f);
-            dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
-            dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
-            checkB("Cast Shadows", "shadowsEnabled", false);
-
-            bool flickerEnabled = p.contains("flicker") && p["flicker"].is_object();
-            if (ImGui::Checkbox("Flicker", &flickerEnabled))
-            {
-                nlohmann::json after = p;
-                if (flickerEnabled)
-                {
-                    after["flicker"] = {
-                        { "amplitude", 0.35f },
-                        { "frequencyHz", 7.0f },
-                        { "seed", 3 }
-                    };
-                }
-                else
-                {
-                    after.erase("flicker");
-                }
-                executeChange(std::move(after), "Toggle Point Light Flicker");
-            }
-
-            if (flickerEnabled)
-            {
-                ImGui::SeparatorText("Flicker");
-                auto dragFlicker = [&](const char* label, const char* key,
-                    float def, float speed, float lo, float hi)
-                {
-                    const nlohmann::json beforeItem = p;
-                    float value = JsonFloat(p["flicker"], key, def);
-                    const bool changed = ImGui::DragFloat(label, &value, speed, lo, hi);
-                    if (changed) { p["flicker"][key] = value; }
-                    trackContinuousEdit(beforeItem, changed);
-                };
-                dragFlicker("Amplitude", "amplitude", 0.35f, 0.01f, 0.0f, 1.0f);
-                dragFlicker("Frequency (Hz)", "frequencyHz", 7.0f, 0.1f, 0.0f, 60.0f);
-
-                const nlohmann::json beforeItem = p;
-                int seed = p["flicker"].value("seed", 3);
-                const bool seedChanged = ImGui::DragInt("Seed", &seed, 1.0f, 0, 1000000);
-                if (seedChanged) { p["flicker"]["seed"] = std::max(seed, 0); }
-                trackContinuousEdit(beforeItem, seedChanged);
-            }
-        }
-        else if (env.type == "spotLight")
-        {
-            colorEdit();
-            dragF("Intensity", "intensity", 5.0f, 0.1f, 0.0f, 1000.0f);
-            dragF("Range", "range", 10.0f, 0.1f, 0.0f, 10000.0f);
-            dragF("Inner Angle (deg)", "innerAngleDeg", 15.0f, 0.2f, 0.0f, 89.0f);
-            dragF("Outer Angle (deg)", "outerAngleDeg", 25.0f, 0.2f, 0.0f, 89.0f);
-            dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
-            dragF3("Direction", "direction", Math::float3(0.0f, -1.0f, 0.0f), 0.01f);
-            checkB("Cast Shadows", "shadowsEnabled", false);
-            dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f, "%.5f");
-            dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f, "%.6f");
-        }
-        else if (env.type == "directionalLight")
-        {
-            colorEdit();
-            // P4. The default handed to the drag is the level's LEGACY `exposure`, which is exactly
-            // the value the migration folded in -- so the row opens showing what is on screen, and
-            // the first drag writes `sunIntensity` without the image jumping. Once that key exists
-            // the legacy field is ignored (JsonLevel and EnvironmentRuntime both branch on it).
-            checkB("Use Colour Temperature", "useSunTemperature", false);
-            if (p.value("useSunTemperature", false))
-            {
-                dragF("Temperature (K)", "sunTemperatureK", 6500.0f, 25.0f, 1000.0f, 15000.0f, "%.0f");
-            }
-            InspectorHelp(
-                "Tints the sun by a black-body temperature, multiplying the colour above. OFF by "
-                "default, so the authored colour is used as-is.\n\n"
-                "1700 candle, 2700 tungsten, 4000 cool white, 5500 midday sun, 6500 D65 (neutral "
-                "here), 7500+ overcast/shade blue.\n\n"
-                "The locus is Unreal's, minus its Stefan-Boltzmann brightness term, and the result "
-                "is renormalised to unit luminance -- so this changes HUE ONLY. Without that, 3000K "
-                "would arrive about a stop darker than 6500K and you would have to chase every "
-                "temperature change with an intensity change.\n\n"
-                "Valid 1000-15000K; outside that the fit bends back on itself, so it is clamped.");
-
-            const float legacyExposure = JsonFloat(p, "exposure", 1.0f);
-            dragF("Sun Intensity", "sunIntensity", legacyExposure, 0.05f, 0.0f, 100.0f);
-            InspectorHelp(
-                "How bright the sun is. This is NOT a camera control -- the camera lives on the "
-                "Camera Exposure object and meters the frame by itself.\n\n"
-                "It replaces the old `exposure` field, which multiplied the sun AND the ambient "
-                "while leaving the sky background, spot/point lights and emissive alone. With auto "
-                "exposure on, that field stopped changing brightness at all (the metering cancels "
-                "it) and only changed the RATIO between lit geometry and sky -- a confusing thing "
-                "for a control with that name.");
-            dragF("Ambient", "ambient", 0.05f, 0.005f, 0.0f, 10.0f);
-            InspectorHelp("Sky fill intensity -- the light everything gets from the sky rather than "
-                          "from the sun. Independent of Sun Intensity.");
-
-            dragF("Sky Fill Intensity", "skyFillIntensity", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
-            InspectorHelp(
-                "How much of the SKY'S OWN measured irradiance reaches diffuse surfaces. Only "
-                "active when this level's sky was imported with its IBL derivatives -- check "
-                "logs/ibl.log if you are not sure which path a level took.\n\n"
-                "1 = the irradiance cube at face value, which is the physical answer. It is a "
-                "separate control from Ambient above on purpose: Ambient means 'this fraction of "
-                "the SUN colour bounces around', a number authored against a different equation "
-                "entirely, and reusing it here would bury the fill about twenty times too deep.\n\n"
-                "Ambient still drives the flat fallback fill on levels whose sky has no "
-                "derivatives.");
-
-            if (p.contains("sunIntensity"))
-            {
-                ImGui::TextDisabled("legacy 'exposure' present but ignored");
-                InspectorHelp("This object carries the new Sun Intensity, so the old whole-scene "
-                              "`exposure` field no longer does anything. Delete it from the level "
-                              "JSON whenever you next hand-edit the file.");
-            }
-
-            Math::float3 rayDirection = EditorLightDirection::NormalizedRay(
-                JsonFloat3(p, "direction", Math::float3(-1.0f, -1.0f, -1.0f)));
-            float sourceAzimuth = 0.0f;
-            float sourceElevation = 0.0f;
-            EditorLightDirection::SourceAngles(
-                rayDirection, sourceAzimuth, sourceElevation);
-
-            {
-                const nlohmann::json beforeItem = p;
-                const bool changed = ImGui::DragFloat("Source azimuth (Y)",
-                    &sourceAzimuth, 0.5f, -180.0f, 180.0f, "%.1f deg",
-                    ImGuiSliderFlags_AlwaysClamp);
-                if (changed)
-                {
-                    rayDirection = EditorLightDirection::RayFromSourceAngles(
-                        sourceAzimuth, sourceElevation);
-                    p["direction"] = {
-                        rayDirection.x, rayDirection.y, rayDirection.z };
-                }
-                trackContinuousEdit(beforeItem, changed);
-            }
-            {
-                const nlohmann::json beforeItem = p;
-                const bool changed = ImGui::DragFloat("Source elevation",
-                    &sourceElevation, 0.5f, -89.0f, 89.0f, "%.1f deg",
-                    ImGuiSliderFlags_AlwaysClamp);
-                if (changed)
-                {
-                    rayDirection = EditorLightDirection::RayFromSourceAngles(
-                        sourceAzimuth, sourceElevation);
-                    p["direction"] = {
-                        rayDirection.x, rayDirection.y, rayDirection.z };
-                }
-                trackContinuousEdit(beforeItem, changed);
-            }
-
-            rayDirection = EditorLightDirection::NormalizedRay(rayDirection);
-            ImGui::PushStyleColor(
-                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::InputFloat3("Normalized ray", &rayDirection.x, "%.3f",
-                ImGuiInputTextFlags_ReadOnly);
-            ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("World-space direction in which the light rays travel.");
-            }
-        }
-        else if (env.type == "camera")
-        {
-            dragF("H FOV (deg)", "hfovDeg", 90.0f, 0.5f, 1.0f, 179.0f);
-            dragF("Z Near", "zNear", 0.01f, 0.001f, 0.0001f, 100.0f);
-            dragF("Z Far", "zFar", 10000.0f, 1.0f, 0.1f, 1000000.0f);
-        }
-        else if (env.type == "cameraExposure")
+        // P8B: the five level-wide look groups, lifted out of the type chain so they can be
+        // drawn EITHER as their own legacy object or as a section of the folded "postProcess"
+        // one. `tgt()` is what makes that work: the same widget code writes to the object's own
+        // properties or to a named sub-object, decided by `groupKey` at the call site.
+        const auto drawCameraExposure = [&]()
         {
             // P1: dormant. Everything here round-trips through the level and reaches
             // Scene::SetCameraExposure, but nothing reads it yet -- the metering passes are P2.
             checkB("Enabled", "enabled", false);
-            if (!p.value("enabled", false))
+            InspectorHelp("Master switch for the whole photographic camera. While OFF the linear "
+                          "exposure multiplier is exactly 1.0 AND no metering work is scheduled, so "
+                          "the frame is bit-for-bit what it was before any of this existed - off is "
+                          "a true no-op, not a neutral value being applied.");
+            if (!tgt().value("enabled", false))
             {
                 ImGui::TextDisabled("Dormant: exposure multiplier is exactly 1.0.");
             }
             checkB("Auto Exposure", "autoExposure", true);
+            InspectorHelp("ON meters the scene each frame and adapts towards what it finds. OFF "
+                          "holds Manual EV100 exactly, which is what every A/B in this project uses "
+                          "- a feature that changes average luminance moves the meter, and then "
+                          "every pixel in the frame shifts including ones the feature never "
+                          "touched.");
 
-            const bool automatic = p.value("autoExposure", true);
+            const bool automatic = tgt().value("autoExposure", true);
             if (automatic)
             {
                 ImGui::SeparatorText("Target");
@@ -723,12 +581,31 @@ namespace
                 ImGui::SeparatorText("Range (clamps on the metered result)");
                 dragF("Min EV100", "minEv100", -6.0f, 0.1f, -16.0f, 20.0f, "%.2f");
                 dragF("Max EV100", "maxEv100", 16.0f, 0.1f, -16.0f, 20.0f, "%.2f");
+                InspectorHelp("A safety net on the ADAPTED value, not a look control. The default "
+                              "span is 22 stops, which clamps essentially nothing - it is \"off\", "
+                              "not \"tuned\". Narrowing it is how a scene stops the camera opening "
+                              "all the way up in a dark frame.\n\n"
+                              "It is deliberately NOT the way to keep different lighting conditions "
+                              "apart: percentile metering is scale-invariant, so a correctly "
+                              "metered night and a correctly metered noon land on the same target, "
+                              "and clamping the result flattens rather than fixes that. The plan "
+                              "records an exposure-compensation CURVE as the real answer.");
                 ImGui::SeparatorText("Metering (which pixels set the exposure)");
                 dragF("Low Percentile", "lowPercentile", 0.15f, 0.005f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("The histogram window the meter averages between. Widening it makes "
                               "exposure react to more of the frame; narrowing it makes the meter "
                               "pickier and steadier.");
+                InspectorHelp("Measured on the canonical views: 0.15 is what the scene was "
+                              "flown at and preferred; about 0.30 lands nearest the reference "
+                              "photograph if a little more contrast is wanted. Raise it toward 0.5 "
+                              "ONLY if shaded interiors read over-exposed and the weight mask below "
+                              "is already doing its job - the two solve different problems and "
+                              "stacking them over-corrects.");
                 dragF("High Percentile", "highPercentile", 0.80f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("The top of that window. Lowering it makes the meter ignore more of "
+                              "the bright end, which is the blunt version of what the mask below "
+                              "does selectively: it discards bright samples EVERYWHERE, including "
+                              "ones that are the subject.");
                 ImGui::SeparatorText("Weight mask (centre-weighted metering)");
                 dragF("Meter Mask Strength", "meterMaskStrength", 0.7f, 0.01f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("How strongly the frame edges are discounted. 0 meters the whole "
@@ -736,6 +613,11 @@ namespace
                               "image dark.");
                 dragF("Meter Mask Inner", "meterMaskInnerRadius", 0.35f, 0.01f, 0.0f, 2.0f, "%.3f");
                 dragF("Meter Mask Outer", "meterMaskOuterRadius", 1.0f, 0.01f, 0.0f, 2.0f, "%.3f");
+                InspectorHelp("Where the falloff runs, as fractions of the HALF-DIAGONAL: 1.0 is "
+                              "the frame corner. Inside the inner radius a sample counts fully, "
+                              "past the outer one it counts least. The shader floors the weight at "
+                              "0.05 (as UE does), so the edges always contribute a little - a "
+                              "subject filling the border must still be metered, not dropped.");
                 dragF("Meter Mask Sky Bias", "meterMaskSkyBias", 0.6f, 0.01f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("Extra discount applied to the upper part of the frame, on top of the "
                               "radial mask. This is the sky-specific version of the same problem.");
@@ -746,20 +628,39 @@ namespace
                 dragF("Speed Down (stops/s)", "speedDown", 1.0f, 0.05f, 0.0f, 20.0f, "%.2f");
                 InspectorHelp("Rate towards a DARKER target (stepping into shade).");
                 dragF("Ease-in Distance", "adaptationStartDistance", 1.5f, 0.05f, 0.05f, 20.0f, "%.2f");
+                InspectorHelp("Distance from the target, IN STOPS, where adaptation stops running "
+                              "at a constant rate and starts easing in. Far away it holds the "
+                              "stops/second above, so a big transition is time-bounded; inside this "
+                              "distance the last fraction of a stop decelerates instead of arriving "
+                              "at full speed and stopping dead. UE's "
+                              "r.EyeAdaptation.ExponentialTransitionDistance, same default of 1.5.");
                 dragF("Black Bucket Influence", "blackBucketInfluence", 1.0f, 0.01f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("Weight of the DARKEST histogram bucket. 1 counts it normally. Lower "
+                              "it when a scene has large regions of pure black - letterboxing, an "
+                              "unlit interior - which would otherwise drag the meter down and open "
+                              "the camera on nothing. UE call it "
+                              "r.EyeAdaptation.BlackHistogramBucketInfluence.");
             }
             else
             {
                 dragF("Manual EV100", "manualEv100", 0.0f, 0.05f, -16.0f, 20.0f, "%.2f");
+                InspectorHelp("Held exactly, with no metering at all.\n\n"
+                              "READ THE UNITS BEFORE TRUSTING THE NAME: this scene's lighting is "
+                              "authored in an arbitrary linear scale - a sunlit surface sits near "
+                              "1-3, not the thousands real luminance would give - so EV100 here is "
+                              "relative to that scale, not to the photometric one. Measured on "
+                              "wind_test: 0 lands just under the authored look and auto-exposure "
+                              "settles near -0.3, while the photometric default of 10 renders a "
+                              "BLACK SCREEN (multiplier 1/(1.2*2^10)).");
             }
 
             // Plan section 6.2 wants both representations visible, because EV is the authored
             // quantity but the linear multiplier is what a shader bug would show up in.
             ImGui::Separator();
             const float shownEv = automatic
-                ? JsonFloat(p, "compensationEv", 0.0f)
-                : JsonFloat(p, "manualEv100", 0.0f);
-            const float multiplier = p.value("enabled", false)
+                ? JsonFloat(tgt(), "compensationEv", 0.0f)
+                : JsonFloat(tgt(), "manualEv100", 0.0f);
+            const float multiplier = tgt().value("enabled", false)
                 ? render::ExposureMultiplierFromEv100(shownEv)
                 : render::kIdentityExposureMultiplier;
             ImGui::TextDisabled(automatic
@@ -785,6 +686,8 @@ namespace
                           "the point: scaling the blurred base while passing detail through "
                           "untouched is what keeps micro-contrast.");
             dragF("Local HL Threshold", "localHighlightThreshold", 0.0f, 0.05f, 0.0f, 8.0f, "%.2f");
+            InspectorHelp("Stops ABOVE middle grey before the highlight scaling starts. 0 applies "
+                          "it everywhere brighter than grey.");
             dragF("Local SH Threshold", "localShadowThreshold", 0.0f, 0.05f, 0.0f, 8.0f, "%.2f");
             InspectorHelp("Stops away from middle grey before the effect starts, so mid-tones -- "
                           "usually the subject -- are left alone.");
@@ -811,8 +714,7 @@ namespace
                     if (i != 0) { ImGui::SameLine(); }
                     if (ImGui::SmallButton(preset.name))
                     {
-                        nlohmann::json after = p;
-                        after["localHighlightContrast"] = preset.hl;
+                        nlohmann::json after = withField("localHighlightContrast", preset.hl);
                         after["localShadowContrast"] = preset.sh;
                         after["localDetailStrength"] = preset.detail;
                         after["localHighlightThreshold"] = preset.hlT;
@@ -868,8 +770,8 @@ namespace
                     float sum = 0.0f;
                     for (int i = 0; i < kBinCount; ++i) { sum += bins[i]; }
                     const float invSum = sum > 0.0f ? 1.0f / sum : 0.0f;
-                    const float lowPct = JsonFloat(p, "lowPercentile", 0.15f);
-                    const float highPct = JsonFloat(p, "highPercentile", 0.80f);
+                    const float lowPct = JsonFloat(tgt(), "lowPercentile", 0.15f);
+                    const float highPct = JsonFloat(tgt(), "highPercentile", 0.80f);
                     int loBin = 0;
                     int hiBin = kBinCount - 1;
                     bool haveLo = false;
@@ -893,16 +795,142 @@ namespace
                     ImGui::TextDisabled("histogram appears once metering has run");
                 }
             }
-        }
-        else if (env.type == "gtao")
+        };
+        const auto drawColorPipeline = [&]()
+        {
+            // P3C. Same set the dev window exposes, so a look tuned live can be written into the
+            // level here rather than only through the clipboard button.
+            const std::string curve = tgt().value("toneCurve", std::string("legacy"));
+            int curveIndex = (curve == "agx") ? 1 : ((curve == "filmic" || curve == "film") ? 2 : 0);
+            {
+                const nlohmann::json beforeItem = props;
+                const char* kCurveNames[] = { "Legacy (ACES fit)", "AgX", "Filmic (Unreal)" };
+                const bool changed = ImGui::Combo("Tone Curve", &curveIndex, kCurveNames, 3);
+                if (changed)
+                {
+                    tgt()["toneCurve"] = (curveIndex == 1) ? "agx" : (curveIndex == 2 ? "filmic" : "legacy");
+                }
+                trackContinuousEdit(beforeItem, changed);
+            }
+
+            ImGui::SeparatorText("Colour grade (applies to every curve)");
+            dragF("Grade Saturation", "gradeSaturation", 1.30f, 0.01f, 0.0f, 4.0f, "%.3f");
+            InspectorHelp("Chroma around luma, applied in linear BEFORE the curve -- the same place "
+                          "Unreal bakes it into its LUT. 1 = unchanged, 0 = greyscale.");
+            dragF("Grade Contrast", "gradeContrast", 1.15f, 0.01f, 0.1f, 4.0f, "%.3f");
+            InspectorHelp("Pivoted on middle grey (0.18), so raising it deepens shadows and lifts "
+                          "highlights while midtones stay put. This is the control that STRETCHES "
+                          "the histogram -- exposure can only slide it.");
+            dragF("Grade Gamma", "gradeGamma", 1.10f, 0.01f, 0.1f, 4.0f, "%.3f");
+            InspectorHelp("Midtone weighting. Above 1 opens midtones without moving black or white "
+                          "as much as gain would.");
+            dragF("Grade Gain", "gradeGain", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+            InspectorHelp("Plain multiplier. Overlaps with exposure compensation -- prefer the "
+                          "camera's compensation for overall brightness or the two will fight.");
+            dragF("Grade Offset", "gradeOffset", 0.0f, 0.001f, -1.0f, 1.0f, "%.4f");
+            InspectorHelp("Plain lift. Small positive values give the faded, milky-black film look; "
+                          "negative crushes the black point.");
+
+            // Same preset set as the developer window, written through the command stack so a
+            // preset is one undo step rather than five stray field edits.
+            {
+                struct GradePreset { const char* name; float sat, con, gam, gain, off; const char* tip; };
+                static const GradePreset kPresets[] = {
+                    { "Neutral", 1.00f, 1.00f, 1.00f, 1.00f, 0.000f,
+                      "No grading. Bit-identical to the ungraded image." },
+                    { "Vivid", 1.40f, 1.25f, 1.00f, 1.00f, 0.000f,
+                      "The measured match to the reference photograph. Set compensation to suit the "
+                      "CURVE: about -0.4 EV on Legacy, 0.0 on Filmic." },
+                    { "Punchy", 1.20f, 1.45f, 1.00f, 1.00f, 0.000f,
+                      "Contrast-forward rather than colour-forward." },
+                    { "Filmic", 1.10f, 1.05f, 1.00f, 1.00f, 0.015f,
+                      "The faded look -- the offset lifts the black point off zero." },
+                    { "Warm sand", 1.30f, 1.15f, 1.10f, 1.00f, 0.000f,
+                      "The default. Vivid with the midtones opened up so lit sand and foliage keep "
+                      "detail. Pairs with -0.15 EV on the Filmic curve." },
+                    { "Flat", 0.85f, 0.90f, 1.00f, 1.00f, 0.000f,
+                      "Deliberately washed out, for judging LIGHTING rather than look -- shading "
+                      "errors stop hiding behind the grade." },
+                };
+                ImGui::PushID("gradePresets");
+                for (int i = 0; i < static_cast<int>(std::size(kPresets)); ++i)
+                {
+                    const GradePreset& preset = kPresets[i];
+                    if (i != 0) { ImGui::SameLine(); }
+                    if (ImGui::SmallButton(preset.name))
+                    {
+                        nlohmann::json after = withField("gradeSaturation", preset.sat);
+                        after["gradeContrast"] = preset.con;
+                        after["gradeGamma"] = preset.gam;
+                        after["gradeGain"] = preset.gain;
+                        after["gradeOffset"] = preset.off;
+                        executeChange(std::move(after), historyLabel);
+                    }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", preset.tip); }
+                }
+                ImGui::PopID();
+            }
+
+            if (curveIndex == 2)
+            {
+                ImGui::SeparatorText("Film curve (Unreal's controls)");
+                dragF("Film Slope", "filmSlope", 0.88f, 0.005f, 0.1f, 2.0f, "%.3f");
+                InspectorHelp("Steepness of the straight middle section, i.e. the curve's overall "
+                              "contrast. Unreal's default is 0.88.");
+                dragF("Film Toe", "filmToe", 0.55f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How much the shadows roll off. Higher keeps shadow detail and lifts "
+                              "the black end; lower crushes toward black sooner. Default 0.55.");
+                dragF("Film Shoulder", "filmShoulder", 0.26f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How much the highlights roll off. LOWER reaches white sooner, which "
+                              "is the knob to use when the image reads short of the reference at "
+                              "the top end. Default 0.26.");
+                dragF("Film Black Clip", "filmBlackClip", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How far below zero the toe may reach before clipping. Default 0.");
+                dragF("Film White Clip", "filmWhiteClip", 0.04f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How far above one the shoulder may reach. Default 0.04.");
+                if (ImGui::SmallButton("Unreal defaults"))
+                {
+                    nlohmann::json after = withField("filmSlope", 0.88f);
+                    after["filmToe"] = 0.55f;
+                    after["filmShoulder"] = 0.26f;
+                    after["filmBlackClip"] = 0.0f;
+                    after["filmWhiteClip"] = 0.04f;
+                    executeChange(std::move(after), historyLabel);
+                }
+            }
+            else if (curveIndex == 1)
+            {
+                ImGui::SeparatorText("AgX look");
+                dragF("AgX Slope", "agxSlope", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+                dragF("AgX Power", "agxPower", 1.0f, 0.01f, 0.1f, 4.0f, "%.3f");
+                InspectorHelp("Contrast. NOTE it acts on the [0,1] log-encoded value, so raising it "
+                              "DARKENS -- unlike the grade contrast above, which pivots on middle "
+                              "grey. That is why the AgX 'punchy' look crushes the image.");
+                dragF("AgX Saturation", "agxSaturation", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+                ImGui::PushID("agxLook");
+                if (ImGui::SmallButton("Neutral"))
+                {
+                    nlohmann::json after = withField("agxSlope", 1.0f); after["agxPower"] = 1.0f; after["agxSaturation"] = 1.0f;
+                    executeChange(std::move(after), historyLabel);
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Punchy"))
+                {
+                    nlohmann::json after = withField("agxSlope", 1.0f); after["agxPower"] = 1.35f; after["agxSaturation"] = 1.4f;
+                    executeChange(std::move(after), historyLabel);
+                }
+                ImGui::PopID();
+            }
+        };
+        const auto drawGtao = [&]()
         {
             // P6B. Every tooltip states the PERFORMANCE consequence as well as the look one, because
             // three of these knobs are linear in GPU cost and that is not guessable from the name.
             {
-                const nlohmann::json beforeItem = p;
-                bool gtaoEnabled = p.value("enabled", false);
+                const nlohmann::json beforeItem = props;
+                bool gtaoEnabled = tgt().value("enabled", false);
                 const bool changed = ImGui::Checkbox("Enabled", &gtaoEnabled);
-                if (changed) { p["enabled"] = gtaoEnabled; }
+                if (changed) { tgt()["enabled"] = gtaoEnabled; }
                 trackContinuousEdit(beforeItem, changed);
             }
             InspectorHelp("Ground-truth screen-space ambient occlusion. The whole chain costs about "
@@ -928,20 +956,20 @@ namespace
 
             ImGui::SeparatorText("Quality (these cost GPU time)");
             {
-                const nlohmann::json beforeItem = p;
-                int angles = static_cast<int>(p.value("numAngles", 2u));
+                const nlohmann::json beforeItem = props;
+                int angles = static_cast<int>(tgt().value("numAngles", 2u));
                 const bool changed = ImGui::SliderInt("Directions", &angles, 1, 8);
-                if (changed) { p["numAngles"] = static_cast<std::uint32_t>(angles < 1 ? 1 : angles); }
+                if (changed) { tgt()["numAngles"] = static_cast<std::uint32_t>(angles < 1 ? 1 : angles); }
                 trackContinuousEdit(beforeItem, changed);
             }
             InspectorHelp("Screen directions searched per pixel. Cost is LINEAR in this - doubling it "
                           "roughly doubles the raw pass. 2 is the UE default (r.GTAO.NumAngles) and "
                           "leans on the temporal stage to average the rest over time.");
             {
-                const nlohmann::json beforeItem = p;
-                int steps = static_cast<int>(p.value("numSteps", 6u));
+                const nlohmann::json beforeItem = props;
+                int steps = static_cast<int>(tgt().value("numSteps", 6u));
                 const bool changed = ImGui::SliderInt("Steps", &steps, 2, 16);
-                if (changed) { p["numSteps"] = static_cast<std::uint32_t>(steps < 1 ? 1 : steps); }
+                if (changed) { tgt()["numSteps"] = static_cast<std::uint32_t>(steps < 1 ? 1 : steps); }
                 trackContinuousEdit(beforeItem, changed);
             }
             InspectorHelp("Taps along each direction. Also LINEAR in cost, and it doubles as the floor "
@@ -956,19 +984,19 @@ namespace
 
             ImGui::SeparatorText("Filtering");
             {
-                const nlohmann::json beforeItem = p;
-                bool denoise = p.value("denoise", true);
+                const nlohmann::json beforeItem = props;
+                bool denoise = tgt().value("denoise", true);
                 const bool changed = ImGui::Checkbox("Denoise", &denoise);
-                if (changed) { p["denoise"] = denoise; }
+                if (changed) { tgt()["denoise"] = denoise; }
                 trackContinuousEdit(beforeItem, changed);
             }
             InspectorHelp("Bilateral 5x5 across depth and normal, about 0.017 ms. Removes roughly 40% "
                           "of the raw noise; off is immediately visible as per-pixel grain.");
             {
-                const nlohmann::json beforeItem = p;
-                bool temporal = p.value("temporal", true);
+                const nlohmann::json beforeItem = props;
+                bool temporal = tgt().value("temporal", true);
                 const bool changed = ImGui::Checkbox("Temporal", &temporal);
-                if (changed) { p["temporal"] = temporal; }
+                if (changed) { tgt()["temporal"] = temporal; }
                 trackContinuousEdit(beforeItem, changed);
             }
             InspectorHelp("Accumulates over frames, which is what makes a 2x6-tap estimate usable at "
@@ -993,17 +1021,17 @@ namespace
 
             ImGui::SeparatorText("Advanced");
             {
-                const nlohmann::json beforeItem = p;
-                bool gbufferNormal = p.value("useGBufferNormal", false);
+                const nlohmann::json beforeItem = props;
+                bool gbufferNormal = tgt().value("useGBufferNormal", false);
                 const bool changed = ImGui::Checkbox("Normal from G-buffer", &gbufferNormal);
-                if (changed) { p["useGBufferNormal"] = gbufferNormal; }
+                if (changed) { tgt()["useGBufferNormal"] = gbufferNormal; }
                 trackContinuousEdit(beforeItem, changed);
             }
             {
-                const nlohmann::json beforeItem = p;
-                bool useHzb = p.value("useHzb", true);
+                const nlohmann::json beforeItem = props;
+                bool useHzb = tgt().value("useHzb", true);
                 const bool changed = ImGui::Checkbox("Use depth pyramid (HZB)", &useHzb);
-                if (changed) { p["useHzb"] = useHzb; }
+                if (changed) { tgt()["useHzb"] = useHzb; }
                 trackContinuousEdit(beforeItem, changed);
             }
             InspectorHelp("Walks the horizon search over the hierarchical depth buffer, reading a "
@@ -1016,17 +1044,17 @@ namespace
                           "given the geometric normal. ON feeds it the normal-mapped one instead, "
                           "which reads as occlusion wherever the two disagree - on detail-mapped sand "
                           "that measured AO 0.35 on a fully open dune. Kept only for comparison.");
-        }
-        else if (env.type == "atmosphere")
+        };
+        const auto drawAtmosphere = [&]()
         {
             // P7. The model is transcribed from UE's HeightFogCommon.ush, so each tooltip names the
             // UE parameter it corresponds to -- and, where a UE default does NOT carry over, says
             // why. That distinction is the whole reason these numbers are not simply theirs.
             {
-                const nlohmann::json beforeItem = p;
-                bool fogEnabled = p.value("enabled", false);
+                const nlohmann::json beforeItem = props;
+                bool fogEnabled = tgt().value("enabled", false);
                 const bool changed = ImGui::Checkbox("Enabled", &fogEnabled);
-                if (changed) { p["enabled"] = fogEnabled; }
+                if (changed) { tgt()["enabled"] = fogEnabled; }
                 trackContinuousEdit(beforeItem, changed);
             }
             InspectorHelp("Global analytic height fog, applied to opaque geometry in compose AND to "
@@ -1126,16 +1154,16 @@ namespace
             ImGui::TextDisabled("Render tab - they are a viewing mode, not level data.");
             ImGui::TextDisabled("Fix exposure when comparing: auto-exposure reacts to fog and");
             ImGui::TextDisabled("shifts the WHOLE frame, sky included.");
-        }
-        else if (env.type == "bloom")
+        };
+        const auto drawBloom = [&]()
         {
             // P8. Every tooltip says where the number is measured, because the two that matter --
             // threshold and intensity -- are in units that are easy to assume wrongly.
             {
-                const nlohmann::json beforeItem = p;
-                bool bloomEnabled = p.value("enabled", false);
+                const nlohmann::json beforeItem = props;
+                bool bloomEnabled = tgt().value("enabled", false);
                 const bool changed = ImGui::Checkbox("Enabled", &bloomEnabled);
-                if (changed) { p["enabled"] = bloomEnabled; }
+                if (changed) { tgt()["enabled"] = bloomEnabled; }
                 trackContinuousEdit(beforeItem, changed);
             }
             InspectorHelp("Exposure-aware HDR bloom: a threshold pass, a half-resolution pyramid "
@@ -1154,10 +1182,10 @@ namespace
                           "default here. Lower = a longer shoulder, so highlights ease into the "
                           "bloom instead of switching on at a fixed brightness.");
             {
-                const nlohmann::json beforeItem = p;
-                bool firefly = p.value("fireflyClamp", true);
+                const nlohmann::json beforeItem = props;
+                bool firefly = tgt().value("fireflyClamp", true);
                 const bool changed = ImGui::Checkbox("Firefly Clamp", &firefly);
-                if (changed) { p["fireflyClamp"] = firefly; }
+                if (changed) { tgt()["fireflyClamp"] = firefly; }
                 trackContinuousEdit(beforeItem, changed);
             }
             InspectorHelp("Karis average on the FIRST downsample only: each tap is weighted by "
@@ -1184,135 +1212,233 @@ namespace
             ImGui::TextDisabled("not change shape with the DLSS quality mode.");
             ImGui::TextDisabled("Fix exposure when comparing: bloom moves average luminance");
             ImGui::TextDisabled("and auto-exposure will chase it.");
-        }
-        else if (env.type == "colorPipeline")
+        };
+
+        if (env.type == "pointLight")
         {
-            // P3C. Same set the dev window exposes, so a look tuned live can be written into the
-            // level here rather than only through the clipboard button.
-            const std::string curve = p.value("toneCurve", std::string("legacy"));
-            int curveIndex = (curve == "agx") ? 1 : ((curve == "filmic" || curve == "film") ? 2 : 0);
+            colorEdit();
+            dragF("Intensity", "intensity", 1.0f, 0.1f, 0.0f, 1000.0f);
+            dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
+            dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
+            checkB("Cast Shadows", "shadowsEnabled", false);
+
+            bool flickerEnabled = tgt().contains("flicker") && tgt()["flicker"].is_object();
+            if (ImGui::Checkbox("Flicker", &flickerEnabled))
             {
-                const nlohmann::json beforeItem = p;
-                const char* kCurveNames[] = { "Legacy (ACES fit)", "AgX", "Filmic (Unreal)" };
-                const bool changed = ImGui::Combo("Tone Curve", &curveIndex, kCurveNames, 3);
+                nlohmann::json after = props;
+                if (flickerEnabled)
+                {
+                    after["flicker"] = {
+                        { "amplitude", 0.35f },
+                        { "frequencyHz", 7.0f },
+                        { "seed", 3 }
+                    };
+                }
+                else
+                {
+                    after.erase("flicker");
+                }
+                executeChange(std::move(after), "Toggle Point Light Flicker");
+            }
+
+            if (flickerEnabled)
+            {
+                ImGui::SeparatorText("Flicker");
+                auto dragFlicker = [&](const char* label, const char* key,
+                    float def, float speed, float lo, float hi)
+                {
+                    const nlohmann::json beforeItem = props;
+                    float value = JsonFloat(tgt()["flicker"], key, def);
+                    const bool changed = ImGui::DragFloat(label, &value, speed, lo, hi);
+                    if (changed) { tgt()["flicker"][key] = value; }
+                    trackContinuousEdit(beforeItem, changed);
+                };
+                dragFlicker("Amplitude", "amplitude", 0.35f, 0.01f, 0.0f, 1.0f);
+                dragFlicker("Frequency (Hz)", "frequencyHz", 7.0f, 0.1f, 0.0f, 60.0f);
+
+                const nlohmann::json beforeItem = props;
+                int seed = tgt()["flicker"].value("seed", 3);
+                const bool seedChanged = ImGui::DragInt("Seed", &seed, 1.0f, 0, 1000000);
+                if (seedChanged) { tgt()["flicker"]["seed"] = std::max(seed, 0); }
+                trackContinuousEdit(beforeItem, seedChanged);
+            }
+        }
+        else if (env.type == "spotLight")
+        {
+            colorEdit();
+            dragF("Intensity", "intensity", 5.0f, 0.1f, 0.0f, 1000.0f);
+            dragF("Range", "range", 10.0f, 0.1f, 0.0f, 10000.0f);
+            dragF("Inner Angle (deg)", "innerAngleDeg", 15.0f, 0.2f, 0.0f, 89.0f);
+            dragF("Outer Angle (deg)", "outerAngleDeg", 25.0f, 0.2f, 0.0f, 89.0f);
+            dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
+            dragF3("Direction", "direction", Math::float3(0.0f, -1.0f, 0.0f), 0.01f);
+            checkB("Cast Shadows", "shadowsEnabled", false);
+            dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f, "%.5f");
+            dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f, "%.6f");
+        }
+        else if (env.type == "directionalLight")
+        {
+            colorEdit();
+            // P4. The default handed to the drag is the level's LEGACY `exposure`, which is exactly
+            // the value the migration folded in -- so the row opens showing what is on screen, and
+            // the first drag writes `sunIntensity` without the image jumping. Once that key exists
+            // the legacy field is ignored (JsonLevel and EnvironmentRuntime both branch on it).
+            checkB("Use Colour Temperature", "useSunTemperature", false);
+            if (tgt().value("useSunTemperature", false))
+            {
+                dragF("Temperature (K)", "sunTemperatureK", 6500.0f, 25.0f, 1000.0f, 15000.0f, "%.0f");
+            }
+            InspectorHelp(
+                "Tints the sun by a black-body temperature, multiplying the colour above. OFF by "
+                "default, so the authored colour is used as-is.\n\n"
+                "1700 candle, 2700 tungsten, 4000 cool white, 5500 midday sun, 6500 D65 (neutral "
+                "here), 7500+ overcast/shade blue.\n\n"
+                "The locus is Unreal's, minus its Stefan-Boltzmann brightness term, and the result "
+                "is renormalised to unit luminance -- so this changes HUE ONLY. Without that, 3000K "
+                "would arrive about a stop darker than 6500K and you would have to chase every "
+                "temperature change with an intensity change.\n\n"
+                "Valid 1000-15000K; outside that the fit bends back on itself, so it is clamped.");
+
+            const float legacyExposure = JsonFloat(tgt(), "exposure", 1.0f);
+            dragF("Sun Intensity", "sunIntensity", legacyExposure, 0.05f, 0.0f, 100.0f);
+            InspectorHelp(
+                "How bright the sun is. This is NOT a camera control -- the camera lives on the "
+                "Camera Exposure object and meters the frame by itself.\n\n"
+                "It replaces the old `exposure` field, which multiplied the sun AND the ambient "
+                "while leaving the sky background, spot/point lights and emissive alone. With auto "
+                "exposure on, that field stopped changing brightness at all (the metering cancels "
+                "it) and only changed the RATIO between lit geometry and sky -- a confusing thing "
+                "for a control with that name.");
+            dragF("Ambient", "ambient", 0.05f, 0.005f, 0.0f, 10.0f);
+            InspectorHelp("Sky fill intensity -- the light everything gets from the sky rather than "
+                          "from the sun. Independent of Sun Intensity.");
+
+            dragF("Sky Fill Intensity", "skyFillIntensity", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
+            InspectorHelp(
+                "How much of the SKY'S OWN measured irradiance reaches diffuse surfaces. Only "
+                "active when this level's sky was imported with its IBL derivatives -- check "
+                "logs/ibl.log if you are not sure which path a level took.\n\n"
+                "1 = the irradiance cube at face value, which is the physical answer. It is a "
+                "separate control from Ambient above on purpose: Ambient means 'this fraction of "
+                "the SUN colour bounces around', a number authored against a different equation "
+                "entirely, and reusing it here would bury the fill about twenty times too deep.\n\n"
+                "Ambient still drives the flat fallback fill on levels whose sky has no "
+                "derivatives.");
+
+            if (tgt().contains("sunIntensity"))
+            {
+                ImGui::TextDisabled("legacy 'exposure' present but ignored");
+                InspectorHelp("This object carries the new Sun Intensity, so the old whole-scene "
+                              "`exposure` field no longer does anything. Delete it from the level "
+                              "JSON whenever you next hand-edit the file.");
+            }
+
+            Math::float3 rayDirection = EditorLightDirection::NormalizedRay(
+                JsonFloat3(tgt(), "direction", Math::float3(-1.0f, -1.0f, -1.0f)));
+            float sourceAzimuth = 0.0f;
+            float sourceElevation = 0.0f;
+            EditorLightDirection::SourceAngles(
+                rayDirection, sourceAzimuth, sourceElevation);
+
+            {
+                const nlohmann::json beforeItem = props;
+                const bool changed = ImGui::DragFloat("Source azimuth (Y)",
+                    &sourceAzimuth, 0.5f, -180.0f, 180.0f, "%.1f deg",
+                    ImGuiSliderFlags_AlwaysClamp);
                 if (changed)
                 {
-                    p["toneCurve"] = (curveIndex == 1) ? "agx" : (curveIndex == 2 ? "filmic" : "legacy");
+                    rayDirection = EditorLightDirection::RayFromSourceAngles(
+                        sourceAzimuth, sourceElevation);
+                    tgt()["direction"] = {
+                        rayDirection.x, rayDirection.y, rayDirection.z };
+                }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            {
+                const nlohmann::json beforeItem = props;
+                const bool changed = ImGui::DragFloat("Source elevation",
+                    &sourceElevation, 0.5f, -89.0f, 89.0f, "%.1f deg",
+                    ImGuiSliderFlags_AlwaysClamp);
+                if (changed)
+                {
+                    rayDirection = EditorLightDirection::RayFromSourceAngles(
+                        sourceAzimuth, sourceElevation);
+                    tgt()["direction"] = {
+                        rayDirection.x, rayDirection.y, rayDirection.z };
                 }
                 trackContinuousEdit(beforeItem, changed);
             }
 
-            ImGui::SeparatorText("Colour grade (applies to every curve)");
-            dragF("Grade Saturation", "gradeSaturation", 1.30f, 0.01f, 0.0f, 4.0f, "%.3f");
-            InspectorHelp("Chroma around luma, applied in linear BEFORE the curve -- the same place "
-                          "Unreal bakes it into its LUT. 1 = unchanged, 0 = greyscale.");
-            dragF("Grade Contrast", "gradeContrast", 1.15f, 0.01f, 0.1f, 4.0f, "%.3f");
-            InspectorHelp("Pivoted on middle grey (0.18), so raising it deepens shadows and lifts "
-                          "highlights while midtones stay put. This is the control that STRETCHES "
-                          "the histogram -- exposure can only slide it.");
-            dragF("Grade Gamma", "gradeGamma", 1.10f, 0.01f, 0.1f, 4.0f, "%.3f");
-            InspectorHelp("Midtone weighting. Above 1 opens midtones without moving black or white "
-                          "as much as gain would.");
-            dragF("Grade Gain", "gradeGain", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
-            InspectorHelp("Plain multiplier. Overlaps with exposure compensation -- prefer the "
-                          "camera's compensation for overall brightness or the two will fight.");
-            dragF("Grade Offset", "gradeOffset", 0.0f, 0.001f, -1.0f, 1.0f, "%.4f");
-            InspectorHelp("Plain lift. Small positive values give the faded, milky-black film look; "
-                          "negative crushes the black point.");
-
-            // Same preset set as the developer window, written through the command stack so a
-            // preset is one undo step rather than five stray field edits.
+            rayDirection = EditorLightDirection::NormalizedRay(rayDirection);
+            ImGui::PushStyleColor(
+                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::InputFloat3("Normalized ray", &rayDirection.x, "%.3f",
+                ImGuiInputTextFlags_ReadOnly);
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
             {
-                struct GradePreset { const char* name; float sat, con, gam, gain, off; const char* tip; };
-                static const GradePreset kPresets[] = {
-                    { "Neutral", 1.00f, 1.00f, 1.00f, 1.00f, 0.000f,
-                      "No grading. Bit-identical to the ungraded image." },
-                    { "Vivid", 1.40f, 1.25f, 1.00f, 1.00f, 0.000f,
-                      "The measured match to the reference photograph. Set compensation to suit the "
-                      "CURVE: about -0.4 EV on Legacy, 0.0 on Filmic." },
-                    { "Punchy", 1.20f, 1.45f, 1.00f, 1.00f, 0.000f,
-                      "Contrast-forward rather than colour-forward." },
-                    { "Filmic", 1.10f, 1.05f, 1.00f, 1.00f, 0.015f,
-                      "The faded look -- the offset lifts the black point off zero." },
-                    { "Warm sand", 1.30f, 1.15f, 1.10f, 1.00f, 0.000f,
-                      "The default. Vivid with the midtones opened up so lit sand and foliage keep "
-                      "detail. Pairs with -0.15 EV on the Filmic curve." },
-                    { "Flat", 0.85f, 0.90f, 1.00f, 1.00f, 0.000f,
-                      "Deliberately washed out, for judging LIGHTING rather than look -- shading "
-                      "errors stop hiding behind the grade." },
-                };
-                ImGui::PushID("gradePresets");
-                for (int i = 0; i < static_cast<int>(std::size(kPresets)); ++i)
-                {
-                    const GradePreset& preset = kPresets[i];
-                    if (i != 0) { ImGui::SameLine(); }
-                    if (ImGui::SmallButton(preset.name))
-                    {
-                        nlohmann::json after = p;
-                        after["gradeSaturation"] = preset.sat;
-                        after["gradeContrast"] = preset.con;
-                        after["gradeGamma"] = preset.gam;
-                        after["gradeGain"] = preset.gain;
-                        after["gradeOffset"] = preset.off;
-                        executeChange(std::move(after), historyLabel);
-                    }
-                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", preset.tip); }
-                }
-                ImGui::PopID();
+                ImGui::SetTooltip("World-space direction in which the light rays travel.");
             }
-
-            if (curveIndex == 2)
+        }
+        else if (env.type == "camera")
+        {
+            dragF("H FOV (deg)", "hfovDeg", 90.0f, 0.5f, 1.0f, 179.0f);
+            dragF("Z Near", "zNear", 0.01f, 0.001f, 0.0001f, 100.0f);
+            dragF("Z Far", "zFar", 10000.0f, 1.0f, 0.1f, 1000000.0f);
+        }
+        else if (env.type == "cameraExposure")
+        {
+            drawCameraExposure();
+        }
+        else if (env.type == "gtao")
+        {
+            drawGtao();
+        }
+        else if (env.type == "atmosphere")
+        {
+            drawAtmosphere();
+        }
+        else if (env.type == "bloom")
+        {
+            drawBloom();
+        }
+        else if (env.type == "colorPipeline")
+        {
+            drawColorPipeline();
+        }
+        else if (env.type == "postProcess")
+        {
+            // P8B. One object, five collapsing sections. Each section sets `groupKey` so the shared
+            // widgets write into `properties[<group>]`, and clears it afterwards -- an escaped
+            // groupKey would send the NEXT object's edits into a sub-object that does not exist.
+            struct Section { const char* key; const char* label; };
+            const Section sections[] = {
+                { "cameraExposure", "Camera Exposure" },
+                { "colorPipeline",  "Color Pipeline" },
+                { "gtao",           "Ambient Occlusion (GTAO)" },
+                { "atmosphere",     "Aerial Perspective" },
+                { "bloom",          "Bloom" },
+            };
+            for (const Section& section : sections)
             {
-                ImGui::SeparatorText("Film curve (Unreal's controls)");
-                dragF("Film Slope", "filmSlope", 0.88f, 0.005f, 0.1f, 2.0f, "%.3f");
-                InspectorHelp("Steepness of the straight middle section, i.e. the curve's overall "
-                              "contrast. Unreal's default is 0.88.");
-                dragF("Film Toe", "filmToe", 0.55f, 0.005f, 0.0f, 1.0f, "%.3f");
-                InspectorHelp("How much the shadows roll off. Higher keeps shadow detail and lifts "
-                              "the black end; lower crushes toward black sooner. Default 0.55.");
-                dragF("Film Shoulder", "filmShoulder", 0.26f, 0.005f, 0.0f, 1.0f, "%.3f");
-                InspectorHelp("How much the highlights roll off. LOWER reaches white sooner, which "
-                              "is the knob to use when the image reads short of the reference at "
-                              "the top end. Default 0.26.");
-                dragF("Film Black Clip", "filmBlackClip", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
-                InspectorHelp("How far below zero the toe may reach before clipping. Default 0.");
-                dragF("Film White Clip", "filmWhiteClip", 0.04f, 0.005f, 0.0f, 1.0f, "%.3f");
-                InspectorHelp("How far above one the shoulder may reach. Default 0.04.");
-                if (ImGui::SmallButton("Unreal defaults"))
+                // A section the document has never carried still has to be editable, or a level
+                // authored before this group existed could never gain it.
+                if (!props.contains(section.key) || !props[section.key].is_object())
                 {
-                    nlohmann::json after = p;
-                    after["filmSlope"] = 0.88f;
-                    after["filmToe"] = 0.55f;
-                    after["filmShoulder"] = 0.26f;
-                    after["filmBlackClip"] = 0.0f;
-                    after["filmWhiteClip"] = 0.04f;
-                    executeChange(std::move(after), historyLabel);
+                    props[section.key] = nlohmann::json::object();
                 }
-            }
-            else if (curveIndex == 1)
-            {
-                ImGui::SeparatorText("AgX look");
-                dragF("AgX Slope", "agxSlope", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
-                dragF("AgX Power", "agxPower", 1.0f, 0.01f, 0.1f, 4.0f, "%.3f");
-                InspectorHelp("Contrast. NOTE it acts on the [0,1] log-encoded value, so raising it "
-                              "DARKENS -- unlike the grade contrast above, which pivots on middle "
-                              "grey. That is why the AgX 'punchy' look crushes the image.");
-                dragF("AgX Saturation", "agxSaturation", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
-                ImGui::PushID("agxLook");
-                if (ImGui::SmallButton("Neutral"))
+                if (ImGui::CollapsingHeader(section.label))
                 {
-                    nlohmann::json after = p;
-                    after["agxSlope"] = 1.0f; after["agxPower"] = 1.0f; after["agxSaturation"] = 1.0f;
-                    executeChange(std::move(after), historyLabel);
+                    ImGui::PushID(section.key);
+                    groupKey = section.key;
+                    if (std::string_view(section.key) == "cameraExposure") { drawCameraExposure(); }
+                    else if (std::string_view(section.key) == "colorPipeline") { drawColorPipeline(); }
+                    else if (std::string_view(section.key) == "gtao") { drawGtao(); }
+                    else if (std::string_view(section.key) == "atmosphere") { drawAtmosphere(); }
+                    else { drawBloom(); }
+                    groupKey.clear();
+                    ImGui::PopID();
                 }
-                ImGui::SameLine();
-                if (ImGui::SmallButton("Punchy"))
-                {
-                    nlohmann::json after = p;
-                    after["agxSlope"] = 1.0f; after["agxPower"] = 1.35f; after["agxSaturation"] = 1.4f;
-                    executeChange(std::move(after), historyLabel);
-                }
-                ImGui::PopID();
             }
         }
         else if (env.type == "skybox")
@@ -1329,7 +1455,7 @@ namespace
                 "Auto exposure used to hide this by metering it away. That is exactly why it must "
                 "not be the only thing holding the image together: turn adaptation off and the "
                 "scene should still be photographable.");
-            const std::string current = p.value("texture", std::string());
+            const std::string current = tgt().value("texture", std::string());
             const std::string currentLabel = current.empty()
                 ? std::string("(none)")
                 : std::filesystem::path(current).filename().string();
@@ -1367,8 +1493,7 @@ namespace
                     ++visibleTextures;
                     if (ImGui::Selectable(label.c_str(), selected) && !selected)
                     {
-                        nlohmann::json after = p;
-                        after["texture"] = NormalizePath(rec.id.key);
+                        nlohmann::json after = withField("texture", NormalizePath(rec.id.key));
                         executeChange(std::move(after), "Set Skybox Texture");
                     }
                     if (selected)
@@ -1384,12 +1509,12 @@ namespace
             }
 
             char buf[512];
-            std::snprintf(buf, sizeof(buf), "%s", p.value("texture", std::string()).c_str());
+            std::snprintf(buf, sizeof(buf), "%s", tgt().value("texture", std::string()).c_str());
             const float applyButtonWidth = ImGui::CalcTextSize("Apply Texture").x +
                 ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SetNextItemWidth(std::max(120.0f,
                 ImGui::GetContentRegionAvail().x - applyButtonWidth - ImGui::GetStyle().ItemSpacing.x));
-            const nlohmann::json beforeItem = p;
+            const nlohmann::json beforeItem = props;
             const bool textureChanged = ImGui::InputText("Texture", buf, sizeof(buf));
             if (ImGui::IsItemActivated())
             {
@@ -1398,7 +1523,7 @@ namespace
             }
             if (textureChanged)
             {
-                p["texture"] = NormalizePath(buf);
+                tgt()["texture"] = NormalizePath(buf);
                 ctx.document.SetDirty(true);
             }
 
@@ -1414,7 +1539,7 @@ namespace
                 commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
                     env.id,
                     before,
-                    p,
+                    props,
                     "Set Skybox Texture"));
                 activeEditObject = EditorObjectId{};
             }
@@ -1434,7 +1559,7 @@ namespace
             else
             {
                 // Preset (reference): changing it reloads the sim live.
-                const std::string curPreset = p.value("preset", std::string());
+                const std::string curPreset = tgt().value("preset", std::string());
                 const std::string curLabel = std::filesystem::path(curPreset).filename().string();
                 if (ImGui::BeginCombo("Preset", curLabel.empty() ? "(none)" : curLabel.c_str()))
                 {
@@ -1444,8 +1569,7 @@ namespace
                         const std::string label = std::filesystem::path(pr).filename().string();
                         if (ImGui::Selectable(label.c_str(), sel) && !sel)
                         {
-                            nlohmann::json after = p;
-                            after["preset"] = pr;
+                            nlohmann::json after = withField("preset", pr);
                             executeChange(std::move(after), "Set Ocean Preset");
                         }
                     }
@@ -1453,22 +1577,22 @@ namespace
                 }
 
                 OceanRenderConfig render = ocean->GetRenderConfig();
-                const auto renderIt = p.find("render");
-                if (renderIt != p.end() && renderIt->is_object())
+                const auto renderIt = tgt().find("render");
+                if (renderIt != tgt().end() && renderIt->is_object())
                 {
                     OceanRenderConfigJson::ApplyOverrides(*renderIt, render);
                 }
 
                 const auto storeRender = [&]()
                 {
-                    p["render"] = OceanRenderConfigJson::ToJson(render);
+                    tgt()["render"] = OceanRenderConfigJson::ToJson(render);
                 };
                 const auto beginRenderContinuousEdit = [&]()
                 {
                     if (ImGui::IsItemActivated())
                     {
                         activeEditObject = env.id;
-                        propertiesBeforeEdit = p;
+                        propertiesBeforeEdit = props;
                     }
                 };
                 const auto finishRenderContinuousEdit = [&](bool changed)
@@ -1483,11 +1607,11 @@ namespace
                         nlohmann::json before =
                             activeEditObject.value == env.id.value ?
                                 std::move(propertiesBeforeEdit) :
-                                p;
+                                props;
                         commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
                             env.id,
                             std::move(before),
-                            p,
+                            props,
                             historyLabel));
                         activeEditObject = EditorObjectId{};
                     }
@@ -1605,8 +1729,7 @@ namespace
                         {
                             OceanRenderConfig afterRender = render;
                             afterRender.surfSimEnabled = surfSimEnabled;
-                            nlohmann::json after = p;
-                            after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                            nlohmann::json after = withField("render", OceanRenderConfigJson::ToJson(afterRender));
                             executeChange(std::move(after), "Set Ocean Surf Sim Enabled");
                         }
                         // Tooltip helper: annotates the LAST widget (the drag above it).
@@ -2006,8 +2129,7 @@ namespace
                     {
                         OceanRenderConfig afterRender = render;
                         afterRender.causticsEnabled = causticsEnabled;
-                        nlohmann::json after = p;
-                        after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                        nlohmann::json after = withField("render", OceanRenderConfigJson::ToJson(afterRender));
                         executeChange(std::move(after), "Set Ocean Caustics Enabled");
                     }
                     if (ImGui::IsItemHovered())
@@ -2052,8 +2174,7 @@ namespace
                     {
                         OceanRenderConfig afterRender = render;
                         afterRender.absorptionGradientType = curvedGradient ? 1.0f : 0.0f;
-                        nlohmann::json after = p;
-                        after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                        nlohmann::json after = withField("render", OceanRenderConfigJson::ToJson(afterRender));
                         executeChange(std::move(after), "Set Ocean Absorption Gradient");
                     }
 
@@ -2074,8 +2195,7 @@ namespace
                             ? Math::float4(1.0f, 1.0f, 1.0f, 1.0f)
                             : afterRender.absorptionColors.back();
                         afterRender.absorptionColors.push_back(last);
-                        nlohmann::json after = p;
-                        after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                        nlohmann::json after = withField("render", OceanRenderConfigJson::ToJson(afterRender));
                         executeChange(std::move(after), "Add Ocean Absorption Key");
                     }
                     if (render.absorptionColors.size() > 1u)
@@ -2085,24 +2205,23 @@ namespace
                         {
                             OceanRenderConfig afterRender = render;
                             afterRender.absorptionColors.pop_back();
-                            nlohmann::json after = p;
-                            after["render"] = OceanRenderConfigJson::ToJson(afterRender);
+                            nlohmann::json after = withField("render", OceanRenderConfigJson::ToJson(afterRender));
                             executeChange(std::move(after), "Remove Ocean Absorption Key");
                         }
                     }
                 }
 
                 ImGui::SeparatorText("Simulation overrides");
-                const nlohmann::json windForceBefore = p;
-                float windForce = JsonFloat(p, "windForce", ocean->GetWindForce01());
+                const nlohmann::json windForceBefore = props;
+                float windForce = JsonFloat(tgt(), "windForce", ocean->GetWindForce01());
                 const bool windForceChanged =
                     ImGui::SliderFloat("Wind Force", &windForce, 0.0f, 1.0f);
-                if (windForceChanged) { p["windForce"] = windForce; }
+                if (windForceChanged) { tgt()["windForce"] = windForce; }
                 trackContinuousEdit(windForceBefore, windForceChanged);
 
-                const nlohmann::json windDirectionBefore = p;
+                const nlohmann::json windDirectionBefore = props;
                 float windDirection = JsonFloat(
-                    p,
+                    tgt(),
                     "windDirectionDeg",
                     ocean->GetLocalWindDirectionDegrees());
                 const bool windDirectionChanged = ImGui::DragFloat(
@@ -2112,12 +2231,12 @@ namespace
                     -360.0f,
                     360.0f,
                     "%.1f deg");
-                if (windDirectionChanged) { p["windDirectionDeg"] = windDirection; }
+                if (windDirectionChanged) { tgt()["windDirectionDeg"] = windDirection; }
                 trackContinuousEdit(windDirectionBefore, windDirectionChanged);
 
-                const nlohmann::json swellDirectionBefore = p;
+                const nlohmann::json swellDirectionBefore = props;
                 float swellDirection = JsonFloat(
-                    p,
+                    tgt(),
                     "swellDirectionDeg",
                     ocean->GetSwellDirectionDegrees());
                 const bool swellDirectionChanged = ImGui::DragFloat(
@@ -2127,7 +2246,7 @@ namespace
                     -360.0f,
                     360.0f,
                     "%.1f deg");
-                if (swellDirectionChanged) { p["swellDirectionDeg"] = swellDirection; }
+                if (swellDirectionChanged) { tgt()["swellDirectionDeg"] = swellDirection; }
                 trackContinuousEdit(swellDirectionBefore, swellDirectionChanged);
             }
         }
@@ -2139,10 +2258,10 @@ namespace
             dragF("Direction", "directionDeg", wind.directionDeg,
                 0.5f, -360.0f, 360.0f, "%.1f deg");
 
-            const nlohmann::json strengthBefore = p;
-            float strength = JsonFloat(p, "strength", wind.strength);
+            const nlohmann::json strengthBefore = props;
+            float strength = JsonFloat(tgt(), "strength", wind.strength);
             const bool strengthChanged = ImGui::SliderFloat("Strength", &strength, 0.0f, 1.0f);
-            if (strengthChanged) { p["strength"] = strength; }
+            if (strengthChanged) { tgt()["strength"] = strength; }
             trackContinuousEdit(strengthBefore, strengthChanged);
 
             dragF("Sway Frequency", "swayFrequency", wind.swayFrequency,
@@ -2154,21 +2273,21 @@ namespace
             const auto dragGust = [&](const char* label, const char* key, float def,
                 float speed, float lo, float hi, const char* fmt)
             {
-                const nlohmann::json beforeItem = p;
+                const nlohmann::json beforeItem = props;
                 float value = def;
-                const auto gustIt = p.find("gust");
-                if (gustIt != p.end() && gustIt->is_object())
+                const auto gustIt = tgt().find("gust");
+                if (gustIt != tgt().end() && gustIt->is_object())
                 {
                     value = JsonFloat(*gustIt, key, def);
                 }
                 const bool changed = ImGui::DragFloat(label, &value, speed, lo, hi, fmt);
                 if (changed)
                 {
-                    if (!p.contains("gust") || !p["gust"].is_object())
+                    if (!tgt().contains("gust") || !tgt()["gust"].is_object())
                     {
-                        p["gust"] = nlohmann::json::object();
+                        tgt()["gust"] = nlohmann::json::object();
                     }
-                    p["gust"][key] = value;
+                    tgt()["gust"][key] = value;
                 }
                 trackContinuousEdit(beforeItem, changed);
             };
@@ -2189,7 +2308,7 @@ namespace
                 ImGui::TextDisabled("Disabled (End must exceed Start)");
             }
 
-            // W8 debug freeze. Deliberately NOT written into `p`: this is a viewing aid, not level
+            // W8 debug freeze. Deliberately NOT written into the object properties: this is a viewing
             // data, so it must never end up saved in the level or land in the undo stack.
             ImGui::SeparatorText("Debug");
             ImGui::Checkbox("Freeze time", &vfx::g_windFreeze);

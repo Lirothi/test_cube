@@ -43,6 +43,22 @@ namespace LevelDocumentSerializer
                 else if (env.type == "directionalLight") { out["directionalLight"] = env.properties; }
                 else if (env.type == "skybox") { out["skybox"] = env.properties; }
                 else if (env.type == "wind") { out["wind"] = env.properties; } // W2: round-trip the wind entity
+                // P8B: the five look groups are one section now. The legacy top-level keys are
+                // ERASED rather than left beside it, because two copies of the same setting is a
+                // question about which one wins that nobody should have to answer -- the loader
+                // prefers the folded one, so a stale sibling would be invisible until someone hand
+                // -edited the file.
+                else if (env.type == "postProcess")
+                {
+                    out["postProcess"] = env.properties;
+                    for (const char* legacy : { "cameraExposure", "colorPipeline", "gtao",
+                                                "atmosphere", "bloom" })
+                    {
+                        out.erase(legacy);
+                    }
+                }
+                // Still accepted on the way out: an editor_state or a document from before P8B can
+                // still carry the individual objects, and dropping them here would delete settings.
                 else if (env.type == "cameraExposure") { out["cameraExposure"] = env.properties; } // P1
                 else if (env.type == "colorPipeline") { out["colorPipeline"] = env.properties; } // P3C
                 else if (env.type == "gtao") { out["gtao"] = env.properties; } // P6B

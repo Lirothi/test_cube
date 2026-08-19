@@ -24,7 +24,8 @@ namespace
             object.type == "colorPipeline" ||  // P3C
             object.type == "gtao" ||           // P6B
             object.type == "atmosphere" ||     // P7
-            object.type == "bloom";            // P8
+            object.type == "bloom" ||          // P8
+            object.type == "postProcess";      // P8B
     }
 
     bool DocumentHasOtherOfType(const EditorSceneDocument& document, const EditorObject& object)

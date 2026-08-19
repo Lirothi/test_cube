@@ -287,7 +287,7 @@ P0 Baseline and diagnostics
                          |     |
                          |     +--> P8B Post-process settings container
                          |           |
-                         |           +--> P8C Lens flares, bokeh scatter [UE ref]
+                         |           +--> P8C Convolution bloom, FFT + kernel [UE ref] (flares come from the kernel)
                          |
                          +--> P9 Diffuse GI / ground-bounce progression
                          |
@@ -2332,7 +2332,7 @@ DISABLED, like P7.
 
 ---
 
-### P8B — Fold the post-process sections into one object — AFTER P8 (queued 2026-08-18)
+### P8B — Fold the post-process sections into one object — DONE (2026-08-19)
 
 **Depends on:** P7 and P8, deliberately. The set of settings is still growing; building the
 container before it stops growing means building it twice, and dragging every already-authored level
@@ -2373,88 +2373,175 @@ if a second such case appears.
 explaining what the group is, which removes the visual clutter without touching the level format or
 requiring any migration.
 
+**OUTCOME (2026-08-19).** One `postProcess` JSON section and one `postProcess` environment object
+holding `cameraExposure`, `colorPipeline`, `gtao`, `atmosphere` and `bloom` as sub-objects; the
+inspector draws them as five collapsing headers.
+
+**The inspector refactor is the part worth describing, because it was done so that a mistake could
+not be silent.** Every widget used to write to `p`, a reference to the object's whole property set.
+It now writes to `tgt()`, which returns either the properties themselves (every other environment
+type) or `properties[groupKey]` (a section of the folded object). `p` was DELETED as an identifier,
+which turned all 106 use sites into compile errors until each had been classified as one of:
+
+* a field read or write -> the GROUP,
+* an undo snapshot or a command payload -> the WHOLE property set, always. `EditEnvironmentCommand`
+  replaces an object's entire properties, so handing it a group would delete that group's siblings.
+
+That distinction is invisible to a `json[...]` call — it would just insert a key and carry on — which
+is exactly why the identifier had to go rather than be pattern-matched.
+
+**Reading takes BOTH shapes, forever; only the writer changed.** `PostProcessSection(level, group)`
+prefers `postProcess.<group>` and falls back to the legacy top-level `<group>`, per group, so a level
+authored before this step loads unchanged and a half-migrated file is well defined. The editor
+document migrates on LOAD; the file only takes the new shape when it is next saved, at which point
+the serializer writes the folded section and ERASES the five legacy keys — two copies of one setting
+is a "which one wins" question nobody should have to answer.
+
+**Gate (`scratchpad/p8b_roundtrip.py`), against `overview`, exposure pinned, DLSS off:**
+
+| level shape | vs the legacy file |
+|---|---:|
+| folded (all five moved under `postProcess`) | **0.076%** of pixels, mean 0.001 |
+| mixed (folded, but `gtao` left only at top level) | **0.007%**, mean 0.000 |
+| empty (both shapes stripped -> struct defaults) | 100%, mean 23.3 |
+
+The first two are the noise floor. The third is the control: without it, "identical" would also be
+the answer if the reader had stopped reading settings altogether.
+
+**One-way migration, and it is worth stating plainly:** a binary from before this step reads a saved
+folded level as all-defaults, because it does not know the section. Levels are not re-saved
+automatically, so this only matters after an explicit save in the editor.
+
+**Not done here, deliberately:** the individual `cameraExposure` / `gtao` / … environment types are
+still understood by the inspector, the serializer and `EnvironmentRuntime`. The document no longer
+CREATES them, so they are unreachable in normal use, but the code stays as the fallback for a stale
+`editor_state.json` and costs nothing.
+
 ---
 
-### P8C — Lens flares, UE's bokeh-scatter implementation — NOT STARTED (queued 2026-08-19)
+### P8C — Convolution bloom (FFT), which is also where the flares come from — NOT STARTED (queued 2026-08-19)
 
-**Depends on:** P8 for the pyramid it reads, and scheduled AFTER P8B on purpose -- it adds another
-group of level settings, and adding it before the container exists means authoring the migration
-twice.
+**Depends on:** P8 (it replaces the pyramid as the bloom SOURCE, and falls back to it), and scheduled
+AFTER P8B so the settings land in the container rather than becoming a seventh singleton.
 
-**Goal:** the optical response of the LENS, on top of P8's response of the sensor. A sunset over
-water is the one condition this project actually ships, and it is exactly the condition a lens
-answers to: a bright glint should throw a shaped ghost, not only a symmetric halo.
+**Goal:** one physically meaningful input -- an image of how a real lens smears a single point of
+light -- producing the halo, the starburst from the aperture blades, the anamorphic streak, the rings
+and the ghosts TOGETHER and consistently. This is the whole reason it is here instead of a separate
+lens-flare feature: flares stop being a second effect that has to be tuned into agreement with bloom,
+and become a property of the kernel image.
 
-**What UE actually do, and it is NOT what "lens flare" usually means** (`PostProcessLensFlares.usf`,
-which is in the drop): there are no hand-placed ghosts along the sun-to-centre axis. It is a **bokeh
-scatter**:
+**What "convolution" means here.** The pyramid in P8 approximates the lens response with a stack of
+Gaussians: symmetric, and structurally incapable of a streak. Convolution does the real operation --
+every bright pixel is replaced by a copy of the kernel scaled by its brightness, and all the copies
+are summed. Done directly that is hopeless: a 2560x1440 frame against a kernel covering half the
+screen is ~3.4e12 multiply-adds per channel. The convolution theorem turns it into
 
-1. Take a DOWNSAMPLED frame -- for us, one level of the bloom pyramid P8 already builds, so the
-   expensive half of this feature is already paid for.
-2. Cut it into tiles (`TileSize`, `TileCount`). Every tile becomes one quad, positioned where the
-   tile is, coloured by the tile, scaled by `KernelSize`.
-3. Tiles below `Threshold` collapse to zero size (`ThresholdScale`), so only bright ones scatter.
-4. Each quad is textured by a **bokeh kernel** -- the aperture's shape. That is where the hexagon or
-   the circle comes from; there is no analytic ghost anywhere.
-5. Colour is scaled by `KernelAreaInverse`, i.e. energy is conserved as the kernel grows.
-6. A double `DiscMask(ScreenPos) * DiscMask(ScreenPos * 0.8)` fades the whole thing towards the
-   screen edge, which is what stops the scatter from reading as a rectangular overlay.
-7. The result is composited INTO the bloom target (`LensFlareCopyBloomPS`), not carried as a second
-   layer. One texture reaches the tonemap either way.
+    convolution(frame, kernel) = IFFT( FFT(frame) * FFT(kernel) )
 
-UE also offer a compute path (`LENS_FLARE_BLUR_CS`) that writes packed half-float quads into a vertex
-buffer for the VS to read -- worth having only if the tile count ever makes the draw the bottleneck.
-Start with the plain instanced-quad VS.
+i.e. O(N log N) instead of O(N*M), plus one elementwise complex multiply. `FFT(kernel)` is computed
+ONCE and cached until the kernel or the resolution changes, so a frame costs two transforms and a
+multiply, not three.
+
+**THE ENGINE HAS AN FFT AND SO DOES THE DROP -- both were checked, 2026-08-19.**
+
+* Ours: `shaders/ocean_fft.hlsl` (`OceanSimulation::DispatchFFT`) is a working 2D radix-2 Stockham
+  transform. It is NOT reusable as written: it holds a whole row in `groupshared` with one thread per
+  element (`numthreads(FFT_SIZE,1,1)`, 256 by define) and it deliberately wants the CIRCULAR
+  convolution an FFT naturally gives, because a wave field must tile. Bloom needs a frame-sized
+  transform and must NOT wrap.
+* UE's, and this is the one to transcribe: **`GPUFastFourierTransform.usf` +
+  `GPUFastFourierTransformCore.ush` + `GPUFastFourierTransform2DCore.ush` are all in the drop**, and
+  they already solve both of those problems:
+  - `GroupSharedComplexFFTCS` / `GSConvolutionWithTextureCS` -- when a scan line fits in shared
+    memory, the whole convolution (forward, multiply by the filter, inverse) is ONE dispatch.
+  - `ReorderFFTPassCS` / `ComplexFFTPassCS` / `GroupSharedSubComplexFFTCS` /
+    `PackTwoForOneFFTPassCS` / `ComplexMultiplyImagesCS` -- the multi-pass decomposition for
+    transforms too large for one group. `RADIX` and `SCAN_LINE_LENGTH` come from the CPU, radix
+    2/3/4/8 are implemented, and the shared buffers are two `float` arrays of `SCAN_LINE_LENGTH`
+    (32 KB at 4096), with an explicit branch for lengths above 4096.
+  - `GroupSharedTwoForOneFFTCS` -- the "two for one" trick: two REAL channels per complex transform,
+    which is how RGB costs two transforms rather than three.
+  - `CopyWindowCS` -- the windowing that gives zero padding, i.e. LINEAR convolution instead of
+    circular. This is the thing that stops a streak leaving the right edge from reappearing on the
+    left.
+
+**And the whole kernel pipeline is in the drop too** (`Shaders/Private/Bloom/*`), which is the half
+that is easy to underestimate -- turning a photograph into a usable filter is most of the work:
+`BloomFindKernelCenter` + `BloomSurveyKernelCenterEnergy` (locate the centre and how much energy sits
+in it), `BloomSumScatterDispersionEnergy` / `BloomSurveyMaxScatterDispersion` / `BloomReduceKernelSurvey`
+(the energy survey the normalisation is built on), `BloomResizeKernel` + `BloomDownsampleKernel`
+(rescale the kernel to the current resolution -- the kernel is a property of the LENS and its angular
+size, so it cannot be a fixed pixel count), `BloomClampKernel`, and
+`BloomPackKernelConstants` / `BloomFinalizeApplyConstants`.
+
+**THE SIZE POLICY, READ OUT OF `GPUFastFourierTransform.cpp` AND `PostProcessFFTBloom.cpp` so it does
+not have to be re-derived:**
+
+* **`GPUFFT::MaxScanLineLength() = 4096`.** That single number is the whole group-shared/multi-pass
+  decision: `FitsInGroupSharedMemory(length)` is literally `length <= 4096`.
+* Shader permutations exist for `SCAN_LINE_LENGTH` 2 … 4096, the sub-FFT pass is `RADIX 2`, and
+  `MIXED_RADIX` is defined for lengths above 8.
+* **The convolution runs on a DOWNSCALED frame** (`DownscaleResolutionFraction`), not the full one.
+* **Padding, and UE's own compromise inside it:** the pad is half the kernel's pixel width
+  (`0.5 * KernelSupportScale * Width`), and the transform buffer is
+  `RoundUpToPowerOfTwo(imageSize + pad)`. But **if that would exceed 4096 the pad is CLAMPED**, with
+  a comment saying so in as many words: the bloom may then wrap from one side of the screen to the
+  other, and they accept it because the kernel's tails are faint. So the wrap test this plan asks
+  for is a question of degree, not a pass/fail -- know which side of that line a chosen size sits on.
+* `KernelSupportScale` is clamped to `[0, 1]`, i.e. the kernel may span at most 100% of screen WIDTH.
+* Horizontal-first vs vertical-first is chosen per frame by **whichever writes less to main memory**
+  (`bDoHorizontalFirst`); the two orders are mathematically identical.
+* There is a `PreFilter` (min/max/mult) that boosts bright pixels before the transform, and it is
+  documented as operating in PRE-EXPOSURE space -- which is the same units question P8 already had
+  to answer.
+* UE can run the whole thing on **async compute** (`r.Bloom.AsyncCompute`), which this engine's
+  async plan (`docs/async_compute_plan.md`) would make available later.
 
 **Implement:**
 
-1. A source level from the bloom `down` chain (a level, not a new reduction) plus the tile grid.
-2. The scatter pass: instanced quads, additive blend, bokeh kernel, threshold, `KernelAreaInverse`,
-   both disc masks.
-3. Composite into the bloom `up` chain's mip 0, so the tonemap keeps reading exactly one texture and
-   `bloomIntensity` still scales the whole optical response.
-4. Controls: intensity, threshold, kernel size, and the per-ghost tints. Ships DISABLED.
-5. The bokeh kernel: generate it procedurally (an N-sided aperture with a controllable blade count
-   and rotation) rather than importing a texture. That keeps the feature free of a content
-   dependency, and blade count is a better control than a bitmap anyway.
+1. Transcribe the FFT core (`GPUFastFourierTransformCore.ush` first -- radix butterflies, the shared
+   memory layout, the normalisation convention), then the 2D layer.
+2. The single-dispatch convolution path for the sizes that fit; the multi-pass path only once a
+   measurement says the fitting one is not enough.
+3. Kernel preparation: centre, energy survey, resize to resolution, clamp, cache. The transformed
+   kernel is cached and invalidated on kernel change or resize.
+4. Zero-padded window so the convolution is linear, not circular.
+5. Run it on a DOWNSAMPLED frame, as UE do. Full-resolution convolution buys nothing visible for a
+   low-frequency effect and costs multiples.
+6. A `bloomMethod` control: Standard (P8's pyramid) or Convolution. Standard stays the default and
+   the fallback -- this path is heavier, and a scene with no bright highlights cannot tell them
+   apart.
+7. Ship the kernel as a small generated image (blades, rotation, a little chromatic spread) so the
+   feature has no content dependency, with a texture path for a photographed kernel later.
 
-**Interface contract:** disabled schedules no pass and produces the P8 image exactly; with P8 itself
-disabled this cannot run at all, because it has no pyramid to read.
+**Interface contract:** with Convolution off, the image is P8's exactly and no transform is
+scheduled. With P8 itself off, this cannot run -- there is nothing for it to be a method OF.
 
-**Done when:** the sun's glint field on `sun_glint` throws shaped ghosts that hold still relative to
-the water and slide correctly as the camera turns, without the frame acquiring a permanent veil.
+**Done when:** `sun_glint` shows a starburst whose blade count follows the kernel, and the streak
+holds still relative to the water as the camera turns, with `overview` (no glint field) still
+essentially unchanged.
 
-**Verify:** `sun_glint` first and `overview` as the control (the same pairing P8 used); a camera
-ROTATION sequence rather than a still, for the reason in the next paragraph; native and DLSS; GPU
-timing of the scatter pass on its own.
+**Verify:** the P8 pairing (`sun_glint` vs `overview`) plus a rotation sequence, native and DLSS, GPU
+timing of the transform passes separately from the kernel preparation, and a **wrap test**: a single
+very bright point near one screen edge must not deposit anything on the opposite edge. That test is
+the one that catches a missing pad, and it fails silently otherwise.
 
-**WHAT THIS PROJECT ALREADY KNOWS AND THE SPEC SHOULD NOT REDISCOVER:**
+**Traps this project has already paid for once:**
 
-* **UE's threshold is a HARD CUT** (`ThresholdScale = (Luminance < Threshold) ? 0 : 1`) and this
-  scene is the worst case for it. P8's notes already record that a sun glint crossing a texel
-  boundary pumps the pyramid; here that same glint makes a whole quad appear and vanish between
-  frames. Soften it the way P8's bloom threshold is softened (a knee, not a step), keep the
-  Karis-averaged level as the source, and judge it on MOTION -- a still cannot show this.
-* **The threshold must be measured against EXPOSED luminance**, exactly as P8's is, or it means a
-  different thing at every time of day. UE compare a raw luminance here because their input is
-  already pre-exposed; ours is not.
-* **Fix exposure before any A/B** (`--set=exposure.autoExposure:0 --dlss=off`). Same trap, third
-  time of asking.
-* **Cheap adjacent win, if it is wanted:** UE's `BloomDirtMask` is one multiply in the tonemap --
-  `Bloom = RawBloom * (1 + Dirt * Tint)` -- and needs no new pass at all. It is a content-dependent
-  look (it needs a dirt texture), so it is deliberately not folded into this step.
+* **Fix exposure before any A/B** (`--set=exposure.autoExposure:0 --dlss=off`).
+* **The threshold, if one is kept, must be measured against EXPOSED luminance** -- same as P8's.
+* **Energy normalisation is not optional here.** The kernel is resized per resolution, and without
+  the energy survey the bloom's brightness changes when the window does. UE dedicate four shaders to
+  this for a reason.
+* **Measure before choosing the multi-pass path.** The single-dispatch convolution is dramatically
+  simpler and covers a downsampled frame at the sizes this project runs.
 
-**THE ALTERNATIVE, and it is a real fork:** UE's other bloom path is FFT **convolution** bloom
-(`Shaders/Private/Bloom/*`, also in the drop), which convolves the frame with an arbitrary kernel
-image and so produces true anamorphic streaks and starbursts, flares included, from one physically
-meaningful input. It is considerably more expensive and needs an FFT this engine does not have.
-Bokeh scatter is the right first implementation; convolution is the thing to reach for only if the
-scatter's ghosts read as decoration rather than as optics.
-
-**Reference files:** `PostProcessLensFlares.usf` **have**; `LensDistortion.ush` **have** (for the
-chromatic edge treatment, if that is ever wanted). `PostProcessLensFlares.cpp` is **NOT** in the drop
-and carries the per-ghost tint/scale table (`LensFlareTints[8]`) and the axis mirroring -- ask for it
-before inventing those numbers.
+**What was considered and dropped:** UE's other flare implementation, the bokeh scatter in
+`PostProcessLensFlares.usf` -- tile the frame, turn each bright tile into an aperture-textured quad.
+It is cheaper and reuses P8's pyramid directly, but it produces ghosts as decoration rather than as
+optics, its threshold is a hard cut that would strobe on this ocean, and it cannot produce a streak
+or a starburst at all. Convolution subsumes it. The file stays in the reference table in case that
+trade ever wants revisiting.
 
 ---
 
@@ -3126,9 +3213,9 @@ barrier gate applies, unlike P7's shader-only edits).
 
 **Reference files needed from the drop** (all present in `ue_strip/Shaders/Private` as of
 2026-08-19): `VolumetricFog.usf`, `VolumetricFogVoxelization.usf`, `VolumetricFogLightFunction.usf`,
-`ParticipatingMediaCommon.ush`, and `HeightFogCommon.ush` (already used by P7). The C++ side
-(`VolumetricFog.cpp`, for the grid setup and the cvar defaults) is **not** in the drop — ask for it
-before guessing at `GridZParams`.
+`ParticipatingMediaCommon.ush`, and `HeightFogCommon.ush` (already used by P7). The C++ side is there too:
+`Source/Runtime/Renderer/Private/VolumetricFog.cpp` carries the grid setup and the `GridZParams`
+derivation, which the shader alone does not explain.
 
 ## 10. Global acceptance checklist
 
@@ -3238,8 +3325,8 @@ For the largest visual gain per unit of risk:
 12. P9B-P9C — probe GI only if the accepted image still lacks indirect depth and the performance budget allows it.
 13. P11 — final scene calibration and human sign-off.
 
-P8B and then P8C (lens flares) slot in after P8 whenever the bloom look has been signed off; neither
-blocks P9-P11.
+P8B and then P8C (convolution bloom, which is where flares come from) slot in after P8 whenever the
+bloom look has been signed off; neither blocks P9-P11.
 
 **P15 (volumetric fog) sits outside this ordering.** It is the largest single piece of new
 infrastructure the plan carries — four passes, three volume targets, a temporal history — and it buys
@@ -3278,21 +3365,27 @@ already cost this project a frame-wide pink tint once.
 | `ReflectionEnvironmentShaders.usf`, `SkyLightingShared.ush` | diffing F8's split-sum against the original. **Arrived 2026-08-17 and immediately earned its keep** — three real differences found (log vs linear roughness/mip mapping, cosine distribution at roughness>0.99, per-sample source mip from the solid-angle ratio) | **have**, in `ue_misc/` |
 | `ReflectionEnvironmentShared.ush` | the body of `ComputeReflectionCaptureRoughnessFromMip` — the log roughness/mip mapping itself. Transcribed and shipped 2026-08-17 | **have**, in `ue_misc/` |
 | `MaterialTemplate.ush` | `MaterialExpressionBlackBody`, the Planckian locus the sun's colour-temperature control is transcribed from | **have** |
-| `PostProcessHistogramCommon.ush` | `CalculateLogLocalExposure` — P3B shipped WITHOUT this file, from the published algorithm plus measurement. Diff it against `shaders/local_exposure.hlsli` before extending P3B | **wanted** |
-| `PostProcessLocalExposure.usf` | the local-exposure apply pass and the exposure-fusion alternative | **wanted** |
-| `PostProcessHistogram.usf` | the bilateral-grid write inside the histogram pass — the P3B upgrade needs it | wanted if the grid is built |
-| `PostProcessLocalExposure.cpp` | bilateral grid construction parameters | wanted if the grid is built |
+| `PostProcessHistogramCommon.ush` | `CalculateLogLocalExposure` — P3B shipped WITHOUT this file, from the published algorithm plus measurement. Diff it against `shaders/local_exposure.hlsli` before extending P3B | **have**, `Shaders/Private/` |
+| `PostProcessLocalExposure.usf` | the local-exposure apply pass and the exposure-fusion alternative | **have**, `Shaders/Private/` |
+| `PostProcessHistogram.usf` | the bilateral-grid write inside the histogram pass — the P3B upgrade needs it | **have**, `Shaders/Private/` |
+| `PostProcessLocalExposure.cpp` | bilateral grid construction parameters | **have**, `Source/Runtime/Renderer/Private/PostProcess/` |
 | `VolumetricFog.usf` | **P15**: all four froxel stages — `MaterialSetupCS`, `InjectShadowedLocalLightPS`, `LightScatteringCS`, `FinalIntegrationCS`, plus the Frostbite energy-conserving integration | **have** |
 | `VolumetricFogVoxelization.usf`, `VolumetricFogLightFunction.usf` | P15: voxelising fog volumes, and light functions inside the volume | **have** |
 | `ParticipatingMediaCommon.ush` | P15: `HenyeyGreensteinPhase` — the real phase function `skyBackScatter` currently approximates | **have** |
-| `PostProcessLensFlares.usf` | **P8C**: the bokeh-scatter flare -- tile grid, threshold, `KernelAreaInverse`, the double `DiscMask`, and the composite back into bloom | **have** |
-| `LensDistortion.ush` | P8C, optional: the chromatic/edge treatment | **have** |
-| `PostProcessLensFlares.cpp` | P8C: the per-ghost tint and scale table (`LensFlareTints[8]`) and the axis mirroring. **The shader does not contain these** -- ask before inventing them | **wanted** |
-| `Bloom/*.usf` (`BloomDownsampleKernel`, `BloomResizeKernel`, `BloomFinalizeApplyConstants`, ...) | P8C's alternative: FFT convolution bloom, for true starbursts from a kernel image | **have** |
-| `VolumetricFog.cpp` | P15: grid setup (`GridPixelSize`, `GridSizeZ`, `Distance`), the `GridZParams` derivation, and the cvar defaults. **The shader alone does not say how the log Z distribution is built** — ask for this file before guessing | **wanted** |
+| `GPUFastFourierTransform.usf`, `GPUFastFourierTransformCore.ush`, `GPUFastFourierTransform2DCore.ush` | **P8C**: the whole transform -- radix 2/3/4/8 butterflies, the group-shared single-dispatch convolution, the multi-pass decomposition for large sizes, the two-for-one real-channel trick, and `CopyWindowCS` for the zero pad | **have** |
+| `Bloom/*.usf` (`BloomFindKernelCenter`, `BloomSurveyKernelCenterEnergy`, `BloomResizeKernel`, `BloomClampKernel`, `BloomPackKernelConstants`, ...) | P8C: turning a kernel image into a normalised, centred, resolution-scaled filter. Most of the work that is not the FFT | **have** |
+| `PostProcessFFTBloom.cpp`, `GPUFastFourierTransform.cpp` | P8C: the size policy, the padding rule and the pass ordering. **Read, and the numbers are now in P8C itself** | **have**, `Source/Runtime/Renderer/Private/[PostProcess/]` |
+| `PostProcessLensFlares.usf` | P8C's rejected alternative (bokeh scatter). Kept in case that trade is revisited | **have** |
+| `LensDistortion.ush` | optional chromatic/edge treatment | **have** |
+| `VolumetricFog.cpp` | P15: grid setup (`GridPixelSize`, `GridSizeZ`, `Distance`), the `GridZParams` derivation, and the cvar defaults. The shader alone does not say how the log Z distribution is built — read this before implementing | **have**, `Source/Runtime/Renderer/Private/` |
 
 Everything is dropped in the **root** of `D:\Programming\ue_autoexposure\`, not under the
 engine-relative subpaths — look there first.
+
+**BEFORE MARKING ANYTHING "wanted", SEARCH BOTH TREES OF `ue_strip`.** It carries `Shaders/` AND
+`Source/` (~24.5k C++ files under `Source/Runtime/Renderer` and `Source/Runtime/Engine`), at their
+real engine-relative paths. Six rows in this table said "wanted" for files that were present all
+along, because only `Shaders/` had been searched. `ue_strip/README.md` is the map.
 
 **2026-08-17: `D:\Programming\ue_strip\` supersedes the three partial drops.** ~26.6k files: the
 whole `Shaders/Private` tree (`Bloom/`, `PostProcessing/`, `SkyAtmosphere.usf`, `HeightFogCommon.ush`,

@@ -19,6 +19,28 @@
 #include "app/scene/GtaoSettingsJson.h"
 #include "app/scene/AtmosphereSettingsJson.h"
 #include "app/scene/BloomSettingsJson.h"
+
+// P8B: the level-wide look settings live under one "postProcess" section now. A level written
+// before that carries them as top-level sections, and must keep loading unchanged -- so this
+// prefers the folded section and falls back to the legacy key, per group. Both forms are read
+// forever; only the WRITER changed.
+namespace
+{
+    const nlohmann::json* PostProcessSection(const nlohmann::json& level, const char* key)
+    {
+        const auto folded = level.find("postProcess");
+        if (folded != level.end() && folded->is_object())
+        {
+            const auto sub = folded->find(key);
+            if (sub != folded->end() && sub->is_object())
+            {
+                return &(*sub);
+            }
+        }
+        const auto legacy = level.find(key);
+        return (legacy != level.end() && legacy->is_object()) ? &(*legacy) : nullptr;
+    }
+}
 #pragma warning(pop)
 
 #include "app/camera/Camera.h"
@@ -326,16 +348,19 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     // light's legacy `exposure` here. P4 is where those two meet.
     {
         render::CameraExposureSettings exposure{};
-        if (j.contains("cameraExposure"))
+        const nlohmann::json* exposureSection = PostProcessSection(j, "cameraExposure");
+        if (exposureSection)
         {
-            render::PhotographicSettingsJson::ApplyOverrides(j["cameraExposure"], exposure);
+            render::PhotographicSettingsJson::ApplyOverrides(*exposureSection, exposure);
         }
         // The P3B local-exposure fields used to live in `colorPipeline`; lift them if this level
         // still writes them there. Done AFTER the camera parse so an explicit new-block value wins.
-        if (j.contains("colorPipeline"))
+        if (const nlohmann::json* colorSection = PostProcessSection(j, "colorPipeline"))
         {
             render::PhotographicSettingsJson::MigrateLegacyLocalExposure(
-                j["colorPipeline"], j.contains("cameraExposure") ? j["cameraExposure"] : nlohmann::json::object(), exposure);
+                *colorSection,
+                exposureSection ? *exposureSection : nlohmann::json::object(),
+                exposure);
         }
         scene.SetCameraExposure(exposure);
         // Plan section 6.4: a level load invalidates the adapted value. Without this the camera
@@ -349,24 +374,24 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     // `enabled = false` reproduces the pre-P6B image exactly.
     {
         GtaoSettings gtao{};
-        if (j.contains("gtao"))
+        if (const nlohmann::json* section = PostProcessSection(j, "gtao"))
         {
-            GtaoSettingsJson::ApplyOverrides(j["gtao"], gtao);
+            GtaoSettingsJson::ApplyOverrides(*section, gtao);
         }
         scene.SetGtao(gtao);
 
         AtmosphereSettings atmosphere{};
-        if (j.contains("atmosphere"))
+        if (const nlohmann::json* section = PostProcessSection(j, "atmosphere"))
         {
-            AtmosphereSettingsJson::ApplyOverrides(j["atmosphere"], atmosphere);
+            AtmosphereSettingsJson::ApplyOverrides(*section, atmosphere);
         }
         scene.SetAtmosphere(atmosphere);
 
         // P8: a level without the section gets the struct defaults, i.e. bloom OFF.
         BloomSettings bloom{};
-        if (j.contains("bloom"))
+        if (const nlohmann::json* section = PostProcessSection(j, "bloom"))
         {
-            BloomSettingsJson::ApplyOverrides(j["bloom"], bloom);
+            BloomSettingsJson::ApplyOverrides(*section, bloom);
         }
         scene.SetBloom(bloom);
     }
@@ -374,9 +399,9 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     // P3: display transform. A level without the section gets the struct defaults, i.e. AgX.
     {
         render::ColorPipelineSettings color{};
-        if (j.contains("colorPipeline"))
+        if (const nlohmann::json* section = PostProcessSection(j, "colorPipeline"))
         {
-            render::PhotographicSettingsJson::ApplyOverrides(j["colorPipeline"], color);
+            render::PhotographicSettingsJson::ApplyOverrides(*section, color);
         }
         scene.SetColorPipeline(color);
     }

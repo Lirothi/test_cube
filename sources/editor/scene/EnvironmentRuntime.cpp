@@ -258,6 +258,42 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         AtmosphereSettingsJson::ApplyOverrides(p, atmosphere);
         ctx.scene.SetAtmosphere(atmosphere);
     }
+    else if (env.type == "postProcess")
+    {
+        // P8B: apply every group the folded object carries, through the SAME per-group readers the
+        // individual objects use. A missing group is applied as struct defaults, exactly as a
+        // missing section is at level load, so "the group is not in the file" means one thing.
+        const auto sub = [&p](const char* key) -> const nlohmann::json& {
+            static const nlohmann::json kEmpty = nlohmann::json::object();
+            const auto it = p.find(key);
+            return (it != p.end() && it->is_object()) ? *it : kEmpty;
+        };
+        {
+            render::CameraExposureSettings exposure{};
+            render::PhotographicSettingsJson::ApplyOverrides(sub("cameraExposure"), exposure);
+            ctx.scene.SetCameraExposure(exposure);
+        }
+        {
+            render::ColorPipelineSettings color{};
+            render::PhotographicSettingsJson::ApplyOverrides(sub("colorPipeline"), color);
+            ctx.scene.SetColorPipeline(color);
+        }
+        {
+            GtaoSettings gtao{};
+            GtaoSettingsJson::ApplyOverrides(sub("gtao"), gtao);
+            ctx.scene.SetGtao(gtao);
+        }
+        {
+            AtmosphereSettings atmosphere{};
+            AtmosphereSettingsJson::ApplyOverrides(sub("atmosphere"), atmosphere);
+            ctx.scene.SetAtmosphere(atmosphere);
+        }
+        {
+            BloomSettings bloom{};
+            BloomSettingsJson::ApplyOverrides(sub("bloom"), bloom);
+            ctx.scene.SetBloom(bloom);
+        }
+    }
     else if (env.type == "bloom")
     {
         // P8: rebuilt from defaults on every edit, same reasoning as the blocks around it -- a
