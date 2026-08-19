@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -147,6 +148,17 @@ public:
     Texture2D albedo; // sRGB
     Texture2D mr;     // UNORM: R=metal, G=rough
     Texture2D normal; // UNORM: RG (or RGB if normalIsRG=false)
+
+    // The files this material was BUILT from, so a re-import can find the built materials it
+    // invalidated (see MaterialDataManager::EvictCachedForTextures). Recorded even when the load
+    // FAILED: a material naming a texture that did not exist yet is exactly the one an import has
+    // to rebuild. These are the REQUESTED paths -- a preset may name x.png while the loader picks
+    // up the imported x.dds sibling, and the eviction test knows to check both.
+    std::wstring albedoSourcePath;
+    std::wstring mrSourcePath;
+    std::wstring normalSourcePath;
+    // True when any recorded source path satisfies `pred`.
+    bool UsesTexture(const std::function<bool(const std::wstring&)>& pred) const;
 
     // Loading helpers
     bool LoadAlbedo(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,

@@ -39,9 +39,18 @@ bool TryParseShadingModel(std::string_view text, ShadingModel& outModel)
     return false;
 }
 
+bool MaterialData::UsesTexture(const std::function<bool(const std::wstring&)>& pred) const
+{
+    if (!pred) { return false; }
+    return (!albedoSourcePath.empty() && pred(albedoSourcePath)) ||
+           (!mrSourcePath.empty()     && pred(mrSourcePath))     ||
+           (!normalSourcePath.empty() && pred(normalSourcePath));
+}
+
 bool MaterialData::LoadAlbedo(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
                               std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
+    albedoSourcePath = path;
     Texture2D::CreateDesc d{};
     d.path  = path;
     d.usage = Texture2D::Usage::AlbedoSRGB;
@@ -55,6 +64,7 @@ bool MaterialData::LoadAlbedo(Renderer* r, ID3D12GraphicsCommandList* upload, co
 bool MaterialData::LoadMR(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
                           std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
+    mrSourcePath = path;
     Texture2D::CreateDesc d{};
     d.path  = path;
     d.usage = Texture2D::Usage::MetalRough;
@@ -65,6 +75,7 @@ bool MaterialData::LoadMR(Renderer* r, ID3D12GraphicsCommandList* upload, const 
 bool MaterialData::LoadNormal(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
                               std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
+    normalSourcePath = path;
     Texture2D::CreateDesc d{};
     d.path       = path;
     d.usage      = Texture2D::Usage::NormalMap;

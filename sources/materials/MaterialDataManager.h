@@ -1,4 +1,6 @@
 #pragma once
+#include <cstddef>
+#include <functional>
 #include <string>
 #include "third_party/robin_hood.h"
 #include <memory>
@@ -66,6 +68,14 @@ public:
     // I2: drop the cached MaterialData for a name so the next GetOrCreate rebuilds it (after its
     // definition or textures changed on disk). Live objects keep their shared_ptr until respawned.
     void EvictCached(const std::string& name);
+
+    // Drop every built MaterialData that loaded one of the files `pred` names -- i.e. everything a
+    // re-import just made stale. Appends the evicted CACHE KEYS to `outEvicted` (a preset name, or
+    // "gltf::<selector>@<ordinal>" for a glTF auto-material), because dropping the cache only fixes
+    // the next GetOrCreate: objects already standing in the level hold their own shared_ptr and
+    // have to be respawned, and the caller needs the names to find them. Returns how many went.
+    std::size_t EvictCachedForTextures(const std::function<bool(const std::wstring&)>& pred,
+                                       std::vector<std::string>* outEvicted = nullptr);
 
     // Does the preset exist?
     bool HasPreset(const std::string& name) const;

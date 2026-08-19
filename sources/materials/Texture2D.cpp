@@ -510,6 +510,30 @@ void Texture2D::ClearCache()
     gSharedTex.clear();
 }
 
+std::size_t Texture2D::EvictIf(const std::function<bool(const std::wstring&)>& pred)
+{
+    if (!pred) { return 0; }
+    std::lock_guard<std::mutex> lk(gSharedTexMutex);
+    std::size_t dropped = 0;
+    for (auto it = gSharedTex.begin(); it != gSharedTex.end(); )
+    {
+        // Expired entries go too -- dead weight, and the map is being walked anyway. They are not
+        // counted: `dropped` answers "how much did the import invalidate", not "how big was the
+        // map".
+        const bool rewritten = pred(it->first.path);
+        if (rewritten || it->second.texture.expired())
+        {
+            if (rewritten) { ++dropped; }
+            it = gSharedTex.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    return dropped;
+}
+
 void Texture2D::CacheStats(std::uint32_t& saved, std::uint32_t& loaded, std::size_t& entries)
 {
     std::lock_guard<std::mutex> lk(gSharedTexMutex);

@@ -22,6 +22,11 @@
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
+#include "assets/AssetInvalidation.h"      // what one import rewrote, so the caches can drop it
+#include "core/diagnostics/DiagPaths.h"    // the invalidation verdict rides the import's own log
+#include "materials/MaterialDataManager.h" // built MaterialData is path-keyed too
+#include "materials/Texture2D.h"           // shared-texture index: evicted per path on re-import
+#include "materials/TextureDecodeCache.h"  // decoded images, same
 #include "rendering/meshes/MeshManager.h" // import completion drops the geometry cache
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -397,10 +402,11 @@ namespace
     // P6B. Seeded from the SCENE's current values, not from struct defaults: the dev window edits
     // the scene copy live, so "add the object" should capture what is on screen rather than snapping
     // the level back to neutral.
-        // Rebuild every placed staticMesh whose mesh asset path starts with `assetPrefix`, so a
-    // re-imported asset is picked up by copies already in the level and not only by new spawns.
-    // Returns how many were refreshed.
-    int RespawnPlacedMeshes(EditorContext& ctx, const std::string& assetPrefix)
+    // Placed static meshes whose geometry comes from under `assetPrefix` ("models/<name>"). The
+    // prefix covers both models/<name>.mesh.json and the split-node models/<name>_<part>.mesh.json
+    // that "Split by top-level nodes" produces.
+    std::vector<EditorObjectId> PlacedMeshesUnderAsset(EditorContext& ctx,
+        const std::string& assetPrefix)
     {
         const auto normalize = [](std::string s)
         {
@@ -416,6 +422,46 @@ namespace
             const std::string m = normalize(obj.properties.value("mesh", std::string()));
             if (!m.empty() && m.rfind(want, 0) == 0) { targets.push_back(obj.id); }
         }
+        return targets;
+    }
+
+    // Placed static meshes whose EFFECTIVE material (after mesh-asset + slot resolution) is one of
+    // `names`, so both inline `material`/`materials` overrides and materials inherited from a
+    // `.mesh.json` count. Mirrors MaterialEditorPanel::ApplyToScene's selection.
+    std::vector<EditorObjectId> PlacedMeshesUsingMaterials(EditorContext& ctx,
+        const std::vector<std::string>& names)
+    {
+        std::vector<EditorObjectId> targets;
+        if (names.empty()) { return targets; }
+
+        const auto wanted = [&names](const nlohmann::json& value)
+        {
+            return value.is_string() &&
+                   std::find(names.begin(), names.end(), value.get<std::string>()) != names.end();
+        };
+        for (const EditorObject& obj : ctx.document.Objects())
+        {
+            if (obj.type != "staticMesh") { continue; }
+            const nlohmann::json eff =
+                SceneObjectFactory::ResolveMeshAsset(EditorSceneDocument::ObjectToJson(obj));
+            bool hit = eff.contains("material") && wanted(eff["material"]);
+            if (!hit && eff.contains("materials") && eff["materials"].is_array())
+            {
+                for (const auto& slot : eff["materials"])
+                {
+                    if (wanted(slot)) { hit = true; break; }
+                }
+            }
+            if (hit) { targets.push_back(obj.id); }
+        }
+        return targets;
+    }
+
+    // Rebuild the runtime objects for `targets` from the document. This bypasses the command stack,
+    // so it owns the two follow-ups: masked groups cache MaterialData-owned SRVs in the shadow
+    // caster data, and the RT bindless caches them per mesh.
+    int RespawnPlacedMeshes(EditorContext& ctx, const std::vector<EditorObjectId>& targets)
+    {
         if (targets.empty()) { return 0; }
 
         // One GPU sync and one upload batch for the whole set, not per object: a grove is dozens
@@ -445,6 +491,149 @@ namespace
             ctx.scene.InvalidateRaytracing();
         }
         return applied;
+    }
+
+    // Appended to the import's OWN log, so one file tells the whole story: what was converted, and
+    // then what the running session dropped because of it. Counts rather than a "done" line -- a
+    // zero where a number belongs is how you find out the eviction matched nothing, which is
+    // exactly the failure this code exists to prevent and the one that looks like success.
+    void LogImportInvalidation(const std::string& line)
+    {
+        std::ofstream out(diag::LogPath("asset_import.log"), std::ios::app);
+        if (out) { out << line << "\n"; }
+    }
+
+    // A material definition the preset table keys by FILE STEM: data/materials/<name>.json, flat.
+    // A nested one (data/materials/_sweep/a0.json) is excluded on purpose -- the level may name it
+    // with its subfolder, so the stem is not its preset key, and guessing wrong would register a
+    // second entry under the wrong name. The importer only writes flat ones anyway.
+    bool IsMaterialDefinition(const std::string& path)
+    {
+        const std::string p = assets::NormalizeAssetPath(path);
+        static const std::string kPrefix = "data/materials/";
+        if (p.rfind(kPrefix, 0) != 0) { return false; }
+        if (p.find('/', kPrefix.size()) != std::string::npos) { return false; }
+        return p.size() > kPrefix.size() + 5 && p.compare(p.size() - 5, 5, ".json") == 0;
+    }
+
+    // The sky is not held in any cache -- the live Skybox object IS the retention: it uploads the
+    // cube, its two F7 IBL derivatives and the shared BRDF LUT once in Init and then keeps them for
+    // its own lifetime. So a re-imported sky needs the cube's version of a respawn, which is
+    // re-applying the environment entity (ApplySkybox builds a fresh Skybox straight from disk).
+    // This is the case that cost the debugging time: the .dds on disk was verifiably correct and
+    // the viewport kept showing the previous import.
+    bool RefreshSkyboxIfRewritten(EditorContext& ctx, const assets::InvalidationSet& rewritten)
+    {
+        const Skybox* sky = ctx.scene.GetSkybox();
+        if (!sky || sky->GetPath().empty()) { return false; }
+
+        std::filesystem::path stem(sky->GetPath());
+        stem.replace_extension();
+        const bool stale =
+            rewritten.Contains(sky->GetPath()) ||
+            rewritten.Contains(stem.wstring() + L"_spec.dds") ||
+            rewritten.Contains(stem.wstring() + L"_diffuse.dds") ||
+            rewritten.Contains(std::wstring(L"textures/brdf_lut.dds"));
+        if (!stale) { return false; }
+
+        for (const EditorObject& env : ctx.document.Environment())
+        {
+            if (env.type == "skybox")
+            {
+                EnvironmentRuntime::Apply(ctx, env);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // A re-import REWRITES files the running session is already holding: baked geometry, texture
+    // bytes, material definitions, the sky cube. Nothing keyed on a path notices by itself, so the
+    // asset ends up verifiably correct on disk while the viewport keeps showing the previous import
+    // until a restart. `written` is the importer's own list of what it produced (see
+    // ImportPanel::LastImportedFiles), which is what lets each cache drop exactly those entries
+    // instead of stat-ing every file on every lookup.
+    //
+    // DROPPING THE CACHES IS ONLY HALF. It fixes the next LOAD; objects already standing in the
+    // level own the geometry and MaterialData they were built with, so without the respawn below
+    // the level disagrees with itself -- new spawns updated, placed copies stale -- which is worse
+    // than not updating at all.
+    void ApplyImportInvalidation(EditorContext& ctx, const std::string& importedName,
+        const std::vector<std::string>& written)
+    {
+        assets::InvalidationSet rewritten;
+        for (const std::string& file : written) { rewritten.Add(file); }
+        const auto touched = [&rewritten](const std::wstring& path) { return rewritten.Contains(path); };
+
+        // Geometry. MeshManager keys its cache on models/<name>.mesh.bin and has no per-path
+        // evict; a full clear only costs re-reading whatever the level touches next, and it was
+        // already the behaviour here. Symptom without it: re-baking a rock to metres still spawned
+        // it at the original size.
+        if (MeshManager* meshes = ctx.renderer.GetMeshManager()) { meshes->Clear(); }
+
+        std::size_t droppedTextures = 0;
+        std::size_t droppedDecodes = 0;
+        if (rewritten.Empty())
+        {
+            // The import named no outputs (a finalize that wrote nothing we could name). Fall back
+            // to the wholesale drop rather than silently invalidating nothing: flushing a weak
+            // index costs the next load, being wrong costs a restart.
+            Texture2D::ClearCache();
+            texdecode::Clear();
+        }
+        else
+        {
+            droppedTextures = Texture2D::EvictIf(touched);
+            droppedDecodes = texdecode::EvictIf(touched);
+        }
+
+        std::vector<std::string> staleMaterials;
+        if (MaterialDataManager* materials = ctx.renderer.GetMaterialDataManager())
+        {
+            // Definitions the import rewrote: re-read the file, THEN drop what was built from the
+            // old one. Order matters (register -> evict -> respawn) -- the same sequence
+            // MaterialEditorPanel::Save follows, and for the same reason.
+            for (const std::string& file : written)
+            {
+                if (!IsMaterialDefinition(file)) { continue; }
+                materials->LoadPresetFromFile(std::wstring(file.begin(), file.end()));
+                const std::string name = std::filesystem::path(file).stem().string();
+                materials->EvictCached(name);
+                staleMaterials.push_back(name);
+            }
+            // And everything BUILT from a rewritten texture whose definition never changed -- the
+            // common case for a texture-set re-import, where only the pixels moved.
+            materials->EvictCachedForTextures(touched, &staleMaterials);
+        }
+
+        // One respawn for both reasons, so a grove of props pays a single GPU sync.
+        //
+        // The "gltf::<selector>@<ordinal>" keys in staleMaterials deliberately match nothing here:
+        // a document names a glTF auto-material as "auto", not by selector. Those objects are
+        // covered by the asset-prefix pass instead, because a glTF material's textures live under
+        // models/<name>/ and that is the import that rewrote them.
+        std::vector<EditorObjectId> targets;
+        if (!importedName.empty())
+        {
+            targets = PlacedMeshesUnderAsset(ctx, "models/" + importedName);
+        }
+        for (const EditorObjectId id : PlacedMeshesUsingMaterials(ctx, staleMaterials))
+        {
+            const bool already = std::any_of(targets.begin(), targets.end(),
+                [id](EditorObjectId t) { return t.value == id.value; });
+            if (!already) { targets.push_back(id); }
+        }
+        const int respawned = RespawnPlacedMeshes(ctx, targets);
+
+        const bool skyRebuilt = RefreshSkyboxIfRewritten(ctx, rewritten);
+
+        LogImportInvalidation(
+            "[reimport] invalidated: files=" + std::to_string(rewritten.Size()) +
+            " tex2d=" + std::to_string(droppedTextures) +
+            " decoded=" + std::to_string(droppedDecodes) +
+            " materials=" + std::to_string(staleMaterials.size()) +
+            " respawned=" + std::to_string(respawned) +
+            " skybox=" + (skyRebuilt ? "rebuilt" : "unchanged"));
     }
 
     EditorObject BuildGtaoObject(const Scene& scene)
@@ -2904,42 +3093,12 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 // 2s poll picks up the new DDS/models entries too.
                 if (importPanel_.Draw(assetRegistry_, &showImportPanel_))
                 {
-                    // A re-import REPLACES models/<name>.mesh.bin, but MeshManager keys its cache
-                    // on that path -- so without this the editor keeps handing out the geometry it
-                    // loaded before the bake and every new spawn is the OLD mesh until a restart.
-                    // Visible the moment a bake changes the VERTICES rather than just a material:
-                    // re-baking a rock to metres still spawned it at the original size.
-                    //
-                    // Clearing the map drops only the manager's own references. Objects already
-                    // placed hold their own shared_ptr and keep the geometry they were built with,
-                    // which is the same rule the shared-texture cache follows: the next LOAD is
-                    // fresh, existing instances are left alone until they are respawned.
-                    if (MeshManager* meshes = panelCtx.renderer.GetMeshManager())
-                    {
-                        meshes->Clear();
-                    }
-
-                    // Dropping the cache only fixes the NEXT load. Instances already standing in
-                    // the level hold their own shared_ptr to the geometry they were built with, so
-                    // without this a re-import that changed the vertices leaves every placed copy
-                    // at the old size and only new spawns look right -- which is worse than not
-                    // updating at all, because the level now disagrees with itself.
-                    //
-                    // Respawning from the document is the same live-apply the Mesh Editor performs
-                    // on save (MeshEditorPanel::ApplyToScene), for the same reason and with the
-                    // same follow-ups: it bypasses the command stack, so the shadow caster set and
-                    // the raytracing acceleration structure have to be rebuilt explicitly.
-                    //
-                    // Scoped by NAME rather than refreshing every static mesh: an import touches
-                    // one asset, and a level with a few hundred placed props should not pay a full
-                    // reload for it. The prefix covers both models/<name>.mesh.json and the
-                    // split-node models/<name>_<part>.mesh.json that "Split by top-level nodes"
-                    // produces.
-                    const std::string& imported = importPanel_.LastImportedName();
-                    if (!imported.empty())
-                    {
-                        RespawnPlacedMeshes(panelCtx, "models/" + imported);
-                    }
+                    // Everything a re-import invalidates in a session that is already running:
+                    // the path-keyed caches drop the entries whose file was rewritten, and the
+                    // objects standing on them get respawned. See ApplyImportInvalidation.
+                    ApplyImportInvalidation(panelCtx,
+                        importPanel_.LastImportedName(),
+                        importPanel_.LastImportedFiles());
                 }
             }));
 

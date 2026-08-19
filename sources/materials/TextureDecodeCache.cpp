@@ -26,6 +26,11 @@ std::mutex gMutex;
 std::unordered_map<Key, DecodedImage, KeyHash> gEntries;
 // Keys a worker is decoding RIGHT NOW. Without this, two thumbnails sharing a material both see an
 // empty cache and both decode the same file.
+//
+// The mapped bool is the entry's VALIDITY: EvictIf clears it for a file a re-import just rewrote,
+// and the worker throws its result away instead of publishing bytes that describe the previous
+// import. A decode takes seconds, so "started before the import, lands after it" is not a
+// theoretical window.
 std::unordered_map<Key, bool, KeyHash> gInFlight;
 // Concurrent decodes. Deliberately small: these run on the SHARED worker pool.
 constexpr std::size_t kMaxDecodesInFlight = 2;
@@ -51,6 +56,17 @@ std::size_t ImageBytes(const DecodedImage& img)
     std::size_t n = 0;
     for (const auto& m : img.mips) { n += m.size(); }
     return n;
+}
+
+// Retire an in-flight claim and say whether its result is still wanted. Called under gMutex by
+// whoever finished the decode. False = the file was rewritten while we were decoding it.
+bool FinishInFlight(const Key& key)
+{
+    const auto it = gInFlight.find(key);
+    if (it == gInFlight.end()) { return false; } // cannot happen: only the decoder erases its claim
+    const bool stillValid = it->second;
+    gInFlight.erase(it);
+    return stillValid;
 }
 
 } // namespace
@@ -92,8 +108,8 @@ Status Request(const Texture2D::CreateDesc& desc)
         img.height = h;
 
         std::lock_guard<std::mutex> lk(gMutex);
-        gInFlight.erase(key);
-        if (!img.valid) { return; }
+        const bool wanted = FinishInFlight(key);
+        if (!img.valid || !wanted) { return; }
         gBytes += ImageBytes(img);
         gEntries.emplace(key, std::move(img));
     });
@@ -118,9 +134,10 @@ void Prewarm(const Texture2D::CreateDesc& desc)
     img.height = h;
 
     std::lock_guard<std::mutex> lk(gMutex);
-    gInFlight.erase(key);
-    if (!img.valid) { return; } // a DDS, or a failed decode: leave the cache empty and let
-                                // CreateFromFile take its normal path
+    const bool wanted = FinishInFlight(key);
+    if (!img.valid || !wanted) { return; } // a DDS, a failed decode, or a re-import landed while we
+                                           // decoded: leave the cache empty and let CreateFromFile
+                                           // take its normal path
     gBytes += ImageBytes(img);
     gEntries.emplace(key, std::move(img));
 }
@@ -145,6 +162,34 @@ void Clear()
     gBytes = 0;
     // gInFlight is deliberately NOT cleared: a worker is still writing those keys and will erase
     // its own entry when it finishes.
+}
+
+std::size_t EvictIf(const std::function<bool(const std::wstring&)>& pred)
+{
+    if (!pred) { return 0; }
+    std::lock_guard<std::mutex> lk(gMutex);
+
+    std::size_t dropped = 0;
+    for (auto it = gEntries.begin(); it != gEntries.end(); )
+    {
+        if (pred(it->first.path))
+        {
+            gBytes -= ImageBytes(it->second);
+            it = gEntries.erase(it);
+            ++dropped;
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    // Same file, decode still running: mark the claim invalid so the worker discards its result
+    // rather than replacing what we just dropped with the pre-import image.
+    for (auto& [key, valid] : gInFlight)
+    {
+        if (valid && pred(key.path)) { valid = false; }
+    }
+    return dropped;
 }
 
 void Stats(std::uint32_t& taken, std::uint32_t& missed)

@@ -397,6 +397,27 @@ void MaterialDataManager::EvictCached(const std::string& name)
     cache_.erase(name);
 }
 
+std::size_t MaterialDataManager::EvictCachedForTextures(
+    const std::function<bool(const std::wstring&)>& pred,
+    std::vector<std::string>* outEvicted)
+{
+    if (!pred) { return 0; }
+
+    // Collect first, erase after: robin_hood rehashes on erase, so mutating mid-iteration is not
+    // safe the way it is for std::unordered_map.
+    std::vector<std::string> doomed;
+    for (const auto& [name, data] : cache_)
+    {
+        if (data && data->UsesTexture(pred)) { doomed.push_back(name); }
+    }
+    for (const std::string& name : doomed)
+    {
+        cache_.erase(name);
+        if (outEvicted) { outEvicted->push_back(name); }
+    }
+    return doomed.size();
+}
+
 void MaterialDataManager::ClearAll()
 {
     cache_.clear();

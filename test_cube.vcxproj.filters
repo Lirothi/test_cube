@@ -543,6 +543,9 @@
     <ClCompile Include="sources/assets/AssetImporter.cpp">
       <Filter>sources\assets</Filter>
     </ClCompile>
+    <ClCompile Include="sources/assets/AssetInvalidation.cpp">
+      <Filter>sources\assets</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/SetMeshAssetCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -1026,6 +1029,9 @@
       <Filter>sources\core\containers</Filter>
     </ClInclude>
     <ClInclude Include="sources/assets/AssetImporter.h">
+      <Filter>sources\assets</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/assets/AssetInvalidation.h">
       <Filter>sources\assets</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/SetMeshAssetCommand.h">

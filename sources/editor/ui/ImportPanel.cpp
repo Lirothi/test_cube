@@ -2,16 +2,17 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include "core/diagnostics/DiagPaths.h"
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 
 #include "assets/AssetImporter.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/MaterialFileGen.h" // I3: write named material files from glTF at import
-#include "materials/Texture2D.h"          // shared-texture cache: dropped when files change on disk
 #include "rendering/meshes/MeshManager.h" // CountSubmeshes for the slot count; ParseFileCpu to size an .obj
 #include "meshoptimizer.h"                // meshopt_Simplify* flags for the LOD import options
 #include <cfloat>
@@ -936,6 +937,40 @@ namespace
         }
     }
 
+    // data/materials/*.json with their write times. An import writes material definitions from
+    // three places (the backend's WritePresets, RecreateMeshAssets, and RepointPresetPaths above),
+    // so rather than have each of them report, snapshot the folder before the import and diff it
+    // after: whatever moved is what the running session's preset table has to re-read. Diffing
+    // write times avoids comparing a file clock against a wall clock -- only equality is used.
+    std::map<std::string, std::uint64_t> SnapshotMaterialDefinitions()
+    {
+        std::map<std::string, std::uint64_t> out;
+        std::error_code ec;
+        for (const fs::directory_entry& entry :
+            fs::directory_iterator("data/materials", fs::directory_options::skip_permission_denied, ec))
+        {
+            if (ec) { break; }
+            std::error_code fileEc;
+            if (!entry.is_regular_file(fileEc) || LowerExt(entry.path()) != ".json") { continue; }
+            out.emplace(entry.path().generic_string(), FileWriteTime(entry.path()));
+        }
+        return out;
+    }
+
+    // Paths in `after` that are new or whose write time changed.
+    std::vector<std::string> ChangedMaterialDefinitions(
+        const std::map<std::string, std::uint64_t>& before,
+        const std::map<std::string, std::uint64_t>& after)
+    {
+        std::vector<std::string> changed;
+        for (const auto& [path, writeTime] : after)
+        {
+            const auto it = before.find(path);
+            if (it == before.end() || it->second != writeTime) { changed.push_back(path); }
+        }
+        return changed;
+    }
+
     void WriteCreditsEntry(const std::string& name, const std::string& license)
     {
         if (license.empty()) { return; }
@@ -1232,6 +1267,8 @@ void ImportPanel::BeginImport(const Item& item,
 {
     if (running_.load()) { return; }
     activeItem_ = item;
+    // Baseline for "which material definitions did this run touch" — see PollImport.
+    materialsBeforeImport_ = SnapshotMaterialDefinitions();
     activeTargetOutputs_.clear();
     for (const std::string& output : targetOutputs)
     {
@@ -1801,6 +1838,8 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
     std::error_code ec;
     if (failures == 0)
     {
+        // Every file this run (re)wrote, collected as it is written. See LastImportedFiles().
+        lastImportedFiles_.clear();
         // Move the CONVERTED asset into the engine tree, by type. We copy only engine-ready files
         // (.dds + glTF/bin) — never the raw PNG/JPG/source.txt — so the project tree stays clean.
         // Generated .dds are then deleted from staging (they're "converted", shouldn't linger); the
@@ -1841,6 +1880,9 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                     }
                     if (mec) { return false; }
                     projectOutputs.insert(NormalizeRelativePath(to.filename()));
+                    // The manifest wants the name inside the set folder; the cache invalidation
+                    // wants the path the level actually loads.
+                    lastImportedFiles_.push_back(NormalizeRelativePath(to));
                     return true;
                 };
 
@@ -1875,6 +1917,7 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                             fs::copy_file(lutSrc, lutDst, fs::copy_options::overwrite_existing, lutEc);
                             if (!lutEc) { std::error_code rm; fs::remove(lutSrc, rm); }
                         }
+                        if (!lutEc) { lastImportedFiles_.push_back(NormalizeRelativePath(lutDst)); }
                     }
                 }
             }
@@ -1923,6 +1966,7 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                     else
                     {
                         projectOutputs.insert(normalizedRel);
+                        lastImportedFiles_.push_back(NormalizeRelativePath(target));
                         if (ext == ".dds") { generatedDds.push_back(it->path()); }
                     }
                 }
@@ -1981,16 +2025,51 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
             destLabel = finalizeFailed ? ("FINALIZE FAILED -> " + dst.string()) :
                 ("-> " + dst.string());
         }
+        else
+        {
+            // "Move into project" off: the converted .dds stay in import_staging/ and that is what
+            // a material pointing into staging loads. Publish those, or an in-place re-import is
+            // exactly as invisible as the one this mechanism exists to fix.
+            if (activeItem_.kind == Kind::Skybox)
+            {
+                fs::path produced = fs::path(activeItem_.path);
+                produced.replace_extension(".dds");
+                const fs::path stagingDir = produced.parent_path();
+                const std::wstring stem = produced.stem().wstring();
+                for (const std::wstring& sibling :
+                    { stem + L".dds", stem + L"_spec.dds", stem + L"_diffuse.dds",
+                      std::wstring(L"brdf_lut.dds") })
+                {
+                    const fs::path p = stagingDir / sibling;
+                    std::error_code sec;
+                    if (fs::exists(p, sec)) { lastImportedFiles_.push_back(NormalizeRelativePath(p)); }
+                }
+            }
+            else
+            {
+                for (auto it = fs::recursive_directory_iterator(activeItem_.path, ec);
+                     it != fs::recursive_directory_iterator(); it.increment(ec))
+                {
+                    if (ec) { break; }
+                    std::error_code fileEc;
+                    if (!it->is_regular_file(fileEc) || LowerExt(it->path()) != ".dds") { continue; }
+                    lastImportedFiles_.push_back(NormalizeRelativePath(it->path()));
+                }
+            }
+        }
         if (!finalizeFailed)
         {
             WriteCreditsEntry(activeItem_.name, activeItem_.license);
         }
-        // The files under models/ and textures/ have just been REPLACED, so every texture the
-        // shared cache is still indexing by that path now describes the previous import. Dropping
-        // the index frees nothing (it holds weak references only) -- it just stops the next load
-        // from being answered with the pre-import image, which is what a re-import into an OPEN
-        // level would otherwise look like: the asset changes on disk and nothing on screen moves.
-        Texture2D::ClearCache();
+        // Material DEFINITIONS are rewritten too — by the backend's WritePresets, by
+        // RecreateMeshAssets, and by the repoint above — and a running session holds those in
+        // MaterialDataManager's preset table, which is just as path-keyed as the texture caches.
+        // Diffing the folder catches all three writers without each having to report.
+        for (std::string& changed : ChangedMaterialDefinitions(
+                 materialsBeforeImport_, SnapshotMaterialDefinitions()))
+        {
+            lastImportedFiles_.push_back(std::move(changed));
+        }
         registry.Refresh();
         Rescan(); // pick up the new alreadyInProject state
         status_ = finalizeFailed ? ("Import FINALIZE FAILED for " + activeItem_.name) :

@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -32,6 +33,18 @@ public:
     // it). Valid when Draw() returned true; the caller uses it to refresh exactly the placed
     // instances that changed rather than every static mesh in the level.
     const std::string& LastImportedName() const { return lastImportedName_; }
+
+    // Engine-relative paths of every file the LAST completed import (re)wrote: the converted .dds,
+    // the skybox's IBL siblings, and the data/materials/*.json definitions it created or repointed.
+    //
+    // PUBLISHED RATHER THAN REDISCOVERED. Caches keyed on a path (the shared Texture2D index, the
+    // decode cache, built MaterialData) go on serving the previous import until something tells
+    // them the file underneath changed, and a running session has no other way to learn it -- the
+    // symptom is a re-imported asset that is verifiably correct on disk and still wrong on screen
+    // until a restart. Only this code knows exactly which files it wrote, so it says so, and the
+    // caches drop those entries by path instead of paying a stat on every lookup. Valid when
+    // Draw() returned true.
+    const std::vector<std::string>& LastImportedFiles() const { return lastImportedFiles_; }
 
     // Reimports only the content-browser resource and its actual source
     // dependencies. Deleted sources remove only their mapped output.
@@ -117,6 +130,10 @@ private:
     std::string workerManifestJson_;       // source snapshot built by worker after successful import
     Item activeItem_;
     std::string lastImportedName_;
+    std::vector<std::string> lastImportedFiles_;
+    // data/materials/*.json write times captured when the import STARTED. Diffed on completion to
+    // find the definitions this run created or rewrote, whoever wrote them.
+    std::map<std::string, std::uint64_t> materialsBeforeImport_;
     std::vector<std::string> activeTargetOutputs_;
     std::vector<std::string> activeRemovedSources_;
     // True for any non-full import (dialog subset or per-resource reimport): the manifest is

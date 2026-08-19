@@ -1,7 +1,9 @@
 #pragma once
 #include <wrl.h>
 #include <d3d12.h>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 #include <string>
@@ -61,6 +63,14 @@ public:
         // Drop the shared-texture cache's own bookkeeping. Entries are weak, so this frees nothing
         // by itself — it exists so shutdown does not walk a map of dangling weak_ptrs.
         static void ClearCache();
+        // Drop only the entries whose file was just rewritten on disk (a re-import). The predicate
+        // is handed the RESOLVED path the entry is indexed under. Returns how many entries went.
+        //
+        // Weak entries, so this frees nothing and changes nothing already on screen: a material
+        // built before the import still owns the texture it loaded. It makes the next LOAD read
+        // disk — which is only half the fix, and the caller owes the other half (respawning what
+        // was placed) or the level ends up disagreeing with itself.
+        static std::size_t EvictIf(const std::function<bool(const std::wstring& resolvedPath)>& pred);
         // Since process start. `entries` counts live shared textures; `saved` is the number of
         // loads the cache turned into views, i.e. the GPU copies that were NOT made.
         static void CacheStats(std::uint32_t& saved, std::uint32_t& loaded, std::size_t& entries);

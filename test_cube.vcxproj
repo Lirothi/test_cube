@@ -354,6 +354,7 @@
     <ClCompile Include="sources/text/TextManager.cpp" />
     <ClCompile Include="sources/ui/ImGuiLayer.cpp" />
     <ClCompile Include="sources/assets/AssetImporter.cpp" />
+    <ClCompile Include="sources/assets/AssetInvalidation.cpp" />
   </ItemGroup>
   <ItemGroup>
     <!-- PCH is limited to engine sources in Debug. Third-party translation units keep
@@ -377,6 +378,7 @@
     <ClInclude Include="sources/pch.h" />
     <ClInclude Include="sources/app/App.h" />
     <ClInclude Include="sources/assets/AssetImporter.h" />
+    <ClInclude Include="sources/assets/AssetInvalidation.h" />
     <ClInclude Include="sources/app/diagnostics/SceneStress.h" />
     <ClInclude Include="sources/app/diagnostics/CullBenchmark.h" />
     <ClInclude Include="sources/app/AppController.h" />

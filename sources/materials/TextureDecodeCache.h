@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -75,6 +76,17 @@ bool Take(const Texture2D::CreateDesc& desc, DecodedImage& out);
 // Drop everything still pending (a browse cancelled mid-flight leaves prewarmed entries nobody
 // will ever take).
 void Clear();
+
+// Drop the decoded images whose file was just rewritten on disk -- a re-import. The predicate is
+// handed the RESOLVED path an entry was decoded from (the same string MakeKey stores), so the
+// caller can compare it against the set of files the import produced. Returns how many entries
+// went.
+//
+// This also cancels any decode IN FLIGHT for a matching file: a worker that started before the
+// import finished is holding the previous bytes, and without the cancel it would publish them
+// AFTER the eviction and the stale image would win. That is the one ordering this cache can get
+// wrong on its own, so it is handled here rather than left to the caller.
+std::size_t EvictIf(const std::function<bool(const std::wstring& resolvedPath)>& pred);
 
 // Take() hit/miss counters since the last ResetStats. A miss means CreateFromFile decoded on
 // the CALLING thread — which is the main thread for thumbnails, i.e. exactly the stall this
