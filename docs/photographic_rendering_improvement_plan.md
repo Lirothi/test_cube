@@ -4525,6 +4525,50 @@ Fixed on the way, both real and both found by the audit rather than by the sympt
   with no light in it at all. `ambient` has always meant "this fraction of the SUN'S COLOUR", so it
   is multiplied by the sun now, exactly as `lighting_cs`'s flat branch does.
 
+#### P16.11 — The banding: RT reflection rays hit their own floor — DONE (2026-08-20)
+
+`TraceReflection` spawned its ray with **`TMin = 0`** and a fixed `P + N * 0.02` offset. Two things
+make that fail on a large flat mirror:
+
+* `P` is **reconstructed from the depth buffer**, so it carries an error that grows with distance and
+  is QUANTISED by the depth format;
+* at a grazing angle a normal offset of 0.02 buys only `0.02 / sin(theta)` of clearance ALONG the
+  ray, which goes to nothing as the ray flattens out.
+
+So the ray dips back under the plane and hits the floor it came from — and because the reconstruction
+error alternates above/below the true plane in steps, the self-hits land in **evenly spaced,
+perspective-converging bands**. The bronze was reflecting ITSELF in stripes.
+
+**The evidence that separated it from everything else was difference imaging.** Subtracting the
+SkyOnly render from the RT render, inside the floor, left the reflected crowns (dark) plus **bright
+orange horizontal lines spanning the whole floor** — orange being the floor's own colour, which is
+what named the mechanism. Row statistics alone could not do this: the floor carries a 3.85% baseline
+ripple from the sky's own cloud layering, and the defect was only 0.57 points on top of it.
+
+Fixed in two parts, because there are two failures: the normal offset now scales with view distance
+(where the reconstruction error lives), and **TMin skips the distance the ray needs to clear that
+offset at ITS OWN angle** — which is the part a normal offset alone cannot do:
+
+```hlsl
+const float viewDist = length(P - camPos);
+const float nOffset  = max(0.02f, viewDist * 0.002f);
+const float cosGraze = max(dot(N, R), 0.05f);
+TraceReflection(P + N * nOffset, R, camPos, nOffset / cosGraze, radiance);
+```
+
+The RT shadow rays had the same `TMin = 0` with a fixed offset and got the same treatment, or
+foliage and terrain would show acne at a grazing sun.
+
+**Verified:** floor ripple **3.548 → 3.483 against a SkyOnly baseline of 3.482** — identical to three
+decimals — and the difference image is clean of bands.
+
+Two other things were established on the way and are worth keeping:
+
+* **the soft striping present in EVERY path, including SkyOnly, is the SKY** — the source HDRI
+  carries 8.7% row-to-row structure near the horizon, and a near-mirror shows it faithfully. Not a
+  defect. Confirmed by the user hiding the meshes: it stayed.
+* **the solid slabs across reflected crowns are a separate, still-open defect** — see below.
+
 #### OPEN — RT reflections do not alpha-test masked geometry
 
 The horizontal banding across reflected palm crowns. **Diagnosed, not fixed.**

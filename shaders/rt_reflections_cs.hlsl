@@ -53,9 +53,13 @@ SamplerState gSmpPoint : register(s1);
 
 // Shadow ray toward a local light: 0 if an opaque TLAS triangle occludes the path
 // to the light, else 1. Used for off-screen hit shading (sun + spot lights).
-float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 L, float maxDist)
+float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 L, float maxDist,
+                    float tMin = 1.0e-3f)
 {
-    RayDesc sray; sray.Origin = origin; sray.Direction = L; sray.TMin = 0.0f; sray.TMax = maxDist;
+    // P16.11: same reasoning as the reflection ray -- TMin 0 lets a shadow ray hit its own
+    // surface, which at a grazing sun angle is acne. The caller offsets along the normal; this
+    // skips the distance needed to clear that offset at the ray's own angle.
+    RayDesc sray; sray.Origin = origin; sray.Direction = L; sray.TMin = tMin; sray.TMax = maxDist;
     RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
     sq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, sray);
     sq.Proceed();
@@ -65,12 +69,14 @@ float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 
 // Trace one reflection ray; on hit, return its radiance shaded like the base pass.
 // camPos is the camera world position — the hit is shaded from the CAMERA view (as
 // the base pass / lightT does) so the recompute is seamless with the screen sample.
-bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radiance)
+bool TraceReflection(float3 origin, float3 dir, float3 camPos, float tMin, out float3 radiance)
 {
     radiance = float3(0.0f, 0.0f, 0.0f);
 
     RaytracingAccelerationStructure tlas = ResourceDescriptorHeap[tlasIndex];
-    RayDesc ray; ray.Origin = origin; ray.Direction = dir; ray.TMin = 0.0f; ray.TMax = 1e4f;
+    // P16.11: TMin was 0, so the ray was free to hit the very triangle it started on. See the
+    // call site for how the clearance is sized.
+    RayDesc ray; ray.Origin = origin; ray.Direction = dir; ray.TMin = tMin; ray.TMax = 1e4f;
     RayQuery<RAY_FLAG_FORCE_OPAQUE> q;
     q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, ray);
     while (q.Proceed()) {}
@@ -146,7 +152,9 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radian
 
         // Sun (directional) + ambient -- multiplied by exposure, as lighting_cs.
         float3 L = normalize(-sunDirWS);
-        float shadow = (dot(N, L) > 0.0f) ? RtTraceShadow(tlas, hitOrigin, L, 1e4f) : 1.0f;
+        // P16.11: clear the 0.02 normal offset along THIS ray's direction.
+        const float shadowTMin = 0.02f / max(dot(N, L), 0.05f);
+        float shadow = (dot(N, L) > 0.0f) ? RtTraceShadow(tlas, hitOrigin, L, 1e4f, shadowTMin) : 1.0f;
         BRDFInput bi;
         bi.albedo = albedo; bi.rough = rough; bi.metal = metal; bi.N = N; bi.V = V; bi.L = L;
         BRDFResult br = EvalBRDF(bi);
@@ -189,7 +197,8 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radian
                 BRDFInput sbi; sbi.albedo = albedo; sbi.rough = rough; sbi.metal = metal; sbi.N = N; sbi.V = V; sbi.L = sl;
                 BRDFResult sbr = EvalBRDF(sbi);
                 if (sbr.NdotL <= 0.0f) { continue; }
-                float ssh = RtTraceShadow(tlas, hitOrigin, sl, max(sdist - 0.04f, 0.0f));
+                const float spotTMin = 0.02f / max(dot(N, sl), 0.05f); // P16.11
+                float ssh = RtTraceShadow(tlas, hitOrigin, sl, max(sdist - 0.04f, 0.0f), spotTMin);
                 direct += (sbr.diffBRDF + sbr.specBRDF) * sbr.NdotL * rad * ssh;
             }
         }
@@ -249,8 +258,24 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         float3 camPos = mul(float4(0.0f, 0.0f, 0.0f, 1.0f), invView).xyz;
         float3 R = reflect(normalize(P - camPos), N);
 
+        // P16.11 -- SELF-INTERSECTION. `P` is RECONSTRUCTED FROM THE DEPTH BUFFER, so it carries an
+        // error that grows with distance and is QUANTISED by the depth format. A fixed 0.02 along
+        // the normal cannot cover that, and at a grazing angle it buys only 0.02/sin(theta) of
+        // clearance ALONG the ray -- so on a large flat mirror the ray dips back under the plane and
+        // hits the floor it came from. That is the evenly spaced, perspective-converging orange
+        // banding across the bronze: the floor reflecting ITSELF, in bands set by where the depth
+        // reconstruction happens to land above or below the true plane.
+        //
+        // Two parts, because there are two failures. The normal offset scales with view distance,
+        // which is where the reconstruction error lives; and TMin skips the distance the ray needs
+        // to actually clear that offset at ITS angle, which is the part a normal offset alone
+        // cannot do. The cosine is floored so a ray exactly along the surface still gets a finite,
+        // large clearance instead of an infinite one.
+        const float viewDist = length(P - camPos);
+        const float nOffset  = max(0.02f, viewDist * 0.002f);
+        const float cosGraze = max(dot(N, R), 0.05f);
         float3 radiance;
-        if (TraceReflection(P + N * 0.02f, R, camPos, radiance))
+        if (TraceReflection(P + N * nOffset, R, camPos, nOffset / cosGraze, radiance))
         {
             result = float4(radiance, 1.0f); // premultiplied, full coverage
         }
