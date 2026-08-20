@@ -47,7 +47,10 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle vsmDepthBias;
     Material::CBFieldHandle clipmapBaseExtent;
     Material::CBFieldHandle clipmapNormalBias;
+    Material::CBFieldHandle clipmapDepthBiasDecay;    // per-level depth-bias shaping (see VsmClipmapShadow)
+    Material::CBFieldHandle clipmapDepthBiasFloorNdc;
     Material::CBFieldHandle clipmapViewProj;
+    Material::CBFieldHandle clipmapUvNormal; // P16.16
     Material::CBFieldHandle causticsTint;      // rgb = tint, w = master enable
     Material::CBFieldHandle causticsParams0;
     Material::CBFieldHandle causticsParams1;
@@ -488,8 +491,11 @@ struct LightingPassConstants
     uint32_t useVsm = 0;                          // Step 24f: 1 = sample the directional VSM clipmap
     float vsmDepthBias = 0.0f;
     float clipmapBaseExtent = 0.0f;               // finest clipmap level's world extent
-    float clipmapNormalBias = 0.0f;               // normal offset in texels
-    std::array<mat4, 8> clipmapViewProj{};        // camera-centered ortho viewProj per clipmap level
+    float clipmapNormalBias = 0.0f;               // receiver normal offset, UE units (P16.16)
+    float clipmapDepthBiasDecay = 1.0f;           // bias(L) = max(vsmDepthBias * decay^L, floorNdc)
+    float clipmapDepthBiasFloorNdc = 0.0f;        // already converted texels -> NDC on the CPU
+    std::array<mat4, 8> clipmapViewProj{};
+    mat4 clipmapUvNormal{}; // P16.16: receiver-plane transform (inverse transpose world->shadow UV)        // camera-centered ortho viewProj per clipmap level
     // Underwater caustics (see shaders/caustics.hlsli). causticsTint.w == 0 disables the block,
     // which is what a level without an ocean produces.
     float4 causticsTint{};

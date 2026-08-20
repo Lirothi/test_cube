@@ -4310,65 +4310,112 @@ other: manual +1 on `manualCompensationEv` = +0.836 stops and on `compensationEv
 on `compensationEv` = +0.688 stops and on `manualCompensationEv` = +0.0002. (Less than a full stop
 because the tone curve compresses; 0.0002 is the temporal noise floor.)
 
-#### P16.14 / P16.15 — Clipmap shadow bias: REVERTED, and what UE actually does
+#### P16.16 — Clipmap shadow bias, done UE's way — and the streak was never a bias problem
 
-Two attempts shipped and both were reverted at the user's call. Recorded because the reading that
-came out of it is the basis for the real fix.
+Two earlier attempts (a slope-scaled depth push; sizing the normal offset by `T*sin/cos^2`, then
+taking its direction from a depth-reconstructed geometric normal) were reverted at the user's call.
+He then asked for the three points below, checked against the UE drop at every step.
 
-**What was tried and why it was wrong.** (1) A slope-scaled DEPTH push, `depth * (1 + slope*tan)`.
-It barely moved the artefact and at a strength that did move it, contacts detached. (2) Sizing the
-NORMAL offset by the derived `T*sin/cos^2` requirement. That removed the streak, but at ~4.9 texels
-the offset is steered by a per-pixel direction and the shadow CONTOUR broke into a dither. (3)
-Taking that direction from a depth-reconstructed geometric normal. It fixed the dither, and the
-user rejected it — correctly, see below. Everything is back to `g_clipmapDepthBias = 0.0001` and
-`g_clipmapNormalBias = 2.0`. Kept: `--set=vsm.clipmapDepthBias / clipmapNormalBias /
-clipmapBaseExtent`, which are only headless access to sliders that already existed.
+**1. Per-tap receiver-plane depth bias** (`VsmSampleNDC`), from
+`ComputeVirtualShadowMapOptimalSlopeBias`:
 
-**UE, from the drop.** Two mechanisms, and the constant is not one of them.
+    depthSlopeUV = -planeUV.xy / planeUV.z          // plane transformed to shadow UV space
+    bias = 2 * max(0, dot(depthSlopeUV, offsetUV))
 
-*Normal offset* — `VirtualShadowMapProjection.usf:249` with
-`VirtualShadowMapGetNormalBiasLength`:
+`offsetUV` is the sub-texel offset to the texel centre PLUS the tap's own offset — the second term
+is ours, because UE's SMRT walks single texels while this is a 3x3 PCF, so a corner tap now biases
+about 1.4x the centre one where one value used to serve all nine. It is not an estimate of the
+snapping error, it IS the error: zero on a texel centre, maximal at a corner.
 
-    TranslatedWorldPosition += WorldNormal * max(0.02, NormalBias * DistanceToCamera / cot(hFov/2))
+`clipmapUvNormal` is built CPU-side exactly as UE build
+`CalcTranslatedWorldToShadowUVNormalMatrix` — the transpose-inverse of world -> shadow UVZ. ONE
+matrix serves all levels: the gradient is a ratio in which the level extent cancels.
 
-`r.Shadow.Virtual.NormalBias` defaults to 0.5 and is divided by 1000 on the CPU, so 0.0005. Two
-things fall out. It uses the **shading normal** — `GetEstimatedGeoWorldNormal` exists right there in
-the same file and is marked *"NOTE: Not currently used but occasionally useful for testing"*, so
-attempt (3) is not what UE do. And the offset is referred to the **screen pixel**, not the shadow
-texel: distance-to-camera times `tan(hFov/2)`. Ours is `2.0 * dist/1024 = 0.00195*dist` with no fov
-term; UE at a 90-degree hFov is `0.0005*dist`. **Same shape, ours is 3.9x larger.**
+**2. The per-level scaling** UE do as `bias *= 1 << (sampledLevel - requestedLevel)` falls out for
+free: the offset is converted to UV with the dimensions of the level the fallback loop ACTUALLY
+landed on, so a coarser level's larger texel widens it by the same factor.
 
-*The workhorse — a per-sample RECEIVER-PLANE depth bias*
-(`ComputeVirtualShadowMapOptimalSlopeBias`, `VirtualShadowMapProjectionCommon.ush:265`):
+**3. The normal offset is now UE's**, `max(0.02cm, NormalBias * distanceToCamera / cot(hFov/2))`
+with `NormalBias` divided by 1000 on the CPU — so `g_clipmapNormalBias` is directly comparable to
+`r.Shadow.Virtual.NormalBias` and defaults to their 0.5. It is referred to the world size of a
+SCREEN PIXEL, not the shadow texel; the old form ignored the field of view and ran 3.9x larger.
 
-    NormalPlaneUV  = mul(plane(N, P), TranslatedWorldToShadowUVNormalMatrix)
-    DepthSlopeUV   = -NormalPlaneUV.xy / NormalPlaneUV.z        // depth gradient per unit shadow UV
-    TexelCenterOffsetUV = (texelCentre - exactSamplePosition) / levelDims
-    OptimalSlopeBias = 2 * max(0, dot(DepthSlopeUV, TexelCenterOffsetUV))
-    OptimalSlopeBias = min(OptimalSlopeBias, abs(100 * ShadowViewToClipMatrix._33))
-    OptimalSlopeBias *= 1 << (sampledLevel - requestedLevel)
+**TWO TRANSCRIPTION BUGS, both caught by rendering.** The `/1000` was written into a comment and
+never implemented, making the offset half the distance to the camera — the frame was solid acne.
+And UE's `DepthSlopeUV` clamp of 0.05 DOES NOT TRANSFER: their clipmap level spans `ZRangeScale`
+(1000) times its radius, ours spans 6x its extent (12x radius), so our gradients are ~83x theirs
+and their clamp was crushing the real gradient (tan(theta)/6 = 0.31 for flat sand here) SIXFOLD —
+producing less bias than the constant it replaced. The bound is now derived, not copied.
 
-This is not an estimate of the error, it IS the error: the depth change between where the sample
-actually is and the centre of the texel it snapped to, from the receiver plane's own gradient. It is
-**zero on a texel centre** and maximal at a corner, so a well-sampled flat receiver gets essentially
-no push and cannot peter-pan; it grows on its own with receiver slope and with texel size. The
-`DepthSlopeUV` clamp (+/-0.05) and the bias clamp are anti-flicker guards for near-grazing
-receivers.
+**AND THE STREAK WAS NEVER A BIAS PROBLEM.** With the receiver-plane bias in and verified, the
+streak stayed. Amplifying it 10x only softened it while over-biasing the crown. The matrix was
+cleared by rendering the same gradient derived analytically from the light basis: it differed by
+0.654/255 against a same-shader-twice control of 0.499 — inside the noise floor, so the two agree.
 
-**And the last line is exactly the user's hypothesis, confirmed**: when the sampler falls back to a
-COARSER clipmap level the bias is scaled by `2^(delta level)`. Our `VsmClipmapShadow` has the same
-fallback loop — it walks to coarser levels when a page is not resident — and passes the SAME NDC
-bias whichever level it lands on. That is a real defect independent of everything above.
+The cause is `--vsm-lodbias`: **the shadow map renders the terrain at a coarser LOD than the
+G-buffer shades**, so the receiver plane and the caster surface are genuinely different geometry.
+No depth bias can fix that, which is exactly why every depth push failed and only a large LATERAL
+normal offset ever "worked" — it walks past the mismatch. At `--vsm-lodbias=-2` the streak is GONE
+with `normalBias 0`, on the receiver-plane bias alone.
 
-**The direction for the real fix**, in order:
-1. Per-tap receiver-plane bias in `VsmSampleNDC`, replacing the constant. Everything needed is
-   already there: `clipVP[i]` gives the plane transform, and each of the 3x3 PCF taps knows its own
-   texel offset — note ours applies ONE bias to all nine taps today, while a corner tap needs about
-   1.4x the centre's.
-2. Scale the bias by the level actually sampled when the residency loop falls through.
-3. Only then revisit the normal offset, which is 3.9x UE's and has no fov term.
+**The cost of that**, three interleaved runs a side: `Pass_VsmPageRender` 1.333 -> 3.154 ms,
+**+1.82 ms (+137%)**. So turning the LOD bias off globally is not the answer. The targeted fix is to
+exclude the TERRAIN from the shadow caster LOD — it is the one mesh that is both the caster and the
+receiver directly under the camera, while the palms the bias exists to speed up can keep it. Not
+implemented; it is a separate change and a design call.
 
-Not implemented. This is a design note, not a change.
+**Gate**: 33/33 shaders, both configs.
+
+#### P16.17 — Terrain out of the shadow-LOD offset: the fix, and the measurement bug that hid it
+
+The diagnosis was the user's and it is correct: **the terrain rasterized into the shadow map at a
+coarser LOD than the G-buffer shades it, so the ground self-shadows.** Excluding
+`RenderLayer::Terrain` meshes from the shadow LOD offset removes the streak completely — it matches
+a reference render where the terrain casts nothing at all.
+
+**IT TOOK TWO WRONG MEASUREMENTS TO GET THERE, AND BOTH WERE MINE.**
+
+*The first* patched the per-(view, group) CPU table. That table feeds only the cull-clear/Legacy
+path: the GPU picks the caster LOD PER VIEW — `vsm_page_setup_cs.hlsl:254`, `gViewLod[rung0View]`
+indexes `gGroupLodMega[group * numLods + lod]`. The exemption never reached the drawn geometry and
+measured as an exact no-op, inside the 0.5/255 run-to-run noise floor.
+
+*The second* moved it into `gGroupLodMega` — but **that entry is filled in TWO separate loops**: the
+lod-relative start and count in one, the mega-absolute start and base vertex in another. The
+exemption went into the first only. The terrain therefore got **LOD 0's index count (248,832)
+starting at LOD 1's mega offset**, reading 124,419 indices off the end of a 124,413-index slice into
+whatever followed. It cost 4 ms, drew garbage, and left the streak in place — and I reported that as
+"excluding the terrain does not fix it", and then built a whole wrong conclusion about foliage on
+top of it. Both halves now go through one `effectiveLod(group, L)` helper so they cannot disagree
+again.
+
+**Corrected measurements** (`Pass_VsmPageRender`, three interleaved runs a side, `Pass_Compose`
+steady at 0.030–0.033 as the control):
+
+| variant | cost | streak |
+|---|---|---|
+| today | 1.325 ms | present |
+| **terrain out of the LOD offset, every level** | **4.568 ms (+3.24, +245%)** | **GONE** |
+| terrain out for the NEAR levels only (viewLod ≤ 1) | 3.518 ms (+2.18, +164%) | GONE, same image (1.0/255 from the above) |
+| terrain casts nothing (reference) | — | GONE |
+
+**The terrain is essentially the entire shadow-render cost.** `logs/shadow_lod_groups.log` (written
+per caster rebuild) shows why: group 0 is the island, 199.6 m radius, **248,832 indices at LOD 1**,
+rasterized into every page it touches; the palms are 336–7,776. So the LOD offset earns nearly all
+of its keep on the one mesh that must not have it, which is the whole tension here.
+
+Restricting the exemption to the near levels recovers a third of the cost for an identical picture,
+and is the obvious next place to push: the far clipmap levels shade the ground coarsely too, so the
+mismatch there is invisible while those levels are where a 248k-index mesh hits the most pages.
+Beyond that the real answer is an error-bounded caster LOD keyed on the shadow texel — what Nanite
+does for UE — rather than a per-mesh exemption.
+
+**NOTHING FROM THIS SECTION IS IN THE TREE.** The mode switch, the terrain group flag, the
+`effectiveLod` helper and the diagnostic log were measurement scaffolding and have been reverted;
+`LodSelect.h`, `ShadowGpuData.h/.cpp` and `Scene.cpp` are back at the commit. What survives is the
+knowledge: the diagnosis is confirmed, the fix is a per-mesh exemption from the shadow LOD offset,
+it costs +3.24 ms (or +2.18 restricted to the near levels), and `gGroupLodMega` is assembled in two
+loops that must be changed together.
 
 #### P16.5 — Local lights in lumens, and every level converted — DONE (2026-08-20)
 

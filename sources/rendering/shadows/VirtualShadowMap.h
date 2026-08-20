@@ -8,6 +8,7 @@
 #include <DirectXMath.h>
 #include <wrl/client.h>
 
+#include "core/math/Math.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/ResourceDeclarations.h"
 
@@ -25,6 +26,27 @@ namespace vfx { struct WindState; } // W5: global wind, folded into the per-page
 namespace vsm
 {
     inline constexpr std::uint32_t kPageSize = 128;                                  // texels per page edge
+
+    // P16.16 -- the plane transform the receiver-plane depth bias needs, built the way Unreal build
+    // `CalcTranslatedWorldToShadowUVNormalMatrix` (VirtualShadowMapArray.cpp:554): take
+    // world -> shadow UVZ and return its TRANSPOSE INVERSE, which is how a plane transforms.
+    //
+    // ONE matrix serves every clipmap level. The shader only uses the ratio
+    // `-planeUV.xy / planeUV.z`, and for our levels the UV scale goes as 1/extent while the depth
+    // scale goes as 1/(6*extent), so the extent cancels out of the ratio. `ClipmapUvNormalMatrixIsUniform`
+    // is the guard on that: it holds only while every level's depth range stays proportional to its
+    // extent, which is what `Scene::UpdateClipmap` builds today (depthUp 5E + depthDown 1E).
+    inline Math::mat4 CalcClipmapUvNormalMatrix(const Math::mat4& viewProj)
+    {
+        // Row-vector convention, matching the shaders: [x y z 1] * M. UE's ScaleAndBias is the same
+        // half-scale with a flipped V.
+        Math::mat4 uvScaleBias = Math::mat4::Identity();
+        uvScaleBias.m._11 = 0.5f;
+        uvScaleBias.m._22 = -0.5f;
+        uvScaleBias.m._41 = 0.5f;  // row-vector translation
+        uvScaleBias.m._42 = 0.5f;
+        return Math::mat4::Inverse(Math::mat4::Transpose(viewProj * uvScaleBias));
+    }
 
     // Step 19b: LOCAL-light virtual res (spot lights + point-light cube faces). The Step-18/19
     // first cut used kVirtualRes=8192 at a single (finest) level, which over-subscribed the pool
@@ -119,10 +141,23 @@ namespace vsm
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
     inline float         g_clipmapBaseExtent = 12.0f;
     // Step 24f: directional-clipmap NDC depth bias (against shadow acne). Tunable at the visual gate.
-    inline float         g_clipmapDepthBias = 0.0001f;
-    // Step 24f: directional-clipmap normal offset in TEXELS — scaled per level by world-units-per-texel
-    // (fine near, coarse far), so the receiver clears its own surface at every level. Tunable.
-    inline float         g_clipmapNormalBias = 2.0f;
+    // A level's NDC range is 6x its extent, so a constant NDC value is a constant bias in TEXELS
+    // (ndc * 6 * 2048 -- 0.0001 = 1.23 texels) whose WORLD size doubles per level.
+    inline float         g_clipmapDepthBias = 0.0009f;
+    // Per-level shaping of the constant bias: bias(L) = max(g_clipmapDepthBias * decay^L, floor).
+    // decay 1 = the legacy constant-in-texels behaviour (world size doubles per level -- raising the
+    // base then detaches thin far shadows); 0.5 = a constant WORLD-size bias (the near value
+    // everywhere). The floor is authored in TEXELS of the landed level and keeps far levels above
+    // the D16 pool's quantization: 6*2048/65536 = 0.19 texel is the hard minimum, so meaningful
+    // values are ~0.25-0.6. floor 0 + decay 1 = exactly the pre-knob behaviour.
+    inline float         g_clipmapDepthBiasDecay = 0.7f;
+    inline float         g_clipmapDepthBiasFloorTexels = 0.25f;
+    // Step 24f / P16.16: directional-clipmap normal offset. UNITS ARE UNREAL'S, so the number here
+    // is directly comparable to `r.Shadow.Virtual.NormalBias` (their default 0.5): the shader
+    // divides by 1000 and multiplies by distance-to-camera * tan(hFov/2), i.e. it is referred to the
+    // world size of a SCREEN PIXEL, not to the shadow texel. The old form was "texels * dist/1024",
+    // which at its shipped 2.0 worked out 3.9x this and ignored the field of view entirely.
+    inline float         g_clipmapNormalBias = 1.1f;
     // Local-light (spot + point) VSM shadow bias, in units of one shadow texel at the receiver
     // (auto-sized per-pixel from the light's cone width, distance and mip level in the shaders).
     // Lateral = surface-normal offset (~1 texel keeps Peter-panning to a texel); depth push =

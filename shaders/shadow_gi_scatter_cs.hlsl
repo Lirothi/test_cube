@@ -17,10 +17,10 @@ cbuffer ScatterParams : register(b0)
     uint   gGiBase;        // first global caster id of this object's instances
     uint   gCount;         // instance count
     float  gWindStrength;  // W5: the object's foliage sway strength (0 = rigid), same value gbuffer_inst.hlsl passes
-    float  gSwayPad;       // W5: metres to grow the world AABB on X/Z for the sway (0 when rigid)
     float  gWindFoliage;   // GI objects are one mesh -> one foliage weight for the whole cloud
     float  gWindTrunkStiff;
     float  gWindLeafScale; // W7.4: world metres of leaf arc per unit of COLOR_0.b
+    float2 _cbPad0;        // keep gAabbCenter on a 16-byte register boundary (mirrors ScatterCB)
     float4 gAabbCenter;  // mesh-local AABB center (w unused)
     float4 gAabbExtent;  // mesh-local AABB half-extents (w unused)
     row_major float4x4 gObjectWorld; // object model matrix, folded onto each instance's local world
@@ -94,12 +94,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const float3 c = gAabbCenter.xyz;
     const float3 e = gAabbExtent.xyz;
     const float3 cW = mul(float4(c, 1.0f), world).xyz;
-    float3 eW = mul(e, abs((float3x3)world));
-    // W5: grow by the max sway on the horizontal axes (mirrors ShadowGpuData::FillBounds for the
-    // static casters) so the per-page / per-view cull can't clip a swaying tip. 0 when rigid.
-    eW.x += gSwayPad;
-    eW.y += gSwayPad; // Tier 0: the arc bend dips the crown and the leaf flutter bobs vertically
-    eW.z += gSwayPad;
+    // Deliberately NOT grown by the wind sway extent (mirrors ShadowGpuData::FillBounds — the
+    // rationale and the measured cost of padding live there).
+    const float3 eW = mul(e, abs((float3x3)world));
     gBounds[dst].center = float4(cW, length(eW));
     gBounds[dst].halfExtents = float4(eW, 0.0f);
 }

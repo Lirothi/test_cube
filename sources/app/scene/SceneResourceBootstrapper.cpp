@@ -49,7 +49,10 @@ void SceneLightingCBHandles::Populate(Material* material)
     vsmDepthBias = material->ComputeCB0FieldHandle("vsmDepthBias");
     clipmapBaseExtent = material->ComputeCB0FieldHandle("clipmapBaseExtent");
     clipmapNormalBias = material->ComputeCB0FieldHandle("clipmapNormalBias");
+    clipmapDepthBiasDecay = material->ComputeCB0FieldHandle("clipmapDepthBiasDecay");
+    clipmapDepthBiasFloorNdc = material->ComputeCB0FieldHandle("clipmapDepthBiasFloorNdc");
     clipmapViewProj = material->ComputeCB0FieldHandle("clipmapViewProj");
+    clipmapUvNormal = material->ComputeCB0FieldHandle("clipmapUvNormal");
     causticsTint = material->ComputeCB0FieldHandle("causticsTint");
     causticsParams0 = material->ComputeCB0FieldHandle("causticsParams0");
     causticsParams1 = material->ComputeCB0FieldHandle("causticsParams1");
@@ -1133,6 +1136,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.vsmDepthBias, data.vsmDepthBias, dest);
     matLighting_->UpdateCBField(handles.clipmapBaseExtent, data.clipmapBaseExtent, dest);
     matLighting_->UpdateCBField(handles.clipmapNormalBias, data.clipmapNormalBias, dest);
+    matLighting_->UpdateCBField(handles.clipmapDepthBiasDecay, data.clipmapDepthBiasDecay, dest);
+    matLighting_->UpdateCBField(handles.clipmapDepthBiasFloorNdc, data.clipmapDepthBiasFloorNdc, dest);
     matLighting_->UpdateCBField(handles.causticsTint, data.causticsTint, dest);
     matLighting_->UpdateCBField(handles.causticsParams0, data.causticsParams0, dest);
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);
@@ -1145,6 +1150,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     {
         matLighting_->UpdateCBField(handles.clipmapViewProj, data.clipmapViewProj[i], dest, static_cast<uint32_t>(i));
     }
+    matLighting_->UpdateCBField(handles.clipmapUvNormal, data.clipmapUvNormal, dest); // P16.16
 }
 
 void SceneResourceBootstrapper::WritePointLightConstants(const PointLightPassConstants& data, uint8_t* dest) const

@@ -13,6 +13,7 @@
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::kMaxShadowLods (per-view shadow LOD table)
+#include "core/diagnostics/DiagPaths.h" // logs/vsm_pages.log (g_logPageStats file mirror)
 #include "vfx/WindState.h" // W5: wind params copied into each page's shadow view CB
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
@@ -1486,6 +1487,44 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     stats_.newAlloc = newAlloc;
     stats_.fail = failCount;
     for (std::uint32_t l = 0; l < vsm::kNumMipLevels; ++l) { stats_.perLevel[l] = perLevel[l]; }
+
+    // File log — every sample (no DBWIN throttle), logs/vsm_pages.log. The per-view residency
+    // breakdown comes from the physOwner snapshot (owner id / kPagesPerView = view), which is what
+    // the round-trip perf investigation needs: WHICH views' resident sets grew
+    // (docs/bug_shadow_lod_bias_perf.md §4). Truncated on the first sample of a run.
+    if (vsm::g_logPageStats)
+    {
+        std::uint32_t ownersTotal = 0, ownersLocal = 0;
+        std::uint32_t ownersClip[vsm::kNumClipmapLevels] = {};
+        for (std::uint32_t p = 0; p < vsm::kPoolPageCount; ++p)
+        {
+            const std::uint32_t o = physOwnerSnapshot_[p];
+            if (o == 0xFFFFFFFFu) { continue; } // VSM_INVALID = free
+            ++ownersTotal;
+            const std::uint32_t v = o / vsm::kPagesPerView;
+            if (v < vsm::kNumLocalVirtualViews) { ++ownersLocal; }
+            else if (v - vsm::kNumLocalVirtualViews < vsm::kNumClipmapLevels)
+            {
+                ++ownersClip[v - vsm::kNumLocalVirtualViews];
+            }
+        }
+        static bool firstLine = true;
+        FILE* f = nullptr;
+        if (fopen_s(&f, diag::LogPath("vsm_pages.log").c_str(), firstLine ? "w" : "a") == 0 && f)
+        {
+            firstLine = false;
+            std::fprintf(f,
+                "frame=%llu bias=%d req=%u (L0=%u L1=%u L2=%u L3=%u L4=%u) resident=%u new=%u fail=%u"
+                " | owners: total=%u local=%u clip=[%u %u %u %u %u %u %u %u]\n",
+                static_cast<unsigned long long>(debugReadbackFrame_), render::g_shadowLodBias,
+                total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
+                resident, newAlloc, failCount,
+                ownersTotal, ownersLocal,
+                ownersClip[0], ownersClip[1], ownersClip[2], ownersClip[3],
+                ownersClip[4], ownersClip[5], ownersClip[6], ownersClip[7]);
+            std::fclose(f);
+        }
+    }
 
     // DBWIN log — OFF by default (vsm::g_logPageStats), throttled independently of the (faster) stats
     // sampling so a captured stress/dev run is not flooded. The on-screen readout updates every

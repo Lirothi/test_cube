@@ -22,18 +22,19 @@ inline constexpr unsigned int kMaxShadowLods = 4u;
 // rasterize at. Each shadow view (CSM cascade i / VSM clipmap level i / local light) gets a base LOD
 // from its tier (near = fine, far = coarse); this bias shifts the whole curve. Shadow maps don't
 // resolve fine geometry, so coarser caster LODs cut VsmPageRender / cascade triangles for free.
-// Default 0 (the tier curve alone); positive = coarser everywhere, negative = sharper. Changing it
-// needs a GPU-idle caster rebuild (Scene polls BuiltShadowLod() vs this each frame).
-inline int g_shadowLodBias = 0;
+// Default 1 (the near tier already coarsens to LOD 1 — measured visually free); positive = coarser
+// everywhere, negative = sharper. Changing it needs a GPU-idle caster rebuild (Scene polls
+// BuiltShadowLod() vs this each frame).
+inline int g_shadowLodBias = 1;
 
-// Per-view BASE shadow LOD from a view's tier (aggressive curve: even the near tier coarsens, so the
-// default already saves in a close-up VSM scene where the finest levels dominate). `tier` is the CSM
-// cascade index or the VSM clipmap level (0 = finest/near); locals pass a small fixed tier. The final
-// LOD adds g_shadowLodBias and is clamped per mesh to its available LODs by the caster tables.
+// Per-view BASE shadow LOD from a view's tier: the tier index itself (near = fine, far = coarse).
+// `tier` is the CSM cascade index or the VSM clipmap level (0 = finest/near); locals pass a small
+// fixed tier. The final LOD adds g_shadowLodBias (default 1, which is where the whole curve's
+// coarsening lives) and is clamped per mesh to its available LODs by the caster tables.
 inline int ShadowTierBaseLod(unsigned int tier)
 {
-    // near tier -> LOD 1, then +1 per tier: level 0->1, 1->2, 2->3, 3+ -> capped by kMaxShadowLods-1.
-    const int lod = static_cast<int>(tier) + 1;
+    // tier -> LOD 1:1, capped: level 0->0, 1->1, 2->2, 3+ -> kMaxShadowLods-1.
+    const int lod = static_cast<int>(tier);
     const int cap = static_cast<int>(kMaxShadowLods) - 1;
     return lod < cap ? lod : cap;
 }

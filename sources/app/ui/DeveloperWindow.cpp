@@ -1913,12 +1913,25 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Smaller = sharper near shadows but less far coverage; larger = the reverse.");
                 ImGui::SliderFloat("Clipmap depth bias", &vsm::g_clipmapDepthBias, 0.0f, 0.01f, "%.4f");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Directional clipmap NDC depth bias. Raise to kill shadow acne; too high = peter-panning.\n"
-                                      "Now uniform across levels (per-level depth range), so one value works everywhere.");
-                ImGui::SliderFloat("Clipmap normal bias (texels)", &vsm::g_clipmapNormalBias, 0.0f, 8.0f, "%.2f");
+                    ImGui::SetTooltip("Directional clipmap NDC depth bias at LEVEL 0 (0.0001 = 1.23 shadow texels).\n"
+                                      "Constant in texels across levels when decay = 1, so its world size doubles per\n"
+                                      "level -- raise it with decay < 1 or far thin shadows detach.");
+                ImGui::SliderFloat("Depth bias decay /level", &vsm::g_clipmapDepthBiasDecay, 0.25f, 1.0f, "%.2f");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Receiver normal offset in texels, scaled per level by world-units-per-texel.\n"
-                                      "Raise if far terrain self-shadows (the 'darkened area' when flying away).");
+                    ImGui::SetTooltip("bias(L) = max(depthBias * decay^L, floor). 1.0 = legacy constant-in-texels;\n"
+                                      "0.5 = constant WORLD-size bias (the near value everywhere). Lets the near bias\n"
+                                      "rise against acne without peter-panning the far levels.");
+                ImGui::SliderFloat("Depth bias floor (texels)", &vsm::g_clipmapDepthBiasFloorTexels, 0.0f, 1.5f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Lower bound of the decayed bias, in texels of the level actually sampled.\n"
+                                      "The D16 pool quantizes at 0.19 texel -- keep this at 0.25+ whenever decay < 1,\n"
+                                      "or far levels drop below quantization and acne returns there.");
+                ImGui::SliderFloat("Clipmap normal bias (UE units)", &vsm::g_clipmapNormalBias, 0.0f, 4.0f, "%.3f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Receiver offset along the normal, UE's r.Shadow.Virtual.NormalBias units\n"
+                                      "(their default 0.5): scaled by distance-to-camera and the FOV, /1000 on the CPU.\n"
+                                      "Values well above 0.5 are masking a caster/receiver geometry mismatch\n"
+                                      "(terrain shadow LOD) -- see docs/terrain_shadow_chunking_plan.md.");
 
                 ImGui::SliderFloat("Local lateral bias (texels)", &vsm::g_localLateralTexels, 0.0f, 4.0f, "%.2f");
                 if (ImGui::IsItemHovered())

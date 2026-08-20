@@ -61,9 +61,10 @@ cbuffer GlassView : register(b1)
     float4 spotShadowInfo;        // xy = spot shadow size, zw = inverse size
     float4 lightCounts;           // x = point lights, y = spot lights, z = traced reflections, w = sky reflection enabled
     float4x4 lightViewProj[4];
-    float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
-    float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
+    float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist, z = depth-bias floor (NDC)
+    float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (UE units), z = depthBias (NDC), w = depth-bias decay/level
     float4x4 clipmapViewProj[8];  // Step 24f: directional clipmap level viewProjs
+    float4x4 clipmapUvNormal;     // P16.16: receiver-plane transform, must match lighting_cs
     // P16.1: x = the pre-exposure every writer of scene colour applies. Glass writes in the
     // transparent pass, which runs AFTER compose, so compose's own scaling never reaches it.
     float4 preExposureParams;
@@ -210,7 +211,11 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
     // Step 24f: VSM mode samples the directional clipmap (matches lighting_cs.hlsl); Legacy = cascades.
     if (vsmParams.x != 0.0f)
     {
-        return VsmClipmapShadow(Pws, Nws, camPosSky.xyz, clipmapParams.x, clipmapParams.y, clipmapParams.z,
+        // P16.16: same arithmetic and the same numbers lighting_cs gets, or glass shades against
+        // a differently-biased shadow.
+        return VsmClipmapShadow(Pws, Nws, camPosSky.xyz, clipmapParams.y, clipmapParams.z,
+                                clipmapParams.w, vsmParams.z,
+                                invProj._11, clipmapUvNormal,
                                 clipmapViewProj, VsmPageTable, VsmPool, ShadowSampler);
     }
     int idx = ChooseCascadeIndex(Pws);

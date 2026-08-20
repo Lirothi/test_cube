@@ -486,7 +486,6 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
     else if (env.type == "wind")
     {
         ctx.scene.GetWindState() = vfx::WindState{};
-        vfx::g_maxSwayExtentMeters = 0.0f;
     }
 }
 

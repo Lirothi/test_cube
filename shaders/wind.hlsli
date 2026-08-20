@@ -67,8 +67,6 @@ static const float kWindFlutterRate = 2.7;
 // submeshes and the shadow (any per-vertex or per-pass source here would tear the tree or detach its
 // shadow). Amplitude is +-kWindGroveAmp, stiffness +-kWindGroveStiff, both symmetric about the
 // authored value so a grove still averages to what the artist tuned.
-// NOTE: kWindGroveAmp is mirrored by WindState::MaxSwayExtentMeters — the shadow caster bounds must
-// cover the LOUDEST tree in the grove, not the average one, or its fronds clip at page edges.
 static const float kWindGroveAmp   = 0.25;
 static const float kWindGroveStiff = 0.20;
 
@@ -86,10 +84,6 @@ float2 WindHash2(float2 p)
 // osc is in [-1.5, 1.5], so bend stays in [1 - 1.5*kWindBendOsc, 1 + 1.5*kWindBendOsc] > 0.
 static const float kWindBendSteady = 1.0;
 static const float kWindBendOsc    = 0.55;
-
-// Peak of the bend envelope, i.e. max of (kWindBendSteady + kWindBendOsc * osc) — mirrored by
-// WindState::MaxSwayExtentMeters on the CPU for the shadow caster-bounds padding.
-static const float kWindBendPeak = kWindBendSteady + 1.5 * kWindBendOsc; // 1.525
 
 // Stiffness profile along the plant. Straight from GPU Gems 3 ch.16: (1+u)^4 - (1+u)^2, scaled so
 // f(1) == 1 (the raw polynomial evaluates to 12 at u = 1). `u` is now the BAKED geodesic weight

@@ -108,9 +108,19 @@ cbuffer PerFrame : register(b0)
     // CSM cascades. clipmapViewProj[i] = clipmap level i's camera-centered ortho viewProj.
     uint useVsm;
     float vsmDepthBias;
-    float clipmapBaseExtent;  // finest clipmap level's world extent (for per-level texel-scaled bias)
-    float clipmapNormalBias;  // normal offset in texels
+    float clipmapBaseExtent;  // finest clipmap level's world extent (level i = base * 2^i)
+    // P16.16: UE units (their `r.Shadow.Virtual.NormalBias`, default 0.5). See VsmClipmapShadow.
+    float clipmapNormalBias;
+    // Per-level shaping of vsmDepthBias (see VsmClipmapShadow): bias(L) = max(bias * decay^L, floor).
+    // decay 1 + floor 0 = the legacy constant-in-texels bias. Floor arrives already converted to NDC.
+    float clipmapDepthBiasDecay;
+    float clipmapDepthBiasFloorNdc;
+    float2 _padClipBias;
     float4x4 clipmapViewProj[8];
+    // P16.16: inverse transpose of world -> shadow UVZ, for the receiver-plane depth bias. One
+    // matrix covers every level (the extent cancels out of the gradient); UE build theirs the same
+    // way in CalcTranslatedWorldToShadowUVNormalMatrix.
+    float4x4 clipmapUvNormal;
     // Underwater caustics (see caustics.hlsli). causticsTint.w == 0 disables the whole block:
     // that is the state when the level has no ocean, or the ocean has caustics switched off.
     float4 causticsTint;          // rgb = tint, w = master enable
@@ -327,7 +337,11 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade)
     if (useVsm != 0u)
     {
         outCascade = 0;
-        return VsmClipmapShadow(P, N, camPosWS, clipmapBaseExtent, clipmapNormalBias, vsmDepthBias,
+        // invProj._11 is tan(hFov/2) for this projection, which is the term UE's normal offset
+        // needs; no extra constant for something the matrix already carries.
+        return VsmClipmapShadow(P, N, camPosWS, clipmapNormalBias, vsmDepthBias,
+                                clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc,
+                                invProj._11, clipmapUvNormal,
                                 clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
     }
     return SampleShadowCSM(P, ndl, N, outCascade);

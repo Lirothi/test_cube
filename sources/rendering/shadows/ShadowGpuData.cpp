@@ -19,7 +19,7 @@
 #include "rendering/renderables/GBufferRenderable.h" // C2: per-slot MaterialData accessor
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/IInstanceable.h"
-#include "vfx/WindState.h" // W5: g_maxSwayExtentMeters for the caster-bounds sway padding
+#include "vfx/WindState.h" // W8: g_windFadeStart/End (distance-fade mover re-check)
 
 // ---- Ring: upload-heap kFrameCount-region structured buffer ----------------
 
@@ -264,8 +264,7 @@ void ShadowGpuData::FillInstance(const RenderableObjectBase* obj, render::Instan
     }
 }
 
-void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out,
-                               float windStrength)
+void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out)
 {
     std::memset(&out, 0, sizeof(out));
     if (!obj) { return; }
@@ -276,26 +275,17 @@ void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBo
     if (!b.IsValid()) { return; } // degenerate/absent → zeroed (cull treats as a point)
 
     const Math::float3 c = b.GetCenter();
-    Math::float3 e = b.GetHalfExtents();
-    float radius = b.GetRadius();
+    const Math::float3 e = b.GetHalfExtents();
 
-    // W5: the shadow VS displaces a swaying caster's vertices by up to windStrength *
-    // MaxSwayExtentMeters, which the static world AABB knows nothing about. Grow the box (and the
-    // sphere pre-test radius) by that much, or the per-page / per-view cull drops the caster right as
-    // its fronds lean into a neighbouring page → shadow popping at page edges. Tier 0 pads Y as well
-    // as X/Z: the length-preserving bend arcs the crown DOWNWARD as it leans, and the leaf flutter
-    // bobs vertically — a horizontal-only pad would clip both.
-    // windStrength 0 (everything but flagged foliage) leaves the bounds byte-identical.
-    const float pad = windStrength > 0.0f ? windStrength * vfx::g_maxSwayExtentMeters : 0.0f;
-    if (pad > 0.0f)
-    {
-        e.x += pad;
-        e.y += pad;
-        e.z += pad;
-        radius += pad;
-    }
-
-    out.center = DirectX::XMFLOAT4(c.x, c.y, c.z, radius);
+    // DELIBERATELY not padded for the wind sway. The shadow VS does displace a swaying caster's
+    // vertices beyond this static AABB (by up to ~4.7x the authored sway amplitude at the worst-case
+    // gust/grove/bend stack), so in principle the per-page / per-view cull can clip a leaning frond
+    // at a page edge. In practice that artifact was never observed in months of use — while the W5
+    // worst-case pad (~3m/axis on wind_test) measured a permanent 2.5x on Pass_VsmPageRender GPU
+    // (+1.4 ms) via caster-page coverage. Decision + numbers: docs/bug_shadow_lod_bias_perf.md.
+    // If popping IS ever seen, reintroduce the pad DIRECTIONALLY (downwind XZ + small Y), not as the
+    // old all-axis worst case — and bake it at level load too, or the pad hysteresis bug returns.
+    out.center = DirectX::XMFLOAT4(c.x, c.y, c.z, b.GetRadius());
     out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
 }
 
@@ -546,7 +536,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         render::CasterBounds bnd{};
         const GBufferRenderable* gbFoliage = obj->AsGBufferRenderable();
         FillInstance(obj, inst);
-        FillBounds(obj, bnd, inst.windStrength); // W5: pad swaying casters' bounds
+        FillBounds(obj, bnd);
         // W5: a wind caster animates in the VERTEX shader — its transform never changes, so the
         // mover-based "nothing changed" tests would freeze its shadow. Remember that we have one.
         if (inst.windStrength > 0.0f) { hasWindCasters_ = true; }
@@ -1057,7 +1047,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         if ((ro && ro->MovedThisFrame()) || windFadeChanged)
         {
             FillInstance(obj, cpuInstances_[idx]);
-            FillBounds(obj, cpuBounds_[idx], cpuInstances_[idx].windStrength); // W5: sway padding
+            FillBounds(obj, cpuBounds_[idx]);
             const GBufferRenderable* gbF = obj->AsGBufferRenderable();
             if (gbF) { cpuInstances_[idx].windFoliage = gbF->FoliageForSlot(0); }
             for (size_t s = 1; s < slots; ++s) // duplicate across the object's submesh slots
@@ -1533,8 +1523,8 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             struct ScatterCB
             {
                 std::uint32_t       giBase, count;
-                float               windStrength, swayPad; // W5 (mirrors gWindStrength/gSwayPad)
-                float               windFoliage, windTrunkStiff, windLeafScale, _pad1;
+                float               windStrength, windFoliage; // W5 (mirrors gWindStrength/gWindFoliage)
+                float               windTrunkStiff, windLeafScale, _pad0, _pad1;
                 DirectX::XMFLOAT4   aabbCenter;
                 DirectX::XMFLOAT4   aabbExtent;
                 DirectX::XMFLOAT4X4 objectWorld;
@@ -1568,7 +1558,6 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                         c.giBase = gc.giBase;
                         c.count = gc.count;
                         c.windStrength = giWind;
-                        c.swayPad = giWind > 0.0f ? giWind * vfx::g_maxSwayExtentMeters : 0.0f;
                         c.windFoliage = giFoliage;
                         c.windTrunkStiff = giStiff;
                         c.windLeafScale = giLeafScale;

@@ -100,31 +100,11 @@ struct WindState
         gustMul = 1.0f + gustAmp * GustNoise(time * gustFreq, gustSeed);
     }
 
-    // W5: worst-case displacement (metres) WindOffset can produce for a caster at windStrength 1.
-    // Used to pad shadow caster bounds so the VSM per-page / Rung-0 cull never clips a swaying frond
-    // tip. MUST track the shader: the Tier 0 main bend peaks at kWindBendPeak (= kWindBendSteady +
-    // 1.5 * kWindBendOsc = 1.525 in wind.hlsli) times the height profile, whose maximum is 1 at the
-    // top; the leaf flutter adds kWindFlutterAmp * 1.5 on top (vertical bob plus half that
-    // laterally). Everything scales with the gust envelope's ceiling (1 + gustAmplitude).
-    float MaxSwayExtentMeters() const
-    {
-        constexpr float kBendPeak    = 1.525f; // == kWindBendPeak in shaders/wind.hlsli
-        constexpr float kStreamPeak  = 0.9f;   // == kWindFoliageStream (leaves stream further)
-        constexpr float kFlutterPeak = 0.225f; // == kWindFlutterAmp * 1.5
-        // W8: the grove jitter scales amp per tree, so the bounds must cover the LOUDEST tree in the
-        // stand, not the authored average — otherwise the one hashed to +25 % clips at page edges.
-        constexpr float kGroveAmpCeil = 1.25f; // == 1 + kWindGroveAmp
-        const float gustCeil = 1.0f + (gustAmplitude > 0.0f ? gustAmplitude : 0.0f);
-        return swayAmplitude * gustCeil * kGroveAmpCeil *
-               (kBendPeak * (1.0f + kStreamPeak) + kFlutterPeak);
-    }
 };
 
-// W5: ShadowGpuData::FillBounds pads swaying casters' world AABBs but has no Scene/frame pointer.
-// Scene::Tick publishes the current wind's max sway extent here each frame (0 = no wind => the
-// bounds are byte-identical to the pre-wind path). Bounds are only refilled on a rebuild or when a
-// caster moves, so a live edit of the wind params (W6) takes effect on the next such refill.
-inline float g_maxSwayExtentMeters = 0.0f;
+// (The W5 "max sway extent" caster-bounds pad used to live here. Removed 2026-08-20: shadow caster
+// cull bounds now deliberately ignore the sway displacement — rationale + measured cost in
+// ShadowGpuData::FillBounds and docs/bug_shadow_lod_bias_perf.md.)
 
 // W8: the current wind push for anything that drifts but is not foliage — GPU particles today.
 // windDirXZ * strength * gustMul, i.e. the visible travel direction (matching the water) scaled by

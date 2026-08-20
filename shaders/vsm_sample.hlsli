@@ -11,19 +11,62 @@
 static const uint VSM_SAMPLE_RESIDENT_BIT = 0x80000000u;
 static const uint VSM_SAMPLE_PHYS_MASK    = 0x0000FFFFu;
 
+// P16.16. UE clamp the receiver-plane bias to `abs(100 * ShadowViewToClipMatrix._33)` -- a hundred
+// world units expressed in the level's own NDC. Ours is already NDC, and a clipmap level's depth
+// range is 6x its extent, so the equivalent bound is a fixed slice of that range. It exists only to
+// stop a near-grazing receiver, where the plane gradient diverges, from flinging its shadow away;
+// it should never bind on anything shaded normally.
+static const float VSM_MAX_SLOPE_BIAS_NDC = 0.01f;
+// UE's clamp on the gradient itself (ComputeDepthSlopeDirectionalUV): "Clamp to avoid excessive
+// degenerate slope biases causing flickering lit pixels". THEIR NUMBER IS 0.05 AND IT DOES NOT
+// TRANSFER -- it is expressed in a depth range that is not ours. UE's clipmap level spans
+// `ZRangeScale` (1000) times its radius; ours spans 6x its extent, i.e. 12x its radius. Our NDC
+// per world unit is therefore ~83x theirs and so are our gradients: for flat ground under this
+// level's 28-degree sun the real gradient is tan(theta)/6 = 0.31, which their 0.05 would crush
+// SIXFOLD -- measured, and it produced less bias than the flat constant it replaced.
+//
+// So the bound is derived here instead of copied. `DepthSlopeUV` works out to tan(theta)/6 for this
+// projection, and bounding tan(theta) at 8 (about 83 degrees off the light, past which a receiver
+// contributes nothing worth defending) gives 8/6.
+static const float VSM_MAX_DEPTH_SLOPE_UV = 1.34f;
+
 // Sample a resident/virtual page given the receiver's light-space NDC + full-view shadow UV.
 // Starts at the distance-selected mip level and walks to COARSER levels until it finds a resident
 // page (the request marks the whole chain from the selected level up, so a coarser page is almost
 // always resident even when the exact level isn't — this is what stops shadows popping in/out as
 // the camera distance nudges the selected level across a threshold). Falls back to lit only if no
 // level is resident.
+// P16.16 -- RECEIVER-PLANE DEPTH BIAS, per tap. Transcribed from Unreal's
+// `ComputeVirtualShadowMapOptimalSlopeBias` (VirtualShadowMapProjectionCommon.ush).
+//
+// A constant push cannot win here, and the reason is not that it is badly tuned. The error a shadow
+// lookup makes is the depth difference between where the receiver ACTUALLY is and the centre of the
+// texel its sample snapped to. That difference depends on the receiver's slope, on the texel size,
+// and on where inside the texel the sample happened to land -- so a constant is simultaneously too
+// large for a sample sitting on a texel centre (which needs none, and gets peter-panning) and too
+// small for one at a corner of a tilted texel (which gets acne).
+//
+// `depthSlopeUV` is the receiver plane's depth gradient per unit shadow UV, built by the caller.
+// Dotted with the offset from the sample to the texel being compared, it IS that difference -- not
+// an estimate of it. Zero on a texel centre, maximal at a corner. UE's 2x factor is kept, with
+// their comment: "2x factor due to lack of precision (probably)".
+//
+// TWO offsets go into it, and only the first is UE's, because their SMRT walks single texels while
+// this samples a 3x3 PCF: the sub-texel offset to the nearest texel centre, plus the tap's own
+// offset in texels. A corner tap of a 3x3 therefore biases about 1.4x the centre one, which is
+// correct and was not happening when one bias served all nine.
+//
+// UE ALSO scale by `1 << (sampledLevel - requestedLevel)` when the sampler falls back to a coarser
+// level. That is not a separate step here: the offset is converted to UV using the dimensions of
+// the level ACTUALLY sampled, inside the fallback loop, so a coarser level's larger texel widens
+// the offset by exactly the same factor. Same result, one fewer thing to keep in step.
 float VsmSampleNDC(uint view, float3 ndc, float2 uv, float distCam, float refDist, float depthBias,
+                   float2 depthSlopeUV,
                    StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
     const uint startLevel = VsmSelectLevel(distCam, refDist, VSM_MAX_LEVEL);
     const float invPoolAxis = 1.0f / (float)VSM_POOL_PAGES_AXIS;
     const float texel = 1.0f / (float)(VSM_POOL_PAGES_AXIS * VSM_PAGE_SIZE); // 1/4096
-    const float depth = ndc.z - depthBias;
 
     for (uint level = startLevel; level <= VSM_MAX_LEVEL; ++level)
     {
@@ -42,13 +85,27 @@ float VsmSampleNDC(uint view, float3 ndc, float2 uv, float distCam, float refDis
         // 3x3 PCF, one pool texel, clamped to this page's pool region (no neighbour bleed).
         const float2 pmin = float2(gx, gy) * invPoolAxis + 0.5f * texel;
         const float2 pmax = (float2(gx, gy) + 1.0f) * invPoolAxis - 0.5f * texel;
+
+        // The receiver-plane bias is built in THIS level's units: `levelDims` is how many texels
+        // the view spans at the level that actually turned out to be resident, which is where the
+        // per-level scaling comes from (see the note above).
+        const float levelDims = (float)(axis * VSM_PAGE_SIZE);
+        const float2 exactTexel = uv * levelDims;
+        const float2 toTexelCentre = (floor(exactTexel) + 0.5f) - exactTexel;
+        const float invLevelDims = 1.0f / levelDims;
+
         float sh = 0.0f;
         [unroll] for (int y = -1; y <= 1; ++y)
         {
             [unroll] for (int x = -1; x <= 1; ++x)
             {
-                float2 s = clamp(poolUV + float2(x, y) * texel, pmin, pmax);
-                sh += Pool.SampleCmpLevelZero(cmp, s, depth);
+                const float2 s = clamp(poolUV + float2(x, y) * texel, pmin, pmax);
+                const float2 offsetUV = (toTexelCentre + float2(x, y)) * invLevelDims;
+                // UE clamp the result against the projection's depth scale; the equivalent bound
+                // here is a slice of this level's own NDC range, which `depthBias` is expressed in.
+                const float slopeBias = min(2.0f * max(0.0f, dot(depthSlopeUV, offsetUV)),
+                                            VSM_MAX_SLOPE_BIAS_NDC);
+                sh += Pool.SampleCmpLevelZero(cmp, s, ndc.z - (depthBias + slopeBias));
             }
         }
         return sh / 9.0f;
@@ -67,7 +124,10 @@ float VsmSpotShadow(uint view, float4x4 viewProj, float3 Pbiased, float3 camPos,
     if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { return 1.0f; }
     float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
     float distCam = length(Pbiased - camPos);
-    return VsmSampleNDC(view, ndc, uv, distCam, refDist, depthBias, PageTable, Pool, cmp);
+    // Spot/point keep their own tuned constant bias (P16.16 changed the DIRECTIONAL clipmap
+    // only); a zero gradient makes the receiver-plane term vanish, so this is an exact no-op.
+    return VsmSampleNDC(view, ndc, uv, distCam, refDist, depthBias, float2(0.0f, 0.0f),
+                        PageTable, Pool, cmp);
 }
 
 // Point: `slot` = the light's cube slot. The 6 cube faces (VSM local views 8 + slot*6 + face) are
@@ -119,7 +179,7 @@ float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, fl
     float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
     float distCam = length(Pbiased - camPos);
     return VsmSampleNDC(kSpotViews + slot * 6u + face, ndc, uv, distCam, refDist, depthBias,
-                        PageTable, Pool, cmp);
+                        float2(0.0f, 0.0f), PageTable, Pool, cmp);
 }
 
 // Directional clipmap (Step 24f): the receiver picks the FINEST level whose ortho extent contains it
@@ -127,19 +187,49 @@ float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, fl
 // clipmap LEVEL is the LOD, so we sample page-level 0 (distCam 0 forces VsmSampleNDC's start level 0).
 // `clipVP[i]` = clipmap level i's camera-centered ortho viewProj (built CPU-side, texel-snapped).
 // Not resident / outside every level -> lit (1.0). Mirrors VsmSpotShadow but with level selection.
-// P = un-offset receiver, N = world normal, camPos = camera (clipmap origin). The normal offset is
-// sized from the receiver's DISTANCE to the clipmap origin, which varies CONTINUOUSLY — a per-LEVEL
-// texel size instead jumps 2x at each boundary, and that jump pushes the outer side further toward
-// the light, popping it out of its own shadow → a lit seam that grows with normal bias. The
-// continuous texel (≈ the containing level's texel, dist/1024) removes the jump. depthBias is a
-// single NDC value: each level's ortho depth range ∝ its extent (UpdateClipmap), so it's uniform.
-float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float baseExtent, float normalBiasTexels,
-                       float depthBias, float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
+// P16.16 -- P = un-offset receiver, N = the SHADING normal (which is what UE use here too:
+// `GetEstimatedGeoWorldNormal` sits beside their projection marked "not currently used").
+//
+// TWO biases, matching Unreal's split:
+//
+//  * a NORMAL OFFSET, `VirtualShadowMapGetNormalBiasLength`:
+//        P += N * max(0.02cm, NormalBias * distanceToCamera / cot(hFov/2))
+//    Note what it is referred to -- the world size of a SCREEN PIXEL (distance x tan(hFov/2)), not
+//    the shadow texel. `normalBias` carries UE's own units (their CVar default 0.5, divided by 1000
+//    on the CPU exactly as `GetNormalBiasForShader` does), so the number here is directly
+//    comparable to `r.Shadow.Virtual.NormalBias`. The old form was `texels * dist/1024`, which at
+//    its shipped 2.0 was 3.9x this and ignored the field of view entirely.
+//
+//  * the RECEIVER-PLANE bias, per tap, inside VsmSampleNDC -- the part that actually does the work.
+//    `uvNormalMatrix` is the inverse transpose of world -> shadow UVZ, built CPU-side the way UE
+//    build `TranslatedWorldToShadowUVNormalMatrix`. ONE matrix serves every level: the gradient it
+//    produces is a ratio of xy to z, and both scale with the level's extent, so the extent cancels.
+//    (`CalcClipmapUvNormalMatrix` on the CPU asserts that proportionality holds.)
+// Constant depth bias per level: `depthBias` is NDC, and a level's NDC range is 6x its extent, so
+// a constant NDC value is a constant bias in TEXELS (ndc * 6 * 2048) whose WORLD size doubles per
+// level -- which is what detaches thin far shadows when the base value is raised. `depthBiasDecay`
+// shrinks it per level (0.5 = a constant WORLD-size bias instead), and `depthBiasFloorNdc` is the
+// lower bound that keeps the far levels above the D16 pool's quantization (6*2048/65536 = 0.19
+// texel = the hard floor; the CPU authors it in texels). decay 1 + floor 0 = the legacy constant.
+float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
+                       float depthBiasDecay, float depthBiasFloorNdc,
+                       float tanHalfFovX, float4x4 uvNormalMatrix,
+                       float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
                        StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
     const float dist = length(P - camPos);
-    const float texelWorld = max(dist, 0.5f * baseExtent) / (0.5f * VSM_VIRTUAL_RES); // continuous ≈ containing level
-    const float3 Poff = P + N * (normalBiasTexels * texelWorld);
+    // 0.0002 m is UE's 0.02 cm floor converted; their world is centimetres, the dimensionless
+    // NormalBias factor transfers unchanged.
+    const float3 Poff = P + N * max(0.0002f, normalBias * dist * tanHalfFovX);
+
+    // The receiver plane, taken to shadow UV space. Only .xyz of the result is used, and for an
+    // affine transform that part does not depend on the plane's distance term -- the `-dot(N, P)`
+    // is carried because UE carry it and because it costs nothing.
+    const float4 planeUV = mul(float4(N, -dot(N, P)), uvNormalMatrix);
+    const float planeZ = (abs(planeUV.z) < 1e-8f) ? 1e-8f : planeUV.z;
+    const float2 depthSlopeUV = clamp(-planeUV.xy / planeZ,
+                                      -VSM_MAX_DEPTH_SLOPE_UV, VSM_MAX_DEPTH_SLOPE_UV);
+
     for (uint i = 0u; i < VSM_NUM_CLIPMAP_LEVELS; ++i)
     {
         float4 clip = mul(float4(Poff, 1.0f), clipVP[i]);
@@ -154,7 +244,11 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float baseExtent, floa
         const uint py = min((uint)(uv.y * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
         const uint entry = PageTable[VsmPageId(VSM_NUM_LOCAL_VIEWS + i, 0u, px, py)];
         if ((entry & VSM_SAMPLE_RESIDENT_BIT) == 0u) { continue; } // not resident -> coarser level
-        return VsmSampleNDC(VSM_NUM_LOCAL_VIEWS + i, ndc, uv, 0.0f, 1.0f, depthBias, PageTable, Pool, cmp);
+        // Bias of the level we LANDED on (matches how the receiver-plane bias scales: a residency
+        // fallback to a coarser level uses that level's own values).
+        const float levelDepthBias = max(depthBias * pow(depthBiasDecay, (float)i), depthBiasFloorNdc);
+        return VsmSampleNDC(VSM_NUM_LOCAL_VIEWS + i, ndc, uv, 0.0f, 1.0f, levelDepthBias, depthSlopeUV,
+                            PageTable, Pool, cmp);
     }
     return 1.0f; // outside all clipmap levels
 }

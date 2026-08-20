@@ -283,11 +283,9 @@ private:
     // which excludes GPU-instanced casters.
     static bool IsGiFoldable(const RenderableObjectBase* obj);
     static void FillInstance(const RenderableObjectBase* obj, render::InstancePerObject& out);
-    // W5: `windStrength` is the caster's per-object foliage sway strength (from the instance entry
-    // filled just above). Non-zero pads the world AABB by the current wind's max sway extent so the
-    // Rung-0 / VSM per-page cull can't clip a swaying frond tip.
-    static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out,
-                           float windStrength = 0.0f);
+    // The caster's world AABB, verbatim — deliberately NOT padded for the wind sway (see the
+    // definition for the rationale and the measured cost of padding).
+    static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out);
 
     void RebuildCullDescriptors(Renderer* renderer);        // per-region UAVs for args/visible/counts
     void RebuildUnifiedDescriptors(Renderer* renderer);     // per-region SRVs for the unified instance/bounds buffers

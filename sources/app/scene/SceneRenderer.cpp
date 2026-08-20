@@ -189,6 +189,7 @@ namespace
         float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
         float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
         mat4   clipmapViewProj[8];    // Step 24f: directional clipmap level viewProjs
+        mat4   clipmapUvNormal;       // P16.16: receiver-plane transform, mirrors lighting_cs
         float4 preExposureParams;     // P16.1: x = pre-exposure, yzw reserved
     };
 
@@ -346,9 +347,16 @@ namespace
 
         // Step 21: VSM sampling for glass — on when the gate is on and the pool is allocated.
         const bool vsmOn = render::VsmActive() && frame.vsm && frame.vsm->IsAllocated();
-        vc.vsmParams = float4(vsmOn ? 1.0f : 0.0f, vsm::g_refDist, 0.0f, 0.0f);
+        // .z = the depth-bias floor, texels -> NDC (same conversion as the lighting CB: a level's
+        // depth range is 6x its extent, virtual res 2048, both scale with the extent).
+        vc.vsmParams = float4(vsmOn ? 1.0f : 0.0f, vsm::g_refDist,
+                              vsm::g_clipmapDepthBiasFloorTexels / (6.0f * (float)vsm::kVirtualRes),
+                              0.0f);
         // Step 24f: directional clipmap for glass (matches lighting_cs). Same tunables + level viewProjs.
-        vc.clipmapParams = float4(vsm::g_clipmapBaseExtent, vsm::g_clipmapNormalBias, vsm::g_clipmapDepthBias, 0.0f);
+        // .y carries the SAME scaled value the lighting CB gets (UE divide by 1000 on the CPU);
+        // .w = the per-level depth-bias decay (see VsmClipmapShadow).
+        vc.clipmapParams = float4(vsm::g_clipmapBaseExtent, vsm::g_clipmapNormalBias * 0.001f,
+                                  vsm::g_clipmapDepthBias, vsm::g_clipmapDepthBiasDecay);
         if (frame.clipmapViews)
         {
             for (size_t i = 0; i < 8 && i < frame.clipmapViews->size(); ++i)
@@ -356,6 +364,10 @@ namespace
                 const SceneView& cv = (*frame.clipmapViews)[i];
                 vc.clipmapViewProj[i] = cv.view * cv.proj;
             }
+            // P16.16: built from level 0; the gradient it feeds is a ratio in which the level's
+            // extent cancels, so one matrix serves them all. Same construction as UE's
+            // CalcTranslatedWorldToShadowUVNormalMatrix.
+            vc.clipmapUvNormal = vsm::CalcClipmapUvNormalMatrix(vc.clipmapViewProj[0]);
         }
 
         // P16.1: glass draws in the transparent pass, after compose, so compose's scaling never
@@ -3291,8 +3303,18 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         // tint visualizes CSM cascades, which that path does not sample.
         constants.csmDebugMode = vsmDir ? 0u : static_cast<uint32_t>(render::g_csmDebugMode);
         constants.vsmDepthBias = vsm::g_clipmapDepthBias;
+        // Per-level depth-bias shaping (see VsmClipmapShadow). The floor is authored in TEXELS of
+        // the landed level; NDC per texel = 1 / (6 * 2048): a level's depth range is 6x its extent
+        // (Scene::UpdateClipmap, depthUp 5E + depthDown 1E) and its virtual res is 2048, and both
+        // scale with the extent, so one conversion serves every level.
+        constants.clipmapDepthBiasDecay = vsm::g_clipmapDepthBiasDecay;
+        constants.clipmapDepthBiasFloorNdc =
+            vsm::g_clipmapDepthBiasFloorTexels / (6.0f * (float)vsm::kVirtualRes);
         constants.clipmapBaseExtent = vsm::g_clipmapBaseExtent;
-        constants.clipmapNormalBias = vsm::g_clipmapNormalBias;
+        // P16.16: UE divide their CVar by 1000 before it reaches the shader
+        // (GetNormalBiasForShader, VirtualShadowMapArray.cpp:561). Same here, so the authored
+        // number stays directly comparable to `r.Shadow.Virtual.NormalBias`.
+        constants.clipmapNormalBias = vsm::g_clipmapNormalBias * 0.001f;
         if (frame_->clipmapViews)
         {
             for (size_t i = 0; i < constants.clipmapViewProj.size() && i < frame_->clipmapViews->size(); ++i)
@@ -3300,6 +3322,10 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
                 const SceneView& cv = (*frame_->clipmapViews)[i];
                 constants.clipmapViewProj[i] = cv.view * cv.proj;
             }
+            // P16.16: the receiver-plane transform, built from level 0. The gradient the shader
+            // takes from it is a ratio in which the level's extent cancels, so one matrix serves
+            // every level -- same construction as UE's CalcTranslatedWorldToShadowUVNormalMatrix.
+            constants.clipmapUvNormal = vsm::CalcClipmapUvNormalMatrix(constants.clipmapViewProj[0]);
         }
 
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),

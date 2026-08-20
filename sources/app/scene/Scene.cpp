@@ -157,6 +157,9 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
     // Rung 0 / Steps 1-2: build the persistent per-caster shadow buffers (instance + bounds)
     // once the object transforms are finalized (SyncSceneState above resets motion history so
     // prevWorld == world). Level load is GPU-idle, safe for the alloc.
+    // NOTE: anything FillBounds/Rebuild consumes must be identical here and in a mid-session
+    // RebuildShadowCasters — a value published elsewhere on a different schedule (like the removed
+    // W5 sway-extent global, docs/bug_shadow_lod_bias_perf.md) splits the two builds' cost/behavior.
     shadowGpu_.Rebuild(renderer, objects_);
     // Rung 2 mega-buffer: concatenate the caster meshes' VB/IB on this GPU-idle upload CL (meshes
     // are all in COMMON here, so the copy uses implicit promotion) for the VSM per-page draws.
@@ -850,8 +853,6 @@ void Scene::Tick(float deltaTime) {
         OceanRenderable* ocean = FindOceanRenderable();
         const float clock = ocean ? ocean->GetElapsedTime() : (windState_.time + deltaTime);
         windState_.Tick(clock);
-        // W5: publish the sway extent for ShadowGpuData::FillBounds (caster-bounds padding).
-        vfx::g_maxSwayExtentMeters = windState_.MaxSwayExtentMeters();
         // W8: the fade origin is the CAMERA, shared by the gbuffer and every shadow view, so both
         // sides of vfx::WindDistanceFade agree and the shadow cannot detach from the tree.
         vfx::g_windFadeOriginWS = camera_.GetPosition();

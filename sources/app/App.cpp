@@ -43,6 +43,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "ocean/OceanRenderable.h"  // --set=ocean.contactFoam
 #include "ocean/OceanSimulation.h"
 #include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
+#include "rendering/meshes/LodSelect.h" // --sweep=vsm.shadowLodBias (docs/bug_shadow_lod_bias_perf.md)
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
@@ -233,8 +234,20 @@ namespace
         // process globals, not scene state -- deliberately, so they survive a level switch the
         // way the dev-window sliders do.
         if (setting == "vsm.clipmapDepthBias")  { vsm::g_clipmapDepthBias = value;  return true; }
+        // Per-level depth-bias shaping (bias(L) = max(base * decay^L, floorTexels), see
+        // VsmClipmapShadow) -- headless mirrors of the two dev-window sliders beside the base bias.
+        if (setting == "vsm.clipmapDepthBiasDecay") { vsm::g_clipmapDepthBiasDecay = std::clamp(value, 0.01f, 1.0f); return true; }
+        if (setting == "vsm.clipmapDepthBiasFloor") { vsm::g_clipmapDepthBiasFloorTexels = std::max(0.0f, value); return true; }
         if (setting == "vsm.clipmapNormalBias") { vsm::g_clipmapNormalBias = value; return true; }
         if (setting == "vsm.clipmapBaseExtent") { vsm::g_clipmapBaseExtent = std::max(0.1f, value); return true; }
+        // The dev-window "Shadow LOD bias" slider, headless. A change triggers the same GPU-idle
+        // caster rebuild the slider does (Scene::ReconcileShadowLodBias polls it) — which is the
+        // point: the round-trip perf leak is only reproducible in ONE process
+        // (docs/bug_shadow_lod_bias_perf.md §6).
+        if (setting == "vsm.shadowLodBias") { render::g_shadowLodBias = (int)value; return true; }
+        // Mirror of the VSM page-stats log toggle, so a headless run can capture the resident/request
+        // counts (logs/vsm_pages.log) that the dev-window "VSM" tab shows live.
+        if (setting == "vsm.logPageStats")  { vsm::g_logPageStats = value != 0.0f; return true; }
         if (setting == "gtao.strength") { scene.GtaoRef().strength = value; return true; }
         if (setting == "gtao.upsampleTolerance") { scene.GtaoRef().upsampleTolerance = value; return true; }
         // Where surface reflections come from: 0 None, 1 SkyOnly, 2 SSR, 3 RT. The DEFAULT IS RT,
@@ -445,6 +458,10 @@ namespace
         // Shore contact foam, as a CAPTURE switch rather than a level edit: it is the thing that
         // litters a lighting comparison with moving white speckle, and turning it off in the level
         // would mean editing content that was tuned on purpose. 0 = off.
+        // The whole ocean surface, as a CAPTURE switch (same rationale as contactFoam below):
+        // shadow/terrain artifacts live on dune slopes the water covers, and the user's repro
+        // screenshots are taken with the ocean hidden. 0 = hidden.
+        if (setting == "ocean.visible") { scene.SetOceanVisible(value != 0.0f); return true; }
         if (setting == "ocean.contactFoam")
         {
             if (OceanRenderable* ocean = scene.FindOceanRenderable())
