@@ -4200,7 +4200,175 @@ that **this HDRI's own sun:sky is about 11:1 where reality is nearer 3.5:1** (ca
 instead of its sky would put the sky at ~4,300 lx). With the disc removed from the lighting and the
 sky authored in lux, that discrepancy no longer reaches the render; it would only matter again if
 the background were put on the same physical scale as the fill. Medium-scale occlusion of the fill —
-the other half of P16.4 — is untouched: ours is still occluded only by GTAO, which is contact-scale.
+the other half of P16.4 — is DONE and is written up in its own section below: GTAO now walks two
+radii out of one dispatch, contact and sky-scale, and the sky fill takes the min of the two.
+
+#### P16.12 — Ground bounce: the other half of the fill — DONE
+
+**The complaint.** On a wide sunlit beach shot the shaded side of every palm read far too dark for
+the day. GTAO was the obvious suspect and was wrong: measured at that camera on the darkest quartile
+of a crop over the foreground palms, the ENTIRE GTAO pass was worth 0.174 stops and P16.4's half of
+it 0.085. Pushing the distance fade from 80/120 m out to 300/600 m changed the frame by 0.005 stops
+— the pass was not being faded out, it was looking at OPEN BEACH, where there is correctly nothing
+to occlude. Two things that were worth a stop each: auto exposure metering a frame half full of
+bright water (0.939 stops) and the subject of this section.
+
+**The gap, in numbers.** Read out of the level's own irradiance cube
+(`rustig_koppie_puresky_4k_diffuse.dds`, physical scale x10985 from `logs/ibl.log`):
+
+| normal | E(N) |
+|---|---|
+| up | 14,073 lx |
+| down | 9,643 lx |
+| toward the sun (+X/+Z) | 19,700 – 23,600 lx |
+| away from it (-X/-Z) | 7,700 – 9,000 lx |
+
+With the sun at 85,000 lx and 28.3 degrees of elevation, level ground receives
+85000·sin(28.3) + 14073 = **54,400 lx**, while a shaded vertical frond receives **~8,000 lx** — sky
+only. Real sand at that illuminance and albedo 0.4 sends ~21,800 lx back up, of which a vertical
+surface catches about half: **+10,900 lx, i.e. 1.2 stops**, on exactly the surfaces that looked
+dead. The engine had no bounce term of any kind. The only fill was the sky cube, and the cube's
+lower hemisphere is the HDRI's OWN ground, not the sunlit sand this scene is standing on.
+
+**What shipped.** `GroundBounceOverPi` in `lighting_cs.hlsl`, added to the sky irradiance inside the
+IBL branch before the albedo multiply:
+
+    E_bounce(N) = groundAlbedo * E_ground * F(N),    F(N) = (1 - N.y) / 2
+
+`F` is the exact view factor of an infinite flat plane of uniform radiance: an up-facing surface
+sees NONE of the ground, a vertical one half, a down-facing one all of it. That direction dependence
+is the whole reason to prefer it to a flat ambient add — it is what makes the result read as light
+off the floor instead of a grey wash. `E_ground` is the sun's cosine on a level surface plus the
+sky's own up-facing irradiance; it is deliberately a SCENE average and NOT shadowed, because a point
+standing in a palm's shadow is still surrounded by lit sand. What localises it is the AO the caller
+already applies to the whole indirect-diffuse term, which is what stops it lighting the inside of a
+closed room.
+
+The control is `directionalLight.groundAlbedo`, an RGB REFLECTANCE and not a light: it only ever
+scales illuminance the scene already has, so it follows the sun automatically, cannot brighten a
+night, and needs no second strength knob — black is off. Default 0.25 neutral (dry sand 0.4, dead
+grass 0.3, concrete 0.25, green grass 0.2, asphalt 0.1, water 0.06); a tint belongs to the level
+that has sand in it. **The same term is duplicated in `rt_reflections_cs.hlsl`'s off-screen
+re-shade** — leaving it out there would have made every reflection of a shaded surface about a stop
+darker than the surface seen directly, which is the identical half-a-pair defect P16.9 fixed for the
+sky fill itself. DIFFUSE ONLY: a down-facing glossy surface really does reflect bright sand, but the
+prefiltered sky cube has no such term either and adding one on this side only would break the
+cancellation compose depends on.
+
+**Verified against a known answer, not against taste.** The view factor makes a falsifiable
+prediction — flat ground must not move at all. Sweeping the albedo with the exposure pinned
+(stops vs albedo 0, default `wind_test` camera):
+
+| region | 0.25 | 0.4 | 1.0 |
+|---|---|---|---|
+| flat sand, sunlit | +0.031 | +0.050 | +0.120 |
+| flat sand, in palm shadow | +0.012 | +0.020 | +0.053 |
+| palm crowns and trunks | **+0.164** | **+0.261** | **+0.609** |
+
+The flat ground does move slightly, and correctly so: the sand carries a detail normal map and the
+beach is duned, so its shading normals are not exactly vertical. The DIFFERENCE IMAGE settles it
+outright — trunks and fronds light up, the sand, the ocean and the sky stay black, and on `demo` it
+is the UNDERSIDES of the sphere grids that brighten. (A first attempt scored two rectangles labelled
+"ocean" and "sky" that were actually sitting on foliage and reported both moving; the picture is
+what caught it. Regions read off remembered coordinates are worth nothing.)
+
+**Regression** on the darkest quartile, albedo 0 -> 0.25: `demo` +0.028 stops, `roughness_sweep`
++0.017, `d_emissive_test` +0.012, `ssr_bronze_palms` +0.238 — the last being the only one of the
+four that is foliage over ground, which is the point.
+
+**Cost**: `Pass_Lighting` 0.0350 -> 0.0360 ms, at the timer's resolution and inside the spread of
+the off runs themselves (which spanned 0.0340-0.0360). One extra cube fetch at a constant direction.
+
+**Gate**: 33/33 shaders, both configs (Debug caught a broken string literal Release never compiles),
+`--gbv` on `wind_test` clean, `--scene-stress-gbv=8` CLEAN.
+
+**Correction to an earlier claim in this session.** `ambient` / `ambientColor` were called dead on
+any level with an IBL sky. They are dead only in the OPAQUE DEFERRED DIFFUSE path: `glass.hlsl` and
+the RT fallback shading still read `ambientIntensity`. The keys must not be deleted from levels.
+
+**Left open.** The bounce is a single scene-wide average, so it cannot know that the ground under
+one tree is shadowed and under another is not, and it assumes a flat world. Real per-pixel bounce is
+screen-space or ray-traced GI. It also does not reach the ocean or glass, which carry their own
+ambient handling.
+
+#### P16.13 — Exposure compensation is two knobs, not one — DONE
+
+`compensationEv` was applied in BOTH branches of `exposure_solve_cs`, so a trim dialled while
+looking at a metered shot silently re-trimmed every fixed-exposure shot in the same level, and back
+again. They are different jobs: in auto the number offsets what the METER decided, in manual it
+offsets an EV the author already solved by hand. `manualCompensationEv` is now its own field,
+defaulting to 0 rather than -0.15 — a manual EV is an absolute the author dialled in, and a hidden
+trim on top of it is a trap. Zero migration: both levels carrying a `cameraExposure` block author
+`compensationEv: 0.0` explicitly.
+
+Both UIs show only the field the current mode uses (showing both would move the confusion from the
+value to the label), and the inspector's EV readout in manual now subtracts the trim, so the row
+cannot disagree with the image.
+
+**Verified with a known answer** — each key must move its own mode and be an exact no-op in the
+other: manual +1 on `manualCompensationEv` = +0.836 stops and on `compensationEv` = +0.0002; auto +1
+on `compensationEv` = +0.688 stops and on `manualCompensationEv` = +0.0002. (Less than a full stop
+because the tone curve compresses; 0.0002 is the temporal noise floor.)
+
+#### P16.14 / P16.15 — Clipmap shadow bias: REVERTED, and what UE actually does
+
+Two attempts shipped and both were reverted at the user's call. Recorded because the reading that
+came out of it is the basis for the real fix.
+
+**What was tried and why it was wrong.** (1) A slope-scaled DEPTH push, `depth * (1 + slope*tan)`.
+It barely moved the artefact and at a strength that did move it, contacts detached. (2) Sizing the
+NORMAL offset by the derived `T*sin/cos^2` requirement. That removed the streak, but at ~4.9 texels
+the offset is steered by a per-pixel direction and the shadow CONTOUR broke into a dither. (3)
+Taking that direction from a depth-reconstructed geometric normal. It fixed the dither, and the
+user rejected it — correctly, see below. Everything is back to `g_clipmapDepthBias = 0.0001` and
+`g_clipmapNormalBias = 2.0`. Kept: `--set=vsm.clipmapDepthBias / clipmapNormalBias /
+clipmapBaseExtent`, which are only headless access to sliders that already existed.
+
+**UE, from the drop.** Two mechanisms, and the constant is not one of them.
+
+*Normal offset* — `VirtualShadowMapProjection.usf:249` with
+`VirtualShadowMapGetNormalBiasLength`:
+
+    TranslatedWorldPosition += WorldNormal * max(0.02, NormalBias * DistanceToCamera / cot(hFov/2))
+
+`r.Shadow.Virtual.NormalBias` defaults to 0.5 and is divided by 1000 on the CPU, so 0.0005. Two
+things fall out. It uses the **shading normal** — `GetEstimatedGeoWorldNormal` exists right there in
+the same file and is marked *"NOTE: Not currently used but occasionally useful for testing"*, so
+attempt (3) is not what UE do. And the offset is referred to the **screen pixel**, not the shadow
+texel: distance-to-camera times `tan(hFov/2)`. Ours is `2.0 * dist/1024 = 0.00195*dist` with no fov
+term; UE at a 90-degree hFov is `0.0005*dist`. **Same shape, ours is 3.9x larger.**
+
+*The workhorse — a per-sample RECEIVER-PLANE depth bias*
+(`ComputeVirtualShadowMapOptimalSlopeBias`, `VirtualShadowMapProjectionCommon.ush:265`):
+
+    NormalPlaneUV  = mul(plane(N, P), TranslatedWorldToShadowUVNormalMatrix)
+    DepthSlopeUV   = -NormalPlaneUV.xy / NormalPlaneUV.z        // depth gradient per unit shadow UV
+    TexelCenterOffsetUV = (texelCentre - exactSamplePosition) / levelDims
+    OptimalSlopeBias = 2 * max(0, dot(DepthSlopeUV, TexelCenterOffsetUV))
+    OptimalSlopeBias = min(OptimalSlopeBias, abs(100 * ShadowViewToClipMatrix._33))
+    OptimalSlopeBias *= 1 << (sampledLevel - requestedLevel)
+
+This is not an estimate of the error, it IS the error: the depth change between where the sample
+actually is and the centre of the texel it snapped to, from the receiver plane's own gradient. It is
+**zero on a texel centre** and maximal at a corner, so a well-sampled flat receiver gets essentially
+no push and cannot peter-pan; it grows on its own with receiver slope and with texel size. The
+`DepthSlopeUV` clamp (+/-0.05) and the bias clamp are anti-flicker guards for near-grazing
+receivers.
+
+**And the last line is exactly the user's hypothesis, confirmed**: when the sampler falls back to a
+COARSER clipmap level the bias is scaled by `2^(delta level)`. Our `VsmClipmapShadow` has the same
+fallback loop — it walks to coarser levels when a page is not resident — and passes the SAME NDC
+bias whichever level it lands on. That is a real defect independent of everything above.
+
+**The direction for the real fix**, in order:
+1. Per-tap receiver-plane bias in `VsmSampleNDC`, replacing the constant. Everything needed is
+   already there: `clipVP[i]` gives the plane transform, and each of the 3x3 PCF taps knows its own
+   texel offset — note ours applies ONE bias to all nine taps today, while a corner tap needs about
+   1.4x the centre's.
+2. Scale the bias by the level actually sampled when the residency loop falls through.
+3. Only then revisit the normal offset, which is 3.9x UE's and has no fov term.
+
+Not implemented. This is a design note, not a change.
 
 #### P16.5 — Local lights in lumens, and every level converted — DONE (2026-08-20)
 
@@ -4618,14 +4786,78 @@ has the bindless VB/IB loaders:
    `CommitNonOpaqueTriangleHit()` when it passes.
 3. The same for `RtTraceShadow`, or foliage keeps casting solid shadows in the RT path.
 
-#### P16.4 — Separate the sky's lighting from its appearance, and occlude it
+#### P16.4 — Occlude the sky fill at a medium scale — DONE
 
-`skyFillIntensity` already exists and is the right control -- Godot's `ambient_light_energy` by
-another name. What is missing is that it has no physical meaning yet (P16.3 gives it one) and that
-the sky fill is occluded only by GTAO, a contact-scale term that knows nothing about a palm tree
-twenty metres away. Both other engines use a medium-scale occlusion for this. Out of scope for the
-urgent fix; recorded so the flat-shadow problem is not blamed on the units again once they are
-right.
+The sky fill was occluded only by GTAO, whose radius is **0.75 m** — a contact term that knows
+nothing about a palm tree twenty metres away. Measured with the sun pinned to 1 lx so only the sky
+lit the scene, raising the sky 6x brightened ground under a DENSE CANOPY by 1.92 stops and open sand
+by 1.88: the crown was worth 0.04 stops of shelter. The mechanism was not missing, the SCALE was.
+
+**Raising the one radius is not the fix.** At 12 m open sand lost about a third of a stop as the
+contact term started eating open ground, and the contact detail the pass exists for goes with it —
+six steps spread over 12 m put the first tap two metres out, stepping clean over the 30 cm contact
+at the base of a trunk. The two questions need two radii. UE answer them with SSAO + DFAO, Godot
+with SSAO + SDFGI.
+
+**What shipped.** `gtao_cs.hlsl` walks the horizon TWICE per direction and writes both answers to
+one `R8G8_UNORM` target: `.x` at `worldRadius` (contact), `.y` at the new `skyRadius` (medium). The
+depth fetch, the normal reconstruction, the direction set and the phase offset are shared, so only
+the walk itself is paid for twice. `skyRadius <= worldRadius` skips the second walk and copies the
+contact answer into both channels — an exact no-op, and the A/B switch. The whole chain (denoise,
+temporal, upsample) carries two channels through the same weights, because those weights are
+computed from depth and normal alone and are identical for both scales. **No new resource,
+descriptor or barrier** — the format constant is the change.
+
+**The combine at the consumer is a MIN, not a product** (`lighting_cs::CombinedAo`, mirrored in
+`compose_cs`). The two are the SAME quantity at two scales, not two independent occluders: the wide
+walk sees the trunk at your feet as well as the crown overhead, so a product would square that
+trunk. `min` takes whichever walk found more, which is right when each is blind at the other's
+scale. The product with `materialAo` stays a product — texture cavities really are independent of
+what a depth buffer can see.
+
+**The sky walk needs its own screen clamp, and this is the part that is easy to get wrong.** The
+contact walk clamps its screen reach at 256 half-res texels. Left at 256 the new knob SATURATED:
+25 m and 40 m produced the same image (-0.577 vs -0.583 stops) because both were clipped to the
+same screen span and only the distance falloff still separated them. Note what that means — at any
+normal viewing distance the *pixel* radius is pinned at the clamp for both walks, so what actually
+separates a 12 m radius from a 40 m one is `attenFactor`, the falloff. Raising the sky clamp to
+1024 restored the range (see the table). It costs no extra taps — `numSteps` is unchanged and the
+steps simply land further apart — so it buys with cache locality, which is what `skyMipBias` (its
+own, default 2) pays back: at mip 4 a 1024-texel span is 64 texels of that level. A knob whose top
+half does nothing is a knob that lies.
+
+**Measured**, `wind_test`, sun pinned to 1 lx, two cameras chosen from the level's own geometry —
+one standing where 43 palms fall within 12 m, one where the nearest is 14 m away — same ground
+height, same material, ground-only crop, `--wind-freeze`, one binary, `--sweep`:
+
+| skyRadius | dense canopy (clamp 256) | open (256) | dense canopy (clamp 1024) | open (1024) |
+|---|---|---|---|---|
+| 0 (off) | +0.000 | +0.000 | +0.000 | +0.000 |
+| 6 m | -0.111 | -0.000 | -0.056 | -0.000 |
+| 12 m | -0.418 | -0.000 | -0.419 | -0.000 |
+| 25 m | -0.577 | -0.001 | **-1.048** | -0.000 |
+| 40 m | -0.583 | -0.001 | -1.157 | -0.001 |
+
+**Open ground does not move at all** — 0.001 stops across the whole sweep, against the third of a
+stop it cost to raise the single radius. That is the entire point of the split. The default is
+**25 m**, where the curve bends: 40 m adds 0.11 stops for the same cost.
+
+**Cost**: `Pass_Gtao` (the whole chain) 0.0720 -> 0.0875 ms, **+0.0155 ms (+22%)**. Three
+interleaved runs per side, medians, first quarter of frames dropped, `Pass_Compose` as an unmoving
+control at 0.0270 in all six — because two consecutive runs are NOT comparable on their own here,
+the GPU clock drifts between them (a first attempt showed `Pass_Hzb`, which nothing touched, moving
+26%).
+
+**Regression**, whole-frame luminance at skyRadius 25 vs 0: `demo` -0.0005 stops,
+`roughness_sweep` +0.0001, `d_emissive_test` -0.0000. Gate: 33/33 shaders, both configs,
+`--gbv` on `wind_test`, and `--scene-stress-gbv=8` CLEAN across reload / level switch / resize /
+DLSS mode / render scale / reflection scale / editor spawn-delete — the operations that recreate
+the AO targets at the new format.
+
+**Left for later.** `skyFillIntensity` and the sky's appearance still share one number by design;
+that half of the original P16.4 note is unchanged and is a separate question from occlusion. And
+the medium walk is still SCREEN-space: it cannot occlude from geometry off-screen or behind the
+camera, which is what a distance-field or a voxel term would buy.
 
 ---
 

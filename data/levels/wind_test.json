@@ -22,6 +22,11 @@
       -0.4740854799747467,
       -0.7215021848678589
     ],
+    "groundAlbedo": [
+      0.25,
+      0.25,
+      0.25
+    ],
     "skyFillIntensity": 1.0,
     "sunIlluminanceLux": 85000.0
   },
@@ -13832,8 +13837,8 @@
   "pointLights": [],
   "postProcess": {
     "atmosphere": {
-      "density": 0.003000000026077032,
-      "enabled": false,
+      "density": 0.0010000000474974513,
+      "enabled": true,
       "heightFalloff": 0.05999999865889549,
       "maxOpacity": 0.8999999761581421,
       "skyBackScatter": 0.4000000059604645,
@@ -13841,7 +13846,7 @@
       "startDistance": 10.0,
       "sunScatterExponent": 8.0,
       "sunScatterStartDistance": 100.0,
-      "sunScatterStrength": 0.3499999940395355
+      "sunScatterStrength": 0.5
     },
     "bloom": {
       "convAnamorphic": 0.30000001192092896,
@@ -13864,13 +13869,15 @@
       "method": 0,
       "radius": 1.0,
       "softKnee": 0.5,
-      "threshold": 1.0
+      "threshold": 2.0
     },
     "cameraExposure": {
-      "autoExposure": false,
+      "apertureFStop": 16.0,
+      "autoExposure": true,
       "compensationEv": 0.0,
       "enabled": true,
       "highPercentile": 0.800000011920929,
+      "isoSensitivity": 100.0,
       "localDetailStrength": 1.0,
       "localHighlightContrast": 0.8500000238418579,
       "localHighlightThreshold": 0.5,
@@ -13880,11 +13887,9 @@
       "maxEv100": 16.0,
       "meterMaskStrength": 0.699999988079071,
       "minEv100": -6.0,
+      "shutterSpeedSec": 0.00798999983817339,
       "speedDown": 1.0,
-      "speedUp": 3.0,
-      "apertureFStop": 16.0,
-      "shutterSpeedSec": 0.014082,
-      "isoSensitivity": 100.0
+      "speedUp": 3.0
     },
     "colorPipeline": {
       "agxPower": 1.350000023841858,
@@ -13909,14 +13914,14 @@
     },
     "gtao": {
       "enabled": true,
-      "intensity": 1.5,
+      "fadeStart": 80.0,
+      "intensity": 1.0,
+      "skyMipBias": 3,
+      "skyRadius": 25.0,
+      "strength": 1.0,
       "thickness": 0.800000011920929,
       "worldRadius": 1.0
-    },
-    "localDetailStrength": 1.0,
-    "localHighlightThreshold": 0.5,
-    "localShadowContrast": 0.8999999761581421,
-    "localShadowThreshold": 0.5
+    }
   },
   "skybox": {
     "illuminanceLux": 12000.0,

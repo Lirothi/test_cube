@@ -1050,7 +1050,8 @@ namespace
             { "apertureFStop", 16.0f },
             { "shutterSpeedSec", 1.0f / 125.0f },
             { "isoSensitivity", 100.0f },
-            { "compensationEv", -0.15f } // pairs with the default Filmic curve; see P3
+            { "compensationEv", -0.15f }, // pairs with the default Filmic curve; see P3
+            { "manualCompensationEv", 0.0f } // P16.13: manual trims from the EV the author solved
         };
         root["directionalLight"] = {
             { "direction", nlohmann::json::array({ -1.5f, -0.7f, -0.5f }) },

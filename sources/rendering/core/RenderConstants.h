@@ -81,10 +81,18 @@ inline float g_preExposure = 1.0f;
 // RGBA16F, not R11G11B10: the alpha carries the reflection's COVERAGE and the compose blend needs
 // it. Same format scene colour uses, so a hit copied from it round-trips exactly.
 inline constexpr DXGI_FORMAT kReflectionFormat              = DXGI_FORMAT_R16G16B16A16_FLOAT;
-// P6B ambient occlusion. One channel: AO is a visibility fraction in [0,1], and 8 bits of it sits
-// below the noise floor of any screen-space estimate -- the denoiser is what decides the quality
-// here, not the storage.
-inline constexpr DXGI_FORMAT kGtaoFormat                    = DXGI_FORMAT_R8_UNORM;
+// P6B ambient occlusion. Eight bits per channel: AO is a visibility fraction in [0,1], and 8 bits
+// of it sits below the noise floor of any screen-space estimate -- the denoiser is what decides the
+// quality here, not the storage.
+//
+// P16.4: TWO channels, was one. .x is the contact-scale estimate this pass has always produced;
+// .y is the same estimate at a medium radius, sized to canopies and building interiors, and it is
+// what occludes the SKY FILL. One texture rather than a second chain because every stage of the
+// chain (denoise, temporal, upsample) weights its taps on depth and normal alone -- the weights are
+// identical for both scales, so a second set of targets would be the same arithmetic done twice
+// over the same guide. Every stage of the chain and both consumers move together; the change is
+// the format here plus `.r` -> `.rg` in six kernels. No new resource, descriptor or barrier.
+inline constexpr DXGI_FORMAT kGtaoFormat                    = DXGI_FORMAT_R8G8_UNORM;
 // P6C hierarchical depth. R32_FLOAT, not the fp16 UE uses: the pyramid stores DEVICE Z, whose
 // useful precision under reversed-Z sits near 0 for distant geometry, and 16-bit floats have
 // their coarsest spacing exactly there. The extra bandwidth is a half-res chain; correctness

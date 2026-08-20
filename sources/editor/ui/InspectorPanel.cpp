@@ -580,7 +580,9 @@ namespace
                 ImGui::SeparatorText("Target");
                 dragF("Compensation (EV)", "compensationEv", 0.0f, 0.05f, -8.0f, 8.0f, "%.2f");
                 InspectorHelp("Offsets whatever the meter decides. This is the artistic knob - "
-                              "negative darkens the whole image, positive lifts it.");
+                              "negative darkens the whole image, positive lifts it.\n\n"
+                              "P16.13: AUTO MODE ONLY. Manual mode has its own field, so a trim you "
+                              "dial here cannot follow you into a fixed-exposure shot and back.");
                 ImGui::SeparatorText("Range (clamps on the metered result)");
                 dragF("Min EV100", "minEv100", -6.0f, 0.1f, -16.0f, 20.0f, "%.2f");
                 dragF("Max EV100", "maxEv100", 16.0f, 0.1f, -16.0f, 20.0f, "%.2f");
@@ -660,13 +662,17 @@ namespace
                 dragF("ISO", "isoSensitivity", 100.0f, 1.0f, 25.0f, 6400.0f, "%.0f",
                       ImGuiSliderFlags_Logarithmic);
                 InspectorHelp("Sensor sensitivity. 100 is the reference; doubling it is one stop.");
-                dragF("Exposure Compensation (EV)", "compensationEv", 0.0f, 0.02f, -5.0f, 5.0f, "%+.2f");
+                dragF("Exposure Compensation (EV)", "manualCompensationEv", 0.0f, 0.02f, -5.0f, 5.0f,
+                      "%+.2f");
                 InspectorHelp(
                     "A quick +/- on top of the three settings above. POSITIVE BRIGHTENS.\n\n"
                     "It is the trim you reach for while looking at the frame, so you do not have to "
-                    "re-solve the shutter in your head to make a scene half a stop warmer. It works "
-                    "in AUTO and MANUAL alike -- before P16.6b it was an auto-only control and a "
-                    "fixed-exposure level had no quick adjustment at all.");
+                    "re-solve the shutter in your head to make a scene half a stop warmer.\n\n"
+                    "P16.13: THIS IS MANUAL MODE'S OWN FIELD (`manualCompensationEv`). Auto mode "
+                    "has a separate one, because they are different jobs -- auto offsets what the "
+                    "METER decided, this offsets a number you solved by hand -- and while they "
+                    "shared a field, trimming one mode silently re-trimmed the other and back "
+                    "again. Switching modes no longer carries a trim across.");
                 InspectorHelp("Held exactly, with no metering at all.\n\n"
                               "THE DEFAULTS ARE SUNNY-16 -- f/16, 1/125, ISO 100, EV 14.97 -- and since P16 the lights are in real lux, so an outdoor scene is correctly exposed with nobody typing anything.\n\n"
                               "EV100 = log2(N^2/t) - log2(ISO/100). It is shown below, read-only: it is derived from these three and having it as a fourth control would be two names for one number.\n\n"
@@ -676,11 +682,15 @@ namespace
             // Plan section 6.2 wants both representations visible, because EV is the authored
             // quantity but the linear multiplier is what a shader bug would show up in.
             ImGui::Separator();
+            // P16.13: in manual the readout is the EV that ACTUALLY RUNS, i.e. the solved camera EV
+            // minus the manual trim -- the same arithmetic exposure_solve_cs does. Showing the
+            // untrimmed value would have this row disagree with the image as soon as the trim moved.
             const float shownEv = automatic
                 ? JsonFloat(tgt(), "compensationEv", 0.0f)
-                : render::Ev100FromCamera(JsonFloat(tgt(), "apertureFStop", 16.0f),
-                                          JsonFloat(tgt(), "shutterSpeedSec", 1.0f / 125.0f),
-                                          JsonFloat(tgt(), "isoSensitivity", 100.0f));
+                : (render::Ev100FromCamera(JsonFloat(tgt(), "apertureFStop", 16.0f),
+                                           JsonFloat(tgt(), "shutterSpeedSec", 1.0f / 125.0f),
+                                           JsonFloat(tgt(), "isoSensitivity", 100.0f)) -
+                   JsonFloat(tgt(), "manualCompensationEv", 0.0f));
             const float multiplier = tgt().value("enabled", false)
                 ? render::ExposureMultiplierFromEv100(shownEv)
                 : render::kIdentityExposureMultiplier;
@@ -968,6 +978,27 @@ namespace
                           "camera moves. FREE in GPU cost. Note it loses authority below about 1 m: "
                           "the search radius is floored at Steps pixels, so past a modest distance it "
                           "stops being a world radius at all.");
+            dragF("Sky Radius", "skyRadius", 25.0f, 0.2f, 0.0f, 60.0f, "%.1f m");
+            InspectorHelp("P16.4. A SECOND, much wider occlusion radius that damps the SKY FILL only "
+                          "- whether this patch of ground is under a canopy or inside a doorway. "
+                          "World Radius above cannot answer that: it is a contact radius, and with "
+                          "one radius the sky reaches under a palm crown as freely as it reaches "
+                          "open sand. At or below World Radius this is OFF and the pass is bit-for-"
+                          "bit what it was. COSTS a second horizon walk, so roughly doubles the raw "
+                          "GTAO pass when on.");
+            {
+                const nlohmann::json beforeItem = props;
+                int skyMip = static_cast<int>(tgt().value("skyMipBias", 2u));
+                const bool changed = ImGui::SliderInt("Sky Mip Bias", &skyMip, 0, 5);
+                if (changed) { tgt()["skyMipBias"] = static_cast<std::uint32_t>(skyMip < 0 ? 0 : skyMip); }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Depth-pyramid level the WIDE walk starts from (the contact walk keeps its "
+                          "own bias below). Its taps are tens of pixels apart, so a mip-0 fetch lands "
+                          "nowhere near the previous one; a coarser level caches better and "
+                          "aggregates, which is what you want at a scale where one texel of leaf does "
+                          "not decide whether the ground is sheltered. Higher is CHEAPER. Inert while "
+                          "Sky Radius is off or Use HZB is unchecked.");
             dragF("Intensity", "intensity", 1.0f, 0.01f, 0.1f, 4.0f, "%.2f");
             InspectorHelp("Exponent on the occlusion term - above 1 deepens, below 1 lifts. FREE.");
             dragF("Thickness", "thickness", 0.6f, 0.01f, 0.0f, 1.0f, "%.2f");
@@ -1524,6 +1555,32 @@ namespace
                 "entirely, and reusing it here would bury the fill about twenty times too deep.\n\n"
                 "Ambient still drives the flat fallback fill on levels whose sky has no "
                 "derivatives.");
+
+            {
+                const nlohmann::json beforeItem = props;
+                const Math::float3 g = JsonFloat3(tgt(), "groundAlbedo",
+                                                  Math::float3(0.25f, 0.25f, 0.25f));
+                float gv[3] = { g.x, g.y, g.z };
+                const bool changed = ImGui::ColorEdit3("Ground Bounce Albedo", gv);
+                if (changed) { tgt()["groundAlbedo"] = { gv[0], gv[1], gv[2] }; }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp(
+                "P16.12. The DIFFUSE REFLECTANCE OF THE GROUND -- the light that comes back UP off "
+                "the floor and fills everything facing downward. Sky Fill above answers what "
+                "arrives from the sky; nothing answered this, because the irradiance cube's lower "
+                "hemisphere carries the HDRI's own ground, not the ground this scene is standing "
+                "on. Measured on wind_test: about 1.2 stops missing on shaded vertical surfaces "
+                "over sunlit sand, which is what makes a bright day look like it has dead shadows."
+                "\n\n"
+                "It is a REFLECTANCE, not a light: it only ever scales illuminance the scene "
+                "already has, so it follows the sun automatically and cannot brighten a night. "
+                "Black switches the whole term off. Physical values: dry sand 0.4, dead grass 0.3, "
+                "concrete 0.25, green grass 0.2, asphalt 0.1, water 0.06. TINT IT toward the ground "
+                "you actually have -- warm sand throwing warm light into the shadows is half of "
+                "what makes the effect read.\n\n"
+                "Applies to indirect DIFFUSE only, and it is occluded by the same AO the sky fill "
+                "is, so it does not light the inside of a closed room. FREE in GPU cost.");
 
             if (tgt().contains("sunIlluminanceLux") &&
                 (tgt().contains("sunIntensity") || tgt().contains("exposure")))

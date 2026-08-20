@@ -354,6 +354,12 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             dirLight.MigrateLegacyExposure(dl.value("exposure", 1.0f));
         }
         dirLight.SetSkyFillIntensity(dl.value("skyFillIntensity", 1.0f));
+        // P16.12: the ground's diffuse reflectance. Read unconditionally for the same reason the
+        // fill fields above are -- it is orthogonal to how the sun intensity was authored. A
+        // disabled sun still has a lit sky, so this is NOT gated on `enabled`; the term scales
+        // itself down through the illuminance it reads.
+        dirLight.SetGroundAlbedo(ToFloat3(dl.value("groundAlbedo", json::array()),
+                                          dirLight.GetGroundAlbedo()));
         dirLight.SetUseSunTemperature(dl.value("useSunTemperature", false));
         dirLight.SetSunTemperatureK(dl.value("sunTemperatureK", 6500.0f));
         scene.SetDirectionalLight(dirLight);

@@ -40,6 +40,11 @@ cbuffer Probe : register(b0)
     // P16.9: the sky's cosine-convolved irradiance and the scale lighting_cs applies to it.
     // `skyIrradianceIndex == 0` means this sky has no F7 derivatives and the flat fallback stands.
     uint skyIrradianceIndex; float skyIrradianceScale; uint _rtPad0; uint _rtPad1;
+    // P16.12: the ground's diffuse reflectance, mirroring lighting_cs. An off-screen hit is
+    // re-shaded HERE, so leaving it out would make every reflection of a shaded surface about a
+    // stop darker than the same surface seen directly -- the same half-a-pair defect P16.9 fixed
+    // for the sky fill itself.
+    float3 groundAlbedoRgb; float _rtPadGround;
     uint spotLightIndex; uint spotCount;      uint pointLightIndex; uint pointCount;
     // depthIndex reconstructs the PRIMARY surface (the reflector). screenDepthIndex is
     // the on-screen opaque depth used only for the fast-path visibility/depth-match — the
@@ -175,7 +180,20 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, float tMin, out f
         {
             TextureCube skyIrradiance = ResourceDescriptorHeap[skyIrradianceIndex];
             const float3 irradiance = skyIrradiance.SampleLevel(gSmp, N, 0).rgb;
-            col = albedo * (1.0f - metal) * irradiance * skyIrradianceScale;
+            // P16.12 ground bounce, the same two-half fill lighting_cs builds. Kept inline rather
+            // than shared because the two passes reach their cube through different bindings; the
+            // ARITHMETIC must stay identical, so change both or neither.
+            float3 groundBounceOverPi = 0.0f.xxx;
+            if (dot(groundAlbedoRgb, groundAlbedoRgb) > 0.0f)
+            {
+                const float3 sunOnGroundOverPi = lightRgb * saturate(-sunDirWS.y) * kInvPi;
+                const float3 skyOnGroundOverPi =
+                    skyIrradiance.SampleLevel(gSmp, float3(0.0f, 1.0f, 0.0f), 0).rgb *
+                    skyIrradianceScale;
+                groundBounceOverPi = groundAlbedoRgb * (sunOnGroundOverPi + skyOnGroundOverPi) *
+                                     ((1.0f - N.y) * 0.5f);
+            }
+            col = albedo * (1.0f - metal) * (irradiance * skyIrradianceScale + groundBounceOverPi);
         }
         else
         {

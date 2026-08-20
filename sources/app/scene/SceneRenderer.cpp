@@ -3066,6 +3066,11 @@ void SceneRenderer::Pass_Gtao(Renderer* renderer, RenderGraphPassContext ctx, co
     c.useHzb = (s.useHzb && D.hzbMips > 0u) ? 1u : 0u;
     c.hzbMipBias = s.hzbMipBias;
     c.hzbMipCount = std::max(1u, D.hzbMips);
+    // P16.4: the medium radius for the sky-fill channel. The kernel treats `skyRadius <=
+    // worldRadius` as OFF and copies the contact answer into both channels, so the settings value
+    // passes through untouched and one comparison in the shader is the whole gate.
+    c.skyRadius = s.skyRadius;
+    c.skyMipBias = s.skyMipBias;
 
     // Shared by all three filter kernels; only the sizes and the stage's own field differ.
     GtaoFilterConstants f{};
@@ -3213,6 +3218,10 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         constants.gtaoStrength = std::clamp(frame_->settings.gtao.strength, 0.0f, 1.0f);
         constants.skyIrradianceScale =
             (iblSky ? iblSky->GetExposure() : 1.0f) * dirLight.GetSkyFillIntensity();
+        // P16.12: the other half of the fill -- what comes back UP off the ground. The shader
+        // treats a zero here as "term off", so a level that wants none writes zero rather than
+        // needing a second boolean.
+        constants.groundAlbedoRgb = dirLight.GetGroundAlbedo();
         // The sky's indirect SPECULAR, moved out of compose so the screen-space reflection pass
         // (which samples this target) sees a metal with its environment on it. These three MUST
         // match compose's own values exactly -- one pass adds the term, the other subtracts the
@@ -3716,6 +3725,9 @@ struct RtReflectConstants
     uint32_t tlasIndex = 0; uint32_t lightIndex = 0; uint32_t gb1Index = 0; uint32_t depthIndex = 0;
     uint32_t reflectionUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t skyboxIndex = 0; float skyboxIntensity = 1.0f;
     uint32_t skyIrradianceIndex = 0; float skyIrradianceScale = 1.0f; uint32_t rtPad0 = 0, rtPad1 = 0; // P16.9
+    // P16.12: mirrors lighting_cs. Off-screen hits are re-shaded in the RT pass, so the bounce has
+    // to reach both or a reflection is about a stop darker than the surface it reflects.
+    Math::float3 groundAlbedoRgb{ 0.25f, 0.25f, 0.25f }; float rtPadGround = 0.0f;
     uint32_t spotLightIndex = 0; uint32_t spotCount = 0; uint32_t pointLightIndex = 0; uint32_t pointCount = 0;
     uint32_t screenDepthIndex = 0; uint32_t _padS0 = 0; uint32_t _padS1 = 0; uint32_t _padS2 = 0;
 };
@@ -3815,6 +3827,7 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         c.skyboxIntensity = skybox->GetExposure();
         c.skyIrradianceIndex = haveSkyIrradiance ? bindless_.SceneIndex(frameIndex, 8) : 0u; // P16.9
         c.skyIrradianceScale = skybox->GetExposure() * dl.GetSkyFillIntensity();
+        c.groundAlbedoRgb = dl.GetGroundAlbedo(); // P16.12, same value lighting_cs gets
         c.geomInfoIndex = bindless_.GeomInfoIndex();
         c.spotLightIndex = bindless_.SceneIndex(frameIndex, 6);
         c.spotCount = haveSpots ? spotCount : 0u;
@@ -4885,6 +4898,7 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
 
         // 3) Solve + adapt.
         constants.compensationEv = settings.compensationEv;
+        constants.manualCompensationEv = settings.manualCompensationEv; // P16.13
         constants.minEv100 = settings.minEv100;
         constants.maxEv100 = settings.maxEv100;
         constants.lowPercentile = settings.lowPercentile;

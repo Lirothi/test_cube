@@ -13,13 +13,16 @@
 // been the reference is inside `#if 0` in the drop. This is the standard joint-bilateral upsample
 // (Kopf et al. 2007), with depth as the guide because depth is what the AO estimate was keyed on.
 //
-// t0: accumulated AO (half res)
+// P16.4: two channels, one set of weights. The guide is depth, which is the same for both scales,
+// so nothing here needs to know which channel is which.
+//
+// t0: accumulated AO (half res, RG8 -- .x contact scale, .y sky scale)
 // t1: scene depth (render res)
-// u0: AO at render resolution -- what lighting and compose will sample once P6B item 7 lands
+// u0: AO at render resolution -- what lighting and compose sample
 
 Texture2D AoTex : register(t0);
 Texture2D DepthTex : register(t1);
-RWTexture2D<float> AoOut : register(u0);
+RWTexture2D<float2> AoOut : register(u0);
 
 SamplerState gSmpPoint : register(s0);
 SamplerState gSmpLinear : register(s1);
@@ -87,15 +90,15 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     // reintroduces the blocky half-res look far away.
     const float tolerance = max(upsampleTolerance * abs(centreLinearZ), 1e-4f);
 
-    float sumAo = 0.0f;
+    float2 sumAo = float2(0.0f, 0.0f);
     float sumWeight = 0.0f;
-    float nearestAo = 1.0f;
+    float2 nearestAo = float2(1.0f, 1.0f);
     float nearestDiff = 1e30f;
 
     [unroll] for (int i = 0; i < 4; ++i)
     {
         const int2 tap = clamp(base + offsets[i], int2(0, 0), hi);
-        const float tapAo = AoTex.Load(int3(tap, 0)).r;
+        const float2 tapAo = AoTex.Load(int3(tap, 0)).rg;
         const float diff = abs(AoTapLinearZ(tap) - centreLinearZ);
 
         const float weight = bilinear[i] * (1.0f - saturate(diff / tolerance));

@@ -336,6 +336,28 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // below ~1 m it stops having any authority at distance. See the plan's P6B section.
                 ImGui::SliderFloat("AO world radius", &gtao.worldRadius, 0.05f, 8.0f, "%.2f m");
                 DevHelp("Occlusion reach in METRES, so contacts do not breathe as the camera moves. FREE in GPU cost. Loses authority below ~1 m: the radius is floored at Steps pixels, so at distance it stops being a world radius.");
+                // P16.4: the second, much wider radius. At or below the contact radius the kernel
+                // skips the whole second walk and copies the contact answer into both channels, so
+                // dragging this to the bottom is the exact-no-op baseline for an A/B.
+                ImGui::SliderFloat("AO sky radius", &gtao.skyRadius, 0.0f, 60.0f, "%.1f m");
+                DevHelp("A SECOND horizon walk at a much wider radius, damping the SKY FILL only - "
+                        "whether this ground is under a canopy or inside a doorway. The contact "
+                        "radius above cannot answer that, and with one radius the sky reaches under "
+                        "a palm crown as freely as it reaches open sand (measured: the crown was "
+                        "worth 0.04 stops). At or below AO world radius this is OFF and bit-for-bit "
+                        "the old pass. COSTS a second walk, so roughly doubles the raw GTAO pass.");
+                ImGui::BeginDisabled(!(gtao.skyRadius > gtao.worldRadius) || !gtao.useHzb);
+                {
+                    int skyBias = static_cast<int>(gtao.skyMipBias);
+                    if (ImGui::SliderInt("AO sky mip bias", &skyBias, 0, 5))
+                    {
+                        gtao.skyMipBias = static_cast<uint32_t>(std::max(0, skyBias));
+                    }
+                }
+                DevHelp("Pyramid level the WIDE walk starts from. Its taps are tens of pixels apart, "
+                        "so mip 0 both misses cache and aliases off whichever texel it lands on. "
+                        "Higher = cheaper. Separate from the contact walk's bias on purpose.");
+                ImGui::EndDisabled();
                 ImGui::SliderFloat("AO thickness", &gtao.thickness, 0.0f, 1.0f, "%.2f");
                 DevHelp("1 = occluders are fully solid behind their silhouette, so foliage casts a slab behind every leaf. UE equivalent works out to 0.75. FREE.");
                 // OFF matches UE (r.GTAO.UseNormals = 0). ON feeds the integral the normal-mapped
@@ -959,7 +981,19 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 
                 ImGui::SeparatorText("Metering");
-                ImGui::SliderFloat("Compensation (EV)", &exposure.compensationEv, -8.0f, 8.0f, "%+.2f");
+                // P16.13: two fields, and only the one the current mode uses is shown. They were a
+                // single value, so a trim dialled for a metered shot silently followed you into a
+                // fixed-exposure one and back again. Showing both at once would only move the
+                // confusion from the value to the label.
+                if (exposure.autoExposure)
+                {
+                    ImGui::SliderFloat("Compensation (EV)", &exposure.compensationEv, -8.0f, 8.0f, "%+.2f");
+                }
+                else
+                {
+                    ImGui::SliderFloat("Compensation (EV, manual)", &exposure.manualCompensationEv,
+                                       -8.0f, 8.0f, "%+.2f");
+                }
                 ImGui::SameLine();
                 HelpMarker(
                     "Artistic offset in stops, applied on top of whatever the meter decided.\n\n"
@@ -1412,6 +1446,7 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "  \"enabled\": %s,\n"
                         "  \"autoExposure\": %s,\n"
                         "  \"compensationEv\": %.4f,\n"
+                        "  \"manualCompensationEv\": %.4f,\n"
                         "  \"minEv100\": %.4f,\n"
                         "  \"maxEv100\": %.4f,\n"
                         "  \"lowPercentile\": %.4f,\n"
@@ -1424,7 +1459,8 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "}",
                         exposure.enabled ? "true" : "false",
                         exposure.autoExposure ? "true" : "false",
-                        exposure.compensationEv, exposure.minEv100, exposure.maxEv100,
+                        exposure.compensationEv, exposure.manualCompensationEv,
+                        exposure.minEv100, exposure.maxEv100,
                         exposure.lowPercentile, exposure.highPercentile,
                         exposure.speedUp, exposure.speedDown, exposure.apertureFStop,
                         exposure.shutterSpeedSec, exposure.isoSensitivity);

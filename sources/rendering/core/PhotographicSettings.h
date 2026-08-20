@@ -71,6 +71,13 @@ struct CameraExposureSettings
     // Compensation belongs to the CURVE, not to the grade: Filmic runs about 0.4 EV darker than the
     // legacy fit, so a value tuned against one stacks with the other.
     float compensationEv = -0.15f;
+    // P16.13: MANUAL mode's own compensation, in stops, same sign (positive brightens).
+    // It was the SAME field as `compensationEv` above, so trimming a metered shot silently
+    // re-trimmed every fixed-exposure shot in the level and back again. The two are different
+    // jobs: in auto this offsets what the METER decided, in manual it offsets a number the author
+    // already solved by hand. Defaults to 0 rather than -0.15 for exactly that reason -- a manual
+    // EV is an absolute the author dialled in, and a hidden trim on top of it is a trap.
+    float manualCompensationEv = 0.0f;
     // Safety net for the adapted value, in EV100. NOTE the span below is 22 stops, which is wide
     // enough that it clamps essentially nothing -- it is "off", not "tuned". Narrowing it is how a
     // scene stops the camera from opening all the way up in a dark frame. It is deliberately NOT

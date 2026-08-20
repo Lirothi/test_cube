@@ -221,8 +221,12 @@ float CombinedAo(float materialAo, float2 uv)
     // product, but here the material term already shipped in F9 and is not this step's to switch
     // off: at strength 0 this must be an EXACT no-op against the pre-P6B build, and the sweep
     // level's AO row is what proves it (damping the product moved it by 177/255).
-    const float dynamicAo = saturate(GtaoTex.SampleLevel(gSmpPoint, uv, 0).r);
-    return saturate(materialAo * lerp(1.0f, dynamicAo, saturate(gtaoStrength)));
+    //
+    // P16.4: two scales in the target, combined with a MIN. The reasoning is in lighting_cs -- this
+    // line only has to stay byte-identical to it, because compose SUBTRACTS the sky specular that
+    // lighting added and the two must remain each other's exact inverse.
+    const float2 dynamicAo = saturate(GtaoTex.SampleLevel(gSmpPoint, uv, 0).rg);
+    return saturate(materialAo * lerp(1.0f, min(dynamicAo.x, dynamicAo.y), saturate(gtaoStrength)));
 }
 
 [numthreads(8,8,1)]

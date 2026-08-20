@@ -334,6 +334,24 @@ struct GtaoSettings
     // 1 at 6 taps, 0 from 8 taps up. Higher = cheaper and blurrier.
     uint32_t hzbMipBias = 0u;
 
+    // --- P16.4: the SECOND radius, the one that occludes the sky fill.
+    //
+    // `worldRadius` above is a CONTACT radius and has to stay one -- it is what makes a trunk meet
+    // the sand. But the sky is a hemisphere-sized source, and whether a patch of ground is under a
+    // canopy or inside a doorway is decided at TENS of metres. With one radius the two questions
+    // share an answer and the second one is always "unoccluded": measured on the atoll, raising the
+    // sky 6x brightened dense canopy 1.92 stops and open sand 1.88 -- the crown was worth 0.04
+    // stops. This is the same split UE make as SSAO + DFAO and Godot as SSAO + SDFGI.
+    //
+    // <= worldRadius switches the second horizon walk off and copies the contact answer into both
+    // channels, which is an exact no-op for both consumers -- so this doubles as the A/B switch.
+    float skyRadius = 25.0f;
+    // Mip bias for the sky walk only (the contact walk keeps `hzbMipBias`). Its taps are tens of
+    // pixels apart, so a mip-0 fetch lands nowhere near the previous one; a coarse level both
+    // caches better and AGGREGATES, which is the right answer at a scale where a single texel of
+    // leaf is not what decides whether the ground is sheltered.
+    uint32_t skyMipBias = 2u;
+
     // --- items 3-5: the filter chain. Each stage is separately switchable so the A/B the plan
     // asks for can isolate one at a time; the chain always ends in the render-resolution target.
     bool denoise = true;

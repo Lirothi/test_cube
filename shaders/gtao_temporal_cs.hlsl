@@ -21,7 +21,12 @@
 //     components, which cancels to zero for a difference of (+a, -a) -- i.e. it reports perfect
 //     agreement for two velocities pointing 90 degrees apart. Uses length() instead.
 //
-// t0: this frame's denoised AO (half res)
+// P16.4: two channels. The reprojection, the disocclusion test and the blend weight are all
+// GEOMETRIC -- they depend on where the pixel was, not on what the AO says -- so they are computed
+// once and applied to both. Only the clamp window is per-channel, because it is a window around
+// each channel's OWN estimate.
+//
+// t0: this frame's denoised AO (half res, RG8 -- .x contact scale, .y sky scale)
 // t1: the previous frame's accumulated AO (half res) -- Deferred[(frame-1)].gtaoHistory
 // t2: gbVelocity (render res); motion = currUv - prevUv
 // u0: accumulated AO (half res) -> consumed by the upsample AND kept as next frame's history
@@ -29,7 +34,7 @@
 Texture2D CurrTex : register(t0);
 Texture2D HistTex : register(t1);
 Texture2D VelocityTex : register(t2);
-RWTexture2D<float> AoOut : register(u0);
+RWTexture2D<float2> AoOut : register(u0);
 
 SamplerState gSmpPoint : register(s0);
 SamplerState gSmpLinear : register(s1);
@@ -64,7 +69,7 @@ static const float kVelocityScale = 100.0f;
 // UE's ReadHistoryClamp: bilinear, but each of the four taps is clamped into the accepted window
 // BEFORE the weighted sum. Clamping the interpolated value instead would let one out-of-range tap
 // drag the result to the edge of the window and stay there, which is how a thin ghost survives.
-float ReadHistoryClamp(float2 uv, float minAo, float maxAo)
+float2 ReadHistoryClamp(float2 uv, float2 minAo, float2 maxAo)
 {
     const float2 pixUv = uv * aoSize - 0.5f;
     const float2 baseUv = floor(pixUv);
@@ -77,10 +82,10 @@ float ReadHistoryClamp(float2 uv, float minAo, float maxAo)
     const float w3 = f.x * f.y;
 
     const int2 hi = int2(aoSize) - int2(1, 1);
-    const float t0 = HistTex.Load(int3(clamp(base + int2(0, 0), int2(0, 0), hi), 0)).r;
-    const float t1 = HistTex.Load(int3(clamp(base + int2(1, 0), int2(0, 0), hi), 0)).r;
-    const float t2 = HistTex.Load(int3(clamp(base + int2(0, 1), int2(0, 0), hi), 0)).r;
-    const float t3 = HistTex.Load(int3(clamp(base + int2(1, 1), int2(0, 0), hi), 0)).r;
+    const float2 t0 = HistTex.Load(int3(clamp(base + int2(0, 0), int2(0, 0), hi), 0)).rg;
+    const float2 t1 = HistTex.Load(int3(clamp(base + int2(1, 0), int2(0, 0), hi), 0)).rg;
+    const float2 t2 = HistTex.Load(int3(clamp(base + int2(0, 1), int2(0, 0), hi), 0)).rg;
+    const float2 t3 = HistTex.Load(int3(clamp(base + int2(1, 1), int2(0, 0), hi), 0)).rg;
 
     return w0 * clamp(t0, minAo, maxAo) + w1 * clamp(t1, minAo, maxAo) +
            w2 * clamp(t2, minAo, maxAo) + w3 * clamp(t3, minAo, maxAo);
@@ -96,7 +101,7 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     }
 
     const int2 px = int2(tid.xy);
-    const float newAo = CurrTex.Load(int3(px, 0)).r;
+    const float2 newAo = CurrTex.Load(int3(px, 0)).rg;
 
     // No history to accumulate against: the first frame after a resize, a level switch, or the
     // stage being switched on. Seeding with this frame is what makes those transitions produce a
@@ -131,14 +136,14 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     // not, and clamping hard is cheaper than detecting every way reprojection can be wrong.
     const float velocityMag = saturate(length(motion) * kVelocityScale);
     const float range = lerp(temporalClampRange, 0.0f, velocityMag);
-    const float minAo = saturate(newAo - range);
-    const float maxAo = saturate(newAo + range);
+    const float2 minAo = saturate(newAo - range);
+    const float2 maxAo = saturate(newAo + range);
 
-    const float historyReprojected = ReadHistoryClamp(prevUv, minAo, maxAo);
+    const float2 historyReprojected = ReadHistoryClamp(prevUv, minAo, maxAo);
     // The un-reprojected history is the fallback when the motion disagrees: it is stale but it is
     // this pixel's own past, which beats a confidently wrong neighbour's.
-    const float historyHere = clamp(HistTex.Load(int3(px, 0)).r, minAo, maxAo);
+    const float2 historyHere = clamp(HistTex.Load(int3(px, 0)).rg, minAo, maxAo);
 
-    const float history = lerp(historyHere, historyReprojected, agreement);
+    const float2 history = lerp(historyHere, historyReprojected, agreement);
     AoOut[px] = lerp(history, newAo, saturate(blendWeight));
 }

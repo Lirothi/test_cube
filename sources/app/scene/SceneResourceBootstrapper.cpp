@@ -29,6 +29,7 @@ void SceneLightingCBHandles::Populate(Material* material)
     skyIrradianceScale = material->ComputeCB0FieldHandle("skyIrradianceScale");
     gtaoEnabled = material->ComputeCB0FieldHandle("gtaoEnabled");
     gtaoStrength = material->ComputeCB0FieldHandle("gtaoStrength");
+    groundAlbedoRgb = material->ComputeCB0FieldHandle("groundAlbedoRgb");
     exposure = material->ComputeCB0FieldHandle("exposure");
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     camDir = material->ComputeCB0FieldHandle("camDirWS");
@@ -273,6 +274,7 @@ void SceneExposureSolveCBHandles::Populate(Material* material)
     lowPercentile = material->ComputeCB0FieldHandle("lowPercentile");
     highPercentile = material->ComputeCB0FieldHandle("highPercentile");
     compensationEv = material->ComputeCB0FieldHandle("compensationEv");
+    manualCompensationEv = material->ComputeCB0FieldHandle("manualCompensationEv");
     minEv100 = material->ComputeCB0FieldHandle("minEv100");
     maxEv100 = material->ComputeCB0FieldHandle("maxEv100");
     deltaTime = material->ComputeCB0FieldHandle("deltaTime");
@@ -756,6 +758,8 @@ void GtaoHandles::Populate(Material* material)
     useHzb = material->ComputeCB0FieldHandle("useHzb");
     hzbMipBias = material->ComputeCB0FieldHandle("hzbMipBias");
     hzbMipCount = material->ComputeCB0FieldHandle("hzbMipCount");
+    skyRadius = material->ComputeCB0FieldHandle("skyRadius");
+    skyMipBias = material->ComputeCB0FieldHandle("skyMipBias");
 }
 
 UINT SceneResourceBootstrapper::GetGtaoCBSizeBytes() const
@@ -786,6 +790,8 @@ void SceneResourceBootstrapper::WriteGtaoConstants(const GtaoPassConstants& d, u
     matGtaoCS_->UpdateCBField(h.useHzb, d.useHzb, dest);
     matGtaoCS_->UpdateCBField(h.hzbMipBias, d.hzbMipBias, dest);
     matGtaoCS_->UpdateCBField(h.hzbMipCount, d.hzbMipCount, dest);
+    matGtaoCS_->UpdateCBField(h.skyRadius, d.skyRadius, dest);
+    matGtaoCS_->UpdateCBField(h.skyMipBias, d.skyMipBias, dest);
 }
 
 void GtaoFilterHandles::Populate(Material* material)
@@ -1099,6 +1105,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.skyIrradianceScale, data.skyIrradianceScale, dest);
     matLighting_->UpdateCBField(handles.gtaoEnabled, data.gtaoEnabled, dest);
     matLighting_->UpdateCBField(handles.gtaoStrength, data.gtaoStrength, dest);
+    matLighting_->UpdateCBField(handles.groundAlbedoRgb, data.groundAlbedoRgb, dest);
     matLighting_->UpdateCBField(handles.exposure, data.exposure, dest);
     matLighting_->UpdateCBField(handles.camPos, data.camPos, dest);
     matLighting_->UpdateCBField(handles.camDir, data.camDir, dest);
@@ -1308,6 +1315,7 @@ void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteri
     matExposureSolveCS_->UpdateCBField(handles.lowPercentile, data.lowPercentile, dest);
     matExposureSolveCS_->UpdateCBField(handles.highPercentile, data.highPercentile, dest);
     matExposureSolveCS_->UpdateCBField(handles.compensationEv, data.compensationEv, dest);
+    matExposureSolveCS_->UpdateCBField(handles.manualCompensationEv, data.manualCompensationEv, dest);
     matExposureSolveCS_->UpdateCBField(handles.minEv100, data.minEv100, dest);
     matExposureSolveCS_->UpdateCBField(handles.maxEv100, data.maxEv100, dest);
     matExposureSolveCS_->UpdateCBField(handles.deltaTime, data.deltaTime, dest);

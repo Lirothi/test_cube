@@ -77,6 +77,11 @@ cbuffer PerFrame : register(b0)
     // off). `gtaoStrength` is UE's AmbientOcclusionStaticFraction: lerp(1, ao, strength).
     uint gtaoEnabled;
     float gtaoStrength;
+    // P16.12 -- GROUND BOUNCE. The ground's diffuse REFLECTANCE, 0 = the term is off. It is an
+    // albedo, not a light: it only ever scales illuminance the scene already has, so it cannot
+    // brighten a night scene and it moves with the sun automatically. See GroundBounceOverPi.
+    float3 groundAlbedoRgb;
+    float _padGround;
 
     float4x4 invView;
     float4x4 invProj;
@@ -138,8 +143,66 @@ float CombinedAo(float materialAo, float2 uv)
     // product, but here the material term already shipped in F9 and is not this step's to switch
     // off: at strength 0 this must be an EXACT no-op against the pre-P6B build, and the sweep
     // level's AO row is what proves it (damping the product moved it by 177/255).
-    const float dynamicAo = saturate(GtaoTex.SampleLevel(gSmpPoint, uv, 0).r);
-    return saturate(materialAo * lerp(1.0f, dynamicAo, saturate(gtaoStrength)));
+    //
+    // P16.4: the GTAO target carries TWO scales -- .x a contact radius, .y a medium one sized to
+    // canopies and buildings -- and this is where they meet. THE COMBINE IS A MIN, NOT A PRODUCT,
+    // and the difference matters: the two estimates are the SAME physical quantity (the fraction of
+    // the hemisphere this pixel can see) measured at two scales, not two independent occluders. The
+    // wide walk sees the trunk at your feet as well as the crown overhead, so multiplying would
+    // square that trunk. `min` takes whichever walk found more occlusion, which is exactly the
+    // right answer when each one is blind at the other's scale. It is still bounded in [0,1],
+    // monotonic, and an identity at 1, so the reasoning about the product below still holds.
+    //
+    // (The product with `materialAo` stays a product: cavities in a texture ARE independent of the
+    // geometry a depth buffer can see.)
+    const float2 dynamicAo = saturate(GtaoTex.SampleLevel(gSmpPoint, uv, 0).rg);
+    return saturate(materialAo * lerp(1.0f, min(dynamicAo.x, dynamicAo.y), saturate(gtaoStrength)));
+}
+
+// P16.12 -- THE LIGHT THAT COMES BACK UP OFF THE GROUND.
+//
+// There is no bounce term in this engine: the only fill is the sky cube, and the cube's lower
+// hemisphere carries whatever the HDRI's own ground was, not the sunlit sand this scene is
+// standing on. So a frond in shade over a beach at 54,400 lx received about 8,000 lx -- sky only.
+// Measured on `wind_test`: the missing bounce is worth about 1.2 stops on exactly the surfaces
+// that read as too dark for a sunny day.
+//
+// The approximation is the classic infinite-ground-plane split, the same one UE spend on
+// SkyLight's LowerHemisphereColor and Godot on its ambient:
+//
+//   E_bounce(N) = groundAlbedo * E_ground * F(N),   F(N) = (1 - cos theta) / 2
+//
+// with theta the angle between N and world up, so `cos theta` is just `N.y`. The view factor is
+// exact for a flat infinite plane of uniform radiance: an up-facing surface sees NONE of the
+// ground, a vertical one sees half, a down-facing one sees all of it. That is the whole reason to
+// prefer it to a flat ambient add -- the direction dependence is what makes it read as light off
+// the floor instead of a grey wash.
+//
+// `E_ground` is the illuminance ON a level surface: the sun's own cosine plus the sky's up-facing
+// irradiance. It is deliberately a SCENE average and not shadowed -- a point standing in a palm's
+// shadow is still surrounded by lit sand. What does localise it is the AO the caller applies to
+// the whole indirect-diffuse term afterwards, which is what stops this lighting the inside of a
+// closed box.
+//
+// Everything here is divided by PI because the irradiance cube stores E/PI and the caller
+// multiplies the sum by albedo alone.
+//
+// DIFFUSE ONLY. A down-facing glossy surface really does reflect bright sand, but the prefiltered
+// sky cube has no such term either, and adding one on this side only would make the two disagree.
+float3 GroundBounceOverPi(float3 N)
+{
+    if (dot(groundAlbedoRgb, groundAlbedoRgb) <= 0.0f)
+    {
+        return 0.0f.xxx;
+    }
+    // `sunDirWS` is the direction the light TRAVELS, so its negated y is the cosine on a level
+    // surface, and a sun below the horizon contributes nothing without a special case.
+    const float3 sunOnGroundOverPi = lightRgb * saturate(-sunDirWS.y) * kInvPi;
+    const float3 skyOnGroundOverPi =
+        SkyIrradiance.SampleLevel(gSmpLinearWrap, float3(0.0f, 1.0f, 0.0f), 0).rgb *
+        skyIrradianceScale;
+    const float groundViewFactor = (1.0f - N.y) * 0.5f;
+    return groundAlbedoRgb * (sunOnGroundOverPi + skyOnGroundOverPi) * groundViewFactor;
 }
 
 int ChooseCascadeIndex(float3 Pws)
@@ -371,7 +434,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (skyIrradianceEnabled != 0u)
     {
         const float3 irradiance = SkyIrradiance.SampleLevel(gSmpLinearWrap, N, 0).rgb;
-        color = albedo * (1.0 - metal) * irradiance * skyIrradianceScale;
+        // P16.12: the sky above and the ground below are the two halves of the same fill, so they
+        // are summed BEFORE the albedo multiply rather than added as a second lit result.
+        // Deliberately not extended to the flat-fill branch below: `ambient` there is a fraction
+        // of the SUN COLOUR authored against a different equation, and a physical bounce added to
+        // it would be two units in one sum.
+        color = albedo * (1.0 - metal) * (irradiance * skyIrradianceScale + GroundBounceOverPi(N));
     }
     else
     {

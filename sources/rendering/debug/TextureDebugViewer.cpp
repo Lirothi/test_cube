@@ -32,6 +32,7 @@ namespace
         case DXGI_FORMAT_R16G16_FLOAT: return "R16G16_FLOAT";
         case DXGI_FORMAT_R16G16B16A16_FLOAT: return "R16G16B16A16_FLOAT";
         case DXGI_FORMAT_R8_UNORM: return "R8_UNORM";
+        case DXGI_FORMAT_R8G8_UNORM: return "R8G8_UNORM";
         case DXGI_FORMAT_R16_UNORM: return "R16_UNORM";
         case DXGI_FORMAT_R32_FLOAT: return "R32_FLOAT";
         case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS: return "R32_FLOAT_X8X24_TYPELESS";
@@ -46,6 +47,7 @@ namespace
         switch (format)
         {
         case DXGI_FORMAT_R8_UNORM: return 8;
+        case DXGI_FORMAT_R8G8_UNORM: return 16;
         case DXGI_FORMAT_R16_UNORM: return 16;
         case DXGI_FORMAT_R16G16_FLOAT: return 32;
         case DXGI_FORMAT_R8G8B8A8_UNORM:
@@ -215,10 +217,10 @@ namespace
             MakeTarget(TextureDebugViewer::Target::GlassReflNormal, "Reflection", "Glass G-buffer: front-face world normal (S15b prepass input).", D.glassReflNormal.Get(), renderer.GetGBuffer1Format()),
             MakeTarget(TextureDebugViewer::Target::GlassReflDepth, "Reflection", "Glass G-buffer: front-face depth (S15b reflection ray origin).", D.glassReflDepth.Get(), renderer.GetDepthSrvFormat()),
             MakeTarget(TextureDebugViewer::Target::GlassReflection, "Reflection", "Off-screen glass reflection (RT or SSR) sampled by the forward glass pass.", D.glassReflection.Get(), renderer.GetReflectionFormat()),
-            MakeTarget(TextureDebugViewer::Target::Gtao, "Lighting", "P6B screen-space ambient occlusion, RAW, half render resolution. White = unoccluded. Expected to be noisy - this is the estimate before any filtering. Blank/white everywhere means the pass is disabled (SceneRenderSettings::gtao.enabled).", D.gtao.Get(), render::kGtaoFormat),
-            MakeTarget(TextureDebugViewer::Target::GtaoFiltered, "Lighting", "P6B AO after the bilateral denoise (half res). Compare against RAW: the per-pixel grain should be gone while the contact darkening stays put. Stale when gtao.denoise is off.", D.gtaoFiltered.Get(), render::kGtaoFormat),
-            MakeTarget(TextureDebugViewer::Target::GtaoHistory, "Lighting", "P6B AO after temporal accumulation (half res); also next frame's history. Under a moving camera the disocclusion band behind an occluder falls back to the un-accumulated estimate. Stale when gtao.temporal is off.", D.gtaoHistory.Get(), render::kGtaoFormat),
-            MakeTarget(TextureDebugViewer::Target::GtaoUpsampled, "Lighting", "P6B AO at render resolution after the edge-aware upsample - the target lighting and compose will consume. Silhouettes should be crisp: a soft dark fringe against the sky means the depth-aware weights are not firing.", D.gtaoUpsampled.Get(), render::kGtaoFormat),
+            MakeTarget(TextureDebugViewer::Target::Gtao, "Lighting", "P6B/P16.4 screen-space ambient occlusion, RAW, half render resolution. TWO CHANNELS: Red = contact scale (gtao.worldRadius), Green = sky scale (gtao.skyRadius) - use the channel selector, because in Auto this reads as yellow where both are open and green where only the wide walk found occlusion. 1 = unoccluded. Expected to be noisy: this is the estimate before any filtering. Blank/white everywhere means the pass is disabled (SceneRenderSettings::gtao.enabled); the two channels being identical means Sky Radius is at or below World Radius, which is the OFF state.", D.gtao.Get(), render::kGtaoFormat),
+            MakeTarget(TextureDebugViewer::Target::GtaoFiltered, "Lighting", "P6B AO after the bilateral denoise (half res), both channels. Compare against RAW: the per-pixel grain should be gone while the contact darkening stays put. Stale when gtao.denoise is off.", D.gtaoFiltered.Get(), render::kGtaoFormat),
+            MakeTarget(TextureDebugViewer::Target::GtaoHistory, "Lighting", "P6B AO after temporal accumulation (half res), both channels; also next frame's history. Under a moving camera the disocclusion band behind an occluder falls back to the un-accumulated estimate. Stale when gtao.temporal is off.", D.gtaoHistory.Get(), render::kGtaoFormat),
+            MakeTarget(TextureDebugViewer::Target::GtaoUpsampled, "Lighting", "P6B AO at render resolution after the edge-aware upsample - the target lighting and compose consume, taking min(Red, Green) per pixel. Silhouettes should be crisp: a soft dark fringe against the sky means the depth-aware weights are not firing.", D.gtaoUpsampled.Get(), render::kGtaoFormat),
             MakeTarget(TextureDebugViewer::Target::Hzb, "Depth", "P6C hierarchical depth pyramid, FURTHEST variant: each level is the 2x2 MIN of the previous, which under reversed-Z is the furthest surface in the tile. That is what a horizon search wants -- a coarse tile then UNDER-estimates occlusion, so it cannot invent contact shadows. GTAO reads this one. Mip 0 is half the render resolution; pick the level with the Mip control. Built right after the G-buffer, so it holds OPAQUE depth only and will legitimately disagree with \"Depth\" wherever the transparent pass wrote water or glass. Reversed-Z device depth sits within a hair of 0, so raise Gain or switch on Depth stretch or this reads as a black rectangle.", D.hzb.Get(), render::kHzbFormat),
             MakeTarget(TextureDebugViewer::Target::HzbClosest, "Depth", "P6C step 6: the same pyramid reduced with MAX device Z = the NEAREST surface in each tile. A ray march wants this one, so that a long step cannot tunnel through a surface the tile really contains -- the exact opposite of what the AO search wants, which is why there are two. ONLY BUILT while the HiZ SSR technique is the active reflection source; on any other frame this shows whatever was last written, not live data. Same black-by-nature caveat: use Gain or Depth stretch.", D.hzbClosest.Get(), render::kHzbFormat),
             MakeTarget(TextureDebugViewer::Target::GBuffer0, "GBuffer", "Albedo RGB, metalness A.", D.gb0.Get(), renderer.GetGBuffer0Format()),

@@ -27,6 +27,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle skyIrradianceScale;   // F8
     Material::CBFieldHandle gtaoEnabled;         // P6B
     Material::CBFieldHandle gtaoStrength;        // P6B
+    Material::CBFieldHandle groundAlbedoRgb;     // P16.12 ground bounce
     Material::CBFieldHandle exposure;
     Material::CBFieldHandle camPos;
     Material::CBFieldHandle camDir;
@@ -224,6 +225,7 @@ struct SceneExposureSolveCBHandles
     Material::CBFieldHandle lowPercentile;
     Material::CBFieldHandle highPercentile;
     Material::CBFieldHandle compensationEv;
+    Material::CBFieldHandle manualCompensationEv; // P16.13
     Material::CBFieldHandle minEv100;
     Material::CBFieldHandle maxEv100;
     Material::CBFieldHandle deltaTime;
@@ -278,7 +280,13 @@ struct GtaoPassConstants
     uint32_t useHzb = 0u;
     uint32_t hzbMipBias = 0u;
     uint32_t hzbMipCount = 1u;
+    // P16.4: the medium radius for the sky-fill channel, and its own mip bias. <= worldRadius
+    // switches the second horizon walk off. See GtaoSettings for why one radius cannot do both.
+    float skyRadius = 0.0f;
+    uint32_t skyMipBias = 2u;
     uint32_t pad1 = 0u;
+    uint32_t pad2 = 0u;
+    uint32_t pad3 = 0u;
 };
 
 struct GtaoHandles
@@ -287,6 +295,7 @@ struct GtaoHandles
     Material::CBFieldHandle worldRadius, thickness, intensity, fadeStart, fadeEnd;
     Material::CBFieldHandle invTanHalfFovY, numAngles, numSteps, frameIndex, useGBufferNormal;
     Material::CBFieldHandle useHzb, hzbMipBias, hzbMipCount;
+    Material::CBFieldHandle skyRadius, skyMipBias;
     void Populate(Material* material);
 };
 
@@ -459,6 +468,8 @@ struct LightingPassConstants
     // pass is off); `strength` is UE's AmbientOcclusionStaticFraction.
     uint32_t gtaoEnabled = 0u;
     float gtaoStrength = 1.0f;
+    // P16.12: the ground's diffuse reflectance. 0 switches the bounce off; see DirectionalLight.
+    float3 groundAlbedoRgb{ 0.25f, 0.25f, 0.25f };
     float exposure = 1.0f;
     float3 camPos{};
     float3 camDir{};
@@ -620,6 +631,7 @@ struct ExposureMeteringConstants
     static constexpr float kMaxLogLum = 14.0f;  // 24 stops over 256 bins = 0.094 stops per bin
 
     float compensationEv = -0.15f;
+    float manualCompensationEv = 0.0f; // P16.13: manual mode's own trim
     float minEv100 = -6.0f;
     float maxEv100 = 16.0f;
     float lowPercentile = 0.15f;

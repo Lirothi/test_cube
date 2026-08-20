@@ -118,6 +118,18 @@ public:
     float GetSkyFillIntensity() const { return skyFillIntensity_; }
     void SetSkyFillIntensity(float v) { skyFillIntensity_ = v; }
 
+    // P16.12: the GROUND's diffuse reflectance, which is the other half of the fill. The sky cube
+    // answers "what arrives from above"; nothing answered "what comes back up off the floor",
+    // because the cube's lower hemisphere is the HDRI's own ground and not this scene's. Measured
+    // on `wind_test`: about 1.2 stops missing on shaded vertical surfaces over sunlit sand.
+    //
+    // It lives on the light rather than on the sky because it is driven by the ILLUMINANCE the
+    // scene has, sun included -- see GroundBounceOverPi in lighting_cs.hlsl. Being a reflectance
+    // and not a light, it cannot brighten a scene whose sun has set, and it needs no separate
+    // strength knob: 0 switches the whole term off, 0.4 is dry sand, 0.2 grass, 0.06 water.
+    const Math::float3& GetGroundAlbedo() const { return groundAlbedo_; }
+    void SetGroundAlbedo(const Math::float3& v) { groundAlbedo_ = v; }
+
     // NOTE (P4, corrected 2026-08-16): there was a `unifiedSkyFill` switch here, on the premise that
     // the ocean's sky fill disagreed with the opaque one. That premise was WRONG, and measuring it
     // is what showed why. In `ocean_surface.hlsl` the `ambient` value reaches exactly one function,
@@ -150,6 +162,10 @@ private:
     float ambient_;
     float sunIlluminanceLux_ = 100000.0f; // P16.2; a sunny midday
     float skyFillIntensity_ = 1.0f;   // F8; 1 = the irradiance cube taken at face value
+    // P16.12; a mid-neutral ground. Not zero: the term is physically present in every outdoor
+    // scene and shipping it off would leave the defect it fixes as the default. Not sand-coloured
+    // either -- a tint belongs to the level that has sand in it.
+    Math::float3 groundAlbedo_{ 0.25f, 0.25f, 0.25f };
     bool  useSunTemperature_ = false; // off = the authored colour is used as-is
     float sunTemperatureK_ = 6500.0f; // ~D65, i.e. a no-op hue once normalised
     std::uint32_t transformVersion_ = 0; // Step 11: bumped on SetDirection

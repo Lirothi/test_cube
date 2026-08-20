@@ -42,6 +42,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "rendering/lighting/Skybox.h" // --sweep=light.skyIntensity
 #include "ocean/OceanRenderable.h"  // --set=ocean.contactFoam
 #include "ocean/OceanSimulation.h"
+#include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
@@ -222,6 +223,18 @@ namespace
         if (setting == "gtao.useGBufferNormal") { scene.GtaoRef().useGBufferNormal = value != 0.0f; return true; }
         if (setting == "gtao.useHzb") { scene.GtaoRef().useHzb = value != 0.0f; return true; }
         if (setting == "gtao.hzbMipBias") { scene.GtaoRef().hzbMipBias = (uint32_t)std::max(0.0f, value); return true; }
+        // P16.4. `skyRadius` at or below `worldRadius` switches the second horizon walk off, which
+        // is the exact-no-op baseline for the A/B.
+        if (setting == "gtao.skyRadius") { scene.GtaoRef().skyRadius = value; return true; }
+        if (setting == "gtao.skyMipBias") { scene.GtaoRef().skyMipBias = (uint32_t)std::max(0.0f, value); return true; }
+        // The directional-clipmap knobs the Developer window already carries, exposed to the
+        // harness. Shadow bias is judged by A/B and the GUI cannot be driven headlessly, so
+        // without these a clipmap artifact can only be argued about, not measured. They are
+        // process globals, not scene state -- deliberately, so they survive a level switch the
+        // way the dev-window sliders do.
+        if (setting == "vsm.clipmapDepthBias")  { vsm::g_clipmapDepthBias = value;  return true; }
+        if (setting == "vsm.clipmapNormalBias") { vsm::g_clipmapNormalBias = value; return true; }
+        if (setting == "vsm.clipmapBaseExtent") { vsm::g_clipmapBaseExtent = std::max(0.1f, value); return true; }
         if (setting == "gtao.strength") { scene.GtaoRef().strength = value; return true; }
         if (setting == "gtao.upsampleTolerance") { scene.GtaoRef().upsampleTolerance = value; return true; }
         // Where surface reflections come from: 0 None, 1 SkyOnly, 2 SSR, 3 RT. The DEFAULT IS RT,
@@ -411,6 +424,13 @@ namespace
             if (value > 0.0f) { scene.DirectionalLightRef().SetSunTemperatureK(value); }
             return true;
         }
+        // P16.12: one scalar drives all three channels, which is what a sweep needs; the level
+        // and the inspector carry the full colour. 0 switches the bounce off.
+        if (setting == "light.groundAlbedo")
+        {
+            scene.DirectionalLightRef().SetGroundAlbedo(Math::float3(value, value, value));
+            return true;
+        }
         if (setting == "light.skyFillIntensity")
         {
             scene.DirectionalLightRef().SetSkyFillIntensity(value);
@@ -472,6 +492,8 @@ namespace
         if (setting == "exposure.lowPercentile")   { e.lowPercentile = value;  return true; }
         if (setting == "exposure.highPercentile")  { e.highPercentile = value; return true; }
         if (setting == "exposure.compensationEv")  { e.compensationEv = value; return true; }
+        // P16.13: manual mode has its own trim; the auto key above no longer reaches it.
+        if (setting == "exposure.manualCompensationEv") { e.manualCompensationEv = value; return true; }
         // P16.6: the camera. `exposure.manualEv100` is kept because every measurement recipe in
         // the plan spells it that way -- it back-solves the aperture, so it still means exactly what
         // it always meant.

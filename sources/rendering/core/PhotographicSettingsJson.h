@@ -30,6 +30,7 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     out.enabled        = j.value("enabled",        out.enabled);
     out.autoExposure   = j.value("autoExposure",   out.autoExposure);
     out.compensationEv = j.value("compensationEv", out.compensationEv);
+    out.manualCompensationEv = j.value("manualCompensationEv", out.manualCompensationEv);
     out.minEv100       = j.value("minEv100",       out.minEv100);
     out.maxEv100       = j.value("maxEv100",       out.maxEv100);
     out.lowPercentile  = j.value("lowPercentile",  out.lowPercentile);
@@ -197,6 +198,7 @@ inline nlohmann::json ToJson(const CameraExposureSettings& s)
         { "enabled",        s.enabled },
         { "autoExposure",   s.autoExposure },
         { "compensationEv", s.compensationEv },
+        { "manualCompensationEv", s.manualCompensationEv },
         { "localHighlightContrast",  s.localHighlightContrast },
         { "localShadowContrast",     s.localShadowContrast },
         { "localDetailStrength",     s.localDetailStrength },

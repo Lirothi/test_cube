@@ -25,15 +25,19 @@
 // alone cannot separate two faces of a convex edge -- they are depth-continuous and the AO on them
 // is not. UE gets away with depth alone because their AO is consumed at a coarser scale.
 //
-// t0: raw AO (half res, R8)
+// P16.4: two channels now, not one. The weights are computed from depth and normal alone, so both
+// scales are filtered by the SAME kernel with the SAME weights -- which is what keeps them
+// comparable at the consumer, where the two are combined per pixel.
+//
+// t0: raw AO (half res, RG8 -- .x contact scale, .y sky scale)
 // t1: scene depth (render res; sampled at the AO texel's own UV, see DeviceZAt)
 // t2: GB1 -- world normal encoded in xyz
-// u0: filtered AO (half res, R8)
+// u0: filtered AO (half res, RG8)
 
 Texture2D AoTex : register(t0);
 Texture2D DepthTex : register(t1);
 Texture2D GB1 : register(t2);
-RWTexture2D<float> AoOut : register(u0);
+RWTexture2D<float2> AoOut : register(u0);
 
 SamplerState gSmpPoint : register(s0);
 SamplerState gSmpLinear : register(s1);
@@ -107,7 +111,7 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     }
 
     const int2 px = int2(tid.xy);
-    const float centreAo = AoTex.Load(int3(px, 0)).r;
+    const float2 centreAo = AoTex.Load(int3(px, 0)).rg;
     const float centreZ = DeviceZAt(px);
     const float centreLinearZ = LinearZ(centreZ);
     const float3 centreN = NormalAt(px);
@@ -126,7 +130,7 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
 
     const int radius = (int)min(filterRadius, 4u);
 
-    float sumAo = 0.0f;
+    float2 sumAo = float2(0.0f, 0.0f);
     float sumWeight = 0.0f;
     for (int y = -radius; y <= radius; ++y)
     {
@@ -143,7 +147,7 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
             const float normalWeight = pow(saturate(dot(tapN, centreN)), kNormalSharpness);
 
             const float weight = depthWeight * normalWeight;
-            sumAo += AoTex.Load(int3(tap, 0)).r * weight;
+            sumAo += AoTex.Load(int3(tap, 0)).rg * weight;
             sumWeight += weight;
         }
     }

@@ -44,6 +44,15 @@ cbuffer ExposureSolveCB : register(b0)
     float exponentialUpM;
     float exponentialDownM;
     float blackBucketInfluence;
+    // P16.13: MANUAL mode's own compensation. `compensationEv` above is the AUTO one. They were a
+    // single field, which meant trimming a metered shot silently re-trimmed every fixed-exposure
+    // shot in the same level and back again -- the two are different jobs. In auto it offsets what
+    // the meter decided; in manual it offsets a number the author already chose by hand, so it is
+    // a quick +/- on top of a solved shutter rather than a correction to a measurement.
+    float manualCompensationEv;
+    float _padComp0;
+    float _padComp1;
+    float _padComp2;
 };
 
 static const uint kBins = 256u;
@@ -172,7 +181,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // P16.6b: compensation applies in MANUAL too. It used to be an auto-only trim, which left
         // a fixed-exposure level with no quick +/- at all -- changing the look meant re-solving the
         // shutter by hand, which is the arithmetic the camera controls exist to remove.
-        targetEv = manualEv100 - compensationEv;
+        // P16.13: and it is its OWN field, so trimming one mode does not move the other. Same sign
+        // convention: positive brightens, hence the subtraction.
+        targetEv = manualEv100 - manualCompensationEv;
     }
     targetEv = clamp(targetEv, minEv100, maxEv100);
 

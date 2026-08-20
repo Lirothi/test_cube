@@ -40,6 +40,8 @@ inline void ApplyOverrides(const nlohmann::json& j, GtaoSettings& s)
     s.useGBufferNormal = j.value("useGBufferNormal", s.useGBufferNormal);
     s.useHzb = j.value("useHzb", s.useHzb);
     s.hzbMipBias = j.value("hzbMipBias", s.hzbMipBias);
+    s.skyRadius = j.value("skyRadius", s.skyRadius);
+    s.skyMipBias = j.value("skyMipBias", s.skyMipBias);
 }
 
 inline nlohmann::json ToJson(const GtaoSettings& s)
@@ -64,6 +66,8 @@ inline nlohmann::json ToJson(const GtaoSettings& s)
     j["useGBufferNormal"] = s.useGBufferNormal;
     j["useHzb"] = s.useHzb;
     j["hzbMipBias"] = s.hzbMipBias;
+    j["skyRadius"] = s.skyRadius;
+    j["skyMipBias"] = s.skyMipBias;
     return j;
 }
 

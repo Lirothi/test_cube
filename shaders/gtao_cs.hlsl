@@ -20,16 +20,34 @@
 // Half resolution is deliberate: AO is a low-frequency signal and this pass is bandwidth bound. The
 // edge-aware upsample (a later step) is what puts it back on geometry edges.
 //
+// P16.4 -- TWO RADII OUT OF ONE DISPATCH. The search above answers "how much of the hemisphere can
+// this pixel see" at ONE scale, and the scale that makes a trunk meet the sand (0.75 m) is not the
+// scale that decides whether a patch of ground is under a canopy (tens of metres). With a single
+// contact radius the sky fill reaches under a palm crown exactly as freely as it reaches open
+// ground -- measured: raising the sky 6x brightened dense canopy by 1.92 stops and open sand by
+// 1.88, i.e. the crown was worth 0.04 stops of shelter.
+//
+// Raising the ONE radius is not the fix. At 12 m open sand darkens by about a third of a stop as
+// the contact term starts eating open ground, and the contact detail the pass exists for is lost:
+// six steps spread over 12 m put the first tap two metres out, so it steps clean over the 30 cm
+// contact at the base of the trunk.
+//
+// So the kernel walks TWICE per direction and writes both answers. This is the same split UE make
+// with SSAO + DFAO and Godot with SSAO + SDFGI, except both estimates come from one pass here, so
+// the depth fetch, the normal reconstruction and the direction set are shared and only the horizon
+// walk itself is paid for twice. `skyRadius <= worldRadius` switches the second walk off and copies
+// the contact answer into both channels, which is an exact no-op for every consumer.
+//
 // t0: scene depth (the render-resolution depth SRV; this pass samples it at half-res UVs)
 // t1: GB1 -- world normal encoded in xyz, roughness in w
-// u0: R8_UNORM raw AO
+// u0: R8G8_UNORM raw AO -- .x contact scale, .y sky scale
 
 Texture2D DepthTex : register(t0);
 Texture2D GB1 : register(t1);
 // P6C: the hierarchical depth pyramid. Mip 0 is the SAME grid this pass runs on, so the UVs need no
 // remapping between them -- that alignment is why the pyramid is sized off the AO resolution.
 Texture2D HzbTex : register(t2);
-RWTexture2D<float> AoTarget : register(u0);
+RWTexture2D<float2> AoTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
 SamplerState gSmpLinear : register(s1);
@@ -56,7 +74,17 @@ cbuffer GtaoCB : register(b0)
     uint     useHzb;
     uint     hzbMipBias;  // added to every step's mip; UE tie this to their quality level
     uint     hzbMipCount; // clamp, so a step can never ask for a level that was not built
+    // P16.4. The SECOND radius, in world units, for the sky-fill channel. <= worldRadius switches
+    // the second walk off entirely and the contact answer is written to both channels.
+    float    skyRadius;
+    // Mip bias for the sky walk only. It wants a coarser start than the contact walk for two
+    // reasons: its taps are tens of pixels apart, so a mip-0 fetch lands nowhere near the previous
+    // one, and a coarse level AGGREGATES -- which is the right answer at this scale, where a single
+    // texel of leaf is not what decides whether the ground is sheltered.
+    uint     skyMipBias;
     uint     pad1;
+    uint     pad2;
+    uint     pad3;
 };
 
 static const float kPi = 3.14159265358979f;
@@ -187,7 +215,8 @@ float3 GetRandomVector(uint2 pixel)
 // angle seen in each. `thickness` is the heuristic that stops a thin object from occluding as if it
 // were a solid wall -- without it every leaf and railing casts a slab of shadow behind it.
 float2 SearchLargestAngleDual(uint steps, float2 baseUv, float2 screenDir, float stepRadius,
-                              float initialOffset, float3 viewPos, float3 viewDir, float attenFactor)
+                              float initialOffset, float3 viewPos, float3 viewDir, float attenFactor,
+                              uint mipBias)
 {
     float2 best = float2(-1.0f, -1.0f);
 
@@ -204,7 +233,7 @@ float2 SearchLargestAngleDual(uint steps, float2 baseUv, float2 screenDir, float
         // memory -- a far step on mip 0 lands nowhere near the previous one -- and a coarse level
         // AGGREGATES, so the estimate stops aliasing off whatever single texel the step happened to
         // hit. Their schedule exactly: bias, then +1 at the third tap, +2 from the fifth on.
-        float mip = (float)hzbMipBias;
+        float mip = (float)mipBias;
         if (i == 2u) { mip += 1.0f; }
         if (i > 3u) { mip += 2.0f; }
         mip = min(mip, (float)hzbMipCount - 1.0f);
@@ -280,7 +309,7 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     // invalid depth returns 1, so nothing downstream has to special-case the sky.
     if (linearZ >= fadeEnd)
     {
-        AoTarget[tid.xy] = 1.0f;
+        AoTarget[tid.xy] = float2(1.0f, 1.0f);
         return;
     }
 
@@ -309,6 +338,24 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     const float stepRadius = pixelRadius / ((float)numSteps + 1.0f);
     const float attenFactor = 2.0f / max(worldRadius * worldRadius, 1e-6f);
 
+    // P16.4 -- the sky-scale walk. Uniform across the whole dispatch (every input is from the CB),
+    // so the branch below is wave-coherent and costs nothing when it is off.
+    //
+    // ITS OWN SCREEN CLAMP, four times the contact walk's. The clamp exists to bound how far a walk
+    // may reach across the screen; at 256 texels a 12 m radius stops being 12 m at any depth under
+    // ~44 m, and MEASURED, the whole knob saturated: 25 m and 40 m produced the same image (-0.577
+    // vs -0.583 stops under canopy) because both were clipped to the same screen span and only the
+    // distance falloff still separated them. A knob whose top half does nothing is a knob that
+    // lies. The clamp costs no extra taps -- `numSteps` is unchanged and the steps simply land
+    // further apart -- so what it buys with is cache locality, which is exactly what `skyMipBias`
+    // pays back: at mip 4 a 1024-texel span is 64 texels of that level.
+    static const float kSkyPixelRadiusMax = 1024.0f;
+    const bool wantSky = skyRadius > worldRadius;
+    const float skyPixelRadius = max(min(skyRadius * fovScale / linearZ, kSkyPixelRadiusMax),
+                                     (float)numSteps);
+    const float skyStepRadius = skyPixelRadius / ((float)numSteps + 1.0f);
+    const float skyAttenFactor = 2.0f / max(skyRadius * skyRadius, 1e-6f);
+
     const float3 rnd = GetRandomVector(tid.xy);
     float2 screenDir = rnd.xy;
     float offset = rnd.z;
@@ -318,11 +365,24 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     const float cosDelta = cos(deltaAngle);
 
     float sum = 0.0f;
+    float skySum = 0.0f;
     for (uint a = 0; a < numAngles; ++a)
     {
         const float2 angles = SearchLargestAngleDual(numSteps, uv, screenDir * invAoSize, stepRadius,
-                                                     offset, viewPos, viewDir, attenFactor);
+                                                     offset, viewPos, viewDir, attenFactor,
+                                                     hzbMipBias);
         sum += ComputeInnerIntegral(angles, screenDir, viewDir, viewNormal);
+
+        // The second walk shares this direction and this phase offset on purpose: the temporal
+        // stage averages the two channels over the SAME rotation schedule, so a direction set that
+        // is complete for one is complete for the other.
+        if (wantSky)
+        {
+            const float2 skyAngles = SearchLargestAngleDual(numSteps, uv, screenDir * invAoSize,
+                                                            skyStepRadius, offset, viewPos, viewDir,
+                                                            skyAttenFactor, skyMipBias);
+            skySum += ComputeInnerIntegral(skyAngles, screenDir, viewDir, viewNormal);
+        }
 
         const float2 prevDir = screenDir;
         screenDir.x = prevDir.x * cosDelta - prevDir.y * sinDelta;
@@ -345,8 +405,18 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     float ao = sum / (float)max(numAngles, 1u);
     ao = saturate(pow(saturate(ao), max(intensity, 1e-3f)));
 
+    // The sky channel takes the SAME intensity exponent, so the two stay comparable and the look
+    // knob keeps meaning one thing. Off, it is a copy -- which is what makes `skyRadius <=
+    // worldRadius` an exact no-op rather than an approximate one.
+    float skyAo = ao;
+    if (wantSky)
+    {
+        skyAo = skySum / (float)max(numAngles, 1u);
+        skyAo = saturate(pow(saturate(skyAo), max(intensity, 1e-3f)));
+    }
+
     // Fade to unoccluded with distance: the radius shrinks to sub-pixel out there, so the estimate
     // is noise long before it is wrong.
     const float fade = saturate((linearZ - fadeStart) / max(fadeEnd - fadeStart, 1e-4f));
-    AoTarget[tid.xy] = lerp(ao, 1.0f, fade);
+    AoTarget[tid.xy] = float2(lerp(ao, 1.0f, fade), lerp(skyAo, 1.0f, fade));
 }

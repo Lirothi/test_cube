@@ -229,6 +229,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
             dl.MigrateLegacyExposure(JF(p, "exposure", 1.0f));
         }
         dl.SetSkyFillIntensity(JF(p, "skyFillIntensity", 1.0f));
+        dl.SetGroundAlbedo(JF3(p, "groundAlbedo", dl.GetGroundAlbedo())); // P16.12
         dl.SetUseSunTemperature(p.value("useSunTemperature", false));
         dl.SetSunTemperatureK(JF(p, "sunTemperatureK", 6500.0f));
         ctx.scene.SetDirectionalLight(dl);
