@@ -1,4 +1,5 @@
 #include "ocean/OceanRenderable.h"
+#include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 
 #include <algorithm>
 #include <array>
@@ -1644,7 +1645,9 @@ Math::float4 OceanRenderable::GetSkyParams() const
             if (sky->HasIbl()) { specMips = (float)sky->GetSpecMips(); }
         }
     }
-    return Math::float4(intensity, specMips, 0.0f, 0.0f);
+    // z: P16.1 pre-exposure. The ocean writes into scene colour in the transparent pass, which runs
+    // AFTER compose, so compose's own scaling never reaches it and it must apply the factor itself.
+    return Math::float4(intensity, specMips, render::g_preExposure, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetSunColorExposure() const

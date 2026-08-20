@@ -1316,6 +1316,7 @@ void ImportPanel::BeginImport(const Item& item,
     assets::ImportOptions opt;
     opt.maxTextureSize = maxTextureSize_;
     opt.skyTargetMedianLuma = skyTargetMedianLuma_;
+    opt.skyRemoveSunFromIbl = skyRemoveSunFromIbl_; // P16.3
     opt.highQuality = highQuality_;
     opt.flipGreen = flipGreen_;
     opt.centerNormals = centerNormals_;
@@ -1453,6 +1454,22 @@ void ImportPanel::DrawSkyboxImportDialog()
         ImGui::TextDisabled("Calibration OFF: the source's radiance is written as-is.");
     }
     ImGui::TextDisabled("The applied factor is logged as 'sky calib ... (+/-N.NN EV)'.");
+
+    ImGui::Spacing();
+    ImGui::Checkbox("Sun out of the sky's lighting", &skyRemoveSunFromIbl_);
+    ImGui::TextWrapped(
+        "The sun disc is removed from the _spec and _diffuse siblings -- what the engine LIGHTS "
+        "with. The display cube keeps it, so the sky still looks the same when you look up.");
+    ImGui::TextWrapped(
+        "Measured on rustig_koppie: the disc is 91.7% of the horizontal illuminance. An irradiance "
+        "cube built from that is not a sky, it is a second sun spread over the whole hemisphere -- "
+        "shadowless, occluded by nothing, and impossible to out-shine with the directional light "
+        "that is supposed to BE the sun. It is why raising the sun never made the shadows read.");
+    ImGui::TextWrapped(
+        "Turn it OFF only for a sky used with no directional light of its own; then the fill is "
+        "the only thing lighting the scene and it needs the sun in it.");
+    ImGui::TextDisabled("The split is logged as 'sky sun REMOVED ... sun N + sky N'; those two "
+                        "numbers are what to set the directional light from.");
 
     ImGui::Separator();
     ImGui::TextDisabled("Also writes the IBL siblings: _spec (GGX-prefiltered), _diffuse "

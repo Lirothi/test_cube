@@ -22,8 +22,8 @@
       -0.4740854799747467,
       -0.7215021848678589
     ],
-    "exposure": 2.0,
-    "skyFillIntensity": 0.699999988079071
+    "skyFillIntensity": 1.0,
+    "sunIlluminanceLux": 85000.0
   },
   "objects": [
     {
@@ -13868,7 +13868,7 @@
     },
     "cameraExposure": {
       "autoExposure": false,
-      "compensationEv": -0.15000000596046448,
+      "compensationEv": 0.0,
       "enabled": true,
       "highPercentile": 0.800000011920929,
       "localDetailStrength": 1.0,
@@ -13877,12 +13877,14 @@
       "localShadowContrast": 0.8999999761581421,
       "localShadowThreshold": 0.5,
       "lowPercentile": 0.15000000596046448,
-      "manualEv100": 2.0,
       "maxEv100": 16.0,
       "meterMaskStrength": 0.699999988079071,
       "minEv100": -6.0,
       "speedDown": 1.0,
-      "speedUp": 3.0
+      "speedUp": 3.0,
+      "apertureFStop": 16.0,
+      "shutterSpeedSec": 0.014082,
+      "isoSensitivity": 100.0
     },
     "colorPipeline": {
       "agxPower": 1.350000023841858,
@@ -13917,6 +13919,7 @@
     "localShadowThreshold": 0.5
   },
   "skybox": {
+    "illuminanceLux": 12000.0,
     "texture": "textures/rustig_koppie_puresky_4k/rustig_koppie_puresky_4k.dds"
   },
   "spotLights": [],

@@ -42,6 +42,28 @@ struct ImportOptions
     // touches. Exposed in the import dialog ("Sky brightness") because the right value is a
     // per-sky judgement, not a constant.
     float       skyTargetMedianLuma = 0.18f;
+    // P16.3 -- strip the sun disc from the LIGHTING derivatives (_spec/_diffuse). The display cube
+    // keeps it; only what the engine LIGHTS with loses it.
+    //
+    // Measured on rustig_koppie_puresky_4k by integrating the upper hemisphere of the source .hdr:
+    // the disc is 91.7% of the horizontal illuminance. An irradiance cube built from that is not a
+    // sky, it is a second sun spread over the hemisphere -- shadowless, unoccluded, and impossible
+    // to out-shine with the directional light that is supposed to BE the sun. The specular cube has
+    // its own version of the problem: lighting_cs already adds an analytic sun specular, so a disc
+    // in the prefiltered radiance double-counts on every glossy surface.
+    //
+    // Off reproduces the pre-P16.3 derivatives exactly, for a sky used with no directional light.
+    bool        skyRemoveSunFromIbl = true;
+    // Angular radius of the cut, in degrees. The sun is 0.53 wide; the rest of the default is the
+    // aureole immediately around it. The integral says the exact value hardly matters -- 0.5 deg
+    // already takes 91.0% and 10 deg only reaches 93.2%, so everything past the disc is real sky.
+    float       skySunRadiusDeg = 1.5f;
+    // Where the finished skybox goes. Empty = leave it beside the source, which is what the
+    // headless path always did; set it to the textures root and the cube, its two IBL siblings and
+    // the shared BRDF LUT are moved to exactly where the GUI import panel puts them:
+    //     <root>/<name>/<name>.dds, _spec.dds, _diffuse.dds     and     <root>/brdf_lut.dds
+    // The LUT is scene-independent and belongs to no single sky, which is why it lands in the root.
+    std::string skyOutputRoot;
     // Default routed through diag::LogPath so a headless --import lands in logs/ like every
     // other engine diagnostic (the ImportPanel sets its own path the same way).
     std::string logPath = diag::LogPath("asset_import.log");

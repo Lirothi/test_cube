@@ -1102,9 +1102,18 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 
                 ImGui::BeginDisabled(exposure.autoExposure);
-                ImGui::SliderFloat("Manual EV100", &exposure.manualEv100, -8.0f, 8.0f, "%.2f");
+                ImGui::SliderFloat("Aperture f/", &exposure.apertureFStop, 1.0f, 32.0f, "%.1f");
+                ImGui::SliderFloat("Shutter (s)", &exposure.shutterSpeedSec, 1.0f / 4000.0f, 1.0f, "%.5f",
+                                   ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderFloat("ISO", &exposure.isoSensitivity, 25.0f, 6400.0f, "%.0f",
+                                   ImGuiSliderFlags_Logarithmic);
                 ImGui::EndDisabled();
-                ImGui::TextDisabled("Manual x%.5f", render::ExposureMultiplierFromEv100(exposure.manualEv100));
+                {
+                    const float ev = render::Ev100FromCamera(exposure.apertureFStop,
+                        exposure.shutterSpeedSec, exposure.isoSensitivity);
+                    ImGui::TextDisabled("= EV100 %.2f   x%.5f", ev,
+                                        render::ExposureMultiplierFromEv100(ev));
+                }
                 ImGui::SameLine();
                 HelpMarker(
                     "Fixed exposure used when 'Auto exposure' is off. Higher EV = DARKER image "
@@ -1409,13 +1418,16 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "  \"highPercentile\": %.4f,\n"
                         "  \"speedUp\": %.4f,\n"
                         "  \"speedDown\": %.4f,\n"
-                        "  \"manualEv100\": %.4f\n"
+                        "  \"apertureFStop\": %.4f,\n"
+                        "  \"shutterSpeedSec\": %.5f,\n"
+                        "  \"isoSensitivity\": %.1f\n"
                         "}",
                         exposure.enabled ? "true" : "false",
                         exposure.autoExposure ? "true" : "false",
                         exposure.compensationEv, exposure.minEv100, exposure.maxEv100,
                         exposure.lowPercentile, exposure.highPercentile,
-                        exposure.speedUp, exposure.speedDown, exposure.manualEv100);
+                        exposure.speedUp, exposure.speedDown, exposure.apertureFStop,
+                        exposure.shutterSpeedSec, exposure.isoSensitivity);
                     ImGui::SetClipboardText(json);
                 }
 

@@ -18,7 +18,9 @@ struct PointLightDesc {
     Math::float3 position = Math::float3(0, 0, 0);
     float        radius   = 1.0f;
     Math::float3 color    = Math::float3(1, 1, 1);
-    float        intensity= 1.0f;
+    // P16.5: LUMINOUS FLUX, in lumens. 800 = a 60 W incandescent, 1600 = 100 W, 10000-50000 a
+    // floodlight. Converted to candela with CandelaFromLumens; see PhotographicSettings.h.
+    float        luminousFluxLm = 1000.0f;
     bool         shadowsEnabled = false; // if false, the point lights the scene but never casts a shadow (honored once Part B point shadows land)
     PointLightFlickerDesc flicker{};
 };

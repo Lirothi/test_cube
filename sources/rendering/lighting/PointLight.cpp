@@ -1,4 +1,5 @@
 #include "rendering/lighting/PointLight.h"
+#include "rendering/core/PhotographicSettings.h" // P16.5 CandelaFromLumens
 #include "rendering/core/Renderer.h"
 #include <algorithm>
 #include <array>
@@ -98,7 +99,7 @@ void PointLight::ApplyFlicker()
         0.58f * std::sin(cycle + SeedPhase(flicker.seed, 0x68bc21ebu)) +
         0.28f * std::sin(cycle * 1.73f + SeedPhase(flicker.seed, 0x02e5be93u)) +
         0.14f * std::sin(cycle * 0.37f + SeedPhase(flicker.seed, 0x9e3779b9u));
-    desc_.intensity = std::max(0.0f, baseDesc_.intensity * (1.0f + amplitude * signal));
+    desc_.luminousFluxLm = std::max(0.0f, baseDesc_.luminousFluxLm * (1.0f + amplitude * signal));
 }
 
 mat4 PointLight::BuildModel() const
@@ -224,7 +225,8 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     matColorFS_->UpdateCBField(cbHandles_.color.light.position, desc_.position, (uint8_t*)cb1.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.light.radius, desc_.radius, (uint8_t*)cb1.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.light.color, desc_.color, (uint8_t*)cb1.cpu);
-    matColorFS_->UpdateCBField(cbHandles_.color.light.intensity, desc_.intensity, (uint8_t*)cb1.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.light.intensity,
+                               render::CandelaFromLumens(desc_.luminousFluxLm), (uint8_t*)cb1.cpu);
 
     // GBuffer SRV table: t0..t4 = GB0, GB1, GB2, GBVelocity, Depth
     auto tbl = r->StageGBufferSrvTable();

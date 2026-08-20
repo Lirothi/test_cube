@@ -10,7 +10,12 @@
     "localHighlightContrast": 0.8500000238418579,
     "localHighlightThreshold": 0.5,
     "localShadowContrast": 0.8999999761581421,
-    "localShadowThreshold": 0.5
+    "localShadowThreshold": 0.5,
+    "autoExposure": false,
+    "maxEv100": 17.0,
+    "apertureFStop": 16.0,
+    "shutterSpeedSec": 0.0334494,
+    "isoSensitivity": 100.0
   },
   "colorPipeline": {
     "agxPower": 1.350000023841858,
@@ -24,7 +29,7 @@
     "toneCurve": "filmic"
   },
   "directionalLight": {
-    "ambient": 0.10999999940395355,
+    "ambient": 0.0542,
     "color": [
       0.9867109656333923,
       0.7375746369361877,
@@ -36,7 +41,7 @@
       -0.4729999899864197
     ],
     "enabled": true,
-    "exposure": 2.5
+    "sunIlluminanceLux": 20000.0
   },
   "gtao": {
     "enabled": true,
@@ -2740,7 +2745,8 @@
   },
   "pointLights": [],
   "skybox": {
-    "texture": "textures/skybox.dds"
+    "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds",
+    "illuminanceLux": 16000.0
   },
   "spotLights": [],
   "wind": {

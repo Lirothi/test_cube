@@ -4,37 +4,20 @@
     "zFar": 10000.0,
     "zNear": 0.01
   },
-  "cameraExposure": {
-    "compensationEv": -0.15000000596046448,
-    "enabled": true,
-    "localDetailStrength": 1.0,
-    "localHighlightContrast": 0.8500000238418579,
-    "localHighlightThreshold": 0.5,
-    "localShadowContrast": 0.8999999761581421,
-    "localShadowThreshold": 0.5
-  },
-  "colorPipeline": {
-    "gradeContrast": 1.149999976158142,
-    "gradeGain": 1.0,
-    "gradeGamma": 1.100000023841858,
-    "gradeOffset": 0.0,
-    "gradeSaturation": 1.2999999523162842,
-    "toneCurve": "filmic"
-  },
   "directionalLight": {
-    "ambient": 0.05,
+    "ambient": 0.0456,
     "color": [
       1.0,
       0.9,
       0.85
     ],
     "direction": [
-      -1.5,
-      -0.7,
-      -0.5
+      -0.9284146428108215,
+      -0.23331937193870544,
+      -0.2891509234905243
     ],
     "enabled": true,
-    "exposure": 1.0
+    "sunIlluminanceLux": 20000.0
   },
   "objects": [
     {
@@ -2584,7 +2567,7 @@
         0.0
       ],
       "enabled": true,
-      "intensity": 15.0,
+      "luminousFluxLm": 7951112,
       "position": [
         2.4,
         5.5,
@@ -2599,7 +2582,7 @@
         1.0,
         0.0
       ],
-      "intensity": 15.0,
+      "luminousFluxLm": 7951112,
       "position": [
         2.4,
         3.5,
@@ -2614,7 +2597,7 @@
         0.0,
         1.0
       ],
-      "intensity": 15.0,
+      "luminousFluxLm": 7951112,
       "position": [
         2.4,
         1.5,
@@ -2630,7 +2613,7 @@
         0.0
       ],
       "enabled": true,
-      "intensity": 15.0,
+      "luminousFluxLm": 103364460,
       "position": [
         12.538274765014648,
         1.411637306213379,
@@ -2646,7 +2629,7 @@
         0.0
       ],
       "enabled": true,
-      "intensity": 15.0,
+      "luminousFluxLm": 103364460,
       "position": [
         14.47765064239502,
         1.411636471748352,
@@ -2662,7 +2645,7 @@
         0.0
       ],
       "enabled": true,
-      "intensity": 15.0,
+      "luminousFluxLm": 103364460,
       "position": [
         19.5179386138916,
         1.4116406440734863,
@@ -2678,7 +2661,7 @@
         0.0
       ],
       "enabled": true,
-      "intensity": 15.0,
+      "luminousFluxLm": 103364460,
       "position": [
         -15.793497085571289,
         1.5545227527618408,
@@ -2694,7 +2677,7 @@
         0.0
       ],
       "enabled": true,
-      "intensity": 15.0,
+      "luminousFluxLm": 103364460,
       "position": [
         -19.369644165039063,
         1.554520845413208,
@@ -2704,8 +2687,36 @@
       "shadowsEnabled": true
     }
   ],
+  "postProcess": {
+    "atmosphere": {},
+    "bloom": {},
+    "cameraExposure": {
+      "apertureFStop": 16.0,
+      "autoExposure": false,
+      "compensationEv": 0.0,
+      "enabled": true,
+      "isoSensitivity": 100.0,
+      "localDetailStrength": 1.0,
+      "localHighlightContrast": 0.8500000238418579,
+      "localHighlightThreshold": 0.5,
+      "localShadowContrast": 0.8999999761581421,
+      "localShadowThreshold": 0.5,
+      "maxEv100": 18.0,
+      "shutterSpeedSec": 0.0078125
+    },
+    "colorPipeline": {
+      "gradeContrast": 1.149999976158142,
+      "gradeGain": 1.0,
+      "gradeGamma": 1.100000023841858,
+      "gradeOffset": 0.0,
+      "gradeSaturation": 1.2999999523162842,
+      "toneCurve": "filmic"
+    },
+    "gtao": {}
+  },
   "skybox": {
-    "texture": "textures/skybox.dds"
+    "illuminanceLux": 16000.0,
+    "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds"
   },
   "spotLights": [
     {
@@ -2721,7 +2732,7 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
+      "luminousFluxLm": 543547943,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         -0.549543023109436,
@@ -2746,7 +2757,7 @@
       ],
       "enabled": true,
       "innerAngleDeg": 20.0,
-      "intensity": 18.0,
+      "luminousFluxLm": 750187449,
       "outerAngleDeg": 32.0,
       "position": [
         -5.0,
@@ -2771,7 +2782,7 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
+      "luminousFluxLm": 543547943,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         11.870731353759766,
@@ -2796,7 +2807,7 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
+      "luminousFluxLm": 543547943,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         15.123939514160156,
@@ -2821,7 +2832,7 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
+      "luminousFluxLm": 543547943,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         -0.7361001968383789,
@@ -2846,7 +2857,7 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
+      "luminousFluxLm": 543547943,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         -8.480936050415039,
@@ -2871,7 +2882,7 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
+      "luminousFluxLm": 543547943,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         -8.931707382202148,
@@ -2896,7 +2907,7 @@
       ],
       "enabled": true,
       "innerAngleDeg": 20.0,
-      "intensity": 18.0,
+      "luminousFluxLm": 750187449,
       "outerAngleDeg": 32.0,
       "position": [
         -9.30030345916748,
@@ -2920,7 +2931,7 @@
         0.2182178944349289
       ],
       "innerAngleDeg": 20.0,
-      "intensity": 18.0,
+      "luminousFluxLm": 750187449,
       "outerAngleDeg": 32.0,
       "position": [
         -8.668525695800781,

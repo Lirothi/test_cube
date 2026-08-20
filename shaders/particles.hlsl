@@ -37,7 +37,11 @@ cbuffer DrawParams : register(b2)
     // depthOcclude: 1 = occlude/soft-fade against the OPAQUE depth copy in the PS. Transparent
     // surfaces are handled by the hardware depth test after they render. softFadeDist is the
     // soft-fade width (0 = hard cutoff at the opaque surface).
-    uint maxParticles; float softFadeDist; float depthOcclude; float _dpPad;
+    // preExposure: P16.1. This pass writes into scene colour AFTER compose, so compose's
+    // scaling never reaches it and it applies the same factor itself. 1.0 = not pre-exposed.
+    uint maxParticles; float softFadeDist; float depthOcclude; float preExposure;
+    // P16.7: what the authored colour MEANS, in cd/m2. See ParticleTypes.h.
+    float luminanceCdM2; float3 _dpPad;
 };
 
 StructuredBuffer<Particle> gParticles : register(t0);
@@ -184,5 +188,11 @@ float4 PSMain(VSOut i) : SV_Target0
         c.a *= fade;
     }
 
-    return float4(c.rgb * c.a, c.a); // premultiplied; additive blend ignores dest alpha
+    // P16.1: the factor goes on the COLOUR only -- alpha is a blend weight against a
+    // destination that already carries it, and scaling it would change the coverage, not the
+    // brightness.
+    // P16.7: the authored colour is a HUE; `luminanceCdM2` is what it is worth in the units
+    // scene colour is actually in. Without it an authored 1.0 is a thousandth of a lit scene
+    // and an alpha-blended particle SUBTRACTS from the frame instead of adding to it.
+    return float4(c.rgb * c.a * luminanceCdM2 * preExposure, c.a); // premultiplied
 }

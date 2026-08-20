@@ -519,12 +519,15 @@ namespace
             if (changed) { tgt()["color"] = { cv[0], cv[1], cv[2] }; }
             trackContinuousEdit(beforeItem, changed);
         };
+        // `flags` is here for P16.2's lux row: a quantity whose useful range spans five decades
+        // cannot be dragged linearly, and a logarithmic drag is a property of THAT row, not a reason
+        // for a second helper.
         auto dragF = [&](const char* label, const char* key, float def, float speed, float lo, float hi,
-                         const char* fmt = "%.3f")
+                         const char* fmt = "%.3f", ImGuiSliderFlags flags = 0)
         {
             const nlohmann::json beforeItem = props;
             float v = JsonFloat(tgt(), key, def);
-            const bool changed = ImGui::DragFloat(label, &v, speed, lo, hi, fmt);
+            const bool changed = ImGui::DragFloat(label, &v, speed, lo, hi, fmt, flags);
             if (changed) { tgt()[key] = v; }
             trackContinuousEdit(beforeItem, changed);
         };
@@ -643,15 +646,31 @@ namespace
             }
             else
             {
-                dragF("Manual EV100", "manualEv100", 0.0f, 0.05f, -16.0f, 20.0f, "%.2f");
+                // P16.6: the camera, as three settings a photographer knows. EV100 is DERIVED and
+                // is shown read-only below -- there is no second control for the same number.
+                dragF("Aperture f/", "apertureFStop", 16.0f, 0.05f, 1.0f, 32.0f, "%.1f");
+                InspectorHelp(
+                    "The iris, as an f-number. Every whole stop is a factor of two in light: "
+                    "f/1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22.");
+                dragF("Shutter (s)", "shutterSpeedSec", 1.0f / 125.0f, 1.0f, 1.0f / 8000.0f, 30.0f,
+                      "%.5f", ImGuiSliderFlags_Logarithmic);
+                InspectorHelp(
+                    "Exposure time in SECONDS: 1/125 is 0.008, 1/500 is 0.002. It does not blur "
+                    "anything here -- the renderer has no shutter -- it only meters light.");
+                dragF("ISO", "isoSensitivity", 100.0f, 1.0f, 25.0f, 6400.0f, "%.0f",
+                      ImGuiSliderFlags_Logarithmic);
+                InspectorHelp("Sensor sensitivity. 100 is the reference; doubling it is one stop.");
+                dragF("Exposure Compensation (EV)", "compensationEv", 0.0f, 0.02f, -5.0f, 5.0f, "%+.2f");
+                InspectorHelp(
+                    "A quick +/- on top of the three settings above. POSITIVE BRIGHTENS.\n\n"
+                    "It is the trim you reach for while looking at the frame, so you do not have to "
+                    "re-solve the shutter in your head to make a scene half a stop warmer. It works "
+                    "in AUTO and MANUAL alike -- before P16.6b it was an auto-only control and a "
+                    "fixed-exposure level had no quick adjustment at all.");
                 InspectorHelp("Held exactly, with no metering at all.\n\n"
-                              "READ THE UNITS BEFORE TRUSTING THE NAME: this scene's lighting is "
-                              "authored in an arbitrary linear scale - a sunlit surface sits near "
-                              "1-3, not the thousands real luminance would give - so EV100 here is "
-                              "relative to that scale, not to the photometric one. Measured on "
-                              "wind_test: 0 lands just under the authored look and auto-exposure "
-                              "settles near -0.3, while the photometric default of 10 renders a "
-                              "BLACK SCREEN (multiplier 1/(1.2*2^10)).");
+                              "THE DEFAULTS ARE SUNNY-16 -- f/16, 1/125, ISO 100, EV 14.97 -- and since P16 the lights are in real lux, so an outdoor scene is correctly exposed with nobody typing anything.\n\n"
+                              "EV100 = log2(N^2/t) - log2(ISO/100). It is shown below, read-only: it is derived from these three and having it as a fourth control would be two names for one number.\n\n"
+                              "A level authored before P16.6 carried a hand-solved `manualEv100`; it is migrated by holding the shutter and ISO and solving the aperture, so the frame does not move.");
             }
 
             // Plan section 6.2 wants both representations visible, because EV is the authored
@@ -659,7 +678,9 @@ namespace
             ImGui::Separator();
             const float shownEv = automatic
                 ? JsonFloat(tgt(), "compensationEv", 0.0f)
-                : JsonFloat(tgt(), "manualEv100", 0.0f);
+                : render::Ev100FromCamera(JsonFloat(tgt(), "apertureFStop", 16.0f),
+                                          JsonFloat(tgt(), "shutterSpeedSec", 1.0f / 125.0f),
+                                          JsonFloat(tgt(), "isoSensitivity", 100.0f));
             const float multiplier = tgt().value("enabled", false)
                 ? render::ExposureMultiplierFromEv100(shownEv)
                 : render::kIdentityExposureMultiplier;
@@ -1352,7 +1373,23 @@ namespace
         if (env.type == "pointLight")
         {
             colorEdit();
-            dragF("Intensity", "intensity", 1.0f, 0.1f, 0.0f, 1000.0f);
+            dragF("Luminous Flux (lm)", "luminousFluxLm", 1000.0f, 1.0f, 0.0f, 200000.0f,
+                  "%.0f", ImGuiSliderFlags_Logarithmic);
+            InspectorHelp(
+                "Luminous flux, in LUMENS -- the number on a light bulb's box. 800 = a 60 W "
+                "incandescent, 1600 = 100 W, 3000-5000 a shop fitting, 10000-50000 a "
+                "floodlight.\n\n"
+                "It is converted to intensity as flux/(4*pi) and falls off as inverse-square, so "
+                "what reaches a surface is LUX -- the same unit the sun's illuminance is in. That "
+                "is what lets a lamp and daylight be compared instead of guessed at.\n\n"
+                "The cone angle does NOT change a spot light's brightness: the same lumens give "
+                "the same peak intensity as a point light would. Physically a reflector does "
+                "concentrate flux, but tying brightness to the cone makes the two controls fight.\n\n"
+                "IT REPLACED `intensity`, which had no unit and did not fall off physically -- the "
+                "old curve was (1 - d/r)^2, a window, so a light's brightness moved whenever the "
+                "radius was dragged. A level authored before this is migrated by matching the old "
+                "brightness at HALF the range; nearer than that it is now brighter and further it "
+                "falls off faster, which is the correction, not a regression.");
             dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
             dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
             checkB("Cast Shadows", "shadowsEnabled", false);
@@ -1401,7 +1438,23 @@ namespace
         else if (env.type == "spotLight")
         {
             colorEdit();
-            dragF("Intensity", "intensity", 5.0f, 0.1f, 0.0f, 1000.0f);
+            dragF("Luminous Flux (lm)", "luminousFluxLm", 1000.0f, 1.0f, 0.0f, 200000.0f,
+                  "%.0f", ImGuiSliderFlags_Logarithmic);
+            InspectorHelp(
+                "Luminous flux, in LUMENS -- the number on a light bulb's box. 800 = a 60 W "
+                "incandescent, 1600 = 100 W, 3000-5000 a shop fitting, 10000-50000 a "
+                "floodlight.\n\n"
+                "It is converted to intensity as flux/(4*pi) and falls off as inverse-square, so "
+                "what reaches a surface is LUX -- the same unit the sun's illuminance is in. That "
+                "is what lets a lamp and daylight be compared instead of guessed at.\n\n"
+                "The cone angle does NOT change a spot light's brightness: the same lumens give "
+                "the same peak intensity as a point light would. Physically a reflector does "
+                "concentrate flux, but tying brightness to the cone makes the two controls fight.\n\n"
+                "IT REPLACED `intensity`, which had no unit and did not fall off physically -- the "
+                "old curve was (1 - d/r)^2, a window, so a light's brightness moved whenever the "
+                "radius was dragged. A level authored before this is migrated by matching the old "
+                "brightness at HALF the range; nearer than that it is now brighter and further it "
+                "falls off faster, which is the correction, not a regression.");
             dragF("Range", "range", 10.0f, 0.1f, 0.0f, 10000.0f);
             dragF("Inner Angle (deg)", "innerAngleDeg", 15.0f, 0.2f, 0.0f, 89.0f);
             dragF("Outer Angle (deg)", "outerAngleDeg", 25.0f, 0.2f, 0.0f, 89.0f);
@@ -1434,16 +1487,28 @@ namespace
                 "temperature change with an intensity change.\n\n"
                 "Valid 1000-15000K; outside that the fit bends back on itself, so it is clamped.");
 
-            const float legacyExposure = JsonFloat(tgt(), "exposure", 1.0f);
-            dragF("Sun Intensity", "sunIntensity", legacyExposure, 0.05f, 0.0f, 100.0f);
+            // P16.2. The default handed to the drag walks the same chain the loader does --
+            // `sunIntensity` if this level went through P4, otherwise the original `exposure` --
+            // so the row opens showing what is on screen and the first drag writes the new key
+            // without the image jumping.
+            const float legacySun = JsonFloat(tgt(), "sunIntensity",
+                                              JsonFloat(tgt(), "exposure", 1.0f));
+            dragF("Sun Illuminance (lux)", "sunIlluminanceLux", legacySun, 1.0f, 0.0f, 200000.0f,
+                  "%.0f", ImGuiSliderFlags_Logarithmic);
             InspectorHelp(
-                "How bright the sun is. This is NOT a camera control -- the camera lives on the "
-                "Camera Exposure object and meters the frame by itself.\n\n"
-                "It replaces the old `exposure` field, which multiplied the sun AND the ambient "
-                "while leaving the sky background, spot/point lights and emissive alone. With auto "
-                "exposure on, that field stopped changing brightness at all (the metering cancels "
-                "it) and only changed the RATIO between lit geometry and sky -- a confusing thing "
-                "for a control with that name.");
+                "How bright the sun is, in LUX, measured perpendicular to the beam. This is NOT a "
+                "camera control -- the camera lives on the Camera Exposure object and meters the "
+                "frame by itself.\n\n"
+                "100000 sunny midday (the default), 125000 full bright sun, 20000 heavy overcast, "
+                "1000 a very dark day, 400 sunrise/sunset, 0.25 full moon.\n\n"
+                "THE NUMBER DID NOT CHANGE WHEN THIS FIELD GOT ITS UNIT. The engine's linear light "
+                "unit was already photometric -- the shading carries the 1/PI and the metering "
+                "solves an EV100, which is defined against cd/m2 -- so a level that authored "
+                "'intensity 2' had been authoring two lux all along. If this row opens on a number "
+                "like that, the level is not mis-migrated: it is telling you its sun is authored at "
+                "twilight strength, which is exactly the defect P16 is working through.\n\n"
+                "Physical values need the photographic camera ON. With it off the exposure "
+                "multiplier is exactly 1.0 and a five-figure sun writes a white screen.");
             dragF("Ambient", "ambient", 0.05f, 0.005f, 0.0f, 10.0f);
             InspectorHelp("Sky fill intensity -- the light everything gets from the sky rather than "
                           "from the sun. Independent of Sun Intensity.");
@@ -1460,12 +1525,14 @@ namespace
                 "Ambient still drives the flat fallback fill on levels whose sky has no "
                 "derivatives.");
 
-            if (tgt().contains("sunIntensity"))
+            if (tgt().contains("sunIlluminanceLux") &&
+                (tgt().contains("sunIntensity") || tgt().contains("exposure")))
             {
-                ImGui::TextDisabled("legacy 'exposure' present but ignored");
-                InspectorHelp("This object carries the new Sun Intensity, so the old whole-scene "
-                              "`exposure` field no longer does anything. Delete it from the level "
-                              "JSON whenever you next hand-edit the file.");
+                ImGui::TextDisabled("legacy 'sunIntensity'/'exposure' present but ignored");
+                InspectorHelp("This object carries the new Sun Illuminance, so the older "
+                              "`sunIntensity` and whole-scene `exposure` fields no longer do "
+                              "anything. Delete them from the level JSON whenever you next "
+                              "hand-edit the file.");
             }
 
             Math::float3 rayDirection = EditorLightDirection::NormalizedRay(
@@ -1590,6 +1657,58 @@ namespace
                 "Auto exposure used to hide this by metering it away. That is exactly why it must "
                 "not be the only thing holding the image together: turn adaptation off and the "
                 "scene should still be photographable.");
+
+            // P16.3b. Logarithmic for the same reason the sun's row is: the useful range runs from
+            // a few hundred lux to twenty thousand.
+            dragF("Sky Illuminance (lux)", "illuminanceLux", 0.0f, 1.0f, 0.0f, 50000.0f,
+                  "%.0f", ImGuiSliderFlags_Logarithmic);
+            InspectorHelp(
+                "How much light this sky puts on a HORIZONTAL surface, in lux. It is the sky's half "
+                "of the same physical scale the sun's illuminance uses, and it is what puts the two "
+                "on one ruler.\n\n"
+                "12000 clear sky with the sun about 30 degrees up, 20000 clear sky with the sun "
+                "overhead, 10000-20000 heavy overcast (where the sky IS the light), 2000 deep "
+                "twilight.\n\n"
+                "0 = NOT AUTHORED, and then nothing changes: the sky keeps the level's old "
+                "behaviour, scaled only by Intensity above. That is what keeps an unconverted "
+                "level rendering exactly what it renders today.\n\n"
+                "The scale that realises the number is DERIVED, never authored -- the engine reads "
+                "this sky's own irradiance cube and divides -- so the same 12000 means the same "
+                "thing on a cube that came out of the importer bright and one that came out dim. "
+                "Check logs/ibl.log for the measured value and the factor it produced.\n\n"
+                "Needs the F7 IBL siblings (_spec/_diffuse). A sky imported without them has "
+                "nothing to measure and this row does nothing.");
+
+            // P16.6b -- WHAT TO PUT IN IT. Switching skyboxes should not mean guessing a
+            // four-figure number, and the answer does not come from the sky asset: it comes from
+            // WHERE THE SUN IS. The clear-day model is the one the levels were converted with, so
+            // the recommendation and the content agree by construction.
+            {
+                const Math::float3 sunDir =
+                    ctx.scene.GetDirectionalLight().GetDirection().Normalized();
+                const float sinE = std::clamp(-sunDir.y, 0.02f, 1.0f);
+                const float sunPerp = 128000.0f * std::exp(-0.21f / sinE);
+                const float f = 0.32f - 0.18f * sinE;
+                const float recommended = f / (1.0f - f) * sunPerp * sinE;
+                const float elevDeg = std::asin(sinE) * 180.0f / 3.14159265f;
+                ImGui::TextDisabled("Sun is %.0f deg up -> a clear sky delivers about %.0f lx",
+                                    elevDeg, recommended);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Use it"))
+                {
+                    nlohmann::json after = withField("illuminanceLux", recommended);
+                    executeChange(std::move(after), historyLabel);
+                }
+                InspectorHelp(
+                    "The number depends on the SUN, not on which photograph you picked: a clear sky "
+                    "at 30 degrees delivers about 12000 lx, at the horizon a tenth of that.\n\n"
+                    "AN OVERCAST SKY IS THE OTHER CASE ENTIRELY -- there the sky IS the light, so "
+                    "use 10000-20000 AND take the directional sun down to near zero. Pasting a "
+                    "bright sun over a photograph of an overcast evening is what makes the ground "
+                    "come out brighter than the sky above it.\n\n"
+                    "The import log says which kind you have: 'sky sun REMOVED ... the sun was N%%' "
+                    "for a clear sky, 'NOT REMOVED ... no sun to take out' for an overcast one.");
+            }
             const std::string current = tgt().value("texture", std::string());
             const std::string currentLabel = current.empty()
                 ? std::string("(none)")

@@ -69,6 +69,9 @@ cbuffer PerFrame : register(b0)
     // P7 item 8. 0 = normal, 1 = transmittance, 2 = in-scattering. Rides the fog block so a view
     // costs nothing when the fog is off -- and shows nothing either, which is the honest answer.
     uint fogDebugView;
+    // P16.1: everything this pass writes is scaled by the exposure the tonemap is about to apply,
+    // so the FP16 target holds numbers near 1 instead of raw radiance. 1.0 = not pre-exposed.
+    float preExposure;
 }
 
 static const float kEps = 1e-6;
@@ -405,5 +408,5 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         }
     }
 
-    SceneColor[dispatchThreadId.xy] = float4(color, 1.0);
+    SceneColor[dispatchThreadId.xy] = float4(color * preExposure, 1.0);
 }

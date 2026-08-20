@@ -13,7 +13,7 @@ struct SpotLightDesc {
     float        innerAngle = DirectX::XMConvertToRadians(15.0f);
     Math::float3 color = Math::float3(1.0f, 1.0f, 1.0f);
     float        outerAngle = DirectX::XMConvertToRadians(25.0f);
-    float        intensity = 5.0f;
+    float        luminousFluxLm = 1000.0f; // P16.5: lumens, see PhotographicSettings.h
     float        shadowNormalBias = 0.01f;
     float        shadowDepthBias = 0.001f;
     float        nearPlane = 0.1f;

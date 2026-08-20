@@ -228,6 +228,29 @@ inline float3 F_Schlick(float cosT, float3 F0)
 }
 
 // ===== Unified BRDF =====
+// P16.5 -- the shared local-light distance falloff, in the same photometric units as the sun.
+//
+// `intensity` at the call sites is CANDELA, so the product is the illuminance reaching the surface,
+// in lux -- the same unit `sunIlluminanceLux` is in, which is the entire point of having it here
+// rather than seven times over.
+//
+// The shape is Unreal's `saturate(1 - (d/r)^4)^2 / (d^2 + 1)`:
+//   * inverse-square in the middle, which is what makes the unit mean anything;
+//   * a window that reaches exactly ZERO at the range, so a light does not clip off while still
+//     bright the way a hard `d > range` cut does;
+//   * `+1` in the denominator so d -> 0 is finite. Not a fudge: a real lamp has a size, and without
+//     it a texel that lands on the light's own position renders as an infinity.
+//
+// It REPLACED `(1 - d/r)^2`, which was a window pretending to be a falloff -- no unit, no
+// inverse-square, and a brightness that moved whenever someone dragged the radius.
+float LightDistanceAttenuation(float dist, float range)
+{
+    const float invRange = (range > 1e-6f) ? (1.0f / range) : 0.0f;
+    const float t = saturate(dist * dist * invRange * invRange); // (d/r)^2
+    const float w = saturate(1.0f - t * t);                      // 1 - (d/r)^4
+    return (w * w) / (dist * dist + 1.0f);
+}
+
 struct BRDFInput
 {
 	float3 albedo;

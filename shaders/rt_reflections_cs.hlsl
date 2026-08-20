@@ -37,6 +37,9 @@ cbuffer Probe : register(b0)
     float depthA;        float depthB;        uint outWidth;       uint outHeight;
     uint tlasIndex;      uint lightIndex;     uint gb1Index;        uint depthIndex;
     uint reflectionUavIndex;    uint geomInfoIndex;  uint skyboxIndex;     float skyboxIntensity;
+    // P16.9: the sky's cosine-convolved irradiance and the scale lighting_cs applies to it.
+    // `skyIrradianceIndex == 0` means this sky has no F7 derivatives and the flat fallback stands.
+    uint skyIrradianceIndex; float skyIrradianceScale; uint _rtPad0; uint _rtPad1;
     uint spotLightIndex; uint spotCount;      uint pointLightIndex; uint pointCount;
     // depthIndex reconstructs the PRIMARY surface (the reflector). screenDepthIndex is
     // the on-screen opaque depth used only for the fast-path visibility/depth-match — the
@@ -147,7 +150,29 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, out float3 radian
         BRDFInput bi;
         bi.albedo = albedo; bi.rough = rough; bi.metal = metal; bi.N = N; bi.V = V; bi.L = L;
         BRDFResult br = EvalBRDF(bi);
-        float3 col = albedo * ambientIntensity * lightRgb;
+        // P16.9 -- THE SAME SKY FILL THE MAIN PASS USES.
+        //
+        // This branch re-shades a hit that is OFF SCREEN, and it was the ONLY lighting path that
+        // never got F8's sky-irradiance branch: it still lit with `ambient * sunColour`, the legacy
+        // fraction knob. While the two were the same order nobody could tell. Once the sky was
+        // authored in lux they were not: on `ssr_bronze_palms` this term gave 1592 against the
+        // 6051 lx the very same leaf underside receives on screen, so every reflection of anything
+        // the camera could not see came back four times too dark -- black, after the tone curve.
+        //
+        // That is also why the defect was BIMODAL. A hit that IS on screen reuses the frame's own
+        // colour and stayed correct and sharp; only the off-screen re-shade went black, and those
+        // are the blurry ones.
+        float3 col;
+        if (skyIrradianceIndex != 0u)
+        {
+            TextureCube skyIrradiance = ResourceDescriptorHeap[skyIrradianceIndex];
+            const float3 irradiance = skyIrradiance.SampleLevel(gSmp, N, 0).rgb;
+            col = albedo * (1.0f - metal) * irradiance * skyIrradianceScale;
+        }
+        else
+        {
+            col = albedo * ambientIntensity * lightRgb;
+        }
         if (br.NdotL > 0.0f) { col += (br.diffBRDF + br.specBRDF) * br.NdotL * lightRgb * shadow; }
         direct = col * exposure;
 

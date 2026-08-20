@@ -84,6 +84,9 @@ public:
     bool AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::unique_ptr<RenderableObjectBase> obj);
     bool RemoveOceanObjects();
     void SetOceanVisible(bool visible);
+    // W1: locate the ocean's shared clock (null if no ocean). PUBLIC since P16.6 -- the capture
+    // harness turns the shore contact foam off through it, which beats editing tuned content.
+    OceanRenderable* FindOceanRenderable();
 
 #if WITH_EDITOR
     // Stable identity for editor-spawned objects. SceneObjectId 0 = a runtime
@@ -184,7 +187,6 @@ private:
     void RebuildShadowCasters(Renderer& renderer);
     // Poll render::g_shadowLodBias vs the LOD the caster geometry was built with; rebuild on a change.
     void ReconcileShadowLodBias(Renderer* renderer);
-    OceanRenderable* FindOceanRenderable(); // W1: locate the ocean's shared clock (null if no ocean)
     void UpdateCascades(const Camera& camera, Renderer* renderer);
     void UpdateClipmap(const Camera& camera); // Step 24d: camera-centered directional clipmap views (VSM)
 

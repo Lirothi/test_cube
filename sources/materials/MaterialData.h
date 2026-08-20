@@ -77,6 +77,16 @@ struct MaterialParams
     float4 texFlags    = {1.f, 1.f, 1.f, 1.f};
     // D: self-illumination added to the emissive G-buffer target (RT2) and re-added at compose.
     // emissiveColor * emissiveStrength; default 0 => zero-cost for existing content.
+    //
+    // P16.7 -- `emissiveStrength` IS A LUMINANCE, IN cd/m2, and always was: the product goes
+    // straight into scene colour, and scene colour has been in cd/m2 since P16 put the lights in
+    // lux. There is no conversion to apply and none should be invented -- the same argument as the
+    // sun's illuminance.
+    //
+    // What DID change is that the numbers content was authored with are now absurdly small. A
+    // strength of 4 is four cd/m2, which is a dim indicator LED in a dark room; against a scene lit
+    // at thousands it does not exist. Real values: a lit screen 300-500, an LED panel ~1000, a
+    // neon sign ~5000, an incandescent filament 10^6. RT2 is R11G11B10_FLOAT and holds them.
     float3 emissiveColor    = {0.f, 0.f, 0.f};
     float  emissiveStrength = 0.f;
     // W3: per-object wind sway strength (0 = rigid). Authored per object and written UNIFORMLY to

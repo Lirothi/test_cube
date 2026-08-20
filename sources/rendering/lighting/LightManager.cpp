@@ -77,7 +77,7 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
 
         const float luminance = std::max(0.0f,
             desc.color.x * 0.2126f + desc.color.y * 0.7152f + desc.color.z * 0.0722f);
-        const float brightness = std::max(desc.intensity, 0.0f) * luminance;
+        const float brightness = std::max(desc.luminousFluxLm, 0.0f) * luminance; // P16.5
         const float score = projectedSize * projectedSize;// *brightness;
         candidates.push_back({ static_cast<std::uint32_t>(i), score });
     }

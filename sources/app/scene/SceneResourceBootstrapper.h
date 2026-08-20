@@ -113,6 +113,8 @@ struct SceneSsrCBHandles
     Material::CBFieldHandle ueStartMipLevel, ueSlopeCompareToleranceScale;
     Material::CBFieldHandle ueConfirmRetries, ueRefineSteps;
     Material::CBFieldHandle ueUseRoughnessTexture, ueRoughnessOverride;
+    Material::CBFieldHandle invPrevPreExposure;
+    Material::CBFieldHandle preExposure;
 
     void Populate(Material* material);
 };
@@ -144,6 +146,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle shoreWetnessBreakup;
     // P7 aerial perspective.
     Material::CBFieldHandle fogParams0, fogParams1, fogParams2, fogSunDir, fogSunColor, fogDebugView;
+    Material::CBFieldHandle preExposure;
 
     void Populate(Material* material);
 };
@@ -162,6 +165,8 @@ struct SceneFxaaCBHandles
 struct SceneTonemapCBHandles
 {
     Material::CBFieldHandle exposureEnabled;
+    Material::CBFieldHandle preExposure;
+    Material::CBFieldHandle preExposureActive;
     Material::CBFieldHandle toneCurve;
     Material::CBFieldHandle agxSlope;
     Material::CBFieldHandle agxPower;
@@ -191,6 +196,7 @@ struct SceneExposureHistogramCBHandles
     Material::CBFieldHandle sampleGridX;
     Material::CBFieldHandle sampleGridY;
     Material::CBFieldHandle minLogLum;
+    Material::CBFieldHandle invPreExposure;
     Material::CBFieldHandle invLogLumRange;
     Material::CBFieldHandle maskStrength;
     Material::CBFieldHandle maskInnerRadius;
@@ -205,6 +211,7 @@ struct SceneExposureBaseLumCBHandles
 {
     Material::CBFieldHandle baseWidth;
     Material::CBFieldHandle baseHeight;
+    Material::CBFieldHandle invPreExposure;   // P16.1
 
     void Populate(Material* material);
 };
@@ -212,6 +219,7 @@ struct SceneExposureBaseLumCBHandles
 struct SceneExposureSolveCBHandles
 {
     Material::CBFieldHandle minLogLum;
+    Material::CBFieldHandle invPreExposure;
     Material::CBFieldHandle logLumRange;
     Material::CBFieldHandle lowPercentile;
     Material::CBFieldHandle highPercentile;
@@ -553,6 +561,9 @@ struct SsrPassConstants
     uint32_t ueRefineSteps = 4u;
     uint32_t ueUseRoughnessTexture = 1u;
     float ueRoughnessOverride = 0.0f;
+    // P16.1: 1 / the factor the SceneColor history was written with (1 = not pre-exposed).
+    float invPrevPreExposure = 1.0f;
+    float preExposure = 1.0f; // P16.8
 };
 
 struct BlurPassConstants
@@ -587,6 +598,7 @@ struct ComposePassConstants
     float4 fogSunDir{};
     float4 fogSunColor{};
     uint32_t fogDebugView = 0u;
+    float preExposure = 1.0f;
 };
 
 struct FxaaPassConstants

@@ -169,7 +169,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     float targetEv = meteredEv - compensationEv;
     if (autoExposure == 0u)
     {
-        targetEv = manualEv100;
+        // P16.6b: compensation applies in MANUAL too. It used to be an auto-only trim, which left
+        // a fixed-exposure level with no quick +/- at all -- changing the look meant re-solving the
+        // shutter by hand, which is the arithmetic the camera controls exist to remove.
+        targetEv = manualEv100 - compensationEv;
     }
     targetEv = clamp(targetEv, minEv100, maxEv100);
 

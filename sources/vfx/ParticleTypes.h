@@ -47,9 +47,13 @@ struct alignas(16) GpuEmitterDrawParams
     float colorKeys[4][4];                                                        // 32
     // depthOcclude: 1 = occlude/soft-fade against the opaque depth copy in the PS; transparent
     // surfaces are handled by the hardware depth test. softFadeDist = fade width.
-    uint32_t maxParticles; float softFadeDist; float depthOcclude; float _pad;    // 96
+    // P16.1: preExposure -- particles draw in the transparent pass, after compose, so they
+    // apply the factor themselves. It took the trailing pad slot, so the layout is unchanged.
+    uint32_t maxParticles; float softFadeDist; float depthOcclude; float preExposure; // 96
+    // P16.7: the luminance the authored colour MEANS, in cd/m2. See EmitterDesc.
+    float luminanceCdM2; float _pad[3];                                           // 112
 };
-static_assert(sizeof(GpuEmitterDrawParams) == 112, "GpuEmitterDrawParams must match HLSL");
+static_assert(sizeof(GpuEmitterDrawParams) == 128, "GpuEmitterDrawParams must match HLSL");
 
 // CPU-side emitter description. E1 consumes the sim fields; size/color/flipbook/blend/texture
 // are stored now (one JSON schema) and consumed by the E2 renderer / E3 presets.
@@ -80,6 +84,18 @@ struct EmitterDesc
     // --- rendering (consumed by E2/E3; carried here so the JSON schema is stable) ---
     float sizeStart = 0.5f;
     float sizeEnd = 0.15f;
+    // P16.7 -- WHAT THE COLOUR MEANS, in cd/m2. `colorKeys` is a HUE and an alpha; this is the
+    // brightness, and it has to be a real number for the same reason the sun does: a particle
+    // writes straight into scene colour, and scene colour is in cd/m2 since P16. An authored 1.0
+    // used to be "about as bright as the scene"; against a physical sky it is a thousandth of it,
+    // which is why the campfire's smoke went BLACK -- an alpha-blended particle darker than what
+    // is behind it subtracts from the frame.
+    //
+    // 3000 = smoke lit by a bright overcast sky, which is what the existing presets were drawing.
+    // A wood fire is 20000-50000, a candle flame about 10000, a glowing ember a few hundred. The
+    // reference is the same one the sky uses, so a flame set to 20000 reads as a flame against a
+    // 16000 lx sky and still reads as one at night.
+    float luminanceCdM2 = 3000.0f;
     Math::float4 colorKeys[4] = {      // colorOverLife gradient (RGBA; A drives fade)
         Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
         Math::float4(1.0f, 1.0f, 1.0f, 1.0f),

@@ -857,6 +857,170 @@ XMFLOAT3 CubeFaceDir(int face, float u, float v)
     }
 }
 
+// Solid angle of one cube texel, for a face of `face` texels and face-local (u,v) in [-1,1].
+// dA = (2/face)^2 on the face plane, projected onto the unit sphere by 1/r^3 with
+// r = |CubeFaceDir| = sqrt(u^2 + v^2 + 1).
+float CubeTexelSolidAngle(int face, float u, float v)
+{
+    const float d = 2.0f / (float)face;
+    const float r2 = u * u + v * v + 1.0f;
+    return (d * d) / (r2 * std::sqrt(r2));
+}
+
+// P16.3 — replace the sun disc with the sky around it, in place, and report what was taken.
+//
+// See ImportOptions::skyRemoveSunFromIbl for why this exists at all. The disc is located as the
+// brightest texel in the cube (a sun is several orders of magnitude above everything else -- for
+// the reference sky, 3.7e5 against a median of 0.09), and replaced with the per-channel MEDIAN of
+// the annulus [R, 2R] around it, which is local, keeps the aureole's colour, and cannot be dragged
+// by a stray bright texel just outside the cut.
+//
+// The horizontal illuminance of the disc and of the remaining sky are integrated with real solid
+// angles and logged: those two numbers are what a level author needs to set the directional light,
+// and they are the evidence for the split rather than an assertion about it.
+// Stripped: the disc was replaced. NoSunPresent: there was nothing worth removing, which is a
+// correct outcome, not a failure -- the caller must not warn about it. Failed: something went wrong
+// and the derivatives fall back to the display cube.
+enum class SunStrip { Stripped, NoSunPresent, Failed };
+
+SunStrip StripSunDisc(ScratchImage& cube, int face, float radiusDeg, Log& log)
+{
+    XMFLOAT3 sunDir{ 0.0f, 1.0f, 0.0f };
+    float peak = -1.0f;
+    for (int f = 0; f < 6; ++f)
+    {
+        const Image* img = cube.GetImage(0, (size_t)f, 0);
+        for (int y = 0; y < face; ++y)
+        {
+            const float* row = reinterpret_cast<const float*>(img->pixels + (size_t)y * img->rowPitch);
+            const float vv = 2.0f * ((float)y + 0.5f) / (float)face - 1.0f;
+            for (int x = 0; x < face; ++x)
+            {
+                const float* px = row + (size_t)x * 4;
+                const float l = 0.2126f * px[0] + 0.7152f * px[1] + 0.0722f * px[2];
+                if (l > peak)
+                {
+                    peak = l;
+                    const float uu = 2.0f * ((float)x + 0.5f) / (float)face - 1.0f;
+                    XMFLOAT3 d = CubeFaceDir(f, uu, vv);
+                    const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+                    sunDir = { d.x / len, d.y / len, d.z / len };
+                }
+            }
+        }
+    }
+    if (peak <= 0.0f)
+    {
+        log.Line("  sky sun    SKIPPED: the cube has no non-zero texel");
+        return SunStrip::NoSunPresent;
+    }
+
+    const float cosR = std::cos(radiusDeg * 3.14159265358979f / 180.0f);
+    const float cosR2 = std::cos(2.0f * radiusDeg * 3.14159265358979f / 180.0f);
+
+    // Pass 1: the annulus sample, and the two illuminance integrals over the UPPER hemisphere.
+    std::vector<float> ring[3];
+    double eSun = 0.0, eSky = 0.0, sunSolidAngle = 0.0;
+    for (int f = 0; f < 6; ++f)
+    {
+        const Image* img = cube.GetImage(0, (size_t)f, 0);
+        for (int y = 0; y < face; ++y)
+        {
+            const float* row = reinterpret_cast<const float*>(img->pixels + (size_t)y * img->rowPitch);
+            const float vv = 2.0f * ((float)y + 0.5f) / (float)face - 1.0f;
+            for (int x = 0; x < face; ++x)
+            {
+                const float uu = 2.0f * ((float)x + 0.5f) / (float)face - 1.0f;
+                XMFLOAT3 d = CubeFaceDir(f, uu, vv);
+                const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+                d = { d.x / len, d.y / len, d.z / len };
+                const float cosSun = d.x * sunDir.x + d.y * sunDir.y + d.z * sunDir.z;
+                const float* px = row + (size_t)x * 4;
+
+                if (cosSun < cosR && cosSun >= cosR2)
+                {
+                    ring[0].push_back(px[0]); ring[1].push_back(px[1]); ring[2].push_back(px[2]);
+                }
+                if (d.y > 0.0f) // horizontal-surface irradiance: cosine-weighted, upper hemisphere
+                {
+                    const double w = (double)CubeTexelSolidAngle(face, uu, vv) * (double)d.y;
+                    const double l = 0.2126 * px[0] + 0.7152 * px[1] + 0.0722 * px[2];
+                    if (cosSun >= cosR) { eSun += l * w; sunSolidAngle += CubeTexelSolidAngle(face, uu, vv); }
+                    else                { eSky += l * w; }
+                }
+            }
+        }
+    }
+    if (ring[0].empty())
+    {
+        log.Line("  sky sun    SKIPPED: the annulus around the disc is empty (radius too large?)");
+        return SunStrip::Failed;
+    }
+
+    // NOT EVERY SKY HAS A SUN, and one without must not be touched. `citrus_orchard_puresky_4k` is
+    // the case in hand: its brightest texel is 8.7 against rustig_koppie's 520,000, its disc carries
+    // 0.0% of the hemisphere, and "removing" it would only smooth the brightest patch of an
+    // otherwise untouched sky for no reason. Below 1% there is nothing here worth the edit.
+    {
+        const double share = (eSun + eSky) > 0.0 ? eSun / (eSun + eSky) : 0.0;
+        if (share < 0.01)
+        {
+            char skip[220];
+            std::snprintf(skip, sizeof(skip),
+                "  sky sun    NOT REMOVED: the brightest disc is %.2f%% of the hemisphere's "
+                "illuminance (peak %.4g) -- this sky has no sun to take out",
+                100.0 * share, peak);
+            log.Line(skip);
+            return SunStrip::NoSunPresent;
+        }
+    }
+
+    float fill[3];
+    for (int c = 0; c < 3; ++c)
+    {
+        const size_t mid = ring[c].size() / 2;
+        std::nth_element(ring[c].begin(), ring[c].begin() + mid, ring[c].end());
+        fill[c] = ring[c][mid];
+    }
+
+    // Pass 2: replace.
+    tbb::parallel_for(0, 6, [&](int f)
+    {
+        const Image* img = cube.GetImage(0, (size_t)f, 0);
+        for (int y = 0; y < face; ++y)
+        {
+            float* row = reinterpret_cast<float*>(img->pixels + (size_t)y * img->rowPitch);
+            const float vv = 2.0f * ((float)y + 0.5f) / (float)face - 1.0f;
+            for (int x = 0; x < face; ++x)
+            {
+                const float uu = 2.0f * ((float)x + 0.5f) / (float)face - 1.0f;
+                XMFLOAT3 d = CubeFaceDir(f, uu, vv);
+                const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+                if ((d.x * sunDir.x + d.y * sunDir.y + d.z * sunDir.z) / len >= cosR)
+                {
+                    float* px = row + (size_t)x * 4;
+                    px[0] = fill[0]; px[1] = fill[1]; px[2] = fill[2];
+                }
+            }
+        }
+    });
+
+    const double total = eSun + eSky;
+    const float elevation = std::asin(std::min(std::max(sunDir.y, -1.0f), 1.0f)) * 180.0f / 3.14159265358979f;
+    char msg[400];
+    std::snprintf(msg, sizeof(msg),
+        "  sky sun    REMOVED from the IBL  dir [%.4f %.4f %.4f]  elevation %.2f deg  peak %.4g\n"
+        "             disc %.1f deg = %.5f sr, filled with the [R,2R] annulus median "
+        "[%.4g %.4g %.4g]\n"
+        "             horizontal illuminance: sun %.4g + sky %.4g = %.4g   (the sun was %.1f%%)\n"
+        "             the DISPLAY cube keeps its sun; only _spec/_diffuse lose it",
+        sunDir.x, sunDir.y, sunDir.z, elevation, peak,
+        radiusDeg, sunSolidAngle, fill[0], fill[1], fill[2],
+        eSun, eSky, total, total > 0.0 ? 100.0 * eSun / total : 0.0);
+    log.Line(msg);
+    return SunStrip::Stripped;
+}
+
 //=============================================================================
 // F7 — offline IBL derivatives for split-sum image-based lighting.
 //
@@ -1528,8 +1692,56 @@ bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
         fs::path specOut = out; specOut.replace_filename(out.stem().wstring() + L"_spec.dds");
         fs::path diffOut = out; diffOut.replace_filename(out.stem().wstring() + L"_diffuse.dds");
 
+        // P16.3: the LIGHTING derivatives are built from a copy of the cube with the sun disc taken
+        // out -- see ImportOptions::skyRemoveSunFromIbl. `cubeMips` itself is left alone because it
+        // is what the display texture was compressed from and what the sky BACKGROUND shows. The
+        // copy is made from the calibrated float cube and re-mipped, so the prefilter reads a chain
+        // whose every level agrees with the strip.
+        const ScratchImage* iblSrc = &cubeMips;
+        ScratchImage iblCube, iblMips;
+        if (opts.skyRemoveSunFromIbl)
+        {
+            const Image* srcImgs = cube.GetImages();
+            if (SUCCEEDED(iblCube.InitializeCube(DXGI_FORMAT_R32G32B32A32_FLOAT,
+                                                 (size_t)face, (size_t)face, 1, 1)))
+            {
+                for (int f = 0; f < 6; ++f)
+                {
+                    const Image* s = &srcImgs[f];
+                    const Image* d = iblCube.GetImage(0, (size_t)f, 0);
+                    for (int y = 0; y < face; ++y)
+                    {
+                        std::memcpy(d->pixels + (size_t)y * d->rowPitch,
+                                    s->pixels + (size_t)y * s->rowPitch, (size_t)face * 4 * sizeof(float));
+                    }
+                }
+                const SunStrip verdict = StripSunDisc(iblCube, face, opts.skySunRadiusDeg, log);
+                if (verdict == SunStrip::Stripped)
+                {
+                    if (SUCCEEDED(GenerateMipMaps(iblCube.GetImages(), iblCube.GetImageCount(),
+                                                  iblCube.GetMetadata(), TEX_FILTER_DEFAULT, 0, iblMips)))
+                    {
+                        ClampToFp16Range(iblMips, log, "skybox ibl");
+                        iblSrc = &iblMips;
+                    }
+                    else
+                    {
+                        log.Line("  sky sun    WARN could not mip the sun-free chain; "
+                                 "derivatives fall back to the display cube");
+                    }
+                }
+                else if (verdict == SunStrip::Failed)
+                {
+                    log.Line("  sky sun    WARN strip failed; derivatives fall back to the "
+                             "display cube");
+                }
+                // NoSunPresent: nothing to do, and the derivatives SHOULD come from the untouched
+                // cube -- it already is the sky. No warning; the reason is logged above.
+            }
+        }
+
         ScratchImage spec;
-        if (BuildPrefilteredSpecular(cubeMips, face, spec, log))
+        if (BuildPrefilteredSpecular(*iblSrc, face, spec, log))
         {
             if (SaveHdrCube(spec, specOut, log, "ibl spec", true))
             {
@@ -1545,7 +1757,7 @@ bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
         // 32^2 faces: the cosine convolution is a low-frequency signal, and anything larger is
         // storing noise-free duplicates of its own neighbours. Left UNCOMPRESSED -- BC6H on a
         // 32^2 cube saves 100 KB and costs banding on the one resource that must stay smooth.
-        if (BuildIrradianceCube(cubeMips, 32, irr, log))
+        if (BuildIrradianceCube(*iblSrc, 32, irr, log))
         {
             if (SaveHdrCube(irr, diffOut, log, "ibl diffuse", false))
             {
@@ -1562,6 +1774,38 @@ bool ConvertSkyboxHdr(const fs::path& in, const ImportOptions& opts, Log& log)
         // a stale LUT is invisible until it is wrong.
         fs::path lutOut = out; lutOut.replace_filename(L"brdf_lut.dds");
         BuildBrdfLut(lutOut, 256, log);
+
+        // Land it where the engine loads from. Same rule the GUI import panel applies, so a
+        // headless import and a dialog import leave the tree in the same state.
+        if (!opts.skyOutputRoot.empty())
+        {
+            std::error_code ec;
+            const fs::path root = fs::path(opts.skyOutputRoot);
+            const fs::path dstDir = root / out.stem();
+            fs::create_directories(dstDir, ec);
+
+            const auto moveOne = [&log](const fs::path& from, const fs::path& to)
+            {
+                std::error_code mec;
+                if (!fs::exists(from, mec)) { return; }
+                mec.clear();
+                fs::rename(from, to, mec);
+                if (mec) // a cross-volume rename fails; copy and drop the source instead
+                {
+                    mec.clear();
+                    fs::copy_file(from, to, fs::copy_options::overwrite_existing, mec);
+                    if (!mec) { std::error_code rm; fs::remove(from, rm); }
+                }
+                log.Line(std::string(mec ? "  WARN move  " : "  ok  move  ") +
+                         Narrow(from.filename().wstring()) + " -> " + Narrow(to.wstring()));
+            };
+
+            const std::wstring stem = out.stem().wstring();
+            moveOne(out, dstDir / (stem + L".dds"));
+            moveOne(specOut, dstDir / (stem + L"_spec.dds"));
+            moveOne(diffOut, dstDir / (stem + L"_diffuse.dds"));
+            moveOne(lutOut, root / L"brdf_lut.dds");
+        }
     }
     return ok;
 }

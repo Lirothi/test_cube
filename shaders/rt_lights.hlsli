@@ -41,8 +41,7 @@ float3 RtEvalSpotLight(SpotLightData light, float3 P, out float3 L, out float di
 
     float angleAtten = saturate((spotCos - light.directionCosOuter.w) * light.shadowParams.z);
     angleAtten = angleAtten * angleAtten;
-    float x = saturate(1.0f - d / light.positionRange.w);
-    float distAtten = x * x;
+    const float distAtten = LightDistanceAttenuation(d, light.positionRange.w); // P16.5
 
     L = dir; dist = d;
     return light.colorIntensity.xyz * light.colorIntensity.w * distAtten * angleAtten;
@@ -58,8 +57,7 @@ float3 RtEvalPointLight(PointLightData light, float3 P, out float3 L, out float 
     if (d > light.radius || light.radius <= kEpsilon) { return float3(0.0f, 0.0f, 0.0f); }
 
     L = Lvec / max(d, kEpsilon); dist = d;
-    float x = saturate(1.0f - d / light.radius);
-    return light.color * light.intensity * (x * x);
+    return light.color * light.intensity * LightDistanceAttenuation(d, light.radius); // P16.5
 }
 
 #endif // RT_LIGHTS_HLSLI

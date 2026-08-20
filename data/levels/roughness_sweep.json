@@ -6,7 +6,8 @@
  },
  "skybox": {
   "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds",
-  "intensity": 1.0
+  "intensity": 1.0,
+  "illuminanceLux": 16000.0
  },
  "directionalLight": {
   "enabled": true,
@@ -20,15 +21,18 @@
    0.97,
    0.92
   ],
-  "sunIntensity": 1.0,
   "ambient": 0.05,
-  "skyFillIntensity": 1.0
+  "skyFillIntensity": 1.0,
+  "sunIlluminanceLux": 20000.0
  },
  "cameraExposure": {
   "enabled": true,
   "autoExposure": false,
-  "manualEv100": 0.0,
-  "compensationEv": 0.0
+  "compensationEv": 0.0,
+  "maxEv100": 18.0,
+  "apertureFStop": 16.0,
+  "shutterSpeedSec": 0.0151576,
+  "isoSensitivity": 100.0
  },
  "colorPipeline": {
   "toneCurve": "filmic",

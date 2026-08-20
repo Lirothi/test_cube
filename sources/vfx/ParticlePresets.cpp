@@ -60,6 +60,7 @@ void ApplyEmitterJson(const nlohmann::json& j, EmitterDesc& d)
     d.texture = j.value("texture", d.texture);
     d.additive = j.value("additive", d.additive);
     d.softFade = j.value("softFade", d.softFade);
+    d.luminanceCdM2 = j.value("luminanceCdM2", d.luminanceCdM2); // P16.7
     d.sortParticles = j.value("sort", d.sortParticles);
     d.localSpace = j.value("localSpace", d.localSpace);
     d.flipbookCols = j.value("flipCols", d.flipbookCols);

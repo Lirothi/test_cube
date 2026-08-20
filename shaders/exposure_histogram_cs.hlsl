@@ -28,6 +28,10 @@ cbuffer ExposureHistogramCB : register(b0)
     uint sampleGridY;    // has no uint2 and a mismatched CB field would pack silently wrong
     float minLogLum;     // log2 luminance mapped to bin 0
     float invLogLumRange;// 1 / (maxLogLum - minLogLum)
+    // P16.1: scene colour arrives scaled by the pre-exposure. Divided back out here so the
+    // histogram measures the SCENE, not the scene times the exposure it is about to be given --
+    // otherwise the two chase each other frame to frame.
+    float invPreExposure;
 
     // Metering weight mask. strength 0 makes MeteringWeight return exactly 1 for every sample, so
     // the mask off is bit-identical to the unweighted histogram this replaced.
@@ -98,7 +102,7 @@ void CSBuild(uint3 dtid : SV_DispatchThreadID)
     }
 
     const float2 uv = (float2(dtid.xy) + 0.5f) / float2(sampleGridX, sampleGridY);
-    const float3 color = SceneColor.SampleLevel(gSmp, uv, 0).rgb;
+    const float3 color = SceneColor.SampleLevel(gSmp, uv, 0).rgb * invPreExposure;
     const float lum = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
 
     // Drop non-finite samples entirely rather than binning them. Counting a NaN as black would

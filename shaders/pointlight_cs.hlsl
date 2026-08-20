@@ -188,8 +188,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         }
         float3 L = Lvec / max(dist, kEpsilon);
 
-        float x = saturate(1.0 - dist / Ld.radius);
-        float atten = x * x;
+        const float atten = LightDistanceAttenuation(dist, Ld.radius); // P16.5
 
         BRDFInput bi;
         bi.albedo = albedo;

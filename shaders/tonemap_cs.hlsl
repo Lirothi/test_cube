@@ -23,6 +23,10 @@ cbuffer TonemapCB : register(b0)
     // 0 = dormant. Kept as an explicit flag rather than writing a neutral EV into the buffer so
     // the disabled path multiplies by a literal 1.0 and is bit-identical to the pre-plan image.
     uint exposureEnabled;
+    // P16.1: the factor every writer of scene colour already applied, and whether it did at all.
+    // The flag is separate from the value because a pre-exposure of exactly 1.0 is legal.
+    float preExposure;
+    uint  preExposureActive;
     // P3: 0 = legacy (Narkowicz ACES fit + pow(1/2.2)), 1 = AgX + sRGB transfer.
     // Legacy is bit-identical to the pre-P3 image and exists so any regression can be A/B'd
     // against the curve rather than argued about.
@@ -112,7 +116,18 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // texture stores the UNEXPOSED scene's log luminance, and comparing the two directly would make
     // the detail term pure error.
     float exposureMultiplier = 1.0f;
-    if (exposureEnabled != 0)
+    // P16.1: WHEN THE WRITERS HAVE ALREADY APPLIED THE EXPOSURE, THIS PASS APPLIES NOTHING.
+    //
+    // The first attempt divided by the pre-exposure here instead, and it did not cancel: the
+    // writers used a CPU factor built from the exposure READBACK while this read the exposure from
+    // the GPU buffer, and those are the same quantity at different ages. Measured, the sky moved
+    // 50/255 with the gate on when it should not have moved at all. There is nothing to reconcile
+    // between two numbers -- there should only ever be one.
+    if (preExposureActive != 0)
+    {
+        // exposureMultiplier stays 1.0.
+    }
+    else if (exposureEnabled != 0)
     {
         const float ev100 = asfloat(ExposureValue.Load(0));
         if (!isnan(ev100) && !isinf(ev100))
@@ -158,8 +173,15 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 // and pixel live in the same space. The grade is NOT modelled here: it is a colour
                 // operation on top, and folding it in would mean re-deriving a blurred field per
                 // grade change for a base layer that is deliberately coarse.
+                // P16.1: the shift is the exposure THE PIXEL ACTUALLY RECEIVED, which is not the
+                // same as what this pass applied. Pre-exposed, the writers applied it and this pass
+                // applied 1.0, while the base layer is stored unexposed either way -- so using
+                // `exposureMultiplier` alone put base and pixel a whole exposure apart and the
+                // local operator pulled the frame down by up to 10/255.
+                const float totalExposure =
+                    exposureMultiplier * ((preExposureActive != 0) ? preExposure : 1.0f);
                 const float baseLog = BaseLogLumTex.SampleLevel(gSmp, uv, 0)
-                                    + log2(max(exposureMultiplier, 1e-8f));
+                                    + log2(max(totalExposure, 1e-8f));
                 hdr *= LocalExposureMultiplier(log2(lum), baseLog, log2(0.18f), local);
             }
         }

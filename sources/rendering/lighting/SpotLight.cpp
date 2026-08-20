@@ -78,7 +78,7 @@ void SpotLight::SetColor(const Math::float3& color)
 
 void SpotLight::SetIntensity(float intensity)
 {
-    desc_.intensity = intensity;
+    desc_.luminousFluxLm = intensity; // P16.5: the argument is LUMENS now
 }
 
 void SpotLight::SetShadowNormalBias(float bias)

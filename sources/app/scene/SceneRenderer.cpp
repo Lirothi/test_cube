@@ -24,6 +24,7 @@
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "ocean/OceanSimulation.h"
+#include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
 #include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
@@ -188,6 +189,7 @@ namespace
         float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
         float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
         mat4   clipmapViewProj[8];    // Step 24f: directional clipmap level viewProjs
+        float4 preExposureParams;     // P16.1: x = pre-exposure, yzw reserved
     };
 
     // MIRRORS the OceanReflectionCB in shaders/ocean_reflection_cs.hlsl. This one is uploaded by
@@ -356,6 +358,11 @@ namespace
             }
         }
 
+        // P16.1: glass draws in the transparent pass, after compose, so compose's scaling never
+        // reaches it and it applies the factor itself -- and its refraction tap reads the opaque
+        // scene copy, which already has the factor on it. Both halves live in glass.hlsl.
+        vc.preExposureParams = float4(render::g_preExposure, 0.0f, 0.0f, 0.0f);
+
         return UploadFrameCB(renderer, vc);
     }
 }
@@ -517,6 +524,27 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         // the object and leaves the PSO null when the shader fails to build, so a null-check alone
         // dispatches with no pipeline state. That cost a debug session -- the shader was missing its
         // [RootSignature] attribute, which dxc compiles happily and check_shaders therefore passed.
+        // P16.1 -- PRE-EXPOSURE, decided here, once, for the same reason `bloomConvolution_` is:
+        // several passes have to agree on it and a disagreement is a uniform brightness error that
+        // reads as a tuning problem. It is the multiplier the tonemap applies just before the tone
+        // curve, taken from the PREVIOUS frame's adapted exposure -- this frame's value is derived
+        // FROM scene colour, and scene colour is what is about to be scaled by it.
+        {
+            prevPreExposure_ = preExposure_; // what last frame's scene colour was stored with
+            preExposure_ = 1.0f;
+            ExposureMetering& metering = renderer->Exposure();
+            if (render::g_preExposureEnabled && frame.cameraExposure.enabled && metering.IsReady())
+            {
+                const float ev = metering.LatestReadback().adaptedEv100;
+                if (std::isfinite(ev))
+                {
+                    const float m = render::ExposureMultiplierFromEv100(ev);
+                    if (std::isfinite(m) && m > 0.0f) { preExposure_ = m; }
+                }
+            }
+            render::g_preExposure = preExposure_;
+        }
+
         const auto bloomMaterial = resources_.GetBloomMaterial();
         // P8C: which method runs is decided HERE, once, for the same reason the gate itself is --
         // the Prepare declares a different set of resources for each, and a body that disagreed
@@ -3372,7 +3400,8 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
 
             spotLightBufferCPU[i].positionRange = float4(desc.position, desc.range);
             spotLightBufferCPU[i].directionCosOuter = float4(dir, light.GetCosOuter());
-            spotLightBufferCPU[i].colorIntensity = float4(desc.color, desc.intensity);
+            spotLightBufferCPU[i].colorIntensity =
+                float4(desc.color, render::CandelaFromLumens(desc.luminousFluxLm)); // P16.5
             spotLightBufferCPU[i].shadowParams = float4(light.GetCosInner(), static_cast<float>(lightManager.GetSpotShadowSlot(i)), light.GetInvAngleRange(), light.GetShadowDepthBias());
             spotLightBufferCPU[i].shadowParams2 = float4(light.GetShadowNormalBias(), 0.0f, 0.0f, 0.0f);
             spotLightBufferCPU[i].viewProj = viewProj;
@@ -3470,7 +3499,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
             pointLightBufferCPU[i].position = desc.position;
             pointLightBufferCPU[i].radius = desc.radius;
             pointLightBufferCPU[i].color = desc.color;
-            pointLightBufferCPU[i].intensity = desc.intensity;
+            pointLightBufferCPU[i].intensity = render::CandelaFromLumens(desc.luminousFluxLm); // P16.5
             // Per-light cube-shadow params = (slot/-1, worldDepthBias, near, far=radius).
             // near MUST match Scene.cpp's cube-face projection EXACTLY — PointShadowFactor
             // reconstructs the compare depth from it. Bias is WORLD-space (subtracted from the
@@ -3590,6 +3619,26 @@ void SceneRenderer::FillSsrReprojectionConstants(const Camera& camera, SsrPassCo
     c.clipToPrevClip = camera.GetInvProjMatrix() * camera.GetInvViewMatrix() *
         camera.GetPrevViewMatrix() * camera.GetPrevProjMatrix();
     c.sceneColorHistoryValid = ssrSceneColorHistoryValid_ ? 1u : 0u;
+    // P16.1: the history was written with LAST frame's factor, not this one's. They differ only
+    // while the exposure is moving, which is exactly when a reflection would otherwise flicker.
+    c.invPrevPreExposure = 1.0f / std::max(prevPreExposure_, 1.0e-8f);
+    c.preExposure = preExposure_; // P16.8: the multi-ray compression runs in pre-exposed space
+
+    // Whether the history is being read AT ALL, in the log. Only the UE march resolves its hits
+    // from the history; the default LogMarch takes its colour from the light target and never
+    // touches the line above. Without this an A/B that exercised neither would look like a clean
+    // result, which is exactly the shape of a verification that proves nothing.
+    {
+        const bool ueMarch = frame_ && frame_->settings.ssrTechnique == SsrTechnique::UeHzb;
+        char msg[192];
+        std::snprintf(msg, sizeof(msg),
+                      "[p16] ssr scene-colour history %s   prevPreExposure ~2^%.0f\n",
+                      (ueMarch && c.sceneColorHistoryValid != 0u)
+                          ? "READ (hits are pre-exposed, undone in-shader)"
+                          : "not read (hits come from the light target)",
+                      std::floor(std::log2(std::max(prevPreExposure_, 1.0e-8f))));
+        Renderer::DiagLogOnce(msg);
+    }
 }
 
 void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphPassContext ctx,
@@ -3666,6 +3715,7 @@ struct RtReflectConstants
     float depthA = 0.0f;    float depthB = 0.0f;   uint32_t outWidth = 0;  uint32_t outHeight = 0;
     uint32_t tlasIndex = 0; uint32_t lightIndex = 0; uint32_t gb1Index = 0; uint32_t depthIndex = 0;
     uint32_t reflectionUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t skyboxIndex = 0; float skyboxIntensity = 1.0f;
+    uint32_t skyIrradianceIndex = 0; float skyIrradianceScale = 1.0f; uint32_t rtPad0 = 0, rtPad1 = 0; // P16.9
     uint32_t spotLightIndex = 0; uint32_t spotCount = 0; uint32_t pointLightIndex = 0; uint32_t pointCount = 0;
     uint32_t screenDepthIndex = 0; uint32_t _padS0 = 0; uint32_t _padS1 = 0; uint32_t _padS2 = 0;
 };
@@ -3718,6 +3768,13 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         bindless_.WriteSceneDescriptor(frameIndex, 3, D.depthSRV);  // Depth
         bindless_.WriteSceneDescriptor(frameIndex, 4, D.reflectionUAV); // reflection out -> blur/compose
         bindless_.WriteSceneDescriptor(frameIndex, 5, skybox->GetTex()->GetSRVCPU()); // skybox cube (env reflection)
+        // P16.9: the cosine-convolved irradiance, so an OFF-SCREEN re-shade gets the same sky
+        // fill the main pass uses instead of the legacy `ambient * sunColour` fraction.
+        const bool haveSkyIrradiance = skybox->HasIbl();
+        if (haveSkyIrradiance)
+        {
+            bindless_.WriteSceneDescriptor(frameIndex, 8, skybox->GetIrradianceTex()->GetSRVCPU());
+        }
 
         // Spot/point light buffers (filled earlier this frame by Pass_SpotLights /
         // Pass_PointLights) so off-screen reflected surfaces are lit by the same
@@ -3756,6 +3813,8 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         c.reflectionUavIndex = bindless_.SceneIndex(frameIndex, 4);
         c.skyboxIndex = bindless_.SceneIndex(frameIndex, 5);
         c.skyboxIntensity = skybox->GetExposure();
+        c.skyIrradianceIndex = haveSkyIrradiance ? bindless_.SceneIndex(frameIndex, 8) : 0u; // P16.9
+        c.skyIrradianceScale = skybox->GetExposure() * dl.GetSkyFillIntensity();
         c.geomInfoIndex = bindless_.GeomInfoIndex();
         c.spotLightIndex = bindless_.SceneIndex(frameIndex, 6);
         c.spotCount = haveSpots ? spotCount : 0u;
@@ -4238,6 +4297,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             constants.fogParams1 = fog.params1;
             constants.fogParams2 = fog.params2;
             constants.fogDebugView = g_atmosphereDebugView;
+            constants.preExposure = preExposure_;   // P16.1
             if (frame_->dirLight)
             {
                 // GetDirection() is the direction the light TRAVELS; the scattering lobe is keyed
@@ -4675,7 +4735,11 @@ void SceneRenderer::Pass_SelectionOutline(Renderer* renderer, RenderGraphPassCon
             static_cast<float>(std::max(renderer->GetRenderHeight(), 1u)));
         constants.selectedBit = kSelectionStencilBit;
         constants.outlineRadius = std::clamp<std::uint32_t>(frame_->selectionOutlineRadius, 1u, 8u);
-        constants.outlineColor = float4(1.0f, 0.82f, 0.12f, 0.92f);
+        // P16.1: an authored colour written into scene colour BEFORE the tonemap. With
+        // pre-exposure on the tonemap no longer scales it down, so it has to arrive pre-scaled
+        // or the outline blows out to white. Alpha is the blend weight and stays put.
+        constants.outlineColor = float4(1.0f * preExposure_, 0.82f * preExposure_,
+                                        0.12f * preExposure_, 0.92f);
 
         RecordComputeDispatch(renderer, t.cl, material.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSelectionOutlineConstants(constants, dest); },
@@ -4713,6 +4777,58 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         if (!metering.IsReady() || !clearMat || !buildMat || !solveMat)
         {
             break;
+        }
+
+        // P16.1 INSTRUMENT. The peak luminance actually written to scene colour, read from the
+        // histogram the metering already builds -- nothing extra is computed. This is the number
+        // pre-exposure has to move: raw radiance today, near 1 afterwards, and the FP16 target it
+        // is written to tops out at 65504 either way.
+        //
+        // Printed to the nearest STOP so a settled scene emits one line: DiagLogOnce dedupes by the
+        // exact string, and an unrounded value changes every frame.
+        {
+            static float bins[ExposureMetering::kHistogramBins] = {};
+            UINT total = 0;
+            if (metering.LatestHistogram(bins, ExposureMetering::kHistogramBins, &total) && total > 0)
+            {
+                int top = -1;
+                for (int i = static_cast<int>(ExposureMetering::kHistogramBins) - 1; i >= 0; --i)
+                {
+                    if (bins[i] > 0.0f) { top = i; break; }
+                }
+                if (top >= 0)
+                {
+                    const float minLog = ExposureMeteringConstants::kMinLogLum;
+                    const float maxLog = ExposureMeteringConstants::kMaxLogLum;
+                    const float f = (static_cast<float>(top) + 0.5f) /
+                                    static_cast<float>(ExposureMetering::kHistogramBins - 1u);
+                    const float logLum = minLog + f * (maxLog - minLog);
+                    // The histogram is built from scene colour with the pre-exposure DIVIDED BACK
+                    // OUT (it has to be, or the metering feeds itself), so what it reports is the
+                    // scene's own radiance either way -- it cannot see the gate. The number the
+                    // gate actually moves is the one STORED in the FP16 target, which is that peak
+                    // times the factor, so both are printed along with the factor itself. Without
+                    // the factor on the line there is no evidence in the log that the gate was
+                    // even live, and a transparent A/B would be indistinguishable from a vacuous
+                    // one.
+                    const float preExpLog = std::log2(std::max(preExposure_, 1.0e-8f));
+                    // P16.2: the METERED EV100 next to it, because that is the number the unit
+                    // claim is falsifiable against -- physical light units mean a sunlit scene must
+                    // meter near a real photographic EV (sunny-16 territory, 14-15), not the 4 this
+                    // engine has been sitting at. Quantised to half a stop so a settled frame emits
+                    // one line through DiagLogOnce instead of one per adaptation step.
+                    const float ev = metering.LatestReadback().adaptedEv100;
+                    char msg[260];
+                    std::snprintf(msg, sizeof(msg),
+                                  "[p16] scene peak luminance ~2^%.0f = %.0f raw"
+                                  "   metered EV100 %.1f   preExposure ~2^%.0f   stored ~2^%.0f"
+                                  "   (FP16 ceiling 65504)\n",
+                                  std::floor(logLum), std::exp2(std::floor(logLum)),
+                                  std::isfinite(ev) ? std::round(ev * 2.0f) * 0.5f : 0.0f,
+                                  std::floor(preExpLog), std::floor(logLum + preExpLog));
+                    Renderer::DiagLogOnce(msg);
+                }
+            }
         }
 
         const auto& D = renderer->GetDeferredForFrame();
@@ -4775,7 +4891,10 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         constants.highPercentile = settings.highPercentile;
         constants.speedUp = settings.speedUp;
         constants.speedDown = settings.speedDown;
-        constants.manualEv100 = settings.manualEv100;
+        // P16.6: derived from the camera, never authored. The shader is unchanged -- it still
+        // receives one EV -- so the three settings agree with it by construction.
+        constants.manualEv100 = render::Ev100FromCamera(
+            settings.apertureFStop, settings.shutterSpeedSec, settings.isoSensitivity);
         constants.autoExposure = settings.autoExposure ? 1u : 0u;
         constants.blackBucketInfluence = settings.blackBucketInfluence;
         constants.startDistance = settings.adaptationStartDistance;
@@ -4889,7 +5008,10 @@ void SceneRenderer::Bloom_Downsample(Renderer* renderer, ID3D12GraphicsCommandLi
         const uint2 dst = mipSize(0);
         BloomPassConstants c{};
         c.stage = 0u;
-        c.exposureEnabled = applyExposure ? 1u : 0u;
+        // P16.1: a pre-exposed source is ALREADY in the units the threshold is authored in, so the
+        // helper must not scale it a second time. `exposureEnabled = 0` makes ExposureMultiplier()
+        // return 1, which is exactly that.
+        c.exposureEnabled = (applyExposure && !render::g_preExposureEnabled) ? 1u : 0u;
         c.dstSize = dst;
         c.srcSize = uint2{ renderer->GetWidth(), renderer->GetHeight() };
         c.threshold = threshold;
@@ -5080,7 +5202,7 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
                        std::min(D.bloomFftImageHeight, D.bloomFftHeight) };
 
     BloomConvConstants conv{};
-    conv.exposureEnabled = applyExposure ? 1u : 0u;
+    conv.exposureEnabled = (applyExposure && !render::g_preExposureEnabled) ? 1u : 0u;  // P16.1
     conv.transformSize = grid;
     conv.imageSize = image;
     conv.threshold = std::max(settings.threshold, 0.0f);

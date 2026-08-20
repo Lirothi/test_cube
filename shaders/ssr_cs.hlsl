@@ -53,6 +53,15 @@ cbuffer PerFrame : register(b0)
     uint     ueRefineSteps;
     uint     ueUseRoughnessTexture;
     float    ueRoughnessOverride;
+    // P16.1: 1 / the pre-exposure the PREVIOUS frame's scene colour was written with. This pass
+    // feeds compose, and compose scales what it writes -- so a hit colour taken from the history
+    // has to come back to raw radiance first or it carries the factor twice. UE spell this
+    // View.PrevSceneColorPreExposureCorrection. 1.0 when nothing is pre-exposed.
+    float    invPrevPreExposure;
+    // P16.8: the CURRENT frame's pre-exposure. The multi-ray compression below is a Reinhard curve,
+    // and a Reinhard curve is only well conditioned near 1 -- which is exactly what pre-exposure
+    // makes the scene. UE run the same compression on scene colour that is already pre-exposed.
+    float    preExposure;
 }
 
 static const float kEps = 1e-6f;
@@ -116,7 +125,7 @@ float4 ResolveUeHit(SSRHit ssr, bool compressForMultiRay)
         float hitVignette;
         ReprojectUeHit(float3(ssr.uv, ssr.deviceZ), prevUV, hitVignette);
         // Mirrors UE SampleScreenColor: bilinear history sample, NaNs/negative HDR -> black.
-        c = PrevSceneColor.SampleLevel(gSmp, prevUV, 0.0f).rgb;
+        c = PrevSceneColor.SampleLevel(gSmp, prevUV, 0.0f).rgb * invPrevPreExposure; // P16.1
         c = -min(-c, 0.0f);
         vis *= hitVignette;
     }
@@ -131,6 +140,11 @@ float4 ResolveUeHit(SSRHit ssr, bool compressForMultiRay)
 
     if (compressForMultiRay)
     {
+        // P16.8: compress in PRE-EXPOSED space. `c` is raw radiance -- thousands of cd/m2 since the
+        // lights went physical -- and `L/(1+L)` maps that to 0.9997, where the inverse `1/(1-L)` is
+        // one catastrophic cancellation away from nonsense. Pre-exposed, the same hit is near 1 and
+        // the pair is exact. The caller divides the factor back out.
+        c *= preExposure;
         c *= rcp(1.0f + SsrUeLuminance(c));
     }
     return float4(c * vis, vis);
@@ -218,11 +232,33 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 }
             }
 
-            result *= rcp((float)max(numRays, 1u));
+            // P16.8 -- THE INVERSE HAS TO SEE WHAT THE COMPRESSION PRODUCED, and that is the mean
+            // of the RAYS THAT HIT, not the mean over every ray fired.
+            //
+            // It used to divide by `numRays` first, mixing the misses in as zeros, and then invert.
+            // `L/(1+L)` and `1/(1-L)` are exact inverses of each other only for a single unweighted
+            // sample; feed the second one a coverage-weighted average and it is not an inverse at
+            // all. With two of four rays hitting a surface of 3000 cd/m2 the old form returned
+            // luminance 0.999 instead of ~1500 -- and it had been returning 0.33 instead of 0.5 for
+            // years, which nobody could see while the whole scene sat near 1. That is why the
+            // bronze floor's GLOSSY reflections went black the day the lights became physical, and
+            // why the sharp ones (roughness < 0.1, single ray, never compressed) stayed correct.
             if (glossy)
             {
-                result.rgb *= rcp(max(1.0f - SsrUeLuminance(result.rgb), 1.0e-3f));
+                const float coverage = result.a; // sum of the per-hit visibilities
+                if (coverage > 1.0e-4f)
+                {
+                    float3 mean = result.rgb / coverage;   // un-premultiply: the mean COMPRESSED hit
+                    mean *= rcp(max(1.0f - SsrUeLuminance(mean), 1.0e-4f));
+                    mean *= rcp(max(preExposure, 1.0e-12f)); // back out of pre-exposed space
+                    result.rgb = mean * coverage;          // and back to premultiplied
+                }
+                else
+                {
+                    result.rgb = 0.0f.xxx;
+                }
             }
+            result *= rcp((float)max(numRays, 1u));
         }
         else
         {

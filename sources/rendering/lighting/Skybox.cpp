@@ -1,10 +1,14 @@
 #include "rendering/lighting/Skybox.h"
+#include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadManager.h"
 #include "rendering/core/FrameResource.h"
 #include "app/camera/Camera.h"
 
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include "core/diagnostics/DiagPaths.h"
 #include <filesystem>
 #include <memory>
@@ -14,6 +18,63 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
+// P16.3b -- this sky's horizontal illuminance, in cube units, read back off `_diffuse.dds`.
+//
+// The irradiance cube stores E(N)/PI for every normal N, so the +Y face's centre texel IS the up
+// direction and the answer is PI times its luminance. That is the number the authored lux is
+// divided by, which is what makes "12,000 lx" mean the same thing on a cube that came out of the
+// importer bright and one that came out dim.
+//
+// The file is read a second time here rather than threaded out of TextureCube: it is 49 KB, it is
+// uncompressed R16G16B16A16_FLOAT by construction (BC6H on a 32^2 cube saves nothing and costs
+// banding on the one resource that must stay smooth), and a loader that stayed ignorant of what its
+// pixels mean is worth more than the microsecond. 0 on any surprise, which disables the
+// calibration rather than scaling by a guess.
+float MeasureCubeUpIlluminance(const std::wstring& diffPath)
+{
+    std::FILE* f = nullptr;
+    if (_wfopen_s(&f, diffPath.c_str(), L"rb") != 0 || !f) { return 0.0f; }
+    struct Closer { std::FILE* f; ~Closer() { if (f) { std::fclose(f); } } } closer{ f };
+
+    // DDS magic + 124-byte header + 20-byte DX10 header, then face 0. The +Y face is index 2.
+    constexpr long kHeader = 4 + 124 + 20;
+    constexpr int  kFace = 32;
+    constexpr long kFaceBytes = (long)kFace * kFace * 4 * (long)sizeof(uint16_t);
+    if (std::fseek(f, kHeader + 2 * kFaceBytes + ((long)kFace / 2 * kFace + kFace / 2) * 4 * (long)sizeof(uint16_t),
+                   SEEK_SET) != 0)
+    {
+        return 0.0f;
+    }
+    uint16_t texel[4]{};
+    if (std::fread(texel, sizeof(uint16_t), 4, f) != 4) { return 0.0f; }
+
+    // half -> float, the plain way: this runs once per level load.
+    const auto half = [](uint16_t h) -> float
+    {
+        const uint32_t sign = (uint32_t)(h >> 15) << 31;
+        uint32_t exp = (h >> 10) & 0x1F;
+        uint32_t man = h & 0x3FF;
+        if (exp == 0)
+        {
+            if (man == 0) { const uint32_t z = sign; float o; std::memcpy(&o, &z, 4); return o; }
+            while ((man & 0x400) == 0) { man <<= 1; --exp; }
+            ++exp; man &= 0x3FF;
+        }
+        else if (exp == 31)
+        {
+            const uint32_t inf = sign | 0x7F800000u | (man << 13); float o; std::memcpy(&o, &inf, 4); return o;
+        }
+        const uint32_t bits = sign | ((exp + 112) << 23) | (man << 13);
+        float o; std::memcpy(&o, &bits, 4);
+        return o;
+    };
+
+    const float r = half(texel[0]), g = half(texel[1]), b = half(texel[2]);
+    const float luma = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    if (!std::isfinite(luma) || luma <= 0.0f) { return 0.0f; }
+    return 3.14159265358979f * luma;
+}
+
 // Which IBL path a level took gets asked about after the fact, from a headless capture, so
 // it goes to the diagnostic log as well as the debugger. A silent fallback to the legacy
 // mip chain is exactly the thing that looks like "F8 did nothing".
@@ -67,6 +128,11 @@ public:
         UpdateUniform(owner, prevProjHandle_, material, camera.GetPrevProjMatrix(), cbData);
         UpdateUniform(owner, projNoJitterHandle_, material, camera.GetProjMatrixNoJitter(), cbData);
         UpdateUniform(owner, prevProjNoJitterHandle_, material, camera.GetPrevProjMatrixNoJitter(), cbData);
+        // P16.1: NOT pre-exposed here. The sky is drawn before compose, and compose scales
+        // everything it writes -- including the sky pixels it passes through -- so applying the
+        // factor here too squared it, and the sky came out 2.8x too dark while the ground was
+        // right. THE RULE: compose applies it to everything it writes; only writers that run AFTER
+        // compose apply it themselves.
         UpdateUniform(owner, exposureHandle_, material, owner_.GetExposure(), cbData);
     }
 
@@ -133,12 +199,15 @@ void Skybox::Init(Renderer* renderer,
             lutDesc.usage = Texture2D::Usage::LinearData;
             const bool lutOk = brdfLut_.CreateFromFile(renderer, uploadCmdList, lutDesc, uploadKeepAlive);
             hasIbl_ = specOk && diffOk && lutOk;
+            if (hasIbl_) { measuredUpIlluminance_ = MeasureCubeUpIlluminance(diffPath); }
 
             char msg[512];
             std::snprintf(msg, sizeof(msg),
-                "[ibl] %s  spec=%d diffuse=%d lut=%d  specMips=%u",
+                "[ibl] %s  spec=%d diffuse=%d lut=%d  specMips=%u  upIlluminance=%.4f units"
+                "  authored=%.0f lx  ->  physical scale x%.1f",
                 hasIbl_ ? "split-sum ON" : "FAILED, falling back to the sky mip chain",
-                (int)specOk, (int)diffOk, (int)lutOk, specCube_.GetMips());
+                (int)specOk, (int)diffOk, (int)lutOk, specCube_.GetMips(),
+                measuredUpIlluminance_, illuminanceLux_, PhysicalScale());
             LogIbl(msg);
         }
         else

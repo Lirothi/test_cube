@@ -36,7 +36,18 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     out.highPercentile = j.value("highPercentile", out.highPercentile);
     out.speedUp        = j.value("speedUp",        out.speedUp);
     out.speedDown      = j.value("speedDown",      out.speedDown);
-    out.manualEv100    = j.value("manualEv100",    out.manualEv100);
+    // P16.6: the camera is three settings; EV100 is derived from them. A level carrying the old
+    // hand-solved `manualEv100` is MIGRATED rather than given a second control -- shutter and ISO
+    // hold at whatever it authored (or the reference values) and the aperture is solved to
+    // reproduce the EV exactly, so the frame does not move.
+    out.apertureFStop   = j.value("apertureFStop",   out.apertureFStop);
+    out.shutterSpeedSec = j.value("shutterSpeedSec", out.shutterSpeedSec);
+    out.isoSensitivity  = j.value("isoSensitivity",  out.isoSensitivity);
+    if (!j.contains("apertureFStop") && j.contains("manualEv100"))
+    {
+        out.apertureFStop = ApertureFromEv100(j.value("manualEv100", 0.0f),
+                                              out.shutterSpeedSec, out.isoSensitivity);
+    }
     out.meterMaskStrength    = j.value("meterMaskStrength",    out.meterMaskStrength);
     out.meterMaskInnerRadius = j.value("meterMaskInnerRadius", out.meterMaskInnerRadius);
     out.meterMaskOuterRadius = j.value("meterMaskOuterRadius", out.meterMaskOuterRadius);
@@ -197,7 +208,9 @@ inline nlohmann::json ToJson(const CameraExposureSettings& s)
         { "highPercentile", s.highPercentile },
         { "speedUp",        s.speedUp },
         { "speedDown",      s.speedDown },
-        { "manualEv100",    s.manualEv100 },
+        { "apertureFStop",   s.apertureFStop },
+        { "shutterSpeedSec", s.shutterSpeedSec },
+        { "isoSensitivity",  s.isoSensitivity },
         { "meterMaskStrength",    s.meterMaskStrength },
         { "meterMaskInnerRadius", s.meterMaskInnerRadius },
         { "meterMaskOuterRadius", s.meterMaskOuterRadius },

@@ -112,11 +112,20 @@ Math::float3 DirectionalLight::GetTemperatureRgb() const
 void DirectionalLight::MigrateLegacyExposure(float legacyExposure)
 {
     // Fold the multiplier into the intensity. Every shader that lit with `sunColor * exposure` now
-    // lights with `sunColor * sunIntensity` for an identical product, and the opaque fill term
+    // lights with `sunColor * sunIlluminanceLux` for an identical product, and the opaque fill term
     // (`ambient * lightRgb`) picks the factor up through the colour -- so `ambient_` is left alone
     // on purpose. Scaling it here too would square the factor on shaded surfaces.
-    sunIntensity_ = legacyExposure;
+    sunIlluminanceLux_ = legacyExposure;
 
     // Retired. Left at 1.0 so a consumer that still multiplies by it is a no-op, not a regression.
     exposure_ = 1.0f;
+}
+
+void DirectionalLight::MigrateLegacySunIntensity(float legacyIntensity)
+{
+    // Deliberately an assignment and nothing else. P16.2 changed what the number MEANS, not what it
+    // IS: the engine's linear light unit was already lux (see GetSunIlluminanceLux), so a level that
+    // authored `sunIntensity 2` had authored two lux, and rewriting it as anything else would move
+    // its pixels for the sake of a prettier readout.
+    sunIlluminanceLux_ = legacyIntensity;
 }

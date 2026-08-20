@@ -297,7 +297,7 @@ namespace
             { "position", SpawnPositionJson(scene) },
             { "radius", 6.0f },
             { "color", nlohmann::json::array({ 1.0f, 0.92f, 0.78f }) },
-            { "intensity", 8.0f },
+            { "luminousFluxLm", 3000.0f }, // P16.5: a bright domestic fitting
             { "shadowsEnabled", false }
         };
         return light;
@@ -316,7 +316,7 @@ namespace
             { "innerAngleDeg", 15.0f },
             { "outerAngleDeg", 28.0f },
             { "color", nlohmann::json::array({ 1.0f, 0.92f, 0.78f }) },
-            { "intensity", 12.0f },
+            { "luminousFluxLm", 12000.0f }, // P16.5: a small floodlight for a 14 m throw
             { "shadowNormalBias", 0.05f },
             { "shadowDepthBias", 0.0001f },
             { "shadowsEnabled", true }
@@ -333,10 +333,11 @@ namespace
             { "enabled", true },
             { "direction", nlohmann::json::array({ -1.5f, -0.7f, -0.5f }) },
             { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
-            // P4: a freshly created sun is authored in the new model. `exposure` is deliberately
-            // absent -- it is the legacy whole-scene multiplier and writing it would only invite
-            // someone to tune a control that no longer does anything once sunIntensity exists.
-            { "sunIntensity", 1.0f },
+            // P16.2: a freshly created sun is authored in the new model, at a physical sunny
+            // midday. The older `sunIntensity` and `exposure` keys are deliberately absent -- they
+            // are the same number under retired names, and writing one would only invite someone to
+            // tune a field the loader is about to ignore.
+            { "sunIlluminanceLux", 100000.0f },
             { "ambient", 0.05f }
         };
         return light;
@@ -1026,13 +1027,35 @@ namespace
             { "zNear", 0.01f },
             { "zFar", 10000.0f }
         };
+        // P16.6: a sky WITH F7 derivatives, and its lighting authored in lux. `skybox.dds` has no
+        // derivatives and no source HDRI left, so it can never be measured -- a new level pointed at
+        // it would light through the flat fallback and render a black background the moment the
+        // exposure went physical. "Works out of the box" has to mean this file.
         root["skybox"] = {
-            { "texture", "textures/skybox.dds" }
+            { "texture", "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds" },
+            { "illuminanceLux", 12000.0f } // clear-sky diffuse horizontal
+        };
+        // P16.2: a new level meters its own frame. It HAS to -- the sun below is authored at a
+        // physical 100,000 lx, and with the camera off the exposure multiplier is exactly 1.0, so
+        // the first thing anyone would see is a white screen. Physical light units presuppose a
+        // metering camera; that is not a quirk here, it is why Unreal and Godot both ship one on.
+        // An EXISTING level without this section still gets `enabled = false` from the struct
+        // defaults, so nothing that already exists changes.
+        // P16.6: a FIXED sunny-16 camera. Auto exposure is deliberately off -- with the lights in
+        // real lux there is nothing to adapt to, and the whole point is that the defaults expose an
+        // outdoor scene correctly with nobody typing a number.
+        root["cameraExposure"] = {
+            { "enabled", true },
+            { "autoExposure", false },
+            { "apertureFStop", 16.0f },
+            { "shutterSpeedSec", 1.0f / 125.0f },
+            { "isoSensitivity", 100.0f },
+            { "compensationEv", -0.15f } // pairs with the default Filmic curve; see P3
         };
         root["directionalLight"] = {
             { "direction", nlohmann::json::array({ -1.5f, -0.7f, -0.5f }) },
             { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
-            { "sunIntensity", 1.0f }, // P4: new-model field, see BuildDirectionalLightObject
+            { "sunIlluminanceLux", 100000.0f }, // P16.2, see BuildDirectionalLightObject
             { "ambient", 0.05f }
         };
         root["spotLights"] = nlohmann::json::array();

@@ -51,7 +51,10 @@ cbuffer OceanCB : register(b0)
     // P4: how bright this level's sky is. compose already scaled its sky samples by
     // `skyboxIntensity`; the ocean did not, so the water kept reflecting the raw cube and the
     // control meant two different things depending on which surface you looked at.
-    float4 skyParams;                  // x: sky intensity, y: prefiltered mip count (0 = none), zw: reserved
+    float4 skyParams;                  // x: sky intensity, y: prefiltered mip count (0 = none),
+                                       // z: P16.1 pre-exposure -- the water writes into scene
+                                       // colour AFTER compose, so it applies the factor itself.
+                                       // w: reserved
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
     // P7 aerial perspective, packed by PackAtmosphere -- the SAME numbers compose gets.
@@ -996,7 +999,13 @@ float3 LitFoamColor(const LightingInput li, const FoamData foamData)
 {
     float ndotl = (0.2f + 0.8f * saturate(dot(foamData.normal, -li.mainLight.direction)))
         * li.mainLight.shadowAttenuation;
-    float3 skyAmbient = SkyFillRadiance(foamData.normal) * (li.ambient + 0.3f * (1.0f - foamData.normal.y));
+    // P16.7: `SkyFillRadiance` is the sky's MEASURED irradiance; `li.ambient` is the legacy
+    // FRACTION-OF-THE-SUN knob (0.05-0.15). Multiplying one by the other is the exact mistake F8
+    // documents about its own first version -- "multiplying an absolute measured irradiance by a
+    // level's 0.05 buries the fill about twenty times too deep" -- and it survived here because
+    // foam is the one thing the ocean lights with the sky. The directional term stays: it is a
+    // shape (upward-facing foam sees more sky), not a strength.
+    float3 skyAmbient = SkyFillRadiance(foamData.normal) * (1.0f + 0.3f * (1.0f - foamData.normal.y));
     return foamData.albedo * foamTint.rgb * (ndotl * li.mainLight.color + skyAmbient);
 }
 
@@ -1125,7 +1134,9 @@ float3 Reflection(const LightingInput li, float roughness)
     }
     float2 reflectionUV = li.screenUV + OceanReflectionUvOffset(li, adjustedNormal);
     float edgeFade = OceanReflectionEdgeFade(reflectionUV);
+    // P16.1: the planar reflection is rendered from scene colour and is pre-exposed too.
     float4 oceanReflection = OceanReflectionTexture.SampleLevel(LinearClampSampler, saturate(reflectionUV), 0);
+    oceanReflection.rgb /= max(skyParams.z, 1.0e-8f);
     float visibility = saturate(oceanReflection.a) * edgeFade;
     return oceanReflection.rgb * edgeFade + skySample * (1.0f - visibility);
 }
@@ -1196,10 +1207,20 @@ float3 RefractionCoords(float refractionStrength, float4 positionNDC, float view
 float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, float3 foamColor)
 {
     float depthScale = 0.0f;
-    float3 color = DeepScatterColor(depthScale);
-    
+    // P16.5 -- THESE TWO ARE SCATTERED LIGHT, NOT EMISSION. They were added as ABSOLUTE radiance,
+    // which only ever worked while the scene's light happened to sit near 1. Against a physical sun
+    // they are tens of thousands of times too small, the water loses its own colour entirely and
+    // nothing is left but the lit diffuse term below -- which is why the sea went from blue to
+    // green the moment the units became real. Multiplying by the light that does the scattering is
+    // what puts them on the same scale as every other term.
+    //
+    // At the pre-P16 scale the sun colour was ~0.92, so this is under 0.13 stops on these two terms
+    // for any level that has not been converted yet.
+    const float3 waterLight = li.mainLight.color;
+    float3 color = DeepScatterColor(depthScale) * waterLight;
+
     float3 sssColor = SssColor(depthScale);
-    color += sssColor * saturate(sss.x + sss.y);
+    color += sssColor * saturate(sss.x + sss.y) * waterLight;
     
     //return color;
 
@@ -1209,7 +1230,12 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     //return color;
 
     float3 refractionCoords = RefractionCoords(refractionParams.x, li.positionNDC, li.viewDepth, li.normal);
-    float3 backgroundColor = SceneColorTexture.SampleLevel(LinearClampSampler, refractionCoords.xy, 0).rgb;
+    // P16.1: this is a copy of SCENE COLOUR, already pre-exposed. The surface multiplies its
+    // whole result by the factor at the end, so an already-scaled input has to be brought back
+    // first -- otherwise the refracted part gets it twice, which is what left the near water
+    // 20/255 too dark.
+    float3 backgroundColor = SceneColorTexture.SampleLevel(LinearClampSampler, refractionCoords.xy, 0).rgb
+                           / max(skyParams.z, 1.0e-8f);
 
     //return backgroundColor;
 
@@ -1412,7 +1438,7 @@ PSOut PSMain(VSOutput input)
         if (refractionEdgeWeight < 0.95f)
         {
             float3 softEdgeRefraction =
-                SceneColorTexture.SampleLevel(LinearClampSampler, screenUV, 0).rgb;
+                SceneColorTexture.SampleLevel(LinearClampSampler, screenUV, 0).rgb / max(skyParams.z, 1.0e-8f);   // P16.1, see above
             color = lerp(softEdgeRefraction, color, refractionEdgeWeight);
         }
     }
@@ -1423,7 +1449,7 @@ PSOut PSMain(VSOutput input)
     // and no amount of work on the cubemap, the mip or the roughness could close a gap that was
     // being imposed after all of them. Only the low end is clamped, which is what the rest of the
     // renderer does.
-    float4 outColor = float4(max(color, 0.0f.xxx), 1.0f);
+    float4 outColor = float4(max(color, 0.0f.xxx) * skyParams.z, 1.0f);
 
     // surf sim injection: debug tint (docs/ocean_surf_sim_plan.md). A plain uniform branch, no
     // variant - surfSimParams.w = 0 keeps every water pixel on the early side of the branch.

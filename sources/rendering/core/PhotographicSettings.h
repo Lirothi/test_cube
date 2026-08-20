@@ -17,12 +17,54 @@
 namespace render
 {
 
+// P16.5 -- a local light's luminous intensity, from the flux it is authored with.
+//
+// I [cd] = flux [lm] / (4*pi): the flux spread over the whole sphere. Unreal's conversion, and the
+// same one for spot lights on purpose -- a spot with 1,000 lm then has the same peak candela as a
+// point with 1,000 lm, so narrowing the cone does not silently brighten it and the two controls
+// stop fighting each other.
+//
+// Candela times `LightDistanceAttenuation` (utils.hlsli) is LUX at the surface, the same unit the
+// sun is authored in. That is what puts local lights and daylight on one ruler.
+inline constexpr float kInv4Pi = 0.07957747154594767f;
+inline constexpr float CandelaFromLumens(float lumens) { return lumens * kInv4Pi; }
+
+// The pre-P16.5 `intensity` a level authored, converted to the flux that reproduces it at HALF the
+// range. Not lossless -- the falloff SHAPE changed, so no single number can match the old curve
+// everywhere -- and r/2 is chosen because it is where a light does its work. See the migration note
+// in the plan under P16.5.
+inline float LumensFromLegacyIntensity(float legacyIntensity, float range)
+{
+    constexpr float kAtHalfRange = 0.87890625f; // (1 - (1/2)^4)^2
+    const float r = (range > 0.0f) ? range : 0.0f;
+    return legacyIntensity * 3.14159265358979f * (r * r * 0.25f + 1.0f) / kAtHalfRange;
+}
+
+// P16.6: the exposure value those three settings add up to. Free function so the JSON reader,
+// the editor and the render pass all agree by construction rather than by three copies of a log2.
+inline float Ev100FromCamera(float apertureFStop, float shutterSpeedSec, float isoSensitivity)
+{
+    const float n = (apertureFStop > 1e-4f) ? apertureFStop : 1e-4f;
+    const float t = (shutterSpeedSec > 1e-9f) ? shutterSpeedSec : 1e-9f;
+    const float s = (isoSensitivity > 1e-4f) ? isoSensitivity : 1e-4f;
+    return std::log2((n * n) / t) - std::log2(s / 100.0f);
+}
+
+// The inverse, for migrating a hand-authored EV: hold the shutter and ISO, solve the aperture.
+inline float ApertureFromEv100(float ev100, float shutterSpeedSec, float isoSensitivity)
+{
+    const float t = (shutterSpeedSec > 1e-9f) ? shutterSpeedSec : 1e-9f;
+    const float s = (isoSensitivity > 1e-4f) ? isoSensitivity : 1e-4f;
+    return std::sqrt(std::exp2(ev100) * t * (s / 100.0f));
+}
+
 struct CameraExposureSettings
 {
     // Master switch. While false the linear exposure multiplier is exactly 1.0 and no metering
     // work is scheduled, so the frame is bit-for-bit what it was before this struct existed.
     bool  enabled = false;
-    // false = hold `manualEv100`; true = meter the scene and adapt towards it.
+    // false = hold the camera's own exposure (aperture/shutter/ISO below); true = meter the
+    // scene and adapt towards it.
     bool  autoExposure = true;
     // Artistic offset applied on top of the metered result, in stops.
     // -0.15 pairs with the default Filmic curve + "Warm sand" grade (see ColorPipelineSettings).
@@ -116,7 +158,22 @@ struct CameraExposureSettings
     // (multiplier 1/(1.2*2^10) = 0.0008). Anything that later claims real-world units -- P4's
     // optional lux-backed sun UI in particular -- has to establish a scene-to-luminance scale
     // first, and this comment is the reason that is not free.
-    float manualEv100 = 0.0f;
+    // P16.6 -- THE CAMERA, as three numbers a photographer already knows. EV100 is derived from
+    // them and is no longer authored:
+    //
+    //     EV100 = log2(N^2 / t) - log2(ISO / 100)
+    //
+    // The defaults are SUNNY-16 -- f/16 at 1/125 with ISO 100, EV 14.97 -- so a scene lit in real
+    // lux is correctly exposed with nobody typing anything. That is what the physical units were
+    // for; a level that still needed a hand-solved `manualEv100` had simply moved the magic number
+    // somewhere else.
+    //
+    // A level carrying the old field is migrated rather than given a second control: ISO and shutter
+    // hold at the reference and the aperture is solved to reproduce the EV exactly. See
+    // PhotographicSettingsJson.
+    float apertureFStop = 16.0f;    // N
+    float shutterSpeedSec = 1.0f / 125.0f;
+    float isoSensitivity = 100.0f;
 
     // P3B local exposure. It lives HERE, on the camera, and not on the colour pipeline: it is an
     // exposure operation -- it decides how many stops a REGION of the frame receives -- and Unreal

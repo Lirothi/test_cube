@@ -44,6 +44,17 @@ COMPUTE_ENTRIES = [
     ("bloom_cs.hlsl", "CSMain"),
     ("bloom_fft_cs.hlsl", "CSMain"),
     ("bloom_conv_cs.hlsl", "CSMain"),
+    # P16.5 moved the local-light falloff into utils.hlsli; these are the passes that call it, and
+    # none of them was checked while it was being changed under them.
+    ("pointlight_cs.hlsl", "CSMain"),
+    ("spotlight_cs.hlsl", "CSMain"),
+]
+
+# Shaders needing a target above the 6_0 default. Kept separate rather than widening every entry to
+# a (file, entry, target) triple: exactly one shader needs it, and the reason is specific.
+COMPUTE_ENTRIES_SM66 = [
+    # ResourceDescriptorHeap (bindless) is SM 6.6, and inline RayQuery is 6.5.
+    ("rt_reflections_cs.hlsl", "CSMain"),
 ]
 
 
@@ -62,6 +73,14 @@ GRAPHICS_ENTRIES = [
     ("ocean_surface.hlsl", "ps_6_0", "PSMain", [], "runup"),
     ("ocean_surface.hlsl", "vs_6_0", "VSMain", ["OCEAN_SHORE_RUNUP=0"], "legacy"),
     ("ocean_surface.hlsl", "ps_6_0", "PSMain", ["OCEAN_SHORE_RUNUP=0"], "legacy"),
+    # The other two transparent surfaces. Both were absent while their per-view constant buffer was
+    # being extended, and both meet the rule above: one define picks each permutation.
+    ("glass.hlsl", "vs_6_0", "VSMain", [], ""),
+    ("glass.hlsl", "ps_6_0", "PSMain", [], ""),
+    ("glass.hlsl", "ps_6_0", "PSMain", ["EDITOR_OBJECT_ID=1"], "editor-id"),
+    ("particles.hlsl", "vs_6_0", "VSMain", [], ""),
+    ("particles.hlsl", "vs_6_0", "VSMain", ["PARTICLE_SORTED=1"], "sorted"),
+    ("particles.hlsl", "ps_6_0", "PSMain", [], ""),
 ]
 
 
@@ -115,6 +134,32 @@ def main() -> int:
         else:
             failures += 1
             print(f"FAIL  {name}:{entry}")
+            for line in (result.stderr or result.stdout).splitlines()[:12]:
+                print(f"      {line}")
+
+    for name, entry in COMPUTE_ENTRIES_SM66:
+        if needle and needle not in name.lower():
+            continue
+        path = SHADERS / name
+        if not path.exists():
+            print(f"SKIP  {name} (missing)")
+            continue
+        checked += 1
+        result = subprocess.run(
+            [str(dxc), "-T", "cs_6_6", "-E", entry, str(path), "-Fo", "NUL"],
+            capture_output=True, text=True, cwd=SHADERS,
+        )
+        if result.returncode == 0:
+            src = path.read_text(encoding="utf-8", errors="ignore")
+            if f"void {entry}(" in src and "[RootSignature(" not in src:
+                failures += 1
+                print(f"FAIL  {name}:{entry} -- compiles, but has no [RootSignature] attribute;"
+                      f" the engine cannot build a PSO from it")
+            else:
+                print(f"ok    {name}:{entry} [sm6.6]")
+        else:
+            failures += 1
+            print(f"FAIL  {name}:{entry} [sm6.6]")
             for line in (result.stderr or result.stdout).splitlines()[:12]:
                 print(f"      {line}")
 

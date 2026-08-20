@@ -5,7 +5,7 @@
     "zNear": 0.009999999776482582
   },
   "directionalLight": {
-    "ambient": 0.05000000074505806,
+    "ambient": 0.0456,
     "color": [
       1.0,
       0.8999999761581421,
@@ -16,7 +16,7 @@
       -0.699999988079071,
       -0.5
     ],
-    "exposure": 1.0
+    "sunIlluminanceLux": 20000.0
   },
   "objects": [
     {
@@ -92,7 +92,8 @@
   },
   "pointLights": [],
   "skybox": {
-    "texture": "textures/skybox.dds"
+    "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds",
+    "illuminanceLux": 16000.0
   },
   "spotLights": [],
   "wind": {
@@ -105,5 +106,13 @@
     },
     "strength": 0.15000000596046448,
     "swayFrequency": 0.8999999761581421
+  },
+  "cameraExposure": {
+    "enabled": true,
+    "autoExposure": false,
+    "maxEv100": 19.0,
+    "apertureFStop": 16.0,
+    "shutterSpeedSec": 0.018029,
+    "isoSensitivity": 100.0
   }
 }

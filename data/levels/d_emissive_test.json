@@ -5,7 +5,7 @@
     "zNear": 0.01
   },
   "directionalLight": {
-    "ambient": 0.02,
+    "ambient": 0.1196,
     "color": [
       0.3,
       0.35,
@@ -17,7 +17,7 @@
       -0.5
     ],
     "enabled": true,
-    "exposure": 1.0
+    "sunIlluminanceLux": 20000.0
   },
   "objects": [
     {
@@ -72,7 +72,7 @@
         0.35,
         0.06
       ],
-      "emissiveStrength": 6.0,
+      "emissiveStrength": 3000,
       "enabled": true,
       "id": 10,
       "material": "damaged_plaster",
@@ -96,7 +96,7 @@
         0.4,
         0.1
       ],
-      "emissiveStrength": 1.5,
+      "emissiveStrength": 750,
       "enabled": true,
       "id": 11,
       "material": "damaged_plaster",
@@ -134,6 +134,15 @@
     }
   ],
   "skybox": {
-    "texture": "textures/skybox.dds"
+    "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds",
+    "illuminanceLux": 16000.0
+  },
+  "cameraExposure": {
+    "enabled": true,
+    "autoExposure": false,
+    "maxEv100": 20.0,
+    "apertureFStop": 16.0,
+    "shutterSpeedSec": 0.0172335,
+    "isoSensitivity": 100.0
   }
 }

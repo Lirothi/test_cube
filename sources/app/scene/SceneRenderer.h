@@ -266,6 +266,13 @@ private:
     // (which emits them). Two independent evaluations is how a body ends up emitting a barrier the
     // compile never registered -- see the note on Pass_Gtao's `chain`.
     bool bloomActive_ = false;
+    // P16.1: the pre-exposure factor for THIS frame. Every writer of scene colour multiplies by it
+    // and the tonemap divides it out, so the stored values sit near 1 instead of near the radiance.
+    // 1.0 means "not pre-exposed", which is what every path sees until it is wired up.
+    float preExposure_ = 1.0f;
+    // P16.1: the factor the PREVIOUS frame's scene colour was written with. The SSR history IS that
+    // image, so a reader of it has to undo the factor it was STORED with, not this frame's.
+    float prevPreExposure_ = 1.0f;
     // P8C: which bloom method this frame runs. Read by the tonemap Prepare AND its body, so the
     // declared resources and the emitted barriers cannot disagree.
     bool bloomConvolution_ = false;

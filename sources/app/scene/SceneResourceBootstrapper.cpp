@@ -1,4 +1,5 @@
 #include "app/scene/SceneResourceBootstrapper.h"
+#include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 
 #include "rendering/core/Renderer.h"
 #include "rendering/debug/DebugDraw.h"
@@ -135,6 +136,8 @@ void SceneSsrCBHandles::Populate(Material* material)
     ueRefineSteps = material->ComputeCB0FieldHandle("ueRefineSteps");
     ueUseRoughnessTexture = material->ComputeCB0FieldHandle("ueUseRoughnessTexture");
     ueRoughnessOverride = material->ComputeCB0FieldHandle("ueRoughnessOverride");
+    invPrevPreExposure = material->ComputeCB0FieldHandle("invPrevPreExposure");
+    preExposure = material->ComputeCB0FieldHandle("preExposure");
 }
 
 void SceneBlurCBHandles::Populate(Material* material)
@@ -178,6 +181,7 @@ void SceneComposeCBHandles::Populate(Material* material)
     fogSunDir = material->ComputeCB0FieldHandle("fogSunDir");
     fogSunColor = material->ComputeCB0FieldHandle("fogSunColor");
     fogDebugView = material->ComputeCB0FieldHandle("fogDebugView");
+    preExposure = material->ComputeCB0FieldHandle("preExposure");
 }
 
 void SceneFxaaCBHandles::Populate(Material* material)
@@ -202,6 +206,8 @@ void SceneTonemapCBHandles::Populate(Material* material)
         return;
     }
     exposureEnabled = material->ComputeCB0FieldHandle("exposureEnabled");
+    preExposure = material->ComputeCB0FieldHandle("preExposure");
+    preExposureActive = material->ComputeCB0FieldHandle("preExposureActive");
     toneCurve = material->ComputeCB0FieldHandle("toneCurve");
     agxSlope = material->ComputeCB0FieldHandle("agxSlope");
     agxPower = material->ComputeCB0FieldHandle("agxPower");
@@ -234,6 +240,7 @@ void SceneExposureHistogramCBHandles::Populate(Material* material)
     sampleGridX = material->ComputeCB0FieldHandle("sampleGridX");
     sampleGridY = material->ComputeCB0FieldHandle("sampleGridY");
     minLogLum = material->ComputeCB0FieldHandle("minLogLum");
+    invPreExposure = material->ComputeCB0FieldHandle("invPreExposure");
     invLogLumRange = material->ComputeCB0FieldHandle("invLogLumRange");
     maskStrength = material->ComputeCB0FieldHandle("maskStrength");
     maskInnerRadius = material->ComputeCB0FieldHandle("maskInnerRadius");
@@ -249,6 +256,7 @@ void SceneExposureBaseLumCBHandles::Populate(Material* material)
         return;
     }
     baseWidth = material->ComputeCB0FieldHandle("baseWidth");
+    invPreExposure = material->ComputeCB0FieldHandle("invPreExposure");
     baseHeight = material->ComputeCB0FieldHandle("baseHeight");
 }
 
@@ -260,6 +268,7 @@ void SceneExposureSolveCBHandles::Populate(Material* material)
         return;
     }
     minLogLum = material->ComputeCB0FieldHandle("minLogLum");
+    invPreExposure = material->ComputeCB0FieldHandle("invPreExposure");
     logLumRange = material->ComputeCB0FieldHandle("logLumRange");
     lowPercentile = material->ComputeCB0FieldHandle("lowPercentile");
     highPercentile = material->ComputeCB0FieldHandle("highPercentile");
@@ -1058,6 +1067,8 @@ void SceneResourceBootstrapper::WriteExposureBaseLumConstants(uint8_t* dest) con
         ExposureMetering::kBaseLumWidth, dest);
     matExposureBaseLumCS_->UpdateCBField(exposureBaseLumHandles_.baseHeight,
         ExposureMetering::kBaseLumHeight, dest);
+    matExposureBaseLumCS_->UpdateCBField(exposureBaseLumHandles_.invPreExposure,
+        1.0f / std::max(render::g_preExposure, 1.0e-8f), dest);
 }
 
 UINT SceneResourceBootstrapper::GetExposureSolveCBSizeBytes() const
@@ -1206,6 +1217,8 @@ void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, 
     matSSR_->UpdateCBField(handles.ueRefineSteps, data.ueRefineSteps, dest);
     matSSR_->UpdateCBField(handles.ueUseRoughnessTexture, data.ueUseRoughnessTexture, dest);
     matSSR_->UpdateCBField(handles.ueRoughnessOverride, data.ueRoughnessOverride, dest);
+    matSSR_->UpdateCBField(handles.invPrevPreExposure, data.invPrevPreExposure, dest);
+    matSSR_->UpdateCBField(handles.preExposure, data.preExposure, dest);
 }
 
 void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data, uint8_t* dest) const
@@ -1234,6 +1247,10 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
     const auto& h = tonemapHandles_;
     matTonemapCS_->UpdateCBField(h.exposureEnabled,
         static_cast<uint32_t>(exposureEnabled ? 1u : 0u), dest);
+    // P16.1: the factor every writer of scene colour already applied, divided back out here.
+    matTonemapCS_->UpdateCBField(h.preExposure, render::g_preExposure, dest);
+    matTonemapCS_->UpdateCBField(h.preExposureActive,
+        static_cast<uint32_t>(render::g_preExposureEnabled ? 1u : 0u), dest);
     matTonemapCS_->UpdateCBField(h.toneCurve,
         static_cast<uint32_t>(color.toneCurve), dest);
     matTonemapCS_->UpdateCBField(h.agxSlope, color.agxSlope, dest);
@@ -1269,6 +1286,8 @@ void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMe
     matExposureBuildCS_->UpdateCBField(handles.sampleGridX, ExposureMeteringConstants::kSampleGridX, dest);
     matExposureBuildCS_->UpdateCBField(handles.sampleGridY, ExposureMeteringConstants::kSampleGridY, dest);
     matExposureBuildCS_->UpdateCBField(handles.minLogLum, ExposureMeteringConstants::kMinLogLum, dest);
+    matExposureBuildCS_->UpdateCBField(handles.invPreExposure,
+                                       1.0f / std::max(render::g_preExposure, 1.0e-8f), dest);
     matExposureBuildCS_->UpdateCBField(handles.invLogLumRange, 1.0f / range, dest);
     matExposureBuildCS_->UpdateCBField(handles.maskStrength, data.maskStrength, dest);
     matExposureBuildCS_->UpdateCBField(handles.maskInnerRadius, data.maskInnerRadius, dest);
@@ -1334,6 +1353,7 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.fogSunDir, data.fogSunDir, dest);
     matComposeCS_->UpdateCBField(handles.fogSunColor, data.fogSunColor, dest);
     matComposeCS_->UpdateCBField(handles.fogDebugView, data.fogDebugView, dest);
+    matComposeCS_->UpdateCBField(handles.preExposure, data.preExposure, dest);
 }
 
 void SceneResourceBootstrapper::WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const

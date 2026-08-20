@@ -1,4 +1,5 @@
 #include "app/App.h"
+#include "rendering/core/RenderConstants.h" // P16.1 g_preExposureEnabled
 #include "core/math/Math.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -39,6 +40,8 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 
 #include "app/levels/JsonLevel.h"
 #include "rendering/lighting/Skybox.h" // --sweep=light.skyIntensity
+#include "ocean/OceanRenderable.h"  // --set=ocean.contactFoam
+#include "ocean/OceanSimulation.h"
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
@@ -418,50 +421,68 @@ namespace
             if (Skybox* sky = scene.GetSkybox()) { sky->SetExposure(value); }
             return true;
         }
-        if (setting == "light.sunIntensity") { scene.DirectionalLightRef().SetSunIntensity(value); return true; }
-        // P4 equivalence probe: put the scene back into the LEGACY split -- unit sun intensity with
-        // the factor on the retired whole-scene multiplier. If the migration folds correctly this
-        // must be pixel-identical to the pre-P4 capture, which is what proves the fold rather than
-        // arguing about it. Kept because it is the only way to re-prove the fold after any change
-        // to a light consumer.
-        if (setting == "light.legacySplit")
+        // P16.3b: the sky's horizontal illuminance in lux. 0 = un-authored, the legacy behaviour.
+        // Shore contact foam, as a CAPTURE switch rather than a level edit: it is the thing that
+        // litters a lighting comparison with moving white speckle, and turning it off in the level
+        // would mean editing content that was tuned on purpose. 0 = off.
+        if (setting == "ocean.contactFoam")
         {
-            scene.DirectionalLightRef().SetSunIntensity(1.0f);
-            scene.DirectionalLightRef().SetExposure(value);
+            if (OceanRenderable* ocean = scene.FindOceanRenderable())
+            {
+                if (OceanSimulation* sim = ocean->GetSimulation())
+                {
+                    OceanRenderConfig cfg = sim->GetRenderConfig();
+                    cfg.shoreContactFoamOpacity = value;
+                    cfg.shoreLegacyContactFoamStrength *= (value > 0.0f) ? 1.0f : 0.0f;
+                    sim->SetRenderConfig(cfg);
+                }
+            }
             return true;
         }
-        if (setting == "light.sunTemperatureK")
+        if (setting == "light.skyIlluminanceLux")
         {
-            scene.DirectionalLightRef().SetUseSunTemperature(value > 0.0f);
-            if (value > 0.0f) { scene.DirectionalLightRef().SetSunTemperatureK(value); }
+            if (Skybox* sky = scene.GetSkybox()) { sky->SetIlluminanceLux(value); }
             return true;
         }
-        if (setting == "light.skyFillIntensity")
+        // P16.2: the sun's illuminance in lux. `light.sunIntensity` is kept as an ALIAS, not a
+        // second control -- it is the same number under its pre-P16.2 name, and every measurement
+        // recipe written down in the plan spells it that way.
+        if (setting == "light.sunIlluminanceLux" || setting == "light.sunIntensity")
         {
-            scene.DirectionalLightRef().SetSkyFillIntensity(value);
+            scene.DirectionalLightRef().SetSunIlluminanceLux(value);
             return true;
         }
-        if (setting == "light.skyIntensity")
-        {
-            if (Skybox* sky = scene.GetSkybox()) { sky->SetExposure(value); }
-            return true;
-        }
-        if (setting == "light.sunIntensity") { scene.DirectionalLightRef().SetSunIntensity(value); return true; }
-        // P4 equivalence probe: put the scene back into the LEGACY split -- unit sun intensity with
-        // the factor on the retired whole-scene multiplier. If the migration folds correctly this
-        // must be pixel-identical to the pre-P4 capture, which is what proves the fold rather than
-        // arguing about it. Kept because it is the only way to re-prove the fold after any change
-        // to a light consumer.
-        if (setting == "light.legacySplit")
-        {
-            scene.DirectionalLightRef().SetSunIntensity(1.0f);
-            scene.DirectionalLightRef().SetExposure(value);
-            return true;
-        }
+        // REMOVED (P16.2): `light.legacySplit`, the P4 equivalence probe. It claimed that putting
+        // the factor back on the retired whole-scene multiplier reproduces the migrated image
+        // exactly, and MEASURED on wind_test it does not -- 27.6 meanabs against a 0.81 noise floor,
+        // the frame 27/255 brighter. The knob was not broken by P16.2; it was invalidated by F8 and
+        // F9 and nobody re-ran it. `lighting_cs` still ends in `color * exposure + skySpecular`, so
+        // that multiplier now scales the SKY IRRADIANCE FILL (which the sun's intensity does not
+        // touch) and skips the sky specular (added after it) -- two terms that did not exist when
+        // the equivalence was true. A probe asserting an invariant that no longer holds is worse
+        // than no probe, so it is gone rather than caveated.
+        //
+        // The P16.2 migration has its own equivalence check and it needs no code: run the level
+        // once as authored and once with `--set=light.sunIlluminanceLux:<the level's own value>`.
+        // Identical frames mean the new key and the legacy fold arrive at the same light.
+        //
+        // With this gone, `DirectionalLight::exposure_` can no longer be set to anything but 1.0,
+        // so the trailing multiply in the shaders is provably an identity. Retiring that plumbing
+        // is a separate change; it touches the ocean, glass and RT reflection constant buffers.
         if (setting == "exposure.lowPercentile")   { e.lowPercentile = value;  return true; }
         if (setting == "exposure.highPercentile")  { e.highPercentile = value; return true; }
         if (setting == "exposure.compensationEv")  { e.compensationEv = value; return true; }
-        if (setting == "exposure.manualEv100")     { e.manualEv100 = value;    return true; }
+        // P16.6: the camera. `exposure.manualEv100` is kept because every measurement recipe in
+        // the plan spells it that way -- it back-solves the aperture, so it still means exactly what
+        // it always meant.
+        if (setting == "exposure.aperture")   { e.apertureFStop = value;   return true; }
+        if (setting == "exposure.shutter")    { e.shutterSpeedSec = value; return true; }
+        if (setting == "exposure.iso")        { e.isoSensitivity = value;  return true; }
+        if (setting == "exposure.manualEv100")
+        {
+            e.apertureFStop = render::ApertureFromEv100(value, e.shutterSpeedSec, e.isoSensitivity);
+            return true;
+        }
         if (setting == "exposure.minEv100")        { e.minEv100 = value;       return true; }
         if (setting == "exposure.maxEv100")        { e.maxEv100 = value;       return true; }
         if (setting == "exposure.speedUp")         { e.speedUp = value;        return true; }
@@ -472,6 +493,7 @@ namespace
         if (setting == "exposure.speedDown")       { e.speedDown = value;      return true; }
         if (setting == "exposure.adaptationStartDistance") { e.adaptationStartDistance = value; return true; }
         if (setting == "exposure.blackBucketInfluence")    { e.blackBucketInfluence = value;    return true; }
+        if (setting == "render.preExposure") { render::g_preExposureEnabled = value != 0.0f; return true; }
         if (setting == "exposure.enabled")         { e.enabled = value != 0.0f;      return true; }
         if (setting == "exposure.autoExposure")    { e.autoExposure = value != 0.0f; return true; }
         if (setting == "color.toneCurve")

@@ -5,7 +5,7 @@
     "zNear": 0.01
   },
   "directionalLight": {
-    "ambient": 0.05,
+    "ambient": 0.0456,
     "color": [
       1.0,
       0.9,
@@ -17,7 +17,7 @@
       -0.5
     ],
     "enabled": true,
-    "exposure": 1.0
+    "sunIlluminanceLux": 20000.0
   },
   "objects": [
     {
@@ -2116,14 +2116,14 @@
         0.0
       ],
       "enabled": true,
-      "intensity": 15.0,
       "position": [
         2.4,
         5.5,
         -12.0
       ],
       "radius": 2.0,
-      "shadowsEnabled": false
+      "shadowsEnabled": false,
+      "luminousFluxLm": 7951112
     },
     {
       "color": [
@@ -2131,14 +2131,14 @@
         1.0,
         0.0
       ],
-      "intensity": 15.0,
       "position": [
         2.4,
         3.5,
         -12.0
       ],
       "radius": 2.0,
-      "shadowsEnabled": false
+      "shadowsEnabled": false,
+      "luminousFluxLm": 7951112
     },
     {
       "color": [
@@ -2146,14 +2146,14 @@
         0.0,
         1.0
       ],
-      "intensity": 15.0,
       "position": [
         2.4,
         1.5,
         -12.0
       ],
       "radius": 2.0,
-      "shadowsEnabled": false
+      "shadowsEnabled": false,
+      "luminousFluxLm": 7951112
     },
     {
       "color": [
@@ -2162,18 +2162,19 @@
         0.0
       ],
       "enabled": true,
-      "intensity": 15.0,
       "position": [
         9.178237915039062,
         5.5,
         -16.005956649780273
       ],
       "radius": 2.0,
-      "shadowsEnabled": false
+      "shadowsEnabled": false,
+      "luminousFluxLm": 7951112
     }
   ],
   "skybox": {
-    "texture": "textures/skybox.dds"
+    "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds",
+    "illuminanceLux": 16000.0
   },
   "spotLights": [
     {
@@ -2189,7 +2190,6 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         -0.549543023109436,
@@ -2199,7 +2199,8 @@
       "range": 23.299999237060547,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
+      "shadowsEnabled": true,
+      "luminousFluxLm": 543547943
     },
     {
       "color": [
@@ -2213,7 +2214,6 @@
         0.25
       ],
       "innerAngleDeg": 20.0,
-      "intensity": 18.0,
       "outerAngleDeg": 32.0,
       "position": [
         -5.0,
@@ -2223,7 +2223,8 @@
       "range": 25.0,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
+      "shadowsEnabled": true,
+      "luminousFluxLm": 750187449
     },
     {
       "color": [
@@ -2238,7 +2239,6 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         11.870731353759766,
@@ -2248,7 +2248,8 @@
       "range": 23.299999237060547,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
+      "shadowsEnabled": true,
+      "luminousFluxLm": 543547943
     },
     {
       "color": [
@@ -2263,7 +2264,6 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         15.123939514160156,
@@ -2273,7 +2273,8 @@
       "range": 23.299999237060547,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
+      "shadowsEnabled": true,
+      "luminousFluxLm": 543547943
     },
     {
       "color": [
@@ -2288,7 +2289,6 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         -0.7361001968383789,
@@ -2298,7 +2298,8 @@
       "range": 23.299999237060547,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
+      "shadowsEnabled": true,
+      "luminousFluxLm": 543547943
     },
     {
       "color": [
@@ -2313,7 +2314,6 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         -8.480936050415039,
@@ -2323,7 +2323,8 @@
       "range": 23.299999237060547,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
+      "shadowsEnabled": true,
+      "luminousFluxLm": 543547943
     },
     {
       "color": [
@@ -2338,7 +2339,6 @@
       ],
       "enabled": true,
       "innerAngleDeg": 29.799999237060547,
-      "intensity": 15.0,
       "outerAngleDeg": 40.599998474121094,
       "position": [
         -8.931707382202148,
@@ -2348,7 +2348,8 @@
       "range": 23.299999237060547,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
+      "shadowsEnabled": true,
+      "luminousFluxLm": 543547943
     },
     {
       "color": [
@@ -2362,7 +2363,6 @@
         0.2182178944349289
       ],
       "innerAngleDeg": 20.0,
-      "intensity": 18.0,
       "outerAngleDeg": 32.0,
       "position": [
         -9.30030345916748,
@@ -2372,7 +2372,8 @@
       "range": 25.0,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
+      "shadowsEnabled": true,
+      "luminousFluxLm": 750187449
     },
     {
       "color": [
@@ -2386,7 +2387,6 @@
         0.2182178944349289
       ],
       "innerAngleDeg": 20.0,
-      "intensity": 18.0,
       "outerAngleDeg": 32.0,
       "position": [
         -8.668525695800781,
@@ -2396,7 +2396,16 @@
       "range": 25.0,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
-      "shadowsEnabled": true
+      "shadowsEnabled": true,
+      "luminousFluxLm": 750187449
     }
-  ]
+  ],
+  "cameraExposure": {
+    "enabled": true,
+    "autoExposure": false,
+    "maxEv100": 19.0,
+    "apertureFStop": 16.0,
+    "shutterSpeedSec": 0.0090146,
+    "isoSensitivity": 100.0
+  }
 }

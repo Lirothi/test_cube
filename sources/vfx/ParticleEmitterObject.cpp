@@ -472,6 +472,8 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
     // handles the ocean separately. softFade is the fade width; 0 = a hard opaque cutoff.
     dp.depthOcclude = haveDepth ? 1.0f : 0.0f;
     dp.softFadeDist = desc_.softFade;
+    dp.preExposure = render::g_preExposure; // P16.1, see ParticleTypes.h
+    dp.luminanceCdM2 = desc_.luminanceCdM2; // P16.7
 
     auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(dp), render::kConstantBufferAlignment);
     std::memcpy(cb.cpu, &dp, sizeof(dp));

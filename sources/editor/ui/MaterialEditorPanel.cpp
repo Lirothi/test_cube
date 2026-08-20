@@ -242,7 +242,13 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         float em[3]; ReadFloats(doc_, "emissiveColor", em, 3, kEmDef);
         if (ImGui::ColorEdit3("Emissive Color", em)) { WriteFloats(doc_, "emissiveColor", em, 3); }
         float es = doc_.value("emissiveStrength", 0.0f);
-        if (ImGui::DragFloat("Emissive Strength", &es, 0.05f, 0.0f, 100.0f)) { doc_["emissiveStrength"] = es; }
+        // P16.7: it is a LUMINANCE in cd/m2 and always was -- the product goes straight into
+        // scene colour, which has been in cd/m2 since the lights went to lux. Logarithmic and
+        // up to a million because that is the real range: a lit screen is 300, a neon sign
+        // 5000, a filament 10^6.
+        if (ImGui::DragFloat("Emissive Luminance (cd/m2)", &es, 1.0f, 0.0f, 1000000.0f, "%.0f",
+                             ImGuiSliderFlags_Logarithmic)) { doc_["emissiveStrength"] = es; }
+        ImGui::TextDisabled("300 screen  1000 LED panel  5000 neon  1e6 filament");
     }
 
     ImGui::SeparatorText("Surface flags");

@@ -201,8 +201,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float angleAtten = saturate((spotCos - light.directionCosOuter.w) * light.shadowParams.z);
         angleAtten = angleAtten * angleAtten;
 
-        float x = saturate(1.0f - dist / light.positionRange.w);
-        float distAtten = x * x;
+        const float distAtten = LightDistanceAttenuation(dist, light.positionRange.w); // P16.5
 
         BRDFInput bi;
         bi.albedo = albedo;

@@ -229,6 +229,10 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     if (j.contains("skybox") && j["skybox"].contains("texture"))
     {
         auto skybox = std::make_unique<Skybox>(Widen(j["skybox"]["texture"].get<std::string>()));
+        // P16.3b: BEFORE Init(). Init loads `_diffuse.dds`, measures the sky's own illuminance and
+        // logs the physical scale it implies -- with the authored lux set afterwards that line would
+        // report 0 and be wrong about what the frame is doing.
+        skybox->SetIlluminanceLux(j["skybox"].value("illuminanceLux", 0.0f));
         skybox->Init(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
         // How bright this level's sky is, on the engine's linear scale. Default 1 = the cubemap's
         // own radiance, untouched, which is what every level got before this field existed.
@@ -241,6 +245,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         // together. Same reasoning as P4's sunIntensity: the scene says how bright its lights are,
         // the camera decides how to photograph them.
         skybox->SetExposure(j["skybox"].value("intensity", 1.0f));
+        // `illuminanceLux` is read above, before Init.
         scene.SetSkybox(std::move(skybox));
     }
 
@@ -259,7 +264,13 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.innerAngle = DirectX::XMConvertToRadians(sl.value("innerAngleDeg", 15.0f));
             desc.outerAngle = DirectX::XMConvertToRadians(sl.value("outerAngleDeg", 25.0f));
             desc.color = ToFloat3(sl.value("color", json::array()), float3(1.0f, 1.0f, 1.0f));
-            desc.intensity = sl.value("intensity", desc.intensity);
+            // P16.5: `luminousFluxLm` is the field going forward; `intensity` is the pre-P16.5
+            // number, converted by the r/2 rule (PhotographicSettings.h). NOT lossless -- the
+            // falloff shape changed with the unit -- so an existing level keeps its lights roughly
+            // where they were rather than exactly.
+            desc.luminousFluxLm = sl.contains("luminousFluxLm")
+                ? sl.value("luminousFluxLm", desc.luminousFluxLm)
+                : render::LumensFromLegacyIntensity(sl.value("intensity", 5.0f), desc.range);
             desc.shadowNormalBias = sl.value("shadowNormalBias", desc.shadowNormalBias);
             desc.shadowDepthBias = sl.value("shadowDepthBias", desc.shadowDepthBias);
             desc.shadowsEnabled = sl.value("shadowsEnabled", desc.shadowsEnabled);
@@ -281,7 +292,9 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.position = ToFloat3(pl.value("position", json::array()), desc.position);
             desc.radius = pl.value("radius", desc.radius);
             desc.color = ToFloat3(pl.value("color", json::array()), desc.color);
-            desc.intensity = pl.value("intensity", desc.intensity);
+            desc.luminousFluxLm = pl.contains("luminousFluxLm") // P16.5, see the spot above
+                ? pl.value("luminousFluxLm", desc.luminousFluxLm)
+                : render::LumensFromLegacyIntensity(pl.value("intensity", 1.0f), desc.radius);
             desc.shadowsEnabled = pl.value("shadowsEnabled", desc.shadowsEnabled);
             ParsePointLightFlicker(pl, desc);
             lightManager.PointLights().push_back({});
@@ -318,19 +331,23 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         // A disabled sun contributes nothing (direct color + ambient zeroed).
         dirLight.SetColor(enabled ? ToFloat3(dl.value("color", json::array()), float3(1.0f, 1.0f, 1.0f)) : float3(0.0f, 0.0f, 0.0f));
         dirLight.SetAmbient(enabled ? dl.value("ambient", 0.05f) : 0.0f);
-        // P4: `sunIntensity` is the field going forward; `exposure` is the legacy whole-scene
-        // multiplier. A level carrying only the old field is migrated losslessly (see
-        // DirectionalLight::MigrateLegacyExposure) so its image does not move. A level carrying the
-        // new field skips the migration entirely -- writing BOTH means the new one wins, because a
-        // level that has been converted should not keep paying for the old semantics.
+        // P16.2: `sunIlluminanceLux` is the field going forward, then P4's `sunIntensity`, then
+        // the original whole-scene `exposure` multiplier. Newest present wins, because a level that
+        // has been converted should not keep paying for the older semantics, and every step of the
+        // chain is LOSSLESS -- P4 folded the multiplier into the intensity for an identical product,
+        // and P16.2 changed only what the number is called (see DirectionalLight).
         //
         // ONLY the sun intensity branches. The fill fields below are read UNCONDITIONALLY: they are
         // orthogonal to how the intensity was authored, and gating them on `sunIntensity` made them
         // dead on every existing level -- ticking the boxes in the inspector did nothing at all,
         // because every shipped level still carries the legacy field.
-        if (dl.contains("sunIntensity"))
+        if (dl.contains("sunIlluminanceLux"))
         {
-            dirLight.SetSunIntensity(dl.value("sunIntensity", 1.0f));
+            dirLight.SetSunIlluminanceLux(dl.value("sunIlluminanceLux", 100000.0f));
+        }
+        else if (dl.contains("sunIntensity"))
+        {
+            dirLight.MigrateLegacySunIntensity(dl.value("sunIntensity", 1.0f));
         }
         else
         {

@@ -40,8 +40,36 @@ public:
     // `kSkyRoughMaxMip = 5` that both compose and the ocean used to guess with.
     UINT GetSpecMips() const { return specCube_.GetMips(); }
     const std::wstring& GetPath() const { return path_; }
-    float GetExposure() const { return exposure_; }
+
+    // The multiplier every consumer of this sky applies -- the authored appearance trim TIMES the
+    // physical calibration below. Folded together on purpose: compose, the lighting pass, the ocean
+    // and glass all already multiply by this, so the calibration reaches every one of them without
+    // a single new constant-buffer field.
+    float GetExposure() const { return exposure_ * PhysicalScale(); }
+    // The authored trim alone, for the editor to round-trip.
+    float GetIntensity() const { return exposure_; }
     void SetExposure(float exp) { exposure_ = exp; }
+
+    // P16.3b -- HOW MUCH LIGHT THIS SKY PUTS ON A HORIZONTAL SURFACE, IN LUX. 0 = not authored,
+    // which reproduces the pre-P16.3b behaviour exactly.
+    //
+    // A clear sky delivers roughly 12,000 lx with the sun 30 degrees up (and ~20,000 with it
+    // overhead); a heavy overcast, where the whole sky IS the light, 10,000-20,000.
+    //
+    // The scale that realises it is DERIVED, never authored: `MeasuredUpIlluminance()` is this
+    // sky's own irradiance cube integrated for the up direction, so the same 12,000 means the same
+    // thing whether the cube came out of the importer bright or dim.
+    float GetIlluminanceLux() const { return illuminanceLux_; }
+    void SetIlluminanceLux(float lux) { illuminanceLux_ = lux; }
+    // The sky's horizontal illuminance in CUBE UNITS, measured from `_diffuse.dds` at load. 0 when
+    // this sky has no derivatives, which is also what disables the calibration.
+    float MeasuredUpIlluminance() const { return measuredUpIlluminance_; }
+    float PhysicalScale() const
+    {
+        return (illuminanceLux_ > 0.0f && measuredUpIlluminance_ > 1e-8f)
+            ? illuminanceLux_ / measuredUpIlluminance_
+            : 1.0f;
+    }
 
     bool IsSimpleRender() const { return true; }
     bool CastsShadow() const { return false; }
@@ -63,4 +91,6 @@ private:
     bool hasIbl_ = false;
     std::wstring path_;
     float exposure_ = 1.0f;
+    float illuminanceLux_ = 0.0f;          // P16.3b, 0 = not authored
+    float measuredUpIlluminance_ = 0.0f;   // from _diffuse.dds at load; 0 = no derivatives
 };

@@ -20,6 +20,8 @@
 //     consumers that already did `sunColor * exposure` need no change at all.
 //   - skyLightIntensity: how bright the sky fill is, independent of the sun.
 //
+// P16.2 renamed the first of those to `sunIlluminanceLux` and gave it a unit. See the accessor.
+//
 // GetExposure() is kept and returns 1.0 once migrated, so any consumer still multiplying by it is
 // a no-op rather than a silent double-application. See MigrateLegacyExposure below for why the
 // migration is lossless.
@@ -62,11 +64,29 @@ public:
     Math::float3 GetEffectiveColor() const
     {
         const Math::float3 t = GetTemperatureRgb();
-        return Math::float3(color_.x * t.x, color_.y * t.y, color_.z * t.z) * sunIntensity_;
+        return Math::float3(color_.x * t.x, color_.y * t.y, color_.z * t.z) * sunIlluminanceLux_;
     }
 
-    float GetSunIntensity() const { return sunIntensity_; }
-    void SetSunIntensity(float intensity) { sunIntensity_ = intensity; }
+    // P16.2 -- THE SUN'S ILLUMINANCE, IN LUX, measured perpendicular to the beam. 100,000 is a
+    // sunny midday (Unreal's own default; 125,000 for full bright sun, ~20,000 for a heavy
+    // overcast, ~1,000 for a very dark day, 0.25 for a full moon).
+    //
+    // It multiplies straight into the colour with NO conversion factor, because the engine's linear
+    // unit is already photometric and always was. Two things pin it down and neither is new:
+    //   * the shading has the right shape -- `diffBRDF` carries the 1/PI and the directional term is
+    //     `diffBRDF * NdotL * lightRgb`, so `lightRgb` sits exactly where an illuminance goes and
+    //     the product is a luminance;
+    //   * the metering solves an EV100, and EV100 is DEFINED against cd/m2 by `L = 0.18 * 2^EV`.
+    // So "one unit of light colour" has meant one lux since the exposure code landed. P16.2 only
+    // writes that down and puts it in the field's name.
+    //
+    // Which is why the migration below is a no-op on the number: an existing level keeps its value
+    // and its pixels, and simply learns that it had been authoring lux all along -- wind_test's sun
+    // reads 2 lux, deep twilight, against a sky delivering thirteen. That gap is not a rounding
+    // error to be papered over with a constant; it is the defect P16 exists to fix, and it belongs
+    // on screen in a unit that can be argued with.
+    float GetSunIlluminanceLux() const { return sunIlluminanceLux_; }
+    void SetSunIlluminanceLux(float lux) { sunIlluminanceLux_ = lux; }
 
     // Legacy whole-scene multiplier. After MigrateLegacyExposure this is 1.0 and multiplying by it
     // does nothing; it stays in the interface only so a missed consumer degrades to a no-op.
@@ -118,12 +138,17 @@ public:
     // Scaling it here as well would apply the factor twice.
     void MigrateLegacyExposure(float legacyExposure);
 
+    // P16.2: fold a pre-lux `sunIntensity` in. The number does not change -- see the accessor for
+    // why there is nothing to convert -- so this exists to give the call site one honest name for
+    // what it is doing rather than a bare assignment that hides a change of meaning.
+    void MigrateLegacySunIntensity(float legacyIntensity);
+
 private:
     Math::float3 direction_;
     Math::float3 color_;
     float exposure_;
     float ambient_;
-    float sunIntensity_ = 1.0f;
+    float sunIlluminanceLux_ = 100000.0f; // P16.2; a sunny midday
     float skyFillIntensity_ = 1.0f;   // F8; 1 = the irradiance cube taken at face value
     bool  useSunTemperature_ = false; // off = the authored colour is used as-is
     float sunTemperatureK_ = 6500.0f; // ~D65, i.e. a no-op hue once normalised

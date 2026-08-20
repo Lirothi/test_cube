@@ -176,6 +176,17 @@ int WINAPI WinMain(
         if (const char* m = std::strstr(lpCmdLine, "--sky-target=")) {
             opts.skyTargetMedianLuma = (float)std::atof(m + std::strlen("--sky-target="));
         }
+        // P16.3: "--sky-keep-sun" leaves the sun disc in the LIGHTING derivatives (the pre-P16.3
+        // behaviour, for a sky used with no directional light of its own); "--sky-sun-radius=<deg>"
+        // sets the cut. See ImportOptions::skyRemoveSunFromIbl.
+        opts.skyRemoveSunFromIbl = std::strstr(lpCmdLine, "--sky-keep-sun") == nullptr;
+        if (const char* m = std::strstr(lpCmdLine, "--sky-sun-radius=")) {
+            opts.skySunRadiusDeg = (float)std::atof(m + std::strlen("--sky-sun-radius="));
+        }
+        // "--sky-out=<textures root>": move the finished cube, its two IBL siblings and the shared
+        // brdf_lut to where the engine loads them from, instead of leaving them in the staging
+        // folder. Same destinations the GUI import panel uses.
+        opts.skyOutputRoot = ExtractArgValue(lpCmdLine, "--sky-out");
         opts.highQuality = std::strstr(lpCmdLine, "--high") != nullptr; // opt-in exhaustive BC7
         opts.flipGreen   = std::strstr(lpCmdLine, "--flip-green") != nullptr;
         opts.bc5Normal   = std::strstr(lpCmdLine, "--bc5-normal") != nullptr;

@@ -1,4 +1,5 @@
 #include "editor/scene/EnvironmentRuntime.h"
+#include "rendering/core/PhotographicSettings.h" // P16.5 lumens migration
 #include "app/scene/GtaoSettingsJson.h"
 #include "app/scene/AtmosphereSettingsJson.h"
 #include "app/scene/BloomSettingsJson.h"
@@ -105,6 +106,8 @@ namespace
         }
 
         auto skybox = std::make_unique<Skybox>(Widen(texture));
+        // P16.3b: before Init(), which is what measures the sky and logs the resulting scale.
+        skybox->SetIlluminanceLux(JF(p, "illuminanceLux", 0.0f));
         skybox->Init(&ctx.renderer, uploads.CommandList(), uploads.KeepAlive());
         uploads.SubmitAndWait(&ctx.renderer);
         // See JsonLevel: HDRI libraries are not calibrated to the engine's linear scale, so the
@@ -172,7 +175,10 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.position = JF3(p, "position", d.position);
         d.radius = JF(p, "radius", d.radius);
         d.color = JF3(p, "color", d.color);
-        d.intensity = JF(p, "intensity", d.intensity);
+        // P16.5: newest field wins, else migrate the legacy number. Mirrors JsonLevel.
+        d.luminousFluxLm = p.contains("luminousFluxLm")
+            ? JF(p, "luminousFluxLm", d.luminousFluxLm)
+            : render::LumensFromLegacyIntensity(JF(p, "intensity", 1.0f), d.radius);
         d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
         ParsePointLightFlicker(p, d);
         points[i].SetDesc(d);
@@ -189,7 +195,9 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.innerAngle = JF(p, "innerAngleDeg", 15.0f) * kDeg2Rad;
         d.outerAngle = JF(p, "outerAngleDeg", 25.0f) * kDeg2Rad;
         d.color = JF3(p, "color", d.color);
-        d.intensity = JF(p, "intensity", d.intensity);
+        d.luminousFluxLm = p.contains("luminousFluxLm") // P16.5
+            ? JF(p, "luminousFluxLm", d.luminousFluxLm)
+            : render::LumensFromLegacyIntensity(JF(p, "intensity", 5.0f), d.range);
         d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
         d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
         d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
@@ -204,13 +212,17 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         dl.SetDirection(JF3(p, "direction", Math::float3(-1.0f, -1.0f, -1.0f)).Normalized());
         dl.SetColor(enabled ? JF3(p, "color", Math::float3(1.0f, 1.0f, 1.0f)) : Math::float3(0.0f, 0.0f, 0.0f));
         dl.SetAmbient(enabled ? JF(p, "ambient", 0.05f) : 0.0f);
-        // P4: mirrors JsonLevel exactly -- `sunIntensity` present means the level is converted and
+        // P16.2/P4: mirrors JsonLevel exactly -- newest field present means the level is converted and
         // the legacy multiplier is ignored; absent means migrate it losslessly. ONLY the intensity
         // branches; the fill fields are read unconditionally, because gating them here is what made
         // the inspector checkboxes inert on every legacy level.
-        if (p.contains("sunIntensity"))
+        if (p.contains("sunIlluminanceLux"))
         {
-            dl.SetSunIntensity(JF(p, "sunIntensity", 1.0f));
+            dl.SetSunIlluminanceLux(JF(p, "sunIlluminanceLux", 100000.0f));
+        }
+        else if (p.contains("sunIntensity"))
+        {
+            dl.MigrateLegacySunIntensity(JF(p, "sunIntensity", 1.0f));
         }
         else
         {
@@ -508,7 +520,9 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.innerAngle = JF(p, "innerAngleDeg", 15.0f) * kDeg2Rad;
             d.outerAngle = JF(p, "outerAngleDeg", 25.0f) * kDeg2Rad;
             d.color = JF3(p, "color", d.color);
-            d.intensity = JF(p, "intensity", d.intensity);
+            d.luminousFluxLm = p.contains("luminousFluxLm") // P16.5
+                ? JF(p, "luminousFluxLm", d.luminousFluxLm)
+                : render::LumensFromLegacyIntensity(JF(p, "intensity", 5.0f), d.range);
             d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
             d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
             d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
@@ -521,7 +535,9 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.position = JF3(p, "position", d.position);
             d.radius = JF(p, "radius", d.radius);
             d.color = JF3(p, "color", d.color);
-            d.intensity = JF(p, "intensity", d.intensity);
+            d.luminousFluxLm = p.contains("luminousFluxLm") // P16.5
+                ? JF(p, "luminousFluxLm", d.luminousFluxLm)
+                : render::LumensFromLegacyIntensity(JF(p, "intensity", 1.0f), d.radius);
             d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
             ParsePointLightFlicker(p, d);
             lm.PointLights().push_back({});

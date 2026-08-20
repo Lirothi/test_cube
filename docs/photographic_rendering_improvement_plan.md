@@ -1249,6 +1249,16 @@ legacy configuration, and against the migrated default it measures **mean |delta
 0.11% of pixels touched at all** — i.e. the particle jitter floor, which an unrelated two-run
 determinism check independently put at the same level.
 
+> **That probe was REMOVED at P16.2, and the result above is a snapshot of 2026-08-16, not a
+> standing invariant.** Re-run on wind_test it now measures **27.6 meanabs against a 0.81 noise
+> floor** — the frame 27/255 brighter. Nothing about P4 broke: F8 and F9 landed afterwards and moved
+> the ground under it. `lighting_cs` still ends in `color * exposure + skySpecular`, so the legacy
+> multiplier now scales the **sky irradiance fill**, which the sun's own intensity does not touch,
+> and skips the **sky specular**, which is added after it. Neither term existed when the equivalence
+> was measured. A probe that asserts an invariant which no longer holds is worse than no probe.
+> P16.2's own equivalence check needs no code: run the level as authored, then with
+> `--set=light.sunIlluminanceLux:<the level's own value>`, and the two must be identical.
+
 **What is NOT lossless, and is therefore off by default:**
 
 - `ambientTintedBySun` (default **true** = legacy). Lighting tinted the whole fill by the sun colour,
@@ -3784,66 +3794,796 @@ The same run also settled two changes made earlier on hypotheses that did not su
 * The FP16 clamp in the importer stands on its own evidence (spec mip 0 at 524,711 against a 65,504
   ceiling) and is unrelated to this.
 
-### P16 — Pre-exposure: keep HDR values inside the float16 range — NOT STARTED (queued 2026-08-19)
+### P16 — Physical light units, in the only order they can be done — IN PROGRESS (2026-08-20)
 
-**Why this is now a task and not a preference.** The plan already records the opposite decision, at
-the very end of the P12 notes: *"UE pre-exposes scene colour at write time (we do not — decision 1
-keeps our HDR unexposed until the display transform)"*. That decision has now cost a day, and the
-bill is worth reading before anyone re-litigates it.
+**THE DEFECT, MEASURED.** On `wind_test`, open sand at EV 4, each term isolated:
 
-`wind_test` moved to `rustig_koppie_puresky_4k`, an HDRI with a physically intense sun, and the
-water filled with solid achromatic slabs. Four wrong answers were measured and discarded on the way
-to the real one (ghosts, the ocean's own reflection, the fog's sample direction, GGX prefiltering),
-and the actual cause was arithmetic that had been sitting in `logs/asset_import.log` the whole time:
+| | screen value |
+|---|---|
+| sun alone, `sunIntensity = 2` (the level's value) | **7.51** |
+| sun alone, `sunIntensity = 20` | 77.20 (x10.3 -- the sun is linear, nothing is clamping it) |
+| **sky alone** | **76.94** |
 
-| spec mip | max written | BC6H_UF16 ceiling | |
+**The sky lights the scene ten times harder than the sun.** Physically it should be about five times
+WEAKER: a clear day is ~100,000 lx of direct sun against ~20,000 lx of skylight on a horizontal
+surface. The scale is wrong by a factor of fifty, and no control fixes that -- with the sun at the
+level's value the shadow of a palm frond measures BRIGHTER than the sand beside it (ratio 0.94), and
+raising the sun alone only clips the highlights (21% of the frame saturated at `sunIntensity 256`).
+
+**THE CAUSE IS THAT THE TWO ARE NOT ON A COMMON SCALE.** The sky's absolute level comes from the
+importer's calibration, which pins its MEDIAN LUMINANCE to 0.18 -- a display-referred number,
+"middle grey after exposure". The sun is a bare multiplier authored next to it. There is no physical
+unit anywhere and no step that divides either by the exposure, so the ratio between them is an
+accident of two unrelated conventions.
+
+**WHAT TWO ENGINES DO, both checked in source rather than from memory.**
+
+*Godot* (`scene/resources/camera_attributes.cpp:424`) computes one normalisation from the camera:
+
+```
+e = (aperture^2 * shutterSpeed) * (100 / ISO)
+exposure_normalization = 1 / (e * 1.2)
+```
+
+and then multiplies EVERY light by it before rendering -- `sky.cpp:1088` does exactly that to the
+sky, right after multiplying by the light's `LIGHT_PARAM_INTENSITY` in lux. Lightmaps, reflection
+probes and SDFGI all carry the same factor. Physical values go in; numbers near 1 reach the shader.
+
+*Unreal* does the same thing under a different name: `FViewInfo::UpdatePreExposure()`
+(`PostProcess/PostProcessEyeAdaptation.cpp:1197`) sets `View.PreExposure` to the exposure the
+tonemapper is about to apply, everything written to scene colour is scaled by it, and the tonemapper
+divides it back out through `View.OneOverPreExposure`.
+
+*Both* also keep the sky's LIGHTING contribution as a control separate from how bright the sky
+LOOKS -- Godot's `ambient_light_energy` (documented starting range 0.3-0.8, "lower values produce
+harder shadows") and `ambient_light_sky_contribution`; UE's `SkyLight.Intensity` in cd/m2. And both
+OCCLUDE it (SDFGI/SSAO, DFAO/Lumen) rather than letting it fill shadows flat.
+
+**THE ORDER IS FORCED, and it is the reverse of what this plan said yesterday.** Pre-exposure first,
+units second. A 100,000 lx sun cannot be written to an `R16G16B16A16_FLOAT` target -- the ceiling is
+65,504, and this project has already lost a day to exactly that wall with a sky whose peak was
+524,711 (see the FP16 clamp in P15B's neighbourhood). Introducing physical units before the
+normalisation exists would reproduce that failure by construction.
+
+---
+
+#### P16.1 — Pre-exposure: divide by the exposure before writing, multiply back at the tonemap
+
+One factor, computed once per frame from the exposure the tonemap will apply, applied by every
+producer of scene colour and undone by the tonemap. Nothing in the image changes; the numbers stored
+in the FP16 target move from "raw radiance" to "around 1".
+
+Touches, and every one has to agree or the frame comes out uniformly wrong:
+* the base pass / lighting / sky / ocean / transparent writes -- every producer;
+* `Pass_Tonemap`, which already computes the exposure and must not apply it twice;
+* the bloom threshold, which measures in "the units the viewer sees" through `ExposureMultiplier()`
+  in `bloom_cs.hlsl` and `bloom_conv_cs.hlsl` -- that helper and pre-exposure are two answers to the
+  same question and must not both be live;
+* `ExposureMetering`, which reads scene colour to compute the exposure it would then be scaled by.
+  UE break the loop with the PREVIOUS frame's value and so must this;
+* `DlssHandler.cpp:50`, `options_.preExposure = 1.0f` -- currently a literal telling DLSS our colour
+  is unexposed. It becomes the real factor.
+
+**Verification is an invariant, not a look**: with pre-exposure on, the maximum value ever written
+to `scene` sits within a couple of stops of 1 for any sky. Instrument that FIRST -- it is also the
+measurement that proves the old behaviour was broken.
+
+**P16.1 IS TRANSPARENT AND VERIFIED (2026-08-20).** With the gate on, the whole frame differs by
+**0.330 meanabs against a 0.34 run-to-run noise floor** -- i.e. not at all -- while the peak value
+stored in scene colour falls from **2^10 to ~2^8.5**, which is the entire point. Turn it on with
+`--set=render.preExposure:1`.
+
+**THREE BUGS, and two of them were the same bug in different clothes.**
+
+1. **The metering fed itself.** The histogram is built FROM scene colour, so once compose pre-exposed
+   it the metering measured the scene times its own exposure, solved a shifted EV, and that EV became
+   the next frame's factor. The instrument caught it as the peak going UP (2^10 -> 2^12). Both
+   readers now divide the factor back out.
+2. **THE SKY GOT IT TWICE.** The skybox draws BEFORE compose, and compose scales everything it
+   writes -- including the sky pixels it passes through. 0.36 squared instead of 0.36 left the sky
+   2.8x too dark. **THE RULE, and it is the whole design: compose applies the factor to everything it
+   writes; only writers that run AFTER compose apply it themselves.** The skybox is not one of them.
+3. **THE OCEAN GOT IT TWICE TOO, by READING.** It samples scene colour for refraction and the planar
+   reflection -- already pre-exposed -- and then multiplies its whole result by the factor. Six reads
+   across the two variants now divide it back out first. This was the last 20/255 on the near water.
+
+**Cancellation is BY CONSTRUCTION, not by two numbers agreeing.** The first attempt had the writers
+use a CPU factor from the exposure readback while the tonemap divided using the exposure it read from
+the GPU buffer that frame -- the same quantity at different ages, which never cancelled. Now an
+explicit `preExposureActive` flag says the writers already applied it and the tonemap applies
+*nothing*; the gate-off path still reads the GPU value and stays byte-identical.
+
+**One more consumer had to be told: LOCAL EXPOSURE.** It shifts its stored base by
+`log2(exposureMultiplier)` so base and pixel share a space. The base is stored unexposed, so the
+shift has to be the exposure the PIXEL ACTUALLY RECEIVED -- which, pre-exposed, is the writers'
+factor and not what this pass applied. Using `exposureMultiplier` alone put them an exposure apart
+and pulled the frame down by 10/255.
+
+**GLASS, PARTICLES AND THE SSR HISTORY ARE NOW WIRED AND MEASURED (2026-08-20).** Finding the rest
+of the list meant asking the question the other way round -- not "what draws late" but "what touches
+scene colour at all":
+
+* **glass** is BOTH halves at once. It draws in the transparent pass, so it applies the factor to
+  what it writes; and its refraction tap reads `SceneOpaque`, a copy of scene colour taken at the
+  top of that pass, so that read divides the factor back out first. Miss the divide and everything
+  seen THROUGH the glass -- most of what glass shows -- is off by the factor.
+* **particles** apply it to `rgb` only. Alpha is a blend weight against a destination that already
+  carries the factor; scaling it would change the coverage, not the brightness.
+* **SSR** is a READER, and the one that would have been missed: it resolves its hit colour from the
+  PREVIOUS frame's scene colour, and its output goes into compose, which scales what it writes. So
+  the hit has to come back to raw radiance first, using the factor the history was STORED with, not
+  this frame's. That needs `prevPreExposure_` kept on the CPU. UE spell the same quantity
+  `View.PrevSceneColorPreExposureCorrection`; the mechanism is not optional, it is what the design
+  rule says out loud.
+* **the two overlays** -- debug lines and the editor's selection outline -- write authored LDR
+  colours into scene colour BEFORE the tonemap. Pre-exposure means the tonemap stops scaling them
+  down, so they would blow out to white; both are pre-scaled on the CPU, no shader involved. These
+  two are reasoned, not measured: neither is reachable from a headless capture.
+
+The bloom threshold is handled: `exposureEnabled = 0` when the gate is on makes
+`ExposureMultiplier()` return 1, which is right because its source is already in viewer units.
+
+**HOW IT WAS MEASURED, and the two dead ends that shaped it.** `--sweep=render.preExposure:0,1`
+gives the A/B inside ONE process; the noise floor is the same command with `0,0`.
+
+The first run had a noise floor of **17.5 meanabs** -- the ocean moves between shots, so the metric
+was measuring waves. `--wind-freeze` pins the ocean clock and drops it to 2.65; the rest is the
+shore foam, so glass and particles are judged on a CROP over the thing under test, with the noise
+floor measured on the SAME crop. Then the exposure is PINNED (`exposure.autoExposure:0` +
+`exposure.manualEv100`) so the factor is a known constant rather than whatever the scene meters to
+-- at the demo level's own EV the factor is 1.4, and a test point that close to 1 proves very little.
+
+| view | factor | noise floor | gate 0 -> 1 |
 |---|---|---|---|
-| 0 | 524,711.7 | 65,504 | **over by 8.0x** |
-| 1 | 135,530.0 | 65,504 | **over by 2.1x** |
-| 2 | 20,283.1 | 65,504 | fits |
+| glass sphere crop, EV 3 | 0.18 | 0.527 | **0.517** |
+| glass sphere crop, EV -2 | 5.76 | 0.413 | **0.441** |
+| particle plume crop, EV -2 | 5.76 | 4.63 | **4.97** |
+| particle plume crop, EV 3 | 0.18 | 2.77 | **3.40** |
+| full frame, SSR + UE march, EV -2 | 5.76 | 3.146 | **3.156** |
 
-BC6H builds each 4x4 block from two endpoints; an endpoint the format cannot express takes the whole
-block with it, and a coarse mip magnifies that block across a large solid angle. The previous sky
-never showed it because its peak was ~34 — three and a half orders of margin, entirely by luck.
+Both directions on purpose: a missing multiply shows up as `1/factor` too dark, a missing divide as
+`factor` too bright, so a factor above AND below 1 catches either sign.
 
-**The clamp that shipped fixes the symptom, and it is what UE do at that spot** — see
-`ClampToFp16Range` in `sources/assets/AssetImporter.cpp`, transcribed from
-`ReflectionEnvironmentShaders.usf:219` with `MaxHalfFloat = 65504` (`Common.ush:142`) and the call
-site commented "Rendering into an FP16 texture." (`ReflectionEnvironmentCapture.cpp:728`). But a
-clamp is a container guard, not a range strategy: it says "this could never have arrived", and the
-reason it could never have arrived is that **scene colour is `R16G16B16A16_FLOAT`
-(`RenderConstants.h:51`) and we write raw radiance into it.** Every future asset lit in physical
-units meets the same ceiling, one symptom at a time.
+**The instrument lied by omission and was fixed.** `[p16] scene peak luminance` is built from the
+metering histogram -- which now divides the pre-exposure back out, because it has to -- so it reports
+the scene's RAW peak and cannot see the gate at all. It now prints the factor and the stored peak
+next to the raw one, which is what makes a log line evidence that the gate was live. It caught a
+second one immediately: the SSR A/B ran on the DEFAULT `LogMarch` technique, which never reads the
+history, so the first "clean" SSR result was measured on a path where the changed line is not
+executed. `ssr.technique:1` picks the UE march, and a second log line now states outright whether
+the history is being read.
 
-**What UE do instead, and what to transcribe.** `FViewInfo::UpdatePreExposure()`
-(`PostProcess/PostProcessEyeAdaptation.cpp:1197`) multiplies everything written into scene colour by
-`View.PreExposure`, chosen as the exposure the tonemapper is about to apply anyway:
+**P16.1 SUPERSEDED NOTE (kept for the record):** Wired and gated OFF; `--set=render.preExposure:1` turns it on.
+Gate-off is verified INERT: 0.356 meanabs against a 0.337 run-to-run noise floor, i.e. unchanged.
+
+Done: the instrument (scene peak from the metering histogram, **baseline 2^10 = 1024** on
+`wind_test`); the factor, from the PREVIOUS frame's adapted EV, published as `render::g_preExposure`
+because the writers are independent systems with no path to the scene renderer; and the wiring for
+the skybox (folded into the multiplier it already had -- no shader change), compose, the tonemap
+(divides it back out), and BOTH metering readers.
+
+**The metering was a real trap and the instrument caught it.** With only compose pre-exposing, the
+scene peak went UP (2^10 -> 2^12) and the frame shifted 28/255. The histogram is built FROM scene
+colour, so it measured the scene times its own exposure, solved a shifted EV, and that EV became the
+next frame's pre-exposure -- a loop. Taking the previous frame's value avoids a same-frame circular
+dependency but not the drift; both readers now divide the factor back out.
+
+Not done: the forward writers -- the OCEAN (both variants), glass, particles -- and the bloom
+threshold's `ExposureMultiplier()`, which would double-apply once its source is pre-exposed. And the
+multiply/divide pair does not yet cancel exactly for the paths that ARE wired (the sky moved by 50
+of 255 with the gate on, where it should not move at all), so the CPU factor and the EV the tonemap
+reads from the GPU buffer are not the same number yet. That is the next thing to chase, before
+anything else is wired.
+
+#### P16.2 — The sun in lux — DONE (2026-08-20)
+
+`sunIlluminanceLux`, default 100,000 (UE's own figure for a sunny midday; 125,000 full bright sun,
+20,000 heavy overcast, 400 sunrise, 0.25 full moon).
+
+**THERE IS NO CONVERSION CONSTANT, AND THAT IS THE WHOLE POINT.** The field multiplies straight into
+the light colour. Two things already pinned the unit down and neither is new:
+
+* the shading has the right SHAPE -- `diffBRDF = kd * albedo * kInvPi` and the directional term is
+  `diffBRDF * NdotL * lightRgb`, so `lightRgb` sits exactly where an illuminance goes and the
+  product comes out as a luminance;
+* the metering solves an **EV100**, and EV100 is defined against cd/m2 (`L = 0.125 * 2^EV` for the
+  K=12.5 saturation convention this code uses -- read straight off `ExposureMultiplierFromEv100`).
+
+So "one unit of light colour" has meant one lux since the exposure code landed. P16.2 writes that
+down and puts it in the field's name. **The migration is therefore an assignment**: `sunIntensity`
+and `sunIlluminanceLux` hold the same number, and a level keeps its pixels while learning that it
+had been authoring lux all along. wind_test's sun reads **2 lux** — deep twilight, against a sky
+delivering thirteen. That is not a mis-migration to be papered over with a fudge factor; it is the
+defect P16 exists to fix, finally written in a unit that can be argued with.
+
+**THE SKY'S IRRADIANCE, MEASURED FROM THE ASSET RATHER THAN THE SCREEN.** The `_diffuse.dds` beside
+each imported sky is the cosine-convolved irradiance cube, `R16G16B16A16_FLOAT`, 32x32x6, and it is
+plain FP16 — twenty lines of numpy read it with no engine involved. For `rustig_koppie_puresky_4k`
+the +Y face centre is `(4.242, 4.203, 4.055)`, so the horizontal irradiance is `pi *` that =
+**13.20 units**, luminance-weighted. wind_test scales it by `skyFillIntensity 0.7` → **9.24**.
+
+That number also settles what the sky IS: the face maxima run +Z 6.29, +X 4.23, +Y 4.20 against
+0.16–0.24 on the three opposite faces, a lobe pointing exactly where this level's sun points. **The
+sun is baked into the irradiance cube.** The scene is lit by a sky that already contains a sun, and
+then a second, separate sun is added on top at 2 lux — which is why the shadows do not read: the
+shadowed sand still receives the sun, through the fill. P16.3/P16.4 inherit that.
+
+**THE UNIT CLAIM IS FALSIFIABLE, AND IT WAS TESTED.** Raising the sun changes only the sun's share
+of the illuminance, so the exposure that reproduces a given look must move by exactly the ratio of
+the totals:
 
 ```
-const float FinalPreExposure = SceneColorTint * GlobalExposure * VignetteMask * LocalExposure;
-// This computation must match FinalLinearColor in PostProcessTonemap.usf.
+E(S lux) = S * 0.7957 (colour luminance) * 0.4741 (NdotL on flat sand) + 13.197 * 0.7 (sky)
+E(2)      =      0.755 + 9.238 =      9.99
+E(100000) = 37 730     + 9.238 = 37 739
+ratio 3777  ->  11.883 stops  ->  baseline EV 2.0 must be matched at EV 13.883
 ```
 
-so stored values sit around 1 rather than around 500,000, and the tonemapper divides it back out via
-`View.OneOverPreExposure`. Where they genuinely need the range instead of the scale, they use
-float32 outright (`PF_A32B32G32R32F`, `ReflectionEnvironmentCapture.cpp:1642`).
+Measured, on the open-sand crop of wind_test, sun pinned at 100,000 lx, `manualEv100` swept:
 
-**Scope, and why it is NOT a small change.** Every producer of scene colour has to agree on the
-factor, and every consumer has to undo it in the right place:
-* the base pass / lighting / sky / ocean / transparent writes;
-* the tonemap, which already computes the exposure and must not apply it twice;
-* the bloom threshold, which is already measured in "the units the viewer sees" through
-  `ExposureMultiplier()` — that helper and pre-exposure are two answers to the same question and
-  must not both be live;
-* `ExposureMetering`, which reads scene colour to compute the exposure it would then be scaled by —
-  the feedback loop UE break by using the PREVIOUS frame's value;
-* `options_.preExposure` in `DlssHandler.cpp:50`, currently the literal `1.0f`, which is us telling
-  DLSS our colour is unexposed. It becomes the real factor.
+| manual EV100 | sand mean | vs baseline |
+|---|---|---|
+| 13.0 | 209.29 | +29.12 |
+| 13.5 | 194.81 | +14.64 |
+| **13.9** | **181.08** | **+0.91** |
+| 14.3 | 165.64 | −14.53 |
 
-**The verification that matters** is not "it looks the same" but the invariant: with pre-exposure
-on, the maximum value ever written to `scene` should sit within a couple of stops of 1, whatever the
-sky. Instrument that before changing any shader, because it is also the check that says the old
-behaviour was broken.
+Baseline (sun 2 lx, the level's own `manualEv100 2.0`) is 180.17. The crossing is at **EV ≈ 13.93
+against a prediction of 13.88 — 0.05 stops**, with the neighbours ±14 grey levels away, so the match
+is sharp rather than a flat region. One test, three claims: lux enters the light linearly, the 13.20
+read out of the DDS is right (it is what makes the ratio 3,777 instead of 50,000), and the colour
+luminance and cosine are applied as expected. As a sanity check on the ABSOLUTE, sunlit sand
+correctly exposed at EV ~13.9 sits within a stop of sunny-16 (EV 14.6), which is where a real
+photograph of that scene would be.
 
-**Do not start this in the same increment as anything else.** It touches the whole write path, and
-its failure mode is a uniform brightness error that looks like a tuning problem.
+**PRE-EXPOSURE IS NOW ON BY DEFAULT**, which is what P16.1 was built for: with the sun at 100,000 lx
+the instrument reads `scene peak ~2^14 = 16384 raw ... preExposure ~2^-11 ... stored ~2^3`. The raw
+peak is a quarter of the FP16 ceiling before a single specular highlight is considered; stored, it
+is 8. Turned back off with `--set=render.preExposure:0`.
+
+**Also in this step, because the unit forced it:**
+
+* **A new level is born with the photographic camera ON.** It has to be — a 100,000 lx sun with the
+  camera off multiplies by exactly 1.0, and the first thing anyone would see is a white screen.
+  Physical light units presuppose a metering camera; that is why Unreal and Godot both ship one.
+  Existing levels without the section still default to `enabled = false` and do not move.
+* **`light.legacySplit` was removed** — see the note under P4. It asserted an equivalence that F8
+  and F9 had quietly invalidated, and re-running it measured 27.6 meanabs against a 0.81 floor.
+* **A duplicated block in `ApplySweepValue`** — five light settings appearing twice, the second copy
+  unreachable behind the first one's `return true` — was deleted.
+
+**What P16.2 does NOT fix, by construction.** Typing the physical 100,000 lx does not yet give a
+physically correct scene, because the sky it is being compared against is still display-referred
+(and still contains a sun). That is P16.3. Point and spot lights keep their own arbitrary scale and
+will need re-tuning once the sky moves — which is the "другие источники потом надо будет тюнить" this
+step was asked for with.
+
+**Verification recipe**, for anything that touches a light consumer later: run the level as
+authored, then with `--set=light.sunIlluminanceLux:<the level's own value>`; the two must be
+identical. Measured on wind_test at **1.00 meanabs against a 0.81 two-run noise floor**. The
+pre-exposure default flip was checked the same way, `--set=render.preExposure:0` against the
+default: **1.09**.
+
+#### P16.3 — The sky: sun out of the fill (DONE 2026-08-20), then cd/m2 (next)
+
+**P16.3a — THE SUN WAS INSIDE THE SKY'S IRRADIANCE CUBE, and that, not the units, is why the
+shadows would not read.**
+
+Measured by integrating the upper hemisphere of the source `.hdr` with real solid angles — a
+Radiance decoder in numpy, no engine involved, because `imageio` and `cv2` are both absent here:
+
+| | rustig_koppie_puresky_4k |
+|---|---|
+| peak luminance | 3.68e5 against a median of 0.09 |
+| sun direction from the HDRI | `[0.5055, 0.4734, 0.7213]`, elevation 28.26° |
+| **the level's own directional light** | **`[0.5047, 0.4741, 0.7215]`** — they agree to three decimals |
+| horizontal illuminance, sun disc | 8.01 |
+| horizontal illuminance, everything else | 0.73 |
+| **the disc's share** | **91.7%** |
+
+So the cube the engine calls a "sky fill" was 92% sun: a second sun, spread evenly over the
+hemisphere, casting no shadow and occluded by nothing. Raising the directional light could never
+make a shadow read, because the shadowed sand was still receiving the sun — through the fill. The
+measured shadow/lit ratio on open sand was **1.007: the shadow was BRIGHTER than the sand beside
+it.**
+
+The disc's exact radius barely matters, which is worth knowing before arguing about it: 0.5° already
+captures 91.0% and 10° only reaches 93.2%, so everything past the disc is genuine sky.
+
+**The fix is the split every engine with a sky light already makes.** UE captures the SkyLight
+without the sun and runs the sun as its own directional; Godot's `ambient_light_energy` is the sky's
+contribution alone. Here there is a second reason on top: `lighting_cs` already adds an ANALYTIC sun
+specular from the directional light, so a prefiltered radiance cube that also contains the disc
+double-counts it on every glossy surface.
+
+`ImportOptions::skyRemoveSunFromIbl` (default on, `--sky-keep-sun` to disable, checkbox in the
+import dialog) builds the two LIGHTING derivatives from a copy of the calibrated cube with the disc
+replaced by the **per-channel median of the annulus [R, 2R]** around it — local, colour-preserving,
+and impossible to drag with one bright texel just outside the cut. The DISPLAY cube keeps its sun:
+the sky still looks the same when you look up.
+
+**Verified on the artefact, not the log.** Reading the shipped `_diffuse.dds` back (plain FP16 at
+byte offset 148, so numpy reads it directly):
+
+| face | before | after | ratio |
+|---|---|---|---|
+| +X | 4.232 | 0.614 | 6.9 |
+| +Y (up) | 4.201 | 0.348 | 12.1 |
+| +Z (toward the sun) | 6.245 | 0.810 | 7.7 |
+| −X | 0.241 | 0.241 | **1.00** |
+| −Y | 0.164 | 0.164 | **1.00** |
+| −Z (away from the sun) | 0.220 | 0.220 | **1.00** |
+
+**The three faces pointing away from the sun are unchanged to three decimals.** That is the evidence
+that the strip took the sun and only the sun. Horizontal irradiance fell 13.20 → 1.09, and the up
+face went from near-neutral `(4.24, 4.20, 4.06)` — sunlight — to `(0.23, 0.35, 0.65)`, which is
+blue. The fill is finally skylight.
+
+On screen, wind_test with the sun re-balanced to the new fill: shadow/lit on open sand
+**1.007 → 0.750**, and by construction the linear ratio is 0.20, i.e. a 2.3-stop shadow, which is
+what a clear day looks like.
+
+**NOT EVERY SKY HAS A SUN, and one without must not be touched.** `citrus_orchard_puresky_4k`'s
+brightest texel is 8.7 against rustig_koppie's 520,000 and its disc carries 0.02% of the hemisphere.
+A disc under **1%** is logged and left alone; re-importing that sky produces a `_diffuse.dds` that is
+**byte-identical** to its pre-P16.3 file, so the two levels using it did not move.
+
+**`--sky-out=<textures root>`** was added at the same time: the headless import used to leave its
+output beside the source and the four files had to be moved by hand, with the shared `brdf_lut.dds`
+going somewhere different from the cube. It now applies the GUI panel's own rule —
+`<root>/<name>/<name>.dds` plus the two siblings, `<root>/brdf_lut.dds` — so a CLI import and a
+dialog import leave the tree in the same state and nothing is left in `import_staging`.
+
+**P16.3b — THE SKY IN LUX. DONE (2026-08-20).**
+
+The authored quantity is `skybox.illuminanceLux`: **how much light this sky puts on a horizontal
+surface**. 12,000 for a clear sky with the sun about 30° up, 20,000 with it overhead, 10,000–20,000
+for a heavy overcast where the sky IS the light. **0 = not authored**, which reproduces the previous
+behaviour exactly — that is what keeps every unconverted level rendering what it renders today.
+
+**The scale that realises it is DERIVED, never authored.** The engine reads this sky's own
+irradiance cube at load — the `_diffuse.dds` +Y centre texel is E(up)/π by construction, so the
+answer is π times its luminance — and divides. That is what makes the number portable: the same
+12,000 lx means the same thing on a cube that came out of the importer bright and one that came out
+dim. The engine's own measurement of rustig_koppie is **1.0924 units**, against **1.092** read
+independently in numpy straight off the file.
+
+**Runtime, not baked.** An FP16 cube cannot hold physical radiance anyway — a sunlit aureole is six
+figures of cd/m2 and BC6H stops at 65,504 — while the runtime is protected by P16.1's pre-exposure.
+It also means the calibration is a tuning decision rather than a bake, and that the ASSET is
+separate from its CALIBRATION, which is what lets one sky serve two levels at two times of day.
+
+**One scale for both roles**, folded into `Skybox::GetExposure()` so compose, the lighting pass, the
+ocean and glass all pick it up with no new constant-buffer field. Lighting and appearance are the
+same sky seen two ways; giving them independent scales is how you get a background that disagrees
+with the fill it is supposed to be casting. (Separating them *deliberately*, for artistic reasons,
+is what is left of P16.4.)
+
+**wind_test is converted, and its exposure stays MANUAL.** The numbers are daylight-table values for
+the sun this sky actually has — the HDRI's disc sits at 28.3° elevation, and the level's directional
+light already pointed there to three decimals:
+
+| | |
+|---|---|
+| `directionalLight.sunIlluminanceLux` | **85,000** (direct normal, clear day, sun ~30° up) |
+| `skybox.illuminanceLux` | **12,000** (diffuse horizontal) |
+| `skyFillIntensity` | 0.7 → **1.0** (it is a trim on top of the authored lux; 0.7 would mean the sky delivers 8,400 while the field says 12,000) |
+| `cameraExposure.manualEv100` | 2.0 → **14.15**, `autoExposure` stays **false** |
+
+The EV is derived, not guessed. P16.2's falsification test measured EV 13.93 as the exposure that
+reproduces this level's own authored sand brightness at a total horizontal illuminance of 37,739.
+Illuminance and exposure scale together, so `13.93 + log2(44,065 / 37,739) = 14.15`.
+
+**Checked from five camera angles, one fixed exposure**, because a look change judged from one view
+is not judged:
+
+| view | mean | p99 | clipped | crushed |
+|---|---|---|---|---|
+| grove | 114.0 | 206 | **0.000%** | 0.009% |
+| into_sun | 189.6 | 250 | **0.000%** | 0.002% |
+| down_sun | 109.3 | 205 | **0.000%** | 0.011% |
+| cross_light | 112.8 | 214 | **0.000%** | 0.017% |
+| overhead_sand | 112.0 | 190 | **0.000%** | 0.000% |
+
+Not one clipped pixel in any of them, including looking straight into the sun, on a fixed manual
+exposure.
+
+**THE OLD SKIES STILL WORK, verified rather than assumed.** `wind_test` before the field existed vs
+after, unconverted: **0.53 meanabs, frame mean 48.13 → 48.13**. `roughness_sweep` and
+`ssr_bronze_palms` (the overcast citrus_orchard sky) log `authored=0 lx -> physical scale x1.0` and
+render clean; `demo` and `e3_particle_test` have no F7 derivatives at all and take the legacy sky
+mip chain exactly as before.
+
+**What is left of P16.4.** The sky's lighting and its appearance still share one number by design.
+Splitting them is now an artistic choice rather than a units bug — and the remaining physical gap is
+that **this HDRI's own sun:sky is about 11:1 where reality is nearer 3.5:1** (calibrating on its disc
+instead of its sky would put the sky at ~4,300 lx). With the disc removed from the lighting and the
+sky authored in lux, that discrepancy no longer reaches the render; it would only matter again if
+the background were put on the same physical scale as the fill. Medium-scale occlusion of the fill —
+the other half of P16.4 — is untouched: ours is still occluded only by GTAO, which is contact-scale.
+
+#### P16.5 — Local lights in lumens, and every level converted — DONE (2026-08-20)
+
+**THE FALLOFF HAD TO CHANGE WITH THE UNIT.** Point and spot lights were
+`colour * intensity * (1 - d/r)^2`, which is not a falloff, it is a WINDOW: halving the distance
+does not quadruple the illuminance, the number has no unit, and a light's brightness therefore moved
+whenever someone dragged its radius. Relabelling that as lumens would have been a lie, so:
+
+```
+attenuation = saturate(1 - (d/r)^4)^2 / (d^2 + 1)      (Unreal's)
+```
+
+inverse-square where it matters, a window that reaches exactly zero at the range instead of clipping
+a still-bright light, and a `+1` that keeps `d -> 0` finite — a real lamp has a size, and without it
+a texel landing on the light's own position renders as an infinity.
+
+**It lived in SEVEN places across six files** — the two compute passes, the two glass loops, the two
+RT reflection evaluators and the legacy stencil pixel shader — which is exactly how a lighting model
+drifts apart one pass at a time. It is now one function in `utils.hlsli`, which all six already
+include. `pointlight_cs`, `spotlight_cs` and `rt_reflections_cs` were added to `check_shaders.py`
+(the last needs SM 6.6 for `ResourceDescriptorHeap`, so the tool grew a second compute pass); 33
+entries now, from 24 before this session.
+
+**The unit is LUMENS**, `I [cd] = flux / (4*pi)`, and deliberately the same conversion for spot
+lights: a spot with 1,000 lm has the same peak candela as a point with 1,000 lm, so narrowing the
+cone does not silently brighten it. Candela times the falloff is **lux at the surface** — the same
+unit the sun is in, which is the point of the exercise.
+
+**The migration is NOT lossless and says so.** The falloff shape changed, so no single number
+reproduces the old curve everywhere; it preserves the illuminance at **half the range**, where a
+light does its work. Nearer than that a light is now brighter and further it falls off faster, which
+is the correction.
+
+#### Every level converted (2026-08-20)
+
+Sun and sky come from a clear-day model evaluated at **each level's own sun elevation**, not one
+number pasted everywhere:
+
+```
+sun_perp = 128000 * exp(-0.21 / sin(elev))       direct normal illuminance, lux
+f        = 0.32 - 0.18 * sin(elev)               clear skies get proportionally less diffuse
+sky_horiz = f/(1-f) * sun_perp * sin(elev)       diffuse horizontal illuminance, lux
+```
+
+At wind_test's 28.3° it returns **82,000 / 12,000** against the **85,000 / 12,000** that level was
+set to by hand from daylight tables — under 0.05 stop apart, which is the check that the model is
+not inventing anything.
+
+**The sky reaches the scene by one of two paths and the conversion differs.** A sky WITH F7
+derivatives gets `skybox.illuminanceLux`. A sky WITHOUT them lights through the flat fallback
+`ambient * sunColour`, which is a FRACTION OF THE SUN'S OWN ILLUMINANCE — so it already scales with
+the sun and only needs re-solving: `ambient = sky_horiz / (pi * sun_perp * colourLuminance)`.
+
+**Every level's exposure is FIXED — `autoExposure: false` with a derived `manualEv100`.** Illuminance
+and exposure scale together, so `EV_new = EV_old_effective + log2(after / before)`, where
+`EV_old_effective` is the level's own manual EV, the settled value its auto exposure was sitting at
+(measured, not guessed), or — for a level whose camera was OFF — `log2(1.44)`, the EV at which the
+tonemap multiplier is exactly the 1.0 those levels were rendering with. Compensation is correctly
+ignored: `exposure_solve_cs` uses `targetEv = manualEv100` in manual mode and never adds it.
+
+**TWO THINGS THE FIRST PASS GOT WRONG, both caught by rendering it rather than by reasoning:**
+
+1. **The sky background went black** on every level whose sky has no derivatives. Those cubes have
+   nothing to measure, so `illuminanceLux` cannot calibrate them, and the background is a
+   display-referred image nobody scaled — raising the exposure fifteen stops turned it off.
+   `skybox.intensity` is exactly the control for that (it is the sky's APPEARANCE), set to the same
+   factor the scene's illuminance rose by.
+2. **`maxEv100` defaults to 16 and was silently clamping** the derived exposure on five levels — a
+   control overruling the authored one without saying so. Raised per level to clear it.
+
+Result, whole-frame mean against the pre-conversion render, **zero clipped pixels everywhere**:
+
+| level | stops | | level | stops |
+|---|---|---|---|---|
+| e3_particle_test | −0.02 | | atoll | −0.14 |
+| wind_shadow_test | −0.02 | | demo | −0.20 |
+| e1_particles_test | −0.05 | | roughness_sweep | **−0.82** |
+| new1 | −0.07 | | ssr_bronze_palms | **−0.83** |
+| demo1 | −0.08 | | | |
+| d_emissive_test | −0.13 | | | |
+
+The two outliers are the two levels on the citrus_orchard sky, and the change is a CORRECTION: their
+background is now consistent with the illuminance that sky is authored to deliver, where before it
+was arbitrary. `skybox.intensity` will restore the old look if wanted, at the cost of the number
+meaning what it says.
+
+**Left as they are:** `demo_bckp` and `demo_orig` are explicit snapshots, and leaving them
+unconverted is what makes them snapshots — they still take the legacy path and render exactly what
+they did. The demo levels' local lights are now a nine-digit lumen figure — the same diagnosis the
+sun's "2 lux" was, since they were authored against a scene lit tens of thousands of times below
+physical. Re-authoring them as real fixtures is a tuning pass, not a migration.
+
+#### The last eight levels moved off `skybox.dds` (2026-08-20)
+
+`skybox.dds` predates the staging setup and **its source HDRI no longer exists**, so it can never be
+given F7 derivatives — which means it can never be measured, which means `illuminanceLux` cannot
+calibrate it, which is why those levels were left carrying a five-figure `skybox.intensity` as a
+stand-in. Pointing them at `citrus_orchard_puresky_4k` replaces the stand-in with the real thing:
+
+| | before | after |
+|---|---|---|
+| `skybox.intensity` | 23,332 – 126,953 | gone (neutral) |
+| `skybox.illuminanceLux` | — | 10,000 / 17,000 lx, from the same model |
+
+citrus_orchard is the right sky to paste onto eight levels whose suns point in three directions,
+because **its disc carries 0.02% of its illuminance** — a hazy, low-sun sky with no directional cue
+to contradict whatever the level's own directional light is doing.
+
+**The exposure had to be re-measured, not carried over.** The horizontal illuminance is unchanged by
+construction (the flat fallback was solved to equal the same `sky_horiz` the cube now delivers), so
+the arithmetic said the EV was still right — and rendering it said otherwise, by −0.42 to −1.83
+stops. Two things the horizontal-illuminance arithmetic cannot see: the fill stopped being
+DIRECTIONLESS (the flat term applies the sun's colour equally from every direction; a real sky gives
+upward faces more than downward ones and turns the shade blue), and the background is a different
+photograph. So each level's own metering was asked for a settled value and that was pinned as
+`manualEv100`, with `autoExposure` still false.
+
+Final, whole-frame mean against the pre-P16 render, **zero clipped pixels on all eight**:
+
+| level | stops | | level | stops |
+|---|---|---|---|---|
+| atoll | +0.10 | | new1 | +0.91 |
+| wind_shadow_test | −0.17 | | e1_particles_test | +1.03 |
+| demo | −0.28 | | d_emissive_test | +1.42 |
+| demo1 | +0.24 | | | |
+| e3_particle_test | +0.34 | | | |
+
+The three that gained a stop or more were UNDEREXPOSED before (frame means of 43–65); the metering
+has now put them where they belong. That is a change of look, and it is the point: swapping the sky
+is not a migration, and there is no old exposure worth preserving across it.
+
+#### P16.6 — Two things physical units broke, and the magic number they left behind — DONE (2026-08-20)
+
+**THE SEA WENT GREEN, and it was not the sky swap.** Measured on demo's open water, the blue-to-green
+ratio of the far field: original **1.31**, converted but still on the OLD sky **1.16**, converted plus
+citrus **1.09**. Most of it happened at the UNIT conversion, with the sky image unchanged — and the
+sky's own ratio was preserved across it (1.13 → 1.14), so the water was losing something of its own.
+
+`Refraction()` builds the water's colour from three terms and **two of them had no light in them at
+all**:
+
+```hlsl
+float3 color = DeepScatterColor(depthScale);                              // absolute
+color += sssColor * saturate(sss.x + sss.y);                              // absolute
+color += (ndotl*0.8 + 0.2) * li.mainLight.color * DiffuseColor(depth);    // lit
+```
+
+Those two are SCATTERED LIGHT written as absolute radiance. It worked only while the scene's light
+happened to sit near 1; against a 76,000 lx sun the lit term is tens of thousands of times bigger and
+the water's own blue simply vanishes, leaving the green diffuse. Multiplying both by the light that
+does the scattering is the fix, in **both** ocean variants — the runup surface carries its own copy.
+At the pre-P16 scale the sun colour was ~0.92, so this is under 0.13 stops for anything unconverted.
+Measured after: B/G back to **1.46**.
+
+This is the same defect as the flat `ambient` fill and the local lights: authored radiance that used
+to sit at the scene's arbitrary scale and no longer does. It is worth stating as a rule —
+**an authored colour that is ADDED to a lit result is a bug waiting for the units to change; a colour
+is a tint on a light, not a light.**
+
+**THE CAMERA STOPPED BEING A MAGIC NUMBER.** With the lights in lux, `manualEv100: 14.51` was the last
+thing in the level nobody could source — nothing said where it came from or what to change it to. But
+EV100 is not a free parameter:
+
+```
+EV100 = log2(N^2 / t) - log2(ISO / 100)
+```
+
+So the **aperture, shutter and ISO** are the authored controls and EV100 is derived and shown
+read-only. `f/16, 1/125, ISO 100` is sunny-16 at EV 14.97, which is why a scene lit in real lux is
+now correctly exposed **by the defaults, with nobody typing anything** — which is what the units were
+for.
+
+ONE control, not two: a level carrying `manualEv100` is MIGRATED (hold shutter and ISO, solve the
+aperture) rather than given a second way to say the same thing. Every level was rewritten holding the
+canonical f/16 and ISO 100 and solving the SHUTTER, because that is how a photographer meters a scene
+— wind_test is `f/16, 1/71 s, ISO 100`, demo `1/128`, wind_shadow_test `1/256`. Verified transparent:
+demo **0.44 meanabs, frame mean 104.44 → 104.45**. Nothing changed on the GPU; the solve shader still
+receives one EV, computed on the CPU from the three.
+
+**A new level now works out of the box**: the template points at a sky that HAS derivatives, with its
+lighting in lux, and a fixed sunny-16 camera. It was still pointing at `skybox.dds` — no derivatives,
+no source HDRI, so it can never be measured — which would have rendered a black background the moment
+the exposure went physical.
+
+**`--set=ocean.contactFoam:0`** turns the shore contact foam off for a capture. It is the thing that
+litters a lighting comparison with moving white speckle, and turning it off in the level would mean
+editing content that was tuned on purpose.
+
+#### P16.6b — The sea brighter than the sky, and the two controls that were missing — DONE (2026-08-20)
+
+**THE OCEAN IS NOT THE BUG.** Reported as "the ocean is far lighter than the sky, and the reflection
+is correct". Measured on the reported camera, water luminance over sky luminance:
+
+| | water/sky |
+|---|---|
+| `demo_bckp`, untouched | **0.46** |
+| `demo`, converted, citrus sky | **0.75** |
+| same, with the sun taken to 2,000 lx and the sky to 16,000 | **0.33** |
+
+Three surfaces on one frame say where it actually moved: **sand/sky went 0.69 → 2.28**. The ground is
+now over twice the brightness of the sky above it, and the water only followed. Nothing in the water
+is wrong — **the level claims a 76,000 lx sun over a photograph of an overcast evening.**
+citrus_orchard's own disc carries **0.0%** of its illuminance at 7.7° elevation; it is a picture of a
+day that has no sun in it. Sunlit sand at 3,654 cd/m² against a stormy horizon band at roughly
+600 cd/m² is a linear ratio of ~6, which is exactly the 2.28 that survives the tone curve.
+
+The third row is the check: give that sky the sun it actually has and the water goes properly dark
+against it. **This is a content mismatch, not a renderer defect, and it is the cost of pasting one
+overcast sky onto eight levels that wanted sun.**
+
+**EXPOSURE COMPENSATION NOW WORKS IN MANUAL MODE.** It was auto-only (`targetEv = manualEv100`
+ignored it), which left a fixed-exposure level with no quick ± at all: changing the look meant
+re-solving the shutter by hand, which is the arithmetic the camera controls exist to remove. It is a
+row under the camera params. Verified on a fixed exposure: +1 EV → +0.45 stops of frame mean, −1 EV →
+−0.56 (the tone curve compresses; the direction and magnitude are right). Because it was INERT in
+manual before, the levels' inherited `-0.15` was zeroed so nothing moved.
+
+**THE SKY'S LUX IS NOW RECOMMENDED, NOT GUESSED.** Switching skyboxes should not mean inventing a
+four-figure number. The recommendation does not come from the sky asset at all — it comes from WHERE
+THE SUN IS, through the same clear-day model the levels were converted with, so the hint and the
+content agree by construction. The inspector prints "Sun is 24 deg up -> a clear sky delivers about
+10000 lx" with a **Use it** button, and the help states the other case explicitly: an overcast sky IS
+the light, so use 10,000–20,000 **and take the directional sun to near zero**. The import log already
+distinguishes the two — `sky sun REMOVED ... the sun was 91.7%` versus `NOT REMOVED ... no sun to
+take out`.
+
+#### P16.7 — The rest of the authored-radiance family — DONE (2026-08-20), and one open defect
+
+**THE RULE, now stated once because this is the sixth instance: AN AUTHORED COLOUR THAT IS ADDED TO
+A LIT RESULT IS A BUG WAITING FOR THE UNITS TO CHANGE. A colour is a tint on a light, not a light.**
+Every one of these worked only while the scene's light happened to sit near 1:
+
+| | what it was | what it is |
+|---|---|---|
+| ocean scatter tints | absolute radiance added to a lit term | tint × the light that scatters (P16.6) |
+| local lights | unitless `intensity`, non-physical falloff | lumens + inverse-square (P16.5) |
+| flat ambient fill | fraction of the sun's colour | re-solved to the sky's lux |
+| debug/selection overlays | authored LDR into scene colour | pre-scaled on the CPU (P16.1) |
+| **particles** | authored colour ≈ 1 written into scene colour | **× `luminanceCdM2`** |
+| **ocean foam's sky term** | measured irradiance × the legacy `ambient` fraction | **the irradiance itself** |
+| **emissive** | authored 1–10, believed unitless | **documented as cd/m2, which it always was** |
+
+**PARTICLES.** A particle writes straight into scene colour, so an authored 1.0 against a physical
+sky is a thousandth of the frame — and because they are ALPHA-BLENDED that is not "invisible", it is
+DARKER THAN THE BACKGROUND: the campfire's smoke came out as a black column subtracting from the
+sky, and the flame vanished. `EmitterDesc::luminanceCdM2` says what the authored colour is worth;
+`colorKeys` stays a hue and an alpha. Default 3,000 = smoke lit by a bright overcast, which is what
+the presets were drawing. A wood fire is 20,000–50,000, a candle 10,000, an ember a few hundred.
+Verified: the flame is back and the smoke is grey. Note it now reads DARKER than the sky behind it,
+which is correct — backlit smoke is darker than the sky; white smoke was the unphysical version.
+
+**THE OCEAN FOAM'S SKY TERM** was `SkyFillRadiance(n) * (li.ambient + ...)` — the measured irradiance
+times the legacy fraction-of-the-sun knob. This is the exact mistake F8 documents about its own first
+version ("multiplying an absolute measured irradiance by a level's 0.05 buries the fill about twenty
+times too deep"), and it survived because foam is the one thing the ocean lights with the sky. The
+directional term stays; it is a shape, not a strength. wind_test: frame mean 108.8 → 121.6, no
+clipping.
+
+**EMISSIVE NEEDED NO CODE.** `emissiveStrength` is a LUMINANCE in cd/m2 and always was — the product
+goes straight into scene colour, which has been in cd/m2 since the lights went to lux. There is no
+conversion to invent, exactly as with the sun. What changed is that the authored numbers are absurd:
+`d_emissive_test`'s embers were **6.0 and 1.5 cd/m2**, which is a dim indicator LED. Relabelled the
+control ("Emissive Luminance (cd/m2)", logarithmic to 10^6, with a reference line) and set the test
+rig to 3,000 / 750, keeping its 4:1 ratio.
+
+**STILL OPEN: THE BRONZE FLOOR'S REFLECTIONS.** Characterised, not fixed. What is established:
+
+* **not the engine** — the pre-conversion level on the current binary is 0.0% black, the converted
+  one 35.4%;
+* **not pre-exposure** — the gate on and off are byte-identical;
+* **not the sun, the fill or GTAO** — each pinned in turn, no change;
+* **not a subtraction overshoot** — a BRIGHTER sky gives LESS black (47% at 4,000 lx → 35% at
+  16,000 → 29% at 40,000);
+* **not a scaling error** — crown/sky measures **0.747 seen directly and 0.726 in the mirror**;
+* **it is in the reflection pass**: SkyOnly is clean, every tracer is not, and dumping the reflection
+  buffer (debug slot 8) shows the failure IN THE BUFFER — along with the horizontal stripes.
+
+The signature is BIMODAL: within one crown, ~35% of pixels are fully black and blurry while the rest
+are correct and sharp. That is a per-pixel resolve failure, not a brightness error, and the stripes
+in the same buffer are likely the same thing. The next step is an instrument inside the pass (output
+alpha and the raw hit to a debug slot), not more black-box probing.
+
+#### P16.10 — The bronze floor: an LDR reflection target — DONE (2026-08-20)
+
+**`kReflectionFormat` was `R8G8B8A8_UNORM`.** An LDR target holding radiance. It worked only while
+scene colour happened to sit near 1; once the lights were in lux **every non-zero reflected pixel
+clamped to 1.0** and the buffer became a black-and-white MASK. Changed to `R16G16B16A16_FLOAT` —
+RGBA, not R11G11B10, because the alpha carries the reflection's coverage and compose's blend needs
+it. The blur scratch went with it, or it would have clamped the values straight back.
+
+What it did downstream is worse than losing the colour: compose adds only the DIFFERENCE a
+reflection makes, `reflectionRGB - skyCol * alpha`. With the hit clamped to 1 and the sky at several
+thousand, that difference is hugely NEGATIVE — so a metal reflecting anything at all went black.
+
+`frac<8` in the reflected crowns: **35.4% → 0.0%**, colours back to the pre-P16 reference
+(66.6/54.8/34.8 against 69.0/54.4/35.9). The horizontal banding went with it — it was the mask's
+quantisation, not a tracing artefact.
+
+**HOW THIS WAS FOUND, AND WHY IT TOOK SO LONG.** The user opened the texture inspector and read the
+format off the panel: `Resource: R8G8B8A8_UNORM`. Before that I had dumped the same buffer through
+the debug blit — which NORMALISES — and spent an hour reasoning about its contents while the answer
+was its type. **Check what a buffer IS before reasoning about what is in it**, and treat a
+normalising viewer as unusable for magnitude. Two earlier conclusions were drawn on that bad
+instrument: "the buffer is identical between levels" (it was not; the aggregate means coincided) and
+"the hit is blown out" (it was clamped, which is not the same thing).
+
+It also explains the one observation that should have been decisive on day one: **RT and SSR looked
+identical.** They were not agreeing — they were both being flattened by the same target.
+
+Fixed on the way, both real and both found by the audit rather than by the symptom:
+
+* **`ssr_cs`** inverted its multi-ray compression on the mean of ALL rays including misses.
+  `L/(1+L)` and `1/(1-L)` are inverses only for a single unweighted sample; with two of four rays
+  hitting a 3,000 cd/m2 surface the old form returned 0.999 instead of ~1500 — and 0.33 instead of
+  0.5 for years, which nobody could see at scene scale 1. Now inverted on the mean of the rays that
+  HIT, in pre-exposed space where the Reinhard curve is conditioned.
+* **`rt_reflections_cs`** re-shaded OFF-SCREEN hits with `albedo * ambient * lightRgb`, the legacy
+  fraction knob — the one lighting path that never got F8's sky-irradiance branch. On
+  `ssr_bronze_palms` that gave 1,592 against the 6,051 lx the same leaf underside receives on screen.
+  It now samples the same irradiance cube `lighting_cs` does.
+* **`glass.hlsl`** started its diffuse accumulator at `tint * ambientIntensity` — an authored 0.05
+  with no light in it at all. `ambient` has always meant "this fraction of the SUN'S COLOUR", so it
+  is multiplied by the sun now, exactly as `lighting_cs`'s flat branch does.
+
+#### OPEN — RT reflections do not alpha-test masked geometry
+
+The horizontal banding across reflected palm crowns. **Diagnosed, not fixed.**
+
+Measured on `ssr_bronze_palms` at the reported camera, dominant vertical period and its strength
+against the row-profile mean:
+
+| path | period | strength |
+|---|---|---|
+| **default (RT)** | 12.5 px | **15.4** |
+| SkyOnly (control) | — | 5.9 |
+| SSR LogMarch | 11.1 px | 5.9 |
+| SSR UE march | 18.8 px | 5.2 |
+
+RT-only. **CORRECTION to a first reading of this:** the empty floor is NOT clean, and the claim
+"only where crowns are reflected" was wrong -- it came from measuring PERIODICITY (an FFT peak) on a
+region that was not actually empty. The right statistic is the row-to-row ripple, and on genuinely
+empty floor it is **6.24 (RT), 6.26 (SkyOnly), 6.26 (SSR LogMarch), 6.25 (SSR UE)** -- identical,
+including the path with no reflected geometry at all.
+
+So there are TWO artefacts here, and they have different causes:
+
+* **the stripes over EMPTY floor are the SKY**, not the reflection pass. The source HDRI carries
+  **8.7% row-to-row structure near the horizon** (layered cloud), and a near-mirror at grazing
+  angles compresses a large vertical span of sky into a few screen rows, tightening soft layers into
+  hard stripes. Optics plus content, not a defect.
+* **the solid slabs across reflected CROWNS are the real bug**, below.
+
+The cause is in the code, not inferred: `AccelerationStructure.cpp:91` flags EVERY geometry
+`D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE`, masked foliage included, and both ray queries in
+`rt_reflections_cs.hlsl` use `RAY_FLAG_FORCE_OPAQUE`, which would override the flag even if it were
+set correctly. So RT rays hit the FULL frond quads — the parts the rasteriser alpha-tests away — and
+a crown reflects as a stack of solid slabs at the frond spacing. Those slabs then fail the
+on-screen depth match (the depth buffer has no surface at those texels), so they also take the
+darker re-shade path, which is what makes them read as dark bands rather than merely wrong ones.
+
+**This is general: every masked surface is solid to RT reflections AND to RT shadows.**
+
+The fix is a real feature, not a one-liner, but the machinery is already there — `GeometryInfo`
+carries `albedoTexIndex`, `vbIndex/ibIndex`, `vertexStride` and `firstTri`, and `rt_geometry.hlsli`
+has the bindless VB/IB loaders:
+
+1. `AccelerationStructure.cpp`: flag masked submeshes `GEOMETRY_FLAG_NONE` instead of `OPAQUE`
+   (needs the material's alpha mode at build time).
+2. `rt_reflections_cs.hlsl`: drop `RAY_FLAG_FORCE_OPAQUE`, and in the `q.Proceed()` loop handle
+   `CANDIDATE_NON_OPAQUE_TRIANGLE` — interpolate UV, sample the albedo's alpha, and
+   `CommitNonOpaqueTriangleHit()` when it passes.
+3. The same for `RtTraceShadow`, or foliage keeps casting solid shadows in the RT path.
+
+#### P16.4 — Separate the sky's lighting from its appearance, and occlude it
+
+`skyFillIntensity` already exists and is the right control -- Godot's `ambient_light_energy` by
+another name. What is missing is that it has no physical meaning yet (P16.3 gives it one) and that
+the sky fill is occluded only by GTAO, a contact-scale term that knows nothing about a palm tree
+twenty metres away. Both other engines use a medium-scale occlusion for this. Out of scope for the
+urgent fix; recorded so the flat-shadow problem is not blamed on the units again once they are
+right.
+
+---
+
+**Do not start P16.2 before P16.1 is verified.** Its failure mode is a uniform brightness error that
+looks like a tuning problem, and it will be blamed on the level.

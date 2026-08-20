@@ -71,9 +71,7 @@ float4 PSMain(VSOut i) : SV_Target
     }
     float3 L = Lvec / max(kEpsilon, dist);
 
-    // Smooth attenuation by radius
-    float x = saturate(1.0 - dist / lightRadius);
-    float atten = x * x;
+    const float atten = LightDistanceAttenuation(dist, lightRadius); // P16.5
 
     float3 V = normalize(camPosWS - P);
 

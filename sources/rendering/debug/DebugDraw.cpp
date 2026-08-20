@@ -10,6 +10,7 @@
 #include <DirectXMath.h>
 
 #include "materials/Material.h"
+#include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 #include "rendering/core/Renderer.h"
 #include "rendering/core/FrameResource.h"
 #include "rendering/core/RenderContextPool.h"
@@ -643,7 +644,11 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 
             DebugDrawSystem::GPUInstanceData& data = instanceDataScratch_[dstIndex];
             data.mvp = cmd.transform * viewProj;
-            data.color = cmd.color;
+            // P16.1: same as the selection outline -- an authored colour going into scene
+            // colour ahead of the tonemap, which no longer scales it when pre-exposure is on.
+            data.color = Math::float4(cmd.color.x * render::g_preExposure,
+                                      cmd.color.y * render::g_preExposure,
+                                      cmd.color.z * render::g_preExposure, cmd.color.w);
         }
 
         auto& instanceBuffers = wireframe ? wireframeInstanceBuffers_ : solidInstanceBuffers_;

@@ -6,7 +6,7 @@
   },
   "cameraExposure": {
     "autoExposure": false,
-    "compensationEv": -0.15000000596046448,
+    "compensationEv": 0.0,
     "enabled": true,
     "highPercentile": 0.800000011920929,
     "localDetailStrength": 1.0,
@@ -15,12 +15,14 @@
     "localShadowContrast": 0.8999999761581421,
     "localShadowThreshold": 0.5,
     "lowPercentile": 0.15000000596046448,
-    "manualEv100": 0.0,
-    "maxEv100": 16.0,
+    "maxEv100": 17.0,
     "meterMaskStrength": 0.699999988079071,
     "minEv100": -6.0,
     "speedDown": 1.0,
-    "speedUp": 3.0
+    "speedUp": 3.0,
+    "apertureFStop": 16.0,
+    "shutterSpeedSec": 0.0157291,
+    "isoSensitivity": 100.0
   },
   "colorPipeline": {
     "agxPower": 1.350000023841858,
@@ -61,8 +63,8 @@
       -0.699999988079071,
       -0.5
     ],
-    "exposure": 2.0,
-    "skyFillIntensity": 0.699999988079071
+    "skyFillIntensity": 1.0,
+    "sunIlluminanceLux": 20000.0
   },
   "gtao": {
     "enabled": true,
@@ -1817,7 +1819,8 @@
   "ocean": false,
   "pointLights": [],
   "skybox": {
-    "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds"
+    "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds",
+    "illuminanceLux": 16000.0
   },
   "spotLights": [],
   "wind": {

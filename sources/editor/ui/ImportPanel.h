@@ -115,6 +115,8 @@ private:
     // linear scale, so this is the dial that decides how bright an imported sky is. 0 = keep the
     // source's own radiance. See ImportOptions::skyTargetMedianLuma.
     float skyTargetMedianLuma_ = 0.18f;
+    // P16.3: take the sun disc out of the LIGHTING derivatives. See ImportOptions.
+    bool  skyRemoveSunFromIbl_ = true;
     bool flipGreen_ = false;
     bool centerNormals_ = true; // re-center normal maps with a DC "purple cast" lean (threshold-gated)
     bool moveIntoProject_ = true;

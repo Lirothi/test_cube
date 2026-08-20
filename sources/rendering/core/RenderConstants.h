@@ -49,7 +49,38 @@ inline constexpr DXGI_FORMAT kGBufferAuxFormat       = DXGI_FORMAT_R8G8B8A8_UNOR
 inline constexpr DXGI_FORMAT kObjectIdFormat         = DXGI_FORMAT_R32_UINT;
 inline constexpr DXGI_FORMAT kLightTargetFormat      = DXGI_FORMAT_R16G16B16A16_FLOAT;
 inline constexpr DXGI_FORMAT kSceneColorFormat       = DXGI_FORMAT_R16G16B16A16_FLOAT;
-inline constexpr DXGI_FORMAT kReflectionFormat              = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+// P16.1 -- PRE-EXPOSURE. ON since P16.2, which is what it was built for: physical light units mean
+// a 100,000 lx sun, and an R16G16B16A16_FLOAT target tops out at 65,504. Without the normalisation
+// the first bright specular highlight in a physically lit scene is an Inf.
+//
+// It was off while it was being built, deliberately -- a half-wired rollout scales SOME writers and
+// not others, which is a uniform brightness error that reads as a tuning problem and gets blamed on
+// the level. It was flipped only after every writer AND every reader of scene colour was wired and
+// each measured transparent (glass, particles, the ocean, the SSR history, the metering, the two
+// overlays; see P16.1 in the plan for the table). Back off with "--set=render.preExposure:0".
+inline bool g_preExposureEnabled = true;
+// The factor itself, published once per frame by SceneRenderer. A global for the same reason
+// g_windFreeze is one: the writers of scene colour are independent systems (the skybox, the ocean,
+// glass, particles) that have no path to the scene renderer, and they must all use the SAME number
+// or the frame comes out in pieces at different brightnesses. 1.0 while the gate is off.
+inline float g_preExposure = 1.0f;
+// P16.10 -- REFLECTIONS CARRY RADIANCE, SO THEY NEED A FLOAT TARGET.
+//
+// This was R8G8B8A8_UNORM, an LDR format, and it worked only while scene colour happened to sit
+// near 1. Once the lights were authored in lux every non-zero reflected pixel CLAMPED TO 1.0 and
+// the buffer became a black-and-white MASK -- visible verbatim in the texture inspector, and the
+// reason RT and SSR looked identical: they were both being flattened by the same target, not
+// agreeing about anything.
+//
+// What it does downstream is worse than losing the colour. compose adds ONLY THE DIFFERENCE the
+// reflection makes, `reflectionRGB - skyCol * alpha`; with the hit clamped to 1 and the sky at
+// several thousand that difference is hugely NEGATIVE, so a metal reflecting anything at all went
+// BLACK. That is the bronze floor.
+//
+// RGBA16F, not R11G11B10: the alpha carries the reflection's COVERAGE and the compose blend needs
+// it. Same format scene colour uses, so a hit copied from it round-trips exactly.
+inline constexpr DXGI_FORMAT kReflectionFormat              = DXGI_FORMAT_R16G16B16A16_FLOAT;
 // P6B ambient occlusion. One channel: AO is a visibility fraction in [0,1], and 8 bits of it sits
 // below the noise floor of any screen-space estimate -- the denoiser is what decides the quality
 // here, not the storage.
@@ -72,6 +103,8 @@ inline constexpr DXGI_FORMAT kBloomFormat                   = DXGI_FORMAT_R16G16
 inline constexpr DXGI_FORMAT kBloomFftFormat                = DXGI_FORMAT_R32G32B32A32_FLOAT;
 // Inspector preview: plain 8-bit colour, because ImGui draws it directly.
 inline constexpr DXGI_FORMAT kDebugPreviewFormat            = DXGI_FORMAT_R8G8B8A8_UNORM;
-inline constexpr DXGI_FORMAT kReflectionScratchFormat          = DXGI_FORMAT_R8G8B8A8_UNORM;
+// P16.10: the blur scratch holds the same radiance the reflection does; an LDR scratch would
+// clamp it straight back after the target stopped clamping it.
+inline constexpr DXGI_FORMAT kReflectionScratchFormat          = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 } // namespace render

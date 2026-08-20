@@ -64,6 +64,9 @@ cbuffer GlassView : register(b1)
     float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
     float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
     float4x4 clipmapViewProj[8];  // Step 24f: directional clipmap level viewProjs
+    // P16.1: x = the pre-exposure every writer of scene colour applies. Glass writes in the
+    // transparent pass, which runs AFTER compose, so compose's own scaling never reaches it.
+    float4 preExposureParams;
 };
 
 Texture2D SceneOpaque : register(t0);
@@ -335,7 +338,12 @@ PSOut PSMain(VSOut i)
     float ambientIntensity = sunDirAmbient.w;
     float3 sunColor = sunColorExposure.xyz * sunColorExposure.w;
 
-    float3 diffuseAccum = tint * ambientIntensity;
+    // P16.9: `ambientIntensity` is the level's `ambient`, and `ambient` has always meant "this
+    // FRACTION OF THE SUN'S COLOUR bounces around" -- lighting_cs's flat branch spells it out as
+    // `ambient * ambientRgb` where ambientRgb IS the sun colour. Glass dropped the sun and kept the
+    // fraction, so its ambient was an ABSOLUTE 0.05-0.1 with no light in it at all: fine while the
+    // scene sat near 1, a thousandth of the frame once the sun was in lux.
+    float3 diffuseAccum = tint * ambientIntensity * sunColor;
     float3 specAccum = 0.0f.xxx;
 
     // Directional light
@@ -369,8 +377,7 @@ PSOut PSMain(VSOut i)
             continue;
         }
         float3 L = Lvec / max(dist, kEpsilon);
-        float atten = saturate(1.0f - dist / light.radius);
-        atten *= atten;
+        const float atten = LightDistanceAttenuation(dist, light.radius); // P16.5
 
         BRDFInput bi;
         bi.albedo = tint;
@@ -418,8 +425,7 @@ PSOut PSMain(VSOut i)
         float angleAtten = saturate((spotCos - light.directionCosOuter.w) * light.shadowParams.z);
         angleAtten *= angleAtten;
 
-        float distAtten = saturate(1.0f - dist / light.positionRange.w);
-        distAtten *= distAtten;
+        const float distAtten = LightDistanceAttenuation(dist, light.positionRange.w); // P16.5
 
         BRDFInput bi;
         bi.albedo = tint;
@@ -481,7 +487,11 @@ PSOut PSMain(VSOut i)
         float2 uv = clip.xy / max(clip.w, 1e-6f);
         uv = uv * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
         uv = saturate(uv);
-        refrColor = SceneOpaque.Sample(LinearSampler, uv).rgb;
+        // P16.1: this is a COPY OF SCENE COLOUR and is therefore already pre-exposed, while
+        // everything else in this shader is raw radiance. Bring it back to raw here; the whole
+        // result is scaled once at the end. Scaling it twice is a plain brightness error on
+        // whatever is seen THROUGH the glass, which is most of what glass shows.
+        refrColor = SceneOpaque.Sample(LinearSampler, uv).rgb / max(preExposureParams.x, 1.0e-8f);
     }
     //return float4(refrColor, 1.0f);
     //absorption = float3(0.16f, 0.07f, 0.03f) * 1.0f;
@@ -520,7 +530,8 @@ PSOut PSMain(VSOut i)
     float2 motion = currUv - prevUv;
 
     PSOut o;
-    o.color = float4(color, 1.0f);
+    // P16.1: the one place the factor goes on. Alpha is a blend weight, not a colour, so it stays.
+    o.color = float4(color * preExposureParams.x, 1.0f);
     o.velocity = motion;
 #ifdef EDITOR_OBJECT_ID
     o.objectId = objectId;

@@ -26,6 +26,8 @@ SamplerState gSmp : register(s0);
 
 cbuffer ExposureBaseLumCB : register(b0)
 {
+    // P16.1: same reason as the histogram -- measure the scene, not the scene times its exposure.
+    float invPreExposure;
     uint baseWidth;
     uint baseHeight;
     float basePad0;
@@ -56,7 +58,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         for (int x = -kBoxRadius; x <= kBoxRadius; ++x)
         {
             const float2 uv = (float2(dtid.xy) + 0.5f + float2(x, y)) * invSize;
-            const float3 c = SceneColor.SampleLevel(gSmp, saturate(uv), 0).rgb;
+            const float3 c = SceneColor.SampleLevel(gSmp, saturate(uv), 0).rgb * invPreExposure;
             const float lum = dot(c, float3(0.2126f, 0.7152f, 0.0722f));
             // Average in LOG space, not linear: the base layer is consumed as a log quantity, and
             // averaging linearly would let one bright sample dominate a whole neighbourhood --
