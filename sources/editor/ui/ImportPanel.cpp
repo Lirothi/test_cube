@@ -815,7 +815,10 @@ namespace
         float spawnScale,
         const std::string& materialBaseName,
         const MeshLoadOptions& lodOpt,
-        int chunkGrid) // -1 = keep the asset's existing value; see RecreateMeshAssets
+        int chunkGrid, // -1 = keep the asset's existing value; see RecreateMeshAssets
+        // true = ignore lodOpt's LOD/bakeScale fields and reproduce what THIS asset's
+        // mesh.json carries (non-dialog re-imports must not inherit dialog leftovers).
+        bool preserveLodFromAsset)
     {
         nlohmann::json asset = nlohmann::json::object();
         std::ifstream existingFile(path);
@@ -836,13 +839,55 @@ namespace
         bakeOpt.generateTangentSpace = true;
         bakeOpt.wantCW = false;
         // LOD knobs chosen in the import dialog (defaults reproduce the shipped chain exactly).
+        // EVERY LOD field must ride along: this copy dropped the LOD3 knobs when they were
+        // added and the dialog's checkbox/sliders silently did nothing (user-hit 2026-08-21).
         bakeOpt.lodRatioScale = lodOpt.lodRatioScale;
         bakeOpt.lodErrorScale = lodOpt.lodErrorScale;
         bakeOpt.lodSimplifyOptions = lodOpt.lodSimplifyOptions;
+        bakeOpt.lod3Aggressive = lodOpt.lod3Aggressive;
+        bakeOpt.lod3RatioScale = lodOpt.lod3RatioScale;
+        bakeOpt.lod3ErrorScale = lodOpt.lod3ErrorScale;
+        bakeOpt.foliagePruneKeep = lodOpt.foliagePruneKeep;
+        bakeOpt.foliageInnerRatio = lodOpt.foliageInnerRatio;
+        bakeOpt.foliageInnerError = lodOpt.foliageInnerError;
+        bakeOpt.foliageGrow = lodOpt.foliageGrow;
+        bakeOpt.foliageUvWeight = lodOpt.foliageUvWeight;
+        // Per-slot per-level drop lists are Mesh Editor overrides — preserve across re-imports.
+        const auto readDropSlots = [&asset](const char* key, std::vector<uint32_t>& out)
+        {
+            if (!asset.contains(key) || !asset[key].is_array()) { return; }
+            for (const nlohmann::json& s : asset[key])
+            {
+                if (s.is_number_integer()) { out.push_back(s.get<uint32_t>()); }
+            }
+        };
+        readDropSlots("lod1DropSlots", bakeOpt.lod1DropSlots);
+        readDropSlots("lod2DropSlots", bakeOpt.lod2DropSlots);
+        readDropSlots("lod3DropSlots", bakeOpt.lod3DropSlots);
         // Unit correction baked into the vertices (see MeshLoadOptions::bakeScale). Rides the same
         // channel as the LOD knobs, and like them it is part of HashOptions, so changing it makes
         // an existing .mesh.bin stale instead of being silently reused.
         bakeOpt.bakeScale = lodOpt.bakeScale;
+        if (preserveLodFromAsset)
+        {
+            // Reproduce the asset's OWN settings (same keys the Mesh Editor's Save reads).
+            // Defaults here MUST equal MeshLoadOptions' defaults — the writer below erases
+            // default-valued keys.
+            bakeOpt.lodRatioScale = asset.value("lodRatioScale", 1.0f);
+            bakeOpt.lodErrorScale = asset.value("lodErrorScale", 1.0f);
+            bakeOpt.lodSimplifyOptions =
+                (asset.value("lodPermissive", false) ? meshopt_SimplifyPermissive : 0u) |
+                (asset.value("lodDropSmallParts", false) ? meshopt_SimplifyPrune : 0u);
+            bakeOpt.lod3Aggressive = asset.value("lod3Aggressive", true);
+            bakeOpt.lod3RatioScale = asset.value("lod3RatioScale", 1.0f);
+            bakeOpt.lod3ErrorScale = asset.value("lod3ErrorScale", 1.0f);
+            bakeOpt.foliagePruneKeep = asset.value("foliagePruneKeep", 0.35f);
+            bakeOpt.foliageInnerRatio = asset.value("foliageInnerRatio", 0.5f);
+            bakeOpt.foliageInnerError = asset.value("foliageInnerError", 0.15f);
+            bakeOpt.foliageGrow = asset.value("foliageGrow", 1.0f);
+            bakeOpt.foliageUvWeight = asset.value("foliageUvWeight", 0.0f);
+            bakeOpt.bakeScale = asset.value("bakeScale", 1.0f);
+        }
         if (asset.contains("recomputeNormalSlots") && asset["recomputeNormalSlots"].is_array())
         {
             for (const nlohmann::json& s : asset["recomputeNormalSlots"])
@@ -918,6 +963,36 @@ namespace
         // Written from the SAME value the bake just used (see above).
         if (effectiveChunkGrid > 0) { asset["chunkGrid"] = effectiveChunkGrid; }
         else { asset.erase("chunkGrid"); }
+
+        // EVERY LOD setting the bake just used lands in the manifest, or it dies on the next
+        // Save: the Mesh Editor re-bakes from mesh.json, and a setting that lived only in this
+        // dialog silently rolls the geometry back to defaults (user-hit 2026-08-21: a tuned
+        // date_palm LOD3 went 339 -> 1045 triangles the moment Save was pressed). Non-default
+        // only, defaults erased — the same style as chunkGrid above.
+        const auto writeLodF = [&asset](const char* key, float v, float def)
+        {
+            if (v != def) { asset[key] = v; }
+            else { asset.erase(key); }
+        };
+        writeLodF("lodRatioScale", bakeOpt.lodRatioScale, 1.0f);
+        writeLodF("lodErrorScale", bakeOpt.lodErrorScale, 1.0f);
+        if ((bakeOpt.lodSimplifyOptions & meshopt_SimplifyPermissive) != 0u) { asset["lodPermissive"] = true; }
+        else { asset.erase("lodPermissive"); }
+        if ((bakeOpt.lodSimplifyOptions & meshopt_SimplifyPrune) != 0u) { asset["lodDropSmallParts"] = true; }
+        else { asset.erase("lodDropSmallParts"); }
+        if (!bakeOpt.lod3Aggressive) { asset["lod3Aggressive"] = false; }
+        else { asset.erase("lod3Aggressive"); }
+        writeLodF("lod3RatioScale", bakeOpt.lod3RatioScale, 1.0f);
+        writeLodF("lod3ErrorScale", bakeOpt.lod3ErrorScale, 1.0f);
+        writeLodF("foliagePruneKeep", bakeOpt.foliagePruneKeep, 0.35f);
+        writeLodF("foliageInnerRatio", bakeOpt.foliageInnerRatio, 0.5f);
+        writeLodF("foliageInnerError", bakeOpt.foliageInnerError, 0.15f);
+        writeLodF("foliageGrow", bakeOpt.foliageGrow, 1.0f);
+        writeLodF("foliageUvWeight", bakeOpt.foliageUvWeight, 0.0f);
+        // The unit correction folded into the vertices must round-trip like the LOD knobs, or
+        // the next Save/bulk re-import would re-bake the mesh at the SOURCE unit scale.
+        writeLodF("bakeScale", bakeOpt.bakeScale, 1.0f);
+        // lod3DropSlots flowed asset -> bakeOpt above and stays in `asset` as-is.
 
         std::error_code ec;
         fs::create_directories(path.parent_path(), ec);
@@ -1049,12 +1124,8 @@ std::string ImportPanel::ProjectDest(const Item& item) const
     return (fs::path(kModelsRoot) / item.name).string();
 }
 
-bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
-    const std::vector<std::string>& splitNodes, int chunkGrid)
+MeshLoadOptions ImportPanel::DialogLodOptions() const
 {
-    if (item.kind != Kind::Mesh || item.gltfFile.empty()) { return false; }
-
-    // Every mesh bake funnels through here, so this is where the dialog's LOD knobs are applied.
     MeshLoadOptions lodOpt;
     lodOpt.lodRatioScale = meshDialogLodRatio_;
     lodOpt.lodErrorScale = meshDialogLodError_;
@@ -1062,6 +1133,28 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
         (meshDialogLodPermissive_ ? meshopt_SimplifyPermissive : 0u) |
         (meshDialogLodPrune_ ? meshopt_SimplifyPrune : 0u);
     lodOpt.bakeScale = meshDialogBakeScale_;
+    lodOpt.lod3Aggressive = meshDialogLod3Aggressive_;
+    lodOpt.foliagePruneKeep = meshDialogFoliageKeep_;
+    lodOpt.lod3RatioScale = meshDialogLod3Ratio_;
+    lodOpt.lod3ErrorScale = meshDialogLod3Error_;
+    lodOpt.foliageInnerRatio = meshDialogInnerRatio_;
+    lodOpt.foliageInnerError = meshDialogInnerError_;
+    lodOpt.foliageGrow = meshDialogFoliageGrow_;
+    lodOpt.foliageUvWeight = meshDialogUvWeight_;
+    return lodOpt;
+}
+
+bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
+    const std::vector<std::string>& splitNodes, int chunkGrid,
+    const MeshLoadOptions* dialogLod)
+{
+    if (item.kind != Kind::Mesh || item.gltfFile.empty()) { return false; }
+
+    // Every mesh bake funnels through here. dialogLod is a click-time snapshot of the import
+    // dialog's knobs; null (bulk "Re-import all changed", per-resource rows) means each asset
+    // re-bakes with the settings its OWN mesh.json carries — never the dialog's leftovers.
+    const bool preserveLodFromAsset = dialogLod == nullptr;
+    const MeshLoadOptions lodOpt = dialogLod ? *dialogLod : MeshLoadOptions{};
 
     std::error_code relEc;
     const fs::path rel = fs::relative(
@@ -1076,7 +1169,7 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
         const std::string binGeom = (dst / (item.name + ".mesh.bin")).generic_string();
         return WriteImportedMeshAsset(
             meshAssetRoot / (item.name + ".mesh.json"), binGeom, source, spawnScale, item.name,
-            lodOpt, chunkGrid);
+            lodOpt, chunkGrid, preserveLodFromAsset);
     }
 
     for (const std::string& node : splitNodes)
@@ -1090,7 +1183,8 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
         // shadow caster group per tile of an object that occupies a handful of pages anyway. The
         // dialog greys the control out when splitting is on; this makes it true for every caller.
         if (!WriteImportedMeshAsset(meshAssetPath, binGeom,
-                source + "#node:" + node, spawnScale, item.name + "_" + component, lodOpt, 0))
+                source + "#node:" + node, spawnScale, item.name + "_" + component, lodOpt, 0,
+                preserveLodFromAsset))
         {
             return false;
         }
@@ -1302,10 +1396,15 @@ void ImportPanel::BeginImport(const Item& item,
     float meshSpawnScale,
     const std::vector<std::string>& meshSplitNodes,
     bool meshSplitChoiceProvided,
-    int meshChunkGrid)
+    int meshChunkGrid,
+    const MeshLoadOptions* meshLodFromDialog)
 {
     if (running_.load()) { return; }
     activeItem_ = item;
+    // Snapshot NOW, not at finalize: the dialog fields are live widgets and the user is free
+    // to open another mesh's dialog while the worker converts textures.
+    activeMeshLodOpt_ = meshLodFromDialog ?
+        std::make_unique<MeshLoadOptions>(*meshLodFromDialog) : nullptr;
     // Baseline for "which material definitions did this run touch" — see PollImport.
     materialsBeforeImport_ = SnapshotMaterialDefinitions();
     activeTargetOutputs_.clear();
@@ -1640,6 +1739,13 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
         meshDialogSplitTopLevelNodes_ = true;
     }
 
+    // LOD settings are deliberately STICKY across dialog opens — the workflow is "tune the
+    // sliders once, stamp several meshes with them". Seeding them per-asset was tried and
+    // reverted the same day (2026-08-21): a mesh whose json carried no knobs silently reset
+    // the widgets and the next bake threw the user's tuning away. The Reset button under the
+    // sliders is the way back to defaults; what an asset ACTUALLY baked with lives in its
+    // mesh.json, which non-dialog re-imports and the Mesh Editor's Save read directly.
+
     // Shadow chunking: seed from what the asset ALREADY carries, so re-opening the dialog shows the
     // truth rather than the previous mesh's widget state. Whole-file assets only (a split import
     // writes one sidecar per node and none of them is chunked — see RecreateMeshAssets).
@@ -1830,8 +1936,62 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
                               "removal fits the error budget. No effect on meshes whose parts are\n"
                               "large (a palm frond is one connected 80-triangle grid, not loose cards).");
 
+        ImGui::Checkbox("Aggressive LOD3", &meshDialogLod3Aggressive_);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("The LAST level cuts hard: solid slots to ~5%% of their triangles at a\n"
+                              "loose error budget, foliage slots via the leaf prune below. TURN OFF\n"
+                              "FOR TERRAIN - its far shadow casters are tuned against low-sun banding\n"
+                              "and the loose budget deforms dune silhouettes.");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("LOD3 triangle target", &meshDialogLod3Ratio_, 0.25f, 4.0f, "x%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("LOD3's OWN multiplier over its harsh base target (5%% solid; also\n"
+                              "scales the kept-leaf interior decimation). Separate from the chain-\n"
+                              "wide Triangle target above, so the last level can be pushed alone.");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("LOD3 error budget", &meshDialogLod3Error_, 0.25f, 4.0f, "x%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("LOD3's OWN multiplier over its loose base error (0.25 of mesh extent).\n"
+                              "Raise it when stubborn small parts (husk scales) refuse to collapse\n"
+                              "at the default budget.");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("Foliage prune keep", &meshDialogFoliageKeep_, 0.0f, 1.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("LOD3 foliage: fraction of whole leaves KEPT (the rest are removed and\n"
+                              "the survivors grow by 1/sqrt(keep) to hold the silhouette density).\n"
+                              "Leaf slots come from windFoliage. 0 or 1 = no prune (plain meshopt,\n"
+                              "which stalls on alpha-card crowns).");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("Leaf inner target", &meshDialogInnerRatio_, 0.05f, 1.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("LOD3: fraction of the KEPT leaves' triangles that survives the interior\n"
+                              "decimation (LockBorder pins each card's outline, so the inside can be\n"
+                              "crushed hard - the silhouette cannot move). Lower = flatter leaves.");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("Leaf inner error", &meshDialogInnerError_, 0.02f, 0.6f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Error budget for the leaf interior decimation (relative to mesh extent).\n"
+                              "Raise it if the inner target is not being reached.");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("Leaf grow", &meshDialogFoliageGrow_, 0.0f, 1.5f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("How much the kept leaves inflate to compensate the pruned area.\n"
+                              "1 = full 1/sqrt(keep) compensation (holds silhouette density but can\n"
+                              "read FLUFFIER than the source crown), 0 = survivors stay authored size.");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("Leaf UV weight", &meshDialogUvWeight_, 0.0f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Attribute-aware simplification for foliage slots (all LODs): makes UV\n"
+                              "distortion cost like position error, so collapses stop smearing the\n"
+                              "leaf texture into streaks. ~0.5-1.0 is the useful range; 0 = classic\n"
+                              "position-only collapse.");
+
         const bool nonDefault = meshDialogLodRatio_ != 1.0f || meshDialogLodError_ != 1.0f ||
-                                meshDialogLodPermissive_ || meshDialogLodPrune_;
+                                meshDialogLodPermissive_ || meshDialogLodPrune_ ||
+                                !meshDialogLod3Aggressive_ || meshDialogFoliageKeep_ != 0.35f ||
+                                meshDialogLod3Ratio_ != 1.0f || meshDialogLod3Error_ != 1.0f ||
+                                meshDialogInnerRatio_ != 0.5f || meshDialogInnerError_ != 0.15f ||
+                                meshDialogFoliageGrow_ != 1.0f || meshDialogUvWeight_ != 0.0f;
         if (nonDefault)
         {
             ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f), "Non-default LOD settings");
@@ -1842,6 +2002,14 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
                 meshDialogLodError_ = 1.0f;
                 meshDialogLodPermissive_ = false;
                 meshDialogLodPrune_ = false;
+                meshDialogLod3Aggressive_ = true;
+                meshDialogFoliageKeep_ = 0.35f;
+                meshDialogLod3Ratio_ = 1.0f;
+                meshDialogLod3Error_ = 1.0f;
+                meshDialogInnerRatio_ = 0.5f;
+                meshDialogInnerError_ = 0.15f;
+                meshDialogFoliageGrow_ = 1.0f;
+                meshDialogUvWeight_ = 0.0f;
             }
         }
     }
@@ -1944,14 +2112,15 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     if (ImGui::Button(meshDialogItem_.alreadyInProject ? "Re-import" : "Import",
             ImVec2(0.0f, 0.0f)))
     {
+        const MeshLoadOptions dialogLod = DialogLodOptions();
         BeginImport(meshDialogItem_, {}, true, {}, {}, selectedSpawnScale,
-            selectedSplitNodes, true, selectedChunkGrid);
+            selectedSplitNodes, true, selectedChunkGrid, &dialogLod);
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!meshDialogItem_.alreadyInProject);
     const bool recreateMeshJson = ImGui::Button(
-        "Recreate mesh JSON only", ImVec2(0.0f, 0.0f));
+        "Recreate JSON + re-bake bin", ImVec2(0.0f, 0.0f));
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     {
@@ -1962,8 +2131,9 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     }
     if (recreateMeshJson)
     {
+        const MeshLoadOptions dialogLod = DialogLodOptions();
         const bool recreated = RecreateMeshAssets(meshDialogItem_,
-            selectedSpawnScale, selectedSplitNodes, selectedChunkGrid);
+            selectedSpawnScale, selectedSplitNodes, selectedChunkGrid, &dialogLod);
         status_ = recreated ?
             (selectedSplitNodes.empty() ?
                 "Recreated mesh JSON for " + meshDialogItem_.name :
@@ -1971,7 +2141,20 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
                 " split mesh JSON files for " + meshDialogItem_.name) :
             "Failed to recreate mesh JSON for " + meshDialogItem_.name;
         statusIsError_ = !recreated;
-        if (recreated) { registry.Refresh(); }
+        if (recreated)
+        {
+            registry.Refresh();
+            // Feed the SAME invalidation the async flow gets (see Draw's tail): the re-baked
+            // bin + rewritten json, keyed by asset name so placed instances respawn.
+            lastImportedName_ = meshDialogItem_.name;
+            lastImportedFiles_.clear();
+            const fs::path dst = ProjectDest(meshDialogItem_);
+            lastImportedFiles_.push_back(NormalizeRelativePath(
+                dst.parent_path() / (meshDialogItem_.name + ".mesh.json")));
+            lastImportedFiles_.push_back(NormalizeRelativePath(
+                dst / (meshDialogItem_.name + ".mesh.bin")));
+            pendingInvalidate_ = true;
+        }
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -2169,7 +2352,8 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                 !activeItem_.gltfFile.empty())
             {
                 finalizeFailed = !RecreateMeshAssets(activeItem_,
-                    activeMeshSpawnScale_, activeMeshSplitNodes_, activeMeshChunkGrid_);
+                    activeMeshSpawnScale_, activeMeshSplitNodes_, activeMeshChunkGrid_,
+                    activeMeshLodOpt_.get());
                 // W7.1b: RecreateMeshAssets generated material files from the STAGING glTF, so their
                 // texture paths point into import_staging/; repoint them to the copied models/ DDS
                 // (mirrors the TextureSet repoint above). No-op on re-import (files preserved).
@@ -2519,6 +2703,10 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
     DrawMeshImportDialog(registry); // per-mesh spawn-size normalization modal
 
     ImGui::End();
+    // "Recreate JSON + re-bake bin" is SYNCHRONOUS (no worker), so it flags the invalidation
+    // itself — without this the running session kept serving the OLD mesh from MeshManager's
+    // cache and placed instances never respawned (user-hit 2026-08-21).
+    if (pendingInvalidate_) { finished = true; pendingInvalidate_ = false; }
     return finished;
 }
 

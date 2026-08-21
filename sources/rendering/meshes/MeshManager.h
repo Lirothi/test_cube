@@ -22,6 +22,54 @@ struct MeshLoadOptions {
     // bake falls back to the per-component ramp.
     std::vector<float> slotFoliage;
 
+    // LOD3 foliage prune (bake path only). Alpha-card foliage cannot be edge-collapsed -- the
+    // shape lives in the silhouette and UV island, so meshopt either stalls (~1.4x on a palm
+    // crown) or shreds blades into spikes with Permissive. Instead LOD3 removes whole leaf
+    // components and scales the survivors by 1/sqrt(keep) about their centroid so the crown's
+    // silhouette DENSITY is preserved (Cook et al., stochastic aggregate simplification).
+    // Fraction of leaf components kept; 0 disables (foliage LOD3 falls back to meshopt).
+    // Only the BAKE can prune: the scaled survivors are APPENDED vertex copies (LODs are index
+    // buffers over one shared VB), and the runtime-fallback path uploads the VB before LODs.
+    float foliagePruneKeep = 0.35f;
+
+    // LOD3 solid budget: true = the harsh level (target 5%, error 0.25 — user decision
+    // 2026-08-21, the last level cuts hard instead of adding a fifth). false = keep the classic
+    // 0.12/0.12 — what TERRAIN wants: its far-clipmap shadow casters are tuned against low-sun
+    // banding and a 0.25 error deforms dune silhouettes. mesh.json "lod3Aggressive".
+    bool lod3Aggressive = true;
+    // LOD3's OWN budget multipliers over the harsh base (0.05 target / 0.25 error) — separate
+    // from the whole-chain lodRatioScale/lodErrorScale so the last level can be pushed without
+    // touching LODs 1-2. SOLID slots only; the kept-leaf interior decimation has its own pair
+    // below. mesh.json "lod3RatioScale"/"lod3ErrorScale".
+    float lod3RatioScale = 1.0f;
+    float lod3ErrorScale = 1.0f;
+    // Interior decimation of the KEPT leaves at LOD3 (LockBorder+Permissive over the pruned
+    // subset): target fraction of the kept triangles and the error budget (relative to mesh
+    // extent). mesh.json "foliageInnerRatio"/"foliageInnerError".
+    float foliageInnerRatio = 0.5f;
+    float foliageInnerError = 0.15f;
+    // Material slots that VANISH at LOD3 entirely (empty submesh keeps the table aligned).
+    // The surgical answer for trims that survive every metric — a date palm's husk scales are
+    // welded to the trunk, so neither Prune nor the error budget can separate them from the
+    // silhouette-critical cylinder. mesh.json "lod3DropSlots": [..].
+    std::vector<uint32_t> lod3DropSlots;
+    // Same contract for the earlier levels — each level's list is independent (a slot dropped
+    // at LOD1 is NOT implicitly dropped later; every LOD builds from the BASE indices).
+    // mesh.json "lod1DropSlots"/"lod2DropSlots".
+    std::vector<uint32_t> lod1DropSlots;
+    std::vector<uint32_t> lod2DropSlots;
+    // Grow factor over the prune's automatic 1/sqrt(keep) survivor inflation: 1 = full area
+    // compensation (holds silhouette DENSITY but can read fluffier than the source crown),
+    // 0 = survivors stay authored-size. mesh.json "foliageGrow".
+    float foliageGrow = 1.0f;
+    // UV weight for attribute-aware simplification of FOLIAGE slots
+    // (meshopt_simplifyWithAttributes). Position-only collapse slides vertices freely along a
+    // flat alpha card — zero geometric error, but the leaf texture smears into streaks by
+    // LOD1. A non-zero weight makes UV distortion cost like position error (UE's simplifier
+    // is attribute-aware for the same reason). 0 = plain meshopt_simplify, byte-identical to
+    // the old bake. mesh.json "foliageUvWeight".
+    float foliageUvWeight = 0.0f;
+
     // Uniform factor applied to VERTEX POSITIONS at bake time, so an asset authored in the wrong
     // unit (centimetres is the common one -- the tent bakes at 418 x 227 x 284) comes out of the
     // bake already in metres. The alternative the importer used to offer, a `spawnScale` on the

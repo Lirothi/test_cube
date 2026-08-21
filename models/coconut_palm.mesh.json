@@ -1,5 +1,21 @@
 {
+  "foliageInnerError": 0.41999998688697815,
+  "foliageInnerRatio": 0.23000000417232513,
+  "foliagePruneKeep": 0.3799999952316284,
   "geometry": "models/coconut_palm/coconut_palm.mesh.bin",
+  "lod2DropSlots": [
+    4,
+    3,
+    1
+  ],
+  "lod3DropSlots": [
+    1,
+    3,
+    4
+  ],
+  "lod3RatioScale": 0.7400000095367432,
+  "lodDropSmallParts": true,
+  "lodRatioScale": 0.7099999785423279,
   "materials": [
     "coconut_palm_0",
     "coconut_palm_1",

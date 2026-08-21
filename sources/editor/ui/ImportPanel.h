@@ -11,6 +11,8 @@
 
 #include "editor/assets/AssetRegistry.h"
 
+struct MeshLoadOptions; // rendering/meshes/MeshManager.h — LOD/bake knobs a mesh import carries
+
 // Part H3 — content-browser "Import Assets" window. Scans import_staging/ for raw downloads
 // (glTF/GLB folders, texture-set folders, .hdr skyboxes), shows what was detected + license, and
 // runs the H1 backend (assets::RunImport) on a background thread to produce engine-ready DDS
@@ -83,7 +85,13 @@ private:
         float meshSpawnScale = -1.0f,
         const std::vector<std::string>& meshSplitNodes = {},
         bool meshSplitChoiceProvided = false,
-        int meshChunkGrid = -1);
+        int meshChunkGrid = -1,
+        // Non-null ONLY from the import dialog's buttons: a SNAPSHOT of its LOD/bake-scale
+        // values, taken at click time. The worker finalizes seconds later, and reading the
+        // live widget fields then means a dialog reopened mid-import re-bakes with the wrong
+        // values. Null (every bulk / per-resource caller) = reproduce the asset's OWN
+        // mesh.json settings, never the dialog's leftovers.
+        const MeshLoadOptions* meshLodFromDialog = nullptr);
     void PollImport(AssetRegistry& registry, bool& finishedOut);
     void OpenImportDialog(const Item& item); // texture sets: choose files + preset before importing
     void DrawImportDialog();
@@ -99,7 +107,12 @@ private:
     // existing mesh.json carries; >= 0 is the import dialog's answer, and 0 must be able to REMOVE
     // an existing grid or the dialog's checkbox could be cleared and silently do nothing.
     bool RecreateMeshAssets(const Item& item, float spawnScale,
-        const std::vector<std::string>& splitNodes, int chunkGrid);
+        const std::vector<std::string>& splitNodes, int chunkGrid,
+        const MeshLoadOptions* dialogLod); // null = preserve the asset's own mesh.json knobs
+
+    // The import dialog's LOD + bake-scale widget values as MeshLoadOptions. The ONLY reader
+    // of those widgets on a bake path — snapshot the result at click time (see BeginImport).
+    MeshLoadOptions DialogLodOptions() const;
 
     // Engine-tree destination for an item, by kind: models/<name> (Mesh), textures/<name>
     // (TextureSet), textures/<name>.dds (Skybox). Meshes go to models/ (their sibling DDS ride
@@ -152,9 +165,16 @@ private:
     // Same contract for shadow chunking: -1 preserves the asset's existing chunkGrid for
     // non-interactive/bulk reimports, >= 0 is the dialog's explicit answer.
     int activeMeshChunkGrid_ = -1;
+    // Snapshot of the dialog's LOD values for the running async import (see BeginImport's
+    // meshLodFromDialog). Null for non-dialog imports = preserve per-asset mesh.json knobs.
+    std::unique_ptr<MeshLoadOptions> activeMeshLodOpt_;
     std::string activeMeshSplitGltf_;
     std::vector<std::string> activeMeshSplitNodes_;
     bool joinPending_ = false;
+    // Set by the synchronous "Recreate JSON + re-bake bin" path; makes the NEXT Draw() return
+    // report "finished" so the caller runs the same cache-invalidation + respawn it does for
+    // async imports. Without it a re-bake was invisible to the running session until restart.
+    bool pendingInvalidate_ = false;
     std::string status_;
     bool statusIsError_ = false; // colors the status line red on failure, green on success
 
@@ -191,6 +211,14 @@ private:
     float meshDialogLodError_ = 1.0f;
     bool  meshDialogLodPermissive_ = false; // meshopt_SimplifyPermissive — shreds masked foliage
     bool  meshDialogLodPrune_ = false;      // meshopt_SimplifyPrune — drops small loose components
+    bool  meshDialogLod3Aggressive_ = true; // harsh last level (solid ~5%; OFF for terrain)
+    float meshDialogFoliageKeep_ = 0.35f;   // LOD3 leaf-prune keep fraction (0/1 = no prune)
+    float meshDialogLod3Ratio_ = 1.0f;      // LOD3-only multiplier over the 5% target
+    float meshDialogLod3Error_ = 1.0f;      // LOD3-only multiplier over the 0.25 error
+    float meshDialogInnerRatio_ = 0.5f;     // LOD3 kept-leaf interior decimation target
+    float meshDialogInnerError_ = 0.15f;    // and its error budget
+    float meshDialogFoliageGrow_ = 1.0f;    // survivor-inflation dial (1 = full area comp)
+    float meshDialogUvWeight_ = 0.0f;       // foliage UV weight for attribute-aware simplify
     // Shadow chunking (mesh.json "chunkGrid"). Splits LOD0 into an N x N grid of submeshes so each
     // tile becomes its own shadow caster and a shadow page rasterizes only the tiles it overlaps.
     // Seeded from the asset on dialog open, so re-opening shows what the asset actually carries.

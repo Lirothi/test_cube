@@ -3124,6 +3124,25 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     ApplyImportInvalidation(panelCtx,
                         importPanel_.LastImportedName(),
                         importPanel_.LastImportedFiles());
+                    // The Mesh Editor edits an IN-MEMORY copy of its .mesh.json, loaded when the
+                    // asset was opened. The import just rewrote that file, and the panel's next
+                    // Save would dump the pre-import document back over it — erasing the LOD
+                    // settings the import persisted and re-baking the geometry to defaults
+                    // (user-hit 2026-08-21: coconut LOD3 339 -> 511 tris, 100% repro with both
+                    // windows open). Re-open so the panel edits what the import actually wrote;
+                    // covers split sidecars too via the models/<name> prefix.
+                    const std::string& imported = importPanel_.LastImportedName();
+                    if (!imported.empty() && !meshEditor_.CurrentPath().empty())
+                    {
+                        // Copy, not a reference: Open() resets panel state including path_.
+                        const std::string reopen = meshEditor_.CurrentPath();
+                        const std::string current =
+                            std::filesystem::path(reopen).generic_string();
+                        if (current.rfind("models/" + imported, 0) == 0)
+                        {
+                            meshEditor_.Open(reopen);
+                        }
+                    }
                 }
             }));
 

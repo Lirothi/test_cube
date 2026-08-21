@@ -1,5 +1,25 @@
 {
+  "foliageGrow": 0.44999998807907104,
+  "foliageInnerError": 0.30000001192092896,
+  "foliageInnerRatio": 0.23000000417232513,
+  "foliagePruneKeep": 0.17000000178813934,
+  "foliageUvWeight": 0.47999998927116394,
   "geometry": "models/date_palm/date_palm.mesh.bin",
+  "lod1DropSlots": [
+    2
+  ],
+  "lod2DropSlots": [
+    2,
+    3
+  ],
+  "lod3DropSlots": [
+    2,
+    3
+  ],
+  "lod3RatioScale": 0.44999998807907104,
+  "lodDropSmallParts": true,
+  "lodErrorScale": 2.0799999237060547,
+  "lodRatioScale": 0.4699999988079071,
   "materials": [
     "date_palm_0",
     "date_palm_1",

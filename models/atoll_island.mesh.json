@@ -1,6 +1,7 @@
 {
   "chunkGrid": 6,
   "geometry": "models/atoll_island/atoll_island.mesh.bin",
+  "lod3Aggressive": false,
   "inputLayout": "PosNormTanUV",
   "material": "sandstone_cracks",
   "renderLayer": "Terrain",

@@ -17,6 +17,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <functional> // LOD3 foliage prune: union-find's recursive-free find lambda
 #include "meshoptimizer.h"
 #include "third_party/cgltf/cgltf.h"
 #include <Windows.h> // OutputDebugStringA for load diagnostics
@@ -102,6 +103,230 @@ bool ChunkifyLod0(const std::vector<VertexPNTUV>& verts, std::vector<uint32_t>& 
     return true;
 }
 
+// LOD3 foliage prune (see MeshLoadOptions::foliagePruneKeep). Removes whole leaf components
+// from one foliage submesh range and APPENDS scaled copies of the survivors' vertices —
+// silhouette density is preserved by growing what stays instead of collapsing what a
+// position-only error metric cannot see. Components come from INDEX connectivity: meshes are
+// index-split at UV seams, so the units land at leaflet/frond granularity — exactly the
+// islands meshopt refuses to collapse across. Deterministic (ordering keyed on the smallest
+// vertex index), so a re-bake is byte-stable.
+// Returns false when the range has too few components to prune meaningfully (caller falls
+// back to meshopt).
+bool PruneFoliageRange(std::vector<VertexPNTUV>& verts, const uint32_t* srcIdx, size_t srcCount,
+                       float keepRatio, float innerRatio, float innerError,
+                       float grow, float uvWeight,
+                       std::vector<uint32_t>& outIndices)
+{
+    if (srcCount < 96 || keepRatio <= 0.0f || keepRatio >= 1.0f) { return false; }
+
+    // Union-find over the range's vertex indices.
+    robin_hood::unordered_map<uint32_t, uint32_t> parent;
+    parent.reserve(srcCount);
+    std::function<uint32_t(uint32_t)> find = [&](uint32_t x) -> uint32_t
+    {
+        auto it = parent.find(x);
+        if (it == parent.end()) { parent[x] = x; return x; }
+        uint32_t root = x;
+        while (parent[root] != root) { root = parent[root]; }
+        while (parent[x] != root) { uint32_t next = parent[x]; parent[x] = root; x = next; }
+        return root;
+    };
+    for (size_t t = 0; t + 2 < srcCount; t += 3)
+    {
+        const uint32_t a = find(srcIdx[t]);
+        const uint32_t b = find(srcIdx[t + 1]);
+        const uint32_t c = find(srcIdx[t + 2]);
+        parent[b] = a;
+        parent[c] = a;
+    }
+
+    struct Comp
+    {
+        std::vector<uint32_t> tris;   // first-index of each triangle in the range
+        Math::float3 centroid{};
+        uint32_t minVert = UINT32_MAX;
+    };
+    robin_hood::unordered_map<uint32_t, uint32_t> rootToComp;
+    std::vector<Comp> comps;
+    for (size_t t = 0; t + 2 < srcCount; t += 3)
+    {
+        const uint32_t root = find(srcIdx[t]);
+        auto it = rootToComp.find(root);
+        if (it == rootToComp.end()) { it = rootToComp.emplace(root, (uint32_t)comps.size()).first; comps.emplace_back(); }
+        Comp& c = comps[it->second];
+        c.tris.push_back((uint32_t)t);
+        for (int k = 0; k < 3; ++k)
+        {
+            const uint32_t vi = srcIdx[t + k];
+            c.minVert = vi < c.minVert ? vi : c.minVert;
+            const auto& p = verts[vi].position;
+            c.centroid = Math::float3(c.centroid.x + p.x, c.centroid.y + p.y, c.centroid.z + p.z);
+        }
+    }
+    // A crown that welded into a handful of blobs cannot be pruned leaf-wise — let meshopt try.
+    if (comps.size() < 8) { return false; }
+
+    for (Comp& c : comps)
+    {
+        const float inv = 1.0f / (float)(c.tris.size() * 3);
+        c.centroid = Math::float3(c.centroid.x * inv, c.centroid.y * inv, c.centroid.z * inv);
+    }
+
+    // FARTHEST-POINT selection over the centroids: start from the largest leaf, then always
+    // keep the candidate farthest from everything already kept (ties: bigger, then smallest
+    // vertex index — deterministic). Blue-noise spread by construction: no grid to alias
+    // against, no bald sector, and a multi-crown asset (the coconut is a DOUBLE palm) splits
+    // its quota between crowns automatically. The first cut of this used a 3x3x3 centroid
+    // grid and visibly skewed the coconut's kept leaves to one side — an axis-aligned grid
+    // over two overlapping radial crowns is exactly the wrong stratifier.
+    std::vector<char> kept(comps.size(), 0);
+    size_t keptTris = 0, totalTris = srcCount / 3;
+    const size_t quota = std::max<size_t>(1, (size_t)std::ceil((double)comps.size() * keepRatio));
+    {
+        uint32_t seed = 0;
+        for (uint32_t i = 1; i < comps.size(); ++i)
+        {
+            if (comps[i].tris.size() > comps[seed].tris.size() ||
+                (comps[i].tris.size() == comps[seed].tris.size() && comps[i].minVert < comps[seed].minVert))
+            {
+                seed = i;
+            }
+        }
+        kept[seed] = 1;
+        keptTris += comps[seed].tris.size();
+        std::vector<float> minDistSq(comps.size(), FLT_MAX);
+        auto relax = [&](uint32_t keptIdx)
+        {
+            const Math::float3& k = comps[keptIdx].centroid;
+            for (uint32_t i = 0; i < comps.size(); ++i)
+            {
+                const Math::float3& c = comps[i].centroid;
+                const float dx = c.x - k.x, dy = c.y - k.y, dz = c.z - k.z;
+                const float d = dx * dx + dy * dy + dz * dz;
+                minDistSq[i] = std::min(minDistSq[i], d);
+            }
+        };
+        relax(seed);
+        for (size_t taken = 1; taken < quota; ++taken)
+        {
+            uint32_t best = UINT32_MAX;
+            for (uint32_t i = 0; i < comps.size(); ++i)
+            {
+                if (kept[i]) { continue; }
+                if (best == UINT32_MAX ||
+                    minDistSq[i] > minDistSq[best] ||
+                    (minDistSq[i] == minDistSq[best] &&
+                     (comps[i].tris.size() > comps[best].tris.size() ||
+                      (comps[i].tris.size() == comps[best].tris.size() && comps[i].minVert < comps[best].minVert))))
+                {
+                    best = i;
+                }
+            }
+            if (best == UINT32_MAX) { break; }
+            kept[best] = 1;
+            keptTris += comps[best].tris.size();
+            relax(best);
+        }
+    }
+    if (keptTris == 0 || keptTris >= totalTris) { return false; }
+
+    // Area compensation: triangles are the area proxy, measured BEFORE the interior decimation
+    // below (decimation keeps the card's area, so the pre-decimation count is the honest one).
+    // Keeping big leaves first means the kept AREA fraction exceeds the component fraction, so
+    // the needed growth stays modest. `grow` dials the compensation itself: full inflation
+    // holds silhouette DENSITY but can read fluffier than the source crown.
+    const float autoScale = std::min(2.5f, std::sqrt((float)totalTris / (float)keptTris));
+    const float scale = 1.0f + (autoScale - 1.0f) * std::max(0.0f, std::min(2.0f, grow));
+
+    // Gather the kept leaves' ORIGINAL triangles.
+    std::vector<uint32_t> keptIdx;
+    keptIdx.reserve(keptTris * 3);
+    for (uint32_t ci = 0; ci < comps.size(); ++ci)
+    {
+        if (!kept[ci]) { continue; }
+        for (const uint32_t t : comps[ci].tris)
+        {
+            keptIdx.push_back(srcIdx[t]);
+            keptIdx.push_back(srcIdx[t + 1]);
+            keptIdx.push_back(srcIdx[t + 2]);
+        }
+    }
+
+    // INTERIOR decimation of the survivors: the pruned leaves kept their full tessellation
+    // (a frond is an ~80-triangle grid whether it is 2 m or 20 m away). LockBorder pins every
+    // open-edge vertex — the card's OUTLINE, which is what a leaf's shape actually lives in —
+    // and with the silhouette nailed down Permissive is finally safe: it lets the interior
+    // collapse across the attribute continuity that stalls safe mode, and the spikes it caused
+    // when the border was free cannot happen. Components are disconnected, so collapses never
+    // cross leaves and every simplified vertex keeps its component identity.
+    const uint32_t* emitIdx = keptIdx.data();
+    size_t emitCount = keptIdx.size();
+    std::vector<uint32_t> innerSimplified;
+    size_t innerTarget = (size_t)((double)keptIdx.size() * std::max(0.05f, std::min(1.0f, innerRatio)));
+    innerTarget -= innerTarget % 3;
+    if (innerTarget >= 12 && innerTarget < keptIdx.size())
+    {
+        innerSimplified.resize(keptIdx.size());
+        float resultError = 0.0f;
+        size_t n = 0;
+        if (uvWeight > 0.0f)
+        {
+            // Interior collapses smear UVs exactly like the chain-wide ones do; same cure.
+            const float uvw[2] = { uvWeight, uvWeight };
+            n = meshopt_simplifyWithAttributes(innerSimplified.data(), keptIdx.data(),
+                keptIdx.size(), &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
+                &verts[0].uv.x, sizeof(VertexPNTUV), uvw, 2, nullptr,
+                innerTarget, innerError, meshopt_SimplifyLockBorder | meshopt_SimplifyPermissive,
+                &resultError);
+        }
+        else
+        {
+            n = meshopt_simplify(innerSimplified.data(), keptIdx.data(), keptIdx.size(),
+                &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
+                innerTarget, innerError, meshopt_SimplifyLockBorder | meshopt_SimplifyPermissive,
+                &resultError);
+        }
+        if (n >= 12)
+        {
+            emitIdx = innerSimplified.data();
+            emitCount = n;
+        }
+    }
+
+    // Emit; every survivor's vertices are APPENDED scaled copies about the OWNING leaf's
+    // centroid. LODs are index buffers over ONE shared vertex buffer — scaling in place would
+    // corrupt LOD 0. A vertex belongs to exactly one component, so one remap serves all.
+    robin_hood::unordered_map<uint32_t, uint32_t> remap;
+    remap.reserve(emitCount);
+    for (size_t t = 0; t + 2 < emitCount; t += 3)
+    {
+        const Comp& c = comps[rootToComp[find(emitIdx[t])]];
+        for (int k = 0; k < 3; ++k)
+        {
+            const uint32_t vi = emitIdx[t + k];
+            auto it = remap.find(vi);
+            if (it == remap.end())
+            {
+                VertexPNTUV v = verts[vi]; // normals/tangents/uv/wind weights verbatim
+                v.position.x = c.centroid.x + (v.position.x - c.centroid.x) * scale;
+                v.position.y = c.centroid.y + (v.position.y - c.centroid.y) * scale;
+                v.position.z = c.centroid.z + (v.position.z - c.centroid.z) * scale;
+                it = remap.emplace(vi, (uint32_t)verts.size()).first;
+                verts.push_back(v);
+            }
+            outIndices.push_back(it->second);
+        }
+    }
+
+    char msg[224];
+    std::snprintf(msg, sizeof(msg),
+        "[meshbake] LOD3 foliage prune: %zu comps -> %zu kept, tris %zu -> %zu -> inner %zu, scale x%.2f\n",
+        comps.size(), (size_t)std::count(kept.begin(), kept.end(), (char)1), totalTris, keptTris,
+        emitCount / 3, scale);
+    OutputDebugStringA(msg);
+    return true;
+}
+
 // Step 6 / Part B: build coarser LODs as reduced index buffers (meshopt_simplify, over the same
 // vertices). Each submesh range is simplified INDEPENDENTLY and the LOD carries its own rebuilt
 // submesh table — simplifying the whole buffer as one blob would dissolve the per-material
@@ -110,9 +335,13 @@ bool ChunkifyLod0(const std::vector<VertexPNTUV>& verts, std::vector<uint32_t>& 
 // `chunkedSubsets` (ChunkifyLod0 ran): the ranges are SPATIAL neighbours of one continuous surface,
 // not disjoint material groups, so independent simplification would pull their shared borders apart
 // into cracks. See the flag block below.
-std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
+//
+// `allowVertexAppend` (the BAKE path only): permits the LOD3 foliage prune, which appends scaled
+// leaf copies to `verts`. The runtime path uploads the VB before LODs are built, so it must pass
+// false and its foliage LOD3 stays plain meshopt until the asset is re-baked.
+std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
     const std::vector<uint32_t>& indices, const std::vector<Mesh::Submesh>& baseSubs,
-    const MeshLoadOptions& opt, bool chunkedSubsets = false)
+    const MeshLoadOptions& opt, bool chunkedSubsets = false, bool allowVertexAppend = false)
 {
     std::vector<MeshLodCpu> out;
     const size_t baseIdx = indices.size();
@@ -145,7 +374,6 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
         : 1.0f;
 
     std::vector<uint32_t> simplified;
-    size_t prevCount = baseIdx;
 
     for (int i = 0; i < 3; ++i)
     {
@@ -156,9 +384,57 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
             const size_t srcCount = s.indexCount;
             const uint32_t outOffset = static_cast<uint32_t>(lod.indices.size());
 
+            // LOD3 (i == 2) is the HARSH level (user decision 2026-08-21: no fifth level;
+            // the last one gets aggressive instead). Opt-out per asset via mesh.json
+            // "lod3Aggressive": false — the terrain manifests carry it, because their
+            // far-clipmap shadow casters are tuned against low-sun banding and a 0.25 error
+            // deforms dune silhouettes.
+            float ratio = ratios[i];
+            float errBudget = errors[i];
+            if (i == 2 && opt.lod3Aggressive)
+            {
+                // LOD3's OWN multipliers (dialog "LOD3 triangle/error x") — deliberately NOT the
+                // whole-chain scales, so the last level is pushed without dragging LODs 1-2.
+                ratio = 0.05f * opt.lod3RatioScale;
+                errBudget = 0.25f * opt.lod3ErrorScale;
+            }
+
+            // Per-level slot drop: the surgical knife for trims that survive every metric (a
+            // date palm's husk scales are welded to the trunk — neither Prune nor the error
+            // budget can take them without eating the silhouette-critical cylinder first). An
+            // EMPTY submesh keeps the table aligned; the draw skips zero-count ranges. Each
+            // level's list is independent — every LOD builds from the BASE indices.
+            const std::vector<uint32_t>* dropLists[3] =
+                { &opt.lod1DropSlots, &opt.lod2DropSlots, &opt.lod3DropSlots };
+            if (std::find(dropLists[i]->begin(), dropLists[i]->end(),
+                          (uint32_t)s.materialSlot) != dropLists[i]->end())
+            {
+                lod.submeshes.push_back(Mesh::Submesh{ outOffset, 0u, s.materialSlot });
+                continue;
+            }
+
+            // LOD3 foliage: whole-leaf prune instead of meshopt (see PruneFoliageRange).
+            // Falls through to meshopt when the range has too few components.
+            const bool foliageSlot = s.materialSlot < opt.slotFoliage.size() &&
+                                     opt.slotFoliage[s.materialSlot] > 0.0f;
+            if (i == 2 && !chunkedSubsets && foliageSlot && allowVertexAppend &&
+                opt.foliagePruneKeep > 0.0f && opt.foliagePruneKeep < 1.0f)
+            {
+                std::vector<uint32_t> pruned;
+                if (PruneFoliageRange(verts, src, srcCount, opt.foliagePruneKeep,
+                                      opt.foliageInnerRatio, opt.foliageInnerError,
+                                      opt.foliageGrow, opt.foliageUvWeight, pruned))
+                {
+                    lod.indices.insert(lod.indices.end(), pruned.begin(), pruned.end());
+                    lod.submeshes.push_back(Mesh::Submesh{ outOffset,
+                        static_cast<uint32_t>(pruned.size()), s.materialSlot });
+                    continue;
+                }
+            }
+
             size_t n = srcCount;
             bool didSimplify = false;
-            size_t target = static_cast<size_t>(srcCount * ratios[i]);
+            size_t target = static_cast<size_t>(srcCount * ratio);
             target -= target % 3;
             if (srcCount >= kMinRangeIndices && target >= 12)
             {
@@ -174,10 +450,34 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
                 // visually destroyed: the leaf blades collapse into spikes, because the position-only
                 // error metric is blind to what actually carries a leaf card's shape (its silhouette
                 // and UV island). Do not trust `resultError` on masked foliage; look at the wireframe.
-                n = meshopt_simplify(simplified.data(), src, srcCount,
-                    &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
-                    target, errors[i] * errorScale, simplifyOptions, &resultError);
-                if (n == 0) { n = srcCount; }  // simplify gave up -> keep the range as-is
+                if (foliageSlot && opt.foliageUvWeight > 0.0f)
+                {
+                    // Attribute-aware collapse for alpha cards: a vertex sliding along a flat
+                    // frond has ZERO position error but drags its UV across the leaf texture —
+                    // the smeared streaks visible from LOD1 on. Weighting UV like position
+                    // (weights are relative to mesh extent, ~0.5-1 is meshopt's ballpark)
+                    // makes those collapses expensive, so the simplifier spends its budget on
+                    // ones that keep the mapping intact. UE's simplifier is attribute-aware
+                    // for the same reason.
+                    const float uvw[2] = { opt.foliageUvWeight, opt.foliageUvWeight };
+                    n = meshopt_simplifyWithAttributes(simplified.data(), src, srcCount,
+                        &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
+                        &verts[0].uv.x, sizeof(VertexPNTUV), uvw, 2, nullptr,
+                        target, errBudget * errorScale, simplifyOptions, &resultError);
+                }
+                else
+                {
+                    n = meshopt_simplify(simplified.data(), src, srcCount,
+                        &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
+                        target, errBudget * errorScale, simplifyOptions, &resultError);
+                }
+                // n == 0 is AMBIGUOUS: without SimplifyPrune it means "gave up" (keep the range
+                // as-is), but WITH it it is a legitimate verdict — every part of the range was a
+                // small disconnected piece within budget (a trunk's husk scales at LOD3), and the
+                // range should VANISH. Resurrecting it here was why "drop small parts" left the
+                // scales in place at LOD3 and bloated the level past LOD2 (user-hit 2026-08-21).
+                const bool pruneEnabled = (simplifyOptions & meshopt_SimplifyPrune) != 0u;
+                if (n == 0 && !pruneEnabled) { n = srcCount; }
                 else { didSimplify = true; }
                 (void)resultError;
             }
@@ -187,9 +487,14 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
             lod.submeshes.push_back(Mesh::Submesh{ outOffset, static_cast<uint32_t>(n), s.materialSlot });
         }
 
-        // Overall shrink gate (same spirit as before): stop once a level is < ~10% smaller.
-        if (lod.indices.empty() || lod.indices.size() + (lod.indices.size() / 10) >= prevCount) { break; }
-        prevCount = lod.indices.size();
+        // NO shrink gate: every level is emitted even when it failed to shrink (user decision
+        // 2026-08-21). The old ~10% gate silently RENUMBERED the chain — a stalled level was
+        // skipped and everything after it landed one slot up, so the harsh LOD3 showed at the
+        // LOD2 distance. The UV-aware collapse made this routine (it deliberately refuses the
+        // texture-smearing collapses, so foliage LOD2 often lands within 10% of LOD1), and a
+        // near-identical level costs only its index-buffer bytes — a stable slot->distance
+        // mapping is worth far more.
+        if (lod.indices.empty()) { break; }
         out.push_back(std::move(lod));
     }
     return out;
@@ -198,11 +503,14 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
 // Called once at load on the upload command list (runtime fallback path).
 void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive,
-    const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices,
+    std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices,
     const MeshLoadOptions& opt)
 {
     if (!mesh) { return; }
-    for (const MeshLodCpu& lod : BuildLodsCpu(verts, indices, mesh->GetSubmeshes(), opt))
+    // allowVertexAppend = false: the VB is already on the GPU here, so the foliage prune (which
+    // appends vertices) is bake-only; this path's foliage LOD3 stays plain meshopt.
+    for (const MeshLodCpu& lod : BuildLodsCpu(verts, indices, mesh->GetSubmeshes(), opt,
+                                              /*chunkedSubsets=*/false, /*allowVertexAppend=*/false))
     {
         mesh->AddLod(device, uploadCmdList, keepAlive,
             lod.indices.data(), static_cast<UINT>(lod.indices.size()), lod.submeshes);
@@ -271,6 +579,31 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
     if (opt.lodRatioScale != 1.0f) { h = Fnv1a(&opt.lodRatioScale, sizeof(float), h); }
     if (opt.lodErrorScale != 1.0f) { h = Fnv1a(&opt.lodErrorScale, sizeof(float), h); }
     if (opt.lodSimplifyOptions != 0u) { h = Fnv1a(&opt.lodSimplifyOptions, sizeof(unsigned int), h); }
+    // The prune rewrites LOD3's indices AND appends vertices; non-default only, same rule as above.
+    if (opt.foliagePruneKeep != 0.35f) { h = Fnv1a(&opt.foliagePruneKeep, sizeof(float), h); }
+    if (!opt.lod3Aggressive) { const uint8_t off = 1u; h = Fnv1a(&off, 1, h); }
+    if (opt.lod3RatioScale != 1.0f) { h = Fnv1a(&opt.lod3RatioScale, sizeof(float), h); }
+    if (opt.lod3ErrorScale != 1.0f) { h = Fnv1a(&opt.lod3ErrorScale, sizeof(float), h); }
+    if (opt.foliageInnerRatio != 0.5f) { h = Fnv1a(&opt.foliageInnerRatio, sizeof(float), h); }
+    if (opt.foliageInnerError != 0.15f) { h = Fnv1a(&opt.foliageInnerError, sizeof(float), h); }
+    if (!opt.lod3DropSlots.empty())
+    {
+        h = Fnv1a(opt.lod3DropSlots.data(), opt.lod3DropSlots.size() * sizeof(uint32_t), h);
+    }
+    // The earlier levels' drop lists are level-TAGGED so {lod1:[2]} cannot hash like
+    // {lod2:[2]}; lod3's stays untagged because existing baked hashes already depend on it.
+    if (!opt.lod1DropSlots.empty())
+    {
+        const uint8_t tag = 1u; h = Fnv1a(&tag, 1, h);
+        h = Fnv1a(opt.lod1DropSlots.data(), opt.lod1DropSlots.size() * sizeof(uint32_t), h);
+    }
+    if (!opt.lod2DropSlots.empty())
+    {
+        const uint8_t tag = 2u; h = Fnv1a(&tag, 1, h);
+        h = Fnv1a(opt.lod2DropSlots.data(), opt.lod2DropSlots.size() * sizeof(uint32_t), h);
+    }
+    if (opt.foliageGrow != 1.0f) { h = Fnv1a(&opt.foliageGrow, sizeof(float), h); }
+    if (opt.foliageUvWeight != 0.0f) { h = Fnv1a(&opt.foliageUvWeight, sizeof(float), h); }
     // Chunking rewrites the index buffers AND the submesh tables of every LOD, so a .bin baked at a
     // different grid must not be reused. Non-default only, so existing caches stay valid.
     if (opt.chunkGrid != 0u) { h = Fnv1a(&opt.chunkGrid, sizeof(unsigned int), h); }
@@ -993,13 +1326,22 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
         OutputDebugStringA(cmsg);
     }
 
-    const std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs, opt, chunked);
+    // allowVertexAppend = true: the prune's scaled leaf copies grow cpu.vertices BEFORE
+    // WriteMeshBinary serialises the VB, so the bin carries them with no format change.
+    const std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs, opt,
+                                                       chunked, /*allowVertexAppend=*/true);
     const bool ok = WriteMeshBinary(outBinPath, HashSourceFile(srcPath), HashOptions(opt),
         cpu.vertices, cpu.indices, lod0Subs, extra);
     char msg[512];
-    std::snprintf(msg, sizeof(msg), "[meshbake] %s '%s' -> '%s' (%zu verts, %zu LODs, %zu submeshes)\n",
+    int len = std::snprintf(msg, sizeof(msg), "[meshbake] %s '%s' -> '%s' (%zu verts, %zu LODs, %zu submeshes; tris",
         ok ? "ok" : "FAILED", srcPath.c_str(), outBinPath.c_str(), cpu.vertices.size(),
         extra.size() + 1, lod0Subs.size());
+    len += std::snprintf(msg + len, sizeof(msg) - len, " %zu", cpu.indices.size() / 3);
+    for (const MeshLodCpu& l : extra)
+    {
+        if (len < (int)sizeof(msg) - 24) { len += std::snprintf(msg + len, sizeof(msg) - len, "/%zu", l.indices.size() / 3); }
+    }
+    std::snprintf(msg + len, sizeof(msg) - len, ")\n");
     OutputDebugStringA(msg);
     return ok;
 }
@@ -1927,13 +2269,18 @@ size_t MeshManager::CountSubmeshes(const std::string& pathWithFragment)
     };
     if (endsWithNoCase(sel.file, ".mesh.bin"))
     {
+        // NOTE: returns the count of unique MATERIAL SLOTS, not submeshes — a chunked terrain
+        // has 36 spatial submeshes that all share slot 0, and the Mesh Editor was rendering a
+        // material picker per CHUNK (user-reported wall of "auto" rows).
         // W7.1b: our baked binary — the submesh count is stored (LOD0's table). The Mesh Editor uses
         // this to show one material picker per slot, so a multi-slot palm must report all its slots.
         std::vector<VertexPNTUV> verts;
         std::vector<MeshLodCpu> lods;
         if (ReadMeshBinary(sel.file, nullptr, nullptr, verts, lods) && !lods.empty())
         {
-            return std::max<size_t>(1, lods[0].submeshes.size());
+            uint32_t maxSlot = 0;
+            for (const Mesh::Submesh& s : lods[0].submeshes) { maxSlot = std::max(maxSlot, s.materialSlot); }
+            return static_cast<size_t>(maxSlot) + 1;
         }
         return 1;
     }

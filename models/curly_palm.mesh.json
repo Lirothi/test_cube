@@ -1,6 +1,20 @@
 {
+  "foliageGrow": 0.4000000059604645,
+  "foliageInnerError": 0.3199999928474426,
+  "foliageInnerRatio": 0.20999999344348907,
+  "foliagePruneKeep": 0.25999999046325684,
   "geometry": "models/curly_palm/curly_palm.mesh.bin",
   "inputLayout": "PosNormTanUV",
+  "lod2DropSlots": [
+    2
+  ],
+  "lod3DropSlots": [
+    2,
+    3
+  ],
+  "lod3RatioScale": 0.6399999856948853,
+  "lodDropSmallParts": true,
+  "lodRatioScale": 0.5299999713897705,
   "materials": [
     "curly_palm_0",
     "curly_palm_1",

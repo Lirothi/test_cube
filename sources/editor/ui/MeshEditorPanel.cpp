@@ -4,6 +4,7 @@
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/MaterialFileGen.h"
 #include "rendering/meshes/MeshManager.h"
+#include "meshoptimizer.h" // lodPermissive/lodDropSmallParts -> meshopt simplify flags
 
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
@@ -401,6 +402,11 @@ std::string MaterialBaseName(const std::string& geometry)
 
 void MeshEditorPanel::Open(const std::string& meshAssetPath)
 {
+    // Re-opening the SAME asset is a refresh (the post-import reload path), not a context
+    // switch: keep the camera and the previewed LOD, or every re-bake kicks the user from the
+    // LOD 3 they were A/B-ing back to LOD 0. The preview scene clamps the LOD to the new
+    // geometry's count, so a shorter chain after a re-bake is safe.
+    const bool refresh = meshAssetPath == path_;
     path_ = meshAssetPath;
     doc_ = nlohmann::json::object();
     loaded_ = false;
@@ -408,8 +414,11 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
 
     slots_.clear();
     recomputeNormalSlots_.clear();
-    previewCamera_ = {};
-    previewLod_ = 0;
+    if (!refresh)
+    {
+        previewCamera_ = {};
+        previewLod_ = 0;
+    }
 
     std::ifstream f(path_);
     if (f)
@@ -700,6 +709,52 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
                               "Tangents are regenerated from the resulting normals and UVs.");
         }
 
+        // mesh.json "lod1/2/3DropSlots": this slot VANISHES at that LOD (empty submesh keeps
+        // the table aligned). The surgical answer for trims welded to a bigger surface (husk
+        // scales on a trunk) that no error budget can drop without eating the silhouette
+        // first. Levels are independent — every LOD builds from the base indices. Applied on
+        // the next re-bake (Save).
+        {
+            ImGui::SameLine();
+            ImGui::TextUnformatted("Drop at LOD");
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("This slot's geometry VANISHES at the checked LODs. For trims\n"
+                                  "welded to a bigger surface - a date palm's husk scales survive every\n"
+                                  "error budget while the trunk collapses. Takes effect on re-bake\n"
+                                  "(Save). Each level is independent.");
+            }
+            static const char* kDropKeys[3] = { "lod1DropSlots", "lod2DropSlots", "lod3DropSlots" };
+            static const char* kDropLabels[3] = { "1", "2", "3" };
+            const auto slotVal = static_cast<uint32_t>(i);
+            for (int lvl = 0; lvl < 3; ++lvl)
+            {
+                const char* key = kDropKeys[lvl];
+                nlohmann::json& dropArr = doc_[key];
+                if (!dropArr.is_array()) { dropArr = nlohmann::json::array(); }
+                bool dropped = false;
+                for (const nlohmann::json& v : dropArr)
+                {
+                    if (v.is_number_integer() && v.get<uint32_t>() == slotVal) { dropped = true; break; }
+                }
+                ImGui::SameLine();
+                ImGui::PushID(key);
+                if (ImGui::Checkbox(kDropLabels[lvl], &dropped))
+                {
+                    nlohmann::json next = nlohmann::json::array();
+                    for (const nlohmann::json& v : dropArr)
+                    {
+                        if (!(v.is_number_integer() && v.get<uint32_t>() == slotVal)) { next.push_back(v); }
+                    }
+                    if (dropped) { next.push_back(slotVal); }
+                    if (next.empty()) { doc_.erase(key); }
+                    else { doc_[key] = std::move(next); }
+                }
+                else if (dropArr.empty()) { doc_.erase(key); }
+                ImGui::PopID();
+            }
+        }
+
         ImGui::PopID();
     }
 
@@ -812,6 +867,74 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         {
             doc_["texOffsScale"] = { tos[0], tos[1], tos[2], tos[3] };
         }
+    }
+
+    // LOD generation — the same knobs the import dialog offers, editing the mesh.json keys
+    // directly so the whole tune -> bake -> inspect loop lives in this one window: Save
+    // re-bakes the .mesh.bin whenever the effective options differ from what it was baked
+    // with (BinaryNeedsRebake), then live-applies to placed instances. Values are stored
+    // non-default-only, mirroring the import dialog's writer.
+    ImGui::Spacing();
+    ImGui::SeparatorText("LOD generation");
+    {
+        ImGui::TextDisabled("Same knobs as the import dialog. Save re-bakes the geometry.");
+        const auto lodFloat = [this](const char* label, const char* key, float def,
+            float lo, float hi, const char* fmt, const char* tip)
+        {
+            float v = def;
+            const auto it = doc_.find(key);
+            if (it != doc_.end() && it->is_number()) { v = it->get<float>(); }
+            ImGui::SetNextItemWidth(150.0f);
+            if (ImGui::SliderFloat(label, &v, lo, hi, fmt))
+            {
+                if (v != def) { doc_[key] = v; } else { doc_.erase(key); }
+            }
+            if (tip && ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tip); }
+        };
+        const auto lodBool = [this](const char* label, const char* key, bool def, const char* tip)
+        {
+            bool v = def;
+            const auto it = doc_.find(key);
+            if (it != doc_.end() && it->is_boolean()) { v = it->get<bool>(); }
+            if (ImGui::Checkbox(label, &v))
+            {
+                if (v != def) { doc_[key] = v; } else { doc_.erase(key); }
+            }
+            if (tip && ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tip); }
+        };
+        lodFloat("Triangle target", "lodRatioScale", 1.0f, 0.25f, 4.0f, "x%.2f",
+            "Chain-wide multiplier over the 0.5/0.25/0.12 per-level triangle targets.");
+        lodFloat("Error budget", "lodErrorScale", 1.0f, 0.25f, 4.0f, "x%.2f",
+            "Chain-wide multiplier over the 0.02/0.05/0.12 per-level error budgets.");
+        lodBool("Allow collapses across attribute seams", "lodPermissive", false,
+            "meshopt_SimplifyPermissive. WRECKS masked foliage (blades collapse into spikes);\n"
+            "fine for solid props with UV seams and real volume.");
+        lodBool("Drop small disconnected parts", "lodDropSmallParts", false,
+            "meshopt_SimplifyPrune. Removes whole loose components once their removal\n"
+            "fits the error budget.");
+        lodBool("Aggressive LOD3", "lod3Aggressive", true,
+            "The LAST level cuts hard: solid slots to ~5%% at a loose budget, foliage via the\n"
+            "leaf prune. TURN OFF FOR TERRAIN - far shadow casters are tuned against\n"
+            "low-sun banding.");
+        lodFloat("LOD3 triangle target", "lod3RatioScale", 1.0f, 0.25f, 4.0f, "x%.2f",
+            "LOD3's OWN multiplier over its harsh base target (5%% solid; also scales the\n"
+            "kept-leaf interior decimation).");
+        lodFloat("LOD3 error budget", "lod3ErrorScale", 1.0f, 0.25f, 4.0f, "x%.2f",
+            "LOD3's OWN multiplier over its loose base error (0.25 of mesh extent).");
+        lodFloat("Foliage prune keep", "foliagePruneKeep", 0.35f, 0.0f, 1.0f, "%.2f",
+            "LOD3 foliage: fraction of whole leaves KEPT. 0 or 1 = no prune.");
+        lodFloat("Leaf inner target", "foliageInnerRatio", 0.5f, 0.05f, 1.0f, "%.2f",
+            "LOD3: fraction of the KEPT leaves' triangles surviving the interior decimation\n"
+            "(outline pinned, inside crushed).");
+        lodFloat("Leaf inner error", "foliageInnerError", 0.15f, 0.02f, 0.6f, "%.2f",
+            "Error budget for the leaf interior decimation.");
+        lodFloat("Leaf grow", "foliageGrow", 1.0f, 0.0f, 1.5f, "%.2f",
+            "How much the kept leaves inflate to compensate the pruned area. 1 = full\n"
+            "1/sqrt(keep) compensation (can read FLUFFIER than the source), 0 = authored size.");
+        lodFloat("Leaf UV weight", "foliageUvWeight", 0.0f, 0.0f, 2.0f, "%.2f",
+            "Attribute-aware simplification for foliage slots (all LODs): UV distortion costs\n"
+            "like position error, so collapses stop smearing the leaf texture into streaks.\n"
+            "~0.5-1.0 is the useful range; 0 = position-only collapse.");
     }
 
     hoveredSlot_ = hoveredSlotThisFrame;
@@ -967,12 +1090,71 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
                     if (v.is_number()) { opt.slotFoliage.push_back(v.get<float>()); }
                 }
             }
+            // The whole-chain LOD knobs the import dialog persisted (see WriteImportedMeshAsset):
+            // this re-bake MUST use them or Save rolls the geometry back to defaults.
+            const auto lrs = doc_.find("lodRatioScale");
+            if (lrs != doc_.end() && lrs->is_number()) { opt.lodRatioScale = lrs->get<float>(); }
+            const auto les = doc_.find("lodErrorScale");
+            if (les != doc_.end() && les->is_number()) { opt.lodErrorScale = les->get<float>(); }
+            if (doc_.value("lodPermissive", false)) { opt.lodSimplifyOptions |= meshopt_SimplifyPermissive; }
+            if (doc_.value("lodDropSmallParts", false)) { opt.lodSimplifyOptions |= meshopt_SimplifyPrune; }
+            // Optional per-asset override of the LOD3 foliage prune (default 0.35, 0 = off).
+            const auto pk = doc_.find("foliagePruneKeep");
+            if (pk != doc_.end() && pk->is_number()) { opt.foliagePruneKeep = pk->get<float>(); }
+            // Per-asset opt-out of the harsh LOD3 solid budget (terrain carries false).
+            const auto la = doc_.find("lod3Aggressive");
+            if (la != doc_.end() && la->is_boolean()) { opt.lod3Aggressive = la->get<bool>(); }
+            const auto l3r = doc_.find("lod3RatioScale");
+            if (l3r != doc_.end() && l3r->is_number()) { opt.lod3RatioScale = l3r->get<float>(); }
+            const auto l3e = doc_.find("lod3ErrorScale");
+            if (l3e != doc_.end() && l3e->is_number()) { opt.lod3ErrorScale = l3e->get<float>(); }
+            const auto fir = doc_.find("foliageInnerRatio");
+            if (fir != doc_.end() && fir->is_number()) { opt.foliageInnerRatio = fir->get<float>(); }
+            const auto fie = doc_.find("foliageInnerError");
+            if (fie != doc_.end() && fie->is_number()) { opt.foliageInnerError = fie->get<float>(); }
+            const auto fg = doc_.find("foliageGrow");
+            if (fg != doc_.end() && fg->is_number()) { opt.foliageGrow = fg->get<float>(); }
+            const auto fuv = doc_.find("foliageUvWeight");
+            if (fuv != doc_.end() && fuv->is_number()) { opt.foliageUvWeight = fuv->get<float>(); }
+            const auto readDropList = [this](const char* key, std::vector<uint32_t>& out)
+            {
+                const auto it = doc_.find(key);
+                if (it == doc_.end() || !it->is_array()) { return; }
+                for (const nlohmann::json& v : *it)
+                {
+                    if (v.is_number_integer()) { out.push_back(v.get<uint32_t>()); }
+                }
+            };
+            readDropList("lod1DropSlots", opt.lod1DropSlots);
+            readDropList("lod2DropSlots", opt.lod2DropSlots);
+            readDropList("lod3DropSlots", opt.lod3DropSlots);
+            // Unit correction folded into the vertices at import time. Without it a Save
+            // re-bake reverts the mesh to the SOURCE unit scale.
+            const auto bs = doc_.find("bakeScale");
+            if (bs != doc_.end() && bs->is_number()) { opt.bakeScale = bs->get<float>(); }
+            // Shadow chunking is a bake input too: omitting it here would re-bake a chunked
+            // terrain into one giant caster while mesh.json keeps claiming chunks.
+            const auto cg = doc_.find("chunkGrid");
+            if (cg != doc_.end() && cg->is_number_integer() && cg->get<int>() > 0)
+            {
+                opt.chunkGrid = static_cast<unsigned int>(cg->get<int>());
+            }
             if (MeshManager::BinaryNeedsRebake(geom, opt))
             {
                 MeshManager mm;
                 if (mm.BakeToBinary(src, geom, opt)) { rebaked = true; } else { rebakeFailed = true; }
             }
         }
+    }
+
+    // A re-bake rewrote the .mesh.bin, but the respawn below re-loads through MeshManager,
+    // which CACHES geometry by bin path — without dropping the cache every "updated" instance
+    // gets the pre-bake mesh handed straight back (the import flow clears it in
+    // ApplyImportInvalidation; this path must too — user-hit 2026-08-21: Save re-baked, the
+    // panel preview showed the new LODs, the level kept the old ones).
+    if (rebaked)
+    {
+        if (MeshManager* meshes = ctx.renderer.GetMeshManager()) { meshes->Clear(); }
     }
 
     // Live-apply to placed instances (must happen AFTER the file is written AND after any re-bake —

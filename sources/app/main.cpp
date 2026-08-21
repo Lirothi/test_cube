@@ -17,6 +17,7 @@
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
+#include "meshoptimizer.h"                // --reimport-drop-small= -> meshopt_SimplifyPrune
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/RtSmoke.h"
 #include "rendering/shadows/VirtualShadowMap.h" // temporary VSM perf-harness tunables (--vsm-*)
@@ -603,6 +604,44 @@ int WINAPI WinMain(
             const std::string bakeScale = getArg("--reimport-scale=");
             if (!bakeScale.empty()) {
                 opt.bakeScale = static_cast<float>(std::atof(bakeScale.c_str()));
+            }
+            // "--reimport-prune=0.35" — LOD3 foliage prune keep fraction (0 = off, plain meshopt).
+            // See MeshLoadOptions::foliagePruneKeep; only acts on slots the --reimport-foliage
+            // list marks as leaves.
+            const std::string prune = getArg("--reimport-prune=");
+            if (!prune.empty()) {
+                opt.foliagePruneKeep = static_cast<float>(std::atof(prune.c_str()));
+            }
+            // "--reimport-lod3=0" — opt out of the harsh LOD3 solid budget (mirrors mesh.json
+            // "lod3Aggressive"; the terrain manifests carry false and a CLI re-bake of them
+            // must pass this or the dunes' far shadow casters coarsen).
+            const std::string lod3 = getArg("--reimport-lod3=");
+            if (!lod3.empty()) {
+                opt.lod3Aggressive = std::atoi(lod3.c_str()) != 0;
+            }
+            // LOD3's own budget multipliers (mesh.json "lod3RatioScale"/"lod3ErrorScale").
+            const std::string lod3r = getArg("--reimport-lod3-ratio=");
+            if (!lod3r.empty()) { opt.lod3RatioScale = static_cast<float>(std::atof(lod3r.c_str())); }
+            const std::string lod3e = getArg("--reimport-lod3-error=");
+            if (!lod3e.empty()) { opt.lod3ErrorScale = static_cast<float>(std::atof(lod3e.c_str())); }
+            // "--reimport-drop-small=1" — the dialog's "Drop small disconnected parts"
+            // (meshopt_SimplifyPrune), so a GUI-observed chain is reproducible headless.
+            const std::string dropSmall = getArg("--reimport-drop-small=");
+            if (!dropSmall.empty() && std::atoi(dropSmall.c_str()) != 0) {
+                opt.lodSimplifyOptions |= meshopt_SimplifyPrune;
+            }
+            // LOD3 leaf interior decimation (mesh.json "foliageInnerRatio"/"foliageInnerError").
+            const std::string innerR = getArg("--reimport-inner-ratio=");
+            if (!innerR.empty()) { opt.foliageInnerRatio = static_cast<float>(std::atof(innerR.c_str())); }
+            const std::string innerE = getArg("--reimport-inner-error=");
+            if (!innerE.empty()) { opt.foliageInnerError = static_cast<float>(std::atof(innerE.c_str())); }
+            // "--reimport-lod3-drop=2,3" — slots that vanish at LOD3 (mesh.json "lod3DropSlots").
+            const std::string lod3Drop = getArg("--reimport-lod3-drop=");
+            for (size_t i = 0; i < lod3Drop.size();) {
+                size_t j = lod3Drop.find(',', i);
+                if (j == std::string::npos) { j = lod3Drop.size(); }
+                if (j > i) { opt.lod3DropSlots.push_back(static_cast<uint32_t>(std::atoi(lod3Drop.substr(i, j - i).c_str()))); }
+                i = j + 1;
             }
             MeshManager mm;
             return mm.BakeToBinary(src, out, opt) ? 0 : 1;

@@ -1,5 +1,6 @@
 {
   "geometry": "models/atoll_lagoon_floor/atoll_lagoon_floor.mesh.bin",
+  "lod3Aggressive": false,
   "inputLayout": "PosNormTanUV",
   "material": "sandstone_cracks",
   "renderLayer": "Terrain",
