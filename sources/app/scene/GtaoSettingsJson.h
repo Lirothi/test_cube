@@ -42,6 +42,7 @@ inline void ApplyOverrides(const nlohmann::json& j, GtaoSettings& s)
     s.hzbMipBias = j.value("hzbMipBias", s.hzbMipBias);
     s.skyRadius = j.value("skyRadius", s.skyRadius);
     s.skyMipBias = j.value("skyMipBias", s.skyMipBias);
+    s.skyIntensity = j.value("skyIntensity", s.skyIntensity);
 }
 
 inline nlohmann::json ToJson(const GtaoSettings& s)
@@ -68,6 +69,7 @@ inline nlohmann::json ToJson(const GtaoSettings& s)
     j["hzbMipBias"] = s.hzbMipBias;
     j["skyRadius"] = s.skyRadius;
     j["skyMipBias"] = s.skyMipBias;
+    j["skyIntensity"] = s.skyIntensity;
     return j;
 }
 

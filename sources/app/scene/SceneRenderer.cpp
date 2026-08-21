@@ -3083,6 +3083,7 @@ void SceneRenderer::Pass_Gtao(Renderer* renderer, RenderGraphPassContext ctx, co
     // passes through untouched and one comparison in the shader is the whole gate.
     c.skyRadius = s.skyRadius;
     c.skyMipBias = s.skyMipBias;
+    c.skyIntensity = s.skyIntensity; // 0 = the kernel's sky walk is a dead branch (exact no-op)
 
     // Shared by all three filter kernels; only the sizes and the stage's own field differ.
     GtaoFilterConstants f{};

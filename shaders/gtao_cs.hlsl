@@ -2,7 +2,7 @@
 
 #pragma pack_matrix(row_major)
 
-// P6B — Ground Truth Ambient Occlusion, half resolution.
+// P6B â€” Ground Truth Ambient Occlusion, half resolution.
 //
 // Transcribed from Unreal's `GTAOCombinedPSandCS` (PostProcessAmbientOcclusion.usf) with their
 // `SearchForLargestAngleDual` and `ComputeInnerIntegral`. The shape of the algorithm:
@@ -82,7 +82,10 @@ cbuffer GtaoCB : register(b0)
     // one, and a coarse level AGGREGATES -- which is the right answer at this scale, where a single
     // texel of leaf is not what decides whether the ground is sheltered.
     uint     skyMipBias;
-    uint     pad1;
+    // Mid-range intensity: a multiplier on the sky channel's exponent (the contact channel keeps
+    // `intensity` alone). 0 switches the sky walk's COMPUTE PATH off entirely -- same dead branch
+    // as skyRadius <= worldRadius -- and the contact answer is copied into both channels.
+    float    skyIntensity;
     uint     pad2;
     uint     pad3;
 };
@@ -220,7 +223,13 @@ float2 SearchLargestAngleDual(uint steps, float2 baseUv, float2 screenDir, float
 {
     float2 best = float2(-1.0f, -1.0f);
 
-    for (uint i = 0; i < steps; ++i)
+    // UE's SHIPPING domain (SearchForLargestAngleDual_HZB): i runs 1..N, so the first tap is never
+    // closer than one full stride. The plain-depth variant they keep for reference starts at 0, and
+    // this port had copied THAT: a sub-stride tap right at the receiver's foot is the noisiest
+    // sample of the walk (half-res + furthest-mip quantisation puts it above the tangent plane as
+    // often as not), and the max-picking horizon keeps exactly the noise. Measured on the bronze
+    // floor at a grazing camera: the i=0 domain veiled the OPEN floor by ~3% AO at skyRadius 25.
+    for (uint i = 1; i <= steps; ++i)
     {
         const float fi = (float)i;
         // At least one pixel per step, or the walk stalls on nearby geometry and finds nothing.
@@ -250,14 +259,19 @@ float2 SearchLargestAngleDual(uint steps, float2 baseUv, float2 screenDir, float
             const float3 v = ViewPosFromUv(uv, sampleZ) - viewPos;
             const float lenSq = dot(v, v);
             const float ooLen = rsqrt(lenSq + 1e-4f);
-            float ang = dot(v, viewDir) * ooLen;
 
             // Distance falloff: something far away subtends a real angle but occludes nothing.
+            // UE's HZB variant gates on it entirely -- a beyond-range sample is a guaranteed
+            // no-op here (the lerp pair below collapses to `prev`), so skip its ALU.
             const float falloff = saturate(lenSq * attenFactor);
-            const float prev = (side == 0) ? best.x : best.y;
-            ang = lerp(ang, prev, falloff);
-            const float updated = (ang > prev) ? ang : lerp(ang, prev, thickness);
-            if (side == 0) { best.x = updated; } else { best.y = updated; }
+            if (falloff < 1.0f)
+            {
+                float ang = dot(v, viewDir) * ooLen;
+                const float prev = (side == 0) ? best.x : best.y;
+                ang = lerp(ang, prev, falloff);
+                const float updated = (ang > prev) ? ang : lerp(ang, prev, thickness);
+                if (side == 0) { best.x = updated; } else { best.y = updated; }
+            }
         }
     }
 
@@ -350,7 +364,9 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     // further apart -- so what it buys with is cache locality, which is exactly what `skyMipBias`
     // pays back: at mip 4 a 1024-texel span is 64 texels of that level.
     static const float kSkyPixelRadiusMax = 1024.0f;
-    const bool wantSky = skyRadius > worldRadius;
+    // skyIntensity 0 kills the whole second walk, same dead wave-coherent branch as the radius
+    // switch -- the dedicated off knob the mid-range channel was missing.
+    const bool wantSky = skyRadius > worldRadius && skyIntensity > 0.0f;
     const float skyPixelRadius = max(min(skyRadius * fovScale / linearZ, kSkyPixelRadiusMax),
                                      (float)numSteps);
     const float skyStepRadius = skyPixelRadius / ((float)numSteps + 1.0f);
@@ -412,7 +428,9 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     if (wantSky)
     {
         skyAo = skySum / (float)max(numAngles, 1u);
-        skyAo = saturate(pow(saturate(skyAo), max(intensity, 1e-3f)));
+        // The shared exponent scaled by the mid-range's own intensity: 1 = the old shared
+        // behaviour, below 1 = a lighter sky veil at the same reach, above 1 = deeper shelter.
+        skyAo = saturate(pow(saturate(skyAo), max(intensity * skyIntensity, 1e-3f)));
     }
 
     // Fade to unoccluded with distance: the radius shrinks to sub-pixel out there, so the estimate

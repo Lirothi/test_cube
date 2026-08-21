@@ -33,7 +33,7 @@
       "mesh": "models/box.mesh.json",
       "metalRough": [
         1.0,
-        0.06
+        0.10000000149011612
       ],
       "name": "bronze floor",
       "normalStrength": 0.35,

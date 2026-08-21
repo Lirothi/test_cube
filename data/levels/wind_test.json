@@ -13915,11 +13915,12 @@
     "gtao": {
       "enabled": true,
       "fadeStart": 80.0,
-      "intensity": 1.0,
+      "intensity": 1.5,
+      "skyIntensity": 0.0,
       "skyMipBias": 3,
       "skyRadius": 25.0,
       "strength": 1.0,
-      "temporalBlendWeight": 0.019999999552965164,
+      "temporalBlendWeight": 0.10000000149011612,
       "thickness": 0.800000011920929,
       "worldRadius": 1.0
     }

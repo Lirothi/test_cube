@@ -27,6 +27,8 @@ extern float g_camPos[3];
 // "--cam-fly=x,z": constant camera drift in m/s (world XZ), the headless stand-in for flying —
 // exercises motion-gated paths (window relocation, clipmap snap, DLSS history).
 extern float g_camFly[2];
+// "--cam-fly-delay=<sec>": hold still this long before the drift starts (motion-onset capture).
+extern float g_camFlyDelay;
 extern float g_camRot[4]; // orientation quaternion (x,y,z,w)
 
 // "--shot=<path>" one-shot capture: after g_shotDelaySec of runtime, read back the presented

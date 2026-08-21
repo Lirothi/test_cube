@@ -287,7 +287,8 @@ struct GtaoPassConstants
     // switches the second horizon walk off. See GtaoSettings for why one radius cannot do both.
     float skyRadius = 0.0f;
     uint32_t skyMipBias = 2u;
-    uint32_t pad1 = 0u;
+    // Mid-range intensity (0 = the sky walk's compute path off entirely).
+    float skyIntensity = 1.0f;
     uint32_t pad2 = 0u;
     uint32_t pad3 = 0u;
 };
@@ -298,7 +299,7 @@ struct GtaoHandles
     Material::CBFieldHandle worldRadius, thickness, intensity, fadeStart, fadeEnd;
     Material::CBFieldHandle invTanHalfFovY, numAngles, numSteps, frameIndex, useGBufferNormal;
     Material::CBFieldHandle useHzb, hzbMipBias, hzbMipCount;
-    Material::CBFieldHandle skyRadius, skyMipBias;
+    Material::CBFieldHandle skyRadius, skyMipBias, skyIntensity;
     void Populate(Material* material);
 };
 

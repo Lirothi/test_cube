@@ -18,6 +18,10 @@ std::string g_bootLevelPath;
 bool  g_camOverride = false;
 float g_camPos[3] = { 0.0f, 0.0f, 0.0f };
 float g_camFly[2] = { 0.0f, 0.0f }; // "--cam-fly=x,z": constant camera drift in m/s (world XZ)
+// "--cam-fly-delay=<sec>": hold the camera STILL for this long, then start the drift. Captures
+// the motion-ONSET transient (converged temporal histories -> first frames of motion), which a
+// from-boot drift can never show.
+float g_camFlyDelay = 0.0f;
 float g_camRot[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 // One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
 std::string g_shotPath;
@@ -229,6 +233,8 @@ namespace
         // is the exact-no-op baseline for the A/B.
         if (setting == "gtao.skyRadius") { scene.GtaoRef().skyRadius = value; return true; }
         if (setting == "gtao.skyMipBias") { scene.GtaoRef().skyMipBias = (uint32_t)std::max(0.0f, value); return true; }
+        // Mid-range intensity; 0 = the sky walk's compute path is off entirely (exact no-op).
+        if (setting == "gtao.skyIntensity") { scene.GtaoRef().skyIntensity = std::max(0.0f, value); return true; }
         // The directional-clipmap knobs the Developer window already carries, exposed to the
         // harness. Shadow bias is judged by A/B and the GUI cannot be driven headlessly, so
         // without these a clipmap artifact can only be argued about, not measured. They are
@@ -966,10 +972,14 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 // surf sim), clipmap snapping, DLSS history — a fixed --cam-pos never triggers them.
                 if (g_camFly[0] != 0.0f || g_camFly[1] != 0.0f)
                 {
-                    Camera& cam = scene.CameraRef();
-                    const float3 p = cam.GetPosition();
-                    cam.SetPosition(float3(p.x + g_camFly[0] * deltaTime, p.y,
-                                           p.z + g_camFly[1] * deltaTime));
+                    static const double flyStart = GetTimeSeconds();
+                    if (now - flyStart >= (double)g_camFlyDelay)
+                    {
+                        Camera& cam = scene.CameraRef();
+                        const float3 p = cam.GetPosition();
+                        cam.SetPosition(float3(p.x + g_camFly[0] * deltaTime, p.y,
+                                               p.z + g_camFly[1] * deltaTime));
+                    }
                 }
                 renderer.Tick(deltaTime);
                 appController_.Tick(input, renderer, scene, levelManager, deltaTime);

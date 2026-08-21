@@ -351,6 +351,11 @@ struct GtaoSettings
     // caches better and AGGREGATES, which is the right answer at a scale where a single texel of
     // leaf is not what decides whether the ground is sheltered.
     uint32_t skyMipBias = 2u;
+    // Mid-range intensity: scales the sky channel's darkening exponent independently of the
+    // contact channel (1 = the shared-`intensity` behaviour). 0 switches the sky walk's compute
+    // path off entirely in the kernel -- the same exact-no-op dead branch as skyRadius <=
+    // worldRadius -- so it doubles as the dedicated off switch.
+    float skyIntensity = 1.0f;
 
     // --- items 3-5: the filter chain. Each stage is separately switchable so the A/B the plan
     // asks for can isolate one at a time; the chain always ends in the render-resolution target.

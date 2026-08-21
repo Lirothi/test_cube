@@ -369,6 +369,8 @@ int WINAPI WinMain(
             g_camOverride = hasPos || hasRot;
             // "--cam-fly=x,z": constant camera drift (m/s) — the headless stand-in for flying.
             readFloats("--cam-fly=", g_camFly, 2);
+            // "--cam-fly-delay=<sec>": hold still this long first (motion-onset transient capture).
+            readFloats("--cam-fly-delay=", &g_camFlyDelay, 1);
         }
         // W8: "--wind-freeze[=<seconds>]" pins the wind clock, so a --shot is reproducible to the
         // pixel without touching a single authored wind parameter. Two runs at the SAME value must

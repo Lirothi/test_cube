@@ -1,9 +1,21 @@
 # Removing the VSM 64-mesh-group cap — execution plan
 
-**Status: NOT STARTED.** Written 2026-08-21, immediately after terrain chunking took wind_test from
-21 to 56 groups (see `docs/terrain_shadow_chunking_plan.md`) and left 8 of headroom. Every claim
-below was re-verified against the code and against the UE drop on the day of writing; file:line
-references are to the tree as of that session (uncommitted chunking work included).
+**Status: NOT STARTED. Facts re-verified 2026-08-21 20:30 against HEAD `0dd0aba`.** Written earlier
+the same day, right after terrain chunking took wind_test from 21 to 56 groups (see
+`docs/terrain_shadow_chunking_plan.md`).
+
+**The chunked-terrain LOD feature was REWRITTEN under this plan by `f0a01c4 "vsm and lod tuning"`**
+— the additive-bias-with-a-radius it was written against is gone, replaced by a per-frame ABSOLUTE
+per-group override equal to each chunk's own CAMERA tier (`RenderableObject::chunkLods_` →
+`ShadowGpuData::RefreshChunkGroupLods` → `groupLodOverride_` → the VSM setup CB). The facts below
+are restated against that design. **What did NOT change: the cap, the mechanism that breaks at it,
+and the headroom** — wind_test re-measured today still reads
+`2708 casters, 56 mesh-groups (1 chunked of 9 meshes, cap 64)`, `cull validation PASS`.
+
+The rewrite also means chunking is **no longer shadow-only**: the gbuffer now draws a chunked mesh
+per submesh at per-chunk LOD (`RenderableObject.cpp:173-178`). That does not touch the group cap
+(camera draws are not grouped) but it does mean a chunked mesh now costs one draw per chunk on the
+camera path too — relevant when sizing any future grid, not to this plan.
 
 **The verdict up front:** the cap is not a property of the per-page-culling approach — Unreal's
 non-Nanite VSM path does the same job with no compile-time group limit at all. Our 64 exists only
@@ -15,16 +27,21 @@ tables — only the *transport* truncates.
 
 ## Facts — verified, do NOT re-derive
 
-- **F1. The only fixed-size group state in the whole engine** is in `vsm_page_setup_cs.hlsl`:
+- **F1. Everything sized by the cap** (re-enumerated 2026-08-21 20:30 — the list GREW by one since
+  the first draft, and the new entry is on the CPU):
 
-  ```
-  uint perGroupCount[VSM_MAX_SETUP_GROUPS];   // :183
-  uint perGroupBase [VSM_MAX_SETUP_GROUPS];   // :246
-  ```
+  | where | what | note |
+  |---|---|---|
+  | `vsm_page_setup_cs.hlsl:186` | `uint perGroupCount[VSM_MAX_SETUP_GROUPS]` | per-THREAD local — the UB (F2) |
+  | `vsm_page_setup_cs.hlsl:244` | `uint perGroupBase[VSM_MAX_SETUP_GROUPS]` | per-THREAD local — the UB (F2) |
+  | same, CB | `uint4 gGroupLodMega[64 * KMAX_SHADOW_LODS]` | guarded by `g2 < VSM_MAX_SETUP_GROUPS` |
+  | same, CB | `int4 gGroupLodOverride[KGROUP_BIAS_VEC4]` | **was `gGroupLodBias`**; same guard |
+  | `ShadowGpuData.h:413` | `std::array<std::int8_t, vsm::kMaxMeshGroups> groupLodOverride_` | **NEW — a fixed CPU array, refreshed EVERY FRAME** |
+  | `ShadowGpuData.cpp:650` | `kMaxGroups` — GI fold policy | soft (F7) |
+  | `ShadowGpuData.cpp:933` | `kMaxMegaGroups` — mega gate | soft-ish (F2 step 1) |
 
-  plus the CB tables `gGroupLodMega[64*4]` and `gGroupLodBias[16]` (int4-packed 64). Every loop over
-  those arrays runs to `gNumGroups`, which the CPU fills **unclamped** from
-  `shadowGpu->MeshGroupCount()` (`VirtualShadowMap.cpp:1136`).
+  Every loop over the two local arrays runs to `gNumGroups`, which the CPU fills **unclamped** from
+  `shadowGpu->MeshGroupCount()` (`VirtualShadowMap.cpp:1144`).
 - **F2. What actually breaks at 65 groups — and it is NOT soft.** The chain:
   1. `ShadowGpuData::Rebuild` refuses to build the mega buffer (`numMeshGroups_ > kMaxMegaGroups` →
      warning, `MegaReady()==false`, ShadowGpuData.cpp ~911).
@@ -48,10 +65,21 @@ tables — only the *transport* truncates.
   and the buffers `pageDrawArgs_` (pool × groups × 5, grows with groups), `pageGroupCount_`,
   `perViewGroup_`, `casterGroup_`, `indirectArgs_`. `pageVisibleList_` scales with *casters*, not
   groups. **Legacy CSM at >64 groups is genuinely fine.**
-- **F4. The CPU tables are ALREADY full-size.** `groupLodMega_.assign(numMeshGroups_ * kLods * 4)`
-  (ShadowGpuData.cpp:831) and `groupLodBias_` (:779) carry every group; only the CB fill clamps at
-  `gm = min(groups, kMaxMegaGroups)` (`VirtualShadowMap.cpp:1158`). Removing the cap is a transport
-  change (CB → SRV), not a data-structure change.
+- **F4. Half the CPU side is already full-size; the other half no longer is.**
+  `groupLodMega_.assign(numMeshGroups_ * kLods * 4)` (ShadowGpuData.cpp:853) carries every group and
+  only the CB fill clamps (`gm = min(groups, kMaxMegaGroups)`, `VirtualShadowMap.cpp:1171`) — for it,
+  removing the cap really is just a transport change (CB → SRV).
+  **`groupLodOverride_` is different: it is a `std::array` hard-sized at the cap**, and
+  `RefreshChunkGroupLods` stops filling at it (`if (g >= groupLodOverride_.size()) break;`,
+  ShadowGpuData.cpp:396). S3 must therefore GROW that container as well as move it, not merely
+  re-point it — and it is refreshed every frame, so its upload wants a per-frame ring region rather
+  than the static region `groupLodMega_` can use.
+- **F4b. Rebuild bakes nothing camera-dependent any more.** `perViewGroup_` carries the PLAIN view
+  LOD for every group including chunk groups (the `biasedLod` lambda is now the identity —
+  ShadowGpuData.cpp:806); the per-chunk LOD arrives only through the per-frame override in the VSM
+  CB. So the Legacy/Rung-0 indirect path draws chunk groups at the view LOD by design (documented
+  divergence, ShadowGpuData.cpp:800-805), and the cap work cannot regress it because it never had
+  the override to lose.
 - **F5. The scattered path needs the local arrays for NOTHING.** In the `scattered` branch (clipmap
   views — all directional pages, i.e. exactly where terrain chunk grids spend groups) each array
   element is written once from a buffer and read once in the args loop:
@@ -65,6 +93,15 @@ tables — only the *transport* truncates.
 - **F7. GI folding** stops folding GPU-instanced casters when `numGroups + 1 > 64`
   (ShadowGpuData.cpp ~566): they keep drawing through the CPU `RenderShadow` tail. Designed-soft,
   stays as policy either way.
+- **F7b. NEW since the rewrite: >64 also breaks chunked terrain's QUALITY, not just its safety.**
+  A chunk whose group lands past the cap gets no camera-tier override — `RefreshChunkGroupLods`
+  `break`s, and the shader's over-cap branch reads `Rung0Args` (view LOD). The caster then stops
+  matching the geometry the gbuffer drew for that chunk, which is precisely the identity the whole
+  chunk-LOD rewrite exists to hold ("retired the whole terrain self-shadow-mismatch family —
+  banding, low-sun stairs, phantom blobs"). So the failure at the cap is now **UB on the local
+  arrays AND silent banding on the tail chunks** — and the configuration that reaches the cap is a
+  finer terrain grid, i.e. exactly the chunks that would lose it. This raises the stakes on S1's
+  clamp: it removes the UB but NOT this, which only S3+S4 fix.
 - **F8. One hand-synced shader constant.** `VSM_MAX_SETUP_GROUPS` (vsm_page_setup_cs.hlsl:21) must
   equal `vsm::kMaxMeshGroups` (VirtualShadowMap.h:117) — the shader cannot include the header. The
   plan shrinks what that number means (see S4) but does not eliminate the pairing.
@@ -152,15 +189,21 @@ once anyway).
 **Touch:** `vsm_page_setup_cs.hlsl` (RS + cbuffer), `VirtualShadowMap.cpp` (SetupCB + dispatch),
 `ShadowGpuData.{h,cpp}` (expose the vectors as GPU buffers).
 
-1. New structured SRVs, uploaded from the already-full-size CPU vectors (F4):
-   `StructuredBuffer<uint4> GroupLodMega : register(t9)` (numGroups × kLods entries) and
-   `StructuredBuffer<int> GroupLodBias : register(t10)` (numGroups). Ring/static buffer rebuilt on
-   Rebuild, same as `perGroup_`.
+1. Two new structured SRVs, and note they have DIFFERENT lifetimes (F4):
+   - `StructuredBuffer<uint4> GroupLodMega : register(t9)` — numGroups × kLods entries, written once
+     per Rebuild from the already-full-size `groupLodMega_`. Static region, same as `perGroup_`.
+   - `StructuredBuffer<int> GroupLodOverride : register(t10)` — numGroups entries, rewritten EVERY
+     FRAME by `RefreshChunkGroupLods`. Needs a **per-frame ring region** (like `instances_` /
+     `bounds_`), not a static one, and `groupLodOverride_` has to become a `std::vector` sized to
+     `numMeshGroups_` with the `break` guard dropped.
 2. RS: `SRV(t0, numDescriptors=9)` → `11`; extend the descriptor list in the
-   `RecordComputeDispatch` call. Drop `gGroupLodMega`, `gGroupLodBias`, `KGROUP_BIAS_VEC4` from the
-   CB and its CPU mirror **in the same edit** (the CB is a mirror; repack both sides together).
-   `gViewLod` stays in the CB — views are fixed at 44, groups are not.
+   `RecordComputeDispatch` call. Drop `gGroupLodMega`, `gGroupLodOverride`, `KGROUP_BIAS_VEC4` from
+   the CB and its CPU mirror **in the same edit** (the CB is a mirror; repack both sides together).
+   `gViewLod` stays in the CB — views are fixed at 44, groups are not. `_pad5` is free again and
+   stays padding.
 3. The `g2 < VSM_MAX_SETUP_GROUPS ? CB : Rung0Args` fallback branch dies; every group reads the SRV.
+   That is also what retires F7b: past the cap, chunk groups get their real camera tier instead of
+   silently reverting to the view LOD.
 4. Verification: **full gate set** — new SRVs + RS change (both configs, Release `--scene-stress`,
    Debug `--scene-stress-gbv`, comparator), plus the A/B image + trace protocol. This is exactly
    the change class `tools/check_shaders.py` cannot vouch for alone: dxc accepting the shader says
@@ -207,6 +250,19 @@ outright, per the delete-don't-disable rule (the brute-force path is currently a
 when the scatter PSO fails to build; decide its fate then, not now). Price: a real shader-design
 step, ~a day plus verification. **Not needed until a level combines local lights with >64 groups**
 — today wind_test has zero locals.
+
+### Readiness — what a start would cost, and what it does NOT depend on
+
+- **S1 is unblocked and cheap** (shader-only, ~an hour with its gate) and buys the biggest single
+  thing: the 65th group stops being undefined. It does not need S4.5's assets.
+- **S2 is unblocked** and is where the directional cap actually falls.
+- **S3 is the real work** (new SRVs + RS + a container change + a per-frame ring) and the only step
+  needing the full stress/GBV set.
+- **S4.5 needs the user** (asset writes) and is the only step that can prove >64 end to end. Until
+  it runs, S1..S4 are verified only at 56 groups — i.e. "unchanged where we can see" plus code
+  reading. State that limit rather than implying a >64 proof.
+- Nothing here depends on the banding camera still owed on the chunking plan, and nothing here
+  blocks that work.
 
 ### S6 — Truth pass on docs + UI
 

@@ -986,6 +986,11 @@ namespace
                           "open sand. At or below World Radius this is OFF and the pass is bit-for-"
                           "bit what it was. COSTS a second horizon walk, so roughly doubles the raw "
                           "GTAO pass when on.");
+            dragF("Sky Intensity", "skyIntensity", 1.0f, 0.02f, 0.0f, 3.0f, "%.2f");
+            InspectorHelp("The MID-RANGE channel's own strength, scaling its darkening exponent "
+                          "independently of the contact channel (1 = the shared-Intensity "
+                          "behaviour). At 0 the second walk's COMPUTE PATH is off entirely - the "
+                          "same exact no-op as Sky Radius at the bottom, kept as its own switch.");
             {
                 const nlohmann::json beforeItem = props;
                 int skyMip = static_cast<int>(tgt().value("skyMipBias", 2u));

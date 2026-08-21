@@ -763,6 +763,7 @@ void GtaoHandles::Populate(Material* material)
     hzbMipCount = material->ComputeCB0FieldHandle("hzbMipCount");
     skyRadius = material->ComputeCB0FieldHandle("skyRadius");
     skyMipBias = material->ComputeCB0FieldHandle("skyMipBias");
+    skyIntensity = material->ComputeCB0FieldHandle("skyIntensity");
 }
 
 UINT SceneResourceBootstrapper::GetGtaoCBSizeBytes() const
@@ -795,6 +796,7 @@ void SceneResourceBootstrapper::WriteGtaoConstants(const GtaoPassConstants& d, u
     matGtaoCS_->UpdateCBField(h.hzbMipCount, d.hzbMipCount, dest);
     matGtaoCS_->UpdateCBField(h.skyRadius, d.skyRadius, dest);
     matGtaoCS_->UpdateCBField(h.skyMipBias, d.skyMipBias, dest);
+    matGtaoCS_->UpdateCBField(h.skyIntensity, d.skyIntensity, dest);
 }
 
 void GtaoFilterHandles::Populate(Material* material)

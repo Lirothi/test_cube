@@ -346,7 +346,12 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "a palm crown as freely as it reaches open sand (measured: the crown was "
                         "worth 0.04 stops). At or below AO world radius this is OFF and bit-for-bit "
                         "the old pass. COSTS a second walk, so roughly doubles the raw GTAO pass.");
-                ImGui::BeginDisabled(!(gtao.skyRadius > gtao.worldRadius) || !gtao.useHzb);
+                ImGui::SliderFloat("AO sky intensity", &gtao.skyIntensity, 0.0f, 3.0f, "%.2f");
+                DevHelp("The MID-RANGE channel's own strength: scales its darkening exponent "
+                        "independently of the contact channel (1 = the old shared behaviour). "
+                        "AT 0 THE SECOND WALK'S COMPUTE PATH IS OFF ENTIRELY - the same exact "
+                        "no-op as dragging the radius to the bottom, kept as its own switch.");
+                ImGui::BeginDisabled(!(gtao.skyRadius > gtao.worldRadius) || !(gtao.skyIntensity > 0.0f) || !gtao.useHzb);
                 {
                     int skyBias = static_cast<int>(gtao.skyMipBias);
                     if (ImGui::SliderInt("AO sky mip bias", &skyBias, 0, 5))
