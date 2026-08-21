@@ -36,6 +36,7 @@ VSOut VSMain(VSIn i)
 [RootSignature(GBUFFER_RS)]
 PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
 {
+    LodFadeClip(i.H.xy, lodFade);
     AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, terrainTiling, terrainEdgeParams,
                   baseColor.a, alphaCutoff);
 

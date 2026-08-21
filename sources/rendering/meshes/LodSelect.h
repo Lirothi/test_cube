@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include "core/math/AABB.h"
 #include "core/math/Math.h"
 
@@ -76,6 +77,24 @@ inline float g_lodBound0 = 5.0f; // ratio where LOD0 -> 1
 inline float g_lodBound1 = 10.0f; // ratio where LOD1 -> 2
 inline float g_lodBound2 = 20.0f; // ratio where LOD2 -> 3
 
+// Dithered LOD crossfade: half-width of the transition band around each boundary, as a
+// fraction of the boundary ratio (0 = off -> hard switches with the classic hysteresis).
+// Inside the band BOTH tiers draw with complementary screen-door masks (see LodFadeClip in
+// gbuffer_common.hlsli), so the switch is a gradual pixel handover instead of a pop; DLSS/TAA
+// resolves the 4x4 Bayer pattern into a smooth blend. Selection inside the band is STATELESS
+// (fade is a pure function of distance), which is also why the band needs no hysteresis: the
+// blend is continuous in distance, so there is nothing to flip-flop.
+inline float g_lodFadeBand = 0.10f;
+
+// Tier + crossfade state for one object. fade == 0: draw `tier` solid. fade in (0,1): `tier`
+// is fading OUT (weight 1-fade) and `tier+1` is fading IN (weight fade) — the caller issues
+// both draws, clamping tier+1 to the mesh's available LODs.
+struct LodTierFade
+{
+    unsigned int tier = 0u;
+    float fade = 0.0f;
+};
+
 // Step 6: pick a LOD tier (0 = full) from screen size (distance / instance radius), with
 // HYSTERESIS off the current tier so it doesn't flip back and forth near a boundary. Called
 // once per frame per object in Scene::PrepareViews (NOT during recording); the result is
@@ -98,5 +117,37 @@ inline unsigned int SelectLodTier(const Math::float3& center, float radius,
     while (t < 3u && ratio > bound[t] * (1.0f + kHyst)) { ++t; }           // go coarser
     while (t > 0u && ratio < bound[t - 1u] * (1.0f - kHyst)) { --t; }      // go finer
     return t;
+}
+
+// Crossfade-aware tier selection. With the band off this is exactly SelectLodTier; with it on
+// the result is STATELESS (currentTier unused): outside every band the tier the ratio falls
+// in, inside boundary t's band tier t with fade = position across the band (0 at the near
+// edge, 1 at the far edge). Same monotonic bound enforcement as SelectLodTier.
+inline LodTierFade SelectLodTierFade(const Math::float3& center, float radius,
+                                     const Math::float3& camPos, unsigned int currentTier)
+{
+    if (g_lodFadeBand <= 0.0f)
+    {
+        return { SelectLodTier(center, radius, camPos, currentTier), 0.0f };
+    }
+    if (radius <= 1e-4f) { return { 0u, 0.0f }; }
+    const float ratio = (center - camPos).Length() / radius;
+
+    float bound[3];
+    bound[0] = g_lodBound0 > 0.5f ? g_lodBound0 : 0.5f;
+    bound[1] = g_lodBound1 > bound[0] * 1.05f ? g_lodBound1 : bound[0] * 1.05f;
+    bound[2] = g_lodBound2 > bound[1] * 1.05f ? g_lodBound2 : bound[1] * 1.05f;
+    // Clamp the half-width so adjacent bands can never overlap (bounds are >= 5% apart).
+    const float w = std::min(g_lodFadeBand, 0.35f);
+
+    unsigned int t = 0u;
+    while (t < 3u && ratio > bound[t] * (1.0f + w)) { ++t; }
+    if (t < 3u && ratio > bound[t] * (1.0f - w))
+    {
+        const float lo = bound[t] * (1.0f - w);
+        const float span = bound[t] * (2.0f * w);
+        return { t, span > 1e-6f ? (ratio - lo) / span : 1.0f };
+    }
+    return { t, 0.0f };
 }
 } // namespace render

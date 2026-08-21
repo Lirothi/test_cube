@@ -163,14 +163,22 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     ctx.cbv[0] = alloc.gpu;
     ctx.cbv[1] = viewCB; // shared per-pass view CB (b1); ignored by shaders without b1
 
+    // Dithered LOD crossfade: in the fade band the object is drawn TWICE — the current tier
+    // fading out (lodFade = -f) and the next tier fading in (+f), with complementary dither
+    // masks in the PS. Chunked meshes keep hard per-chunk switches (their own path below).
+    const Mesh* mesh = GetMesh();
+    const bool chunked = mesh && mesh->IsChunkedSubmeshes() && !chunkLods_.empty();
+    const bool fading = !chunked && mesh && cameraLodFade_ > 0.0f &&
+                        (cameraLod_ + 1u) < mesh->GetLodCount();
+
+    drawLodFade_ = fading ? -cameraLodFade_ : 0.0f;
     RecordGraphics(renderer, cl, ctx, camera, cbData);
     // Step 6: draw at the camera LOD chosen in PrepareViews (see SelectLod). Mesh::SelectLod
     // clamps to available LODs. No selection/mutation here — recording is side-effect-free.
     //
     // Chunked-terrain: one ranged draw per chunk at ITS tier from SelectLod. This is the receiver
     // half of the caster==receiver contract — the shadow paths consume the same chunkLods_ array.
-    const Mesh* mesh = GetMesh();
-    if (mesh && mesh->IsChunkedSubmeshes() && !chunkLods_.empty())
+    if (chunked)
     {
         const size_t n = std::min(chunkLods_.size(), mesh->SubmeshesForLod(0).size());
         for (size_t s = 0; s < n; ++s)
@@ -180,6 +188,17 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         return;
     }
     DrawGeometry(cl, cameraLod_);
+    if (fading)
+    {
+        auto alloc2 = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign);
+        uint8_t* cbData2 = static_cast<uint8_t*>(alloc2.cpu);
+        if (cbData2) { std::memset(cbData2, 0, cbSizeBytes); }
+        ctx.cbv[0] = alloc2.gpu;
+        drawLodFade_ = cameraLodFade_;
+        RecordGraphics(renderer, cl, ctx, camera, cbData2); // rebinds with the second b0
+        DrawGeometry(cl, cameraLod_ + 1u);
+    }
+    drawLodFade_ = 0.0f;
 }
 
 #if WITH_EDITOR
@@ -217,9 +236,13 @@ void RenderableObject::RenderSelectionStencil(Renderer* renderer, ID3D12Graphics
 
 void RenderableObject::SelectLod(const Camera& camera)
 {
-    // Hysteresis off the current tier; per-instance radius (GetLodRadius) so cloud/instanced
-    // objects select on their single-mesh size, not their aggregate bound.
-    cameraLod_ = render::SelectLodTier(GetWorldBounds().GetCenter(), GetLodRadius(), camera.GetPosition(), cameraLod_);
+    // Hysteresis off the current tier (or the stateless crossfade band when g_lodFadeBand is
+    // on); per-instance radius (GetLodRadius) so cloud/instanced objects select on their
+    // single-mesh size, not their aggregate bound.
+    const render::LodTierFade sel = render::SelectLodTierFade(
+        GetWorldBounds().GetCenter(), GetLodRadius(), camera.GetPosition(), cameraLod_);
+    cameraLod_ = sel.tier;
+    cameraLodFade_ = sel.fade;
 
     // Chunked-terrain LOD: one tier per chunk from the chunk's own world AABB (the object-level
     // tier above is meaningless for a mesh whose radius is the whole island). Closest-point

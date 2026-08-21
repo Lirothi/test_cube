@@ -157,6 +157,10 @@ public:
     // Shadow LOD is the cascade index, chosen per-pass by the renderer — not here.
     virtual void SelectLod(const Camera& /*camera*/) {}
     virtual unsigned int GetCameraLod() const { return 0u; }
+    // Dithered LOD crossfade weight chosen with the tier in PrepareViews: 0 = solid at
+    // GetCameraLod(); in (0,1) = that tier fades OUT and tier+1 fades IN with this weight
+    // (both draws recorded — see RenderableObject::Render / InstancedDrawBatch).
+    virtual float GetCameraLodFade() const { return 0.0f; }
 
     // Draw identity for opaque sorting + instanced-run grouping (Step 3/4). Default empty key
     // (mesh-less / transient renderables sort together). See RenderBatchKey above.

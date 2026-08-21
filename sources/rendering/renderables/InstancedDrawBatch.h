@@ -57,9 +57,13 @@ private:
     // Records instanced draws for a SUBSET of the run at one LOD (chunked to the shader's
     // instance-array capacity). Step 6d: the camera pass buckets members per-instance and
     // calls this once per LOD tier; the shadow pass calls it once with all members.
+    // `fades` (parallel to `members`, camera pass only; null = all solid) feeds the b3
+    // LodFadeArray for the dithered crossfade — an instance in the fade band appears in TWO
+    // tiers' buckets with -f / +f (see BuildLodBuckets).
     void RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                          Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod,
-                         const std::vector<RenderableObjectBase*>& members);
+                         const std::vector<RenderableObjectBase*>& members,
+                         const float* fades = nullptr);
 
     static constexpr unsigned int kMaxLodTiers = 4; // base + 3 (matches SelectLodTier range)
 
@@ -75,7 +79,10 @@ private:
     // this lead (run members are slot-identical by SameInstanceSlots). Shadows stay whole-mesh.
     const IInstanceable* leadInst_ = nullptr;
     // Per-instance LOD buckets, reused each Render (pooled batch -> retains capacity).
+    // lodBucketFades_ runs parallel to lodBuckets_: 0 = solid, -f = fading out of this tier,
+    // +f = fading into it (a transitioning member sits in both tiers' buckets).
     std::array<std::vector<RenderableObjectBase*>, kMaxLodTiers> lodBuckets_;
+    std::array<std::vector<float>, kMaxLodTiers> lodBucketFades_;
     // B2b scratch reused by every occupied LOD in the current camera Render.
     std::vector<SlotBindingScratch> slotBindingsScratch_;
 };

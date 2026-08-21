@@ -45,6 +45,7 @@ cbuffer SlotParams : register(b2)
     "CBV(b0)," \
     "CBV(b1)," \
     "CBV(b2)," \
+    "CBV(b3)," \
     "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #else
@@ -65,9 +66,19 @@ cbuffer SurfaceParams : register(b2)
     "CBV(b0)," \
     "CBV(b1)," \
     "CBV(b2)," \
+    "CBV(b3)," \
     "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #endif
+
+// Per-instance dithered LOD crossfade (see LodFadeClip). Packed float4s (256 floats); filled
+// by InstancedDrawBatch per draw chunk, zeros when nothing in the chunk fades. Deliberately
+// NOT part of InstancePerObject: that 224-byte stride is shared with every shadow reader
+// (shadow_indirect_csm / shadow_gi_scatter), and the fade is a camera-pass-only concern.
+cbuffer LodFadeArray : register(b3)
+{
+    float4 gLodFade[GBUFFER_MAX_INSTANCES / 4];
+};
 
 struct VSOutInst
 {
@@ -112,6 +123,7 @@ VSOutInst VSMain(VSInInst i)
 PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
 {
     InstancePerObject d = inst[i.IID];
+    LodFadeClip(i.H.xy, gLodFade[i.IID >> 2u][i.IID & 3u]);
 
 #if INSTCB_SLOT_PARAMS
     const float4 mBaseColor    = slotBaseColor;

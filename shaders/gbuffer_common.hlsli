@@ -52,6 +52,10 @@ cbuffer PerObject : register(b0)
     float windLeafScale; // W7.4: WORLD metres of leaf arc per unit of COLOR_0.b (0 = unbaked)
     float windFoliage; // PER-SLOT 0..1 (0 = trunk, 1 = leaves)
     float windTrunkStiff; // per-object; divides the main bend
+    // Dithered LOD crossfade (camera pass only; shadow variants never write it -> 0 = solid).
+    // 0 = no dither; +f = this draw is FADING IN with coverage f; -f = FADING OUT with
+    // coverage 1-f. The two draws of one transition carry +f/-f -> complementary masks.
+    float lodFade;
 };
 #else
 // Instanced variant: per-object data is an array indexed by SV_InstanceID (root CBV b0).
@@ -315,6 +319,31 @@ inline void FetchShadingValues(Texture2D txAlbedo, Texture2D txMR, Texture2D txN
                         terrainTiling, terrainEdgeParams, albedo, mr, norm);
 }
 #endif
+
+// Dithered LOD crossfade (screen-door). In the fade band the SAME instance is drawn at BOTH
+// LOD tiers: the outgoing draw carries fade = -f, the incoming one fade = +f. The 4x4 Bayer
+// threshold splits the pixels between them EXACTLY (in keeps bayer < f, out keeps bayer >= f
+// — union = every pixel, intersection = none), so depth stays consistent and nothing double
+// writes; DLSS/TAA then resolves the pattern into a smooth blend. fade == 0 (the common
+// case) costs one compare. discard here does NOT lose early-Z REJECTION — only the early
+// depth WRITE turns late, same as the alpha-tested foliage this pass already draws.
+// 4x4 Bayer thresholds ((n + 0.5) / 16). File scope, not function-local: dxc turns a local
+// static array into an external declaration that fails validation as "unused".
+static const float kLodFadeBayer[16] = {
+     0.5 / 16.0,  8.5 / 16.0,  2.5 / 16.0, 10.5 / 16.0,
+    12.5 / 16.0,  4.5 / 16.0, 14.5 / 16.0,  6.5 / 16.0,
+     3.5 / 16.0, 11.5 / 16.0,  1.5 / 16.0,  9.5 / 16.0,
+    15.5 / 16.0,  7.5 / 16.0, 13.5 / 16.0,  5.5 / 16.0 };
+
+inline void LodFadeClip(float2 svPos, float fade)
+{
+    if (fade != 0.0f)
+    {
+        const uint2 p = uint2(svPos) & 3u;
+        const float bayer = kLodFadeBayer[p.y * 4u + p.x];
+        clip(fade > 0.0f ? (fade - bayer) : (bayer + fade));
+    }
+}
 
 // C1 masked foliage: discard the fragment when baseColor.a * albedo.a < cutoff. A negative
 // cutoff disables the test for this slot (so an opaque submesh sharing an ALPHA_TEST PSO never

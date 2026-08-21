@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
@@ -59,6 +60,7 @@ void InstancedDrawBatch::BuildLodBuckets()
     // member used its OWN bounds, so a spatially spread run LODs each object correctly). Render
     // then emits one instanced draw per occupied tier. Called in PrepareViews (not recording).
     for (auto& bucket : lodBuckets_) { bucket.clear(); }
+    for (auto& fades : lodBucketFades_) { fades.clear(); }
     if (!mesh_) { return; }
     const UINT maxTier = mesh_->GetLodCount() - 1u; // clamp so empty/duplicate tiers don't draw
     for (RenderableObjectBase* m : members_)
@@ -67,7 +69,20 @@ void InstancedDrawBatch::BuildLodBuckets()
         UINT tier = m->GetCameraLod();
         if (tier > maxTier) { tier = maxTier; }
         if (tier >= kMaxLodTiers) { tier = kMaxLodTiers - 1u; }
+        // Dithered crossfade: a member in the fade band contributes to BOTH tiers — the
+        // current one fading out (-f) and the next fading in (+f). The complementary PS
+        // masks make the pair cover every pixel exactly once.
+        const float fade = m->GetCameraLodFade();
+        if (fade > 0.0f && tier < maxTier && (tier + 1u) < kMaxLodTiers)
+        {
+            lodBuckets_[tier].push_back(m);
+            lodBucketFades_[tier].push_back(-fade);
+            lodBuckets_[tier + 1u].push_back(m);
+            lodBucketFades_[tier + 1u].push_back(fade);
+            continue;
+        }
         lodBuckets_[tier].push_back(m);
+        lodBucketFades_[tier].push_back(0.0f);
     }
 }
 
@@ -79,7 +94,8 @@ void InstancedDrawBatch::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
     {
         if (!lodBuckets_[tier].empty())
         {
-            RecordInstanced(renderer, cl, gfxMat_, viewCB, /*gbuffer=*/true, tier, lodBuckets_[tier]);
+            RecordInstanced(renderer, cl, gfxMat_, viewCB, /*gbuffer=*/true, tier,
+                            lodBuckets_[tier], lodBucketFades_[tier].data());
         }
     }
 }
@@ -150,7 +166,8 @@ void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandL
 
 void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                          Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod,
-                                         const std::vector<RenderableObjectBase*>& members)
+                                         const std::vector<RenderableObjectBase*>& members,
+                                         const float* fades)
 {
     const size_t total = members.size();
     const bool wireframe = gbuffer && renderer->GetWireframeMode();
@@ -182,11 +199,33 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
             }
         }
 
+        // Dithered LOD crossfade weights (b3, gbuffer only — the shadow RS has no b3 and
+        // shadows keep hard switches). Deliberately NOT part of InstancePerObject: that
+        // 224-byte stride is shared with every shadow reader. Fixed-size slab (the shader
+        // declares GBUFFER_MAX_INSTANCES/4 float4s); zeros = everything solid.
+        D3D12_GPU_VIRTUAL_ADDRESS fadeCbv = 0;
+        if (gbuffer)
+        {
+            constexpr UINT kFadeBytes = render::kMaxInstancesPerDraw * sizeof(float);
+            auto fadeAlloc = renderer->GetFrameResource()->AllocDynamic(
+                kFadeBytes, render::kConstantBufferAlignment);
+            auto* fadeDst = static_cast<float*>(fadeAlloc.cpu);
+            if (fades) { std::memcpy(fadeDst, fades + base, count * sizeof(float)); }
+            else       { std::memset(fadeDst, 0, count * sizeof(float)); }
+            if (count < render::kMaxInstancesPerDraw)
+            {
+                std::memset(fadeDst + count, 0,
+                            (render::kMaxInstancesPerDraw - count) * sizeof(float));
+            }
+            fadeCbv = fadeAlloc.gpu;
+        }
+
         if (!multiSlot)
         {
             RenderContext ctx{};
             ctx.cbv[0] = alloc.gpu; // b0: per-instance array
             ctx.cbv[1] = viewCB;    // b1: shared per-pass view CB
+            if (gbuffer) { ctx.cbv[3] = fadeCbv; } // b3: crossfade weights
 
             if (gbuffer)
             {
@@ -217,6 +256,7 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
         RenderContext ctx{};
         ctx.cbv[0] = alloc.gpu; // b0: per-instance array (shared by every submesh)
         ctx.cbv[1] = viewCB;    // b1: shared per-pass view CB
+        if (gbuffer) { ctx.cbv[3] = fadeCbv; } // b3: crossfade weights (shared by every submesh)
         for (size_t s = 0; s < subs->size(); ++s)
         {
             size_t slot = (*subs)[s].materialSlot;

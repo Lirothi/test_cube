@@ -122,6 +122,11 @@ public:
     // Step 6: camera LOD chosen in PrepareViews (with hysteresis), read at draw time.
     void SelectLod(const Camera& camera) override;
     unsigned int GetCameraLod() const override { return cameraLod_; }
+    float GetCameraLodFade() const override { return cameraLodFade_; }
+    // The fade value of the draw being RECORDED right now (0 outside transitions): -fade for
+    // the outgoing-LOD draw, +fade for the incoming one. Read by the uniform binder into the
+    // PerObject cbuffer's lodFade field; set/cleared by the Render implementations.
+    float GetDrawLodFade() const { return drawLodFade_; }
 
     // Chunked-terrain LOD: one camera tier per chunk (submesh) of a chunked mesh, chosen in
     // SelectLod from the chunk's own world AABB (render::SelectChunkLodTier, hysteresis per
@@ -226,6 +231,9 @@ private:
 protected:
     void SetMesh(std::shared_ptr<Mesh> mesh);
     void MarkWorldBoundsDirty();
+    // Crossfade recording state: a Render implementation sets the CURRENT draw's fade before
+    // filling b0 (the uniform binder copies it into the cbuffer's lodFade) and clears it after.
+    void SetDrawLodFade(float fade) { drawLodFade_ = fade; }
 
 private:
     void RebuildModelMatrix();
@@ -234,6 +242,8 @@ private:
     mutable AABB worldBoundsCache_;
     mutable bool worldBoundsDirty_ = true;
     unsigned int cameraLod_ = 0u; // Step 6: camera LOD chosen in PrepareViews (persists for hysteresis)
+    float cameraLodFade_ = 0.0f;  // crossfade weight to cameraLod_+1 (0 = solid), from PrepareViews
+    float drawLodFade_ = 0.0f;    // transient: the fade of the draw being recorded (binder reads it)
     std::vector<std::uint8_t> chunkLods_; // per-chunk camera tier (chunked meshes only; hysteresis state)
 
     Math::float3 pos_{};

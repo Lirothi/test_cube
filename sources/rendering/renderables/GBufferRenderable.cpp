@@ -44,6 +44,7 @@ public:
             cbHandles_.windTrunkStiff = material->ComputeCBFieldHandle(0, "windTrunkStiff");
             cbHandles_.windLeafScale = material->ComputeCBFieldHandle(0, "windLeafScale");
             cbHandles_.objectId = material->ComputeCBFieldHandle(0, "objectId");
+            cbHandles_.lodFade = material->ComputeCBFieldHandle(0, "lodFade");
         }
 
         if (Material* shadowMaterial = owner.GetShadowMaterial())
@@ -84,6 +85,8 @@ public:
         UpdateUniform(owner, cbHandles_.windLeafScale, material,
                       gb ? gb->GetWindLeafScaleWorld() : 0.0f, cbData);
         UpdateUniform(owner, cbHandles_.objectId, material, ToObjectId32(owner.GetEditorObjectId()), cbData);
+        // Dithered LOD crossfade: the fade of the draw being recorded (0 outside transitions).
+        UpdateUniform(owner, cbHandles_.lodFade, material, owner.GetDrawLodFade(), cbData);
     }
 
     void UpdateShadowCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& /*lightView*/, const mat4& /*lightProj*/, uint8_t* cbData) override
@@ -125,6 +128,7 @@ private:
         Material::CBFieldHandle windTrunkStiff;
         Material::CBFieldHandle windLeafScale;
         Material::CBFieldHandle objectId;
+        Material::CBFieldHandle lodFade;
     } cbHandles_{};
 
     struct ShadowCBHandles
@@ -463,27 +467,39 @@ void GBufferRenderable::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl
     // Per-submesh recording: each submesh gets its own b0 slice (slot params), its slot's SRV
     // table, and a ranged draw. World/prevWorld repeat per slice — simple and correct; a shared
     // per-object CB split is a later optimization if palms ever multiply.
+    //
+    // Dithered LOD crossfade: in the fade band the WHOLE submesh loop runs twice — the current
+    // tier fading out (lodFade = -f) and the next fading in (+f). All slots fade together
+    // (opaque trunk included), or the two tiers' trunks would z-fight during the transition.
     const UINT lod = GetCameraLod();
-    const auto& subs = mesh->SubmeshesForLod(lod);
+    const float fadeWeight = GetCameraLodFade();
+    const bool fading = fadeWeight > 0.0f && (lod + 1u) < mesh->GetLodCount();
     constexpr UINT kAlign = render::kConstantBufferAlignment;
     const UINT cbSizeBytes = GetGraphicsMaterial()->GetCBSizeBytesAligned(0, kAlign);
 
-    for (size_t s = 0; s < subs.size(); ++s)
+    for (int pass = 0; pass < (fading ? 2 : 1); ++pass)
     {
-        currentDrawSlot_ = subs[s].materialSlot < matDatas_.size()
-            ? subs[s].materialSlot
-            : static_cast<uint32_t>(matDatas_.size() - 1);
+        const UINT drawLod = lod + static_cast<UINT>(pass);
+        SetDrawLodFade(fading ? (pass == 0 ? -fadeWeight : fadeWeight) : 0.0f);
+        const auto& subs = mesh->SubmeshesForLod(drawLod);
+        for (size_t s = 0; s < subs.size(); ++s)
+        {
+            currentDrawSlot_ = subs[s].materialSlot < matDatas_.size()
+                ? subs[s].materialSlot
+                : static_cast<uint32_t>(matDatas_.size() - 1);
 
-        auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign);
-        uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
-        auto h = renderer->GetRenderContextPool()->Acquire();
-        auto& ctx = h.ref();
-        ctx.cbv[0] = alloc.gpu;
-        ctx.cbv[1] = viewCB;
+            auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign);
+            uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
+            auto h = renderer->GetRenderContextPool()->Acquire();
+            auto& ctx = h.ref();
+            ctx.cbv[0] = alloc.gpu;
+            ctx.cbv[1] = viewCB;
 
-        RecordGraphics(renderer, cl, ctx, camera, cbData); // stages the slot's SRVs + binds
-        mesh->DrawSubmesh(cl, static_cast<UINT>(s), lod);
+            RecordGraphics(renderer, cl, ctx, camera, cbData); // stages the slot's SRVs + binds
+            mesh->DrawSubmesh(cl, static_cast<UINT>(s), drawLod);
+        }
     }
+    SetDrawLodFade(0.0f);
     currentDrawSlot_ = 0;
 }
 

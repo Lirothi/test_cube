@@ -261,6 +261,7 @@ namespace
         if (setting == "lod.bound0")  { render::g_lodBound0 = std::max(0.5f, value); return true; }
         if (setting == "lod.bound1")  { render::g_lodBound1 = std::max(0.5f, value); return true; }
         if (setting == "lod.bound2")  { render::g_lodBound2 = std::max(0.5f, value); return true; }
+        if (setting == "lod.fadeBand") { render::g_lodFadeBand = std::clamp(value, 0.0f, 0.35f); return true; }
         if (setting == "lod.enabled") { render::g_lodEnabled = value != 0.0f; return true; }
         if (setting == "lod.forced")  { render::g_forcedLod = std::clamp((int)value, -1, 3); return true; }
         // Mirror of the VSM page-stats log toggle, so a headless run can capture the resident/request

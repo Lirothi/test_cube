@@ -1761,6 +1761,13 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "boundary is forced at least 5%% past the previous one.");
                 ImGui::SliderFloat("LOD2 at ratio", &render::g_lodBound1, 4.0f, 120.0f, "%.0f");
                 ImGui::SliderFloat("LOD3 at ratio", &render::g_lodBound2, 8.0f, 240.0f, "%.0f");
+                ImGui::SliderFloat("Crossfade band", &render::g_lodFadeBand, 0.0f, 0.35f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Dithered LOD crossfade: half-width of the transition band around each\n"
+                                      "boundary (fraction of the boundary ratio). Inside it BOTH tiers draw with\n"
+                                      "complementary screen-door masks that DLSS/TAA resolves into a smooth\n"
+                                      "blend - no pop. Costs a second draw of the object across the band.\n"
+                                      "0 = off (hard switches with the classic +/-15%% hysteresis).");
 
                 ImGui::SeparatorText("Chunked terrain (metres, per chunk)");
                 ImGui::SliderFloat("Chunk LOD distance (m)", &render::g_chunkLodDist0, 24.0f, 400.0f, "%.0f");
