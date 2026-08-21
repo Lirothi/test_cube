@@ -1111,8 +1111,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
         std::uint32_t forceAll, megaActive, flatLod, numLods; // per-view LOD: mega on/off + fallback LOD
         std::uint32_t scatterActive, pageIdShift, compactArgs; // 1 = the scatter pass produced clipmap lists
-        // Distance cutoff for groupLodBias as a clipmap-level count (was _p5 — layout unchanged).
-        std::uint32_t chunkBiasLevels;
+        std::uint32_t _pad5; // (was the chunk-bias level cutoff; the override table replaced it)
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -1122,10 +1121,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
         DirectX::XMUINT4 viewLod[kViewLodVec4];               // per cull-view shadow LOD (packed 4/vec)
         DirectX::XMUINT4 groupLodMega[kMaxMegaGroups * kLods]; // per (group,lod): {megaStart, lodRel, count, baseVertex}
-        // Per-group additive LOD bias, one int per group packed 4/uint4 (chunked terrain = -1).
+        // Chunked-terrain LOD: per-group ABSOLUTE LOD override, one int per group packed 4/int4
+        // (-1 = no override -> the view LOD; else the chunk's camera tier, so caster == receiver).
         // APPENDED AT THE END on purpose: every array above keeps its offset, so this cannot shift
-        // gGroupLodMega out from under the shader. Mirrors gGroupLodBias in vsm_page_setup_cs.hlsl.
-        DirectX::XMINT4 groupLodBias[kGroupBiasVec4];
+        // gGroupLodMega out from under the shader. Mirrors gGroupLodOverride in vsm_page_setup_cs.hlsl.
+        DirectX::XMINT4 groupLodOverride[kGroupBiasVec4];
     };
     // Region base in 5-uint arg units. MUST come from the ring's PHYSICAL region stride: the args
     // ring is grow-only (EnsureUavRing reuses a larger prior-level allocation), so after a level
@@ -1149,11 +1149,6 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.scatterActive = scatterActive ? 1u : 0u;
             cb.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u; // must match the scatter CB's value
             cb.compactArgs = compactArgs ? 1u : 0u;
-            // The bias table below is only allowed to act on clipmap views this close to the
-            // camera. Taken from the caster build, NOT recomputed from the live globals: the
-            // per-view LODs in perViewGroup_ were baked with that same count, and the two
-            // paths disagreeing would draw one LOD's triangles from another LOD's range.
-            cb.chunkBiasLevels = shadowGpu->BuiltChunkBiasLevels();
             // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
             // use one LOD = the near directional (clipmap level 0) view's LOD.
             cb.flatLod = shadowGpu->ViewLodAt(render::kMaxShadowViews - vsm::kNumClipmapLevels);
@@ -1183,13 +1178,13 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                     if (src + 3 < glm.size()) { e = { glm[src], glm[src + 1], glm[src + 2], glm[src + 3] }; }
                 }
             }
-            // Per-group LOD bias, same packing as viewLod (one entry per group, 4 per int4). Zero
-            // for every group unless a chunked terrain mesh is loaded, which is what makes the whole
-            // feature a provable no-op until one is.
-            const std::vector<std::int32_t>& glb = shadowGpu->GroupLodBias();
-            for (std::uint32_t g = 0; g < gm && g < glb.size(); ++g)
+            // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = use the view LOD), the
+            // per-frame camera tiers ShadowGpuData refreshed this frame. -1 everywhere unless a
+            // chunked mesh is loaded, which keeps the whole feature a provable no-op until one is.
+            const auto& ovr = shadowGpu->GroupLodOverride();
+            for (std::uint32_t g = 0; g < gm && g < ovr.size(); ++g)
             {
-                reinterpret_cast<std::int32_t*>(cb.groupLodBias)[g] = glb[g];
+                reinterpret_cast<std::int32_t*>(cb.groupLodOverride)[g] = ovr[g];
             }
             std::memcpy(dst, &cb, sizeof(cb));
         },

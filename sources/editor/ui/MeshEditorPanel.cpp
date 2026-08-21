@@ -352,6 +352,10 @@ void DrawMeshPreview(EditorContext& ctx,
             ? "Render the mesh with the selected explicit LOD."
             : "This mesh has no generated LODs.");
     }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Triangles: %u | Indices: %u",
+        preview.triangleCount,
+        preview.indexCount);
     ImGui::TextDisabled("LMB orbit | RMB/MMB pan | Wheel zoom | Double-click frame");
 }
 

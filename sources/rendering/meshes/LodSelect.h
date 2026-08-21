@@ -27,38 +27,35 @@ inline constexpr unsigned int kMaxShadowLods = 4u;
 // BuiltShadowLod() vs this each frame).
 inline int g_shadowLodBias = 1;
 
-// Additional shadow-LOD bias applied ONLY to the caster groups of a chunked mesh (mesh.json
-// "chunkGrid" — terrain split into spatial submesh chunks). Terrain is the receiver the camera
-// rasterizes at LOD0, so ANY caster LOD above 0 makes the simplified surface shadow the detailed
-// one. DEFAULT -3 = PIN TERRAIN CASTERS TO LOD0 AT EVERY LEVEL (with radius 0 below), and it is
-// not a taste call: at a grazing sun the mismatch multiplies by 1/sin(elevation) along the light —
-// at the 2.8-degree low sun a ~10-30 cm LOD3 height deviation became 2-6 METRES of depth error,
-// which rendered as huge phantom shadow blobs on empty beach (2026-08-21, verified against a
-// Legacy-CSM ground truth: LOD0-everywhere sits at the noise floor from it, no depth bias short of
-// metres could mask it). Measured cost of LOD0-everywhere over the old "-1 within 12 m":
-// Pass_VsmPageRender 0.716 -> 0.816 ms — chunking is what makes it this cheap (a page draws only
-// its overlapping chunks). The per-view LOD curve still applies to everything non-chunked (palms).
-// 0 disables (the A/B control; no-op while no chunked mesh exists). Same rebuild rule as
-// g_shadowLodBias above: Scene polls BuiltChunkLodBias() and re-Rebuilds on a change.
-inline int g_chunkShadowLodBias = -3;
+// --- Chunked-terrain LOD (mesh.json "chunkGrid": spatial submesh tiles of one surface) ----------
+//
+// A chunked mesh is LODed PER CHUNK, from the camera, and the SAME per-chunk tier drives BOTH the
+// raster draw and the shadow casters (the VSM setup CB carries a per-group override; the Legacy
+// per-view loop reads the same array). Caster == receiver geometry BY CONSTRUCTION, which is what
+// kills the terrain self-shadow family for good: any caster LOD above the drawn one multiplies its
+// height error by 1/sin(sunElevation) along the light — at a 2.8-degree sun a 10-30 cm LOD
+// deviation became 2-6 METRES of depth error (phantom shadow blobs on empty beach, verified
+// against a Legacy ground truth 2026-08-21). The per-view shadow LOD curve above still applies to
+// everything non-chunked (palms).
+//
+// The knobs: a chunk closer than g_chunkLodDist0 (metres, closest point of its world AABB) draws
+// LOD0; each g_chunkLodDistFactor further steps one LOD coarser. +/-15% hysteresis on the tier a
+// chunk already has, so a boundary chunk does not flip while the camera breathes.
+inline float g_chunkLodDist0 = 24.0f;
+inline float g_chunkLodDistFactor = 2.0f;
 
-// How far from the camera `g_chunkShadowLodBias` is allowed to act, in METRES. Directional shadow
-// views are distance-ordered (CSM cascade index / VSM clipmap level), so this is a cutoff on that
-// order: a view whose reach exceeds the radius keeps the plain per-view LOD.
-//
-// Without it the bias applies at EVERY distance, and the far end is where it is least worth paying:
-// the per-view LOD saturates at the coarsest level, so a -1 there does not cancel the +1 default —
-// it un-saturates a level the clamp had already collapsed, making the terrain finer out to the
-// horizon for no visible gain. Local lights never take the bias at all: "distance from the camera"
-// is not a property their views have.
-//
-// <= 0 means "no cutoff" — WHICH IS THE DEFAULT NOW: the phantom-blob finding above showed the
-// far levels are exactly where the terrain LOD mismatch does the most damage at a low sun (the
-// grazing multiplier grows with distance-level coarseness), so the bias must reach every level.
-// The radius stays as the cost-recovery knob if a scene ever needs it. The mapping to views is
-// vsm::ClipmapLevelsWithinRadius, and the RESULTING LEVEL COUNT is what the caster rebuild is keyed
-// on — nudging the radius inside one level's bucket costs nothing.
-inline float g_chunkShadowLodRadius = 0.0f;
+inline unsigned int SelectChunkLodTier(float distMeters, unsigned int currentTier)
+{
+    const float d0 = g_chunkLodDist0 > 1.0f ? g_chunkLodDist0 : 1.0f;
+    const float f = g_chunkLodDistFactor > 1.01f ? g_chunkLodDistFactor : 1.01f;
+    constexpr float kHyst = 0.15f;
+    constexpr unsigned int cap = kMaxShadowLods - 1u;
+    unsigned int t = currentTier > cap ? cap : currentTier;
+    auto bound = [&](unsigned int tier) { float b = d0; for (unsigned int i = 0; i < tier; ++i) { b *= f; } return b; };
+    while (t < cap && distMeters > bound(t) * (1.0f + kHyst)) { ++t; }          // go coarser
+    while (t > 0u && distMeters < bound(t - 1u) * (1.0f - kHyst)) { --t; }      // go finer
+    return t;
+}
 
 // Per-view BASE shadow LOD from a view's tier: the tier index itself (near = fine, far = coarse).
 // `tier` is the CSM cascade index or the VSM clipmap level (0 = finest/near); locals pass a small
@@ -72,6 +69,13 @@ inline int ShadowTierBaseLod(unsigned int tier)
     return lod < cap ? lod : cap;
 }
 
+// Step 6 boundaries, now TUNABLE (dev window "LOD" tab; --set=lod.bound0/1/2). The unit is
+// distance / instance RADIUS — object-size-relative on purpose, so a palm switches later than a
+// pebble at the same distance. Defaults = the original deliberately conservative curve.
+inline float g_lodBound0 = 5.0f; // ratio where LOD0 -> 1
+inline float g_lodBound1 = 10.0f; // ratio where LOD1 -> 2
+inline float g_lodBound2 = 20.0f; // ratio where LOD2 -> 3
+
 // Step 6: pick a LOD tier (0 = full) from screen size (distance / instance radius), with
 // HYSTERESIS off the current tier so it doesn't flip back and forth near a boundary. Called
 // once per frame per object in Scene::PrepareViews (NOT during recording); the result is
@@ -83,11 +87,16 @@ inline unsigned int SelectLodTier(const Math::float3& center, float radius,
     if (radius <= 1e-4f) { return 0u; }
     const float ratio = (center - camPos).Length() / radius; // ~ inverse of projected screen size
 
-    constexpr float kBound[3] = { 15.0f, 35.0f, 70.0f }; // tier boundaries (deliberately conservative)
+    // Monotonic enforcement (each bound at least 5% past the previous) keeps the hysteresis bands
+    // from overlapping however the three sliders are dragged.
+    float bound[3];
+    bound[0] = g_lodBound0 > 0.5f ? g_lodBound0 : 0.5f;
+    bound[1] = g_lodBound1 > bound[0] * 1.05f ? g_lodBound1 : bound[0] * 1.05f;
+    bound[2] = g_lodBound2 > bound[1] * 1.05f ? g_lodBound2 : bound[1] * 1.05f;
     constexpr float kHyst = 0.15f;                       // +/-15% dead band around each boundary
     unsigned int t = currentTier > 3u ? 3u : currentTier;
-    while (t < 3u && ratio > kBound[t] * (1.0f + kHyst)) { ++t; }          // go coarser
-    while (t > 0u && ratio < kBound[t - 1u] * (1.0f - kHyst)) { --t; }     // go finer
+    while (t < 3u && ratio > bound[t] * (1.0f + kHyst)) { ++t; }           // go coarser
+    while (t > 0u && ratio < bound[t - 1u] * (1.0f - kHyst)) { --t; }      // go finer
     return t;
 }
 } // namespace render

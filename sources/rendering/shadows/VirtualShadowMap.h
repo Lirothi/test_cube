@@ -152,20 +152,6 @@ namespace vsm
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
     inline float         g_clipmapBaseExtent = 12.0f;
 
-    // How many clipmap levels, counting from the finest, reach no further than `radius` metres from
-    // the camera. Level i SPANS g_clipmapBaseExtent * 2^i and is centred on the camera, so it
-    // reaches HALF that (E0 = 12 -> 6 / 12 / 24 / 48 / 96 / 192 / 384 / 768 m). `radius <= 0` means
-    // no cutoff. Used by the chunked-terrain shadow LOD bias (render::g_chunkShadowLodRadius) to
-    // decide which directional views it may act on; the returned COUNT is what a caster rebuild is
-    // keyed on, so this must stay a pure function of the two globals.
-    inline std::uint32_t ClipmapLevelsWithinRadius(float radius)
-    {
-        if (!(radius > 0.0f)) { return kNumClipmapLevels; }
-        const float e0 = g_clipmapBaseExtent > 1.0f ? g_clipmapBaseExtent : 1.0f;
-        std::uint32_t n = 0;
-        while (n < kNumClipmapLevels && 0.5f * e0 * static_cast<float>(1u << n) <= radius) { ++n; }
-        return n;
-    }
     // Step 24f: directional-clipmap NDC depth bias (against shadow acne). Tunable at the visual gate.
     // A level's NDC range is 6x its extent, so a constant NDC value is a constant bias in TEXELS
     // (ndc * 6 * 2048 -- 0.0001 = 1.23 texels) whose WORLD size doubles per level.

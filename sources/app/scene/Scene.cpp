@@ -786,15 +786,10 @@ void Scene::ReconcileShadowLodBias(Renderer* renderer)
     // The shadow LOD bias picks a coarser (or finer) caster LOD to rasterize into the shadow maps.
     // The geometry lives in the consolidated mega buffer built at load, so a change needs a GPU-idle
     // rebuild. Cheap to poll (one int compare); only rebuilds on an actual change (slider drag).
-    // The chunked-terrain bias rides the same tables (perViewGroup_ + the per-group bias the VSM
-    // setup CB mirrors), so it needs the same rebuild — one more int compare.
+    // (Chunked-terrain LOD needs NO rebuild anywhere: its per-chunk camera tiers travel through a
+    // per-frame CB override — see ShadowGpuData::RefreshChunkGroupLods.)
     if (!renderer) { return; }
-    // The chunk bias's radius is polled as the LEVEL COUNT it resolves to, so dragging the slider
-    // within one level's bucket (or between two radii that select the same levels) costs nothing.
-    if (shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias &&
-        shadowGpu_.BuiltChunkLodBias() == render::g_chunkShadowLodBias &&
-        shadowGpu_.BuiltChunkBiasLevels() ==
-            vsm::ClipmapLevelsWithinRadius(render::g_chunkShadowLodRadius)) { return; }
+    if (shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias) { return; }
     RebuildShadowCasters(*renderer);
 }
 
@@ -1255,6 +1250,11 @@ void Scene::Render(Renderer* renderer) {
     vsm_.PollPageRequestDebug(renderer);  // Step 19: one-shot page-request count log when ready
 
     PrepareViews(renderer);
+
+    // Chunked-terrain LOD: publish THIS frame's per-chunk camera tiers (chosen by SelectLods inside
+    // PrepareViews above) as the shadow caster overrides — after PrepareViews on purpose, so the
+    // caster can never lag the receiver by a frame at a LOD transition.
+    shadowGpu_.RefreshChunkGroupLods(objects_);
 
     // Rung 0 / Step 2: upload the active shadow views' frustum planes (the per-view cull input)
     // into this frame's ring region. Fixed slot layout [cascades | spots | point-faces] so a

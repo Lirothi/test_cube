@@ -372,6 +372,34 @@ Material* ShadowGpuData::IndirectShadowPoolMaterial() const
     return MaskedShadowsActive() ? indirectShadowPoolMaskedMat_.get() : indirectShadowPoolMat_.get();
 }
 
+// Chunked-terrain LOD: refresh the per-group ABSOLUTE LOD override from each chunked object's
+// camera tiers (RenderableObject::SelectLod filled them this frame). Runs every frame — it is what
+// keeps the VSM caster LOD equal to the LOD the gbuffer just drew, per chunk, with no rebuild.
+void ShadowGpuData::RefreshChunkGroupLods(
+    const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
+{
+    groupLodOverride_.fill(-1);
+    if (meshFirstGroup_.empty()) { return; }
+    for (const auto& objPtr : objects)
+    {
+        const RenderableObjectBase* obj = objPtr.get();
+        if (!IsCaster(obj)) { continue; }
+        const RenderableObject* ro = obj->AsRenderableObject();
+        const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
+        if (!mesh || !mesh->IsChunkedSubmeshes()) { continue; }
+        const auto it = meshFirstGroup_.find(mesh);
+        if (it == meshFirstGroup_.end()) { continue; }
+        const std::vector<std::uint8_t>& lods = ro->ChunkCameraLods();
+        for (size_t s = 0; s < lods.size(); ++s)
+        {
+            const std::uint32_t g = it->second + static_cast<std::uint32_t>(s);
+            if (g >= groupLodOverride_.size()) { break; }
+            groupLodOverride_[g] =
+                static_cast<std::int8_t>(mesh->ClampExplicitLod(lods[s]));
+        }
+    }
+}
+
 // Mirrors the rule above for the VSM single-draw permutations. MaskedShadowsActive() keys off the
 // LOOP path's masked PSO on purpose: it answers "does this caster set contain masked groups", and
 // both permutation pairs are built from the same source, so they succeed or fail together in
@@ -507,8 +535,6 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // Snapshot the shadow LOD BIAS this build baked into the per-view LOD tables (viewLod_/perViewGroup_/
     // groupLodMega_). Scene compares BuiltShadowLod() to the live global and re-Rebuilds on a change.
     builtShadowLod_ = render::g_shadowLodBias;
-    builtChunkLodBias_ = render::g_chunkShadowLodBias;
-    builtChunkBiasLevels_ = vsm::ClipmapLevelsWithinRadius(render::g_chunkShadowLodRadius);
 
     size_t casterCount = 0;
     for (const auto& obj : objects)
@@ -611,6 +637,9 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         }
     }
     const std::uint32_t staticGroups = nextGroup;
+    // Chunked-terrain LOD: keep the mesh -> first-group mapping so the per-frame override refresh
+    // (RefreshChunkGroupLods) can address a chunk's group without re-deriving the layout.
+    meshFirstGroup_ = meshToGroup;
 
     // (2) GI→VSM reservation (Step 3): fold each GPU-instanced caster's instances into the caster
     // set as an id sub-range [giBase, giBase+count) after the static casters, one mesh-group per GI
@@ -753,10 +782,6 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // is clamped per mesh by the tables below (a mesh may have fewer LODs than the view asks for).
     const int lodCap = static_cast<int>(render::kMaxShadowLods) - 1;
     viewLod_.assign(render::kMaxShadowViews, 0u);
-    // Per view: may the chunked-terrain bias act here? DIRECTIONAL views only (their tier IS a
-    // distance order, which is what a radius cutoff needs), and only within the radius. Filled in
-    // the same loop as the tier so the two can never disagree about what a view's distance is.
-    std::vector<std::uint8_t> viewTakesChunkBias(render::kMaxShadowViews, 0u);
     {
         constexpr std::uint32_t kCasc = vsm::kNumCascades;                       // [0, 4)
         constexpr std::uint32_t kLocalEnd = kCasc + LightManager::kMaxShadowedSpotLights
@@ -764,41 +789,24 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         for (std::uint32_t v = 0; v < render::kMaxShadowViews; ++v)
         {
             std::uint32_t tier;
-            bool directional;
-            if (v < kCasc)              { tier = v; directional = true; }              // CSM cascade index (near->far)
-            else if (v < kLocalEnd)     { tier = 0u; directional = false; }            // local light -> near tier
-            else                        { tier = v - kLocalEnd; directional = true; }  // VSM clipmap level (near->far)
-            viewTakesChunkBias[v] = (directional && tier < builtChunkBiasLevels_) ? 1u : 0u;
+            if (v < kCasc)              { tier = v; }                  // CSM cascade index (near->far)
+            else if (v < kLocalEnd)     { tier = 0u; }                 // local light -> near tier
+            else                        { tier = v - kLocalEnd; }      // VSM clipmap level (near->far)
             int lod = render::ShadowTierBaseLod(tier) + render::g_shadowLodBias;
             lod = lod < 0 ? 0 : (lod > lodCap ? lodCap : lod);
             viewLod_[v] = static_cast<std::uint32_t>(lod);
         }
     }
 
-    // --- Per-group shadow-LOD bias (chunked terrain gets render::g_chunkShadowLodBias) -----------
-    // Terrain is the one receiver the camera always rasterizes at LOD0, so any caster LOD above 0
-    // shadows detailed geometry with a simplified surface and the mismatch reads as banding. -1 here
-    // cancels the global +1 for terrain groups only. Chunked meshes are the only ones that get it:
-    // un-chunked, "terrain at LOD0" would mean the whole island's LOD0 in every page it covers.
-    std::vector<std::int32_t> groupBias(numMeshGroups_, 0);
-    if (render::g_chunkShadowLodBias != 0)
+    // Chunked-terrain LOD note: the per-view tables below carry the PLAIN view LOD. Chunk groups
+    // get their ABSOLUTE per-frame camera-tier override later (UpdateForFrame -> groupLodOverride_
+    // -> the VSM setup CB), so the caster always matches what the camera drew — Rebuild bakes
+    // nothing camera-dependent. The Rung0-args/Legacy-indirect fallback keeps the view LOD for
+    // chunk groups (documented divergence: only the VSM page path and the Legacy per-submesh CPU
+    // loop can be per-chunk).
+    const auto biasedLod = [&](std::uint32_t v, std::uint32_t) -> std::uint32_t
     {
-        for (std::uint32_t g = 0; g < staticGroups && g < groupMesh_.size(); ++g)
-        {
-            const Mesh* m = groupMesh_[g];
-            if (m && m->IsChunkedSubmeshes()) { groupBias[g] = render::g_chunkShadowLodBias; }
-        }
-    }
-    groupLodBias_ = groupBias;
-    // One helper for BOTH consumers below (this table and the CB the setup CS reads), because a LOD
-    // that differs between the two would show up as a page drawing one LOD's triangles with another
-    // LOD's index range.
-    const auto biasedLod = [&](std::uint32_t v, std::uint32_t g) -> std::uint32_t
-    {
-        const int base = static_cast<int>(v < viewLod_.size() ? viewLod_[v] : 0u);
-        const bool takes = v < viewTakesChunkBias.size() && viewTakesChunkBias[v] != 0u;
-        const int b = base + ((takes && g < groupBias.size()) ? groupBias[g] : 0);
-        return static_cast<std::uint32_t>(b < 0 ? 0 : (b > lodCap ? lodCap : b));
+        return v < viewLod_.size() ? viewLod_[v] : 0u;
     };
 
     // --- Per (view, group) draw ranges at that view's LOD (seeds the cull-clear args -> Legacy + Rung0).
@@ -1104,6 +1112,9 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         lastMoverCount_ = count_; // full rebuild -> treat everything as changed (don't skip VSM)
         return count_;
     }
+    // (Chunked-terrain LOD overrides are refreshed by Scene AFTER PrepareViews — this function
+    // runs BEFORE the frame's SelectLod, and reading last frame's tiers here would let the caster
+    // lag the camera by one frame exactly on LOD-transition frames.)
 
     const UINT region = renderer->GetCurrentFrameIndex();
     if (region >= render::kFrameCount) { return 0; }

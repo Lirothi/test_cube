@@ -44,11 +44,7 @@ cbuffer SetupCB : register(b0)
     // layout the per-page loop indexes directly. Only ever 1 when the single-draw path is active —
     // the loop computes its own argOffset from (page, group) and would read garbage otherwise.
     uint gCompactArgs;
-    // Distance cutoff for gGroupLodBias, as a COUNT of clipmap levels from the finest: a clipmap
-    // view takes the per-group bias only while its level is below this. 0 = the bias never acts
-    // here, VSM_NUM_CLIPMAP_LEVELS = everywhere. Local views never take it (see gGroupLodBias).
-    // Occupies what used to be _pad5, so the CB layout is unchanged.
-    uint gChunkBiasLevels;
+    uint _pad5; // (was the chunk-bias level cutoff; the absolute override table replaced it)
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -58,11 +54,13 @@ cbuffer SetupCB : register(b0)
     uint4    gViewLod[KVIEWLOD_VEC4];      // per cull-view shadow LOD (near->far tier + bias), packed 4/uint4
     // per (mesh-group, lod): x=mega absolute start, y=lod-relative start, z=index count, w=mega base vertex.
     uint4    gGroupLodMega[VSM_MAX_SETUP_GROUPS * KMAX_SHADOW_LODS];
-    // per mesh-group: ADDITIVE shadow-LOD bias, packed 4/int4 (chunked terrain = -1, everything
-    // else 0), applied only on clipmap views inside gChunkBiasLevels. Appended AFTER gGroupLodMega
-    // so no array above it moves; the CPU mirror is SetupCB::groupLodBias in VirtualShadowMap.cpp
-    // and the two must be repacked together.
-    int4     gGroupLodBias[KGROUP_BIAS_VEC4];
+    // per mesh-group: ABSOLUTE LOD override, packed 4/int4. -1 = no override (use the view LOD);
+    // else the chunk's CAMERA tier this frame, on EVERY view — the caster must equal the geometry
+    // the gbuffer just rasterized, and that identity is what retired the whole terrain
+    // self-shadow-mismatch family (banding, low-sun stairs, phantom blobs). Appended AFTER
+    // gGroupLodMega so no array above it moves; the CPU mirror is SetupCB::groupLodOverride in
+    // VirtualShadowMap.cpp and the two must be repacked together.
+    int4     gGroupLodOverride[KGROUP_BIAS_VEC4];
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; }; // xyz world center/half-extents (matches render::CasterBounds)
@@ -263,10 +261,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // -> absolute mega start; mega off -> lod-relative start into the mesh's own IB (baseVertex 0).
     uint viewLod = gMegaActive ? (gViewLod[rung0View >> 2u][rung0View & 3u]) : gFlatLod;
     if (viewLod >= gNumLods) { viewLod = gNumLods - 1u; }
-    // Uniform for the whole page: the chunked-terrain bias only acts on DIRECTIONAL views near
-    // enough to the camera. Local (spot/point) views have no such distance, so they never take it.
-    const bool takesChunkBias = (view >= VSM_NUM_LOCAL_VIEWS) &&
-                                ((view - VSM_NUM_LOCAL_VIEWS) < gChunkBiasLevels);
     for (uint g2 = 0u; g2 < gNumGroups; ++g2)
     {
         // Compacted args: an empty group would only ever be a zero-instance no-op, so don't append
@@ -276,15 +270,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         uint4 a0;
         if (g2 < VSM_MAX_SETUP_GROUPS) // per-view LOD from the CB table (the normal path)
         {
-            // Per-GROUP LOD: the view's LOD plus this group's bias (chunked terrain runs one level
-            // finer so the near clipmap rings cast from the same geometry the camera rasterizes).
-            // The bias is 0 for every non-chunked group and outside gChunkBiasLevels, so this
-            // reduces to `viewLod` exactly in both cases.
-            // Indexed only inside this branch — gGroupLodBias is sized VSM_MAX_SETUP_GROUPS, and the
-            // over-cap path below reads Rung0Args, which the CPU already baked the same bias into.
-            const int biased = (int)viewLod +
-                (takesChunkBias ? gGroupLodBias[g2 >> 2u][g2 & 3u] : 0);
-            const uint groupLod = (uint)clamp(biased, 0, (int)gNumLods - 1);
+            // Per-GROUP LOD: a chunked-terrain group carries an ABSOLUTE override (its camera tier
+            // this frame, -1 = none) so the caster is the same geometry the gbuffer rasterized, on
+            // every view. Everything else takes the view LOD. Indexed only inside this branch —
+            // gGroupLodOverride is sized VSM_MAX_SETUP_GROUPS; the over-cap path below reads
+            // Rung0Args (view LOD, documented divergence for chunk groups past the cap).
+            const int ovr = gGroupLodOverride[g2 >> 2u][g2 & 3u];
+            const uint groupLod = (ovr >= 0) ? min((uint)ovr, gNumLods - 1u) : viewLod;
             uint4 e = gGroupLodMega[g2 * gNumLods + groupLod]; // {megaStart, lodRel, count, baseVertex}
             a0.x = e.z;                                       // IndexCountPerInstance = LOD's index count
             a0.z = gMegaActive ? e.x : e.y;                   // StartIndexLocation: mega-absolute / lod-relative

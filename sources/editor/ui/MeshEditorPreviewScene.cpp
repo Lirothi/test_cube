@@ -355,6 +355,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
 
     view.lodCount = std::max(1u, impl_->mesh->GetLodCount());
     lod = std::min(lod, view.lodCount - 1u);
+    view.indexCount = impl_->mesh->GetLodDrawInfo(lod).indexCount;
+    view.triangleCount = view.indexCount / 3u;
 
     const std::uint32_t frameIndex = renderer.GetCurrentFrameIndex();
     if (frameIndex >= render::kFrameCount)

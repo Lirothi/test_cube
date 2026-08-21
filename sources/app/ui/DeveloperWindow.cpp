@@ -1679,19 +1679,7 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Checkbox("GPU instancing", &render::g_instancingEnabled);
 #endif
 
-                ImGui::Checkbox("Mesh LOD [F10]", &render::g_lodEnabled);
-                ImGui::BeginDisabled(!render::g_lodEnabled);
-                // -1 = automatic (screen-size / cascade); 0..3 force that level on every mesh.
-                static const char* kForcedLodLabels[] = { "Auto", "0 (full)", "1", "2", "3" };
-                int forcedLodCombo = render::g_forcedLod + 1; // map -1..3 -> 0..4
-                if (ImGui::Combo("Force LOD level", &forcedLodCombo, kForcedLodLabels, IM_ARRAYSIZE(kForcedLodLabels)))
-                {
-                    render::g_forcedLod = forcedLodCombo - 1;
-                }
-                ImGui::EndDisabled();
-
-                ImGui::Separator();
-
+                // (Mesh LOD enable/force + the selection boundaries moved to the "LOD" tab.)
                 const Camera& camera = scene.CameraRef();
                 const auto& camPos = camera.GetPosition();
                 const auto& camDir = camera.GetDirection();
@@ -1732,6 +1720,57 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         textStats.uploadRectUs, textStats.uploadTextUs, textStats.drawUs, textStats.beginUs);
                     ImGui::TreePop();
                 }
+
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("LOD"))
+            {
+                // Every mesh-LOD SELECTION control in one place (shadow-specific LOD lives with the
+                // shadows: the per-view curve bias stays on the VSM tab). All of these apply live.
+                ImGui::TextWrapped("Mesh LOD selection. Regular meshes pick a tier from "
+                    "distance / instance radius (object-size-relative: a palm switches later than a "
+                    "pebble); chunked terrain picks a tier PER CHUNK in metres, and its shadow "
+                    "casters always match the drawn LOD by construction.");
+                ImGui::Separator();
+
+#if WITH_EDITOR
+                ImGui::Checkbox("Mesh LOD [F10]", &render::g_lodEnabled);
+#else
+                ImGui::Checkbox("Mesh LOD", &render::g_lodEnabled);
+#endif
+                ImGui::BeginDisabled(!render::g_lodEnabled);
+                // -1 = automatic (screen-size / cascade); 0..3 force that level on every mesh.
+                static const char* kForcedLodLabels[] = { "Auto", "0 (full)", "1", "2", "3" };
+                int forcedLodCombo = render::g_forcedLod + 1; // map -1..3 -> 0..4
+                if (ImGui::Combo("Force LOD level", &forcedLodCombo, kForcedLodLabels, IM_ARRAYSIZE(kForcedLodLabels)))
+                {
+                    render::g_forcedLod = forcedLodCombo - 1;
+                }
+
+                ImGui::SeparatorText("Regular meshes (distance / radius)");
+                ImGui::SliderFloat("LOD1 at ratio", &render::g_lodBound0, 2.0f, 60.0f, "%.0f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("distance / instance radius where LOD0 steps to LOD1. A 2 m-radius palm\n"
+                                      "at ratio 15 switches at 30 m. +/-15%% hysteresis on every boundary; each\n"
+                                      "boundary is forced at least 5%% past the previous one.");
+                ImGui::SliderFloat("LOD2 at ratio", &render::g_lodBound1, 4.0f, 120.0f, "%.0f");
+                ImGui::SliderFloat("LOD3 at ratio", &render::g_lodBound2, 8.0f, 240.0f, "%.0f");
+
+                ImGui::SeparatorText("Chunked terrain (metres, per chunk)");
+                ImGui::SliderFloat("Chunk LOD distance (m)", &render::g_chunkLodDist0, 24.0f, 400.0f, "%.0f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A terrain chunk closer than this (closest point of its box) draws AND\n"
+                                      "casts LOD0; each 'factor' further steps one LOD coarser. The caster always\n"
+                                      "matches the drawn LOD per chunk, so no setting here can cause the terrain\n"
+                                      "self-shadow banding/phantom family -- this knob trades triangles for pop-in\n"
+                                      "distance only.");
+                ImGui::SliderFloat("Chunk LOD factor", &render::g_chunkLodDistFactor, 1.2f, 4.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Distance multiplier between LOD steps: LOD2 starts at distance*factor,\n"
+                                      "LOD3 at distance*factor^2. +/-15%% hysteresis keeps a boundary chunk from\n"
+                                      "flipping while the camera breathes.");
+                ImGui::EndDisabled();
 
                 ImGui::EndTabItem();
             }
@@ -1887,31 +1926,8 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "+ = coarser everywhere (cheaper), - = sharper. Shadows don't resolve fine\n"
                                       "geometry, so coarser is usually invisible. Changing it rebuilds casters (a hitch).");
 
-                // Chunked terrain (mesh.json "chunkGrid") gets its own offset on top, limited to a
-                // radius. Same rebuild-on-change contract as the slider above. Shown for both modes
-                // for the same reason it is: the per-view LOD it edits seeds Legacy cascades too.
-                ImGui::SliderInt("Terrain LOD bias", &render::g_chunkShadowLodBias, -3, 3);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("EXTRA shadow-LOD offset for chunked terrain only (a mesh baked with\n"
-                                      "\"chunkGrid\"), on top of the bias above. -1 cancels the default +1 so the\n"
-                                      "terrain casts from the SAME geometry the camera rasterizes, which is what\n"
-                                      "removes the banding a simplified caster leaves across the dunes.\n"
-                                      "0 = terrain follows the plain curve (the A/B control).\n"
-                                      "Affordable only because chunking made a shadow page draw just the tiles it\n"
-                                      "overlaps -- unchunked, this would mean the WHOLE terrain at LOD0 per page.");
-
-                ImGui::SliderFloat("Terrain LOD radius", &render::g_chunkShadowLodRadius, 0.0f, 400.0f, "%.0f m");
-                if (ImGui::IsItemHovered())
-                {
-                    const std::uint32_t lv = vsm::ClipmapLevelsWithinRadius(render::g_chunkShadowLodRadius);
-                    ImGui::SetTooltip("How far from the camera the terrain bias acts. Shadow views are\n"
-                                      "distance-ordered, so this is a cutoff on that order: right now it covers\n"
-                                      "%u of %u clipmap levels (level i reaches %.0f*2^i m).\n"
-                                      "0 = no cutoff (acts at every distance, including where the per-view LOD has\n"
-                                      "already saturated -- pure cost, no visible gain).\n"
-                                      "Local lights never take the bias: they have no distance from the camera.",
-                                      lv, vsm::kNumClipmapLevels, 0.5f * vsm::g_clipmapBaseExtent);
-                }
+                // (Chunked-terrain LOD selection moved to the "LOD" tab — it is a camera-LOD
+                // control, not a shadow one; the caster follows the drawn LOD by construction.)
 
                 ImGui::BeginDisabled(!render::VsmActive());
 

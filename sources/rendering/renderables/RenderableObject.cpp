@@ -161,6 +161,19 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     RecordGraphics(renderer, cl, ctx, camera, cbData);
     // Step 6: draw at the camera LOD chosen in PrepareViews (see SelectLod). Mesh::SelectLod
     // clamps to available LODs. No selection/mutation here — recording is side-effect-free.
+    //
+    // Chunked-terrain: one ranged draw per chunk at ITS tier from SelectLod. This is the receiver
+    // half of the caster==receiver contract — the shadow paths consume the same chunkLods_ array.
+    const Mesh* mesh = GetMesh();
+    if (mesh && mesh->IsChunkedSubmeshes() && !chunkLods_.empty())
+    {
+        const size_t n = std::min(chunkLods_.size(), mesh->SubmeshesForLod(0).size());
+        for (size_t s = 0; s < n; ++s)
+        {
+            mesh->DrawSubmesh(cl, static_cast<UINT>(s), chunkLods_[s]);
+        }
+        return;
+    }
     DrawGeometry(cl, cameraLod_);
 }
 
@@ -202,6 +215,33 @@ void RenderableObject::SelectLod(const Camera& camera)
     // Hysteresis off the current tier; per-instance radius (GetLodRadius) so cloud/instanced
     // objects select on their single-mesh size, not their aggregate bound.
     cameraLod_ = render::SelectLodTier(GetWorldBounds().GetCenter(), GetLodRadius(), camera.GetPosition(), cameraLod_);
+
+    // Chunked-terrain LOD: one tier per chunk from the chunk's own world AABB (the object-level
+    // tier above is meaningless for a mesh whose radius is the whole island). Closest-point
+    // distance, not centre distance — a 60 m chunk whose near edge the camera stands on must be
+    // LOD0 even though its centre is 40 m away. The same array feeds the gbuffer draw, the Legacy
+    // shadow loop and (through ShadowGpuData's per-group override) the VSM page render.
+    const Mesh* mesh = GetMesh();
+    if (mesh && mesh->IsChunkedSubmeshes())
+    {
+        const std::vector<AABB>& boxes = mesh->GetSubmeshBounds();
+        chunkLods_.resize(boxes.size(), 0u);
+        const Math::float3 cam = camera.GetPosition();
+        const mat4 model = GetModelMatrix();
+        for (size_t s = 0; s < boxes.size(); ++s)
+        {
+            if (!boxes[s].IsValid()) { chunkLods_[s] = 0u; continue; }
+            const AABB w = boxes[s].Transform(model);
+            const Math::float3 mn = w.GetMin(), mx = w.GetMax();
+            const Math::float3 cp(
+                cam.x < mn.x ? mn.x : (cam.x > mx.x ? mx.x : cam.x),
+                cam.y < mn.y ? mn.y : (cam.y > mx.y ? mx.y : cam.y),
+                cam.z < mn.z ? mn.z : (cam.z > mx.z ? mx.z : cam.z));
+            const float dist = (cam - cp).Length();
+            chunkLods_[s] = static_cast<std::uint8_t>(
+                render::SelectChunkLodTier(dist, chunkLods_[s]));
+        }
+    }
 }
 
 std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
@@ -268,9 +308,14 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     const std::vector<Mesh::Submesh>* subs = mesh ? &mesh->SubmeshesForLod(lod) : nullptr;
     if (subs && subs->size() > 1)
     {
+        // Chunked-terrain: cast each chunk at ITS camera tier (the same chunkLods_ the gbuffer
+        // just drew), not the per-view LOD — caster must equal receiver per chunk. Non-chunked
+        // multi-submesh meshes keep the per-view LOD.
+        const bool chunked = mesh->IsChunkedSubmeshes() && !chunkLods_.empty();
         for (UINT s = 0; s < static_cast<UINT>(subs->size()); ++s)
         {
-            mesh->DrawSubmesh(cl, s, lod);
+            const UINT drawLod = (chunked && s < chunkLods_.size()) ? chunkLods_[s] : lod;
+            mesh->DrawSubmesh(cl, s, drawLod);
         }
     }
     else

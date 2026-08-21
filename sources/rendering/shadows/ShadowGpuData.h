@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -10,6 +11,7 @@
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/renderables/InstanceTypes.h"
+#include "rendering/shadows/VirtualShadowMap.h" // vsm::kMaxMeshGroups (the per-group override table)
 
 class Renderer;
 struct RenderGraphPassContext;
@@ -127,13 +129,13 @@ public:
     // The shadow LOD bias the current caster geometry was built with (see render::g_shadowLodBias).
     // Scene compares this to the live global each frame and triggers a GPU-idle rebuild on a change.
     int BuiltShadowLod() const { return builtShadowLod_; }
-    // Same contract for the chunked-terrain bias: it is baked into perViewGroup_/groupLodBias_ at
-    // Rebuild, so changing the global has to trigger one (Scene polls both).
-    int BuiltChunkLodBias() const { return builtChunkLodBias_; }
-    // The chunk bias's DISTANCE cutoff as a clipmap-level count (vsm::ClipmapLevelsWithinRadius of
-    // render::g_chunkShadowLodRadius). Keyed on the count, not the radius, so dragging the slider
-    // inside one level's bucket does not rebuild. Also fed to the VSM setup CB.
-    std::uint32_t BuiltChunkBiasLevels() const { return builtChunkBiasLevels_; }
+    // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = none), refreshed EVERY FRAME in
+    // UpdateForFrame from each chunked object's ChunkCameraLods() — the camera tier per chunk. No
+    // rebuild involved: the mega buffer holds every LOD and gGroupLodMega carries every (group,lod)
+    // range, so matching the caster to the drawn LOD is per-frame CB data. Consumed by the VSM
+    // setup CB fill (VirtualShadowMap.cpp); the Legacy per-view loop reads the object array
+    // directly (RenderableObject::RenderShadow).
+    const std::array<std::int8_t, vsm::kMaxMeshGroups>& GroupLodOverride() const { return groupLodOverride_; }
     // Groups [0, StaticGroupCount()) are static submesh groups (biased to BuiltShadowLod()); groups
     // at/after it are GI whole-buffer groups (always LOD0). The per-group fallback binds accordingly.
     std::uint32_t StaticGroupCount() const { return numStaticGroups_; }
@@ -240,10 +242,6 @@ public:
     // Per-view LOD + per-(group,lod) mega table for the VSM setup CB (see viewLod_/groupLodMega_).
     const std::vector<std::uint32_t>& ViewLod() const { return viewLod_; }
     const std::vector<std::uint32_t>& GroupLodMegaTable() const { return groupLodMega_; }
-    // Per-group ADDITIVE shadow-LOD bias (render::g_chunkShadowLodBias on chunked terrain groups,
-    // 0 everywhere else). Already folded into perViewGroup_; the VSM setup CB carries it so the
-    // per-page path can bias the same way. All zeros while no chunked mesh is loaded.
-    const std::vector<std::int32_t>& GroupLodBias() const { return groupLodBias_; }
     // Shadow LOD to bind a mesh's own index buffer at, for the per-page/per-view geometry FALLBACK
     // (mega off) and the Legacy per-view path. `cullView` indexes the cull-view layout; clamp per mesh
     // at the call site via Mesh::ClampExplicitLod. Returns 0 if out of range.
@@ -303,6 +301,14 @@ private:
     // The caster's world AABB, verbatim — deliberately NOT padded for the wind sway (see the
     // definition for the rationale and the measured cost of padding).
     static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out);
+
+public:
+    // Chunked-terrain LOD: refresh groupLodOverride_ from the chunked objects' camera tiers.
+    // Scene calls it every frame AFTER PrepareViews (whose SelectLods picked the tiers) — earlier
+    // and the caster would lag the receiver by one frame at every LOD transition.
+    void RefreshChunkGroupLods(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects);
+
+private:
 
     void RebuildCullDescriptors(Renderer* renderer);        // per-region UAVs for args/visible/counts
     void RebuildUnifiedDescriptors(Renderer* renderer);     // per-region SRVs for the unified instance/bounds buffers
@@ -402,8 +408,12 @@ private:
     // Per (group, lod) mega geometry, flat 4 uints/entry: {megaAbsStart, lodRelStart, indexCount,
     // baseVertex}, pre-clamped to the mesh's available LODs. numMeshGroups_ * kMaxShadowLods entries.
     std::vector<std::uint32_t> groupLodMega_;
-    // Per group: additive LOD bias (see GroupLodBias). One entry per mesh-group, 0 = no bias.
-    std::vector<std::int32_t> groupLodBias_;
+    // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = none), refreshed every frame in
+    // UpdateForFrame from the chunked objects' camera tiers (see GroupLodOverride()).
+    std::array<std::int8_t, vsm::kMaxMeshGroups> groupLodOverride_{};
+    // mesh -> its FIRST caster group (snapshot of Rebuild's meshToGroup), so the per-frame override
+    // refresh can map a chunked mesh's slot ordinal to its group id without re-deriving the layout.
+    std::unordered_map<const Mesh*, std::uint32_t> meshFirstGroup_;
     // B3: mega copy list per UNIQUE mesh (submesh groups share one VB slice). Per-view shadow LOD: the
     // mesh's IB slot concatenates its first `lodCount` LOD index buffers ([LOD0|LOD1|...]), so different
     // shadow views can draw different LODs of the same mesh from one mega buffer. The VB (shared across
@@ -414,8 +424,6 @@ private:
     DXGI_FORMAT megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     bool megaWanted_ = false, megaBuilt_ = false, megaReady_ = false;
     int builtShadowLod_ = 0; // render::g_shadowLodBias snapshot the caster geometry was built with
-    int builtChunkLodBias_ = 0; // render::g_chunkShadowLodBias snapshot (chunked terrain groups)
-    std::uint32_t builtChunkBiasLevels_ = 0; // its distance cutoff, as a clipmap-level count
     std::uint32_t numStaticGroups_ = 0; // count of static submesh groups (the rest are GI, always LOD0)
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)

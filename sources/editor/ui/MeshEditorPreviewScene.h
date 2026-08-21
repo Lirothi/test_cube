@@ -52,6 +52,8 @@ public:
         ImTextureID texture = ImTextureID_Invalid;
         const char* error = nullptr;
         std::uint32_t lodCount = 1;
+        std::uint32_t indexCount = 0;
+        std::uint32_t triangleCount = 0;
     };
 
     MeshEditorPreviewScene();

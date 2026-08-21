@@ -245,14 +245,17 @@ namespace
         // point: the round-trip perf leak is only reproducible in ONE process
         // (docs/bug_shadow_lod_bias_perf.md §6).
         if (setting == "vsm.shadowLodBias") { render::g_shadowLodBias = (int)value; return true; }
-        // Terrain-chunking LOD bias (docs/terrain_shadow_chunking_plan.md S4). Default -1 = chunked
-        // terrain casts one LOD finer than the view curve; 0 = off, which is the A/B control. Rides
-        // the same in-process rebuild as the key above, so both sides of the comparison come out of
-        // ONE binary and one level load.
-        if (setting == "vsm.chunkLodBias") { render::g_chunkShadowLodBias = (int)value; return true; }
-        // How far the key above is allowed to act, in metres (<= 0 = everywhere). Both ride the same
-        // in-process caster rebuild, so a radius sweep also lives inside ONE binary and one load.
-        if (setting == "vsm.chunkLodRadius") { render::g_chunkShadowLodRadius = value; return true; }
+        // Chunked-terrain LOD selection curve (per-chunk camera tiers; the caster matches the drawn
+        // LOD by construction, so these trade triangles for pop-in distance only — no rebuild).
+        if (setting == "lod.chunkDist0")  { render::g_chunkLodDist0 = std::max(1.0f, value); return true; }
+        if (setting == "lod.chunkFactor") { render::g_chunkLodDistFactor = std::max(1.01f, value); return true; }
+        // Regular-mesh LOD selection (distance/radius tier boundaries; the dev "LOD" tab's sliders)
+        // + the master enable and the per-mesh force, so a LOD capture needs no GUI.
+        if (setting == "lod.bound0")  { render::g_lodBound0 = std::max(0.5f, value); return true; }
+        if (setting == "lod.bound1")  { render::g_lodBound1 = std::max(0.5f, value); return true; }
+        if (setting == "lod.bound2")  { render::g_lodBound2 = std::max(0.5f, value); return true; }
+        if (setting == "lod.enabled") { render::g_lodEnabled = value != 0.0f; return true; }
+        if (setting == "lod.forced")  { render::g_forcedLod = std::clamp((int)value, -1, 3); return true; }
         // Mirror of the VSM page-stats log toggle, so a headless run can capture the resident/request
         // counts (logs/vsm_pages.log) that the dev-window "VSM" tab shows live.
         if (setting == "vsm.logPageStats")  { vsm::g_logPageStats = value != 0.0f; return true; }

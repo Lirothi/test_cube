@@ -5,6 +5,7 @@
 #include <string>
 #include <memory>
 #include <cstdint>
+#include <vector>
 
 #include "materials/Material.h"
 #include "rendering/meshes/Mesh.h"
@@ -122,6 +123,13 @@ public:
     void SelectLod(const Camera& camera) override;
     unsigned int GetCameraLod() const override { return cameraLod_; }
 
+    // Chunked-terrain LOD: one camera tier per chunk (submesh) of a chunked mesh, chosen in
+    // SelectLod from the chunk's own world AABB (render::SelectChunkLodTier, hysteresis per
+    // chunk). Empty for non-chunked meshes. CONSUMED BY THREE PATHS THAT MUST AGREE: the gbuffer
+    // draw, the Legacy per-view shadow loop, and (via ShadowGpuData's per-group override) the VSM
+    // page render — one array is what makes caster == receiver a construction, not a hope.
+    const std::vector<std::uint8_t>& ChunkCameraLods() const { return chunkLods_; }
+
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
     void SetGraphicsMaterial(Material* m);
     Material* GetShadowMaterial() const { return shadowMaterial_.get(); }
@@ -226,6 +234,7 @@ private:
     mutable AABB worldBoundsCache_;
     mutable bool worldBoundsDirty_ = true;
     unsigned int cameraLod_ = 0u; // Step 6: camera LOD chosen in PrepareViews (persists for hysteresis)
+    std::vector<std::uint8_t> chunkLods_; // per-chunk camera tier (chunked meshes only; hysteresis state)
 
     Math::float3 pos_{};
     Math::float3 scale_ = Math::float3(1.0f, 1.0f, 1.0f);
