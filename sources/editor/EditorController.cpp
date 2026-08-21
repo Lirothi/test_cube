@@ -3027,7 +3027,8 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                     skybox ? skybox->GetTex() : nullptr,
                     skyboxPath,
                     skyboxWriteTime,
-                    skybox ? skybox->GetExposure() : 1.0f);
+                    // Trim, not GetExposure(): the preview has no tonemapper. See Skybox.h.
+                    skybox ? skybox->GetIntensity() : 1.0f);
 
                 const ContentBrowserAction action =
                     contentBrowser_.Draw(assetRegistry_, selectedAsset_, extensions_,

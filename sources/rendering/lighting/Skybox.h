@@ -46,7 +46,11 @@ public:
     // and glass all already multiply by this, so the calibration reaches every one of them without
     // a single new constant-buffer field.
     float GetExposure() const { return exposure_ * PhysicalScale(); }
-    // The authored trim alone, for the editor to round-trip.
+    // The authored trim alone -- for the editor to round-trip, AND for every consumer that is not
+    // on the physical path. The editor's preview pass (thumbnails, the Mesh Editor viewport) writes
+    // linear light straight into an sRGB target with no tonemapper, so handing it GetExposure()
+    // multiplies the environment by the calibration (x10985 for a 12,000 lx sky) and saturates the
+    // whole image to white. Anything without an exposure stage wants THIS one.
     float GetIntensity() const { return exposure_; }
     void SetExposure(float exp) { exposure_ = exp; }
 

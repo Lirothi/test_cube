@@ -258,7 +258,8 @@ void DrawMeshPreview(EditorContext& ctx,
         texOffsScaleOverride,
         highlightMaterialSlot,
         environment,
-        skybox ? skybox->GetExposure() : 1.0f);
+        // Trim, not GetExposure(): the preview has no tonemapper. See Skybox.h.
+        skybox ? skybox->GetIntensity() : 1.0f);
 
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
