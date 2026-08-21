@@ -27,6 +27,19 @@ inline constexpr unsigned int kMaxShadowLods = 4u;
 // BuiltShadowLod() vs this each frame).
 inline int g_shadowLodBias = 1;
 
+// Additional shadow-LOD bias applied ONLY to the caster groups of a chunked mesh (mesh.json
+// "chunkGrid" — terrain split into spatial submesh chunks). Terrain is the receiver the camera
+// rasterizes at LOD0, so a caster LOD above 0 makes the simplified surface shadow the detailed one
+// and the mismatch shows up as banding across the dunes. -1 cancels the global default +1 for
+// terrain only, which puts the finest clipmap ring back on caster == receiver geometry.
+//
+// This is affordable exactly BECAUSE of chunking: at the old whole-island granularity, LOD0 near the
+// camera meant the entire island's LOD0 in every page it touched. Chunked, the 12 m ring covers one
+// to four chunks. 0 disables the feature without disturbing anything else (it is the A/B control,
+// and it is a no-op by construction while no chunked mesh exists). Same rebuild rule as
+// g_shadowLodBias above: Scene polls BuiltChunkLodBias() and re-Rebuilds on a change.
+inline int g_chunkShadowLodBias = -1;
+
 // Per-view BASE shadow LOD from a view's tier: the tier index itself (near = fine, far = coarse).
 // `tier` is the CSM cascade index or the VSM clipmap level (0 = finest/near); locals pass a small
 // fixed tier. The final LOD adds g_shadowLodBias (default 1, which is where the whole curve's

@@ -56,6 +56,7 @@ void StaticMesh::Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdLi
         options.generateTangentSpace = true;
         options.wantCW = false;
         options.recomputeNormalSlots = recomputeNormalSlots_;
+        options.chunkGrid = chunkGrid_;
         SetMesh(renderer->GetMeshManager()->Load(
             modelName_, renderer, uploadCmdList, uploadKeepAlive, options));
     }

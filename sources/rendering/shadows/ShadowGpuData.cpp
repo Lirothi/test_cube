@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/diagnostics/DiagPaths.h" // shadow_casters.log: the group count a headless run cannot print
 #include "core/math/Frustum.h"
 #include "materials/MaterialData.h" // C2: per-slot alphaMask/alphaCutoff/albedo for masked shadows
 #include "rendering/core/Renderer.h"
@@ -289,6 +290,48 @@ void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBo
     out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
 }
 
+// `[ShadowGpuData]` lines also go to a file: they are OutputDebugStringA-only otherwise, i.e.
+// invisible to exactly the headless runs that gate caster-set work. Truncates on the first write of
+// a process and appends after, so one run's rebuilds stay together without the file growing forever.
+static void LogCasterLine(const char* line)
+{
+    static bool started = false;
+    FILE* f = nullptr;
+    if (fopen_s(&f, diag::LogPath("shadow_casters.log").c_str(), started ? "a" : "w") != 0 || !f)
+    {
+        return; // a diagnostic must never be the reason a run fails
+    }
+    started = true;
+    std::fputs(line, f);
+    std::fclose(f);
+}
+
+// Terrain chunking: bounds for ONE slot of a chunked mesh (Mesh::IsChunkedSubmeshes). Its submeshes
+// tile one surface, so each gets its own world box instead of the object's — which is the whole
+// point of chunking: a shadow page then rasterizes only the tiles that reach it, instead of the
+// island's full LOD range once per resident page.
+//
+// Same conservative 8-corner transform the object bounds use (AABB::Transform), so a chunk box and
+// the object box are produced by ONE piece of math; a slot with no valid box falls back to the
+// object's (conservative, merely not tight).
+static void FillChunkBounds(const RenderableObject* ro, size_t slot,
+    const render::CasterBounds& objectBounds, render::CasterBounds& out)
+{
+    const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
+    const std::vector<AABB>* boxes = mesh ? &mesh->GetSubmeshBounds() : nullptr;
+    if (!boxes || slot >= boxes->size() || !(*boxes)[slot].IsValid())
+    {
+        out = objectBounds;
+        return;
+    }
+    const AABB w = (*boxes)[slot].Transform(ro->GetModelMatrix());
+    if (!w.IsValid()) { out = objectBounds; return; }
+    const Math::float3 c = w.GetCenter();
+    const Math::float3 e = w.GetHalfExtents();
+    out.center = DirectX::XMFLOAT4(c.x, c.y, c.z, w.GetRadius());
+    out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
+}
+
 // ---- Public API ------------------------------------------------------------
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::InstanceSrv(UINT frameIndex) const { return instances_.Srv(frameIndex); }
@@ -458,6 +501,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // Snapshot the shadow LOD BIAS this build baked into the per-view LOD tables (viewLod_/perViewGroup_/
     // groupLodMega_). Scene compares BuiltShadowLod() to the live global and re-Rebuilds on a change.
     builtShadowLod_ = render::g_shadowLodBias;
+    builtChunkLodBias_ = render::g_chunkShadowLodBias;
 
     size_t casterCount = 0;
     for (const auto& obj : objects)
@@ -498,6 +542,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     hasWindCasters_ = false; // W5: recomputed below over the static set + the folded GI objects
     bool maskedOverflow = false;
     std::uint32_t nextGroup = 0;
+    std::uint32_t chunkedMeshes = 0; // meshes whose submeshes are spatial chunks (independent casters)
     size_t idx = 0;
     for (const auto& objPtr : objects)
     {
@@ -509,6 +554,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         if (mesh && meshToGroup.find(mesh) == meshToGroup.end())
         {
             meshToGroup.emplace(mesh, nextGroup);
+            if (mesh->IsChunkedSubmeshes()) { ++chunkedMeshes; }
             GBufferRenderable* gb = obj->AsGBufferRenderable();
             for (size_t s = 0; s < slots; ++s)
             {
@@ -541,6 +587,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         // mover-based "nothing changed" tests would freeze its shadow. Remember that we have one.
         if (inst.windStrength > 0.0f) { hasWindCasters_ = true; }
         const std::uint32_t dyn = obj->IsDynamicCaster() ? 1u : 0u;
+        const bool chunked = mesh && mesh->IsChunkedSubmeshes();
         for (size_t s = 0; s < slots; ++s)
         {
             cpuInstances_[idx] = inst;
@@ -549,6 +596,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             // extra buffer. FillInstance only knows slot 0, so patch each slot's own value in.
             if (gbFoliage) { cpuInstances_[idx].windFoliage = gbFoliage->FoliageForSlot(s); }
             cpuBounds_[idx] = bnd;
+            if (chunked) { FillChunkBounds(ro, s, bnd, cpuBounds_[idx]); }
             casterMesh[idx] = mesh;
             casterSub[idx] = static_cast<std::uint32_t>(s);
             staticDynamic[idx] = dyn;
@@ -563,7 +611,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // (see RecordCull), so these ids/groups are allocated + wired but never visited or drawn yet —
     // Step 4 runs the scatter + bumps the cull count. Respect the 64-group cap (VSM_MAX_SETUP_GROUPS):
     // over-cap GI objects are left unfolded and keep drawing via the CPU RenderShadow tail (Step 5).
-    constexpr std::uint32_t kMaxGroups = 64u; // matches VSM_MAX_SETUP_GROUPS / kMaxMegaGroups below
+    constexpr std::uint32_t kMaxGroups = vsm::kMaxMeshGroups; // == VSM_MAX_SETUP_GROUPS in the shader
     giCasters_.clear();
     giFoldableInstances_ = 0;
     std::uint32_t totalCount = static_cast<std::uint32_t>(casterCount);
@@ -644,9 +692,14 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         const Mesh* mesh = casterMesh[i];
         const std::uint32_t g = (mesh ? meshToGroup[mesh] : 0u) + casterSub[i];
         casterGroupId[i] = g;
-        const std::uint32_t slots = (casterSub[i] == 0u && mesh)
-            ? static_cast<std::uint32_t>(std::max<size_t>(mesh->GetSubmeshCount(), 1u))
-            : 0u;
+        // Chunked meshes break the "one object, one box, N slots" rule on purpose: every chunk owns
+        // its own bounds, so every chunk must LEAD ITSELF (slot count 1) or the cull would test the
+        // first chunk's box and hand the verdict to all 35 others — the exact opposite of chunking.
+        const std::uint32_t slots = (mesh && mesh->IsChunkedSubmeshes())
+            ? 1u
+            : ((casterSub[i] == 0u && mesh)
+                ? static_cast<std::uint32_t>(std::max<size_t>(mesh->GetSubmeshCount(), 1u))
+                : 0u);
         casterMeta[i] = (slots << 1) | (staticDynamic[i] & 1u);
         if (g < numMeshGroups_) { ++groupCount[g]; }
     }
@@ -709,6 +762,31 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         }
     }
 
+    // --- Per-group shadow-LOD bias (chunked terrain gets render::g_chunkShadowLodBias) -----------
+    // Terrain is the one receiver the camera always rasterizes at LOD0, so any caster LOD above 0
+    // shadows detailed geometry with a simplified surface and the mismatch reads as banding. -1 here
+    // cancels the global +1 for terrain groups only. Chunked meshes are the only ones that get it:
+    // un-chunked, "terrain at LOD0" would mean the whole island's LOD0 in every page it covers.
+    std::vector<std::int32_t> groupBias(numMeshGroups_, 0);
+    if (render::g_chunkShadowLodBias != 0)
+    {
+        for (std::uint32_t g = 0; g < staticGroups && g < groupMesh_.size(); ++g)
+        {
+            const Mesh* m = groupMesh_[g];
+            if (m && m->IsChunkedSubmeshes()) { groupBias[g] = render::g_chunkShadowLodBias; }
+        }
+    }
+    groupLodBias_ = groupBias;
+    // One helper for BOTH consumers below (this table and the CB the setup CS reads), because a LOD
+    // that differs between the two would show up as a page drawing one LOD's triangles with another
+    // LOD's index range.
+    const auto biasedLod = [&](std::uint32_t v, std::uint32_t g) -> std::uint32_t
+    {
+        const int base = static_cast<int>(v < viewLod_.size() ? viewLod_[v] : 0u);
+        const int b = base + (g < groupBias.size() ? groupBias[g] : 0);
+        return static_cast<std::uint32_t>(b < 0 ? 0 : (b > lodCap ? lodCap : b));
+    };
+
     // --- Per (view, group) draw ranges at that view's LOD (seeds the cull-clear args -> Legacy + Rung0).
     // For a static submesh group, use the mesh's clamped view LOD; GI groups stay whole-buffer LOD0.
     // Layout mirrors the args: index = view * numMeshGroups_ + group. `base` (visible-list slice) is
@@ -726,7 +804,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             {
                 const auto it = meshToGroup.find(m);
                 const std::uint32_t s = (it != meshToGroup.end()) ? (g - it->second) : 0u;
-                const UINT lod = m->ClampExplicitLod(viewLod_[v]);
+                const UINT lod = m->ClampExplicitLod(biasedLod(v, g));
                 const auto& subs = m->SubmeshesForLod(lod);
                 if (s < subs.size()) { count = subs[s].indexCount; start = subs[s].indexOffset; }
                 else                 { count = m->GetLodIndexCount(lod); start = 0u; }
@@ -830,7 +908,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     baseVertex_.assign(numMeshGroups_, 0u);
     startIndex_.assign(numMeshGroups_, 0u);
     megaCopy_.clear();
-    constexpr std::uint32_t kMaxMegaGroups = 64u; // matches VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl
+    constexpr std::uint32_t kMaxMegaGroups = vsm::kMaxMeshGroups; // == VSM_MAX_SETUP_GROUPS in the shader
     if (numMeshGroups_ > kMaxMegaGroups)
     {
         // Over the VSM setup shader's per-group CB cap: the mega path stays off (per-group
@@ -969,16 +1047,20 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     RebuildUnifiedDescriptors(renderer); // Step 2: per-region SRVs onto the unified buffers
     valState_ = 0; // re-validate after a caster-set change
 
-    char buf[288];
+    char buf[352];
     std::snprintf(buf, sizeof(buf),
-        "[ShadowGpuData] rebuilt: %u casters (%u static + %u GI in %zu objs%s), %u mesh-groups; "
-        "%.2f KB instance + %.2f KB bounds x%u regions.\n",
+        "[ShadowGpuData] rebuilt: %u casters (%u static + %u GI in %zu objs%s), %u mesh-groups "
+        "(%u chunked of %u meshes, cap %u); %.2f KB instance + %.2f KB bounds x%u regions.\n",
         count_, staticCount_, count_ - staticCount_, giCasters_.size(),
-        giCapped ? ", CAPPED" : "", numMeshGroups_,
+        giCapped ? ", CAPPED" : "", numMeshGroups_, chunkedMeshes, static_cast<std::uint32_t>(meshToGroup.size()),
+        kMaxGroups,
         (instances_.capacity * sizeof(render::InstancePerObject)) / 1024.0,
         (bounds_.capacity * sizeof(render::CasterBounds)) / 1024.0,
         render::kFrameCount);
     OutputDebugStringA(buf);
+    // The group count is the number this whole feature is capped by (VSM_MAX_SETUP_GROUPS), so a
+    // re-bake's effect on the caster set can be READ rather than assumed.
+    LogCasterLine(buf);
     logFramesRemaining_ = 5;
 }
 
@@ -1047,7 +1129,15 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         if ((ro && ro->MovedThisFrame()) || windFadeChanged)
         {
             FillInstance(obj, cpuInstances_[idx]);
-            FillBounds(obj, cpuBounds_[idx]);
+            render::CasterBounds objectBounds{};
+            FillBounds(obj, objectBounds);
+            cpuBounds_[idx] = objectBounds;
+            // Terrain today is static, so this branch never runs for a chunked mesh — but leaving
+            // the object box here would silently un-chunk a mesh the moment one ever moved, and the
+            // bug would look like a pure performance regression with a correct image.
+            const Mesh* movedMesh = ro ? ro->GetMesh() : nullptr;
+            const bool chunkedMover = movedMesh && movedMesh->IsChunkedSubmeshes();
+            if (chunkedMover) { FillChunkBounds(ro, 0, objectBounds, cpuBounds_[idx]); }
             const GBufferRenderable* gbF = obj->AsGBufferRenderable();
             if (gbF) { cpuInstances_[idx].windFoliage = gbF->FoliageForSlot(0); }
             for (size_t s = 1; s < slots; ++s) // duplicate across the object's submesh slots
@@ -1055,6 +1145,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
                 cpuInstances_[idx + s] = cpuInstances_[idx];
                 if (gbF) { cpuInstances_[idx + s].windFoliage = gbF->FoliageForSlot(s); }
                 cpuBounds_[idx + s] = cpuBounds_[idx];
+                if (chunkedMover) { FillChunkBounds(ro, s, objectBounds, cpuBounds_[idx + s]); }
             }
             for (size_t s = 0; s < slots; ++s)
             {
@@ -1858,6 +1949,8 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
             mismatchViews, valViews_, firstView, firstCpu, firstGpu);
     }
     OutputDebugStringA(buf);
+    // The verdict this validation exists to produce, readable by the gate runs that trust it.
+    LogCasterLine(buf);
     valState_ = 2;
 }
 

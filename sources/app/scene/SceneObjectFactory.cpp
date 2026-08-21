@@ -237,6 +237,15 @@ namespace SceneObjectFactory
         mesh.SetRecomputeNormalSlots(ToUIntVector(
             o.value("recomputeNormalSlots", json::array())));
 
+        // mesh.json "chunkGrid": the .mesh.bin was baked with its LOD0 split into an N x N grid of
+        // submesh chunks. The value itself is a BAKE parameter; at runtime all it says is "these
+        // submeshes are spatial chunks", which turns them into independent shadow casters.
+        if (o.contains("chunkGrid") && o["chunkGrid"].is_number_integer())
+        {
+            const int grid = o["chunkGrid"].get<int>();
+            if (grid > 0) { mesh.SetChunkGrid(static_cast<unsigned int>(grid)); }
+        }
+
         if (o.contains("rotationDeg"))
         {
             mesh.SetRotationEulerDeg(ToFloat3(o["rotationDeg"]));

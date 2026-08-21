@@ -3937,6 +3937,138 @@ floor measured on the SAME crop. Then the exposure is PINNED (`exposure.autoExpo
 |---|---|---|---|
 | glass sphere crop, EV 3 | 0.18 | 0.527 | **0.517** |
 | glass sphere crop, EV -2 | 5.76 | 0.413 | **0.441** |
+
+### P8C-2 — The kernel becomes an IMAGE, and the ghosts become UE's — NOT STARTED (queued 2026-08-21)
+
+**Depends on:** P8C (the FFT machinery it reuses unchanged) and P8D (whose aperture-PSF kernel it
+RETIRES, and whose end-to-end read of `PostProcessLensFlares.usf/.cpp` it executes). Do not start
+without re-reading both OUTCOME blocks — every trap listed there was hit once already.
+
+**Why the current result looks the way it does — three diagnosed causes, none of them the FFT:**
+
+1. **Resolution.** Our convolution runs on a 640x360 image inside a 1024x512 grid; UE's default is
+   the FULL viewport (`r.Bloom.ScreenPercentage` default 100, `PostProcessFFTBloom.cpp:17`, clamped
+   [0.1, max] in `GetFFTBloomResolutionFraction`). A 1-2 texel diffraction ray upscaled 4x per axis
+   (then DLSS) is a dashed line of squares — the "ragged crown" IS this.
+2. **Monochromatic diffraction.** The P8D kernel evaluates |FT{aperture}|^2 at effectively TWO
+   wavelengths (R+iG share one kernel by the two-for-one packing; B has its own). A polygonal
+   aperture's spike is sinc^2 interference WITH ZEROS — physically dashed at any single wavelength.
+   Real photographic starbursts are smooth because they integrate the whole visible spectrum. No
+   parameter fixes this; it is structural to a 2-sample spectrum.
+3. **Ghost architecture.** Sprites placed at ghost positions of ONE source (`sunUV`) with an
+   authored atlas is not what UE do at all — see P8D's read-out and the Implement below. The GPT
+   atlas (grid lines, 0.3/255 black floor, additive leaks) was unrescuable content on top of the
+   wrong mechanism.
+
+**The asset that closes cause 2 exists and is already in the tree:**
+`textures/DefaultBloomKernel.EXR` — 2048x2048, RGBA half, zip-compressed scanline EXR (header
+parsed 2026-08-21). It is UE's shipped kernel: spectral integration, halo and rainbow rays are
+baked in by the source photograph. NOTE `textures/` is NOT under git — copy it somewhere safe
+before any import experiments, and every derived file written into `textures/` is a USER GATE.
+
+**THE ONE REAL MATH CHANGE — a coloured kernel breaks the two-for-one packing.** `(R + iG)`
+convolved by a single shared kernel is legal only while R and G share that kernel; a rainbow
+kernel's R and G differ. The standard fix (UE's — it is why their frequency layout carries "+2
+elements in the first transform direction"): Hermitian unpack at the spectral multiply. For a
+packed transform Z of two real signals, `Fr(k) = (Z(k) + Z*(-k))/2` and `Fg(k) = (Z(k) - Z*(-k))/(2i)`;
+unpack IMAGE and KERNEL at (k, -k), multiply per channel, repack. Memory unchanged, the multiply
+reads mirrored texels (x2 reads). **Extend `scratchpad/fft_verify.py` and prove this in numpy
+BEFORE touching the shader** — the P8C transform was verified to 5e-16 that way and it is the
+reason the FFT itself has never been a suspect.
+
+**WHAT UE'S GHOSTS ARE (verified in `PostProcessLensFlares.cpp/.usf`, 2026-08-21; P8D recorded the
+same read):** input = a downsampled scene slice with a x2 guard band (off-screen sources still
+throw flares) — NOT a light position. `LensFlareBlurVS/PS`: one instanced quad per input PIXEL
+(`TileSizeInPixels = 1`), collapsed to zero size when `dot(rgb,1) < Threshold`, sized
+`BokehSizePercent` of viewport width (default ~3), textured with a BOKEH SPRITE (the iris shape),
+coloured by the pixel x `KernelAreaInverse`, additively rasterized. Then `LensFlareComposite`: N=8
+copies of that blurred image, each one full-image quad scaled about the SCREEN CENTRE by
+`(TintAlpha * (N-1) - (N-1)/2) * GuardBandScale` (+1.40 ... -4.90, negatives mirror), tinted, faded
+by a double `DiscMask`, additively blended over a copy of the bloom. Ghost SHAPES are therefore the
+actual defocused images of the actual bright sources — two suns give two chains for free, and no
+atlas exists anywhere.
+
+**Implement (in this order):**
+
+1. **Kernel decode + import.** Zip-scanline RGBA-half EXR is ~50 lines of stdlib Python (zlib +
+   struct + numpy half) — convert offline to an FP16 DDS the engine already loads, OR vendor tinyexr
+   into the importer. Either way the write into `textures/` is presented to the user first. Sanity:
+   dump the decoded kernel as PNG and LOOK at it (centre, rays, halo) before anything consumes it.
+2. **Hermitian spectral multiply** (numpy first, then `bloom_fft_cs.hlsl`). Gate: the numpy port of
+   the shader indexing must show per-channel convolution exact to float rounding, including the
+   mirrored-index edge rows (k = 0 and Nyquist are their own mirrors — the classic off-by-one).
+3. **Kernel pipeline stages.** Replace P8D's stages 3/4 (aperture draw + |FT|^2) with: resample the
+   kernel texture into the grid at the size `convolutionSize` asks for (fraction of screen width,
+   UE's `BloomConvolutionSize`), centre folded to the DC corner (P8C's fold comment), FFT once,
+   cache per (kernel, size, resolution, frame-slot) — the P8C cache-key trap. Normalisation stays
+   the free DC-term divide. `centerUV` default 0.5 (the EXR is centred; keep the control for a
+   photographed kernel later).
+3b. **The anamorphic streak is COMPOSITED INTO the kernel at build time** — the stock EXR is a
+   spherical-lens kernel and carries none, so without this step "anamorphic" simply ceases to
+   exist. During the resample stage, ADD a procedural streak lobe to the loaded image: a thin
+   screen-horizontal line through the kernel centre, exponential falloff along x
+   (`anamorphicLength` = its 1/e extent as a fraction of screen width), a couple of texels of
+   Gaussian thickness in y, tinted with a gradient from near-white at the core to BLUE at the tips
+   (the cyan-blue of real cylindrical-element coatings — and a coloured gradient is exactly what
+   step 2's Hermitian multiply makes representable). `anamorphicIntensity` = the fraction of total
+   kernel energy the streak carries, 0 = exact stock kernel. Three consequences that come free and
+   should be asserted rather than assumed: the DC-divide keeps total bloom energy UNCHANGED as the
+   streak is dialled (it redistributes, never brightens); the streak is screen-horizontal by
+   construction (physically right — the streak is fixed to the LENS, not the world); and all three
+   params join the kernel cache key, so they cost a kernel rebuild, not a per-frame term.
+4. **Resolution.** Grid 1024x512 -> 2048x1024 (image ~1280x720). Decide the memory/precision pair
+   ON MEASUREMENT: R32G32B32A32 grids go 25 -> 100 MB; half-float grids halve that but the FFT's
+   dynamic range in half needs a verify pass (numpy: same transform in float16 vs float64 on a real
+   HDR frame, look at the error). Expect `Pass_BloomConv` 0.12 -> ~0.5 ms; a `bloom.convPercent`
+   control mirroring UE's ScreenPercentage keeps the old cost reachable.
+5. **Ghosts, UE's way.** (a) The scatter: instanced quads over the thresholded half-res source
+   (`GhostSource` exists), additive blend, bokeh sprite — the sprite is BAKED AT LOAD from the
+   existing `ApertureMask` code into a small texture (a soft iris polygon is procedural-friendly;
+   this is where P8D's blade controls keep living). Watch the cost: 1px tiles at half-res is ~1M
+   quads with overdraw — UE gate this behind quality; start at QUARTER res and measure up. (b) The
+   composite: ONE compute pass, 8 taps of the blurred texture at `centre + (uv-centre)/scale_i`
+   (the transform is a fixed affine map, so a gather is legal here — it was the PER-SOURCE gather
+   that could never work), UE's tint table (already transcribed), double DiscMask, into the bloom
+   chain. (c) DELETE, not disable: the ghost atlas binding, `sunUV`/`sunOnScreen` plumbing, the
+   per-ghost jitter hashes, and the atlas file itself from the level/settings — controls must not
+   lie, and P8D's four-control removal is the precedent and the checklist for where they hide
+   (settings struct, JSON, inspector, dev window, `--set`, CB, cache keys).
+6. **Control cleanup after the kernel switch.** `blades`/`bladeRotation` move to the GHOST sprite
+   only; `kernelRadius` is superseded by `convolutionSize`; `anamorphic` + `anamorphicLength` are
+   RE-HOMED, not removed — they become step 3b's kernel-build parameters (`anamorphicIntensity` /
+   `anamorphicLength`), applied on kernel rebuild like `blades` was, never per frame. What dies is
+   the aperture-squeeze MECHANISM (it stretched the whole PSF, halo included, which is not what an
+   anamorphic lens does to bloom) and `chroma` (the EXR carries real dispersion; the streak's blue
+   gradient is authored in 3b). Same removal checklist as above for everything that goes. The
+   aperture-PSF path itself is retired WITH its stages — git holds P8D if a content-free fallback
+   is ever wanted again.
+
+**Interface contract:** `bloom.method` semantics unchanged (pyramid default, convolution opt-in);
+with the EXR kernel absent the convolution method refuses to enable (UE's own gate:
+`IsFFTBloomEnabled` returns false without a kernel texture) rather than falling back to a
+procedural kernel that no longer exists. Ghosts keep their own enable, default OFF until the visual
+sign-off flips it.
+
+**Done when:** `sun_glint` shows the EXR kernel's smooth rainbow starburst with no dashing at
+native AND under DLSS; a two-source frame (sun + one bright specular) shows TWO ghost chains
+through the screen centre; the wrap test still holds; the old "ragged crown" camera reads clean
+at `bloom.convPercent` >= 50; and the anamorphic contract holds: `anamorphicIntensity 0` is
+byte-identical to the stock kernel, raising it draws a screen-horizontal streak through every
+glint with blue tips whose extent follows `anamorphicLength`, and the bloom's TOTAL brightness
+stays within the noise floor as the streak is dialled (the DC-divide energy invariant, measured,
+not assumed).
+
+**Verify:** P8C's full gate list (wrap test, rotation series, exposure pinned, GPU timings split
+transform/kernel/ghosts) plus: the numpy Hermitian check of step 2; a kernel-swap test (feed a
+deliberately asymmetric test kernel and confirm the on-screen star rotates with it — proves the
+image path, not the old procedural one, is live); and the P8C noise-floor discipline for every A/B
+(`--wind-freeze`, same-crop floors).
+
+**Traps already paid for, restated because every one of them will be met again:** the
+`RecordComputeDispatch` /8 convention (P8C bug 1); per-frame-slot cache keys (P8C bug 2); UAV-chain
+reads via `RWTexture2D` or GBV id=1358 (P8C bug 3); Karis-vs-box at setup (P8C bug 4); and
+`textures/` is not under git — the EXR and anything derived from it must be backed up before import
+experiments.
 | particle plume crop, EV -2 | 5.76 | 4.63 | **4.97** |
 | particle plume crop, EV 3 | 0.18 | 2.77 | **3.40** |
 | full frame, SSR + UE march, EV -2 | 5.76 | 3.146 | **3.156** |

@@ -105,6 +105,17 @@ namespace vsm
                   "cull view layout must be [cascades | local | clipmap]");
     inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*40 = 13640
 
+    // Caster MESH-GROUPS the GPU-driven shadow path can address at once, across the whole level: one
+    // per (mesh, submesh), so submesh splits — material slots, and terrain chunking's spatial tiles —
+    // all spend from this one budget. Over it, the consolidated mega-buffer path degrades.
+    //
+    // Lives here because FOUR places need the same number and three of them used to spell it as a
+    // local literal 64: ShadowGpuData::Rebuild's GI-fold cap, the SetupCB mirror, the editor's mesh
+    // import dialog (which quotes the budget while the user picks a chunk grid), and
+    // VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl — the one copy that cannot include this header
+    // and so must be kept in step by hand.
+    inline constexpr std::uint32_t kMaxMeshGroups = 64;
+
     // Page-table entry packing (a single uint per virtual page). Unused until Step 20 fills it.
     //   bit 31      : resident (1 = mapped to a physical page)
     //   bits 0..15  : physical page index (0..kPoolPageCount-1)
@@ -150,14 +161,14 @@ namespace vsm
     // everywhere). The floor is authored in TEXELS of the landed level and keeps far levels above
     // the D16 pool's quantization: 6*2048/65536 = 0.19 texel is the hard minimum, so meaningful
     // values are ~0.25-0.6. floor 0 + decay 1 = exactly the pre-knob behaviour.
-    inline float         g_clipmapDepthBiasDecay = 0.7f;
-    inline float         g_clipmapDepthBiasFloorTexels = 0.25f;
+    inline float         g_clipmapDepthBiasDecay = 0.75f;
+    inline float         g_clipmapDepthBiasFloorTexels = 0.5f;
     // Step 24f / P16.16: directional-clipmap normal offset. UNITS ARE UNREAL'S, so the number here
     // is directly comparable to `r.Shadow.Virtual.NormalBias` (their default 0.5): the shader
     // divides by 1000 and multiplies by distance-to-camera * tan(hFov/2), i.e. it is referred to the
     // world size of a SCREEN PIXEL, not to the shadow texel. The old form was "texels * dist/1024",
     // which at its shipped 2.0 worked out 3.9x this and ignored the field of view entirely.
-    inline float         g_clipmapNormalBias = 1.1f;
+    inline float         g_clipmapNormalBias = 1.3f;
     // Local-light (spot + point) VSM shadow bias, in units of one shadow texel at the receiver
     // (auto-sized per-pixel from the light's cone width, distance and mip level in the shaders).
     // Lateral = surface-normal offset (~1 texel keeps Peter-panning to a texel); depth push =

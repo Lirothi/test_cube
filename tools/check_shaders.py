@@ -48,6 +48,22 @@ COMPUTE_ENTRIES = [
     # none of them was checked while it was being changed under them.
     ("pointlight_cs.hlsl", "CSMain"),
     ("spotlight_cs.hlsl", "CSMain"),
+    # The GPU-driven shadow path. Every one of these is plain compute with no permutation, and the
+    # whole set was missing here while the terrain-chunking work was editing the setup CS's constant
+    # buffer -- exactly the change class this tool exists to catch, since a CB that no longer matches
+    # its CPU mirror produces a silently missing shadow pass in Release.
+    ("vsm_page_setup_cs.hlsl", "CSMain"),
+    ("vsm_page_scatter_cs.hlsl", "CSMain"),
+    ("vsm_page_scatter_clear_cs.hlsl", "CSMain"),
+    ("vsm_page_request_cs.hlsl", "CSMain"),
+    ("vsm_page_request_clear_cs.hlsl", "CSMain"),
+    ("vsm_page_alloc_init_cs.hlsl", "CSMain"),
+    ("vsm_page_alloc_map_cs.hlsl", "CSMain"),
+    ("vsm_page_alloc_touch_cs.hlsl", "CSMain"),
+    ("vsm_page_alloc_freelist_cs.hlsl", "CSMain"),
+    ("shadow_cull_cs.hlsl", "CSMain"),
+    ("shadow_cull_clear_cs.hlsl", "CSMain"),
+    ("shadow_gi_scatter_cs.hlsl", "CSMain"),
 ]
 
 # Shaders needing a target above the 6_0 default. Kept separate rather than widening every entry to

@@ -786,7 +786,11 @@ void Scene::ReconcileShadowLodBias(Renderer* renderer)
     // The shadow LOD bias picks a coarser (or finer) caster LOD to rasterize into the shadow maps.
     // The geometry lives in the consolidated mega buffer built at load, so a change needs a GPU-idle
     // rebuild. Cheap to poll (one int compare); only rebuilds on an actual change (slider drag).
-    if (!renderer || shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias) { return; }
+    // The chunked-terrain bias rides the same tables (perViewGroup_ + the per-group bias the VSM
+    // setup CB mirrors), so it needs the same rebuild — one more int compare.
+    if (!renderer) { return; }
+    if (shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias &&
+        shadowGpu_.BuiltChunkLodBias() == render::g_chunkShadowLodBias) { return; }
     RebuildShadowCasters(*renderer);
 }
 

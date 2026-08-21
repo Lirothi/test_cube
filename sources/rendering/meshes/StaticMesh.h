@@ -17,6 +17,11 @@ public:
 
     void SetRecomputeNormalSlots(std::vector<uint32_t> slots);
 
+    // mesh.json "chunkGrid": the geometry was baked as an N x N grid of submesh chunks, so the
+    // shadow path should treat each chunk as its own caster. Must be set BEFORE Init (that is where
+    // the mesh is loaded and the flag reaches MeshLoadOptions), same channel as the normal slots.
+    void SetChunkGrid(unsigned int grid) { chunkGrid_ = grid; }
+
     bool IsSimpleRender() const override { return true; }
     bool CastsShadow() const override { return true; }
 
@@ -27,4 +32,5 @@ protected:
 private:
     std::string modelName_;
     std::vector<uint32_t> recomputeNormalSlots_;
+    unsigned int chunkGrid_ = 0;
 };

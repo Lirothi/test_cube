@@ -143,6 +143,36 @@ void Mesh::CreateGPU_PNTUV(ID3D12Device* device,
 #endif
 }
 
+void Mesh::MarkChunkedSubmeshes(const std::vector<VertexPNTUV>& verts,
+    const uint32_t* indices, UINT indexCount)
+{
+    // One mesh-local box per LOD0 submesh. A chunk's coarser LODs simplify only its INTERIOR
+    // (meshopt_SimplifyLockBorder pins every seam vertex), so the LOD0 box bounds every LOD of the
+    // same chunk and one table serves all of them.
+    submeshBounds_.assign(submeshes_.size(), AABB::Empty());
+    if (indices)
+    {
+        for (size_t s = 0; s < submeshes_.size(); ++s)
+        {
+            const Submesh& sub = submeshes_[s];
+            const uint64_t end = static_cast<uint64_t>(sub.indexOffset) + sub.indexCount;
+            if (end > indexCount) { continue; } // malformed table -> leave this slot invalid
+            AABB box = AABB::Empty();
+            for (uint32_t i = sub.indexOffset; i < end; ++i)
+            {
+                const uint32_t v = indices[i];
+                if (v >= verts.size()) { continue; }
+                box.Expand(Math::float3(verts[v].position.x, verts[v].position.y, verts[v].position.z));
+            }
+            submeshBounds_[s] = box;
+        }
+    }
+    // Set even when a box came out invalid: the shadow path falls back to the object's bounds for
+    // that one slot, which is conservative — silently reverting the WHOLE mesh to shared bounds
+    // would instead hide the failure behind a performance cliff.
+    chunkedSubmeshes_ = true;
+}
+
 #if WITH_EDITOR
 bool Mesh::RaycastLocal(const Math::float3& origin, const Math::float3& direction,
     float* outDistance) const

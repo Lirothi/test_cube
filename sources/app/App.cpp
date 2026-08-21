@@ -245,6 +245,11 @@ namespace
         // point: the round-trip perf leak is only reproducible in ONE process
         // (docs/bug_shadow_lod_bias_perf.md §6).
         if (setting == "vsm.shadowLodBias") { render::g_shadowLodBias = (int)value; return true; }
+        // Terrain-chunking LOD bias (docs/terrain_shadow_chunking_plan.md S4). Default -1 = chunked
+        // terrain casts one LOD finer than the view curve; 0 = off, which is the A/B control. Rides
+        // the same in-process rebuild as the key above, so both sides of the comparison come out of
+        // ONE binary and one level load.
+        if (setting == "vsm.chunkLodBias") { render::g_chunkShadowLodBias = (int)value; return true; }
         // Mirror of the VSM page-stats log toggle, so a headless run can capture the resident/request
         // counts (logs/vsm_pages.log) that the dev-window "VSM" tab shows live.
         if (setting == "vsm.logPageStats")  { vsm::g_logPageStats = value != 0.0f; return true; }

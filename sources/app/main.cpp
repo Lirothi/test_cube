@@ -584,6 +584,15 @@ int WINAPI WinMain(
                 opt.slotFoliage.push_back(static_cast<float>(std::atof(foliage.substr(i, j - i).c_str())));
                 i = j + 1;
             }
+            // "--reimport-chunk=6" mirrors the mesh.json "chunkGrid": the LOD0 triangles are split
+            // into a 6x6 grid of submeshes so a shadow page can rasterize only the chunks it
+            // overlaps. MUST match what mesh.json carries at runtime — the runtime reads the grid
+            // from mesh.json to decide the submeshes are independent casters, and a .bin baked
+            // unchunked would then hand it one giant "chunk" with the object's own bounds.
+            const std::string chunk = getArg("--reimport-chunk=");
+            if (!chunk.empty()) {
+                opt.chunkGrid = static_cast<unsigned int>(std::atoi(chunk.c_str()));
+            }
             MeshManager mm;
             return mm.BakeToBinary(src, out, opt) ? 0 : 1;
         }

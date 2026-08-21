@@ -15,6 +15,8 @@
 #include "editor/assets/MaterialFileGen.h" // I3: write named material files from glTF at import
 #include "rendering/meshes/MeshManager.h" // CountSubmeshes for the slot count; ParseFileCpu to size an .obj
 #include "meshoptimizer.h"                // meshopt_Simplify* flags for the LOD import options
+#include "rendering/shadows/VirtualShadowMap.h" // vsm::kMaxMeshGroups: the shadow caster-group
+                                                // budget the chunk-grid control spends from
 #include <cfloat>
 #include "third_party/cgltf/cgltf.h"
 #include "imgui.h"
@@ -789,6 +791,21 @@ namespace
         return names;
     }
 
+    // mesh.json "chunkGrid" of an already-imported asset; 0 = absent or off. The import dialog seeds
+    // its chunking control from this, so re-opening the dialog shows what the asset really carries
+    // instead of whatever the last-opened mesh left in the widget.
+    int ReadAssetChunkGrid(const fs::path& meshJsonPath)
+    {
+        std::ifstream in(meshJsonPath);
+        if (!in) { return 0; }
+        const nlohmann::json j = nlohmann::json::parse(in, nullptr, false, true);
+        if (!j.is_object()) { return 0; }
+        const auto it = j.find("chunkGrid");
+        if (it == j.end() || !it->is_number_integer()) { return 0; }
+        const int grid = it->get<int>();
+        return grid > 0 ? grid : 0;
+    }
+
     // W7.1b: `binGeometry` is our baked .mesh.bin under models/<name>/ (what the runtime loads;
     // mesh.json "geometry"). `sourceGltf` is the staging glTF (mesh.json "source"), used to BAKE the
     // .bin and to generate material files — the glTF is never copied into models/ anymore.
@@ -797,7 +814,8 @@ namespace
         const std::string& sourceGltf,
         float spawnScale,
         const std::string& materialBaseName,
-        const MeshLoadOptions& lodOpt)
+        const MeshLoadOptions& lodOpt,
+        int chunkGrid) // -1 = keep the asset's existing value; see RecreateMeshAssets
     {
         nlohmann::json asset = nlohmann::json::object();
         std::ifstream existingFile(path);
@@ -842,6 +860,19 @@ namespace
                 if (f.is_number()) { bakeOpt.slotFoliage.push_back(f.get<float>()); }
             }
         }
+        // Shadow chunking. The bake and mesh.json MUST agree: the .bin carries no flag of its own,
+        // so mesh.json's "chunkGrid" is the ONLY thing that tells the runtime these submeshes are
+        // spatial chunks rather than material groups. Resolve it once here and use that one value
+        // for both the bake and the file — a re-import that baked chunks without writing the key
+        // (or wrote the key without baking chunks) would leave the asset lying about itself.
+        int effectiveChunkGrid = chunkGrid;
+        if (effectiveChunkGrid < 0) // no explicit choice -> preserve what the asset already says
+        {
+            effectiveChunkGrid = (asset.contains("chunkGrid") && asset["chunkGrid"].is_number_integer())
+                ? asset["chunkGrid"].get<int>() : 0;
+        }
+        if (effectiveChunkGrid < 0) { effectiveChunkGrid = 0; }
+        bakeOpt.chunkGrid = static_cast<unsigned int>(effectiveChunkGrid);
         {
             MeshManager mm;
             if (!mm.BakeToBinary(sourceGltf, binGeometry, bakeOpt)) { return false; }
@@ -884,6 +915,9 @@ namespace
         }
         if (spawnScale > 0.0f) { asset["spawnScale"] = spawnScale; }
         else { asset.erase("spawnScale"); }
+        // Written from the SAME value the bake just used (see above).
+        if (effectiveChunkGrid > 0) { asset["chunkGrid"] = effectiveChunkGrid; }
+        else { asset.erase("chunkGrid"); }
 
         std::error_code ec;
         fs::create_directories(path.parent_path(), ec);
@@ -1016,7 +1050,7 @@ std::string ImportPanel::ProjectDest(const Item& item) const
 }
 
 bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
-    const std::vector<std::string>& splitNodes)
+    const std::vector<std::string>& splitNodes, int chunkGrid)
 {
     if (item.kind != Kind::Mesh || item.gltfFile.empty()) { return false; }
 
@@ -1041,7 +1075,8 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
     {
         const std::string binGeom = (dst / (item.name + ".mesh.bin")).generic_string();
         return WriteImportedMeshAsset(
-            meshAssetRoot / (item.name + ".mesh.json"), binGeom, source, spawnScale, item.name, lodOpt);
+            meshAssetRoot / (item.name + ".mesh.json"), binGeom, source, spawnScale, item.name,
+            lodOpt, chunkGrid);
     }
 
     for (const std::string& node : splitNodes)
@@ -1051,8 +1086,11 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
             (item.name + "_node_" + component + ".mesh.json");
         const std::string binGeom =
             (dst / (item.name + "_node_" + component + ".mesh.bin")).generic_string();
+        // Split parts are individual props, not one large surface: chunking them would spend a
+        // shadow caster group per tile of an object that occupies a handful of pages anyway. The
+        // dialog greys the control out when splitting is on; this makes it true for every caller.
         if (!WriteImportedMeshAsset(meshAssetPath, binGeom,
-                source + "#node:" + node, spawnScale, item.name + "_" + component, lodOpt))
+                source + "#node:" + node, spawnScale, item.name + "_" + component, lodOpt, 0))
         {
             return false;
         }
@@ -1263,7 +1301,8 @@ void ImportPanel::BeginImport(const Item& item,
     const std::vector<std::string>& removedSources,
     float meshSpawnScale,
     const std::vector<std::string>& meshSplitNodes,
-    bool meshSplitChoiceProvided)
+    bool meshSplitChoiceProvided,
+    int meshChunkGrid)
 {
     if (running_.load()) { return; }
     activeItem_ = item;
@@ -1279,6 +1318,7 @@ void ImportPanel::BeginImport(const Item& item,
     // manifest and must not delete sibling outputs; only a full import owns the whole folder.
     activeMergeManifest_ = !includeRel.empty() || !activeTargetOutputs_.empty();
     activeMeshSpawnScale_ = 0.0f;
+    activeMeshChunkGrid_ = meshChunkGrid; // -1 from every non-dialog caller = preserve the asset's
     activeMeshSplitGltf_.clear();
     activeMeshSplitNodes_.clear();
     if (item.kind == Kind::Mesh)
@@ -1599,6 +1639,19 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
     {
         meshDialogSplitTopLevelNodes_ = true;
     }
+
+    // Shadow chunking: seed from what the asset ALREADY carries, so re-opening the dialog shows the
+    // truth rather than the previous mesh's widget state. Whole-file assets only (a split import
+    // writes one sidecar per node and none of them is chunked — see RecreateMeshAssets).
+    const int existingChunkGrid = ReadAssetChunkGrid(
+        fs::path(ProjectDest(item)).parent_path() / (item.name + ".mesh.json"));
+    meshDialogChunk_ = existingChunkGrid > 0;
+    meshDialogChunkGrid_ = existingChunkGrid > 0 ? existingChunkGrid : 6;
+    // v1 chunks single-submesh meshes only. Read it once here (the bake would otherwise reject the
+    // request and log it where nobody looks) so the dialog can say so before the user commits.
+    meshDialogSubmeshCount_ = static_cast<int>(
+        std::max<size_t>(MeshManager::CountSubmeshes(item.gltfFile), 1));
+
     showMeshImportDialog_ = true;
 }
 
@@ -1792,6 +1845,88 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
             }
         }
     }
+
+    // --- Shadow chunking (collapsed: only large ground/terrain surfaces want it) ------------------
+    // A caster's bounds decide which shadow-map pages have to rasterize it. One 361x388 m island is
+    // ONE caster whose box covers every page of every clipmap level, so its full LOD range is drawn
+    // once per resident page. Split into tiles, a page draws only the tiles that reach it -- which
+    // is also what makes "terrain casts at LOD0 near the camera" affordable, and that is what kills
+    // the banding you get when a simplified caster shadows the detailed surface the camera draws.
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Shadow chunking"))
+    {
+        const bool splitting = meshDialogSplitTopLevelNodes_ && meshDialogTopLevelNodes_.size() > 1;
+        const bool multiSubmesh = meshDialogSubmeshCount_ > 1;
+        const bool blocked = splitting || multiSubmesh;
+
+        ImGui::TextDisabled("Splits LOD0 into a grid of tiles, each its own shadow caster.");
+        ImGui::BeginDisabled(blocked);
+        ImGui::Checkbox("Split into shadow chunks", &meshDialogChunk_);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip(
+                "For LARGE GROUND SURFACES (terrain, an island, a big floor) - not for props.\n\n"
+                "A caster's bounding box decides which shadow pages must draw it. One big mesh is\n"
+                "one box covering every page, so its whole LOD range is redrawn per page. Tiled, a\n"
+                "page draws only the tiles that touch it, and terrain can afford to cast at LOD0\n"
+                "near the camera - which is what removes the banding a simplified caster produces\n"
+                "over the detailed surface the camera actually rasterizes.\n\n"
+                "Tiles are simplified with their shared borders LOCKED, so coarse LODs cannot crack\n"
+                "apart at the seams. Camera rendering is unaffected: LOD0 is only reordered.");
+        }
+        if (multiSubmesh)
+        {
+            ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f),
+                "Unavailable: %d material submeshes (chunking is single-submesh only).",
+                meshDialogSubmeshCount_);
+        }
+        else if (splitting)
+        {
+            ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f),
+                "Unavailable while \"Split by top-level nodes\" is on - the parts are props.");
+        }
+
+        ImGui::BeginDisabled(blocked || !meshDialogChunk_);
+        ImGui::SetNextItemWidth(150.0f);
+        // ONE %d: ImGui formats the slider label with exactly one int argument, so a "%d x %d"
+        // format would read a second one off the stack. The grid shape is spelled out below.
+        ImGui::SliderInt("Tiles per axis", &meshDialogChunkGrid_, 2, 8, "%d");
+        ImGui::EndDisabled();
+        meshDialogChunkGrid_ = std::clamp(meshDialogChunkGrid_, 2, 8);
+
+        if (meshDialogChunk_ && !blocked)
+        {
+            const int grid = meshDialogChunkGrid_;
+            const int tiles = grid * grid;
+            const int budget = static_cast<int>(vsm::kMaxMeshGroups);
+            // Tiles over the mesh's XZ box; empty cells emit nothing, so this is an upper bound.
+            if (meshDialogItem_.worldSizeM > 0.0f)
+            {
+                ImGui::TextDisabled("%d x %d = up to %d tiles, ~%.0f m each.", grid, grid, tiles,
+                    meshDialogItem_.worldSizeM / static_cast<float>(grid));
+            }
+            else
+            {
+                ImGui::TextDisabled("%d x %d = up to %d tiles.", grid, grid, tiles);
+            }
+            // Every tile costs a shadow caster GROUP, and that budget is per LEVEL, shared with
+            // every other mesh in it. Worth saying out loud: the failure mode is not this asset
+            // looking wrong, it is the whole level's shadow path falling off its fast path.
+            const ImVec4 warn(0.96f, 0.62f, 0.16f, 1.0f);
+            const ImVec4 bad(0.92f, 0.35f, 0.30f, 1.0f);
+            if (tiles > budget - 8)
+            {
+                ImGui::TextColored(tiles >= budget ? bad : warn,
+                    "%d shadow caster groups of the level's %d - other meshes need some too.",
+                    tiles, budget);
+            }
+            else
+            {
+                ImGui::TextDisabled("%d shadow caster groups of the level's %d.", tiles, budget);
+            }
+        }
+    }
     ImGui::Separator();
 
     // Zero when the correction went into the vertices -- the asset must NOT also carry a
@@ -1800,12 +1935,17 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     const std::vector<std::string> selectedSplitNodes =
         meshDialogSplitTopLevelNodes_ ? meshDialogTopLevelNodes_ :
         std::vector<std::string>{};
+    // 0 rather than -1: an explicit "no chunks" must ERASE a chunkGrid the asset already carries,
+    // or clearing the checkbox would silently leave the old value in mesh.json.
+    const int selectedChunkGrid =
+        (meshDialogChunk_ && selectedSplitNodes.empty() && meshDialogSubmeshCount_ <= 1)
+            ? meshDialogChunkGrid_ : 0;
 
     if (ImGui::Button(meshDialogItem_.alreadyInProject ? "Re-import" : "Import",
             ImVec2(0.0f, 0.0f)))
     {
         BeginImport(meshDialogItem_, {}, true, {}, {}, selectedSpawnScale,
-            selectedSplitNodes, true);
+            selectedSplitNodes, true, selectedChunkGrid);
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -1816,14 +1956,14 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     {
         ImGui::SetTooltip(
-            "Regenerate only the spawnable .mesh.json asset(s).\n"
-            "No glTF, binary, or texture files are re-imported.\n"
-            "Uses the current normalization and split options.");
+            "Regenerate the spawnable .mesh.json asset(s) AND re-bake the .mesh.bin geometry\n"
+            "from the staging source - that is what applies changed scale / LOD / chunk settings.\n"
+            "Textures are not re-converted and nothing is copied out of staging.");
     }
     if (recreateMeshJson)
     {
         const bool recreated = RecreateMeshAssets(meshDialogItem_,
-            selectedSpawnScale, selectedSplitNodes);
+            selectedSpawnScale, selectedSplitNodes, selectedChunkGrid);
         status_ = recreated ?
             (selectedSplitNodes.empty() ?
                 "Recreated mesh JSON for " + meshDialogItem_.name :
@@ -2029,7 +2169,7 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                 !activeItem_.gltfFile.empty())
             {
                 finalizeFailed = !RecreateMeshAssets(activeItem_,
-                    activeMeshSpawnScale_, activeMeshSplitNodes_);
+                    activeMeshSpawnScale_, activeMeshSplitNodes_, activeMeshChunkGrid_);
                 // W7.1b: RecreateMeshAssets generated material files from the STAGING glTF, so their
                 // texture paths point into import_staging/; repoint them to the copied models/ DDS
                 // (mirrors the TextureSet repoint above). No-op on re-import (files preserved).

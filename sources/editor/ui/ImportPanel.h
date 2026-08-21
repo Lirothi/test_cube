@@ -82,7 +82,8 @@ private:
         const std::vector<std::string>& removedSources = {},
         float meshSpawnScale = -1.0f,
         const std::vector<std::string>& meshSplitNodes = {},
-        bool meshSplitChoiceProvided = false);
+        bool meshSplitChoiceProvided = false,
+        int meshChunkGrid = -1);
     void PollImport(AssetRegistry& registry, bool& finishedOut);
     void OpenImportDialog(const Item& item); // texture sets: choose files + preset before importing
     void DrawImportDialog();
@@ -94,8 +95,11 @@ private:
     void DrawSkyboxImportDialog();
     void OpenMeshImportDialog(const Item& item);
     void DrawMeshImportDialog(AssetRegistry& registry);
+    // `chunkGrid`: -1 = no explicit choice (bulk / per-resource re-import), keep whatever the
+    // existing mesh.json carries; >= 0 is the import dialog's answer, and 0 must be able to REMOVE
+    // an existing grid or the dialog's checkbox could be cleared and silently do nothing.
     bool RecreateMeshAssets(const Item& item, float spawnScale,
-        const std::vector<std::string>& splitNodes);
+        const std::vector<std::string>& splitNodes, int chunkGrid);
 
     // Engine-tree destination for an item, by kind: models/<name> (Mesh), textures/<name>
     // (TextureSet), textures/<name>.dds (Skybox). Meshes go to models/ (their sibling DDS ride
@@ -145,6 +149,9 @@ private:
     // >= 0 is the explicit choice from the mesh import dialog. -1 preserves
     // an existing manifest value for non-interactive/bulk reimports.
     float activeMeshSpawnScale_ = -1.0f;
+    // Same contract for shadow chunking: -1 preserves the asset's existing chunkGrid for
+    // non-interactive/bulk reimports, >= 0 is the dialog's explicit answer.
+    int activeMeshChunkGrid_ = -1;
     std::string activeMeshSplitGltf_;
     std::vector<std::string> activeMeshSplitNodes_;
     bool joinPending_ = false;
@@ -184,6 +191,14 @@ private:
     float meshDialogLodError_ = 1.0f;
     bool  meshDialogLodPermissive_ = false; // meshopt_SimplifyPermissive — shreds masked foliage
     bool  meshDialogLodPrune_ = false;      // meshopt_SimplifyPrune — drops small loose components
+    // Shadow chunking (mesh.json "chunkGrid"). Splits LOD0 into an N x N grid of submeshes so each
+    // tile becomes its own shadow caster and a shadow page rasterizes only the tiles it overlaps.
+    // Seeded from the asset on dialog open, so re-opening shows what the asset actually carries.
+    bool meshDialogChunk_ = false;
+    int  meshDialogChunkGrid_ = 6;
+    // Submesh count of the source, read once when the dialog opens: chunking is single-submesh only
+    // (v1), and the dialog says so up front rather than letting the bake reject it silently.
+    int  meshDialogSubmeshCount_ = 1;
     std::vector<std::string> meshDialogTopLevelNodes_;
 };
 

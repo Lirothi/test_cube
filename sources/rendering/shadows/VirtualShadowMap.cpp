@@ -1096,9 +1096,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         renderer->EmitPoint(cl, dec.pointScatterRead);
     }
 
-    constexpr std::uint32_t kMaxMegaGroups = 64u; // matches VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl
+    constexpr std::uint32_t kMaxMegaGroups = vsm::kMaxMeshGroups; // == VSM_MAX_SETUP_GROUPS in the shader
     constexpr std::uint32_t kLods = render::kMaxShadowLods;                    // KMAX_SHADOW_LODS
     constexpr std::uint32_t kViewLodVec4 = (render::kMaxShadowViews + 3u) / 4u; // 44 cull-views packed 4/uint4
+    constexpr std::uint32_t kGroupBiasVec4 = (kMaxMegaGroups + 3u) / 4u;        // 64 groups packed 4/int4
     struct SetupCB
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
@@ -1113,6 +1114,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
         DirectX::XMUINT4 viewLod[kViewLodVec4];               // per cull-view shadow LOD (packed 4/vec)
         DirectX::XMUINT4 groupLodMega[kMaxMegaGroups * kLods]; // per (group,lod): {megaStart, lodRel, count, baseVertex}
+        // Per-group additive LOD bias, one int per group packed 4/uint4 (chunked terrain = -1).
+        // APPENDED AT THE END on purpose: every array above keeps its offset, so this cannot shift
+        // gGroupLodMega out from under the shader. Mirrors gGroupLodBias in vsm_page_setup_cs.hlsl.
+        DirectX::XMINT4 groupLodBias[kGroupBiasVec4];
     };
     // Region base in 5-uint arg units. MUST come from the ring's PHYSICAL region stride: the args
     // ring is grow-only (EnsureUavRing reuses a larger prior-level allocation), so after a level
@@ -1164,6 +1169,14 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                     DirectX::XMUINT4& e = cb.groupLodMega[g * kLods + L];
                     if (src + 3 < glm.size()) { e = { glm[src], glm[src + 1], glm[src + 2], glm[src + 3] }; }
                 }
+            }
+            // Per-group LOD bias, same packing as viewLod (one entry per group, 4 per int4). Zero
+            // for every group unless a chunked terrain mesh is loaded, which is what makes the whole
+            // feature a provable no-op until one is.
+            const std::vector<std::int32_t>& glb = shadowGpu->GroupLodBias();
+            for (std::uint32_t g = 0; g < gm && g < glb.size(); ++g)
+            {
+                reinterpret_cast<std::int32_t*>(cb.groupLodBias)[g] = glb[g];
             }
             std::memcpy(dst, &cb, sizeof(cb));
         },

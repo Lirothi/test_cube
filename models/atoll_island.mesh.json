@@ -1,4 +1,5 @@
 {
+  "chunkGrid": 6,
   "geometry": "models/atoll_island/atoll_island.mesh.bin",
   "inputLayout": "PosNormTanUV",
   "material": "sandstone_cracks",

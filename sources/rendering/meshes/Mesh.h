@@ -104,6 +104,21 @@ public:
     const std::vector<Submesh>& SubmeshesForLod(UINT lod) const;
     size_t GetSubmeshCount() const { return submeshes_.size(); }
 
+    // Shadow chunking (mesh.json "chunkGrid", baked by MeshManager's ChunkifyLod0). The LOD0
+    // submeshes of a chunked mesh are SPATIAL tiles of one continuous surface, not material groups
+    // scattered through it — so each carries its own mesh-local AABB and the shadow path registers
+    // it as an INDEPENDENT caster. That is what lets a virtual-shadow-map page rasterize only the
+    // tiles it overlaps instead of the whole terrain. Non-chunked meshes report false + an empty
+    // table and keep sharing their object's bounds across slots.
+    bool IsChunkedSubmeshes() const { return chunkedSubmeshes_; }
+    const std::vector<AABB>& GetSubmeshBounds() const { return submeshBounds_; }
+
+    // Compute one mesh-local AABB per LOD0 submesh and mark the mesh chunked. Call right after
+    // CreateGPU_PNTUV, from the load path that knows mesh.json asked for chunking (the .bin carries
+    // no flag of its own — see the format NOTE in MeshManager.cpp).
+    void MarkChunkedSubmeshes(const std::vector<VertexPNTUV>& verts,
+        const uint32_t* indices, UINT indexCount);
+
     // Clamp an explicit LOD request to the LODs this mesh actually has (0..GetLodCount()-1). Unlike
     // ResolveRuntimeLod this ignores the g_lodEnabled/g_forcedLod runtime overrides — the shadow LOD
     // bias is a deliberate fixed level, not the per-camera LOD.
@@ -175,6 +190,9 @@ private:
 
     std::vector<Submesh> submeshes_;  // lod 0 submesh table (>=1 entry; whole buffer by default)
     std::vector<LodLevel> extraLods_; // lod 1+ (lod 0 is the base buffers above); empty = no LODs
+
+    bool chunkedSubmeshes_ = false;   // submeshes are spatial chunks -> independent shadow casters
+    std::vector<AABB> submeshBounds_; // mesh-local LOD0 AABB per submesh; empty unless chunked
 
 #if WITH_EDITOR
     // Position-only CPU copy of base LOD geometry. This avoids GPU readback and retains

@@ -32,13 +32,87 @@ struct MeshLodCpu {
     std::vector<Mesh::Submesh> submeshes;
 };
 
+// Shadow chunking (MeshLoadOptions::chunkGrid): partition a SINGLE-submesh LOD0 into an N x N grid
+// of submeshes over the mesh's XZ extent, by triangle centroid. Pure reordering — every triangle
+// survives exactly once, the material slot is inherited, and empty cells emit nothing. Cells are
+// emitted row-major (z-major, x-minor) and triangles keep their relative order inside a cell, so
+// the partition is deterministic and slot ordinal <-> chunk identity is positional (the runtime's
+// per-slot caster bounds rely on that, and so does the "same submesh count in the same order at
+// every LOD" invariant BuildLodsCpu preserves).
+//
+// Returns false (leaving the mesh untouched) for anything it cannot chunk: grid < 2, a mesh that
+// already carries multiple material submeshes, or a degenerate XZ extent.
+bool ChunkifyLod0(const std::vector<VertexPNTUV>& verts, std::vector<uint32_t>& indices,
+    std::vector<Mesh::Submesh>& subs, uint32_t grid)
+{
+    if (grid < 2u || subs.size() != 1u || indices.size() < 3u || verts.empty()) { return false; }
+    const uint32_t slot = subs[0].materialSlot;
+
+    float mnx = FLT_MAX, mnz = FLT_MAX, mxx = -FLT_MAX, mxz = -FLT_MAX;
+    for (const uint32_t i : indices)
+    {
+        if (i >= verts.size()) { return false; }
+        const DirectX::XMFLOAT3& p = verts[i].position;
+        mnx = std::min(mnx, p.x); mxx = std::max(mxx, p.x);
+        mnz = std::min(mnz, p.z); mxz = std::max(mxz, p.z);
+    }
+    const float spanX = mxx - mnx, spanZ = mxz - mnz;
+    if (!(spanX > 0.0f) || !(spanZ > 0.0f)) { return false; }
+
+    const size_t triCount = indices.size() / 3;
+    const uint32_t cells = grid * grid;
+    std::vector<std::vector<uint32_t>> bucket(cells);
+    const float invCellX = static_cast<float>(grid) / spanX;
+    const float invCellZ = static_cast<float>(grid) / spanZ;
+    const int last = static_cast<int>(grid) - 1;
+    for (size_t t = 0; t < triCount; ++t)
+    {
+        const DirectX::XMFLOAT3& a = verts[indices[t * 3 + 0]].position;
+        const DirectX::XMFLOAT3& b = verts[indices[t * 3 + 1]].position;
+        const DirectX::XMFLOAT3& c = verts[indices[t * 3 + 2]].position;
+        const float cx = (a.x + b.x + c.x) * (1.0f / 3.0f);
+        const float cz = (a.z + b.z + c.z) * (1.0f / 3.0f);
+        int gx = static_cast<int>((cx - mnx) * invCellX);
+        int gz = static_cast<int>((cz - mnz) * invCellZ);
+        gx = gx < 0 ? 0 : (gx > last ? last : gx);   // the max-coordinate triangle lands on `grid`
+        gz = gz < 0 ? 0 : (gz > last ? last : gz);
+        bucket[static_cast<uint32_t>(gz) * grid + static_cast<uint32_t>(gx)].push_back(
+            static_cast<uint32_t>(t));
+    }
+
+    std::vector<uint32_t> reordered;
+    reordered.reserve(indices.size());
+    std::vector<Mesh::Submesh> chunked;
+    chunked.reserve(cells);
+    for (uint32_t c = 0; c < cells; ++c)
+    {
+        if (bucket[c].empty()) { continue; }
+        const uint32_t offset = static_cast<uint32_t>(reordered.size());
+        for (const uint32_t t : bucket[c])
+        {
+            reordered.push_back(indices[t * 3 + 0]);
+            reordered.push_back(indices[t * 3 + 1]);
+            reordered.push_back(indices[t * 3 + 2]);
+        }
+        chunked.push_back(Mesh::Submesh{ offset,
+            static_cast<uint32_t>(reordered.size()) - offset, slot });
+    }
+    indices.swap(reordered);
+    subs.swap(chunked);
+    return true;
+}
+
 // Step 6 / Part B: build coarser LODs as reduced index buffers (meshopt_simplify, over the same
 // vertices). Each submesh range is simplified INDEPENDENTLY and the LOD carries its own rebuilt
 // submesh table — simplifying the whole buffer as one blob would dissolve the per-material
 // boundaries. Single-submesh meshes reduce to the original behavior. CPU-only (no GPU).
+//
+// `chunkedSubsets` (ChunkifyLod0 ran): the ranges are SPATIAL neighbours of one continuous surface,
+// not disjoint material groups, so independent simplification would pull their shared borders apart
+// into cracks. See the flag block below.
 std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
     const std::vector<uint32_t>& indices, const std::vector<Mesh::Submesh>& baseSubs,
-    const MeshLoadOptions& opt)
+    const MeshLoadOptions& opt, bool chunkedSubsets = false)
 {
     std::vector<MeshLodCpu> out;
     const size_t baseIdx = indices.size();
@@ -49,6 +123,27 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
     // Per-level target ratio + error budget; overridable per import (see MeshLoadOptions).
     const float ratios[] = { 0.5f * opt.lodRatioScale, 0.25f * opt.lodRatioScale, 0.12f * opt.lodRatioScale };
     const float errors[] = { 0.02f * opt.lodErrorScale, 0.05f * opt.lodErrorScale, 0.12f * opt.lodErrorScale };
+
+    // Chunked (spatially partitioned) ranges need three extra meshopt flags, and the third one
+    // forces the error budget to be restated:
+    //   LockBorder     pins every vertex on an OPEN edge of the range. A chunk's seam is exactly
+    //                  that, and both sides of a seam lock the same shared positions, so adjacent
+    //                  chunks stay welded no matter how differently their interiors collapse.
+    //   Sparse         restricts meshopt's per-call work to the vertices the range actually uses
+    //                  (36 calls over a 41k-vertex array otherwise walk the whole array 36 times).
+    //   ErrorAbsolute  Sparse ALSO re-bases the relative error onto the SUBSET's extent (~60 m per
+    //                  chunk instead of the island's 388 m), which would silently tighten the
+    //                  budget ~6x. Absolute error + an explicit multiply by the whole mesh's
+    //                  simplify scale restores exactly the meaning `errors[]` has today:
+    //                  a fraction of the WHOLE mesh's largest extent.
+    const unsigned int simplifyOptions = chunkedSubsets
+        ? (opt.lodSimplifyOptions | meshopt_SimplifyLockBorder | meshopt_SimplifySparse |
+           meshopt_SimplifyErrorAbsolute)
+        : opt.lodSimplifyOptions;
+    const float errorScale = chunkedSubsets
+        ? meshopt_simplifyScale(&verts[0].position.x, verts.size(), sizeof(VertexPNTUV))
+        : 1.0f;
+
     std::vector<uint32_t> simplified;
     size_t prevCount = baseIdx;
 
@@ -81,7 +176,7 @@ std::vector<MeshLodCpu> BuildLodsCpu(const std::vector<VertexPNTUV>& verts,
                 // and UV island). Do not trust `resultError` on masked foliage; look at the wireframe.
                 n = meshopt_simplify(simplified.data(), src, srcCount,
                     &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
-                    target, errors[i], opt.lodSimplifyOptions, &resultError);
+                    target, errors[i] * errorScale, simplifyOptions, &resultError);
                 if (n == 0) { n = srcCount; }  // simplify gave up -> keep the range as-is
                 else { didSimplify = true; }
                 (void)resultError;
@@ -176,6 +271,9 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
     if (opt.lodRatioScale != 1.0f) { h = Fnv1a(&opt.lodRatioScale, sizeof(float), h); }
     if (opt.lodErrorScale != 1.0f) { h = Fnv1a(&opt.lodErrorScale, sizeof(float), h); }
     if (opt.lodSimplifyOptions != 0u) { h = Fnv1a(&opt.lodSimplifyOptions, sizeof(unsigned int), h); }
+    // Chunking rewrites the index buffers AND the submesh tables of every LOD, so a .bin baked at a
+    // different grid must not be reused. Non-default only, so existing caches stay valid.
+    if (opt.chunkGrid != 0u) { h = Fnv1a(&opt.chunkGrid, sizeof(unsigned int), h); }
     return h;
 }
 
@@ -255,14 +353,21 @@ std::vector<uint32_t> CanonicalNormalSlots(const std::vector<uint32_t>& slots)
 std::string MeshCacheKey(const std::string& path, const MeshLoadOptions& opt)
 {
     const std::vector<uint32_t> slots = CanonicalNormalSlots(opt.recomputeNormalSlots);
-    if (slots.empty()) { return path; }
+    // chunkGrid changes what the loaded Mesh IS (per-submesh caster bounds + the chunked flag), so
+    // two objects asking for the same file at different grids must not share one cached Mesh.
+    if (slots.empty() && opt.chunkGrid == 0u) { return path; }
 
-    std::string key = path + "|recomputeNormalSlots=";
-    for (const uint32_t slot : slots)
+    std::string key = path;
+    if (!slots.empty())
     {
-        key += std::to_string(slot);
-        key.push_back(',');
+        key += "|recomputeNormalSlots=";
+        for (const uint32_t slot : slots)
+        {
+            key += std::to_string(slot);
+            key.push_back(',');
+        }
     }
+    if (opt.chunkGrid != 0u) { key += "|chunkGrid=" + std::to_string(opt.chunkGrid); }
     return key;
 }
 
@@ -871,12 +976,30 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
     // from foliage; before LOD building, so every LOD inherits the same weights.
     BakeWindWeightsCpu(cpu.vertices, cpu.indices, lod0Subs, opt.slotFoliage);
 
-    const std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs, opt);
+    // Shadow chunking, between the wind bake (vertex colors only — the reorder below cannot disturb
+    // it) and LOD building (which then simplifies every chunk independently). v1 supports
+    // single-submesh input only: a multi-material mesh would need the grid crossed with the material
+    // table, and nothing needs that yet.
+    bool chunked = false;
+    if (opt.chunkGrid > 0u)
+    {
+        chunked = ChunkifyLod0(cpu.vertices, cpu.indices, lod0Subs, opt.chunkGrid);
+        char cmsg[256];
+        std::snprintf(cmsg, sizeof(cmsg),
+            chunked ? "[meshbake] chunkGrid=%u -> %zu chunk submeshes\n"
+                    : "[meshbake] chunkGrid=%u REJECTED (needs a single-submesh mesh with a "
+                      "non-degenerate XZ extent and grid >= 2); baking unchunked. submeshes=%zu\n",
+            opt.chunkGrid, lod0Subs.size());
+        OutputDebugStringA(cmsg);
+    }
+
+    const std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs, opt, chunked);
     const bool ok = WriteMeshBinary(outBinPath, HashSourceFile(srcPath), HashOptions(opt),
         cpu.vertices, cpu.indices, lod0Subs, extra);
     char msg[512];
-    std::snprintf(msg, sizeof(msg), "[meshbake] %s '%s' -> '%s' (%zu verts, %zu LODs)\n",
-        ok ? "ok" : "FAILED", srcPath.c_str(), outBinPath.c_str(), cpu.vertices.size(), extra.size() + 1);
+    std::snprintf(msg, sizeof(msg), "[meshbake] %s '%s' -> '%s' (%zu verts, %zu LODs, %zu submeshes)\n",
+        ok ? "ok" : "FAILED", srcPath.c_str(), outBinPath.c_str(), cpu.vertices.size(),
+        extra.size() + 1, lod0Subs.size());
     OutputDebugStringA(msg);
     return ok;
 }
@@ -884,7 +1007,8 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
 std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
     Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
-    std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
+    std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
+    const MeshLoadOptions& opt)
 {
     if (!renderer || !uploadCmdList) { return nullptr; }
     std::vector<VertexPNTUV> verts;
@@ -902,6 +1026,15 @@ std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
     {
         mesh->AddLod(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
             lods[i].indices.data(), static_cast<UINT>(lods[i].indices.size()), lods[i].submeshes);
+    }
+    // mesh.json "chunkGrid": this .bin's LOD0 submeshes are spatial chunks, so give each one its own
+    // local AABB (the shadow path turns those into independent casters). The .bin format carries no
+    // flag of its own — mesh.json is the single place that says a mesh is chunked, which is why the
+    // bake flag and the mesh.json value MUST agree (see --reimport-chunk).
+    if (opt.chunkGrid > 0u && lods[0].submeshes.size() > 1u)
+    {
+        mesh->MarkChunkedSubmeshes(verts, lods[0].indices.data(),
+            static_cast<UINT>(lods[0].indices.size()));
     }
     return mesh;
 }
@@ -921,7 +1054,7 @@ std::shared_ptr<Mesh> MeshManager::Load(const std::string& path,
         {
             const std::string memKeyBin = MeshCacheKey(path, opt);
             if (auto cit = cache_.find(memKeyBin); cit != cache_.end()) { return cit->second; }
-            std::shared_ptr<Mesh> m = LoadBinaryDirect(geom, renderer, uploadCmdList, uploadKeepAlive);
+            std::shared_ptr<Mesh> m = LoadBinaryDirect(geom, renderer, uploadCmdList, uploadKeepAlive, opt);
             if (m) { cache_[memKeyBin] = m; }
             return m;
         }

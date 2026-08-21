@@ -48,6 +48,19 @@ struct MeshLoadOptions {
     float lodRatioScale = 1.0f;         // scales the per-level triangle targets (<1 = more aggressive)
     float lodErrorScale = 1.0f;         // scales the per-level error budgets (<1 = preserve shape more)
     unsigned int lodSimplifyOptions = 0; // meshopt_Simplify* flags; 0 = safe default
+
+    // --- Shadow chunking (mesh.json "chunkGrid", 0 = off) ----------------------------------------
+    // Bake time: split a SINGLE-submesh mesh's LOD0 triangles into an N x N grid over its XZ extent
+    // and emit each non-empty cell as its own submesh (same material slot, same triangles, merely
+    // reordered). Runtime: a chunked mesh's submeshes are INDEPENDENT shadow casters, each with its
+    // own bounds, so a virtual-shadow-map page only rasterizes the chunks that overlap it instead of
+    // the whole terrain. The island otherwise draws its full LOD range into every resident page.
+    //
+    // Chunks are simplified independently, so their shared borders have to be pinned or adjacent
+    // chunks crack apart at LOD >= 1 — see BuildLodsCpu's LockBorder/Sparse/ErrorAbsolute block.
+    // Camera LOD is unaffected: the LOD0 partition is loss-free and the camera never leaves LOD0 on
+    // a mesh this large.
+    unsigned int chunkGrid = 0;
 };
 
 // CPU-side geometry prepared independently of D3D12. Thumbnail jobs parse and
@@ -169,7 +182,8 @@ private:
     std::shared_ptr<Mesh> LoadBinaryDirect(const std::string& binPath,
                                            Renderer* renderer,
                                            ID3D12GraphicsCommandList* uploadCmdList,
-                                           std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
+                                           std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
+                                           const MeshLoadOptions& opt = {});
 
     // Internal parsers
     bool ParseTextFile(const std::string& path,

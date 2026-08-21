@@ -21,6 +21,7 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
 #define KMAX_SHADOW_LODS 4      // matches render::kMaxShadowLods
 #define KVIEWLOD_VEC4    11     // (render::kMaxShadowViews=44 cull-views + 3) / 4, packed 4/uint4
+#define KGROUP_BIAS_VEC4 16     // (VSM_MAX_SETUP_GROUPS=64 + 3) / 4, packed 4/int4
 
 cbuffer SetupCB : register(b0)
 {
@@ -53,6 +54,10 @@ cbuffer SetupCB : register(b0)
     uint4    gViewLod[KVIEWLOD_VEC4];      // per cull-view shadow LOD (near->far tier + bias), packed 4/uint4
     // per (mesh-group, lod): x=mega absolute start, y=lod-relative start, z=index count, w=mega base vertex.
     uint4    gGroupLodMega[VSM_MAX_SETUP_GROUPS * KMAX_SHADOW_LODS];
+    // per mesh-group: ADDITIVE shadow-LOD bias, packed 4/int4 (chunked terrain = -1, everything
+    // else 0). Appended AFTER gGroupLodMega so no array above it moves; the CPU mirror is
+    // SetupCB::groupLodBias in VirtualShadowMap.cpp and the two must be repacked together.
+    int4     gGroupLodBias[KGROUP_BIAS_VEC4];
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; }; // xyz world center/half-extents (matches render::CasterBounds)
@@ -262,7 +267,14 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         uint4 a0;
         if (g2 < VSM_MAX_SETUP_GROUPS) // per-view LOD from the CB table (the normal path)
         {
-            uint4 e = gGroupLodMega[g2 * gNumLods + viewLod]; // {megaStart, lodRel, count, baseVertex}
+            // Per-GROUP LOD: the view's LOD plus this group's bias (chunked terrain runs one level
+            // finer so the near clipmap ring casts from the same geometry the camera rasterizes).
+            // The bias is 0 for every non-chunked group, so this reduces to `viewLod` exactly.
+            // Indexed only inside this branch — gGroupLodBias is sized VSM_MAX_SETUP_GROUPS, and the
+            // over-cap path below reads Rung0Args, which the CPU already baked the same bias into.
+            const int biased = (int)viewLod + gGroupLodBias[g2 >> 2u][g2 & 3u];
+            const uint groupLod = (uint)clamp(biased, 0, (int)gNumLods - 1);
+            uint4 e = gGroupLodMega[g2 * gNumLods + groupLod]; // {megaStart, lodRel, count, baseVertex}
             a0.x = e.z;                                       // IndexCountPerInstance = LOD's index count
             a0.z = gMegaActive ? e.x : e.y;                   // StartIndexLocation: mega-absolute / lod-relative
             a0.w = gMegaActive ? e.w : 0u;                    // BaseVertexLocation: mega base / mesh-own VB (0)
