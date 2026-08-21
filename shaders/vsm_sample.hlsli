@@ -25,10 +25,14 @@ static const float VSM_MAX_SLOPE_BIAS_NDC = 0.01f;
 // level's 28-degree sun the real gradient is tan(theta)/6 = 0.31, which their 0.05 would crush
 // SIXFOLD -- measured, and it produced less bias than the flat constant it replaced.
 //
-// So the bound is derived here instead of copied. `DepthSlopeUV` works out to tan(theta)/6 for this
-// projection, and bounding tan(theta) at 8 (about 83 degrees off the light, past which a receiver
-// contributes nothing worth defending) gives 8/6.
-static const float VSM_MAX_DEPTH_SLOPE_UV = 1.34f;
+// So the bound is derived by UNIT CONVERSION instead of copied: their 0.05 in a 1000r depth range
+// equals 0.05 * (1000/12) = 4.17 in our 12r range -- the SAME world-space clamp UE runs with. The
+// earlier 1.34 ("past 83 degrees nothing is worth defending") was tighter than UE for no reason a
+// low sun tolerates: a dune's terminator belt lives at 83-90 degrees off the light and its per-texel
+// depth spans run to metres there, so the gradient must be allowed to say so. (Raising the clamp
+// alone did NOT fix the low-sun stair banding -- the sign bug at the slope-bias application below
+// did; the clamp is kept at UE's value because it is the correct conversion of their bound.)
+static const float VSM_MAX_DEPTH_SLOPE_UV = 4.17f;
 
 // Sample a resident/virtual page given the receiver's light-space NDC + full-view shadow UV.
 // Starts at the distance-selected mip level and walks to COARSER levels until it finds a resident
@@ -103,7 +107,13 @@ float VsmSampleNDC(uint view, float3 ndc, float2 uv, float distCam, float refDis
                 const float2 offsetUV = (toTexelCentre + float2(x, y)) * invLevelDims;
                 // UE clamp the result against the projection's depth scale; the equivalent bound
                 // here is a slice of this level's own NDC range, which `depthBias` is expressed in.
-                const float slopeBias = min(2.0f * max(0.0f, dot(depthSlopeUV, offsetUV)),
+                // SIGN: the tap that needs covering is the one whose texel centre lies on the
+                // SHALLOW side of the receiver plane (stored depth closer to the light than the
+                // receiver), i.e. dot(g, offset) NEGATIVE in this engine's z-forward convention --
+                // UE's identical-looking max(0, +dot) is written against their REVERSED shadow
+                // depth. Transcribing the formula verbatim biased exactly the taps that never
+                // needed it and left the needy half of the PCF kernel in acne.
+                const float slopeBias = min(2.0f * max(0.0f, -dot(depthSlopeUV, offsetUV)),
                                             VSM_MAX_SLOPE_BIAS_NDC);
                 sh += Pool.SampleCmpLevelZero(cmp, s, ndc.z - (depthBias + slopeBias));
             }
@@ -208,9 +218,10 @@ float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, fl
 // Constant depth bias per level: `depthBias` is NDC, and a level's NDC range is 6x its extent, so
 // a constant NDC value is a constant bias in TEXELS (ndc * 6 * 2048) whose WORLD size doubles per
 // level -- which is what detaches thin far shadows when the base value is raised. `depthBiasDecay`
-// shrinks it per level (0.5 = a constant WORLD-size bias instead), and `depthBiasFloorNdc` is the
-// lower bound that keeps the far levels above the D16 pool's quantization (6*2048/65536 = 0.19
-// texel = the hard floor; the CPU authors it in texels). decay 1 + floor 0 = the legacy constant.
+// shrinks it per level (0.5 = a constant WORLD-size bias instead) and `depthBiasFloorNdc` is a
+// per-level lower bound (authored in texels on the CPU). With the D32 pool (2026-08-21) the
+// quantization floor is ~2^-24 of the range -- effectively zero -- so the constant CAN sit at 0
+// with the receiver-plane bias below doing all the work, which is UE's configuration.
 float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
                        float depthBiasDecay, float depthBiasFloorNdc,
                        float tanHalfFovX, float4x4 uvNormalMatrix,

@@ -6,8 +6,8 @@ struct CascadeShadowConfig
 {
     float maxDistance = 300.0f;
     std::array<float, 4> sliceDistances = { 10.0f, 35.0f, 100.0f, 300.0f };
-    float normalBiasInTexels = 2.0f;
-    float depthBiasInTexels = 2.0f;
+    float normalBiasInTexels = 1.0f;
+    float depthBiasInTexels = 1.5f;
     // S2: padding on the fitted sphere radius, absorbing the texel-snap shift. In CASCADE TEXELS,
     // not world units — the snap (std::floor in UpdateCascades) moves the centre by at most ONE
     // texel per axis, so a texel is the only unit in which one constant is right for every cascade.

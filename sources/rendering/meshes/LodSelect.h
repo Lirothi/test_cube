@@ -29,16 +29,18 @@ inline int g_shadowLodBias = 1;
 
 // Additional shadow-LOD bias applied ONLY to the caster groups of a chunked mesh (mesh.json
 // "chunkGrid" — terrain split into spatial submesh chunks). Terrain is the receiver the camera
-// rasterizes at LOD0, so a caster LOD above 0 makes the simplified surface shadow the detailed one
-// and the mismatch shows up as banding across the dunes. -1 cancels the global default +1 for
-// terrain only, which puts the finest clipmap ring back on caster == receiver geometry.
-//
-// This is affordable exactly BECAUSE of chunking: at the old whole-island granularity, LOD0 near the
-// camera meant the entire island's LOD0 in every page it touched. Chunked, the 12 m ring covers one
-// to four chunks. 0 disables the feature without disturbing anything else (it is the A/B control,
-// and it is a no-op by construction while no chunked mesh exists). Same rebuild rule as
+// rasterizes at LOD0, so ANY caster LOD above 0 makes the simplified surface shadow the detailed
+// one. DEFAULT -3 = PIN TERRAIN CASTERS TO LOD0 AT EVERY LEVEL (with radius 0 below), and it is
+// not a taste call: at a grazing sun the mismatch multiplies by 1/sin(elevation) along the light —
+// at the 2.8-degree low sun a ~10-30 cm LOD3 height deviation became 2-6 METRES of depth error,
+// which rendered as huge phantom shadow blobs on empty beach (2026-08-21, verified against a
+// Legacy-CSM ground truth: LOD0-everywhere sits at the noise floor from it, no depth bias short of
+// metres could mask it). Measured cost of LOD0-everywhere over the old "-1 within 12 m":
+// Pass_VsmPageRender 0.716 -> 0.816 ms — chunking is what makes it this cheap (a page draws only
+// its overlapping chunks). The per-view LOD curve still applies to everything non-chunked (palms).
+// 0 disables (the A/B control; no-op while no chunked mesh exists). Same rebuild rule as
 // g_shadowLodBias above: Scene polls BuiltChunkLodBias() and re-Rebuilds on a change.
-inline int g_chunkShadowLodBias = -1;
+inline int g_chunkShadowLodBias = -3;
 
 // How far from the camera `g_chunkShadowLodBias` is allowed to act, in METRES. Directional shadow
 // views are distance-ordered (CSM cascade index / VSM clipmap level), so this is a cutoff on that
@@ -50,10 +52,13 @@ inline int g_chunkShadowLodBias = -1;
 // horizon for no visible gain. Local lights never take the bias at all: "distance from the camera"
 // is not a property their views have.
 //
-// <= 0 means "no cutoff" (the pre-radius behaviour). The mapping to views is
+// <= 0 means "no cutoff" — WHICH IS THE DEFAULT NOW: the phantom-blob finding above showed the
+// far levels are exactly where the terrain LOD mismatch does the most damage at a low sun (the
+// grazing multiplier grows with distance-level coarseness), so the bias must reach every level.
+// The radius stays as the cost-recovery knob if a scene ever needs it. The mapping to views is
 // vsm::ClipmapLevelsWithinRadius, and the RESULTING LEVEL COUNT is what the caster rebuild is keyed
 // on — nudging the radius inside one level's bucket costs nothing.
-inline float g_chunkShadowLodRadius = 12.0f;
+inline float g_chunkShadowLodRadius = 0.0f;
 
 // Per-view BASE shadow LOD from a view's tier: the tier index itself (near = fine, far = coarse).
 // `tier` is the CSM cascade index or the VSM clipmap level (0 = finest/near); locals pass a small

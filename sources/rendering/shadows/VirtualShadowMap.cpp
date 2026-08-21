@@ -25,8 +25,12 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_DEFAULT;
 
-    // --- Physical page pool: one D16 depth atlas (R16_TYPELESS -> D16 DSV + R16_UNORM SRV),
-    // mirroring the existing shadow atlases. PERSISTENT; the pool IS the cache. ---
+    // --- Physical page pool: one D32 depth atlas (R32_TYPELESS -> D32_FLOAT DSV + R32_FLOAT SRV).
+    // 32-bit ON PURPOSE (was D16, 2026-08-21): float depth makes quantization negligible
+    // (2^-24 of the range vs D16's 1.5e-5), which is what lets the directional constant depth
+    // bias sit at ~0 with the receiver-plane bias doing the per-tap work — UE's configuration
+    // (their pool is R32 too, via atomics). Cost: 32 -> 64 MB. The Legacy CSM/spot/point atlases
+    // stay D16 — they keep their own tuned constant biases. PERSISTENT; the pool IS the cache. ---
     {
         D3D12_RESOURCE_DESC rd{};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -34,13 +38,13 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         rd.Height = vsm::kPoolTexels;
         rd.DepthOrArraySize = 1;
         rd.MipLevels = 1;
-        rd.Format = DXGI_FORMAT_R16_TYPELESS;
+        rd.Format = DXGI_FORMAT_R32_TYPELESS;
         rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
         D3D12_CLEAR_VALUE cv{};
-        cv.Format = DXGI_FORMAT_D16_UNORM;
+        cv.Format = DXGI_FORMAT_D32_FLOAT;
         cv.DepthStencil.Depth = 1.0f;
 
         if (FAILED(render::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, rd,
@@ -113,7 +117,7 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         }
         poolDsv_ = dsvHeap_->GetCPUDescriptorHandleForHeapStart();
         D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-        dsv.Format = DXGI_FORMAT_D16_UNORM;
+        dsv.Format = DXGI_FORMAT_D32_FLOAT;
         dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
         dev->CreateDepthStencilView(pagePool_.Get(), &dsv, poolDsv_);
     }
@@ -138,7 +142,7 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         requestUav_ = { base.ptr + static_cast<SIZE_T>(3) * incr };
 
         D3D12_SHADER_RESOURCE_VIEW_DESC poolSd{};
-        poolSd.Format = DXGI_FORMAT_R16_UNORM;
+        poolSd.Format = DXGI_FORMAT_R32_FLOAT;
         poolSd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         poolSd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         poolSd.Texture2D.MipLevels = 1;
@@ -367,7 +371,7 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
         gd.inputLayoutKey = ""; // no IA input
         gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         gd.numRT = 0;
-        gd.dsvFormat = DXGI_FORMAT_D16_UNORM;
+        gd.dsvFormat = DXGI_FORMAT_D32_FLOAT; // the pool's format (see EnsureResources)
         gd.depth.DepthEnable = TRUE;
         gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
         gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
@@ -948,7 +952,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     if (!shadowGpu->IndirectDrawReady()) { return; } // needs this frame's Rung 0 cull output
     if (!pageDrawArgs_ || !pageProj_ || !renderHeap_ || !pageVisibleList_) { return; }
 
-    Material* indirectMat = shadowGpu->IndirectShadowMaterial();
+    // The LOOP fallback draws into the pool, whose DSV is D32 — it needs the pool-format twin of
+    // the Legacy PSO (one PSO cannot serve two depth formats).
+    Material* indirectMat = shadowGpu->IndirectShadowPoolMaterial();
     ID3D12CommandSignature* sig = renderer->GetDrawIndexedCommandSignature();
     if (!indirectMat || !indirectMat->GetPipelineState() || !sig) { return; }
 

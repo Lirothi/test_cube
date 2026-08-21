@@ -366,6 +366,12 @@ Material* ShadowGpuData::IndirectShadowMaterial() const
     return MaskedShadowsActive() ? indirectShadowMaskedMat_.get() : indirectShadowMat_.get();
 }
 
+// Same masked-selection rule, pool-format (D32) twins — the VSM per-page loop draws into the pool.
+Material* ShadowGpuData::IndirectShadowPoolMaterial() const
+{
+    return MaskedShadowsActive() ? indirectShadowPoolMaskedMat_.get() : indirectShadowPoolMat_.get();
+}
+
 // Mirrors the rule above for the VSM single-draw permutations. MaskedShadowsActive() keys off the
 // LOOP path's masked PSO on purpose: it answers "does this caster set contain masked groups", and
 // both permutation pairs are built from the same source, so they succeed or fail together in
@@ -1309,13 +1315,38 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
             indirectShadowMaskedMat_.reset();
         }
 
+        // Pool-format twins of the two PSOs above, for the VSM per-page LOOP fallback: same shader,
+        // same state, but the POOL's D32_FLOAT depth format (the Legacy atlases stay D16, and one
+        // PSO cannot serve two DSV formats). Optional like the masked variant — a failure only
+        // costs the loop fallback, which the single-draw path already covers.
+        gd.dsvFormat = DXGI_FORMAT_D32_FLOAT;
+        gd.defines.clear();
+        gd.inputLayoutKey = "PosOnly_InstCasterId";
+        gd.raster.CullMode = D3D12_CULL_MODE_BACK;
+        indirectShadowPoolMat_ = mm->GetOrCreateGraphics(renderer, gd);
+        if (!indirectShadowPoolMat_ || !indirectShadowPoolMat_->GetPipelineState())
+        {
+            OutputDebugStringA("[ShadowGpuData] pool-format indirect shadow PSO FAILED (per-page loop fallback off).\n");
+            indirectShadowPoolMat_.reset();
+        }
+        gd.defines.emplace_back("SHADOW_MASKED", "1");
+        gd.inputLayoutKey = "PosUV_InstCasterId";
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        indirectShadowPoolMaskedMat_ = mm->GetOrCreateGraphics(renderer, gd);
+        if (!indirectShadowPoolMaskedMat_ || !indirectShadowPoolMaskedMat_->GetPipelineState())
+        {
+            OutputDebugStringA("[ShadowGpuData] pool-format masked indirect shadow PSO FAILED (per-page loop fallback off).\n");
+            indirectShadowPoolMaskedMat_.reset();
+        }
+
         // Single-draw page render: the VSM_PAGE permutations, used only by the VSM per-page pass.
-        // Identical pipeline state to the two above — the whole difference lives in the shader (page
-        // index unpacked from the caster id, projection + wind read from an SRV instead of the b1
-        // root CBV, page borders emitted as SV_ClipDistance instead of a per-page scissor), so the
-        // input layouts are unchanged: the same uint arrives in CASTERID, only reinterpreted.
-        // Optional — on failure IndirectShadowPageMaterial() returns null and RecordPageRender stays
-        // on the per-page loop, so shadows remain correct either way.
+        // Identical pipeline state to the pool pair above (D32 — they also draw into the pool) — the
+        // whole difference lives in the shader (page index unpacked from the caster id, projection +
+        // wind read from an SRV instead of the b1 root CBV, page borders emitted as SV_ClipDistance
+        // instead of a per-page scissor), so the input layouts are unchanged: the same uint arrives
+        // in CASTERID, only reinterpreted. Optional — on failure IndirectShadowPageMaterial()
+        // returns null and RecordPageRender stays on the per-page loop, so shadows remain correct
+        // either way.
         gd.defines.clear();
         gd.defines.emplace_back("VSM_PAGE", "1");
         gd.inputLayoutKey = "PosOnly_InstCasterId";

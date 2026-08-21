@@ -191,6 +191,12 @@ public:
     // for VirtualShadowMap::RecordPageRender to stay on the loop. Never used by the Legacy path.
     Material* IndirectShadowPageMaterial() const;
 
+    // Same shader as IndirectShadowMaterial but with the VSM POOL's DSV format (D32_FLOAT — the
+    // pool is 32-bit so the receiver-plane bias can run with a ~zero constant; the Legacy atlases
+    // stay D16). Used ONLY by the VSM per-page LOOP fallback, which draws into the pool with the
+    // non-VSM_PAGE shader — one PSO cannot serve two depth formats.
+    Material* IndirectShadowPoolMaterial() const;
+
     // Barrier plan step 5: what RecordCull transitions, registered by the owner rather than
     // exposed buffer by buffer. Same shape as VirtualShadowMap::PrepareRequestPass — the
     // context is forward-declared, RenderGraph.h is included only in the .cpp.
@@ -339,6 +345,9 @@ private:
     // per-page loop. Used ONLY by VirtualShadowMap::RecordPageRender, never by the Legacy path.
     std::shared_ptr<Material> indirectShadowPageMat_;
     std::shared_ptr<Material> indirectShadowPageMaskedMat_;
+    // Pool-format (D32) twins of the plain/masked pair, for the VSM per-page LOOP fallback only.
+    std::shared_ptr<Material> indirectShadowPoolMat_;
+    std::shared_ptr<Material> indirectShadowPoolMaskedMat_;
     std::shared_ptr<Material> giScatterMat_;     // shadow_gi_scatter_cs.hlsl (Step 4)
     bool shaderResourcesTried_ = false;          // one-shot creation attempt (avoid re-log on failure)
 

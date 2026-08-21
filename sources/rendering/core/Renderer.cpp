@@ -1407,13 +1407,13 @@ void Renderer::EnsureVsmDummySrvs() {
         dev->CreateShaderResourceView(nullptr, &d, vsmDummyBufferSrv_);
     }
 
-    // Slot 1: null Texture2D (R16_UNORM) — matches VsmPool (t8/t10).
+    // Slot 1: null Texture2D (R32_FLOAT) — matches VsmPool (t8/t10), D32 since 2026-08-21.
     vsmDummyTexSrv_ = base;
     vsmDummyTexSrv_.ptr += inc;
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC d{};
         d.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        d.Format = DXGI_FORMAT_R16_UNORM;
+        d.Format = DXGI_FORMAT_R32_FLOAT;
         d.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         d.Texture2D.MipLevels = 1;
         dev->CreateShaderResourceView(nullptr, &d, vsmDummyTexSrv_);

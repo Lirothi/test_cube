@@ -74,7 +74,7 @@ namespace vsm
     }
     inline constexpr std::uint32_t kPagesPerView = LevelPageOffset(kNumMipLevels);   // 341 = 256+64+16+4+1
 
-    inline constexpr std::uint32_t kPoolTexels = 4096;                               // physical pool edge (~32 MB @ D16)
+    inline constexpr std::uint32_t kPoolTexels = 4096;                               // physical pool edge (~64 MB @ D32)
     inline constexpr std::uint32_t kPoolPagesPerAxis = kPoolTexels / kPageSize;      // 32
     inline constexpr std::uint32_t kPoolPageCount = kPoolPagesPerAxis * kPoolPagesPerAxis; // 1024
 
@@ -169,21 +169,24 @@ namespace vsm
     // Step 24f: directional-clipmap NDC depth bias (against shadow acne). Tunable at the visual gate.
     // A level's NDC range is 6x its extent, so a constant NDC value is a constant bias in TEXELS
     // (ndc * 6 * 2048 -- 0.0001 = 1.23 texels) whose WORLD size doubles per level.
-    inline float         g_clipmapDepthBias = 0.0009f;
+    // DEFAULT 0 (2026-08-21): the pool is D32_FLOAT now, so there is no quantization floor to
+    // cover -- the per-tap receiver-plane bias plus the normal offset carry everything, which is
+    // UE's configuration (they run no constant either). Verified at the 2.8-degree-sun banding
+    // camera and the palm-contact camera; raise only if a new scene shows residual acne.
+    inline float         g_clipmapDepthBias = 0.0001f;
     // Per-level shaping of the constant bias: bias(L) = max(g_clipmapDepthBias * decay^L, floor).
-    // decay 1 = the legacy constant-in-texels behaviour (world size doubles per level -- raising the
-    // base then detaches thin far shadows); 0.5 = a constant WORLD-size bias (the near value
-    // everywhere). The floor is authored in TEXELS of the landed level and keeps far levels above
-    // the D16 pool's quantization: 6*2048/65536 = 0.19 texel is the hard minimum, so meaningful
-    // values are ~0.25-0.6. floor 0 + decay 1 = exactly the pre-knob behaviour.
-    inline float         g_clipmapDepthBiasDecay = 0.75f;
-    inline float         g_clipmapDepthBiasFloorTexels = 0.5f;
+    // decay 1 = constant-in-texels (world size doubles per level -- raising the base then detaches
+    // thin far shadows); 0.5 = a constant WORLD-size bias (the near value everywhere). The floor is
+    // authored in TEXELS of the landed level. Both are inert at the 0-bias default; they shape the
+    // constant if one is ever brought back.
+    inline float         g_clipmapDepthBiasDecay = 1.0f;
+    inline float         g_clipmapDepthBiasFloorTexels = 0.0f;
     // Step 24f / P16.16: directional-clipmap normal offset. UNITS ARE UNREAL'S, so the number here
     // is directly comparable to `r.Shadow.Virtual.NormalBias` (their default 0.5): the shader
     // divides by 1000 and multiplies by distance-to-camera * tan(hFov/2), i.e. it is referred to the
     // world size of a SCREEN PIXEL, not to the shadow texel. The old form was "texels * dist/1024",
     // which at its shipped 2.0 worked out 3.9x this and ignored the field of view entirely.
-    inline float         g_clipmapNormalBias = 1.3f;
+    inline float         g_clipmapNormalBias = 1.0f;
     // Local-light (spot + point) VSM shadow bias, in units of one shadow texel at the receiver
     // (auto-sized per-pixel from the light's cone width, distance and mip level in the shaders).
     // Lateral = surface-normal offset (~1 texel keeps Peter-panning to a texel); depth push =
@@ -401,7 +404,7 @@ public:
     const std::vector<std::uint32_t>& PhysOwnerSnapshot() const { return physOwnerSnapshot_; }
 
 private:
-    GpuResource pagePool_;   // R16_TYPELESS depth atlas (kPoolTexels²)
+    GpuResource pagePool_;   // R32_TYPELESS depth atlas (kPoolTexels²) — D32, see EnsureResources
     GpuResource pageTable_;  // StructuredBuffer<uint>[kPageTableEntries]
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap_;    // pool DSV
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvUavHeap_; // pool SRV + page-table SRV/UAV

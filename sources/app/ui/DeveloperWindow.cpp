@@ -1950,8 +1950,8 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::SliderFloat("Depth bias floor (texels)", &vsm::g_clipmapDepthBiasFloorTexels, 0.0f, 1.5f, "%.2f");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Lower bound of the decayed bias, in texels of the level actually sampled.\n"
-                                      "The D16 pool quantizes at 0.19 texel -- keep this at 0.25+ whenever decay < 1,\n"
-                                      "or far levels drop below quantization and acne returns there.");
+                                      "The D32 pool has effectively no quantization floor, so 0 is legal -- the\n"
+                                      "receiver-plane bias carries the slope; raise this only if residual acne shows.");
                 ImGui::SliderFloat("Clipmap normal bias (UE units)", &vsm::g_clipmapNormalBias, 0.0f, 4.0f, "%.3f");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Receiver offset along the normal, UE's r.Shadow.Virtual.NormalBias units\n"

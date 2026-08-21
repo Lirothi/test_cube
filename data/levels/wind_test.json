@@ -18,9 +18,9 @@
       0.6279069781303406
     ],
     "direction": [
-      -0.5046558976173401,
-      -0.4740854799747467,
-      -0.7215021848678589
+      -0.5046603679656982,
+      -0.47365298867225647,
+      -0.7217830419540405
     ],
     "groundAlbedo": [
       0.25,
@@ -11245,12 +11245,12 @@
       "name": "staticMesh #27 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
         -72.91971588134766,
-        1.456444263458252,
-        41.186767578125
+        1.3706445693969727,
+        41.18659973144531
       ],
       "rotationDeg": [
         180.0,
-        -70.49183654785156,
+        -70.4918212890625,
         180.0
       ],
       "scale": [
@@ -11289,8 +11289,8 @@
       "name": "staticMesh #26 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
         -73.10807037353516,
-        1.2971816062927246,
-        42.09032440185547
+        1.1746504306793213,
+        42.0904541015625
       ],
       "rotationDeg": [
         0.0,
@@ -11311,8 +11311,8 @@
       "name": "staticMesh #27 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
         -67.95539093017578,
-        2.086771011352539,
-        41.940818786621094
+        2.0249814987182617,
+        41.940635681152344
       ],
       "rotationDeg": [
         0.0,
@@ -11574,19 +11574,19 @@
       "mesh": "models/curly_palm.mesh.json",
       "name": "staticMesh #27 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
-        -58.51321029663086,
-        2.0676679611206055,
-        55.54845428466797
+        -58.51345443725586,
+        1.9971550703048706,
+        55.54851531982422
       ],
       "rotationDeg": [
         180.0,
-        -70.49183654785156,
+        -70.4918212890625,
         180.0
       ],
       "scale": [
+        1.0000001192092896,
         1.0,
-        1.0,
-        1.0
+        1.0000001192092896
       ],
       "type": "staticMesh"
     },
@@ -12213,18 +12213,18 @@
       "name": "staticMesh #27 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
         -45.84305953979492,
-        2.1382479667663574,
-        67.2389144897461
+        1.996293544769287,
+        67.23912811279297
       ],
       "rotationDeg": [
         180.0,
-        -55.51164627075195,
+        -55.51163864135742,
         180.0
       ],
       "scale": [
-        0.9999999403953552,
         1.0,
-        0.9999999403953552
+        1.0,
+        1.0
       ],
       "type": "staticMesh"
     },
@@ -12256,8 +12256,8 @@
       "mesh": "models/coconut_palm.mesh.json",
       "name": "staticMesh #26 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
-        -46.25855255126953,
-        1.941606044769287,
+        -46.258277893066406,
+        1.7582920789718628,
         68.06305694580078
       ],
       "rotationDeg": [
@@ -13648,7 +13648,7 @@
     }
   ],
   "ocean": {
-    "enabled": true,
+    "enabled": false,
     "preset": "data/ocean/default.json",
     "render": {
       "absorptionColors": [
@@ -13683,7 +13683,7 @@
       "causticsBias": 0.0,
       "causticsDepthFade": 4.0,
       "causticsDispersion": 0.0,
-      "causticsEnabled": true,
+      "causticsEnabled": false,
       "causticsIntensity": 2.0,
       "causticsLayerBlend": 1.0,
       "causticsScale": 10.0,
@@ -13779,7 +13779,7 @@
       "shoreRunupStrength": 3.0,
       "shoreSwashAmplitude": 0.800000011920929,
       "shoreVerticalFadeDepth": 5.0,
-      "shoreWetnessDarkening": 0.3499999940395355,
+      "shoreWetnessDarkening": 0.0,
       "shoreWetnessDepositDepth": 1.0,
       "shoreWetnessDryTime": 4.0,
       "shoreWetnessEdgeOffset": 0.30000001192092896,
