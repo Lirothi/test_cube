@@ -115,7 +115,8 @@ cbuffer PerFrame : register(b0)
     // decay 1 + floor 0 = the legacy constant-in-texels bias. Floor arrives already converted to NDC.
     float clipmapDepthBiasDecay;
     float clipmapDepthBiasFloorNdc;
-    float2 _padClipBias;
+    float clipmapBlendWidth; // outer fraction of a fine level blended into its parent; 0 = off
+    float _padClipBias;
     float4x4 clipmapViewProj[8];
     // P16.16: inverse transpose of world -> shadow UVZ, for the receiver-plane depth bias. One
     // matrix covers every level (the extent cancels out of the gradient); UE build theirs the same
@@ -340,7 +341,7 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade)
         // invProj._11 is tan(hFov/2) for this projection, which is the term UE's normal offset
         // needs; no extra constant for something the matrix already carries.
         return VsmClipmapShadow(P, N, camPosWS, clipmapNormalBias, vsmDepthBias,
-                                clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc,
+                                clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,
                                 invProj._11, clipmapUvNormal,
                                 clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
     }

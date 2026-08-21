@@ -183,10 +183,10 @@ private:
 
     void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM resource switch
     // GPU-idle rebuild of the shadow caster data + consolidated mega VB/IB (the body shared by the
-    // editor caster-set refresh and the shadow-LOD-bias change). Waits for the GPU, so call sparingly.
+    // editor caster-set refresh and shadow-LOD curve changes). Waits for the GPU, so call sparingly.
     void RebuildShadowCasters(Renderer& renderer);
-    // Poll render::g_shadowLodBias vs the LOD the caster geometry was built with; rebuild on a change.
-    void ReconcileShadowLodBias(Renderer* renderer);
+    // Poll the live shadow-LOD bias/stride against the caster tables; rebuild on a change.
+    void ReconcileShadowLodCurve(Renderer* renderer);
     void UpdateCascades(const Camera& camera, Renderer* renderer);
     void UpdateClipmap(const Camera& camera); // Step 24d: camera-centered directional clipmap views (VSM)
 

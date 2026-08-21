@@ -48,7 +48,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "ocean/OceanRenderable.h"  // --set=ocean.contactFoam
 #include "ocean/OceanSimulation.h"
 #include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
-#include "rendering/meshes/LodSelect.h" // --sweep=vsm.shadowLodBias (docs/bug_shadow_lod_bias_perf.md)
+#include "rendering/meshes/LodSelect.h" // --sweep=vsm.shadowLod* (docs/bug_shadow_lod_bias_perf.md)
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
@@ -247,11 +247,18 @@ namespace
         if (setting == "vsm.clipmapDepthBiasFloor") { vsm::g_clipmapDepthBiasFloorTexels = std::max(0.0f, value); return true; }
         if (setting == "vsm.clipmapNormalBias") { vsm::g_clipmapNormalBias = value; return true; }
         if (setting == "vsm.clipmapBaseExtent") { vsm::g_clipmapBaseExtent = std::max(0.1f, value); return true; }
+        if (setting == "vsm.clipmapBlend") { vsm::g_clipmapBlendEnabled = value != 0.0f; return true; }
+        if (setting == "vsm.clipmapBlendWidth") { vsm::g_clipmapBlendWidth = std::clamp(value, 0.0f, 0.5f); return true; }
         // The dev-window "Shadow LOD bias" slider, headless. A change triggers the same GPU-idle
         // caster rebuild the slider does (Scene::ReconcileShadowLodBias polls it) — which is the
         // point: the round-trip perf leak is only reproducible in ONE process
         // (docs/bug_shadow_lod_bias_perf.md §6).
         if (setting == "vsm.shadowLodBias") { render::g_shadowLodBias = (int)value; return true; }
+        if (setting == "vsm.shadowLodTierStride")
+        {
+            render::g_shadowLodTierStride = std::clamp((int)value, 1, 8);
+            return true;
+        }
         // Chunked-terrain LOD selection curve (per-chunk camera tiers; the caster matches the drawn
         // LOD by construction, so these trade triangles for pop-in distance only — no rebuild).
         if (setting == "lod.chunkDist0")  { render::g_chunkLodDist0 = std::max(1.0f, value); return true; }

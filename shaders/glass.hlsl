@@ -61,7 +61,7 @@ cbuffer GlassView : register(b1)
     float4 spotShadowInfo;        // xy = spot shadow size, zw = inverse size
     float4 lightCounts;           // x = point lights, y = spot lights, z = traced reflections, w = sky reflection enabled
     float4x4 lightViewProj[4];
-    float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist, z = depth-bias floor (NDC)
+    float4 vsmParams;             // x = useVsm, y = refDist, z = depth-bias floor, w = clip blend width
     float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (UE units), z = depthBias (NDC), w = depth-bias decay/level
     float4x4 clipmapViewProj[8];  // Step 24f: directional clipmap level viewProjs
     float4x4 clipmapUvNormal;     // P16.16: receiver-plane transform, must match lighting_cs
@@ -214,7 +214,7 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
         // P16.16: same arithmetic and the same numbers lighting_cs gets, or glass shades against
         // a differently-biased shadow.
         return VsmClipmapShadow(Pws, Nws, camPosSky.xyz, clipmapParams.y, clipmapParams.z,
-                                clipmapParams.w, vsmParams.z,
+                                clipmapParams.w, vsmParams.z, vsmParams.w,
                                 invProj._11, clipmapUvNormal,
                                 clipmapViewProj, VsmPageTable, VsmPool, ShadowSampler);
     }

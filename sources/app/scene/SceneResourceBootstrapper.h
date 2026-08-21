@@ -49,6 +49,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle clipmapNormalBias;
     Material::CBFieldHandle clipmapDepthBiasDecay;    // per-level depth-bias shaping (see VsmClipmapShadow)
     Material::CBFieldHandle clipmapDepthBiasFloorNdc;
+    Material::CBFieldHandle clipmapBlendWidth;
     Material::CBFieldHandle clipmapViewProj;
     Material::CBFieldHandle clipmapUvNormal; // P16.16
     Material::CBFieldHandle causticsTint;      // rgb = tint, w = master enable
@@ -495,6 +496,7 @@ struct LightingPassConstants
     float clipmapNormalBias = 0.0f;               // receiver normal offset, UE units (P16.16)
     float clipmapDepthBiasDecay = 1.0f;           // bias(L) = max(vsmDepthBias * decay^L, floorNdc)
     float clipmapDepthBiasFloorNdc = 0.0f;        // already converted texels -> NDC on the CPU
+    float clipmapBlendWidth = 0.0f;               // outer level fraction blended into parent; 0 = off
     std::array<mat4, 8> clipmapViewProj{};
     mat4 clipmapUvNormal{}; // P16.16: receiver-plane transform (inverse transpose world->shadow UV)        // camera-centered ortho viewProj per clipmap level
     // Underwater caustics (see shaders/caustics.hlsli). causticsTint.w == 0 disables the block,

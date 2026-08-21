@@ -35,7 +35,7 @@ cbuffer PageRequestCB : register(b0)
     float4x4 invProj;
     float4   camPosWS;
     float4   screen;    // x=w, y=h, z=1/w, w=1/h
-    float4   lodParams; // x=refDist, y=maxLevel, z=downscale, w=unused
+    float4   lodParams; // x=refDist, y=maxLevel, z=downscale, w=directional clipmap blend width
     uint     numViews;
     uint3    _pad;
     ViewProjEntry views[kMaxViews];
@@ -101,8 +101,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
 
     // --- Directional clipmap (Step 24d): views [kNumLocalViews, count) are camera-centered ortho
-    // levels ordered finest -> coarsest by extent. The LEVELS are the LOD (not a mip chain), so mark
-    // exactly ONE page: the finest level whose extent contains this receiver, at level 0 (16x16). ---
+    // levels ordered finest -> coarsest by extent. The LEVELS are the LOD (not a mip chain). Mark
+    // the finest containing level and, inside its transition band, the next coarser level too. A
+    // zero blend width preserves the old exact-one-page request path. ---
+    const float clipBlendWidth = clamp(lodParams.w, 0.0f, 0.5f);
     for (uint cv = kNumLocalViews; cv < count; ++cv)
     {
         if (views[cv].params.x < 0.5f) { continue; }
@@ -118,6 +120,31 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         uint cpage = cv * kPagesPerView + kLevelOffset[0] + cpy * axis0 + cpx;
         uint cprev;
         InterlockedOr(Request[cpage >> 5u], 1u << (cpage & 31u), cprev);
+
+        // The sampler blends by the fine level's square-edge coordinate. Request the parent page
+        // only in that same band, so width 0 has zero residency/raster cost and a narrow band adds
+        // only the coarse pages that can actually receive a second PCF sample.
+        if (clipBlendWidth > 0.0f && cv + 1u < count && views[cv + 1u].params.x >= 0.5f)
+        {
+            const float edge = max(abs(cndc.x), abs(cndc.y));
+            if (edge > 1.0f - clipBlendWidth)
+            {
+                float4 pclip = mul(float4(P, 1.0f), views[cv + 1u].viewProj);
+                if (pclip.w > 0.0f)
+                {
+                    float3 pndc = pclip.xyz / pclip.w;
+                    if (all(abs(pndc.xy) <= 1.0f) && pndc.z >= 0.0f && pndc.z <= 1.0f)
+                    {
+                        float2 puv = float2(0.5f * pndc.x + 0.5f, 0.5f - 0.5f * pndc.y);
+                        uint ppx = min((uint)(puv.x * (float)kL0Axis), kL0Axis - 1u);
+                        uint ppy = min((uint)(puv.y * (float)kL0Axis), kL0Axis - 1u);
+                        uint ppage = (cv + 1u) * kPagesPerView + kLevelOffset[0] + ppy * kL0Axis + ppx;
+                        uint pprev;
+                        InterlockedOr(Request[ppage >> 5u], 1u << (ppage & 31u), pprev);
+                    }
+                }
+            }
+        }
         break; // finest containing clipmap level only
     }
 }

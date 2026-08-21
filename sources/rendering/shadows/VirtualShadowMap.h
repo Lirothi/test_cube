@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -151,6 +152,16 @@ namespace vsm
     // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
     inline float         g_clipmapBaseExtent = 12.0f;
+    // Fraction of a directional clipmap level's half-extent used to cross-fade its shadow factor
+    // into the next coarser level. 0 is a strict kill switch: no parent page requests and no second
+    // PCF sample. 0.12 blends the outer 12% of each nested square and hides caster-LOD silhouette
+    // changes without coarsening the finest level near the camera.
+    inline bool          g_clipmapBlendEnabled = true;
+    inline float         g_clipmapBlendWidth = 0.12f;
+    inline float ClipmapBlendWidth()
+    {
+        return g_clipmapBlendEnabled ? std::clamp(g_clipmapBlendWidth, 0.0f, 0.5f) : 0.0f;
+    }
 
     // Step 24f: directional-clipmap NDC depth bias (against shadow acne). Tunable at the visual gate.
     // A level's NDC range is 6x its extent, so a constant NDC value is a constant bias in TEXELS
@@ -238,7 +249,7 @@ namespace vsm
         DirectX::XMFLOAT4X4 invProj;
         DirectX::XMFLOAT4   camPosWS;   // xyz
         DirectX::XMFLOAT4   screen;     // x=w, y=h, z=1/w, w=1/h
-        DirectX::XMFLOAT4   lodParams;  // x=refDist, y=maxLevel, z=downscale, w=unused
+        DirectX::XMFLOAT4   lodParams;  // x=refDist, y=maxLevel, z=downscale, w=clipmap blend width
         std::uint32_t       numViews;
         std::uint32_t       _pad[3];
         ViewProjEntry       views[kMaxVirtualViews];

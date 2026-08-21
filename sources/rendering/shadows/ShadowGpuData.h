@@ -126,9 +126,10 @@ public:
     std::uint32_t ViewFrustumCount() const { return viewFrustumCount_; }
     std::uint32_t MeshGroupCount() const { return numMeshGroups_; }
 
-    // The shadow LOD bias the current caster geometry was built with (see render::g_shadowLodBias).
-    // Scene compares this to the live global each frame and triggers a GPU-idle rebuild on a change.
+    // The shadow LOD curve the current caster tables were built with. Scene compares both values to
+    // the live globals each frame and triggers a GPU-idle rebuild on a change.
     int BuiltShadowLod() const { return builtShadowLod_; }
+    int BuiltShadowLodTierStride() const { return builtShadowLodTierStride_; }
     // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = none), refreshed EVERY FRAME in
     // UpdateForFrame from each chunked object's ChunkCameraLods() — the camera tier per chunk. No
     // rebuild involved: the mega buffer holds every LOD and gGroupLodMega carries every (group,lod)
@@ -402,8 +403,8 @@ private:
     std::vector<std::uint32_t> baseVertex_;   // per group: its MESH's vertex offset into megaVB_ (B3: submesh groups share it)
     std::vector<std::uint32_t> startIndex_;   // per group: its MESH's index offset into megaIB_ (the group's submesh range rides in the args)
     // Per-view shadow LOD (cull-view layout: [cascades | spots | point-faces | clipmap]); = the view's
-    // tier base LOD + g_shadowLodBias, UNclamped per mesh (the mega table clamps per mesh). Consumed by
-    // the VSM setup CB + the Legacy per-view index-buffer bind.
+    // tier base LOD (tier / g_shadowLodTierStride) + g_shadowLodBias, UNclamped per mesh (the mega
+    // table clamps per mesh). Consumed by the VSM setup CB + the Legacy per-view index-buffer bind.
     std::vector<std::uint32_t> viewLod_;
     // Per (group, lod) mega geometry, flat 4 uints/entry: {megaAbsStart, lodRelStart, indexCount,
     // baseVertex}, pre-clamped to the mesh's available LODs. numMeshGroups_ * kMaxShadowLods entries.
@@ -424,6 +425,7 @@ private:
     DXGI_FORMAT megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     bool megaWanted_ = false, megaBuilt_ = false, megaReady_ = false;
     int builtShadowLod_ = 0; // render::g_shadowLodBias snapshot the caster geometry was built with
+    int builtShadowLodTierStride_ = 1; // normalized render::g_shadowLodTierStride snapshot
     std::uint32_t numStaticGroups_ = 0; // count of static submesh groups (the rest are GI, always LOD0)
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)

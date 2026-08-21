@@ -186,7 +186,7 @@ namespace
         float4 spotShadowInfo;
         float4 lightCounts;
         mat4   lightViewProj[4];
-        float4 vsmParams;             // Rung 2 / Step 21: x = useVsm, y = vsmRefDist
+        float4 vsmParams;             // x = useVsm, y = refDist, z = depth-bias floor, w = clip blend width
         float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
         mat4   clipmapViewProj[8];    // Step 24f: directional clipmap level viewProjs
         mat4   clipmapUvNormal;       // P16.16: receiver-plane transform, mirrors lighting_cs
@@ -351,7 +351,7 @@ namespace
         // depth range is 6x its extent, virtual res 2048, both scale with the extent).
         vc.vsmParams = float4(vsmOn ? 1.0f : 0.0f, vsm::g_refDist,
                               vsm::g_clipmapDepthBiasFloorTexels / (6.0f * (float)vsm::kVirtualRes),
-                              0.0f);
+                              vsm::ClipmapBlendWidth());
         // Step 24f: directional clipmap for glass (matches lighting_cs). Same tunables + level viewProjs.
         // .y carries the SAME scaled value the lighting CB gets (UE divide by 1000 on the CPU);
         // .w = the per-level depth-bias decay (see VsmClipmapShadow).
@@ -2164,7 +2164,8 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     cb.screen = DirectX::XMFLOAT4(static_cast<float>(rw), static_cast<float>(rh),
                                   rw ? 1.0f / rw : 0.0f, rh ? 1.0f / rh : 0.0f);
     cb.lodParams = DirectX::XMFLOAT4(vsm::g_refDist, static_cast<float>(vsm::kMaxMipLevel),
-                                     static_cast<float>(vsm::g_requestDownscale), 0.0f);
+                                     static_cast<float>(vsm::g_requestDownscale),
+                                     vsm::ClipmapBlendWidth());
 
     std::uint32_t slot = 0;
     auto addView = [&](const SceneView& v, bool active)
@@ -3311,6 +3312,7 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         constants.clipmapDepthBiasDecay = vsm::g_clipmapDepthBiasDecay;
         constants.clipmapDepthBiasFloorNdc =
             vsm::g_clipmapDepthBiasFloorTexels / (6.0f * (float)vsm::kVirtualRes);
+        constants.clipmapBlendWidth = vsm::ClipmapBlendWidth();
         constants.clipmapBaseExtent = vsm::g_clipmapBaseExtent;
         // P16.16: UE divide their CVar by 1000 before it reaches the shader
         // (GetNormalBiasForShader, VirtualShadowMapArray.cpp:561). Same here, so the authored

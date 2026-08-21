@@ -21,11 +21,12 @@
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/RtSmoke.h"
 #include "rendering/shadows/VirtualShadowMap.h" // temporary VSM perf-harness tunables (--vsm-*)
-#include "rendering/meshes/LodSelect.h"          // render::g_shadowLodBias (--vsm-lodbias)
+#include "rendering/meshes/LodSelect.h"          // shadow caster LOD curve (--vsm-lodbias/--vsm-lodstride)
 #include "rendering/renderables/InstanceTypes.h"  // S0: g_shadowMode / g_csmDebugMode (--shadow-mode, --csm-tint)
 #include "text/TextManager.h"
 #include "vfx/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -525,6 +526,12 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-normalbias=")) {
             vsm::g_clipmapNormalBias = (float)std::atof(flag + std::strlen("--vsm-normalbias="));
         }
+        if (const char* flag = std::strstr(lpCmdLine, "--vsm-clipblend=")) {
+            const float width = std::clamp(
+                (float)std::atof(flag + std::strlen("--vsm-clipblend=")), 0.0f, 0.5f);
+            vsm::g_clipmapBlendEnabled = width > 0.0f;
+            if (width > 0.0f) { vsm::g_clipmapBlendWidth = width; }
+        }
         if (std::strstr(lpCmdLine, "--vsm-resident")) {
             vsm::g_residentIterOnly = true;
         }
@@ -540,6 +547,10 @@ int WINAPI WinMain(
         }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-lodbias=")) {
             render::g_shadowLodBias = std::atoi(flag + std::strlen("--vsm-lodbias="));
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--vsm-lodstride=")) {
+            render::g_shadowLodTierStride = std::clamp(
+                std::atoi(flag + std::strlen("--vsm-lodstride=")), 1, 8);
         }
         // S0: "--shadow-mode=legacy|vsm" picks the directional shadow method at boot. The build
         // defaults to VSM, so without this every Legacy CSM measurement would need a Ctrl+V by

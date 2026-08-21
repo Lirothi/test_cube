@@ -781,15 +781,16 @@ void Scene::RebuildShadowCasters(Renderer& renderer)
     shadowGpu_.ForceContentRefreshNextFrame();
 }
 
-void Scene::ReconcileShadowLodBias(Renderer* renderer)
+void Scene::ReconcileShadowLodCurve(Renderer* renderer)
 {
-    // The shadow LOD bias picks a coarser (or finer) caster LOD to rasterize into the shadow maps.
-    // The geometry lives in the consolidated mega buffer built at load, so a change needs a GPU-idle
-    // rebuild. Cheap to poll (one int compare); only rebuilds on an actual change (slider drag).
+    // The shadow LOD bias and tier stride pick the caster LOD rasterized into each shadow view.
+    // The geometry lives in the consolidated mega buffer built at load, so a curve change needs a
+    // GPU-idle rebuild. Cheap to poll; only rebuilds on an actual slider/sweep change.
     // (Chunked-terrain LOD needs NO rebuild anywhere: its per-chunk camera tiers travel through a
     // per-frame CB override — see ShadowGpuData::RefreshChunkGroupLods.)
     if (!renderer) { return; }
-    if (shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias) { return; }
+    if (shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias &&
+        shadowGpu_.BuiltShadowLodTierStride() == render::ShadowLodTierStride()) { return; }
     RebuildShadowCasters(*renderer);
 }
 
@@ -1233,7 +1234,7 @@ void Scene::Render(Renderer* renderer) {
     CPU_SCOPE(ProfilerScopes::kSceneRender);
 
     ReconcileShadowMode(renderer); // Step 24b: apply a pending Legacy<->VSM switch (GPU-idle free/alloc)
-    ReconcileShadowLodBias(renderer); // apply a pending shadow-LOD-bias change (GPU-idle caster rebuild)
+    ReconcileShadowLodCurve(renderer); // apply pending shadow-LOD curve changes (GPU-idle caster rebuild)
 
     if (renderer->ConsumeMaterialHotReloadFlag())
     {

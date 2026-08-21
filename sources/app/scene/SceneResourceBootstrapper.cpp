@@ -51,6 +51,7 @@ void SceneLightingCBHandles::Populate(Material* material)
     clipmapNormalBias = material->ComputeCB0FieldHandle("clipmapNormalBias");
     clipmapDepthBiasDecay = material->ComputeCB0FieldHandle("clipmapDepthBiasDecay");
     clipmapDepthBiasFloorNdc = material->ComputeCB0FieldHandle("clipmapDepthBiasFloorNdc");
+    clipmapBlendWidth = material->ComputeCB0FieldHandle("clipmapBlendWidth");
     clipmapViewProj = material->ComputeCB0FieldHandle("clipmapViewProj");
     clipmapUvNormal = material->ComputeCB0FieldHandle("clipmapUvNormal");
     causticsTint = material->ComputeCB0FieldHandle("causticsTint");
@@ -1140,6 +1141,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.clipmapNormalBias, data.clipmapNormalBias, dest);
     matLighting_->UpdateCBField(handles.clipmapDepthBiasDecay, data.clipmapDepthBiasDecay, dest);
     matLighting_->UpdateCBField(handles.clipmapDepthBiasFloorNdc, data.clipmapDepthBiasFloorNdc, dest);
+    matLighting_->UpdateCBField(handles.clipmapBlendWidth, data.clipmapBlendWidth, dest);
     matLighting_->UpdateCBField(handles.causticsTint, data.causticsTint, dest);
     matLighting_->UpdateCBField(handles.causticsParams0, data.causticsParams0, dest);
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);

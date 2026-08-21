@@ -28,6 +28,17 @@ inline constexpr unsigned int kMaxShadowLods = 4u;
 // BuiltShadowLod() vs this each frame).
 inline int g_shadowLodBias = 1;
 
+// Number of consecutive shadow-view tiers that share one caster mesh LOD. A tier is a CSM
+// cascade or a VSM clipmap level. 1 preserves the original aggressive 1:1 mapping; 2 produces
+// 0,0,1,1,2,2,... and avoids changing caster geometry at every clipmap boundary. The additive
+// g_shadowLodBias is applied after this curve. Changing either knob rebuilds the caster tables.
+inline int g_shadowLodTierStride = 2;
+
+inline int ShadowLodTierStride()
+{
+    return std::clamp(g_shadowLodTierStride, 1, 8);
+}
+
 // --- Chunked-terrain LOD (mesh.json "chunkGrid": spatial submesh tiles of one surface) ----------
 //
 // A chunked mesh is LODed PER CHUNK, from the camera, and the SAME per-chunk tier drives BOTH the
@@ -58,14 +69,14 @@ inline unsigned int SelectChunkLodTier(float distMeters, unsigned int currentTie
     return t;
 }
 
-// Per-view BASE shadow LOD from a view's tier: the tier index itself (near = fine, far = coarse).
+// Per-view BASE shadow LOD from a view's tier. g_shadowLodTierStride controls how many consecutive
+// tiers share one caster LOD (1 = the original 1:1 curve, 2 = 0,0,1,1,...).
 // `tier` is the CSM cascade index or the VSM clipmap level (0 = finest/near); locals pass a small
 // fixed tier. The final LOD adds g_shadowLodBias (default 1, which is where the whole curve's
 // coarsening lives) and is clamped per mesh to its available LODs by the caster tables.
 inline int ShadowTierBaseLod(unsigned int tier)
 {
-    // tier -> LOD 1:1, capped: level 0->0, 1->1, 2->2, 3+ -> kMaxShadowLods-1.
-    const int lod = static_cast<int>(tier);
+    const int lod = static_cast<int>(tier) / ShadowLodTierStride();
     const int cap = static_cast<int>(kMaxShadowLods) - 1;
     return lod < cap ? lod : cap;
 }

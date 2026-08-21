@@ -223,7 +223,7 @@ float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, fl
 // quantization floor is ~2^-24 of the range -- effectively zero -- so the constant CAN sit at 0
 // with the receiver-plane bias below doing all the work, which is UE's configuration.
 float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
-                       float depthBiasDecay, float depthBiasFloorNdc,
+                       float depthBiasDecay, float depthBiasFloorNdc, float clipBlendWidth,
                        float tanHalfFovX, float4x4 uvNormalMatrix,
                        float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
                        StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
@@ -258,8 +258,41 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, floa
         // Bias of the level we LANDED on (matches how the receiver-plane bias scales: a residency
         // fallback to a coarser level uses that level's own values).
         const float levelDepthBias = max(depthBias * pow(depthBiasDecay, (float)i), depthBiasFloorNdc);
-        return VsmSampleNDC(VSM_NUM_LOCAL_VIEWS + i, ndc, uv, 0.0f, 1.0f, levelDepthBias, depthSlopeUV,
-                            PageTable, Pool, cmp);
+        const float fineShadow = VsmSampleNDC(VSM_NUM_LOCAL_VIEWS + i, ndc, uv, 0.0f, 1.0f,
+                                              levelDepthBias, depthSlopeUV, PageTable, Pool, cmp);
+
+        // Blend visibility, not depth: each level may contain a deliberately different caster mesh
+        // LOD, so there is no meaningful way to interpolate the stored depths themselves. Width 0
+        // exits before any parent projection/table lookup/sample and keeps the old texture-sampling cost.
+        const float blendWidth = clamp(clipBlendWidth, 0.0f, 0.5f);
+        if (blendWidth <= 0.0f || i + 1u >= VSM_NUM_CLIPMAP_LEVELS) { return fineShadow; }
+        const float edge = max(abs(ndc.x), abs(ndc.y));
+        const float blendStart = 1.0f - blendWidth;
+        if (edge <= blendStart) { return fineShadow; }
+
+        // Project independently: every clip level has its own texel-snapped centre and depth range,
+        // so parent NDC is close to ndc/2 but intentionally not assumed to be exactly that.
+        float4 parentClip = mul(float4(Poff, 1.0f), clipVP[i + 1u]);
+        if (parentClip.w <= 0.0f) { return fineShadow; }
+        float3 parentNdc = parentClip.xyz / parentClip.w;
+        if (any(abs(parentNdc.xy) > 1.0f) || parentNdc.z < 0.0f || parentNdc.z > 1.0f)
+        {
+            return fineShadow;
+        }
+        const float2 parentUv = float2(0.5f * parentNdc.x + 0.5f, 0.5f - 0.5f * parentNdc.y);
+        const uint parentPx = min((uint)(parentUv.x * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
+        const uint parentPy = min((uint)(parentUv.y * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
+        const uint parentEntry = PageTable[VsmPageId(VSM_NUM_LOCAL_VIEWS + i + 1u, 0u,
+                                                     parentPx, parentPy)];
+        if ((parentEntry & VSM_SAMPLE_RESIDENT_BIT) == 0u) { return fineShadow; }
+
+        const float parentDepthBias = max(depthBias * pow(depthBiasDecay, (float)(i + 1u)),
+                                          depthBiasFloorNdc);
+        const float parentShadow = VsmSampleNDC(VSM_NUM_LOCAL_VIEWS + i + 1u, parentNdc, parentUv,
+                                                0.0f, 1.0f, parentDepthBias, depthSlopeUV,
+                                                PageTable, Pool, cmp);
+        const float blend = smoothstep(blendStart, 1.0f, edge);
+        return lerp(fineShadow, parentShadow, blend);
     }
     return 1.0f; // outside all clipmap levels
 }

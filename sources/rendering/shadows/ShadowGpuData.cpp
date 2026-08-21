@@ -532,9 +532,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
 {
     if (!renderer) { return; }
 
-    // Snapshot the shadow LOD BIAS this build baked into the per-view LOD tables (viewLod_/perViewGroup_/
-    // groupLodMega_). Scene compares BuiltShadowLod() to the live global and re-Rebuilds on a change.
+    // Snapshot the shadow LOD curve this build baked into the per-view LOD tables
+    // (viewLod_/perViewGroup_/groupLodMega_). Scene compares both knobs to the live globals and
+    // re-Rebuilds on a change.
     builtShadowLod_ = render::g_shadowLodBias;
+    builtShadowLodTierStride_ = render::ShadowLodTierStride();
 
     size_t casterCount = 0;
     for (const auto& obj : objects)
@@ -776,7 +778,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         groupBase[g] = groupBase[g - 1] + groupCount[g - 1];
     }
 
-    // --- Per-view shadow LOD (aggressive tier curve + g_shadowLodBias) --------------------------------
+    // --- Per-view shadow LOD (tunable tier stride + g_shadowLodBias) -----------------------------------
     // Cull-view layout: [cascades | spots | point-faces | clipmap]. A view's tier picks a base LOD
     // (near = fine, far = coarse); the global bias shifts it. Locals use the near tier. The final LOD
     // is clamped per mesh by the tables below (a mesh may have fewer LODs than the view asks for).

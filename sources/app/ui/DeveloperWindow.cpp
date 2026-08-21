@@ -1938,6 +1938,14 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "+ = coarser everywhere (cheaper), - = sharper. Shadows don't resolve fine\n"
                                       "geometry, so coarser is usually invisible. Changing it rebuilds casters (a hitch).");
 
+                ImGui::SliderInt("Shadow tiers per LOD", &render::g_shadowLodTierStride, 1, 8);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How many consecutive shadow-view tiers share one caster mesh LOD.\n"
+                                      "1 = original aggressive 0,1,2,3 curve; 2 = 0,0,1,1,2,2 and avoids\n"
+                                      "changing caster geometry at every VSM clip boundary. Shadow LOD bias\n"
+                                      "is added afterwards. Applies to CSM cascades too; changing it rebuilds\n"
+                                      "casters (a hitch).");
+
                 // (Chunked-terrain LOD selection moved to the "LOD" tab — it is a camera-LOD
                 // control, not a shadow one; the caster follows the drawn LOD by construction.)
 
@@ -1965,6 +1973,19 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Step 24f directional clipmap: finest level's world extent (level i = base*2^i).\n"
                                       "Smaller = sharper near shadows but less far coverage; larger = the reverse.");
+                ImGui::Checkbox("Clipmap level blend", &vsm::g_clipmapBlendEnabled);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Hard performance A/B switch. OFF sends width 0 to both the page requester\n"
+                                      "and samplers: no new parent requests and no second PCF sample. Parent pages\n"
+                                      "requested before the switch age out after the configured LRU frame count.");
+                ImGui::BeginDisabled(!vsm::g_clipmapBlendEnabled);
+                ImGui::SliderFloat("Clipmap blend width", &vsm::g_clipmapBlendWidth, 0.0f, 0.30f, "%.3f");
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Outer fraction of each fine clip level blended into the next coarser level.\n"
+                                      "Hides caster-LOD silhouette changes at clip boundaries. 0 is a strict off\n"
+                                      "switch: no parent page requests and no second 3x3 PCF sample. Non-zero\n"
+                                      "costs the extra sample only inside this transition band.");
                 ImGui::SliderFloat("Clipmap depth bias", &vsm::g_clipmapDepthBias, 0.0f, 0.01f, "%.4f");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Directional clipmap NDC depth bias at LEVEL 0 (0.0001 = 1.23 shadow texels).\n"
