@@ -1104,7 +1104,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
         std::uint32_t forceAll, megaActive, flatLod, numLods; // per-view LOD: mega on/off + fallback LOD
-        std::uint32_t scatterActive, pageIdShift, compactArgs, _p5; // 1 = the scatter pass produced clipmap lists
+        std::uint32_t scatterActive, pageIdShift, compactArgs; // 1 = the scatter pass produced clipmap lists
+        // Distance cutoff for groupLodBias as a clipmap-level count (was _p5 — layout unchanged).
+        std::uint32_t chunkBiasLevels;
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -1141,6 +1143,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.scatterActive = scatterActive ? 1u : 0u;
             cb.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u; // must match the scatter CB's value
             cb.compactArgs = compactArgs ? 1u : 0u;
+            // The bias table below is only allowed to act on clipmap views this close to the
+            // camera. Taken from the caster build, NOT recomputed from the live globals: the
+            // per-view LODs in perViewGroup_ were baked with that same count, and the two
+            // paths disagreeing would draw one LOD's triangles from another LOD's range.
+            cb.chunkBiasLevels = shadowGpu->BuiltChunkBiasLevels();
             // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
             // use one LOD = the near directional (clipmap level 0) view's LOD.
             cb.flatLod = shadowGpu->ViewLodAt(render::kMaxShadowViews - vsm::kNumClipmapLevels);

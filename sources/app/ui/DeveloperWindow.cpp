@@ -1887,6 +1887,32 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "+ = coarser everywhere (cheaper), - = sharper. Shadows don't resolve fine\n"
                                       "geometry, so coarser is usually invisible. Changing it rebuilds casters (a hitch).");
 
+                // Chunked terrain (mesh.json "chunkGrid") gets its own offset on top, limited to a
+                // radius. Same rebuild-on-change contract as the slider above. Shown for both modes
+                // for the same reason it is: the per-view LOD it edits seeds Legacy cascades too.
+                ImGui::SliderInt("Terrain LOD bias", &render::g_chunkShadowLodBias, -3, 3);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("EXTRA shadow-LOD offset for chunked terrain only (a mesh baked with\n"
+                                      "\"chunkGrid\"), on top of the bias above. -1 cancels the default +1 so the\n"
+                                      "terrain casts from the SAME geometry the camera rasterizes, which is what\n"
+                                      "removes the banding a simplified caster leaves across the dunes.\n"
+                                      "0 = terrain follows the plain curve (the A/B control).\n"
+                                      "Affordable only because chunking made a shadow page draw just the tiles it\n"
+                                      "overlaps -- unchunked, this would mean the WHOLE terrain at LOD0 per page.");
+
+                ImGui::SliderFloat("Terrain LOD radius", &render::g_chunkShadowLodRadius, 0.0f, 400.0f, "%.0f m");
+                if (ImGui::IsItemHovered())
+                {
+                    const std::uint32_t lv = vsm::ClipmapLevelsWithinRadius(render::g_chunkShadowLodRadius);
+                    ImGui::SetTooltip("How far from the camera the terrain bias acts. Shadow views are\n"
+                                      "distance-ordered, so this is a cutoff on that order: right now it covers\n"
+                                      "%u of %u clipmap levels (level i reaches %.0f*2^i m).\n"
+                                      "0 = no cutoff (acts at every distance, including where the per-view LOD has\n"
+                                      "already saturated -- pure cost, no visible gain).\n"
+                                      "Local lights never take the bias: they have no distance from the camera.",
+                                      lv, vsm::kNumClipmapLevels, 0.5f * vsm::g_clipmapBaseExtent);
+                }
+
                 ImGui::BeginDisabled(!render::VsmActive());
 
                 ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist, 1.0f, 40.0f, "%.1f");

@@ -130,6 +130,10 @@ public:
     // Same contract for the chunked-terrain bias: it is baked into perViewGroup_/groupLodBias_ at
     // Rebuild, so changing the global has to trigger one (Scene polls both).
     int BuiltChunkLodBias() const { return builtChunkLodBias_; }
+    // The chunk bias's DISTANCE cutoff as a clipmap-level count (vsm::ClipmapLevelsWithinRadius of
+    // render::g_chunkShadowLodRadius). Keyed on the count, not the radius, so dragging the slider
+    // inside one level's bucket does not rebuild. Also fed to the VSM setup CB.
+    std::uint32_t BuiltChunkBiasLevels() const { return builtChunkBiasLevels_; }
     // Groups [0, StaticGroupCount()) are static submesh groups (biased to BuiltShadowLod()); groups
     // at/after it are GI whole-buffer groups (always LOD0). The per-group fallback binds accordingly.
     std::uint32_t StaticGroupCount() const { return numStaticGroups_; }
@@ -402,6 +406,7 @@ private:
     bool megaWanted_ = false, megaBuilt_ = false, megaReady_ = false;
     int builtShadowLod_ = 0; // render::g_shadowLodBias snapshot the caster geometry was built with
     int builtChunkLodBias_ = 0; // render::g_chunkShadowLodBias snapshot (chunked terrain groups)
+    std::uint32_t builtChunkBiasLevels_ = 0; // its distance cutoff, as a clipmap-level count
     std::uint32_t numStaticGroups_ = 0; // count of static submesh groups (the rest are GI, always LOD0)
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)

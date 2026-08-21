@@ -502,6 +502,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // groupLodMega_). Scene compares BuiltShadowLod() to the live global and re-Rebuilds on a change.
     builtShadowLod_ = render::g_shadowLodBias;
     builtChunkLodBias_ = render::g_chunkShadowLodBias;
+    builtChunkBiasLevels_ = vsm::ClipmapLevelsWithinRadius(render::g_chunkShadowLodRadius);
 
     size_t casterCount = 0;
     for (const auto& obj : objects)
@@ -746,6 +747,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // is clamped per mesh by the tables below (a mesh may have fewer LODs than the view asks for).
     const int lodCap = static_cast<int>(render::kMaxShadowLods) - 1;
     viewLod_.assign(render::kMaxShadowViews, 0u);
+    // Per view: may the chunked-terrain bias act here? DIRECTIONAL views only (their tier IS a
+    // distance order, which is what a radius cutoff needs), and only within the radius. Filled in
+    // the same loop as the tier so the two can never disagree about what a view's distance is.
+    std::vector<std::uint8_t> viewTakesChunkBias(render::kMaxShadowViews, 0u);
     {
         constexpr std::uint32_t kCasc = vsm::kNumCascades;                       // [0, 4)
         constexpr std::uint32_t kLocalEnd = kCasc + LightManager::kMaxShadowedSpotLights
@@ -753,9 +758,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         for (std::uint32_t v = 0; v < render::kMaxShadowViews; ++v)
         {
             std::uint32_t tier;
-            if (v < kCasc)              { tier = v; }                  // CSM cascade index (near->far)
-            else if (v < kLocalEnd)     { tier = 0u; }                 // local light -> near tier
-            else                        { tier = v - kLocalEnd; }      // VSM clipmap level (near->far)
+            bool directional;
+            if (v < kCasc)              { tier = v; directional = true; }              // CSM cascade index (near->far)
+            else if (v < kLocalEnd)     { tier = 0u; directional = false; }            // local light -> near tier
+            else                        { tier = v - kLocalEnd; directional = true; }  // VSM clipmap level (near->far)
+            viewTakesChunkBias[v] = (directional && tier < builtChunkBiasLevels_) ? 1u : 0u;
             int lod = render::ShadowTierBaseLod(tier) + render::g_shadowLodBias;
             lod = lod < 0 ? 0 : (lod > lodCap ? lodCap : lod);
             viewLod_[v] = static_cast<std::uint32_t>(lod);
@@ -783,7 +790,8 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     const auto biasedLod = [&](std::uint32_t v, std::uint32_t g) -> std::uint32_t
     {
         const int base = static_cast<int>(v < viewLod_.size() ? viewLod_[v] : 0u);
-        const int b = base + (g < groupBias.size() ? groupBias[g] : 0);
+        const bool takes = v < viewTakesChunkBias.size() && viewTakesChunkBias[v] != 0u;
+        const int b = base + ((takes && g < groupBias.size()) ? groupBias[g] : 0);
         return static_cast<std::uint32_t>(b < 0 ? 0 : (b > lodCap ? lodCap : b));
     };
 

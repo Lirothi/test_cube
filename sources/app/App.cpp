@@ -250,6 +250,9 @@ namespace
         // the same in-process rebuild as the key above, so both sides of the comparison come out of
         // ONE binary and one level load.
         if (setting == "vsm.chunkLodBias") { render::g_chunkShadowLodBias = (int)value; return true; }
+        // How far the key above is allowed to act, in metres (<= 0 = everywhere). Both ride the same
+        // in-process caster rebuild, so a radius sweep also lives inside ONE binary and one load.
+        if (setting == "vsm.chunkLodRadius") { render::g_chunkShadowLodRadius = value; return true; }
         // Mirror of the VSM page-stats log toggle, so a headless run can capture the resident/request
         // counts (logs/vsm_pages.log) that the dev-window "VSM" tab shows live.
         if (setting == "vsm.logPageStats")  { vsm::g_logPageStats = value != 0.0f; return true; }

@@ -40,6 +40,21 @@ inline int g_shadowLodBias = 1;
 // g_shadowLodBias above: Scene polls BuiltChunkLodBias() and re-Rebuilds on a change.
 inline int g_chunkShadowLodBias = -1;
 
+// How far from the camera `g_chunkShadowLodBias` is allowed to act, in METRES. Directional shadow
+// views are distance-ordered (CSM cascade index / VSM clipmap level), so this is a cutoff on that
+// order: a view whose reach exceeds the radius keeps the plain per-view LOD.
+//
+// Without it the bias applies at EVERY distance, and the far end is where it is least worth paying:
+// the per-view LOD saturates at the coarsest level, so a -1 there does not cancel the +1 default —
+// it un-saturates a level the clamp had already collapsed, making the terrain finer out to the
+// horizon for no visible gain. Local lights never take the bias at all: "distance from the camera"
+// is not a property their views have.
+//
+// <= 0 means "no cutoff" (the pre-radius behaviour). The mapping to views is
+// vsm::ClipmapLevelsWithinRadius, and the RESULTING LEVEL COUNT is what the caster rebuild is keyed
+// on — nudging the radius inside one level's bucket costs nothing.
+inline float g_chunkShadowLodRadius = 12.0f;
+
 // Per-view BASE shadow LOD from a view's tier: the tier index itself (near = fine, far = coarse).
 // `tier` is the CSM cascade index or the VSM clipmap level (0 = finest/near); locals pass a small
 // fixed tier. The final LOD adds g_shadowLodBias (default 1, which is where the whole curve's

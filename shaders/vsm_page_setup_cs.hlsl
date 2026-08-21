@@ -44,7 +44,11 @@ cbuffer SetupCB : register(b0)
     // layout the per-page loop indexes directly. Only ever 1 when the single-draw path is active —
     // the loop computes its own argOffset from (page, group) and would read garbage otherwise.
     uint gCompactArgs;
-    uint _pad5;
+    // Distance cutoff for gGroupLodBias, as a COUNT of clipmap levels from the finest: a clipmap
+    // view takes the per-group bias only while its level is below this. 0 = the bias never acts
+    // here, VSM_NUM_CLIPMAP_LEVELS = everywhere. Local views never take it (see gGroupLodBias).
+    // Occupies what used to be _pad5, so the CB layout is unchanged.
+    uint gChunkBiasLevels;
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -55,8 +59,9 @@ cbuffer SetupCB : register(b0)
     // per (mesh-group, lod): x=mega absolute start, y=lod-relative start, z=index count, w=mega base vertex.
     uint4    gGroupLodMega[VSM_MAX_SETUP_GROUPS * KMAX_SHADOW_LODS];
     // per mesh-group: ADDITIVE shadow-LOD bias, packed 4/int4 (chunked terrain = -1, everything
-    // else 0). Appended AFTER gGroupLodMega so no array above it moves; the CPU mirror is
-    // SetupCB::groupLodBias in VirtualShadowMap.cpp and the two must be repacked together.
+    // else 0), applied only on clipmap views inside gChunkBiasLevels. Appended AFTER gGroupLodMega
+    // so no array above it moves; the CPU mirror is SetupCB::groupLodBias in VirtualShadowMap.cpp
+    // and the two must be repacked together.
     int4     gGroupLodBias[KGROUP_BIAS_VEC4];
 };
 
@@ -258,6 +263,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // -> absolute mega start; mega off -> lod-relative start into the mesh's own IB (baseVertex 0).
     uint viewLod = gMegaActive ? (gViewLod[rung0View >> 2u][rung0View & 3u]) : gFlatLod;
     if (viewLod >= gNumLods) { viewLod = gNumLods - 1u; }
+    // Uniform for the whole page: the chunked-terrain bias only acts on DIRECTIONAL views near
+    // enough to the camera. Local (spot/point) views have no such distance, so they never take it.
+    const bool takesChunkBias = (view >= VSM_NUM_LOCAL_VIEWS) &&
+                                ((view - VSM_NUM_LOCAL_VIEWS) < gChunkBiasLevels);
     for (uint g2 = 0u; g2 < gNumGroups; ++g2)
     {
         // Compacted args: an empty group would only ever be a zero-instance no-op, so don't append
@@ -268,11 +277,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         if (g2 < VSM_MAX_SETUP_GROUPS) // per-view LOD from the CB table (the normal path)
         {
             // Per-GROUP LOD: the view's LOD plus this group's bias (chunked terrain runs one level
-            // finer so the near clipmap ring casts from the same geometry the camera rasterizes).
-            // The bias is 0 for every non-chunked group, so this reduces to `viewLod` exactly.
+            // finer so the near clipmap rings cast from the same geometry the camera rasterizes).
+            // The bias is 0 for every non-chunked group and outside gChunkBiasLevels, so this
+            // reduces to `viewLod` exactly in both cases.
             // Indexed only inside this branch — gGroupLodBias is sized VSM_MAX_SETUP_GROUPS, and the
             // over-cap path below reads Rung0Args, which the CPU already baked the same bias into.
-            const int biased = (int)viewLod + gGroupLodBias[g2 >> 2u][g2 & 3u];
+            const int biased = (int)viewLod +
+                (takesChunkBias ? gGroupLodBias[g2 >> 2u][g2 & 3u] : 0);
             const uint groupLod = (uint)clamp(biased, 0, (int)gNumLods - 1);
             uint4 e = gGroupLodMega[g2 * gNumLods + groupLod]; // {megaStart, lodRel, count, baseVertex}
             a0.x = e.z;                                       // IndexCountPerInstance = LOD's index count

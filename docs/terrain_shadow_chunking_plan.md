@@ -527,6 +527,59 @@ from a camera that contains none of that shadow.**
 needs dunes at a low sun — the one thing the standard camera does not contain. Until it arrives, the
 banding claim is UNVERIFIED; the perf result above stands on its own.
 
+### S4b — the bias got a RADIUS (2026-08-21, on the user's report that it was never meant to be global)
+
+**What it did before:** `g_chunkShadowLodBias` was written into the per-group table for every chunked
+group and added on EVERY view. Two consequences, the second one unintended:
+
+* it acted at every distance, out to the 768 m clipmap level;
+* `viewLod_[v]` is clamped to `kMaxShadowLods-1` **before** the group bias is added, so on the levels
+  where the curve had already saturated (L3..L7 all sit at LOD3) a −1 did not "cancel the default
+  +1" — it *un-saturated* them, dropping terrain to LOD2 out to the horizon. That ordering was an
+  accident, not a decision.
+
+**Now:** `render::g_chunkShadowLodRadius` (metres, default **12**) gates it.
+`vsm::ClipmapLevelsWithinRadius` maps the radius onto the distance-ordered view list — clipmap level
+i spans `g_clipmapBaseExtent * 2^i` and is camera-centred, so it *reaches* half that (6 / 12 / 24 /
+48 / 96 / 192 / 384 / 768 m at E0 = 12). Default 12 m ⇒ levels L0 and L1 take the bias, L2+ keep the
+plain curve. **Local lights never take it** — "distance from the camera" is not a property of a spot
+light's view. `<= 0` restores the old act-everywhere behaviour and is the A/B control.
+
+Implementation notes worth keeping:
+
+* The gate is baked per VIEW next to the tier in the same loop (`viewTakesChunkBias`), so the two can
+  never disagree about what a view's distance is, and it flows through the one `biasedLod` helper
+  that already fed both `perViewGroup_` and the CB.
+* Shader side is one uniform: `gChunkBiasLevels` **took over `_pad5`**, so the CB layout is
+  byte-identical — no repack, no descriptor change.
+* The rebuild is keyed on the resulting LEVEL COUNT (`BuiltChunkBiasLevels`), not the raw radius, so
+  dragging the slider inside one level's bucket costs nothing.
+* Both knobs are now in the dev window (Shadows section, next to "Shadow LOD bias") and as
+  `--set/--sweep=vsm.chunkLodBias` / `vsm.chunkLodRadius`.
+
+**Perf: the cutoff is a CONTROL fix, not a speed-up — five samples each, interleaved:**
+
+| config | `Pass_VsmPageRender` | median | spread |
+|---|---|---|---|
+| bias 0 (off) | 0.664 / 0.664 | 0.664 | — |
+| radius 12 (new default, L0+L1) | 0.709 / 0.711 / 0.717 / 0.718 / 0.710 | **0.711** | 0.009 |
+| radius 0 (bias everywhere = old) | 0.737 / 0.717 / 0.723 / 0.718 / 0.720 | **0.720** | 0.020 |
+
+`Pass_Compose` 0.030 throughout. **The two medians differ by 0.009 ms and their spreads overlap
+(12-max 0.718 vs 0-min 0.717) — the saving is NOT resolvable here.** A first two-sample read of this
+same pair suggested 0.017 ms and that was noise; the five-sample rule from S0 caught it. Justify the
+cutoff by what it controls, not by this number: on wind_test the far levels are cheap because L2..L7
+hold 146 of 360 resident pages and the LOD3→LOD2 step is small. A scene with more terrain area or a
+deeper resident far set would pay more.
+
+**Capture caveat found here — screenshots taken FAR APART in wall clock are not comparable on
+wind_test.** `chunked_ref` (01:37) vs `radius_zero` (02:45) read |mean| 0.147 over 9 % of pixels
+despite being the SAME configuration. The amplified diff puts all of it on palm fronds and their
+shadow silhouettes; the terrain rows sit at 0.023–0.031, i.e. the floor. Wind sway phase drifts
+between runs even under `--wind-freeze`. The valid comparison is same-binary, minutes apart:
+radius 12 vs radius 0 = **0.028**, the floor — as expected, since this camera contains no terrain
+self-shadow for a far-level terrain LOD to show up in.
+
 ### S5 RESULT — closing gates, all green 2026-08-21
 
 * **The bug this whole line of work started from is still fixed.** HUD round trip in ONE process,

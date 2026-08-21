@@ -789,8 +789,12 @@ void Scene::ReconcileShadowLodBias(Renderer* renderer)
     // The chunked-terrain bias rides the same tables (perViewGroup_ + the per-group bias the VSM
     // setup CB mirrors), so it needs the same rebuild — one more int compare.
     if (!renderer) { return; }
+    // The chunk bias's radius is polled as the LEVEL COUNT it resolves to, so dragging the slider
+    // within one level's bucket (or between two radii that select the same levels) costs nothing.
     if (shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias &&
-        shadowGpu_.BuiltChunkLodBias() == render::g_chunkShadowLodBias) { return; }
+        shadowGpu_.BuiltChunkLodBias() == render::g_chunkShadowLodBias &&
+        shadowGpu_.BuiltChunkBiasLevels() ==
+            vsm::ClipmapLevelsWithinRadius(render::g_chunkShadowLodRadius)) { return; }
     RebuildShadowCasters(*renderer);
 }
 
