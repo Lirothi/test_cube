@@ -131,11 +131,9 @@ float4 ResolveUeHit(SSRHit ssr, bool compressForMultiRay)
     }
     else
     {
-        uint renderWidth, renderHeight;
-        LightTarget.GetDimensions(renderWidth, renderHeight);
-        int2 ip = int2(ssr.uv * float2(renderWidth, renderHeight) + 0.5f);
-        ip = clamp(ip, int2(0, 0), int2(int(renderWidth) - 1, int(renderHeight) - 1));
-        c = LightTarget.Load(int3(ip, 0)).rgb;
+        // BILINEAR + NaN guard, same rationale as the LogMarch resolve below (UE SampleScreenColor).
+        c = LightTarget.SampleLevel(gSmp, ssr.uv, 0.0f).rgb;
+        c = -min(-c, 0.0f);
     }
 
     if (compressForMultiRay)
@@ -167,8 +165,15 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float2 fullRes = float2(renderWidth, renderHeight);
     float2 ssrRes = float2(max(ssrWidth, 1u), max(ssrHeight, 1u));
     float2 pixelScale = fullRes / ssrRes;
+    // SNAPPED to the centre of the render texel that contains this SSR texel's centre. At a
+    // fractional target scale the unsnapped centre lands BETWEEN render texels: point-sampling
+    // depth there is a numerical coin flip between neighbours, bilinear normals a maximal blend
+    // of four surfaces — and the DLSS jitter re-tosses the coin every frame, which is exactly
+    // the no-temporal flicker this fixed. One snapped uv guarantees depth, normal and roughness
+    // describe the SAME surface.
     float2 pixel = (float2(dispatchThreadId.xy) + 0.5f) * pixelScale;
-    float2 uv = pixel / fullRes;
+    float2 snappedPixel = floor(pixel) + 0.5f;
+    float2 uv = snappedPixel / fullRes;
 
     // Origin (reflector) depth: glass front-face depth for the glass pass, opaque depth for the
     // opaque pass (where t3 == t2). Pixels with no reflector (cleared depth 0) are skipped.
@@ -177,7 +182,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     if (depth > 1e-6f)
     {
-        float3 N_ws = normalize(GB1.SampleLevel(gSmp, uv, 0).rgb * 2 - 1);
+        // POINT sample on purpose: packed unit normals must not be bilinearly mixed for ray
+        // generation — an edge blend yields a direction no actual surface has (and uv is snapped
+        // to a texel centre above, so point is exact rather than a boundary coin flip).
+        float3 N_ws = normalize(GB1.SampleLevel(gSmpPoint, uv, 0).rgb * 2 - 1);
         float3 Pv   = ReconstructPosVS(uv, depth);
         float3 Nv   = normalize(mul(N_ws, (float3x3)view));
 
@@ -267,9 +275,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             const SSRHit ssr = TraceSSR_LogMarch(Pv, Nv, seed);
             if (ssr.hit != 0)
             {
-                int2 ip = int2(ssr.uv * float2(renderWidth, renderHeight) + 0.5f);
-                ip = clamp(ip, int2(0, 0), int2(int(renderWidth) - 1, int(renderHeight) - 1));
-                const float3 c = LightTarget.Load(int3(ip, 0)).rgb;
+                // BILINEAR hit colour, as UE's SampleScreenColor does. A point Load flips a whole
+                // texel of frond-green against sky whenever jitter nudges the hit sub-texel — the
+                // measured tremble of reflected palm crowns at grazing views was exactly that.
+                // NaN/negative guard verbatim from UE.
+                float3 c = LightTarget.SampleLevel(gSmp, ssr.uv, 0.0f).rgb;
+                c = -min(-c, 0.0f);
                 result = float4(c * ssr.visibility, ssr.visibility);
             }
         }

@@ -60,9 +60,9 @@ static const uint SSR_TECHNIQUE_UE = 1u;
 #define SSR_LOGMARCH_REFINE_STEPS 12
 #endif
 
-static const float ssrMaxDistanceVS = 100.0f; // maxDistance (view units)
+static const float ssrMaxDistanceVS = 60.0f; // maxDistance (view units)
 static const int ssrRefineSteps = 16; // number of refinement iterations (LEGACY path only)
-static const int ssrOptimizedRefineSteps = SSR_LOGMARCH_REFINE_STEPS; // sub-pixel refinement budget
+static const int ssrOptimizedRefineSteps = SSR_LOGMARCH_REFINE_STEPS; //SSR_LOGMARCH_REFINE_STEPS; // sub-pixel refinement budget
 static const int ssrLogMarchSteps = SSR_LOGMARCH_COARSE_STEPS; // coarse steps for the hybrid tracer
 static const float ssrMinStrideVS = 0.05f; // minimum ray step in view space
 static const float ssrStrideGrowth = 1.02f; // multiplicative stride growth per step

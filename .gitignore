@@ -395,3 +395,6 @@ import_staging/
 
 # All engine diagnostic output (see sources/core/diagnostics/DiagPaths.h)
 /logs/
+
+# Backup
+bckp/

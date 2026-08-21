@@ -524,7 +524,7 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         // The tracer's two budgets, stated here so the P14 ablation is reproducible without
         // editing a shader. Compile-time on purpose: a constant-buffer bound cost ~4%.
         cd.defines.emplace_back("SSR_LOGMARCH_COARSE_STEPS", "128");
-        cd.defines.emplace_back("SSR_LOGMARCH_REFINE_STEPS", "12");
+        cd.defines.emplace_back("SSR_LOGMARCH_REFINE_STEPS", "8");
         matSSR_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
