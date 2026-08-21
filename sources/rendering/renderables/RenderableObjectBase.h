@@ -103,7 +103,13 @@ public:
     // draws objects walks its own half of the scene (opaque vs transparent) calling this.
     virtual void PrepareRender(RenderGraphPassContext& ctx) { (void)ctx; }
     // lod: per-pass LOD floor (Step 6 — e.g. the shadow cascade index); clamped to available LODs.
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0) = 0;
+    // `chunkCameraLods`: a CHUNKED mesh's submeshes draw at their per-chunk CAMERA tiers instead of
+    // `lod` — pass true ONLY from actual shadow views that want caster == receiver (the Legacy CSM
+    // cascades). Data bakes that happen to reuse this entry point (the ocean's shore-depth/SDF
+    // top-down renders) MUST leave it false: they need STABLE, camera-independent geometry, and
+    // feeding them camera tiers made the baked waterline change with every camera move — the
+    // "ocean blinks with wetness on" bug (2026-08-21).
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0, bool chunkCameraLods = false) = 0;
     virtual bool IsTransparent() const = 0;
     virtual bool IsSimpleRender() const = 0;
     // Editor: does the viewport ray-vs-bounds pick consider this object? False for helpers that

@@ -459,10 +459,16 @@ public:
         UpdateUniform(owner, sssColorHandle_, material, owner_.GetSssColor(), cbData);
         UpdateUniform(owner, diffuseColorHandle_, material, owner_.GetDiffuseColor(), cbData);
         UpdateUniform(owner, absorptionGradientParamsHandle_, material, owner_.GetAbsorptionGradientParams(), cbData);
+        // ALL 8 gradient slots, not just the used ones. The unused tail is masked out in the
+        // shader, but a mask multiply is not a branch: NaN bytes left in the unwritten slots
+        // poison the whole gradient (NaN * 0 = NaN) and blacked the water for a frame whenever
+        // the upload-ring layout shifted under this CB (docs/bug_ocean_blink_ring_poison.md).
         const uint32_t absorptionCount = owner_.GetAbsorptionColorCount();
-        for (uint32_t i = 0; i < absorptionCount; ++i)
+        for (uint32_t i = 0; i < 8u; ++i)
         {
-            UpdateUniform(owner, absorptionColorsHandle_, material, owner_.GetAbsorptionColor(i), cbData, i);
+            const uint32_t src = i < absorptionCount ? i : (absorptionCount > 0u ? absorptionCount - 1u : 0u);
+            const Math::float4 key = absorptionCount > 0u ? owner_.GetAbsorptionColor(src) : Math::float4(0, 0, 0, 0);
+            UpdateUniform(owner, absorptionColorsHandle_, material, key, cbData, i);
         }
         UpdateUniform(owner, worldToWindHandle_, material, owner_.GetWorldToWindMatrix(), cbData);
         UpdateUniform(owner, windParams0Handle_, material, owner_.GetWindParams0(), cbData);

@@ -29,7 +29,7 @@ public:
     void BuildLodBuckets();
 
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
-    void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod) override;
+    void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods) override;
 
     void Init(Renderer*, ID3D12GraphicsCommandList*, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>*) override {}
     void Tick(float) override {}

@@ -17,6 +17,7 @@
 std::string g_bootLevelPath;
 bool  g_camOverride = false;
 float g_camPos[3] = { 0.0f, 0.0f, 0.0f };
+float g_camFly[2] = { 0.0f, 0.0f }; // "--cam-fly=x,z": constant camera drift in m/s (world XZ)
 float g_camRot[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 // One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
 std::string g_shotPath;
@@ -960,6 +961,16 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
                 deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
 
+                // "--cam-fly=x,z": drift the camera at a constant world velocity (m/s). The ONLY
+                // headless way to exercise motion-dependent paths — window relocations (wetness,
+                // surf sim), clipmap snapping, DLSS history — a fixed --cam-pos never triggers them.
+                if (g_camFly[0] != 0.0f || g_camFly[1] != 0.0f)
+                {
+                    Camera& cam = scene.CameraRef();
+                    const float3 p = cam.GetPosition();
+                    cam.SetPosition(float3(p.x + g_camFly[0] * deltaTime, p.y,
+                                           p.z + g_camFly[1] * deltaTime));
+                }
                 renderer.Tick(deltaTime);
                 appController_.Tick(input, renderer, scene, levelManager, deltaTime);
                 scene.Tick(deltaTime);

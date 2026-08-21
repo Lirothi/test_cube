@@ -13648,7 +13648,7 @@
     }
   ],
   "ocean": {
-    "enabled": false,
+    "enabled": true,
     "preset": "data/ocean/default.json",
     "render": {
       "absorptionColors": [
@@ -13683,7 +13683,7 @@
       "causticsBias": 0.0,
       "causticsDepthFade": 4.0,
       "causticsDispersion": 0.0,
-      "causticsEnabled": false,
+      "causticsEnabled": true,
       "causticsIntensity": 2.0,
       "causticsLayerBlend": 1.0,
       "causticsScale": 10.0,
@@ -13779,7 +13779,7 @@
       "shoreRunupStrength": 3.0,
       "shoreSwashAmplitude": 0.800000011920929,
       "shoreVerticalFadeDepth": 5.0,
-      "shoreWetnessDarkening": 0.0,
+      "shoreWetnessDarkening": 0.3499999940395355,
       "shoreWetnessDepositDepth": 1.0,
       "shoreWetnessDryTime": 4.0,
       "shoreWetnessEdgeOffset": 0.30000001192092896,

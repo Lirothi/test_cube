@@ -153,6 +153,11 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 
     auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign);
     uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
+    // Zero the allocation before the binder fills it. Any CB field the binder misses otherwise
+    // reads whatever the upload ring held at this offset — quasi-stable garbage that turns into
+    // NaN the frame the ring layout shifts (docs/bug_ocean_blink_ring_poison.md). Zeros make an
+    // unwritten field a deterministic 0.0 instead of a lottery.
+    if (cbData) { std::memset(cbData, 0, cbSizeBytes); }
     auto h = renderer->GetRenderContextPool()->Acquire();
     auto& ctx = h.ref();
     ctx.cbv[0] = alloc.gpu;
@@ -273,7 +278,8 @@ void RenderableObject::OnMaterialHotReload(Renderer* /*renderer*/)
 }
 
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-    const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod)
+    const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod,
+    bool chunkCameraLods)
 {
     if (!renderer || !cl || !shadowMaterial_)
     {
@@ -288,6 +294,8 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     UINT cbSize = shadowMaterial_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment);
     auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, render::kConstantBufferAlignment);
     uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
+    // Same unwritten-field guard as Render() (docs/bug_ocean_blink_ring_poison.md).
+    if (cbData) { std::memset(cbData, 0, cbSize); }
     auto h = renderer->GetRenderContextPool()->Acquire();
     auto& ctx = h.ref();
 
@@ -309,9 +317,10 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
     if (subs && subs->size() > 1)
     {
         // Chunked-terrain: cast each chunk at ITS camera tier (the same chunkLods_ the gbuffer
-        // just drew), not the per-view LOD — caster must equal receiver per chunk. Non-chunked
-        // multi-submesh meshes keep the per-view LOD.
-        const bool chunked = mesh->IsChunkedSubmeshes() && !chunkLods_.empty();
+        // just drew), not the per-view LOD — caster must equal receiver per chunk. ONLY when the
+        // caller is an actual shadow view (`chunkCameraLods`): the shore-depth/SDF bakes reuse
+        // this entry point and need stable camera-INdependent LOD0 (see RenderableObjectBase.h).
+        const bool chunked = chunkCameraLods && mesh->IsChunkedSubmeshes() && !chunkLods_.empty();
         for (UINT s = 0; s < static_cast<UINT>(subs->size()); ++s)
         {
             const UINT drawLod = (chunked && s < chunkLods_.size()) ? chunkLods_[s] : lod;

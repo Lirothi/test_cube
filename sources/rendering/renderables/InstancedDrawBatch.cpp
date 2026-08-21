@@ -140,7 +140,7 @@ void InstancedDrawBatch::PrepareSlotBindings(Renderer* renderer)
     }
 }
 
-void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& /*lightView*/, const mat4& /*lightProj*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod)
+void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& /*lightView*/, const mat4& /*lightProj*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool /*chunkCameraLods*/)
 {
     if (!renderer || !cl || !shadowMat_ || !mesh_ || members_.empty()) { return; }
     // Shadows use the per-cascade LOD floor for the whole run (all casters in a cascade are at

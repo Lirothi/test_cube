@@ -367,6 +367,8 @@ int WINAPI WinMain(
             const bool hasPos = readFloats("--cam-pos=", g_camPos, 3);
             const bool hasRot = readFloats("--cam-rot=", g_camRot, 4);
             g_camOverride = hasPos || hasRot;
+            // "--cam-fly=x,z": constant camera drift (m/s) — the headless stand-in for flying.
+            readFloats("--cam-fly=", g_camFly, 2);
         }
         // W8: "--wind-freeze[=<seconds>]" pins the wind clock, so a --shot is reproducible to the
         // pixel without touching a single authored wind parameter. Two runs at the SAME value must
@@ -592,6 +594,13 @@ int WINAPI WinMain(
             const std::string chunk = getArg("--reimport-chunk=");
             if (!chunk.empty()) {
                 opt.chunkGrid = static_cast<unsigned int>(std::atoi(chunk.c_str()));
+            }
+            // "--reimport-scale=0.0107" mirrors the import dialog's unit-fix bakeScale (see
+            // MeshLoadOptions::bakeScale) — without it a centimetre-authored asset (the tent)
+            // bakes 100x too large. The GUI import was the only way to pass this before.
+            const std::string bakeScale = getArg("--reimport-scale=");
+            if (!bakeScale.empty()) {
+                opt.bakeScale = static_cast<float>(std::atof(bakeScale.c_str()));
             }
             MeshManager mm;
             return mm.BakeToBinary(src, out, opt) ? 0 : 1;

@@ -1,12 +1,12 @@
 {
-  "albedo": "textures/sandstone_cracks_1k/textures/sandstone_cracks_albedo.dds",
+  "albedo": "import_staging/sandstone_cracks_1k/textures/sandstone_cracks_albedo.dds",
   "metalRough": [
     1.0,
     1.0
   ],
-  "mr": "textures/sandstone_cracks_1k/textures/sandstone_cracks_mr.dds",
+  "mr": "import_staging/sandstone_cracks_1k/textures/sandstone_cracks_mr.dds",
   "multiplyMR": false,
-  "normal": "textures/sandstone_cracks_1k/textures/sandstone_cracks_normal.dds",
+  "normal": "import_staging/sandstone_cracks_1k/textures/sandstone_cracks_normal.dds",
   "normalIsRG": false,
   "normalStrength": 1.0,
   "shadingModel": "terrain",

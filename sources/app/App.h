@@ -24,6 +24,9 @@ extern std::string g_bootLevelPath;
 // into a headless repro of the same view (see AGENTS.md).
 extern bool  g_camOverride;
 extern float g_camPos[3];
+// "--cam-fly=x,z": constant camera drift in m/s (world XZ), the headless stand-in for flying —
+// exercises motion-gated paths (window relocation, clipmap snap, DLSS history).
+extern float g_camFly[2];
 extern float g_camRot[4]; // orientation quaternion (x,y,z,w)
 
 // "--shot=<path>" one-shot capture: after g_shotDelaySec of runtime, read back the presented

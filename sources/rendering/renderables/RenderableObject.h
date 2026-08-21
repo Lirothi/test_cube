@@ -62,7 +62,7 @@ public:
     void RenderSelectionStencil(Renderer* renderer, ID3D12GraphicsCommandList* cl, Material* material, const Camera& camera) override;
 #endif
     void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod) override;
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods) override;
     virtual void OnMaterialHotReload(Renderer* renderer);
 
     // Transform

@@ -2477,7 +2477,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
                 {
                     if (obj)
                     {
-                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod, /*chunkCameraLods=*/true);
                     }
                 }
 
@@ -2485,7 +2485,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
                 {
                     if (obj)
                     {
-                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod, /*chunkCameraLods=*/true);
                     }
                 }
             }
@@ -2523,7 +2523,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod, /*chunkCameraLods=*/true);
                 }
             }
 
@@ -2531,7 +2531,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod, /*chunkCameraLods=*/true);
                 }
             }
         }

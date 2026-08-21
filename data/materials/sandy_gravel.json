@@ -1,7 +1,7 @@
 {
-  "albedo": "textures/sandy_gravel_1k/textures/sandy_gravel_albedo.dds",
-  "mr": "textures/sandy_gravel_1k/textures/sandy_gravel_mr.dds",
-  "normal": "textures/sandy_gravel_1k/textures/sandy_gravel_normal.dds",
+  "albedo": "import_staging/sandy_gravel_1k/textures/sandy_gravel_albedo.dds",
+  "mr": "import_staging/sandy_gravel_1k/textures/sandy_gravel_mr.dds",
+  "normal": "import_staging/sandy_gravel_1k/textures/sandy_gravel_normal.dds",
   "normalIsRG": false,
   "normalStrength": 1.0,
   "shadingModel": "terrain",
