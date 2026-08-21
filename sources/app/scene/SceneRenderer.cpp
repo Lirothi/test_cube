@@ -4774,11 +4774,35 @@ void SceneRenderer::Pass_SelectionOutline(Renderer* renderer, RenderGraphPassCon
             static_cast<float>(std::max(renderer->GetRenderHeight(), 1u)));
         constants.selectedBit = kSelectionStencilBit;
         constants.outlineRadius = std::clamp<std::uint32_t>(frame_->selectionOutlineRadius, 1u, 8u);
-        // P16.1: an authored colour written into scene colour BEFORE the tonemap. With
-        // pre-exposure on the tonemap no longer scales it down, so it has to arrive pre-scaled
-        // or the outline blows out to white. Alpha is the blend weight and stays put.
-        constants.outlineColor = float4(1.0f * preExposure_, 0.82f * preExposure_,
-                                        0.12f * preExposure_, 0.92f);
+        // P16.1: an authored, DISPLAY-REFERRED colour written into scene colour BEFORE the tone
+        // curve. What the curve finally sees is `outlineColor * whatever the tonemap still applies`,
+        // so the authored value has to be divided by exactly that -- and nothing else:
+        //   * pre-exposed (the default), the WRITERS applied the exposure and the tonemap applies
+        //     1.0, so the authored value goes in unchanged;
+        //   * with pre-exposure off, scene colour is still physical -- P16 put it in cd/m^2, and a
+        //     sunny beach sits near 1e4 -- and the tonemap scales it by the exposure multiplier, so
+        //     the outline has to be scaled UP by the inverse.
+        // Multiplying BY the pre-exposure, which is what this did, is that backwards: measured at
+        // EV100 14.3 the factor is 7.1e-5, so the outline was written as 7e-5 into a buffer whose
+        // sand sits around 0.3, and a 0.92 blend toward it painted the contour BLACK.
+        // Alpha is the blend weight and stays put.
+        float tonemapExposure = 1.0f;
+        if (!render::g_preExposureEnabled)
+        {
+            ExposureMetering& metering = renderer->Exposure();
+            if (frame_->cameraExposure.enabled && metering.IsReady())
+            {
+                const float ev = metering.LatestReadback().adaptedEv100;
+                if (std::isfinite(ev))
+                {
+                    const float m = render::ExposureMultiplierFromEv100(ev);
+                    if (std::isfinite(m) && m > 0.0f) { tonemapExposure = m; }
+                }
+            }
+        }
+        const float outlineScale = 1.0f / std::max(tonemapExposure, 1.0e-8f);
+        constants.outlineColor = float4(1.0f * outlineScale, 0.82f * outlineScale,
+                                        0.12f * outlineScale, 0.92f);
 
         RecordComputeDispatch(renderer, t.cl, material.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSelectionOutlineConstants(constants, dest); },
