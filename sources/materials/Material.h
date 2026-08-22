@@ -185,7 +185,11 @@ public:
 private:
     ComPtr<ID3D12RootSignature> rootSignature_;
     ComPtr<ID3D12PipelineState> pipelineState_;
-    ComPtr<ID3D12PipelineState> pipelineStateWire_;
+    mutable ComPtr<ID3D12PipelineState> pipelineStateWire_;
+    ComPtr<ID3DBlob> vertexShader_;
+    ComPtr<ID3DBlob> pixelShader_;
+    Renderer* renderer_ = nullptr;
+    mutable std::mutex wireframeMtx_;
     bool isCompute_ = false;
     std::vector<RootParameterInfo> rootParams_;
 
@@ -201,6 +205,7 @@ private:
 
     struct RetiredState {
         ComPtr<ID3D12PipelineState> pso;
+        ComPtr<ID3D12PipelineState> wirePso;
         ComPtr<ID3D12RootSignature> rs;
         uint64_t retireFrame = 0;
     };
@@ -217,7 +222,8 @@ private:
     bool BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         ComPtr<ID3D12RootSignature>& outRS,
         ComPtr<ID3D12PipelineState>& outPSO,
-        ComPtr<ID3D12PipelineState>& outPSOWire,
+        ComPtr<ID3DBlob>& outVS,
+        ComPtr<ID3DBlob>& outPS,
         std::vector<RootParameterInfo>& outParams,
         std::vector<std::wstring>& outIncludes);
 
@@ -234,6 +240,7 @@ private:
         ComPtr<ID3DBlob>& outBlob,
         std::vector<std::wstring>& outIncludes);
 
+    bool EnsureWireframePipeline_() const;
     void RefreshWatchTimes_();
 };
 

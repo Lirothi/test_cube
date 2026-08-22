@@ -5,7 +5,10 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 
 #include "core/diagnostics/DiagPaths.h"
@@ -55,6 +58,808 @@ static std::wstring BuildProfile(const char* stage4cc, D3D_SHADER_MODEL sm)
     swprintf_s(buf, L"%hs_%u_%u", stage4cc, major, minor);
     return std::wstring(buf);
 }
+
+namespace
+{
+constexpr uint32_t kShaderCacheMagic = 0x43435844u; // "DXCC"
+constexpr uint32_t kShaderCacheVersion = 2u;
+constexpr uint32_t kMaxCachedDependencies = 512u;
+constexpr uint32_t kMaxCachedPathChars = 32768u;
+constexpr uint64_t kMaxCachedBlobBytes = 128ull * 1024ull * 1024ull;
+constexpr uint64_t kMaxCachedPsoBlobBytes = 64ull * 1024ull * 1024ull;
+constexpr uint32_t kPsoCacheMagic = 0x4f535043u; // "CPSO"
+constexpr uint32_t kPsoCacheVersion = 1u;
+constexpr uint64_t kFnvOffset = 1469598103934665603ull;
+constexpr uint64_t kFnvPrime = 1099511628211ull;
+
+std::atomic<uint32_t> g_shaderCacheAttempts{ 0 };
+std::atomic<uint32_t> g_shaderCacheHits{ 0 };
+std::atomic<uint32_t> g_shaderCacheWrites{ 0 };
+std::atomic<uint32_t> g_psoCacheAttempts{ 0 };
+std::atomic<uint32_t> g_psoCacheHits{ 0 };
+std::atomic<uint32_t> g_psoCacheStores{ 0 };
+std::atomic<uint32_t> g_psoCacheRejects{ 0 };
+std::atomic<uint64_t> g_psoCacheLoadUs{ 0 };
+std::atomic<uint64_t> g_psoCacheCreateUs{ 0 };
+std::atomic<uint64_t> g_psoCacheSerializedBytes{ 0 };
+
+struct ShaderDependencyFingerprint
+{
+    std::wstring path;
+    uint64_t size = 0;
+    uint64_t hash = kFnvOffset;
+};
+
+void CacheHashBytes(uint64_t& hash, const void* data, size_t size)
+{
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < size; ++i)
+    {
+        hash ^= bytes[i];
+        hash *= kFnvPrime;
+    }
+}
+
+void CacheHashString(uint64_t& hash, const char* value)
+{
+    if (value)
+    {
+        CacheHashBytes(hash, value, std::strlen(value));
+    }
+    const uint8_t separator = 0xffu;
+    CacheHashBytes(hash, &separator, sizeof(separator));
+}
+
+void CacheHashWString(uint64_t& hash, const std::wstring& value)
+{
+    CacheHashBytes(hash, value.data(), value.size() * sizeof(wchar_t));
+    const wchar_t separator = static_cast<wchar_t>(0xffffu);
+    CacheHashBytes(hash, &separator, sizeof(separator));
+}
+
+std::filesystem::path NormalizeShaderPath(const std::filesystem::path& source)
+{
+    std::error_code ec;
+    std::filesystem::path path = std::filesystem::absolute(source, ec);
+    if (ec)
+    {
+        path = source;
+    }
+    return path.lexically_normal();
+}
+
+const std::filesystem::path& ShaderCacheDirectory()
+{
+    static const std::filesystem::path directory = []
+    {
+        std::array<wchar_t, 32768> overridePath{};
+        const DWORD length = GetEnvironmentVariableW(
+            L"TEST_CUBE_SHADER_CACHE_DIR", overridePath.data(),
+            static_cast<DWORD>(overridePath.size()));
+        if (length > 0 && length < overridePath.size())
+        {
+            return std::filesystem::path(std::wstring(overridePath.data(), length));
+        }
+        return std::filesystem::path(L"shader_cache");
+    }();
+    return directory;
+}
+
+bool ShaderCacheEnabled()
+{
+    static const bool enabled = []
+    {
+        wchar_t value[8]{};
+        const DWORD length = GetEnvironmentVariableW(
+            L"TEST_CUBE_DISABLE_SHADER_CACHE", value, static_cast<DWORD>(std::size(value)));
+        return length == 0 || value[0] == L'0';
+    }();
+    return enabled;
+}
+
+bool FingerprintShaderFile(const std::filesystem::path& path, ShaderDependencyFingerprint& out)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+    {
+        return false;
+    }
+
+    out = {};
+    out.path = NormalizeShaderPath(path).wstring();
+    out.hash = kFnvOffset;
+
+    std::array<char, 64 * 1024> buffer{};
+    while (file)
+    {
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = file.gcount();
+        if (count > 0)
+        {
+            CacheHashBytes(out.hash, buffer.data(), static_cast<size_t>(count));
+            out.size += static_cast<uint64_t>(count);
+        }
+    }
+    return file.eof();
+}
+
+const ShaderDependencyFingerprint& DxcCompilerFingerprint()
+{
+    static const ShaderDependencyFingerprint fingerprint = []
+    {
+        ShaderDependencyFingerprint result;
+        const HMODULE module = GetModuleHandleW(L"dxcompiler.dll");
+        if (!module)
+        {
+            return result;
+        }
+        std::array<wchar_t, 32768> modulePath{};
+        const DWORD length = GetModuleFileNameW(
+            module, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+        if (length == 0 || length >= modulePath.size() ||
+            !FingerprintShaderFile(std::wstring(modulePath.data(), length), result))
+        {
+            return ShaderDependencyFingerprint{};
+        }
+        return result;
+    }();
+    return fingerprint;
+}
+
+uint64_t BuildShaderCacheIdentity(const std::filesystem::path& shaderPath,
+    const char* entry, const char* stage4cc, const std::wstring& target,
+    const Material::DefineList& defines)
+{
+    uint64_t hash = kFnvOffset;
+    CacheHashBytes(hash, &kShaderCacheVersion, sizeof(kShaderCacheVersion));
+    CacheHashWString(hash, NormalizeShaderPath(shaderPath).wstring());
+    CacheHashString(hash, entry);
+    CacheHashString(hash, stage4cc);
+    CacheHashWString(hash, target);
+#ifdef _DEBUG
+    CacheHashString(hash, "debug:-Zi,-Qembed_debug,-Od");
+#else
+    CacheHashString(hash, "release:-O3,-Qstrip_debug");
+#endif
+    CacheHashString(hash, "row-major;hlsl-2021");
+    const ShaderDependencyFingerprint& compiler = DxcCompilerFingerprint();
+    CacheHashBytes(hash, &compiler.size, sizeof(compiler.size));
+    CacheHashBytes(hash, &compiler.hash, sizeof(compiler.hash));
+
+    // Preserve command-line order: duplicate -D entries are unusual, but their
+    // order is still part of the compiler input and therefore part of the key.
+    for (const auto& define : defines)
+    {
+        CacheHashString(hash, define.first.c_str());
+        CacheHashString(hash, define.second.c_str());
+    }
+    return hash;
+}
+
+std::filesystem::path ShaderCachePath(uint64_t identity)
+{
+    wchar_t name[32]{};
+    swprintf_s(name, L"%016llx.dxilcache", static_cast<unsigned long long>(identity));
+    return ShaderCacheDirectory() / name;
+}
+
+template<typename T>
+bool ReadCacheValue(std::ifstream& file, T& value)
+{
+    return static_cast<bool>(file.read(reinterpret_cast<char*>(&value), sizeof(value)));
+}
+
+template<typename T>
+bool WriteCacheValue(std::ofstream& file, const T& value)
+{
+    return static_cast<bool>(file.write(reinterpret_cast<const char*>(&value), sizeof(value)));
+}
+
+bool TryLoadShaderCache(uint64_t identity, ComPtr<ID3DBlob>& outBlob,
+    std::vector<std::wstring>& outIncludes)
+{
+    if (!ShaderCacheEnabled())
+    {
+        return false;
+    }
+
+    g_shaderCacheAttempts.fetch_add(1, std::memory_order_relaxed);
+    std::ifstream file(ShaderCachePath(identity), std::ios::binary);
+    if (!file)
+    {
+        return false;
+    }
+
+    uint32_t magic = 0;
+    uint32_t version = 0;
+    uint64_t storedIdentity = 0;
+    uint32_t dependencyCount = 0;
+    uint64_t blobSize = 0;
+    uint64_t storedBlobHash = 0;
+    if (!ReadCacheValue(file, magic) || !ReadCacheValue(file, version) ||
+        !ReadCacheValue(file, storedIdentity) || !ReadCacheValue(file, dependencyCount) ||
+        !ReadCacheValue(file, blobSize) || !ReadCacheValue(file, storedBlobHash) ||
+        magic != kShaderCacheMagic || version != kShaderCacheVersion ||
+        storedIdentity != identity || dependencyCount == 0 ||
+        dependencyCount > kMaxCachedDependencies || blobSize == 0 ||
+        blobSize > kMaxCachedBlobBytes)
+    {
+        return false;
+    }
+
+    std::vector<std::wstring> dependencies;
+    dependencies.reserve(dependencyCount);
+    for (uint32_t i = 0; i < dependencyCount; ++i)
+    {
+        uint32_t pathChars = 0;
+        uint64_t storedSize = 0;
+        uint64_t storedHash = 0;
+        if (!ReadCacheValue(file, pathChars) || !ReadCacheValue(file, storedSize) ||
+            !ReadCacheValue(file, storedHash) || pathChars == 0 ||
+            pathChars > kMaxCachedPathChars)
+        {
+            return false;
+        }
+
+        std::wstring path(pathChars, L'\0');
+        const size_t pathBytes = static_cast<size_t>(pathChars) * sizeof(wchar_t);
+        if (!file.read(reinterpret_cast<char*>(path.data()), static_cast<std::streamsize>(pathBytes)))
+        {
+            return false;
+        }
+
+        ShaderDependencyFingerprint current;
+        if (!FingerprintShaderFile(path, current) || current.size != storedSize ||
+            current.hash != storedHash)
+        {
+            return false;
+        }
+        dependencies.push_back(std::move(path));
+    }
+
+    std::vector<uint8_t> bytes(static_cast<size_t>(blobSize));
+    if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())))
+    {
+        return false;
+    }
+    uint64_t blobHash = kFnvOffset;
+    CacheHashBytes(blobHash, bytes.data(), bytes.size());
+    if (blobHash != storedBlobHash)
+    {
+        return false;
+    }
+
+    ComPtr<ID3DBlob> blob;
+    if (FAILED(D3DCreateBlob(bytes.size(), &blob)))
+    {
+        return false;
+    }
+    std::memcpy(blob->GetBufferPointer(), bytes.data(), bytes.size());
+    outBlob = std::move(blob);
+    outIncludes = std::move(dependencies);
+    g_shaderCacheHits.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+void StoreShaderCache(uint64_t identity, const std::filesystem::path& shaderPath,
+    ID3DBlob* blob, const std::vector<std::wstring>& includes)
+{
+    if (!ShaderCacheEnabled() || !blob || blob->GetBufferSize() == 0)
+    {
+        return;
+    }
+
+    std::vector<std::filesystem::path> dependencyPaths;
+    dependencyPaths.reserve(includes.size() + 1);
+    dependencyPaths.push_back(NormalizeShaderPath(shaderPath));
+    for (const std::wstring& include : includes)
+    {
+        dependencyPaths.push_back(NormalizeShaderPath(include));
+    }
+    std::sort(dependencyPaths.begin(), dependencyPaths.end(), [](const auto& a, const auto& b)
+    {
+        return a.native() < b.native();
+    });
+    dependencyPaths.erase(std::unique(dependencyPaths.begin(), dependencyPaths.end()),
+                          dependencyPaths.end());
+    if (dependencyPaths.empty() || dependencyPaths.size() > kMaxCachedDependencies)
+    {
+        return;
+    }
+
+    std::vector<ShaderDependencyFingerprint> dependencies;
+    dependencies.reserve(dependencyPaths.size());
+    for (const std::filesystem::path& path : dependencyPaths)
+    {
+        ShaderDependencyFingerprint dependency;
+        if (!FingerprintShaderFile(path, dependency) ||
+            dependency.path.size() > kMaxCachedPathChars)
+        {
+            return;
+        }
+        dependencies.push_back(std::move(dependency));
+    }
+
+    const uint64_t blobSize = static_cast<uint64_t>(blob->GetBufferSize());
+    if (blobSize > kMaxCachedBlobBytes)
+    {
+        return;
+    }
+    uint64_t blobHash = kFnvOffset;
+    CacheHashBytes(blobHash, blob->GetBufferPointer(), static_cast<size_t>(blobSize));
+
+    const std::filesystem::path finalPath = ShaderCachePath(identity);
+    std::error_code ec;
+    std::filesystem::create_directories(finalPath.parent_path(), ec);
+    if (ec)
+    {
+        return;
+    }
+
+    std::filesystem::path tempPath = finalPath;
+    tempPath += L".tmp-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                std::to_wstring(GetCurrentThreadId());
+    std::ofstream file(tempPath, std::ios::binary | std::ios::trunc);
+    const uint32_t dependencyCount = static_cast<uint32_t>(dependencies.size());
+    if (!file || !WriteCacheValue(file, kShaderCacheMagic) ||
+        !WriteCacheValue(file, kShaderCacheVersion) || !WriteCacheValue(file, identity) ||
+        !WriteCacheValue(file, dependencyCount) || !WriteCacheValue(file, blobSize) ||
+        !WriteCacheValue(file, blobHash))
+    {
+        file.close();
+        std::filesystem::remove(tempPath, ec);
+        return;
+    }
+
+    for (const ShaderDependencyFingerprint& dependency : dependencies)
+    {
+        const uint32_t pathChars = static_cast<uint32_t>(dependency.path.size());
+        const size_t pathBytes = static_cast<size_t>(pathChars) * sizeof(wchar_t);
+        if (!WriteCacheValue(file, pathChars) || !WriteCacheValue(file, dependency.size) ||
+            !WriteCacheValue(file, dependency.hash) ||
+            !file.write(reinterpret_cast<const char*>(dependency.path.data()),
+                        static_cast<std::streamsize>(pathBytes)))
+        {
+            file.close();
+            std::filesystem::remove(tempPath, ec);
+            return;
+        }
+    }
+
+    if (!file.write(static_cast<const char*>(blob->GetBufferPointer()),
+                    static_cast<std::streamsize>(blobSize)))
+    {
+        file.close();
+        std::filesystem::remove(tempPath, ec);
+        return;
+    }
+    file.close();
+    if (!file)
+    {
+        std::filesystem::remove(tempPath, ec);
+        return;
+    }
+
+    if (!MoveFileExW(tempPath.c_str(), finalPath.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        std::filesystem::remove(tempPath, ec);
+        return;
+    }
+    g_shaderCacheWrites.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool PipelineCacheEnabled()
+{
+    static const bool enabled = []
+    {
+        if (!ShaderCacheEnabled())
+        {
+            return false;
+        }
+        wchar_t value[8]{};
+        const DWORD length = GetEnvironmentVariableW(
+            L"TEST_CUBE_DISABLE_PSO_CACHE", value, static_cast<DWORD>(std::size(value)));
+        return length == 0 || value[0] == L'0';
+    }();
+    return enabled;
+}
+
+std::filesystem::path PipelineCachePath(const std::wstring& name)
+{
+    return ShaderCacheDirectory() / L"pso" / (name + L".bin");
+}
+
+uint64_t ElapsedMicroseconds(std::chrono::steady_clock::time_point begin)
+{
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - begin).count());
+}
+
+class PipelineKeyBuilder
+{
+public:
+    PipelineKeyBuilder()
+    {
+        CacheHashString(first_, "test_cube:pso-key-v1");
+        CacheHashString(second_, "test_cube:pso-key-v1");
+    }
+
+    template<typename T>
+    void Add(const T& value)
+    {
+        AddBytes(&value, sizeof(value));
+    }
+
+    void AddBytes(const void* data, size_t size)
+    {
+        CacheHashBytes(first_, data, size);
+        CacheHashBytes(second_, data, size);
+    }
+
+    void AddString(const char* value)
+    {
+        CacheHashString(first_, value);
+        CacheHashString(second_, value);
+    }
+
+    void AddShader(const D3D12_SHADER_BYTECODE& shader)
+    {
+        const uint64_t size = static_cast<uint64_t>(shader.BytecodeLength);
+        Add(size);
+        if (shader.pShaderBytecode && shader.BytecodeLength > 0)
+        {
+            AddBytes(shader.pShaderBytecode, shader.BytecodeLength);
+        }
+    }
+
+    std::wstring Finish(wchar_t kind) const
+    {
+        wchar_t name[48]{};
+        swprintf_s(name, L"%c-%016llx-%016llx", kind,
+            static_cast<unsigned long long>(first_),
+            static_cast<unsigned long long>(second_));
+        return name;
+    }
+
+private:
+    uint64_t first_ = kFnvOffset;
+    uint64_t second_ = kFnvOffset ^ 0x9e3779b97f4a7c15ull;
+};
+
+void HashInputLayout(PipelineKeyBuilder& hash, const D3D12_INPUT_LAYOUT_DESC& layout)
+{
+    hash.Add(layout.NumElements);
+    if (layout.NumElements > 0 && !layout.pInputElementDescs)
+    {
+        return;
+    }
+    for (UINT i = 0; i < layout.NumElements; ++i)
+    {
+        const D3D12_INPUT_ELEMENT_DESC& element = layout.pInputElementDescs[i];
+        hash.AddString(element.SemanticName);
+        hash.Add(element.SemanticIndex);
+        hash.Add(element.Format);
+        hash.Add(element.InputSlot);
+        hash.Add(element.AlignedByteOffset);
+        hash.Add(element.InputSlotClass);
+        hash.Add(element.InstanceDataStepRate);
+    }
+}
+
+void HashStreamOutput(PipelineKeyBuilder& hash, const D3D12_STREAM_OUTPUT_DESC& output)
+{
+    hash.Add(output.NumEntries);
+    if (output.NumEntries > 0 && !output.pSODeclaration)
+    {
+        return;
+    }
+    for (UINT i = 0; i < output.NumEntries; ++i)
+    {
+        const D3D12_SO_DECLARATION_ENTRY& entry = output.pSODeclaration[i];
+        hash.Add(entry.Stream);
+        hash.AddString(entry.SemanticName);
+        hash.Add(entry.SemanticIndex);
+        hash.Add(entry.StartComponent);
+        hash.Add(entry.ComponentCount);
+        hash.Add(entry.OutputSlot);
+    }
+    hash.Add(output.NumStrides);
+    if (output.NumStrides > 0 && !output.pBufferStrides)
+    {
+        return;
+    }
+    for (UINT i = 0; i < output.NumStrides; ++i)
+    {
+        hash.Add(output.pBufferStrides[i]);
+    }
+    hash.Add(output.RasterizedStream);
+}
+
+void HashBlendState(PipelineKeyBuilder& hash, const D3D12_BLEND_DESC& blend)
+{
+    hash.Add(blend.AlphaToCoverageEnable);
+    hash.Add(blend.IndependentBlendEnable);
+    for (const D3D12_RENDER_TARGET_BLEND_DESC& rt : blend.RenderTarget)
+    {
+        hash.Add(rt.BlendEnable);
+        hash.Add(rt.LogicOpEnable);
+        hash.Add(rt.SrcBlend);
+        hash.Add(rt.DestBlend);
+        hash.Add(rt.BlendOp);
+        hash.Add(rt.SrcBlendAlpha);
+        hash.Add(rt.DestBlendAlpha);
+        hash.Add(rt.BlendOpAlpha);
+        hash.Add(rt.LogicOp);
+        hash.Add(rt.RenderTargetWriteMask);
+    }
+}
+
+void HashRasterizerState(PipelineKeyBuilder& hash, const D3D12_RASTERIZER_DESC& raster)
+{
+    hash.Add(raster.FillMode);
+    hash.Add(raster.CullMode);
+    hash.Add(raster.FrontCounterClockwise);
+    hash.Add(raster.DepthBias);
+    hash.Add(raster.DepthBiasClamp);
+    hash.Add(raster.SlopeScaledDepthBias);
+    hash.Add(raster.DepthClipEnable);
+    hash.Add(raster.MultisampleEnable);
+    hash.Add(raster.AntialiasedLineEnable);
+    hash.Add(raster.ForcedSampleCount);
+    hash.Add(raster.ConservativeRaster);
+}
+
+void HashDepthStencilOp(PipelineKeyBuilder& hash, const D3D12_DEPTH_STENCILOP_DESC& op)
+{
+    hash.Add(op.StencilFailOp);
+    hash.Add(op.StencilDepthFailOp);
+    hash.Add(op.StencilPassOp);
+    hash.Add(op.StencilFunc);
+}
+
+void HashDepthStencilState(PipelineKeyBuilder& hash, const D3D12_DEPTH_STENCIL_DESC& depth)
+{
+    hash.Add(depth.DepthEnable);
+    hash.Add(depth.DepthWriteMask);
+    hash.Add(depth.DepthFunc);
+    hash.Add(depth.StencilEnable);
+    hash.Add(depth.StencilReadMask);
+    hash.Add(depth.StencilWriteMask);
+    HashDepthStencilOp(hash, depth.FrontFace);
+    HashDepthStencilOp(hash, depth.BackFace);
+}
+
+std::wstring BuildGraphicsPipelineName(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc)
+{
+    PipelineKeyBuilder hash;
+    hash.AddString("graphics");
+    // In Material, the root signature is extracted from the supplied shader bytecode,
+    // so hashing all stages also gives the root signature a stable cross-process key.
+    hash.AddShader(desc.VS);
+    hash.AddShader(desc.PS);
+    hash.AddShader(desc.DS);
+    hash.AddShader(desc.HS);
+    hash.AddShader(desc.GS);
+    HashStreamOutput(hash, desc.StreamOutput);
+    HashBlendState(hash, desc.BlendState);
+    hash.Add(desc.SampleMask);
+    HashRasterizerState(hash, desc.RasterizerState);
+    HashDepthStencilState(hash, desc.DepthStencilState);
+    HashInputLayout(hash, desc.InputLayout);
+    hash.Add(desc.IBStripCutValue);
+    hash.Add(desc.PrimitiveTopologyType);
+    hash.Add(desc.NumRenderTargets);
+    for (DXGI_FORMAT format : desc.RTVFormats)
+    {
+        hash.Add(format);
+    }
+    hash.Add(desc.DSVFormat);
+    hash.Add(desc.SampleDesc.Count);
+    hash.Add(desc.SampleDesc.Quality);
+    hash.Add(desc.NodeMask);
+    hash.Add(desc.Flags);
+    return hash.Finish(L'g');
+}
+
+std::wstring BuildComputePipelineName(const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc)
+{
+    PipelineKeyBuilder hash;
+    hash.AddString("compute");
+    hash.AddShader(desc.CS);
+    hash.Add(desc.NodeMask);
+    hash.Add(desc.Flags);
+    return hash.Finish(L'c');
+}
+
+// Keep PSO creation on the normal device path so Streamline returns its expected
+// proxy objects. Loading objects directly from ID3D12PipelineLibrary is unsafe with
+// the current Streamline interposer; D3D12_CACHED_PIPELINE_STATE preserves the
+// driver-compiled payload while still going through Create*PipelineState.
+bool TryLoadPipelineBlob(const std::wstring& name, std::vector<uint8_t>& outBytes)
+{
+    outBytes.clear();
+    std::ifstream file(PipelineCachePath(name), std::ios::binary);
+    if (!file)
+    {
+        return false;
+    }
+
+    uint32_t magic = 0;
+    uint32_t version = 0;
+    uint64_t blobSize = 0;
+    uint64_t storedHash = 0;
+    if (!ReadCacheValue(file, magic) || !ReadCacheValue(file, version) ||
+        !ReadCacheValue(file, blobSize) || !ReadCacheValue(file, storedHash) ||
+        magic != kPsoCacheMagic || version != kPsoCacheVersion ||
+        blobSize == 0 || blobSize > kMaxCachedPsoBlobBytes)
+    {
+        return false;
+    }
+
+    outBytes.resize(static_cast<size_t>(blobSize));
+    if (!file.read(reinterpret_cast<char*>(outBytes.data()),
+                   static_cast<std::streamsize>(outBytes.size())))
+    {
+        outBytes.clear();
+        return false;
+    }
+    uint64_t blobHash = kFnvOffset;
+    CacheHashBytes(blobHash, outBytes.data(), outBytes.size());
+    if (blobHash != storedHash)
+    {
+        outBytes.clear();
+        return false;
+    }
+    return true;
+}
+
+void StorePipelineBlob(const std::wstring& name, ID3D12PipelineState* pipeline)
+{
+    if (!PipelineCacheEnabled() || !pipeline)
+    {
+        return;
+    }
+
+    ComPtr<ID3DBlob> blob;
+    if (FAILED(pipeline->GetCachedBlob(&blob)) || !blob || blob->GetBufferSize() == 0 ||
+        blob->GetBufferSize() > kMaxCachedPsoBlobBytes)
+    {
+        return;
+    }
+
+    const uint64_t blobSize = static_cast<uint64_t>(blob->GetBufferSize());
+    uint64_t blobHash = kFnvOffset;
+    CacheHashBytes(blobHash, blob->GetBufferPointer(), static_cast<size_t>(blobSize));
+
+    const std::filesystem::path finalPath = PipelineCachePath(name);
+    std::error_code ec;
+    std::filesystem::create_directories(finalPath.parent_path(), ec);
+    if (ec)
+    {
+        return;
+    }
+    std::filesystem::path tempPath = finalPath;
+    tempPath += L".tmp-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                std::to_wstring(GetCurrentThreadId());
+    std::ofstream file(tempPath, std::ios::binary | std::ios::trunc);
+    if (!file || !WriteCacheValue(file, kPsoCacheMagic) ||
+        !WriteCacheValue(file, kPsoCacheVersion) || !WriteCacheValue(file, blobSize) ||
+        !WriteCacheValue(file, blobHash) ||
+        !file.write(static_cast<const char*>(blob->GetBufferPointer()),
+                    static_cast<std::streamsize>(blobSize)))
+    {
+        file.close();
+        std::filesystem::remove(tempPath, ec);
+        return;
+    }
+    file.close();
+    if (!file || !MoveFileExW(tempPath.c_str(), finalPath.c_str(),
+                              MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        std::filesystem::remove(tempPath, ec);
+        return;
+    }
+    g_psoCacheStores.fetch_add(1, std::memory_order_relaxed);
+    g_psoCacheSerializedBytes.fetch_add(blobSize, std::memory_order_relaxed);
+}
+
+HRESULT CreateGraphicsPipelineStateCached(ID3D12Device* device,
+    const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc,
+    ComPtr<ID3D12PipelineState>& out)
+{
+    const std::wstring name = BuildGraphicsPipelineName(desc);
+    if (PipelineCacheEnabled())
+    {
+        g_psoCacheAttempts.fetch_add(1, std::memory_order_relaxed);
+        const auto begin = std::chrono::steady_clock::now();
+        std::vector<uint8_t> cachedBytes;
+        if (TryLoadPipelineBlob(name, cachedBytes))
+        {
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC cachedDesc = desc;
+            cachedDesc.CachedPSO = { cachedBytes.data(), cachedBytes.size() };
+            out.Reset();
+            const HRESULT cachedHr = device->CreateGraphicsPipelineState(
+                &cachedDesc, IID_PPV_ARGS(out.ReleaseAndGetAddressOf()));
+            g_psoCacheLoadUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
+            if (SUCCEEDED(cachedHr))
+            {
+                g_psoCacheHits.fetch_add(1, std::memory_order_relaxed);
+                g_psoCacheSerializedBytes.fetch_add(
+                    static_cast<uint64_t>(cachedBytes.size()), std::memory_order_relaxed);
+                return cachedHr;
+            }
+            g_psoCacheRejects.fetch_add(1, std::memory_order_relaxed);
+            out.Reset();
+        }
+        else
+        {
+            g_psoCacheLoadUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
+        }
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC uncachedDesc = desc;
+    uncachedDesc.CachedPSO = {};
+    out.Reset();
+    const auto begin = std::chrono::steady_clock::now();
+    const HRESULT hr = device->CreateGraphicsPipelineState(
+        &uncachedDesc, IID_PPV_ARGS(out.ReleaseAndGetAddressOf()));
+    g_psoCacheCreateUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
+    if (SUCCEEDED(hr))
+    {
+        StorePipelineBlob(name, out.Get());
+    }
+    return hr;
+}
+
+HRESULT CreateComputePipelineStateCached(ID3D12Device* device,
+    const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc,
+    ComPtr<ID3D12PipelineState>& out)
+{
+    const std::wstring name = BuildComputePipelineName(desc);
+    if (PipelineCacheEnabled())
+    {
+        g_psoCacheAttempts.fetch_add(1, std::memory_order_relaxed);
+        const auto begin = std::chrono::steady_clock::now();
+        std::vector<uint8_t> cachedBytes;
+        if (TryLoadPipelineBlob(name, cachedBytes))
+        {
+            D3D12_COMPUTE_PIPELINE_STATE_DESC cachedDesc = desc;
+            cachedDesc.CachedPSO = { cachedBytes.data(), cachedBytes.size() };
+            out.Reset();
+            const HRESULT cachedHr = device->CreateComputePipelineState(
+                &cachedDesc, IID_PPV_ARGS(out.ReleaseAndGetAddressOf()));
+            g_psoCacheLoadUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
+            if (SUCCEEDED(cachedHr))
+            {
+                g_psoCacheHits.fetch_add(1, std::memory_order_relaxed);
+                g_psoCacheSerializedBytes.fetch_add(
+                    static_cast<uint64_t>(cachedBytes.size()), std::memory_order_relaxed);
+                return cachedHr;
+            }
+            g_psoCacheRejects.fetch_add(1, std::memory_order_relaxed);
+            out.Reset();
+        }
+        else
+        {
+            g_psoCacheLoadUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
+        }
+    }
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC uncachedDesc = desc;
+    uncachedDesc.CachedPSO = {};
+    out.Reset();
+    const auto begin = std::chrono::steady_clock::now();
+    const HRESULT hr = device->CreateComputePipelineState(
+        &uncachedDesc, IID_PPV_ARGS(out.ReleaseAndGetAddressOf()));
+    g_psoCacheCreateUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
+    if (SUCCEEDED(hr))
+    {
+        StorePipelineBlob(name, out.Get());
+    }
+    return hr;
+}
+} // namespace
 
 // Include handler for DXC that captures the list of files
 struct IncludeCaptureDXC : public IDxcIncludeHandler
@@ -112,6 +917,16 @@ static HRESULT CompileDXC(const std::wstring& file,
     outBlob.Reset();
     outIncludes.clear();
 
+    const std::filesystem::path path = NormalizeShaderPath(file);
+    const D3D_SHADER_MODEL sm = QueryMaxShaderModel(device);
+    const std::wstring target = BuildProfile(stage4cc, sm);
+    const uint64_t cacheIdentity = BuildShaderCacheIdentity(
+        path, entry, stage4cc, target, defines);
+    if (TryLoadShaderCache(cacheIdentity, outBlob, outIncludes))
+    {
+        return S_OK;
+    }
+
     // DXC utils/compiler
     ComPtr<IDxcUtils>     utils;
     ComPtr<IDxcCompiler3> compiler;
@@ -121,17 +936,12 @@ static HRESULT CompileDXC(const std::wstring& file,
     if (FAILED(hr)) return hr;
 
     // Load the source file
-    std::filesystem::path path = std::filesystem::path(file).lexically_normal();
     ComPtr<IDxcBlobEncoding> src;
     hr = utils->LoadFile(path.c_str(), nullptr, &src);
     if (FAILED(hr)) return hr;
 
     // Include handler that tracks loaded files
     IncludeCaptureDXC* inc = new IncludeCaptureDXC(utils.Get(), path.parent_path(), outIncludes);
-
-    // Target: highest supported shader model
-    const D3D_SHADER_MODEL sm = QueryMaxShaderModel(device);
-    const std::wstring target = BuildProfile(stage4cc, sm);
 
     // Build the argument list safely: keep wchar strings alive until the end of the function
     std::wstring wEntry(entry, entry + std::strlen(entry));
@@ -207,6 +1017,7 @@ static HRESULT CompileDXC(const std::wstring& file,
     ThrowIfFailed(D3DCreateBlob(dxil->GetBufferSize(), &blob));
     std::memcpy(blob->GetBufferPointer(), dxil->GetBufferPointer(), dxil->GetBufferSize());
     outBlob = blob;
+    StoreShaderCache(cacheIdentity, path, outBlob.Get(), outIncludes);
 
     return S_OK;
 }
@@ -345,14 +1156,19 @@ bool Material::FSProbeAndFlagPending()
 void Material::CreateGraphics(Renderer* r, const GraphicsDesc& gd)
 {
     isCompute_ = false;
+    renderer_ = r;
     cachedGfxDesc_ = gd;
 
     std::vector<RootParameterInfo> params;
     std::vector<std::wstring> inc;
 
-    if (!BuildGraphicsPSO(r, gd, rootSignature_, pipelineState_, pipelineStateWire_, params, inc)) {
+    if (!BuildGraphicsPSO(r, gd, rootSignature_, pipelineState_, vertexShader_, pixelShader_, params, inc)) {
         OutputDebugStringA("[Material] CreateGraphics failed\n");
         return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(wireframeMtx_);
+        pipelineStateWire_.Reset();
     }
 
     rootParams_ = std::move(params);
@@ -367,6 +1183,7 @@ void Material::CreateGraphics(Renderer* r, const GraphicsDesc& gd)
 void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
 {
     isCompute_ = true;
+    renderer_ = r;
     cachedCmpDesc_ = cd;
 
     ComPtr<ID3D12RootSignature> rs;
@@ -381,6 +1198,12 @@ void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
 
     rootSignature_ = rs;
     pipelineState_ = pso;
+    vertexShader_.Reset();
+    pixelShader_.Reset();
+    {
+        std::lock_guard<std::mutex> lock(wireframeMtx_);
+        pipelineStateWire_.Reset();
+    }
     rootParams_ = std::move(params);
 
 #ifdef _DEBUG
@@ -427,7 +1250,8 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
 
     ComPtr<ID3D12RootSignature> newRS;
     ComPtr<ID3D12PipelineState> newPSO;
-    ComPtr<ID3D12PipelineState> newPSOWire;
+    ComPtr<ID3DBlob> newVS;
+    ComPtr<ID3DBlob> newPS;
     std::vector<RootParameterInfo> newParams;
     std::vector<std::wstring> inc;
 
@@ -436,18 +1260,22 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
         ok = BuildComputePSO(r, cachedCmpDesc_, newRS, newPSO, newParams, inc);
     }
     else {
-        ok = BuildGraphicsPSO(r, cachedGfxDesc_, newRS, newPSO, newPSOWire, newParams, inc);
+        ok = BuildGraphicsPSO(r, cachedGfxDesc_, newRS, newPSO, newVS, newPS, newParams, inc);
     }
 
     if (!ok) {
         return false; // leave pending=true — try again on the next tick
     }
 
-    retired_.push_back({ pipelineState_, rootSignature_, frameNumber });
-
-    pipelineState_ = newPSO;
-    pipelineStateWire_ = newPSOWire;
-    rootSignature_ = newRS;
+    {
+        std::lock_guard<std::mutex> lock(wireframeMtx_);
+        retired_.push_back({ pipelineState_, pipelineStateWire_, rootSignature_, frameNumber });
+        pipelineState_ = newPSO;
+        pipelineStateWire_.Reset();
+        rootSignature_ = newRS;
+        vertexShader_ = newVS;
+        pixelShader_ = newPS;
+    }
     rootParams_ = std::move(newParams);
 
     {
@@ -492,6 +1320,10 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
         if (batch) { cache.rs = rs; cache.isCompute = isCompute_; cache.OnRootSignatureChanged(); }
     }
 
+    if (wireframe)
+    {
+        (void)EnsureWireframePipeline_();
+    }
     ID3D12PipelineState* pso = (wireframe && pipelineStateWire_) ? pipelineStateWire_.Get() : pipelineState_.Get();
     if (!batch || cache.pso != pso) {
         cmdList->SetPipelineState(pso);
@@ -674,7 +1506,8 @@ static bool BuildRootFromEmbedded(ID3D12Device* device, ID3DBlob* rsBlob,
 bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     ComPtr<ID3D12RootSignature>& outRS,
     ComPtr<ID3D12PipelineState>& outPSO,
-    ComPtr<ID3D12PipelineState>& outPSOWire,
+    ComPtr<ID3DBlob>& outVS,
+    ComPtr<ID3DBlob>& outPS,
     std::vector<RootParameterInfo>& outParams,
     std::vector<std::wstring>& outIncludes)
 {
@@ -748,21 +1581,13 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     pso.DSVFormat = gd.dsvFormat;
     pso.SampleDesc.Count = gd.sampleCount;
 
-    if (FAILED(r->GetDevice()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&outPSO)))) {
+    if (FAILED(CreateGraphicsPipelineStateCached(r->GetDevice(), pso, outPSO))) {
         return false;
     }
     outPSO->SetName(gd.shaderFile.c_str()); // so GBV/PIX name the shader, not 'Unnamed'
 
-    if (pso.PrimitiveTopologyType == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
-    {
-        pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-        pso.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
-
-        if (FAILED(r->GetDevice()->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&outPSOWire)))) {
-            return false;
-        }
-        outPSOWire->SetName((gd.shaderFile + L":wire").c_str());
-    }
+    outVS = vs;
+    outPS = ps;
 
     outIncludes.clear();
     outIncludes.push_back(gd.shaderFile);
@@ -771,6 +1596,58 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     std::sort(outIncludes.begin(), outIncludes.end());
     outIncludes.erase(std::unique(outIncludes.begin(), outIncludes.end()), outIncludes.end());
 
+    return true;
+}
+
+bool Material::EnsureWireframePipeline_() const
+{
+    if (isCompute_ || cachedGfxDesc_.topologyType != D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(wireframeMtx_);
+    if (pipelineStateWire_)
+    {
+        return true;
+    }
+    if (!renderer_ || !renderer_->GetDevice() || !rootSignature_ ||
+        !vertexShader_ || !pixelShader_)
+    {
+        return false;
+    }
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+    pso.pRootSignature = rootSignature_.Get();
+    if (!cachedGfxDesc_.inputLayoutKey.empty())
+    {
+        const auto inputLayout = renderer_->GetInputLayoutManager()->Get(cachedGfxDesc_.inputLayoutKey);
+        pso.InputLayout = { inputLayout.desc, inputLayout.count };
+    }
+    pso.VS = { vertexShader_->GetBufferPointer(), vertexShader_->GetBufferSize() };
+    pso.PS = { pixelShader_->GetBufferPointer(), pixelShader_->GetBufferSize() };
+    pso.RasterizerState = cachedGfxDesc_.raster;
+    pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    pso.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    pso.BlendState = cachedGfxDesc_.blend;
+    pso.DepthStencilState = cachedGfxDesc_.depth;
+    pso.SampleMask = UINT_MAX;
+    pso.PrimitiveTopologyType = cachedGfxDesc_.topologyType;
+    pso.NumRenderTargets = cachedGfxDesc_.numRT;
+    for (UINT i = 0; i < cachedGfxDesc_.numRT; ++i)
+    {
+        pso.RTVFormats[i] = cachedGfxDesc_.rtvFormats[i];
+    }
+    pso.DSVFormat = cachedGfxDesc_.dsvFormat;
+    pso.SampleDesc.Count = cachedGfxDesc_.sampleCount;
+
+    ComPtr<ID3D12PipelineState> wireframe;
+    if (FAILED(CreateGraphicsPipelineStateCached(renderer_->GetDevice(), pso, wireframe)))
+    {
+        return false;
+    }
+    wireframe->SetName((cachedGfxDesc_.shaderFile + L":wire").c_str());
+    pipelineStateWire_ = std::move(wireframe);
     return true;
 }
 
@@ -810,7 +1687,7 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     D3D12_COMPUTE_PIPELINE_STATE_DESC pso{};
     pso.pRootSignature = outRS.Get();
     pso.CS = { cs->GetBufferPointer(), cs->GetBufferSize() };
-    if (FAILED(r->GetDevice()->CreateComputePipelineState(&pso, IID_PPV_ARGS(&outPSO)))) {
+    if (FAILED(CreateComputePipelineStateCached(r->GetDevice(), pso, outPSO))) {
         return false;
     }
     // Name the PSO after the shader that made it. Every GPU-based-validation message carries
@@ -1008,6 +1885,43 @@ bool MaterialManager::RequestFSProbeAsync()
 
 void MaterialManager::Clear()
 {
+    const uint32_t attempts = g_shaderCacheAttempts.load(std::memory_order_relaxed);
+    const uint32_t hits = g_shaderCacheHits.load(std::memory_order_relaxed);
+    const uint32_t writes = g_shaderCacheWrites.load(std::memory_order_relaxed);
+    char line[192]{};
+    std::snprintf(line, sizeof(line),
+        "[shadercache] %u hits, %u misses, %u writes\n",
+        hits, attempts >= hits ? attempts - hits : 0u, writes);
+    OutputDebugStringA(line);
+    if (FILE* file = nullptr;
+        fopen_s(&file, diag::LogPath("shader_cache.log").c_str(), "w") == 0 && file)
+    {
+        std::fputs(line, file);
+        std::fclose(file);
+    }
+
+    const uint32_t psoAttempts = g_psoCacheAttempts.load(std::memory_order_relaxed);
+    const uint32_t psoHits = g_psoCacheHits.load(std::memory_order_relaxed);
+    const uint32_t psoStores = g_psoCacheStores.load(std::memory_order_relaxed);
+    const uint32_t psoRejects = g_psoCacheRejects.load(std::memory_order_relaxed);
+    const uint64_t psoLoadUs = g_psoCacheLoadUs.load(std::memory_order_relaxed);
+    const uint64_t psoCreateUs = g_psoCacheCreateUs.load(std::memory_order_relaxed);
+    const uint64_t psoBytes = g_psoCacheSerializedBytes.load(std::memory_order_relaxed);
+    char psoLine[256]{};
+    std::snprintf(psoLine, sizeof(psoLine),
+        "[psocache] %u hits, %u misses, %u stores, %u rejects, "
+        "load %.3f ms, create %.3f ms, blob I/O %llu bytes\n",
+        psoHits, psoAttempts >= psoHits ? psoAttempts - psoHits : 0u,
+        psoStores, psoRejects, static_cast<double>(psoLoadUs) / 1000.0,
+        static_cast<double>(psoCreateUs) / 1000.0,
+        static_cast<unsigned long long>(psoBytes));
+    OutputDebugStringA(psoLine);
+    if (FILE* file = nullptr;
+        fopen_s(&file, diag::LogPath("pso_cache.log").c_str(), "w") == 0 && file)
+    {
+        std::fputs(psoLine, file);
+        std::fclose(file);
+    }
     materials_.clear();
 }
 
