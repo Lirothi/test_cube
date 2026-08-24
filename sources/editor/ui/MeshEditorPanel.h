@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "editor/ui/MeshEditorPreviewScene.h"
+#include "rendering/meshes/MeshManager.h" // BinaryInfo: per-LOD chunk triangle counts
 #include "third_party/json/json.hpp"
 
 class AssetRegistry;
@@ -63,6 +64,13 @@ private:
     // is obvious which part of the model a control drives. One frame stale by construction: the
     // preview pane is drawn before the settings pane that detects the hover.
     int           hoveredSlot_ = -1;
+    // Chunked meshes (mesh.json "chunkGrid"): their submeshes are spatial TILES, not material
+    // slots, so the material list collapses to one and the tiles get their own list instead.
+    // chunkGrid_ 0/1 = not chunked. hoveredChunk_ drives the preview's per-ORDINAL highlight,
+    // which is the only way to single out one tile (they all share material slot 0).
+    int           chunkGrid_ = 0;
+    int           hoveredChunk_ = -1;
+    MeshManager::BinaryInfo binInfo_{}; // per-LOD, per-submesh triangle counts; empty if not baked
     std::string   status_;
     MeshEditorPreviewScene previewScene_;
     MeshEditorPreviewCamera previewCamera_;

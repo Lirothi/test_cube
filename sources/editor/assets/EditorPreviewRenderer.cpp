@@ -539,8 +539,9 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordThumbnail(
         0u,
         renderSlot,
         existingColorTarget,
-        nullptr,
-        -1,
+        /*texOffsScaleOverride=*/nullptr,
+        /*highlightMaterialSlot=*/-1,
+        /*highlightSubmeshOrdinal=*/-1,
         environment,
         environmentExposure);
 }
@@ -560,6 +561,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     ID3D12Resource* existingColorTarget,
     const Math::float4* texOffsScaleOverride,
     int highlightMaterialSlot,
+    int highlightSubmeshOrdinal,
     const TextureCube* environment,
     float environmentExposure)
 {
@@ -934,10 +936,14 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                 0.0f,
                 0.0f };
         }
-        // Highlight is driven by the SUBMESH's material slot, not the draw index: one material slot
-        // can cover several submeshes and they must all light up together.
+        // Two highlight channels. BY MATERIAL SLOT: one slot can cover several submeshes and they
+        // must all light up together. BY SUBMESH ORDINAL: a chunked mesh's tiles all share slot 0,
+        // so only the ordinal can single one out. Either match tints the draw.
         const int drawMaterialSlot = hasSubmesh ? static_cast<int>(submesh.materialSlot) : 0;
-        if (highlightMaterialSlot >= 0 && drawMaterialSlot == highlightMaterialSlot)
+        const bool slotMatch = highlightMaterialSlot >= 0 && drawMaterialSlot == highlightMaterialSlot;
+        const bool ordinalMatch = highlightSubmeshOrdinal >= 0 &&
+                                  static_cast<int>(draw) == highlightSubmeshOrdinal;
+        if (slotMatch || ordinalMatch)
         {
             cb.surfaceFlags.w = 1.0f;
         }

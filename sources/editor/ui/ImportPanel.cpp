@@ -905,7 +905,7 @@ namespace
                 if (f.is_number()) { bakeOpt.slotFoliage.push_back(f.get<float>()); }
             }
         }
-        // Shadow chunking. The bake and mesh.json MUST agree: the .bin carries no flag of its own,
+        // Mesh chunking. The bake and mesh.json MUST agree: the .bin carries no flag of its own,
         // so mesh.json's "chunkGrid" is the ONLY thing that tells the runtime these submeshes are
         // spatial chunks rather than material groups. Resolve it once here and use that one value
         // for both the bake and the file — a re-import that baked chunks without writing the key
@@ -1746,7 +1746,7 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
     // sliders is the way back to defaults; what an asset ACTUALLY baked with lives in its
     // mesh.json, which non-dialog re-imports and the Mesh Editor's Save read directly.
 
-    // Shadow chunking: seed from what the asset ALREADY carries, so re-opening the dialog shows the
+    // Mesh chunking: seed from what the asset ALREADY carries, so re-opening the dialog shows the
     // truth rather than the previous mesh's widget state. Whole-file assets only (a split import
     // writes one sidecar per node and none of them is chunked — see RecreateMeshAssets).
     const int existingChunkGrid = ReadAssetChunkGrid(
@@ -1757,6 +1757,14 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
     // request and log it where nobody looks) so the dialog can say so before the user commits.
     meshDialogSubmeshCount_ = static_cast<int>(
         std::max<size_t>(MeshManager::CountSubmeshes(item.gltfFile), 1));
+    // "<N> tris" appears in both DescribeObj's and DescribeGltf's meta strings; 0 if absent.
+    meshDialogTriCount_ = 0;
+    if (const size_t at = item.meta.find(" tris"); at != std::string::npos)
+    {
+        size_t b = at;
+        while (b > 0 && std::isdigit(static_cast<unsigned char>(item.meta[b - 1]))) { --b; }
+        if (b < at) { meshDialogTriCount_ = std::atoi(item.meta.c_str() + b); }
+    }
 
     showMeshImportDialog_ = true;
 }
@@ -2014,34 +2022,33 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
         }
     }
 
-    // --- Shadow chunking (collapsed: only large ground/terrain surfaces want it) ------------------
-    // A caster's bounds decide which shadow-map pages have to rasterize it. One 361x388 m island is
-    // ONE caster whose box covers every page of every clipmap level, so its full LOD range is drawn
-    // once per resident page. Split into tiles, a page draws only the tiles that reach it -- which
-    // is also what makes "terrain casts at LOD0 near the camera" affordable, and that is what kills
-    // the banding you get when a simplified caster shadows the detailed surface the camera draws.
+    // --- Mesh chunking (collapsed: only large ground/terrain surfaces want it) --------------------
+    // NOT shadow-only any more. A chunked mesh is LODed and drawn PER CHUNK from the camera, and the
+    // same per-chunk tier drives its shadow casters — caster == receiver by construction, which is
+    // what retired the terrain self-shadow artefacts. The shadow side additionally gains per-chunk
+    // bounds, so a shadow page rasterizes only the tiles that reach it instead of the whole surface.
     ImGui::Spacing();
-    if (ImGui::CollapsingHeader("Shadow chunking"))
+    if (ImGui::CollapsingHeader("Mesh chunking"))
     {
         const bool splitting = meshDialogSplitTopLevelNodes_ && meshDialogTopLevelNodes_.size() > 1;
         const bool multiSubmesh = meshDialogSubmeshCount_ > 1;
         const bool blocked = splitting || multiSubmesh;
 
-        ImGui::TextDisabled("Splits LOD0 into a grid of tiles, each its own shadow caster.");
+        ImGui::TextDisabled("Splits LOD0 into a grid of tiles that LOD and draw independently.");
         ImGui::BeginDisabled(blocked);
-        ImGui::Checkbox("Split into shadow chunks", &meshDialogChunk_);
+        ImGui::Checkbox("Split into chunks", &meshDialogChunk_);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         {
             ImGui::SetTooltip(
                 "For LARGE GROUND SURFACES (terrain, an island, a big floor) - not for props.\n\n"
-                "A caster's bounding box decides which shadow pages must draw it. One big mesh is\n"
-                "one box covering every page, so its whole LOD range is redrawn per page. Tiled, a\n"
-                "page draws only the tiles that touch it, and terrain can afford to cast at LOD0\n"
-                "near the camera - which is what removes the banding a simplified caster produces\n"
-                "over the detailed surface the camera actually rasterizes.\n\n"
+                "CAMERA: each tile picks its own LOD by its own distance, so a 400 m surface stops\n"
+                "being one LOD decision. SHADOWS: each tile is a separate caster with its own\n"
+                "bounds, so a shadow page draws only the tiles that reach it - and because the\n"
+                "caster uses the SAME per-chunk LOD the camera just drew, the surface can no longer\n"
+                "shadow itself with geometry it is not showing.\n\n"
                 "Tiles are simplified with their shared borders LOCKED, so coarse LODs cannot crack\n"
-                "apart at the seams. Camera rendering is unaffected: LOD0 is only reordered.");
+                "apart at the seams. LOD0 is a loss-free reorder of the original triangles.");
         }
         if (multiSubmesh)
         {
@@ -2059,39 +2066,77 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
         ImGui::SetNextItemWidth(150.0f);
         // ONE %d: ImGui formats the slider label with exactly one int argument, so a "%d x %d"
         // format would read a second one off the stack. The grid shape is spelled out below.
-        ImGui::SliderInt("Tiles per axis", &meshDialogChunkGrid_, 2, 8, "%d");
+        ImGui::SliderInt("Tiles per axis", &meshDialogChunkGrid_, 1, 100, "%d");
         ImGui::EndDisabled();
-        meshDialogChunkGrid_ = std::clamp(meshDialogChunkGrid_, 2, 8);
+        meshDialogChunkGrid_ = std::clamp(meshDialogChunkGrid_, 1, 100);
 
         if (meshDialogChunk_ && !blocked)
         {
             const int grid = meshDialogChunkGrid_;
             const int tiles = grid * grid;
-            const int budget = static_cast<int>(vsm::kMaxMeshGroups);
-            // Tiles over the mesh's XZ box; empty cells emit nothing, so this is an upper bound.
-            if (meshDialogItem_.worldSizeM > 0.0f)
+            if (grid < 2)
             {
-                ImGui::TextDisabled("%d x %d = up to %d tiles, ~%.0f m each.", grid, grid, tiles,
+                ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f),
+                    "1 x 1 is the whole mesh - the bake leaves it unchunked.");
+            }
+            else if (meshDialogItem_.worldSizeM > 0.0f)
+            {
+                // Tiles over the mesh's XZ box; empty cells emit nothing, so this is an upper bound.
+                ImGui::TextDisabled("%d x %d = up to %d tiles, ~%.1f m each.", grid, grid, tiles,
                     meshDialogItem_.worldSizeM / static_cast<float>(grid));
             }
             else
             {
                 ImGui::TextDisabled("%d x %d = up to %d tiles.", grid, grid, tiles);
             }
-            // Every tile costs a shadow caster GROUP, and that budget is per LEVEL, shared with
-            // every other mesh in it. Worth saying out loud: the failure mode is not this asset
-            // looking wrong, it is the whole level's shadow path falling off its fast path.
-            const ImVec4 warn(0.96f, 0.62f, 0.16f, 1.0f);
-            const ImVec4 bad(0.92f, 0.35f, 0.30f, 1.0f);
-            if (tiles > budget - 8)
+
+            // WHAT ACTUALLY LIMITS THE GRID: triangles per tile, not tile count. Tiles simplify
+            // with their shared borders LOCKED, so only a tile's INTERIOR can reduce — as tiles
+            // shrink the perimeter/area ratio rises and the LOD chain collapses. Measured on the
+            // 82,944-triangle island (LOD3 as a fraction of LOD0; lower is better):
+            //   384 tris/tile -> 0.17    176 -> 0.33    102 -> 0.43    46 -> 0.57    11 -> 1.00
+            // i.e. past roughly 300 triangles per tile the coarse LODs stop paying for themselves,
+            // and by ~50 they do nothing at all. That happens well BEFORE memory becomes the issue.
+            if (meshDialogTriCount_ > 0)
             {
-                ImGui::TextColored(tiles >= budget ? bad : warn,
-                    "%d shadow caster groups of the level's %d - other meshes need some too.",
-                    tiles, budget);
+                const double perTile = static_cast<double>(meshDialogTriCount_) / tiles;
+                if (perTile < 100.0)
+                {
+                    ImGui::TextColored(ImVec4(0.92f, 0.35f, 0.30f, 1.0f),
+                        "~%.0f triangles per tile - too fine: locked tile borders leave nothing\n"
+                        "to simplify, so the coarse LODs will barely reduce (or not at all).", perTile);
+                }
+                else if (perTile < 300.0)
+                {
+                    ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f),
+                        "~%.0f triangles per tile - the coarse LODs start losing their reduction\n"
+                        "here (locked borders). Prefer 300+ per tile.", perTile);
+                }
+                else
+                {
+                    ImGui::TextDisabled("~%.0f triangles per tile.", perTile);
+                }
+            }
+
+            // The other cost is linear and dominated by GPU BUFFERS: per-(page, group) draw args +
+            // per-(page, group) counter + per-(view, group) Rung-0 args. Page-setup GPU time is
+            // ~19 ns/frame per group (measured at 1042 groups), i.e. negligible next to the memory.
+            constexpr double kBytesPerGroup =
+                static_cast<double>(vsm::kPoolPageCount) * (sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) + sizeof(std::uint32_t)) +
+                static_cast<double>(render::kMaxShadowViews) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) * render::kFrameCount;
+            const double mb = tiles * kBytesPerGroup / (1024.0 * 1024.0);
+            const bool heavy = mb > 64.0;
+            if (heavy)
+            {
+                ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f),
+                    "%d caster groups = ~%.0f MB of shadow buffers (%.0f KB each). No hard cap, but\n"
+                    "this is real VRAM, shared with every other mesh in the level.",
+                    tiles, mb, kBytesPerGroup / 1024.0);
             }
             else
             {
-                ImGui::TextDisabled("%d shadow caster groups of the level's %d.", tiles, budget);
+                ImGui::TextDisabled("%d caster groups = ~%.1f MB of shadow buffers (%.0f KB each),"
+                                    " shared per level.", tiles, mb, kBytesPerGroup / 1024.0);
             }
         }
     }

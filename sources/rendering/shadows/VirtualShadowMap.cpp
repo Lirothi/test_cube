@@ -474,6 +474,7 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
                       pageGroupCountUav_.ptr != 0 && pageScatterDynUav_.ptr != 0 &&
                       pageGroupCountSrv_.ptr != 0 && pageScatterDynSrv_.ptr != 0 &&
                       shadowGpu->PerGroupSrv().ptr != 0;
+    d.scatterLocals = d.scatterActive && vsm::g_scatterLocalViews;
 
     return d;
 }
@@ -1054,6 +1055,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // casters) brute force for clipmap pages; local (perspective) views still cull in the setup. ---
     const D3D12_CPU_DESCRIPTOR_HANDLE perGroupSrv = shadowGpu->PerGroupSrv();
     const bool scatterActive = dec.scatterActive;
+    const bool scatterLocals = dec.scatterLocals;
     if (scatterActive)
     {
         GPU_SCOPE(cl, ProfilerScopes::kVsmPageScatter);
@@ -1070,7 +1072,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         struct ScatterCB
         {
             std::uint32_t numCasters, numGroups, numLevels, pageIdShift;
-            DirectX::XMFLOAT4X4 clipViewProj[vsm::kNumClipmapLevels];
+            // S5: local (spot/point) views scatter too. They follow the clipmap levels in the
+            // dispatch's y axis, and the matrix table became EVERY view rather than just the 8
+            // clipmap ones — same indexing as the setup CB (0..31 local, 32..39 clipmap).
+            std::uint32_t numLocalViews;
+            std::uint32_t _pad0[3];
+            DirectX::XMFLOAT4X4 viewProj[vsm::kMaxVirtualViews];
         };
         RecordComputeDispatch(renderer, cl, pageScatterMat_.get(), static_cast<UINT>(sizeof(ScatterCB)),
             [&](std::uint8_t* dst)
@@ -1083,18 +1090,21 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 // visible-list entry so ONE draw can serve all pages. MUST match the setup CB below —
                 // both write the same list and the VS decodes it with one rule.
                 c.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u;
-                // Clipmap views occupy VSM view slots [kNumLocalVirtualViews, kMaxVirtualViews).
-                for (std::uint32_t L = 0; L < vsm::kNumClipmapLevels; ++L)
-                {
-                    const std::uint32_t v = vsm::kNumLocalVirtualViews + L;
-                    if (v < viewCount) { c.clipViewProj[L] = views[v].viewProj; }
-                }
+                c.numLocalViews = scatterLocals ? vsm::kNumLocalVirtualViews : 0u;
+                // Every view, straight through. An inactive local slot stays the ZERO matrix this
+                // value-initialised struct starts with, which the shader's perspective path rejects
+                // on its own (maxW <= 0) — and such a view owns no resident pages either.
+                const std::uint32_t nv = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
+                for (std::uint32_t v = 0; v < nv; ++v) { c.viewProj[v] = views[v].viewProj; }
                 std::memcpy(dst, &c, sizeof(c));
             },
             { boundsSrv, casterGroupSrv, casterMetaSrv, pageTableSrv_, perGroupSrv },
             { pageGroupCountUav_, pageVisibleListUav_, pageScatterDynUav_ },
             D3D12_GPU_DESCRIPTOR_HANDLE{},
-            activeCasters, vsm::kNumClipmapLevels,
+            // y now spans clipmap levels AND local views: RecordComputeDispatch rounds up to its
+            // 8-thread groups, so 8 + 32 = 40 becomes 5 groups.
+            activeCasters,
+            vsm::kNumClipmapLevels + (scatterLocals ? vsm::kNumLocalVirtualViews : 0u),
             pageGroupCount_.Get());
         renderer->UAVBarrier(cl, pageVisibleList_.Get());
         renderer->UAVBarrier(cl, pageScatterDyn_.Get());
@@ -1102,16 +1112,14 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         renderer->EmitPoint(cl, dec.pointScatterRead);
     }
 
-    constexpr std::uint32_t kMaxMegaGroups = vsm::kMaxMeshGroups; // == VSM_MAX_SETUP_GROUPS in the shader
     constexpr std::uint32_t kLods = render::kMaxShadowLods;                    // KMAX_SHADOW_LODS
     constexpr std::uint32_t kViewLodVec4 = (render::kMaxShadowViews + 3u) / 4u; // 44 cull-views packed 4/uint4
-    constexpr std::uint32_t kGroupBiasVec4 = (kMaxMegaGroups + 3u) / 4u;        // 64 groups packed 4/int4
     struct SetupCB
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
         std::uint32_t forceAll, megaActive, flatLod, numLods; // per-view LOD: mega on/off + fallback LOD
         std::uint32_t scatterActive, pageIdShift, compactArgs; // 1 = the scatter pass produced clipmap lists
-        std::uint32_t _pad5; // (was the chunk-bias level cutoff; the override table replaced it)
+        std::uint32_t scatterLocals; // S5: 1 = LOCAL views were scattered too (was _pad5)
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -1120,12 +1128,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         DirectX::XMFLOAT4 wind1{ 0.0f, 0.0f, 1.0f, 1.0f }; // swayAmp, swayFreq, gustMul, prevGustMul
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
         DirectX::XMUINT4 viewLod[kViewLodVec4];               // per cull-view shadow LOD (packed 4/vec)
-        DirectX::XMUINT4 groupLodMega[kMaxMegaGroups * kLods]; // per (group,lod): {megaStart, lodRel, count, baseVertex}
-        // Chunked-terrain LOD: per-group ABSOLUTE LOD override, one int per group packed 4/int4
-        // (-1 = no override -> the view LOD; else the chunk's camera tier, so caster == receiver).
-        // APPENDED AT THE END on purpose: every array above keeps its offset, so this cannot shift
-        // gGroupLodMega out from under the shader. Mirrors gGroupLodOverride in vsm_page_setup_cs.hlsl.
-        DirectX::XMINT4 groupLodOverride[kGroupBiasVec4];
+        // The per-(group,lod) mega ranges and the per-group LOD override used to sit here as arrays
+        // sized kMaxMegaGroups -- the thing that capped the shadow path at 64 groups. They are SRVs
+        // now (t9/t10), sized by the real group count. viewLod stays: 44 views, fixed.
     };
     // Region base in 5-uint arg units. MUST come from the ring's PHYSICAL region stride: the args
     // ring is grow-only (EnsureUavRing reuses a larger prior-level allocation), so after a level
@@ -1147,6 +1152,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.megaActive = useMega ? 1u : 0u; // per-view LOD: mega on = absolute mega start, off = lod-relative
             cb.numLods = kLods;
             cb.scatterActive = scatterActive ? 1u : 0u;
+            cb.scatterLocals = scatterLocals ? 1u : 0u;
             cb.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u; // must match the scatter CB's value
             cb.compactArgs = compactArgs ? 1u : 0u;
             // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
@@ -1167,29 +1173,13 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             {
                 reinterpret_cast<std::uint32_t*>(cb.viewLod)[v] = vl[v];
             }
-            const std::vector<std::uint32_t>& glm = shadowGpu->GroupLodMegaTable();
-            const std::uint32_t gm = (groups < kMaxMegaGroups) ? groups : kMaxMegaGroups;
-            for (std::uint32_t g = 0; g < gm; ++g)
-            {
-                for (std::uint32_t L = 0; L < kLods; ++L)
-                {
-                    const size_t src = (static_cast<size_t>(g) * kLods + L) * 4u;
-                    DirectX::XMUINT4& e = cb.groupLodMega[g * kLods + L];
-                    if (src + 3 < glm.size()) { e = { glm[src], glm[src + 1], glm[src + 2], glm[src + 3] }; }
-                }
-            }
-            // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = use the view LOD), the
-            // per-frame camera tiers ShadowGpuData refreshed this frame. -1 everywhere unless a
-            // chunked mesh is loaded, which keeps the whole feature a provable no-op until one is.
-            const auto& ovr = shadowGpu->GroupLodOverride();
-            for (std::uint32_t g = 0; g < gm && g < ovr.size(); ++g)
-            {
-                reinterpret_cast<std::int32_t*>(cb.groupLodOverride)[g] = ovr[g];
-            }
             std::memcpy(dst, &cb, sizeof(cb));
         },
+        // POSITIONAL: this list IS t0..t10 in order. groupLodMega (t9) is static region 0;
+        // groupLodOverride (t10) is per-frame -- it is rewritten every frame by RefreshChunkGroupLods.
         { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv, physOwnerPrevSrv_, casterMetaSrv,
-          pageGroupCountSrv_, perGroupSrv, pageScatterDynSrv_ },
+          pageGroupCountSrv_, perGroupSrv, pageScatterDynSrv_,
+          shadowGpu->GroupLodMegaSrv(), shadowGpu->GroupLodOverrideSrv(f) },
         // u4 = the compacted-args counter. Its descriptor must be valid even when compaction is off
         // (the root signature declares the range); the shader only touches it when gCompactArgs != 0,
         // so a stand-in on the OOM path is never read.

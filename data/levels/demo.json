@@ -2371,6 +2371,402 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 185,
+      "mesh": "models/atoll_island.mesh.json",
+      "name": "staticMesh #185",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 208,
+      "mesh": "models/coconut_palm.mesh.json",
+      "name": "staticMesh #208",
+      "position": [
+        59.26557159423828,
+        2.378124237060547,
+        -41.32698440551758
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 209,
+      "mesh": "models/curly_palm.mesh.json",
+      "name": "staticMesh #209",
+      "position": [
+        61.645423889160156,
+        2.3386058807373047,
+        -32.811885833740234
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 210,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #210",
+      "position": [
+        59.559837341308594,
+        1.4623374938964844,
+        -27.650754928588867
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 211,
+      "mesh": "models/rock_boulder_2_game_ready_asset.mesh.json",
+      "name": "staticMesh #211",
+      "position": [
+        65.97077178955078,
+        2.6943912506103516,
+        -35.8729362487793
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 212,
+      "mesh": "models/rock_boulder_game_ready_asset.mesh.json",
+      "name": "staticMesh #212",
+      "position": [
+        65.70199584960938,
+        2.6898155212402344,
+        -28.817853927612305
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 213,
+      "mesh": "models/rocks_node_Rock01.mesh.json",
+      "name": "staticMesh #213",
+      "position": [
+        69.01654052734375,
+        2.8440723419189453,
+        -32.15470504760742
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 214,
+      "mesh": "models/rocks_node_Rock02.mesh.json",
+      "name": "staticMesh #214",
+      "position": [
+        55.20655822753906,
+        1.9226856231689453,
+        -39.424842834472656
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 215,
+      "mesh": "models/tent.mesh.json",
+      "name": "staticMesh #215",
+      "position": [
+        63.60670471191406,
+        2.139699935913086,
+        -43.84403991699219
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 216,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #210 Copy",
+      "position": [
+        -1.3401603698730469,
+        -0.2999992370605469,
+        -9.750753402709961
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 217,
+      "mesh": "models/coconut_palm.mesh.json",
+      "name": "staticMesh #208 Copy",
+      "position": [
+        11.36557388305664,
+        -0.3775320053100586,
+        -20.126983642578125
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 218,
+      "mesh": "models/curly_palm.mesh.json",
+      "name": "staticMesh #209 Copy",
+      "position": [
+        9.445425033569336,
+        -0.4664340019226074,
+        -21.311885833740234
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 219,
+      "mesh": "models/tent.mesh.json",
+      "name": "staticMesh #219",
+      "position": [
+        9.568799018859863,
+        -0.3000001907348633,
+        -13.997516632080078
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 220,
+      "mesh": "models/rock_boulder_2_game_ready_asset.mesh.json",
+      "name": "staticMesh #220",
+      "position": [
+        4.101459503173828,
+        -0.3000001907348633,
+        -11.934768676757813
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 221,
+      "mesh": "models/rock_boulder_2_game_ready_asset.mesh.json",
+      "name": "staticMesh #221",
+      "position": [
+        10.450370788574219,
+        -0.3000001907348633,
+        -17.27094841003418
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 222,
+      "mesh": "models/rock_boulder_game_ready_asset.mesh.json",
+      "name": "staticMesh #222",
+      "position": [
+        -0.7673091888427734,
+        -0.3000001907348633,
+        -10.805585861206055
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 223,
+      "mesh": "models/rocks_node_Rock01.mesh.json",
+      "name": "staticMesh #223",
+      "position": [
+        2.1978912353515625,
+        -0.3000001907348633,
+        -13.72413158416748
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 224,
+      "mesh": "models/rocks_node_Rock02.mesh.json",
+      "name": "staticMesh #224",
+      "position": [
+        0.9605522155761719,
+        -0.3000006675720215,
+        -8.715339660644531
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {

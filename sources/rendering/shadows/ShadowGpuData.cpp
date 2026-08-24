@@ -340,6 +340,8 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::ViewFrustumSrv(UINT frameIndex) const
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterGroupSrv() const { return casterGroup_.Srv(0); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterMetaSrv() const { return casterMeta_.Srv(0); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::PerGroupSrv() const { return perGroup_.Srv(0); }
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::GroupLodMegaSrv() const { return groupLodMegaBuf_.Srv(0); }
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::GroupLodOverrideSrv(UINT f) const { return groupLodOverrideBuf_.Srv(f); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::PerViewGroupSrv() const { return perViewGroup_.Srv(0); }
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedInstanceSrv(UINT f) const
@@ -375,11 +377,11 @@ Material* ShadowGpuData::IndirectShadowPoolMaterial() const
 // Chunked-terrain LOD: refresh the per-group ABSOLUTE LOD override from each chunked object's
 // camera tiers (RenderableObject::SelectLod filled them this frame). Runs every frame — it is what
 // keeps the VSM caster LOD equal to the LOD the gbuffer just drew, per chunk, with no rebuild.
-void ShadowGpuData::RefreshChunkGroupLods(
+void ShadowGpuData::RefreshChunkGroupLods(Renderer* renderer,
     const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
 {
-    groupLodOverride_.fill(-1);
-    if (meshFirstGroup_.empty()) { return; }
+    groupLodOverride_.assign(std::max<size_t>(numMeshGroups_, 1), -1);
+    if (meshFirstGroup_.empty()) { UploadChunkGroupLods(renderer); return; }
     for (const auto& objPtr : objects)
     {
         const RenderableObjectBase* obj = objPtr.get();
@@ -393,10 +395,30 @@ void ShadowGpuData::RefreshChunkGroupLods(
         for (size_t s = 0; s < lods.size(); ++s)
         {
             const std::uint32_t g = it->second + static_cast<std::uint32_t>(s);
-            if (g >= groupLodOverride_.size()) { break; }
+            if (g >= groupLodOverride_.size()) { break; } // group ids are dense; this is a bounds guard
             groupLodOverride_[g] =
-                static_cast<std::int8_t>(mesh->ClampExplicitLod(lods[s]));
+                static_cast<std::int32_t>(mesh->ClampExplicitLod(lods[s]));
         }
+    }
+    UploadChunkGroupLods(renderer);
+}
+
+// The override table's home is a PER-FRAME ring region: it is rewritten every frame, so writing it
+// into region f is the same WAR discipline the instance/bounds rings use. Sized by numMeshGroups_,
+// which is what took the group cap off this table.
+void ShadowGpuData::UploadChunkGroupLods(Renderer* renderer)
+{
+    if (!renderer || groupLodOverride_.empty()) { return; }
+    if (!EnsureRing(renderer, groupLodOverrideBuf_, groupLodOverride_.size(),
+                    sizeof(std::int32_t), L"ShadowGpuData.GroupLodOverride"))
+    {
+        return;
+    }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return; }
+    if (std::uint8_t* dst = groupLodOverrideBuf_.Region(f))
+    {
+        std::memcpy(dst, groupLodOverride_.data(), groupLodOverride_.size() * sizeof(std::int32_t));
     }
 }
 
@@ -932,19 +954,12 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     baseVertex_.assign(numMeshGroups_, 0u);
     startIndex_.assign(numMeshGroups_, 0u);
     megaCopy_.clear();
-    constexpr std::uint32_t kMaxMegaGroups = vsm::kMaxMeshGroups; // == VSM_MAX_SETUP_GROUPS in the shader
-    if (numMeshGroups_ > kMaxMegaGroups)
-    {
-        // Over the VSM setup shader's per-group CB cap: the mega path stays off (per-group
-        // binding fallback still draws correctly), but flag it — B3's per-submesh groups make
-        // this reachable with far fewer meshes than before.
-        char warn[128];
-        std::snprintf(warn, sizeof(warn),
-            "[ShadowGpuData] WARNING: %u mesh-groups exceeds the VSM setup cap (%u); mega path disabled.\n",
-            numMeshGroups_, kMaxMegaGroups);
-        OutputDebugStringA(warn);
-    }
-    if (numMeshGroups_ > 0 && numMeshGroups_ <= kMaxMegaGroups)
+    // NO group cap here any more. This used to bail above vsm::kMaxMeshGroups because the VSM setup
+    // shader addressed the per-(group,lod) ranges through a CB array of that fixed size; they are an
+    // SRV now (groupLodMegaBuf_ -> t9), sized by numMeshGroups_. The mega layout itself never had a
+    // 64 dependency -- it iterates megaCopy_ per UNIQUE MESH, and baseVertex_/startIndex_ are sized
+    // by the group count. Keeping the gate would have cost the >64 case its fast path for nothing.
+    if (numMeshGroups_ > 0)
     {
         // Per-view shadow LOD: lay the mega buffer out per UNIQUE mesh — one VB copy + its LOD index
         // buffers concatenated ([LOD0|LOD1|...]) — so different shadow views draw different LODs of the
@@ -1028,6 +1043,23 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         }
     }
 
+    // Per-(group,lod) mega ranges -> their SRV. Written LAST because the mega block above patches
+    // groupLodMega_ in place (absolute starts + base vertex). Static region 0: it only changes when
+    // the caster set is rebuilt, which is when this runs.
+    if (numMeshGroups_ > 0 &&
+        EnsureRing(renderer, groupLodMegaBuf_, groupLodMega_.size() / 4u,
+                   4 * sizeof(std::uint32_t), L"ShadowGpuData.GroupLodMega"))
+    {
+        if (std::uint8_t* dst = groupLodMegaBuf_.Region(0))
+        {
+            std::memcpy(dst, groupLodMega_.data(), groupLodMega_.size() * sizeof(std::uint32_t));
+        }
+    }
+    // The override table is per-frame, but it must be VALID before the first RefreshChunkGroupLods
+    // of the new caster set — a rebuild can land between two frames' refreshes.
+    groupLodOverride_.assign(std::max<size_t>(numMeshGroups_, 1), -1);
+    UploadChunkGroupLods(renderer);
+
     // Prime ALL ring regions — after this a static scene re-uploads nothing.
     if (casterCount > 0)
     {
@@ -1074,10 +1106,13 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     char buf[352];
     std::snprintf(buf, sizeof(buf),
         "[ShadowGpuData] rebuilt: %u casters (%u static + %u GI in %zu objs%s), %u mesh-groups "
-        "(%u chunked of %u meshes, cap %u); %.2f KB instance + %.2f KB bounds x%u regions.\n",
+        "(%u chunked of %u meshes; %u cast from local lights); %.2f KB instance + %.2f KB bounds x%u regions.\n",
         count_, staticCount_, count_ - staticCount_, giCasters_.size(),
         giCapped ? ", CAPPED" : "", numMeshGroups_, chunkedMeshes, static_cast<std::uint32_t>(meshToGroup.size()),
-        kMaxGroups,
+        // NOT a cap on the group count any more (directional shadows have none) — it is how many
+        // groups the local-light per-page cull can still address. Printing it as "cap N" read like a
+        // hard limit the moment a level went past it.
+        (numMeshGroups_ < kMaxGroups) ? numMeshGroups_ : kMaxGroups,
         (instances_.capacity * sizeof(render::InstancePerObject)) / 1024.0,
         (bounds_.capacity * sizeof(render::CasterBounds)) / 1024.0,
         render::kFrameCount);

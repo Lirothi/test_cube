@@ -134,9 +134,9 @@ public:
     // UpdateForFrame from each chunked object's ChunkCameraLods() — the camera tier per chunk. No
     // rebuild involved: the mega buffer holds every LOD and gGroupLodMega carries every (group,lod)
     // range, so matching the caster to the drawn LOD is per-frame CB data. Consumed by the VSM
-    // setup CB fill (VirtualShadowMap.cpp); the Legacy per-view loop reads the object array
-    // directly (RenderableObject::RenderShadow).
-    const std::array<std::int8_t, vsm::kMaxMeshGroups>& GroupLodOverride() const { return groupLodOverride_; }
+    // setup pass (as an SRV, region `frameIndex` — it is rewritten every frame); the Legacy
+    // per-view loop reads the object array directly (RenderableObject::RenderShadow).
+    D3D12_CPU_DESCRIPTOR_HANDLE GroupLodOverrideSrv(UINT frameIndex) const;
     // Groups [0, StaticGroupCount()) are static submesh groups (biased to BuiltShadowLod()); groups
     // at/after it are GI whole-buffer groups (always LOD0). The per-group fallback binds accordingly.
     std::uint32_t StaticGroupCount() const { return numStaticGroups_; }
@@ -240,9 +240,11 @@ public:
     DXGI_FORMAT MegaIndexFormat() const { return megaIndexFormat_; }
     std::uint32_t GroupBaseVertex(std::uint32_t g) const { return g < baseVertex_.size() ? baseVertex_[g] : 0u; }
     std::uint32_t GroupStartIndex(std::uint32_t g) const { return g < startIndex_.size() ? startIndex_[g] : 0u; }
-    // Per-view LOD + per-(group,lod) mega table for the VSM setup CB (see viewLod_/groupLodMega_).
+    // Per-view LOD for the VSM setup CB (44 views, fixed) — see viewLod_.
     const std::vector<std::uint32_t>& ViewLod() const { return viewLod_; }
-    const std::vector<std::uint32_t>& GroupLodMegaTable() const { return groupLodMega_; }
+    // Per-(group,lod) mega ranges as an SRV (static, region 0). A CB array would cap the group
+    // count at the CB's compile-time size; this is sized by numMeshGroups_ (see groupLodMega_).
+    D3D12_CPU_DESCRIPTOR_HANDLE GroupLodMegaSrv() const;
     // Shadow LOD to bind a mesh's own index buffer at, for the per-page/per-view geometry FALLBACK
     // (mega off) and the Legacy per-view path. `cullView` indexes the cull-view layout; clamp per mesh
     // at the call site via Mesh::ClampExplicitLod. Returns 0 if out of range.
@@ -307,9 +309,15 @@ public:
     // Chunked-terrain LOD: refresh groupLodOverride_ from the chunked objects' camera tiers.
     // Scene calls it every frame AFTER PrepareViews (whose SelectLods picked the tiers) — earlier
     // and the caster would lag the receiver by one frame at every LOD transition.
-    void RefreshChunkGroupLods(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects);
+    // Takes the renderer because it UPLOADS: the overrides land in this frame's ring region, and
+    // Scene calls this after UpdateForFrame, so there is no later per-frame hook to defer to.
+    void RefreshChunkGroupLods(Renderer* renderer,
+                               const std::vector<std::unique_ptr<RenderableObjectBase>>& objects);
 
 private:
+    // Copy groupLodOverride_ into this frame's ring region (growing the ring as needed).
+    void UploadChunkGroupLods(Renderer* renderer);
+
 
     void RebuildCullDescriptors(Renderer* renderer);        // per-region UAVs for args/visible/counts
     void RebuildUnifiedDescriptors(Renderer* renderer);     // per-region SRVs for the unified instance/bounds buffers
@@ -409,9 +417,15 @@ private:
     // Per (group, lod) mega geometry, flat 4 uints/entry: {megaAbsStart, lodRelStart, indexCount,
     // baseVertex}, pre-clamped to the mesh's available LODs. numMeshGroups_ * kMaxShadowLods entries.
     std::vector<std::uint32_t> groupLodMega_;
-    // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = none), refreshed every frame in
-    // UpdateForFrame from the chunked objects' camera tiers (see GroupLodOverride()).
-    std::array<std::int8_t, vsm::kMaxMeshGroups> groupLodOverride_{};
+    // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = none), refreshed every frame from
+    // the chunked objects' camera tiers (see RefreshChunkGroupLods). Sized to numMeshGroups_ — it
+    // used to be a std::array capped at vsm::kMaxMeshGroups, which silently dropped the override for
+    // every chunk past the cap and put those tiles back on the view LOD.
+    std::vector<std::int32_t> groupLodOverride_;
+    // GPU homes for the two tables above. Mega is static (region 0, written at Rebuild); the
+    // override is per-frame (region f, rewritten by RefreshChunkGroupLods).
+    Ring groupLodMegaBuf_;
+    Ring groupLodOverrideBuf_;
     // mesh -> its FIRST caster group (snapshot of Rebuild's meshToGroup), so the per-frame override
     // refresh can map a chunked mesh's slot ordinal to its group id without re-deriving the layout.
     std::unordered_map<const Mesh*, std::uint32_t> meshFirstGroup_;

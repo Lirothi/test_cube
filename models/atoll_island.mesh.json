@@ -1,10 +1,9 @@
 {
-  "chunkGrid": 6,
+  "chunkGrid": 16,
   "geometry": "models/atoll_island/atoll_island.mesh.bin",
   "inputLayout": "PosNormTanUV",
   "lod3Aggressive": false,
-  "lodRatioScale": 0.800000011920929,
-  "material": "sandstone_cracks",
+  "material": "sandy_gravel",
   "renderLayer": "Terrain",
   "source": "import_staging\\atoll_island\\atoll_island.obj",
   "texOffsScale": [

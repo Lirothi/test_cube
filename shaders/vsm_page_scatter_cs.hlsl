@@ -17,8 +17,13 @@
 // pass then reads the same counter as InstanceCount and uses the global base as
 // StartInstanceLocation. Costs nothing extra: the slice was already sized for the worst case.
 //
-// Local (spot/point) views are PERSPECTIVE — an AABB's NDC rect is not well defined when the box
-// crosses the near plane — so they are NOT scattered here and keep the brute-force per-page path.
+// S5: LOCAL (spot/point) views scatter here too. They are PERSPECTIVE, so the NDC rect needs the
+// per-corner divide, and a box straddling w=0 has no well-defined rect at all — the answer is
+// Unreal's (Nanite/NaniteHZBCull.ush::BoxCullFrustumPerspective): detect the straddle and bail to
+// the FULL [-1,1] rect instead of producing a wrapped one. Conservative, and conservative is always
+// safe here (a page may draw a caster it turns out not to touch; the rasterizer discards it).
+// Locals also use the whole mip PYRAMID (a pixel marks one page at its own level), unlike clipmap
+// views where the level IS the LOD and only mip 0 exists — so a local view walks all 5 levels.
 #pragma pack_matrix(row_major)
 #include "vsm_addressing.hlsli"
 
@@ -35,7 +40,12 @@ cbuffer ScatterCB : register(b0)
     // Single-draw page render: see the identically-named field in vsm_page_setup_cs.hlsl's SetupCB.
     // Both writers of PageVisibleList must pack identically, so this is fed from the same CPU value.
     uint gPageIdShift;
-    float4x4 gClipViewProj[VSM_NUM_CLIPMAP_LEVELS]; // per clipmap level (VSM view 32+L)
+    uint gNumLocalViews; // local (spot/point) views scattered after the clipmap levels; 0 = none
+    uint3 _pad0;
+    // Every VSM view, same indexing as the setup CB (0..31 local, 32..39 clipmap). Was only the 8
+    // clipmap matrices before S5. An inactive slot is a ZERO matrix, which the perspective path
+    // rejects on its own (maxW <= 0) — and its pages are not resident either.
+    float4x4 gViewProj[VSM_MAX_VIEWS];
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; };
@@ -52,14 +62,84 @@ RWStructuredBuffer<uint> PageGroupCount  : register(u0); // per (page, group) co
 RWStructuredBuffer<uint> PageVisibleList : register(u1); // per (page, slot) caster id
 RWStructuredBuffer<uint> PageScatterDyn  : register(u2); // per page: a dynamic caster landed here
 
-// numthreads(8,8,1) matches RecordComputeDispatch's group size; y spans the 8 clipmap levels exactly.
+// Project an AABB to an NDC rect. Ortho (clipmap) views map the 8 corners AFFINELY, so the min/max
+// over them is exact. Perspective (local) views need the divide, and the box can straddle w=0 where
+// no rect exists — transcribed from Unreal's BoxCullFrustumPerspective: notice the straddle and
+// return the FULL rect. Returns false only when the box is entirely behind the eye.
+// Positive-vertex AABB-vs-frustum test (same rule as vsm_page_setup_cs::PageIntersects). Planes are
+// unnormalized straight from the matrix — the test is scale-invariant per plane.
+bool BoxInPagePlanes(float4x4 vp, uint level, uint px, uint py, float3 c, float3 e)
+{
+    // The page's off-center projection, built exactly like the setup pass builds it.
+    const float a = (float)(VSM_L0_AXIS >> level);
+    const float cx = -1.0f + (2.0f * px + 1.0f) / a;
+    const float cy =  1.0f - (2.0f * py + 1.0f) / a;
+    const float4x4 S = float4x4(a, 0, 0, 0,
+                                0, a, 0, 0,
+                                0, 0, 1, 0,
+                                -cx * a, -cy * a, 0, 1);
+    const float4x4 pt = transpose(mul(vp, S));
+    float4 planes[6];
+    planes[0] = pt[3] + pt[0];
+    planes[1] = pt[3] - pt[0];
+    planes[2] = pt[3] + pt[1];
+    planes[3] = pt[3] - pt[1];
+    planes[4] = pt[2];
+    planes[5] = pt[3] - pt[2];
+    [unroll] for (int i = 0; i < 6; ++i)
+    {
+        if (dot(planes[i].xyz, c) + planes[i].w + dot(abs(planes[i].xyz), e) < 0.0f) { return false; }
+    }
+    return true;
+}
+
+bool ProjectAabbNdc(float4x4 vp, float3 ctr, float3 ext, bool perspective,
+                    out float2 lo, out float2 hi, out bool straddles)
+{
+    lo = float2( 1e30f,  1e30f);
+    hi = float2(-1e30f, -1e30f);
+    float minW =  1e30f;
+    float maxW = -1e30f;
+    [unroll] for (uint k = 0u; k < 8u; ++k)
+    {
+        const float3 corner = ctr + ext * float3((k & 1u) ? 1.0f : -1.0f,
+                                                 (k & 2u) ? 1.0f : -1.0f,
+                                                 (k & 4u) ? 1.0f : -1.0f);
+        const float4 clip = mul(float4(corner, 1.0f), vp);
+        minW = min(minW, clip.w);
+        maxW = max(maxW, clip.w);
+        // The divide can produce inf/NaN when w is at or near 0 — harmless, because that is exactly
+        // the straddle case below, which discards lo/hi wholesale.
+        const float2 sp = perspective ? (clip.xy / clip.w) : clip.xy;
+        lo = min(lo, sp);
+        hi = max(hi, sp);
+    }
+    straddles = false;
+    if (!perspective) { return true; }
+    if (maxW <= 0.0f) { return false; }                              // entirely behind the eye
+    if (minW <= 0.0f)
+    {
+        // No NDC rect exists. Unreal takes the full rect here and moves on; measured on demo.json
+        // that costs +0.47 ms on Pass_VsmPageRender, because a straddling caster then appends to
+        // EVERY resident page of the view (0.776 vs 0.308 for the brute-force path it replaced).
+        // So the full rect becomes a page CANDIDATE SET instead of an answer: each candidate still
+        // has to pass the exact per-page frustum test below. Only straddlers pay for it.
+        lo = float2(-1.0f, -1.0f);
+        hi = float2( 1.0f,  1.0f);
+        straddles = true;
+    }
+    return true;
+}
+
+// numthreads(8,8,1) matches RecordComputeDispatch's group size. y indexes a SCATTER TARGET:
+// [0, gNumLevels) = clipmap level, [gNumLevels, gNumLevels+gNumLocalViews) = local view.
 [numthreads(8, 8, 1)]
 [RootSignature(VSM_SCATTER_RS)]
 void CSMain(uint3 dtid : SV_DispatchThreadID)
 {
     const uint c = dtid.x;              // caster slot id (only object-leading slots do work)
-    const uint level = dtid.y;          // clipmap level == VSM view (VSM_NUM_LOCAL_VIEWS + level)
-    if (c >= gNumCasters || level >= gNumLevels) { return; }
+    const uint target = dtid.y;
+    if (c >= gNumCasters || target >= gNumLevels + gNumLocalViews) { return; }
 
     const uint meta = CasterMeta[c];
     const uint slots = meta >> 1;
@@ -69,59 +149,57 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const float3 ctr = b.center.xyz;
     const float3 ext = b.halfExtents.xyz;
 
-    // Project the AABB into this level's clip space and take the NDC bounding rect. The clipmap
-    // views are ORTHOGRAPHIC, so w is constant and the 8 corners map affinely — the min/max over
-    // them is exact and conservative (a superset is always safe: a page may draw a caster that turns
-    // out not to touch it, which the rasterizer then discards).
-    const float4x4 vp = gClipViewProj[level];
-    float2 lo = float2( 1e30f,  1e30f);
-    float2 hi = float2(-1e30f, -1e30f);
-    [unroll] for (uint k = 0u; k < 8u; ++k)
-    {
-        const float3 corner = ctr + ext * float3((k & 1u) ? 1.0f : -1.0f,
-                                                 (k & 2u) ? 1.0f : -1.0f,
-                                                 (k & 4u) ? 1.0f : -1.0f);
-        const float4 clip = mul(float4(corner, 1.0f), vp);
-        lo = min(lo, clip.xy);
-        hi = max(hi, clip.xy);
-    }
-    if (hi.x < -1.0f || lo.x > 1.0f || hi.y < -1.0f || lo.y > 1.0f) { return; } // outside this level
+    const bool isLocal = (target >= gNumLevels);
+    // Clipmap views sit after the local ones in the VSM view list; a clipmap LEVEL is its own view.
+    const uint view = isLocal ? (target - gNumLevels) : (VSM_NUM_LOCAL_VIEWS + target);
+    // A clipmap view is one page grid (the level IS the LOD). A local view is a mip pyramid, and a
+    // receiver pixel marks whichever level matches its density, so every level can be resident.
+    const uint mipCount = isLocal ? (VSM_MAX_LEVEL + 1u) : 1u;
 
-    // NDC -> page grid. Clipmap views use level 0 of the mip chain only (the clipmap LEVEL is the
-    // LOD), so the grid is VSM_L0_AXIS x VSM_L0_AXIS. y flips (NDC +y is up, page rows run down).
-    const float axis = (float)VSM_L0_AXIS;
-    const int x0 = (int)floor((lo.x * 0.5f + 0.5f) * axis);
-    const int x1 = (int)floor((hi.x * 0.5f + 0.5f) * axis);
-    const int y0 = (int)floor((0.5f - hi.y * 0.5f) * axis);
-    const int y1 = (int)floor((0.5f - lo.y * 0.5f) * axis);
-    const uint px0 = (uint)clamp(x0, 0, (int)VSM_L0_AXIS - 1);
-    const uint px1 = (uint)clamp(x1, 0, (int)VSM_L0_AXIS - 1);
-    const uint py0 = (uint)clamp(y0, 0, (int)VSM_L0_AXIS - 1);
-    const uint py1 = (uint)clamp(y1, 0, (int)VSM_L0_AXIS - 1);
+    float2 lo, hi;
+    bool straddles;
+    if (!ProjectAabbNdc(gViewProj[view], ctr, ext, isLocal, lo, hi, straddles)) { return; }
+    if (hi.x < -1.0f || lo.x > 1.0f || hi.y < -1.0f || lo.y > 1.0f) { return; } // outside this view
 
-    const uint view = VSM_NUM_LOCAL_VIEWS + level;
     const bool isDynamic = (meta & 1u) != 0u;
 
-    for (uint py = py0; py <= py1; ++py)
+    for (uint L = 0u; L < mipCount; ++L)
     {
-        for (uint pxi = px0; pxi <= px1; ++pxi)
-        {
-            const uint entry = PageTable[VsmPageId(view, 0u, pxi, py)];
-            if ((entry & 0x80000000u) == 0u) { continue; }   // not resident -> nothing to draw into
-            const uint p = entry & 0x0000FFFFu;              // physical page index
+        // NDC -> this level's page grid. y flips (NDC +y is up, page rows run down).
+        const uint axisI = VSM_L0_AXIS >> L;
+        const float axis = (float)axisI;
+        const int x0 = (int)floor((lo.x * 0.5f + 0.5f) * axis);
+        const int x1 = (int)floor((hi.x * 0.5f + 0.5f) * axis);
+        const int y0 = (int)floor((0.5f - hi.y * 0.5f) * axis);
+        const int y1 = (int)floor((0.5f - lo.y * 0.5f) * axis);
+        const uint px0 = (uint)clamp(x0, 0, (int)axisI - 1);
+        const uint px1 = (uint)clamp(x1, 0, (int)axisI - 1);
+        const uint py0 = (uint)clamp(y0, 0, (int)axisI - 1);
+        const uint py1 = (uint)clamp(y1, 0, (int)axisI - 1);
 
-            for (uint s = 0u; s < slots; ++s)
+        for (uint py = py0; py <= py1; ++py)
+        {
+            for (uint pxi = px0; pxi <= px1; ++pxi)
             {
-                const uint g = CasterGroup[c + s];
-                if (g >= gNumGroups) { continue; }
-                uint rank;
-                InterlockedAdd(PageGroupCount[p * gNumGroups + g], 1u, rank);
-                // Global group base inside this page's slice (see SLICE LAYOUT above).
-                const uint vid = c + s;
-                PageVisibleList[p * gNumCasters + PerGroup[g].x + rank] =
-                    (gPageIdShift != 0u) ? (vid | (p << gPageIdShift)) : vid;
+                const uint entry = PageTable[VsmPageId(view, L, pxi, py)];
+                if ((entry & 0x80000000u) == 0u) { continue; }   // not resident -> nothing to draw into
+                // Residency first: the exact test is only worth building for a page that exists.
+                if (isLocal && !BoxInPagePlanes(gViewProj[view], L, pxi, py, ctr, ext)) { continue; }
+                const uint p = entry & 0x0000FFFFu;              // physical page index
+
+                for (uint s = 0u; s < slots; ++s)
+                {
+                    const uint g = CasterGroup[c + s];
+                    if (g >= gNumGroups) { continue; }
+                    uint rank;
+                    InterlockedAdd(PageGroupCount[p * gNumGroups + g], 1u, rank);
+                    // Global group base inside this page's slice (see SLICE LAYOUT above).
+                    const uint vid = c + s;
+                    PageVisibleList[p * gNumCasters + PerGroup[g].x + rank] =
+                        (gPageIdShift != 0u) ? (vid | (p << gPageIdShift)) : vid;
+                }
+                if (isDynamic) { PageScatterDyn[p] = 1u; }
             }
-            if (isDynamic) { PageScatterDyn[p] = 1u; }
         }
     }
 }

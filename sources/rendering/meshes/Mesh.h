@@ -104,12 +104,12 @@ public:
     const std::vector<Submesh>& SubmeshesForLod(UINT lod) const;
     size_t GetSubmeshCount() const { return submeshes_.size(); }
 
-    // Shadow chunking (mesh.json "chunkGrid", baked by MeshManager's ChunkifyLod0). The LOD0
+    // Mesh chunking (mesh.json "chunkGrid", baked by MeshManager's ChunkifyLod0). The LOD0
     // submeshes of a chunked mesh are SPATIAL tiles of one continuous surface, not material groups
-    // scattered through it — so each carries its own mesh-local AABB and the shadow path registers
-    // it as an INDEPENDENT caster. That is what lets a virtual-shadow-map page rasterize only the
-    // tiles it overlaps instead of the whole terrain. Non-chunked meshes report false + an empty
-    // table and keep sharing their object's bounds across slots.
+    // scattered through it — so each carries its own mesh-local AABB. Two consumers: the CAMERA
+    // LODs and draws each tile independently (RenderableObject::chunkLods_), and the shadow path
+    // registers each as an INDEPENDENT caster so a page rasterizes only the tiles it overlaps.
+    // Non-chunked meshes report false + an empty table and keep sharing their object's bounds.
     bool IsChunkedSubmeshes() const { return chunkedSubmeshes_; }
     const std::vector<AABB>& GetSubmeshBounds() const { return submeshBounds_; }
 

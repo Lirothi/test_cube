@@ -15,13 +15,13 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 
 #define VSM_PAGE_SETUP_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
 #define KMAX_SHADOW_LODS 4      // matches render::kMaxShadowLods
 #define KVIEWLOD_VEC4    11     // (render::kMaxShadowViews=44 cull-views + 3) / 4, packed 4/uint4
-#define KGROUP_BIAS_VEC4 16     // (VSM_MAX_SETUP_GROUPS=64 + 3) / 4, packed 4/int4
+#define VSM_SETUP_LANES  8      // == numthreads y; threads per page that share the per-group loop
 
 cbuffer SetupCB : register(b0)
 {
@@ -44,7 +44,11 @@ cbuffer SetupCB : register(b0)
     // layout the per-page loop indexes directly. Only ever 1 when the single-draw path is active —
     // the loop computes its own argOffset from (page, group) and would read garbage otherwise.
     uint gCompactArgs;
-    uint _pad5; // (was the chunk-bias level cutoff; the absolute override table replaced it)
+    // S5: 1 = LOCAL (spot/point) views were scattered too, so their pages skip the brute-force
+    // cull like clipmap pages already do. Occupies what used to be _pad5, so the CB layout is
+    // unchanged. Toggled live by vsm::g_scatterLocalViews, which exists so the two local-light
+    // paths can be A/B-ed inside ONE binary.
+    uint gScatterLocals;
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -52,15 +56,10 @@ cbuffer SetupCB : register(b0)
     float4 gWind1;      // x=swayAmp, y=swayFreq, z=gustMul, w=prevGustMul
     float4x4 gViewProj[VSM_MAX_VIEWS];    // per VSM local view (spots then point faces)
     uint4    gViewLod[KVIEWLOD_VEC4];      // per cull-view shadow LOD (near->far tier + bias), packed 4/uint4
-    // per (mesh-group, lod): x=mega absolute start, y=lod-relative start, z=index count, w=mega base vertex.
-    uint4    gGroupLodMega[VSM_MAX_SETUP_GROUPS * KMAX_SHADOW_LODS];
-    // per mesh-group: ABSOLUTE LOD override, packed 4/int4. -1 = no override (use the view LOD);
-    // else the chunk's CAMERA tier this frame, on EVERY view — the caster must equal the geometry
-    // the gbuffer just rasterized, and that identity is what retired the whole terrain
-    // self-shadow-mismatch family (banding, low-sun stairs, phantom blobs). Appended AFTER
-    // gGroupLodMega so no array above it moves; the CPU mirror is SetupCB::groupLodOverride in
-    // VirtualShadowMap.cpp and the two must be repacked together.
-    int4     gGroupLodOverride[KGROUP_BIAS_VEC4];
+    // NOTE: the per-(group,lod) mega ranges and the per-group LOD override used to live HERE, as CB
+    // arrays sized VSM_MAX_SETUP_GROUPS. That is what capped the whole shadow path at 64 mesh-groups
+    // — a CB array cannot be sized by gNumGroups. Both are SRVs now (t9/t10), sized by the real group
+    // count. gViewLod stays: the view count is fixed at 44, so it has no such problem.
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; }; // xyz world center/half-extents (matches render::CasterBounds)
@@ -75,6 +74,11 @@ StructuredBuffer<uint>         CasterMeta    : register(t5); // per-caster: bit0
 StructuredBuffer<uint>         PageGroupCount : register(t6); // per (page, group) instance count
 StructuredBuffer<uint4>        PerGroup       : register(t7); // .x = group's global base in a page slice
 StructuredBuffer<uint>         PageScatterDyn : register(t8); // per page: a dynamic caster landed here
+// Per-group geometry tables, sized by the REAL group count (CB arrays capped at 64 until the cap
+// removal). A descriptor table is POSITIONAL: t9/t10 must be the 10th and 11th handles the CPU
+// stages, in this order.
+StructuredBuffer<uint4>        GroupLodMega     : register(t9);  // per (group,lod): {megaStart, lodRel, count, baseVertex}
+StructuredBuffer<int>          GroupLodOverride : register(t10); // per group: ABSOLUTE LOD, -1 = use the view LOD
 
 RWByteAddressBuffer      PageDrawArgs    : register(u0); // per (page, group) D3D12_DRAW_INDEXED_ARGUMENTS
 RWByteAddressBuffer      PageProj        : register(u1); // per page off-center viewProj (256-byte stride for root-CBV)
@@ -103,8 +107,15 @@ bool PageIntersects(float4 planes[6], float3 c, float3 e)
 [RootSignature(VSM_PAGE_SETUP_RS)]
 void CSMain(uint3 dtid : SV_DispatchThreadID)
 {
-    if (dtid.y != 0u) { return; }
+    // dtid.y spans VSM_SETUP_LANES because RecordComputeDispatch has a fixed 8x8 group shape. This
+    // used to open `if (dtid.y != 0) return;` — 7 of every 8 threads died immediately. The per-group
+    // args loop is the term that scales with the mesh-group count, and on a SCATTERED page it now
+    // has no per-thread state (both counts and bases are direct buffer reads since the cap removal),
+    // so it is split across the lanes instead of run serially in one.
+    //
+    // The brute-force (local-light) path keeps its serial prefix sum and stays lane 0 only.
     const uint p = dtid.x;
+    const uint lane = dtid.y;
     if (p >= gNumPages) { return; }
 
     const uint owner = PhysOwner[p];
@@ -115,10 +126,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // With compacted args there is nothing to write at all — a record that is never appended
         // cannot be reached, since the count buffer stops the draw short of it. That skip IS the
         // compaction: free pages are ~45% of the pool.
-        PerPageDirty[p] = 0u;
+        if (lane == 0u) { PerPageDirty[p] = 0u; }
         if (gCompactArgs == 0u)
         {
-            for (uint g = 0u; g < gNumGroups; ++g)
+            for (uint g = lane; g < gNumGroups; g += VSM_SETUP_LANES)
             {
                 uint off = (p * gNumGroups + g) * 20u;
                 PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u));
@@ -136,28 +147,42 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     uint view, level, px, py;
     VsmDecodePage(owner, view, level, px, py);
 
+    // Established BEFORE the projection so the extra lanes can retire without paying for it: the
+    // brute-force path is inherently serial (count -> prefix sum -> scatter cursor, all in one
+    // thread's registers), so only lane 0 walks it.
+    const bool scattered = (gScatterActive != 0u) &&
+                           (view >= VSM_NUM_LOCAL_VIEWS || gScatterLocals != 0u);
+    if (!scattered && lane != 0u) { return; }
+
     // Off-center projection: the page (px,py) at this level covers the NDC sub-rect centered at
     // (cx,cy) with half-size 1/axis; scale/bias clip so that sub-rect fills [-1,1] (z preserved).
-    const float a = (float)(VSM_L0_AXIS >> level);
-    const float cx = -1.0f + (2.0f * px + 1.0f) / a;
-    const float cy =  1.0f - (2.0f * py + 1.0f) / a;
-    const float4x4 S = float4x4(a, 0, 0, 0,
-                                0, a, 0, 0,
-                                0, 0, 1, 0,
-                                -cx * a, -cy * a, 0, 1);
-    const float4x4 pm = mul(gViewProj[view], S);
-    uint po = p * 256u; // 256-byte stride (root-CBV alignment)
-    PageProj.Store4(po +  0u, asuint(pm[0]));
-    PageProj.Store4(po + 16u, asuint(pm[1]));
-    PageProj.Store4(po + 32u, asuint(pm[2]));
-    PageProj.Store4(po + 48u, asuint(pm[3]));
-    // W5: the wind tail of the shadow PerView CB. Bytes 64..192 (viewProjNoJitter /
-    // prevViewProjNoJitter) stay unwritten — the depth-only shadow VS never reads them.
-    PageProj.Store4(po + 192u, asuint(gWind0));
-    PageProj.Store4(po + 208u, asuint(gWind1));
+    // Lane 0 only: one page has ONE projection, and only the serial path needs the planes derived
+    // from it. The extra lanes exist for the per-group args loop, which does not read either.
+    float4x4 pm = (float4x4)0;
+    if (lane == 0u)
+    {
+        const float a = (float)(VSM_L0_AXIS >> level);
+        const float cx = -1.0f + (2.0f * px + 1.0f) / a;
+        const float cy =  1.0f - (2.0f * py + 1.0f) / a;
+        const float4x4 S = float4x4(a, 0, 0, 0,
+                                    0, a, 0, 0,
+                                    0, 0, 1, 0,
+                                    -cx * a, -cy * a, 0, 1);
+        pm = mul(gViewProj[view], S);
+        uint po = p * 256u; // 256-byte stride (root-CBV alignment)
+        PageProj.Store4(po +  0u, asuint(pm[0]));
+        PageProj.Store4(po + 16u, asuint(pm[1]));
+        PageProj.Store4(po + 32u, asuint(pm[2]));
+        PageProj.Store4(po + 48u, asuint(pm[3]));
+        // W5: the wind tail of the shadow PerView CB. Bytes 64..192 (viewProjNoJitter /
+        // prevViewProjNoJitter) stay unwritten — the depth-only shadow VS never reads them.
+        PageProj.Store4(po + 192u, asuint(gWind0));
+        PageProj.Store4(po + 208u, asuint(gWind1));
+    }
 
     // The page's 6 frustum planes from pm (columns; clip = mul(world, pm)). Positive-vertex test is
     // scale-invariant, so unnormalized planes are fine. Near/far match the view (S preserves z).
+    // Only the brute-force cull reads them, and that runs on lane 0 — the only lane holding pm.
     const float4x4 pt = transpose(pm); // pt[k] = column k of pm
     float4 planes[6];
     planes[0] = pt[3] + pt[0]; // left
@@ -168,11 +193,21 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     planes[5] = pt[3] - pt[2]; // far
 
     const uint rung0View = view + 4u;
+    // Groups this lane owns in the per-group loops below: strided across lanes on the scattered
+    // path, the whole range on the serial one (where only lane 0 got this far).
+    const uint gStart = scattered ? lane : 0u;
+    const uint gStep  = scattered ? (uint)VSM_SETUP_LANES : 1u;
 
-    // DIRECTIONAL clipmap pages get their instance lists from the spatial scatter pass, which already
-    // wrote this page's per-group counts (and appended the caster ids into the page slice at each
-    // group's GLOBAL base). Nothing to cull here. LOCAL (spot/point) views are perspective, so an
-    // AABB page-rect is ill-defined for them and they keep the brute-force per-page cull below.
+    // EVERY page now gets its instance list from the spatial scatter pass, which already wrote this
+    // page's per-group counts (and appended the caster ids into the page slice at each group's
+    // GLOBAL base). Nothing to cull here. S5 brought LOCAL (spot/point) views into that pass too —
+    // their perspective AABB rect is Unreal's straddle-the-near-plane-and-take-the-full-rect trick.
+    //
+    // The brute-force block below is now purely the FALLBACK for `gScatterActive == 0`, i.e. the
+    // scatter PSO failed to build. It is kept rather than deleted because without it that failure
+    // means NO shadows instead of slow ones — and it is the one place the group cap still bites
+    // (its two per-thread tables), which is acceptable for a degraded path that also has to be
+    // simultaneously over 64 groups to notice.
     //
     // NOTE, previously measured dead end: iterating Rung 0's per-VIEW visible set here instead of all
     // casters is ~1.8x SLOWER (Setup 0.435 -> 0.791 ms at 610 palms) — most RESIDENT pages belong to
@@ -181,16 +216,21 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // O(pages x casters) term. Do not "optimize" this loop by reordering the iteration.
     // Clipmap pages consume the scatter pass's output; if that pass is unavailable (shader failed to
     // compile) every page falls back to culling here, so shadows stay correct — just slower.
-    const bool scattered = (view >= VSM_NUM_LOCAL_VIEWS) && (gScatterActive != 0u);
-
+    // Per-thread group tables. THEY are what caps this shader at VSM_MAX_SETUP_GROUPS: a local array
+    // cannot be sized by gNumGroups, and indexing one past its end is undefined — an indexable temp
+    // lives in the thread's own scratch, so the write lands on whatever else is there (the page
+    // matrix, the frustum planes). gNumGroups arrives UNCLAMPED from the CPU, so the guard has to be
+    // here.
+    //
+    // Only the BRUTE-FORCE path spends them. A scattered (clipmap) page reads the scatter pass's
+    // buffers directly in the args loop below and never touches these arrays — which is what makes
+    // the directional path cap-free, and it costs nothing: each element was written once and read
+    // once anyway.
     uint perGroupCount[VSM_MAX_SETUP_GROUPS];
+    const uint numLocalGroups = min(gNumGroups, (uint)VSM_MAX_SETUP_GROUPS);
     bool dynamicOverlap = false;
     if (scattered)
     {
-        for (uint gs0 = 0u; gs0 < gNumGroups; ++gs0)
-        {
-            perGroupCount[gs0] = PageGroupCount[p * gNumGroups + gs0];
-        }
         dynamicOverlap = (PageScatterDyn[p] != 0u);
     }
     else
@@ -199,7 +239,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // caster overlaps (page-cache invalidation). B3: an object's submesh slots are CONSECUTIVE and
         // share its bounds, so test once per OBJECT (CasterMeta slot count) and apply the result to all
         // its slots — otherwise the (pages x casters) plane tests scale with the submesh split.
-        for (uint gi = 0u; gi < gNumGroups; ++gi) { perGroupCount[gi] = 0u; }
+        for (uint gi = 0u; gi < numLocalGroups; ++gi) { perGroupCount[gi] = 0u; }
         for (uint c = 0u; c < gNumCasters; )
         {
             const uint meta = CasterMeta[c];
@@ -210,8 +250,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             {
                 for (uint s = 0u; s < n; ++s)
                 {
+                    // numLocalGroups, not gNumGroups: a group with no slot in the table cannot be
+                    // counted, and it draws nothing below. Deterministic loss beyond the cap.
                     uint g = CasterGroup[c + s];
-                    if (g < gNumGroups) { perGroupCount[g] += 1u; }
+                    if (g < numLocalGroups) { perGroupCount[g] += 1u; }
                 }
                 if ((meta & 1u) != 0u) { dynamicOverlap = true; }
             }
@@ -220,13 +262,15 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
 
     // Cache decision: dirty pages clear + redraw; clean pages keep their cached depth (draw nothing).
+    // Every lane derives `dirty` from the same buffer reads, so they agree by construction; the
+    // flag itself has one writer.
     const bool dirty = isNew || dynamicOverlap || (gForceAll != 0u);
-    PerPageDirty[p] = dirty ? 1u : 0u;
+    if (lane == 0u) { PerPageDirty[p] = dirty ? 1u : 0u; }
     if (!dirty)
     {
         if (gCompactArgs == 0u) // compacted: append nothing (see the free-page branch above)
         {
-            for (uint gc = 0u; gc < gNumGroups; ++gc)
+            for (uint gc = gStart; gc < gNumGroups; gc += gStep)
             {
                 uint off = (p * gNumGroups + gc) * 20u;
                 PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u)); // InstanceCount 0 -> caster draw is a no-op
@@ -241,15 +285,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // is where the scatter pass appended — the slice is gNumCasters long, i.e. exactly the sum of
     // those totals, so the fixed layout always fits. The brute-force path packs tightly instead, with
     // a local prefix sum over what IT found, and reuses the array as its scatter cursor.
+    // Brute-force only, for the same reason as perGroupCount: a scattered page reads PerGroup[g].x
+    // straight from the buffer in the args loop, so it neither fills nor reads this.
     uint perGroupBase[VSM_MAX_SETUP_GROUPS];
-    if (scattered)
-    {
-        for (uint gb = 0u; gb < gNumGroups; ++gb) { perGroupBase[gb] = PerGroup[gb].x; }
-    }
-    else
+    if (!scattered)
     {
         uint acc = 0u;
-        for (uint gp = 0u; gp < gNumGroups; ++gp) { perGroupBase[gp] = acc; acc += perGroupCount[gp]; }
+        for (uint gp = 0u; gp < numLocalGroups; ++gp) { perGroupBase[gp] = acc; acc += perGroupCount[gp]; }
     }
 
     const uint pageBase = p * gNumCasters;
@@ -261,34 +303,48 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // -> absolute mega start; mega off -> lod-relative start into the mesh's own IB (baseVertex 0).
     uint viewLod = gMegaActive ? (gViewLod[rung0View >> 2u][rung0View & 3u]) : gFlatLod;
     if (viewLod >= gNumLods) { viewLod = gNumLods - 1u; }
-    for (uint g2 = 0u; g2 < gNumGroups; ++g2)
+    for (uint g2 = gStart; g2 < gNumGroups; g2 += gStep)
     {
+        // This page's instance count for the group, and where its run starts in the page slice.
+        // Real control flow, not a select: each branch may only read what its own path wrote, and
+        // the cap test must actually gate the array access rather than pick between two evaluated
+        // reads. Scattered pages take the buffers (uncapped); the brute-force path takes its tables,
+        // and a group past the cap has no slot, so it reports empty and draws nothing.
+        uint groupCount, groupBase;
+        if (scattered)
+        {
+            groupCount = PageGroupCount[p * gNumGroups + g2];
+            groupBase  = PerGroup[g2].x;
+        }
+        else if (g2 < (uint)VSM_MAX_SETUP_GROUPS)
+        {
+            groupCount = perGroupCount[g2];
+            groupBase  = perGroupBase[g2];
+        }
+        else
+        {
+            groupCount = 0u;
+            groupBase  = 0u;
+        }
         // Compacted args: an empty group would only ever be a zero-instance no-op, so don't append
         // it. This is where the bulk of the 65k-record worst case disappears — even a RESIDENT page
         // usually touches one or two mesh-groups out of all of them.
-        if (gCompactArgs != 0u && perGroupCount[g2] == 0u) { continue; }
+        if (gCompactArgs != 0u && groupCount == 0u) { continue; }
+        // Per-GROUP LOD, for EVERY group: a chunked-terrain group carries an ABSOLUTE override (its
+        // camera tier this frame, -1 = none) so the caster is the same geometry the gbuffer
+        // rasterized, on every view. Everything else takes the view LOD.
+        //
+        // No cap branch any more. This used to fall back to Rung0Args past VSM_MAX_SETUP_GROUPS,
+        // which meant the tail groups quietly lost their override and reverted to the view LOD —
+        // banding back on exactly the finest grids. Both tables are now SRVs sized by gNumGroups.
         uint4 a0;
-        if (g2 < VSM_MAX_SETUP_GROUPS) // per-view LOD from the CB table (the normal path)
-        {
-            // Per-GROUP LOD: a chunked-terrain group carries an ABSOLUTE override (its camera tier
-            // this frame, -1 = none) so the caster is the same geometry the gbuffer rasterized, on
-            // every view. Everything else takes the view LOD. Indexed only inside this branch —
-            // gGroupLodOverride is sized VSM_MAX_SETUP_GROUPS; the over-cap path below reads
-            // Rung0Args (view LOD, documented divergence for chunk groups past the cap).
-            const int ovr = gGroupLodOverride[g2 >> 2u][g2 & 3u];
-            const uint groupLod = (ovr >= 0) ? min((uint)ovr, gNumLods - 1u) : viewLod;
-            uint4 e = gGroupLodMega[g2 * gNumLods + groupLod]; // {megaStart, lodRel, count, baseVertex}
-            a0.x = e.z;                                       // IndexCountPerInstance = LOD's index count
-            a0.z = gMegaActive ? e.x : e.y;                   // StartIndexLocation: mega-absolute / lod-relative
-            a0.w = gMegaActive ? e.w : 0u;                    // BaseVertexLocation: mega base / mesh-own VB (0)
-        }
-        else // > VSM_MAX_SETUP_GROUPS (mega already off): fall back to the Rung0 args (perViewGroup LOD)
-        {
-            uint src = (gArgBaseElems + rung0View * gNumGroups + g2) * 20u;
-            uint4 r = Rung0Args.Load4(src);
-            a0.x = r.x; a0.z = r.z; a0.w = r.w;
-        }
-        a0.y = perGroupCount[g2];             // OVERRIDE: this page's instance count
+        const int ovr = GroupLodOverride[g2];
+        const uint groupLod = (ovr >= 0) ? min((uint)ovr, gNumLods - 1u) : viewLod;
+        uint4 e = GroupLodMega[g2 * gNumLods + groupLod]; // {megaStart, lodRel, count, baseVertex}
+        a0.x = e.z;                                      // IndexCountPerInstance = LOD's index count
+        a0.z = gMegaActive ? e.x : e.y;                  // StartIndexLocation: mega-absolute / lod-relative
+        a0.w = gMegaActive ? e.w : 0u;                   // BaseVertexLocation: mega base / mesh-own VB (0)
+        a0.y = groupCount;                    // OVERRIDE: this page's instance count
         // Record slot. Fixed [page][group] for the loop path (which derives its argOffset from those
         // two). Compacted: any free slot will do — the VS no longer infers the page from the record
         // position, it unpacks it from the instance id, which is exactly what Step 1 bought.
@@ -307,7 +363,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             dst = (p * gNumGroups + g2) * 20u;
         }
         PageDrawArgs.Store4(dst, a0);
-        PageDrawArgs.Store(dst + 16u, pageBase + perGroupBase[g2]); // StartInstanceLocation -> page slice
+        PageDrawArgs.Store(dst + 16u, pageBase + groupBase); // StartInstanceLocation -> page slice
     }
 
     // Pass 2: scatter the visible caster ids into the page's slice, grouped (perGroupBase = cursor).
@@ -324,7 +380,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             for (uint s2 = 0u; s2 < n2; ++s2)
             {
                 uint g = CasterGroup[c2 + s2];
-                if (g < gNumGroups)
+                if (g < numLocalGroups) // same cap as pass 1: no slot -> not counted, so not scattered
                 {
                     const uint vid = c2 + s2;
                     PageVisibleList[pageBase + perGroupBase[g]] =

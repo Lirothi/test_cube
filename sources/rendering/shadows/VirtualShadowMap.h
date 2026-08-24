@@ -108,13 +108,22 @@ namespace vsm
 
     // Caster MESH-GROUPS the GPU-driven shadow path can address at once, across the whole level: one
     // per (mesh, submesh), so submesh splits — material slots, and terrain chunking's spatial tiles —
-    // all spend from this one budget. Over it, the consolidated mega-buffer path degrades.
+    // all spend from this one budget.
     //
-    // Lives here because FOUR places need the same number and three of them used to spell it as a
-    // local literal 64: ShadowGpuData::Rebuild's GI-fold cap, the SetupCB mirror, the editor's mesh
-    // import dialog (which quotes the budget while the user picks a chunk grid), and
-    // VSM_MAX_SETUP_GROUPS in vsm_page_setup_cs.hlsl — the one copy that cannot include this header
-    // and so must be kept in step by hand.
+    // NARROWED TWICE on 2026-08-24, and it now caps almost nothing. First the per-(group,lod) and
+    // per-group-override tables left the setup CB for SRVs sized by the real group count (and the
+    // mega gate went with them), so DIRECTIONAL shadows lost their limit. Then S5 put LOCAL views
+    // into the spatial scatter too, so their pages stopped using the brute-force cull whose two
+    // per-thread tables are the last thing sized by this number.
+    //
+    // What it still bounds: (a) the brute-force FALLBACK, reached only if the scatter PSO fails to
+    // build — a group past it casts no local-light shadow there, deterministically; (b) the GI-fold
+    // policy cap. Neither is a limit on ordinary rendering.
+    //
+    // Consumers: ShadowGpuData::Rebuild's GI-fold cap, the editor's mesh import dialog (which quotes
+    // the budget while the user picks a chunk grid), and VSM_MAX_SETUP_GROUPS in
+    // vsm_page_setup_cs.hlsl — the one copy that cannot include this header, so keep it in step by
+    // hand. Removing the local-light cap too is S5 in docs/vsm_group_cap_removal_plan.md.
     inline constexpr std::uint32_t kMaxMeshGroups = 64;
 
     // Page-table entry packing (a single uint per virtual page). Unused until Step 20 fills it.
@@ -221,7 +230,35 @@ namespace vsm
     // the pass's most expensive sub-scope. Kept because the record count is pages x mesh-groups: a
     // group-heavy scene (64 groups = 65k records) is where the walk could start to matter. Re-measure
     // there before turning it on; do not enable it on faith.
-    inline bool g_pageDrawCompact = false;
+    //
+    // RE-MEASURED 2026-08-24 at 66 GROUPS (wind_test, island chunked 7x7 = 67.6k records) — the
+    // scene the note above asked for, and the verdict INVERTS: `Pass_VsmPageRender` 0.794/0.809 OFF
+    // vs 0.757/0.756 ON (-0.046 ms), `VsmPageRender.Setup` 0.050 -> 0.022 (-56%), `Pass_Compose`
+    // flat at 0.029. Interleaved x2 on matched clocks.
+    //
+    // Why it flipped, and it is not just the walk: the `continue` for an empty group now skips the
+    // group's GroupLodOverride + GroupLodMega SRV loads too (they moved out of the CB when the group
+    // cap was removed). So compaction skips the loop BODY, not just a 20-byte store, and most of
+    // what it recovers is that transport cost.
+    //
+    // DEFAULT FLIPPED TO ON 2026-08-24, after the light-scene re-measure the note above demanded.
+    // demo.json (6 groups, 9 spots + 8 points): 0.367/0.360 OFF vs 0.360/0.358 ON — the 2026-08-01
+    // loss is GONE. It went away because the setup CS now splits its per-group loop across the 8
+    // thread lanes it used to throw away, so the atomic this adds no longer lands in a serial loop.
+    // Neutral on a light scene, -0.057 ms on a group-heavy one: ON is the right default at both ends.
+    // Boot flags: --vsm-page-nocompact forces it off (the A/B control), --vsm-page-compact on.
+    inline bool g_pageDrawCompact = true;
+
+    // S5: scatter LOCAL (spot/point) views too, instead of leaving them to the setup CS's
+    // brute-force per-page cull. ON removes the last mesh-group cap (that cull's two per-thread
+    // tables are the only thing still sized by kMaxMeshGroups) and makes the per-page cost stop
+    // scaling with the caster count. OFF restores the brute-force path.
+    //
+    // Kept as a live toggle because the two paths must be A/B-able IN ONE BINARY: local-light
+    // shadow correctness is judged by comparing them, and demo.json — the only level with local
+    // lights — has a screenshot noise floor of |mean| 1.07, so a cross-build comparison there
+    // cannot resolve a real difference from run-to-run drift.
+    inline bool g_scatterLocalViews = true;
 
     // Page cache (Rung 1): skip re-rendering pages whose content didn't change (cached depth kept;
     // only new / dynamic-caster-overlapping / forced pages re-render). DEFAULT OFF: measured a net
@@ -307,6 +344,8 @@ public:
         bool singleDraw = false;
         bool compactArgs = false;
         bool scatterActive = false;
+        // S5: local views are in the scatter this frame (scatterActive AND g_scatterLocalViews).
+        bool scatterLocals = false;
         std::uint32_t forceAll = 1u;
         // pass-flow S3b: the ABSOLUTE declaration indices of the pass's barrier points, captured
         // by PrepareRenderPass as it declares them. RecordPageRender emits each with an EmitPoint

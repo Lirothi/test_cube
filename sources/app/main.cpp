@@ -220,12 +220,22 @@ int WINAPI WinMain(
     // all measured with the shipping defaults. These two flip the VSM page-draw path so
     // --canonical-check can be re-run against the other configuration; they must be parsed here for
     // the same reason as the flags above (the scene-stress branch returns first). Names match the
-    // globals: "--vsm-page-multidraw" turns g_pageDrawSingle OFF, "--vsm-page-compact" turns
-    // g_pageDrawCompact ON.
+    // globals: "--vsm-page-multidraw" turns g_pageDrawSingle OFF; "--vsm-page-compact" /
+    // "--vsm-page-nocompact" force g_pageDrawCompact (default ON) either way.
     if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-page-multidraw")) {
         vsm::g_pageDrawSingle = false;
     }
-    if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-page-compact")) {
+    // Compaction is ON by default since 2026-08-24, so keep BOTH directions: a flag that only sets
+    // the value it already has is a control that does nothing.
+    // S5 A/B: "--vsm-no-local-scatter" puts local (spot/point) views back on the brute-force
+    // per-page cull, so both local-light paths are reachable from one binary.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-no-local-scatter")) {
+        vsm::g_scatterLocalViews = false;
+    }
+    if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-page-nocompact")) {
+        vsm::g_pageDrawCompact = false;
+    }
+    else if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-page-compact")) {
         vsm::g_pageDrawCompact = true;
     }
 

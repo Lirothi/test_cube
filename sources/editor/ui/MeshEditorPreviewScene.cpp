@@ -88,6 +88,7 @@ struct MeshEditorPreviewScene::Impl
     // leave the cached image on screen.
     std::array<Math::float4, render::kFrameCount> renderedTexOffsScale{};
     std::array<int, render::kFrameCount> renderedHighlights{ -1, -1, -1 };
+    std::array<int, render::kFrameCount> renderedHighlightOrdinals{ -1, -1, -1 };
     std::array<ID3D12Resource*, render::kFrameCount> renderedEnvironments{};
     std::array<float, render::kFrameCount> renderedEnvironmentExposures{};
     std::array<bool, render::kFrameCount> cameraValid{};
@@ -190,6 +191,7 @@ struct MeshEditorPreviewScene::Impl
         std::uint32_t lod,
         const Math::float4* texOffsScaleOverride,
         int highlightMaterialSlot,
+        int highlightSubmeshOrdinal,
         const TextureCube* environment,
         float environmentExposure)
     {
@@ -246,6 +248,7 @@ struct MeshEditorPreviewScene::Impl
                 targets[frameIndex].Get(),
                 texOffsScaleOverride,
                 highlightMaterialSlot,
+                highlightSubmeshOrdinal,
                 environment,
                 environmentExposure);
         if (!target || !commands->Submit(&renderer))
@@ -263,6 +266,7 @@ struct MeshEditorPreviewScene::Impl
         renderedTexOffsScale[frameIndex] = texOffsScaleOverride
             ? *texOffsScaleOverride : Math::float4(0.0f, 0.0f, 1.0f, 1.0f);
         renderedHighlights[frameIndex] = highlightMaterialSlot;
+        renderedHighlightOrdinals[frameIndex] = highlightSubmeshOrdinal;
         renderedEnvironments[frameIndex] = environment ? environment->GetResource() : nullptr;
         renderedEnvironmentExposures[frameIndex] = environmentExposure;
         cameraValid[frameIndex] = true;
@@ -325,6 +329,7 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     std::uint32_t lod,
     const Math::float4* texOffsScaleOverride,
     int highlightMaterialSlot,
+    int highlightSubmeshOrdinal,
     const TextureCube* environment,
     float environmentExposure)
 {
@@ -381,6 +386,7 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
         impl_->renderedLods[frameIndex] != lod ||
         !SameTexOffsScale(impl_->renderedTexOffsScale[frameIndex], texOffsScaleOverride) ||
         impl_->renderedHighlights[frameIndex] != highlightMaterialSlot ||
+        impl_->renderedHighlightOrdinals[frameIndex] != highlightSubmeshOrdinal ||
         impl_->renderedEnvironments[frameIndex] != environmentResource ||
         impl_->renderedEnvironmentExposures[frameIndex] != environmentExposure)
     {
@@ -394,6 +400,7 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
                 lod,
                 texOffsScaleOverride,
                 highlightMaterialSlot,
+                highlightSubmeshOrdinal,
                 environment,
                 environmentExposure))
         {

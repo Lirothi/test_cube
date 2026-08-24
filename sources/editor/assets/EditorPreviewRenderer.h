@@ -123,6 +123,10 @@ public:
         // Matched against each submesh's materialSlot, so a slot spanning several submeshes
         // lights all of them.
         int highlightMaterialSlot = -1,
+        // Mesh Editor hover highlight by submesh ORDINAL (-1 = none). A CHUNKED mesh's submeshes
+        // are spatial tiles that all share material slot 0, so the slot highlight above would tint
+        // every tile at once; picking out ONE tile is exactly what the chunk list needs.
+        int highlightSubmeshOrdinal = -1,
         // Optional scene environment used for metallic reflections and the preview background.
         const TextureCube* environment = nullptr,
         float environmentExposure = 1.0f);

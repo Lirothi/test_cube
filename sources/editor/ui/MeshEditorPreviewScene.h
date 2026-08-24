@@ -80,6 +80,9 @@ public:
         const Math::float4* texOffsScaleOverride = nullptr,
         // Material slot to highlight while its Mesh Editor control is hovered (-1 = none).
         int highlightMaterialSlot = -1,
+        // Submesh ORDINAL to highlight (-1 = none) — how the chunk list picks out ONE tile,
+        // which the slot highlight above cannot do (every tile shares slot 0).
+        int highlightSubmeshOrdinal = -1,
         const TextureCube* environment = nullptr,
         float environmentExposure = 1.0f);
 

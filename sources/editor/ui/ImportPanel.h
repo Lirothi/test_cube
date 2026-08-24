@@ -162,7 +162,7 @@ private:
     // >= 0 is the explicit choice from the mesh import dialog. -1 preserves
     // an existing manifest value for non-interactive/bulk reimports.
     float activeMeshSpawnScale_ = -1.0f;
-    // Same contract for shadow chunking: -1 preserves the asset's existing chunkGrid for
+    // Same contract for mesh chunking: -1 preserves the asset's existing chunkGrid for
     // non-interactive/bulk reimports, >= 0 is the dialog's explicit answer.
     int activeMeshChunkGrid_ = -1;
     // Snapshot of the dialog's LOD values for the running async import (see BeginImport's
@@ -219,7 +219,7 @@ private:
     float meshDialogInnerError_ = 0.15f;    // and its error budget
     float meshDialogFoliageGrow_ = 1.0f;    // survivor-inflation dial (1 = full area comp)
     float meshDialogUvWeight_ = 0.0f;       // foliage UV weight for attribute-aware simplify
-    // Shadow chunking (mesh.json "chunkGrid"). Splits LOD0 into an N x N grid of submeshes so each
+    // Mesh chunking (mesh.json "chunkGrid"). Splits LOD0 into an N x N grid of submeshes so each
     // tile becomes its own shadow caster and a shadow page rasterizes only the tiles it overlaps.
     // Seeded from the asset on dialog open, so re-opening shows what the asset actually carries.
     bool meshDialogChunk_ = false;
@@ -227,6 +227,10 @@ private:
     // Submesh count of the source, read once when the dialog opens: chunking is single-submesh only
     // (v1), and the dialog says so up front rather than letting the bake reject it silently.
     int  meshDialogSubmeshCount_ = 1;
+    // Triangle count parsed out of Item::meta (both describe paths write "<N> tris"). 0 = unknown.
+    // Chunking needs it because the thing that actually limits the grid is TRIANGLES PER TILE, not
+    // the tile count — see the readout in DrawMeshImportDialog.
+    int  meshDialogTriCount_ = 0;
     std::vector<std::string> meshDialogTopLevelNodes_;
 };
 

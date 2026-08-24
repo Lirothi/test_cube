@@ -1,6 +1,6 @@
 # Removing the VSM 64-mesh-group cap — execution plan
 
-**Status: NOT STARTED. Facts re-verified 2026-08-21 20:30 against HEAD `0dd0aba`.** Written earlier
+**Status: PLAN COMPLETE 2026-08-24 (uncommitted). S1-S6 ALL DONE — the VSM mesh-group cap is GONE (only a PSO-failure fallback and the GI-fold policy still reference it), proven at 66 groups on wind_test and 70 with local lights on demo; plus two follow-up levers (`Pass_VsmPageRender` -12% on wind_test) and S5's 7.8x on the local-light per-page cull.** Facts re-verified 2026-08-21 20:30 against HEAD `0dd0aba`. Written earlier
 the same day, right after terrain chunking took wind_test from 21 to 56 groups (see
 `docs/terrain_shadow_chunking_plan.md`).
 
@@ -171,6 +171,46 @@ still needs draw commands for everything else. The cap-free design is in the non
 
 **Done when:** ≤64 behavior provably unchanged; the 65th group can no longer corrupt a thread.
 
+### S1 + S2 RESULT — DONE 2026-08-24 (as ONE edit: they touch the same lines)
+
+`shaders/vsm_page_setup_cs.hlsl` only — no C++, no CB, no root signature, no resources.
+
+* `numLocalGroups = min(gNumGroups, VSM_MAX_SETUP_GROUPS)` bounds every touch of the two per-thread
+  tables: the zero-fill, the brute-force count guard, the prefix sum, and pass 2's scatter cursor.
+  Past the cap a group is never counted, so it draws nothing — a deterministic loss.
+* **The scattered (clipmap) path no longer touches either array.** It reads
+  `PageGroupCount[p*gNumGroups+g2]` and `PerGroup[g2].x` directly in the args loop, so directional
+  pages are already cap-free.
+* The args loop still runs to `gNumGroups` — it must fully rewrite the real-sized args buffer, or a
+  skipped tail leaves last frame's records for the loop-path ExecuteIndirect. Over-cap groups on the
+  brute-force path emit zero instances.
+* The count/base selection is **real control flow, not a ternary**: `if (scattered) / else if (g2 <
+  VSM_MAX_SETUP_GROUPS) / else`. A select would still evaluate the array read on the untaken side —
+  which is the exact out-of-bounds access being removed.
+
+Verification, at 56 groups. Read the readiness caveat: this is "unchanged where we can see" plus
+code reading, **not** a >64 proof — that is still S4.5 and still needs the user.
+
+| gate | result |
+|---|---|
+| `tools/check_shaders.py vsm_page_setup` | 1/1 compiled |
+| Release boot + **Debug** boot | both render; `cull validation PASS: 44 views match CPU (2708 casters, 56 groups)` |
+| image, HEAD shader vs this one | terrain bands at the noise floor (0.004–0.012 against a floor of 0.003–0.010). The one band above it is the canopy + the HUD text — sway phase and changing FPS digits |
+| `Pass_VsmPageRender` (interleaved ×2) | before 0.788 / 0.802, after 0.801 / 0.804 — inside the before-side spread |
+| `VsmPageRender.Setup` | 0.016 both |
+| `VsmPageRender.Scatter` | 0.107 both |
+| `Pass_Compose` / `Pass_Tonemap` controls | 0.030 / 0.385 throughout |
+
+S2 was predicted "neutral-to-better" and measured neutral: `Setup` is 0.016 ms in total, so deleting
+a 56-iteration copy per page had nothing to give back. Its value is the removed cap, not speed.
+
+**A/B method worth reusing for any runtime-compiled shader.** The "before" was
+`git show HEAD:shaders/vsm_page_setup_cs.hlsl` — legitimate because `git diff --stat HEAD --` proved
+the file was clean before the edit. It was swapped onto the real path inside a PowerShell
+`try/finally` that restores the edited version, with a `Get-FileHash` equality check printed after.
+Same binary, same level, minutes apart, and git state never touched.
+
+
 ### S2 — Scattered path: delete the local arrays (directional cap gone)
 
 **Touch:** `shaders/vsm_page_setup_cs.hlsl`.
@@ -181,8 +221,7 @@ arrays only in the brute-force scope so the scattered path carries zero scratch.
 neutral-to-better (`VsmPageRender.Setup` is 0.010–0.023 ms today; each element was read exactly
 once anyway).
 
-**Done when:** clipmap pages have no group-count limit; image + perf at 56 groups unchanged
-(interleaved ×2, five samples for any scope you quote — see the S0 lesson in the chunking doc).
+**Done when:** clipmap pages have no group-count limit; image + perf at 56 groups unchanged. **DONE — see the S1 + S2 RESULT block above; both steps landed as one edit.**
 
 ### S3 — CB tables → SRVs (the transport fix that unblocks everything)
 
@@ -209,7 +248,7 @@ once anyway).
    the change class `tools/check_shaders.py` cannot vouch for alone: dxc accepting the shader says
    nothing about the PSO or the descriptor table — run it.
 
-**Done when:** no group table lives in a CB; behavior at 56 groups byte-stable.
+**Done when:** no group table lives in a CB; behavior at 56 groups byte-stable. **DONE — see the S3 + S4 RESULT block below.**
 
 ### S4 — Lift the mega/single-draw gate
 
@@ -223,6 +262,56 @@ gate (F7). Update the hand-synced pairing note (F8) on both sides.
 
 **Done when:** a >64 level renders directional VSM correctly on the single-draw path, with locals
 deterministically capped and logged.
+
+### S3 + S4 RESULT — DONE 2026-08-24
+
+**S3, transport.** `gGroupLodMega` and `gGroupLodOverride` left the constant buffer for two SRVs
+sized by the real group count:
+
+* `StructuredBuffer<uint4> GroupLodMega : register(t9)` — `groupLodMegaBuf_`, a STATIC ring region 0
+  written at the end of `Rebuild`, deliberately after the mega block patches `groupLodMega_` in
+  place (absolute starts + base vertex).
+* `StructuredBuffer<int> GroupLodOverride : register(t10)` — `groupLodOverrideBuf_`, a PER-FRAME ring
+  region, rewritten by `RefreshChunkGroupLods` (which now takes the renderer: Scene calls it after
+  `UpdateForFrame`, so there is no later per-frame hook to defer the upload to). Its frame index is
+  the same `renderer->GetCurrentFrameIndex()` the instance/bounds rings use.
+* `groupLodOverride_` became a `std::vector<std::int32_t>` sized `numMeshGroups_`. As a
+  `std::array<int8_t, 64>` it silently dropped every chunk past the cap — F7b.
+* Root signature `SRV(t0, numDescriptors=9)` → `11`, and the two handles appended to the dispatch's
+  descriptor list **in register order** — that list IS t0..t10 positionally.
+* The `g2 < VSM_MAX_SETUP_GROUPS ? CB : Rung0Args` branch in the args loop is gone; every group
+  reads the SRVs. That is what retires F7b.
+
+**S4, the mega gate.** `Rebuild`'s `numMeshGroups_ <= kMaxMegaGroups` condition is deleted along
+with its warning: the mega layout never had a 64 dependency (it iterates `megaCopy_` per unique
+MESH), and the gate existed only because a CB array could not address more groups. Keeping it would
+have cost the >64 case its single-draw fast path for nothing.
+
+Verification:
+
+| gate | result |
+|---|---|
+| both configs | build clean |
+| `tools/check_shaders.py vsm_page_setup` | 1/1 compiled |
+| Release boot | PSO builds with the new RS; render clean, palm shadows sharp |
+| `cull validation` | `PASS: 44 views match CPU (2708 casters, 56 groups)` |
+| **image vs the S1+S2 state** | terrain bands **0.0003 / 0.0001 / 0.0001** — pixel-identical, an order below the same-binary noise floor (0.0096 / 0.0080 / 0.0026). Only the canopy+HUD band differs (0.044 vs a 0.061 floor) |
+| Debug `--scene-stress=24 --scene-stress-gbv` | `verdict: CLEAN after 24 iterations` (barriers 8820 enhanced / 0 legacy) |
+| Release `--scene-stress=24` | `verdict: CLEAN after 24 iterations` (8214 / 0) |
+
+Both stress runs exercise level switches with the chunked mesh present; `cull validation PASS`
+recurs across them at 37/38 groups as levels change.
+
+The terrain coming out bit-identical through an entirely different data path is the strongest signal
+available here: the values reaching the shader are the same, only their transport changed.
+
+**Two leftovers, deliberate.** `Rung0Args` (t1) is now unread by this shader and `gArgBaseElems` is
+now unused in its CB — both are LEFT IN PLACE. Removing t1 would shift t2..t8 and a descriptor table
+is positional; removing the CB field would repack the mirror. Neither buys anything.
+
+**What is NOT proven.** Still 56 groups. S4.5 (a >64 level) remains the only thing that can exercise
+the paths this work exists for, and it still needs the user's asset writes.
+
 
 ### S4.5 — The >64 proof (USER GATE: needs scratch assets)
 
@@ -239,7 +328,167 @@ plus `"chunkGrid": 7` in the mesh.json (or the import dialog at 7 tiles per axis
 shows 69 groups and **no** "mega path disabled" line; image clean; then restore grid 6 the same
 way. Before S1..S4 land, do NOT run a >64 level expecting anything — F2 says what happens.
 
+### S4.5 RESULT — THE >64 PROOF, and it holds (2026-08-24)
+
+The user re-imported the island at `chunkGrid 7`. 7x7 with 3 empty corner cells = **46 chunk
+submeshes**, so wind_test came out at **66 mesh-groups** — two past the old cap, and the first time
+this engine has ever run there.
+
+| gate | result at 66 groups |
+|---|---|
+| boot | renders clean; palm shadows sharp, no missing terrain shadow, no banding |
+| `cull validation` | `PASS: 44 views match CPU (2718 casters, 66 groups)` |
+| **fast path alive** | `Pass_VsmPageRender` **0.808 / 0.803** vs **0.801 / 0.804** at 56 groups — unchanged |
+| `VsmPageRender.Scatter` | 0.107, unchanged |
+| `Pass_Compose` / `Pass_Tonemap` | 0.029-0.030 / 0.385 |
+| Debug `--scene-stress=24 --scene-stress-gbv` | `verdict: CLEAN after 24 iterations` |
+
+**The perf number IS the proof that S4 worked.** Had the mega gate still fired, the draw would have
+fallen back to the per-page per-group binding loop — 1024 pages x 66 groups of
+IASetVertexBuffers/IASetIndexBuffer/ExecuteIndirect. That is milliseconds, not 0.003 ms of noise.
+Before this work the same configuration was undefined behaviour on two per-thread arrays.
+
+**One real cost, and I did not measure it when I should have.** `VsmPageRender.Setup` went
+**0.016 -> 0.051 ms**. Two things changed between those samples (S3's CB->SRV transport, and 56->66
+groups), because S3 was verified by image and stress but never traced — that was a gap in the S3
+gate. The confound is bounded by argument, though: the group count only scales the args loop, so
+56->66 can account for at most +18% (0.016 -> ~0.019). **At least 0.032 of the 0.035 ms is the SRV
+transport** — a constant-buffer load per group became a structured-buffer load, 66 of them per page
+across 1024 page threads.
+
+In context that is +0.035 ms on a ~2.1 ms GPU frame (~1.7%), paid to remove the cap, and
+`Pass_VsmPageRender` itself did not move. Whether to claw it back is a separate question; note that
+the obvious idea — folding the override into `PerGroup`'s unused `.w` — does NOT work, because
+`PerGroup` is a static region-0 buffer while the override is per-frame. A cheap partial win would be
+a uniform "no chunked mesh in this level" flag that skips the override load entirely, which helps
+every level that has no chunked terrain and does nothing for this one.
+
+Also fixed here: the rebuild log printed `cap %u`, which read like a hard limit the moment a level
+went past it. It now prints how many groups still cast from LOCAL lights:
+`66 mesh-groups (1 chunked of 9 meshes; 64 cast from local lights)`.
+
+### Follow-up found while answering "what do groups cost as they grow" (2026-08-24)
+
+Group cost is **O(pages x groups)**: the setup CS runs one thread per page and that thread loops
+every group, and until now an EMPTY group still cost a loop body (two SRV loads + a 20-byte store).
+At 66 groups that is 67.6k arg records per frame. Three levers, in order of readiness:
+
+1. **Compacted draw args — measured, and it is now a win.** `g_pageDrawCompact` was recorded a small
+   LOSS at 6 groups in 2026-08-01 and its comment asked for a re-measure in a group-heavy scene.
+   Done at 66: `Pass_VsmPageRender` 0.794/0.809 -> 0.757/0.756, `VsmPageRender.Setup` 0.050 -> 0.022.
+   It skips the loop BODY for empty groups, so it also recovers most of the CB->SRV transport cost
+   S3 introduced. Left OFF by default — the right default is scene-dependent and that is a decision.
+2. **The dispatch throws away 7 of every 8 threads.** `vsm_page_setup_cs` is `numthreads(8,8,1)` and
+   opens with `if (dtid.y != 0u) { return; }` — the y lane exists only because RecordComputeDispatch
+   has a fixed shape. Since S2, the SCATTERED path's args loop has no per-thread state (both
+   groupCount and groupBase are direct buffer reads), so it could be split across `dtid.y` — ~8x on
+   exactly the loop that scales with group count, for no new resources. The per-page prologue
+   (planes, projection, dirty decision) stays on one lane. Not valid for the brute-force local path,
+   whose prefix sum is inherently serial.
+3. **UE's shape** — no page thread iterates draw commands at all; see the UE section above. The
+   structural fix, and the one that also retires S5.
+
+### Levers 1 + 2 — DONE and measured 2026-08-24
+
+Both landed after the cap work, on wind_test at 66 groups (island chunked 7x7). Interleaved x2,
+`Pass_Compose` flat at 0.029 throughout:
+
+| config | `Pass_VsmPageRender` | `VsmPageRender.Setup` |
+|---|---|---|
+| 1 lane, compact OFF (the state S4.5 was proven in) | 0.794 / 0.809 | 0.050 |
+| 1 lane, compact ON | 0.757 / 0.756 | 0.022 |
+| 8 lanes, compact OFF | 0.757 / 0.766 | 0.014 |
+| **8 lanes, compact ON (shipped)** | **0.704 / 0.706** | **0.008** |
+
+**-0.097 ms on the pass (-12%), and Setup 6.3x.** Setup at 0.008 is now BELOW its pre-S3 value
+(0.016), so the CB->SRV transport cost the cap removal introduced is not merely paid off — the pass
+is cheaper than before any of this work.
+
+**Lever 2 (`vsm_page_setup_cs`): the dispatch was throwing away 7 of every 8 threads.** It opened
+`if (dtid.y != 0u) return;` because RecordComputeDispatch has a fixed 8x8 group shape. Since S2 the
+SCATTERED path's per-group loop has no per-thread state, so it is now strided across the lanes
+(`gStart = lane`, `gStep = VSM_SETUP_LANES`). Lane 0 alone keeps: the page projection + PageProj
+stores, the frustum planes, the `PerPageDirty` write, and the whole brute-force local-light path
+(its prefix sum is inherently serial). Extra lanes retire immediately on a non-scattered page.
+
+**Lever 1 (`g_pageDrawCompact`): default flipped to ON.** Its comment demanded a group-heavy
+re-measure before enabling; done, and the 2026-08-01 verdict inverted. The light-scene check the
+decision actually needed — demo.json, 6 groups, 9 spots + 8 points — came out **0.367/0.360 OFF vs
+0.360/0.358 ON**, i.e. the old loss is gone, because lever 2 means compaction's atomic no longer
+lands in a serial loop. Neutral on a light scene, -0.057 ms on a group-heavy one. `--vsm-page-compact`
+would have become a no-op flag, so `--vsm-page-nocompact` was added as the A/B control.
+
+Verification: both configs build; dxc 1/1; wind_test image vs the 1-lane build |mean| **0.0264**
+against a same-binary noise floor of **0.0321** (i.e. below the floor); demo.json renders local-light
+shadows correctly inside the spot cones — the path lever 2 deliberately leaves on lane 0;
+`cull validation PASS` on both levels; Debug `--scene-stress=24 --scene-stress-gbv` and Release
+`--scene-stress=24` both `verdict: CLEAN after 24 iterations`.
+
 ### S5 — OPTIONAL: local lights join the scatter (full cap removal)
+
+### S5 RESULT — DONE 2026-08-24 (the user built the level it needed)
+
+The blocker was "no level combines local lights with >64 groups". The user added atoll meshes to
+demo.json, which now reads **70 mesh-groups + 9 spots + 8 points** — so the step became justified and
+verifiable in the same move.
+
+**What shipped.** `vsm_page_scatter_cs` now scatters LOCAL views as well as clipmap levels: the
+dispatch's y axis indexes a scatter TARGET (`[0,gNumLevels)` = clipmap level,
+`[gNumLevels, +gNumLocalViews)` = local view), the CB carries every view's matrix instead of only the
+8 clipmap ones, and a local view walks its whole mip pyramid (a receiver pixel marks a page at its
+own level, so every level can be resident). The setup CS's `scattered` now covers local pages too;
+its brute-force block survives ONLY as the `gScatterActive == 0` fallback (a scatter-PSO failure must
+degrade to slow, not to no shadows) — which is also the one place the group cap still exists.
+
+**The perspective rect, and the trap in copying UE literally.** UE's
+`BoxCullFrustumPerspective` answers the straddling-w=0 case by taking the FULL [-1,1] rect. Ported
+verbatim that is a **+0.47 ms regression**: `Pass_VsmPageRender` 0.308 -> 0.776, because a straddling
+caster then appends to every resident page of the view. A one-line diagnostic (straddle -> reject,
+deliberately wrong) put the pass back at 0.325 and named the cause outright. The fix is to treat the
+full rect as a page CANDIDATE SET and test each candidate against that page's exact frustum planes
+(`BoxInPagePlanes`, the same positive-vertex rule the brute-force path used), after the residency
+check so only real pages pay. Applying that to straddlers alone still left +0.09; applying it to ALL
+local pages — the NDC rect is loose under perspective generally, not just at the near plane — landed
+it. Progression, all on demo.json:
+
+| variant | `Pass_VsmPageRender` | `Setup` |
+|---|---|---|
+| brute-force (before S5) | 0.308 / 0.310 | 0.072 |
+| S5, UE's full-rect bail | 0.776 / 0.765 | 0.009 |
+| S5, exact test for straddlers only | 0.393 / 0.403 | 0.009 |
+| **S5, exact test for all local pages** | **0.309 / 0.306** | **0.009** |
+
+**Final verdict, same-binary A/B** (`--vsm-no-local-scatter` was added so both paths live in one
+binary — the toggle is `vsm::g_scatterLocalViews`):
+
+| | `Pass_VsmPageRender` | `Setup` | `Scatter` | GPU frame |
+|---|---|---|---|---|
+| brute-force locals | 0.308 / 0.306 | 0.070 / 0.071 | 0.040 | 2.144 / 2.222 |
+| **scattered locals (default)** | 0.306 / 0.308 | **0.009 / 0.009** | 0.050 | 2.172 / 2.223 |
+
+**Perf-neutral today, structurally better tomorrow, and the cap is gone.** `Setup` is 7.8x cheaper
+because the O(pages x casters) term for local lights disappeared — that term grew with the scene,
+the scatter's does not. The +0.010 on `Scatter` pays for it. wind_test (66 groups, no local lights)
+is untouched: 0.700/0.715 vs 0.704/0.706, `Setup` 0.007.
+
+**Correctness, and the measurement that nearly went wrong.** The first comparison read |mean| 2.06
+over 71 % of pixels, which looks alarming — until demo.json's own noise floor turned out to be
+**1.07** (animated scene, nothing frozen). With `--wind-freeze` and the same-binary toggle the floor
+drops to **0.135 / 0.098** and the actual brute-force-vs-scattered difference is **0.164** — barely
+above it, with mean luminance 87.939 -> 87.850, i.e. a hair MORE shadow, which is exactly what
+un-capping the tail groups should do. The amplified diff is confined to specular highlights on the
+sphere grids and the tent; no structured loss anywhere. A second self-check agrees: rect-only vs
+exact-test differ by 0.144, below the floor, so the exact test prunes nothing that was being drawn.
+
+Gates: both configs build; `check_shaders.py` 45/45; `cull validation PASS` on both levels; Debug
+`--scene-stress=24 --scene-stress-gbv` and Release `--scene-stress=24` both `CLEAN after 24
+iterations`.
+
+**What is left capped:** only the `gScatterActive == 0` fallback (scatter PSO failure) and the
+GI-fold policy. `vsm::kMaxMeshGroups`'s doc block and the import dialog text should be narrowed once
+more to say that.
+
+#### Original step text
 
 Locals brute-force because a perspective view has no trivial AABB→page-rect mapping
 (vsm_page_setup_cs.hlsl:172 comment). UE crosses that bridge in `VirtualShadowMapPageOverlap.ush`
@@ -264,7 +513,23 @@ step, ~a day plus verification. **Not needed until a level combines local lights
 - Nothing here depends on the banding camera still owed on the chunking plan, and nothing here
   blocks that work.
 
-### S6 — Truth pass on docs + UI
+### S6 RESULT — DONE 2026-08-24 (the parts that do not wait on S5)
+
+* **Import dialog** (`ImportPanel.cpp`, Shadow chunking): the readout said "N of the level's 64",
+  which now over-warns — directional shadows have no group limit any more. It states the real
+  consequence instead: past the budget the extra tiles **stop casting from spot/point lights, sun and
+  sky are unaffected**. The red "over cap" colour is gone; only the amber caution remains, because
+  there is no longer a hard failure to signal.
+* **`vsm::kMaxMeshGroups`** doc block narrowed: it is no longer "the shadow path's cap" but the
+  local-light brute-force cull's per-thread table size plus the GI-fold policy cap, with a pointer to
+  S5 for removing even that. The stale "over it, the mega-buffer path degrades" clause is deleted —
+  S4 removed that gate.
+* Both configs rebuilt after the edit.
+
+Left for when S5 lands (or is declined): nothing else — the chunking plan's F4 and the memory files
+were updated in the same pass.
+
+### S6 — Truth pass on docs + UI (original step text)
 
 - Import dialog (`ImportPanel.cpp`, Shadow chunking section): the budget readout currently implies
   a hard level-wide 64. Post-S4 the honest text is "N tiles = N caster groups; directional

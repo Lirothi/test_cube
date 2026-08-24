@@ -33,7 +33,7 @@ struct MeshLodCpu {
     std::vector<Mesh::Submesh> submeshes;
 };
 
-// Shadow chunking (MeshLoadOptions::chunkGrid): partition a SINGLE-submesh LOD0 into an N x N grid
+// Mesh chunking (MeshLoadOptions::chunkGrid): partition a SINGLE-submesh LOD0 into an N x N grid
 // of submeshes over the mesh's XZ extent, by triangle centroid. Pure reordering — every triangle
 // survives exactly once, the material slot is inherited, and empty cells emit nothing. Cells are
 // emitted row-major (z-major, x-minor) and triangles keep their relative order inside a cell, so
@@ -1309,19 +1309,19 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
     // from foliage; before LOD building, so every LOD inherits the same weights.
     BakeWindWeightsCpu(cpu.vertices, cpu.indices, lod0Subs, opt.slotFoliage);
 
-    // Shadow chunking, between the wind bake (vertex colors only — the reorder below cannot disturb
+    // Mesh chunking, between the wind bake (vertex colors only — the reorder below cannot disturb
     // it) and LOD building (which then simplifies every chunk independently). v1 supports
     // single-submesh input only: a multi-material mesh would need the grid crossed with the material
     // table, and nothing needs that yet.
     bool chunked = false;
-    if (opt.chunkGrid > 0u)
+    if (opt.chunkGrid > 1u) // grid 0/1 == one tile == not chunked; not a failure, so not reported as one
     {
         chunked = ChunkifyLod0(cpu.vertices, cpu.indices, lod0Subs, opt.chunkGrid);
         char cmsg[256];
         std::snprintf(cmsg, sizeof(cmsg),
             chunked ? "[meshbake] chunkGrid=%u -> %zu chunk submeshes\n"
                     : "[meshbake] chunkGrid=%u REJECTED (needs a single-submesh mesh with a "
-                      "non-degenerate XZ extent and grid >= 2); baking unchunked. submeshes=%zu\n",
+                      "non-degenerate XZ extent); baking unchunked. submeshes=%zu\n",
             opt.chunkGrid, lod0Subs.size());
         OutputDebugStringA(cmsg);
     }
@@ -2251,6 +2251,33 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
         " nrm=" + (out.normalPath.empty() ? "-" : "y"));
 
     return out;
+}
+
+bool MeshManager::DescribeMeshBinary(const std::string& binPath, BinaryInfo& out)
+{
+    out = {};
+    std::vector<VertexPNTUV> verts;
+    std::vector<MeshLodCpu> lods;
+    // Freshness checks skipped on purpose (same reason LoadBinaryDirect skips them): a committed
+    // .bin IS the asset, there is no source to compare against.
+    if (!ReadMeshBinary(GeometryFilePart(binPath), nullptr, nullptr, verts, lods) || lods.empty())
+    {
+        return false;
+    }
+    out.vertexCount = static_cast<uint32_t>(verts.size());
+    out.lods.reserve(lods.size());
+    for (const MeshLodCpu& lod : lods)
+    {
+        BinaryLodInfo info;
+        info.totalTris = static_cast<uint32_t>(lod.indices.size() / 3u);
+        info.submeshTris.reserve(lod.submeshes.size());
+        for (const Mesh::Submesh& sub : lod.submeshes)
+        {
+            info.submeshTris.push_back(sub.indexCount / 3u);
+        }
+        out.lods.push_back(std::move(info));
+    }
+    return true;
 }
 
 size_t MeshManager::CountSubmeshes(const std::string& pathWithFragment)

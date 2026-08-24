@@ -191,7 +191,8 @@ void DrawMeshPreview(EditorContext& ctx,
     const std::vector<std::string>& materialSlots,
     const std::vector<std::uint32_t>& recomputeNormalSlots,
     const Math::float4* texOffsScaleOverride,
-    int highlightMaterialSlot)
+    int highlightMaterialSlot,
+    int highlightSubmeshOrdinal)
 {
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const float controlsHeight = ImGui::GetFrameHeightWithSpacing() +
@@ -258,6 +259,7 @@ void DrawMeshPreview(EditorContext& ctx,
         lod,
         texOffsScaleOverride,
         highlightMaterialSlot,
+        highlightSubmeshOrdinal,
         environment,
         // Trim, not GetExposure(): the preview has no tonemapper. See Skybox.h.
         skybox ? skybox->GetIntensity() : 1.0f);
@@ -432,7 +434,19 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
     // Auto-size the material slots to the geometry's submesh count, then seed each from the file:
     // the `materials` array wins per-slot; else the scalar `material` seeds slot 0; rest default auto.
     const std::string geometry = doc_.value("geometry", std::string());
-    const size_t slotCount = std::max<size_t>(1, MeshManager::CountSubmeshes(geometry));
+    // A CHUNKED mesh's submeshes are spatial tiles that all carry material slot 0 by construction
+    // (ChunkifyLod0 inherits it), so auto-sizing the material list to the submesh count would put
+    // one useless picker per tile — 46 of them on the island, 800+ on a fine grid. Collapse to the
+    // single real slot and describe the tiles separately instead.
+    chunkGrid_ = doc_.value("chunkGrid", 0);
+    hoveredChunk_ = -1;
+    binInfo_ = {};
+    const bool chunked = chunkGrid_ > 1 && MeshManager::DescribeMeshBinary(geometry, binInfo_) &&
+                         !binInfo_.lods.empty() && binInfo_.lods[0].submeshTris.size() > 1;
+    if (!chunked) { chunkGrid_ = 0; binInfo_ = {}; }
+    const size_t slotCount = chunked
+        ? size_t{ 1 }
+        : std::max<size_t>(1, MeshManager::CountSubmeshes(geometry));
     slots_.assign(slotCount, "auto");
     if (doc_.contains("materials") && doc_["materials"].is_array())
     {
@@ -568,7 +582,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         slots_,
         recomputeNormalSlots_,
         hasTexOffsScale ? &texOffsScale : nullptr,
-        hoveredSlot_);
+        hoveredSlot_,
+        hoveredChunk_);
     ImGui::EndChild();
 
     ImGui::SameLine(0.0f, kSplitterWidth);
@@ -635,6 +650,97 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
 
     // Collected while drawing the settings pane; consumed by the preview on the NEXT frame.
     int hoveredSlotThisFrame = -1;
+    int hoveredChunkThisFrame = -1;
+
+    // --- Chunks (chunked meshes only) -------------------------------------------------------------
+    // These submeshes are spatial TILES of one surface, not material slots, so they get their own
+    // section: how many, how big, and whether the tiles are still coarse enough for the LOD chain to
+    // reduce them. Hovering a row highlights that one tile in the preview.
+    if (chunkGrid_ > 1 && !binInfo_.lods.empty())
+    {
+        const auto& lod0 = binInfo_.lods[0];
+        const size_t chunkCount = lod0.submeshTris.size();
+        const std::uint32_t lodCount = static_cast<std::uint32_t>(binInfo_.lods.size());
+        ImGui::SeparatorText("Chunks");
+        ImGui::Text("%d x %d grid, %zu non-empty tiles, %u triangles total",
+            chunkGrid_, chunkGrid_, chunkCount, lod0.totalTris);
+
+        // Tiles simplify with their shared borders LOCKED, so only a tile's interior can reduce.
+        // The coarsest LOD as a fraction of LOD0 is the health number: measured on the island,
+        // 384 tris/tile -> 0.17, 176 -> 0.33, 102 -> 0.43, 46 -> 0.57, 11 -> 1.00 (LODs dead).
+        if (lodCount > 1 && lod0.totalTris > 0)
+        {
+            const double ratio = static_cast<double>(binInfo_.lods.back().totalTris) / lod0.totalTris;
+            const double perTile = chunkCount ? static_cast<double>(lod0.totalTris) / chunkCount : 0.0;
+            const ImVec4 bad(0.92f, 0.35f, 0.30f, 1.0f), warn(0.96f, 0.62f, 0.16f, 1.0f);
+            if (ratio > 0.5)
+            {
+                ImGui::TextColored(bad, "~%.0f tris/tile - LOD%u is %.0f%% of LOD0: the grid is too"
+                    " fine for the LOD chain to reduce anything.", perTile, lodCount - 1u, ratio * 100.0);
+            }
+            else if (ratio > 0.25)
+            {
+                ImGui::TextColored(warn, "~%.0f tris/tile - LOD%u is %.0f%% of LOD0: the coarse LODs"
+                    " are losing their reduction (locked tile borders).", perTile, lodCount - 1u, ratio * 100.0);
+            }
+            else
+            {
+                ImGui::TextDisabled("~%.0f tris/tile, LOD%u is %.0f%% of LOD0.",
+                    perTile, lodCount - 1u, ratio * 100.0);
+            }
+        }
+
+        // Per-LOD totals, then the per-tile table. Both read straight out of the baked .bin.
+        std::string totals = "Totals:";
+        for (std::uint32_t L = 0; L < lodCount; ++L)
+        {
+            totals += "  LOD" + std::to_string(L) + " " + std::to_string(binInfo_.lods[L].totalTris);
+        }
+        ImGui::TextDisabled("%s", totals.c_str());
+
+        if (ImGui::TreeNode("Per-tile triangles"))
+        {
+            ImGui::TextDisabled("Hover a row to highlight that tile in the preview.");
+            const int cols = 1 + static_cast<int>(lodCount);
+            if (ImGui::BeginTable("##chunkTable", cols,
+                    ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY |
+                    ImGuiTableFlags_SizingFixedFit,
+                    ImVec2(0.0f, 220.0f)))
+            {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("tile");
+                for (std::uint32_t L = 0; L < lodCount; ++L)
+                {
+                    const std::string h = "LOD" + std::to_string(L);
+                    ImGui::TableSetupColumn(h.c_str());
+                }
+                ImGui::TableHeadersRow();
+                // Clipper: a fine grid is hundreds of tiles and only the visible rows matter.
+                ImGuiListClipper clipper;
+                clipper.Begin(static_cast<int>(chunkCount));
+                while (clipper.Step())
+                {
+                    for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("%d", i);
+                        if (ImGui::IsItemHovered()) { hoveredChunkThisFrame = i; }
+                        for (std::uint32_t L = 0; L < lodCount; ++L)
+                        {
+                            ImGui::TableSetColumnIndex(1 + static_cast<int>(L));
+                            const auto& tris = binInfo_.lods[L].submeshTris;
+                            const std::uint32_t t = (static_cast<size_t>(i) < tris.size()) ? tris[i] : 0u;
+                            ImGui::Text("%u", t);
+                            if (ImGui::IsItemHovered()) { hoveredChunkThisFrame = i; }
+                        }
+                    }
+                }
+                ImGui::EndTable();
+            }
+            ImGui::TreePop();
+        }
+    }
 
     // One material picker per submesh — the slot count is auto-detected from the geometry (Open()).
     ImGui::SeparatorText(slots_.size() == 1 ? "Material" : "Material slots (per submesh)");
@@ -938,6 +1044,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     }
 
     hoveredSlot_ = hoveredSlotThisFrame;
+    hoveredChunk_ = hoveredChunkThisFrame;
 
     ImGui::Separator();
     if (ImGui::Button("Save"))
@@ -1132,7 +1239,7 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
             // re-bake reverts the mesh to the SOURCE unit scale.
             const auto bs = doc_.find("bakeScale");
             if (bs != doc_.end() && bs->is_number()) { opt.bakeScale = bs->get<float>(); }
-            // Shadow chunking is a bake input too: omitting it here would re-bake a chunked
+            // Mesh chunking is a bake input too: omitting it here would re-bake a chunked
             // terrain into one giant caster while mesh.json keeps claiming chunks.
             const auto cg = doc_.find("chunkGrid");
             if (cg != doc_.end() && cg->is_number_integer() && cg->get<int>() > 0)

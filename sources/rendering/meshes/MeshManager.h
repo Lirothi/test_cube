@@ -97,17 +97,22 @@ struct MeshLoadOptions {
     float lodErrorScale = 1.0f;         // scales the per-level error budgets (<1 = preserve shape more)
     unsigned int lodSimplifyOptions = 0; // meshopt_Simplify* flags; 0 = safe default
 
-    // --- Shadow chunking (mesh.json "chunkGrid", 0 = off) ----------------------------------------
+    // --- Mesh chunking (mesh.json "chunkGrid", 0/1 = off) -----------------------------------------
     // Bake time: split a SINGLE-submesh mesh's LOD0 triangles into an N x N grid over its XZ extent
     // and emit each non-empty cell as its own submesh (same material slot, same triangles, merely
-    // reordered). Runtime: a chunked mesh's submeshes are INDEPENDENT shadow casters, each with its
-    // own bounds, so a virtual-shadow-map page only rasterizes the chunks that overlap it instead of
-    // the whole terrain. The island otherwise draws its full LOD range into every resident page.
+    // reordered). 0 or 1 means one tile, i.e. not chunked.
+    //
+    // Runtime, BOTH paths — this stopped being shadow-only:
+    //   CAMERA  each tile picks its own LOD from its own distance (render::SelectChunkLodTier),
+    //           and the mesh draws per submesh at those tiers.
+    //   SHADOWS each tile is an independent caster with its own bounds, so a virtual-shadow-map
+    //           page rasterizes only the tiles that reach it instead of the whole surface — and it
+    //           casts at the SAME per-chunk tier the camera drew, so the surface cannot shadow
+    //           itself with geometry it is not showing.
     //
     // Chunks are simplified independently, so their shared borders have to be pinned or adjacent
     // chunks crack apart at LOD >= 1 — see BuildLodsCpu's LockBorder/Sparse/ErrorAbsolute block.
-    // Camera LOD is unaffected: the LOD0 partition is loss-free and the camera never leaves LOD0 on
-    // a mesh this large.
+    // LOD0 is a loss-free reorder, so the partition itself changes no pixels.
     unsigned int chunkGrid = 0;
 };
 
@@ -160,6 +165,23 @@ public:
     static void InvalidateGltfMaterialCache();
     static GltfMaterialDesc DescribeGltfMaterial(const std::string& pathWithFragment,
                                                  int groupOrdinal = -1);
+
+    // Per-LOD, per-submesh triangle counts of a baked .mesh.bin, CPU-only (no GPU, no upload).
+    // CountSubmeshes answers "how many", this answers "how big is each, at every level" — which is
+    // what a CHUNKED mesh needs shown, since its submeshes are spatial tiles rather than material
+    // slots and their LOD reduction is the thing that tells you the grid is too fine.
+    // Returns false for a missing/unreadable/non-.mesh.bin path.
+    struct BinaryLodInfo
+    {
+        std::vector<uint32_t> submeshTris; // triangles per submesh at this LOD
+        uint32_t totalTris = 0;
+    };
+    struct BinaryInfo
+    {
+        uint32_t vertexCount = 0;
+        std::vector<BinaryLodInfo> lods; // lods[0] = LOD0
+    };
+    static bool DescribeMeshBinary(const std::string& binPath, BinaryInfo& out);
 
     // J: number of material slots (submeshes) a geometry resolves to (CPU-only, no GPU). glTF =
     // the resolved group count (#N selector = 1); non-glTF (.obj/.mesh.txt) = 1. Used by the Mesh

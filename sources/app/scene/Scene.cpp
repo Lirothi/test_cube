@@ -1255,7 +1255,7 @@ void Scene::Render(Renderer* renderer) {
     // Chunked-terrain LOD: publish THIS frame's per-chunk camera tiers (chosen by SelectLods inside
     // PrepareViews above) as the shadow caster overrides — after PrepareViews on purpose, so the
     // caster can never lag the receiver by a frame at a LOD transition.
-    shadowGpu_.RefreshChunkGroupLods(objects_);
+    shadowGpu_.RefreshChunkGroupLods(renderer, objects_);
 
     // Rung 0 / Step 2: upload the active shadow views' frustum planes (the per-view cull input)
     // into this frame's ring region. Fixed slot layout [cascades | spots | point-faces] so a

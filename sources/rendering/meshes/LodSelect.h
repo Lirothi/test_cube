@@ -84,9 +84,9 @@ inline int ShadowTierBaseLod(unsigned int tier)
 // Step 6 boundaries, now TUNABLE (dev window "LOD" tab; --set=lod.bound0/1/2). The unit is
 // distance / instance RADIUS — object-size-relative on purpose, so a palm switches later than a
 // pebble at the same distance. Defaults = the original deliberately conservative curve.
-inline float g_lodBound0 = 5.0f; // ratio where LOD0 -> 1
-inline float g_lodBound1 = 10.0f; // ratio where LOD1 -> 2
-inline float g_lodBound2 = 20.0f; // ratio where LOD2 -> 3
+inline float g_lodBound0 = 10.0f; // ratio where LOD0 -> 1
+inline float g_lodBound1 = 20.0f; // ratio where LOD1 -> 2
+inline float g_lodBound2 = 40.0f; // ratio where LOD2 -> 3
 
 // Dithered LOD crossfade: half-width of the transition band around each boundary, as a
 // fraction of the boundary ratio (0 = off -> hard switches with the classic hysteresis).
