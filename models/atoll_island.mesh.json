@@ -1,8 +1,9 @@
 {
-  "chunkGrid": 16,
+  "chunkGrid": 10,
   "geometry": "models/atoll_island/atoll_island.mesh.bin",
   "inputLayout": "PosNormTanUV",
   "lod3Aggressive": false,
+  "lodNormalWeight": 0.75,
   "material": "sandy_gravel",
   "renderLayer": "Terrain",
   "source": "import_staging\\atoll_island\\atoll_island.obj",

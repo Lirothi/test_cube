@@ -410,7 +410,33 @@ void Mesh::GenerateNormalsTangents(std::vector<VertexPNTUV>& verts,
             XMFLOAT3 t; XMStoreFloat3(&t, v);
             a.x += t.x; a.y += t.y; a.z += t.z;
             };
-        add3(accN[i0], N); add3(accN[i1], N); add3(accN[i2], N);
+        // ANGLE-weighted normals: each face contributes in proportion to the interior angle it
+        // occupies AT that vertex. The obvious alternative -- adding the same normalized face
+        // normal to all three corners -- weights by TRIANGLE COUNT, so wherever a fan is denser on
+        // one side (which is everywhere on an irregular or simplified mesh) the normal is pulled
+        // toward whichever side happens to have more triangles rather than toward the actual
+        // surface. Angle weighting is the one common scheme that does not depend on how the
+        // surface was triangulated, so re-triangulating a region leaves its shading alone.
+        // (Area weighting -- accumulating the UNNORMALIZED cross product, which is what
+        // tools/gen_island.py does -- is the other reasonable choice; it is triangulation-dependent
+        // but biased toward large faces rather than numerous ones.)
+        auto cornerAngle = [](XMVECTOR at, XMVECTOR b, XMVECTOR c) {
+            XMVECTOR u = XMVector3Normalize(XMVectorSubtract(b, at));
+            XMVECTOR v = XMVector3Normalize(XMVectorSubtract(c, at));
+            float d = XMVectorGetX(XMVector3Dot(u, v));
+            d = d < -1.0f ? -1.0f : (d > 1.0f ? 1.0f : d);
+            return acosf(d);
+            };
+        const float a0 = cornerAngle(P0, P1, P2);
+        const float a1 = cornerAngle(P1, P2, P0);
+        const float a2 = cornerAngle(P2, P0, P1);
+        // A degenerate triangle has no meaningful angles; contributing NaN here would poison every
+        // vertex of its fan, so it simply does not vote.
+        if (std::isfinite(a0) && std::isfinite(a1) && std::isfinite(a2)) {
+            add3(accN[i0], XMVectorScale(N, a0));
+            add3(accN[i1], XMVectorScale(N, a1));
+            add3(accN[i2], XMVectorScale(N, a2));
+        }
         add3(accT[i0], T); add3(accT[i1], T); add3(accT[i2], T);
         add3(accB[i0], B); add3(accB[i1], B); add3(accB[i2], B);
     }

@@ -16,6 +16,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias (shadow caster LOD)
+#include "rendering/debug/LodDebugView.h" // render::DrawLodDebug (LOD selection debug view)
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
@@ -1256,6 +1257,32 @@ void Scene::Render(Renderer* renderer) {
     // PrepareViews above) as the shadow caster overrides — after PrepareViews on purpose, so the
     // caster can never lag the receiver by a frame at a LOD transition.
     shadowGpu_.RefreshChunkGroupLods(renderer, objects_);
+
+    // LOD selection debug view (dev window "LOD" tab, or --set=lod.debug). Emitted HERE because
+    // this is the one point where both halves of what it shows are valid: this frame's tiers are
+    // final (SelectLods ran inside PrepareViews just above) and the HUD text buffer is still open
+    // for writing (AppController::WaitForHudBuild returned before Scene::Render was called, and
+    // TextManager::Build runs later, inside SceneRenderer::Render). Off by default; the body
+    // early-outs on the mode before touching anything.
+#if WITH_EDITOR
+    // The editor selection, resolved from ids to pointers here because objectIds_ is what holds the
+    // lockstep mapping. Kept out of SceneFrameData: this is a same-frame main-thread read, and the
+    // frame data is for what the render threads consume.
+    {
+        tc::inl_vector<const RenderableObjectBase*, SceneFrameData::kMaxEditorSelection> sel;
+        for (std::uint32_t i = 0; i < selectedEditorObjectCount_; ++i)
+        {
+            const SceneObjectId id = selectedEditorObjectIds_[i];
+            for (size_t o = 0; o < objectIds_.size() && o < objects_.size(); ++o)
+            {
+                if (objectIds_[o] == id) { sel.push_back(objects_[o].get()); break; }
+            }
+        }
+        render::DrawLodDebug(renderer, camera_, objects_, sel.data(), sel.size());
+    }
+#else
+    render::DrawLodDebug(renderer, camera_, objects_);
+#endif
 
     // Rung 0 / Step 2: upload the active shadow views' frustum planes (the per-view cull input)
     // into this frame's ring region. Fixed slot layout [cascades | spots | point-faces] so a

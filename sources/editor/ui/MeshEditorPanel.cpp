@@ -1008,27 +1008,75 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             }
             if (tip && ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tip); }
         };
+        // Read from the DOC, not from chunkGrid_: that member is zeroed when the .bin on disk is
+        // not chunked yet, and the warning is about the intent the manifest already states.
+        const int docChunkGrid = doc_.value("chunkGrid", 0);
+        bool lod3Aggr = true;
+        {
+            const auto it = doc_.find("lod3Aggressive");
+            if (it != doc_.end() && it->is_boolean()) { lod3Aggr = it->get<bool>(); }
+        }
+        if (docChunkGrid > 1 && lod3Aggr)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.62f, 0.16f, 1.0f));
+            ImGui::TextWrapped("Chunking is ON and so is Aggressive LOD3. Terrain manifests turn "
+                               "LOD3 off: its loose 0.25 error budget deforms dune silhouettes, and "
+                               "the far-clipmap shadow casters are tuned against low-sun banding.");
+            ImGui::PopStyleColor();
+            if (ImGui::SmallButton("Turn off Aggressive LOD3")) { doc_["lod3Aggressive"] = false; }
+            ImGui::Spacing();
+        }
+
+        ImGui::SeparatorText("Every level (LOD1-3)");
         lodFloat("Triangle target", "lodRatioScale", 1.0f, 0.25f, 4.0f, "x%.2f",
             "Chain-wide multiplier over the 0.5/0.25/0.12 per-level triangle targets.");
         lodFloat("Error budget", "lodErrorScale", 1.0f, 0.25f, 4.0f, "x%.2f",
             "Chain-wide multiplier over the 0.02/0.05/0.12 per-level error budgets.");
+        lodFloat("Normal weight", "lodNormalWeight", 0.0f, 0.0f, 2.0f, "%.2f",
+            "Attribute-aware simplification on EVERY slot, weighting the NORMAL. LODs are index\n"
+            "buffers over ONE shared vertex buffer, so a surviving vertex keeps the normal that was\n"
+            "computed for the LOD0 surface around it; a position-only collapse is blind to that and\n"
+            "the shading normal stops matching the geometry it is drawn on -- the lighting shifts\n"
+            "between levels even where the silhouette holds, and a low sun magnifies it.\n"
+            "Aimed at TERRAIN. ~0.5-1.0 to start; 0 = the old position-only bake, byte for byte.");
         lodBool("Allow collapses across attribute seams", "lodPermissive", false,
             "meshopt_SimplifyPermissive. WRECKS masked foliage (blades collapse into spikes);\n"
             "fine for solid props with UV seams and real volume.");
         lodBool("Drop small disconnected parts", "lodDropSmallParts", false,
             "meshopt_SimplifyPrune. Removes whole loose components once their removal\n"
             "fits the error budget.");
+        ImGui::SeparatorText("LOD3 only (the last, harshest level)");
         lodBool("Aggressive LOD3", "lod3Aggressive", true,
             "The LAST level cuts hard: solid slots to ~5%% at a loose budget, foliage via the\n"
             "leaf prune. TURN OFF FOR TERRAIN - far shadow casters are tuned against\n"
             "low-sun banding.");
+        // Both scale LOD3's AGGRESSIVE bases and are read nowhere else, so with the toggle off they
+        // are inert. Greyed rather than hidden: the value still round-trips through mesh.json.
+        ImGui::BeginDisabled(!lod3Aggr);
         lodFloat("LOD3 triangle target", "lod3RatioScale", 1.0f, 0.25f, 4.0f, "x%.2f",
             "LOD3's OWN multiplier over its harsh base target (5%% solid; also scales the\n"
             "kept-leaf interior decimation).");
         lodFloat("LOD3 error budget", "lod3ErrorScale", 1.0f, 0.25f, 4.0f, "x%.2f",
             "LOD3's OWN multiplier over its loose base error (0.25 of mesh extent).");
+        ImGui::EndDisabled();
+
+        ImGui::SeparatorText("Foliage only (slots marked in windFoliage)");
+        lodFloat("Leaf UV weight", "foliageUvWeight", 0.0f, 0.0f, 2.0f, "%.2f",
+            "Every level. Attribute-aware simplification for foliage slots: UV distortion costs\n"
+            "like position error, so collapses stop smearing the leaf texture into streaks.\n"
+            "~0.5-1.0 is the useful range; 0 = position-only collapse.");
+
+        // The leaf prune is LOD3-only AND never runs on a chunked mesh (BuildLodsCpu gates it on
+        // !chunkedSubsets, because it APPENDS vertices and a chunk's submesh table cannot absorb
+        // that). On terrain the whole group is dead weight, so say so.
+        const bool pruneDead = docChunkGrid > 1;
+        ImGui::BeginDisabled(pruneDead);
+        ImGui::TextDisabled(pruneDead ? "Leaf prune (LOD3) - not run on a chunked mesh"
+                                      : "Leaf prune - LOD3 only");
         lodFloat("Foliage prune keep", "foliagePruneKeep", 0.35f, 0.0f, 1.0f, "%.2f",
             "LOD3 foliage: fraction of whole leaves KEPT. 0 or 1 = no prune.");
+        const float pruneKeep = doc_.value("foliagePruneKeep", 0.35f);
+        ImGui::BeginDisabled(!(pruneKeep > 0.0f && pruneKeep < 1.0f));
         lodFloat("Leaf inner target", "foliageInnerRatio", 0.5f, 0.05f, 1.0f, "%.2f",
             "LOD3: fraction of the KEPT leaves' triangles surviving the interior decimation\n"
             "(outline pinned, inside crushed).");
@@ -1037,10 +1085,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         lodFloat("Leaf grow", "foliageGrow", 1.0f, 0.0f, 1.5f, "%.2f",
             "How much the kept leaves inflate to compensate the pruned area. 1 = full\n"
             "1/sqrt(keep) compensation (can read FLUFFIER than the source), 0 = authored size.");
-        lodFloat("Leaf UV weight", "foliageUvWeight", 0.0f, 0.0f, 2.0f, "%.2f",
-            "Attribute-aware simplification for foliage slots (all LODs): UV distortion costs\n"
-            "like position error, so collapses stop smearing the leaf texture into streaks.\n"
-            "~0.5-1.0 is the useful range; 0 = position-only collapse.");
+        ImGui::EndDisabled(); // prune keep out of range
+        ImGui::EndDisabled(); // chunked mesh
     }
 
     hoveredSlot_ = hoveredSlotThisFrame;
@@ -1223,6 +1269,8 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
             if (fg != doc_.end() && fg->is_number()) { opt.foliageGrow = fg->get<float>(); }
             const auto fuv = doc_.find("foliageUvWeight");
             if (fuv != doc_.end() && fuv->is_number()) { opt.foliageUvWeight = fuv->get<float>(); }
+            const auto lnw = doc_.find("lodNormalWeight");
+            if (lnw != doc_.end() && lnw->is_number()) { opt.lodNormalWeight = lnw->get<float>(); }
             const auto readDropList = [this](const char* key, std::vector<uint32_t>& out)
             {
                 const auto it = doc_.find(key);

@@ -219,6 +219,7 @@ private:
     float meshDialogInnerError_ = 0.15f;    // and its error budget
     float meshDialogFoliageGrow_ = 1.0f;    // survivor-inflation dial (1 = full area comp)
     float meshDialogUvWeight_ = 0.0f;       // foliage UV weight for attribute-aware simplify
+    float meshDialogNormalWeight_ = 0.0f;   // normal weight for attribute-aware simplify (all slots)
     // Mesh chunking (mesh.json "chunkGrid"). Splits LOD0 into an N x N grid of submeshes so each
     // tile becomes its own shadow caster and a shadow page rasterizes only the tiles it overlaps.
     // Seeded from the asset on dialog open, so re-opening shows what the asset actually carries.

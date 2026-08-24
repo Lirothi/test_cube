@@ -11,6 +11,7 @@
 
 #include "core/math/Math.h"
 #include "core/math/AABB.h"
+#include "rendering/core/RenderConstants.h" // render::kFrameCount (per-slot instance buffers)
 #include "core/math/OBB.h"
 #include "core/math/Frustum.h"
 #include "rendering/meshes/Mesh.h"
@@ -120,8 +121,16 @@ private:
     mutable std::mutex commandMutex_;
 
     static constexpr size_t kShapeCount = static_cast<size_t>(ShapeType::Cone) + 1;
-    std::array<InstanceBuffer, kShapeCount> solidInstanceBuffers_{};
-    std::array<InstanceBuffer, kShapeCount> wireframeInstanceBuffers_{};
+    // Indexed by FRAME SLOT first, not one global pair. These are UPLOAD buffers the CPU writes and
+    // the GPU reads, so a single copy has two defects: frame N+1's memcpy lands in memory frame N is
+    // still reading, and -- far worse -- growing it calls Reset() on a resource an in-flight command
+    // list still holds a descriptor for, which is a GPU page fault, i.e. device removed. Both stayed
+    // dormant while the only caller drew a couple of gizmo spheres and never passed the initial
+    // 64-element capacity; the LOD debug view draws hundreds and made the growth path run for the
+    // first time. Per slot, growth happens only when this slot's fence has already been waited on.
+    using ShapeBuffers = std::array<InstanceBuffer, kShapeCount>;
+    std::array<ShapeBuffers, render::kFrameCount> solidInstanceBuffers_{};
+    std::array<ShapeBuffers, render::kFrameCount> wireframeInstanceBuffers_{};
     std::shared_ptr<Material> lineMaterial_;
 };
 

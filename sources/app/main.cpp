@@ -301,6 +301,14 @@ int WINAPI WinMain(
     }
 
     if (lpCmdLine) {
+        // "--dred": force DRED (auto-breadcrumbs + page-fault allocation report) on for a NORMAL
+        // run. It is on automatically in Debug and under --scene-stress, which left the interactive
+        // Release_Editor session -- where an editor-only device removal actually happens -- with no
+        // way to produce the one artefact that names the faulting op and resource. Cheap enough to
+        // leave on while chasing one; it must be set before device creation, hence here.
+        if (std::strstr(lpCmdLine, "--dred")) {
+            GraphicsDevice::EnableDredForStress(true);
+        }
         if (const char* flag = std::strstr(lpCmdLine, "scene-stress")) {
             int iterations = 0; // 0 => driver default
             if (const char* eq = std::strchr(flag, '=')) {
@@ -618,6 +626,14 @@ int WINAPI WinMain(
             const std::string chunk = getArg("--reimport-chunk=");
             if (!chunk.empty()) {
                 opt.chunkGrid = static_cast<unsigned int>(std::atoi(chunk.c_str()));
+            }
+            // "--reimport-normal-weight=0.75" mirrors mesh.json "lodNormalWeight": the LOD
+            // simplifier weights the NORMAL alongside position, so collapses stop breaking the
+            // shading of a surface whose vertex normals it cannot rewrite (LODs share one vertex
+            // buffer). 0 / absent = the position-only metric, byte-identical to the old bake.
+            const std::string normalWeight = getArg("--reimport-normal-weight=");
+            if (!normalWeight.empty()) {
+                opt.lodNormalWeight = static_cast<float>(std::atof(normalWeight.c_str()));
             }
             // "--reimport-scale=0.0107" mirrors the import dialog's unit-fix bakeScale (see
             // MeshLoadOptions::bakeScale) — without it a centimetre-authored asset (the tent)

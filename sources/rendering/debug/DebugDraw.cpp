@@ -392,8 +392,8 @@ void DebugDrawSystem::Shutdown()
         }
     };
 
-    releaseBuffers(solidInstanceBuffers_);
-    releaseBuffers(wireframeInstanceBuffers_);
+    for (auto& slot : solidInstanceBuffers_) { releaseBuffers(slot); }
+    for (auto& slot : wireframeInstanceBuffers_) { releaseBuffers(slot); }
     initialized_ = false;
 }
 
@@ -579,7 +579,17 @@ void DebugDrawSystem::AddFrustum(const Frustum& frustum, const Math::float4& col
 bool DebugDrawSystem::HasCommands() const
 {
     std::lock_guard<std::mutex> lock(commandMutex_);
-    return !solidCommands_.empty() || !wireframeCommands_.empty() || !lineCommands_.empty();
+    // BOTH sets, because the two are one frame out of phase and this answer gates a pass that
+    // consumes the SCRATCH. BeginFrame swaps the accumulators into the scratch, so what Render()
+    // will draw this frame is last frame's accumulation. Reporting only on the accumulators made
+    // the gate and the payload disagree in both directions: a frame that stopped accumulating had
+    // its still-pending scratch silently dropped, and -- the reason this matters beyond a lost
+    // frame -- the render graph decided whether to declare the pass's resource states from a set
+    // that is not the one the body draws. Reporting on the union can only ever run the pass when
+    // there is nothing to draw, which costs one empty command list and is always safe.
+    return !solidCommands_.empty() || !wireframeCommands_.empty() || !lineCommands_.empty()
+        || !solidCommandScratch_.empty() || !wireframeCommandScratch_.empty()
+        || !lineCommandScratch_.empty();
 }
 
 void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -644,14 +654,24 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 
             DebugDrawSystem::GPUInstanceData& data = instanceDataScratch_[dstIndex];
             data.mvp = cmd.transform * viewProj;
-            // P16.1: same as the selection outline -- an authored colour going into scene
-            // colour ahead of the tonemap, which no longer scales it when pre-exposure is on.
-            data.color = Math::float4(cmd.color.x * render::g_preExposure,
-                                      cmd.color.y * render::g_preExposure,
-                                      cmd.color.z * render::g_preExposure, cmd.color.w);
+            // An authored debug colour is DISPLAY-referred: it is a UI colour that has to stay
+            // legible whatever the scene exposure is, which is the whole point of a debug overlay.
+            // It used to be multiplied by render::g_preExposure here (P16.1, by analogy with the
+            // selection outline). Under P16 physical light units that multiplier is ~2.5e-5 on a
+            // sunlit exterior, so every AddBox/AddSphere/AddCone has been rendering BLACK since:
+            // measured on a wind_test capture, box edges came out (53,40,36) while the AddLine
+            // path -- which never applied the multiplier -- drew a clean (216,130,135) on the same
+            // frame. Matching the line path is what makes the two primitives mean the same thing
+            // by a colour, and it is what un-blacks the editor's sun gizmo as well.
+            data.color = cmd.color;
         }
 
-        auto& instanceBuffers = wireframe ? wireframeInstanceBuffers_ : solidInstanceBuffers_;
+        // This frame's slot. See the declaration: the buffers are per-slot precisely so the memcpy
+        // below and any growth inside EnsureInstanceBuffer touch memory no in-flight frame is using.
+        const size_t frameSlot =
+            static_cast<size_t>(renderer->GetCurrentFrameIndex()) % render::kFrameCount;
+        auto& instanceBuffers =
+            (wireframe ? wireframeInstanceBuffers_ : solidInstanceBuffers_)[frameSlot];
 
         for (size_t shapeIndex = 0; shapeIndex < kShapeCount; ++shapeIndex)
         {

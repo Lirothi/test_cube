@@ -852,6 +852,7 @@ namespace
         bakeOpt.foliageInnerError = lodOpt.foliageInnerError;
         bakeOpt.foliageGrow = lodOpt.foliageGrow;
         bakeOpt.foliageUvWeight = lodOpt.foliageUvWeight;
+        bakeOpt.lodNormalWeight = lodOpt.lodNormalWeight;
         // Per-slot per-level drop lists are Mesh Editor overrides — preserve across re-imports.
         const auto readDropSlots = [&asset](const char* key, std::vector<uint32_t>& out)
         {
@@ -886,6 +887,7 @@ namespace
             bakeOpt.foliageInnerError = asset.value("foliageInnerError", 0.15f);
             bakeOpt.foliageGrow = asset.value("foliageGrow", 1.0f);
             bakeOpt.foliageUvWeight = asset.value("foliageUvWeight", 0.0f);
+            bakeOpt.lodNormalWeight = asset.value("lodNormalWeight", 0.0f);
             bakeOpt.bakeScale = asset.value("bakeScale", 1.0f);
         }
         if (asset.contains("recomputeNormalSlots") && asset["recomputeNormalSlots"].is_array())
@@ -989,6 +991,7 @@ namespace
         writeLodF("foliageInnerError", bakeOpt.foliageInnerError, 0.15f);
         writeLodF("foliageGrow", bakeOpt.foliageGrow, 1.0f);
         writeLodF("foliageUvWeight", bakeOpt.foliageUvWeight, 0.0f);
+        writeLodF("lodNormalWeight", bakeOpt.lodNormalWeight, 0.0f);
         // The unit correction folded into the vertices must round-trip like the LOD knobs, or
         // the next Save/bulk re-import would re-bake the mesh at the SOURCE unit scale.
         writeLodF("bakeScale", bakeOpt.bakeScale, 1.0f);
@@ -1141,6 +1144,7 @@ MeshLoadOptions ImportPanel::DialogLodOptions() const
     lodOpt.foliageInnerError = meshDialogInnerError_;
     lodOpt.foliageGrow = meshDialogFoliageGrow_;
     lodOpt.foliageUvWeight = meshDialogUvWeight_;
+    lodOpt.lodNormalWeight = meshDialogNormalWeight_;
     return lodOpt;
 }
 
@@ -1915,7 +1919,24 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("LOD generation"))
     {
-        ImGui::TextDisabled("Coarser levels are built per submesh (meshopt_simplify).");
+        ImGui::TextDisabled("Three coarser levels, built per submesh over the SAME vertex buffer.");
+
+        // Chunking and the harsh last level are a known-bad pair, and nothing downstream catches
+        // it -- the bake succeeds and the damage only shows up as deformed dunes and low-sun
+        // shadow banding much later. Stated here, next to the toggle, rather than in a comment
+        // nobody reads at 2am.
+        if (meshDialogChunk_ && meshDialogLod3Aggressive_)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.62f, 0.16f, 1.0f));
+            ImGui::TextWrapped("Chunking is ON and so is Aggressive LOD3. Terrain manifests turn "
+                               "LOD3 off: its loose 0.25 error budget deforms dune silhouettes, and "
+                               "the far-clipmap shadow casters are tuned against low-sun banding.");
+            ImGui::PopStyleColor();
+            if (ImGui::SmallButton("Turn off Aggressive LOD3")) { meshDialogLod3Aggressive_ = false; }
+            ImGui::Spacing();
+        }
+
+        ImGui::SeparatorText("Every level (LOD1-3)");
         ImGui::SetNextItemWidth(150.0f);
         ImGui::SliderFloat("Triangle target", &meshDialogLodRatio_, 0.25f, 2.0f, "x%.2f");
         if (ImGui::IsItemHovered())
@@ -1927,6 +1948,19 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
             ImGui::SetTooltip("Scales the per-level error limits (base 0.02 / 0.05 / 0.12, relative\n"
                               "to mesh extents). Simplification stops when the budget is spent, so a\n"
                               "larger value reduces further at the cost of shape.");
+
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("Normal weight", &meshDialogNormalWeight_, 0.0f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Attribute-aware simplification on EVERY slot, weighting the NORMAL.\n"
+                              "LODs are index buffers over ONE shared vertex buffer, so a surviving\n"
+                              "vertex keeps the normal computed for the LOD0 surface around it; a\n"
+                              "position-only collapse is blind to that, and the shading normal stops\n"
+                              "matching the geometry it is drawn on. This costs normal distortion like\n"
+                              "position error instead. Aimed at TERRAIN, where the lighting shift\n"
+                              "between levels shows up long before the silhouette does -- more so\n"
+                              "under a low sun, where a degree of normal error is a large N.L change.\n"
+                              "~0.5-1.0 to start; 0 = the old position-only bake, byte for byte.");
 
         ImGui::Checkbox("Allow collapses across attribute seams", &meshDialogLodPermissive_);
         if (ImGui::IsItemHovered())
@@ -1944,12 +1978,17 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
                               "removal fits the error budget. No effect on meshes whose parts are\n"
                               "large (a palm frond is one connected 80-triangle grid, not loose cards).");
 
+        ImGui::SeparatorText("LOD3 only (the last, harshest level)");
         ImGui::Checkbox("Aggressive LOD3", &meshDialogLod3Aggressive_);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("The LAST level cuts hard: solid slots to ~5%% of their triangles at a\n"
                               "loose error budget, foliage slots via the leaf prune below. TURN OFF\n"
                               "FOR TERRAIN - its far shadow casters are tuned against low-sun banding\n"
                               "and the loose budget deforms dune silhouettes.");
+        // Both multipliers scale LOD3's AGGRESSIVE bases and are read nowhere else, so with the
+        // toggle off they are inert. Greyed rather than hidden: the value still round-trips through
+        // mesh.json, and a control that silently does nothing is worse than one that says so.
+        ImGui::BeginDisabled(!meshDialogLod3Aggressive_);
         ImGui::SetNextItemWidth(150.0f);
         ImGui::SliderFloat("LOD3 triangle target", &meshDialogLod3Ratio_, 0.25f, 4.0f, "x%.2f");
         if (ImGui::IsItemHovered())
@@ -1962,6 +2001,31 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
             ImGui::SetTooltip("LOD3's OWN multiplier over its loose base error (0.25 of mesh extent).\n"
                               "Raise it when stubborn small parts (husk scales) refuse to collapse\n"
                               "at the default budget.");
+        ImGui::EndDisabled();
+
+        ImGui::SeparatorText("Foliage only (slots marked in windFoliage)");
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::SliderFloat("Leaf UV weight", &meshDialogUvWeight_, 0.0f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Every level. Attribute-aware simplification for foliage slots: makes UV\n"
+                              "distortion cost like position error, so collapses stop smearing the\n"
+                              "leaf texture into streaks. ~0.5-1.0 is the useful range; 0 = classic\n"
+                              "position-only collapse.");
+
+        // The leaf prune is LOD3-only AND never runs on a chunked mesh (BuildLodsCpu gates it on
+        // !chunkedSubsets, because it APPENDS vertices and a chunk's submesh table cannot absorb
+        // that). On terrain the whole group is dead weight, so say so instead of letting four
+        // sliders imply they do something.
+        const bool pruneDead = meshDialogChunk_;
+        ImGui::BeginDisabled(pruneDead);
+        if (pruneDead)
+        {
+            ImGui::TextDisabled("Leaf prune (LOD3) - not run on a chunked mesh");
+        }
+        else
+        {
+            ImGui::TextDisabled("Leaf prune - LOD3 only");
+        }
         ImGui::SetNextItemWidth(150.0f);
         ImGui::SliderFloat("Foliage prune keep", &meshDialogFoliageKeep_, 0.0f, 1.0f, "%.2f");
         if (ImGui::IsItemHovered())
@@ -1969,6 +2033,10 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
                               "the survivors grow by 1/sqrt(keep) to hold the silhouette density).\n"
                               "Leaf slots come from windFoliage. 0 or 1 = no prune (plain meshopt,\n"
                               "which stalls on alpha-card crowns).");
+        // 0 or 1 means the prune never runs, and these three only describe what it does to the
+        // leaves it keeps.
+        const bool pruneOff = !(meshDialogFoliageKeep_ > 0.0f && meshDialogFoliageKeep_ < 1.0f);
+        ImGui::BeginDisabled(pruneOff);
         ImGui::SetNextItemWidth(150.0f);
         ImGui::SliderFloat("Leaf inner target", &meshDialogInnerRatio_, 0.05f, 1.0f, "%.2f");
         if (ImGui::IsItemHovered())
@@ -1986,20 +2054,17 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
             ImGui::SetTooltip("How much the kept leaves inflate to compensate the pruned area.\n"
                               "1 = full 1/sqrt(keep) compensation (holds silhouette density but can\n"
                               "read FLUFFIER than the source crown), 0 = survivors stay authored size.");
-        ImGui::SetNextItemWidth(150.0f);
-        ImGui::SliderFloat("Leaf UV weight", &meshDialogUvWeight_, 0.0f, 2.0f, "%.2f");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Attribute-aware simplification for foliage slots (all LODs): makes UV\n"
-                              "distortion cost like position error, so collapses stop smearing the\n"
-                              "leaf texture into streaks. ~0.5-1.0 is the useful range; 0 = classic\n"
-                              "position-only collapse.");
+        ImGui::EndDisabled(); // pruneOff
+        ImGui::EndDisabled(); // pruneDead (chunked mesh)
 
+        ImGui::Spacing();
         const bool nonDefault = meshDialogLodRatio_ != 1.0f || meshDialogLodError_ != 1.0f ||
                                 meshDialogLodPermissive_ || meshDialogLodPrune_ ||
                                 !meshDialogLod3Aggressive_ || meshDialogFoliageKeep_ != 0.35f ||
                                 meshDialogLod3Ratio_ != 1.0f || meshDialogLod3Error_ != 1.0f ||
                                 meshDialogInnerRatio_ != 0.5f || meshDialogInnerError_ != 0.15f ||
-                                meshDialogFoliageGrow_ != 1.0f || meshDialogUvWeight_ != 0.0f;
+                                meshDialogFoliageGrow_ != 1.0f || meshDialogUvWeight_ != 0.0f ||
+                                meshDialogNormalWeight_ != 0.0f;
         if (nonDefault)
         {
             ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f), "Non-default LOD settings");
@@ -2018,6 +2083,7 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
                 meshDialogInnerError_ = 0.15f;
                 meshDialogFoliageGrow_ = 1.0f;
                 meshDialogUvWeight_ = 0.0f;
+                meshDialogNormalWeight_ = 0.0f;
             }
         }
     }

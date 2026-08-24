@@ -375,6 +375,29 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
 
     std::vector<uint32_t> simplified;
 
+    // Attribute scratch for the normal-weighted metric: [normal.xyz, uv.xy] per vertex. Built
+    // lazily and rebuilt when `verts` grows -- the foliage prune APPENDS vertices mid-loop, and a
+    // stale array here would hand meshopt attributes for vertices that no longer line up.
+    constexpr size_t kAttrCount = 5;
+    std::vector<float> attribs;
+    auto ensureAttribs = [&]()
+    {
+        if (attribs.size() == verts.size() * kAttrCount) { return; }
+        attribs.resize(verts.size() * kAttrCount);
+        for (size_t v = 0; v < verts.size(); ++v)
+        {
+            const VertexPNTUV& vx = verts[v];
+            // Normalized on the way in: the weight's meaning ("one unit of normal delta costs W
+            // units of position delta") only holds if the deltas are on the unit sphere.
+            float nx = vx.normal.x, ny = vx.normal.y, nz = vx.normal.z;
+            const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (len > 1e-8f) { nx /= len; ny /= len; nz /= len; }
+            float* a = attribs.data() + v * kAttrCount;
+            a[0] = nx; a[1] = ny; a[2] = nz;
+            a[3] = vx.uv.x; a[4] = vx.uv.y;
+        }
+    };
+
     for (int i = 0; i < 3; ++i)
     {
         MeshLodCpu lod;
@@ -450,7 +473,26 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
                 // visually destroyed: the leaf blades collapse into spikes, because the position-only
                 // error metric is blind to what actually carries a leaf card's shape (its silhouette
                 // and UV island). Do not trust `resultError` on masked foliage; look at the wireframe.
-                if (foliageSlot && opt.foliageUvWeight > 0.0f)
+                if (opt.lodNormalWeight > 0.0f)
+                {
+                    // Normal-weighted collapse (see MeshLoadOptions::lodNormalWeight). Kept as its
+                    // OWN branch rather than folded into the UV one so that leaving the weight at 0
+                    // reproduces the previous bake exactly, down to meshopt's attribute count --
+                    // every asset already on disk was authored against that behaviour.
+                    float w[kAttrCount] = { opt.lodNormalWeight, opt.lodNormalWeight,
+                                            opt.lodNormalWeight, 0.0f, 0.0f };
+                    if (foliageSlot && opt.foliageUvWeight > 0.0f)
+                    {
+                        w[3] = opt.foliageUvWeight;
+                        w[4] = opt.foliageUvWeight;
+                    }
+                    ensureAttribs();
+                    n = meshopt_simplifyWithAttributes(simplified.data(), src, srcCount,
+                        &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
+                        attribs.data(), kAttrCount * sizeof(float), w, kAttrCount, nullptr,
+                        target, errBudget * errorScale, simplifyOptions, &resultError);
+                }
+                else if (foliageSlot && opt.foliageUvWeight > 0.0f)
                 {
                     // Attribute-aware collapse for alpha cards: a vertex sliding along a flat
                     // frond has ZERO position error but drags its UV across the leaf texture —
@@ -579,6 +621,9 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
     if (opt.lodRatioScale != 1.0f) { h = Fnv1a(&opt.lodRatioScale, sizeof(float), h); }
     if (opt.lodErrorScale != 1.0f) { h = Fnv1a(&opt.lodErrorScale, sizeof(float), h); }
     if (opt.lodSimplifyOptions != 0u) { h = Fnv1a(&opt.lodSimplifyOptions, sizeof(unsigned int), h); }
+    // Reaches the baked geometry: it changes WHICH edges collapse, so a .bin baked without it must
+    // not be reused once it is on. Non-default only, so existing caches stay valid.
+    if (opt.lodNormalWeight != 0.0f) { h = Fnv1a(&opt.lodNormalWeight, sizeof(float), h); }
     // The prune rewrites LOD3's indices AND appends vertices; non-default only, same rule as above.
     if (opt.foliagePruneKeep != 0.35f) { h = Fnv1a(&opt.foliagePruneKeep, sizeof(float), h); }
     if (!opt.lod3Aggressive) { const uint8_t off = 1u; h = Fnv1a(&off, 1, h); }

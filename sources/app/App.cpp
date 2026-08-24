@@ -49,6 +49,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "ocean/OceanSimulation.h"
 #include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
 #include "rendering/meshes/LodSelect.h" // --sweep=vsm.shadowLod* (docs/bug_shadow_lod_bias_perf.md)
+#include "rendering/debug/LodDebugView.h" // --set=lod.debug (LOD selection debug view)
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
@@ -271,6 +272,18 @@ namespace
         if (setting == "lod.fadeBand") { render::g_lodFadeBand = std::clamp(value, 0.0f, 0.35f); return true; }
         if (setting == "lod.enabled") { render::g_lodEnabled = value != 0.0f; return true; }
         if (setting == "lod.forced")  { render::g_forcedLod = std::clamp((int)value, -1, 3); return true; }
+        // LOD selection debug view (dev "LOD" tab). 0 off, 1 tier colours, 2 apparent-triangle-size
+        // colours. Exposed here so a debug capture is a command line, not a click path.
+        if (setting == "lod.debug")         { render::g_lodDebugMode = static_cast<render::LodDebugMode>(std::clamp((int)value, 0, 2)); return true; }
+        if (setting == "lod.debugBoxes")    { render::g_lodDebugBoxes = value != 0.0f; return true; }
+        if (setting == "lod.debugLabels")   { render::g_lodDebugLabels = value != 0.0f; return true; }
+        if (setting == "lod.debugCriteria") { render::g_lodDebugCriteria = value != 0.0f; return true; }
+        if (setting == "lod.debugRegular")  { render::g_lodDebugRegularMeshes = value != 0.0f; return true; }
+        if (setting == "lod.debugRange")    { render::g_lodDebugRange = std::max(10.0f, value); return true; }
+        if (setting == "lod.debugMaxBoxes") { render::g_lodDebugMaxBoxes = std::max(0, (int)value); return true; }
+        // 0 = whole level, 1 = editor selection only. A headless run has no selection, so 1 there
+        // reports an empty view on purpose rather than silently meaning 0.
+        if (setting == "lod.debugFilter")   { render::g_lodDebugFilter = static_cast<render::LodDebugFilter>(std::clamp((int)value, 0, 1)); return true; }
         // Mirror of the VSM page-stats log toggle, so a headless run can capture the resident/request
         // counts (logs/vsm_pages.log) that the dev-window "VSM" tab shows live.
         if (setting == "vsm.logPageStats")  { vsm::g_logPageStats = value != 0.0f; return true; }

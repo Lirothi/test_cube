@@ -22,6 +22,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderStats.h"
 #include "rendering/meshes/LodSelect.h"
+#include "rendering/debug/LodDebugView.h"
 #include "rendering/renderables/InstanceTypes.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "ocean/OceanSimulation.h"
@@ -1782,6 +1783,67 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("Distance multiplier between LOD steps: LOD2 starts at distance*factor,\n"
                                       "LOD3 at distance*factor^2. +/-15%% hysteresis keeps a boundary chunk from\n"
                                       "flipping while the camera breathes.");
+                ImGui::EndDisabled();
+
+                ImGui::SeparatorText("Debug view");
+                ImGui::TextWrapped("Draws the LOD DECISION next to the INPUTS it was made from, so "
+                    "a wrong-looking LOD can be pinned on the curve or on the geometry without a "
+                    "rebuild. Every number shown is read back from what selection already stored "
+                    "this frame, never re-derived.");
+                static const char* kLodDebugLabels[] = {
+                    "Off", "Tier (selected LOD)", "Density (apparent triangle size)" };
+                int lodDebugCombo = static_cast<int>(render::g_lodDebugMode);
+                if (ImGui::Combo("LOD debug view", &lodDebugCombo, kLodDebugLabels, IM_ARRAYSIZE(kLodDebugLabels)))
+                {
+                    render::g_lodDebugMode = static_cast<render::LodDebugMode>(lodDebugCombo);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Tier: colour = the LOD each chunk selected (green 0 -> red 3).\n"
+                                      "Density: colour = the triangle size that LOD actually DELIVERS on\n"
+                                      "screen. The two disagree whenever chunks differ in source density --\n"
+                                      "simplification is a fixed ratio of each chunk's own LOD0 triangle\n"
+                                      "count, so an equal tier is not equal detail. That gap is exactly why\n"
+                                      "a nearer chunk can look coarser than a farther one.");
+
+                ImGui::BeginDisabled(render::g_lodDebugMode == render::LodDebugMode::Off);
+#if WITH_EDITOR
+                // Only offered where a selection can exist; in a non-editor build there is nothing
+                // to select, so the control is absent rather than present and inert.
+                static const char* kLodDebugFilterLabels[] = { "Whole level", "Selection only" };
+                int lodDebugFilterCombo = static_cast<int>(render::g_lodDebugFilter);
+                if (ImGui::Combo("Report on", &lodDebugFilterCombo, kLodDebugFilterLabels, IM_ARRAYSIZE(kLodDebugFilterLabels)))
+                {
+                    render::g_lodDebugFilter = static_cast<render::LodDebugFilter>(lodDebugFilterCombo);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Selection only narrows the view to the objects picked in the viewport\n"
+                                      "(all chunks of a selected chunked mesh included, and never range-culled).\n"
+                                      "It does not quietly widen back to the whole level when nothing is\n"
+                                      "selected -- the readout says the selection is empty instead.");
+#endif
+                ImGui::Checkbox("Boxes", &render::g_lodDebugBoxes);
+                ImGui::SameLine();
+                ImGui::Checkbox("Labels", &render::g_lodDebugLabels);
+                ImGui::SameLine();
+                ImGui::Checkbox("Criteria", &render::g_lodDebugCriteria);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Draws the boundaries as what they geometrically ARE: spheres around\n"
+                                      "the camera, sliced at sea level. It is why height alone can put every\n"
+                                      "chunk past a boundary. Also probes the chunk under the crosshair --\n"
+                                      "white box, plus the exact closest-point segment its distance was\n"
+                                      "measured along.");
+                ImGui::Checkbox("Include regular meshes", &render::g_lodDebugRegularMeshes);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Palms and props select on distance/RADIUS (the ratio sliders above),\n"
+                                      "not on metres. Off by default so the two curves stay separable.");
+                ImGui::SliderFloat("Debug range (m)", &render::g_lodDebugRange, 40.0f, 800.0f, "%.0f");
+                ImGui::SliderInt("Max boxes", &render::g_lodDebugMaxBoxes, 0, 800);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A populated level has hundreds of meshes and every box is 12 lines,\n"
+                                      "which buries the terrain the view is usually there to judge. Chunks\n"
+                                      "are drawn first, then the nearest regular meshes fill what is left.\n"
+                                      "The readout always counts everything in range, so this hides\n"
+                                      "geometry, never numbers. 0 = no limit.");
                 ImGui::EndDisabled();
 
                 ImGui::EndTabItem();

@@ -70,6 +70,26 @@ struct MeshLoadOptions {
     // the old bake. mesh.json "foliageUvWeight".
     float foliageUvWeight = 0.0f;
 
+    // NORMAL weight for attribute-aware simplification of EVERY slot
+    // (meshopt_simplifyWithAttributes). LODs are index buffers over ONE shared vertex buffer, so a
+    // surviving vertex keeps the normal that was computed for the LOD0 surface around it. A
+    // position-only collapse is blind to that: it will happily remove the vertices that made the
+    // stored normals correct, and the shading normal then stops matching the geometry it is drawn
+    // on. Measured on atoll_island's current bake, the area-weighted angle between a triangle's
+    // geometric normal and its interpolated shading normal grows 0.18 deg (LOD0) -> 0.25 -> 0.40 ->
+    // 1.57 (LOD3), with p99 reaching 23 deg -- which at this scene's ~3 deg sun elevation is a large
+    // change in N.L, i.e. the lighting visibly shifts between levels even where the silhouette does
+    // not. A non-zero weight makes normal distortion cost like position error, so the simplifier
+    // spends its budget on collapses that keep shading intact.
+    //
+    // Fixing the normals themselves would need meshopt_simplifyWithUpdate, which rewrites the
+    // attribute values -- but it does so DESTRUCTIVELY on the shared vertex buffer, so LOD3's
+    // rewrite would corrupt LOD0. That needs per-LOD vertex data first; this knob is the part that
+    // works within one VB.
+    //
+    // 0 = plain position-only metric, byte-identical to the old bake. mesh.json "lodNormalWeight".
+    float lodNormalWeight = 0.0f;
+
     // Uniform factor applied to VERTEX POSITIONS at bake time, so an asset authored in the wrong
     // unit (centimetres is the common one -- the tent bakes at 418 x 227 x 284) comes out of the
     // bake already in metres. The alternative the importer used to offer, a `spawnScale` on the
