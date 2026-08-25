@@ -374,39 +374,74 @@ Material* ShadowGpuData::IndirectShadowPoolMaterial() const
     return MaskedShadowsActive() ? indirectShadowPoolMaskedMat_.get() : indirectShadowPoolMat_.get();
 }
 
-// Chunked-terrain LOD: refresh the per-group ABSOLUTE LOD override from each chunked object's
-// camera tiers (RenderableObject::SelectLod filled them this frame). Runs every frame — it is what
-// keeps the VSM caster LOD equal to the LOD the gbuffer just drew, per chunk, with no rebuild.
-void ShadowGpuData::RefreshChunkGroupLods(Renderer* renderer,
-    const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
+// Per-caster shadow LOD (Unreal's per-primitive rule, transcribed): every caster SLOT gets the LOD
+// its RECEIVER draws this frame, and the VSM scatter buckets each instance into a virtual draw
+// group by it. Runs every frame; no rebuild. Two transports are refreshed here:
+//   casterLod_          one byte per caster slot (bit 7 = chunk EXACT) -> vsm_page_scatter_cs
+//   groupLodOverride_   per-group chunk EXACT only -> the setup shader's BRUTE-FORCE fallback and
+//                       nothing else (per-group is representable there because a chunk group has
+//                       exactly one instance)
+//
+// The receiver LOD is computed FRESH from the camera rather than read from cameraLod_: SelectLod
+// only runs over VISIBLE buckets, so an off-screen instance's stored LOD is stale — and a stale
+// value here is not cosmetic. The tent repro (2026-08-25): both tents boot at LOD0, the far one
+// gets its real coarse LOD the first time the camera sweeps across it, and from then on any
+// per-GROUP answer was poisoned for the near tent. Fresh per-instance math has no such state.
+void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
+    const std::vector<std::unique_ptr<RenderableObjectBase>>& objects,
+    const Math::float3& cameraPos)
 {
     groupLodOverride_.assign(std::max<size_t>(numMeshGroups_, 1), -1);
-    if (meshFirstGroup_.empty()) { UploadChunkGroupLods(renderer); return; }
+    // count_ includes the GI tail. The default is EXACT LOD0, not plain 0: a GI group only has
+    // LOD0 geometry registered (its GroupLodMega rows past lod 0 are empty), so letting the
+    // scatter's max(lod, viewLod) push a GI instance into a lod>0 bucket would drop it from
+    // every far clipmap. The static walk below overwrites its own slots.
+    casterLod_.assign(std::max<std::uint32_t>(count_, 1u), render::kCasterLodExactBit);
+
+    // Walk objects EXACTLY like Rebuild does — the caster slot cursor is the mapping. UpdateForFrame
+    // rebuilds on any caster-count change before this runs, so the orders agree; the bounds guard
+    // below is for the one frame a mismatch could slip through, not a supported state.
+    std::uint32_t idx = 0;
     for (const auto& objPtr : objects)
     {
         const RenderableObjectBase* obj = objPtr.get();
         if (!IsCaster(obj)) { continue; }
+        const std::uint32_t slots = static_cast<std::uint32_t>(CasterSlots(obj));
+        if (idx + slots > casterLod_.size()) { break; }
         const RenderableObject* ro = obj->AsRenderableObject();
         const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
-        if (!mesh || !mesh->IsChunkedSubmeshes()) { continue; }
-        const auto it = meshFirstGroup_.find(mesh);
-        if (it == meshFirstGroup_.end()) { continue; }
-        const std::vector<std::uint8_t>& lods = ro->ChunkCameraLods();
-        for (size_t s = 0; s < lods.size(); ++s)
+        if (!mesh) { idx += slots; continue; }
+
+        if (mesh->IsChunkedSubmeshes())
         {
-            const std::uint32_t g = it->second + static_cast<std::uint32_t>(s);
-            if (g >= groupLodOverride_.size()) { break; } // group ids are dense; this is a bounds guard
-            groupLodOverride_[g] =
-                static_cast<std::int32_t>(mesh->ClampExplicitLod(lods[s]));
+            const std::vector<std::uint8_t>& lods = ro->ChunkCameraLods();
+            const auto it = meshFirstGroup_.find(mesh);
+            for (std::uint32_t s = 0; s < slots; ++s)
+            {
+                const unsigned int lod =
+                    mesh->ClampExplicitLod(s < lods.size() ? lods[s] : 0u);
+                casterLod_[idx + s] = lod | render::kCasterLodExactBit;
+                if (it != meshFirstGroup_.end() && it->second + s < groupLodOverride_.size())
+                {
+                    groupLodOverride_[it->second + s] = static_cast<std::int32_t>(lod);
+                }
+            }
         }
+        else
+        {
+            const unsigned int lod = mesh->ClampExplicitLod(
+                render::EffectiveDrawLod(ro->ComputeReceiverLodTier(cameraPos)));
+            for (std::uint32_t s = 0; s < slots; ++s) { casterLod_[idx + s] = lod; }
+        }
+        idx += slots;
     }
-    UploadChunkGroupLods(renderer);
+    UploadCasterLods(renderer);
 }
 
 // The override table's home is a PER-FRAME ring region: it is rewritten every frame, so writing it
 // into region f is the same WAR discipline the instance/bounds rings use. Sized by numMeshGroups_,
 // which is what took the group cap off this table.
-void ShadowGpuData::UploadChunkGroupLods(Renderer* renderer)
+void ShadowGpuData::UploadCasterLods(Renderer* renderer)
 {
     if (!renderer || groupLodOverride_.empty()) { return; }
     if (!EnsureRing(renderer, groupLodOverrideBuf_, groupLodOverride_.size(),
@@ -420,7 +455,20 @@ void ShadowGpuData::UploadChunkGroupLods(Renderer* renderer)
     {
         std::memcpy(dst, groupLodOverride_.data(), groupLodOverride_.size() * sizeof(std::int32_t));
     }
+    // The per-instance table rides its own ring with the same WAR discipline.
+    if (casterLod_.empty() ||
+        !EnsureRing(renderer, casterLodBuf_, casterLod_.size(),
+                    sizeof(std::uint32_t), L"ShadowGpuData.CasterLod"))
+    {
+        return;
+    }
+    if (std::uint8_t* dst = casterLodBuf_.Region(f))
+    {
+        std::memcpy(dst, casterLod_.data(), casterLod_.size() * sizeof(std::uint32_t));
+    }
 }
+
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterLodSrv(UINT f) const { return casterLodBuf_.Srv(f); }
 
 // Mirrors the rule above for the VSM single-draw permutations. MaskedShadowsActive() keys off the
 // LOOP path's masked PSO on purpose: it answers "does this caster set contain masked groups", and
@@ -558,6 +606,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // (viewLod_/perViewGroup_/groupLodMega_). Scene compares both knobs to the live globals and
     // re-Rebuilds on a change.
     builtShadowLod_ = render::g_shadowLodBias;
+    builtShadowLodBiasNearTier_ = render::g_shadowLodBiasNearTier;
     builtShadowLodTierStride_ = render::ShadowLodTierStride();
 
     size_t casterCount = 0;
@@ -816,7 +865,21 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             if (v < kCasc)              { tier = v; }                  // CSM cascade index (near->far)
             else if (v < kLocalEnd)     { tier = 0u; }                 // local light -> near tier
             else                        { tier = v - kLocalEnd; }      // VSM clipmap level (near->far)
-            int lod = render::ShadowTierBaseLod(tier) + render::g_shadowLodBias;
+            // The bias is a shift of the TIER curve, and a local light has no tier -- it is pinned
+            // at 0 and then biased anyway, which is how a spot ended up rasterizing its casters two
+            // levels coarser than the camera drew them. On thin shells that is self-shadow blobs:
+            // measured on demo.json's tent, bias 0 is clean, bias 1 smudges it, bias 2 covers it in
+            // dark patches, and Legacy CSM is clean at every setting. Locals shadow exactly the
+            // near-field geometry the camera is closest to, so there is no distance to hide a
+            // coarser caster behind. Cascades and clipmaps keep the bias -- that is where the tier
+            // curve is real and where the triangles it saves actually live.
+            // Applies to the NEAREST tier of ANY view kind, not just locals: a local light is
+            // pinned at tier 0, and so is clipmap level 0, and it was the clipmap that was
+            // biasing the tent (toggling locals alone moved the canvas metric by 0 px across 5
+            // interleaved samples -- 3076 vs 3076).
+            const bool nearTier = (tier == 0u);
+            int lod = render::ShadowTierBaseLod(tier)
+                    + ((nearTier && !render::g_shadowLodBiasNearTier) ? 0 : render::g_shadowLodBias);
             lod = lod < 0 ? 0 : (lod > lodCap ? lodCap : lod);
             viewLod_[v] = static_cast<std::uint32_t>(lod);
         }
@@ -910,8 +973,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     {
         std::memcpy(casterMeta_.Region(0), casterMeta.data(), count_ * sizeof(std::uint32_t));
     }
-    // B3: uint4 per group — {visible-list base, index count, start index, 0}. The clear CS seeds
-    // the indirect args' StartIndexLocation from .z so submesh groups draw their range.
+    // B3: uint4 per group — {visible-list base, index count, start index, caster count}. The clear
+    // CS seeds the indirect args' StartIndexLocation from .z so submesh groups draw their range;
+    // .w sizes the per-LOD instance buckets in the VSM scatter (each of a group's kMaxShadowLods
+    // buckets must be able to hold the WHOLE group, since an instance can land in any one of them).
     if (EnsureRing(renderer, perGroup_, std::max<size_t>(numMeshGroups_, 1), 4 * sizeof(std::uint32_t), L"ShadowGpuData.PerGroup") &&
         numMeshGroups_ > 0)
     {
@@ -921,7 +986,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             pg[g * 4 + 0] = groupBase[g];
             pg[g * 4 + 1] = groupIndexCount[g];
             pg[g * 4 + 2] = groupStartIndex[g];
-            pg[g * 4 + 3] = 0u;
+            pg[g * 4 + 3] = groupCount[g];
         }
     }
 
@@ -1055,10 +1120,12 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             std::memcpy(dst, groupLodMega_.data(), groupLodMega_.size() * sizeof(std::uint32_t));
         }
     }
-    // The override table is per-frame, but it must be VALID before the first RefreshChunkGroupLods
-    // of the new caster set — a rebuild can land between two frames' refreshes.
+    // The LOD tables are per-frame, but they must be VALID before the first RefreshCasterLods of
+    // the new caster set — a rebuild can land between two frames' refreshes. Neutral defaults:
+    // no chunk override, every caster at LOD0 (never coarser than any receiver for one frame).
     groupLodOverride_.assign(std::max<size_t>(numMeshGroups_, 1), -1);
-    UploadChunkGroupLods(renderer);
+    casterLod_.assign(std::max<std::uint32_t>(count_, 1u), render::kCasterLodExactBit); // EXACT LOD0 (see RefreshCasterLods)
+    UploadCasterLods(renderer);
 
     // Prime ALL ring regions — after this a static scene re-uploads nothing.
     if (casterCount > 0)

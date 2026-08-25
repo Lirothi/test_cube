@@ -130,6 +130,9 @@ public:
     // the live globals each frame and triggers a GPU-idle rebuild on a change.
     int BuiltShadowLod() const { return builtShadowLod_; }
     int BuiltShadowLodTierStride() const { return builtShadowLodTierStride_; }
+    // Part of the same snapshot: it changes the per-view LOD table, so a change needs the same
+    // GPU-idle rebuild. Without this the toggle is inert at runtime and reads as a no-op knob.
+    bool BuiltShadowLodBiasNearTier() const { return builtShadowLodBiasNearTier_; }
     // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = none), refreshed EVERY FRAME in
     // UpdateForFrame from each chunked object's ChunkCameraLods() — the camera tier per chunk. No
     // rebuild involved: the mega buffer holds every LOD and gGroupLodMega carries every (group,lod)
@@ -306,17 +309,22 @@ private:
     static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out);
 
 public:
-    // Chunked-terrain LOD: refresh groupLodOverride_ from the chunked objects' camera tiers.
-    // Scene calls it every frame AFTER PrepareViews (whose SelectLods picked the tiers) — earlier
-    // and the caster would lag the receiver by one frame at every LOD transition.
-    // Takes the renderer because it UPLOADS: the overrides land in this frame's ring region, and
-    // Scene calls this after UpdateForFrame, so there is no later per-frame hook to defer to.
-    void RefreshChunkGroupLods(Renderer* renderer,
-                               const std::vector<std::unique_ptr<RenderableObjectBase>>& objects);
+    // Per-caster shadow LOD (the caster==receiver contract, per INSTANCE): refresh casterLod_ (one
+    // entry per caster slot; the VSM scatter buckets instances by it) and groupLodOverride_ (chunk
+    // EXACT, brute-fallback only) from the camera. Scene calls it every frame AFTER PrepareViews
+    // (whose SelectLods picked the receiver tiers) — earlier and the caster would lag the receiver
+    // by one frame at every LOD transition. Takes the renderer because it UPLOADS: the tables land
+    // in this frame's ring regions, and Scene calls this after UpdateForFrame, so there is no later
+    // per-frame hook to defer to.
+    void RefreshCasterLods(Renderer* renderer,
+                           const std::vector<std::unique_ptr<RenderableObjectBase>>& objects,
+                           const Math::float3& cameraPos);
+    // Per-frame SRV of the per-caster LOD table (vsm_page_scatter_cs t5).
+    D3D12_CPU_DESCRIPTOR_HANDLE CasterLodSrv(UINT frameIndex) const;
 
 private:
-    // Copy groupLodOverride_ into this frame's ring region (growing the ring as needed).
-    void UploadChunkGroupLods(Renderer* renderer);
+    // Copy casterLod_ + groupLodOverride_ into this frame's ring regions (growing as needed).
+    void UploadCasterLods(Renderer* renderer);
 
 
     void RebuildCullDescriptors(Renderer* renderer);        // per-region UAVs for args/visible/counts
@@ -418,14 +426,18 @@ private:
     // baseVertex}, pre-clamped to the mesh's available LODs. numMeshGroups_ * kMaxShadowLods entries.
     std::vector<std::uint32_t> groupLodMega_;
     // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = none), refreshed every frame from
-    // the chunked objects' camera tiers (see RefreshChunkGroupLods). Sized to numMeshGroups_ — it
-    // used to be a std::array capped at vsm::kMaxMeshGroups, which silently dropped the override for
-    // every chunk past the cap and put those tiles back on the view LOD.
+    // the chunked objects' camera tiers (see RefreshCasterLods). Consumed ONLY by the setup
+    // shader's brute-force fallback since the per-instance table below took over the scatter path.
     std::vector<std::int32_t> groupLodOverride_;
-    // GPU homes for the two tables above. Mega is static (region 0, written at Rebuild); the
-    // override is per-frame (region f, rewritten by RefreshChunkGroupLods).
+    // Per caster SLOT: the receiver's LOD this frame (bit 7 = chunk EXACT; see LodSelect.h's
+    // encoding contract). vsm_page_scatter_cs buckets every instance into a virtual draw group by
+    // it — the per-instance caster==receiver contract.
+    std::vector<std::uint32_t> casterLod_;
+    // GPU homes for the tables above. Mega is static (region 0, written at Rebuild); the override
+    // and per-caster tables are per-frame (region f, rewritten by RefreshCasterLods).
     Ring groupLodMegaBuf_;
     Ring groupLodOverrideBuf_;
+    Ring casterLodBuf_;
     // mesh -> its FIRST caster group (snapshot of Rebuild's meshToGroup), so the per-frame override
     // refresh can map a chunked mesh's slot ordinal to its group id without re-deriving the layout.
     std::unordered_map<const Mesh*, std::uint32_t> meshFirstGroup_;
@@ -439,6 +451,7 @@ private:
     DXGI_FORMAT megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     bool megaWanted_ = false, megaBuilt_ = false, megaReady_ = false;
     int builtShadowLod_ = 0; // render::g_shadowLodBias snapshot the caster geometry was built with
+    bool builtShadowLodBiasNearTier_ = false; // render::g_shadowLodBiasNearTier snapshot
     int builtShadowLodTierStride_ = 1; // normalized render::g_shadowLodTierStride snapshot
     std::uint32_t numStaticGroups_ = 0; // count of static submesh groups (the rest are GI, always LOD0)
 

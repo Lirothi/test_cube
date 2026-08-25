@@ -234,13 +234,41 @@ void RenderableObject::RenderSelectionStencil(Renderer* renderer, ID3D12Graphics
 }
 #endif
 
+float RenderableObject::LodAutoScale() const
+{
+    if (!render::g_lodAutoScaleFromError) { return 1.0f; }
+    const Mesh* mesh = GetMesh();
+    return mesh ? mesh->GetLodAutoDistanceScale() : 1.0f;
+}
+
+unsigned int RenderableObject::ComputeReceiverLodTier(const Math::float3& cameraPos) const
+{
+    return render::SelectLodTierFade(
+        GetWorldBounds().GetCenter(), LodSelectionRadius(), cameraPos, cameraLod_).tier;
+}
+
+float RenderableObject::GetLodRadius() const
+{
+    const Mesh* mesh = GetMesh();
+    const float local = mesh ? mesh->GetBoundingSphereRadius() : 0.0f;
+    if (local <= 1e-6f) { return GetWorldBounds().GetRadius(); }
+    // Largest axis: a non-uniform scale can only grow the enclosing sphere by its biggest component,
+    // and over-estimating here is the safe direction (it keeps detail slightly longer).
+    const Math::float3 s = GetScale();
+    const float k = std::max(std::abs(s.x), std::max(std::abs(s.y), std::abs(s.z)));
+    return local * k;
+}
+
 void RenderableObject::SelectLod(const Camera& camera)
 {
     // Hysteresis off the current tier (or the stateless crossfade band when g_lodFadeBand is
     // on); per-instance radius (GetLodRadius) so cloud/instanced objects select on their
     // single-mesh size, not their aggregate bound.
+    // lodDistanceScale rides the RADIUS because the selector's input is distance/radius: scaling the
+    // radius by k scales every switch distance by k, without touching the shared curve's shape.
+    // LodSelectionRadius() is shared with the shadow path's receiver recompute — see its comment.
     const render::LodTierFade sel = render::SelectLodTierFade(
-        GetWorldBounds().GetCenter(), GetLodRadius(), camera.GetPosition(), cameraLod_);
+        GetWorldBounds().GetCenter(), LodSelectionRadius(), camera.GetPosition(), cameraLod_);
     cameraLod_ = sel.tier;
     cameraLodFade_ = sel.fade;
 

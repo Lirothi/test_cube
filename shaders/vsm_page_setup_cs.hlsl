@@ -78,7 +78,19 @@ StructuredBuffer<uint>         PageScatterDyn : register(t8); // per page: a dyn
 // removal). A descriptor table is POSITIONAL: t9/t10 must be the 10th and 11th handles the CPU
 // stages, in this order.
 StructuredBuffer<uint4>        GroupLodMega     : register(t9);  // per (group,lod): {megaStart, lodRel, count, baseVertex}
-StructuredBuffer<int>          GroupLodOverride : register(t10); // per group: ABSOLUTE LOD, -1 = use the view LOD
+StructuredBuffer<int>          GroupLodOverride : register(t10); // per group: see ResolveGroupLod
+
+// Per-INSTANCE LOD note: the SCATTERED path no longer resolves a LOD here at all. The scatter pass
+// buckets every caster instance into a VIRTUAL group (group * gNumLods + lod) chosen from that
+// instance's own receiver LOD (CasterLod, Unreal's per-primitive rule), so by the time this shader
+// runs, the LOD is already part of the group index. GroupLodOverride survives only for the
+// BRUTE-FORCE fallback below (scatter PSO failed to build), where it carries the chunked-terrain
+// EXACT override: >= 0 = that LOD on every view, -1 = the view LOD.
+uint ResolveGroupLod(int ovr, uint viewLod, uint numLods)
+{
+    if (ovr >= 0) { return min((uint)ovr, numLods - 1u); }
+    return viewLod;
+}
 
 RWByteAddressBuffer      PageDrawArgs    : register(u0); // per (page, group) D3D12_DRAW_INDEXED_ARGUMENTS
 RWByteAddressBuffer      PageProj        : register(u1); // per page off-center viewProj (256-byte stride for root-CBV)
@@ -118,6 +130,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint lane = dtid.y;
     if (p >= gNumPages) { return; }
 
+    // Per-instance caster LOD: every [page][group] layout in this shader is really [page][VIRTUAL
+    // group], where a virtual group is (static group * gNumLods + lod) — the scatter pass buckets
+    // each instance by its own receiver LOD. numVg is the arg/count stride everywhere below.
+    const uint numVg = gNumGroups * gNumLods;
+
     const uint owner = PhysOwner[p];
     if (owner == VSM_INVALID)
     {
@@ -129,9 +146,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         if (lane == 0u) { PerPageDirty[p] = 0u; }
         if (gCompactArgs == 0u)
         {
-            for (uint g = lane; g < gNumGroups; g += VSM_SETUP_LANES)
+            for (uint g = lane; g < numVg; g += VSM_SETUP_LANES)
             {
-                uint off = (p * gNumGroups + g) * 20u;
+                uint off = (p * numVg + g) * 20u;
                 PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u));
                 PageDrawArgs.Store(off + 16u, 0u);
             }
@@ -270,9 +287,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     {
         if (gCompactArgs == 0u) // compacted: append nothing (see the free-page branch above)
         {
-            for (uint gc = gStart; gc < gNumGroups; gc += gStep)
+            for (uint gc = gStart; gc < numVg; gc += gStep)
             {
-                uint off = (p * gNumGroups + gc) * 20u;
+                uint off = (p * numVg + gc) * 20u;
                 PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u)); // InstanceCount 0 -> caster draw is a no-op
                 PageDrawArgs.Store(off + 16u, 0u);
             }
@@ -294,76 +311,98 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         for (uint gp = 0u; gp < numLocalGroups; ++gp) { perGroupBase[gp] = acc; acc += perGroupCount[gp]; }
     }
 
-    const uint pageBase = p * gNumCasters;
+    const uint pageBase = p * gNumCasters * gNumLods; // slice is per-LOD bucketed -> x gNumLods
 
-    // Write per (page, group) args BEFORE the scatter (so perGroupBase can double as the scatter
-    // cursor below). InstanceCount + StartInstanceLocation are per-page. The geometry (index count /
-    // start / base vertex) comes from this VIEW's shadow LOD: gViewLod[rung0View] picks the LOD, and
-    // gGroupLodMega[group * numLods + lod] gives {megaStart, lodRel, count, baseVertex} for it. Mega on
-    // -> absolute mega start; mega off -> lod-relative start into the mesh's own IB (baseVertex 0).
+    // Write per (page, VIRTUAL group) args BEFORE the brute scatter (so perGroupBase can double as
+    // the scatter cursor below). InstanceCount + StartInstanceLocation are per-page.
     uint viewLod = gMegaActive ? (gViewLod[rung0View >> 2u][rung0View & 3u]) : gFlatLod;
     if (viewLod >= gNumLods) { viewLod = gNumLods - 1u; }
-    for (uint g2 = gStart; g2 < gNumGroups; g2 += gStep)
+
+    if (scattered)
     {
-        // This page's instance count for the group, and where its run starts in the page slice.
-        // Real control flow, not a select: each branch may only read what its own path wrote, and
-        // the cap test must actually gate the array access rather than pick between two evaluated
-        // reads. Scattered pages take the buffers (uncapped); the brute-force path takes its tables,
-        // and a group past the cap has no slot, so it reports empty and draws nothing.
-        uint groupCount, groupBase;
-        if (scattered)
+        // SCATTERED path: the LOD is baked into the virtual group index (vg = group * gNumLods +
+        // lod, chosen per INSTANCE by the scatter pass from CasterLod), so there is nothing to
+        // resolve here — and conveniently vg IS the GroupLodMega index, because that table was
+        // always laid out (group, lod)-major with the same stride.
+        for (uint vg = gStart; vg < numVg; vg += gStep)
         {
-            groupCount = PageGroupCount[p * gNumGroups + g2];
-            groupBase  = PerGroup[g2].x;
+            const uint groupCount = PageGroupCount[p * numVg + vg];
+            // Compacted args: an empty bucket would only ever be a zero-instance no-op, so don't
+            // append it. This is where the bulk of the worst case disappears — even a RESIDENT
+            // page usually touches one or two buckets out of all of them.
+            if (gCompactArgs != 0u && groupCount == 0u) { continue; }
+            const uint g = vg / gNumLods;
+            const uint lod = vg - g * gNumLods;
+            uint4 a0;
+            const uint4 e = GroupLodMega[vg];   // {megaStart, lodRel, count, baseVertex}
+            a0.x = e.z;                          // IndexCountPerInstance = LOD's index count
+            a0.z = gMegaActive ? e.x : e.y;      // StartIndexLocation: mega-absolute / lod-relative
+            a0.w = gMegaActive ? e.w : 0u;       // BaseVertexLocation: mega base / mesh-own VB (0)
+            a0.y = groupCount;                   // this page's instance count for the bucket
+            // Bucket base in the page slice: group base scaled by the bucket count plus this LOD's
+            // sub-run — MUST mirror vsm_page_scatter_cs's append arithmetic exactly.
+            const uint bucketBase = PerGroup[g].x * gNumLods + lod * PerGroup[g].w;
+            uint dst;
+            if (gCompactArgs != 0u)
+            {
+                uint slot;
+                PageArgCount.InterlockedAdd(0u, 1u, slot);
+                if (slot >= gNumPages * numVg) { continue; } // ExecuteIndirect clamps anyway; never store OOB
+                dst = slot * 20u;
+            }
+            else
+            {
+                dst = (p * numVg + vg) * 20u;
+            }
+            PageDrawArgs.Store4(dst, a0);
+            PageDrawArgs.Store(dst + 16u, pageBase + bucketBase);
         }
-        else if (g2 < (uint)VSM_MAX_SETUP_GROUPS)
+    }
+    else
+    {
+        // BRUTE-FORCE fallback (scatter PSO unavailable): stays per-GROUP with the view LOD (plus
+        // the chunk EXACT override) — no per-instance data reaches this path, and it exists so a
+        // failed scatter compile degrades to slow-but-correct instead of no shadows. Its single
+        // per-group LOD picks the arg record's virtual-group slot, so both paths share one layout.
+        for (uint g2 = gStart; g2 < gNumGroups; g2 += gStep)
         {
-            groupCount = perGroupCount[g2];
-            groupBase  = perGroupBase[g2];
+            uint groupCount, groupBase;
+            if (g2 < (uint)VSM_MAX_SETUP_GROUPS)
+            {
+                groupCount = perGroupCount[g2];
+                groupBase  = perGroupBase[g2];
+            }
+            else
+            {
+                groupCount = 0u;
+                groupBase  = 0u;
+            }
+            if (gCompactArgs != 0u && groupCount == 0u) { continue; }
+            uint4 a0;
+            const int ovr = GroupLodOverride[g2];
+            const uint groupLod = ResolveGroupLod(ovr, viewLod, gNumLods);
+            const uint4 e = GroupLodMega[g2 * gNumLods + groupLod];
+            a0.x = e.z;
+            a0.z = gMegaActive ? e.x : e.y;
+            a0.w = gMegaActive ? e.w : 0u;
+            a0.y = groupCount;
+            uint dst;
+            if (gCompactArgs != 0u)
+            {
+                uint slot;
+                PageArgCount.InterlockedAdd(0u, 1u, slot);
+                if (slot >= gNumPages * numVg) { continue; }
+                dst = slot * 20u;
+            }
+            else
+            {
+                dst = (p * numVg + g2 * gNumLods + groupLod) * 20u;
+            }
+            PageDrawArgs.Store4(dst, a0);
+            // Brute path packs its list TIGHTLY from pageBase (local prefix sum), independent of
+            // the scatter's bucket layout — the slice is bigger than it needs, which is fine.
+            PageDrawArgs.Store(dst + 16u, pageBase + groupBase);
         }
-        else
-        {
-            groupCount = 0u;
-            groupBase  = 0u;
-        }
-        // Compacted args: an empty group would only ever be a zero-instance no-op, so don't append
-        // it. This is where the bulk of the 65k-record worst case disappears — even a RESIDENT page
-        // usually touches one or two mesh-groups out of all of them.
-        if (gCompactArgs != 0u && groupCount == 0u) { continue; }
-        // Per-GROUP LOD, for EVERY group: a chunked-terrain group carries an ABSOLUTE override (its
-        // camera tier this frame, -1 = none) so the caster is the same geometry the gbuffer
-        // rasterized, on every view. Everything else takes the view LOD.
-        //
-        // No cap branch any more. This used to fall back to Rung0Args past VSM_MAX_SETUP_GROUPS,
-        // which meant the tail groups quietly lost their override and reverted to the view LOD —
-        // banding back on exactly the finest grids. Both tables are now SRVs sized by gNumGroups.
-        uint4 a0;
-        const int ovr = GroupLodOverride[g2];
-        const uint groupLod = (ovr >= 0) ? min((uint)ovr, gNumLods - 1u) : viewLod;
-        uint4 e = GroupLodMega[g2 * gNumLods + groupLod]; // {megaStart, lodRel, count, baseVertex}
-        a0.x = e.z;                                      // IndexCountPerInstance = LOD's index count
-        a0.z = gMegaActive ? e.x : e.y;                  // StartIndexLocation: mega-absolute / lod-relative
-        a0.w = gMegaActive ? e.w : 0u;                   // BaseVertexLocation: mega base / mesh-own VB (0)
-        a0.y = groupCount;                    // OVERRIDE: this page's instance count
-        // Record slot. Fixed [page][group] for the loop path (which derives its argOffset from those
-        // two). Compacted: any free slot will do — the VS no longer infers the page from the record
-        // position, it unpacks it from the instance id, which is exactly what Step 1 bought.
-        uint dst;
-        if (gCompactArgs != 0u)
-        {
-            uint slot;
-            PageArgCount.InterlockedAdd(0u, 1u, slot);
-            // Unreachable by construction (appends <= pages x groups = the buffer's capacity), and
-            // ExecuteIndirect clamps the count to maxCount anyway — but never store out of bounds.
-            if (slot >= gNumPages * gNumGroups) { continue; }
-            dst = slot * 20u;
-        }
-        else
-        {
-            dst = (p * gNumGroups + g2) * 20u;
-        }
-        PageDrawArgs.Store4(dst, a0);
-        PageDrawArgs.Store(dst + 16u, pageBase + groupBase); // StartInstanceLocation -> page slice
     }
 
     // Pass 2: scatter the visible caster ids into the page's slice, grouped (perGroupBase = cursor).

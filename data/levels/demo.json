@@ -2978,6 +2978,7 @@
         1.0,
         0.0
       ],
+      "enabled": true,
       "luminousFluxLm": 7951112,
       "position": [
         2.4,
@@ -2993,6 +2994,7 @@
         0.0,
         1.0
       ],
+      "enabled": true,
       "luminousFluxLm": 7951112,
       "position": [
         2.4,
@@ -3326,6 +3328,7 @@
         -0.8728715777397156,
         0.2182178944349289
       ],
+      "enabled": true,
       "innerAngleDeg": 20.0,
       "luminousFluxLm": 750187449,
       "outerAngleDeg": 32.0,

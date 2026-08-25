@@ -5717,15 +5717,17 @@ void SceneRenderer::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx,
         GPU_SCOPE(t.cl, ProfilerScopes::kPassOverlay);
         renderer->RecordBindDefaultsNoClear(t.cl);
 
-        renderer->RenderImGui(t.cl);
-        renderer->RestoreGraphicsStateAfterExternalDraw(t.cl);
-
+        // Engine text UNDER ImGui. ImGui is the interactive layer -- a dev window you dragged over
+        // the HUD has to occlude it, not be written through by the FPS line or the LOD debug
+        // labels. This was the other way round, which is why the LOD debug view painted over
+        // whichever panel you had open while reading it.
         if (auto* tm = renderer->GetTextManager())
         {
             tm->Draw(renderer, t.cl);
         }
 
-        //renderer->RenderImGui(t.cl);
+        renderer->RenderImGui(t.cl);
+        renderer->RestoreGraphicsStateAfterExternalDraw(t.cl);
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);

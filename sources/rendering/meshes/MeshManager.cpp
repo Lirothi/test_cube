@@ -1,6 +1,7 @@
 #include "rendering/meshes/MeshManager.h"
 #include "rendering/core/Renderer.h"
 #include <fstream>
+#include "third_party/json/json.hpp" // MeshManager::ApplyManifestOptions (mesh.json -> bake options)
 #include <sstream>
 #include <cctype>
 #include <algorithm>
@@ -31,6 +32,12 @@ namespace
 struct MeshLodCpu {
     std::vector<uint32_t> indices;
     std::vector<Mesh::Submesh> submeshes;
+    // Worst-case geometric deviation of this level from LOD0, in OBJECT-SPACE units, as reported by
+    // meshopt and normalized out of its relative form. This is the number Unreal has and this engine
+    // did not: it makes a LOD switch decidable WITHOUT a per-asset screen size, because a deviation
+    // projects to a pixel count and a pixel count has an obviously right threshold.
+    // 0 = unknown (a level that copied through without simplifying).
+    float error = 0.0f;
 };
 
 // Mesh chunking (MeshLoadOptions::chunkGrid): partition a SINGLE-submesh LOD0 into an N x N grid
@@ -369,9 +376,12 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
         ? (opt.lodSimplifyOptions | meshopt_SimplifyLockBorder | meshopt_SimplifySparse |
            meshopt_SimplifyErrorAbsolute)
         : opt.lodSimplifyOptions;
-    const float errorScale = chunkedSubsets
-        ? meshopt_simplifyScale(&verts[0].position.x, verts.size(), sizeof(VertexPNTUV))
-        : 1.0f;
+    // meshopt reports error RELATIVE to this scale unless SimplifyErrorAbsolute is on, so it is
+    // needed unconditionally now: the chunked path uses it to restate the BUDGET in absolute
+    // units, and every path uses it to turn the reported error back into object-space metres.
+    const float simplifyScale =
+        meshopt_simplifyScale(&verts[0].position.x, verts.size(), sizeof(VertexPNTUV));
+    const float errorScale = chunkedSubsets ? simplifyScale : 1.0f;
 
     std::vector<uint32_t> simplified;
 
@@ -521,7 +531,14 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
                 const bool pruneEnabled = (simplifyOptions & meshopt_SimplifyPrune) != 0u;
                 if (n == 0 && !pruneEnabled) { n = srcCount; }
                 else { didSimplify = true; }
-                (void)resultError;
+                // Worst case over the ranges: a LOD pops as badly as its WORST submesh does, so
+                // an average would describe a level nobody sees. Absolute already when the
+                // chunked path asked for absolute; relative to simplifyScale otherwise.
+                if (didSimplify && resultError > 0.0f)
+                {
+                    const float abs = chunkedSubsets ? resultError : resultError * simplifyScale;
+                    lod.error = std::max(lod.error, abs);
+                }
             }
 
             const uint32_t* from = didSimplify ? simplified.data() : src;
@@ -555,14 +572,18 @@ void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* u
                                               /*chunkedSubsets=*/false, /*allowVertexAppend=*/false))
     {
         mesh->AddLod(device, uploadCmdList, keepAlive,
-            lod.indices.data(), static_cast<UINT>(lod.indices.size()), lod.submeshes);
+            lod.indices.data(), static_cast<UINT>(lod.indices.size()), lod.submeshes, lod.error);
     }
 }
 
 // ---------- W7.1b: baked binary mesh cache (cache/meshes/<hash>.mesh.bin) ----------
 std::vector<uint32_t> CanonicalNormalSlots(const std::vector<uint32_t>& slots); // defined below
 constexpr uint32_t kMeshBinMagic   = 0x4253484Du; // 'MSHB'
-constexpr uint32_t kMeshBinVersion = 1u;          // bump on any bake-algo / format change -> stale
+// v2 (2026-08-25): each LOD block carries its geometric error, so LOD selection can be driven by
+// projected pixels instead of a hand-tuned distance/radius curve. Every .bin must be re-baked; all
+// 14 mesh.json manifests carry a "source", so every one of them is regenerable (audited before the
+// bump -- a manifest without a source would have been bricked by it).
+constexpr uint32_t kMeshBinVersion = 2u;          // bump on any bake-algo / format change -> stale
 // NOTE when bumping: a directly-referenced models/*.mesh.bin has no runtime source to rebuild from,
 // so a bump makes every one of them stale -> they must ALL be re-baked (--reimport-src/--reimport-out)
 // or their meshes silently fail to load. LOD *settings* do not need a bump: they ride in optionsHash.
@@ -671,17 +692,19 @@ bool WriteMeshBinary(const std::string& binPath, uint64_t sourceHash, uint64_t o
     f.write(reinterpret_cast<const char*>(verts.data()),
         static_cast<std::streamsize>(verts.size() * sizeof(VertexPNTUV)));
 
-    const auto writeLod = [&](const std::vector<uint32_t>& idx, const std::vector<Mesh::Submesh>& subs)
+    const auto writeLod = [&](const std::vector<uint32_t>& idx, const std::vector<Mesh::Submesh>& subs,
+                              float error)
     {
         const uint32_t ic = static_cast<uint32_t>(idx.size());
         const uint32_t sc = static_cast<uint32_t>(subs.size());
         f.write(reinterpret_cast<const char*>(&ic), sizeof(ic));
         f.write(reinterpret_cast<const char*>(&sc), sizeof(sc));
+        f.write(reinterpret_cast<const char*>(&error), sizeof(error)); // v2
         f.write(reinterpret_cast<const char*>(idx.data()), static_cast<std::streamsize>(ic * sizeof(uint32_t)));
         f.write(reinterpret_cast<const char*>(subs.data()), static_cast<std::streamsize>(sc * sizeof(Mesh::Submesh)));
     };
-    writeLod(lod0Indices, lod0Subs);
-    for (const MeshLodCpu& l : extraLods) { writeLod(l.indices, l.submeshes); }
+    writeLod(lod0Indices, lod0Subs, 0.0f); // LOD0 IS the reference; its deviation is zero
+    for (const MeshLodCpu& l : extraLods) { writeLod(l.indices, l.submeshes, l.error); }
     return f.good();
 }
 
@@ -709,9 +732,12 @@ bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash
     for (uint32_t i = 0; i < h.lodCount && f; ++i)
     {
         uint32_t ic = 0, sc = 0;
+        float err = 0.0f;
         f.read(reinterpret_cast<char*>(&ic), sizeof(ic));
         f.read(reinterpret_cast<char*>(&sc), sizeof(sc));
+        f.read(reinterpret_cast<char*>(&err), sizeof(err)); // v2
         if (!f) { return false; }
+        lods[i].error = err;
         lods[i].indices.resize(ic);
         lods[i].submeshes.resize(sc);
         f.read(reinterpret_cast<char*>(lods[i].indices.data()), static_cast<std::streamsize>(ic * sizeof(uint32_t)));
@@ -1412,7 +1438,8 @@ std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
     for (size_t i = 1; i < lods.size(); ++i)
     {
         mesh->AddLod(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-            lods[i].indices.data(), static_cast<UINT>(lods[i].indices.size()), lods[i].submeshes);
+            lods[i].indices.data(), static_cast<UINT>(lods[i].indices.size()), lods[i].submeshes,
+            lods[i].error);
     }
     // mesh.json "chunkGrid": this .bin's LOD0 submeshes are spatial chunks, so give each one its own
     // local AABB (the shadow path turns those into independent casters). The .bin format carries no
@@ -2315,6 +2342,7 @@ bool MeshManager::DescribeMeshBinary(const std::string& binPath, BinaryInfo& out
     {
         BinaryLodInfo info;
         info.totalTris = static_cast<uint32_t>(lod.indices.size() / 3u);
+        info.error = lod.error;
         info.submeshTris.reserve(lod.submeshes.size());
         for (const Mesh::Submesh& sub : lod.submeshes)
         {
@@ -2379,4 +2407,94 @@ size_t MeshManager::CountSubmeshes(const std::string& pathWithFragment)
     }
     cgltf_free(data);
     return count;
+}
+
+// ---------- mesh.json -> MeshLoadOptions (the one authoritative reader; see the header) ----------
+bool MeshManager::ApplyManifestOptions(const std::string& meshJsonPath, MeshLoadOptions& opt)
+{
+    std::ifstream f(meshJsonPath);
+    if (!f) { return false; }
+    nlohmann::json doc;
+    try { f >> doc; } catch (...) { return false; }
+    if (!doc.is_object()) { return false; }
+
+    const auto num = [&doc](const char* k, float& dst)
+    {
+        const auto it = doc.find(k);
+        if (it != doc.end() && it->is_number()) { dst = it->get<float>(); }
+    };
+    const auto boolean = [&doc](const char* k, bool& dst)
+    {
+        const auto it = doc.find(k);
+        if (it != doc.end() && it->is_boolean()) { dst = it->get<bool>(); }
+    };
+    const auto uints = [&doc](const char* k, std::vector<uint32_t>& dst)
+    {
+        const auto it = doc.find(k);
+        if (it == doc.end() || !it->is_array()) { return; }
+        dst.clear();
+        for (const nlohmann::json& v : *it)
+        {
+            if (v.is_number_unsigned() || v.is_number_integer()) { dst.push_back(v.get<uint32_t>()); }
+        }
+    };
+
+    num("lodRatioScale", opt.lodRatioScale);
+    num("lodErrorScale", opt.lodErrorScale);
+    num("lod3RatioScale", opt.lod3RatioScale);
+    num("lod3ErrorScale", opt.lod3ErrorScale);
+    num("foliagePruneKeep", opt.foliagePruneKeep);
+    num("foliageInnerRatio", opt.foliageInnerRatio);
+    num("foliageInnerError", opt.foliageInnerError);
+    num("foliageGrow", opt.foliageGrow);
+    num("foliageUvWeight", opt.foliageUvWeight);
+    num("lodNormalWeight", opt.lodNormalWeight);
+    num("bakeScale", opt.bakeScale);
+    boolean("lod3Aggressive", opt.lod3Aggressive);
+    uints("lod1DropSlots", opt.lod1DropSlots);
+    uints("lod2DropSlots", opt.lod2DropSlots);
+    uints("lod3DropSlots", opt.lod3DropSlots);
+    uints("recomputeNormalSlots", opt.recomputeNormalSlots);
+
+    // Two keys do not map one-to-one and are restated here rather than left to the caller:
+    //   chunkGrid  is an unsigned grid, not a float
+    //   windFoliage is a per-SLOT weight array whose position IS the slot index
+    {
+        const auto it = doc.find("chunkGrid");
+        if (it != doc.end() && it->is_number_integer())
+        {
+            const int g = it->get<int>();
+            opt.chunkGrid = g > 0 ? static_cast<unsigned int>(g) : 0u;
+        }
+    }
+    {
+        const auto it = doc.find("windFoliage");
+        if (it != doc.end() && it->is_array())
+        {
+            opt.slotFoliage.clear();
+            for (const nlohmann::json& v : *it)
+            {
+                opt.slotFoliage.push_back(v.is_number() ? v.get<float>() : 0.0f);
+            }
+        }
+    }
+
+    // The two meshopt flag bits ride in one uint, so they are set/cleared rather than assigned.
+    {
+        const auto it = doc.find("lodPermissive");
+        if (it != doc.end() && it->is_boolean())
+        {
+            if (it->get<bool>()) { opt.lodSimplifyOptions |= meshopt_SimplifyPermissive; }
+            else                 { opt.lodSimplifyOptions &= ~meshopt_SimplifyPermissive; }
+        }
+    }
+    {
+        const auto it = doc.find("lodDropSmallParts");
+        if (it != doc.end() && it->is_boolean())
+        {
+            if (it->get<bool>()) { opt.lodSimplifyOptions |= meshopt_SimplifyPrune; }
+            else                 { opt.lodSimplifyOptions &= ~meshopt_SimplifyPrune; }
+        }
+    }
+    return true;
 }

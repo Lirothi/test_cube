@@ -271,7 +271,8 @@ Mesh::LodDrawInfo Mesh::GetLodDrawInfo(UINT lod) const {
 void Mesh::AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const uint32_t* indices, UINT indexCount,
-    const std::vector<Submesh>& submeshes) {
+    const std::vector<Submesh>& submeshes,
+    float geometricError) {
     if (!indices || indexCount == 0) { return; }
     UploadManager up(device, uploadCmdList);
     LodLevel lod;
@@ -287,8 +288,25 @@ void Mesh::AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList
     lod.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
     lod.indexCount = indexCount;
     lod.submeshes = submeshes.empty() ? std::vector<Submesh>{ Submesh{ 0u, indexCount, 0u } } : submeshes;
+    lod.error = geometricError;
     extraLods_.push_back(std::move(lod));
     up.StealKeepAlive(uploadKeepAlive);
+
+    // Recompute the per-asset auto scale from LOD1, which is the FIRST switch and therefore the one
+    // whose visual cost sets where this asset should start dropping detail at all. Using the whole
+    // chain would average a level that is chosen at a completely different distance into the answer.
+    // Deliberately NOT taken from LOD3: on foliage that level is built by the leaf prune, which
+    // reports no meshopt error at all, so it would read as 0 = "free" and pull every palm coarse.
+    if (extraLods_.size() == 1 && geometricError > 0.0f && boundingSphereRadius_ > 1e-6f)
+    {
+        const float errOverRadius = geometricError / boundingSphereRadius_;
+        // render::kLodAutoErrorRef is the value that maps to 1.0, i.e. the asset whose distances do
+        // not move at all. Picked from a measurement over this project's baked meshes, not invented.
+        const float s = errOverRadius / render::kLodAutoErrorRef;
+        // Clamped: the scale multiplies a distance, and one pathological asset should not be able to
+        // hold LOD0 across the whole level or collapse to LOD3 in front of the camera.
+        lodAutoDistanceScale_ = std::clamp(s, 0.35f, 3.0f);
+    }
 }
 
 const std::vector<Mesh::Submesh>& Mesh::SubmeshesForLod(UINT lod) const {

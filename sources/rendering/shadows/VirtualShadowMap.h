@@ -258,7 +258,12 @@ namespace vsm
     // shadow correctness is judged by comparing them, and demo.json — the only level with local
     // lights — has a screenshot noise floor of |mean| 1.07, so a cross-build comparison there
     // cannot resolve a real difference from run-to-run drift.
-    inline bool g_scatterLocalViews = true;
+    // A/B lever for the per-instance caster LOD (the caster==receiver contract): 1 = bucket every
+// FLOOR caster by its own receiver LOD (correct; the default), 0 = the old per-view LOD for
+// every instance of a group (reproduces the pre-contract record layout inside one binary, for
+// cost attribution). Chunk EXACT is unaffected. --set=vsm.perInstanceCasterLod
+inline bool g_perInstanceCasterLod = true;
+inline bool g_scatterLocalViews = true;
 
     // Page cache (Rung 1): skip re-rendering pages whose content didn't change (cached depth kept;
     // only new / dynamic-caster-overlapping / forced pages re-render). DEFAULT OFF: measured a net

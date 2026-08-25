@@ -1992,7 +1992,16 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // Shadow LOD bias applies to BOTH Legacy cascades and VSM (it shifts the per-view caster
                 // LOD the shadow passes rasterize), so it lives OUTSIDE the VSM-only disabled block below.
                 // A change triggers a GPU-idle caster rebuild (Scene::ReconcileShadowLodBias) next frame.
-                ImGui::SliderInt("Shadow LOD bias", &render::g_shadowLodBias, -2, 3);
+ImGui::SliderInt("Shadow LOD bias", &render::g_shadowLodBias, -2, 3);
+                ImGui::Checkbox("Bias the NEAREST tier too", &render::g_shadowLodBiasNearTier);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Default OFF. The bias shifts the TIER curve, but clipmap level 0 and the\n"
+                                      "local lights (which are pinned at tier 0) have no distance to hide a\n"
+                                      "coarser caster behind, so biasing them lands as self-shadow blobs on thin\n"
+                                      "shells. Measured on demo.json's tent, 5 interleaved samples: dark canvas\n"
+                                      "pixels 2698 with this OFF vs 3996 ON (Legacy CSM floor is 1168), for about\n"
+                                      "+0.2 ms. Turn it on to get those 0.2 ms back in a scene with no thin\n"
+                                      "shells near the camera. A change rebuilds the caster tables at GPU idle.");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ADDITIVE offset on the per-view shadow LOD. Each shadow view (CSM cascade /\n"
                                       "VSM clipmap level / local light) already picks a base LOD by its tier (near =\n"

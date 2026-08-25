@@ -791,7 +791,8 @@ void Scene::ReconcileShadowLodCurve(Renderer* renderer)
     // per-frame CB override — see ShadowGpuData::RefreshChunkGroupLods.)
     if (!renderer) { return; }
     if (shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias &&
-        shadowGpu_.BuiltShadowLodTierStride() == render::ShadowLodTierStride()) { return; }
+        shadowGpu_.BuiltShadowLodTierStride() == render::ShadowLodTierStride() &&
+        shadowGpu_.BuiltShadowLodBiasNearTier() == render::g_shadowLodBiasNearTier) { return; }
     RebuildShadowCasters(*renderer);
 }
 
@@ -1253,10 +1254,10 @@ void Scene::Render(Renderer* renderer) {
 
     PrepareViews(renderer);
 
-    // Chunked-terrain LOD: publish THIS frame's per-chunk camera tiers (chosen by SelectLods inside
+    // Per-caster shadow LOD: publish THIS frame's receiver LODs (per chunk / per instance, inside
     // PrepareViews above) as the shadow caster overrides — after PrepareViews on purpose, so the
     // caster can never lag the receiver by a frame at a LOD transition.
-    shadowGpu_.RefreshChunkGroupLods(renderer, objects_);
+    shadowGpu_.RefreshCasterLods(renderer, objects_, camera_.GetPosition());
 
     // LOD selection debug view (dev window "LOD" tab, or --set=lod.debug). Emitted HERE because
     // this is the one point where both halves of what it shows are valid: this frame's tiers are

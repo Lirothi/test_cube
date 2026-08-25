@@ -5,6 +5,8 @@
 #include <limits>
 
 #include "core/math/Math.h"
+#include "app/camera/Camera.h"
+#include "rendering/meshes/LodSelect.h" // render::UpdateLodFovScale (per-frame FOV normalization)
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/renderables/InstancedDrawBatch.h"
 #include "rendering/renderables/IInstanceable.h"
@@ -237,6 +239,10 @@ InstancedDrawBatch* SceneRenderQueue::AcquireBatch(size_t& cursor)
 void SceneRenderQueue::SelectLods(const Camera& camera)
 {
     CPU_SCOPE(ProfilerScopes::kSceneRenderQueueSelectLods);
+    // Once per frame, ahead of every SelectLod: the ratio bounds are a screen size only at the
+    // reference FOV, so the factor that carries the current one has to be current too. Set here
+    // rather than in the camera because this is the single point every LOD decision passes through.
+    render::UpdateLodFovScale(camera.GetHFov());
     for (auto& bucket : visibleBuckets_)
     {
         for (RenderableObjectBase* obj : bucket)

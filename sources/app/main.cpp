@@ -627,6 +627,19 @@ int WINAPI WinMain(
             if (!chunk.empty()) {
                 opt.chunkGrid = static_cast<unsigned int>(std::atoi(chunk.c_str()));
             }
+            // "--reimport-manifest=models/x.mesh.json": take EVERY bake option from the manifest.
+            // Applied before the individual flags below so an explicit flag still wins, which is
+            // what makes "re-bake exactly what this asset says, but with one thing changed" a
+            // one-liner. Without it a headless re-bake silently dropped every manifest key that had
+            // no flag of its own -- lod3Aggressive, lodRatioScale, the per-level drop slots -- and
+            // handed back geometry that disagreed with the manifest it was baked from.
+            const std::string manifest = getArg("--reimport-manifest=");
+            if (!manifest.empty()) {
+                if (!MeshManager::ApplyManifestOptions(manifest, opt)) {
+                    OutputDebugStringA("--reimport-manifest: could not read the manifest\n");
+                    return 3;
+                }
+            }
             // "--reimport-normal-weight=0.75" mirrors mesh.json "lodNormalWeight": the LOD
             // simplifier weights the NORMAL alongside position, so collapses stop breaking the
             // shading of a surface whose vertex normals it cannot rewrite (LODs share one vertex

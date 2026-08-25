@@ -94,6 +94,8 @@ struct Entry
     float radius = 0.0f;
     float ratio = 0.0f;
     float fade = 0.0f;    // crossfade weight into tier+1 (0 = solid); chunked meshes never fade
+    float lodErr = 0.0f;    // baked object-space deviation of the SELECTED lod from LOD0
+    float autoScale = 1.0f; // Mesh::GetLodAutoDistanceScale, shown even when it is not applied
     float sx = 0.0f, sy = 0.0f;
     bool onScreen = false;
 };
@@ -202,6 +204,8 @@ void DrawLodDebug(Renderer* renderer,
             e.fade = ro->GetCameraLodFade();
             const unsigned int lod = mesh->ClampExplicitLod(e.tier);
             e.tris = mesh->GetLodIndexCount(lod) / 3u;
+            e.lodErr = mesh->GetLodError(lod);
+            e.autoScale = mesh->GetLodAutoDistanceScale();
             e.edgeM = EstimateEdgeMeters(e.box, e.tris);
             e.mrad = e.dist > 1e-3f ? 1000.0f * e.edgeM / e.dist : 0.0f;
             e.onScreen = project(e.metricAt, e.sx, e.sy);
@@ -478,10 +482,11 @@ void DrawLodDebug(Renderer* renderer,
         else
         {
             tm->AddTextfShadow(8, y, 15.0f, head, true,
-                               L"probe: mesh   dist %.1f m / radius %.2f m = ratio %.1f   LOD%u%s   %u tris   ~%.2f m edge   %.1f mrad",
+                               L"probe: mesh   dist %.1f m / radius %.2f m = ratio %.1f   LOD%u%s   %u tris   ~%.2f m edge   %.1f mrad   baked LOD error %.4f m (auto x%.2f)",
                                probe->dist, probe->radius, probe->ratio, probe->tier,
                                probe->fade > 0.001f ? L" (crossfading)" : L"",
-                               probe->tris, probe->edgeM, probe->mrad);
+                               probe->tris, probe->edgeM, probe->mrad,
+                               probe->lodErr, probe->autoScale);
             y += 18;
             float rb[3];
             rb[0] = g_lodBound0 > 0.5f ? g_lodBound0 : 0.5f;

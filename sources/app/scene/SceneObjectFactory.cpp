@@ -246,6 +246,15 @@ namespace SceneObjectFactory
             if (grid > 0) { mesh.SetChunkGrid(static_cast<unsigned int>(grid)); }
         }
 
+        // mesh.json "lodDistanceScale": per-asset multiplier on every LOD switch DISTANCE. Runtime
+        // only -- it changes nothing about the baked geometry, so it must not reach MeshLoadOptions
+        // or the .bin cache key. See RenderableObject::SetLodDistanceScale for why UE needs the
+        // equivalent (its ScreenSize is authored per LOD per mesh).
+        if (o.contains("lodDistanceScale") && o["lodDistanceScale"].is_number())
+        {
+            mesh.SetLodDistanceScale(o["lodDistanceScale"].get<float>());
+        }
+
         if (o.contains("rotationDeg"))
         {
             mesh.SetRotationEulerDeg(ToFloat3(o["rotationDeg"]));

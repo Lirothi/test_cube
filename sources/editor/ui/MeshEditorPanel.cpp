@@ -1027,6 +1027,37 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             ImGui::Spacing();
         }
 
+        // RUNTIME selection, not a bake knob: it changes nothing in the .bin and needs no re-import,
+        // which is why it sits above the separator that starts the bake settings.
+        lodFloat("LOD switch distance", "lodDistanceScale", 1.0f, 0.25f, 6.0f, "x%.2f",
+            "Per-asset multiplier on the DISTANCE at which every LOD switch of this mesh happens.\n"
+            "2 = each level starts twice as far away (keeps detail longer), 0.5 = half.\n\n"
+            "The global curve (dev window LOD tab, 'distance / instance radius') is shared by every\n"
+            "mesh, so tuning it for foliage mistunes props. Unreal does not have that problem because\n"
+            "it authors a ScreenSize PER LOD PER MESH; this is the per-asset half of that, without\n"
+            "changing the shape of the curve you already tuned. Applies live - no re-import.");
+
+        // The baked per-level deviation, so the slider above is set from evidence instead of feel.
+        // Deliberately NOT auto-applied: measured across this project's assets, deviation/radius
+        // orders the assets the wrong way round (palms deform more for their size than a sphere,
+        // yet a sphere shows its LOD far sooner), because geometric error is not perceptual
+        // salience. Unreal authors ScreenSize per LOD per mesh for the same reason. Read it, then
+        // decide.
+        if (!binInfo_.lods.empty())
+        {
+            ImGui::TextDisabled("Baked deviation from LOD0 (object units):");
+            ImGui::SameLine();
+            std::string errs;
+            for (size_t i = 1; i < binInfo_.lods.size(); ++i)
+            {
+                char buf[48];
+                std::snprintf(buf, sizeof(buf), "%sLOD%zu %.4f", i > 1 ? "   " : "", i,
+                              static_cast<double>(binInfo_.lods[i].error));
+                errs += buf;
+            }
+            ImGui::TextUnformatted(errs.empty() ? "not measured" : errs.c_str());
+        }
+
         ImGui::SeparatorText("Every level (LOD1-3)");
         lodFloat("Triangle target", "lodRatioScale", 1.0f, 0.25f, 4.0f, "x%.2f",
             "Chain-wide multiplier over the 0.5/0.25/0.12 per-level triangle targets.");

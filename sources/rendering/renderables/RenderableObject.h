@@ -117,7 +117,45 @@ public:
     // Step 6: radius of ONE drawn instance for LOD selection. Default = the object's world
     // radius (standalone). Cloud/instanced objects override to the single-mesh radius so they
     // don't stay at LOD 0 forever (their aggregate world bounds span the whole cloud).
-    virtual float GetLodRadius() const { return GetWorldBounds().GetRadius(); }
+    // The mesh's VERTEX-enclosing sphere, scaled to world. Unreal selects on Bounds.SphereRadius
+    // for the same reason: AABB::GetRadius() is the radius of the box CORNER, so it charges for the
+    // empty volume the box has and the geometry does not, and how much empty volume that is depends
+    // on the SHAPE of the box rather than the size of the object. Measured over this project's own
+    // assets, corner/sphere runs 1.000x on box.mesh, 1.16-1.26x on the palms, and 1.732x on
+    // sphere.mesh -- a 73% spread in the selection metric produced by nothing but bounding-box
+    // shape, which is exactly what makes one global curve impossible to tune for two shapes at once.
+    // Falls back to the box radius only when there is no mesh to ask.
+    virtual float GetLodRadius() const;
+
+    // mesh.json "lodDistanceScale": multiplies the distance at which EVERY LOD switch of this asset
+    // happens. 2 = each level starts twice as far away (keeps detail longer), 0.5 = half.
+    //
+    // This is the knob Unreal has and this engine did not. UE authors a ScreenSize PER LOD PER MESH
+    // (FStaticMeshRenderData::ScreenSize, consumed by ComputeStaticMeshLOD) and multiplies it by a
+    // per-component FactorScale, so a palm and a sphere never share one switch curve. Here the curve
+    // is global (g_lodBound0/1/2, "distance / instance radius"), so tuning it for foliage mistunes
+    // everything else -- which is exactly the "palms are right now but spheres switch too early"
+    // case. A per-asset multiplier is the smallest thing that buys UE's separation without changing
+    // the shape of the curve everyone is already tuned against.
+    void SetLodDistanceScale(float s) { lodDistanceScale_ = s > 0.01f ? s : 0.01f; }
+    float GetLodDistanceScale() const { return lodDistanceScale_; }
+
+    // The mesh's own DERIVED scale (Mesh::GetLodAutoDistanceScale), or 1 when the derivation is
+    // switched off. Multiplied with the authored lodDistanceScale above, so the manifest tunes ON
+    // TOP of the automatic answer instead of replacing it.
+    float LodAutoScale() const;
+
+    // The exact radius LOD selection divides distance by — every per-asset factor folded in. The
+    // ONE place this expression lives: SelectLod and the shadow path's receiver-LOD recompute
+    // (ShadowGpuData::RefreshCasterLods) must agree to the bit, or caster and receiver drift.
+    float LodSelectionRadius() const { return GetLodRadius() * lodDistanceScale_ * LodAutoScale(); }
+
+    // The LOD tier the camera pass would select for this object RIGHT NOW, stateless apart from
+    // the hysteresis seed. For an object SelectLod visited this frame it returns cameraLod_
+    // exactly (the same function on the same inputs); for an OFF-SCREEN caster it returns current
+    // truth instead of the stale stored value — which is what the shadow path needs, because a
+    // caster keeps casting long after its receiver leaves the frustum.
+    unsigned int ComputeReceiverLodTier(const Math::float3& cameraPos) const;
 
     // Step 6: camera LOD chosen in PrepareViews (with hysteresis), read at draw time.
     void SelectLod(const Camera& camera) override;
@@ -243,6 +281,7 @@ private:
     mutable bool worldBoundsDirty_ = true;
     unsigned int cameraLod_ = 0u; // Step 6: camera LOD chosen in PrepareViews (persists for hysteresis)
     float cameraLodFade_ = 0.0f;  // crossfade weight to cameraLod_+1 (0 = solid), from PrepareViews
+    float lodDistanceScale_ = 1.0f; // mesh.json "lodDistanceScale"; see SetLodDistanceScale
     float drawLodFade_ = 0.0f;    // transient: the fade of the draw being recorded (binder reads it)
     std::vector<std::uint8_t> chunkLods_; // per-chunk camera tier (chunked meshes only; hysteresis state)
 

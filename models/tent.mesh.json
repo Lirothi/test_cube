@@ -1,4 +1,5 @@
 {
+  "bakeScale": 0.01,
   "geometry": "models/tent/tent.mesh.bin",
   "materials": [
     "tent_0",

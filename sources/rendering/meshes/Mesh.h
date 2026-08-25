@@ -96,10 +96,32 @@ public:
     void AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
         const uint32_t* indices, UINT indexCount,
-        const std::vector<Submesh>& submeshes);
+        const std::vector<Submesh>& submeshes,
+        // Worst-case OBJECT-SPACE deviation of this level from LOD0 (meshopt, absolute).
+        // 0 = unknown. Drives GetLodAutoDistanceScale below.
+        float geometricError = 0.0f);
 
     // Part B plumbing (consumed by the queue in B2). lod 0 = base table; higher clamps like Draw.
     const std::vector<Submesh>& GetSubmeshes() const { return submeshes_; }
+
+    // Baked deviation of `lod` from LOD0 in object-space units; 0 for LOD0 and for anything the
+    // bake could not measure.
+    float GetLodError(UINT lod) const
+    {
+        return (lod == 0 || lod - 1u >= extraLods_.size()) ? 0.0f : extraLods_[lod - 1u].error;
+    }
+
+    // Per-asset LOD distance multiplier DERIVED from the geometry, so two shapes switch at the same
+    // visual cost without anyone authoring a screen size for either.
+    //
+    // Unreal solves this by authoring a ScreenSize per LOD per mesh (FStaticMeshRenderData::
+    // ScreenSize, ComputeStaticMeshLOD). The equivalent that needs no authoring falls out of what a
+    // LOD switch actually IS: it should happen at a constant PROJECTED error, so its distance must
+    // be proportional to the level's deviation. That makes deviation/radius -- normalized against a
+    // reference -- the multiplier itself. A sphere deviates a lot for its size (pure curvature,
+    // nothing for the error to hide behind) and is held at fine LODs longer; a palm deviates little
+    // relative to its bounding radius and switches sooner. 1.0 when the bake measured nothing.
+    float GetLodAutoDistanceScale() const { return lodAutoDistanceScale_; }
 
     const std::vector<Submesh>& SubmeshesForLod(UINT lod) const;
     size_t GetSubmeshCount() const { return submeshes_.size(); }
@@ -168,6 +190,7 @@ private:
         D3D12_INDEX_BUFFER_VIEW  indexBufferView = {};
         UINT indexCount = 0;
         std::vector<Submesh> submeshes; // ranges into this LOD's index buffer
+        float error = 0.0f;             // object-space deviation from LOD0; 0 = unknown
     };
 
     UINT ResolveRuntimeLod(UINT lod) const;
@@ -190,6 +213,8 @@ private:
 
     std::vector<Submesh> submeshes_;  // lod 0 submesh table (>=1 entry; whole buffer by default)
     std::vector<LodLevel> extraLods_; // lod 1+ (lod 0 is the base buffers above); empty = no LODs
+
+    float lodAutoDistanceScale_ = 1.0f; // see GetLodAutoDistanceScale; recomputed as LODs are added
 
     bool chunkedSubmeshes_ = false;   // submeshes are spatial chunks -> independent shadow casters
     std::vector<AABB> submeshBounds_; // mesh-local LOD0 AABB per submesh; empty unless chunked

@@ -195,6 +195,7 @@ public:
     {
         std::vector<uint32_t> submeshTris; // triangles per submesh at this LOD
         uint32_t totalTris = 0;
+        float error = 0.0f; // v2: worst-case object-space deviation of this level from LOD0
     };
     struct BinaryInfo
     {
@@ -202,6 +203,15 @@ public:
         std::vector<BinaryLodInfo> lods; // lods[0] = LOD0
     };
     static bool DescribeMeshBinary(const std::string& binPath, BinaryInfo& out);
+
+    // Fill the BAKE-affecting fields of `opt` from a mesh.json manifest. Engine-side and
+    // authoritative on purpose: the headless bake used to mirror a hand-picked SUBSET of these as
+    // --reimport-* flags, so re-baking from the command line silently dropped whatever had no flag
+    // (lod3Aggressive, lodRatioScale, the per-level drop slots, foliageGrow, foliageUvWeight...) and
+    // produced geometry that disagreed with the manifest it came from. One reader, one meaning.
+    // Leaves every field alone that the manifest does not mention. Returns false if the file is
+    // missing or is not an object.
+    static bool ApplyManifestOptions(const std::string& meshJsonPath, MeshLoadOptions& opt);
 
     // J: number of material slots (submeshes) a geometry resolves to (CPU-only, no GPU). glTF =
     // the resolved group count (#N selector = 1); non-glTF (.obj/.mesh.txt) = 1. Used by the Mesh

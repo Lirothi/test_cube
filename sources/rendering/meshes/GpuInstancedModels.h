@@ -52,7 +52,16 @@ public:
     bool GetRtInstance(RtInstanceDesc&) const override { return false; }
     size_t GetRtInstances(std::vector<RtInstanceDesc>& out) const override;
     // LOD from a single instance's size (not the whole-cloud bound), at the cloud's distance.
-    float GetLodRadius() const override { return GetMesh() ? GetMesh()->GetBoundingBox().GetRadius() : 0.0f; }
+    // Vertex-enclosing sphere, not the AABB CORNER radius -- same correction as
+    // RenderableObject::GetLodRadius (Unreal selects on Bounds.SphereRadius). Mesh-local on
+    // purpose: an instanced cloud selects on ONE instance's size, not the aggregate bound.
+    float GetLodRadius() const override
+    {
+        const Mesh* m = GetMesh();
+        if (!m) { return 0.0f; }
+        const float r = m->GetBoundingSphereRadius();
+        return r > 1e-6f ? r : m->GetBoundingBox().GetRadius();
+    }
 
     void PrepareCompute(RenderGraphPassContext& ctx) override;
     void PrepareRender(RenderGraphPassContext& ctx) override;

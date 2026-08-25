@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include "core/math/AABB.h"
 #include "core/math/Math.h"
 
@@ -32,6 +33,13 @@ inline int g_shadowLodBias = 1;
 // cascade or a VSM clipmap level. 1 preserves the original aggressive 1:1 mapping; 2 produces
 // 0,0,1,1,2,2,... and avoids changing caster geometry at every clipmap boundary. The additive
 // g_shadowLodBias is applied after this curve. Changing either knob rebuilds the caster tables.
+// Whether g_shadowLodBias also applies to the NEAREST shadow tier (clipmap level 0, and local
+// lights, which are pinned there). Default OFF: the bias is a shift of the TIER curve, and at
+// tier 0 there is no distance to hide a coarser caster behind, so it lands as self-shadow blobs
+// on thin shells. See the note at the assignment in ShadowGpuData.cpp.
+// --set=vsm.shadowLodBiasNearTier
+inline bool g_shadowLodBiasNearTier = false;
+
 inline int g_shadowLodTierStride = 2;
 
 inline int ShadowLodTierStride()
@@ -69,6 +77,54 @@ inline unsigned int SelectChunkLodTier(float distMeters, unsigned int currentTie
     return t;
 }
 
+// --- Caster-vs-receiver LOD contract -------------------------------------------------------------
+//
+// Unreal's rule, from ShadowSetup.cpp FProjectedShadowInfo::CalcAndUpdateLODToRender: the shadow
+// depth pass STARTS from `CurrentView.PrimitivesLODMask[PrimitiveId]` -- the LOD the main view
+// already chose for that primitive -- and only recomputes when a LOD is forced or
+// r.Shadow.LODDistanceFactor is set. Its two deliberate divergences (preshadows take FMath::Max over
+// the LOD indices, far cascades add GFarShadowStaticMeshLODBias) both go COARSER. A caster is never
+// FINER than its receiver.
+//
+// This engine broke that for non-chunked meshes: ShadowGpuData picks the caster LOD purely per SHADOW
+// VIEW (ShadowTierBaseLod(tier) + g_shadowLodBias), knowing nothing about the camera LOD. A sphere
+// drawn at LOD2 while its caster rasterizes LOD1 self-shadows: LOD geometry is a vertex SUBSET, so
+// the coarse receiver sits inside the finer caster hull and the depth test puts it behind its own
+// shadow. That is the "black squares appear while I walk toward it, and raising the shadow LOD bias
+// makes them go away" report -- raising the bias is a manual, global version of this rule.
+//
+// The transport is PER INSTANCE, like Unreal's: one byte per caster SLOT in
+// ShadowGpuData::RefreshCasterLods' ring, consumed by vsm_page_scatter_cs, which buckets each
+// instance into a VIRTUAL draw group (group * kMaxShadowLods + lod). A per-GROUP value was tried
+// first (a FLOOR = "no finer than the coarsest receiver") and was wrong by construction: instances
+// of one mesh sit at different receiver LODs in the same frame (demo.json's spheres span two LODs
+// from any one camera), so any single per-group answer mismatches part of them — and BOTH mismatch
+// directions self-shadow. A finer caster is a vertex SUPERSET whose hull the coarse receiver sits
+// inside; a coarser caster pokes through a thin receiver (the tent). Only per-instance is exact.
+//
+//   bits 0..3  the LOD this caster's RECEIVER draws this frame
+//   bit  7     EXACT (chunked terrain): that LOD on EVERY view, no per-view coarsening — a caster
+//              coarser than the drawn ground multiplies its height error by 1/sin(sunElevation)
+//              along the light (metres of depth error at a low sun; the phantom-shadow family)
+//
+// Without the EXACT bit the scatter takes max(receiverLod, view LOD): never finer than the
+// receiver, coarser only where the view's tier curve already coarsens (which distance hides).
+// Keep in sync with the decode in vsm_page_scatter_cs.hlsl.
+inline constexpr unsigned int kCasterLodExactBit = 0x80u;
+inline constexpr unsigned int kCasterLodMask = 0x0Fu;
+
+// The LOD a draw of `selectedTier` will ACTUALLY use once the two global debug overrides are
+// applied. This is the mirror of Mesh::ResolveRuntimeLod, and the caster floor has to be computed
+// from it rather than from the raw selected tier -- otherwise "Force LOD level" moves the receiver
+// and leaves the caster where it was, which is the exact mismatch the floor exists to prevent, now
+// produced by the debug control meant to inspect it.
+inline unsigned int EffectiveDrawLod(unsigned int selectedTier)
+{
+    if (!g_lodEnabled) { return 0u; }
+    if (g_forcedLod >= 0) { return static_cast<unsigned int>(g_forcedLod); }
+    return selectedTier;
+}
+
 // Per-view BASE shadow LOD from a view's tier. g_shadowLodTierStride controls how many consecutive
 // tiers share one caster LOD (1 = the original 1:1 curve, 2 = 0,0,1,1,...).
 // `tier` is the CSM cascade index or the VSM clipmap level (0 = finest/near); locals pass a small
@@ -88,6 +144,52 @@ inline float g_lodBound0 = 10.0f; // ratio where LOD0 -> 1
 inline float g_lodBound1 = 20.0f; // ratio where LOD1 -> 2
 inline float g_lodBound2 = 40.0f; // ratio where LOD2 -> 3
 
+// --- FOV normalization ---------------------------------------------------------------------------
+//
+// The bounds above are a distance/radius ratio, which is a screen size ONLY at a fixed field of
+// view: zoom in and every object doubles on screen while its ratio does not move, so the LOD stays
+// where a much smaller object would have wanted it. Unreal folds the projection into the metric
+// (SceneManagement.cpp ComputeBoundsScreenSize: ScreenMultiple = max(0.5*P[0][0], 0.5*P[1][1]),
+// ScreenRadius = ScreenMultiple * SphereRadius / max(1, Dist)).
+//
+// Taken NORMALIZED to a reference FOV on purpose: the factor is refMultiple/currentMultiple, and
+// since both share the aspect ratio that reduces exactly to tan(hfov/2) / tan(refHfov/2). So the
+// numbers stay tuned at the reference FOV (the factor is exactly 1 there), a window resize does not
+// move any LOD, and only an actual FOV change does. Absolute screen sizes would have re-tuned every
+// bound the moment this shipped.
+// Reference deviation/radius that maps to an auto scale of 1.0 (Mesh::GetLodAutoDistanceScale).
+// The median over this project baked meshes.
+inline constexpr float kLodAutoErrorRef = 0.00422f;
+//
+// DEFAULT OFF, and the measurement is why. Deriving a switch distance from the baked geometric
+// error is an appealing idea -- a deviation projects to pixels, and pixels have an obviously
+// right threshold -- but measured over the v2 bake it ORDERS THE ASSETS WRONG. deviation/radius
+// at LOD1: date_palm 0.0535, curly_palm 0.0314, sphere 0.0285, coconut_palm 0.0099, rocks and
+// teapot and tent 0.003-0.005, atoll_island 0.00016. So the palms deform MORE for their size
+// than the sphere does, and this rule would hold palms fine longer than spheres -- the opposite
+// of what the eye asks for.
+//
+// Geometric error is not perceptual salience. A sphere errs by little but STRUCTURALLY: a smooth
+// silhouette becomes a polygon and the eye tracks that instantly. A palm errs by a lot, spread
+// over noisy fronds where nothing is trackable. This is exactly why Unreal AUTHORS ScreenSize per
+// LOD per mesh instead of deriving it -- a deliberate choice, not an omission.
+//
+// The baked errors are kept and surfaced (Mesh::GetLodError, the Mesh Editor, the LOD debug
+// probe) so per-asset lodDistanceScale is set from evidence. Turn this on only with a rule that
+// survives its own measurement. --set=lod.autoScale
+inline bool g_lodAutoScaleFromError = false;
+
+inline float g_lodRefHFovDeg = 90.0f;  // the camera's own default hfov; see Camera::view_.hfov
+inline float g_lodFovRatioScale = 1.0f; // refreshed once per frame from the camera, before selection
+
+inline void UpdateLodFovScale(float hfovRadians)
+{
+    const float ref = g_lodRefHFovDeg * 3.14159265f / 180.0f;
+    const float a = std::tan(std::clamp(hfovRadians, 0.01f, 3.0f) * 0.5f);
+    const float b = std::tan(std::clamp(ref, 0.01f, 3.0f) * 0.5f);
+    g_lodFovRatioScale = (b > 1e-6f) ? (a / b) : 1.0f;
+}
+
 // Dithered LOD crossfade: half-width of the transition band around each boundary, as a
 // fraction of the boundary ratio (0 = off -> hard switches with the classic hysteresis).
 // Inside the band BOTH tiers draw with complementary screen-door masks (see LodFadeClip in
@@ -95,6 +197,20 @@ inline float g_lodBound2 = 40.0f; // ratio where LOD2 -> 3
 // resolves the 4x4 Bayer pattern into a smooth blend. Selection inside the band is STATELESS
 // (fade is a pure function of distance), which is also why the band needs no hysteresis: the
 // blend is continuous in distance, so there is nothing to flip-flop.
+// Default OFF (user decision 2026-08-25): the band costs a SECOND draw of every object crossing it,
+// and the pop it hides stopped being the thing you notice once the LOD normal drift was fixed
+// (see MeshLoadOptions::lodNormalWeight). Raise it to bring the dithered handover back.
+//
+// KNOWN INTERACTION if you do, measured on demo.json 2026-08-25: the band draws the object TWICE,
+// as two geometrically DIFFERENT surfaces, but the shadow map holds only one of them (this is a
+// camera-pass-only effect). Under VSM's local spot/point shadows -- whose bias is a tight,
+// texel-sized world push -- the tier the shadow map never saw lands on the wrong side of that bias
+// and self-shadows, so the screen-door mask itself becomes visible as squares of dark dots on the
+// lit side of every fading object. Legacy CSM shows the same scene clean: it shadows the same local
+// lights, but its softer/coarser lookup keeps the tier displacement inside the bias. Proven by
+// same-binary toggles: lod.fadeBand:0 removes it, lod.enabled:0 removes it, and
+// vsm.shadowLodBias:0 does NOT (it makes it slightly worse) -- so this is the crossfade, not a
+// caster-vs-receiver LOD mismatch.
 inline float g_lodFadeBand = 0.10f;
 
 // Tier + crossfade state for one object. fade == 0: draw `tier` solid. fade in (0,1): `tier`
@@ -115,7 +231,9 @@ inline unsigned int SelectLodTier(const Math::float3& center, float radius,
                                   const Math::float3& camPos, unsigned int currentTier)
 {
     if (radius <= 1e-4f) { return 0u; }
-    const float ratio = (center - camPos).Length() / radius; // ~ inverse of projected screen size
+    // g_lodFovRatioScale folds the field of view in (see UpdateLodFovScale): 1 at the reference
+    // FOV, below 1 when zoomed in, which pulls every boundary nearer in ratio terms = finer LOD.
+    const float ratio = (center - camPos).Length() / radius * g_lodFovRatioScale;
 
     // Monotonic enforcement (each bound at least 5% past the previous) keeps the hysteresis bands
     // from overlapping however the three sliders are dragged.
@@ -142,7 +260,7 @@ inline LodTierFade SelectLodTierFade(const Math::float3& center, float radius,
         return { SelectLodTier(center, radius, camPos, currentTier), 0.0f };
     }
     if (radius <= 1e-4f) { return { 0u, 0.0f }; }
-    const float ratio = (center - camPos).Length() / radius;
+    const float ratio = (center - camPos).Length() / radius * g_lodFovRatioScale;
 
     float bound[3];
     bound[0] = g_lodBound0 > 0.5f ? g_lodBound0 : 0.5f;

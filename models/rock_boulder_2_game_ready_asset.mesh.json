@@ -1,4 +1,5 @@
 {
+  "bakeScale": 0.01,
   "geometry": "models/rock_boulder_2_game_ready_asset/rock_boulder_2_game_ready_asset.mesh.bin",
   "inputLayout": "PosNormTanUV",
   "material": "rock_boulder_2_game_ready_asset_0",

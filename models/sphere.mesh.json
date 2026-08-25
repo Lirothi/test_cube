@@ -1,4 +1,8 @@
 {
   "geometry": "models/sphere/sphere.mesh.bin",
-  "source": "import_staging\\sphere\\sphere.obj"
+  "lod3Aggressive": false,
+  "lodDistanceScale": 2.0,
+  "material": "auto",
+  "source": "import_staging\\sphere\\sphere.obj",
+  "texOffsScale": null
 }

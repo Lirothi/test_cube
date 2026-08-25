@@ -1,5 +1,6 @@
 {
   "geometry": "models/teapot/teapot.mesh.bin",
+  "lod3Aggressive": false,
   "material": "bronze",
   "source": "import_staging\\teapot\\teapot.obj"
 }
