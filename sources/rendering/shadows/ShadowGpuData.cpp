@@ -391,6 +391,7 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
     const std::vector<std::unique_ptr<RenderableObjectBase>>& objects,
     const Math::float3& cameraPos)
 {
+    lastCameraPos_ = DirectX::XMFLOAT3(cameraPos.x, cameraPos.y, cameraPos.z);
     groupLodOverride_.assign(std::max<size_t>(numMeshGroups_, 1), -1);
     // count_ includes the GI tail. The default is EXACT LOD0, not plain 0: a GI group only has
     // LOD0 geometry registered (its GroupLodMega rows past lod 0 are empty), so letting the
@@ -434,6 +435,14 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
             for (std::uint32_t s = 0; s < slots; ++s) { casterLod_[idx + s] = lod; }
         }
         idx += slots;
+    }
+    // Change detection for the page cache: any LOD move invalidates cached pages (they hold
+    // the old geometry). Rebuild resizes the table, which reads as a change — correct, a new
+    // caster set must flush too.
+    if (casterLodPrev_ != casterLod_)
+    {
+        casterLodsChanged_ = true;
+        casterLodPrev_ = casterLod_;
     }
     UploadCasterLods(renderer);
 }

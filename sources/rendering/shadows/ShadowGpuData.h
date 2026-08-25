@@ -319,6 +319,21 @@ public:
     void RefreshCasterLods(Renderer* renderer,
                            const std::vector<std::unique_ptr<RenderableObjectBase>>& objects,
                            const Math::float3& cameraPos);
+    // TRUE exactly once after a frame in which any caster's LOD changed (receiver LOD moved, or
+    // a chunk crossed a tier). The page cache must flush then: a cached page holds geometry at
+    // the OLD LOD, and the scatter will bucket the caster into a different virtual group, so
+    // the cached content and the new args disagree. Consumed by ComputePageRenderDecisions.
+    // Camera position captured by RefreshCasterLods this frame — the VSM wind falloff's
+    // origin (gWindFade). Lives here because this class already receives the camera each
+    // frame and VirtualShadowMap does not.
+    const DirectX::XMFLOAT3& LastCameraPos() const { return lastCameraPos_; }
+
+    bool ConsumeCasterLodsChanged()
+    {
+        const bool c = casterLodsChanged_;
+        casterLodsChanged_ = false;
+        return c;
+    }
     // Per-frame SRV of the per-caster LOD table (vsm_page_scatter_cs t5).
     D3D12_CPU_DESCRIPTOR_HANDLE CasterLodSrv(UINT frameIndex) const;
 
@@ -433,6 +448,9 @@ private:
     // encoding contract). vsm_page_scatter_cs buckets every instance into a virtual draw group by
     // it — the per-instance caster==receiver contract.
     std::vector<std::uint32_t> casterLod_;
+    std::vector<std::uint32_t> casterLodPrev_; // last frame's table (change detection)
+    bool casterLodsChanged_ = false;           // see ConsumeCasterLodsChanged
+    DirectX::XMFLOAT3 lastCameraPos_{};        // see LastCameraPos
     // GPU homes for the tables above. Mega is static (region 0, written at Rebuild); the override
     // and per-caster tables are per-frame (region f, rewritten by RefreshCasterLods).
     Ring groupLodMegaBuf_;

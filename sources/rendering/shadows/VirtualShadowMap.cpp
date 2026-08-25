@@ -455,7 +455,14 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
 
     d.caching = vsm::g_pageCaching && pageClearMat_ && pageClearMat_->GetPipelineState() && perPageDirtySrv_.ptr != 0;
     const bool windAnimating = wind && wind->swayAmplitude > 0.0f && shadowGpu->HasWindCasters();
-    d.forceAll = (!d.caching || cacheWarmup_ || shadowGpu->MoverCount() > 0 || windAnimating) ? 1u : 0u;
+    // Wind is deliberately NOT part of forceAll any more: it dirties only the pages that
+    // ANIMATE it (near clipmap levels + locals; gWindDirtyMaxLevel in the setup CB) — the far
+    // levels render rigid casters and cache. A caster-LOD change DOES force everything:
+    // cached pages hold geometry at the old receiver LOD, and RefreshCasterLods flags it.
+    d.forceAll = (!d.caching || cacheWarmup_ || shadowGpu->MoverCount() > 0 ||
+                  shadowGpu->ConsumeCasterLodsChanged()) ? 1u : 0u;
+    d.windDirtyMaxLevel = windAnimating
+        ? std::min(vsm::g_windAnimateMaxLevel, vsm::kNumClipmapLevels) : 0u;
 
     d.useMega = shadowGpu->MegaReady() &&
                 shadowGpu->MegaVertexBuffer() && shadowGpu->MegaIndexBuffer();
@@ -978,6 +985,24 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         physOwnerPrevSrv_.ptr == 0 || casterMetaSrv.ptr == 0 || perPageDirtyUav_.ptr == 0) { return; }
     const std::uint32_t activeCasters = shadowGpu->ActiveCasterCount();
 
+    // Per-view "matrix changed" bits for the page cache (gViewDirtyMask; see the setup CB
+    // comment). A cached page's id carries no scroll offset, so any view movement makes its
+    // content stand for the wrong world rect with the owner id unchanged — the only honest
+    // answer until pages scroll is to re-render that whole view. Bit-exact compare on purpose:
+    // a static camera rebuilds bit-identical matrices, so a parked frame caches fully.
+    std::uint32_t viewDirtyMask[2] = { 0u, 0u };
+    {
+        const std::uint32_t nv = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
+        for (std::uint32_t v = 0; v < nv; ++v)
+        {
+            const bool changed = !prevViewVpValid_ ||
+                std::memcmp(&prevViewVp_[v], &views[v].viewProj, sizeof(DirectX::XMFLOAT4X4)) != 0;
+            if (changed) { viewDirtyMask[v >> 5u] |= (1u << (v & 31u)); }
+            prevViewVp_[v] = views[v].viewProj;
+        }
+        prevViewVpValid_ = true;
+    }
+
     // Page cache: active only when the clear PSO + dirty SRV are ready (the inputs above are already
     // guaranteed here). When off, force every page dirty (gForceAll=1) so the whole-pool-clear +
     // draw-all fallback stays correct. When on, force all only when a static caster moved this frame
@@ -1143,12 +1168,16 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         std::uint32_t forceAll, megaActive, flatLod, numLods; // per-view LOD: mega on/off + fallback LOD
         std::uint32_t scatterActive, pageIdShift, compactArgs; // 1 = the scatter pass produced clipmap lists
         std::uint32_t scatterLocals; // S5: 1 = LOCAL views were scattered too (was _pad5)
+        std::uint32_t windDirtyMaxLevel = 0; // mirrors gWindDirtyMaxLevel (wind page-cache range)
+        std::uint32_t viewDirtyMask[2]{};    // mirrors gViewDirtyMask (view matrix changed bits)
+        std::uint32_t _pad6{};               // keep wind0 on the 16-byte row HLSL puts gWind0 on
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
         // `cbuffer PerView` in gbuffer_common.hlsli / shadow_indirect_csm.hlsl.
         DirectX::XMFLOAT4 wind0{ 0.0f, 0.0f, 1.0f, 0.0f }; // time, prevTime, dirX, dirZ
         DirectX::XMFLOAT4 wind1{ 0.0f, 0.0f, 1.0f, 1.0f }; // swayAmp, swayFreq, gustMul, prevGustMul
+        DirectX::XMFLOAT4 windFade{ 0.0f, 0.0f, 0.0f, 0.0f }; // camPos.xyz + fade end (0 = off); mirrors gWindFade
         DirectX::XMFLOAT4X4 vp[vsm::kMaxVirtualViews];
         DirectX::XMUINT4 viewLod[kViewLodVec4];               // per cull-view shadow LOD (packed 4/vec)
         // The per-(group,lod) mega ranges and the per-group LOD override used to sit here as arrays
@@ -1172,6 +1201,20 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.numGroups = groups; cb.argBaseElems = argBaseElems; cb.numPages = vsm::kPoolPageCount;
             cb.numCasters = activeCasters; // static + GI when GI folding is active, else static only
             cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
+            cb.windDirtyMaxLevel = dec.windDirtyMaxLevel;
+            cb.viewDirtyMask[0] = viewDirtyMask[0];
+            cb.viewDirtyMask[1] = viewDirtyMask[1];
+            // World-distance sway falloff (see gWindFade in the setup shader): reaches zero at
+            // the outer extent of the last SWAYING level, so the rigid levels beyond pick up
+            // exactly where the falloff ends and the clipmap blend band sees one geometry.
+            // Off (w=0) when calm, when everything is rigid, or when everything sways (old mode).
+            if (dec.windDirtyMaxLevel > 0 && dec.windDirtyMaxLevel < vsm::kNumClipmapLevels)
+            {
+                const DirectX::XMFLOAT3& cp = shadowGpu->LastCameraPos();
+                const float fadeEnd = vsm::g_clipmapBaseExtent *
+                    static_cast<float>(1u << (dec.windDirtyMaxLevel - 1u));
+                cb.windFade = DirectX::XMFLOAT4(cp.x, cp.y, cp.z, fadeEnd);
+            }
             cb.megaActive = useMega ? 1u : 0u; // per-view LOD: mega on = absolute mega start, off = lod-relative
             cb.numLods = kLods;
             cb.scatterActive = scatterActive ? 1u : 0u;

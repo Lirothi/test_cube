@@ -271,7 +271,12 @@ inline bool g_scatterLocalViews = true;
     // can't skip), the teapots are dynamic (uncacheable), and the gated depth-clear is slower than a
     // hardware full-pool clear on spike frames (max regressed). ON draws only dirty pages + uses the
     // gated clear; keep for a future coarse-skip (skip the cull for pages far from any mover).
-    inline bool g_pageCaching = false;
+    inline bool g_pageCaching = true;
+// Wind page-cache range (Unreal's per-level WPO disable, transcribed): clipmap levels BELOW
+// this animate wind (and re-render every frame while it blows); levels at/above render their
+// casters RIGID and can cache. Locals always animate. Only matters with g_pageCaching on —
+// without caching every page redraws anyway. --set=vsm.windMaxLevel; >= level count = all.
+inline std::uint32_t g_windAnimateMaxLevel = 2;
 
     // Periodically log the VSM page stats to DBWIN ("[VSM] request ... | resident=..."). DEFAULT OFF
     // — it spams a captured stress/dev run. The on-screen dev-window "VSM" tab always shows the live
@@ -352,6 +357,8 @@ public:
         // S5: local views are in the scatter this frame (scatterActive AND g_scatterLocalViews).
         bool scatterLocals = false;
         std::uint32_t forceAll = 1u;
+        // Clipmap levels below this wind-animate and wind-dirty; 0 = calm. See gWindDirtyMaxLevel.
+        std::uint32_t windDirtyMaxLevel = 0u;
         // pass-flow S3b: the ABSOLUTE declaration indices of the pass's barrier points, captured
         // by PrepareRenderPass as it declares them. RecordPageRender emits each with an EmitPoint
         // marker — the record body names no resource and no state. Scatter/cache indices are only
@@ -534,6 +541,10 @@ private:
     std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
     std::uint32_t   scatterGroups_ = 0;          // mesh-group count pageGroupCount_ is sized for
     std::uint32_t   renderCasters_ = 0;          // caster count pageVisibleList_ is sized for
+    // Last frame's per-view matrices (page cache: a moved view re-renders wholesale; see
+    // gViewDirtyMask in vsm_page_setup_cs.hlsl).
+    DirectX::XMFLOAT4X4 prevViewVp_[vsm::kMaxVirtualViews]{};
+    bool prevViewVpValid_ = false;
     bool            cacheWarmup_ = true;         // force one full render until physOwnerPrev_ is valid (else garbage)
     // Single-draw page render: last logged reason the path was unavailable while g_pageDrawSingle
     // was on (0 = available / nothing logged). Dedupes the DBWIN line to one per distinct cause —

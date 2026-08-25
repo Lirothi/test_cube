@@ -49,11 +49,32 @@ cbuffer SetupCB : register(b0)
     // unchanged. Toggled live by vsm::g_scatterLocalViews, which exists so the two local-light
     // paths can be A/B-ed inside ONE binary.
     uint gScatterLocals;
+    // Wind page-cache contract (transcribed from Unreal's per-level WPO disable threshold,
+    // VirtualShadowMapClipmap.cpp): clipmap levels BELOW this animate wind and are re-rendered
+    // every frame while wind blows; levels AT/ABOVE it render their casters RIGID (the per-page
+    // wind amplitude below is zeroed) so a cached page and a fresh render agree — that
+    // consistency is what makes caching them valid, with no pop when one finally re-renders.
+    // Local views always animate (their whole frustum is near-field). 0 = wind is not blowing
+    // this frame (nothing wind-dirties); >= clipmap level count = the old animate-everywhere.
+    uint gWindDirtyMaxLevel;
+    // Per-VSM-view "matrix changed this frame" bits (x = views 0..31, y = 32..39). A cached
+    // page's id is (view, level, px, py) — an NDC rect of ITS VIEW, with no scroll offset —
+    // so ANY view translation/snap/rotation makes every cached page of that view hold depth
+    // for the WRONG world rect while its owner id never changes (isNew cannot see it; Unreal
+    // solves the clipmap case with a per-level PageOffset). Until pages scroll, the honest
+    // cache contract is: a view that moved re-renders wholesale. Static camera + static
+    // lights = everything caches; a dolly re-renders exactly what it invalidates.
+    uint2 gViewDirtyMask;
+    uint _pad6;
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
     float4 gWind0;      // x=time, y=prevTime, z=windDirXZ.x, w=windDirXZ.y
     float4 gWind1;      // x=swayAmp, y=swayFreq, z=gustMul, w=prevGustMul
+    // (camPos.xyz, windFadeEnd): the world-distance sway falloff the shadow VS applies (byte
+    // 224 of every page slot). Identical across levels, which is what keeps the clipmap blend
+    // band consistent; the per-level rigid gate above it only decides CACHING. w = 0 disables.
+    float4 gWindFade;
     float4x4 gViewProj[VSM_MAX_VIEWS];    // per VSM local view (spots then point faces)
     uint4    gViewLod[KVIEWLOD_VEC4];      // per cull-view shadow LOD (near->far tier + bias), packed 4/uint4
     // NOTE: the per-(group,lod) mega ranges and the per-group LOD override used to live HERE, as CB
@@ -176,6 +197,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // Lane 0 only: one page has ONE projection, and only the serial path needs the planes derived
     // from it. The extra lanes exist for the per-group args loop, which does not read either.
     float4x4 pm = (float4x4)0;
+    // Clipmap level of this page's VIEW (each clipmap level is its own view at mip 0);
+    // locals report 0 and always animate.
+    const bool isLocalView = (view < VSM_NUM_LOCAL_VIEWS);
+    const uint clipLevel = isLocalView ? 0u : (view - VSM_NUM_LOCAL_VIEWS);
+    const bool windHere = (gWindDirtyMaxLevel != 0u) &&
+                          (isLocalView || clipLevel < gWindDirtyMaxLevel);
     if (lane == 0u)
     {
         const float a = (float)(VSM_L0_AXIS >> level);
@@ -194,7 +221,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // W5: the wind tail of the shadow PerView CB. Bytes 64..192 (viewProjNoJitter /
         // prevViewProjNoJitter) stay unwritten — the depth-only shadow VS never reads them.
         PageProj.Store4(po + 192u, asuint(gWind0));
-        PageProj.Store4(po + 208u, asuint(gWind1));
+        // Rigid beyond the wind range: zero the sway amplitude THIS page's casters see, so
+        // far clipmap levels draw un-swayed geometry that a cached page can keep bit-stable.
+        float4 wind1 = gWind1;
+        if (!windHere) { wind1.x = 0.0f; }
+        PageProj.Store4(po + 208u, asuint(wind1));
+        PageProj.Store4(po + 224u, asuint(gWindFade)); // (camPos, fade end) -> shadow VS w2
     }
 
     // The page's 6 frustum planes from pm (columns; clip = mul(world, pm)). Positive-vertex test is
@@ -281,7 +313,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // Cache decision: dirty pages clear + redraw; clean pages keep their cached depth (draw nothing).
     // Every lane derives `dirty` from the same buffer reads, so they agree by construction; the
     // flag itself has one writer.
-    const bool dirty = isNew || dynamicOverlap || (gForceAll != 0u);
+    // Wind no longer rides gForceAll: it dirties only the pages that actually ANIMATE it
+    // (near clipmap levels + locals). Everything past the range renders rigid and caches.
+    const bool viewDirty = (view < 32u) ? (((gViewDirtyMask.x >> view) & 1u) != 0u)
+                                        : (((gViewDirtyMask.y >> (view - 32u)) & 1u) != 0u);
+    const bool dirty = isNew || dynamicOverlap || (gForceAll != 0u) || windHere || viewDirty;
     if (lane == 0u) { PerPageDirty[p] = dirty ? 1u : 0u; }
     if (!dirty)
     {

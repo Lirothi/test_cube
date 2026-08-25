@@ -2120,7 +2120,32 @@ ImGui::SliderInt("Shadow LOD bias", &render::g_shadowLodBias, -2, 3);
                                       "already free, the atomic it adds lands in the setup CS. Kept for group-heavy\n"
                                       "scenes (records = pages x groups). No effect while single-draw is off.");
 
-                ImGui::Checkbox("Page cache (experimental, off = net loss here)", &vsm::g_pageCaching);
+                ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching);
+                {
+                    int windLvl = static_cast<int>(vsm::g_windAnimateMaxLevel);
+                    ImGui::SetNextItemWidth(150.0f);
+                    if (ImGui::SliderInt("Wind animate below level", &windLvl, 0,
+                                         static_cast<int>(vsm::kNumClipmapLevels)))
+                    {
+                        vsm::g_windAnimateMaxLevel = static_cast<std::uint32_t>(windLvl);
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Clipmap levels BELOW this sway in the shadow map and re-render every\n"
+                                          "frame while wind blows; levels at/above draw their casters RIGID, so\n"
+                                          "the page cache can keep them (a cached page and a fresh render agree\n"
+                                          "exactly). Level extent doubles per step from the clipmap base extent,\n"
+                                          "so 2 = sway within ~2x base extent of the camera. Locals always sway.\n"
+                                          "Max = everything sways (the old behavior; cache gains nothing in wind).");
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Skips re-rendering pages whose content did not change. Two rules make the\n"
+                                      "cached content valid: (1) wind past 'wind animate below level' renders\n"
+                                      "RIGID, so a swaying grove caches its far levels (-0.33 ms Pass_VsmPageRender\n"
+                                      "in the wind_test grove, neutral on demo.json); (2) any view whose MATRIX\n"
+                                      "changed re-renders wholesale - a page id has no scroll offset, so a moved\n"
+                                      "clipmap/sun/spot would otherwise serve depth for the wrong world rect.\n"
+                                      "Net effect: parked camera + settled lights cache fully; motion redraws\n"
+                                      "exactly what it invalidates (the cost of the uncached path, no worse).");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: re-render only new / dynamic-overlapping pages; cached pages keep their\n"
                                       "depth. Measured no avg gain + worse spikes on this scene (cull-bound + dynamic\n"

@@ -95,12 +95,25 @@ StructuredBuffer<InstancePerObject> Instances : register(t0);
 // Do NOT re-implement any of this per permutation; add parameters instead.
 inline float4 WindTransformCore(float3 objPos, float4x4 world, float4 windWeights,
                                 float windStrengthValue, float foliageValue, float trunkStiffValue,
-                                float leafScaleValue, float4x4 vp, float4 w0, float4 w1)
+                                float leafScaleValue, float4x4 vp, float4 w0, float4 w1,
+                                float4 w2)
 {
     float4 wp = mul(float4(objPos, 1.0f), world);
-    wp.xyz += WindOffset(objPos, wp.xyz, float3(world._41, world._42, world._43), windStrengthValue,
-                         windWeights, foliageValue, trunkStiffValue, leafScaleValue,
-                         w0.zw, w1.x, w1.y, w1.z, w0.x);
+    float3 off = WindOffset(objPos, wp.xyz, float3(world._41, world._42, world._43), windStrengthValue,
+                            windWeights, foliageValue, trunkStiffValue, leafScaleValue,
+                            w0.zw, w1.x, w1.y, w1.z, w0.x);
+    // w2 = (camPos.xyz, windFadeEnd). WORLD-distance sway falloff for the VSM pages (byte 224
+    // of the page slot): sway fades to zero across [end/2, end], identically in EVERY clipmap
+    // level, so two levels blended at a level boundary agree on the geometry by construction —
+    // the hard per-level rigid gate alone put a full-amplitude mismatch straight into the
+    // clipmap blend band. w2.w <= 0 = no falloff (the legacy CB path passes zero and keeps its
+    // old full-sway behavior untouched).
+    if (w2.w > 0.0f)
+    {
+        const float d = length(wp.xz - w2.xz);
+        off *= 1.0f - smoothstep(0.5f * w2.w, w2.w, d);
+    }
+    wp.xyz += off;
     return mul(wp, vp);
 }
 
@@ -122,11 +135,12 @@ static const float kPoolAxis    = (float)VSM_POOL_PAGES_AXIS;
 // One page's 256-byte pageProj_ slot, viewed as 16 float4s: rows 0..3 = the off-center viewProj the
 // setup CS built (vsm_page_setup_cs.hlsl stores pm[0..3] at bytes 0/16/32/48), elements 12 and 13 =
 // the wind tail it copied to bytes 192/208. Bytes 64..191 are never written and never read.
-float4x4 LoadPageVP(uint page, out float4 w0, out float4 w1)
+float4x4 LoadPageVP(uint page, out float4 w0, out float4 w1, out float4 w2)
 {
     const uint b = page * 16u;  // 256 B slot / 16 B per float4
     w0 = PageProjRows[b + 12u];
     w1 = PageProjRows[b + 13u];
+    w2 = PageProjRows[b + 14u]; // (camPos.xyz, windFadeEnd) -- byte 224
     return float4x4(PageProjRows[b + 0u], PageProjRows[b + 1u],
                     PageProjRows[b + 2u], PageProjRows[b + 3u]);
 }
@@ -179,7 +193,8 @@ inline float4 WindTransformH(float3 objPos, float4x4 world, float4 windWeights,
     return WindTransformCore(objPos, world, windWeights, windStrengthValue, foliageValue,
                              trunkStiffValue, leafScaleValue, viewProj,
                              float4(windTime, windPrevTime, windDirXZ),
-                             float4(windSwayAmp, windSwayFreq, windGustMul, windPrevGustMul));
+                             float4(windSwayAmp, windSwayFreq, windGustMul, windPrevGustMul),
+                             float4(0.0f, 0.0f, 0.0f, 0.0f)); // no falloff on the legacy path
 }
 
 #endif // VSM_PAGE
@@ -230,10 +245,10 @@ VSOutMasked VSMain(VSInMasked i)
     const uint page = i.casterId >> kPageIdShift;
     const uint cid  = i.casterId & kCasterMask;
     const InstancePerObject ip = Instances[cid];
-    float4 w0, w1;
-    const float4x4 vp = LoadPageVP(page, w0, w1);
+    float4 w0, w1, w2;
+    const float4x4 vp = LoadPageVP(page, w0, w1, w2);
     const float4 hLocal = WindTransformCore(i.P, ip.world, i.WIND, ip.windStrength, ip.windFoliage,
-                                            ip.windTrunkStiff, ip.windLeafScale, vp, w0, w1);
+                                            ip.windTrunkStiff, ip.windLeafScale, vp, w0, w1, w2);
     PagePlace(page, hLocal, o.H, o.CD);
 #else
     const uint cid = i.casterId;
@@ -281,10 +296,10 @@ VSOutD VSMain(VSInIndirect i)
     const uint page = i.casterId >> kPageIdShift;
     const uint cid  = i.casterId & kCasterMask;
     const InstancePerObject ip = Instances[cid];
-    float4 w0, w1;
-    const float4x4 vp = LoadPageVP(page, w0, w1);
+    float4 w0, w1, w2;
+    const float4x4 vp = LoadPageVP(page, w0, w1, w2);
     const float4 hLocal = WindTransformCore(i.P, ip.world, i.WIND, ip.windStrength, ip.windFoliage,
-                                            ip.windTrunkStiff, ip.windLeafScale, vp, w0, w1);
+                                            ip.windTrunkStiff, ip.windLeafScale, vp, w0, w1, w2);
     PagePlace(page, hLocal, o.H, o.CD);
 #else
     const InstancePerObject ip = Instances[i.casterId];

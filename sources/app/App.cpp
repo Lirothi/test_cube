@@ -256,6 +256,8 @@ namespace
         // (docs/bug_shadow_lod_bias_perf.md §6).
         if (setting == "vsm.shadowLodBias") { render::g_shadowLodBias = (int)value; return true; }
         // Caster-vs-receiver LOD floor (LodSelect.h). Off = the old per-view-only caster LOD.
+        if (setting == "vsm.pageCaching")  { vsm::g_pageCaching = value != 0.0f; return true; }
+        if (setting == "vsm.windMaxLevel") { vsm::g_windAnimateMaxLevel = (std::uint32_t)std::max(0.0f, value); return true; }
         if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod = value != 0.0f; return true; }
         if (setting == "vsm.shadowLodBiasNearTier") { render::g_shadowLodBiasNearTier = value != 0.0f; return true; }
         if (setting == "vsm.shadowLodTierStride")
