@@ -1229,7 +1229,7 @@ namespace
                           "so off genuinely costs nothing.");
 
             ImGui::SeparatorText("Extraction");
-            dragF("Threshold", "threshold", -1.0f, 0.01f, -1.0f, 16.0f, "%.2f");
+            dragF("Threshold", "threshold", 1.0f, 0.01f, -1.0f, 16.0f, "%.2f");
             InspectorHelp("Luminance at which bloom starts, measured AFTER exposure - UE's "
                           "BloomThreshold, in the same units. Being post-exposure is what makes one "
                           "number mean the same thing across a sunset and a noon.\n\n"
@@ -1249,7 +1249,11 @@ namespace
                           "reads as a uniform veil -- the veil lifted the DARKS by 8.3/255 while "
                           "lifting the area around the sun by only 6.6. A positive threshold is "
                           "what isolates the point source, and it is why this ships at 1.0 rather "
-                          "than at UE's default.");
+                          "than at UE's default.\n\n"
+                          "UNITS CAVEAT (P16): the buffers are pre-exposed, so this compares "
+                          "against ADAPTED values and one number reads differently as the camera "
+                          "adapts. The ghost and streak thresholds below were moved to absolute "
+                          "units for exactly that reason; this one keeps UE's semantics for now.");
             dragF("Soft Knee", "softKnee", 0.5f, 0.01f, 0.05f, 4.0f, "%.2f");
             InspectorHelp("Slope of the ramp above the threshold; UE hardwire 0.5, which is the "
                           "default here. Lower = a longer shoulder, so highlights ease into the "
@@ -1295,21 +1299,100 @@ namespace
                           "via two Fourier transforms and one complex multiply. Halo, starburst and "
                           "the rays from the iris blades all come out of that ONE kernel and are "
                           "consistent with each other by construction, instead of being three "
-                          "effects tuned into agreement. It costs more and runs on a quarter-"
-                          "resolution grid; a scene with no bright highlights cannot tell them "
-                          "apart, which is why Standard is the default.");
+                          "effects tuned into agreement. It costs more and runs at Resolution % "
+                          "of the display (50 by default); a scene with no bright highlights "
+                          "cannot tell them apart, which is why Standard is the default.");
 
             if (tgt().value("method", 0u) == 1u)
             {
-                ImGui::SeparatorText("Aperture (convolution only)");
-                dragF("Kernel Radius", "convKernelRadius", 0.004f, 0.0002f, 0.0005f, 0.02f, "%.4f");
-                InspectorHelp("Radius of the kernel's bright CORE, as a fraction of the convolution "
-                              "grid. Small numbers are correct here: the visible glare comes from "
-                              "the skirt, not the core. MEASURED -- at 0.12 the normalised kernel "
-                              "peaks at 1.4e-05 and only 4% of its energy sits within 32 texels, so "
-                              "every highlight is spread into a flat wash and no halo is visible at "
-                              "all. At 0.004 the core carries 14% inside two texels and 65% inside "
-                              "eight, which is what reads as glare.");
+                ImGui::SeparatorText("Kernel (convolution only)");
+                // P8C-2: the kernel is UE's photographed DefaultBloomKernel. The star, its rays,
+                // the halo and the rainbow dispersion are IN the image -- the aperture generator
+                // and its shape controls (kernel radius, spokes, chroma) are retired.
+                dragF("Kernel Size", "convSize", 1.0f, 0.01f, 0.02f, 1.0f, "%.2f");
+                InspectorHelp("The kernel photograph's width as a fraction of the viewport -- "
+                              "UE's BloomConvolutionSize, same units and same default of 1.0. "
+                              "This is the ONE size control: the visible glare is the kernel "
+                              "image, scaled.");
+                dragF("Resolution %", "convPercent", 50.0f, 0.5f, 10.0f, 50.0f, "%.0f %%");
+                InspectorHelp("Resolution of the convolution as a percent of the display -- UE's "
+                              "r.Bloom.ScreenPercentage (their default is 100; 50 is this "
+                              "engine's grid ceiling). The first P8C ran at 12.5, and a 1-2 texel "
+                              "diffraction ray upscaled 4x per axis is a dashed line of squares "
+                              "-- the 'ragged crown'. Lowering this buys the transform cost back.");
+                ImGui::SeparatorText("Anamorphic");
+                // P8C-2b: the streak is its own separable pass with a nonlinear front end -- the
+                // only way the band can come out THINNER than its source (a convolution cannot:
+                // the sun here is a disc with a baked corona hundreds of pixels tall).
+                dragF("Anamorphic Intensity", "convAnamorphicIntensity", 0.0f, 0.02f, 0.0f, 8.0f, "%.2f");
+                InspectorHelp("Direct brightness of the streak. 0 = off (the passes do not run).");
+                dragF("Anamorphic Threshold", "convAnamorphicThreshold", 1.5f, 0.05f, 0.1f, 24.0f, "%.2f");
+                InspectorHelp("The streak's OWN threshold, in ABSOLUTE units: authored as stored "
+                              "brightness at EV100 = 14 and rescaled by the frame's pre-exposure, "
+                              "so the same sun crosses it from any viewpoint -- being a light "
+                              "source is a property of the scene, not the camera. On this level: "
+                              "sky ~1, sun corona 4-6, sun core 10-12, glints above that. This is "
+                              "also the narrowness control that actually works: higher values "
+                              "take only the CORE of a source, so the corona stops throwing a "
+                              "screen-tall band.");
+                dragF("Anamorphic Narrow", "convAnamorphicNarrow", 0.0f, 0.5f, 0.0f, 200.0f, "%.0f px");
+                InspectorHelp("Vertical luminance EROSION window in display pixels; 0 = off. "
+                              "Shrinks a wide source before the blur -- the band narrows by about "
+                              "this many pixels. Small glints below the window lose their streak "
+                              "entirely, which is the deliberate trade: the streak belongs to the "
+                              "dominant source.");
+                dragF("Anamorphic Length", "convAnamorphicLength", 0.28f, 0.005f, 0.01f, 0.6f, "%.3f");
+                InspectorHelp("How far the band reaches, as a fraction of the screen width -- "
+                              "the VISIBLE extent, so 0.1 draws a band about a tenth of the "
+                              "screen long (plus the source's own width, which no filter can "
+                              "shorten). It was authored as a 1/e until P8C-2e, and a 1/e lies by "
+                              "3.4x: the cascade's support is the SUM of its passes' reaches, so "
+                              "0.1 measured 34% of the screen and a corner-parked sun looked like "
+                              "a light leak. The exponential shape is unchanged, with 1/e at a "
+                              "third of the extent.");
+                dragF("Anamorphic Width", "convAnamorphicWidth", 3.0f, 0.1f, 0.5f, 30.0f, "%.1f px");
+                InspectorHelp("The band's final soft width: a small vertical Gaussian applied at "
+                              "composite, in display pixels. Works on the already-blurred band, "
+                              "so it can be narrow without aliasing.");
+                dragF("Anamorphic Chroma", "convAnamorphicChroma", 0.5f, 0.01f, 0.0f, 1.0f, "%.2f");
+                InspectorHelp("Spreads the per-channel 1/e lengths: blue runs ~45% farther and "
+                              "red ~30% shorter at 1.0, so the tail shifts white -> blue along "
+                              "its length -- the look of real cylindrical-element coatings.");
+                {
+                    const nlohmann::json beforeItem = props;
+                    float tint[3] = { 1.0f, 1.0f, 1.0f };
+                    if (tgt().contains("convAnamorphicTint") &&
+                        tgt()["convAnamorphicTint"].is_array() &&
+                        tgt()["convAnamorphicTint"].size() == 3)
+                    {
+                        for (int i = 0; i < 3; ++i)
+                        {
+                            tint[i] = tgt()["convAnamorphicTint"][i].get<float>();
+                        }
+                    }
+                    const bool changed = ImGui::ColorEdit3("Anamorphic Tint", tint,
+                        ImGuiColorEditFlags_Float);
+                    if (changed) { tgt()["convAnamorphicTint"] = { tint[0], tint[1], tint[2] }; }
+                    trackContinuousEdit(beforeItem, changed);
+                }
+                InspectorHelp("A plain colour multiplier on the whole band, on top of the "
+                              "chroma's own gradient.");
+
+                ImGui::SeparatorText("Ghosts");
+                {
+                    const nlohmann::json beforeItem = props;
+                    int ghosts = static_cast<int>(tgt().value("convGhosts", 0u));
+                    const bool changed = ImGui::SliderInt("Ghost Count", &ghosts, 0, 8);
+                    if (changed) { tgt()["convGhosts"] = static_cast<std::uint32_t>(ghosts < 0 ? 0 : ghosts); }
+                    trackContinuousEdit(beforeItem, changed);
+                }
+                InspectorHelp("P8C-2: UE's actual mechanism, both halves. A bokeh SCATTER splats "
+                              "one iris sprite per bright pixel of the thresholded scene -- the "
+                              "output is the real defocused image of the real sources -- and the "
+                              "composite lays N copies of that image scaled about the screen "
+                              "centre (UE's LensFlareTints table: two on the source's side, the "
+                              "rest mirrored through the centre). No sun position and no sprite "
+                              "atlas exist anywhere: two suns give two chains for free.");
                 {
                     const nlohmann::json beforeItem = props;
                     int blades = static_cast<int>(tgt().value("convBlades", 6u));
@@ -1317,86 +1400,46 @@ namespace
                     if (changed) { tgt()["convBlades"] = static_cast<std::uint32_t>(blades < 0 ? 0 : blades); }
                     trackContinuousEdit(beforeItem, changed);
                 }
-                InspectorHelp("Number of iris blades, and THE control that decides whether there "
-                              "is a star at all. The kernel is the diffraction pattern of this "
-                              "shape, so: 0 (or 1-2) is a round hole and gives a halo with NO rays; "
-                              "an EVEN count gives that many rays; an ODD count gives twice as many, "
-                              "because opposite parallel edges throw rays that land on top of each "
-                              "other. Measured here: 5 -> 10 rays, 6 -> 6, 8 -> 8. Photography "
-                              "agrees -- a nine-bladed lens is sold as making an eighteen-point "
-                              "star.");
-                dragF("Blade Rotation", "convBladeRotation", 0.0f, 0.01f, -3.2f, 3.2f, "%.2f rad");
-                InspectorHelp("Turns the star. Free, and the only way to stop the rays lining up "
-                              "with the horizon.");
-
-                ImGui::SeparatorText("Rays");
-                // The kernel is the diffraction pattern of the aperture, so every one of these
-                // shapes the HOLE and the pattern follows. UE have no equivalent -- their star
-                // comes out of a painted BloomConvolutionTexture and has no parameters at all.
-                dragF("Spoke Strength", "convSpokeStrength", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
-                InspectorHelp("How STRAIGHT the blades are, blending the polygon against a circle. "
-                              "A circle has no straight edges and therefore throws no rays, so 0 "
-                              "really is 'no star' -- turn this down rather than dropping Blades to "
-                              "0 if you want to keep the blade count for the ghosts. Measured on an "
-                              "isolated flare: angular contrast around the sun goes 0.7 at 0 to 1.3 "
-                              "at 1, against 72 for a full hard-edged iris.");
-                dragF("Spoke Length", "convSpokeLength", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
-                InspectorHelp("How far the rays reach, by APODIZING the aperture edge. A hard edge "
-                              "is a step, and a step's transform has the long 1/r^2 tails that ARE "
-                              "the rays; feathering the edge shortens them. It is how an apodizing "
-                              "filter kills diffraction spikes on a real lens. Measured: a ray "
-                              "reaches 180 px at 0.2 and 760 px at 1.0.");
-                dragF("Spoke Width", "convSpokeWidth", 0.0f, 0.02f, 0.0f, 4.0f, "%.2f");
-                InspectorHelp("Ray thickness, by BOWING each blade. A spike's angular width goes as "
-                              "one over the coherent straight length, so a curved blade -- which is "
-                              "what a real iris has -- shortens that length and broadens the ray. 0 "
-                              "is dead straight blades and the thinnest rays.");
-
-                ImGui::SeparatorText("Anamorphic and chroma");
-                dragF("Anamorphic", "convAnamorphic", 0.25f, 0.01f, 0.0f, 3.0f, "%.2f");
-                InspectorHelp("Strength of the single long HORIZONTAL streak -- the anamorphic bar. "
-                              "It is a separate term from the spokes because a real anamorphic "
-                              "lens squeezes one axis only, which no symmetric star can imitate.");
-                dragF("Anamorphic Length", "convAnamorphicLength", 0.28f, 0.005f, 0.01f, 0.6f, "%.3f");
-                InspectorHelp("How far the bar runs across the grid. This is the control that "
-                              "decides whether it reads as a lens or as a light leak.");
-                dragF("Chroma", "convChroma", 0.6f, 0.01f, 0.0f, 3.0f, "%.2f");
-                InspectorHelp("How much WIDER the blue kernel is than red and green, which is what "
-                              "gives the halo a cool fringe and the bar its traditional blue. Free: "
-                              "the complex packing carries (R + iG) in one lane and B in the other, "
-                              "so blue can have its own kernel at no cost. R and G cannot be "
-                              "separated from each other -- that would need a third transform.");
-
-                ImGui::SeparatorText("Ghosts");
-                {
-                    const nlohmann::json beforeItem = props;
-                    int ghosts = static_cast<int>(tgt().value("convGhosts", 3u));
-                    const bool changed = ImGui::SliderInt("Ghost Count", &ghosts, 0, 6);
-                    if (changed) { tgt()["convGhosts"] = static_cast<std::uint32_t>(ghosts < 0 ? 0 : ghosts); }
-                    trackContinuousEdit(beforeItem, changed);
-                }
-                InspectorHelp("The reflections between lens elements, DRAWN as polygons of the "
-                              "iris at computed positions -- which is what a photograph of one "
-                              "shows. They are not part of the convolution and cannot be: a "
-                              "convolution is shift-invariant, while a ghost moves the OPPOSITE way "
-                              "to its source because it is a reflection through the frame centre. "
-                              "Their shape follows Blades and Spoke Strength, so the chain and the "
-                              "star always come from the same aperture. Positions and tints are "
-                              "UE's LensFlareTints[8].");
-                dragF("Ghost Spacing", "convGhostSpacing", 0.45f, 0.01f, 0.05f, 1.5f, "%.2f");
-                InspectorHelp("One multiplier over UE's whole scale table, so the chain can be "
-                              "pulled in or spread out without editing eight entries. Their table "
-                              "puts two ghosts on the SAME side of the centre as the source and six "
-                              "mirrored, at -4.9x to +1.4x -- which is why a real chain has big "
-                              "soft discs far out and small tight ones near the light.");
+                InspectorHelp("Number of iris blades in the BOKEH SPRITE the scatter splats -- 0 "
+                              "is a round bokeh. It shapes the ghosts only: the bloom kernel is a "
+                              "photograph and carries its own star.\n\n"
+                              "MEASURED, so you know what to expect. Against a 1/255 noise floor, "
+                              "3 blades vs 8 moves the frame by 8/255 and 0 (round) vs 8 by 2/255 "
+                              "-- an octagon IS very nearly a circle, so the low counts are where "
+                              "this control lives. It also needs Ghost Size to be LARGER than the "
+                              "source: a ghost is source-convolved-with-sprite, and the bigger of "
+                              "the two wins the shape. Blade ROTATION used to sit here and was "
+                              "removed in P8C-2d for measuring 4/255 against that same floor -- "
+                              "superposition over an extended source washes an orientation out "
+                              "entirely.");
                 dragF("Ghost Size", "convGhostBokeh", 3.0f, 0.05f, 0.0f, 32.0f, "%.2f %%");
-                InspectorHelp("Sprite radius as a percent of frame width -- UE's LensFlareBokehSize, "
-                              "same units and same default of 3. Bigger copies are correspondingly "
-                              "dimmer, because it is the same light over more area.");
+                InspectorHelp("Bokeh sprite radius as a percent of frame width -- UE's "
+                              "LensFlareBokehSize, same units and same default of 3. Bigger "
+                              "copies are correspondingly dimmer: same light over more area.\n\n"
+                              "IT IS ALSO THE SHAPE CONTROL, which is not obvious. A ghost is the "
+                              "source CONVOLVED with this sprite, so whichever of the two is "
+                              "bigger wins: with the sprite smaller than the source, every ghost "
+                              "reproduces the SOURCE's outline -- at 0.5% the sun's ragged corona "
+                              "and the water's glitter path came out as recognisable mirrored "
+                              "smears in the sky. At UE's 3 the sprite dominates and the chain "
+                              "reads as bokeh discs again.");
                 dragF("Ghost Intensity", "convGhostIntensity", 0.6f, 0.01f, 0.0f, 3.0f, "%.2f");
-                InspectorHelp("Brightness of the chain. The colour comes from the source itself, so "
-                              "a dimmer sun throws dimmer ghosts and a sky with nothing above the "
-                              "bloom threshold throws none at all.");
+                InspectorHelp("Brightness of the chain. The colour comes from the sources "
+                              "themselves, so a dimmer sun throws dimmer ghosts and a sky with "
+                              "nothing above the threshold throws none at all.");
+                dragF("Ghost Threshold", "convGhostThreshold", 7.0f, 0.05f, 0.0f, 24.0f, "%.2f");
+                InspectorHelp("UE's LensFlareThreshold, in the same ABSOLUTE units as the streak "
+                              "threshold above (stored brightness at EV100 = 14, rescaled by the "
+                              "frame's pre-exposure). Ghosts are images of SOURCES -- too low and "
+                              "sunlit foliage becomes one (upside-down palms in the sky, "
+                              "observed).\n\n"
+                              "SOFT KNEE, unlike UE's binary gate: a source's ghost is scaled by "
+                              "how far it sits ABOVE this, so one at the threshold contributes "
+                              "nothing and one ten times over it 90%. That is what stops a chain "
+                              "popping into existence as the sun brightens -- and it means this "
+                              "number wants to be LOWER than a binary gate's: 7 here matches what "
+                              "10 gave before the knee. Raising it also cuts the scatter's cost "
+                              "directly: collapsed quads rasterize nothing.");
             }
 
             ImGui::TextDisabled("Runs after the upscaler on the image the tone curve reads,");

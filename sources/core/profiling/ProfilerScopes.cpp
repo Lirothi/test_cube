@@ -45,6 +45,10 @@ const Profiler::ScopeNameKey kRendererExecuteTimelineAndPresent = Profiler::Regi
 const Profiler::ScopeNameKey kRendererTransition = Profiler::RegisterTraceLiteral(L"Renderer::Transition");
 
 const Profiler::ScopeNameKey kSceneTick = Profiler::RegisterTraceLiteral(L"Scene::Tick");
+const Profiler::ScopeNameKey kSceneTickPointLights = Profiler::RegisterTraceLiteral(L"Scene::Tick.PointLights");
+const Profiler::ScopeNameKey kSceneTickObjects = Profiler::RegisterTraceLiteral(L"Scene::Tick.Objects");
+const Profiler::ScopeNameKey kSceneTickPostObjects = Profiler::RegisterTraceLiteral(L"Scene::Tick.PostObjects");
+const Profiler::ScopeNameKey kSceneTickWind = Profiler::RegisterTraceLiteral(L"Scene::Tick.Wind");
 const Profiler::ScopeNameKey kSceneRender = Profiler::RegisterTraceLiteral(L"Scene::Render");
 const Profiler::ScopeNameKey kPassPrologueClear = Profiler::RegisterTraceLiteral(L"Pass_PrologueClear");
 const Profiler::ScopeNameKey kPassObjectCompute = Profiler::RegisterTraceLiteral(L"Pass_ObjectCompute");

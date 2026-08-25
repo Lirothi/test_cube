@@ -649,6 +649,21 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D.bloomFftImageHeight = std::max(1u, sizes.bloomFftImageHeight);
         }
 
+        // P8C-2: the lens-flare accumulation target. A RENDER target on purpose -- the scatter is
+        // an instanced additive raster pass (that is UE's mechanism and the whole point), while
+        // everything else in the bloom chain is compute.
+        {
+            const UINT lw = std::max(1u, sizes.lensFlareWidth);
+            const UINT lh = std::max(1u, sizes.lensFlareHeight);
+            currentTargetWidth = lw;
+            currentTargetHeight = lh;
+            CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.bloom,
+                DeferredRtvSlot::LensFlare, DeferredSrvSlot::LensFlareAccum, DeferredSrvSlot::Count,
+                f, D.lensFlare, D.lensFlareRTV, D.lensFlareSRV);
+            D.lensFlareWidth = lw;
+            D.lensFlareHeight = lh;
+        }
+
         // Inspector preview. Rests SHADER-READABLE: the overlay transitions FROM a resource's
         // canonical into PIXEL_SHADER_RESOURCE without transitioning back, which is only sound when
         // the canonical already shares that barrier layout.
@@ -725,6 +740,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.bloomFftA.Get(), L"BloomFftA", kNps);
         nameRes(D.bloomFftB.Get(), L"BloomFftB", kNps);
         nameRes(D.bloomFftKernel.Get(), L"BloomFftKernel", kNps);
+        nameRes(D.lensFlare.Get(), L"LensFlareAccum", kNps);
         nameRes(D.bloomDown.Get(), L"BloomDown", kNps);
         nameRes(D.bloomUp.Get(), L"BloomUp", kNps);
         nameRes(D.hzb.Get(), L"Hzb", kNps);

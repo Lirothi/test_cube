@@ -54,10 +54,11 @@ cbuffer BloomFftCB : register(b0)
     uint2 transformSize;  // the padded, power-of-two grid this transform runs on
     uint  isVertical;     // 0 = transform rows (along X), 1 = transform columns (along Y)
     uint  isInverse;      // 0 = forward, 1 = inverse (conjugate twiddles + 1/N normalisation)
-    // 1 = multiply by the kernel's spectrum on the way out. Folded into the transform rather than
-    // given a pass of its own: the data is already in registers, and a separate pass would be a
-    // full round trip through memory for one complex multiply per texel.
-    uint  multiplyByKernel;
+    // 0 = one axis of the transform. 1 = the Hermitian spectral multiply (P8C-2), a standalone
+    // full-grid pass BETWEEN the forward and inverse transforms -- it can no longer ride the
+    // column transform, because a coloured kernel needs the spectrum at (-k), which belongs to a
+    // DIFFERENT column that this dispatch has not necessarily finished.
+    uint  mode;
     uint  fftPad0, fftPad1, fftPad2;
 };
 
@@ -92,6 +93,71 @@ void CSMain(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
     const uint half_ = length / 2u;
     const uint thread = groupThreadId.x;
     const uint line_ = groupId.x; // which row (or column) this group owns
+
+    // ---- mode 1: the Hermitian spectral multiply; mode 2: spectrum accumulate ----
+    //
+    // Uniform early path: EVERY thread of the group takes it (mode is a CB constant), so nobody
+    // misses the barriers of the transform loop below. One group per ROW, each thread owning the
+    // same two columns the transform shape gives it.
+    if (mode != 0u)
+    {
+        const uint width = transformSize.x;
+        const uint height = transformSize.y;
+        const uint halfW = width / 2u;
+        if (thread >= halfW) { return; }
+        const uint y = line_;
+        [unroll]
+        for (uint e = 0u; e < 2u; ++e)
+        {
+            const uint x = (e == 0u) ? thread : (thread + halfW);
+            const uint2 p = uint2(x, y);
+            // THE COLOURED-KERNEL MULTIPLY (P8C-2). The packing carries (R + iG) in .xy and
+            // (B + i0) in .zw. While R and G shared one REAL kernel the packed product was the
+            // packed convolution; a coloured kernel's R and G differ, so both spectra are
+            // unpacked at (k, -k) by Hermitian symmetry, multiplied per channel, and repacked:
+            //     Fr(k) = (Z(k) + Z*(-k)) / 2      Fg(k) = (Z(k) - Z*(-k)) / (2i)
+            //     Zout(k) = Fr*Kr + i * (Fg*Kg)
+            // -k is ((N-x)%N, (M-y)%M) -- the %N is what makes k = 0 and Nyquist their own
+            // mirrors, and it is the classic off-by-one if written as N-x alone. Verified against
+            // per-channel numpy convolution to float rounding (fft_verify_hermitian.py) BEFORE
+            // this was written, mirrored edge rows included.
+            //
+            // The B lane needs no unpack: B and its kernel lane are both real signals, so their
+            // packed spectra ARE the per-channel spectra and the direct product is exact.
+            const uint2 m = uint2((width - x) % width, (height - y) % height);
+
+            const float4 z = SrcSpectrum[p];
+            const float4 zm = SrcSpectrum[m];
+            const float4 w = KernelSpectrum[p];
+            const float4 wm = KernelSpectrum[m];
+
+            const float2 zc = float2(zm.x, -zm.y);   // Z*(-k), lane 1
+            const float2 wc = float2(wm.x, -wm.y);   // W*(-k), lane 1
+
+            const float2 fr = (z.xy + zc) * 0.5f;
+            const float2 fg = float2(z.y - zc.y, zc.x - z.x) * 0.5f;   // (Z - Z*(-k)) / (2i)
+            const float2 kr = (w.xy + wc) * 0.5f;
+            const float2 kg = float2(w.y - wc.y, wc.x - w.x) * 0.5f;
+
+            // ENERGY NORMALISATION, still free: the kernel spectrum's DC texel holds the
+            // per-channel sums -- (Sr, Sg) packed in .xy of lane 1, Sb in .z of lane 2. UE
+            // normalise per channel and then re-tint by the kernel's own colour balance
+            // (BloomFinalizeApplyConstants.usf), and the two steps collapse to dividing every
+            // channel by the LARGEST channel sum: brightness is bounded and the kernel's tint
+            // survives. Per-channel division instead would bleach the photograph's colour cast.
+            const float4 dc = KernelSpectrum[uint2(0u, 0u)];
+            const float invNorm = 1.0f / max(max(dc.x, max(dc.y, dc.z)), 1.0e-6f);
+
+            const float2 pr = ComplexMul(fr, kr);
+            const float2 pg = ComplexMul(fg, kg);
+
+            float4 outV;
+            outV.xy = float2(pr.x - pg.y, pr.y + pg.x);        // Fr*Kr + i*(Fg*Kg)
+            outV.zw = ComplexMul(z.zw, w.zw);
+            DstSpectrum[p] = outV * invNorm;
+        }
+        return;
+    }
 
     // Threads past the transform's own half-length have nothing to own. They must still reach every
     // barrier below, so they are not returned early -- they simply carry zeroes.
@@ -148,22 +214,6 @@ void CSMain(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
 
     const uint2 outA = (isVertical != 0u) ? uint2(line_, thread) : uint2(thread, line_);
     const uint2 outB = (isVertical != 0u) ? uint2(line_, thread + half_) : uint2(thread + half_, line_);
-
-    if (multiplyByKernel != 0u)
-    {
-        // ENERGY NORMALISATION, FOR FREE. The transform's DC term is by definition the SUM of the
-        // kernel, so dividing by it makes the convolution preserve total energy no matter what the
-        // kernel radius, blade count or falloff are set to. Without this, widening the aperture
-        // would brighten the whole bloom -- the failure the plan warns about, and the reason UE
-        // spend four shaders on an energy survey. Reading one texel per thread is a broadcast the
-        // hardware handles well.
-        const float kernelSum = max(KernelSpectrum[uint2(0u, 0u)].x, 1.0e-6f);
-        const float invSum = 1.0f / kernelSum;
-        const float4 ka = KernelSpectrum[outA] * invSum;
-        const float4 kb = KernelSpectrum[outB] * invSum;
-        a = float4(ComplexMul(a.xy, ka.xy), ComplexMul(a.zw, ka.zw));
-        b = float4(ComplexMul(b.xy, kb.xy), ComplexMul(b.zw, kb.zw));
-    }
 
     DstSpectrum[outA] = a * norm;
     DstSpectrum[outB] = b * norm;

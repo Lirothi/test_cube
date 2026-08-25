@@ -563,13 +563,59 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         // with it would emit a barrier the compile never registered.
         const auto fftMaterial = resources_.GetBloomFftMaterial();
         const auto convMaterial = resources_.GetBloomConvMaterial();
+        // P8C-2: the photographed kernel, loaded lazily HERE so the gate below can see the
+        // answer. Without it the convolution REFUSES to enable -- UE's own gate
+        // (IsFFTBloomPhysicalKernelReady) -- because there is no procedural kernel to fall
+        // back to any more.
+        if (frame.settings.bloom.method == 1u && !bloomKernelTried_)
+        {
+            bloomKernelTried_ = true;
+            renderer->WaitForPreviousFrame();
+            UploadBatch up;
+            if (up.Begin(renderer))
+            {
+                Texture2D::CreateDesc desc;
+                desc.path = L"textures/DefaultBloomKernel.dds";
+                desc.usage = Texture2D::Usage::LinearData;
+                bloomKernelReady_ =
+                    bloomKernelTex_.CreateFromFile(renderer, up.CommandList(), desc, up.KeepAlive());
+                up.SubmitAndWait(renderer);
+            }
+        }
+        // P8C-2 step 5a / P8C-2d: the ghost bokeh sprite, (re)baked when the blade count moves.
+        // The retire half runs unconditionally so a pending upload is always collected, even if
+        // the ghosts were switched off in the meantime; only the START is gated, because a bake
+        // for a sprite nothing samples is pure cost (it used to run on `method == 1` alone).
+        {
+            const std::uint64_t nowFrame = renderer->GetTotalFrameNumber();
+            if (flareBokehPending_ >= 0 && nowFrame >= flareBokehSafeFrame_)
+            {
+                flareBokehSlot_ = static_cast<std::uint32_t>(flareBokehPending_);
+                flareBokehPending_ = -1;
+                flareBokehUpload_.reset(); // intermediates + allocator, now provably consumed
+                flareBokehReady_ = true;
+                // The slot that just stopped being sampled needs its own ring before the next
+                // bake may overwrite it.
+                flareBokehSafeFrame_ = nowFrame + render::kFrameCount + 1u;
+            }
+            const bool ghostsWanted = frame.settings.bloom.convGhosts > 0u &&
+                                      frame.settings.bloom.convGhostIntensity > 0.0f;
+            if (frame.settings.bloom.method == 1u && ghostsWanted &&
+                flareBokehPending_ < 0 && flareBokehBlades_ != frame.settings.bloom.convBlades &&
+                nowFrame >= flareBokehSafeFrame_)
+            {
+                BakeFlareBokeh(renderer, frame.settings.bloom.convBlades);
+            }
+        }
         bloomConvolution_ = frame.settings.bloom.method == 1u &&
+                            bloomKernelReady_ &&
                             fftMaterial != nullptr && fftMaterial->GetPipelineState() != nullptr &&
                             convMaterial != nullptr && convMaterial->GetPipelineState() != nullptr &&
                             resources_.GetBloomFftCBSizeBytes() > 0u &&
                             resources_.GetBloomConvCBSizeBytes() > 0u &&
                             DB.bloomFftA.Get() != nullptr && DB.bloomFftB.Get() != nullptr &&
-                            DB.bloomFftKernel.Get() != nullptr;
+                            DB.bloomFftKernel.Get() != nullptr &&
+                            DB.lensFlare.Get() != nullptr;
         bloomActive_ = frame.settings.bloom.enabled &&
                        frame.settings.bloom.intensity > 0.0f &&
                        (bloomConvolution_ ||
@@ -1703,13 +1749,21 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 // bloomDown is written FIRST and read as an SRV by everything after it -- it is
                 // the ghosts' soft source -- so it is declared first and comes back readable at
                 // its own point, before the transforms have run.
+                // P8C-2b: everything writable up front -- the streak passes read/write the
+                // bloom chains' mips while bloomDown is still a UAV, before the scatter reads it.
                 p.Use(DTM.bloomDown.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                p.NextPoint();
-                p.Use(DTM.bloomDown.Get(), kNps);
+                p.Use(DTM.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 p.Use(DTM.bloomFftA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 p.Use(DTM.bloomFftB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 p.Use(DTM.bloomFftKernel.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                p.Use(DTM.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                p.NextPoint();
+                p.Use(DTM.bloomDown.Get(), kNps);
+                // P8C-2: the flare accumulation target -- rendered by the bokeh scatter, read
+                // back by the resolve's ghost composite. Declared unconditionally within the
+                // convolution branch (the body transitions it whether or not ghosts drew).
+                p.Use(DTM.lensFlare.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                p.NextPoint();
+                p.Use(DTM.lensFlare.Get(), kNps);
                 p.NextPoint();
                 p.Use(DTM.bloomUp.Get(), kNps); // the tonemap samples mip 0
                 p.Use(DTM.bloomFftA.Get(), kNps);
@@ -5180,24 +5234,20 @@ void SceneRenderer::Bloom_Build(Renderer* renderer, ID3D12GraphicsCommandList* c
     renderer->Transition(cl, D.bloomDown.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 }
 
-// The flare floor, used when the bloom threshold is switched off. Bloom without a threshold is
-// correct -- a lens scatters everything in front of it -- but a GHOST is an image of a source, and
-// with no floor at all the sky itself becomes one. In the units the viewer sees, like `threshold`.
-static constexpr float kGhostFallbackThreshold = 1.0f;
-// How much of the frame the ghosts' defocus covers. Converted to a mip below, so it holds at any
-// resolution.
 
 
-// P8C -- convolution bloom. Same slot in the frame as the pyramid, same output texture, and the
-// tonemap cannot tell which one ran: `intensity` scales either.
+
+// P8C / P8C-2 -- convolution bloom. Same slot in the frame as the pyramid, same output texture,
+// and the tonemap cannot tell which one ran: `intensity` scales either.
 //
-//   kernel (only when its parameters changed)   generate -> FFT rows -> FFT cols   -> cached
-//   frame                                       pack     -> FFT rows -> FFT cols * kernel
-//                                                        -> IFFT cols -> IFFT rows -> resolve
+//   kernel (only when its parameters changed)  resample EXR -> FFT -> [+ streak spectrum] -> cached
+//   frame                                      pack -> FFT rows -> FFT cols
+//                                                   -> HERMITIAN MULTIPLY (its own pass)
+//                                                   -> IFFT cols -> IFFT rows -> resolve
 //
-// The multiply rides the forward COLUMN transform rather than getting a pass of its own: the data
-// is already in registers there, and a separate pass would be a full round trip through memory for
-// one complex multiply per texel. That is also what UE do.
+// P8C-2 moved the multiply OUT of the column transform: a coloured kernel needs the spectrum at
+// (-k), which belongs to a different column that the folded dispatch had not necessarily written.
+// One extra full-grid pass per frame is the price of the rainbow kernel.
 //
 // NO EARLY RETURN once recording starts, for the reason Pass_Gtao documents: the gate was decided
 // before the graph was built and the Prepare declared from the same flag.
@@ -5213,60 +5263,69 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
 
     GPU_SCOPE(cl, ProfilerScopes::kPassBloomConv);
 
-    // ---- the ghosts' source, built BEFORE anything else and left shader-readable, because every
-    // convolution dispatch after this point binds it. `threshold < 0` means "no threshold", which
-    // is right for bloom -- a lens scatters ALL the light reaching it -- and wrong for flares,
-    // which come from SOURCES, so the chain keeps a floor of its own in that case.
-    //
-    // The TRANSITIONS are unconditional but the DISPATCHES are not. bloomDown is bound as an SRV
-    // on every convolution dispatch whether or not it was written this frame -- a descriptor table
-    // is positional and cannot have a hole -- so it has to be shader-readable regardless, and two
-    // transitions cost nothing. Building a chain nothing reads does not: measured at 0.11 ms.
-    renderer->Transition(cl, D.bloomDown.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    if (settings.convGhosts > 0u && settings.convGhostIntensity > 0.0f)
-    {
-        // ONE LEVEL, NOT A CHAIN. This is the thresholded downsampled scene UE hand their flare
-        // pass, and they read it at mip 0 -- the softness of a ghost comes from the sprite, not
-        // from a blurred source. The chain that used to be built here was mine, and it cost 0.116 ms
-        // to produce something a ghost should not have had in the first place.
-        Bloom_Downsample(renderer, cl, hdrSource,
-                         settings.threshold >= 0.0f ? settings.threshold : kGhostFallbackThreshold,
-                         1u);
-    }
-    renderer->Transition(cl, D.bloomDown.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    auto flareMaterial = resources_.GetLensFlareMaterial();
+    const bool ghosts = settings.convGhosts > 0u && settings.convGhostIntensity > 0.0f &&
+                        flareBokehReady_ && flareMaterial != nullptr &&
+                        flareMaterial->GetPipelineState() != nullptr &&
+                        resources_.GetLensFlareCBSizeBytes() > 0u;
 
+    // ---- the ghosts' source, built BEFORE anything else. `threshold < 0` means "no threshold",
+    // which is right for bloom -- a lens scatters ALL the light reaching it -- and wrong for
+    // flares, which come from SOURCES, so the chain keeps a floor of its own in that case.
+    //
+    // The TRANSITIONS are unconditional but the DISPATCHES are not: the Prepare declared these
+    // points from `bloomConvolution_` alone, so every declared point has to be emitted whether or
+    // not the ghosts are on this frame.
+    // P8C-2b: the anamorphic streak is a separable pass over the same downsampled source the
+    // ghosts use -- so the downsample runs when EITHER consumer is on.
+    const bool streak = settings.convAnamorphicIntensity > 0.0f && D.bloomMips >= 2u;
+    const uint2 streakGrid{ std::max(D.bloomWidth / 2u, 1u), std::max(D.bloomHeight / 2u, 1u) };
+
+    renderer->Transition(cl, D.bloomDown.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->Transition(cl, D.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (ghosts || streak)
+    {
+        // ONE LEVEL, NOT A CHAIN, and UNTHRESHOLDED: both consumers carry their own threshold
+        // now (the scatter's convGhostThreshold, the streak's convAnamorphicThreshold), and
+        // pre-thresholding the source CASCADED with them -- at bloom.threshold -1 the old 1.0
+        // floor cut the skybox sun to a remainder the streak's own gate then killed, while
+        // brighter water glints sailed through both. One threshold per consumer, in ONE set of
+        // units (the raw downsampled scene), is the only arrangement that tunes sanely.
+        Bloom_Downsample(renderer, cl, hdrSource, -1.0f, 1u);
+    }
     renderer->Transition(cl, D.bloomFftA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, D.bloomFftB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, D.bloomFftKernel.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    renderer->Transition(cl, D.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
 
     const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
     const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
         renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-    // The ghost sprite sheet, loaded once. A PNG is fine -- Texture2D decodes anything that is not
-    // already DDS -- so this carries no import step and no generated asset.
-    if (!flareAtlasTried_)
-    {
-        flareAtlasTried_ = true;
-        renderer->WaitForPreviousFrame();
-        UploadBatch up;
-        if (up.Begin(renderer))
-        {
-            Texture2D::CreateDesc desc;
-            desc.path = L"textures/lens_flares_ghosts_atlas.png";
-            desc.usage = Texture2D::Usage::AlbedoSRGB;
-            flareAtlasReady_ = flareAtlas_.CreateFromFile(renderer, up.CommandList(), desc, up.KeepAlive());
-            up.SubmitAndWait(renderer);
-        }
-    }
-
     ExposureMetering& metering = renderer->Exposure();
     const bool applyExposure = frame_->cameraExposure.enabled && metering.IsReady();
 
-    const uint2 grid{ D.bloomFftWidth, D.bloomFftHeight };
-    const uint2 image{ std::min(D.bloomFftImageWidth, D.bloomFftWidth),
-                       std::min(D.bloomFftImageHeight, D.bloomFftHeight) };
+    // ---- the ACTIVE grid, from bloom.convPercent (P8C-2 step 4) ----
+    //
+    // The textures are allocated for percent 50 (the ceiling); a lower percent runs the whole
+    // chain on a sub-grid of the same textures, so the transform cost actually shrinks -- the
+    // FFT's cost is the GRID's, not the image's. UE's r.Bloom.ScreenPercentage, same clamp shape.
+    const auto nextPow2 = [](UINT v) {
+        UINT p = 16u;
+        while (p < v && p < 2048u) { p <<= 1u; }
+        return p;
+    };
+    const float pct = std::clamp(settings.convPercent, 10.0f, 100.0f) * 0.01f;
+    UINT imageW = std::max(16u,
+        static_cast<UINT>(std::lround(static_cast<float>(renderer->GetWidth()) * pct)));
+    UINT imageH = std::max(16u,
+        static_cast<UINT>(std::lround(static_cast<float>(renderer->GetHeight()) * pct)));
+    UINT gridW = nextPow2((imageW * 5u) / 4u);
+    UINT gridH = nextPow2((imageH * 5u) / 4u);
+    if (gridW > D.bloomFftWidth) { gridW = D.bloomFftWidth; imageW = std::min(imageW, (gridW * 4u) / 5u); }
+    if (gridH > D.bloomFftHeight) { gridH = D.bloomFftHeight; imageH = std::min(imageH, (gridH * 4u) / 5u); }
+    const uint2 grid{ gridW, gridH };
+    const uint2 image{ imageW, imageH };
 
     BloomConvConstants conv{};
     conv.exposureEnabled = (applyExposure && !render::g_preExposureEnabled) ? 1u : 0u;  // P16.1
@@ -5274,77 +5333,75 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
     conv.imageSize = image;
     conv.threshold = std::max(settings.threshold, 0.0f);
     conv.softKnee = std::max(settings.softKnee, 1.0e-4f);
-    // Authored as a fraction of the grid so it means the same thing at any resolution.
-    conv.kernelRadius = std::max(0.001f, settings.convKernelRadius) * static_cast<float>(grid.x);
-    conv.blades = settings.convBlades;
-    conv.bladeRotation = settings.convBladeRotation;
-    conv.spokeStrength = std::clamp(settings.convSpokeStrength, 0.0f, 1.0f);
-    conv.spokeLength = std::clamp(settings.convSpokeLength, 0.0f, 1.0f);
-    conv.spokeWidth = std::max(0.0f, settings.convSpokeWidth);
-    conv.anamorphic = std::max(0.0f, settings.convAnamorphic);
+    // Kernel placement: the photograph's full width spans convSize x the image's major axis in
+    // grid texels (UE's KernelSupportScale rule), and the mip whose texel density matches that
+    // span stands in for UE's downsample-chain prefilter.
+    const float convSizeFrac = std::clamp(settings.convSize, 0.02f, 1.0f);
+    conv.kernelSpanTexels = convSizeFrac * static_cast<float>(std::max(image.x, image.y));
+    conv.kernelTexLod = std::max(0.0f,
+        std::log2(static_cast<float>(std::max(bloomKernelTex_.GetWidth(), 1u)) /
+                  std::max(conv.kernelSpanTexels, 1.0f)));
+    conv.kernelCenterUV[0] = 0.5f;
+    conv.kernelCenterUV[1] = 0.5f;
+    // P8C-2b streak parameters. Sizes authored in display pixels convert through the streak
+    // grid's own scale, so the band keeps its on-screen look at any resolution.
+    const float displayW = static_cast<float>(std::max(renderer->GetWidth(), 1u));
+    // The streak lands in the bloom target BEFORE the tonemap scales it by bloom.intensity, and
+    // AFTER the resolve's kConvolutionGain (8, mirrored from bloom_conv_cs.hlsl) -- so the knob
+    // is made ABSOLUTE by compensating both: the band's on-screen brightness follows this control
+    // alone, not the bloom mix. That is the "individual brightness" a streak needs -- at the
+    // level's bloom.intensity 0.1 an uncompensated streak was invisible at any sane setting.
+    conv.anamorphicIntensity = std::max(0.0f, settings.convAnamorphicIntensity) * 8.0f /
+                               std::max(settings.intensity, 0.01f);
     conv.anamorphicLength = std::max(0.0005f, settings.convAnamorphicLength);
-    conv.chroma = std::max(0.0f, settings.convChroma);
-    conv.ghostCount = std::min(settings.convGhosts, 6u);
-    conv.ghostSpacing = settings.convGhostSpacing;
+    // Composite sigma in bloom-mip0 texels (half display).
+    conv.anamorphicSigma = std::max(0.5f, settings.convAnamorphicWidth) *
+                           (static_cast<float>(D.bloomWidth) / displayW);
+    // P8C-2c: the ghost and streak thresholds are ABSOLUTE. "Is this pixel a light source" is a
+    // property of the SCENE, not of the camera -- but the buffers hold PRE-EXPOSED values, so a
+    // threshold compared against them directly drifted with adaptation: one value found the sun
+    // from a shaded grove (low EV, high stored) and missed the same sun over open water (high EV,
+    // low stored) -- reported twice. The authored number now means "stored brightness at EV100 =
+    // 14" (a reference that puts this scene's sun near 5 and its sky near 1, keeping the knobs
+    // in slider range) and is rescaled by the frame's actual pre-exposure, so the same sun crosses the same
+    // threshold from any viewpoint. With pre-exposure off the scene is raw (multiplier 1) and the
+    // same formula converts the authored value into raw units -- consistent both ways.
+    const float thresholdScale =
+        preExposure_ / render::ExposureMultiplierFromEv100(14.0f);
+    conv.anamorphicThreshold =
+        std::max(0.05f, settings.convAnamorphicThreshold) * thresholdScale;
+    // Erosion half-window in SOURCE (mip0) texels.
+    conv.anamorphicNarrow = std::max(0.0f, settings.convAnamorphicNarrow) *
+                            (static_cast<float>(D.bloomWidth) / displayW);
+    conv.anamorphicChroma = std::clamp(settings.convAnamorphicChroma, 0.0f, 1.0f);
+    conv.anamorphicTint[0] = std::max(0.0f, settings.convAnamorphicTint[0]);
+    conv.anamorphicTint[1] = std::max(0.0f, settings.convAnamorphicTint[1]);
+    conv.anamorphicTint[2] = std::max(0.0f, settings.convAnamorphicTint[2]);
+    // P8C-2e: `Length` is the band's VISIBLE EXTENT, not its 1/e. Authored as a 1/e it drew a
+    // band 3.4x longer than the number said, because a cascade's support is the SUM of its
+    // passes' reaches (7 taps each side x step): 0.1 asked for 10% of the screen and laid 34% of
+    // kernel on top of the source's own width -- which is what "the streak spreads across the
+    // width" was, measured at 41% with a corner sun. The exponential SHAPE is kept, with 1/e at
+    // a third of the extent, and the cascade below is built to reach that extent and stop.
+    const float streakExtentTexels =
+        std::max(conv.anamorphicLength * static_cast<float>(streakGrid.x), 4.0f);
+    conv.streakLambdaTexels = std::max(streakExtentTexels / 3.5f, 1.0f);
+    conv.ghostCount = ghosts ? std::min(settings.convGhosts, 8u) : 0u;
     conv.ghostIntensity = std::max(0.0f, settings.convGhostIntensity);
-    // THE DEFOCUS, EXPRESSED AS A MIP -- and DERIVED from the gather rather than guessed beside it.
-    // The gather must span `kGhostGatherTexels` of the source, so the source has to be
-    // `kGhostGatherTexels / kGhostGatherFraction` texels wide, and the mip is whatever gets the
-    // chain down to that width. Picking the two independently is what produced ghosts made of
-    // visible squares.
-    // UE author BokehSize as a PERCENT of viewport width and default it to 3; this is the same
-    // number as a fraction.
-    conv.ghostBokeh = std::max(0.0f, settings.convGhostBokeh) * 0.01f;
-
-    // WHERE THE CHAIN COMES FROM. A lens flare is thrown by one bright source, and for an outdoor
-    // scene that is the sun: project its direction to the screen and the ghosts can be DRAWN at
-    // computed positions instead of dredged out of the frame. Behind the camera there is no chain.
-    conv.sunOnScreen = 0.0f;
-    conv.sunUV[0] = 0.5f;
-    conv.sunUV[1] = 0.5f;
-    if (frame_->dirLight && frame_->camera)
-    {
-        // The authored direction is where the light TRAVELS -- ocean_surface_legacy.hlsli takes
-        // its negation for the same reason -- so the sun is the other way.
-        const Math::float3 toSun = -frame_->dirLight->GetDirection();
-        const Math::mat4& vp = frame_->camera->GetViewProjMatrix();
-        // A DIRECTION, not a position: w = 0 puts it at infinity, which is where the sun is. Done
-        // through the shared helper rather than by hand -- transcribing the row/column convention
-        // from memory produced a mirrored position, and the engine already owns this.
-        const Math::float4 clip = vp.Transform(Math::float4(toSun.x, toSun.y, toSun.z, 0.0f));
-        const float cx = clip.x, cy = clip.y, cw = clip.w;
-        if (cw > 1.0e-4f)
-        {
-            const float ndcX = cx / cw;
-            const float ndcY = cy / cw;
-            conv.sunUV[0] = ndcX * 0.5f + 0.5f;
-            conv.sunUV[1] = 0.5f - ndcY * 0.5f;
-            // The guard band is what lets a source just off the edge still throw a chain inwards,
-            // which is UE's reason for rendering the flare view at twice the area.
-            conv.sunOnScreen = (std::abs(ndcX) < 2.0f && std::abs(ndcY) < 2.0f) ? 1.0f : 0.0f;
-            // Logged once so the projection can be checked against where the sun actually lands in
-            // a capture, rather than inferred from whether ghosts appeared.
-        }
-    }
 
     // The convolution shader writes the grid (u0), the bloom target (u1) and reads the exposure
     // record (u2). The table is positional, so all three are bound on every stage even when a
-    // stage touches only one of them.
-    // `dstUav` overrides u1. Every stage but the PSF accumulate leaves it at the bloom target; the
-    // accumulate aims it at another grid instead, which needs no root-signature change because both
-    // are RWTexture2D<float4> and the table is built per dispatch.
+    // stage touches only one of them. `dstUav` overrides u1 -- the streak stage aims it at the
+    // KERNEL SPECTRUM to read the DC energy, everything else leaves it at the bloom target.
     const auto convDispatchTo = [&](const BloomConvConstants& c, D3D12_CPU_DESCRIPTOR_HANDLE gridUav,
                                     D3D12_CPU_DESCRIPTOR_HANDLE dstUav,
                                     UINT w, UINT h, ID3D12Resource* barrierRes) {
         RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
             [&](uint8_t* dest) { resources_.WriteBloomConvConstants(c, dest); },
-            // t1 is the DOWN chain, which only the resolve reads -- but a descriptor table is
-            // POSITIONAL, so it is bound on every stage rather than left as a hole.
-            // t2 is the ghost sprite sheet. The table is POSITIONAL, so it is bound on every
-            // stage even though only the resolve reads it; the depth SRV stands in when the sheet
-            // is missing so the slot is never a hole.
-            { hdrSource, D.bloomDownSRV,
-              flareAtlasReady_ ? flareAtlas_.GetSRVCPU() : D.depthSRV },
+            // t1 is the flare-blur image (only the resolve's ghost composite reads it) and t2 the
+            // kernel photograph (only the resample stage reads it) -- but a descriptor table is
+            // POSITIONAL, so both are bound on every stage rather than left as holes.
+            { hdrSource, D.lensFlareSRV, bloomKernelTex_.GetSRVCPU() },
             { gridUav, dstUav, metering.ExposureUav() },
             samplerTable, w, h, barrierRes);
     };
@@ -5354,6 +5411,7 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
     };
 
     // One thread per element PAIR, one group per scan line -- the shape bloom_fft_cs declares.
+    // The multiply and accumulate modes reuse the row shape: one group per ROW (isVertical = 0).
     const auto fftDispatch = [&](const BloomFftConstants& c,
                                  D3D12_CPU_DESCRIPTOR_HANDLE srcUav,
                                  D3D12_CPU_DESCRIPTOR_HANDLE kernelUav,
@@ -5374,61 +5432,141 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
             barrierRes);
     };
 
-    // ---- kernel: generate, then transform. Rebuilt only when its parameters move, because the
-    // spectrum is a pure function of them and two transforms per frame is the whole budget. ----
-    // EVERY shape parameter belongs in the key. The spectrum is cached, so one left out is a
-    // control that appears to do nothing until something else forces a rebuild.
-    const BloomKernelKey key{ grid.x, grid.y, conv.kernelRadius, conv.blades, conv.bladeRotation,
-                              conv.spokeStrength, conv.spokeLength, conv.spokeWidth,
-                              conv.anamorphic, conv.anamorphicLength,
-                              conv.chroma };
+    // ---- P8C-2b: the anamorphic streak, while bloomDown is still writable ----
+    if (streak)
+    {
+        BloomConvConstants a = conv;
+        a.convStage = 4u;
+        a.sourceSize = streakGrid;
+        a.imageSize = uint2{ D.bloomWidth, D.bloomHeight };
+        convDispatchTo(a, D.bloomDownMipUAV[0], D.bloomUpMipUAV[1],
+                       streakGrid.x, streakGrid.y, D.bloomUp.Get());
+
+        // Cascaded horizontal passes, steps from 1/5/25/125 streak texels -- but only the steps
+        // the AUTHORED length can support: a cascade stage whose step exceeds the exponential's
+        // 1/e length does not extend the tail, it REPLICATES the source at the tap spacing --
+        // observed as vertical bands marching away from the sun's corona at length 0.1. A step-1
+        // pass is appended when needed so the count stays EVEN and the result ends in bloomUp
+        // mip1, the only grid still writable when the composite runs after the resolve.
+        a.convStage = 5u;
+        a.imageSize = streakGrid;
+        // Each pass has 7 taps a side, so it reaches 7 x its step; a pass joins the cascade only
+        // while the TOTAL support still fits the authored extent. A step coarser than that does
+        // not lengthen the tail, it places bright COPIES of the source every step.
+        float steps[5];
+        int numSteps = 0;
+        float reach = 0.0f;
+        for (float st : { 1.0f, 5.0f, 25.0f, 125.0f })
+        {
+            const float next = reach + 7.0f * st;
+            if (next <= streakExtentTexels || numSteps == 0)
+            {
+                steps[numSteps++] = st;
+                reach = next;
+            }
+        }
+        if ((numSteps % 2) != 0) { steps[numSteps++] = 1.0f; }
+        for (int pass = 0; pass < numSteps; ++pass)
+        {
+            a.streakTapStep = steps[pass];
+            const bool fromUp = (pass % 2) == 0;
+            convDispatchTo(a,
+                fromUp ? D.bloomUpMipUAV[1] : D.bloomDownMipUAV[1],
+                fromUp ? D.bloomDownMipUAV[1] : D.bloomUpMipUAV[1],
+                streakGrid.x, streakGrid.y,
+                fromUp ? D.bloomDown.Get() : D.bloomUp.Get());
+        }
+    }
+
+    renderer->Transition(cl, D.bloomDown.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    // ---- P8C-2 step 5a: the bokeh scatter (UE's LensFlareBlur) ----
+    //
+    // A GRAPHICS pass in a chain of compute: one instanced quad per tile of the thresholded
+    // half-res scene, collapsed to zero size where the tile is dark, textured with the baked iris
+    // sprite, additively rasterized into the quarter-res flare target. The output is the actual
+    // defocused image of the actual bright sources -- which is why no sun position is plumbed
+    // anywhere and two suns give two ghost chains for free.
+    renderer->Transition(cl, D.lensFlare.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+    if (ghosts)
+    {
+        const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        cl->ClearRenderTargetView(D.lensFlareRTV, clearColor, 0, nullptr);
+        cl->OMSetRenderTargets(1, &D.lensFlareRTV, FALSE, nullptr);
+        D3D12_VIEWPORT vp{ 0.0f, 0.0f,
+                           static_cast<float>(D.lensFlareWidth),
+                           static_cast<float>(D.lensFlareHeight), 0.0f, 1.0f };
+        D3D12_RECT sc{ 0, 0, static_cast<LONG>(D.lensFlareWidth),
+                       static_cast<LONG>(D.lensFlareHeight) };
+        cl->RSSetViewports(1, &vp);
+        cl->RSSetScissorRects(1, &sc);
+
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& rc = h.ref();
+
+        LensFlareConstants fc{};
+        // The tile grid runs at the flare target's own (quarter-display) resolution; the source
+        // is the half-display bloomDown, so one tile covers 2x2 source texels. UE run 1px tiles
+        // on their half-res input; a quarter-res start is the plan's own cost advice.
+        fc.tileCount = uint2{ D.lensFlareWidth, D.lensFlareHeight };
+        fc.flareRTSize[0] = static_cast<float>(D.lensFlareWidth);
+        fc.flareRTSize[1] = static_cast<float>(D.lensFlareHeight);
+        fc.srcInvSize[0] = 1.0f / static_cast<float>(std::max(D.bloomWidth, 1u));
+        fc.srcInvSize[1] = 1.0f / static_cast<float>(std::max(D.bloomHeight, 1u));
+        fc.tileSizeTexels = 2.0f;
+        // UE's LensFlareBokehSize: a percent of the flare view's width.
+        fc.kernelSizePx = std::max(settings.convGhostBokeh, 0.05f) * 0.01f *
+                          static_cast<float>(D.lensFlareWidth);
+        // UE's LensFlareThreshold, verbatim mechanism: the VS collapses every tile below it. The
+        // bloom extraction's own threshold is NOT enough -- at bloom.threshold -1 the source is
+        // unthresholded and sunlit foliage splats bokehs, which the composite then mirrors into
+        // the sky as upside-down palms. This is also the pass's whole cost model: quads that
+        // collapse rasterize nothing.
+        // Absolute units, same EV14 reference as the streak threshold -- see that comment.
+        fc.threshold = std::max(settings.convGhostThreshold, 1.0e-4f) *
+                       (preExposure_ / render::ExposureMultiplierFromEv100(14.0f));
+        fc.kernelAreaInverse = 1.0f / std::max(1.0f, fc.kernelSizePx * fc.kernelSizePx);
+
+        auto cbAlloc = renderer->GetFrameResource()->AllocDynamic(
+            resources_.GetLensFlareCBSizeBytes(), render::kConstantBufferAlignment);
+        resources_.WriteLensFlareConstants(fc, static_cast<uint8_t*>(cbAlloc.cpu));
+        rc.cbv[0] = cbAlloc.gpu;
+        rc.srvTable[0] = renderer->StageSrvUavTable(
+            { D.bloomDownSRV, flareBokeh_[flareBokehSlot_].GetSRVCPU() }).gpu;
+        const auto flareSamplers = std::array{ *SamplerManager::LinearClamp() };
+        rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, flareSamplers);
+
+        flareMaterial->Bind(cl, rc);
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        cl->DrawInstanced(6, D.lensFlareWidth * D.lensFlareHeight, 0, 0);
+    }
+    renderer->Transition(cl, D.lensFlare.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+
+    // ---- kernel: resample the photograph, transform, add the streak's spectrum. Rebuilt only
+    // when its parameters move -- EVERY placement parameter is in the key, because the spectrum
+    // is cached and one left out is a control that appears to do nothing until something else
+    // forces a rebuild. ----
+    const BloomKernelKey key{ grid.x, grid.y, image.x, image.y, convSizeFrac };
     BloomKernelKey& slotKey = bloomKernelKeys_[renderer->GetCurrentFrameIndex() % render::kFrameCount];
     if (!(key == slotKey))
     {
-        // THE KERNEL IS THE DIFFRACTION PATTERN OF THE APERTURE, not a drawing of one.
-        // PSF = |FT{aperture}|^2 (Fraunhofer), so the iris is drawn and transformed, and the rays,
-        // their COUNT, their length and the dispersion all follow from the shape instead of being
-        // authored next to it. The invariant that says it is real: an N-sided aperture gives N rays
-        // for even N and 2N for odd, which no analytic sum of spokes obeys by accident.
         BloomConvConstants k = conv;
         BloomFftConstants f{};
         f.transformSize = grid;
 
-        // Dispersion is a WAVELENGTH RATIO, and it runs the opposite way to intuition: the pattern
-        // scales with lambda, so BLUE is the tighter one. 0.82 is roughly 450nm/550nm at full
-        // `chroma`. The old kernel widened blue instead, which is Rayleigh scattering -- a real
-        // effect, but not the one a diffraction pattern is made of.
-        const float blueScale = 1.0f - 0.18f * std::clamp(conv.chroma, 0.0f, 1.0f);
+        // The photograph into grid A, centre folded to the DC corner...
+        k.convStage = 3u;
+        convDispatch(k, D.bloomFftAUAV, grid.x, grid.y, D.bloomFftA.Get());
 
-        const auto buildLane = [&](float apertureScale, uint32_t lane,
-                                   D3D12_CPU_DESCRIPTOR_HANDLE scratchUav,
-                                   ID3D12Resource* scratchRes) {
-            k.convStage = 3u;
-            k.apertureScale = apertureScale;
-            k.psfLane = lane;
-            convDispatch(k, D.bloomFftAUAV, grid.x, grid.y, D.bloomFftA.Get());
-
-            f.isVertical = 0u;
-            fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, scratchUav, scratchRes);
-            f.isVertical = 1u;
-            fftDispatch(f, scratchUav, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA.Get());
-
-            k.convStage = 4u;
-            convDispatchTo(k, D.bloomFftAUAV, D.bloomFftBUAV, grid.x, grid.y, D.bloomFftB.Get());
-        };
-
-        // Lane 0 scratches through B -- which the vertical pass has just emptied back into A -- and
-        // lane 1 through the kernel grid, which holds nothing until the last two passes below.
-        buildLane(1.0f, 0u, D.bloomFftBUAV, D.bloomFftB.Get());
-        buildLane(blueScale, 1u, D.bloomFftKernelUAV, D.bloomFftKernel.Get());
-
-        // B now holds the packed PSF, real in both lanes. Transform it into the spectrum the
-        // multiply reads.
+        // ...and its spectrum into the kernel texture. The DC texel now holds the per-channel
+        // sums, which both the streak's amplitude and the multiply's normalisation read.
         f.isVertical = 0u;
-        fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA.Get());
+        fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB.Get());
         f.isVertical = 1u;
-        fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftKernelUAV,
+        fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftKernelUAV,
                     D.bloomFftKernel.Get());
+
         slotKey = key;
     }
 
@@ -5445,25 +5583,113 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
     f.isVertical = 0u;
     fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB.Get());
     f.isVertical = 1u;
-    f.multiplyByKernel = 1u;
     fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA.Get());
-    f.multiplyByKernel = 0u;
-    f.isInverse = 1u;
-    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB.Get());
+    // P8C-2: the Hermitian spectral multiply, on the COMPLETE forward spectrum.
+    f.mode = 1u;
     f.isVertical = 0u;
+    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB.Get());
+    f.mode = 0u;
+    f.isInverse = 1u;
+    f.isVertical = 1u;
     fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA.Get());
+    f.isVertical = 0u;
+    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB.Get());
 
     {
         BloomConvConstants r = conv;
         r.convStage = 2u;
         r.sourceSize = uint2{ D.bloomWidth, D.bloomHeight };
-        convDispatch(r, D.bloomFftAUAV, D.bloomWidth, D.bloomHeight, D.bloomUp.Get());
+        convDispatch(r, D.bloomFftBUAV, D.bloomWidth, D.bloomHeight, D.bloomUp.Get());
+    }
+
+    // ---- P8C-2b: streak composite, additive onto the freshly resolved mip 0 ----
+    if (streak)
+    {
+        BloomConvConstants a = conv;
+        a.convStage = 6u;
+        a.sourceSize = uint2{ D.bloomWidth, D.bloomHeight };
+        a.imageSize = streakGrid;
+        convDispatchTo(a, D.bloomUpMipUAV[1], D.bloomUpMipUAV[0],
+                       D.bloomWidth, D.bloomHeight, D.bloomUp.Get());
     }
 
     renderer->Transition(cl, D.bloomUp.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer->Transition(cl, D.bloomFftA.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer->Transition(cl, D.bloomFftB.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderer->Transition(cl, D.bloomFftKernel.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+}
+
+// P8C-2 step 5a: the ghost bokeh sprite -- the iris polygon with its bright rim, P8D's
+// ApertureMask moved to the CPU. UE author theirs as a texture asset; keeping it procedural is
+// what lets `blades` still mean something after the aperture kernel's retirement.
+//
+// P8C-2d: no GPU wait anywhere in here. The pixels are built on the CPU, the copy is enqueued
+// with UploadBatch::Submit (close + execute, no fence wait) into the slot the scatter is NOT
+// sampling, and the batch is held until the frame gate retires it -- which is what keeps the
+// intermediates and the command allocator alive for exactly as long as the GPU needs them.
+void SceneRenderer::BakeFlareBokeh(Renderer* renderer, uint32_t blades)
+{
+    // 256, not 64: at Ghost Size 3% a sprite is drawn 23-177 px, so a 64 px bake was MAGNIFIED
+    // up to 3x and its polygon edges arrived as mush -- half the reason the blade count could not
+    // be seen. Minification preserves a shape; magnification invents one.
+    constexpr int kSize = 256;
+    std::vector<uint8_t> pixels(static_cast<size_t>(kSize) * kSize * 4u);
+    const float step = 6.28318530718f / static_cast<float>(std::max(blades, 1u));
+    const float apothem =
+        (blades >= 3u) ? std::cos(3.14159265f / static_cast<float>(blades)) : 1.0f;
+    const auto smoothstepf = [](float e0, float e1, float v) {
+        const float t = std::clamp((v - e0) / (e1 - e0), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+    for (int y = 0; y < kSize; ++y)
+    {
+        for (int x = 0; x < kSize; ++x)
+        {
+            const float ox = (static_cast<float>(x) + 0.5f) / (kSize * 0.5f) - 1.0f;
+            const float oy = (static_cast<float>(y) + 0.5f) / (kSize * 0.5f) - 1.0f;
+            const float round = std::sqrt(ox * ox + oy * oy);
+            float d = round;
+            if (blades >= 3u)
+            {
+                // The convex polygon by its half-planes -- the worst edge distance.
+                float worst = -1.0e30f;
+                for (uint32_t i = 0; i < blades; ++i)
+                {
+                    const float a = step * static_cast<float>(i);
+                    worst = std::max(worst, (ox * std::cos(a) + oy * std::sin(a)) / apothem);
+                }
+                d = worst;
+            }
+            // A real ghost has a bright rim: the reflection is brightest where the cone of light
+            // grazes the blade edge. Same profile the drawn ghosts used.
+            // Tighter than the 64 px version's 0.85..1.0: that band was 18% of the radius, which
+            // rounded an octagon into a circle before it ever reached the screen. At 256 px this
+            // is still ~10 texels of antialiasing.
+            const float body = 1.0f - smoothstepf(0.94f, 1.0f, d);
+            const float rim = smoothstepf(0.80f, 0.96f, d) * (1.0f - smoothstepf(0.96f, 1.0f, d));
+            const float v = std::clamp(body * 0.75f + rim * 0.6f, 0.0f, 1.0f);
+            const uint8_t b = static_cast<uint8_t>(std::lround(v * 255.0f));
+            uint8_t* px = &pixels[(static_cast<size_t>(y) * kSize + x) * 4u];
+            px[0] = b; px[1] = b; px[2] = b; px[3] = 255u;
+        }
+    }
+
+    const std::uint32_t slot = 1u - flareBokehSlot_;
+    auto batch = std::make_unique<UploadBatch>();
+    if (!batch->Begin(renderer))
+    {
+        return;
+    }
+    flareBokeh_[slot].CreateFromRGBA8(renderer, batch->CommandList(), pixels.data(), kSize, kSize,
+                                      batch->KeepAlive(), L"FlareBokeh");
+    if (!batch->Submit(renderer))
+    {
+        return;
+    }
+    flareBokehUpload_ = std::move(batch);
+    flareBokehPending_ = static_cast<std::int32_t>(slot);
+    flareBokehSafeFrame_ = renderer->GetTotalFrameNumber() + render::kFrameCount + 1u;
+    flareBokehBlades_ = blades;
 }
 
 void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)

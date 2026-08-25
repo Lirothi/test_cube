@@ -108,6 +108,9 @@ public:
         GpuResource bloomFftA;
         GpuResource bloomFftB;
         GpuResource bloomFftKernel;
+        // P8C-2 step 5a: the lens-flare accumulation target. The bokeh scatter rasterizes into it
+        // additively; the convolution's resolve reads it back for the ghost composite.
+        GpuResource lensFlare;
         // The texture inspector's preview surface. ImGui can only tint an image by a value it
         // packs to 8 bits, so anything needing to BRIGHTEN a target has to happen before ImGui
         // sees it; the inspector resamples into this and ImGui draws it untinted.
@@ -171,6 +174,8 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE bloomFftKernelSRV{}, bloomFftKernelUAV{};
         UINT bloomFftWidth = 1, bloomFftHeight = 1;
         UINT bloomFftImageWidth = 1, bloomFftImageHeight = 1;
+        D3D12_CPU_DESCRIPTOR_HANDLE lensFlareRTV{}, lensFlareSRV{};
+        UINT lensFlareWidth = 1, lensFlareHeight = 1;
 
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
         UINT spotShadowRes = 512;
@@ -216,6 +221,8 @@ public:
         // makes the convolution linear instead of wrapping around the screen edge.
         UINT bloomFftWidth = 1, bloomFftHeight = 1;
         UINT bloomFftImageWidth = 1, bloomFftImageHeight = 1;
+        // P8C-2: the lens-flare accumulation target, a quarter of the display.
+        UINT lensFlareWidth = 1, lensFlareHeight = 1;
     };
 
     void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls);
@@ -238,7 +245,7 @@ private:
 #if WITH_EDITOR
         ObjectID,
 #endif
-        Light, Scene, GlassReflNormal, Count
+        Light, Scene, GlassReflNormal, LensFlare, Count
     };
     enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, ReflectionHistory, ReflectionHistoryUAV,
     // P6C hierarchical depth. One SRV over the whole chain plus one UAV PER MIP: the build writes
@@ -265,6 +272,8 @@ private:
     BloomUpMipUav4, BloomUpMipUav5, BloomUpMipUav6, BloomUpMipUav7,
     // P8C convolution grids.
     BloomFftA, BloomFftAUAV, BloomFftB, BloomFftBUAV, BloomFftKernel, BloomFftKernelUAV,
+    // P8C-2: the lens-flare accumulation image (SRV only; it is written as a render target).
+    LensFlareAccum,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

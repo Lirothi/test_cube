@@ -26,19 +26,31 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     s.radius = j.value("radius", s.radius);
     s.fireflyClamp = j.value("fireflyClamp", s.fireflyClamp);
     s.method = j.value("method", s.method);
+    // P8C-2: the aperture-kernel fields (convKernelRadius, the spoke set, convChroma, the
+    // convAnamorphic squeeze, convGhostSpacing) are GONE, not renamed -- a level that still
+    // carries them keeps rendering, the keys are simply ignored. P8C-2d retired
+    // `convBladeRotation` the same way, for being inert against the noise floor.
+    s.convSize = j.value("convSize", s.convSize);
+    s.convPercent = j.value("convPercent", s.convPercent);
     s.convBlades = j.value("convBlades", s.convBlades);
-    s.convBladeRotation = j.value("convBladeRotation", s.convBladeRotation);
-    s.convKernelRadius = j.value("convKernelRadius", s.convKernelRadius);
-    s.convSpokeStrength = j.value("convSpokeStrength", s.convSpokeStrength);
-    s.convSpokeLength = j.value("convSpokeLength", s.convSpokeLength);
-    s.convSpokeWidth = j.value("convSpokeWidth", s.convSpokeWidth);
-    s.convAnamorphic = j.value("convAnamorphic", s.convAnamorphic);
+    s.convAnamorphicIntensity = j.value("convAnamorphicIntensity", s.convAnamorphicIntensity);
     s.convAnamorphicLength = j.value("convAnamorphicLength", s.convAnamorphicLength);
-    s.convChroma = j.value("convChroma", s.convChroma);
+    s.convAnamorphicWidth = j.value("convAnamorphicWidth", s.convAnamorphicWidth);
+    s.convAnamorphicThreshold = j.value("convAnamorphicThreshold", s.convAnamorphicThreshold);
+    s.convAnamorphicNarrow = j.value("convAnamorphicNarrow", s.convAnamorphicNarrow);
+    s.convAnamorphicChroma = j.value("convAnamorphicChroma", s.convAnamorphicChroma);
+    if (j.contains("convAnamorphicTint") && j["convAnamorphicTint"].is_array() &&
+        j["convAnamorphicTint"].size() == 3)
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            s.convAnamorphicTint[i] = j["convAnamorphicTint"][i].get<float>();
+        }
+    }
     s.convGhosts = j.value("convGhosts", s.convGhosts);
-    s.convGhostSpacing = j.value("convGhostSpacing", s.convGhostSpacing);
     s.convGhostBokeh = j.value("convGhostBokeh", s.convGhostBokeh);
     s.convGhostIntensity = j.value("convGhostIntensity", s.convGhostIntensity);
+    s.convGhostThreshold = j.value("convGhostThreshold", s.convGhostThreshold);
 }
 
 inline nlohmann::json ToJson(const BloomSettings& s)
@@ -51,19 +63,21 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["radius"] = s.radius;
     j["fireflyClamp"] = s.fireflyClamp;
     j["method"] = s.method;
+    j["convSize"] = s.convSize;
+    j["convPercent"] = s.convPercent;
     j["convBlades"] = s.convBlades;
-    j["convBladeRotation"] = s.convBladeRotation;
-    j["convKernelRadius"] = s.convKernelRadius;
-    j["convSpokeStrength"] = s.convSpokeStrength;
-    j["convSpokeLength"] = s.convSpokeLength;
-    j["convSpokeWidth"] = s.convSpokeWidth;
-    j["convAnamorphic"] = s.convAnamorphic;
+    j["convAnamorphicIntensity"] = s.convAnamorphicIntensity;
     j["convAnamorphicLength"] = s.convAnamorphicLength;
-    j["convChroma"] = s.convChroma;
+    j["convAnamorphicWidth"] = s.convAnamorphicWidth;
+    j["convAnamorphicThreshold"] = s.convAnamorphicThreshold;
+    j["convAnamorphicNarrow"] = s.convAnamorphicNarrow;
+    j["convAnamorphicChroma"] = s.convAnamorphicChroma;
+    j["convAnamorphicTint"] = { s.convAnamorphicTint[0], s.convAnamorphicTint[1],
+                                s.convAnamorphicTint[2] };
     j["convGhosts"] = s.convGhosts;
-    j["convGhostSpacing"] = s.convGhostSpacing;
     j["convGhostBokeh"] = s.convGhostBokeh;
     j["convGhostIntensity"] = s.convGhostIntensity;
+    j["convGhostThreshold"] = s.convGhostThreshold;
     return j;
 }
 

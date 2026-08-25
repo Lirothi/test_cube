@@ -506,6 +506,32 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matBloomConvCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    // P8C-2 step 5a: the bokeh scatter. One quad per tile of the thresholded scene, additive into
+    // the flare accumulation target; the VS collapses dark tiles to zero-size quads. No vertex
+    // buffer -- SV_VertexID/SV_InstanceID only, like the debug blit.
+    if (!matLensFlare_)
+    {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/lens_flare.hlsl";
+        gd.vsEntry = "VSMain";
+        gd.psEntry = "PSMain";
+        gd.inputLayoutKey = "";
+        gd.numRT = 1;
+        gd.rtvFormats[0] = render::kBloomFormat;
+        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
+        gd.depth.DepthEnable = FALSE;
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        auto& rt = gd.blend.RenderTarget[0];
+        rt.BlendEnable = TRUE;
+        rt.SrcBlend = D3D12_BLEND_ONE;
+        rt.DestBlend = D3D12_BLEND_ONE;
+        rt.BlendOp = D3D12_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+        rt.DestBlendAlpha = D3D12_BLEND_ONE;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        matLensFlare_ = mm->GetOrCreateGraphics(renderer, gd);
+    }
+
     if (!matDebugPreviewCS_)
     {
         Material::ComputeDesc cd{};
@@ -682,6 +708,7 @@ void SceneResourceBootstrapper::RefreshHandles()
     bloomHandles_.Populate(matBloomCS_.get());
     bloomFftHandles_.Populate(matBloomFftCS_.get());
     bloomConvHandles_.Populate(matBloomConvCS_.get());
+    lensFlareHandles_.Populate(matLensFlare_.get());
     debugPreviewHandles_.Populate(matDebugPreviewCS_.get());
     ssrHandles_.Populate(matSSR_.get());
     blurHandles_.Populate(matBlur_.get());
@@ -904,7 +931,7 @@ void BloomFftHandles::Populate(Material* material)
     transformSize = material->ComputeCB0FieldHandle("transformSize");
     isVertical = material->ComputeCB0FieldHandle("isVertical");
     isInverse = material->ComputeCB0FieldHandle("isInverse");
-    multiplyByKernel = material->ComputeCB0FieldHandle("multiplyByKernel");
+    mode = material->ComputeCB0FieldHandle("mode");
 }
 
 UINT SceneResourceBootstrapper::GetBloomFftCBSizeBytes() const
@@ -922,23 +949,32 @@ void BloomConvHandles::Populate(Material* material)
     sourceSize = material->ComputeCB0FieldHandle("sourceSize");
     threshold = material->ComputeCB0FieldHandle("threshold");
     softKnee = material->ComputeCB0FieldHandle("softKnee");
-    kernelRadius = material->ComputeCB0FieldHandle("kernelRadius");
-    blades = material->ComputeCB0FieldHandle("blades");
-    bladeRotation = material->ComputeCB0FieldHandle("bladeRotation");
-    spokeStrength = material->ComputeCB0FieldHandle("spokeStrength");
-    spokeLength = material->ComputeCB0FieldHandle("spokeLength");
-    spokeWidth = material->ComputeCB0FieldHandle("spokeWidth");
-    anamorphic = material->ComputeCB0FieldHandle("anamorphic");
+    kernelSpanTexels = material->ComputeCB0FieldHandle("kernelSpanTexels");
+    kernelTexLod = material->ComputeCB0FieldHandle("kernelTexLod");
+    kernelCenterUV = material->ComputeCB0FieldHandle("kernelCenterUV");
+    anamorphicIntensity = material->ComputeCB0FieldHandle("anamorphicIntensity");
     anamorphicLength = material->ComputeCB0FieldHandle("anamorphicLength");
-    chroma = material->ComputeCB0FieldHandle("chroma");
+    anamorphicSigma = material->ComputeCB0FieldHandle("anamorphicSigma");
+    anamorphicThreshold = material->ComputeCB0FieldHandle("anamorphicThreshold");
+    anamorphicNarrow = material->ComputeCB0FieldHandle("anamorphicNarrow");
+    anamorphicChroma = material->ComputeCB0FieldHandle("anamorphicChroma");
+    anamorphicTint = material->ComputeCB0FieldHandle("anamorphicTint");
+    streakTapStep = material->ComputeCB0FieldHandle("streakTapStep");
+    streakLambdaTexels = material->ComputeCB0FieldHandle("streakLambdaTexels");
     ghostCount = material->ComputeCB0FieldHandle("ghostCount");
-    ghostSpacing = material->ComputeCB0FieldHandle("ghostSpacing");
     ghostIntensity = material->ComputeCB0FieldHandle("ghostIntensity");
-    ghostBokeh = material->ComputeCB0FieldHandle("ghostBokeh");
-    sunUV = material->ComputeCB0FieldHandle("sunUV");
-    sunOnScreen = material->ComputeCB0FieldHandle("sunOnScreen");
-    apertureScale = material->ComputeCB0FieldHandle("apertureScale");
-    psfLane = material->ComputeCB0FieldHandle("psfLane");
+}
+
+void LensFlareHandles::Populate(Material* material)
+{
+    if (!material) { return; }
+    tileCount = material->ComputeCB0FieldHandle("tileCount");
+    flareRTSize = material->ComputeCB0FieldHandle("flareRTSize");
+    srcInvSize = material->ComputeCB0FieldHandle("srcInvSize");
+    tileSizeTexels = material->ComputeCB0FieldHandle("tileSizeTexels");
+    kernelSizePx = material->ComputeCB0FieldHandle("kernelSizePx");
+    threshold = material->ComputeCB0FieldHandle("threshold");
+    kernelAreaInverse = material->ComputeCB0FieldHandle("kernelAreaInverse");
 }
 
 UINT SceneResourceBootstrapper::GetBloomConvCBSizeBytes() const
@@ -988,7 +1024,7 @@ void SceneResourceBootstrapper::WriteBloomFftConstants(const BloomFftConstants& 
     matBloomFftCS_->UpdateCBField(bloomFftHandles_.transformSize, d.transformSize, dest);
     matBloomFftCS_->UpdateCBField(bloomFftHandles_.isVertical, d.isVertical, dest);
     matBloomFftCS_->UpdateCBField(bloomFftHandles_.isInverse, d.isInverse, dest);
-    matBloomFftCS_->UpdateCBField(bloomFftHandles_.multiplyByKernel, d.multiplyByKernel, dest);
+    matBloomFftCS_->UpdateCBField(bloomFftHandles_.mode, d.mode, dest);
 }
 
 void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants& d, uint8_t* dest) const
@@ -1002,23 +1038,40 @@ void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants
     matBloomConvCS_->UpdateCBField(h.sourceSize, d.sourceSize, dest);
     matBloomConvCS_->UpdateCBField(h.threshold, d.threshold, dest);
     matBloomConvCS_->UpdateCBField(h.softKnee, d.softKnee, dest);
-    matBloomConvCS_->UpdateCBField(h.kernelRadius, d.kernelRadius, dest);
-    matBloomConvCS_->UpdateCBField(h.blades, d.blades, dest);
-    matBloomConvCS_->UpdateCBField(h.bladeRotation, d.bladeRotation, dest);
-    matBloomConvCS_->UpdateCBField(h.spokeStrength, d.spokeStrength, dest);
-    matBloomConvCS_->UpdateCBField(h.spokeLength, d.spokeLength, dest);
-    matBloomConvCS_->UpdateCBField(h.spokeWidth, d.spokeWidth, dest);
-    matBloomConvCS_->UpdateCBField(h.anamorphic, d.anamorphic, dest);
+    matBloomConvCS_->UpdateCBField(h.kernelSpanTexels, d.kernelSpanTexels, dest);
+    matBloomConvCS_->UpdateCBField(h.kernelTexLod, d.kernelTexLod, dest);
+    matBloomConvCS_->UpdateCBField(h.kernelCenterUV,
+        Math::float2(d.kernelCenterUV[0], d.kernelCenterUV[1]), dest);
+    matBloomConvCS_->UpdateCBField(h.anamorphicIntensity, d.anamorphicIntensity, dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicLength, d.anamorphicLength, dest);
-    matBloomConvCS_->UpdateCBField(h.chroma, d.chroma, dest);
+    matBloomConvCS_->UpdateCBField(h.anamorphicSigma, d.anamorphicSigma, dest);
+    matBloomConvCS_->UpdateCBField(h.anamorphicThreshold, d.anamorphicThreshold, dest);
+    matBloomConvCS_->UpdateCBField(h.anamorphicNarrow, d.anamorphicNarrow, dest);
+    matBloomConvCS_->UpdateCBField(h.anamorphicChroma, d.anamorphicChroma, dest);
+    matBloomConvCS_->UpdateCBField(h.anamorphicTint,
+        Math::float3(d.anamorphicTint[0], d.anamorphicTint[1], d.anamorphicTint[2]), dest);
+    matBloomConvCS_->UpdateCBField(h.streakTapStep, d.streakTapStep, dest);
+    matBloomConvCS_->UpdateCBField(h.streakLambdaTexels, d.streakLambdaTexels, dest);
     matBloomConvCS_->UpdateCBField(h.ghostCount, d.ghostCount, dest);
-    matBloomConvCS_->UpdateCBField(h.ghostSpacing, d.ghostSpacing, dest);
     matBloomConvCS_->UpdateCBField(h.ghostIntensity, d.ghostIntensity, dest);
-    matBloomConvCS_->UpdateCBField(h.ghostBokeh, d.ghostBokeh, dest);
-    matBloomConvCS_->UpdateCBField(h.sunUV, Math::float2(d.sunUV[0], d.sunUV[1]), dest);
-    matBloomConvCS_->UpdateCBField(h.sunOnScreen, d.sunOnScreen, dest);
-    matBloomConvCS_->UpdateCBField(h.apertureScale, d.apertureScale, dest);
-    matBloomConvCS_->UpdateCBField(h.psfLane, d.psfLane, dest);
+}
+
+UINT SceneResourceBootstrapper::GetLensFlareCBSizeBytes() const
+{
+    return matLensFlare_ ? matLensFlare_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void SceneResourceBootstrapper::WriteLensFlareConstants(const LensFlareConstants& d, uint8_t* dest) const
+{
+    if (!matLensFlare_ || !dest) { return; }
+    const auto& h = lensFlareHandles_;
+    matLensFlare_->UpdateCBField(h.tileCount, d.tileCount, dest);
+    matLensFlare_->UpdateCBField(h.flareRTSize, Math::float2(d.flareRTSize[0], d.flareRTSize[1]), dest);
+    matLensFlare_->UpdateCBField(h.srcInvSize, Math::float2(d.srcInvSize[0], d.srcInvSize[1]), dest);
+    matLensFlare_->UpdateCBField(h.tileSizeTexels, d.tileSizeTexels, dest);
+    matLensFlare_->UpdateCBField(h.kernelSizePx, d.kernelSizePx, dest);
+    matLensFlare_->UpdateCBField(h.threshold, d.threshold, dest);
+    matLensFlare_->UpdateCBField(h.kernelAreaInverse, d.kernelAreaInverse, dest);
 }
 
 void SceneResourceBootstrapper::WriteBloomConstants(const BloomPassConstants& d, uint8_t* dest) const

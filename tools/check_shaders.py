@@ -97,6 +97,9 @@ GRAPHICS_ENTRIES = [
     ("particles.hlsl", "vs_6_0", "VSMain", [], ""),
     ("particles.hlsl", "vs_6_0", "VSMain", ["PARTICLE_SORTED=1"], "sorted"),
     ("particles.hlsl", "ps_6_0", "PSMain", [], ""),
+    # P8C-2: the lens-flare bokeh scatter.
+    ("lens_flare.hlsl", "vs_6_0", "VSMain", [], ""),
+    ("lens_flare.hlsl", "ps_6_0", "PSMain", [], ""),
 ]
 
 

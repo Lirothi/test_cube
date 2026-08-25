@@ -3938,7 +3938,7 @@ floor measured on the SAME crop. Then the exposure is PINNED (`exposure.autoExpo
 | glass sphere crop, EV 3 | 0.18 | 0.527 | **0.517** |
 | glass sphere crop, EV -2 | 5.76 | 0.413 | **0.441** |
 
-### P8C-2 — The kernel becomes an IMAGE, and the ghosts become UE's — NOT STARTED (queued 2026-08-21)
+### P8C-2 — The kernel becomes an IMAGE, and the ghosts become UE's — DONE (2026-08-25), uncommitted
 
 **Depends on:** P8C (the FFT machinery it reuses unchanged) and P8D (whose aperture-PSF kernel it
 RETIRES, and whose end-to-end read of `PostProcessLensFlares.usf/.cpp` it executes). Do not start
@@ -4069,6 +4069,204 @@ image path, not the old procedural one, is live); and the P8C noise-floor discip
 reads via `RWTexture2D` or GBV id=1358 (P8C bug 3); Karis-vs-box at setup (P8C bug 4); and
 `textures/` is not under git — the EXR and anything derived from it must be backed up before import
 experiments.
+
+**OUTCOME (2026-08-25) — IMPLEMENTED, all six steps, verified headlessly.**
+
+* **Step 1.** The EXR decoded with ~60 lines of stdlib Python (zip scanline RGBA half; the
+  predictor+interleave is the only non-obvious part). Eyeballed as a PNG first: tight core (97.5%
+  of energy within r=2), smooth multi-ray star, wide coloured halo — the real thing. Shipped as
+  `textures/DefaultBloomKernel.dds`, FP16 with a FULL MIP CHAIN — the mips ARE the substitute for
+  UE's successive-downsample prefilter (`FBloomDownsampleKernelCS`): the resample stage picks
+  `log2(2048 / kernelSpanTexels)` as its LOD. EXR backed up to the session scratchpad first.
+* **Step 2.** Hermitian unpack proven in numpy to 2e-13 (per-texel with the shader's own
+  `(N-x)%N` mirror indexing, k=0/Nyquist included) BEFORE the shader was touched
+  (`fft_verify_hermitian.py`). One structural discovery: the multiply CANNOT stay folded into the
+  forward column pass — it needs Z(-k), which lives in a DIFFERENT column that the dispatch has
+  not necessarily written. It is now `mode 1` of bloom_fft_cs, a standalone full-grid pass between
+  forward and inverse; `mode 2` is the spectrum accumulate the streak uses. The B lane needs no
+  unpack at all (both signals real; the packed product is already exact).
+* **Normalisation.** UE's FinalizeApplyConstants math (per-channel divide by total energy, then
+  re-tint by `RefTotalEnergy/max3`) COLLAPSES to dividing every channel by the largest channel
+  sum. That is what the multiply does, reading the sums from the kernel spectrum's DC texel —
+  `(Sr,Sg)` packed in lane 1's DC, `Sb` in lane 2's. Per-channel division would have bleached the
+  photograph's tint.
+* **Step 3b.** The streak rides LINEARITY: drawn alone (stage 4), transformed, spectrum
+  ACCUMULATED onto the kernel's (mode 2). Its amplitude is calibrated against the kernel's DC
+  energy — read from the spectrum texture the previous dispatch just wrote, by aiming the stage's
+  u1 at it. At intensity 0 none of it runs: the cached spectrum is the stock kernel's, exactly.
+* **Step 4.** Grids allocated at percent-50 (2048x1024 for 2560x1440, ~100 MB at FP32 — the
+  FP16-halving question stays open); `bloom.convPercent` runs the whole chain on a SUB-GRID of
+  the same textures, so lowering it buys the transform back without target recreation.
+* **Step 5.** The scatter is a real graphics pass inside the compute chain (instanced quads,
+  SV_VertexID/SV_InstanceID, no vertex buffer, additive into a new quarter-res `lensFlare` RT);
+  the bokeh sprite is baked ON THE CPU from the blade controls (64x64 RGBA8, `BakeFlareBokeh`),
+  rebaked when they move. The composite folded into the conv resolve: 8 taps of the flare image at
+  `(uv-0.5)/scale_g + 0.5`, UE's tint/alpha ladder, double DiscMask, guard-band area payback.
+* **Step 6.** Deleted end-to-end (settings, JSON, CB, UI x2, --set keys, cache key, atlas file
+  retired to the scratchpad): convKernelRadius, the spoke trio, convChroma, the convAnamorphic
+  squeeze, convGhostSpacing, sunUV/sunOnScreen, FlareHash/kFlareShape, the atlas binding (t2 is
+  now the kernel photograph, t1 the flare image). `convSize` (UE default 1.0) and `convPercent`
+  added; anamorphic re-homed as `convAnamorphicIntensity`/`Length`; ghosts default OFF.
+
+**Verified (one binary, native + DLSS, wind-freeze):** Pass_BloomConv 0.463 ms median at
+2048x1024 (203-frame trace) — inside the plan's ~0.5 ms guess. The starburst around the sun is
+SMOOTH at native and under DLSS — difference imaging vs bloom-off shows continuous fine rays, no
+dashing (cause 1+2 closed). The streak reads as one clean horizontal band through the sun with the
+tint gradient visible; the ghost chain marches through the screen centre with UE's tints and
+mirrors once the sun is off-centre (near-centre it collapses onto the source by construction, as
+UE's does). Wrap test: the left-edge-sun frame shows monotone decay to the right, no re-entrant
+feature. GBV (Debug, `--gbv`, full path incl. the scatter): clean.
+
+**The energy invariant needed its own instrument.** On-screen means moved +3.3% (linearised) when
+the streak was dialled — but the display chain's tone curve is concave, and moving energy out of
+compressed/clipped highlights into dark sky RAISES the post-curve mean at constant input energy.
+The invariant was therefore verified in numpy with the exact shader math (real kernel, real streak
+formulas, max-channel DC divide): total luma energy ratio streak-0.5 / stock = **0.9874**, the
+residual being the deliberate tint shift (R -5.5%, B +3.9%). Pre-curve, the DC divide holds.
+
+**Found in passing, NOT a P8C-2 defect: the bloom threshold's units shifted under P16
+pre-exposure.** With `render.preExposure` on (the default since P16.2), `ExposureMultiplier()`
+in the extraction shaders returns 1 and `threshold` compares against PRE-EXPOSED values — and the
+level's `threshold 1.0` now sits above this frame's entire downsampled range, so BOTH bloom
+methods silently extract nothing at the level's own settings (measured: contribution == noise
+floor at threshold 1.0 and intensity 1.0; 2.34/255 at threshold 0.5; a 30/255 veil at -1). The
+threshold needs either re-authoring in the new units or a divide by the pre-exposure in the
+extraction — deferred to the user's tuning pass.
+
+**POST-REVIEW FIXES (same day, after the user's first look):**
+* **The kernel DDS is 512x512 + mips (2.8 MB), not 2048 (44 MB).** UE cap the imported kernel at
+  512 (`Maximum Texture Size 512`, FloatRGBA, 2 MB — read off the user's UE screenshot); at
+  convSize 1.0 the span (1280 texels) now BILINEARLY UPSCALES mip 0, exactly UE's read, instead of
+  trilinearly MINIFYING a 2048 texture at LOD 0.68 — which smeared the sub-texel rays and made the
+  star look fat. Energy preserved exactly (box reduce; sum checked).
+* **`convGhostThreshold` (UE's LensFlareThreshold), default 6.0.** The scatter VS had a 1e-4
+  collapse threshold and trusted the source's own extraction threshold — at `bloom.threshold -1`
+  (the level's setting) that source is UNthresholded, backlit palm crowns splatted bokehs, and the
+  composite mirrored upside-down foliage into the sky. Measured: 2.0 still passes sunlit crowns;
+  6.0 keeps the sun and the brightest glints. Also the pass's cost model: collapsed quads
+  rasterize nothing.
+* **`convAnamorphicWidth`** — the band's Gaussian sigma in DISPLAY pixels (default 3), converted
+  to grid texels at build so it survives convPercent; in the kernel cache key.
+* **Perf on the user's saved view (DLSS balanced): 0.60 ms at convPercent 50, 0.28 ms at 25.**
+  The percent ladder is power-of-two: 33 still lands in the 2048-wide grid (845*1.25 > 1024), so
+  the real steps at 1440p are 50 / ~32 / 25. FP16 grids remain the open halving.
+* **Why the sun shows a halo, not a star, and that is PHYSICS:** this HDRI's sun is a DISC with a
+  baked corona hundreds of pixels wide; convolution spreads every point of it and the rays
+  average into a smooth glow. The kernel's star appears on POINT sources (specular glints) and on
+  any sun whose disc is small. At `threshold -1` the sky's total energy additionally swamps the
+  sun's share under the DC normalisation — the P8C-era finding, unchanged.
+
+**P8C-2b (same day) — the anamorphic streak became its OWN separable pass.** A convolution can
+never make the band thinner than its source, and this scene's "source" is a sun disc plus a baked
+corona hundreds of pixels tall — so the streak left the FFT kernel entirely (kernel build is now
+resample+FFT only; FFT mode 2 deleted with it). New chain, all inside bloom_conv_cs on the bloom
+chains' spare mips (zero new allocations): stage 4 PREFILTER (bloomDown mip0 -> mip1-sized grid;
+its OWN threshold takes source cores, an optional vertical luminance EROSION — `Narrow`, display
+px — is the nonlinearity that actually narrows a wide source), stage 5 = four cascaded horizontal
+exponential blurs (steps 1/5/25/125, ping-pong bloomUp mip1 <-> bloomDown mip1; PER-CHANNEL 1/e
+lengths are the `Chroma` — blue runs ~45% farther), stage 6 COMPOSITE into the resolved mip 0
+(vertical Gaussian `Width` px, `Tint`, `Intensity`). Three lessons paid for: (1) the ghost/streak
+source downsample is now UNTHRESHOLDED — the old 1.0 fallback CASCADED with the consumers' own
+thresholds and killed the skybox sun while brighter glints sailed through (each consumer owns ONE
+threshold in ONE set of units); (2) the streak intensity is made ABSOLUTE by compensating
+kConvolutionGain and bloom.intensity — uncompensated it sat under x0.1 and was invisible at any
+sane setting; (3) thresholds live in ADAPTED viewer units, so one value reads differently between
+a bright seascape and a shaded grove (~1 stop apart on wind_test) — an adaptive threshold
+(fraction of the frame peak) is the recorded follow-up if tuning per scene annoys. Tuned set
+written into wind_test: intensity 1.5 / threshold 1.3 / narrow 60 / width 5 / chroma 0.75 /
+length 0.3. Barrier order changed (everything writable up front); GBV clean.
+
+**P8C-2c (next session-day) — three field bugs off the user's screenshots, each with a one-line
+mechanism:** (1) *"the streak explodes at the frame edge"* — the cascaded blur CLAMPED
+out-of-range taps to the border column, so an edge-riding sun was counted once per clamped tap;
+taps past the edge now contribute ZERO with their weight kept in the normalisation, and the band
+honestly fades. (2) *"a step-125 pass at authored length 0.1"* replicated the corona as marching
+vertical bands — a cascade stage whose step exceeds the exponential's 1/e length replicates
+instead of extending; steps are now FILTERED by lambda (with a step-1 pass appended to keep the
+ping-pong count even). (3) *"ghosts visible from shade, invisible over open water"* (the
+adaptation see-saw, reported three times) — the ghost and streak thresholds are now ABSOLUTE:
+authored as "stored brightness at EV100 = 14" and rescaled by the frame's pre-exposure, because
+being a light source is a property of the SCENE, not the camera. On wind_test the sun's core
+lands near 10-12 in these units, its corona near 4-6, bright clouds near 4, sky near 1 — the
+level ships ghostThreshold 10 (core only: one clean disc ghost, no cloud-copy ghosts, invariant
+across viewpoints, verified on both user views) and anamorphicThreshold 1.8. The scatter also
+box-averages its tile's full 2x2 source footprint (a single centre tap skipped half the texels
+and wind-swaying foliage made the ghost image crawl). The exposure pass that preceded all this:
+highPercentile 0.8 -> 0.95 (the metering could not SEE the top 20% of pixels — the whole
+overexposure complaint) + localHighlightContrast 0.7, clip on the grove view 1.59% -> 0.35%,
+no compensation used.
+
+**P8C-2d/e — the blade controls audited, the bake de-stalled, and two field bugs from a
+corner-parked sun.**
+
+* **`convBladeRotation` DELETED end-to-end** (settings, JSON, `--set`, both UIs, the level, the
+  bake signature and its cached member). Measured against a two-run noise floor of max 1/255 it
+  moved the frame by **max 4/255 in the most favourable configuration buildable** -- a triangular
+  bokeh at 8% of frame width turned 60 degrees. NOT a bug: the bake genuinely rotates the sprite
+  (replicated in numpy, the two textures differ by max 1.0), but a ghost is the SUPERPOSITION of
+  thousands of splats over an extended source, so it converges to (source) * (sprite) and the
+  orientation of a convex near-symmetric sprite washes out. It would only read on a source smaller
+  than one scatter tile. `convBlades` survives (3 vs 8 measures max 10/255) and moved from the
+  "Kernel" section to "Ghosts", where it belongs since P8C-2.
+* **The bake no longer stalls the GPU.** It used to call `WaitForPreviousFrame()` +
+  `SubmitAndWait()` from the frame gate, so dragging a blade control flushed the whole GPU once
+  per changed frame. The wait existed for one reason -- `CreateFromRGBA8` RELEASES the resource it
+  creates over, which the previous frame may still be sampling -- so the sprite is now DOUBLE
+  BUFFERED: the bake writes the slot that is not being sampled, `UploadBatch::Submit` enqueues
+  without a fence wait, and a `safeFrame` counter (total frame number + kFrameCount + 1) governs
+  both halves -- the pending slot is not sampled until the copy has had a full frame ring, and the
+  slot just retired from sampling is not overwritten until it has had the same. The bake is also
+  gated on ghosts actually being ON; it used to run on `method == 1` alone, i.e. for a sprite
+  nothing sampled.
+* **`Anamorphic Length` now means the band's VISIBLE EXTENT, not its 1/e** -- the whole of "the
+  streak spreads across the width with the sun in a corner". A cascade's support is the SUM of its
+  passes' reaches (7 taps a side x step), which is 3.4x its lambda, so an authored 0.1 laid 34% of
+  kernel on top of the source's own width: measured **41% of the screen** with a corner sun. Lambda
+  is now extent/3.5 and the cascade takes a pass only while its total support still fits the
+  extent. Measured after: **18%**, hugging the source. (Authoring 0.34 reproduces the old look
+  exactly, if the long band is ever wanted.) The first two suspects were WRONG and the measurement
+  said so: both step filters admitted the same set {1,5,25}, and the erosion's window never reached
+  the frame edge in that shot -- the edge-clamp fix is kept because it is right, not because it
+  fixed this.
+* **Ghosts fade toward the corners.** The scatter applied UE's single `DiscMask` to the
+  guard-band-shrunk source position, which still leaves 25% of the chain at a screen corner. It now
+  applies the DOUBLE disc UE use in their composite (`DiscMask(p) * DiscMask(p*0.8)`), decaying to
+  11% at a corner and to zero at the guard band's own limit: measured **61% of the previous chain
+  strength** with the sun in the corner, unchanged at frame centre.
+
+**P8C-2f -- three more field reports, and the one that was my own regression.**
+
+* **The horizontal CUT across the streak (my regression, P8C-2e).** Treating off-frame as dark in
+  the erosion's vertical window put a straight horizontal edge across the band wherever the window
+  first reached past the top of the screen -- the min collapses to zero on one side of a row and
+  not the other. REVERTED to the clamped read: assuming a source that leaves the frame continues
+  is the only honest assumption and it degrades smoothly. (The corner-fatness that change was
+  aimed at turned out to be the Length semantics anyway, fixed in P8C-2e.)
+* **Ghosts came out as crescents near the frame border.** Not clipping -- the flare source IS the
+  on-screen image, so a source on the border is a disc CUT BY THE FRAME and every ghost copied
+  that. Added a border fade on the source's TRUE screen position (full strength to 60% out, zero
+  at the border) on top of UE's own disc on the shrunk position. Masking the true position with
+  UE's disc INSTEAD was tried first and measured -82% at 63% out, which killed the chain outright
+  -- hence the flat-then-fall shape.
+* **"Inverted clouds" in the ghosts: the ghost reproduces the SOURCE's shape, not the sprite's,
+  whenever the source is bigger.** A ghost is source-convolved-with-sprite; at the level's
+  `convGhostBokeh 0.5%` the sprite was a fifth of the sun's corona, so the chain was mirrored
+  smears of the corona and of the water's glitter path. UE's default 3% makes the sprite dominate
+  and the chain reads as discs again -- the user found this himself, and the measurement agrees.
+  Level set to 3.0. **A soft knee was added to the scatter's threshold at the same time** (scale
+  by the excess above it rather than UE's binary pass/fail): it does NOT change the shape -- the
+  circled-region/whole-sky energy ratio held at 4.9-6.0 across every threshold, before and after,
+  which is what proved the shape story -- but it stops a chain popping into existence as a source
+  brightens. The knee wants a lower number than a binary gate: level threshold 10 -> 7.
+* **`convBlades` audited again on a sharpened sprite** (bake 64 -> 256 px, edge band 18% -> 6% of
+  the radius, because at Ghost Size 3% a 64 px sprite was magnified 3x into mush). Measured
+  against a 1/255 floor: 3 vs 8 blades = 8/255 (mean 6x the floor, up from 2x), 0 vs 8 = 2/255 --
+  an octagon is very nearly a circle. KEPT, unlike rotation, because it has a real regime (low
+  counts, and Ghost Size above the source's own size); both tooltips now state the measured
+  numbers and that regime.
+
+Gates: 47/47 shaders, both configs, Debug `--gbv` clean (the resource-lifetime change is exactly
+what GBV is for), three canonical views re-verified.
 | particle plume crop, EV -2 | 5.76 | 4.63 | **4.97** |
 | particle plume crop, EV 3 | 0.18 | 2.77 | **3.40** |
 | full frame, SSR + UE march, EV -2 | 5.76 | 3.146 | **3.156** |

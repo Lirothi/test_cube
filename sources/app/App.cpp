@@ -416,25 +416,47 @@ namespace
             scene.BloomRef().convBlades = static_cast<uint32_t>(std::max(0.0f, value));
             return true;
         }
-        if (setting == "bloom.bladeRotation") { scene.BloomRef().convBladeRotation = value; return true; }
-        if (setting == "bloom.kernelRadius") { scene.BloomRef().convKernelRadius = value; return true; }
-        if (setting == "bloom.spokes") { scene.BloomRef().convSpokeStrength = value; return true; }
-        if (setting == "bloom.spokeLength") { scene.BloomRef().convSpokeLength = value; return true; }
-        if (setting == "bloom.spokeWidth") { scene.BloomRef().convSpokeWidth = value; return true; }
-        if (setting == "bloom.anamorphic") { scene.BloomRef().convAnamorphic = value; return true; }
+        // P8C-2: the aperture-kernel keys (bloom.kernelRadius, spokes*, chroma, the anamorphic
+        // squeeze, ghostSpacing) are GONE with the mechanism -- deleted, not aliased.
+        if (setting == "bloom.convSize") { scene.BloomRef().convSize = value; return true; }
+        if (setting == "bloom.convPercent") { scene.BloomRef().convPercent = value; return true; }
+        if (setting == "bloom.anamorphicIntensity")
+        {
+            scene.BloomRef().convAnamorphicIntensity = value;
+            return true;
+        }
         if (setting == "bloom.anamorphicLength")
         {
             scene.BloomRef().convAnamorphicLength = value;
             return true;
         }
-        if (setting == "bloom.chroma") { scene.BloomRef().convChroma = value; return true; }
+        if (setting == "bloom.anamorphicWidth")
+        {
+            scene.BloomRef().convAnamorphicWidth = value;
+            return true;
+        }
+        if (setting == "bloom.anamorphicThreshold")
+        {
+            scene.BloomRef().convAnamorphicThreshold = value;
+            return true;
+        }
+        if (setting == "bloom.anamorphicNarrow")
+        {
+            scene.BloomRef().convAnamorphicNarrow = value;
+            return true;
+        }
+        if (setting == "bloom.anamorphicChroma")
+        {
+            scene.BloomRef().convAnamorphicChroma = value;
+            return true;
+        }
         if (setting == "bloom.ghosts")
         {
             scene.BloomRef().convGhosts = static_cast<uint32_t>(std::max(0.0f, value));
             return true;
         }
-        if (setting == "bloom.ghostSpacing") { scene.BloomRef().convGhostSpacing = value; return true; }
         if (setting == "bloom.ghostBokeh") { scene.BloomRef().convGhostBokeh = value; return true; }
+        if (setting == "bloom.ghostThreshold") { scene.BloomRef().convGhostThreshold = value; return true; }
         if (setting == "bloom.ghostIntensity")
         {
             scene.BloomRef().convGhostIntensity = value;

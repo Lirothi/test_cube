@@ -546,24 +546,30 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                             bloom.method = static_cast<std::uint32_t>(method < 0 ? 0 : method);
                         }
                     }
-                    DevHelp("Standard = the mip pyramid. Convolution = two Fourier transforms and a "
-                            "complex multiply against a generated aperture, which is where streaks "
-                            "and the starburst come from. Convolution runs on a quarter-resolution "
-                            "grid and costs more; the kernel's own transform is cached until its "
-                            "parameters change.");
+                    DevHelp("Standard = the mip pyramid. Convolution = two Fourier transforms and "
+                            "a complex multiply against UE's photographed kernel image, which is "
+                            "where the starburst and halo come from. It runs at Resolution % of "
+                            "the display (50 by default) and costs more; the kernel's own "
+                            "transform is cached until its parameters change.");
                     if (bloom.method == 1u)
                     {
-                        ImGui::SliderFloat("Kernel radius", &bloom.convKernelRadius, 0.0005f, 0.02f, "%.4f");
-                        DevHelp("Core radius as a fraction of the grid. Small is correct - the glare "
-                                "is the skirt. At 0.12 only 4% of the kernel's energy sits within 32 "
-                                "texels and the result is a flat wash.");
+                        ImGui::SliderFloat("Kernel size", &bloom.convSize, 0.02f, 1.0f, "%.2f");
+                        DevHelp("P8C-2: the photographed kernel's width as a fraction of the "
+                                "viewport - UE's BloomConvolutionSize, default 1.0. The star and "
+                                "halo come from the kernel IMAGE now; there are no shape "
+                                "parameters left to tune into agreement.");
+                        ImGui::SliderFloat("Resolution %", &bloom.convPercent, 10.0f, 50.0f, "%.0f");
+                        DevHelp("UE's r.Bloom.ScreenPercentage. 50 is the allocation ceiling; "
+                                "12.5 is the old quarter-res grid whose upscale dashed the rays.");
                         int blades = static_cast<int>(bloom.convBlades);
                         if (ImGui::SliderInt("Blades", &blades, 0, 12))
                         {
                             bloom.convBlades = static_cast<std::uint32_t>(blades < 0 ? 0 : blades);
                         }
-                        DevHelp("N blades give 2N rays, falling BETWEEN the blades.");
-                        ImGui::SliderFloat("Blade rotation", &bloom.convBladeRotation, -3.2f, 3.2f, "%.2f");
+                        DevHelp("Shapes the GHOST bokeh sprite only - the kernel is a photograph "
+                                "and carries its own star. Measured: 3 vs 8 blades = 8/255, round "
+                                "vs 8 = 2/255, so the low counts are where it reads - and only "
+                                "when Ghost Size is bigger than the source.");
                     }
                     ImGui::Checkbox("Firefly clamp", &bloom.fireflyClamp);
                     DevHelp("Karis average on the FIRST downsample: each tap weighted by "

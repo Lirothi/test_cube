@@ -225,40 +225,62 @@ struct BloomSettings
     // Pyramid stays the default: convolution is heavier and a scene with no bright highlights
     // cannot tell them apart.
     uint32_t method = 0u;
-    // Aperture blades. 0 = a round iris (halo only); N >= 3 gives 2N rays, which is what a real
-    // polygonal iris does -- the rays fall between the blades, not along them.
+    // P8C-2: the kernel is an IMAGE -- UE's photographed DefaultBloomKernel -- and these are its
+    // placement controls. The generated-aperture controls (kernelRadius, the spoke set, chroma,
+    // the anamorphic squeeze) died with the aperture: a 2-wavelength |FT{aperture}|^2 is
+    // physically dashed, and the photograph carries real full-spectrum dispersion instead.
+    //
+    // Kernel width as a fraction of the viewport's major axis -- UE's BloomConvolutionSize, same
+    // units and same default of 1.0 (the kernel's faintest tails reach the whole screen).
+    float convSize = 1.0f;
+    // Resolution of the convolution as a percent of the DISPLAY resolution -- UE's
+    // r.Bloom.ScreenPercentage (their default is 100; 50 is this engine's grid ceiling, and going
+    // below buys the transform cost back). The 640x360 grid the first P8C ran on is 12.5 here,
+    // and it is what made a 1-2 texel ray a dashed line of squares.
+    float convPercent = 50.0f;
+    // The iris. Only the GHOST BOKEH SPRITE is built from these now -- the sprite is baked at
+    // load from the blade controls, which is where they survived the aperture kernel's removal.
+    // P8C-2d: `convBladeRotation` was REMOVED, not hidden. Measured against a two-run noise floor
+    // (max 1/255) it moved the frame by max 4/255 in the most favourable configuration buildable
+    // -- a triangular bokeh at 8% of frame width turned by 60 degrees. Not a bug: the bake really
+    // does rotate the sprite (verified in numpy, the two textures differ by max 1.0), but a ghost
+    // is the SUPERPOSITION of thousands of splats over an extended source, so it converges to
+    // (source shape) convolved with (sprite) and the orientation of a convex near-symmetric
+    // sprite washes out. It would only read on a source smaller than one scatter tile.
     uint32_t convBlades = 6u;
-    float convBladeRotation = 0.0f;
-    // Kernel reach, as a FRACTION of the convolution grid's width. The transform is padded by this
-    // much, so raising it costs transform size, not just brightness.
-    // MEASURED, not guessed: at 0.12 the normalised kernel peaks at 1.4e-05 and only 4% of its
-    // energy sits within 32 texels of the centre, so the convolution spreads every highlight into a
-    // flat wash and no halo is visible at all. A bloom kernel has to be a SPIKE with a faint skirt --
-    // at 0.004/3.0 the spike carries 14% of the energy inside two texels and 65% inside eight,
-    // which is what reads as glare. See scratchpad/kernel_probe.py for the sweep.
-    float convKernelRadius = 0.004f;
-    // Falloff exponent of the kernel's skirt. A real lens's glare is a bright core plus a long
-    // power-law tail, and the tail is what is actually visible; lower = wider, hazier glare.
-    // The spokes -- what actually makes a star rather than a halo. An angular modulation of a
-    // radial profile cannot: a spoke is a SLOW falloff along a direction and a FAST one across it.
-    // Measured on-spoke vs 45-degrees-off at 30 texels: 1.0x radial-only, ~200x with these.
-    // The anamorphic bar: one long thin horizontal streak, blue by tradition and by `convChroma`.
-    // Ray shaping, all of it applied to the IRIS. 0 strength is a round hole and no star.
-    float convSpokeStrength = 1.0f;
-    float convSpokeLength = 1.0f;
-    float convSpokeWidth = 0.0f;
-    float convAnamorphic = 0.25f;
+    // P8C-2 step 3b: the anamorphic streak, COMPOSITED INTO the kernel at build time (the stock
+    // EXR is a spherical-lens kernel and carries none). Intensity is the FRACTION OF TOTAL KERNEL
+    // ENERGY the streak carries -- 0 is exactly the stock kernel, and the DC-divide keeps total
+    // bloom energy unchanged as it is dialled (it redistributes, never brightens). Length is the
+    // streak's 1/e extent as a fraction of the screen width.
+    float convAnamorphicIntensity = 0.0f;
     float convAnamorphicLength = 0.28f;
-    // How much wider the blue kernel is than red/green. The packing gives two independent complex
-    // lanes, so blue gets its own kernel for free; R and G cannot be separated from each other.
-    float convChroma = 0.6f;
-    // Lens ghosts. NOT part of the convolution -- a convolution is shift-invariant and a ghost is a
-    // reflection through the frame centre, so they are gathered in the resolve.
-    uint32_t convGhosts = 3u;
-    float convGhostSpacing = 0.45f;
+    // The band's final soft width in DISPLAY pixels (vertical Gaussian sigma at composite).
+    float convAnamorphicWidth = 3.0f;
+    // P8C-2b: the streak is its own separable pass with a NONLINEAR front end -- the only way a
+    // band can come out thinner than its source. Its own threshold takes source CORES and drops
+    // the corona; the erosion (display px, 0 = off) shrinks what remains vertically -- small
+    // glints below the window lose their streak, deliberately. Chroma spreads the per-channel
+    // 1/e lengths (blue runs farther, like real cylindrical-element coatings); tint is a plain
+    // colour on top. Intensity is a DIRECT brightness multiplier now, not an energy fraction.
+    float convAnamorphicThreshold = 1.5f; // absolute units too -- see convGhostThreshold
+    float convAnamorphicNarrow = 0.0f;
+    float convAnamorphicChroma = 0.5f;
+    float convAnamorphicTint[3] = { 1.0f, 1.0f, 1.0f };
+    // Lens ghosts, UE's mechanism (P8C-2 step 5): a bokeh SCATTER over the thresholded scene
+    // builds the defocused image of every bright source, and the composite lays N copies of it
+    // scaled about the screen centre. No sun position, no sprite atlas -- the sources' locations
+    // are in the image. Default OFF until the visual sign-off.
+    uint32_t convGhosts = 0u;
     // Sprite radius as a PERCENT of frame width -- UE's LensFlareBokehSize, default 3.
     float convGhostBokeh = 3.0f;
     float convGhostIntensity = 0.6f;
+    // The scatter's OWN threshold -- UE's LensFlareThreshold, in ABSOLUTE units: authored as
+    // stored brightness at EV100 = 14, rescaled by the frame's pre-exposure at dispatch (P8C-2c),
+    // so the same source crosses it from any viewpoint. Ghosts are images of SOURCES; too low and
+    // sunlit foliage or bright clouds become ones (both observed). On wind_test's scale (sky ~1,
+    // corona 4-6, sun core 10-12) the default takes the core only: one clean disc ghost.
+    float convGhostThreshold = 10.0f;
 };
 
 // P7 item 8. Deliberately NOT part of AtmosphereSettings: that struct is serialized into the level,

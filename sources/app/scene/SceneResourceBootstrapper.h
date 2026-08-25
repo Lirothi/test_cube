@@ -401,13 +401,14 @@ struct BloomFftConstants
     uint2 transformSize{ 1u, 1u };
     uint32_t isVertical = 0u;
     uint32_t isInverse = 0u;
-    uint32_t multiplyByKernel = 0u;
+    // 0 = transform, 1 = Hermitian spectral multiply, 2 = accumulate. See bloom_fft_cs.hlsl.
+    uint32_t mode = 0u;
     uint32_t pad0 = 0u, pad1 = 0u, pad2 = 0u;
 };
 
 struct BloomFftHandles
 {
-    Material::CBFieldHandle transformSize, isVertical, isInverse, multiplyByKernel;
+    Material::CBFieldHandle transformSize, isVertical, isInverse, mode;
     void Populate(Material* material);
 };
 
@@ -421,34 +422,51 @@ struct BloomConvConstants
     uint2 sourceSize{ 1u, 1u };
     float threshold = 1.0f;
     float softKnee = 0.5f;
-    float kernelRadius = 64.0f;
-    uint32_t blades = 6u;
-    float bladeRotation = 0.0f;
-    float spokeStrength = 1.0f;
-    float spokeLength = 1.0f;
-    float spokeWidth = 0.0f;
-    float anamorphic = 0.8f;
+    // P8C-2: the kernel is an image; these place it in the grid. See bloom_conv_cs.hlsl.
+    float kernelSpanTexels = 1024.0f;
+    float kernelTexLod = 0.0f;
+    float kernelCenterUV[2] = { 0.5f, 0.5f };
+    float anamorphicIntensity = 0.0f;
     float anamorphicLength = 0.28f;
-    float chroma = 0.6f;
-    uint32_t ghostCount = 3u;
-    float ghostSpacing = 0.45f;
-    float ghostIntensity = 0.25f;
-    float ghostBokeh = 0.03f;
-    float sunUV[2] = { 0.5f, 0.5f };
-    float sunOnScreen = 0.0f;
-    float apertureScale = 1.0f;
-    uint32_t psfLane = 0u;
+    float anamorphicSigma = 1.5f;
+    float anamorphicThreshold = 4.0f;
+    float anamorphicNarrow = 0.0f;
+    float anamorphicChroma = 0.5f;
+    float anamorphicTint[3] = { 1.0f, 1.0f, 1.0f };
+    float streakTapStep = 1.0f;
+    float streakLambdaTexels = 128.0f;
+    uint32_t ghostCount = 0u;
+    float ghostIntensity = 0.6f;
 };
 
 struct BloomConvHandles
 {
     Material::CBFieldHandle convStage, exposureEnabled, transformSize, imageSize, sourceSize;
-    Material::CBFieldHandle threshold, softKnee, kernelRadius, blades, bladeRotation;
-    Material::CBFieldHandle spokeStrength, spokeLength, spokeWidth;
-    Material::CBFieldHandle anamorphic, anamorphicLength, chroma;
-    Material::CBFieldHandle ghostCount, ghostSpacing, ghostIntensity, ghostBokeh;
-    Material::CBFieldHandle sunUV, sunOnScreen;
-    Material::CBFieldHandle apertureScale, psfLane;
+    Material::CBFieldHandle threshold, softKnee;
+    Material::CBFieldHandle kernelSpanTexels, kernelTexLod, kernelCenterUV;
+    Material::CBFieldHandle anamorphicIntensity, anamorphicLength, anamorphicSigma;
+    Material::CBFieldHandle anamorphicThreshold, anamorphicNarrow, anamorphicChroma;
+    Material::CBFieldHandle anamorphicTint, streakTapStep, streakLambdaTexels;
+    Material::CBFieldHandle ghostCount, ghostIntensity;
+    void Populate(Material* material);
+};
+
+// P8C-2 step 5a: the lens-flare bokeh scatter (lens_flare.hlsl), a tiny instanced graphics pass.
+struct LensFlareConstants
+{
+    uint2 tileCount{ 1u, 1u };
+    float flareRTSize[2] = { 1.0f, 1.0f };
+    float srcInvSize[2] = { 1.0f, 1.0f };
+    float tileSizeTexels = 2.0f;
+    float kernelSizePx = 16.0f;
+    float threshold = 1.0e-4f;
+    float kernelAreaInverse = 1.0f;
+};
+
+struct LensFlareHandles
+{
+    Material::CBFieldHandle tileCount, flareRTSize, srcInvSize, tileSizeTexels;
+    Material::CBFieldHandle kernelSizePx, threshold, kernelAreaInverse;
     void Populate(Material* material);
 };
 
@@ -722,6 +740,10 @@ public:
     void WriteBloomFftConstants(const BloomFftConstants& data, uint8_t* dest) const;
     UINT GetBloomConvCBSizeBytes() const;
     void WriteBloomConvConstants(const BloomConvConstants& data, uint8_t* dest) const;
+    // P8C-2 step 5a: the lens-flare bokeh scatter (graphics: instanced quads, additive).
+    std::shared_ptr<Material> GetLensFlareMaterial() const { return matLensFlare_; }
+    UINT GetLensFlareCBSizeBytes() const;
+    void WriteLensFlareConstants(const LensFlareConstants& data, uint8_t* dest) const;
     UINT GetSsrTemporalCBSizeBytes() const;
     void WriteSsrTemporalConstants(const SsrTemporalConstants& data, uint8_t* dest) const;
     UINT GetGtaoFilterCBSizeBytes() const;
@@ -817,6 +839,7 @@ private:
     std::shared_ptr<Material> matBloomCS_;
     std::shared_ptr<Material> matBloomFftCS_;
     std::shared_ptr<Material> matBloomConvCS_;
+    std::shared_ptr<Material> matLensFlare_;
     std::shared_ptr<Material> matDebugPreviewCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matOceanReflection_;
@@ -842,6 +865,7 @@ private:
     BloomHandles bloomHandles_{};
     BloomFftHandles bloomFftHandles_{};
     BloomConvHandles bloomConvHandles_{};
+    LensFlareHandles lensFlareHandles_{};
     SsrTemporalHandles ssrTemporalHandles_{};
     DebugPreviewHandles debugPreviewHandles_{};
     ScenePointLightCBHandles pointHandles_{};

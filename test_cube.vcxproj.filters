@@ -1246,6 +1246,9 @@
     <None Include="shaders\bloom_conv_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\lens_flare.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\debug_preview_cs.hlsl">
       <Filter>shaders</Filter>
     </None>

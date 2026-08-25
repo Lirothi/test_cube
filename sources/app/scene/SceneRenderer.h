@@ -14,6 +14,7 @@
 #include "core/task/TaskSystem.h"
 #include "app/scene/SceneFrameData.h"
 #include "materials/Texture2D.h"
+#include "rendering/core/UploadBatch.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneResourceBootstrapper.h"
 
@@ -143,6 +144,8 @@ private:
     // source its ghosts are gathered from. Assumes bloomDown is already UNORDERED_ACCESS.
     // `mipCount` 0 means the whole chain, which is what the pyramid needs; the convolution's ghost
     // source asks for only the levels it samples.
+    // P8C-2 step 5a: bake the ghost bokeh sprite from the blade count.
+    void BakeFlareBokeh(Renderer* r, uint32_t blades);
     void Bloom_Downsample(Renderer* r, ID3D12GraphicsCommandList* cl,
                           D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, float threshold, UINT mipCount);
     // P8C: the convolution alternative. Same slot, same output texture.
@@ -277,21 +280,18 @@ private:
     // declared resources and the emitted barriers cannot disagree.
     bool bloomConvolution_ = false;
     // The kernel's spectrum is a pure function of these, so it is only rebuilt when one moves.
+    // P8C-2: the shape controls died with the generated aperture; what remains is the kernel
+    // IMAGE's placement (size, active grid) and the streak composited into it.
     struct BloomKernelKey
     {
-        uint32_t width = 0u, height = 0u;
-        float radius = 0.0f;
-        uint32_t blades = 0u;
-        float rotation = 0.0f;
-        float spokeStrength = 0.0f, spokeLength = 0.0f, spokeWidth = 0.0f;
-        float anamorphic = 0.0f, anamorphicLength = 0.0f, chroma = 0.0f;
+        uint32_t width = 0u, height = 0u;          // the ACTIVE grid
+        uint32_t imageWidth = 0u, imageHeight = 0u; // the span depends on the image's major axis
+        float convSize = -1.0f;
         bool operator==(const BloomKernelKey& o) const
         {
-            return width == o.width && height == o.height && radius == o.radius &&
-                   blades == o.blades && rotation == o.rotation &&
-                   spokeStrength == o.spokeStrength && spokeLength == o.spokeLength &&
-                   spokeWidth == o.spokeWidth && anamorphic == o.anamorphic &&
-                   anamorphicLength == o.anamorphicLength && chroma == o.chroma;
+            return width == o.width && height == o.height &&
+                   imageWidth == o.imageWidth && imageHeight == o.imageHeight &&
+                   convSize == o.convSize;
         }
     };
     // ONE KEY PER FRAME SLOT, not one for the renderer. The kernel spectrum lives in
@@ -299,11 +299,32 @@ private:
     // and 2 convolved against an empty texture, i.e. two frames in three had no bloom at all. That
     // is what the first convolution captures actually showed.
     std::array<BloomKernelKey, render::kFrameCount> bloomKernelKeys_{};
-    // The authored ghost sprite sheet. Loaded once, lazily, the same way the editor's icon atlas
-    // is: a PNG loads directly (Texture2D decodes non-DDS), so this needs no import step.
-    Texture2D flareAtlas_;
-    bool flareAtlasReady_ = false;
-    bool flareAtlasTried_ = false;
+    // P8C-2: the photographed convolution kernel (UE's DefaultBloomKernel as an FP16 DDS with
+    // mips). Loaded once, lazily, at the frame-gate site -- WITHOUT it the convolution method
+    // refuses to enable (UE's own gate: IsFFTBloomEnabled is false with no kernel texture), rather
+    // than falling back to a procedural kernel that no longer exists.
+    Texture2D bloomKernelTex_;
+    bool bloomKernelReady_ = false;
+    bool bloomKernelTried_ = false;
+    // P8C-2 step 5a: the ghost BOKEH SPRITE -- the iris polygon the scatter splats. Baked on the
+    // CPU from the blade count (its new home after the aperture kernel's retirement) and rebaked
+    // when it moves.
+    //
+    // P8C-2d -- DOUBLE BUFFERED, AND THE UPLOAD DOES NOT WAIT. The first version called
+    // WaitForPreviousFrame() + SubmitAndWait() from the frame gate, so every change of the blade
+    // controls flushed the whole GPU -- once per frame while a slider was being dragged. The wait
+    // was there for one reason: CreateFromRGBA8 RELEASES the resource it creates over, and the
+    // previous frame may still be sampling it. Two slots remove that reason -- the bake writes the
+    // one that is not being sampled -- and `safeFrame` keeps both halves honest: the pending slot
+    // is not sampled until the copy has had a full frame ring to land, and the slot just retired
+    // from sampling is not overwritten until it has had the same.
+    Texture2D flareBokeh_[2];
+    std::unique_ptr<UploadBatch> flareBokehUpload_;
+    std::uint64_t flareBokehSafeFrame_ = 0;
+    std::uint32_t flareBokehSlot_ = 0;    // the slot the scatter samples
+    std::int32_t flareBokehPending_ = -1; // the slot being uploaded, -1 = idle
+    bool flareBokehReady_ = false;
+    std::uint32_t flareBokehBlades_ = 0xffffffffu;
     // SSR temporal resolve: whether it ran this frame (the blur's input depends on it) and whether
     // the previous frame left a history worth reading.
     bool ssrTemporalActive_ = false;

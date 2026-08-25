@@ -818,37 +818,52 @@ OceanRenderable* Scene::FindOceanRenderable()
 void Scene::Tick(float deltaTime) {
     CPU_SCOPE(ProfilerScopes::kSceneTick);
 
-    for (PointLight& light : lightManager_.PointLights())
     {
-        light.Tick(deltaTime);
+        CPU_SCOPE(ProfilerScopes::kSceneTickPointLights);
+        for (PointLight& light : lightManager_.PointLights())
+        {
+            light.Tick(deltaTime);
+        }
     }
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
-    size_t batchSize = 32;
-    TaskSystem::ParallelFor(objects_.size(),
-        [this, deltaTime](size_t index) {
-            if (index >= objects_.size()) {
-                return;
-            }
-            objects_[index]->Tick(deltaTime);
-        }, batchSize);
-
-    TaskSystem::ParallelFor(objects_.size(),
-        [this, deltaTime](size_t index) {
-            if (index >= objects_.size()) {
-                return;
-            }
-            objects_[index]->PostTick(deltaTime);
-        }, batchSize);
-#else
-    for (auto& obj : objects_)
+    const size_t batchSize = 64;
     {
-        obj->Tick(deltaTime);
+        CPU_SCOPE(ProfilerScopes::kSceneTickObjects);
+        TaskSystem::ParallelFor(objects_.size(),
+            [this, deltaTime](size_t index) {
+                if (index >= objects_.size()) {
+                    return;
+                }
+                objects_[index]->Tick(deltaTime);
+            }, batchSize);
     }
 
-    for (auto& obj : objects_)
     {
-        obj->PostTick(deltaTime);
+        CPU_SCOPE(ProfilerScopes::kSceneTickPostObjects);
+        TaskSystem::ParallelFor(objects_.size(),
+            [this, deltaTime](size_t index) {
+                if (index >= objects_.size()) {
+                    return;
+                }
+                objects_[index]->PostTick(deltaTime);
+            }, batchSize);
+    }
+#else
+    {
+        CPU_SCOPE(ProfilerScopes::kSceneTickObjects);
+        for (auto& obj : objects_)
+        {
+            obj->Tick(deltaTime);
+        }
+    }
+
+    {
+        CPU_SCOPE(ProfilerScopes::kSceneTickPostObjects);
+        for (auto& obj : objects_)
+        {
+            obj->PostTick(deltaTime);
+        }
     }
 #endif
 
@@ -856,6 +871,7 @@ void Scene::Tick(float deltaTime) {
     // and foliage sway stay phase-coherent. No ocean -> standalone monotonic accumulator (coherence
     // is moot). Runs after the object-Tick barrier above, so the ocean's clock is current.
     {
+        CPU_SCOPE(ProfilerScopes::kSceneTickWind);
         OceanRenderable* ocean = FindOceanRenderable();
         const float clock = ocean ? ocean->GetElapsedTime() : (windState_.time + deltaTime);
         windState_.Tick(clock);

@@ -52,6 +52,10 @@ extern const Profiler::ScopeNameKey kRendererTransition;
 
 // Scene
 extern const Profiler::ScopeNameKey kSceneTick;
+extern const Profiler::ScopeNameKey kSceneTickPointLights;
+extern const Profiler::ScopeNameKey kSceneTickObjects;
+extern const Profiler::ScopeNameKey kSceneTickPostObjects;
+extern const Profiler::ScopeNameKey kSceneTickWind;
 extern const Profiler::ScopeNameKey kSceneRender;
 extern const Profiler::ScopeNameKey kPassPrologueClear;
 extern const Profiler::ScopeNameKey kPassObjectCompute;
