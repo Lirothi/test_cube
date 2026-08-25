@@ -1090,6 +1090,30 @@ float3 Specular(const LightingInput li, const BrunetonInputs bi)
     return spec * li.mainLight.color;
 }
 
+// Horizon pull for the ENVIRONMENT reflection ray (skyParams.w; 1 = identity, the shipped default).
+//
+// A wave crest swings the reflected ray between "just above the horizon" (bright) and "high into the
+// zenith" (dark), and a clear-sky HDRI has a steep Rayleigh gradient between those two — so adjacent
+// facets sample very different radiance, and at grazing angles Fresnel is ~1, which passes that
+// contrast to the eye at full strength. It reads as hard dark streaks along the crests.
+//
+// The prefilter is supposed to soften exactly this, but IblClampToSharp (ibl_common.hlsli) bounds the
+// blurred sample by the SHARP one in the same direction — a one-sided guard against the sun smearing
+// through the lobe. Where the sharp direction lands in the dark zenith, the ceiling is "2x dark" and
+// the blur is undone precisely where it was needed, so the streaks stay pixel-crisp at any roughness.
+//
+// Compressing the ray's Y before the sky lookup keeps the reflection in the band near the horizon,
+// which is also where real water reflects from at these view angles. Sun glitter is unaffected while
+// the sun is low (this scene's is ~3 degrees) because the pull moves rays TOWARD it; a high sun would
+// have its specular handled by the direct term anyway. Only the ocean's env sample is touched --
+// the planar reflection, the land IBL and the sky itself are untouched.
+float3 OceanSkyReflectDir(float3 reflectDir)
+{
+    const float pull = (skyParams.w > 0.0f) ? skyParams.w : 1.0f;
+    if (pull >= 0.999f) { return reflectDir; }
+    return normalize(float3(reflectDir.x, reflectDir.y * pull, reflectDir.z));
+}
+
 float2 OceanReflectionUvOffset(const LightingInput li, float3 adjustedNormal)
 {
     float3 flatReflectDir = reflect(-li.viewDir, float3(0.0f, 1.0f, 0.0f));
@@ -1116,7 +1140,7 @@ float3 Reflection(const LightingInput li, float roughness)
 {
     float reflectionNormalStrength = heightFogParams.w;
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
-    float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
+    float3 reflectDir = OceanSkyReflectDir(reflect(-li.viewDir, adjustedNormal));
 
     // P5: see the modern variant. The `3` here was a fixed blur with no relation to roughness.
     float3 skySample;

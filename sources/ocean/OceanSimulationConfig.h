@@ -34,6 +34,14 @@ struct OceanRenderConfig
     float sssFadeDistance = 6.0f;
     float horizonFogDistanceScale = 2.5f;
     float reflectionNormalStrength = 0.05f;
+    // Horizon pull for the SKY reflection ray only (skyParams.w -> OceanSkyReflectDir). 1 = off,
+    // which is the shipped default so an existing level looks byte-identical; below 1 compresses
+    // the ray's Y so the water samples the band near the horizon instead of swinging into the
+    // zenith. It exists because a clear-sky HDRI's dark zenith, sampled across a wave's facets,
+    // reads as hard dark streaks along the crests — and IblClampToSharp's one-sided guard cancels
+    // the prefilter blur exactly there (full reasoning in ocean_surface_legacy.hlsli). ~0.4-0.6 is
+    // the useful range; the planar reflection and the land IBL are untouched.
+    float reflectionSkyHorizonPull = 1.0f;
     float cascadeFadeScale = 20.0f;
     float minMeshScale = 15.0f;
     float detailNormalMipBias = 0.0f;

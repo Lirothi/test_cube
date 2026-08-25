@@ -2001,6 +2001,16 @@ namespace
                     renderDrag("Roughness Scale", render.roughnessScale, 0.005f, 0.0f, 1.0f);
                     renderDrag("Roughness Distance", render.roughnessDistance, 1.0f, 1.0f, 5000.0f, "%.1f");
                     renderDrag("Reflection Normal Flattening", render.reflectionNormalStrength, 0.005f, 0.0f, 1.0f);
+                    renderDrag("Sky Reflection Horizon Pull", render.reflectionSkyHorizonPull, 0.005f, 0.05f, 1.0f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Compresses the SKY reflection ray toward the horizon (1 = off).\n"
+                                          "A clear-sky HDRI is much darker at the zenith, and a wave's facets\n"
+                                          "swing the reflected ray between horizon and zenith - at grazing angles\n"
+                                          "Fresnel passes that contrast through at full strength, so it reads as\n"
+                                          "hard dark streaks along the crests. Lower values keep the water in the\n"
+                                          "bright band near the horizon, which is also where real water reflects\n"
+                                          "from at these angles. ~0.4-0.6 is the useful range. Affects the ocean's\n"
+                                          "environment sample only: planar reflection, land IBL and sky untouched.");
                     renderDrag("Horizon Fog Strength", render.horizonFogStrength, 0.005f, 0.01f, 5.0f);
                     renderDrag("Horizon Fog Distance Scale", render.horizonFogDistanceScale, 0.01f, 0.0f, 20.0f);
                     renderDrag("Cascade Fade Scale", render.cascadeFadeScale, 0.1f, 0.0f, 1000.0f);

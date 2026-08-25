@@ -1653,7 +1653,9 @@ Math::float4 OceanRenderable::GetSkyParams() const
     }
     // z: P16.1 pre-exposure. The ocean writes into scene colour in the transparent pass, which runs
     // AFTER compose, so compose's own scaling never reaches it and it must apply the factor itself.
-    return Math::float4(intensity, specMips, render::g_preExposure, 0.0f);
+    // w: horizon pull for the sky reflection ray (1 = off) — see OceanSkyReflectDir in the shader.
+    return Math::float4(intensity, specMips, render::g_preExposure,
+                        GetRenderConfig().reflectionSkyHorizonPull);
 }
 
 Math::float4 OceanRenderable::GetSunColorExposure() const

@@ -1980,6 +1980,16 @@ float3 Specular(const LightingInput li, const BrunetonInputs bi, float roughness
     return spec * li.mainLight.color;
 }
 
+// Horizon pull for the ENVIRONMENT reflection ray. Same contract, same reasoning and the same
+// skyParams.w as the legacy surface — see the long note on OceanSkyReflectDir in
+// ocean_surface_legacy.hlsli. Both permutations must agree or the water changes look with a define.
+float3 OceanSkyReflectDir(float3 reflectDir)
+{
+    const float pull = (skyParams.w > 0.0f) ? skyParams.w : 1.0f;
+    if (pull >= 0.999f) { return reflectDir; }
+    return normalize(float3(reflectDir.x, reflectDir.y * pull, reflectDir.z));
+}
+
 float2 OceanReflectionUvOffset(const LightingInput li, float3 adjustedNormal)
 {
     float3 flatReflectDir = reflect(-li.viewDir, float3(0.0f, 1.0f, 0.0f));
@@ -2002,7 +2012,7 @@ float3 Reflection(const LightingInput li, float roughness)
 {
     float reflectionNormalStrength = saturate(heightFogParams.w);
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
-    float3 reflectDir = reflect(-li.viewDir, adjustedNormal);
+    float3 reflectDir = OceanSkyReflectDir(reflect(-li.viewDir, adjustedNormal));
 
     // P5: the prefiltered cube indexed by the shared mapping, so water and land broaden their
     // reflections identically. Without derivatives this falls back to the old guess.
