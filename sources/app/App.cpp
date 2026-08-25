@@ -440,11 +440,6 @@ namespace
             scene.BloomRef().convAnamorphicThreshold = value;
             return true;
         }
-        if (setting == "bloom.anamorphicNarrow")
-        {
-            scene.BloomRef().convAnamorphicNarrow = value;
-            return true;
-        }
         if (setting == "bloom.anamorphicChroma")
         {
             scene.BloomRef().convAnamorphicChroma = value;

@@ -4265,6 +4265,154 @@ corner-parked sun.**
   counts, and Ghost Size above the source's own size); both tooltips now state the measured
   numbers and that regime.
 
+**P8C-2h -- the streak rebuilt as an ANISOTROPIC PYRAMID, and the kernel's mips retired.**
+
+The user, who has shipped anamorphics before, pointed at the classic construction (threshold mask,
+ping-pong through non-proportional targets) and asked why ours had edge problems his never did.
+The answer, and it condemns two of my own decisions:
+
+* **A min-filter cannot taper at a border.** The erosion was the only NON-LINEAR stage in the
+  chain, and both edge artifacts came from it and nothing else: clamped it goes one-sided (the
+  band glued to the top edge), zeroed it collapses a whole row (the straight horizontal cut).
+  Every operator in the classic chain is an average, and an average degrades gracefully whichever
+  padding you pick.
+* **A cascade with a growing STEP at fixed resolution is not a pyramid.** A step coarser than the
+  falloff replicates the source at the tap spacing instead of extending it. The classic chain
+  keeps the step at ~1 texel and buys reach with RESOLUTION, which is why it never aliases.
+
+Rebuilt accordingly, verified against [KinoStreak](https://github.com/keijiro/KinoStreak)'s actual
+source (Unlicense): prefilter with keijiro's own soft knee `c *= max(0, br - t)/max(br, 1e-5)` ->
+horizontal-only downsample chain, 6 taps at +-1,+-3,+-5 x 1.25 source texels, WIDTH halves and
+height is untouched -> weighted upsample -> composite. Six levels from a quarter-display base;
+they live packed side by side in bloomDown mip1 with level 0 in bloomUp mip1, so the rebuild costs
+NO new allocation.
+
+* **`Length` is now honest by construction.** The level whose reach matches the authored extent is
+  picked by log2, and a tent across the two neighbouring levels realises a fractional one. Verified
+  in numpy against the exact tap pattern BEFORE the shader was written: asked 128/256/512/768 px
+  delivered 92/204/420/788, i.e. **0.72-1.03x**, against the 3.4x the cascade lied by. Floor is
+  level 0's own reach (~30 px), ceiling the coarsest level's (~800 px).
+* **Chroma became free.** The tent is shifted per channel -- blue a third of a level up, red a
+  fifth down -- so blue runs ~40% farther with no second blur. The weights were already per level.
+* **`convAnamorphicNarrow` DELETED end-to-end.** Narrowing is the threshold's job: measured on a
+  soft source, raising it took a 149-row corona to 77 rows, and in-engine 1.8 -> 4.0 took the band
+  from 730 rows to 160. Pointwise, so it has no border behaviour to get wrong.
+* **Two bugs caught by measurement during the rebuild, not by reading.** (1) The coarsest level
+  would have entered the sum UNWEIGHTED -- a silent brightness error growing with Length -- so the
+  up pass carries a separate source weight. (2) The x8/intensity compensation was calibrated for a
+  chain whose output was forty times dimmer than the source; the pyramid's up-chain is convex, so
+  the same constant put the streak at eight times the corona and flooded half the sky (contribution
+  mean 15.5 against the cascade's 1.25). `Intensity` now means "fraction of the source's own
+  brightness".
+
+**Kernel mips retired.** `textures/DefaultBloomKernel.dds` ships mip 0 only (2.1 MB, was 2.8),
+matching UE's asset; minification is box-filtered on demand in the resample stage, which is the
+same box UE build as a runtime chain (FBloomDownsampleKernelCS) and stores nothing. We deliberately
+do NOT copy UE's kernel CLAMP: theirs is safe only because they split the kernel into a centre term
+applied directly to scene colour and a scatter term through the convolution -- we carry the whole
+kernel through the convolution, so clamping the core would turn the bloom into haze. Verified inert
+at shipped settings: mipped vs mip-less renders match at **0.0435 meanabs, max 1/255** on a 0.04
+noise floor (at convSize >= 0.4 the kernel is magnified and the box is a single tap anyway).
+
+Level retuned for the new definitions: intensity 1.2, threshold 4.0, length 0.25.
+
+**P8C-2i -- the Length slider made fully live, and an honest answer to "thinner than the source".**
+
+* **Eight levels instead of six.** Six capped the delivered band at ~870 px measured, so the upper
+  half of the slider was inert; each level doubles the reach (25 px at level 0), so eight reach
+  ~3200 px. The packing budget still fits (320+160+80+40+20+10 = 630 of 640). Slider max raised
+  0.6 -> 1.0, and measured in-engine at 0.25/0.6/1.0 the band spans 1175/2182/2560 px -- longer
+  than the kernel alone because the SOURCE's own width is added to it, which no horizontal filter
+  can shorten.
+* **"Thinner than the source" does not exist in the classic method, and now there is a lever that
+  does not break.** A horizontal-only pyramid carries the source's vertical extent through
+  untouched -- that is the whole reason the erosion existed. Its replacement is a vertical
+  UNSHARP in the prefilter, `src - amount * blur_v(src)`: what is vertically peaked survives, what
+  is vertically flat cancels. It is a difference of two LINEAR operators, so a clamped read near a
+  frame edge only biases it, smoothly -- where the min-filter went one-sided (band glued to the
+  edge) or collapsed whole rows (straight horizontal cut).
+
+  **Measured, and the honest verdict is "modest":** on this scene's sun the band goes 210 -> 155
+  rows (26% thinner) at radius 384 px / amount 0.5, costing 4x peak brightness (35 -> 9,
+  recoverable with Intensity). Amount 0.8, or radius 128, kills the streak outright -- the radius
+  must be WIDER than the core to keep and narrower than the pedestal to remove, and at 128 px it
+  was narrower than the sun's own core, so the "local average" was the signal itself and the
+  unsharp merely dimmed everything. For comparison the THRESHOLD remains the stronger lever
+  (730 -> 160 rows measured, 4.5x) and the retired erosion was stronger still (3x) at the cost of
+  both edge bugs. Defaults to 0; the level ships with it off.
+
+**P8C-2j -- THE KERNEL WAS BEING APPLIED WITH ITS DELTA CORE, which is why bright points came out
+as blurry blobs instead of stars. The user asked me to check our kernel application against the
+original; it was wrong, and not in the resample -- in the COMPOSITE.**
+
+Measured on this kernel at 512: **98.18% of its energy sits within ONE texel of the centre.** That
+spike is a delta -- convolving with it reproduces the source image -- so our additive bloom was 98%
+a slightly blurred copy of the scene and 1.8% starburst, with the star sitting some fifty times
+below the copy. Blobs, exactly as reported.
+
+UE never see this because they SPLIT the kernel and we had not: `FBloomFinalizeApplyConstantsCS`
+computes a CENTRE fraction and a SCATTER fraction of the kernel's own energy;
+`SceneColorApplyParameters` scales SCENE COLOUR by the centre one (PostProcessTonemap.usf:
+`SceneColorTint = ColorScale0 * SceneColorApplyParamaters[0]`) and `FFTMulitplyParameters` scales
+the convolution by the scatter one. What their convolution contributes is scatter alone.
+
+Taken at the source, the way their `FBloomClampKernelCS` does: the resample now clamps the kernel
+to what it measures on a ring just outside the CENTRE ZONE, and the zone is UE's own definition --
+one output pixel's worth of kernel texels, floored at one (`ViewTexelDiameterInKernelTexels`). The
+ring is sampled in the shader (8 taps), so it stays asset-agnostic with no survey pass and no
+plumbed constant. The DC-divide then renormalises what remains, so the star returns at full
+strength.
+
+What we deliberately do NOT copy is their scene DIMMING. Their split conserves energy by taking
+the centre's share OUT of scene colour; our bloom is additive and the direct light is already in
+the image, so re-adding it is precisely the double-count being removed. The consequence is that
+`bloom.intensity` changes meaning: it is now the fraction of the scene's light the lens SCATTERS,
+which for a real lens is one or two percent, not the 0.1 that looked reasonable while 98% of the
+"bloom" was a copy of the image. Measured on the glint view, bloom contribution over the frame:
+17.8/255 at intensity 0.1, 12.9 at 0.05, 9.4 at 0.02.
+
+Verified: bright water glints now carry visible rays, and with a threshold the sun shows the
+kernel's starburst radiating from it. Level values NOT changed -- threshold and intensity are the
+user's own artistic settings and the honest move is to report the new meaning, not to retune them
+silently.
+
+**P8C-2k -- WHERE THE STAR ACTUALLY IS, AND THE ONE PIECE OF UE'S MATH WE STILL DO NOT HAVE.**
+
+Measured the kernel itself rather than guessing. Angular profile of the RAW 2048 EXR, 720 samples
+around a ring, per texel, no smoothing:
+
+| radius | max / ring mean | max / ring min | lobes |
+|---|---|---|---|
+| 16 | 2.1x | 4.9x | 6-7 |
+| 32 | 2.0x | 4.3x | 6 |
+| 64 | 1.6x | 2.4x | 6-7 |
+| 128 | 1.6x | 2.9x | 6-9 |
+
+**The six rays are there, but only twice the brightness of the gap beside them.** That is a mildly
+anisotropic halo; it reads as a star ONLY where the rays clip to white and the gaps do not, which
+is why one appears at high threshold plus high intensity and not otherwise. No pipeline change
+produces a starburst from this image. **CONFIRMED FROM UE'S OWN DOCS PAGE:** it shows the kernel
+twice, captioned "Kernel Image unaltered" and "Kernel Image adjusted for demonstration" -- the
+crisp star belongs to the ADJUSTED one. The measurement and the vendor's own caption agree: the
+shipped kernel is a soft halo, and the demo star is content, not math. (A `Star Contrast` knob raising the kernel's anisotropy
+to a power was built, measured and REVERTED at the user's instruction: he wants UE's math, not
+invented shaping.)
+
+**The real divergence, found by reading their normalisation** (`GPUFastFourierTransform.usf`,
+`GetKernelSum` plus the multiply after it): UE divide each channel by ITS OWN kernel DC sum, then
+`FBloomFinalizeApplyConstantsCS` re-tints by `Tint = TotalEnergy / max3(TotalEnergy)` and scales the
+convolution by `saturate(ScatterEnergy * dispersion / TotalEnergy)`. Those collapse to one
+per-channel scale of **dispersion / max3(ORIGINAL TOTAL energy)** -- centre plus scatter. We divide
+by the max channel of the CLAMPED (scatter-only) DC, about fifty times smaller, so our convolution
+arrives ~50x hotter and `bloom.intensity` absorbs it. Their other half is the scene DIMMING
+(`SceneColorApplyParameters`, the centre's fraction), which is what makes the pair energy-conserving.
+
+Reproducing it needs the kernel's centre and total energies as GPU reductions plus a constant
+threaded into the tonemap -- a real change, NOT started: it moves global brightness and still would
+not make a star.
+
+
+
 Gates: 47/47 shaders, both configs, Debug `--gbv` clean (the resource-lifetime change is exactly
 what GBV is for), three canonical views re-verified.
 | particle plume crop, EV -2 | 5.76 | 4.63 | **4.97** |

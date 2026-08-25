@@ -950,17 +950,19 @@ void BloomConvHandles::Populate(Material* material)
     threshold = material->ComputeCB0FieldHandle("threshold");
     softKnee = material->ComputeCB0FieldHandle("softKnee");
     kernelSpanTexels = material->ComputeCB0FieldHandle("kernelSpanTexels");
-    kernelTexLod = material->ComputeCB0FieldHandle("kernelTexLod");
+    kernelBoxTaps = material->ComputeCB0FieldHandle("kernelBoxTaps");
+    kernelBoxStep = material->ComputeCB0FieldHandle("kernelBoxStep");
+    kernelCoreRingUV = material->ComputeCB0FieldHandle("kernelCoreRingUV");
     kernelCenterUV = material->ComputeCB0FieldHandle("kernelCenterUV");
     anamorphicIntensity = material->ComputeCB0FieldHandle("anamorphicIntensity");
     anamorphicLength = material->ComputeCB0FieldHandle("anamorphicLength");
     anamorphicSigma = material->ComputeCB0FieldHandle("anamorphicSigma");
     anamorphicThreshold = material->ComputeCB0FieldHandle("anamorphicThreshold");
-    anamorphicNarrow = material->ComputeCB0FieldHandle("anamorphicNarrow");
     anamorphicChroma = material->ComputeCB0FieldHandle("anamorphicChroma");
     anamorphicTint = material->ComputeCB0FieldHandle("anamorphicTint");
-    streakTapStep = material->ComputeCB0FieldHandle("streakTapStep");
-    streakLambdaTexels = material->ComputeCB0FieldHandle("streakLambdaTexels");
+    streakWeight = material->ComputeCB0FieldHandle("streakWeight");
+    streakSrcWeight = material->ComputeCB0FieldHandle("streakSrcWeight");
+    streakOffsets = material->ComputeCB0FieldHandle("streakOffsets");
     ghostCount = material->ComputeCB0FieldHandle("ghostCount");
     ghostIntensity = material->ComputeCB0FieldHandle("ghostIntensity");
 }
@@ -1039,19 +1041,23 @@ void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants
     matBloomConvCS_->UpdateCBField(h.threshold, d.threshold, dest);
     matBloomConvCS_->UpdateCBField(h.softKnee, d.softKnee, dest);
     matBloomConvCS_->UpdateCBField(h.kernelSpanTexels, d.kernelSpanTexels, dest);
-    matBloomConvCS_->UpdateCBField(h.kernelTexLod, d.kernelTexLod, dest);
+    matBloomConvCS_->UpdateCBField(h.kernelBoxTaps, d.kernelBoxTaps, dest);
+    matBloomConvCS_->UpdateCBField(h.kernelBoxStep, d.kernelBoxStep, dest);
+    matBloomConvCS_->UpdateCBField(h.kernelCoreRingUV, d.kernelCoreRingUV, dest);
     matBloomConvCS_->UpdateCBField(h.kernelCenterUV,
         Math::float2(d.kernelCenterUV[0], d.kernelCenterUV[1]), dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicIntensity, d.anamorphicIntensity, dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicLength, d.anamorphicLength, dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicSigma, d.anamorphicSigma, dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicThreshold, d.anamorphicThreshold, dest);
-    matBloomConvCS_->UpdateCBField(h.anamorphicNarrow, d.anamorphicNarrow, dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicChroma, d.anamorphicChroma, dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicTint,
         Math::float3(d.anamorphicTint[0], d.anamorphicTint[1], d.anamorphicTint[2]), dest);
-    matBloomConvCS_->UpdateCBField(h.streakTapStep, d.streakTapStep, dest);
-    matBloomConvCS_->UpdateCBField(h.streakLambdaTexels, d.streakLambdaTexels, dest);
+    matBloomConvCS_->UpdateCBField(h.streakWeight,
+        Math::float3(d.streakWeight[0], d.streakWeight[1], d.streakWeight[2]), dest);
+    matBloomConvCS_->UpdateCBField(h.streakSrcWeight,
+        Math::float3(d.streakSrcWeight[0], d.streakSrcWeight[1], d.streakSrcWeight[2]), dest);
+    matBloomConvCS_->UpdateCBField(h.streakOffsets, d.streakOffsets, dest);
     matBloomConvCS_->UpdateCBField(h.ghostCount, d.ghostCount, dest);
     matBloomConvCS_->UpdateCBField(h.ghostIntensity, d.ghostIntensity, dest);
 }

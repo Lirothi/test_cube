@@ -257,14 +257,13 @@ struct BloomSettings
     float convAnamorphicLength = 0.28f;
     // The band's final soft width in DISPLAY pixels (vertical Gaussian sigma at composite).
     float convAnamorphicWidth = 3.0f;
-    // P8C-2b: the streak is its own separable pass with a NONLINEAR front end -- the only way a
-    // band can come out thinner than its source. Its own threshold takes source CORES and drops
-    // the corona; the erosion (display px, 0 = off) shrinks what remains vertically -- small
-    // glints below the window lose their streak, deliberately. Chroma spreads the per-channel
-    // 1/e lengths (blue runs farther, like real cylindrical-element coatings); tint is a plain
-    // colour on top. Intensity is a DIRECT brightness multiplier now, not an energy fraction.
+    // P8C-2h: the streak is an anisotropic PYRAMID (KinoStreak's structure) -- prefilter with a
+    // soft-knee threshold, horizontal-only downsample chain, weighted upsample. NARROWING IS THE
+    // THRESHOLD'S JOB: measured on a soft source, raising it took a 149-row corona to 77 rows,
+    // and being pointwise it has no window to hang off a frame edge. `convAnamorphicNarrow` (a
+    // vertical min-filter) was DELETED with the cascade -- a min cannot taper at a border, which
+    // is what put first a fat band and then a straight horizontal cut across the streak.
     float convAnamorphicThreshold = 1.5f; // absolute units too -- see convGhostThreshold
-    float convAnamorphicNarrow = 0.0f;
     float convAnamorphicChroma = 0.5f;
     float convAnamorphicTint[3] = { 1.0f, 1.0f, 1.0f };
     // Lens ghosts, UE's mechanism (P8C-2 step 5): a bokeh SCATTER over the thresholded scene

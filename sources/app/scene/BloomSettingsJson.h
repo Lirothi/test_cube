@@ -37,7 +37,6 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     s.convAnamorphicLength = j.value("convAnamorphicLength", s.convAnamorphicLength);
     s.convAnamorphicWidth = j.value("convAnamorphicWidth", s.convAnamorphicWidth);
     s.convAnamorphicThreshold = j.value("convAnamorphicThreshold", s.convAnamorphicThreshold);
-    s.convAnamorphicNarrow = j.value("convAnamorphicNarrow", s.convAnamorphicNarrow);
     s.convAnamorphicChroma = j.value("convAnamorphicChroma", s.convAnamorphicChroma);
     if (j.contains("convAnamorphicTint") && j["convAnamorphicTint"].is_array() &&
         j["convAnamorphicTint"].size() == 3)
@@ -70,7 +69,6 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["convAnamorphicLength"] = s.convAnamorphicLength;
     j["convAnamorphicWidth"] = s.convAnamorphicWidth;
     j["convAnamorphicThreshold"] = s.convAnamorphicThreshold;
-    j["convAnamorphicNarrow"] = s.convAnamorphicNarrow;
     j["convAnamorphicChroma"] = s.convAnamorphicChroma;
     j["convAnamorphicTint"] = { s.convAnamorphicTint[0], s.convAnamorphicTint[1],
                                 s.convAnamorphicTint[2] };

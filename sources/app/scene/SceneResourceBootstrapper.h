@@ -424,17 +424,19 @@ struct BloomConvConstants
     float softKnee = 0.5f;
     // P8C-2: the kernel is an image; these place it in the grid. See bloom_conv_cs.hlsl.
     float kernelSpanTexels = 1024.0f;
-    float kernelTexLod = 0.0f;
+    uint32_t kernelBoxTaps = 1u;
+    float kernelBoxStep = 0.0f;
+    float kernelCoreRingUV = 0.0f;
     float kernelCenterUV[2] = { 0.5f, 0.5f };
     float anamorphicIntensity = 0.0f;
     float anamorphicLength = 0.28f;
     float anamorphicSigma = 1.5f;
     float anamorphicThreshold = 4.0f;
-    float anamorphicNarrow = 0.0f;
     float anamorphicChroma = 0.5f;
     float anamorphicTint[3] = { 1.0f, 1.0f, 1.0f };
-    float streakTapStep = 1.0f;
-    float streakLambdaTexels = 128.0f;
+    float streakWeight[3] = { 0.0f, 0.0f, 0.0f };
+    float streakSrcWeight[3] = { 1.0f, 1.0f, 1.0f };
+    uint2 streakOffsets{ 0u, 0u };
     uint32_t ghostCount = 0u;
     float ghostIntensity = 0.6f;
 };
@@ -443,10 +445,11 @@ struct BloomConvHandles
 {
     Material::CBFieldHandle convStage, exposureEnabled, transformSize, imageSize, sourceSize;
     Material::CBFieldHandle threshold, softKnee;
-    Material::CBFieldHandle kernelSpanTexels, kernelTexLod, kernelCenterUV;
+    Material::CBFieldHandle kernelSpanTexels, kernelBoxTaps, kernelBoxStep;
+    Material::CBFieldHandle kernelCoreRingUV, kernelCenterUV;
     Material::CBFieldHandle anamorphicIntensity, anamorphicLength, anamorphicSigma;
-    Material::CBFieldHandle anamorphicThreshold, anamorphicNarrow, anamorphicChroma;
-    Material::CBFieldHandle anamorphicTint, streakTapStep, streakLambdaTexels;
+    Material::CBFieldHandle anamorphicThreshold, anamorphicChroma;
+    Material::CBFieldHandle anamorphicTint, streakWeight, streakSrcWeight, streakOffsets;
     Material::CBFieldHandle ghostCount, ghostIntensity;
     void Populate(Material* material);
 };

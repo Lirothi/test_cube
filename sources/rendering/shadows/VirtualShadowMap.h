@@ -179,7 +179,7 @@ namespace vsm
     // cover -- the per-tap receiver-plane bias plus the normal offset carry everything, which is
     // UE's configuration (they run no constant either). Verified at the 2.8-degree-sun banding
     // camera and the palm-contact camera; raise only if a new scene shows residual acne.
-    inline float         g_clipmapDepthBias = 0.0001f;
+    inline float         g_clipmapDepthBias = 0.0002f;
     // Per-level shaping of the constant bias: bias(L) = max(g_clipmapDepthBias * decay^L, floor).
     // decay 1 = constant-in-texels (world size doubles per level -- raising the base then detaches
     // thin far shadows); 0.5 = a constant WORLD-size bias (the near value everywhere). The floor is

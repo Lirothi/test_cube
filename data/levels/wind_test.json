@@ -12389,7 +12389,7 @@
       "name": "staticMesh #28 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
         -52.617095947265625,
-        2.534748077392578,
+        1.1363705396652222,
         36.796363830566406
       ],
       "rotationDeg": [
@@ -12411,7 +12411,7 @@
       "name": "staticMesh #26 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
         -51.218910217285156,
-        2.5164623260498047,
+        1.335471749305725,
         40.90861129760742
       ],
       "rotationDeg": [
@@ -13645,6 +13645,35 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 722,
+      "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
+      "metalRough": [
+        0.0,
+        0.20000000298023224
+      ],
+      "name": "staticMesh #722",
+      "normalStrength": 0.0,
+      "position": [
+        -51.774444580078125,
+        1.7864035367965698,
+        64.0921401977539
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh",
+      "useMR": false
     }
   ],
   "ocean": {
@@ -13793,7 +13822,7 @@
       "shoreWetnessReflectionStrength": 0.3499999940395355,
       "shoreWetnessWetTime": 0.75,
       "skyScatterStrength": 0.3499999940395355,
-      "specularStrength": 1.0,
+      "specularStrength": 3.0,
       "sssColor": [
         0.13333334028720856,
         0.9411764740943909,
@@ -13852,13 +13881,13 @@
     "bloom": {
       "convAnamorphic": 0.30000001192092896,
       "convAnamorphicChroma": 1.0,
-      "convAnamorphicIntensity": 0.5,
-      "convAnamorphicLength": 0.3400000035762787,
-      "convAnamorphicNarrow": 150.0,
-      "convAnamorphicThreshold": 2.0,
+      "convAnamorphicIntensity": 2.0,
+      "convAnamorphicLength": 0.800000011920929,
+      "convAnamorphicNarrow": 0.0,
+      "convAnamorphicThreshold": 3.5,
       "convAnamorphicTint": [
-        1.0,
-        1.0,
+        0.37873756885528564,
+        0.4365294575691223,
         1.0
       ],
       "convAnamorphicWidth": 5.0,

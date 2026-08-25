@@ -467,7 +467,7 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
 
             size_t n = srcCount;
             bool didSimplify = false;
-            size_t target = static_cast<size_t>(srcCount * ratio);
+            size_t target = static_cast<size_t>(srcCount * ratio);  
             target -= target % 3;
             if (srcCount >= kMinRangeIndices && target >= 12)
             {

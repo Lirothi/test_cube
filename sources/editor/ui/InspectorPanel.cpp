@@ -1327,7 +1327,10 @@ namespace
                 dragF("Anamorphic Intensity", "convAnamorphicIntensity", 0.0f, 0.02f, 0.0f, 8.0f, "%.2f");
                 InspectorHelp("Direct brightness of the streak. 0 = off (the passes do not run).");
                 dragF("Anamorphic Threshold", "convAnamorphicThreshold", 1.5f, 0.05f, 0.1f, 24.0f, "%.2f");
-                InspectorHelp("The streak's OWN threshold, in ABSOLUTE units: authored as stored "
+                InspectorHelp("The streak's OWN threshold, and since P8C-2h the ONLY narrowing "
+                              "control -- the vertical erosion that used to sit below was deleted "
+                              "with the cascade (a min-filter cannot taper at a frame edge). In "
+                              "ABSOLUTE units: authored as stored "
                               "brightness at EV100 = 14 and rescaled by the frame's pre-exposure, "
                               "so the same sun crosses it from any viewpoint -- being a light "
                               "source is a property of the scene, not the camera. On this level: "
@@ -1335,21 +1338,18 @@ namespace
                               "also the narrowness control that actually works: higher values "
                               "take only the CORE of a source, so the corona stops throwing a "
                               "screen-tall band.");
-                dragF("Anamorphic Narrow", "convAnamorphicNarrow", 0.0f, 0.5f, 0.0f, 200.0f, "%.0f px");
-                InspectorHelp("Vertical luminance EROSION window in display pixels; 0 = off. "
-                              "Shrinks a wide source before the blur -- the band narrows by about "
-                              "this many pixels. Small glints below the window lose their streak "
-                              "entirely, which is the deliberate trade: the streak belongs to the "
-                              "dominant source.");
-                dragF("Anamorphic Length", "convAnamorphicLength", 0.28f, 0.005f, 0.01f, 0.6f, "%.3f");
+                dragF("Anamorphic Length", "convAnamorphicLength", 0.28f, 0.005f, 0.01f, 1.0f, "%.3f");
                 InspectorHelp("How far the band reaches, as a fraction of the screen width -- "
                               "the VISIBLE extent, so 0.1 draws a band about a tenth of the "
                               "screen long (plus the source's own width, which no filter can "
                               "shorten). It was authored as a 1/e until P8C-2e, and a 1/e lies by "
-                              "3.4x: the cascade's support is the SUM of its passes' reaches, so "
-                              "0.1 measured 34% of the screen and a corner-parked sun looked like "
-                              "a light leak. The exponential shape is unchanged, with 1/e at a "
-                              "third of the extent.");
+                              "3.4x. It is realised by WEIGHTING PYRAMID LEVELS -- the level whose "
+                              "reach matches the number, with a tent across its neighbours for the "
+                              "fraction -- and verified in numpy against the exact tap pattern: "
+                              "asked 128/256/512/768 px delivered 92/204/420/788, i.e. 0.72-1.03x. "
+                              "The floor is level 0's own reach, about 30 px; the ceiling is the "
+                              "deepest level's, about 3200 px, so the whole slider is live.");
+
                 dragF("Anamorphic Width", "convAnamorphicWidth", 3.0f, 0.1f, 0.5f, 30.0f, "%.1f px");
                 InspectorHelp("The band's final soft width: a small vertical Gaussian applied at "
                               "composite, in display pixels. Works on the already-blurred band, "

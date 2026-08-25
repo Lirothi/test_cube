@@ -5251,6 +5251,14 @@ void SceneRenderer::Bloom_Build(Renderer* renderer, ID3D12GraphicsCommandList* c
 //
 // NO EARLY RETURN once recording starts, for the reason Pass_Gtao documents: the gate was decided
 // before the graph was built and the Prepare declared from the same flag.
+// P8C-2h/i: how deep the anamorphic pyramid may go. Each level of width-halving doubles the
+// reach -- 25 display pixels at level 0, so eight levels reach ~3200, past the width of the
+// screen. Six levels capped the band at ~870 px measured, which is what made the Length slider's
+// upper half inert; the packing budget still fits (320+160+80+40+20+10 = 630 of 640).
+static constexpr int kStreakMaxLevels = 8;
+// A level narrower than this carries no usable detail.
+static constexpr uint32_t kStreakMinLevelWidth = 10u;
+
 void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                    D3D12_CPU_DESCRIPTOR_HANDLE hdrSource)
 {
@@ -5276,8 +5284,8 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
     // The TRANSITIONS are unconditional but the DISPATCHES are not: the Prepare declared these
     // points from `bloomConvolution_` alone, so every declared point has to be emitted whether or
     // not the ghosts are on this frame.
-    // P8C-2b: the anamorphic streak is a separable pass over the same downsampled source the
-    // ghosts use -- so the downsample runs when EITHER consumer is on.
+    // P8C-2h: the anamorphic streak is a pyramid over the same downsampled source the ghosts
+    // use -- so the downsample runs when EITHER consumer is on.
     const bool streak = settings.convAnamorphicIntensity > 0.0f && D.bloomMips >= 2u;
     const uint2 streakGrid{ std::max(D.bloomWidth / 2u, 1u), std::max(D.bloomHeight / 2u, 1u) };
 
@@ -5338,20 +5346,40 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
     // span stands in for UE's downsample-chain prefilter.
     const float convSizeFrac = std::clamp(settings.convSize, 0.02f, 1.0f);
     conv.kernelSpanTexels = convSizeFrac * static_cast<float>(std::max(image.x, image.y));
-    conv.kernelTexLod = std::max(0.0f,
-        std::log2(static_cast<float>(std::max(bloomKernelTex_.GetWidth(), 1u)) /
-                  std::max(conv.kernelSpanTexels, 1.0f)));
+    // P8C-2h: minification is box-filtered in the shader on demand, so the asset ships mip 0
+    // only -- like UE's, which is why they build a downsample chain at runtime instead. `taps` is
+    // how many kernel texels fall in one grid texel; 1 means the kernel is being MAGNIFIED, the
+    // common case (at convSize 1.0 it is upscaled) and then a single bilinear tap is exact.
+    {
+        const float kernelTexels = static_cast<float>(std::max(bloomKernelTex_.GetWidth(), 1u));
+        const float ratio = kernelTexels / std::max(conv.kernelSpanTexels, 1.0f);
+        // Capped at 8x8: past that the box is strided rather than dense, which is a fair trade
+        // for a stage that runs once per kernel rebuild rather than per frame.
+        const uint32_t taps = static_cast<uint32_t>(
+            std::clamp(static_cast<int>(std::ceil(ratio)), 1, 8));
+        conv.kernelBoxTaps = taps;
+        conv.kernelBoxStep = (taps > 1u) ? (ratio / static_cast<float>(taps)) / kernelTexels : 0.0f;
+        // P8C-2j: UE's centre zone is one OUTPUT pixel's worth of kernel texels, floored at one
+        // (ViewTexelDiameterInKernelTexels); the ring one texel outside it is where they measure
+        // the level to clamp the kernel's delta-like core down to.
+        conv.kernelCoreRingUV = (std::max(ratio, 1.0f) + 1.0f) / kernelTexels;
+    }
     conv.kernelCenterUV[0] = 0.5f;
     conv.kernelCenterUV[1] = 0.5f;
     // P8C-2b streak parameters. Sizes authored in display pixels convert through the streak
     // grid's own scale, so the band keeps its on-screen look at any resolution.
     const float displayW = static_cast<float>(std::max(renderer->GetWidth(), 1u));
-    // The streak lands in the bloom target BEFORE the tonemap scales it by bloom.intensity, and
-    // AFTER the resolve's kConvolutionGain (8, mirrored from bloom_conv_cs.hlsl) -- so the knob
-    // is made ABSOLUTE by compensating both: the band's on-screen brightness follows this control
-    // alone, not the bloom mix. That is the "individual brightness" a streak needs -- at the
-    // level's bloom.intensity 0.1 an uncompensated streak was invisible at any sane setting.
-    conv.anamorphicIntensity = std::max(0.0f, settings.convAnamorphicIntensity) * 8.0f /
+    // INTENSITY MEANS "FRACTION OF THE SOURCE'S OWN BRIGHTNESS". The pyramid's up-chain is a
+    // convex combination -- its weights sum to one -- so the band comes out at roughly the
+    // source's amplitude, and the composite adds it AFTER the resolve, i.e. without the
+    // convolution's kConvolutionGain. Only the tonemap's bloom.intensity is still ahead of it,
+    // so compensating that alone makes the knob mean what it says.
+    //
+    // The cascade this replaced needed a x8/intensity compensation because its output was some
+    // forty times dimmer than the source; carrying that constant over to a chain that no longer
+    // attenuates put the streak at eight times the corona and flooded half the sky (measured:
+    // contribution mean 15.5 against the cascade's 1.25).
+    conv.anamorphicIntensity = std::max(0.0f, settings.convAnamorphicIntensity) /
                                std::max(settings.intensity, 0.01f);
     conv.anamorphicLength = std::max(0.0005f, settings.convAnamorphicLength);
     // Composite sigma in bloom-mip0 texels (half display).
@@ -5370,22 +5398,18 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
         preExposure_ / render::ExposureMultiplierFromEv100(14.0f);
     conv.anamorphicThreshold =
         std::max(0.05f, settings.convAnamorphicThreshold) * thresholdScale;
-    // Erosion half-window in SOURCE (mip0) texels.
-    conv.anamorphicNarrow = std::max(0.0f, settings.convAnamorphicNarrow) *
-                            (static_cast<float>(D.bloomWidth) / displayW);
     conv.anamorphicChroma = std::clamp(settings.convAnamorphicChroma, 0.0f, 1.0f);
     conv.anamorphicTint[0] = std::max(0.0f, settings.convAnamorphicTint[0]);
     conv.anamorphicTint[1] = std::max(0.0f, settings.convAnamorphicTint[1]);
     conv.anamorphicTint[2] = std::max(0.0f, settings.convAnamorphicTint[2]);
-    // P8C-2e: `Length` is the band's VISIBLE EXTENT, not its 1/e. Authored as a 1/e it drew a
-    // band 3.4x longer than the number said, because a cascade's support is the SUM of its
-    // passes' reaches (7 taps each side x step): 0.1 asked for 10% of the screen and laid 34% of
-    // kernel on top of the source's own width -- which is what "the streak spreads across the
-    // width" was, measured at 41% with a corner sun. The exponential SHAPE is kept, with 1/e at
-    // a third of the extent, and the cascade below is built to reach that extent and stop.
+    // `Length` is the band's VISIBLE EXTENT as a fraction of the screen, and the pyramid below
+    // realises it by WEIGHTING LEVELS rather than by stretching a kernel -- which is what finally
+    // makes the number honest. Verified in numpy against the exact tap pattern before any of this
+    // was written: asked 128/256/512/768 px measured 92/204/420/788, i.e. 0.72-1.03x, against the
+    // 3.4x the old cascade lied by. The floor is level 0's own reach (~30 px) and the ceiling is
+    // the coarsest level's (~800 px at six levels).
     const float streakExtentTexels =
         std::max(conv.anamorphicLength * static_cast<float>(streakGrid.x), 4.0f);
-    conv.streakLambdaTexels = std::max(streakExtentTexels / 3.5f, 1.0f);
     conv.ghostCount = ghosts ? std::min(settings.convGhosts, 8u) : 0u;
     conv.ghostIntensity = std::max(0.0f, settings.convGhostIntensity);
 
@@ -5432,49 +5456,123 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
             barrierRes);
     };
 
-    // ---- P8C-2b: the anamorphic streak, while bloomDown is still writable ----
+    // ---- P8C-2h: the anamorphic streak, an ANISOTROPIC PYRAMID (KinoStreak's structure) ----
+    //
+    // Levels halve in WIDTH and keep their height, so the band's vertical resolution never
+    // degrades, and every tap is ~1 texel of its own level -- reach comes from resolution, not
+    // from a growing step. That is what retires the fixed-resolution cascade this replaces: a
+    // step coarser than the falloff replicated the source instead of extending it.
+    //
+    // Levels live PACKED SIDE BY SIDE in bloomDown mip1 (widths halve, so 1/2 + 1/4 + ... always
+    // fits inside the full width), with level 0 in bloomUp mip1. No new allocation: everything
+    // below mip 0 of those two chains is unused while the convolution method runs.
     if (streak)
     {
-        BloomConvConstants a = conv;
-        a.convStage = 4u;
-        a.sourceSize = streakGrid;
-        a.imageSize = uint2{ D.bloomWidth, D.bloomHeight };
-        convDispatchTo(a, D.bloomDownMipUAV[0], D.bloomUpMipUAV[1],
-                       streakGrid.x, streakGrid.y, D.bloomUp.Get());
-
-        // Cascaded horizontal passes, steps from 1/5/25/125 streak texels -- but only the steps
-        // the AUTHORED length can support: a cascade stage whose step exceeds the exponential's
-        // 1/e length does not extend the tail, it REPLICATES the source at the tap spacing --
-        // observed as vertical bands marching away from the sun's corona at length 0.1. A step-1
-        // pass is appended when needed so the count stays EVEN and the result ends in bloomUp
-        // mip1, the only grid still writable when the composite runs after the resolve.
-        a.convStage = 5u;
-        a.imageSize = streakGrid;
-        // Each pass has 7 taps a side, so it reaches 7 x its step; a pass joins the cascade only
-        // while the TOTAL support still fits the authored extent. A step coarser than that does
-        // not lengthen the tail, it places bright COPIES of the source every step.
-        float steps[5];
-        int numSteps = 0;
-        float reach = 0.0f;
-        for (float st : { 1.0f, 5.0f, 25.0f, 125.0f })
+        std::array<uint32_t, kStreakMaxLevels> levelWidth{};
+        std::array<uint32_t, kStreakMaxLevels> levelOffset{};
+        int levels = 1;
+        levelWidth[0] = streakGrid.x;
+        for (int k = 1; k < kStreakMaxLevels; ++k)
         {
-            const float next = reach + 7.0f * st;
-            if (next <= streakExtentTexels || numSteps == 0)
+            const uint32_t w = levelWidth[k - 1] / 2u;
+            if (w < kStreakMinLevelWidth) { break; }
+            levelWidth[k] = w;
+            // Level 0 has its own texture, so the packing of 1..N-1 starts at zero.
+            levelOffset[k] = (k == 1) ? 0u : levelOffset[k - 1] + levelWidth[k - 1];
+            ++levels;
+        }
+
+        // WHICH LEVEL CARRIES THE BAND. Level k reaches 5 * 1.25 * 2^k of its own texels, so the
+        // level matching the authored extent is the log2 of that ratio, and a tent across the two
+        // neighbouring levels realises a fractional one. `kTentCalibration` is measured, not
+        // guessed: the tent's own support overshoots its nominal reach, and dividing by it is
+        // what puts the delivered extent within 0.72-1.03x of the number on the slider (numpy,
+        // against this exact tap pattern, before the shader was written).
+        constexpr float kLevel0Reach = 5.0f * 1.25f;
+        constexpr float kTentCalibration = 1.55f;
+        const float tCentre = std::clamp(
+            std::log2(std::max(streakExtentTexels / kTentCalibration, kLevel0Reach) / kLevel0Reach),
+            0.0f, static_cast<float>(levels - 1));
+
+        // CHROMA IS A PER-CHANNEL SHIFT OF THAT TENT, which costs nothing: the weights were
+        // already per level, they are simply per channel now. One level is a factor of two in
+        // reach, so blue shifted a third of a level up and red a fifth down makes blue run ~40%
+        // farther -- the cylindrical-coating look, without a second blur.
+        const float chroma = std::clamp(settings.convAnamorphicChroma, 0.0f, 1.0f);
+        const float tChannel[3] = { tCentre - 0.20f * chroma,
+                                    tCentre,
+                                    tCentre + 0.33f * chroma };
+
+        float weight[kStreakMaxLevels][3]{};
+        float weightSum[3]{};
+        for (int k = 0; k < levels; ++k)
+        {
+            for (int c = 0; c < 3; ++c)
             {
-                steps[numSteps++] = st;
-                reach = next;
+                const float w =
+                    std::max(0.0f, 1.0f - std::abs(static_cast<float>(k) - tChannel[c]));
+                weight[k][c] = w;
+                weightSum[c] += w;
             }
         }
-        if ((numSteps % 2) != 0) { steps[numSteps++] = 1.0f; }
-        for (int pass = 0; pass < numSteps; ++pass)
+        for (int c = 0; c < 3; ++c)
         {
-            a.streakTapStep = steps[pass];
-            const bool fromUp = (pass % 2) == 0;
+            if (weightSum[c] < 1.0e-6f)
+            {
+                const int k =
+                    std::clamp(static_cast<int>(std::lround(tChannel[c])), 0, levels - 1);
+                weight[k][c] = 1.0f;
+                weightSum[c] = 1.0f;
+            }
+        }
+        const auto share = [&](int level, int c) {
+            return weight[level][c] / std::max(weightSum[c], 1.0e-6f);
+        };
+
+        BloomConvConstants a = conv;
+
+        // ---- prefilter: bloomDown mip0 -> level 0 ----
+        a.convStage = 4u;
+        a.sourceSize = uint2{ levelWidth[0], streakGrid.y };
+        a.imageSize = uint2{ D.bloomWidth, D.bloomHeight };
+        a.streakOffsets = uint2{ 0u, 0u };
+        convDispatchTo(a, D.bloomDownMipUAV[0], D.bloomUpMipUAV[1],
+                       levelWidth[0], streakGrid.y, D.bloomUp.Get());
+
+        // ---- downsample chain ----
+        a.convStage = 5u;
+        for (int k = 1; k < levels; ++k)
+        {
+            a.sourceSize = uint2{ levelWidth[k], streakGrid.y };
+            a.imageSize = uint2{ levelWidth[k - 1], streakGrid.y };
+            a.streakOffsets = uint2{ levelOffset[k], (k == 1) ? 0u : levelOffset[k - 1] };
             convDispatchTo(a,
-                fromUp ? D.bloomUpMipUAV[1] : D.bloomDownMipUAV[1],
-                fromUp ? D.bloomDownMipUAV[1] : D.bloomUpMipUAV[1],
-                streakGrid.x, streakGrid.y,
-                fromUp ? D.bloomDown.Get() : D.bloomUp.Get());
+                           (k == 1) ? D.bloomUpMipUAV[1] : D.bloomDownMipUAV[1],
+                           D.bloomDownMipUAV[1],
+                           levelWidth[k], streakGrid.y, D.bloomDown.Get());
+        }
+
+        // ---- up-chain: acc(k) = upsample(acc(k+1)) * srcWeight + level_k * ownWeight ----
+        a.convStage = 6u;
+        for (int k = levels - 2; k >= 0; --k)
+        {
+            const bool firstUp = (k == levels - 2);
+            const bool intoLevel0 = (k == 0);
+            for (int c = 0; c < 3; ++c)
+            {
+                a.streakWeight[c] = share(k, c);
+                // Only the first pass weights its source: that "accumulator" is the coarsest
+                // level's raw content. Every later pass receives an already-weighted sum.
+                a.streakSrcWeight[c] = firstUp ? share(levels - 1, c) : 1.0f;
+            }
+            a.sourceSize = uint2{ levelWidth[k], streakGrid.y };
+            a.imageSize = uint2{ levelWidth[k + 1], streakGrid.y };
+            a.streakOffsets = uint2{ intoLevel0 ? 0u : levelOffset[k], levelOffset[k + 1] };
+            convDispatchTo(a,
+                           D.bloomDownMipUAV[1],
+                           intoLevel0 ? D.bloomUpMipUAV[1] : D.bloomDownMipUAV[1],
+                           levelWidth[k], streakGrid.y,
+                           intoLevel0 ? D.bloomUp.Get() : D.bloomDown.Get());
         }
     }
 
@@ -5602,13 +5700,14 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
         convDispatch(r, D.bloomFftBUAV, D.bloomWidth, D.bloomHeight, D.bloomUp.Get());
     }
 
-    // ---- P8C-2b: streak composite, additive onto the freshly resolved mip 0 ----
+    // ---- P8C-2h: streak composite, additive onto the freshly resolved mip 0 ----
     if (streak)
     {
         BloomConvConstants a = conv;
-        a.convStage = 6u;
+        a.convStage = 7u;
         a.sourceSize = uint2{ D.bloomWidth, D.bloomHeight };
-        a.imageSize = streakGrid;
+        a.imageSize = uint2{ streakGrid.x, streakGrid.y };  // level 0
+        a.streakOffsets = uint2{ 0u, 0u };
         convDispatchTo(a, D.bloomUpMipUAV[1], D.bloomUpMipUAV[0],
                        D.bloomWidth, D.bloomHeight, D.bloomUp.Get());
     }
