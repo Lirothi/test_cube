@@ -232,7 +232,8 @@ void SceneTonemapCBHandles::Populate(Material* material)
     localDetailStrength = material->ComputeCB0FieldHandle("localDetailStrength");
     localHighlightThreshold = material->ComputeCB0FieldHandle("localHighlightThreshold");
     localShadowThreshold = material->ComputeCB0FieldHandle("localShadowThreshold");
-    bloomIntensity = material->ComputeCB0FieldHandle("bloomIntensity");
+    bloomSceneApply = material->ComputeCB0FieldHandle("bloomSceneApply");
+    bloomScatterApply = material->ComputeCB0FieldHandle("bloomScatterApply");
 }
 
 void SceneExposureHistogramCBHandles::Populate(Material* material)
@@ -949,6 +950,10 @@ void BloomConvHandles::Populate(Material* material)
     sourceSize = material->ComputeCB0FieldHandle("sourceSize");
     threshold = material->ComputeCB0FieldHandle("threshold");
     softKnee = material->ComputeCB0FieldHandle("softKnee");
+    preFilterMin = material->ComputeCB0FieldHandle("preFilterMin");
+    preFilterMax = material->ComputeCB0FieldHandle("preFilterMax");
+    preFilterMult = material->ComputeCB0FieldHandle("preFilterMult");
+    kernelTint = material->ComputeCB0FieldHandle("kernelTint");
     kernelSpanTexels = material->ComputeCB0FieldHandle("kernelSpanTexels");
     kernelBoxTaps = material->ComputeCB0FieldHandle("kernelBoxTaps");
     kernelBoxStep = material->ComputeCB0FieldHandle("kernelBoxStep");
@@ -1040,6 +1045,11 @@ void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants
     matBloomConvCS_->UpdateCBField(h.sourceSize, d.sourceSize, dest);
     matBloomConvCS_->UpdateCBField(h.threshold, d.threshold, dest);
     matBloomConvCS_->UpdateCBField(h.softKnee, d.softKnee, dest);
+    matBloomConvCS_->UpdateCBField(h.preFilterMin, d.preFilterMin, dest);
+    matBloomConvCS_->UpdateCBField(h.preFilterMax, d.preFilterMax, dest);
+    matBloomConvCS_->UpdateCBField(h.preFilterMult, d.preFilterMult, dest);
+    matBloomConvCS_->UpdateCBField(h.kernelTint,
+        Math::float3(d.kernelTint[0], d.kernelTint[1], d.kernelTint[2]), dest);
     matBloomConvCS_->UpdateCBField(h.kernelSpanTexels, d.kernelSpanTexels, dest);
     matBloomConvCS_->UpdateCBField(h.kernelBoxTaps, d.kernelBoxTaps, dest);
     matBloomConvCS_->UpdateCBField(h.kernelBoxStep, d.kernelBoxStep, dest);
@@ -1313,7 +1323,7 @@ void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data
 void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
                                                       const render::ColorPipelineSettings& color,
                                                       const render::CameraExposureSettings& camera,
-                                                      float bloomIntensity,
+                                                      const BloomApplyConstants& bloomApply,
                                                       uint8_t* dest) const
 {
     if (!matTonemapCS_ || !dest)
@@ -1347,7 +1357,8 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
     matTonemapCS_->UpdateCBField(h.localDetailStrength, camera.localDetailStrength, dest);
     matTonemapCS_->UpdateCBField(h.localHighlightThreshold, camera.localHighlightThreshold, dest);
     matTonemapCS_->UpdateCBField(h.localShadowThreshold, camera.localShadowThreshold, dest);
-    matTonemapCS_->UpdateCBField(h.bloomIntensity, bloomIntensity, dest);
+    matTonemapCS_->UpdateCBField(h.bloomSceneApply, bloomApply.sceneApply, dest);
+    matTonemapCS_->UpdateCBField(h.bloomScatterApply, bloomApply.scatterApply, dest);
 }
 
 void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMeteringConstants& data,

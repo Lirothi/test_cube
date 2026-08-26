@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -232,6 +233,36 @@ struct BloomSettings
     //
     // Kernel width as a fraction of the viewport's major axis -- UE's BloomConvolutionSize, same
     // units and same default of 1.0 (the kernel's faintest tails reach the whole screen).
+    // P8C-2r: WHICH kernel image. Any square FP16 DDS in textures/ will do -- the placement,
+    // the clamp and the centre/scatter survey are all derived from the pixels, so swapping the
+    // photograph swaps the entire look of the glare with nothing else to retune. UE's own
+    // DefaultBloomKernel.dds ships beside the derived star and is one pick away.
+    std::string convKernel = "textures/BloomKernelStar.dds";
+    // P8C-6: a colour multiplier on the kernel IMAGE, applied where it is resampled into the grid.
+    // It survives the DC divide: that normalises by the LARGEST channel sum, precisely so a
+    // kernel's own colour balance is not washed out, so tinting the kernel tints the glare. This
+    // is the runtime equivalent of re-authoring the photograph, and it costs nothing -- the kernel
+    // spectrum is rebuilt only when its key moves, and the tint is part of that key.
+    float convKernelTint[3] = { 1.0f, 1.0f, 1.0f };
+    // P8C-5 -- UE'S BRIGHT-PIXEL GAIN, WHICH IS WHAT THEIR FFT BLOOM HAS INSTEAD OF A THRESHOLD.
+    //
+    // `BloomConvolutionPreFilterMin/Max/Mult`, applied in GPUFastFourierTransform.usf's FilterPixel
+    // on the forward transform only:
+    //
+    //     if (Luma > Min) { Target = Mult * (Luma - Min) + Min; Target = min(Target, Max);
+    //                       rgb *= Target / Luma; }
+    //
+    // Nothing is CUT. A pixel below Min passes through untouched -- which is why an open sun keeps
+    // its glow no matter how the auto-exposure moves -- and a pixel above Min is REWEIGHTED, with
+    // `Max` as a ceiling so a frame full of bright gaps cannot run away. That ceiling is the whole
+    // reason one setting can serve a beach and a palm grove; a threshold has no such thing, it can
+    // only decide membership, and both frames then move together (measured: at 5 both bloomed, at 6
+    // both died).
+    //
+    // Mult <= 0 deactivates it, which is UE's own default state.
+    float convPreFilterMin = 1.5f;
+    float convPreFilterMax = 6.0f;
+    float convPreFilterMult = 0.0f;
     float convSize = 1.0f;
     // Resolution of the convolution as a percent of the DISPLAY resolution -- UE's
     // r.Bloom.ScreenPercentage (their default is 100; 50 is this engine's grid ceiling, and going

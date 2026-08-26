@@ -13653,7 +13653,7 @@
       "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
-        0.20000000298023224
+        0.05000000074505806
       ],
       "name": "staticMesh #722",
       "normalStrength": 0.0,
@@ -13822,7 +13822,7 @@
       "shoreWetnessReflectionStrength": 0.3499999940395355,
       "shoreWetnessWetTime": 0.75,
       "skyScatterStrength": 0.3499999940395355,
-      "specularStrength": 3.0,
+      "specularStrength": 2.0,
       "sssColor": [
         0.13333334028720856,
         0.9411764740943909,
@@ -13881,7 +13881,7 @@
     "bloom": {
       "convAnamorphic": 0.30000001192092896,
       "convAnamorphicChroma": 1.0,
-      "convAnamorphicIntensity": 2.0,
+      "convAnamorphicIntensity": 0.0,
       "convAnamorphicLength": 0.800000011920929,
       "convAnamorphicNarrow": 0.0,
       "convAnamorphicThreshold": 3.5,
@@ -13897,20 +13897,24 @@
       "convGhostBokeh": 2.0,
       "convGhostIntensity": 0.5,
       "convGhostSpacing": 0.44999998807907104,
-      "convGhostThreshold": 8.0,
+      "convGhostThreshold": 10.0,
       "convGhosts": 6,
+      "convKernel": "textures/DefaultBloomKernelAnamorphic.dds",
       "convKernelRadius": 0.0015999999595806003,
       "convPercent": 25.0,
+      "convPreFilterMax": 12.0,
+      "convPreFilterMin": 2.0,
+      "convPreFilterMult": 8.0,
       "convSize": 1.0,
       "convSpokeLength": 0.8999999761581421,
       "convSpokeStrength": 0.4000000059604645,
       "convSpokeWidth": 4.0,
       "enabled": true,
       "fireflyClamp": true,
-      "intensity": 0.10000000149011612,
+      "intensity": 1.0,
       "method": 1,
       "radius": 1.0,
-      "softKnee": 0.5,
+      "softKnee": 0.009999999776482582,
       "threshold": -1.0
     },
     "cameraExposure": {
@@ -13918,7 +13922,7 @@
       "autoExposure": true,
       "compensationEv": 0.0,
       "enabled": true,
-      "highPercentile": 0.95,
+      "highPercentile": 0.949999988079071,
       "isoSensitivity": 100.0,
       "localDetailStrength": 1.0,
       "localHighlightContrast": 0.7,

@@ -418,6 +418,14 @@ namespace
         }
         // P8C-2: the aperture-kernel keys (bloom.kernelRadius, spokes*, chroma, the anamorphic
         // squeeze, ghostSpacing) are GONE with the mechanism -- deleted, not aliased.
+        // P8C-5: UE's BloomConvolutionPreFilterMin/Max/Mult.
+        if (setting == "bloom.preFilterMin") { scene.BloomRef().convPreFilterMin = value; return true; }
+        if (setting == "bloom.preFilterMax") { scene.BloomRef().convPreFilterMax = value; return true; }
+        if (setting == "bloom.preFilterMult") { scene.BloomRef().convPreFilterMult = value; return true; }
+        // P8C-6: the kernel tint, one channel per key -- `--set` carries floats only.
+        if (setting == "bloom.kernelTintR") { scene.BloomRef().convKernelTint[0] = value; return true; }
+        if (setting == "bloom.kernelTintG") { scene.BloomRef().convKernelTint[1] = value; return true; }
+        if (setting == "bloom.kernelTintB") { scene.BloomRef().convKernelTint[2] = value; return true; }
         if (setting == "bloom.convSize") { scene.BloomRef().convSize = value; return true; }
         if (setting == "bloom.convPercent") { scene.BloomRef().convPercent = value; return true; }
         if (setting == "bloom.anamorphicIntensity")

@@ -664,6 +664,23 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D.lensFlareHeight = lh;
         }
 
+        // P8C-2l: the streak pyramid's own two halves, so it no longer borrows mip 1 of the bloom
+        // chains -- those belong to the pyramid bloom method whenever it runs.
+        {
+            const UINT sw = std::max(1u, sizes.streakWidth);
+            const UINT sh = std::max(1u, sizes.streakHeight);
+            currentTargetWidth = sw;
+            currentTargetHeight = sh;
+            CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.bloom,
+                DeferredSrvSlot::StreakA, DeferredSrvSlot::StreakAUAV, f,
+                D.streakA, D.streakASRV, D.streakAUAV, sw, sh);
+            CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.bloom,
+                DeferredSrvSlot::StreakB, DeferredSrvSlot::StreakBUAV, f,
+                D.streakB, D.streakBSRV, D.streakBUAV, sw, sh);
+            D.streakWidth = sw;
+            D.streakHeight = sh;
+        }
+
         // Inspector preview. Rests SHADER-READABLE: the overlay transitions FROM a resource's
         // canonical into PIXEL_SHADER_RESOURCE without transitioning back, which is only sound when
         // the canonical already shares that barrier layout.
@@ -741,6 +758,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.bloomFftB.Get(), L"BloomFftB", kNps);
         nameRes(D.bloomFftKernel.Get(), L"BloomFftKernel", kNps);
         nameRes(D.lensFlare.Get(), L"LensFlareAccum", kNps);
+        nameRes(D.streakA.Get(), L"StreakPyramidA", kNps);
+        nameRes(D.streakB.Get(), L"StreakPyramidB", kNps);
         nameRes(D.bloomDown.Get(), L"BloomDown", kNps);
         nameRes(D.bloomUp.Get(), L"BloomUp", kNps);
         nameRes(D.hzb.Get(), L"Hzb", kNps);
@@ -995,6 +1014,9 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         collect(D.glassReflNormal);
         collect(D.glassReflDepth);
         collect(D.glassReflection);
+        collect(D.lensFlare);
+        collect(D.streakA);
+        collect(D.streakB);
     }
 
     decls.ForgetMany(released);

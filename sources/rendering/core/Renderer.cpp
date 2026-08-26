@@ -1586,6 +1586,10 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         // tile grid runs at this resolution too, which is where its cost model starts.
         sizes.lensFlareWidth = std::max(16u, (displayWidth + 3u) / 4u);
         sizes.lensFlareHeight = std::max(16u, (displayHeight + 3u) / 4u);
+        // P8C-2l: the streak pyramid shares that quarter-display base -- level 0 is one half,
+        // levels 1..N packed into the other, and the halving widths always fit.
+        sizes.streakWidth = sizes.lensFlareWidth;
+        sizes.streakHeight = sizes.lensFlareHeight;
     }
 
     rtManager_.Create(GetDevice(), formats, sizes, Declarations());

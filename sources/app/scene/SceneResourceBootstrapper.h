@@ -191,7 +191,10 @@ struct SceneTonemapCBHandles
     Material::CBFieldHandle localDetailStrength;
     Material::CBFieldHandle localHighlightThreshold;
     Material::CBFieldHandle localShadowThreshold;
-    Material::CBFieldHandle bloomIntensity; // P8
+    // P8C-2o: UE's split -- the scene's own factor and the flare's, which PARTITION the light
+    // rather than adding to it. See the block comment in tonemap_cs.hlsl.
+    Material::CBFieldHandle bloomSceneApply;
+    Material::CBFieldHandle bloomScatterApply;
 
     void Populate(Material* material);
 };
@@ -422,6 +425,12 @@ struct BloomConvConstants
     uint2 sourceSize{ 1u, 1u };
     float threshold = 1.0f;
     float softKnee = 0.5f;
+    // P8C-5: UE's BloomConvolutionPreFilterMin/Max/Mult, all three ABSOLUTE
+    // (EV14 units) like every other threshold in the bloom. Mult <= 0 = inactive.
+    float preFilterMin = 0.0f;
+    float preFilterMax = 0.0f;
+    float preFilterMult = 0.0f;
+    float kernelTint[3] = { 1.0f, 1.0f, 1.0f };   // P8C-6
     // P8C-2: the kernel is an image; these place it in the grid. See bloom_conv_cs.hlsl.
     float kernelSpanTexels = 1024.0f;
     uint32_t kernelBoxTaps = 1u;
@@ -445,6 +454,8 @@ struct BloomConvHandles
 {
     Material::CBFieldHandle convStage, exposureEnabled, transformSize, imageSize, sourceSize;
     Material::CBFieldHandle threshold, softKnee;
+    Material::CBFieldHandle preFilterMin, preFilterMax, preFilterMult;
+    Material::CBFieldHandle kernelTint;   // P8C-6
     Material::CBFieldHandle kernelSpanTexels, kernelBoxTaps, kernelBoxStep;
     Material::CBFieldHandle kernelCoreRingUV, kernelCenterUV;
     Material::CBFieldHandle anamorphicIntensity, anamorphicLength, anamorphicSigma;
@@ -650,6 +661,16 @@ struct FxaaPassConstants
     float edgeThresholdMin = 0.0625f;
 };
 
+// P8C-2o: how the tonemap combines the scene with the bloom. These are UE's
+// SceneColorApplyParameters and FFTMulitplyParameters (BloomFinalizeApplyConstants.usf), and they
+// PARTITION the light rather than adding to it -- the defaults below are the pyramid's neutral
+// case, where the scene passes through untouched and the flare is a plain additive term.
+struct BloomApplyConstants
+{
+    std::array<float, 3> sceneApply{ 1.0f, 1.0f, 1.0f };
+    std::array<float, 3> scatterApply{ 0.0f, 0.0f, 0.0f };
+};
+
 // P2 photographic camera. The log-luminance window is a compile-time constant of the metering,
 // not an authored setting: it only has to be wide enough to contain any scene the histogram will
 // ever see, and moving it would silently reinterpret every stored bin.
@@ -807,7 +828,7 @@ public:
     void WriteTonemapConstants(bool exposureEnabled,
                                const render::ColorPipelineSettings& color,
                                const render::CameraExposureSettings& camera,
-                               float bloomIntensity,
+                               const BloomApplyConstants& bloomApply,
                                uint8_t* dest) const;
     void WriteExposureHistogramConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
     void WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;

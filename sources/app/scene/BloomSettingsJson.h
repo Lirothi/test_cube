@@ -30,6 +30,18 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     // convAnamorphic squeeze, convGhostSpacing) are GONE, not renamed -- a level that still
     // carries them keeps rendering, the keys are simply ignored. P8C-2d retired
     // `convBladeRotation` the same way, for being inert against the noise floor.
+    s.convKernel = j.value("convKernel", s.convKernel);
+    if (j.contains("convKernelTint") && j["convKernelTint"].is_array() &&
+        j["convKernelTint"].size() == 3)
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            s.convKernelTint[i] = j["convKernelTint"][i].get<float>();
+        }
+    }
+    s.convPreFilterMin = j.value("convPreFilterMin", s.convPreFilterMin);
+    s.convPreFilterMax = j.value("convPreFilterMax", s.convPreFilterMax);
+    s.convPreFilterMult = j.value("convPreFilterMult", s.convPreFilterMult);
     s.convSize = j.value("convSize", s.convSize);
     s.convPercent = j.value("convPercent", s.convPercent);
     s.convBlades = j.value("convBlades", s.convBlades);
@@ -62,6 +74,11 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["radius"] = s.radius;
     j["fireflyClamp"] = s.fireflyClamp;
     j["method"] = s.method;
+    j["convKernel"] = s.convKernel;
+    j["convKernelTint"] = { s.convKernelTint[0], s.convKernelTint[1], s.convKernelTint[2] };
+    j["convPreFilterMin"] = s.convPreFilterMin;
+    j["convPreFilterMax"] = s.convPreFilterMax;
+    j["convPreFilterMult"] = s.convPreFilterMult;
     j["convSize"] = s.convSize;
     j["convPercent"] = s.convPercent;
     j["convBlades"] = s.convBlades;

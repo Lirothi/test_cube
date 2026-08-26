@@ -37,11 +37,13 @@ class RenderTargetManager
 {
 public:
     struct DeferredTargets {
+        // Only a reserve() hint for the Destroy sweep, but keep it honest: P8C-2 added the
+        // lens-flare target and P8C-2l the streak pyramid's two halves.
         static constexpr size_t kResourceCount =
 #if WITH_EDITOR
-            26; // Runtime targets plus the editor-only objectID target.
+            29; // Runtime targets plus the editor-only objectID target.
 #else
-            25;
+            28;
 #endif
         // Resources
         GpuResource gb0;   // albedo+metal
@@ -109,8 +111,14 @@ public:
         GpuResource bloomFftB;
         GpuResource bloomFftKernel;
         // P8C-2 step 5a: the lens-flare accumulation target. The bokeh scatter rasterizes into it
-        // additively; the convolution's resolve reads it back for the ghost composite.
+        // additively; the ghost composite reads it back.
         GpuResource lensFlare;
+        // P8C-2l: the anamorphic streak's own pyramid, two ping-pong halves at the same size.
+        // It USED to squat on mip 1 of the bloom chains, which is free only while the convolution
+        // method runs -- the pyramid method owns those mips. Giving the streak its own storage is
+        // what lets either bloom method drive it. Levels 1..N are packed side by side inside B.
+        GpuResource streakA;
+        GpuResource streakB;
         // The texture inspector's preview surface. ImGui can only tint an image by a value it
         // packs to 8 bits, so anything needing to BRIGHTEN a target has to happen before ImGui
         // sees it; the inspector resamples into this and ImGui draws it untinted.
@@ -176,6 +184,9 @@ public:
         UINT bloomFftImageWidth = 1, bloomFftImageHeight = 1;
         D3D12_CPU_DESCRIPTOR_HANDLE lensFlareRTV{}, lensFlareSRV{};
         UINT lensFlareWidth = 1, lensFlareHeight = 1;
+        D3D12_CPU_DESCRIPTOR_HANDLE streakASRV{}, streakAUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE streakBSRV{}, streakBUAV{};
+        UINT streakWidth = 1, streakHeight = 1;
 
         UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
         UINT spotShadowRes = 512;
@@ -223,6 +234,8 @@ public:
         UINT bloomFftImageWidth = 1, bloomFftImageHeight = 1;
         // P8C-2: the lens-flare accumulation target, a quarter of the display.
         UINT lensFlareWidth = 1, lensFlareHeight = 1;
+        // P8C-2l: the streak pyramid, also a quarter of the display.
+        UINT streakWidth = 1, streakHeight = 1;
     };
 
     void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls);
@@ -274,6 +287,8 @@ private:
     BloomFftA, BloomFftAUAV, BloomFftB, BloomFftBUAV, BloomFftKernel, BloomFftKernelUAV,
     // P8C-2: the lens-flare accumulation image (SRV only; it is written as a render target).
     LensFlareAccum,
+    // P8C-2l: the anamorphic streak's own pyramid.
+    StreakA, StreakAUAV, StreakB, StreakBUAV,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

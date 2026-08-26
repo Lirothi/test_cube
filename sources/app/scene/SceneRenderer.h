@@ -144,11 +144,31 @@ private:
     // source its ghosts are gathered from. Assumes bloomDown is already UNORDERED_ACCESS.
     // `mipCount` 0 means the whole chain, which is what the pyramid needs; the convolution's ghost
     // source asks for only the levels it samples.
+    // P8C-2m: whether the flares run THIS frame, decided before the graph is built so the
+    // Prepare declares exactly what the body will touch. Off means off: no dispatch, no draw, and
+    // no barrier -- the targets are not declared at all.
+    bool flaresGhosts_ = false;
+    bool flaresStreak_ = false;
+    // P8C-2l: the flare constants, filled once so the two bloom methods cannot drift apart.
+    BloomConvConstants Bloom_FlareConstants(Renderer* r) const;
+    // P8C-2l: the lens flares, shared by BOTH bloom methods. Build runs before the bloom target
+    // is written (scatter + streak pyramid), composite after it (both add into mip 0).
+    void Bloom_FlaresBuild(Renderer* r, ID3D12GraphicsCommandList* cl,
+                           D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const BloomConvConstants& conv);
+    void Bloom_FlaresComposite(Renderer* r, ID3D12GraphicsCommandList* cl,
+                               D3D12_CPU_DESCRIPTOR_HANDLE hdrSource,
+                               const BloomConvConstants& conv);
     // P8C-2 step 5a: bake the ghost bokeh sprite from the blade count.
     void BakeFlareBokeh(Renderer* r, uint32_t blades);
     void Bloom_Downsample(Renderer* r, ID3D12GraphicsCommandList* cl,
                           D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, float threshold, UINT mipCount);
     // P8C: the convolution alternative. Same slot, same output texture.
+    // P8C-2o: the kernel survey and the constants it feeds the tonemap. Reading the pixels is
+    // narrow on purpose -- it accepts exactly the format this one asset ships in.
+    bool Bloom_ReadKernelPixels(const wchar_t* path);
+    void Bloom_SurveyKernel(float ratio);
+    BloomApplyConstants Bloom_ApplyConstants() const;
+    float Bloom_TonemapBloomScale() const;
     void Bloom_Convolve(Renderer* r, ID3D12GraphicsCommandList* cl,
                         D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
 
@@ -287,11 +307,16 @@ private:
         uint32_t width = 0u, height = 0u;          // the ACTIVE grid
         uint32_t imageWidth = 0u, imageHeight = 0u; // the span depends on the image's major axis
         float convSize = -1.0f;
+        // P8C-6: the TINT is part of the key. The spectrum is cached and rebuilt only when the key
+        // moves, so a tint left out of it would be a colour picker that does nothing until
+        // something else happens to force a rebuild -- which is worse than no picker at all.
+        float tint[3] = { -1.0f, -1.0f, -1.0f };
         bool operator==(const BloomKernelKey& o) const
         {
             return width == o.width && height == o.height &&
                    imageWidth == o.imageWidth && imageHeight == o.imageHeight &&
-                   convSize == o.convSize;
+                   convSize == o.convSize &&
+                   tint[0] == o.tint[0] && tint[1] == o.tint[1] && tint[2] == o.tint[2];
         }
     };
     // ONE KEY PER FRAME SLOT, not one for the renderer. The kernel spectrum lives in
@@ -305,7 +330,25 @@ private:
     // than falling back to a procedural kernel that no longer exists.
     Texture2D bloomKernelTex_;
     bool bloomKernelReady_ = false;
-    bool bloomKernelTried_ = false;
+    // P8C-2r: which image is currently resident. Empty means none; comparing it against the
+    // setting is the whole reload gate, which is why the old once-only `bloomKernelTried_`
+    // flag is gone rather than kept beside it -- two gates would have disagreed.
+    std::string bloomKernelLoadedPath_;
+    // P8C-2o -- THE SAME PIXELS ON THE CPU, for UE's centre/scatter survey.
+    //
+    // They survey the kernel on the GPU (FindKernelCenter -> SurveyKernelCenterEnergy ->
+    // SumScatterDispersionEnergy), which for us would mean a readback the tonemap cannot wait for.
+    // It does not have to: what the survey produces are RATIOS over a static image, and a ratio is
+    // invariant to the resampling that stands between the texture and the grid -- box minification
+    // scales both sums by the same (span/texels)^2. So the identical numbers come off the texture
+    // itself, once per kernel key, with nothing to race.
+    std::vector<float> bloomKernelPixels_;      // RGB triples, row-major, square
+    uint32_t bloomKernelPixelDim_ = 0u;
+    // Sums from the last survey, and the `ratio` they were taken at. Energy, not colour -- the
+    // apply constants are formed from these every frame because they also depend on the intensity.
+    std::array<float, 3> bloomKernelCenterEnergy_{};
+    std::array<float, 3> bloomKernelScatterEnergy_{};
+    float bloomSurveyRatio_ = -1.0f;
     // P8C-2 step 5a: the ghost BOKEH SPRITE -- the iris polygon the scatter splats. Baked on the
     // CPU from the blade count (its new home after the aperture kernel's retirement) and rebaked
     // when it moves.

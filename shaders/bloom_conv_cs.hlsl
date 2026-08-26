@@ -46,6 +46,10 @@ cbuffer BloomConvCB : register(b0)
     uint2 sourceSize;       // the HDR image being read (setup) or written (resolve)
     float threshold;
     float softKnee;
+    // P8C-5: UE's BloomConvolutionPreFilterMin/Max/Mult. Mult <= 0 = inactive.
+    float preFilterMin;
+    float preFilterMax;
+    float preFilterMult;
     // P8C-2 kernel placement. `kernelSpanTexels` is how many GRID texels the kernel photograph's
     // full width covers: convSize (UE's BloomConvolutionSize, a fraction of the viewport) times
     // the image's major axis -- UE's own rule (PostProcessFFTBloom.cpp, KernelSupportScale).
@@ -64,6 +68,9 @@ cbuffer BloomConvCB : register(b0)
     // Where the kernel's centre sits in ITS texture. 0.5 for the stock EXR; kept for a
     // photographed kernel whose hot spot is off-centre (UE find it with a shader).
     float2 kernelCenterUV;
+    // P8C-6: colour multiplier on the kernel image itself. Survives the DC divide, which normalises
+    // by the LARGEST channel sum precisely so a kernel's colour balance is not washed out.
+    float3 kernelTint;
     // P8C-2h: THE ANAMORPHIC STREAK IS AN ANISOTROPIC PYRAMID, the structure keijiro's KinoStreak
     // uses (github.com/keijiro/KinoStreak, Unlicense) and the one this engine should have started
     // from. Width halves per level, height is untouched; every tap is ~1 texel OF ITS OWN LEVEL,
@@ -197,9 +204,45 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float3 lit = color;
         if (threshold >= 0.0f)
         {
-            const float exposedLuma = dot(color, kLumaWeights) * ExposureMultiplier();
-            const float amount = saturate((exposedLuma - threshold) * max(softKnee, 1.0e-4f));
+            // P8C-4 -- ABSOLUTE, i.e. a property of the SCENE and not of the
+            // camera. It used to be measured in the units the viewer sees -- luminance times the
+            // exposure -- which holds the bloom steady relative to the IMAGE but makes the same
+            // light source cross the line differently depending on what else is in frame.
+            // Measured on this level, that failure is not subtle: on the open beach the sun's
+            // exposed luminance sits between 1.3 and 3, while in the palm grove -- where the dark
+            // foliage drives the exposure up -- the sky gaps sit between 3 and 6. One number
+            // cannot serve both, and the user hits it as "raise it for the grove and lose the sun,
+            // lower it for the sun and blow out the grove".
+            //
+            // The CPU scales `threshold` by preExposure / ExposureMultiplierFromEv100(14) before
+            // it arrives, so what is compared here is the STORED value against a threshold in the
+            // same stored units -- exactly what the streak and the ghosts already do. All four
+            // thresholds in the bloom now mean one thing: brightness at EV100 = 14.
+            const float lum = dot(color, kLumaWeights);
+            const float amount = saturate((lum - threshold) * max(softKnee, 1.0e-4f));
             lit = amount * color;
+        }
+
+        // P8C-5 -- UE'S BRIGHT-PIXEL GAIN, and when it is on it REPLACES the threshold above.
+        //
+        // Transcribed from GPUFastFourierTransform.usf's FilterPixel, which is the only filtering
+        // their FFT bloom has -- there is no threshold anywhere in that path. The difference is not
+        // a detail: a threshold DECIDES MEMBERSHIP, so every source in the frame moves together and
+        // one number cannot serve two shots (measured on this level: at 5 both a beach sun and a
+        // palm grove bloomed, at 6 both died). This REWEIGHTS instead. Below Min nothing is touched,
+        // which is why an open sun keeps its glow; above Min the luminance is remapped with slope
+        // Mult and CLAMPED at Max, and that ceiling is what stops a grove full of bright gaps from
+        // running away while the same setting still lights a single sun.
+        if (preFilterMult > 0.0f)
+        {
+            lit = color;
+            const float lum = dot(color, kLumaWeights);
+            if (lum > preFilterMin)
+            {
+                float target = preFilterMult * (lum - preFilterMin) + preFilterMin;
+                target = min(target, preFilterMax);
+                lit = color * (target / max(lum, 1.0e-6f));
+            }
         }
 
         Grid[pixel] = float4(lit.r, lit.g, lit.b, 0.0f);
@@ -280,6 +323,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             }
         }
         k = min(k, clampLevel);
+        // P8C-6: tint the kernel, AFTER the clamp so the clamp level stays a property of the image
+        // and a tint cannot change how much of the delta core is cut.
+        k *= kernelTint;
         // Packed exactly as the image is: lane 1 = (R + iG) in .xy, lane 2 = (B + i0) in .zw.
         Grid[pixel] = float4(k.r, k.g, k.b, 0.0f);
         return;
@@ -289,8 +335,15 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     {
         // ---- stage 4: streak PREFILTER (P8C-2h) ----
         //
-        // u0 = bloomDown mip0 (source), u1 = pyramid level 0. `sourceSize` is level 0,
-        // `imageSize` the source. Soft-knee threshold, then a 2x2 box down.
+        // t0 = the HDR source at DISPLAY resolution, u1 = pyramid level 0. `sourceSize` is
+        // level 0. Soft-knee threshold, then a box down.
+        //
+        // P8C-2l: reading the HDR source DIRECTLY, rather than the bloom chain's mip 0, is what
+        // frees the streak from the convolution. The pyramid needs its own mip 0 thresholded by
+        // `bloom.threshold`, while every flare consumer needs the raw image plus its OWN absolute
+        // threshold -- sharing one texture made those two thresholds CASCADE, which is the bug
+        // that cut the sun to a remnant while brighter glints sailed through. One source, one
+        // threshold per consumer.
         //
         // The knee is keijiro's, verbatim in shape (KinoStreak's Streak.cginc):
         //     c *= max(0, br - threshold) / max(br, 1e-5)
@@ -299,20 +352,17 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // window that can hang off a frame edge.
         if (pixel.x >= sourceSize.x || pixel.y >= sourceSize.y) { return; }
 
-        const int2 base = int2(pixel) * 2;
-        const int2 hiSrc = int2(imageSize) - 1;
-
-        float3 c = 0.0f.xxx;
-        [unroll]
-        for (int dy = 0; dy < 2; ++dy)
-        {
-            [unroll]
-            for (int dx = 0; dx < 2; ++dx)
-            {
-                c += Grid[clamp(base + int2(dx, dy), int2(0, 0), hiSrc)].rgb;
-            }
-        }
-        c *= 0.25f;
+        // Four taps spread across this level-0 texel's footprint in the source. The footprint is
+        // 4x4 display texels at a quarter-resolution level 0, so these sample its corners rather
+        // than covering it: enough to break the correlation that makes a moving glint flicker,
+        // and the same tap count the half-res version used.
+        const float2 uvSrc = (float2(pixel) + 0.5f) / float2(sourceSize);
+        const float2 quarter = 0.25f / float2(sourceSize);
+        float3 c = 0.25f * (
+            HDRColor.SampleLevel(gSmp, uvSrc + float2(-quarter.x, -quarter.y), 0).rgb +
+            HDRColor.SampleLevel(gSmp, uvSrc + float2( quarter.x, -quarter.y), 0).rgb +
+            HDRColor.SampleLevel(gSmp, uvSrc + float2(-quarter.x,  quarter.y), 0).rgb +
+            HDRColor.SampleLevel(gSmp, uvSrc + float2( quarter.x,  quarter.y), 0).rgb);
 
         const float br = max(c.r, max(c.g, c.b));
         c *= max(br - anamorphicThreshold, 0.0f) / max(br, 1.0e-5f);
@@ -428,6 +478,62 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
+    if (convStage == 8u)
+    {
+        // ---- stage 8: the GHOST COMPOSITE, additive onto bloom mip 0 (P8C-2l) ----
+        //
+        // Lifted out of the convolution's RESOLVE so that both bloom methods can run it: the
+        // pyramid has no resolve to fold it into. u1 is bloom mip 0, `sourceSize` its extent.
+        //
+        // The flare image already IS the defocused picture of every bright source -- the scatter
+        // pass (lens_flare.hlsl) splatted one bokeh sprite per bright tile, exactly as UE's
+        // LensFlareBlurVS does. This is then N full-image copies of it scaled about the SCREEN
+        // CENTRE by the tint table's alpha ladder (negative scales mirror through the centre,
+        // which is what a real ghost chain does), each tinted, masked by a double DiscMask, and
+        // added. Drawing a scaled quad and gathering through the inverse map reach the same
+        // image; a gather is legal HERE because the transform is one fixed affine map per ghost
+        // -- it was the PER-SOURCE gather that could never work.
+        //
+        // Two suns give two chains for free, and no sun position is plumbed anywhere: the
+        // sources' locations are in the image.
+        if (pixel.x >= sourceSize.x || pixel.y >= sourceSize.y) { return; }
+        if (ghostCount == 0u || ghostIntensity <= 0.0f) { return; }
+
+        const float2 uv = (float2(pixel) + 0.5f) / float2(sourceSize);
+        const float2 screenPos = (uv - 0.5f) * 2.0f;
+        const float mask = DiscMask(screenPos) * DiscMask(screenPos * 0.8f);
+        if (mask <= 0.0f) { return; }
+
+        const uint count = min(ghostCount, 8u);
+        const float aScale = float(count) - 1.0f;
+        const float aBias = -aScale * 0.5f;
+        const float guardBand = 2.0f;                 // UE's GuardBandScale
+        // UE divide the composite tint by the guard band's AREA -- the scatter spread the image
+        // over a quarter of the flare target, and this puts the energy back.
+        const float guardArea = 1.0f / (guardBand * guardBand);
+
+        float3 sum = 0.0f.xxx;
+        [loop]
+        for (uint g = 0u; g < count; ++g)
+        {
+            const float4 tint = kFlareTints[g];
+            const float scale = (tint.a * aScale + aBias) * guardBand;
+            if (abs(scale) < 1.0e-3f) { continue; }
+
+            // The inverse of drawing the full flare texture on a quad of size `scale` centred on
+            // the screen centre. A negative scale flips both axes = the mirror.
+            const float2 t = (uv - 0.5f) / scale + 0.5f;
+            if (any(t < 0.0f) || any(t > 1.0f)) { continue; }
+
+            sum += FlareBlur.SampleLevel(gSmp, t, 0.0f).rgb * tint.rgb *
+                   (ghostIntensity * guardArea * mask);
+        }
+
+        float4 dst = BloomOut[pixel];
+        BloomOut[pixel] = float4(dst.rgb + sum, dst.a);
+        return;
+    }
+
     // ---- stage 2: resolve ----
     if (pixel.x >= sourceSize.x || pixel.y >= sourceSize.y) { return; }
 
@@ -436,62 +542,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     const float2 uv = (float2(pixel) + 0.5f) / float2(sourceSize);
     float4 c = SampleGridBilinear(uv);
 
-    // ---- ghosts: UE's LensFlareComposite, transcribed (P8C-2 step 5b) ----
-    //
-    // The flare-blur image already IS the defocused picture of every bright source -- the scatter
-    // pass (lens_flare.hlsl) splatted one bokeh sprite per bright pixel, exactly as UE's
-    // LensFlareBlurVS does. The composite is then N full-image copies of it scaled about the
-    // SCREEN CENTRE by the tint table's alpha ladder (negative scales mirror -- through the
-    // centre, which is what a real ghost chain does), each tinted, masked by a double DiscMask,
-    // and added. Drawing a scaled quad and gathering with the inverse map reach the same image;
-    // a gather is legal HERE because the transform is one fixed affine map per ghost -- it was
-    // the PER-SOURCE gather that could never work.
-    //
-    // Two suns give two chains for free, and no sun position is plumbed anywhere: the source's
-    // location is IN the flare image.
-    if (ghostCount > 0u && ghostIntensity > 0.0f)
-    {
-        const float2 screenPos = (uv - 0.5f) * 2.0f;
-        const float mask = DiscMask(screenPos) * DiscMask(screenPos * 0.8f);
-        if (mask > 0.0f)
-        {
-            const uint count = min(ghostCount, 8u);
-            const float aScale = float(count) - 1.0f;
-            const float aBias = -aScale * 0.5f;
-            const float guardBand = 2.0f;                 // UE's GuardBandScale
-            // UE divide the composite tint by the guard band's AREA -- the scatter spread the
-            // image over a quarter of the flare target, and this puts the energy back.
-            const float guardArea = 1.0f / (guardBand * guardBand);
-
-            [loop]
-            for (uint g = 0u; g < count; ++g)
-            {
-                const float4 tint = kFlareTints[g];
-                const float scale = (tint.a * aScale + aBias) * guardBand;
-                if (abs(scale) < 1.0e-3f) { continue; }
-
-                // The inverse of drawing the full flare texture on a quad of size `scale`
-                // centred on the screen centre. A negative scale flips both axes = the mirror.
-                const float2 t = (uv - 0.5f) / scale + 0.5f;
-                if (any(t < 0.0f) || any(t > 1.0f)) { continue; }
-
-                c.xyz += FlareBlur.SampleLevel(gSmp, t, 0.0f).rgb * tint.rgb *
-                         (ghostIntensity * guardArea * mask);
-            }
-        }
-    }
-
-    // UNIT MATCHING BETWEEN THE TWO METHODS, so `intensity` means the same thing in both and
-    // switching method is not also a brightness change.
-    //
-    // The convolution CONSERVES energy: its kernel is normalised through the DC divide, so the
-    // output carries the thresholded image's total light, redistributed. The pyramid does not --
-    // its tent upsample ADDS the levels together, so its output is roughly the level count times
-    // brighter. kBloomMaxMips (8) is the structural reason for most of the measured factor (~13),
-    // and is used rather than the measurement because it is the thing that would change if the
-    // pyramid ever gained or lost a level.
-    const float kConvolutionGain = 8.0f;
-    BloomOut[pixel] = float4(max(c.x, 0.0f) * kConvolutionGain,
-                             max(c.y, 0.0f) * kConvolutionGain,
-                             max(c.z, 0.0f) * kConvolutionGain, 1.0f);
+    // P8C-2o: THE UNIT-MATCHING GAIN IS GONE. It existed so `intensity` meant the same in both
+    // methods -- the convolution conserves energy through the DC divide while the pyramid's tent
+    // upsample adds its levels, so the pyramid ran ~8x hotter per unit. Under the centre/scatter
+    // split the convolution's scale is no longer a free multiplier to match against: it is a
+    // FRACTION OF THE KERNEL'S OWN ENERGY, computed by the survey, and an arbitrary 8 on top of it
+    // would be the one number in the chain that means nothing. The output is left at unit energy,
+    // which is what BloomFinalizeApplyConstants' fractions are defined against.
+    BloomOut[pixel] = float4(max(c.x, 0.0f), max(c.y, 0.0f), max(c.z, 0.0f), 1.0f);
 }

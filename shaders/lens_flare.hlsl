@@ -44,28 +44,49 @@ struct VSOut
     noperspective float3 color : TEXCOORD1;
 };
 
+// P8C-3: mirrored by the DrawInstanced call -- 6 vertices a quad, this many quads an instance.
+// UE call it GLensFlareQuadsPerInstance.
+//
+// P8C-5: THESE MUST STAY ABOVE THE [RootSignature] ATTRIBUTE. Declaring them between the attribute
+// and VSMain detaches it from the function: the shader then compiles CLEANLY with no root
+// signature, the pipeline silently fails to build, and the material lives on with a null PSO --
+// every gate still says the ghosts are on, the draw is still issued, and the flare target comes
+// out exactly zero. That cost most of a session to find.
+static const uint kFlareQuadsPerInstance = 4u;
+static const uint kFlareVertsPerInstance = 6u * kFlareQuadsPerInstance;
+
 [RootSignature(LENS_FLARE_RS)]
 VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
 {
+    // P8C-3: FOUR QUADS PER INSTANCE, which is UE's GLensFlareQuadsPerInstance = 4. Drawing one
+    // quad per instance meant four times their instance count for the same splat -- the only place
+    // in the whole flare comparison where they were ahead of us. 24 vertices an instance, the low
+    // bits pick the corner and the high bits the quad.
+    const uint quad = vid / 6u;
+    const uint v = vid % 6u;
+    const uint tileIndex = iid * kFlareQuadsPerInstance + quad;
+    // The last instance is partial whenever the tile count is not a multiple of four; those quads
+    // collapse to zero size below rather than reading outside the grid.
+    const bool inGrid = tileIndex < (tileCount.x * tileCount.y);
+
     // Triangle A: 0 left-top, 1 right-top, 2 left-bottom; B: 3 right-bottom, 4 left-bottom,
     // 5 right-top -- UE's own corner decode, verbatim.
-    const float2 corner = float2((float)(vid % 2u), (vid > 1u && vid < 5u) ? 1.0f : 0.0f);
+    const float2 corner = float2((float)(v % 2u), (v > 1u && v < 5u) ? 1.0f : 0.0f);
 
-    const float2 tile = float2((float)(iid % tileCount.x), (float)(iid / tileCount.x));
+    const uint safeIndex = inGrid ? tileIndex : 0u;
+    const float2 tile = float2((float)(safeIndex % tileCount.x), (float)(safeIndex / tileCount.x));
 
-    // The tile's FULL 2x2 source footprint, box-averaged. A single centre tap skipped half the
-    // source texels: a wind-swaying palm frond flickered its gap pixels in and out of the missed
-    // set, and the ghost image CRAWLED. Averaging the whole tile is the "small parent zone" that
-    // the bokeh then inflates -- the softness still comes from the SPRITE, not from a blur.
-    const float2 base = tile * tileSizeTexels;
-    const float2 h = srcInvSize * 0.5f;
-    const float2 uv00 = (base + 0.5f) * srcInvSize;
+    // The tile's footprint, sampled at four spread points rather than one. A single centre tap
+    // skipped most of the texels a tile covers: a wind-swaying palm frond flickered its gap
+    // pixels in and out of the missed set, and the ghost image CRAWLED. This is the "small parent
+    // zone" the bokeh then inflates -- the softness still comes from the SPRITE, not from a blur.
     const float2 srcUV = (tile + 0.5f) * tileSizeTexels * srcInvSize; // tile centre, for position
+    const float2 q = 0.25f * tileSizeTexels * srcInvSize;
     float3 color = 0.25f * (
-        FlareSource.SampleLevel(gSmp, uv00, 0.0f).rgb +
-        FlareSource.SampleLevel(gSmp, uv00 + float2(2.0f * h.x, 0.0f), 0.0f).rgb +
-        FlareSource.SampleLevel(gSmp, uv00 + float2(0.0f, 2.0f * h.y), 0.0f).rgb +
-        FlareSource.SampleLevel(gSmp, uv00 + 2.0f * h, 0.0f).rgb);
+        FlareSource.SampleLevel(gSmp, srcUV + float2(-q.x, -q.y), 0.0f).rgb +
+        FlareSource.SampleLevel(gSmp, srcUV + float2( q.x, -q.y), 0.0f).rgb +
+        FlareSource.SampleLevel(gSmp, srcUV + float2(-q.x,  q.y), 0.0f).rgb +
+        FlareSource.SampleLevel(gSmp, srcUV + float2( q.x,  q.y), 0.0f).rgb);
 
     // The source's TRUE screen position, and the shrunk one the splat is placed at.
     const float2 screenPos = float2(srcUV.x * 2.0f - 1.0f, 1.0f - srcUV.y * 2.0f);
@@ -90,7 +111,7 @@ VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     // so ghosts come from cores and not from haze.
     const float lum = color.r + color.g + color.b;   // UE: dot(rgb, 1)
     color.rgb *= max(lum - threshold, 0.0f) / max(lum, 1.0e-6f);
-    const float alive = (lum < threshold) ? 0.0f : 1.0f;
+    const float alive = (lum < threshold || !inGrid) ? 0.0f : 1.0f;
 
     const float2 cornerDelta = corner - 0.5f;
     pos += float2(2.0f * cornerDelta.x * kernelSizePx / flareRTSize.x,

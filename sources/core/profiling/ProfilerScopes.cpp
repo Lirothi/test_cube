@@ -88,6 +88,17 @@ const Profiler::ScopeNameKey kPassOceanReflection = Profiler::RegisterTraceLiter
 const Profiler::ScopeNameKey kPassDebugDraw = Profiler::RegisterTraceLiteral(L"Pass_DebugDraw");
 const Profiler::ScopeNameKey kPassExposureMetering = Profiler::RegisterTraceLiteral(L"Pass_ExposureMetering");
 const Profiler::ScopeNameKey kPassTonemap = Profiler::RegisterTraceLiteral(L"Pass_Tonemap");
+// P8C-2s: Pass_Tonemap's own work, which is everything after the DLSS evaluate it is named for.
+const Profiler::ScopeNameKey kTonemapCurve = Profiler::RegisterTraceLiteral(L"Tonemap.Curve");
+const Profiler::ScopeNameKey kTonemapFxaa = Profiler::RegisterTraceLiteral(L"Tonemap.Fxaa");
+const Profiler::ScopeNameKey kTonemapResolve = Profiler::RegisterTraceLiteral(L"Tonemap.Resolve");
+const Profiler::ScopeNameKey kTonemapBloomRecord = Profiler::RegisterTraceLiteral(L"Tonemap.RecordBloom");
+const Profiler::ScopeNameKey kTonemapCurveRecord = Profiler::RegisterTraceLiteral(L"Tonemap.RecordCurve");
+const Profiler::ScopeNameKey kTonemapTailRecord = Profiler::RegisterTraceLiteral(L"Tonemap.RecordTail");
+const Profiler::ScopeNameKey kBloomRecKernel = Profiler::RegisterTraceLiteral(L"BloomRec.Kernel");
+const Profiler::ScopeNameKey kBloomRecFft = Profiler::RegisterTraceLiteral(L"BloomRec.Fft");
+const Profiler::ScopeNameKey kBloomRecResolve = Profiler::RegisterTraceLiteral(L"BloomRec.Resolve");
+const Profiler::ScopeNameKey kBloomRecFlares = Profiler::RegisterTraceLiteral(L"BloomRec.Flares");
 const Profiler::ScopeNameKey kPassDebug = Profiler::RegisterTraceLiteral(L"Pass_Debug");
 const Profiler::ScopeNameKey kFrameAsyncWait = Profiler::RegisterTraceLiteral(L"Frame Async Wait");
 const Profiler::ScopeNameKey kPassOverlay = Profiler::RegisterTraceLiteral(L"Pass_Overlay");

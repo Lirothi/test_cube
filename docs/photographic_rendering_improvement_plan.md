@@ -4376,6 +4376,30 @@ kernel's starburst radiating from it. Level values NOT changed -- threshold and 
 user's own artistic settings and the honest move is to report the new meaning, not to retune them
 silently.
 
+**P8C-2l -- THE LENS FLARES NO LONGER BELONG TO THE CONVOLUTION.** The streak and the ghost chain
+lived inside `Bloom_Convolve`, so the cheap pyramid method could not have them at all. Nothing
+about either is convolution-specific: both read the HDR image and both add into mip 0 of the bloom
+target, which the pyramid writes too. Two things had to be untied first, and each was a real bug:
+
+* **They read the bloom chain's THRESHOLDED mip 0**, so `bloom.threshold` cascaded with each
+  consumer's own absolute threshold -- the bug that once cut the sun to a remnant while brighter
+  glints sailed through. Both now read the raw HDR image at display resolution, one threshold per
+  consumer, and the convolution path lost a whole downsample pass in the process.
+* **The streak pyramid squatted on mip 1 of the bloom chains**, which is free only while the
+  convolution runs -- the pyramid method owns those mips. It has its own two targets now
+  (`streakA`/`streakB`, quarter-display, ~1.8 MB the pair).
+
+Shape of the change: `Bloom_FlaresBuild` (bokeh scatter + streak pyramid) runs before the bloom
+target is written, `Bloom_FlaresComposite` (both composites) after it, and `Bloom_FlareConstants`
+fills the shared fields in ONE place -- assembling them twice is exactly how the two methods would
+drift. The ghost composite was lifted out of the convolution's resolve into its own stage (8),
+because the pyramid has no resolve to fold a composite into.
+
+Verified: with `bloom.method 0` the flare contribution measures 0.615 mean / 189 max against the
+same frame with flares off -- ghosts and streak both present on the pyramid, which they never were
+before. Both paths GBV-clean in Debug (the barrier declarations gained a branch), 47/47 shaders,
+both configs.
+
 **P8C-2k -- WHERE THE STAR ACTUALLY IS, AND THE ONE PIECE OF UE'S MATH WE STILL DO NOT HAVE.**
 
 Measured the kernel itself rather than guessing. Angular profile of the RAW 2048 EXR, 720 samples
@@ -5388,3 +5412,688 @@ camera, which is what a distance-field or a voxel term would buy.
 
 **Do not start P16.2 before P16.1 is verified.** Its failure mode is a uniform brightness error that
 looks like a tuning problem, and it will be blamed on the level.
+
+**P8C-2m -- THE FLARES SWITCH OFF COMPLETELY, ON EITHER BLOOM METHOD.** Two frame gates,
+`flaresGhosts_` and `flaresStreak_`, are decided in `Render()` beside the existing
+`bloomConvolution_` gate and are the ONLY source of truth: the Prepare declares from them, the
+bodies read them rather than re-deriving from the settings (a body that re-derived could disagree
+with the Prepare, which is a barrier the compile never registered). Off means no dispatch, no draw,
+and no declaration -- the streak and flare targets are not even barriered.
+
+Two real bugs fell out of doing it:
+
+* **The ghost intensity had dropped ~8x** when the composite moved out of the convolution's resolve,
+  because inside the resolve it was riding `kConvolutionGain`. The compensation was written but a
+  STALE line right below the shared-constant block overwrote `ghostIntensity` with the raw setting
+  again. Ghost coverage measured 11 025 -> 29 291 pixels once the overwrite was deleted, and the
+  pyramid now carries the ghosts at the same strength as the convolution (0.2278 vs 0.2697 mean
+  contribution) -- which is the point of one knob meaning one thing on both methods.
+* **Switching the flares off STALLED the pass's whole barrier program.** `Renderer::Transition`
+  matches only the CURRENT point and breaks otherwise, so a declared non-empty point whose body
+  request never arrives blocks every later point too. The convolution's `bloomDown -> SRV`
+  transition lived inside `Bloom_FlaresBuild`, an optional callee. GBV: 21 errors with the FFT
+  grids and `BloomUp` still in `UNORDERED_ACCESS` under the tonemap's read, and the Debug build
+  died with no screenshot written. Fixed by deleting the convolution's `bloomDown` round trip
+  outright -- that path never writes it any more (stage 0 packs straight from the HDR image) and
+  the flares read the HDR image too, so the UAV->SRV trip was pure cost.
+
+Verified: GBV clean across ghosts-only, streak-only, both-on and both-off on the convolution
+method and on the pyramid; the flares-off frame renders intact.
+
+**P8C-2n -- (a) A DERIVED KERNEL. THE STAR IS REAL AND STILL DOES NOT SHOW; THE BLOCKER IS (b).**
+
+The kernel is no longer a photograph. `textures/BloomKernelStar.dds` is computed as what a camera's
+point spread function IS -- `PSF_lambda(x) = |FT{pupil}(x / lambda f)|^2` -- so the rays are not drawn:
+diffraction at the straight edges of a nine-bladed iris throws them, and an ODD blade count gives 2N
+rays because no two blades are parallel (an even one gives N, which is why the six-rayed first
+attempt was wrong against Epic's reference). Wavelengths 380-730nm are integrated against an
+analytic CIE 1931 observer (Wyman/Sloan/Shirley 2013). The glow is NOT modelled: it is lifted out of
+UE's own photograph by a per-radius trimmed mean, which the few degrees of ray cannot move, so the
+footprint the level was tuned against is preserved exactly and only the star changes.
+
+Measured, kernel-side (ray peak against the between-ray median):
+
+| | r 8-16 | r 16-32 | r 32-64 | r 64-128 |
+|---|---|---|---|---|
+| UE's photograph | 4.2x | 2.6x | 3.7x | 3.0x |
+| derived kernel | 7.6x | 12.3x | 11.5x | 10.0x |
+
+**A FINDING THAT COST THE FIRST THREE ATTEMPTS:** a kernel with UE's radial energy profile is
+FORCED to have ~2x rays. Their glow is flat per octave, and mixing any 1/r^2 halo in at 30% of the
+energy collapses the ray contrast to exactly the 2-3x their photograph measures. Their weak rays are
+not a defect of the photograph -- they are the arithmetic consequence of the glow. Epic's own docs
+page admits as much, captioning the crisp version "Kernel Image adjusted for demonstration".
+
+**AND THE STAR STILL DOES NOT REACH THE SCREEN, for a reason no kernel can fix.** What lands is
+`B * ray/DC * bloom.intensity`. Measured through the real path (core clamped to the r=2 ring, then
+the DC divide): ray/DC at r=32 is 4.5e-5 for UE's kernel and 2.5e-4 for this one -- 5.6x better, and
+still 1.5-2 orders below visibility once `bloom.intensity` (0.1 in the level) multiplies it. Raising
+intensity to 3.0 and sweeping convSize 0.06-1.0 does not produce a star, and the sweep exposes the
+squeeze: minifying the kernel raises ray/DC roughly linearly, but the rays then stop being longer
+than the source blob and the convolution smears them flat.
+
+**That is exactly what UE's split buys, so (b) is not an improvement to this -- it is its
+precondition.** `SceneColorApplyParameters` scales scene colour by the CENTRE fraction (4.2% for the
+shipped kernel) and `FFTMulitplyParameters` scales the convolution by the SCATTER fraction (95.8%),
+normalised by the scatter energy rather than the whole DC. The source DIMS and its light BECOMES the
+star; ours keeps the source intact and adds a star worth `intensity` on top. Two further notes for
+whoever picks (b) up: a star only survives on a source SMALLER than the ray is long -- the sphere's
+~40px specular blob smears a one-texel ray across its own width -- and around the sun the sky's own
+painted corona dominates the bloom (in-frame ray contrast there measured 1.04x regardless of kernel).
+
+Reverting is one line in `SceneRenderer.cpp`: UE's `DefaultBloomKernel.dds` is untouched beside it.
+
+**P8C-2o -- (b) UE'S CENTRE/SCATTER SPLIT. THE BLOOM PARTITIONS THE LIGHT INSTEAD OF ADDING TO IT.**
+
+Transcribed from `BloomFinalizeApplyConstants.usf`, which is four lines and every one of them matters:
+
+```
+FinalScatter = ScatterDispersionEnergy * s          // s = BloomConvolutionScatterDispersion * BloomIntensity
+FinalCenter  = TotalEnergy - FinalScatter
+SceneColorApply = Tint * saturate(FinalCenter  / TotalEnergy)
+FFTMulitply     = Tint * saturate(FinalScatter / TotalEnergy)
+```
+
+A kernel is the lens's whole point spread function. The part of it inside ONE output pixel is the
+light that did not scatter; everything else is the flare. So the two are a PARTITION, the tonemap
+became `out = scene * sceneApply + bloom * scatterApply`, and pushing the knob up no longer creates
+light -- it MOVES it out of the source and into the flare. That is the only mechanism by which a
+star can ever outshine the highlight that threw it.
+
+Three quantities, their definitions:
+* **MaxScatterDispersion** -- the level the kernel is clamped to, measured on the ring just outside
+  the centre zone. Stage 3 already computed exactly this.
+* **CenterEnergy** -- the sum over the centre zone of `max(kernel - MaxScatterDispersion, 0)`. Not
+  the kernel's value there: the EXCESS above the clamp, which is the delta spike. A SQUARE zone of
+  Chebyshev radius `ViewTexelRadiusInKernelTexels`, because that is a pixel's footprint.
+* **ScatterDispersionEnergy** -- the total of the clamped kernel, i.e. all the rest.
+
+**The survey runs on the CPU, and that is not a shortcut.** UE need three compute passes because
+they must find the centre of an arbitrary import; for us the numbers are RATIOS over a static image,
+and a ratio is invariant to the resampling between texture and grid -- box minification scales both
+sums by the same `(span/texels)^2`. So the identical constants come off the texture, once per kernel
+key, with no readback for the tonemap to race. Measured on the shipped kernel: **centre 92.7-94.2%
+of total, scatter 5.8-7.3%** (it moves with `convSize`, because the centre zone does).
+
+**`bloom.intensity` HAS CHANGED MEANING and levels need retuning.** It is UE's
+ScatterDispersionIntensity now: the multiplier on the scattered fraction. Useful range is 0 to
+~1/scatterFraction (about 14 for this kernel), where the source vanishes entirely into its own
+flare. UE's own default lands near 0.7. The level's old 0.1 gave `0.1 * 8 = 0.8` of ADDED light --
+the frame carried 1.8x the light that entered it, which is what an additive bloom always did and
+what this retires. Verified: at s = 0.7 the frame mean drops 116.4 -> 113.3 and the flare appears;
+at s = 10 it drops to 66.9. The scene dimming IS the flare being paid for.
+
+Two consequences worth writing down:
+
+* **The unit-matching gain in the resolve is gone.** `kConvolutionGain = 8` existed so `intensity`
+  meant the same in both methods. Under the split the convolution's scale is a fraction of the
+  kernel's own energy, so an arbitrary 8 on top would be the one number in the chain meaning
+  nothing. The flares' own knobs, which divide out whatever the tonemap multiplies the target by,
+  now divide by the surveyed scatter instead of by `intensity` (`Bloom_TonemapBloomScale`).
+* **A threshold makes the partition lossy** -- the scene dims by `sceneApply` but only the
+  above-threshold part returns as bloom, and the rest is destroyed. UE's FFT bloom does not
+  threshold by default and neither should this one: `bloom.threshold < 0`.
+
+**AND THE STAR STILL DOES NOT APPEAR, for a reason that is now measured rather than suspected.**
+A ray is ONE texel wide; convolution smears it across the source's own width. Convolving the shipped
+kernel with a disc source (numpy, ray peak vs between-ray median):
+
+| source radius | r 32 | r 64 | r 128 |
+|---|---|---|---|
+| 1 px | 5.9x | 27.3x | 10.8x |
+| 4 px | 1.7x | 8.1x | 7.3x |
+| 8 px | 1.4x | 1.7x | 4.5x |
+| 16 px | 1.15x | 1.5x | 1.8x |
+| 24 px | 1.1x | 1.3x | 1.5x |
+
+The sphere's specular blob is ~20 bloom texels, which at `convSize 0.25` is ~32 kernel px -- the
+bottom row. **This is physics, not a defect: photographs show stars on point lights, never on big
+specular blobs.** It also inverts an assumption made earlier in this pass: a LARGER `convSize` helps,
+because the source shrinks in kernel-pixel terms while the ray's width does not. What the scene
+actually lacks is a small source with real dynamic range -- a threshold sweep found the frame's peak
+exposed luminance sits between 1.5 and 3 (thresholds 3.0 and 6.0 produce bit-identical bloom), so
+there is nothing in it more than ~3x display white to make a star out of.
+
+**P8C-2p -- THE STAR APPEARS. THE MISSING FACTOR WAS A UNIT BREAK I INTRODUCED ONE STEP EARLIER.**
+
+P8C-2o deleted `kConvolutionGain = 8` from the resolve on the grounds that the partition supplies an
+absolute scale and an arbitrary 8 on top of it would mean nothing. That is true of the PARTITION and
+false of everything else: with a threshold the bloom is additive, `intensity` is a free multiplier
+that must mean the same in both methods, and the gain is exactly what made it. Deleting it outright
+left the additive convolution **8x dimmer than the pyramid at the same `intensity`** -- and the
+level's star landed just under visibility, which reads as "the kernel does not work" rather than as
+the unit break it was.
+
+The gain is back, but on the CPU and only on the path where it means something
+(`Bloom_ApplyConstants`, the non-partition branch, `kBloomMaxMips`). At the level's own
+`intensity: 2` the eighteen rays are plainly visible on the sphere's highlight; at 4 they are
+dramatic. The partition path keeps its physical scale with no gain at all.
+
+**Two measurement lessons, both of which cost time here.**
+
+* **The ratio metric lied twice.** "Ray peak / between-ray median" on a ring around the highlight
+  read 1.11x at `intensity` 2, 6 and 15 alike -- flat, apparently proving the knob dead -- while the
+  eye saw the star plainly at 15. The ring sits on the SPHERE, whose own brightness is the median
+  and dominates both terms; the metric was measuring the sphere, not the star. The same ruler had
+  already failed at P8C-2n by averaging a one-pixel ray over a 4-degree wedge. **A contrast ratio
+  taken against a bright background measures the background.**
+* **The bloom target had to be looked at alone.** Setting `intensity` to ~1/scatterFraction drives
+  `sceneApply` to zero, which leaves the flare as the entire image -- free, needs no debug view, and
+  it showed the eighteen-ray burst intact while the composited frame still looked like a blob. That
+  is what separated "the algorithm is wrong" from "the algorithm is 8x quiet".
+
+`convPercent` was tested as a suspect and cleared: 25, 50 and 100 give ray contrast 1.129, 1.129 and
+1.130. `kernelSpanTexels` scales with the image, so the star's footprint in DISPLAY pixels -- and the
+ray's width in them -- does not move with the convolution's resolution.
+
+**Working recipe for a visible starburst**, all measured on `wind_test`: convolution method,
+`convSize` 1.0 (the kernel's footprint is fixed in screen terms, so bigger is strictly better for the
+ray-to-source ratio), a threshold that isolates the source (1.5 on this scene, whose peak exposed
+luminance is between 1.5 and 3), and `intensity` 2 upward. Drop the threshold below zero instead and
+the partition takes over: physical, energy-conserving, and the star then needs the source to carry
+real dynamic range rather than a threshold to isolate it.
+
+**P8C-2q/r -- THE GAP IN THE STAR, AND THE KERNEL BECOMES AN ASSET CHOICE.**
+
+**The gap was mine, not diffraction's.** Measured along a ray of the shipped kernel: brightness fell
+3.8e-3 at r=5 -> 1.75e-4 at r=13 and then ROSE again to 3.2e-4 by r=19. A ray that dims and
+re-brightens is what reads as a hole between the highlight and the spikes, and a real spike never
+does it at this scale. Cause: `rays = max(diffraction - isotropic, 0)` at full strength. Near the
+core the diffraction figure's own isotropic part is comparable to the ray, so the subtraction ate
+the ray there.
+
+Two fixes were tried and measured before the third was kept, which is worth recording because the
+first two are the obvious ones:
+
+* **Delete the subtraction** (add diffraction and glare, as the two physical mechanisms genuinely
+  do): monotonic, no gap -- and no star either. Ray/isotropic collapsed to 1.1-1.5x out to r=15.
+  The subtraction is what buys the contrast.
+* **Taper the subtraction toward the core**: monotonic, and the star vanished from the level's own
+  camera. It removed exactly the near-core contrast (12x at r=5) the visible rays were made of.
+* **KEPT: force the ray's RADIAL profile monotonic.** The subtraction stays at full strength; the
+  ray term's radial profile is replaced by its own non-increasing envelope (running maximum taken
+  from the outside in, which is >= the profile everywhere and monotone by construction) and each
+  ring is scaled by the ratio, clamped to [1, 8] so it only ever FILLS. A per-radius scalar cannot
+  touch angular contrast. Result: the r=13 trough goes from a 22x drop to 1.2x, and contrast is
+  unchanged (12x at r=5, 22-33x past r=25).
+
+**P8C-2r: `bloom.convKernel` picks the image.** Any square FP16 DDS in `textures/`; the inspector
+lists what it finds (scanned once and cached -- an inspector that stats the filesystem per frame is
+a stutter waiting to happen). The reload gate is the PATH, not a once-only flag, and it clears every
+frame slot's kernel key so no slot keeps convolving against the old spectrum. Placement, the core
+clamp and the centre/scatter survey are all derived from the pixels, so a swap needs nothing else
+retuned -- though `intensity` shifts meaning across it, because the scatter fraction is a property
+of the image.
+
+**And the swap independently confirms the survey is transcribing UE's quantities correctly**: on
+their `DefaultBloomKernel.dds` it reports centre **97.90%** / scatter **2.10%**, which is the ~2%
+their whole design is built around; on the derived star it is 92.5 / 7.5.
+
+**The CPU survey is not in the frame, and here is the number.** It is gated on `ratio`, which moves
+only when `convSize`, the bloom resolution or the kernel image changes: **one survey per run, 0.56
+ms**, logged with its own timing to `logs/bloom_kernel.log`. Per steady frame it costs one float
+compare. Moving it to the GPU would make it *worse*, not better -- the tonemap needs the constants
+in its own constant buffer, so a GPU survey means either a readback the tonemap cannot wait for, or
+a per-frame structured buffer plus a descriptor plus a barrier, every frame, to replace 0.56 ms
+paid once. UE need the GPU passes because they must find the centre of an arbitrary import; our
+constants are ratios over a static image, and a ratio survives the texture-to-grid resampling
+untouched.
+
+**Threshold, for the record.** Slider range -1.0 to 16.0, default 1.0, and the sign is a MODE:
+`>= 0` gates on post-exposure luminance where display white is 1.0, and the bloom is additive
+(an extraction, so the scene is not dimmed); `< 0` disables the gate entirely -- UE's default --
+and the centre/scatter partition takes over. On `wind_test` the frame's peak exposed luminance sits
+between 1.5 and 3, so 0.5-3 is the whole useful gating range there.
+
+**P8C-2s -- THE UNNAMED BLOCK AT THE END OF Pass_Tonemap, MEASURED.**
+
+Pass_Tonemap records far more than its name: the DLSS evaluate lives inside it (bloom must see the
+upscaled image and the tonemap must see the bloom), and so does the whole bloom, the tone curve
+dispatch, FXAA and the backbuffer resolve. Only the first two were ever scoped, so everything after
+DLSS read as an unlabelled block on both timelines. Six scopes added -- three GPU
+(`Tonemap.Curve` / `.Fxaa` / `.Resolve`) and three CPU (`Tonemap.RecordBloom` / `.RecordCurve` /
+`.RecordTail`), the CPU ones because RECORDING the convolution is its own cost and the GPU side was
+already covered by `Pass_BloomConv`.
+
+Measured (`--profdump`, wind_test, convolution bloom, DLSS balanced):
+
+| CPU, Pass_Tonemap 0.259 ms | | GPU, Pass_Tonemap 0.756 ms | |
+|---|---|---|---|
+| DLSS::Evaluate | 0.139 | Pass_BloomConv | 0.382 |
+| **Tonemap.RecordBloom** | **0.089** | Tonemap.Curve | 0.045 |
+| Tonemap.RecordTail | 0.010 | Tonemap.Resolve | 0.030 |
+| Tonemap.RecordCurve | 0.006 | | |
+
+The block after DLSS on the CPU is **command recording for the convolution** -- kernel resample, six
+FFT dispatches, the resolve and the flare composites, each staging descriptors and allocating a
+constant buffer. A third of the pass, ~3.8% of a 2.365 ms CPU frame. The 0.015 ms remainder is
+`ApplyDeclaredStates`, the transitions and the descriptor-heap bind. **The P8C-2o CPU survey does
+not appear at all, because it is not in the frame.**
+
+**Two traps this cost, both worth remembering.** `--trace` writes nothing when `--shot` is also
+passed: the screenshot ends the app before the capture's `frames + 30` margin elapses, so the
+"trace" being read was silently the PREVIOUS build's file -- which is exactly why freshly added
+markers appeared to be missing. `--profdump=<path>` takes both tables with no such race and is the
+right tool for a scope-level question. And the GPU query budget was cleared as a suspect by
+counting: 28 scopes/frame against a 512 ceiling.
+
+**P8C-2t -- THE GLARE SHRANK WHEN convSize CROSSED 0.8, AND THE CLAMP WAS WHY.**
+
+Reported on UE's `DefaultBloomKernel` and NOT on the derived star, which is the clue that solved it:
+the effect is a property of the kernel's CONTENT, not of the grid. Replicating stage 3 in numpy over
+the boundary (image 640x360, so span = convSize * 640):
+
+| convSize | ratio | taps | clamped DC | near ring / DC |
+|---|---|---|---|---|
+| 0.70 | 1.143 | 2 | 185.2 | 0.451 |
+| 0.75 | 1.067 | 2 | 310.2 | 0.313 |
+| 0.79 | 1.013 | 2 | 549.9 | 0.198 |
+| 0.80 | 1.000 | 1 | 626.6 | 0.179 |
+| 0.90 | 0.889 | 1 | 701.9 | 0.205 |
+
+`taps` crossing 2 -> 1 is a red herring; the DC is already 3x up before it happens. The cause is the
+CLAMP RING: its radius is `(max(ratio, 1) + 1)` kernel texels, so it shrinks from 2.14 to 2.00 as
+convSize rises -- and UE's kernel is 98% one texel, so its profile there is steep enough that those
+0.14 texels TRIPLE the clamp level, hence the DC, hence the divisor under everything else. The
+derived star has no delta to clip and only moved 0.665 -> 0.485 over the same span, which is why it
+looked proportional.
+
+**Fixed with UE's own invariant rather than a patch.** The additive path now scales by
+`scatter / total` as well: `total` is the ORIGINAL kernel energy and does not care where the clamp
+lands, `scatter` IS the clamped DC, so `(kernel / clampedDC) * (scatter / total)` is `kernel / total`
+-- clamp-invariant by construction. It is the same `FFTMulitplyParameters` the partition already
+used, so the two paths now differ ONLY in whether the scene is dimmed. Measured after: near ring
+440 / 442 / 424 / 425 across convSize 0.5 / 0.7 / 0.8 / 0.9, against 497 / 504 / 453 / 458 before.
+
+The knob rescales with it -- `scatterApply = intensity * kBloomMaxMips * scatter/total`, and the
+scatter fraction is a property of the image (8.5% for the star, 2.1-2.3% for UE's). The Intensity
+slider goes to 64 now; the level's 4 on the star kernel becomes about 53. **That the same number is
+dimmer on a kernel that scatters less is the point, not a quirk.**
+
+**AND THE LESSON THAT COST THE MOST HERE: CHECK THE LEVEL'S mtime BEFORE BELIEVING A REGRESSION.**
+Half of this pass was spent concluding the invariant had "killed the star", from A/B shots where the
+reference frame used `BloomKernelStar` and every new frame used `DefaultBloomKernel` -- because the
+level had been saved from the editor mid-session with the new kernel picker, at 15:20, choosing UE's
+image. The arithmetic said the two frames had to match (33 vs 32) and they did not, which was the
+signal to go looking at the INPUTS rather than at the change. `[p8c-2t]` now logs
+`s / match / invariant / scatterApply` on every change to `logs/bloom_kernel.log`, so which kernel
+and which scale are live is one grep away.
+
+**On splitting the bloom out of Pass_Tonemap:** nothing structural forbids it. The ordering is real
+-- the bloom must see the upscaled image and the tone curve must see the bloom -- but that is a
+sequence, not a shared-pass requirement, and it would become `Pass_Dlss -> Pass_Bloom ->
+Pass_Tonemap`. The work is redistributing one Prepare across three, which is exactly the kind of
+edit where a declared point left without its body request stalls a whole pass silently (see
+[[barrier-plan-progress]]). The payoff would be naming and a place to hang async compute later --
+and the naming half is already paid for by the P8C-2s scopes, at no risk.
+
+**P8C-2v -- THE convSize CLIFF, FOUND PROPERLY THIS TIME. THE CLAMP RING IS NOW FIXED.**
+
+P8C-2t named the clamp ring and then "fixed" it with a `scatter/total` factor. That was wrong twice
+over and both mistakes are worth keeping:
+
+* **The verification measured the wrong thing.** The sweep looked flat (440/442/424/425) only
+  because the factor had made the bloom 48x too dim to move a number that also contains the SPHERE'S
+  own brightness. Isolating the bloom against a `bloom.intensity:0` baseline showed the cliff still
+  there at full size: 151 -> 84 at r 40-100, a 0.55x step at convSize 0.8. **A ring statistic taken
+  over a lit object measures the object; subtract a baseline or measure nothing.**
+* **The compensation could not work anyway.** The GPU divides by the DC of the RESAMPLED-then-clamped
+  kernel; the CPU survey summed the clamped-then-sampled texture. For a delta kernel those are not
+  proportional -- box-averaging spreads the spike BELOW the clamp, so far less gets clipped -- and no
+  constant relates them.
+
+`taps` was also cleared as a suspect by direct test: forcing a fixed four-tap box with a footprint of
+`max(ratio, 1)` (continuous in ratio, kept because it IS the more correct filter) moved the cliff not
+at all.
+
+**The cause is that the clamp ring radius moved, and the fix is to stop moving it.** UE set it from
+`ViewTexelRadiusInKernelTexels + 1`, which grows with the kernel texels one output pixel covers.
+That is safe FOR THEM because the energy the clamp removes is not discarded -- it becomes their
+centre term and returns as scene colour, so moving the ring moves light between two places and the
+total is untouched. Here the clamped-off energy is simply gone and the convolution is normalised by
+what is left, so a moving ring changes the divisor under the entire image. On a kernel that is 98%
+one texel, the ring shrinking 2.14 -> 2.00 texels across convSize 0.7 -> 0.8 was worth 45% of the
+glare. Pinned at 2.0 texels, in the shader and in the CPU survey both:
+
+| convSize | 0.5 | 0.7 | 0.8 | 0.9 | 1.0 |
+|---|---|---|---|---|---|
+| before (bloom only, r 40-100) | 155.9 | 151.2 | **83.6** | 65.4 | 56.4 |
+| after | 50.5 | 75.1 | 83.6 | 65.4 | 56.4 |
+
+A smooth hump instead of a cliff -- and the hump is the expected shape, since a fixed measuring ring
+sees little from a small kernel and little from one spread thin. UE's kernel goes 0.55x -> 1.11x
+across the step, the derived star 0.55x -> 0.97x.
+
+**And the compensation factor was then DELETED, not left in.** With the ring fixed the clamp level no
+longer moves, so the factor computed to identically 1.000 at every ratio. An inert multiply is worse
+than none: the next reader has to prove it does nothing. `bloom.intensity` therefore means exactly
+what it meant before this whole detour -- the level's 4 is still 4, and the Intensity slider's raised
+ceiling is the only thing that stayed.
+
+**P8C-2w/x -- THE RAYS ARE SYNTHESISED NOW; THE GRID GROWS WITH THE KERNEL; THE PASS SPLIT WOULD BUY NOTHING.**
+
+**The star is drawn, not carved.** Every earlier version built the rays as
+`max(diffraction - isotropic, 0)`. That residual is what put a hole between the core and the spikes:
+near the centre the figure's own isotropic part is as bright as the ray, so the subtraction ate it,
+and each repair traded the gap for something else (dropping the subtraction lost the star at
+1.1-1.5x contrast; tapering it lost the near-core rays; a monotone envelope filled the trough but
+rattled the gain 1.02/1.55/1.00/1.60/1.41/2.34 between neighbouring rings, which is the concentric
+ripple that read as "torn"). The field is now written directly --
+
+```
+ray(r, th) = sum_i  A_i * radial(r) * lobe(perp_i, r) * tip_i(r)
+```
+
+-- continuous from r = 0 by construction (ring-to-ray rises >5% over r 4..80: **0**, was 5), with
+per-ray ANGLE, amplitude and LENGTH, which is what makes the spacing uneven and the lengths varied.
+Two things that had to be got right: the lobe is measured in PIXELS ACROSS the ray, not in angle --
+an angular width is a cone, and a real spike stays a thin line -- and the tip fades over the last
+45% of its length instead of being cut. The glow underneath is still UE's photographed disc, so the
+footprint is unchanged.
+
+**It needs more `intensity` than the derived version: about 12 where the old one wanted 4.** Measured
+through the real path, the synthesised rays reach 0.29-0.39x of the old ray/DC and SATURATE there --
+raising their amplitude also raises the DC they now dominate, so past a point the ratio stops moving.
+Thin rays over that much area simply cannot carry the share a sub-pixel diffraction ridge does.
+
+**The FFT grid is sized from the kernel as well as the image.** The kernel is laid out around the
+DC-folded origin and the shader maps grid offset to `uv = 0.5 + offset/span`, so once `span` passes
+the grid's SHORTER axis the outer ring of the kernel image is never sampled. At convPercent 25 the
+grid was 1024x512 against a 640-wide image, putting that at exactly convSize 0.8. UE's own kernel is
+unaffected -- its disc ends at 0.29 of the image, inside the surviving window -- which is why the
+measurement did not move for it; the derived star reaches 0.49 and was losing its outer rays. The
+grid now takes `nextPow2(max(image * 5/4, span))`, and where the allocation ceiling stops it growing
+the SPAN is clamped instead, so the kernel is always whole.
+
+**On splitting Pass_Tonemap into three: measured, and it would not move the 0.089 ms.**
+`RenderGraph::ExecuteParallel` already makes every pass its own task -- `Pass_Tonemap` was observed
+recording on **24 different worker threads** across one capture, so that cost is not on the main
+thread to begin with. It sits at the end of the frame because it is the LAST pass and depends on
+everything before it; there is nothing left to overlap it with, and DLSS -> bloom -> tone curve is a
+hard data dependency that would serialise the three new passes against each other anyway. The lever
+that WOULD pay is cutting the recording itself -- the convolution issues a kernel resample, six FFT
+dispatches, a resolve and the flare composites, each staging descriptors and allocating a constant
+buffer.
+
+**P8C-2y -- WHERE THE BLOOM'S CPU RECORDING ACTUALLY GOES, AND TWO OPTIMISATIONS OF WHICH ONE SURVIVED.**
+
+Scoped first, guessed never. Of `Tonemap.RecordBloom`'s 0.093 ms:
+
+| | ms | note |
+|---|---|---|
+| BloomRec.Flares | 0.061 | two calls -- the streak pyramid is ~15 dispatches, plus the scatter draw and the composites |
+| BloomRec.Fft | 0.031 | the pack, six transforms and the resolve |
+| BloomRec.Kernel | 0.021 | `usages:0` -- it does NOT run in a steady frame, only on a key change |
+
+**Tried and REVERTED: writing only the constants that moved.** `WriteBloomConvConstants` reflects 23
+fields into a fresh constant buffer for each of ~18 dispatches, and the buffer is upload-heap memory
+where scattered small stores are the bad pattern. Assembling in ordinary memory and handing over one
+linear copy measured 0.093 -> 0.095 ms: nothing. It was reverted rather than kept "because the
+reasoning is sound" -- an optimisation that does not optimise is complexity with a story attached.
+
+**Tried and KEPT: one driver call per descriptor TABLE instead of one per DESCRIPTOR.**
+`StageDescriptorTableRange` looped `CopyDescriptorsSimple(1, ...)`, so a dispatch with three SRVs and
+three UAVs cost six calls into the driver before it could bind. `CopyDescriptors` takes the set at
+once, with a null source-range-size array meaning "each source is one descriptor", and both callers
+already hand in contiguous storage so the sources need no gathering. Worth ~0.011 ms of a 1.945 ms
+CPU frame -- small, engine-wide, and strictly fewer calls.
+
+**What is left is irreducible without changing what is issued.** ~18 dispatches x roughly seven
+command-list calls each (PSO, root signature, three or four table binds, the dispatch, a UAV barrier)
+is ~126 calls, which is the 0.061 ms. The one real saving left is not re-setting the PSO and root
+signature when consecutive dispatches share a material -- true for all ~15 streak dispatches -- but
+that is a state cache on a path every pass uses, and it belongs in its own change with its own
+verification, not bolted onto this one.
+
+**Correctness checked against the NOISE FLOOR, not against zero.** Two runs of the same build differ
+by mean 0.0135 / max 172 (exposure adaptation and the ocean). The image before and after these
+changes differs by mean 0.0044 / max 11 -- an order of magnitude *inside* that floor, i.e. unchanged.
+
+**P8C-2z -- WHAT THE FLARES COST, AND WHAT UE PAY FOR THE SAME THING.**
+
+Measured by toggling, `wind_test`, convolution bloom, DLSS balanced:
+
+| | CPU record | GPU |
+|---|---|---|
+| convolution alone (both flares off) | 0.037 | 0.167 |
+| + ghosts | +0.013 | **+0.145** |
+| + anamorphic streak | **+0.044** | +0.062 |
+| total flares | 0.057 | 0.207 |
+
+**The flares cost more on the GPU than the FFT convolution they hang off.** Read against the drop,
+the two halves land in opposite places.
+
+**THE STREAK IS A COST UE DO NOT PAY AT ALL.** "Anamorphic" does not appear anywhere in
+`Shaders/Private` or in the post-process renderer. With FFT bloom their streak IS the kernel
+photograph -- an anamorphic lens is an anamorphic kernel image -- and with the pyramid bloom they
+simply have no streak. Our anisotropic pyramid is ~15 dispatches every frame for something they get
+for the price of a different texture. The principled cheap route on the convolution path is the one
+P8C-2b originally took: composite the streak INTO the kernel, so it costs one kernel rebuild instead
+of fifteen per-frame dispatches. The catch is exactly why it was taken out at P8C-2l -- the pyramid
+method has no kernel, so it would lose the streak again.
+
+**THE GHOSTS ARE ALREADY CHEAPER THAN THEIRS, structurally.** Three differences, all in our favour:
+
+* their splat is one quad per **PIXEL** of the flare viewport (`TileSizeInPixels = 1`); ours is one
+  quad per tile of a quarter-resolution target;
+* their composite is **one full-screen raster pass per ghost** -- `LensFlare0..N` in a loop, each its
+  own `AddPass` with pipeline state, viewport and draw, up to eight of them, plus
+  `LensFlareCopyBloom`; ours loops all eight inside a single compute dispatch;
+* they pack `GLensFlareQuadsPerInstance = 4` quads into one instance. **We draw one quad per
+  instance, i.e. four times their instance count for the same splat** -- that one is a straight
+  saving available to us, and the only place in this comparison where they are ahead.
+
+So the honest summary: the 0.145 ms of ghost GPU is the bokeh splat's overdraw, and UE pay that and
+more; the 0.044 ms CPU of streak recording is ours alone.
+
+**P8C-3 -- THE STREAK MOVES INTO THE KERNEL, AND THE GHOST SPLAT PACKS FOUR QUADS AN INSTANCE.**
+
+**Two new kernels, both a copy plus a band.** `DefaultBloomKernelAnamorphic.dds` and
+`BloomKernelStarAnamorphic.dds` sit beside the originals and appear in the inspector's picker on
+their own. The band is what an anamorphic lens actually leaves: the cylindrical element focuses hard
+on one axis, so it is a tight Gaussian vertically, a `1/(|x| + core)` line-spread horizontally with a
+smooth end before the frame edge, and faintly cool -- the coated cylinder's tint in every anamorphic
+photograph. Turn `convAnamorphicIntensity` OFF when using one, or the runtime pyramid adds a second
+band on top of the baked one.
+
+**The strength is PER KERNEL and calibrated by rendering, not by taste.** It is authored as a share
+of that kernel's own scatter energy, and the two kernels are nothing alike there: UE's photograph is
+98% delta, so 45% of what little scatters is a band you cannot see, while the derived star scatters
+far more and the same number lands. Measured band-over-glow against a bloom-off baseline, at the
+level's own intensity:
+
+| | share | band / glow |
+|---|---|---|
+| runtime pyramid streak | -- | 1.56x |
+| UE kernel + baked | 0.80 | 1.70x |
+| derived star + baked | 0.45 | 1.60x |
+
+So the baked band matches what the pyramid delivers, for the price of one kernel rebuild instead of
+~15 dispatches every frame -- which is how UE have a streak at all without a line of code for it.
+
+**And the splat now packs four quads into one instance**, `GLensFlareQuadsPerInstance = 4`, the one
+place the comparison in P8C-2z had them ahead of us. The vertex shader takes the quad out of the high
+bits of `SV_VertexID` and the corner out of the low bits, and the partial last instance collapses to
+zero size instead of reading outside the tile grid. Measured on the same A/B as before:
+
+**the ghosts' GPU cost fell from 0.145 ms to 0.075 ms -- 48%** -- for a four-fold drop in instance
+count. CPU recording is unchanged (0.013 -> 0.014, one draw either way). The frame renders clean: no
+missing tiles, no banding at the instance boundaries.
+
+Taken together the flares went from 0.207 ms of GPU to 0.137, and to 0.075 if the streak comes from a
+baked kernel instead of the pyramid -- at which point the 0.044 ms of CPU streak recording also
+disappears.
+
+**P8C-4 -- THE BLOOM THRESHOLD BECOMES ABSOLUTE, AND THE SOFT KNEE IS WHAT SEPARATES A SUN FROM A SKY GAP.**
+
+Two viewpoints on the same level, same settings, could not both be tuned: raise the threshold for the
+palm grove and the sun on the open beach stops blooming; lower it for the sun and the grove blows out
+in white bands. Measured against a `bloom.enabled:0` baseline, the reason was not subtle:
+
+| threshold (viewer units) | beach added | palms added | palms blown to white |
+|---|---|---|---|
+| 1.3 | +1.93 | +78.0 | 48 084 px |
+| 3 | **+0.004** | +23.7 | 14 940 px |
+| 6 | +0.004 | -0.005 | 0 |
+
+**The sun on the open beach is DIMMER, in viewer units, than the sky gaps between the fronds** -- the
+grove is dark, the auto-exposure climbs, and everything bright in it climbs with it. One number in
+those units cannot serve both frames, ever.
+
+**So the threshold now measures the SCENE, not the camera**, scaled on the CPU by
+`preExposure / ExposureMultiplierFromEv100(14)` and compared against the stored value -- exactly what
+the streak and ghost thresholds have done since P8C-2c. All four thresholds in the bloom finally mean
+one thing: brightness at EV100 = 14. Both methods changed together, or switching method would also
+have been a threshold change. This reverses a deliberate choice documented in `bloom_cs.hlsl` (author
+in viewer units so a darkening scene keeps its bloom); the two invariants are both real, and this one
+-- the same light source blooms the same -- is the one a lens has.
+
+**That fixed the units and exposed the real remainder: the grove genuinely has ~5x the source area.**
+Both views now move together, but the threshold alone still cannot separate them -- at 5 both bloom,
+at 6 both die. The knob that does is the SOFT KNEE, which decides how much a source only just over
+the line counts for. At `softKnee 0.5` it is nearly a step, so a thousand medium-bright gaps count as
+much per pixel as the sun's core.
+
+Tuned by measurement, not by eye -- the target being "no pixel blown to white in either view, with
+the strongest bloom that allows":
+
+| intensity / threshold / softKnee | beach added | palms added | palms blown |
+|---|---|---|---|
+| 2 / 1.3 / 0.5 (the level's own) | +1.93 | +78.0 | 48 084 |
+| 4 / 3 / 0.03 | +2.16 | +11.1 | 3 453 |
+| 4 / 2 / 0.02 | +3.87 | +16.6 | 1 298 |
+| **5 / 1.6 / 0.010** | **+3.83** | **+15.3** | **4** |
+
+`bloom.intensity 5`, `bloom.threshold 1.6`, `bloom.softKnee 0.010`: the beach keeps the strongest sun
+glow of anything tried, and the grove goes from 48 084 blown pixels to four.
+
+**P8C-5 -- THE GHOSTS WERE DEAD BECAUSE A ROOT SIGNATURE STOPPED ATTACHING, AND UE'S PREFILTER REPLACES THE THRESHOLD.**
+
+**The ghost regression, and it was mine.** Packing four quads per instance (P8C-3) put two
+`static const uint` declarations BETWEEN `[RootSignature(LENS_FLARE_RS)]` and `VSMain`. The attribute
+must sit immediately before the function it applies to; with declarations in between it attaches to
+nothing. The shader then compiles CLEANLY, the pipeline silently fails to build, and the material
+lives on with a null PSO -- `Bind` binds nothing and the draw is dropped. Every gate still said the
+ghosts were on, the clear and the DrawInstanced were both issued, and the flare target came out
+exactly zero.
+
+**Three verification failures made it survive a whole session, and each is worth more than the bug:**
+
+* **I A/B'd a configuration in which the thing under test was already invisible.** One quad per
+  instance versus four came out "identical within the noise floor" -- both were broken, and I read
+  that as proof the packing was innocent. A control that cannot distinguish working from broken is
+  not a control.
+* **I called 1 322 differing pixels "the ghosts are there".** Amplified, those pixels turned out to
+  be the HUD text and run-to-run noise on frond edges. A contribution has to be LOOKED at, not
+  counted.
+* **Two one-shot probes fired on the FIRST frame** and reported `bokehReady=0` and a threshold of
+  16 380 -- both true at startup and both meaningless. Anything sampled once must be sampled late.
+
+The gate now asks whether the scatter can actually draw (`material && GetPipelineState() && CB size`)
+and logs once if it cannot, so a null pipeline can never again present itself as a working feature.
+"Compiles is not loads" was already written down; this is what it costs when it is not applied.
+
+**UE'S PREFILTER, in place of the threshold.** `BloomConvolutionPreFilterMin/Max/Mult`, transcribed
+from `GPUFastFourierTransform.usf`'s `FilterPixel` -- the only filtering their FFT bloom has:
+
+```
+if (Luma > Min) { Target = min(Mult * (Luma - Min) + Min, Max); rgb *= Target / Luma; }
+```
+
+Nothing is cut. Below Min a pixel passes untouched, which is why an open sun keeps its glow whatever
+the auto-exposure does; above Min the luminance is remapped with slope `Mult` and CLAMPED at `Max`,
+and that ceiling is the thing a threshold does not have. A threshold can only decide membership, so
+every source in a frame moves together -- measured here, at 5 both the beach sun and the palm grove
+bloomed and at 6 both died. Min and Max are luminances and get the same absolute (EV14) scaling as
+every other threshold in the bloom; Mult is a slope and is unitless. `Mult > 0` switches the
+threshold cut off inside the shader.
+
+**It only makes sense together with the partition, which is also how UE ship it.** On the additive
+path, "nothing is cut" means the whole frame blooms at `intensity`, and the result is 1.6 million
+pixels of white. With `threshold` below zero the centre/scatter split carries the energy, and both
+shots come right at once:
+
+| | beach added | beach blown | palms added | palms blown |
+|---|---|---|---|---|
+| tuned threshold (int5 thr1.6 knee0.010) | +3.83 | 0 | +15.27 | 4 |
+| **partition + prefilter, int0.25 min2 max12 mult8** | **+32.9** | **0** | **+63.6** | **0** |
+
+Eight times the glow, and the blow-out gone from both. The recommended set is
+`threshold -1`, `intensity 0.25`, `preFilterMin 2`, `preFilterMax 12`, `preFilterMult 8`.
+
+**P8C-6 -- CHROMA IN THE BAKED BAND, AND A RUNTIME TINT FOR THE KERNEL.**
+
+**The band disperses now.** A cylindrical element is glass like any other: its focal length varies
+with wavelength, so the streak it throws is not one band but three of different LENGTH -- red focuses
+long and reaches furthest, blue focuses short and stops soonest. That is a per-channel horizontal
+SCALE, which is exactly why a colour multiplier could never produce it. Both anamorphic kernels were
+rebaked with it. Measured on the band's own contribution against a bloom-off frame, running outward
+from the source:
+
+| distance | R/G | B/G |
+|---|---|---|
+| 40-140 px | 0.73 | 1.31 |
+| 200-380 px | 0.93 | 0.64 |
+| 450-700 px | 1.04 | 0.58 |
+
+Cool at the core, warm at the tips -- the gradient every anamorphic photograph has.
+
+**`bloom.convKernelTint` tints the kernel image at runtime.** Applied where the photograph is
+resampled into the grid, AFTER the clamp so a tint cannot change how much of the delta core is cut.
+It survives the normalisation by construction: the DC divide is by the LARGEST channel sum,
+precisely so a kernel's own colour balance is not washed out. Measured on the convolution alone,
+`(1, 0.55, 0.25)` takes the glare from R/G 1.31 to 2.14 and B/G 0.75 to 0.43.
+
+**The tint is part of the kernel KEY.** The spectrum is cached and rebuilt only when the key moves,
+so a tint left out of it would have been a colour picker that does nothing until something else
+happened to force a rebuild -- worse than no picker at all. It therefore costs nothing per frame.
+
+**FOURTH DIRTY MEASUREMENT OF THE SESSION, and the pattern is now unmistakable.** Both features
+looked dead at first: a HARDCODED `float3(1, 0, 0)` on the kernel appeared to change nothing. The
+measurement was taken with the partition on and the ghosts running, so the "bloom contribution" it
+computed was mostly the scene dimming plus the ghost chain, and the convolution's own colour was a
+minor term inside it. Isolated -- additive path, ghosts off, streak off -- the same build reports
+R/G 36.8, i.e. the tint had been working the entire time. **Measure the ONE thing under test with
+everything else switched off, or the answer is about the everything else.**
+
+**P8C-6a -- THE CHROMATIC BAND DID NOT FIT THE TEXTURE. IT DOES NOW.**
+
+Caught by the user, and it was a real defect in the first cut of the chroma. The per-channel edge
+fade was driven by the STRETCHED coordinate: `t = (|x| / spread) / (reach * c)`, so a channel that
+had been stretched finished its fade at `|x| = spread * reach * c`. At chroma 0.35 red stretches
+1.175 and wanted to finish at 294 against a half-width of 255 -- so instead of fading it was CUT.
+Measured on the shipped file: the star kernel's red band ran to +256 of 255, and the last column
+still held a non-zero value.
+
+That matters twice over. A step at the border is a step in the thing being Fourier-transformed --
+ringing -- and visually the streak stops instead of ending.
+
+**Two wrong fixes before the right one, both worth keeping:**
+
+* Driving the fade from the ABSOLUTE `|x|` put every channel inside the border, but it also flattened
+  the gradient to nothing (R/G 0.98 from core to tip). The reason is worth understanding: with a
+  common fade the only chroma left is the `1/(x/s + core)` decay, whose channel ratio is CONSTANT in
+  x, and the cool base tint `(0.72, 0.86, 1.0)` then cancelled it almost exactly. The gradient the
+  first version had was coming from the fade asymmetry -- i.e. from the bug.
+* Strengthening the spread to `(1+c, 1, 1/(1+c))` restored a warm band but still no GRADIENT along
+  it, for the same reason.
+
+**Kept: each channel gets its own LENGTH, and the reaches are normalised by the longest spread.**
+That is what dispersion physically is -- three bands of different extent, overlapping and neutral
+near the core, and only the long ones left further out -- and normalising by `max(spread)` makes the
+longest channel finish exactly at `reach` with every shorter one sooner, all inside the texture.
+
+Verified on the shipped files at chroma 0.28:
+
+| | red ends | green ends | blue ends | last column |
+|---|---|---|---|---|
+| DefaultBloomKernelAnamorphic | +192 | +153 | +121 | **0, 0, 0** |
+| BloomKernelStarAnamorphic | +232 | +182 | +142 | **0, 0, 0** |
+
+Half-width is 255, so every channel fades inside with margin and the border is exactly zero. Along
+the band the colour now runs R/G 1.06 -> 1.29 with blue dying first: neutral core, warm tip.
+
+**A note on verifying this in-frame:** on `wind_test` the convolution's brightest source is the
+ocean glitter, which is broad rather than point-like, so the horizontal and vertical contributions
+around it come out similar and no band is legible there. The kernel-side measurement above is the
+one to trust for this property; an in-frame check needs a scene with an isolated small source.

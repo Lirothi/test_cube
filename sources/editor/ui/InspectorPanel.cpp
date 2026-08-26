@@ -1273,11 +1273,18 @@ namespace
                           "it would only eat energy the tent needs.");
 
             ImGui::SeparatorText("Reconstruction");
-            dragF("Intensity", "intensity", 0.25f, 0.005f, 0.0f, 4.0f, "%.3f");
-            InspectorHelp("Weight of the bloom added back, in scene units. It receives the same "
-                          "GLOBAL exposure the scene does, but not the local exposure and not the "
-                          "colour grade - a halo that spread from elsewhere is not part of this "
-                          "pixel's neighbourhood. 0 is an exact no-op and skips the chain.");
+            dragF("Intensity", "intensity", 0.25f, 0.02f, 0.0f, 64.0f, "%.3f");
+            InspectorHelp("Weight of the bloom added back. It receives the same GLOBAL exposure "
+                          "the scene does, but not the local exposure and not the colour grade -- a "
+                          "halo that spread from elsewhere is not part of this pixel's "
+                          "neighbourhood. 0 is an exact no-op and skips the chain.\n\n"
+                          "ON THE CONVOLUTION IT IS UE'S ScatterDispersionIntensity: the multiplier "
+                          "on the fraction of the kernel's energy that SCATTERS. That fraction is a "
+                          "property of the kernel image (7.5% for BloomKernelStar, 2.1% for UE's "
+                          "own), so the same number is dimmer on a kernel that scatters less -- "
+                          "which is the point, not a quirk. With Threshold below zero the scene is "
+                          "dimmed by whatever the flare takes, and the knob saturates once ALL of "
+                          "the light has moved into the flare.");
             dragF("Radius", "radius", 1.0f, 0.01f, 0.0f, 4.0f, "%.2f");
             InspectorHelp("Tap spacing of the tent upsample, in DESTINATION texels, so it means the "
                           "same thing at every level and at every resolution. It spreads the same "
@@ -1306,6 +1313,55 @@ namespace
             if (tgt().value("method", 0u) == 1u)
             {
                 ImGui::SeparatorText("Kernel (convolution only)");
+                // P8C-2r: WHICH image. Everything downstream -- placement, the core clamp, the
+                // centre/scatter split -- is derived from the pixels, so this one pick changes the
+                // entire character of the glare with nothing else to retune. The list is whatever
+                // square FP16 DDS sits in textures/; it is scanned once and cached, because an
+                // inspector that touches the filesystem every frame is a stutter waiting to happen.
+                {
+                    static std::vector<std::string> kernels;
+                    static bool scanned = false;
+                    if (!scanned)
+                    {
+                        scanned = true;
+                        std::error_code ec;
+                        for (const auto& e : std::filesystem::directory_iterator("textures", ec))
+                        {
+                            if (ec) { break; }
+                            if (!e.is_regular_file()) { continue; }
+                            const std::filesystem::path& fp = e.path();
+                            std::string ext = fp.extension().string();
+                            for (char& c : ext) { c = static_cast<char>(::tolower(c)); }
+                            if (ext == ".dds") { kernels.push_back("textures/" + fp.filename().string()); }
+                        }
+                        std::sort(kernels.begin(), kernels.end());
+                    }
+                    const std::string cur = tgt().value("convKernel", std::string("textures/BloomKernelStar.dds"));
+                    int sel = -1;
+                    std::vector<const char*> items;
+                    items.reserve(kernels.size());
+                    for (size_t i = 0; i < kernels.size(); ++i)
+                    {
+                        items.push_back(kernels[i].c_str());
+                        if (kernels[i] == cur) { sel = static_cast<int>(i); }
+                    }
+                    if (!items.empty())
+                    {
+                        const nlohmann::json beforeItem = props;
+                        const bool changed = ImGui::Combo("Kernel Image", &sel, items.data(),
+                                                          static_cast<int>(items.size()));
+                        if (changed && sel >= 0) { tgt()["convKernel"] = kernels[static_cast<size_t>(sel)]; }
+                        trackContinuousEdit(beforeItem, changed);
+                    }
+                }
+                InspectorHelp("The kernel photograph itself. Anything square and FP16 in textures/ "
+                              "works: BloomKernelStar is the DERIVED one (nine-bladed diffraction, "
+                              "18 rays, measured 7.6-12.3x ray contrast), DefaultBloomKernel is "
+                              "UE's original photograph (2.6-4.2x -- their weak rays are the "
+                              "arithmetic consequence of their broad glow, not a defect). "
+                              "Switching reloads the image and re-surveys it; nothing else needs "
+                              "retuning, though the centre/scatter fractions differ per image so "
+                              "Intensity will not mean quite the same thing across a swap.");
                 // P8C-2: the kernel is UE's photographed DefaultBloomKernel. The star, its rays,
                 // the halo and the rainbow dispersion are IN the image -- the aperture generator
                 // and its shape controls (kernel radius, spokes, chroma) are retired.
@@ -1314,139 +1370,193 @@ namespace
                               "UE's BloomConvolutionSize, same units and same default of 1.0. "
                               "This is the ONE size control: the visible glare is the kernel "
                               "image, scaled.");
+                {
+                    const nlohmann::json beforeItem = props;
+                    float ktint[3] = { 1.0f, 1.0f, 1.0f };
+                    if (tgt().contains("convKernelTint") && tgt()["convKernelTint"].is_array() &&
+                        tgt()["convKernelTint"].size() == 3)
+                    {
+                        for (int i = 0; i < 3; ++i)
+                        {
+                            ktint[i] = tgt()["convKernelTint"][i].get<float>();
+                        }
+                    }
+                    const bool changed = ImGui::ColorEdit3("Kernel Tint", ktint,
+                        ImGuiColorEditFlags_Float);
+                    if (changed) { tgt()["convKernelTint"] = { ktint[0], ktint[1], ktint[2] }; }
+                    trackContinuousEdit(beforeItem, changed);
+                }
+                InspectorHelp("A colour multiplier on the kernel IMAGE, the runtime equivalent of "
+                              "re-authoring the photograph. It survives the normalisation: the DC "
+                              "divide is by the LARGEST channel sum, exactly so a kernel's own "
+                              "colour balance is not washed out -- so tinting the kernel tints the "
+                              "glare rather than being divided back out.\n\n"
+                              "It costs nothing per frame: the kernel spectrum is rebuilt only when "
+                              "its key moves, and the tint is part of that key.");
+
+                ImGui::SeparatorText("Bright-pixel gain (UE's prefilter)");
+                dragF("Gain Slope", "convPreFilterMult", 0.0f, 0.05f, 0.0f, 32.0f, "%.2f");
+                InspectorHelp("UE's BloomConvolutionPreFilterMult, and the ONLY filtering their FFT "
+                              "bloom has -- there is no threshold anywhere in that path.\n\n"
+                              "0 turns it off and the Threshold above takes over. Anything above 0 "
+                              "REPLACES the threshold: nothing is cut, a pixel below Min passes "
+                              "through untouched, and a pixel above Min has its luminance remapped "
+                              "with this slope. That is the difference that matters -- a threshold "
+                              "decides MEMBERSHIP, so every source in the frame moves together and "
+                              "one number cannot serve two shots; measured on this level, at 5 both "
+                              "a beach sun and a palm grove bloomed and at 6 both died.\n\n"
+                              "Pair it with Threshold below zero, which is how UE ship it: no "
+                              "threshold, this gain, and the centre/scatter split for the energy.");
+                dragF("Gain Min", "convPreFilterMin", 1.5f, 0.05f, 0.0f, 64.0f, "%.2f");
+                InspectorHelp("Where the boost starts, in the same ABSOLUTE units as every other "
+                              "threshold here: brightness at EV100 = 14, so it means the same thing "
+                              "from any viewpoint. Below it, pixels are left exactly as they are.");
+                dragF("Gain Max", "convPreFilterMax", 6.0f, 0.25f, 0.0f, 512.0f, "%.1f");
+                InspectorHelp("The CEILING the boosted luminance is clamped to -- the reason one "
+                              "setting can serve an open sun and a grove full of bright gaps. A "
+                              "threshold has no such thing: it can only include or exclude, so a "
+                              "frame with a thousand medium-bright sources runs away. This caps "
+                              "what any single source can contribute, however bright it gets.");
                 dragF("Resolution %", "convPercent", 50.0f, 0.5f, 10.0f, 50.0f, "%.0f %%");
                 InspectorHelp("Resolution of the convolution as a percent of the display -- UE's "
                               "r.Bloom.ScreenPercentage (their default is 100; 50 is this "
                               "engine's grid ceiling). The first P8C ran at 12.5, and a 1-2 texel "
                               "diffraction ray upscaled 4x per axis is a dashed line of squares "
                               "-- the 'ragged crown'. Lowering this buys the transform cost back.");
-                ImGui::SeparatorText("Anamorphic");
-                // P8C-2b: the streak is its own separable pass with a nonlinear front end -- the
-                // only way the band can come out THINNER than its source (a convolution cannot:
-                // the sun here is a disc with a baked corona hundreds of pixels tall).
-                dragF("Anamorphic Intensity", "convAnamorphicIntensity", 0.0f, 0.02f, 0.0f, 8.0f, "%.2f");
-                InspectorHelp("Direct brightness of the streak. 0 = off (the passes do not run).");
-                dragF("Anamorphic Threshold", "convAnamorphicThreshold", 1.5f, 0.05f, 0.1f, 24.0f, "%.2f");
-                InspectorHelp("The streak's OWN threshold, and since P8C-2h the ONLY narrowing "
+            }
+
+            // P8C-2l: THE FLARES ARE NOT PART OF EITHER BLOOM METHOD. They read the HDR image
+            // and add into the same bloom target the pyramid and the convolution both write, so
+            // they live outside the method's own block -- and outside its `if`, or half of them
+            // would vanish from the UI the moment someone chose Standard.
+            ImGui::SeparatorText("Anamorphic Streak (any bloom method)");
+            // P8C-2h/l: an anisotropic PYRAMID of its own (KinoStreak's structure), reading the
+            // HDR image and adding into the bloom target -- it belongs to neither bloom method
+            // and runs with both.
+            dragF("Anamorphic Intensity", "convAnamorphicIntensity", 0.0f, 0.02f, 0.0f, 8.0f, "%.2f");
+            InspectorHelp("Direct brightness of the streak. 0 = off (the passes do not run).");
+            dragF("Anamorphic Threshold", "convAnamorphicThreshold", 1.5f, 0.05f, 0.1f, 24.0f, "%.2f");
+            InspectorHelp("The streak's OWN threshold, and since P8C-2h the ONLY narrowing "
                               "control -- the vertical erosion that used to sit below was deleted "
                               "with the cascade (a min-filter cannot taper at a frame edge). In "
                               "ABSOLUTE units: authored as stored "
-                              "brightness at EV100 = 14 and rescaled by the frame's pre-exposure, "
-                              "so the same sun crosses it from any viewpoint -- being a light "
-                              "source is a property of the scene, not the camera. On this level: "
-                              "sky ~1, sun corona 4-6, sun core 10-12, glints above that. This is "
-                              "also the narrowness control that actually works: higher values "
-                              "take only the CORE of a source, so the corona stops throwing a "
-                              "screen-tall band.");
-                dragF("Anamorphic Length", "convAnamorphicLength", 0.28f, 0.005f, 0.01f, 1.0f, "%.3f");
-                InspectorHelp("How far the band reaches, as a fraction of the screen width -- "
-                              "the VISIBLE extent, so 0.1 draws a band about a tenth of the "
-                              "screen long (plus the source's own width, which no filter can "
-                              "shorten). It was authored as a 1/e until P8C-2e, and a 1/e lies by "
-                              "3.4x. It is realised by WEIGHTING PYRAMID LEVELS -- the level whose "
-                              "reach matches the number, with a tent across its neighbours for the "
-                              "fraction -- and verified in numpy against the exact tap pattern: "
-                              "asked 128/256/512/768 px delivered 92/204/420/788, i.e. 0.72-1.03x. "
-                              "The floor is level 0's own reach, about 30 px; the ceiling is the "
-                              "deepest level's, about 3200 px, so the whole slider is live.");
+                          "brightness at EV100 = 14 and rescaled by the frame's pre-exposure, "
+                          "so the same sun crosses it from any viewpoint -- being a light "
+                          "source is a property of the scene, not the camera. On this level: "
+                          "sky ~1, sun corona 4-6, sun core 10-12, glints above that. This is "
+                          "also the narrowness control that actually works: higher values "
+                          "take only the CORE of a source, so the corona stops throwing a "
+                          "screen-tall band.");
+            dragF("Anamorphic Length", "convAnamorphicLength", 0.28f, 0.005f, 0.01f, 1.0f, "%.3f");
+            InspectorHelp("How far the band reaches, as a fraction of the screen width -- "
+                          "the VISIBLE extent, so 0.1 draws a band about a tenth of the "
+                          "screen long (plus the source's own width, which no filter can "
+                          "shorten). It was authored as a 1/e until P8C-2e, and a 1/e lies by "
+                          "3.4x. It is realised by WEIGHTING PYRAMID LEVELS -- the level whose "
+                          "reach matches the number, with a tent across its neighbours for the "
+                          "fraction -- and verified in numpy against the exact tap pattern: "
+                          "asked 128/256/512/768 px delivered 92/204/420/788, i.e. 0.72-1.03x. "
+                          "The floor is level 0's own reach, about 30 px; the ceiling is the "
+                          "deepest level's, about 3200 px, so the whole slider is live.");
 
-                dragF("Anamorphic Width", "convAnamorphicWidth", 3.0f, 0.1f, 0.5f, 30.0f, "%.1f px");
-                InspectorHelp("The band's final soft width: a small vertical Gaussian applied at "
-                              "composite, in display pixels. Works on the already-blurred band, "
-                              "so it can be narrow without aliasing.");
-                dragF("Anamorphic Chroma", "convAnamorphicChroma", 0.5f, 0.01f, 0.0f, 1.0f, "%.2f");
-                InspectorHelp("Spreads the per-channel 1/e lengths: blue runs ~45% farther and "
-                              "red ~30% shorter at 1.0, so the tail shifts white -> blue along "
-                              "its length -- the look of real cylindrical-element coatings.");
+            dragF("Anamorphic Width", "convAnamorphicWidth", 3.0f, 0.1f, 0.5f, 30.0f, "%.1f px");
+            InspectorHelp("The band's final soft width: a small vertical Gaussian applied at "
+                          "composite, in display pixels. Works on the already-blurred band, "
+                          "so it can be narrow without aliasing.");
+            dragF("Anamorphic Chroma", "convAnamorphicChroma", 0.5f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("Spreads the per-channel 1/e lengths: blue runs ~45% farther and "
+                          "red ~30% shorter at 1.0, so the tail shifts white -> blue along "
+                          "its length -- the look of real cylindrical-element coatings.");
+            {
+                const nlohmann::json beforeItem = props;
+                float tint[3] = { 1.0f, 1.0f, 1.0f };
+                if (tgt().contains("convAnamorphicTint") &&
+                    tgt()["convAnamorphicTint"].is_array() &&
+                    tgt()["convAnamorphicTint"].size() == 3)
                 {
-                    const nlohmann::json beforeItem = props;
-                    float tint[3] = { 1.0f, 1.0f, 1.0f };
-                    if (tgt().contains("convAnamorphicTint") &&
-                        tgt()["convAnamorphicTint"].is_array() &&
-                        tgt()["convAnamorphicTint"].size() == 3)
+                    for (int i = 0; i < 3; ++i)
                     {
-                        for (int i = 0; i < 3; ++i)
-                        {
-                            tint[i] = tgt()["convAnamorphicTint"][i].get<float>();
-                        }
+                        tint[i] = tgt()["convAnamorphicTint"][i].get<float>();
                     }
-                    const bool changed = ImGui::ColorEdit3("Anamorphic Tint", tint,
-                        ImGuiColorEditFlags_Float);
-                    if (changed) { tgt()["convAnamorphicTint"] = { tint[0], tint[1], tint[2] }; }
-                    trackContinuousEdit(beforeItem, changed);
                 }
-                InspectorHelp("A plain colour multiplier on the whole band, on top of the "
-                              "chroma's own gradient.");
-
-                ImGui::SeparatorText("Ghosts");
-                {
-                    const nlohmann::json beforeItem = props;
-                    int ghosts = static_cast<int>(tgt().value("convGhosts", 0u));
-                    const bool changed = ImGui::SliderInt("Ghost Count", &ghosts, 0, 8);
-                    if (changed) { tgt()["convGhosts"] = static_cast<std::uint32_t>(ghosts < 0 ? 0 : ghosts); }
-                    trackContinuousEdit(beforeItem, changed);
-                }
-                InspectorHelp("P8C-2: UE's actual mechanism, both halves. A bokeh SCATTER splats "
-                              "one iris sprite per bright pixel of the thresholded scene -- the "
-                              "output is the real defocused image of the real sources -- and the "
-                              "composite lays N copies of that image scaled about the screen "
-                              "centre (UE's LensFlareTints table: two on the source's side, the "
-                              "rest mirrored through the centre). No sun position and no sprite "
-                              "atlas exist anywhere: two suns give two chains for free.");
-                {
-                    const nlohmann::json beforeItem = props;
-                    int blades = static_cast<int>(tgt().value("convBlades", 6u));
-                    const bool changed = ImGui::SliderInt("Blades", &blades, 0, 12);
-                    if (changed) { tgt()["convBlades"] = static_cast<std::uint32_t>(blades < 0 ? 0 : blades); }
-                    trackContinuousEdit(beforeItem, changed);
-                }
-                InspectorHelp("Number of iris blades in the BOKEH SPRITE the scatter splats -- 0 "
-                              "is a round bokeh. It shapes the ghosts only: the bloom kernel is a "
-                              "photograph and carries its own star.\n\n"
-                              "MEASURED, so you know what to expect. Against a 1/255 noise floor, "
-                              "3 blades vs 8 moves the frame by 8/255 and 0 (round) vs 8 by 2/255 "
-                              "-- an octagon IS very nearly a circle, so the low counts are where "
-                              "this control lives. It also needs Ghost Size to be LARGER than the "
-                              "source: a ghost is source-convolved-with-sprite, and the bigger of "
-                              "the two wins the shape. Blade ROTATION used to sit here and was "
-                              "removed in P8C-2d for measuring 4/255 against that same floor -- "
-                              "superposition over an extended source washes an orientation out "
-                              "entirely.");
-                dragF("Ghost Size", "convGhostBokeh", 3.0f, 0.05f, 0.0f, 32.0f, "%.2f %%");
-                InspectorHelp("Bokeh sprite radius as a percent of frame width -- UE's "
-                              "LensFlareBokehSize, same units and same default of 3. Bigger "
-                              "copies are correspondingly dimmer: same light over more area.\n\n"
-                              "IT IS ALSO THE SHAPE CONTROL, which is not obvious. A ghost is the "
-                              "source CONVOLVED with this sprite, so whichever of the two is "
-                              "bigger wins: with the sprite smaller than the source, every ghost "
-                              "reproduces the SOURCE's outline -- at 0.5% the sun's ragged corona "
-                              "and the water's glitter path came out as recognisable mirrored "
-                              "smears in the sky. At UE's 3 the sprite dominates and the chain "
-                              "reads as bokeh discs again.");
-                dragF("Ghost Intensity", "convGhostIntensity", 0.6f, 0.01f, 0.0f, 3.0f, "%.2f");
-                InspectorHelp("Brightness of the chain. The colour comes from the sources "
-                              "themselves, so a dimmer sun throws dimmer ghosts and a sky with "
-                              "nothing above the threshold throws none at all.");
-                dragF("Ghost Threshold", "convGhostThreshold", 7.0f, 0.05f, 0.0f, 24.0f, "%.2f");
-                InspectorHelp("UE's LensFlareThreshold, in the same ABSOLUTE units as the streak "
-                              "threshold above (stored brightness at EV100 = 14, rescaled by the "
-                              "frame's pre-exposure). Ghosts are images of SOURCES -- too low and "
-                              "sunlit foliage becomes one (upside-down palms in the sky, "
-                              "observed).\n\n"
-                              "SOFT KNEE, unlike UE's binary gate: a source's ghost is scaled by "
-                              "how far it sits ABOVE this, so one at the threshold contributes "
-                              "nothing and one ten times over it 90%. That is what stops a chain "
-                              "popping into existence as the sun brightens -- and it means this "
-                              "number wants to be LOWER than a binary gate's: 7 here matches what "
-                              "10 gave before the knee. Raising it also cuts the scatter's cost "
-                              "directly: collapsed quads rasterize nothing.");
+                const bool changed = ImGui::ColorEdit3("Anamorphic Tint", tint,
+                    ImGuiColorEditFlags_Float);
+                if (changed) { tgt()["convAnamorphicTint"] = { tint[0], tint[1], tint[2] }; }
+                trackContinuousEdit(beforeItem, changed);
             }
+            InspectorHelp("A plain colour multiplier on the whole band, on top of the "
+                          "chroma's own gradient.");
+
+            ImGui::SeparatorText("Lens Ghosts (any bloom method)");
+            {
+                const nlohmann::json beforeItem = props;
+                int ghosts = static_cast<int>(tgt().value("convGhosts", 0u));
+                const bool changed = ImGui::SliderInt("Ghost Count", &ghosts, 0, 8);
+                if (changed) { tgt()["convGhosts"] = static_cast<std::uint32_t>(ghosts < 0 ? 0 : ghosts); }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("P8C-2: UE's actual mechanism, both halves. A bokeh SCATTER splats "
+                          "one iris sprite per bright pixel of the thresholded scene -- the "
+                          "output is the real defocused image of the real sources -- and the "
+                          "composite lays N copies of that image scaled about the screen "
+                          "centre (UE's LensFlareTints table: two on the source's side, the "
+                          "rest mirrored through the centre). No sun position and no sprite "
+                          "atlas exist anywhere: two suns give two chains for free.");
+            {
+                const nlohmann::json beforeItem = props;
+                int blades = static_cast<int>(tgt().value("convBlades", 6u));
+                const bool changed = ImGui::SliderInt("Blades", &blades, 0, 12);
+                if (changed) { tgt()["convBlades"] = static_cast<std::uint32_t>(blades < 0 ? 0 : blades); }
+                trackContinuousEdit(beforeItem, changed);
+            }
+            InspectorHelp("Number of iris blades in the BOKEH SPRITE the scatter splats -- 0 "
+                          "is a round bokeh. It shapes the ghosts only: the bloom kernel is a "
+                          "photograph and carries its own star.\n\n"
+                          "MEASURED, so you know what to expect. Against a 1/255 noise floor, "
+                          "3 blades vs 8 moves the frame by 8/255 and 0 (round) vs 8 by 2/255 "
+                          "-- an octagon IS very nearly a circle, so the low counts are where "
+                          "this control lives. It also needs Ghost Size to be LARGER than the "
+                          "source: a ghost is source-convolved-with-sprite, and the bigger of "
+                          "the two wins the shape. Blade ROTATION used to sit here and was "
+                          "removed in P8C-2d for measuring 4/255 against that same floor -- "
+                          "superposition over an extended source washes an orientation out "
+                          "entirely.");
+            dragF("Ghost Size", "convGhostBokeh", 3.0f, 0.05f, 0.0f, 32.0f, "%.2f %%");
+            InspectorHelp("Bokeh sprite radius as a percent of frame width -- UE's "
+                          "LensFlareBokehSize, same units and same default of 3. Bigger "
+                          "copies are correspondingly dimmer: same light over more area.\n\n"
+                          "IT IS ALSO THE SHAPE CONTROL, which is not obvious. A ghost is the "
+                          "source CONVOLVED with this sprite, so whichever of the two is "
+                          "bigger wins: with the sprite smaller than the source, every ghost "
+                          "reproduces the SOURCE's outline -- at 0.5% the sun's ragged corona "
+                          "and the water's glitter path came out as recognisable mirrored "
+                          "smears in the sky. At UE's 3 the sprite dominates and the chain "
+                          "reads as bokeh discs again.");
+            dragF("Ghost Intensity", "convGhostIntensity", 0.6f, 0.01f, 0.0f, 3.0f, "%.2f");
+            InspectorHelp("Brightness of the chain. The colour comes from the sources "
+                          "themselves, so a dimmer sun throws dimmer ghosts and a sky with "
+                          "nothing above the threshold throws none at all.");
+            dragF("Ghost Threshold", "convGhostThreshold", 7.0f, 0.05f, 0.0f, 24.0f, "%.2f");
+            InspectorHelp("UE's LensFlareThreshold, in the same ABSOLUTE units as the streak "
+                          "threshold above (stored brightness at EV100 = 14, rescaled by the "
+                          "frame's pre-exposure). Ghosts are images of SOURCES -- too low and "
+                          "sunlit foliage becomes one (upside-down palms in the sky, "
+                          "observed).\n\n"
+                          "SOFT KNEE, unlike UE's binary gate: a source's ghost is scaled by "
+                          "how far it sits ABOVE this, so one at the threshold contributes "
+                          "nothing and one ten times over it 90%. That is what stops a chain "
+                          "popping into existence as the sun brightens -- and it means this "
+                          "number wants to be LOWER than a binary gate's: 7 here matches what "
+                          "10 gave before the knee. Raising it also cuts the scatter's cost "
+                          "directly: collapsed quads rasterize nothing.");
 
             ImGui::TextDisabled("Runs after the upscaler on the image the tone curve reads,");
             ImGui::TextDisabled("so the pyramid is sized off the DISPLAY resolution and does");
             ImGui::TextDisabled("not change shape with the DLSS quality mode.");
             ImGui::TextDisabled("Fix exposure when comparing: bloom moves average luminance");
             ImGui::TextDisabled("and auto-exposure will chase it.");
+            ImGui::TextDisabled("Streak and ghosts run with EITHER bloom method: they read the");
+            ImGui::TextDisabled("HDR image and add into the same target both methods write.");
         };
 
         if (env.type == "pointLight")

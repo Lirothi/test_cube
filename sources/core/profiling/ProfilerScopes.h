@@ -96,6 +96,24 @@ extern const Profiler::ScopeNameKey kPassOceanReflection;
 extern const Profiler::ScopeNameKey kPassDebugDraw;
 extern const Profiler::ScopeNameKey kPassExposureMetering;
 extern const Profiler::ScopeNameKey kPassTonemap;
+// P8C-2s: the three things Pass_Tonemap does AFTER the DLSS evaluate, none of which had a scope --
+// so they read as an unnamed hole at the end of the pass, which is exactly how they were found.
+// The bloom is already covered by kPassBloom / kPassBloomConv; these are the rest of it.
+extern const Profiler::ScopeNameKey kTonemapCurve;
+extern const Profiler::ScopeNameKey kTonemapFxaa;
+extern const Profiler::ScopeNameKey kTonemapResolve;
+// P8C-2s: and the CPU side of the same region, which is the one that was actually unnamed. The
+// bloom is RECORDED inside Pass_Tonemap -- kernel resample, six FFT dispatches, the resolve and
+// the flares, each staging descriptors and allocating a constant buffer -- so on the CPU timeline
+// it is a wide unlabelled block sitting after DLSS::Evaluate returns.
+extern const Profiler::ScopeNameKey kTonemapBloomRecord;
+extern const Profiler::ScopeNameKey kTonemapCurveRecord;
+extern const Profiler::ScopeNameKey kTonemapTailRecord;
+// P8C-2y: inside the bloom recording, so an optimisation has something to aim at.
+extern const Profiler::ScopeNameKey kBloomRecKernel;
+extern const Profiler::ScopeNameKey kBloomRecFft;
+extern const Profiler::ScopeNameKey kBloomRecResolve;
+extern const Profiler::ScopeNameKey kBloomRecFlares;
 extern const Profiler::ScopeNameKey kPassDebug;
 extern const Profiler::ScopeNameKey kFrameAsyncWait;
 extern const Profiler::ScopeNameKey kPassOverlay;

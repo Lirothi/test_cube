@@ -108,18 +108,12 @@ float3 Setup(uint2 pixel)
     // point-sampled, which is where it belongs.
     const float3 color = (t0 + t1 + t2 + t3) * 0.25f;
 
-    float exposureMultiplier = 1.0f;
-    if (exposureEnabled != 0u)
-    {
-        // Mirrors render::ExposureMultiplierFromEv100 and the identical block in tonemap_cs.hlsl:
-        // m = kMiddleGrey * (S/K) / 2^EV100. The two MUST agree -- a threshold measured against a
-        // different exposure than the image is measured in is not a threshold at all.
-        const float ev100 = asfloat(ExposureValue.Load(0));
-        if (!isnan(ev100) && !isinf(ev100))
-        {
-            exposureMultiplier = (0.18f * 8.0f) / exp2(ev100);
-        }
-    }
+    // P8C-4: no exposure factor here any more -- the threshold arrives ABSOLUTE, scaled on the CPU
+    // by preExposure / ExposureMultiplierFromEv100(14), so it is compared against the STORED value.
+    // See the long note in bloom_conv_cs.hlsl stage 0: measuring in viewer units made the same sun
+    // cross the line at 1.3 on an open beach and at 6 inside a palm grove, purely because the
+    // auto-exposure moved. Both methods changed together, or switching method would also be a
+    // threshold change.
 
     // THRESHOLD < 0 MEANS NO THRESHOLD, and that is UE's DEFAULT, not an escape hatch.
     // `FPostProcessSettings::BloomThreshold` ships at -1.0 (Scene.cpp:423) and their own
@@ -136,7 +130,7 @@ float3 Setup(uint2 pixel)
     {
         return color;
     }
-    const float exposedLuma = Luma(color) * exposureMultiplier;
+    const float exposedLuma = Luma(color);
     const float amount = saturate((exposedLuma - threshold) * max(softKnee, 1.0e-4f));
     return amount * color;
 }

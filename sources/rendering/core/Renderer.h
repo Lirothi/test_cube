@@ -503,14 +503,20 @@ public:
         }
 
         GpuDescHandle block = alloc.Alloc(count);
-        const UINT incr = alloc.GetIncr();
 
-        D3D12_CPU_DESCRIPTOR_HANDLE dst = block.cpu;
-        for (It it = first; it != last; ++it) {
-            const D3D12_CPU_DESCRIPTOR_HANDLE src = *it;
-            graphicsDevice_.Device()->CopyDescriptorsSimple(1, dst, src, heapType);
-            dst.ptr += incr;
-        }
+        // ONE DRIVER CALL, NOT ONE PER DESCRIPTOR. This used to loop CopyDescriptorsSimple(1, ...)
+        // over the range, so a compute dispatch with three SRVs and three UAVs cost six calls into
+        // the driver before it could even bind -- and the convolution issues ~18 dispatches a
+        // frame. CopyDescriptors takes the whole set at once; passing null for the source range
+        // SIZES is the documented way of saying "every source range is one descriptor", which is
+        // exactly what these are. Both callers hand in contiguous storage (an initializer_list or
+        // a std::array), so the sources can be pointed at directly rather than gathered.
+        UINT dstRangeSize = count;
+        const D3D12_CPU_DESCRIPTOR_HANDLE* srcStarts = &(*first);
+        graphicsDevice_.Device()->CopyDescriptors(
+            1, &block.cpu, &dstRangeSize,
+            count, srcStarts, nullptr,
+            heapType);
         return block;
     }
 

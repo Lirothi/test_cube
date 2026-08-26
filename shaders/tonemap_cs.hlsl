@@ -6,7 +6,7 @@ Texture2D HDRColor : register(t0);
 Texture2D<float> BaseLogLumTex : register(t1);
 // P8: mip 0 of the bloom pyramid's UP chain, at HALF this target's resolution -- sampled
 // bilinearly, which is the last upsample step and is why it is an SRV here rather than another UAV.
-// Bound to an inert 1x1 when bloom is off; `bloomIntensity` 0 is what actually disables it.
+// Bound to an inert 1x1 when bloom is off; a zero `bloomScatterApply` is what disables it.
 Texture2D BloomTex : register(t2);
 RWTexture2D<float4> LdrTarget : register(u0);
 // P2: the persistent exposure record, read-only here. Bound as a UAV rather than an SRV purely so
@@ -55,9 +55,29 @@ cbuffer TonemapCB : register(b0)
     float localDetailStrength;
     float localHighlightThreshold;
     float localShadowThreshold;
-    // P8. 0 = no bloom is read at all, which is the interface contract's exact no-op.
-    float bloomIntensity;
-    float tonemapPad4, tonemapPad5;
+    // P8C-2o -- UE'S CENTRE/SCATTER SPLIT (BloomFinalizeApplyConstants.usf).
+    //
+    // The bloom is no longer light ADDED on top of a scene that already has it. A kernel is the
+    // lens's whole point spread function: the part of it inside one output pixel is the light that
+    // did NOT scatter, and the rest is the flare. So the two terms are a PARTITION --
+    //
+    //     out = scene * sceneApply + bloom * scatterApply
+    //
+    // -- with `scatterApply = Tint * saturate(Scatter * s / Total)` and
+    // `sceneApply = Tint * saturate((Total - Scatter * s) / Total)`, exactly as their
+    // FinalizeApplyConstants writes SceneColorApplyOutput and FFTMulitplyOutput. `s` is their
+    // ScatterDispersionIntensity (BloomConvolutionScatterDispersion * BloomIntensity). The two
+    // sum to Tint by construction, so pushing `s` up does not create light -- it MOVES it out of
+    // the source and into the flare, which is the only way a star ever outshines its own
+    // highlight. `Tint` is the kernel's own colour balance, normalised by its largest channel.
+    //
+    // The pyramid method has no kernel to survey, so it passes sceneApply = 1 and
+    // scatterApply = its plain intensity, which is bit-identical to what it did before.
+    // Zero scatterApply is the interface contract's exact no-op: no bloom is read at all.
+    float3 bloomSceneApply;
+    float  tonemapPad4;
+    float3 bloomScatterApply;
+    float  tonemapPad5;
 };
 
 #include "utils.hlsli"
@@ -198,9 +218,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // per-pixel contrast operator derived from THIS pixel's neighbourhood, and a halo that spread
     // from somewhere else is not part of that neighbourhood. Before the curve, because bloom is
     // scene-referred light and the curve is what maps scene-referred light to the display.
-    if (bloomIntensity > 0.0f)
+    if (any(bloomScatterApply > 0.0f))
     {
-        hdr += BloomTex.SampleLevel(gSmp, uv, 0).rgb * (bloomIntensity * exposureMultiplier);
+        const float3 bloom = BloomTex.SampleLevel(gSmp, uv, 0).rgb;
+        // The scene is scaled FIRST and by its own factor: this is a partition of the light, not
+        // an addition to it. With the pyramid's sceneApply of 1 the line reduces to the old `+=`.
+        hdr = hdr * bloomSceneApply + bloom * (bloomScatterApply * exposureMultiplier);
     }
 
     float3 ldr;
