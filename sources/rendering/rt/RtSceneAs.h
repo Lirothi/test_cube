@@ -70,6 +70,7 @@ private:
         const RenderableObjectBase* object = nullptr;
         const Mesh* mesh = nullptr;
         uint64_t materialFingerprint = 0;
+        uint64_t nonOpaqueSlots = 0; // Part C: per-submesh masked bits for the BLAS build
         uint32_t instanceId = 0;
         bool valid = false;
     };

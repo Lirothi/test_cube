@@ -331,7 +331,6 @@
     <ClCompile Include="sources/rendering/core/SwapchainManager.cpp" />
     <ClCompile Include="sources/rendering/rt/AccelerationStructure.cpp" />
     <ClCompile Include="sources/rendering/rt/BindlessTable.cpp" />
-    <ClCompile Include="sources/rendering/rt/ReflectionHistory.cpp" />
     <ClCompile Include="sources/rendering/rt/RtSceneAs.cpp" />
     <ClCompile Include="sources/rendering/rt/RtSmoke.cpp" />
     <ClCompile Include="sources/rendering/core/UploadBatch.cpp" />
@@ -514,7 +513,6 @@
     <ClInclude Include="sources/rendering/core/UploadBatch.h" />
     <ClInclude Include="sources/rendering/rt/AccelerationStructure.h" />
     <ClInclude Include="sources/rendering/rt/BindlessTable.h" />
-    <ClInclude Include="sources/rendering/rt/ReflectionHistory.h" />
     <ClInclude Include="sources/rendering/rt/RtSceneAs.h" />
     <ClInclude Include="sources/rendering/rt/RtSmoke.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
@@ -638,7 +636,6 @@
     <None Include="shaders\glass_refl_prepass.hlsl" />
     <None Include="shaders\rt_compile_probe.hlsl" />
     <None Include="shaders\rt_debug_cs.hlsl" />
-    <None Include="shaders\rt_reflection_denoise_cs.hlsl" />
     <None Include="shaders\rt_reflections_cs.hlsl" />
     <None Include="shaders\shadow_cull_clear_cs.hlsl" />
     <None Include="shaders\shadow_cull_cs.hlsl" />

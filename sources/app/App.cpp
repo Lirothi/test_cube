@@ -309,7 +309,11 @@ namespace
         // steps against full depth), 1 = UE SSRT fixed-step Batch4 march against the furthest HZB.
         // The A/B switch for the SSR retrofit, and the only way to compare both inside one binary.
         // Only has an effect when render.reflectionSource is 2 (SSR).
+        // Despite the prefix this now gates the temporal resolve for BOTH reflection sources —
+        // the RT reflection at half res boils under DLSS jitter just like the SSR buffer did.
         if (setting == "ssr.temporal")   { renderSettings.ssrTemporal = value != 0.0f; return true; }
+        // Stochastic coverage inflation for the RT foliage alpha test (0 honest .. 1 solid cards).
+        if (setting == "rt.alphaMissKeep") { renderSettings.rtAlphaMissKeep = value; return true; }
         if (setting == "ssr.temporalBlend") { renderSettings.ssrTemporalBlendWeight = value; return true; }
         if (setting == "ssr.temporalClampExpand") { renderSettings.ssrTemporalClampExpand = value; return true; }
         if (setting == "ssr.ueQuality")

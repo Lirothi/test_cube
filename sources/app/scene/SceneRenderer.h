@@ -12,7 +12,6 @@
 // to be complete here (SceneFrameData only forward-declares the class).
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/rt/RtSceneAs.h"
-#include "rendering/rt/ReflectionHistory.h"
 #include "core/task/TaskSystem.h"
 #include "app/scene/SceneFrameData.h"
 #include "materials/Texture2D.h"
@@ -92,7 +91,7 @@ private:
         bool rtBuildAS = false;        // ...so the acceleration structures have to be built
         bool clearReflections = false; // source is None/SkyOnly: nothing traces, the target is cleared
         bool glassRefl = false;        // glass gets traced reflections (was glassReflActive_)
-        bool ssrTemporal = false;      // the SSR temporal resolve runs (was ssrTemporalActive_)
+        bool reflectionTemporal = false; // the reflection temporal resolve runs (SSR or RT source)
         // P6C step 6: does anything trace the CLOSEST depth pyramid this frame? ONE flag, read by
         // the pyramid build (whether to write that chain at all) and by both SSR dispatches
         // (whether the HiZ tracer may run). Two independent evaluations of "is HiZ on" is how a
@@ -332,7 +331,6 @@ private:
         const Camera& camera, std::uint32_t point);
     void Pass_RTReflections(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, std::uint32_t point);
-    void Pass_RTDenoise(Renderer* r, RenderGraphPassContext ctx); // S11 temporal accumulate
     // S15b off-screen glass reflections: render a glass front-face normal/depth G-buffer,
     // then dispatch rt_reflections_cs over it into glassReflection (sampled by forward glass).
     void Pass_GlassReflGbuffer(Renderer* r, RenderGraphPassContext ctx,
@@ -452,7 +450,6 @@ private:
     // their rebuild incremental, together with the build body that was Pass_BuildAS. The RT passes
     // reach them through rtAs_.Manager() / rtAs_.Bindless().
     RtSceneAs rtAs_;
-    rt::ReflectionHistory reflectionHistory_; // S11: ping-pong temporal-accumulation textures (dormant)
     // The frame's render graphs, owned rather than built as locals in Render(): the main one is
     // ~16 KB (MaxPasses x Pass, each holding a std::function), which on the stack left Render at
     // C6262's 16 KB threshold with no headroom. Reset() per frame gives the same freshly-empty

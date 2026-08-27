@@ -844,7 +844,7 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
     // SSR temporal resolve, between the trace and the glossy blur. Skipped entirely when it is not
     // active -- an unregistered pass costs nothing, a registered one still pays its barriers.
     size_t pReflectionFiltered = pReflectionSource;
-    if (decisions_.ssrTemporal)
+    if (decisions_.reflectionTemporal)
     {
         pReflectionFiltered = rg.AddPass2(RenderPass::Main_ReflectionTemporal, { pReflectionSource },
             /*mtDeps=*/{},

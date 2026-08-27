@@ -191,21 +191,11 @@ struct RtReflectConstants
     // to reach both or a reflection is about a stop darker than the surface it reflects.
     Math::float3 groundAlbedoRgb{ 0.25f, 0.25f, 0.25f }; float rtPadGround = 0.0f;
     uint32_t spotLightIndex = 0; uint32_t spotCount = 0; uint32_t pointLightIndex = 0; uint32_t pointCount = 0;
-    uint32_t screenDepthIndex = 0; uint32_t _padS0 = 0; uint32_t _padS1 = 0; uint32_t _padS2 = 0;
+    // alphaMissKeep/frameSeed: stochastic coverage inflation for the RT foliage alpha test —
+    // see RtAlphaCandidatePasses in rt_geometry.hlsli.
+    uint32_t screenDepthIndex = 0; float alphaMissKeep = 0.0f; uint32_t frameSeed = 0; uint32_t _padS2 = 0;
 };
 
-// Matches the `Denoise` cbuffer in rt_reflection_denoise_cs.hlsl.
-struct RtDenoiseConstants
-{
-    uint32_t rawIndex = 0;
-    uint32_t histPrevIndex = 0;
-    uint32_t velocityIndex = 0;
-    uint32_t reflectionUavIndex = 0;
-    uint32_t histCurrUavIndex = 0;
-    uint32_t outWidth = 0;
-    uint32_t outHeight = 0;
-    float    alpha = 0.1f;
-};
 } // namespace
 
 void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContext ctx,
@@ -284,6 +274,14 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         c.gb1Index = rtAs_.Bindless().SceneIndex(frameIndex, 2);
         c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, 3);
         c.screenDepthIndex = c.depthIndex; // opaque: primary == on-screen depth (no change)
+        c.alphaMissKeep = std::clamp(frame_->settings.rtAlphaMissKeep, 0.0f, 1.0f);
+        // FROZEN dither, by measurement (ssr_bronze_palms, resolved frame-to-frame boil in the
+        // mirror band): fill 0 = 0.41; fill 0.15 re-rolled per frame = 0.74; re-rolled once per
+        // EMA time constant = 1.25 (coherent drift is the WORST case for the resolve); frozen =
+        // 0.43. A static pattern realises the coverage inflation spatially, adds no dance at all,
+        // and the EMA has nothing to chase. The seed still reaches the shader so a future
+        // animated-dither experiment only touches this line.
+        c.frameSeed = 0u;
         c.reflectionUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, 4);
         c.skyboxIndex = rtAs_.Bindless().SceneIndex(frameIndex, 5);
         c.skyboxIntensity = skybox->GetExposure();
@@ -447,6 +445,14 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         c.gb1Index = rtAs_.Bindless().SceneIndex(frameIndex, B + 2);
         c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 3);        // primary = glass depth
         c.screenDepthIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 8);  // visibility match = opaque depth
+        c.alphaMissKeep = std::clamp(frame_->settings.rtAlphaMissKeep, 0.0f, 1.0f);
+        // FROZEN dither, by measurement (ssr_bronze_palms, resolved frame-to-frame boil in the
+        // mirror band): fill 0 = 0.41; fill 0.15 re-rolled per frame = 0.74; re-rolled once per
+        // EMA time constant = 1.25 (coherent drift is the WORST case for the resolve); frozen =
+        // 0.43. A static pattern realises the coverage inflation spatially, adds no dance at all,
+        // and the EMA has nothing to chase. The seed still reaches the shader so a future
+        // animated-dither experiment only touches this line.
+        c.frameSeed = 0u;
         c.reflectionUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 4);
         c.skyboxIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 5);
         c.skyboxIntensity = skybox->GetExposure();
@@ -536,68 +542,7 @@ void SceneRenderer::Pass_GlassReflectionsSSR(Renderer* renderer, RenderGraphPass
     ctx.EndCL(t);
 }
 
-// ---- the parked denoise, the clear variant, the temporal resolve, the blur ----
-void SceneRenderer::Pass_RTDenoise(Renderer* renderer, RenderGraphPassContext ctx)
-{
-    auto t = ctx.BeginCL();
-    SetCommandListName(t.cl, ctx.pass);
-    do
-    {
-        GPU_SCOPE(t.cl, ProfilerScopes::kPassRTDenoise);
-        const auto& D = renderer->GetDeferredForFrame();
-        ctx.ApplyDeclaredStates(t.cl); // scratch(raw)/velocity/histPrev -> NPS, reflection/histCurr -> UAV
-
-        auto denoiseMaterial = resources_.GetRtDenoiseMaterial();
-        const UINT frameIndex = renderer->GetCurrentFrameIndex();
-        if (!denoiseMaterial || !rtAs_.Bindless().Ready() || !reflectionHistory_.Ready())
-        {
-            break;
-        }
-
-        const uint64_t parity = renderer->GetTotalFrameNumber();
-        // Scene slots 8-12 (distinct from the reflection pass's 0-7).
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 8, D.reflectionScratchSRV);                 // raw reflection (this frame)
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 9, reflectionHistory_.PrevSrv(parity)); // accumulated (prev frame)
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 10, D.gbSRV[3]);                  // gbVelocity (motion)
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 11, D.reflectionUAV);                    // denoised out -> blur/compose
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 12, reflectionHistory_.CurrUav(parity)); // history (this frame)
-
-        RtDenoiseConstants c{};
-        c.rawIndex = rtAs_.Bindless().SceneIndex(frameIndex, 8);
-        c.histPrevIndex = rtAs_.Bindless().SceneIndex(frameIndex, 9);
-        c.velocityIndex = rtAs_.Bindless().SceneIndex(frameIndex, 10);
-        c.reflectionUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, 11);
-        c.histCurrUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, 12);
-        c.outWidth = renderer->GetReflectionTextureWidth();
-        c.outHeight = renderer->GetReflectionTextureHeight();
-        // alpha = 1 -> pass-through (no accumulation). The reflection is currently
-        // sharp + stable, so temporal accumulation isn't needed and would only add
-        // ghosting under motion. (Re-enable < 1 together with jittered glossy + a
-        // proper denoiser, e.g. DLSS Ray Reconstruction.)
-        c.alpha = 1.0f;
-
-        auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtDenoiseConstants), render::kConstantBufferAlignment);
-        std::memcpy(cb.cpu, &c, sizeof(c));
-
-        ID3D12DescriptorHeap* heaps[] = { rtAs_.Bindless().Heap() };
-        t.cl->SetDescriptorHeaps(1, heaps);
-        t.cl->SetComputeRootSignature(denoiseMaterial->GetRootSignature());
-        t.cl->SetPipelineState(denoiseMaterial->GetPipelineState());
-        t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
-        const UINT gx = (c.outWidth + 7u) / 8u;
-        const UINT gy = (c.outHeight + 7u) / 8u;
-        if (gx > 0 && gy > 0)
-        {
-            t.cl->Dispatch(gx, gy, 1);
-        }
-        renderer->UAVBarrier(t.cl, D.reflection.Get());
-
-        // Restore the frame heap for the grouped blur + compose passes.
-        renderer->BindDescriptorHeaps(t.cl);
-    } while (false);
-    ctx.EndCL(t);
-}
-
+// ---- the clear variant, the temporal resolve, the blur ----
 void SceneRenderer::Pass_ClearReflections(Renderer* renderer, RenderGraphPassContext ctx,
     std::uint32_t point)
 {
@@ -709,7 +654,7 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
             // The temporal resolve, when it ran, leaves its result in reflectionHistory -- so that
             // is the blur's input. The second (vertical) tap still lands in `reflection`, which is
             // what compose reads, so nothing downstream changes.
-            { decisions_.ssrTemporal ? D.reflectionHistorySRV : D.reflectionSRV, D.gbSRV[0] },
+            { decisions_.reflectionTemporal ? D.reflectionHistorySRV : D.reflectionSRV, D.gbSRV[0] },
             { D.reflectionScratchUAV }, samplerTable, // t0 reflection, t1 GB0 (roughness)
             ssrWidth, ssrHeight,
             D.reflectionScratch.Get());

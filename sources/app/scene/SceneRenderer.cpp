@@ -74,8 +74,7 @@ void SceneRenderer::Reset()
 {
     resources_ = SceneResourceBootstrapper{};
     rtAs_.Reset();
-    reflectionHistory_.Reset();
-    decisions_.ssrTemporal = false;
+    decisions_.reflectionTemporal = false;
     ssrHistoryValid_ = false;
     ssrHistoryFrames_ = 0u;
     ssrHistoryWidth_ = 0u;
@@ -94,7 +93,6 @@ void SceneRenderer::InvalidateRaytracing()
     // bindless geom-info next RT frame. The per-frame register loop (GetOrUpdateMesh) re-runs
     // and re-reads current material SRVs after this clear.
     rtAs_.Invalidate();
-    reflectionHistory_.Reset();
 }
 
 // Barrier plan step 4: everything the pass bodies used to create lazily, created here instead —
@@ -219,18 +217,21 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         // registered.
         bloom_.Decide(renderer, frame);
     }
-    // SSR TEMPORAL RESOLVE. Only for the screen-space source: RT traces the TLAS and does not have
-    // this instability, and None/SkyOnly dispatch nothing to filter. The history is per-frame-set
+    // REFLECTION TEMPORAL RESOLVE. Born for SSR (a screen-space march is violently sensitive to
+    // its jittered start). RT was assumed immune -- true on the mirror-on-flat-floor scenes it was
+    // judged on, false the moment reflected FOLIAGE became subpixel at half reflection res: 1
+    // sharp ray/px of sub-texel fronds boils under DLSS jitter exactly like the raw SSR buffer
+    // did (user-visible on the ssr_bronze_palms mirror). One resolve, one toggle, both sources;
+    // None/SkyOnly dispatch nothing to filter. The history is per-frame-set
     // like the GTAO one, so it is only valid once a previous frame at THIS reflection size has
     // written it -- a resize or a level switch has to seed instead of reading garbage.
-    decisions_.ssrTemporal = frame.settings.ssrTemporal && !decisions_.clearReflections &&
-                             !decisions_.rtReflect;
+    decisions_.reflectionTemporal = frame.settings.ssrTemporal && !decisions_.clearReflections;
     {
         const UINT rw = renderer->GetReflectionTextureWidth();
         const UINT rh = renderer->GetReflectionTextureHeight();
-        ssrHistoryValid_ = decisions_.ssrTemporal && ssrHistoryFrames_ > 0u &&
+        ssrHistoryValid_ = decisions_.reflectionTemporal && ssrHistoryFrames_ > 0u &&
                            ssrHistoryWidth_ == rw && ssrHistoryHeight_ == rh;
-        ssrHistoryFrames_ = decisions_.ssrTemporal
+        ssrHistoryFrames_ = decisions_.reflectionTemporal
             ? ((ssrHistoryWidth_ == rw && ssrHistoryHeight_ == rh) ? ssrHistoryFrames_ + 1u : 1u)
             : 0u;
         ssrHistoryWidth_ = rw;
@@ -266,10 +267,10 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     {
         rtAs_.EnsureInit(renderer);
     }
-    // S11 temporal-accumulation history is retired (S12): the hand-rolled denoise pass
-    // it fed was an inert pass-through once glossy was parked, so it was removed and these
-    // history textures are no longer allocated. The infra (ReflectionHistory / Pass_RTDenoise
-    // / rt_reflection_denoise_cs.hlsl) is kept dormant; a future glossy path uses DLSS-RR (S16).
+    // S11's hand-rolled RT denoise (ReflectionHistory ping-pong + rt_reflection_denoise_cs) was
+    // retired in S12 and DELETED once the shared reflection temporal resolve took over the RT
+    // source too -- one resolve, both sources, gated by settings.ssrTemporal. Glossy still waits
+    // on DLSS-RR (S16).
 
     // Step 24f-2: in VSM mode directional shadows come from the clipmap and the CSM cascade atlas is
     // a 1x1 placeholder — the Main_CSM pass is OMITTED entirely. (Adding it but skipping its

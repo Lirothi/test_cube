@@ -629,14 +629,6 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matRtReflect_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
-    if (!matRtDenoise_ && renderer->IsRaytracingSupported())
-    {
-        Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/rt_reflection_denoise_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matRtDenoise_ = mm->GetOrCreateCompute(renderer, cd);
-    }
-
     // S15b: glass reflection G-buffer prepass PSO (front-face normal RTV + depth DSV). Built on
     // all HW — glass off-screen reflections work in SSR mode too (ssr_cs), not just RT.
     if (!matGlassReflPrepass_)

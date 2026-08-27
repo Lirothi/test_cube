@@ -735,24 +735,24 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     }
                 }
 
-                ImGui::Checkbox("SSR temporal resolve", &settings.ssrTemporal);
-                DevHelp("Accumulates the screen-space reflection over time instead of showing each "
-                        "frame raw. A reflected ray is violently sensitive to where it starts, so "
-                        "under DLSS's per-frame jitter the raw buffer boils even with a still "
-                        "camera -- measured 7.9x less frame-to-frame movement in the reflections "
-                        "with this on. Unreal never display their SSR unfiltered either. "
-                        "Perf: ~0.014 ms. Off = see the tracer's raw output, which is what you "
-                        "want when judging a tracer rather than the picture.");
+                ImGui::Checkbox("Reflection temporal resolve", &settings.ssrTemporal);
+                DevHelp("Accumulates the reflection over time instead of showing each frame raw. "
+                        "Applies to BOTH sources: an SSR march is violently sensitive to its "
+                        "jittered start (measured 7.9x less frame-to-frame movement), and RT at "
+                        "half reflection res boils the same way once reflected foliage is "
+                        "subpixel -- 1 sharp ray/px under DLSS jitter. Unreal never display "
+                        "either unfiltered. Perf: ~0.014 ms. Off = the tracer's raw output, "
+                        "which is what you want when judging a tracer rather than the picture.");
                 ImGui::BeginDisabled(!settings.ssrTemporal);
                 {
                     ImGui::SetNextItemWidth(140.0f);
-                    ImGui::SliderFloat("SSR temporal blend", &settings.ssrTemporalBlendWeight,
+                    ImGui::SliderFloat("Temporal blend", &settings.ssrTemporalBlendWeight,
                                        0.02f, 1.0f, "%.3f");
                     DevHelp("Weight of the CURRENT frame. UE use 1/8 = 0.125 for their SSR TAA "
                             "config. Lower = longer history, steadier but slower to react; 1 = no "
                             "accumulation at all.");
                     ImGui::SetNextItemWidth(140.0f);
-                    ImGui::SliderFloat("SSR temporal clamp expand", &settings.ssrTemporalClampExpand,
+                    ImGui::SliderFloat("Temporal clamp expand", &settings.ssrTemporalClampExpand,
                                        0.0f, 2.0f, "%.2f");
                     DevHelp("How far the neighbourhood clamp box may widen when the camera is "
                             "still. 0 = clamp hard to this frame's 3x3 box always (least ghosting, "
@@ -817,6 +817,14 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 
                 ImGui::BeginDisabled(!rtSupported);
+                ImGui::SetNextItemWidth(140.0f);
+                ImGui::SliderFloat("RT foliage fill", &settings.rtAlphaMissKeep, 0.0f, 1.0f, "%.2f");
+                DevHelp("Stochastic coverage inflation for the RT alpha test. One sharp ray per "
+                        "pixel at reflection res undersamples thin fronds, so the reflected crown "
+                        "reads smaller than the real one. On a failed alpha test the hit is still "
+                        "kept with this probability, re-rolled per pixel per frame -- the temporal "
+                        "resolve averages the dither back into density. 0 = honest cutouts, "
+                        "1 = the old solid cards. Headless: --set=rt.alphaMissKeep:<v>.");
                 ImGui::Checkbox("RT debug view -> Reflection target [F6]", &settings.rtDebugView);
                 ImGui::EndDisabled();
                 if (rtSupported && settings.rtDebugView)

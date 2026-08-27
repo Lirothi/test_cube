@@ -32,6 +32,14 @@ struct InstanceEntry {
     Mesh* mesh = nullptr;
     DirectX::XMFLOAT4X4 world{};
     uint32_t instanceId = 0;
+    // Part C alpha test: bit s set = the BLAS geometry for submesh s is built WITHOUT
+    // D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE, so masked foliage surfaces as a non-opaque
+    // candidate the RayQuery loops alpha-test (UE marks whole instances non-force-opaque and
+    // runs an any-hit shader — RayTracingInstanceMask.cpp:219; per-geometry is strictly finer).
+    // Submeshes past bit 63 stay opaque. Only the FIRST instance to reach a mesh builds its
+    // BLAS (build-once cache), so this must be derived from the mesh's own slot materials,
+    // not from anything per-instance.
+    uint64_t nonOpaqueSlots = 0;
 };
 
 // Builds and caches BLASes for meshes and assembles a per-frame TLAS from a list
@@ -48,7 +56,9 @@ public:
 
     // Returns the cached BLAS for `mesh`, building it on `cmdList4` on first use
     // (with a UAV barrier). On failure the returned Blas has a null result.
-    const Blas& GetOrBuildBlas(Mesh* mesh, ID3D12GraphicsCommandList4* cmdList4);
+    // nonOpaqueSlots: see InstanceEntry — consumed only by the first (building) call.
+    const Blas& GetOrBuildBlas(Mesh* mesh, uint64_t nonOpaqueSlots,
+                               ID3D12GraphicsCommandList4* cmdList4);
 
     // (Re)build the TLAS for `frameIndex` from `instances`. BLASes are built on
     // demand on the same cmdList4 (so the per-BLAS UAV barrier already orders

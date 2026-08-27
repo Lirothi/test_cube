@@ -136,6 +136,9 @@ public:
         out.baseColor = mp.baseColor;
         out.metalRough = mp.metalRough; // x=metallic, y=roughness (flat fallback)
         out.mrMultiply = mp.mrMultiply > 0.5f;
+        // Part C: masked geometry (foliage) must not be a solid quad in the BVH. The cutoff is
+        // the same value the raster clip uses; it only means anything with an albedo to sample.
+        out.alphaCutoff = (md && md->hasAlbedo) ? mp.alphaCutoff : -1.0f;
         return true;
     }
 

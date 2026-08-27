@@ -182,11 +182,18 @@ VSM baseline, so re-tune `clipmapNormalBias` whenever the extent is changed for 
 Read from the code on 2026-07-23. These are gaps R0 must confirm and later steps must close; they are
 recorded here so no executor plans around a BVH that does not contain what they think it does.
 
-1. **Every BLAS geometry is forced opaque.** `AccelerationStructure.cpp:90` sets
+1. **Every BLAS geometry is forced opaque.** ~~`AccelerationStructure.cpp:90` sets
    `D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` unconditionally. Masked foliage is a solid quad in the BVH
    today (already visible in RT reflections). Without R3 an RT sun shadow of a palm is a **black
    rectangle**, not a cut-out crown. R3 is not an enhancement here, it is a correctness prerequisite —
-   R2 sign-off on the atoll is meaningless without it.
+   R2 sign-off on the atoll is meaningless without it.~~ **CLOSED 2026-08-28.** Masked submeshes now
+   build their BLAS geometry without the OPAQUE flag (`InstanceEntry.nonOpaqueSlots`, derived from the
+   same per-slot `alphaCutoff` the raster clip uses), the bindless record carries the cutoff, and every
+   RayQuery loop (reflection, off-screen shadow ray, debug view) alpha-tests
+   `CANDIDATE_NON_OPAQUE_TRIANGLE` via `RtAlphaCandidatePasses` in `rt_geometry.hlsli` — UE's
+   masked-segment any-hit policy (`RayTracingInstanceMask.cpp:219`), at per-geometry granularity.
+   Verified on a mirror sphere in the wind_test grove: reflected crowns are cut-out fronds with sky in
+   the gaps. An RT shadow pass inherits this for free.
 2. **BLAS is static and cached per mesh, and cannot be refit.** `AccelerationStructure.h:17-24`
    ("Geometry in this engine is static, so a BLAS is built once and cached per mesh"), built with
    `PREFER_FAST_TRACE` only — no `ALLOW_UPDATE` (`AccelerationStructure.cpp:109`), so `PERFORM_UPDATE`

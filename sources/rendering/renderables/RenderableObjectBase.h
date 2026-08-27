@@ -26,6 +26,10 @@ struct RtInstanceDesc
     Math::float4 baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
     Math::float2 metalRough{ 0.0f, 1.0f }; // x=metallic, y=roughness (flat fallback when no MR texture)
     bool mrMultiply = false;               // true = MR texture * metalRough; false = texture override
+    // Part C alpha test: >= 0 marks the geometry MASKED — its BLAS entries are built non-opaque
+    // and RT candidate hits are kept only when baseColor.a * albedo.a >= alphaCutoff (the raster
+    // clip rule). < 0 = opaque geometry, zero traversal cost added.
+    float alphaCutoff = -1.0f;
 };
 class Camera;
 class Material;

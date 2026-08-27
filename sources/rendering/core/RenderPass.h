@@ -30,7 +30,6 @@ enum class RenderPass : uint16_t {
     Main_ReflectionBlur,
     Main_Compose,
     Main_RTReflections,
-    Main_RTDenoise,
     Main_RTDebug,
     Main_GlassReflGbuffer,
     Main_GlassReflections,
@@ -93,7 +92,6 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_ReflectionBlur: return L"Reflection.Blur";
     case RenderPass::Main_Compose: return L"Compose";
     case RenderPass::Main_RTReflections: return L"RTReflections";
-    case RenderPass::Main_RTDenoise: return L"RTDenoise";
     case RenderPass::Main_GlassReflGbuffer: return L"GlassReflGbuffer";
     case RenderPass::Main_GlassReflections: return L"GlassReflections";
     case RenderPass::Main_RTDebug: return L"RTDebug";

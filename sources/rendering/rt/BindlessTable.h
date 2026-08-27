@@ -39,7 +39,12 @@ struct GeometryInfoGPU
     // to 52 (W7.1's COLOR_0). Every vertex but #0 then decoded at the wrong offset and RT
     // reflections shaded off garbage normals/UVs. Sourcing it from the mesh removes the mirror.
     uint32_t vertexStride = 0u;
-    uint32_t _pad[2]{};
+    // Part C alpha test: same convention as the raster clip (gbuffer_common.hlsli) — a candidate
+    // hit is rejected when baseColor.a * albedo.a < alphaCutoff; negative disables the test. Only
+    // meaningful on records whose BLAS geometry was built WITHOUT the OPAQUE flag: an opaque
+    // geometry never surfaces as a non-opaque candidate, so its cutoff is never read.
+    float    alphaCutoff = -1.0f;
+    uint32_t _pad = 0u;
 };
 
 // Persistent bindless table (S9): a single shader-visible CBV_SRV_UAV heap that
@@ -56,7 +61,8 @@ class BindlessTable
 public:
     static constexpr UINT kScenePerFrame = 32; // per-frame scene descriptors, partitioned
                                                // across the RT passes (reflections 0-7,
-                                               // denoise 8-12, debug 13-16, glass refl 17-25)
+                                               // 8-12 free (was the deleted S11 denoise),
+                                               // debug 13-16, glass refl 17-25)
                                                // so passes in the same frame never alias slots
     static constexpr UINT kDescPerGeom = 4;    // VB raw, IB raw, albedo texture, MR texture
     static constexpr UINT kSceneBase = render::kFrameCount;
@@ -82,6 +88,8 @@ public:
         float roughness = 1.0f;
         float metalness = 0.0f;
         bool mrMultiply = false;
+        // < 0 = opaque slot (no alpha test); >= 0 = masked, tested against baseColor.a * albedo.a.
+        float alphaCutoff = -1.0f;
     };
 
     // One stable, contiguous record run per owner + mesh (InstanceID + GeometryIndex).
@@ -92,7 +100,7 @@ public:
     uint32_t GetOrUpdateMesh(const void* owner, Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
                                const float* baseColor4, float roughness, float metalness,
-                               bool mrMultiply);
+                               bool mrMultiply, float alphaCutoff = -1.0f);
 
     // Absolute heap index of per-frame scene descriptor `which` for `frameIndex`.
     UINT SceneIndex(UINT frameIndex, UINT which) const

@@ -44,6 +44,7 @@ namespace
         mixFloat(p.metalRough.x); mixFloat(p.metalRough.y);
         mixFloat(p.mrMultiply);
         mixFloat(p.texFlags.y); // useMR controls whether the MR descriptor participates
+        mixFloat(p.alphaCutoff); // Part C: the cutoff travels in the bindless record
         return h;
     }
 }
@@ -170,8 +171,27 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                         slotMats[s].roughness = p->metalRough.y;
                         slotMats[s].metalness = p->metalRough.x;
                         slotMats[s].mrMultiply = p->mrMultiply > 0.5f;
+                        // Part C: same value the raster clip uses; >= 0 only on MASK slots.
+                        slotMats[s].alphaCutoff = p->alphaCutoff;
                     }
                 }
+                // Part C: per-submesh non-opaque bits for the BLAS build. Submesh s reads bindless
+                // record s, which BindlessTable fills from slots[min(s, slotCount-1)] — the mask
+                // MUST use the same mapping, or a BLAS flag and the record it gates would disagree.
+                // Masked needs both a cutoff and an albedo to test (the record fill nulls the
+                // cutoff without one).
+                uint64_t nonOpaque = 0;
+                const size_t submeshCount = gb->GetMesh() ? gb->GetMesh()->GetSubmeshCount() : 0;
+                for (size_t s = 0; s < submeshCount && s < 64u; ++s)
+                {
+                    const rt::BindlessTable::SlotMaterial& sm =
+                        slotMats[s < slotMats.size() ? s : slotMats.size() - 1];
+                    if (sm.alphaCutoff >= 0.0f && sm.albedoSrv.ptr != 0)
+                    {
+                        nonOpaque |= 1ull << s;
+                    }
+                }
+                objectCache.nonOpaqueSlots = nonOpaque;
             }
             for (size_t descIndex = 0; descIndex < descCount; ++descIndex)
             {
@@ -185,6 +205,7 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 // a running index if the bindless table isn't up.
                 if (perSlot && desc.mesh == gb->GetMesh())
                 {
+                    entry.nonOpaqueSlots = objectCache.nonOpaqueSlots;
                     if (reuseObjectCache)
                     {
                         entry.instanceId = objectCache.instanceId;
@@ -206,10 +227,14 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 }
                 else
                 {
+                    // Single-material path: every submesh shares slot 0's record, so masked-ness
+                    // is uniform across the BLAS geometries.
+                    entry.nonOpaqueSlots =
+                        (desc.alphaCutoff >= 0.0f && desc.albedoSrv.ptr != 0) ? ~0ull : 0ull;
                     entry.instanceId = bindless_.Ready()
                         ? bindless_.GetOrUpdateMesh(obj.get(), desc.mesh, desc.albedoSrv, desc.mrSrv, &desc.baseColor.x,
                                                       /*roughness*/ desc.metalRough.y, /*metalness*/ desc.metalRough.x,
-                                                      desc.mrMultiply)
+                                                      desc.mrMultiply, desc.alphaCutoff)
                         : instanceId;
                 }
                 if (entry.instanceId == rt::BindlessTable::kInvalidGeometry) { break; }

@@ -193,7 +193,7 @@ int RunRtSmoke(const char* outPath)
         asManager.ReleaseCompletedScratch();
 
         // The BLAS was built on demand inside BuildTlas; fetch the cached address.
-        blasAddr = asManager.GetOrBuildBlas(&mesh, nullptr).Address();
+        blasAddr = asManager.GetOrBuildBlas(&mesh, /*nonOpaqueSlots*/ 0, nullptr).Address();
         const UINT tlasInstances = asManager.TlasInstanceCount(0);
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager.TlasSrvCpu(0);
         tlasBuilt = (tlasInstances == 2) && (tlasSrv.ptr != 0);

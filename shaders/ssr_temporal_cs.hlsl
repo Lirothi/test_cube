@@ -183,5 +183,13 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     const float4 here = ClampSample(HistTex.Load(int3(px, 0)), lo, hi);
 
     const float4 history = lerp(here, reprojected, agreement);
+    // NOTE a flat lerp is a MEASURED decision, not an omission. UE's final TAA blend is luma-
+    // weighted (HdrWeightY + WeightedLerpFactors, "Tone map to kill fireflies") and runs for the
+    // SSR config too -- but transcribing it HERE tripled the frame-to-frame boil on the
+    // ssr_bronze_palms mirror (0.43 -> 1.21): their weighting acts on a SPATIALLY FILTERED
+    // current frame (AA_FILTERED) with exposure-normalised luma, while our input is raw 1spp
+    // leaf<->sky flips at full HDR contrast -- there the asymmetric weights (a dark sample
+    // replaces a bright history almost instantly, a bright one barely lands) turn the
+    // accumulator into an oscillator. Half of their pair is worse than none of it.
     OutTex[px] = lerp(history, newC, saturate(blendWeight));
 }

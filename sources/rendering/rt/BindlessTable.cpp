@@ -73,9 +73,9 @@ void BindlessTable::WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_
 uint32_t BindlessTable::GetOrUpdateMesh(const void* owner, Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                           D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
                                           const float* baseColor4, float roughness, float metalness,
-                                          bool mrMultiply)
+                                          bool mrMultiply, float alphaCutoff)
 {
-    const SlotMaterial one{ albedoSrv, mrSrv, baseColor4, roughness, metalness, mrMultiply };
+    const SlotMaterial one{ albedoSrv, mrSrv, baseColor4, roughness, metalness, mrMultiply, alphaCutoff };
     return GetOrUpdateMesh(owner, mesh, &one, 1);
 }
 
@@ -168,6 +168,10 @@ uint32_t BindlessTable::GetOrUpdateMesh(const void* owner, Mesh* mesh,
         }
         rec.firstTri = (s < subs.size()) ? subs[s].indexOffset / 3u : 0u;
         rec.vertexStride = mesh ? mesh->GetVertexStride() : 0u;
+        // Part C: the cutoff only matters when there is an albedo texture to test against — with
+        // no texture the alpha is a per-slot constant and the raster path never authors that as
+        // MASK. Keeping the record opaque then matches the BLAS mask in RtSceneAs.
+        rec.alphaCutoff = (rec.albedoTexIndex != 0xFFFFFFFFu) ? sm.alphaCutoff : -1.0f;
 
         GeometryInfoGPU& current = geomInfo_[base + s];
         if (std::memcmp(&current, &rec, sizeof(rec)) != 0) {

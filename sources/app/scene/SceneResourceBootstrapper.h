@@ -782,7 +782,6 @@ public:
     std::shared_ptr<Material> GetDebugMaterial() const { return matDebug_; }
     std::shared_ptr<Material> GetRtDebugMaterial() const { return matRtDebug_; } // S6, null on non-RT HW
     std::shared_ptr<Material> GetRtReflectMaterial() const { return matRtReflect_; } // S7, null on non-RT HW
-    std::shared_ptr<Material> GetRtDenoiseMaterial() const { return matRtDenoise_; } // S11, null on non-RT HW
     std::shared_ptr<Material> GetGlassReflPrepassMaterial() const { return matGlassReflPrepass_; } // S15b, null on non-RT HW
 #if WITH_EDITOR
     std::shared_ptr<Material> GetSelectionOutlineMaterial() const { return matSelectionOutlineCS_; }
@@ -871,7 +870,6 @@ private:
     std::shared_ptr<Material> matDebug_;
     std::shared_ptr<Material> matRtDebug_;   // S6 RT debug viz (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matRtReflect_;  // S7 Tier-1 RT reflections (RayQuery cs_6_5); only on RT HW
-    std::shared_ptr<Material> matRtDenoise_;  // S11 temporal reflection denoise; only on RT HW
     std::shared_ptr<Material> matGlassReflPrepass_; // S15b glass refl G-buffer prepass; only on RT HW
 #if WITH_EDITOR
     std::shared_ptr<Material> matSelectionOutlineCS_;

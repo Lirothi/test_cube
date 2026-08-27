@@ -480,9 +480,6 @@
     <ClCompile Include="sources/rendering/rt/BindlessTable.cpp">
       <Filter>sources\rendering\rt</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/rt/ReflectionHistory.cpp">
-      <Filter>sources\rendering\rt</Filter>
-    </ClCompile>
     <ClCompile Include="sources/rendering/rt/RtSceneAs.cpp">
       <Filter>sources\rendering\rt</Filter>
     </ClCompile>
@@ -882,9 +879,6 @@
       <Filter>sources\rendering\rt</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/rt/BindlessTable.h">
-      <Filter>sources\rendering\rt</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/rt/ReflectionHistory.h">
       <Filter>sources\rendering\rt</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/rt/RtSceneAs.h">
@@ -1331,9 +1325,6 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\rt_debug_cs.hlsl">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="shaders\rt_reflection_denoise_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\rt_reflections_cs.hlsl">

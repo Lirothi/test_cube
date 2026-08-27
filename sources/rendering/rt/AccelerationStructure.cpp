@@ -59,7 +59,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateUavBuffer(ID3D12Device* device,
 
 } // namespace
 
-const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, ID3D12GraphicsCommandList4* cmdList4)
+const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, uint64_t nonOpaqueSlots,
+                                                         ID3D12GraphicsCommandList4* cmdList4)
 {
     Blas& slot = blasCache_[mesh];
     if (slot.result) {
@@ -88,7 +89,13 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, ID3D12Graph
         D3D12_RAYTRACING_GEOMETRY_DESC& geom = geoms[s];
         geom = {};
         geom.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-        geom.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+        // Part C: masked submeshes stay non-opaque so traversal surfaces them as
+        // CANDIDATE_NON_OPAQUE_TRIANGLE for the RayQuery alpha test; everything else keeps the
+        // OPAQUE fast path (no candidate cost). UE's equivalent decision is per instance
+        // (bForceOpaque only when every segment is BLEND_Opaque); per-geometry is finer.
+        const bool masked = s < 64u && ((nonOpaqueSlots >> s) & 1ull) != 0ull;
+        geom.Flags = masked ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE
+                            : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
         geom.Triangles.VertexBuffer.StartAddress = vb->GetGPUVirtualAddress();
         geom.Triangles.VertexBuffer.StrideInBytes = stride;
         geom.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
@@ -230,7 +237,7 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         d.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
         if (!lastBlasResolved || e.mesh != lastMesh) {
             lastMesh = e.mesh;
-            lastBlasAddress = GetOrBuildBlas(e.mesh, cmdList4).Address();
+            lastBlasAddress = GetOrBuildBlas(e.mesh, e.nonOpaqueSlots, cmdList4).Address();
             lastBlasResolved = true;
         }
         d.AccelerationStructure = lastBlasAddress;

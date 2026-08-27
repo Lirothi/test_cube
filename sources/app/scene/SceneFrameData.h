@@ -452,12 +452,19 @@ struct SceneRenderSettings
     // the strength of the cost numbers alone: the comparison that decided it was the image.
     SsrTechnique ssrTechnique = SsrTechnique::LogMarch;
     UeSsrSettings ssrUe{};
-    // SSR temporal resolve. A screen-space ray is violently sensitive to its own start, so under
-    // DLSS's per-frame jitter the raw buffer boils even with a still camera; Unreal never show
-    // theirs unfiltered either. Defaults ON -- see ssr_temporal_cs.hlsl.
+    // RT foliage alpha test: on a FAILED alpha test the hit is still kept with this probability
+    // (a FROZEN per-pixel dither -- static patterns measured strictly calmer than per-frame
+    // re-rolls, see the frameSeed fill site). A 1-ray/px trace at reflection res undersamples
+    // thin fronds and the reflected crown reads smaller than the real one; this inflates
+    // coverage back. 0 = honest cutout, 1 = the old solid cards.
+    float rtAlphaMissKeep = 0.15f;
+    // Reflection temporal resolve, BOTH sources. A screen-space ray is violently sensitive to its
+    // own start, so under DLSS's per-frame jitter the raw buffer boils even with a still camera;
+    // RT at half reflection res boils the same way once reflected foliage is subpixel. Unreal
+    // never show theirs unfiltered either. Defaults ON -- see ssr_temporal_cs.hlsl.
     bool ssrTemporal = true;
     // UE's AA_LERP 8 for ETAAPassConfig::ScreenSpaceReflections: this frame is worth 1/8.
-    float ssrTemporalBlendWeight = 0.125f;
+    float ssrTemporalBlendWeight = 0.0625f;
     // How much the neighbourhood clamp box may widen when the camera is still (0 = never).
     float ssrTemporalClampExpand = 0.5f;
     bool doFxaa = false;

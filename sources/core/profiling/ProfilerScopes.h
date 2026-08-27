@@ -89,7 +89,6 @@ extern const Profiler::ScopeNameKey kPassSkybox;
 extern const Profiler::ScopeNameKey kPassBuildAS;
 extern const Profiler::ScopeNameKey kPassReflectionSource;
 extern const Profiler::ScopeNameKey kPassRTReflections;
-extern const Profiler::ScopeNameKey kPassRTDenoise;
 extern const Profiler::ScopeNameKey kPassReflectionTemporal;
 extern const Profiler::ScopeNameKey kPassReflectionBlur;
 extern const Profiler::ScopeNameKey kPassCompose;
