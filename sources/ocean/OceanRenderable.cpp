@@ -675,10 +675,11 @@ void OceanRenderable::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandLis
     UpdateFoamTrailState();
 }
 
-void OceanRenderable::PrepareCompute(RenderGraphPassContext& ctx)
+bool OceanRenderable::PrepareCompute(RenderGraphPassContext& ctx)
 {
-    if (!simulation_) { return; }
+    if (!simulation_) { return false; }
     simulation_->PrepareUpdate(ctx);
+    return true;
 }
 
 // surf sim injection (pass-flow S3 pilot): the surf sim is its OWN render-graph pass now,

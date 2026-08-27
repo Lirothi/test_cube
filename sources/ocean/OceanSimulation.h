@@ -130,6 +130,15 @@ public:
     float GetShoreSdfHalfExtent() const { return shoreSdfHalfExtent_; }
     // The jump-flood itself. Called with the source already rendered and readable.
     void BuildShoreSdf(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+    // pass-flow S6: everything BuildShoreSdf needs before it will record anything. The pass
+    // builder asks BEFORE declaring, because the flood's own early-out used to fire mid-record,
+    // after the pass had declared the SDF's UAV/SRV points — and it also cleared `shoreSdfDirty_`
+    // on the way out, so a level whose SDF materials were not up yet lost its one rebuild.
+    bool CanBuildShoreSdf() const
+    {
+        return shoreSdfSeedMaterial_ && shoreSdfJumpMaterial_ && shoreSdfResolveMaterial_ &&
+               shoreSdfJump_[0] && shoreSdfJump_[1];
+    }
     void SetShoreViewSnapMultiplier(float multiplier)
     {
         shoreViewSnapMultiplier_ = std::max(multiplier, 1.0f);

@@ -8,6 +8,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include "core/containers/inl_vector.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/renderables/InstanceTypes.h"
@@ -67,11 +68,35 @@ public:
     // (view, mesh-group) indirect args) + a cull dispatch (frustum-test every caster into the
     // visible list + InstanceCounts). Writes the current frame's ring region. Produces the
     // indirect args; NOTHING draws from them yet. Call from a render-graph pass before shadows.
-    void RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl);
-    // D1.1: the gate RecordCull's one-shot validation readback uses, shared with
-    // PrepareCullPass so Prepare cannot register what Record will skip.
-    bool WillRecordValidationReadback(Renderer* renderer) const;
-    bool WillUseUnifiedBuffers(Renderer* renderer) const;
+    // pass-flow S7a: this frame's cull decisions and the ABSOLUTE indices of the barrier points
+    // they were declared under. Produced by PrepareCullPass (which runs in the AddPass2 builder,
+    // serially, before any recording) and handed straight to RecordCull, so the two cannot
+    // disagree — which is what the two `Will*` predicates existed to prevent by hand.
+    //
+    // `giCasterIdx` is the FILTERED caster list, not a re-derivable hint: the declaration walk and
+    // the record walk have to skip exactly the same entries, and the only way to guarantee that is
+    // for the record to iterate what the declaration produced.
+    struct CullDecisions
+    {
+        bool active = false;      // every gate RecordCull used to re-check
+        bool useUnified = false;  // the DEFAULT-heap instance/bounds mirror is usable this frame
+        bool giOn = false;        // GI folding runs, so the scatter fills the GI region
+        bool readback = false;    // the one-shot validation readback runs on this frame
+        std::uint32_t base = 0;         // cull outputs -> UAV
+        std::uint32_t unifiedCopy = 0;  // unified instance/bounds -> COPY_DEST
+        std::uint32_t giWrite = 0;      // ...-> UAV for the scatter
+        std::uint32_t giRead = 0;       // each folded object's instance buffer -> NPS
+        std::uint32_t giRestore = 0;    // ...and back to its owner's canonical
+        std::uint32_t unifiedRead = 0;  // unified instance/bounds -> NPS for the cull + the draws
+        std::uint32_t valCopy = 0;      // indirect args -> COPY_SOURCE for the readback
+        std::uint32_t consume = 0;      // args -> INDIRECT_ARGUMENT, visible list -> vertex stream
+        tc::inl_vector<std::uint16_t, vsm::kMaxMeshGroups> giCasterIdx;
+    };
+    // NOT const: it commits this frame's cross-frame state — the one-shot validation snapshot and
+    // the readback buffer — the way an AddPass2 builder is supposed to, instead of leaving it to
+    // the record body where an inner allocation failure could skip a point that was declared.
+    CullDecisions PrepareCullPass(RenderGraphPassContext& ctx);
+    void RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullDecisions& dec);
 
     // Step 4 (temporary): once, a few frames after the cull first runs, read back the GPU
     // InstanceCounts and compare per-view totals against a CPU frustum cull of the same
@@ -202,11 +227,6 @@ public:
     // stay D16). Used ONLY by the VSM per-page LOOP fallback, which draws into the pool with the
     // non-VSM_PAGE shader — one PSO cannot serve two depth formats.
     Material* IndirectShadowPoolMaterial() const;
-
-    // Barrier plan step 5: what RecordCull transitions, registered by the owner rather than
-    // exposed buffer by buffer. Same shape as VirtualShadowMap::PrepareRequestPass — the
-    // context is forward-declared, RenderGraph.h is included only in the .cpp.
-    void PrepareCullPass(RenderGraphPassContext& ctx) const;
 
     // Barrier plan step 4/5: create the cull + indirect-draw PSOs once per frame BEFORE the
     // graph runs. RecordCull used to do this itself, which meant PrepareCullPass ran while

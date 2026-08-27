@@ -91,7 +91,7 @@ public:
     void Tick(float deltaTime) override;
 
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    void PrepareCompute(RenderGraphPassContext& ctx) override;
+    bool PrepareCompute(RenderGraphPassContext& ctx) override;
     // surf sim injection (pass-flow S3): the surf sim's own pass, authored with AddPass2 —
     // SceneRenderer calls this as the pass builder. Empty return = the sim is off this frame.
     std::function<void(RenderGraphPassContext)> BuildSurfSimPass(RenderGraphPassContext& ctx);

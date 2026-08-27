@@ -8,6 +8,9 @@
 
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderPass.h"
+// pass-flow S7a: Pass_ShadowCull takes ShadowGpuData::CullDecisions by reference, so the type has
+// to be complete here (SceneFrameData only forward-declares the class).
+#include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/BindlessTable.h"
 #include "rendering/rt/ReflectionHistory.h"
@@ -82,18 +85,36 @@ private:
     // Registers the per-object states a draw pass's body will transition, for the objects that
     // body will actually draw — hence the view list, whose visible buckets are exactly what the
     // bodies iterate. `shadowDraw` selects the shadow bodies' extra GPU-driven gate.
+    // pass-flow S7c: `indirect` arrives from the pass builder rather than being recomputed here.
+    // It used to be derived in FOUR places from the same inputs — this function, Pass_CSM,
+    // Pass_SpotShadows and Pass_PointShadows — and it decides WHICH OBJECTS DRAW, so a
+    // disagreement between the registration and the draw is a GPU-instanced caster transitioning
+    // its instance buffer with no declaration behind it.
     void PrepareOpaqueDrawStates(RenderGraphPassContext& p, const SceneView* views, size_t viewCount,
-                                 bool shadowDraw);
+                                 bool indirect);
+    // The one place that decision is made. `shadowDraw` is false for the G-buffer, whose draws
+    // never go through the indirect path.
+    bool IndirectShadowDrawsActive() const;
 
     void Pass_BuildAS(Renderer* r, RenderGraphPassContext ctx);
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
-    void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx);
+    // pass-flow S7b: the objects whose compute records something this frame, collected by the
+    // Main_ObjectCompute builder as it declares for them. Fixed capacity because it rides into the
+    // record lambda by value — an overflow is an invariant failure, never a silent drop.
+    static constexpr size_t kMaxComputeObjects = 64;
+    using ObjectComputeList = tc::inl_vector<RenderableObjectBase*, kMaxComputeObjects>;
+    void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx,
+        const ObjectComputeList& objects);
 
-    void Pass_ShadowCull(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_ShadowCull(Renderer* r, RenderGraphPassContext ctx,
+        const ShadowGpuData::CullDecisions& dec);
     void Pass_CSM(Renderer* r, RenderGraphPassContext ctx,
-        const std::array<SceneView, kCascades>& cascadeViews);
+        const std::array<SceneView, kCascades>& cascadeViews,
+        std::uint32_t atlasPoint, bool indirect);
+    // pass-flow S7d: `bindPoint` is the outer pass's single declared point; the INNER graph's
+    // driver emits it instead of carrying a second copy of the same declaration list.
     void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera, const SceneView& mainView);
+        const Camera& camera, const SceneView& mainView, std::uint32_t bindPoint);
     // pass-flow S3c: `pts` arrives from the AddPass2 builder's PrepareRequestPass call — the
     // point indices the declarations were made under, captured by value into the record lambda.
     void Pass_VsmPageRequest(Renderer* r, RenderGraphPassContext ctx,
@@ -133,7 +154,7 @@ private:
 
     // P6C: the hierarchical depth pyramid. `mipCount` is decided in the builder so the record body
     // dispatches exactly the levels that were declared.
-    void Pass_SsrTemporal(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_SsrTemporal(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
     void Pass_Hzb(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
     // P8: the bloom pyramid. Not a pass of its own -- it records into the tonemap pass's list,
     // between the DLSS evaluate and the tone curve, because both of those live in that pass.
@@ -197,52 +218,141 @@ private:
         D3D12_CPU_DESCRIPTOR_HANDLE srv{};
     };
     static DebugTexPick PickDebugTexTarget(const RenderTargetManager::DeferredTargets& D, int index);
-    void Pass_Debug(Renderer* r, RenderGraphPassContext ctx, bool on, const DebugTexPick& pick,
-        D3D12_RESOURCE_STATES canonical);
+    // pass-flow S6: the debug blit's two points. The pass exists at all only when the builder
+    // decided the target is pickable, so the body carries no `on` flag any more; `restore` is
+    // emitted on EVERY path, including the one where the debug material is missing.
+    struct DebugBlitPoints
+    {
+        std::uint32_t read = 0;
+        std::uint32_t restore = 0;
+    };
+    void Pass_Debug(Renderer* r, RenderGraphPassContext ctx, const DebugTexPick& pick,
+        const DebugBlitPoints& pts);
+    // pass-flow S5: `point` is the pass's single declared barrier point, decided by the AddPass2
+    // builder (which also owns the readiness gate this body used to repeat) and emitted here as
+    // one marker instead of ApplyDeclaredStates' list of named transitions.
     void Pass_Lighting(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, std::uint32_t point);
+    // pass-flow S6: `viewCount` is the builder's clamp (the shadowed-light count against the
+    // fixed-size view array), not a second one made here — the two used to be computed
+    // independently in the Prepare and in the body. `atlasPoint` is the point the atlas's
+    // DEPTH_WRITE was declared under; the per-object draw states the fan-out workers transition
+    // stay named (a legal mixed pass until S7c takes the walk apart).
     void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,
-        const std::array<SceneView, LightManager::kMaxShadowedSpotLights>& views);
+        const std::array<SceneView, LightManager::kMaxShadowedSpotLights>& views,
+        size_t viewCount, std::uint32_t atlasPoint, bool indirect);
     void Pass_PointShadows(Renderer* r, RenderGraphPassContext ctx,
-        const std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>& views);
+        const std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>& views,
+        size_t viewCount, std::uint32_t atlasPoint, bool indirect);
     void Pass_SpotLights(Renderer* renderer, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, std::uint32_t point);
     void Pass_PointLights(Renderer* renderer, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, std::uint32_t point);
     void Pass_Skybox(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, std::uint32_t point);
+    // pass-flow S6: Main_TerrainDepth's frame decisions and the barrier points they were declared
+    // under. `drawDepth` / `buildSdf` used to be read by the Prepare AND recomputed by the body
+    // from the same two OceanSimulation flags; the builder decides them once, commits
+    // MarkShoreSdfBuilt itself, and the body just walks the points.
+    struct ShoreDepthPoints
+    {
+        bool drawDepth = false;
+        bool buildSdf = false;
+        std::uint32_t depthWrite = 0;  // shore depth window -> DEPTH_WRITE
+        std::uint32_t depthRead = 0;   // ...and back to shader-readable
+        std::uint32_t sdfWrite = 0;    // SDF source -> DEPTH_WRITE
+        std::uint32_t sdfRead = 0;     // source readable + the flood's two buffers -> UAV
+    };
     // Shore depth window, plus (once per level) the SDF source render and its jump flood.
     void Pass_ShoreDepth(Renderer* r, RenderGraphPassContext ctx,
-        const SceneView* view);
+        const SceneView* view, const ShoreDepthPoints& pts);
     void Pass_ScreenSpaceReflections(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, std::uint32_t point);
     void Pass_RTReflections(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, std::uint32_t point);
     void Pass_RTDenoise(Renderer* r, RenderGraphPassContext ctx); // S11 temporal accumulate
     // S15b off-screen glass reflections: render a glass front-face normal/depth G-buffer,
     // then dispatch rt_reflections_cs over it into glassReflection (sampled by forward glass).
     void Pass_GlassReflGbuffer(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera, const SceneView& mainView);
-    void Pass_GlassReflections(Renderer* r, RenderGraphPassContext ctx, const Camera& camera); // RT mode
-    void Pass_GlassReflectionsSSR(Renderer* r, RenderGraphPassContext ctx, const Camera& camera); // SSR mode
-    void Pass_ClearReflections(Renderer* r, RenderGraphPassContext ctx); // S8 None/SkyOnly: zero traced reflection
-    void Pass_ReflectionBlur(Renderer* r, RenderGraphPassContext ctx);
+        const Camera& camera, const SceneView& mainView, std::uint32_t point);
+    void Pass_GlassReflections(Renderer* r, RenderGraphPassContext ctx,
+        const Camera& camera, std::uint32_t point); // RT mode
+    void Pass_GlassReflectionsSSR(Renderer* r, RenderGraphPassContext ctx,
+        const Camera& camera, std::uint32_t point); // SSR mode
+    void Pass_ClearReflections(Renderer* r, RenderGraphPassContext ctx,
+        std::uint32_t point); // S8 None/SkyOnly: zero traced reflection
+    // pass-flow S6: the blur's decision + its two points. `blur` (material + CB size) was the
+    // ORIGINAL D1.1 duplication this repo documented and never removed — the Prepare evaluated it
+    // to decide whether the ping-pong point exists, and the body evaluated it again to decide
+    // whether to record the pair.
+    struct BlurPoints
+    {
+        std::uint32_t apply = 0;     // first-use states for the horizontal dispatch
+        std::uint32_t pingPong = 0;  // scratch -> readable, reflection -> UAV, for the vertical
+        bool blur = false;
+    };
+    void Pass_ReflectionBlur(Renderer* r, RenderGraphPassContext ctx, const BlurPoints& pts);
+    // pass-flow S6: `apply` is the first-use point (plus the shore-wetness read when the ocean has
+    // one), `handBack` is the unconditional `scene -> RENDER_TARGET` the transparent pass needs —
+    // unconditional because EVERY path through this body takes it, including both early-outs.
     void Pass_Compose(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, std::uint32_t apply, std::uint32_t handBack);
+    // pass-flow S5: the RT debug view's two points. `trace` is the builder's readiness decision
+    // (material + bindless table + a non-empty TLAS); the restore point exists ONLY on the frames
+    // that trace, because only they move `reflection` out of UNORDERED_ACCESS.
+    struct RtDebugPoints
+    {
+        std::uint32_t apply = 0;
+        std::uint32_t restore = 0;
+        bool trace = false;
+    };
     void Pass_RTDebug(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, const RtDebugPoints& pts);
+    // pass-flow S7d: the transparent pass's four driver points plus the decisions they were
+    // declared from. The driver used to perform this sequence by name while the outer Prepare
+    // re-stated it as four points — one list now, in the builder.
+    struct TransparentPoints
+    {
+        std::uint32_t copy = 0;    // depth/scene -> COPY_SOURCE, their copies -> COPY_DEST
+        std::uint32_t oceanRead = 0; // the copies -> NPS, HZB, ocean reflection -> UAV
+        std::uint32_t pixel = 0;   // ...and all three PS-readable for the forward draws
+        std::uint32_t rebind = 0;  // scene/depth/velocity (+objectID) back to their draw states
+        bool copyDepth = false;
+        bool copyScene = false;
+        bool oceanReflect = false; // the reflection compute runs (targets + material + descriptors)
+    };
     void RecordOceanReflection(Renderer* r, ID3D12GraphicsCommandList* cl,
-        const Camera& camera);
+        const Camera& camera, const TransparentPoints& pts);
     void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera, const SceneView& mainView);
+        const Camera& camera, const SceneView& mainView, const TransparentPoints& pts);
     void Pass_DebugDraw(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera);
+        const Camera& camera, std::uint32_t point);
 #if WITH_EDITOR
-    void Pass_SelectionOutline(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_SelectionOutline(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
 #endif
+    // pass-flow S6: the metering pass's decision + its four points, in the order the body takes
+    // them. `apply` is UNCONDITIONAL — the body hands `scene` to the metering read before it looks
+    // at whether the camera is dormant, and that has to keep happening on every frame.
+    //
+    // The three points after it used to be TWO, and the bundling was a real bug: `baseLum -> read`
+    // shared a point with `exposure/histogram -> COPY_SOURCE`, and a point is emitted wholesale at
+    // its first match — so the copy-source barriers fired at the END OF THE BASE-LUM DISPATCH,
+    // before the solve wrote the exposure record and read the histogram. Confirmed with
+    // --barrier-flip-trace: "point 1/3 (3 barriers) asked Exposure.BaseLogLum 0x40". The readback
+    // copy that follows the solve was then left with no barrier of its own between the solve's
+    // write and its read.
+    struct ExposurePoints
+    {
+        std::uint32_t apply = 0;        // scene -> metering read (+ the pass's buffers to UAV)
+        std::uint32_t baseLumRead = 0;  // P3B base layer back to its resting read state
+        std::uint32_t copySrc = 0;      // exposure + histogram -> COPY_SOURCE, for the readback
+        std::uint32_t restore = 0;      // ...and back to UAV, which is where they rest
+        bool meter = false;             // enabled + metering ready + all three materials
+        bool baseLum = false;           // the P3B base-luminance dispatch runs this frame
+    };
     // P2: clear + build the luminance histogram and solve the adapted exposure. Runs before the
     // tonemap, which consumes the value it writes.
-    void Pass_ExposureMetering(Renderer* r, RenderGraphPassContext ctx);
+    void Pass_ExposureMetering(Renderer* r, RenderGraphPassContext ctx, const ExposurePoints& pts);
     void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx);
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask);
 

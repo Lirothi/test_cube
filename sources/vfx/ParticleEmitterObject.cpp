@@ -391,9 +391,9 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
     }
 }
 
-void ParticleEmitterObject::PrepareCompute(RenderGraphPassContext& ctx)
+bool ParticleEmitterObject::PrepareCompute(RenderGraphPassContext& ctx)
 {
-    if (!updateCs_ || !spawnCs_ || !particles_) { return; }
+    if (!updateCs_ || !spawnCs_ || !particles_) { return false; }
 
     // Deliberately NOT mirroring the body's g_freeze / dt_ / spawnCount gates: those flip
     // between frames, and a frame that registers nothing but then records would be a missing
@@ -414,6 +414,7 @@ void ParticleEmitterObject::PrepareCompute(RenderGraphPassContext& ctx)
         ctx.NextPoint();
         ctx.Use(deadCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
+    return true;
 }
 
 void ParticleEmitterObject::PrepareRender(RenderGraphPassContext& ctx)

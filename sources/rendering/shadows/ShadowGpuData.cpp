@@ -483,32 +483,43 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterLodSrv(UINT f) const { return c
 // LOOP path's masked PSO on purpose: it answers "does this caster set contain masked groups", and
 // both permutation pairs are built from the same source, so they succeed or fail together in
 // practice. A null here is handled by the caller (it keeps the per-page loop).
-void ShadowGpuData::PrepareCullPass(RenderGraphPassContext& ctx) const
+ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassContext& ctx)
 {
-    // Mirrors RecordCull in body order — INCLUDING every one of its early returns. Registering
-    // on a frame the body will skip advances the compile past barriers nobody emits, which is a
-    // wrong before-state for the next pass that touches them (measured: VsmPageRender reading
-    // IndirectArgs right after a level switch, when the cull bails on count_ == 0).
-    if (!cullClearMat_ || !cullMat_) { return; }
-    if (count_ == 0 || numMeshGroups_ == 0) { return; }
-    if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return; }
+    // pass-flow S7a: this used to MIRROR RecordCull in body order, including every one of its
+    // early returns, and the two shared a pair of predicate helpers so they could not drift.
+    // Now it DECIDES: the gates below are the pass's gates, the declarations are made from those
+    // decisions, and RecordCull is handed the same values. Registering on a frame the body will
+    // skip advances the compile past barriers nobody emits, which is a wrong before-state for the
+    // next pass that touches them (measured: VsmPageRender reading IndirectArgs right after a
+    // level switch, when the cull bails on count_ == 0).
+    CullDecisions dec{};
+    if (!cullClearMat_ || !cullMat_) { return dec; }
+    if (count_ == 0 || numMeshGroups_ == 0) { return dec; }
+    if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return dec; }
     if (!bounds_.Valid() || !viewFrustums_.Valid() || !casterGroup_.Valid() || !perGroup_.Valid() ||
-        !perViewGroup_.Valid()) { return; }
-    if (!cullUavHeap_) { return; }
-    if (ctx.renderer == nullptr || ctx.renderer->GetCurrentFrameIndex() >= render::kFrameCount) { return; }
+        !perViewGroup_.Valid()) { return dec; }
+    if (!cullUavHeap_) { return dec; }
+    if (ctx.renderer == nullptr || ctx.renderer->GetCurrentFrameIndex() >= render::kFrameCount) { return dec; }
+    dec.active = true;
 
+    dec.base = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(indirectCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     // Unified instance/bounds: uploaded, then scattered into, then read by the cull. The NESTING
-    // below mirrors RecordCull's exactly, and that is not cosmetic — see the giOn block.
-    // D1.1: the record body gates these on `useUnified`, which needs the per-frame SRVs too —
-    // Valid() alone over-registers on the frames the descriptors are not up yet.
-    const bool useUnified = WillUseUnifiedBuffers(ctx.renderer);
-    if (useUnified)
+    // below is the pass's own control flow now, and RecordCull walks the points it produced.
+    // The unified mirror needs the per-frame SRVs, not just Valid() — otherwise this over-declares
+    // on the frames the descriptors are not up yet.
+    {
+        const UINT f = ctx.renderer->GetCurrentFrameIndex();
+        dec.useUnified = instancesUnified_.Valid() && boundsUnified_.Valid() && unifiedSrvHeap_ &&
+                         UnifiedInstanceSrv(f).ptr != 0 && UnifiedBoundsSrv(f).ptr != 0;
+    }
+    if (dec.useUnified)
     {
         ctx.NextPoint();
+        dec.unifiedCopy = ctx.usePoint ? *ctx.usePoint : 0u;
         ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
         ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
 
@@ -519,22 +530,30 @@ void ShadowGpuData::PrepareCullPass(RenderGraphPassContext& ctx) const
         // never fired while the compile (and therefore VsmPageRender's compiled before-state) had
         // already advanced past it. That is exactly D3D12 error 527 on 'VsmPageRender', plus 538
         // on the validation readback's CopyBufferRegion when that frame also carried one.
-        if (IsGiIndirectActive())
+        dec.giOn = IsGiIndirectActive();
+        if (dec.giOn)
         {
             ctx.NextPoint();
+            dec.giWrite = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
             // GI scatter reads each folded object's own instance buffer — resource identity is
-            // per-object (census category D), so walk the same list the body walks AND skip
-            // exactly what it skips. A point whose every entry the body skips is compiled empty,
-            // which BuildPassBarrierView drops, so it cannot stall anything.
+            // per-object (census category D). The filtering happens ONCE, here: `giCasterIdx` is
+            // what the declarations were made from and what RecordCull will walk, so the two
+            // cannot skip different entries.
             ctx.NextPoint();
-            for (const GiCaster& gc : giCasters_)
+            dec.giRead = ctx.usePoint ? *ctx.usePoint : 0u;
+            for (std::size_t i = 0; i < giCasters_.size(); ++i)
             {
+                const GiCaster& gc = giCasters_[i];
                 if (!gc.obj || gc.count == 0) { continue; }
                 ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource();
                 if (!giBuf || gc.obj->GetInstanceCasterSrv().ptr == 0) { continue; }
+                if (dec.giCasterIdx.size() < dec.giCasterIdx.capacity())
+                {
+                    dec.giCasterIdx.push_back(static_cast<std::uint16_t>(i));
+                }
                 ctx.Use(giBuf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             }
 
@@ -547,31 +566,53 @@ void ShadowGpuData::PrepareCullPass(RenderGraphPassContext& ctx) const
             // frame ended off-canonical. Restoring to the OWNER'S declared state rather than a
             // literal keeps this honest if that owner ever changes where it rests.
             ctx.NextPoint();
-            for (const GiCaster& gc : giCasters_)
+            dec.giRestore = ctx.usePoint ? *ctx.usePoint : 0u;
+            for (std::uint16_t i : dec.giCasterIdx)
             {
-                if (!gc.obj || gc.count == 0) { continue; }
-                ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource();
-                if (!giBuf || gc.obj->GetInstanceCasterSrv().ptr == 0) { continue; }
+                ID3D12Resource* giBuf = giCasters_[i].obj->GetInstanceCasterResource();
                 ctx.Use(giBuf, ctx.renderer->GetCanonicalState(giBuf));
             }
         }
 
         ctx.NextPoint();
+        dec.unifiedRead = ctx.usePoint ? *ctx.usePoint : 0u;
         ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
-    // D1.1: the one-shot validation readback runs on exactly one frame. Registering its
-    // COPY_SOURCE move every frame was benign under the tracker and unemittable once barriers are
-    // compiled, so gate it on the SAME condition RecordCull uses.
-    if (WillRecordValidationReadback(ctx.renderer))
+    // Step 4 validation (temporary, one-shot after warmup): snapshot the inputs so a CPU cull can
+    // be compared against this frame's args kFrameCount frames later. Skipped when GI folding is
+    // active — the CPU reference (cpuBounds_) only covers static casters, so it cannot validate
+    // the GPU-scattered GI bounds. Toggle GI off (Ctrl+G) to exercise the validator.
+    //
+    // ALL of it happens here, not in the body: the readback buffer's allocation is what decides
+    // whether the copy can run at all, and deciding that mid-record meant a declared COPY_SOURCE
+    // point could go unemitted. The snapshot fields are cross-frame state, which the builder owns.
+    dec.readback = valState_ == 0 && !dec.giOn &&
+                   ctx.renderer->GetTotalFrameNumber() > render::kFrameCount;
+    if (dec.readback)
     {
+        EnsureReadback(ctx.renderer, indirectArgs_.regionBytes);
+        dec.readback = valReadback_ != nullptr;
+    }
+    if (dec.readback)
+    {
+        valBounds_ = cpuBounds_;
+        valFrustums_ = cpuViewFrustums_;
+        valCasters_ = dec.giOn ? count_ : staticCount_;
+        valViews_ = render::kMaxShadowViews;
+        valGroups_ = numMeshGroups_;
+        valFrame_ = ctx.renderer->GetTotalFrameNumber();
+        valState_ = 1;
         ctx.NextPoint();
+        dec.valCopy = ctx.usePoint ? *ctx.usePoint : 0u;
         ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
     }
     ctx.NextPoint();
+    dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    return dec;
 }
 
 Material* ShadowGpuData::IndirectShadowPageMaterial() const
@@ -1689,37 +1730,22 @@ void ShadowGpuData::EnsureReadback(Renderer* renderer, size_t bytes)
         IID_PPV_ARGS(valReadback_.GetAddressOf()));
 }
 
-// The gate RecordCull's one-shot validation readback uses. Shared with PrepareCullPass so the two
-// cannot drift — a duplicated predicate is how over-registration creeps back in.
-// Shared with PrepareCullPass: the unified instance/bounds SRVs are only usable once this frame's
-// per-region descriptors exist, so Valid() alone would over-register.
-bool ShadowGpuData::WillUseUnifiedBuffers(Renderer* renderer) const
-{
-    if (!renderer) { return false; }
-    const UINT f = renderer->GetCurrentFrameIndex();
-    return instancesUnified_.Valid() && boundsUnified_.Valid() && unifiedSrvHeap_ &&
-           UnifiedInstanceSrv(f).ptr != 0 && UnifiedBoundsSrv(f).ptr != 0;
-}
+// pass-flow S7a: `WillUseUnifiedBuffers` and `WillRecordValidationReadback` are GONE. They existed
+// only so a Prepare and a Record could not disagree about what this frame does; PrepareCullPass now
+// decides both inline and hands the answers to RecordCull in CullDecisions, so there is nothing
+// left for a second evaluation to get wrong.
 
-bool ShadowGpuData::WillRecordValidationReadback(Renderer* renderer) const
+void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                               const CullDecisions& dec)
 {
-    return renderer != nullptr && valState_ == 0 && !IsGiIndirectActive() &&
-           renderer->GetTotalFrameNumber() > render::kFrameCount;
-}
-
-void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl)
-{
-    if (!renderer || !cl) { return; }
+    // pass-flow S7a: no gates. `dec` came from PrepareCullPass, which made every one of these
+    // decisions once and declared from them. EnsureShaderResources stays a no-op safety net — it
+    // is one-shot and SceneRenderer::EnsureFrameResources already called it before the graph was
+    // built, which is what makes the builder's view of the materials final.
+    if (!renderer || !cl || !dec.active) { return; }
     EnsureShaderResources(renderer);
-    if (!cullClearMat_ || !cullMat_) { return; }
-    if (count_ == 0 || numMeshGroups_ == 0) { return; }
-    if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return; }
-    if (!bounds_.Valid() || !viewFrustums_.Valid() || !casterGroup_.Valid() || !perGroup_.Valid() ||
-        !perViewGroup_.Valid()) { return; }
-    if (!cullUavHeap_) { return; }
 
     const UINT f = renderer->GetCurrentFrameIndex();
-    if (f >= render::kFrameCount) { return; }
 
     const std::uint32_t numViews = render::kMaxShadowViews;
     const std::uint32_t numGroups = numMeshGroups_;
@@ -1727,14 +1753,12 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     // casters (the scatter below fills the GI region first); otherwise only the static Nstatic (GI
     // dormant, drawn by the retained CPU tail). numCasters is also the per-view visible-list stride
     // the clear/cull/draw all agree on — Nstatic keeps the static-only layout byte-identical.
-    const bool giOn = IsGiIndirectActive();
+    const bool giOn = dec.giOn;
     const std::uint32_t numCasters = giOn ? count_ : staticCount_;
 
     // The cull outputs must be UNORDERED_ACCESS before the dispatches (created COMMON, or left
-    // COPY_SOURCE by a prior validation frame). This pass declares no states -> transition here.
-    renderer->Transition(cl, indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    renderer->Transition(cl, visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    renderer->Transition(cl, indirectCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // COPY_SOURCE by a prior validation frame).
+    renderer->EmitPoint(cl, dec.base);
 
     // Step 2/3 (GI→VSM): before the cull, mirror this frame's per-STATIC-caster ring region into the
     // DEFAULT-heap unified buffers so the cull (bounds) + indirect VS (t0 instances) read a GPU-local
@@ -1744,11 +1768,9 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     // rings stay in GENERIC_READ (which includes COPY_SOURCE) so no source barrier is needed. Left in
     // NON_PIXEL_SHADER_RESOURCE for the cull's compute SRV read and the parallel shadow passes' VS t0
     // read (both non-pixel shader stages).
-    const bool useUnified = WillUseUnifiedBuffers(renderer); // shared with PrepareCullPass
-    if (useUnified)
+    if (dec.useUnified)
     {
-        renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
-        renderer->Transition(cl, boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        renderer->EmitPoint(cl, dec.unifiedCopy);
         if (staticCount_ > 0)
         {
             const UINT64 instSrc = static_cast<UINT64>(f) * instances_.capacity * instances_.stride;
@@ -1769,8 +1791,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         // Main_ObjectCompute precedes Main_ShadowCull in the render graph.
         if (giOn)
         {
-            renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            renderer->Transition(cl, boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            renderer->EmitPoint(cl, dec.giWrite);
             const D3D12_CPU_DESCRIPTOR_HANDLE instUav = UnifiedInstanceUav(f);
             const D3D12_CPU_DESCRIPTOR_HANDLE boundUav = UnifiedBoundsUav(f);
 
@@ -1784,12 +1805,14 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                 DirectX::XMFLOAT4X4 objectWorld;
             };
             const UINT scatterCbSize = static_cast<UINT>(sizeof(ScatterCB));
-            for (const GiCaster& gc : giCasters_)
+            // pass-flow S7a: the FILTERED list PrepareCullPass declared from — not a second walk
+            // with a second copy of the skip conditions.
+            bool giReadEmitted = false;
+            for (std::uint16_t idx : dec.giCasterIdx)
             {
-                if (!gc.obj || gc.count == 0) { continue; }
+                const GiCaster& gc = giCasters_[idx];
                 ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource();
                 const D3D12_CPU_DESCRIPTOR_HANDLE giSrv = gc.obj->GetInstanceCasterSrv();
-                if (!giBuf || giSrv.ptr == 0) { continue; }
                 // Fold in the object's model matrix so the stored world matches gbuffer_inst_csm's
                 // mul(instanceWorld, objectWorld); read the object's transform fresh each frame.
                 const RenderableObject* ro = gc.obj->AsRenderableObject();
@@ -1804,7 +1827,9 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                 const float giStiff = giGb ? giGb->GetWindTrunkStiffness() : 1.0f;
                 const float giLeafScale = giGb ? giGb->GetWindLeafScaleWorld() : 0.0f;
 
-                renderer->Transition(cl, giBuf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                // One marker for the whole list: the point carries every folded object's buffer,
+                // and all of them are read (never written) by the dispatches below.
+                if (!giReadEmitted) { renderer->EmitPoint(cl, dec.giRead); giReadEmitted = true; }
                 RecordComputeDispatch(renderer, cl, giScatterMat_.get(), scatterCbSize,
                     [&](std::uint8_t* dst)
                     {
@@ -1829,20 +1854,13 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             renderer->UAVBarrier(cl, instancesUnified_.buffer.Get());
             renderer->UAVBarrier(cl, boundsUnified_.buffer.Get());
 
-            // The hand-back PrepareCullPass registers, in the same order and with the same skips.
-            // The scatter is done with these buffers here; leaving them in the state IT wanted made
-            // the resting state depend on whether the owner's (conditional) draw ran afterwards.
-            for (const GiCaster& gc : giCasters_)
-            {
-                if (!gc.obj || gc.count == 0) { continue; }
-                ID3D12Resource* giBuf = gc.obj->GetInstanceCasterResource();
-                if (!giBuf || gc.obj->GetInstanceCasterSrv().ptr == 0) { continue; }
-                renderer->Transition(cl, giBuf, renderer->GetCanonicalState(giBuf));
-            }
+            // The hand-back the builder declared, for the same objects. The scatter is done with
+            // these buffers here; leaving them in the state IT wanted made the resting state
+            // depend on whether the owner's (conditional) draw ran afterwards.
+            if (giReadEmitted) { renderer->EmitPoint(cl, dec.giRestore); }
         }
 
-        renderer->Transition(cl, instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(cl, boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        renderer->EmitPoint(cl, dec.unifiedRead);
     }
 
     struct CullCB { std::uint32_t numCasters, numViews, numGroups, pad; };
@@ -1868,26 +1886,15 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         numCasters, 1,
         indirectArgs_.buffer.Get());
 
-    // Step 4 validation (temporary, one-shot after warmup): snapshot the inputs + read back this
-    // region's args to compare against a CPU cull kFrameCount frames later. Skipped when GI folding
-    // is active — the CPU reference (cpuBounds_) only covers static casters, so it can't validate
-    // the GPU-scattered GI bounds. Toggle GI off (Ctrl+G) to exercise the validator on the static set.
-    if (valState_ == 0 && !giOn && renderer->GetTotalFrameNumber() > render::kFrameCount)
+    // Step 4 validation (temporary, one-shot after warmup): read back this region's args so a CPU
+    // cull can be compared against them kFrameCount frames later. The decision, the snapshot and
+    // the readback buffer are all the builder's (see PrepareCullPass) — what is left here is the
+    // copy itself.
+    if (dec.readback)
     {
-        valBounds_ = cpuBounds_;
-        valFrustums_ = cpuViewFrustums_;
-        valCasters_ = numCasters;
-        valViews_ = numViews;
-        valGroups_ = numGroups;
-        EnsureReadback(renderer, indirectArgs_.regionBytes);
-        if (valReadback_)
-        {
-            renderer->Transition(cl, indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-            cl->CopyBufferRegion(valReadback_.Get(), 0, indirectArgs_.buffer.Get(),
-                                 static_cast<UINT64>(f) * indirectArgs_.regionBytes, indirectArgs_.regionBytes);
-            valFrame_ = renderer->GetTotalFrameNumber();
-            valState_ = 1;
-        }
+        renderer->EmitPoint(cl, dec.valCopy);
+        cl->CopyBufferRegion(valReadback_.Get(), 0, indirectArgs_.buffer.Get(),
+                             static_cast<UINT64>(f) * indirectArgs_.regionBytes, indirectArgs_.regionBytes);
     }
 
     // Step 6: leave the args in INDIRECT_ARGUMENT and the visible list as a vertex buffer so the
@@ -1895,8 +1902,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     // without touching state on their parallel CLs. Done every frame (harmless when the toggle is
     // off — nothing reads them); next frame's start transitions them back to UAV. Counts stays
     // UAV (Step 6 uses maxCount=1 per draw, so no count buffer is read).
-    renderer->Transition(cl, indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-    renderer->Transition(cl, visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    renderer->EmitPoint(cl, dec.consume);
 }
 
 bool ShadowGpuData::IndirectDrawReady() const

@@ -2847,6 +2847,74 @@ This is intentionally split into independently landable substeps. Stop after the
 
 ---
 
+
+### P9D — Screen-space diffuse GI (SSGI) — SCOPED, NOT STARTED
+
+**Depends on:** P6C (HZB Closest — done), P6B (GTAO — done), P5/P6A. **Read first:**
+`ue_strip/Source/Runtime/Renderer/Private/ScreenSpaceRayTracing.cpp` (1407 lines) and
+`ue_strip/Shaders/Private/SSRT/` — this section is scoped from them, not from first principles.
+
+**What UE actually run**, in order, with their own defaults:
+
+1. **`SSRTPrevFrameReduction`** (353 lines) — reduce LAST FRAME'S LIT SCENE COLOUR into a mip chain,
+   in two dispatches (mips 0-3, then 4-7). With `r.SSGI.LeakFreeReprojection` (default **1**) it
+   carries a second channel so a sample that was disoccluded can be rejected rather than smeared.
+2. **`SSRTTileClassification`** (173 lines) — 8x8 tile pass building a tile list, so the trace skips
+   tiles that cannot contribute.
+3. **`FScreenSpaceCastStandaloneRayCS`** (`SSRTDiffuseIndirect.usf`, 586 lines, over
+   `SSRTRayCast.ush`, 748 lines) — the march itself, at `ViewRect / DownscaleFactor`
+   (`r.DiffuseIndirect.HalfRes`, default half), marching the **Closest** HZB.
+   `r.SSGI.Quality` 1/2/3/4 -> **4 / 8 / 16 / 32 rays per pixel**, default **4 = 32 rays**.
+4. **The `SSD*` denoiser** (`ScreenSpaceDenoise.cpp` + the whole `SSD*` shader set) — a subsystem in
+   its own right, not a blur.
+5. **`DiffuseIndirectComposite`** — into the indirect-diffuse slot alongside AO.
+
+**What this engine already has:** the Closest HZB pyramid (P6C step 6, `hzbClosest` with its own
+mips and UAVs — built for exactly this and for SSR), GTAO for the AO term the composite reconciles
+against, and the full reference set in the drop.
+
+**What is missing, in order of how much work each is:**
+
+* **A reprojected previous-frame colour chain.** The engine keeps `scene`, `sceneOpaque`, `tonemap`
+  and `dlssOutput` per frame slot, but nothing that survives as *last frame's lit colour reprojected
+  into this frame*. This is the real prerequisite and it is not small: it is a new persistent target,
+  a mip chain, the reduction pass, and the leak-free rejection channel. **Ours must reproject the
+  PRE-DLSS scene colour** — sampling the upscaled output would feed the upscaler's own history back
+  into lighting.
+* **The trace.** `SSRTRayCast.ush` is transcribable but it is 748 lines of hierarchical march with
+  its own tolerance and thickness handling; expect the same class of work as the SSR march, not less.
+* **The denoiser.** 1 spp screen-space diffuse is unusable raw. This is the same wall the RT plan hit
+  at S11 (1 spp glossy + DLSS jitter = dancing noise) and the reason the plan already lists the
+  `SSD*` set as wanted. Either transcribe a real spatial+temporal denoiser or accept a much higher
+  ray count.
+* **Composite plumbing** into the indirect-diffuse slot, and a policy for how it stacks with GTAO
+  (double-darkening is the classic mistake) and with P9A's ground bounce.
+
+**Cost estimate, anchored on this engine's own measurements rather than on UE's hardware.**
+`Pass_Gtao` measures **0.0875 ms** at half res, 2 angles x 6 steps — call that ~12 depth taps per
+half-res pixel. Scaling by tap count and adding the colour fetch per hit:
+
+| stage | shape | estimate |
+|---|---|---|
+| prev-colour reduction | 2 dispatches over a mip chain | 0.08-0.15 ms |
+| tile classification | 8x8 tiles, trivial | ~0.02 ms |
+| trace, 4 rays/px (UE quality 1) | half res, hierarchical | 0.5-0.9 ms |
+| trace, 16 rays/px (UE quality 3) | half res | 2-3.5 ms |
+| denoise | spatial + temporal | 0.3-0.7 ms |
+| composite | full res, cheap | ~0.05 ms |
+
+So **~1.0-1.8 ms at the cheap end (4 rays)** and **~2.5-4.5 ms at UE's mid quality**, on top of a
+frame that currently runs 1.9-4.3 ms depending on view. That is not a garnish: at 4 rays it is
+roughly a third of the beach frame and at 16 it doubles the grove frame.
+
+**Honest recommendation.** The cheap end of SSGI costs more than every flare, GTAO, SSR and the whole
+bloom put together, and buys short-range colour bleed that the sky-dominated exteriors in this level
+will barely show. P9A's analytic ground bounce covers the same intent for a rounding error, and the
+plan already sequences it first for that reason. SSGI is worth starting **only** when there are
+interiors or deep shade where a screen-space bounce has something to carry — and when it is, the
+prerequisite to build first is the reprojected previous-frame colour chain, because everything else
+depends on it and it is useful to SSR as well.
+
 ### P10 — Add contact and large-scale shadow polish
 
 **Depends on:** P6B and P7.

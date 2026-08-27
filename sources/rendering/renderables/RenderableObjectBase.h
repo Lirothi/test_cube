@@ -93,12 +93,16 @@ public:
     }
 #endif
     virtual void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) { (void)renderer; (void)cl; }
-    // Barrier plan step 5: register the states ExecuteCompute will transition to, in body
-    // order. Pass_ObjectCompute's Prepare walks the same object list calling this, so the
-    // two stay in step by construction. Default no-op — an object whose compute records
-    // nothing transitions nothing. Over-registering costs a redundant barrier; MISSING one
-    // is a silent corruption, so mirror the union of reachable branches, not the exact path.
-    virtual void PrepareCompute(RenderGraphPassContext& ctx) { (void)ctx; }
+    // Barrier plan step 5: register the states ExecuteCompute will transition to, in body order.
+    // Over-registering costs a redundant barrier; MISSING one is a silent corruption, so mirror
+    // the union of reachable branches, not the exact path.
+    //
+    // pass-flow S7b: RETURNS whether this object's compute will record anything this frame. The
+    // Main_ObjectCompute builder collects exactly the objects that answer true and the record body
+    // runs THAT list, so the two walks cannot select differently — the pass used to walk the whole
+    // scene twice and rely on the two filters agreeing. Default false: an object whose compute
+    // records nothing transitions nothing and is skipped by both sides.
+    virtual bool PrepareCompute(RenderGraphPassContext& ctx) { (void)ctx; return false; }
     // Same contract for the graphics side: the states Render transitions to. Each pass that
     // draws objects walks its own half of the scene (opaque vs transparent) calling this.
     virtual void PrepareRender(RenderGraphPassContext& ctx) { (void)ctx; }

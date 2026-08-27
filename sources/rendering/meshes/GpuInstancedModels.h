@@ -63,7 +63,7 @@ public:
         return r > 1e-6f ? r : m->GetBoundingBox().GetRadius();
     }
 
-    void PrepareCompute(RenderGraphPassContext& ctx) override;
+    bool PrepareCompute(RenderGraphPassContext& ctx) override;
     void PrepareRender(RenderGraphPassContext& ctx) override;
 
 protected:

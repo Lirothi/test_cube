@@ -354,6 +354,120 @@ be reverted independently.
   the reference example of cross-frame state committed at Prepare time: history size, history
   frame counter, frame index), and `Main_DebugPreview`. Seven converted in total; the S4 inventory
   counts them.
-- S4-S9: NOT STARTED. S4 is documentation only (the conversion contract + the gate + the
-  inventory); S5 is the mechanical tier and the cheapest place to start; S8 is deliberately
-  conditional and S9 is what makes the whole thing structural rather than a habit.
+- S4 DONE (committed in 0d44274): the conversion contract + the standard gate + the inventory.
+- S5 DONE (uncommitted) — **all 12 Tier A registrations converted**: Main_BuildAS,
+  Main_PrologueClear, Epilogue_Overlay (declare nothing: builder returns the body, no marker),
+  Main_Lighting (both variants share ONE builder), Main_Skybox, Main_ReflectionSource /
+  Main_RTReflections / the clear variant, Main_ReflectionTemporal, Main_RTDebug,
+  Main_GlassReflGbuffer, Main_GlassReflections (RT + SSR variants), Main_ObjectIdReadback,
+  Main_SelectionOutline. Six `SetPassPrepare` lambdas deleted; every converted body's
+  `ctx.ApplyDeclaredStates(cl)` became one `renderer->EmitPoint(cl, point)`. The only
+  `ApplyDeclaredStates` calls left in SceneRenderer are Tier B/C passes and the inner G-buffer
+  driver, which is exactly the expected residue.
+  **BUG FOUND AND FIXED by the conversion: `Main_RTDebug`'s trailing `reflection -> NPS` was
+  never registered at all.** Its Prepare was `UseDeclared()` — one point — while the body
+  performed a SECOND transition at the end. A request may only match the CURRENT point, and
+  there was none left, so the barrier was silently dropped and `reflection` ended the frame in
+  UNORDERED_ACCESS instead of its canonical read state on every frame the RT debug view was on.
+  It is now a second declared point, gated on the same `trace` decision the body uses.
+  **Latent class closed: four passes early-outed AFTER declaring** — Main_Lighting (material /
+  CB size / staged SRVs), Main_Skybox (no skybox), Main_GlassReflGbuffer (no prepass material),
+  Main_SelectionOutline (material / CB size / handles). Each returned without emitting a single
+  one of the barriers it had already declared, which is the fatal direction under compiled
+  barriers. The gates now live in the builders; the bodies lost them entirely.
+  Gates: both builds 0/0 (artefacts verified fresh); Debug `--scene-stress-gbv=20 --barrier-cmp
+  --canonical-check` CLEAN in BOTH shadow modes, comparator showing only the two documented
+  benign INFO extras (Ocean.Wetness*, Exposure.Value) and zero MISSING; `--scene-stress=12`
+  CLEAN; `--barrier-cache-verify` silent. Visual A/B against a baseline binary built from the
+  SAME commit: on `wind_test` and on `ssr_bronze_palms` the A/B sits INSIDE the same-binary
+  noise floor (that floor is large on both levels — 2.8k-16.8k pixels differing by >16 between
+  two runs of one binary, DLSS jitter plus auto-exposure — so the first single-sample diff LOOKED
+  like a regression until the floor was measured).
+  **Coverage gap, stated rather than papered over:** Main_SelectionOutline and
+  Main_ObjectIdReadback need an editor selection / a pick, and Main_RTDebug needs its UI toggle,
+  so none of the three is exercised by the automated gates. A wrong marker there is a loud
+  RendererInvariantFailure (EmitPoint validates its index), not silent corruption.
+- S6 DONE (uncommitted) — **all 10 Tier B passes converted**: Main_TerrainDepth,
+  Main_SpotShadows, Main_PointShadows, Main_SpotLights, Main_PointLights, Main_ReflectionBlur,
+  Main_Compose, Main_DebugDraw, Main_ExposureMetering, Main_Debug. Every duplicated predicate
+  named in the step above is gone, including the D1.1 debt in Main_ReflectionBlur that this
+  repo's own comment said step 5 would hoist and never did. The only `SetPassPrepare` calls left
+  in SceneRenderer are the five Tier C passes and Main_Tonemap, exactly as the inventory said.
+  **BUG FOUND AND FIXED, confirmed by measurement: Main_ExposureMetering emitted its readback
+  barriers a dispatch too early.** `baseLum -> read` shared ONE point with
+  `exposure/histogram -> COPY_SOURCE`, and a point is emitted wholesale at its first match, so
+  the copy-source pair fired at the end of the base-luminance dispatch — before the solve wrote
+  the exposure record and read the histogram, leaving the readback copy that follows the solve
+  with no barrier of its own between the write and the read. `--barrier-flip-trace` printed it:
+  `point 1/3 (3 barriers) asked Exposure.BaseLogLum 0x40`, then two flip-misses. It never showed
+  up as a debug-layer error because all three are BUFFERS and the engine emits enhanced
+  barriers, where buffers have no layout to validate. Now four points in the body's real order;
+  the same trace prints `point 0/4 (2) / 1/4 (1) / 2/4 (2) / 3/4 (2) marker`, in order, no misses.
+  **Second fix, same tier:** `MarkShoreSdfBuilt()` was called from the RECORD body of
+  Main_TerrainDepth, after `BuildShoreSdf` — including on the runs where the flood bailed out on
+  its own materials, which cleared the dirty flag and cost that level its one SDF rebuild. The
+  flag is now committed in the builder, gated on a new `OceanSimulation::CanBuildShoreSdf()`
+  that asks the flood what it needs BEFORE anything is declared. Ordering checked: the surf sim
+  reads the same flag and its builder runs earlier in the schedule, so it still sees the frame
+  the maps are rebuilt on.
+  **Latent declare-then-skip closed in four more passes:** Main_SpotLights and Main_PointLights
+  each had FOUR early-outs the Prepare never mirrored (light buffer, its CPU pointer and SRV,
+  the staged G-buffer handles, VSM readiness) — every one returned with ten states declared;
+  Main_ExposureMetering's three materials; Main_TerrainDepth's null-DSV skip inside renderCascade.
+  Gates: both builds 0/0; Debug `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN in
+  BOTH shadow modes; `--scene-stress=12` CLEAN; `--barrier-cache-verify` silent; zero
+  flip-miss / MISSING / EmitPoint invariant lines in any run. The shore-SDF path was checked
+  separately with `--ocean-surf-sim --barrier-flip-trace` (the stress harness never reaches it):
+  the pass fires ONCE per level with its five points in order, which is also the proof that
+  moving the dirty-flag clear did not turn it into a per-frame rebuild. Visual A/B against a
+  HEAD-built binary on `wind_test` and `ssr_bronze_palms`: inside the same-binary noise floor on
+  both, and identical by eye.
+  Side effect worth knowing: the comparator's two long-standing benign INFO extras on Compose
+  (Ocean.WetnessA/B) are GONE from the log — a marker pass cannot diverge from its compile, so
+  the benign direction is suppressed for it by design.
+- S7 DONE (uncommitted) — **all four Tier C sub-steps**, so every pass in the main and epilogue
+  graphs is now authored with `AddPass2` except `Main_Tonemap`.
+  - **S7a `Main_ShadowCull`:** `PrepareCullPass` RETURNS `ShadowGpuData::CullDecisions` (active /
+    useUnified / giOn / readback, eight point indices, and the FILTERED GI-caster index list) and
+    `RecordCull` takes it. `WillUseUnifiedBuffers` and `WillRecordValidationReadback` are
+    DELETED — they existed only to keep the two sides from drifting. The record body lost every
+    gate and all nine named transitions; the GI scatter walks the list the declaration produced
+    instead of re-filtering. The one-shot validation snapshot (`valBounds_`/`valFrame_`/
+    `valState_`) and its readback allocation moved into the builder: they are cross-frame state,
+    and `EnsureReadback` failing mid-record could skip a point that had already been declared.
+  - **S7b `Main_ObjectCompute`:** `RenderableObjectBase::PrepareCompute` now RETURNS whether the
+    object's compute will record anything. The builder collects exactly those objects and the
+    body runs that list — the pass no longer walks the whole scene twice with two copies of the
+    same filter, and objects with no compute are skipped by both sides. Three overriders updated
+    (ocean, GPU-instanced models, particles).
+  - **S7c the `indirect` decision:** `render::g_indirectShadowsEnabled && shadowGpu &&
+    IndirectDrawReady()` was derived independently in FOUR places (PrepareOpaqueDrawStates,
+    Pass_CSM, Pass_SpotShadows, Pass_PointShadows). It decides WHICH OBJECTS DRAW, so a
+    disagreement between the registration and the draw is a GPU-instanced caster transitioning
+    its instance buffer with nothing declared behind it. One `IndirectShadowDrawsActive()`,
+    called by the builders, passed into both the walk and the bodies. `Main_CSM` converted with
+    it.
+  - **S7d the nested graphs:** `Main_GBuffer`'s seven target states were written twice (outer
+    Prepare + the inner driver's `declares`) with a comment asking the two to stay in step; the
+    inner driver now declares NOTHING and emits the outer pass's point as a marker. Same for
+    `Main_Transparent`: its driver's copy/read/pixel/rebind sequence is four markers, and
+    `RecordOceanReflection`'s two early-outs became ONE builder decision (`oceanReflect` covers
+    the targets, the material, the CB size and all three descriptors), so the read point is
+    declared only on the frames the compute runs. **The API gap this step predicted did not
+    materialise:** no `DependencyList` overload of `AddPass2` was needed, because the fix was to
+    delete the inner declarations rather than to pass them down.
+  Gates: both builds 0/0; Debug `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN in
+  BOTH shadow modes; `--scene-stress=12` CLEAN; `--barrier-cache-verify` silent; zero
+  flip-miss / MISSING / EmitPoint invariant lines across all of them. The ocean + shore-SDF path
+  re-checked with `--ocean-surf-sim --gbv --barrier-flip-trace`: TerrainDepth still fires ONCE
+  per level with five points in order, and the trace's benign misses now come from exactly four
+  passes — ObjectCompute and Transparent (the ocean's own still-named transitions), TerrainDepth
+  (the flood's two, documented) and Tonemap (its union, by design). The comparator log is down to
+  Tonemap's union alone: every other INFO extra disappeared as its pass became a marker pass.
+  Visual A/B against a HEAD-built binary: `ssr_bronze_palms` inside the same-binary noise floor;
+  `wind_test` is too noisy to resolve anything (six same-binary pairs span 0-21 955 pixels >16,
+  eight A/B pairs span 6 291-32 604), so the verdict there rests on the gates and on the frames
+  being identical by eye.
+- S8-S9: NOT STARTED. S8 is deliberately conditional; S9 is what makes the whole thing structural
+  rather than a habit, and after S7 its precondition is met — the only `SetPassPrepare` call left
+  in the engine is `Main_Tonemap`'s.
