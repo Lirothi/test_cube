@@ -6097,3 +6097,35 @@ the band the colour now runs R/G 1.06 -> 1.29 with blue dying first: neutral cor
 ocean glitter, which is broad rather than point-like, so the horizontal and vertical contributions
 around it come out similar and no band is legible there. The kernel-side measurement above is the
 one to trust for this property; an in-frame check needs a scene with an isolated small source.
+
+**P8C-8 -- A SUNSTAR KERNEL, MATCHED TO A REAL SMALL-APERTURE PHOTOGRAPH.**
+
+`textures/BloomKernelSunstar.dds`, beside the others and pickable from the inspector. The reference
+was a stopped-down lens shooting into the sun, and reading it properly is what made this one differ
+from everything baked here before:
+
+* **12 rays, not 18.** An even blade count gives N rays -- opposite blades are parallel and their
+  streaks superimpose -- so twelve blades.
+* **The rays cross most of the frame.** Every earlier kernel faded its rays at 40-80% of the kernel
+  radius, which put their tips inside the glow instead of far outside it. These reach r = 232 of
+  255, with the fade spent only on the last 30% as a tip rather than a cut.
+* **They stay thin.** Width is measured across the ray in pixels, not in angle -- an angular width
+  is a cone, and no lens makes one.
+* **There is almost no halo.** This is the big one: every kernel here had been built on UE's
+  photographed disc, which is veiling glare from a dirtier, wider-open lens. A stopped-down lens
+  throws its light into the spikes instead. Reusing that disc is what kept drowning the rays --
+  measured, this kernel holds 62% of its energy inside r < 8 against 85-98% for the disc-based ones,
+  and the between-ray floor is literally zero.
+* **Warm, with rainbow on a couple of rays only** -- a per-ray hue jitter rather than a global tint,
+  which is what the reference actually shows.
+
+Border verified at 7e-178, i.e. exactly zero: nothing is cut, so nothing rings.
+
+**It reads best on a small bright source**, which is the same limit measured back at P8C-2n: a ray is
+one texel wide and convolution smears it across the source's own width. On the sphere's specular
+highlight the star is clearly legible; on the sky's sun -- a large soft disc with the sky's own
+painted corona around it -- the rays smear into the glow, exactly as the earlier source-size table
+predicted.
+
+Settings it was verified with: `threshold 5`, `softKnee 0.5`, `intensity 8`, `preFilterMult 0`,
+`ghostIntensity 0.5`, `ghostThreshold 4`, `convSize 1.0`.

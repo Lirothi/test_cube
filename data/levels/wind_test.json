@@ -13822,7 +13822,7 @@
       "shoreWetnessReflectionStrength": 0.3499999940395355,
       "shoreWetnessWetTime": 0.75,
       "skyScatterStrength": 0.3499999940395355,
-      "specularStrength": 2.0,
+      "specularStrength": 1.0,
       "sssColor": [
         0.13333334028720856,
         0.9411764740943909,
@@ -13901,21 +13901,26 @@
       "convGhosts": 6,
       "convKernel": "textures/DefaultBloomKernelAnamorphic.dds",
       "convKernelRadius": 0.0015999999595806003,
+      "convKernelTint": [
+        0.4407457113265991,
+        0.546588659286499,
+        0.9900332093238831
+      ],
       "convPercent": 25.0,
       "convPreFilterMax": 12.0,
       "convPreFilterMin": 2.0,
-      "convPreFilterMult": 8.0,
+      "convPreFilterMult": 0.0,
       "convSize": 1.0,
       "convSpokeLength": 0.8999999761581421,
       "convSpokeStrength": 0.4000000059604645,
       "convSpokeWidth": 4.0,
       "enabled": true,
       "fireflyClamp": true,
-      "intensity": 1.0,
+      "intensity": 3.0,
       "method": 1,
       "radius": 1.0,
-      "softKnee": 0.009999999776482582,
-      "threshold": -1.0
+      "softKnee": 0.5,
+      "threshold": 5.0
     },
     "cameraExposure": {
       "apertureFStop": 16.0,
