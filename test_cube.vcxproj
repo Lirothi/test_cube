@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -279,6 +279,13 @@
     <ClCompile Include="sources/app/scene/SceneObjectRegistry.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderConfig.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderer_Geometry.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderer_Shadows.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderer_Graph.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderer_Lighting.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderer_Reflections.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderer_Post.cpp" />
+    <ClCompile Include="sources/rendering/post/BloomRenderer.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderQueue.cpp" />
     <ClCompile Include="sources/app/scene/SceneResourceBootstrapper.cpp" />
     <ClCompile Include="sources/app/Systems.cpp" />
@@ -325,6 +332,7 @@
     <ClCompile Include="sources/rendering/rt/AccelerationStructure.cpp" />
     <ClCompile Include="sources/rendering/rt/BindlessTable.cpp" />
     <ClCompile Include="sources/rendering/rt/ReflectionHistory.cpp" />
+    <ClCompile Include="sources/rendering/rt/RtSceneAs.cpp" />
     <ClCompile Include="sources/rendering/rt/RtSmoke.cpp" />
     <ClCompile Include="sources/rendering/core/UploadBatch.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
@@ -437,6 +445,8 @@
     <ClInclude Include="sources/app/scene/SceneFrameData.h" />
     <ClInclude Include="sources/app/scene/GtaoSettingsJson.h" />
     <ClInclude Include="sources/app/scene/SceneRenderConfig.h" />
+    <ClInclude Include="sources/app/scene/SceneRenderInternal.h" />
+    <ClInclude Include="sources/rendering/post/BloomRenderer.h" />
     <ClInclude Include="sources/app/scene/SceneRenderer.h" />
     <ClInclude Include="sources/app/scene/SceneRenderQueue.h" />
     <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h" />
@@ -505,6 +515,7 @@
     <ClInclude Include="sources/rendering/rt/AccelerationStructure.h" />
     <ClInclude Include="sources/rendering/rt/BindlessTable.h" />
     <ClInclude Include="sources/rendering/rt/ReflectionHistory.h" />
+    <ClInclude Include="sources/rendering/rt/RtSceneAs.h" />
     <ClInclude Include="sources/rendering/rt/RtSmoke.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
     <ClInclude Include="sources/rendering/debug/DebugDraw.h" />

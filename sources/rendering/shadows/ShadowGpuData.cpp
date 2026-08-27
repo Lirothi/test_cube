@@ -1198,7 +1198,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // reversed the report. The cause is that it had TWO last-touchers, not one. RecordCull closes
     // by leaving it in INDIRECT_ARGUMENT (below), while VirtualShadowMap::PrepareRenderPass borrows
     // it as an SRV -- so whichever ran last decided the resting state, and whether the VSM page
-    // render pass exists at all depends on VsmActive() && IsAllocated() && !vsmSkipUpdate_. Hence
+    // render pass exists at all depends on VsmActive() && IsAllocated() && no skip-when-still. Hence
     // one level rested INDIRECT_ARGUMENT and another NON_PIXEL_SHADER_RESOURCE.
     //
     // The fix is the rule its two siblings below already follow: DECLARE THE STATE THE OWNER LEAVES

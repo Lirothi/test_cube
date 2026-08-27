@@ -86,6 +86,19 @@ inline bool g_barrierComparator = false;
 inline bool g_barrierCompileLog = false;
 } // namespace render
 
+// Debug name for a pass's command list: PIX, GBV and the breadcrumb dump all read it, so the
+// list a body records into is named after the pass that opened it. Call right after BeginCL.
+// R4: lives here rather than in the SceneRenderer's internal header because the RT AS build
+// moved out of sources/app/scene/ and records a pass of its own.
+inline void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
+{
+    const auto nameW = RenderPassToWString(pass);
+    if (!nameW.empty() && cl)
+    {
+        cl->SetName(nameW.data());
+    }
+}
+
 struct RenderGraphPassContext {
     // Shared command-list state for a CL group (step 5). Lives on the group
     // task's stack; every member's context points at the same instance so they

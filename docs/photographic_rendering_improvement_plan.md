@@ -2817,7 +2817,7 @@ trade ever wants revisiting.
 
 This is intentionally split into independently landable substeps. Stop after the cheapest stage that meets the art target.
 
-#### P9A — Hemispherical ground-bounce approximation
+#### P9A — Hemispherical ground-bounce approximation — DONE (shipped as P16.12)
 
 1. Add a bounded ground-hemisphere irradiance term driven by environment/level parameters.
 2. Weight it by surface orientation and indirect visibility.
@@ -2826,7 +2826,7 @@ This is intentionally split into independently landable substeps. Stop after the
 
 **Done when:** upward/downward orientation reads more naturally and shaded palm trunks receive restrained warm ground fill without visible screen-space artifacts.
 
-#### P9B — Probe-volume infrastructure (dormant)
+#### P9B — Probe-volume infrastructure (dormant) — DEFERRED, see the verdict below
 
 1. Define probe volume placement, storage, update budget, scrolling/reset rules, and debug visualization.
 2. Allocate resources and serialize settings with the feature disabled.
@@ -2834,7 +2834,7 @@ This is intentionally split into independently landable substeps. Stop after the
 
 **Done when:** probes can be visualized and lifecycle-tested without contributing lighting.
 
-#### P9C — Dynamic diffuse probe lighting
+#### P9C — Dynamic diffuse probe lighting — DEFERRED, see the verdict below
 
 1. Update a bounded number of probes per frame using the available ray-query/RT path, with a non-RT fallback policy documented.
 2. Store low-frequency irradiance and visibility.
@@ -2844,6 +2844,59 @@ This is intentionally split into independently landable substeps. Stop after the
 **Done when:** large-scale bounce improves shaded island interiors without light leaks, flicker, or a hard probe-volume boundary.
 
 **Verify for every substep:** feature-off equivalence, canonical captures, moving camera, day-light parameter changes, GPU timing, non-RT behavior.
+
+**VERDICT 2026-08-27 — P9A IS DONE; P9B/P9C ARE NOT UNREAL'S PATH.**
+
+**P9A shipped, under another number.** It is `GroundBounceOverPi()` in `shaders/lighting_cs.hlsl:203`,
+landed as **P16.12**: `groundAlbedoRgb` from the level, sun-on-ground plus sky-on-ground irradiance,
+weighted by a `(1 - N.y) * 0.5` view factor, applied to indirect diffuse only. That satisfies all four
+requirements above — bounded, orientation-weighted, not derived from the sun colour alone, low
+frequency. Treat P9A as closed and read P16.12 for the outcome.
+
+**What Unreal actually does for indirect diffuse, measured in the drop.** There are four rungs, and
+P9B/P9C matches none of them:
+
+| rung | what it is | size in `ue_strip` |
+|---|---|---|
+| sky IBL + AO | what this engine ships today | — |
+| **Volumetric Lightmap** | offline Lightmass bake, sampled at runtime | `VolumetricLightmapShared.ush`, `VisualizeVolumetricLightmap.usf` present; **the baker is not in the drop** |
+| **Distance Field AO** | mesh SDFs → a **bent normal**, i.e. long-range *directional* sky occlusion | `Shaders/Private/DistanceField/` (9 files) + `DistanceFieldAmbientOcclusion.cpp` (999 lines) + `DistanceFieldLightingPost.cpp` (623) |
+| **Lumen** | screen probes + world radiance cache + surface cache | `Shaders/Private/Lumen/` (89 files) + `Source/Runtime/Renderer/Private/Lumen` (39 .cpp, **37,220 lines**) |
+
+P9C as written — bounded per-frame probe updates over a ray-query path, irradiance plus visibility,
+hysteresis and relocation — is **DDGI/RTXGI**. A legitimate and well-documented technique, but
+NVIDIA's, not Epic's. **There is nothing in the drop to transcribe for it**, which breaks this
+project's standing rule of checking every step against UE. The plan should not have implied otherwise.
+
+**What either would give THIS level.** On the open beach, near enough nothing: the sky dominates,
+split-sum IBL plus P9A's bounce is already a defensible answer, and the eye has nothing to gain. The
+real hole is **under the canopy** — shaded sand and the backs of trunks currently receive almost the
+full sky ambient, shaved only by GTAO, which is screen-space and short-range: it sees centimetres, not
+the ten metres of fronds overhead. Of the two errors, **the missing sky occlusion is the larger one,
+not the missing colour bleed.** Probes fix both; a bent normal fixes the larger one for a fraction of
+the work.
+
+**Blocker that comes first either way.** `sources/rendering/rt/AccelerationStructure.cpp:91` sets
+`D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE` unconditionally, so masked foliage is a solid quad in the BVH.
+Any ray-query sky-visibility or probe pass run today would see a sealed box over the grove and
+over-occlude it grossly. This is the same open item as AS-readiness gap 1 in
+`docs/rt_shadows_integration_plan.md`.
+
+**Recommended order instead of P9B/P9C:**
+
+1. **Alpha-testing in the BLAS** — removes the blocker and independently fixes RT shadows and
+   reflections through foliage. Worth doing on its own merits.
+2. **Directional sky occlusion (bent normal) via RayQuery against the existing TLAS** — the same
+   information DFAO produces, without the mesh-SDF pipeline this engine does not have. Half res, a
+   handful of rays per pixel, estimate **0.2–0.4 ms**. This takes the largest visible error under
+   the canopy.
+3. **Probes — only if interiors appear.** Cost if built: 32×8×32 = 8192 probes updating an
+   eighth per frame at 64 rays is ~65k rays, against ~1M for half-res 1 spp RT reflections, so **the
+   trace itself is cheap, 0.15–0.4 ms**. The price is engineering — octahedral irradiance and
+   depth atlases, hysteresis, relocation, classification, leak control through thin geometry — a
+   body of work comparable to the whole RT-reflections plan.
+
+**Status:** P9A closed (P16.12). P9B and P9C **deferred and re-scoped above**, not deleted.
 
 ---
 

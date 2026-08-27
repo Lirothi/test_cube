@@ -11,8 +11,7 @@
 // pass-flow S7a: Pass_ShadowCull takes ShadowGpuData::CullDecisions by reference, so the type has
 // to be complete here (SceneFrameData only forward-declares the class).
 #include "rendering/shadows/ShadowGpuData.h"
-#include "rendering/rt/AccelerationStructure.h"
-#include "rendering/rt/BindlessTable.h"
+#include "rendering/rt/RtSceneAs.h"
 #include "rendering/rt/ReflectionHistory.h"
 #include "core/task/TaskSystem.h"
 #include "app/scene/SceneFrameData.h"
@@ -20,6 +19,7 @@
 #include "rendering/core/UploadBatch.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneResourceBootstrapper.h"
+#include "rendering/post/BloomRenderer.h" // R3: the bloom subsystem, a member below
 
 class Renderer;
 class Camera;
@@ -64,8 +64,8 @@ public:
     // RT reflections for glass (S15): whether RT reflections are active this frame
     // (rtSupported && source==RT && AS not failed), and the current TLAS SRV — read
     // by the transparent pass / glass renderable. {0} when no TLAS is built.
-    bool IsRtReflectActive() const { return rtReflectActive_; }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetTlasSrvCpu(UINT frameIndex) const { return asManager_.TlasSrvCpu(frameIndex); }
+    bool IsRtReflectActive() const { return decisions_.rtReflect; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetTlasSrvCpu(UINT frameIndex) const { return rtAs_.TlasSrvCpu(frameIndex); }
 
     // Renders one frame (main graph, overlay epilogue, EndFrame).
     // `frame` must stay valid for the duration of the call.
@@ -73,6 +73,84 @@ public:
 
 private:
     static constexpr int kCascades = SceneFrameData::kCascades;
+
+    // R6 (docs/scene_renderer_refactor_plan.md): everything this frame DECIDES, in one place.
+    //
+    // These were loose members and loose locals scattered through Render(), which made them
+    // indistinguishable from the state below that legitimately CROSSES frames (the SSR and VSM
+    // histories, the pre-exposure pair). Nothing in here survives Render(): DecideFrame() writes
+    // every field before the graph is built, and no pass body or builder may write one — the whole
+    // point of the pass-flow plan was that a decision taken twice is a decision that can disagree.
+    //
+    // It is a MEMBER rather than a local because the pass builders read it: they capture `this` and
+    // run later, from ExecuteParallel, long after the registration code that filled this in.
+    struct FrameDecisions
+    {
+        bool rtSupported = false;      // hardware answer, not a setting
+        bool rtDebugView = false;      // the RT debug visualisation is up
+        bool rtReflect = false;        // reflections trace the TLAS (was rtReflectActive_)
+        bool rtBuildAS = false;        // ...so the acceleration structures have to be built
+        bool clearReflections = false; // source is None/SkyOnly: nothing traces, the target is cleared
+        bool glassRefl = false;        // glass gets traced reflections (was glassReflActive_)
+        bool ssrTemporal = false;      // the SSR temporal resolve runs (was ssrTemporalActive_)
+        // P6C step 6: does anything trace the CLOSEST depth pyramid this frame? ONE flag, read by
+        // the pyramid build (whether to write that chain at all) and by both SSR dispatches
+        // (whether the HiZ tracer may run). Two independent evaluations of "is HiZ on" is how a
+        // pass ends up tracing a chain nobody filled in.
+        bool ssrHiz = false;           // was ssrHizActive_
+        // Directional shadows come from the VSM clipmap, so the CSM pass is omitted entirely.
+        // Render() used to compute this predicate twice under two names (`vsmDirectional` and
+        // `vsmActive`) from the same three terms.
+        bool vsmActive = false;
+        bool vsmSkipUpdate = false;    // nothing moved: keep last frame's pages (was vsmSkipUpdate_)
+        bool willDlss = false;         // the DLSS evaluate is predicted to run (was a local)
+    };
+    void DecideFrame(Renderer* renderer, const SceneFrameData& frame);
+    FrameDecisions decisions_{};
+
+    // R5: what the seven phase builders (SceneRenderer_Graph.cpp) hand each other.
+    //
+    // Render() no longer constructs the graph itself — it opens this, calls the phases in schedule
+    // order and executes. The phases are pure REGISTRATION: every AddPass2 builder runs later, from
+    // ExecuteParallel, so moving a registration between phases changes nothing except the order
+    // passes are added in, which is the schedule and is preserved exactly.
+    //
+    // The pass INDICES are the interface, so they are named fields rather than a bag of size_t —
+    // and only the ones that actually cross a phase boundary are here. An index used solely inside
+    // one phase stays a local there, which is what makes this list readable as the dependency
+    // graph between phases.
+    struct GraphBuild
+    {
+        RenderGraph<kMainRenderGraphPassCount>& rg;
+        // The deferred targets are stable between BeginFrame and Present, so pass declarations
+        // capture the frame's resources directly.
+        const RenderTargetManager::DeferredTargets& D;
+        const RenderTargetManager::DeferredTargets& P; // the PREVIOUS frame's set (temporal history reads)
+
+        static constexpr size_t kNone = static_cast<size_t>(-1);
+
+        size_t pBuildAS = kNone;   // prologue -> reflections, RT debug, glass
+        size_t pWetness = kNone;   // prologue -> reflection source
+        size_t pShoreDepth = kNone;// prologue -> shadow cull
+        size_t pShadow = kNone;    // shadows  -> lighting (mtDep)
+        size_t pSpotShadow = kNone;// shadows  -> spot lights (mtDep)
+        size_t pPointShadow = kNone;
+        size_t pGbuf = kNone;      // gbuffer  -> lighting, AO
+        size_t pVsmPageRender = kNone;
+        size_t pHzb = kNone;       // gbuffer  -> SSR
+        size_t pGtao = kNone;      // gbuffer  -> lighting
+        size_t pSky = kNone;       // lighting -> reflection source
+        size_t pCompose = kNone;   // reflections -> transparent
+        size_t pGlassReflect = kNone;
+        size_t pSelectionOutline = kNone; // forward -> metering, DLSS
+    };
+    void BuildPrologue(Renderer* renderer, GraphBuild& gb);
+    void BuildShadows(Renderer* renderer, GraphBuild& gb);
+    void BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb);
+    void BuildLighting(Renderer* renderer, GraphBuild& gb);
+    void BuildReflections(Renderer* renderer, GraphBuild& gb);
+    void BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb);
+    void BuildPost(Renderer* renderer, GraphBuild& gb);
 
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
         const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize,
@@ -96,7 +174,6 @@ private:
     // never go through the indirect path.
     bool IndirectShadowDrawsActive() const;
 
-    void Pass_BuildAS(Renderer* r, RenderGraphPassContext ctx);
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
     // pass-flow S7b: the objects whose compute records something this frame, collected by the
     // Main_ObjectCompute builder as it declares for them. Fixed capacity because it rides into the
@@ -123,15 +200,6 @@ private:
     // values the declarations were made from, captured by value into the record lambda.
     void Pass_VsmPageRender(Renderer* r, RenderGraphPassContext ctx,
         const VirtualShadowMap::PageRenderDecisions& dec);
-    // P6B: rotates the AO sampling directions per frame; the temporal step averages them.
-    uint32_t gtaoFrameCounter_ = 0u;
-    // P6B item 4: how many consecutive frames the temporal stage has run at the current AO size.
-    // 0 means the history texture holds nothing this frame may read — the first frame after a
-    // resize, a level switch, or the stage being switched on.
-    uint32_t gtaoHistoryFrames_ = 0u;
-    uint32_t gtaoHistoryWidth_ = 0u;
-    uint32_t gtaoHistoryHeight_ = 0u;
-
     // P6B: the AO chain's decision, made ONCE in the AddPass2 builder (which runs serially, before
     // any recording) and carried into the record body by value. `point*` are the barrier-point
     // indices the declarations were made under; the body emits exactly those.
@@ -175,10 +243,8 @@ private:
     {
         std::uint32_t apply = 0;       // tonemap + fxaa -> UAV, plus the exposure record
         std::uint32_t source = 0;      // the tone curve's input (and the forward targets back)
-        std::uint32_t bloomWrite = 0;  // the bloom chains -> UAV
-        std::uint32_t flareRt = 0;     // lens flare -> RENDER_TARGET
-        std::uint32_t flareRead = 0;   // lens flare -> shader-readable
-        std::uint32_t bloomRead = 0;   // the bloom chains -> shader-readable
+        // R3: the bloom declares and emits these itself; they are still THIS pass's points.
+        BloomRenderer::Points bloom_;
         std::uint32_t fxaaRead = 0;    // tonemap -> shader-readable, the FXAA input
         std::uint32_t resolveCopy = 0; // the resolve source -> COPY_SOURCE
         std::uint32_t resolveBack = 0; // ...and back to UAV (with `tonemap` when FXAA ran)
@@ -189,44 +255,6 @@ private:
         bool fxaa = false;
         bool resolve = false;   // the tonemap material and a backbuffer both exist
     };
-    // P8: the bloom pyramid. Not a pass of its own -- it records into the tonemap pass's list,
-    // between the DLSS evaluate and the tone curve, because both of those live in that pass.
-    void Bloom_Build(Renderer* r, ID3D12GraphicsCommandList* cl,
-                     D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const TonemapPoints& pts);
-    // The thresholded DOWN chain on its own. Split out because BOTH methods need it: the pyramid
-    // builds on it, and the convolution -- which has no pyramid of its own -- needs it as the SOFT
-    // source its ghosts are gathered from. Assumes bloomDown is already UNORDERED_ACCESS.
-    // `mipCount` 0 means the whole chain, which is what the pyramid needs; the convolution's ghost
-    // source asks for only the levels it samples.
-    // P8C-2m: whether the flares run THIS frame, decided before the graph is built so the
-    // Prepare declares exactly what the body will touch. Off means off: no dispatch, no draw, and
-    // no barrier -- the targets are not declared at all.
-    bool flaresGhosts_ = false;
-    bool flaresStreak_ = false;
-    // P8C-2l: the flare constants, filled once so the two bloom methods cannot drift apart.
-    BloomConvConstants Bloom_FlareConstants(Renderer* r) const;
-    // P8C-2l: the lens flares, shared by BOTH bloom methods. Build runs before the bloom target
-    // is written (scatter + streak pyramid), composite after it (both add into mip 0).
-    void Bloom_FlaresBuild(Renderer* r, ID3D12GraphicsCommandList* cl,
-                           D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const BloomConvConstants& conv,
-                           const TonemapPoints& pts);
-    void Bloom_FlaresComposite(Renderer* r, ID3D12GraphicsCommandList* cl,
-                               D3D12_CPU_DESCRIPTOR_HANDLE hdrSource,
-                               const BloomConvConstants& conv);
-    // P8C-2 step 5a: bake the ghost bokeh sprite from the blade count.
-    void BakeFlareBokeh(Renderer* r, uint32_t blades);
-    void Bloom_Downsample(Renderer* r, ID3D12GraphicsCommandList* cl,
-                          D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, float threshold, UINT mipCount);
-    // P8C: the convolution alternative. Same slot, same output texture.
-    // P8C-2o: the kernel survey and the constants it feeds the tonemap. Reading the pixels is
-    // narrow on purpose -- it accepts exactly the format this one asset ships in.
-    bool Bloom_ReadKernelPixels(const wchar_t* path);
-    void Bloom_SurveyKernel(float ratio);
-    BloomApplyConstants Bloom_ApplyConstants() const;
-    float Bloom_TonemapBloomScale() const;
-    void Bloom_Convolve(Renderer* r, ID3D12GraphicsCommandList* cl,
-                        D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const TonemapPoints& pts);
-
     // P6C step 6: fills the HZB tracer's half of the SSR constants. ONE definition, called by the
     // opaque and the glass dispatch, so the two can never disagree about whether the furthest
     // pyramid exists this frame.
@@ -402,161 +430,89 @@ private:
     // once per frame before the graph is built. See the definition for why.
     void EnsureFrameResources(Renderer* renderer);
 
+    // ================================================================================
+    // R7 — the state, in three blocks, sorted by LIFETIME.
+    //
+    // That is the only classification that has ever mattered here. A member's topic tells you
+    // nothing about whether clearing it on a level switch is required, forbidden, or a bug; its
+    // lifetime tells you all three. R6 removed the per-FRAME members from this list entirely (they
+    // are FrameDecisions now), which is what makes the remaining three groups clean.
+    // ================================================================================
+
+    // ---- SUB-OBJECTS: own their own state, their own reset rules and their own API. ----
+    // The pass materials, CBs and descriptor handles every body binds. Reset() replaces it wholesale
+    // on a level switch, which is why nothing else in this class caches anything it hands out.
     SceneResourceBootstrapper resources_{};
-
-    // P2: wall-clock stamp of the previous metering dispatch, for the adaptation rate. Negative =
-    // no previous frame. Kept here rather than derived from a frame counter so a stall (breakpoint,
-    // level load) shows up as a large delta that the cap below can clamp, per plan section 6.2.
-    double lastExposureTimeSeconds_ = -1.0;
-
-    // The frame's main render graph, owned rather than built as a local in Render():
-    // it is ~16 KB (MaxPasses x Pass, each holding a std::function), which on the stack
-    // left Render at C6262's 16 KB threshold with no headroom. Reset() per frame gives
-    // the same freshly-empty graph without the stack cost or a per-frame allocation.
+    // R3: the bloom (rendering/post/BloomRenderer.h). It still records into the TONEMAP's list —
+    // bloom must see the upscaled image and the tone curve must see the bloom — but it owns its
+    // decision, its declarations and the nineteen members only it ever read. Talked to through
+    // Decide / Declare / Record. Deliberately has no Reset: its kernel and sprite are assets.
+    BloomRenderer bloom_;
+    // R4: the RT acceleration structures (S5), the bindless table (S9) and the two caches that keep
+    // their rebuild incremental, together with the build body that was Pass_BuildAS. The RT passes
+    // reach them through rtAs_.Manager() / rtAs_.Bindless().
+    RtSceneAs rtAs_;
+    rt::ReflectionHistory reflectionHistory_; // S11: ping-pong temporal-accumulation textures (dormant)
+    // The frame's render graphs, owned rather than built as locals in Render(): the main one is
+    // ~16 KB (MaxPasses x Pass, each holding a std::function), which on the stack left Render at
+    // C6262's 16 KB threshold with no headroom. Reset() per frame gives the same freshly-empty
+    // graph without the stack cost or a per-frame allocation; the epilogue graph is here for the
+    // same reason once it carries a Prepare.
     std::unique_ptr<RenderGraph<kMainRenderGraphPassCount>> mainRenderGraph_;
-    // Same reason as the main graph: once it carries a Prepare, building it as a local
-    // would heap-allocate the PrepareState every frame.
     std::unique_ptr<RenderGraph<kEpilogueRenderGraphPassCount>> epilogueRenderGraph_;
 
-    // RT acceleration structures (S5). Built by Pass_BuildAS when RT is supported
-    // and enabled; no consumer yet. asManager_ owns the per-mesh BLAS cache and
-    // the per-frame TLAS. asScratchRetireFrame_ defers releasing one-time BLAS
-    // build scratch until its command list's frame has surely completed.
-    rt::AccelerationStructureManager asManager_;
-    rt::BindlessTable bindless_; // S9: per-mesh VB/IB + geometry-info for RT hit shading
-    rt::ReflectionHistory reflectionHistory_; // S11: ping-pong temporal-accumulation textures
-    bool asManagerInited_ = false;
-    uint64_t asScratchRetireFrame_ = 0;
-    bool rtFailureLogged_ = false; // S13: one-time "AS alloc failed -> SSR fallback" log
-    bool asVramLogged_ = false;    // S13: one-time AS VRAM accounting log
-    bool rtReflectActive_ = false; // S15: RT reflections active this frame (for glass)
-    bool glassReflActive_ = false; // S15b: traced glass reflections active (RT or SSR)
-    // P6C step 6: does anything trace the CLOSEST depth pyramid this frame? ONE flag, read by the
-    // pyramid build (whether to write that chain at all) and by both SSR dispatches (whether the
-    // HiZ tracer may run). Two independent evaluations of "is HiZ on" is how a pass ends up
-    // tracing a chain nobody filled in.
-    bool ssrHizActive_ = false;
-    // P8: does the bloom chain run this frame? ONE flag, decided where the graph is built and read
-    // by BOTH the tonemap pass's Prepare (which declares the pyramid's barrier points) and its body
-    // (which emits them). Two independent evaluations is how a body ends up emitting a barrier the
-    // compile never registered -- see the note on Pass_Gtao's `chain`.
-    bool bloomActive_ = false;
-    // P16.1: the pre-exposure factor for THIS frame. Every writer of scene colour multiplies by it
-    // and the tonemap divides it out, so the stored values sit near 1 instead of near the radiance.
-    // 1.0 means "not pre-exposed", which is what every path sees until it is wired up.
+    // ---- CROSS-FRAME STATE: this frame READS what the last one wrote. ----
+    // Every member here is a history or the validity of one, and every one of them has the same
+    // failure mode: read it after a resize or a level switch and the frame samples garbage. That is
+    // why each history carries its own size + frame count rather than trusting a global "first
+    // frame" flag — the sizes move independently (render, reflection and AO targets all differ).
+
+    // P16.1: the pre-exposure factor for THIS frame, and the one the PREVIOUS frame's scene colour
+    // was written with. Every writer of scene colour multiplies by the first and the tonemap
+    // divides it out, so stored values sit near 1 instead of near the radiance; a reader of the SSR
+    // history has to undo the factor that image was STORED with, which is the second.
     float preExposure_ = 1.0f;
-    // P16.1: the factor the PREVIOUS frame's scene colour was written with. The SSR history IS that
-    // image, so a reader of it has to undo the factor it was STORED with, not this frame's.
     float prevPreExposure_ = 1.0f;
-    // P8C: which bloom method this frame runs. Read by the tonemap Prepare AND its body, so the
-    // declared resources and the emitted barriers cannot disagree.
-    bool bloomConvolution_ = false;
-    // The kernel's spectrum is a pure function of these, so it is only rebuilt when one moves.
-    // P8C-2: the shape controls died with the generated aperture; what remains is the kernel
-    // IMAGE's placement (size, active grid) and the streak composited into it.
-    struct BloomKernelKey
-    {
-        uint32_t width = 0u, height = 0u;          // the ACTIVE grid
-        uint32_t imageWidth = 0u, imageHeight = 0u; // the span depends on the image's major axis
-        float convSize = -1.0f;
-        // P8C-6: the TINT is part of the key. The spectrum is cached and rebuilt only when the key
-        // moves, so a tint left out of it would be a colour picker that does nothing until
-        // something else happens to force a rebuild -- which is worse than no picker at all.
-        float tint[3] = { -1.0f, -1.0f, -1.0f };
-        bool operator==(const BloomKernelKey& o) const
-        {
-            return width == o.width && height == o.height &&
-                   imageWidth == o.imageWidth && imageHeight == o.imageHeight &&
-                   convSize == o.convSize &&
-                   tint[0] == o.tint[0] && tint[1] == o.tint[1] && tint[2] == o.tint[2];
-        }
-    };
-    // ONE KEY PER FRAME SLOT, not one for the renderer. The kernel spectrum lives in
-    // DeferredTargets, which is per-frame -- a single key meant slot 0 built the kernel and slots 1
-    // and 2 convolved against an empty texture, i.e. two frames in three had no bloom at all. That
-    // is what the first convolution captures actually showed.
-    std::array<BloomKernelKey, render::kFrameCount> bloomKernelKeys_{};
-    // P8C-2: the photographed convolution kernel (UE's DefaultBloomKernel as an FP16 DDS with
-    // mips). Loaded once, lazily, at the frame-gate site -- WITHOUT it the convolution method
-    // refuses to enable (UE's own gate: IsFFTBloomEnabled is false with no kernel texture), rather
-    // than falling back to a procedural kernel that no longer exists.
-    Texture2D bloomKernelTex_;
-    bool bloomKernelReady_ = false;
-    // P8C-2r: which image is currently resident. Empty means none; comparing it against the
-    // setting is the whole reload gate, which is why the old once-only `bloomKernelTried_`
-    // flag is gone rather than kept beside it -- two gates would have disagreed.
-    std::string bloomKernelLoadedPath_;
-    // P8C-2o -- THE SAME PIXELS ON THE CPU, for UE's centre/scatter survey.
-    //
-    // They survey the kernel on the GPU (FindKernelCenter -> SurveyKernelCenterEnergy ->
-    // SumScatterDispersionEnergy), which for us would mean a readback the tonemap cannot wait for.
-    // It does not have to: what the survey produces are RATIOS over a static image, and a ratio is
-    // invariant to the resampling that stands between the texture and the grid -- box minification
-    // scales both sums by the same (span/texels)^2. So the identical numbers come off the texture
-    // itself, once per kernel key, with nothing to race.
-    std::vector<float> bloomKernelPixels_;      // RGB triples, row-major, square
-    uint32_t bloomKernelPixelDim_ = 0u;
-    // Sums from the last survey, and the `ratio` they were taken at. Energy, not colour -- the
-    // apply constants are formed from these every frame because they also depend on the intensity.
-    std::array<float, 3> bloomKernelCenterEnergy_{};
-    std::array<float, 3> bloomKernelScatterEnergy_{};
-    float bloomSurveyRatio_ = -1.0f;
-    // P8C-2 step 5a: the ghost BOKEH SPRITE -- the iris polygon the scatter splats. Baked on the
-    // CPU from the blade count (its new home after the aperture kernel's retirement) and rebaked
-    // when it moves.
-    //
-    // P8C-2d -- DOUBLE BUFFERED, AND THE UPLOAD DOES NOT WAIT. The first version called
-    // WaitForPreviousFrame() + SubmitAndWait() from the frame gate, so every change of the blade
-    // controls flushed the whole GPU -- once per frame while a slider was being dragged. The wait
-    // was there for one reason: CreateFromRGBA8 RELEASES the resource it creates over, and the
-    // previous frame may still be sampling it. Two slots remove that reason -- the bake writes the
-    // one that is not being sampled -- and `safeFrame` keeps both halves honest: the pending slot
-    // is not sampled until the copy has had a full frame ring to land, and the slot just retired
-    // from sampling is not overwritten until it has had the same.
-    Texture2D flareBokeh_[2];
-    std::unique_ptr<UploadBatch> flareBokehUpload_;
-    std::uint64_t flareBokehSafeFrame_ = 0;
-    std::uint32_t flareBokehSlot_ = 0;    // the slot the scatter samples
-    std::int32_t flareBokehPending_ = -1; // the slot being uploaded, -1 = idle
-    bool flareBokehReady_ = false;
-    std::uint32_t flareBokehBlades_ = 0xffffffffu;
-    // SSR temporal resolve: whether it ran this frame (the blur's input depends on it) and whether
-    // the previous frame left a history worth reading.
-    bool ssrTemporalActive_ = false;
+    // P2: wall-clock stamp of the previous metering dispatch, for the adaptation rate. Negative =
+    // no previous frame. Kept as a stamp rather than derived from a frame counter so a stall
+    // (breakpoint, level load) shows up as a large delta that the rate cap can clamp.
+    double lastExposureTimeSeconds_ = -1.0;
+    // SSR temporal resolve: whether the previous frame left a history worth reading, at what size.
+    // (Whether the resolve RUNS is this frame's decision and lives in FrameDecisions::ssrTemporal.)
     bool ssrHistoryValid_ = false;
     uint32_t ssrHistoryFrames_ = 0u;
     uint32_t ssrHistoryWidth_ = 0u;
     uint32_t ssrHistoryHeight_ = 0u;
     // UE samples the previous temporal SceneColor at the reprojected HIT, independently of the
     // later SSR temporal resolve. Track that history even while the temporal reflection filter is
-    // disabled, because Deferred.scene is produced every frame.
+    // disabled, because Deferred.scene is produced every frame. The camera revision is part of the
+    // key: an explicit cut invalidates it even when nothing resized.
     bool ssrSceneColorHistoryValid_ = false;
     uint32_t ssrSceneColorHistoryFrames_ = 0u;
     uint32_t ssrSceneColorHistoryWidth_ = 0u;
     uint32_t ssrSceneColorHistoryHeight_ = 0u;
     uint64_t ssrSceneColorCameraRevision_ = 0u;
-    std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Pass_BuildAS touches it)
-    struct RtBindlessObjectCache
-    {
-        const RenderableObjectBase* object = nullptr;
-        const Mesh* mesh = nullptr;
-        uint64_t materialFingerprint = 0;
-        uint32_t instanceId = 0;
-        bool valid = false;
-    };
-    // Per-object bindless registration is stable across frames even though TLAS transforms are
-    // uploaded/refit every frame. Indexed like SceneFrameData::objects; pointer checks make object
-    // replacement safe, while RT invalidation clears the entire cache after material hot reloads.
-    std::vector<RtBindlessObjectCache> rtBindlessObjectCache_;
-
-    // VSM (Rung 2) skip-when-still: last camera view matrix + whether the VSM has been rendered
-    // since the gate turned on. When the camera view is unchanged the pool + page table persist, so
-    // the whole VSM update (request/alloc/render) is skipped that frame.
+    // P6B: the AO temporal history. `gtaoFrameCounter_` rotates the sampling directions per frame
+    // (the temporal stage averages them); `gtaoHistoryFrames_` = 0 means the history texture holds
+    // nothing this frame may read — the first frame after a resize, a level switch, or the stage
+    // being switched on.
+    uint32_t gtaoFrameCounter_ = 0u;
+    uint32_t gtaoHistoryFrames_ = 0u;
+    uint32_t gtaoHistoryWidth_ = 0u;
+    uint32_t gtaoHistoryHeight_ = 0u;
+    // VSM (Rung 2) skip-when-still: the last camera view matrix, whether the VSM has been rendered
+    // since the gate turned on, and how many consecutive still frames have passed. When nothing
+    // moved the pool + page table persist and the whole VSM update is skipped — DecideFrame reads
+    // these three and publishes the answer as FrameDecisions::vsmSkipUpdate.
     mat4 vsmLastView_{};
     bool vsmHasRendered_ = false;
-    bool vsmSkipUpdate_ = false;
-    std::uint32_t vsmStillFrames_ = 0; // consecutive fully-still frames (settle before skipping)
+    std::uint32_t vsmStillFrames_ = 0;
 
-    // Valid only during Render(); pass bodies (running on task threads) read it.
+    // ---- PER-LEVEL / ONE-SHOT: survives frames, cleared by Reset(). ----
+    bool rtFailureLogged_ = false; // S13: one "AS alloc failed -> SSR fallback" line per scene
+
+    // ---- VALID ONLY DURING Render(). ----
+    // Pass bodies run on task threads and read this; it is null outside the call. `decisions_`
+    // (above, with FrameDecisions) has exactly the same lifetime.
     const SceneFrameData* frame_ = nullptr;
 };

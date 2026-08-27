@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="sources">
@@ -74,6 +74,9 @@
       <UniqueIdentifier>{d7a549b3-2575-456d-869c-0c11ead713a3}</UniqueIdentifier>
     </Filter>
     <Filter Include="sources\rendering\core">
+      <UniqueIdentifier>{dc6790ce-276e-4f46-8000-f893062b29a2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sources\rendering\post">
       <UniqueIdentifier>{dc6790ce-276e-4f46-8000-f893062b29a2}</UniqueIdentifier>
     </Filter>
     <Filter Include="sources\rendering\diagnostics">
@@ -318,6 +321,27 @@
     <ClCompile Include="sources/app/scene/SceneRenderer.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/scene/SceneRenderer_Geometry.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/scene/SceneRenderer_Shadows.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/scene/SceneRenderer_Graph.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/scene/SceneRenderer_Lighting.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/scene/SceneRenderer_Reflections.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/scene/SceneRenderer_Post.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/post/BloomRenderer.cpp">
+      <Filter>sources\rendering\post</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/scene/SceneRenderQueue.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
@@ -457,6 +481,9 @@
       <Filter>sources\rendering\rt</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/rt/ReflectionHistory.cpp">
+      <Filter>sources\rendering\rt</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/rt/RtSceneAs.cpp">
       <Filter>sources\rendering\rt</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/rt/RtSmoke.cpp">
@@ -728,6 +755,12 @@
     <ClInclude Include="sources/app/scene/SceneRenderConfig.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/scene/SceneRenderInternal.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/post/BloomRenderer.h">
+      <Filter>sources\rendering\post</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/scene/SceneRenderer.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
@@ -852,6 +885,9 @@
       <Filter>sources\rendering\rt</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/rt/ReflectionHistory.h">
+      <Filter>sources\rendering\rt</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/rt/RtSceneAs.h">
       <Filter>sources\rendering\rt</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/rt/RtSmoke.h">
