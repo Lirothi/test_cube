@@ -162,6 +162,9 @@ void DlssHandler::OnStreamlineInitialized(sl::Result initResult)
 
 void DlssHandler::OnBeginFrame()
 {
+    // DLSS-split: the failure backoff ticks here, BEFORE the graph is built and asks WillEvaluate,
+    // so the frame right after a failure is the one that takes the scene-colour path.
+    if (skipEvaluateFrames_ > 0) { --skipEvaluateFrames_; }
     if (!available_)
     {
         frameToken_ = nullptr;
@@ -442,7 +445,37 @@ void DlssHandler::EnsureExposureResources(ID3D12GraphicsCommandList* cl)
     exposureUploaded_ = true;
 }
 
+bool DlssHandler::WillEvaluate() const
+{
+    if (!IsActive() || frameToken_ == nullptr || skipEvaluateFrames_ > 0) { return false; }
+    const auto& deferred = renderer_.rtManager_.Deferred(renderer_.currentFrameIndex_);
+    return deferred.scene && deferred.depth && deferred.gbVelocity && deferred.dlssOutput;
+}
+
 bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
+{
+    // DLSS-split: the outcome steers the NEXT frames' prediction. A single wrapper rather than a
+    // flag set at each of the six exits — one of them getting missed is exactly how a stuck
+    // "failed" or a stuck "fine" would appear.
+    //
+    // A failure parks the prediction for kEvaluateBackoffFrames frames rather than forever: the
+    // pass that calls this only EXISTS on frames the prediction said yes, so a permanently sticky
+    // flag would have nothing left to clear it and DLSS would stay off until a mode change. The
+    // backoff also stops a persistently broken Streamline from alternating DLSS/no-DLSS every
+    // other frame — it costs one retry per backoff window instead.
+    const bool ok = EvaluateInternal(cl);
+    if (!ok)
+    {
+        if (skipEvaluateFrames_ == 0)
+        {
+            Renderer::DiagLog("[dlss] evaluate failed - falling back to scene colour, retrying shortly\n");
+        }
+        skipEvaluateFrames_ = kEvaluateBackoffFrames;
+    }
+    return ok;
+}
+
+bool DlssHandler::EvaluateInternal(ID3D12GraphicsCommandList* cl)
 {
     CPU_SCOPE(ProfilerScopes::kDlssEvaluate);
     outputValid_ = false;

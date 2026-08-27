@@ -50,7 +50,22 @@ public:
     bool ShouldUseUpscaledOutput() const { return IsActive() && outputValid_; }
     void InvalidateOutput() { outputValid_ = false; }
 
+    // DLSS-split: will Evaluate() do its work this frame? Asked BEFORE recording, by the
+    // Main_DLSS pass builder, so that Main_Tonemap can be recorded CONCURRENTLY with the evaluate
+    // instead of waiting to be told what happened inside it.
+    //
+    // Everything it reads is settled before the graph is built: `active_` is a UI/mode setting,
+    // `frameToken_` comes from OnBeginFrame, and the four tagged targets belong to this frame's
+    // Deferred set. The one thing it CANNOT foresee is Streamline itself failing mid-record —
+    // four of Evaluate's exits are `sl*` calls. That is what `evaluateFailed_` is for: a failure
+    // is remembered, so the frame AFTER it predicts false and the pipeline is back on the
+    // scene-colour path. The frame that failed shows the previous DLSS output (the tonemap reads
+    // the target it was promised); one stale frame on a should-never-happen path is the price of
+    // recording the two passes in parallel, and it is deliberate.
+    bool WillEvaluate() const;
+
 private:
+    bool EvaluateInternal(ID3D12GraphicsCommandList* cl);
     void ClearResourceTags();
     void HandleAllocationFailure();
     void ResetJitterSequence();
@@ -64,6 +79,12 @@ private:
     bool resourcesAllocated_ = false;
     bool resetPending_ = true;
     bool outputValid_ = false;
+    // DLSS-split: frames left to skip after an evaluate we PREDICTED would run came back false.
+    // Ticked down in OnBeginFrame; while non-zero the prediction says no and the tonemap takes the
+    // scene-colour path. A COUNTER rather than a sticky bool: the pass that could clear a bool
+    // only exists on frames the prediction said yes, so a bool would latch DLSS off for good.
+    static constexpr std::uint32_t kEvaluateBackoffFrames = 30;
+    std::uint32_t skipEvaluateFrames_ = 0;
     sl::ViewportHandle viewport_{ 1 };
     sl::DLSSOptions options_{};
     sl::Constants constants_{};

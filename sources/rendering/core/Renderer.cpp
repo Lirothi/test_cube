@@ -1807,6 +1807,11 @@ bool Renderer::IsDlssActive() const
     return dlssHandler_ && dlssHandler_->IsActive();
 }
 
+bool Renderer::WillEvaluateDlss() const
+{
+    return dlssHandler_ && dlssHandler_->WillEvaluate();
+}
+
 bool Renderer::IsDlssAvailable() const
 {
     return dlssHandler_ && dlssHandler_->IsAvailable();

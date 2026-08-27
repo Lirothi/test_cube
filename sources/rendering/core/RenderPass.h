@@ -38,6 +38,9 @@ enum class RenderPass : uint16_t {
     Main_DebugDraw,
     Main_SelectionOutline,
     Main_ExposureMetering, // P2: histogram + percentile solve, feeds the tonemap's exposure
+    // DLSS-split: the upscale is its OWN pass so its ~116us of Streamline recording overlaps the
+    // tonemap's bloom + tone curve instead of sitting in front of them in one command list.
+    Main_DLSS,
     Main_Tonemap,
     Main_Debug,
     Main_Count,
@@ -98,6 +101,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_DebugDraw: return L"DebugDraw";
     case RenderPass::Main_SelectionOutline: return L"SelectionOutline";
     case RenderPass::Main_ExposureMetering: return L"ExposureMetering";
+    case RenderPass::Main_DLSS: return L"DLSS";
     case RenderPass::Main_Tonemap: return L"Tonemap";
     case RenderPass::Main_Debug: return L"Debug";
     case RenderPass::Epilogue_Overlay: return L"Overlay";

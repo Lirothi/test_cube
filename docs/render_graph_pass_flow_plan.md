@@ -286,6 +286,42 @@ any step.
   editor-only passes are the ones a stress run never registers) and a `--shot` A/B against the
   pre-S5 binary on `wind_test` with `--wind-freeze=3.0`.
 
+- **DLSS-split (not a plan step — a perf change the user asked for on top of S7).** `Main_DLSS` is
+  now its own pass so the ~116 us of Streamline recording overlaps the tonemap's bloom + tone
+  curve instead of sitting in front of them in one command list. Three things make it legal: GPU
+  order comes from SUBMISSION order (`pDlss` is in the tonemap's PREREQS, not its mtDeps, so the
+  two tasks record on different workers and the lists still reach the queue in order); the barrier
+  compile walks the schedule, so the upscale's points compile before the tonemap's; and the pass
+  hangs off `pSelectionOutline` rather than the exposure metering, which it does not read, so it
+  can start recording earlier.
+  **The price, accepted deliberately:** `ranDlss` used to be the RETURN of `EvaluateDLSS` — a value
+  only knowable mid-record, which is why S3 called this pass a counterexample. Recording the two in
+  parallel means the tonemap cannot be told, so it is PREDICTED (`Renderer::WillEvaluateDlss` ->
+  `DlssHandler::WillEvaluate`: active + frame token + this frame's four targets). If Streamline
+  then fails mid-record, the tonemap reads the target it was promised and shows ONE stale frame
+  instead of falling back to scene colour. A failure parks the prediction for 30 frames
+  (`skipEvaluateFrames_`, ticked in OnBeginFrame) and logs once — a COUNTER, not a sticky flag,
+  because the pass that could clear a flag only exists on frames the prediction said yes, so a
+  bool would have latched DLSS off for good.
+  Measured A/B/A, 3 runs per binary, wind_test, medians of per-frame CPU scopes:
+  `RenderGraph::ExecuteParallel` 298/319/294 -> 237/239/232 us (**-61 us, -20 %**), `Pass_Tonemap`
+  183/199/186 -> 72/71/68 with a new `Pass_DLSS` at 128/136/135, `Whole Cycle` 680/720/655 ->
+  614/628/630. The ranges do not overlap. In the trace the two passes overlap by a median 68 us on
+  different threads in 40/40 frames. GPU work is unchanged (Pass_Tonemap 660 -> 364 GPU us plus a
+  280 us Pass_DLSS = the same upscale, now attributed).
+  **What it does NOT buy on this scene:** `Renderer::WaitForFrame` went 2796 -> 2846 us. wind_test
+  is GPU-bound (the whole CPU cycle is 616 us against a ~3.5 ms frame), so the saved recording time
+  goes into waiting, not into FPS. This pays where the CPU is the limit — stress churn, the editor,
+  scenes with many small draws.
+  Gates: both builds 0/0; Debug GBV stress CLEAN in both shadow modes; `--scene-stress=12` CLEAN;
+  comparator down to three benign INFO extras (the tonemap declares `dlssOutput -> NPS`, which the
+  DLSS pass already left it in, so the body never asks); frames identical by eye.
+  History worth keeping: the same split was tried on 2026-07-03 and REVERTED because the numbers
+  then said no (eval 95 us, bloom+tail ~25, CL overhead measured ~28 -> the isolated task was
+  longer than the bundled one). What changed is the FFT bloom (42 us of recording worth moving) and
+  the CL overhead now measuring ~12 us. The lesson is that a rejected perf change deserves
+  re-measuring when the shape of the pass changes, not permanent rejection.
+
 ## Detachability
 
 `EmitPoint` is additive (the named-`Transition` path stays fully supported); the comparator

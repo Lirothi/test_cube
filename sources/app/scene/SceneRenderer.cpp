@@ -1998,16 +1998,56 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
             };
         });
 
+    // DLSS-split: the upscale is its own pass, recorded CONCURRENTLY with the tonemap's bloom and
+    // tone curve rather than in front of them in one command list. Three things make that legal:
+    //   * GPU order comes from SUBMISSION order, and `pDlss` is in the tonemap's PREREQS (batch
+    //     order) while its mtDeps stay empty (no record-time wait) — so the two tasks run on
+    //     different workers and the lists still reach the queue in the right order.
+    //   * The barrier compile walks the schedule, so this pass's points compile before the
+    //     tonemap's, exactly as when they shared a body.
+    //   * `ranDlss` is PREDICTED (Renderer::WillEvaluateDlss) instead of being discovered inside
+    //     the record — the one thing the split really costs. See DlssHandler::WillEvaluate.
+    // Its prereq is the selection outline, NOT the exposure metering: the upscale does not read
+    // the metered exposure, so it can start recording while metering is still being recorded.
+    const bool willDlss = renderer->WillEvaluateDlss();
+    size_t pDlss = static_cast<size_t>(-1);
+    if (willDlss)
+    {
+        pDlss = rg.AddPass2(RenderPass::Main_DLSS, { pSelectionOutline },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                const auto& DD = renderer->GetDeferredForFrame();
+                DlssPoints pts{};
+                pts.apply = ctx.usePoint ? *ctx.usePoint : 0u;
+                // Inside EvaluateDLSS (DlssHandler): the three inputs plus the upscaled output.
+                ctx.Use(DD.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(DD.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(DD.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(DD.dlssOutput.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                ctx.NextPoint();
+                pts.output = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(DD.dlssOutput.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                return [this, renderer, pts](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassDlss);
+                    Pass_Dlss(renderer, c, pts);
+                };
+            });
+    }
+
     rg.BeginCLGroup();
-    auto pTone = rg.AddPass(RenderPass::Main_Tonemap, { pExposure },
+    // The tonemap's prereqs carry BOTH the metering (its exposure input) and the upscale (its
+    // colour input); neither is an mtDep, so neither makes this task wait to be recorded.
+    const std::initializer_list<size_t> tonemapPrereqs = willDlss
+        ? std::initializer_list<size_t>{ pExposure, pDlss }
+        : std::initializer_list<size_t>{ pExposure };
+    auto pTone = rg.AddPass(RenderPass::Main_Tonemap, tonemapPrereqs,
         { { D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
           { D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
-        [this, renderer](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx); });
-    // Tonemap also drives the whole DLSS evaluate and the backbuffer resolve. The resolve
-    // SOURCE (fxaa vs tonemap) and `ranDlss` are both decided inside the body, so BOTH
-    // alternatives are registered — a state the body skips is one redundant barrier, the
-    // one it takes and never registered is a missing barrier.
-    rg.SetPassPrepare(pTone, [this](RenderGraphPassContext& p) {
+        [this, renderer, willDlss](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx, willDlss); });
+    // The resolve SOURCE (fxaa vs tonemap) is still decided inside the body, so BOTH alternatives
+    // are registered — a state the body skips is one redundant barrier, the one it takes and never
+    // registered is a missing barrier. The DLSS half of that union is gone: the upscale is its own
+    // pass now and `willDlss` is decided before either of them records.
+    rg.SetPassPrepare(pTone, [this, willDlss](RenderGraphPassContext& p) {
         constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         p.UseDeclared(); // tonemap + fxaa -> UAV
         // P2: the exposure record is bound to the tonemap dispatch on every path. It rests at
@@ -2019,28 +2059,20 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         }
         const auto& DTM = p.renderer->GetDeferredForFrame();
         p.NextPoint();
-        if (p.renderer->IsDlssActive())
-        {
-            // Inside EvaluateDLSS (DlssHandler): the three inputs plus the upscaled output.
-            p.Use(DTM.scene.Get(), kNps);
-            p.Use(DTM.gbVelocity.Get(), kNps);
-            p.Use(DTM.depth.Get(), kNps);
-            p.Use(DTM.dlssOutput.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            p.NextPoint();
-            p.Use(DTM.dlssOutput.Get(), kNps);
-        }
-        else
+        if (!willDlss)
         {
             // Hand the forward targets back. The transparent pass ends with depth as DEPTH_WRITE
             // and velocity as RENDER_TARGET because that is what it drew into, and with DLSS on
-            // EvaluateDLSS returns both to a read state as a side effect of consuming them. With
-            // DLSS off nothing did, so the frame ended off-canonical on all three frame sets --
-            // an invariant that must not depend on which upscaler path is selected. Gated on the
-            // SAME predicate as the body's matching transitions, so the two cannot disagree.
+            // the upscale pass returns both to a read state as a side effect of consuming them.
+            // With DLSS off nothing did, so the frame ended off-canonical on all three frame sets
+            // -- an invariant that must not depend on which upscaler path is selected.
             p.Use(DTM.gbVelocity.Get(), kNps);
             p.Use(DTM.depth.Get(), kNps);
         }
-        p.Use(DTM.scene.Get(), kNps); // the non-DLSS tonemap source
+        // The tonemap source. With the upscale split out, this is `scene` only when DLSS is not
+        // running; the DLSS pass leaves `dlssOutput` shader-readable for the other case, and
+        // declaring it here as well costs nothing and keeps the read legal for the compile.
+        p.Use(willDlss ? DTM.dlssOutput.Get() : DTM.scene.Get(), kNps);
         // P8: the bloom pyramid, built between the upscale above and the tone curve below. Both
         // chains go to UNORDERED_ACCESS for the build and come back shader-readable -- the same
         // shape as the HZB pyramid, and for the same reason: a level reads the level above it
@@ -6380,7 +6412,28 @@ void SceneRenderer::BakeFlareBokeh(Renderer* renderer, uint32_t blades)
     flareBokehBlades_ = blades;
 }
 
-void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
+// DLSS-split: the upscale, on its own command list so its Streamline recording overlaps the
+// tonemap's. It performs no decision of its own — `Renderer::WillEvaluateDlss` already said this
+// frame runs it, and both points are emitted whatever `Evaluate` returns, because a declared point
+// that goes unemitted leaves the compile a transition ahead of the GPU.
+void SceneRenderer::Pass_Dlss(Renderer* renderer, RenderGraphPassContext ctx, const DlssPoints& pts)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassDlss);
+        // The three inputs to their read states and the output to UAV — the states DlssHandler
+        // then hands to Streamline through its COMMON bracket.
+        renderer->EmitPoint(t.cl, pts.apply);
+        renderer->EvaluateDLSS(t.cl);
+        // ...and the upscaled image shader-readable for the tonemap, which is being recorded on
+        // another thread right now and was promised exactly this.
+        renderer->EmitPoint(t.cl, pts.output);
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx, bool ranDlss)
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
@@ -6389,25 +6442,15 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
         GPU_SCOPE(t.cl, ProfilerScopes::kPassTonemap);
         const auto& D = renderer->GetDeferredForFrame();
         ctx.ApplyDeclaredStates(t.cl);
-        bool ranDlss = false;
-        if (renderer->IsDlssActive())
-        {
-            ranDlss = renderer->EvaluateDLSS(t.cl);
-            if (ranDlss)
-            {
-                renderer->Transition(t.cl, D.dlssOutput.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            }
-        }
-        else
-        {
-            // The other half of the Prepare's `else` above: DLSS's own evaluate performs these two
-            // (DlssHandler::EvaluateDLSS) because it reads depth and velocity; without it the frame
-            // had no owner for handing them back and ended with the forward targets still bound.
-            renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        }
+        // DLSS-split: `ranDlss` is the PREDICTION Main_DLSS was built from, not a result read back
+        // from the evaluate — the two passes record concurrently, so there is nothing to read.
         if (!ranDlss)
         {
+            // With DLSS on, the upscale pass performs these three as a side effect of consuming
+            // depth + velocity and reading scene colour. With it off nothing else would, and the
+            // frame would end with the forward targets still bound.
+            renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
 
@@ -6421,9 +6464,9 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx)
 
         const D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = ranDlss ? D.dlssOutputSRV : D.sceneSRV;
         const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
-        // P8: build the bloom pyramid off whatever the tonemap is about to read. It has to be here
-        // rather than in a pass of its own, because the DLSS evaluate above lives inside THIS pass:
-        // bloom must see the upscaled image, and the tonemap must see the bloom.
+        // P8: build the bloom pyramid off whatever the tonemap is about to read — the upscaled
+        // image when DLSS runs, which the submission order guarantees is finished on the GPU
+        // before this list executes.
         if (bloomActive_)
         {
             // The CPU cost of RECORDING the bloom, which is the wide unnamed block after

@@ -353,7 +353,17 @@ private:
     // P2: clear + build the luminance histogram and solve the adapted exposure. Runs before the
     // tonemap, which consumes the value it writes.
     void Pass_ExposureMetering(Renderer* r, RenderGraphPassContext ctx, const ExposurePoints& pts);
-    void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx);
+    // DLSS-split: the upscale's own pass. Two points — the tagged inputs/output on the way in, the
+    // upscaled image on the way out — both emitted whatever Streamline returns.
+    struct DlssPoints
+    {
+        std::uint32_t apply = 0;
+        std::uint32_t output = 0;
+    };
+    void Pass_Dlss(Renderer* r, RenderGraphPassContext ctx, const DlssPoints& pts);
+    // `ranDlss` is the prediction Main_DLSS was built from, captured by value: the two passes are
+    // recorded in parallel, so the tonemap cannot be told what the evaluate returned.
+    void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx, bool ranDlss);
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask);
 
     // Barrier plan step 4: create/grow everything the pass bodies used to create lazily,

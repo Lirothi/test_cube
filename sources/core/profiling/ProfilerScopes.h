@@ -96,6 +96,7 @@ extern const Profiler::ScopeNameKey kPassOceanReflection;
 extern const Profiler::ScopeNameKey kPassDebugDraw;
 extern const Profiler::ScopeNameKey kPassExposureMetering;
 extern const Profiler::ScopeNameKey kPassTonemap;
+extern const Profiler::ScopeNameKey kPassDlss;
 // P8C-2s: the three things Pass_Tonemap does AFTER the DLSS evaluate, none of which had a scope --
 // so they read as an unnamed hole at the end of the pass, which is exactly how they were found.
 // The bloom is already covered by kPassBloom / kPassBloomConv; these are the rest of it.

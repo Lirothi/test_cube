@@ -88,6 +88,7 @@ const Profiler::ScopeNameKey kPassOceanReflection = Profiler::RegisterTraceLiter
 const Profiler::ScopeNameKey kPassDebugDraw = Profiler::RegisterTraceLiteral(L"Pass_DebugDraw");
 const Profiler::ScopeNameKey kPassExposureMetering = Profiler::RegisterTraceLiteral(L"Pass_ExposureMetering");
 const Profiler::ScopeNameKey kPassTonemap = Profiler::RegisterTraceLiteral(L"Pass_Tonemap");
+const Profiler::ScopeNameKey kPassDlss = Profiler::RegisterTraceLiteral(L"Pass_DLSS");
 // P8C-2s: Pass_Tonemap's own work, which is everything after the DLSS evaluate it is named for.
 const Profiler::ScopeNameKey kTonemapCurve = Profiler::RegisterTraceLiteral(L"Tonemap.Curve");
 const Profiler::ScopeNameKey kTonemapFxaa = Profiler::RegisterTraceLiteral(L"Tonemap.Fxaa");

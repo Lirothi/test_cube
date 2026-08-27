@@ -462,6 +462,8 @@ public:
     void UpdateDlssCameraData(const Camera& camera);
     bool EvaluateDLSS(ID3D12GraphicsCommandList* cl);
     bool IsDlssActive() const;
+    // DLSS-split: the Main_DLSS builder's prediction — see DlssHandler::WillEvaluate.
+    bool WillEvaluateDlss() const;
     // Debug: freeze the sub-pixel jitter so render-resolution targets stop shimmering in the
     // texture inspector. See DlssHandler::SetJitterPaused for what it costs.
     // The texture inspector's preview request, left during UI building and consumed by the
