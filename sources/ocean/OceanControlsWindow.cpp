@@ -1119,6 +1119,12 @@ namespace
             drag("Deposit strength", render.surfSimDepositStrength, 0.01f, 0.0f, 5.0f);
             drag("Breaker gamma", render.surfSimBreakerGamma, 0.005f, 0.4f, 1.2f);
             drag("Foam fade time (s)", render.surfSimFoamFadeTime, 0.01f, 0.2f, 30.0f);
+            drag("Surf foam coverage multiplier", render.surfSimFoamCoverageMultiplier, 0.005f, 0.0f, 2.0f);
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Final surf-sim foam coverage: 0 = hidden, 1 = unchanged, above 1 = stronger.\n"
+                                  "Does not change simulation, contact foam or FFT whitecaps.");
+            }
             drag("Front breakup", render.surfSimFrontBreakup, 0.005f, 0.0f, 1.0f);
             drag("Tail breakup", render.surfSimTailBreakup, 0.005f, 0.0f, 2.0f);
             drag("Tear scale (m)", render.surfSimTearScale, 0.05f, 1.0f, 50.0f);

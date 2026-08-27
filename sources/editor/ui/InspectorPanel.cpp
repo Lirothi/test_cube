@@ -2271,6 +2271,10 @@ namespace
                         tip("Seconds a full-strength foam stamp takes to dissolve\n"
                             "(linear decay behind the crest). The tail length lever.");
                         // --- Foam look ---
+                        renderDrag("Surf Foam Coverage Multiplier", render.surfSimFoamCoverageMultiplier, 0.005f, 0.0f, 2.0f);
+                        tip("Multiplies final surf-sim foam coverage after breakup and window fade.\n"
+                            "0 = hidden, 1 = unchanged, above 1 = stronger (clamped to full coverage).\n"
+                            "Does not change foam generation, lifetime, contact foam or FFT whitecaps.");
                         renderDrag("Surf Front Breakup", render.surfSimFrontBreakup, 0.005f, 0.0f, 1.0f);
                         tip("Tear of the FRESH foam (values near the stamp peak). 0 = solid cap.");
                         renderDrag("Surf Tail Breakup", render.surfSimTailBreakup, 0.005f, 0.0f, 2.0f);

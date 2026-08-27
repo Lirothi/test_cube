@@ -204,7 +204,7 @@ private:
     Math::float4 GetShoreLegacyDissipationParams() const;
     Math::float4 GetSurfSimParams() const;  // surf sim injection
     Math::float4 GetSurfSimParams2() const; // surf sim injection (S4): x = front breakup
-    Math::float4 GetSurfSimParams3() const; // surf sim injection: x = chopness, y = cap width
+    Math::float4 GetSurfSimParams3() const; // surf sim injection: x = foam coverage multiplier, y = cap width
     Math::float4 GetShoreWetnessParams() const;
     Math::float4 GetShoreWetnessParams2() const;
     bool SurfSimActive() const;            // surf sim injection: config flag OR the boot force

@@ -450,6 +450,9 @@ namespace OceanRenderConfigJson
         render.surfSimFoamFadeTime = std::clamp(
             ReadFloat(object, "surfSimFoamFadeTime", render.surfSimFoamFadeTime),
             0.2f, 30.0f);
+        render.surfSimFoamCoverageMultiplier = std::clamp(
+            ReadFloat(object, "surfSimFoamCoverageMultiplier", render.surfSimFoamCoverageMultiplier),
+            0.0f, 2.0f);
         render.surfSimFrontBreakup = std::clamp(
             ReadFloat(object, "surfSimFrontBreakup", render.surfSimFrontBreakup),
             0.0f, 1.0f);
@@ -667,6 +670,7 @@ namespace OceanRenderConfigJson
         out["surfSimDepositStrength"] = render.surfSimDepositStrength;
         out["surfSimBreakerGamma"] = render.surfSimBreakerGamma;
         out["surfSimFoamFadeTime"] = render.surfSimFoamFadeTime;
+        out["surfSimFoamCoverageMultiplier"] = render.surfSimFoamCoverageMultiplier;
         out["surfSimFrontBreakup"] = render.surfSimFrontBreakup;
         out["surfSimTailBreakup"] = render.surfSimTailBreakup;
         out["surfSimTearScale"] = render.surfSimTearScale;

@@ -83,7 +83,7 @@ cbuffer OceanCB : register(b0)
     float4 shoreSdfParams;             // surf sim injection (debug): shared name with the modern surface - x: centre x, y: centre z, z: inv extent, w: texel world size
     float4 surfSimParams;              // surf sim injection: xy: window centre, z: 1 / half extent, w: debug view (0 = off)
     float4 surfSimParams2;             // surf sim injection (S4/S6): x: front breakup, y: tail breakup (0..2), z: tear patch scale (m), w: wave displacement scale
-    float4 surfSimParams3;             // surf sim injection: y: cap width (>1 wider dense zone, <1 narrower), xzw: spare
+    float4 surfSimParams3;             // x: final foam coverage multiplier, y: cap width (>1 wider dense zone, <1 narrower), zw: spare
     float4 shoreWetnessParams;         // xy: history centre, z: 1 / half extent, w: deposit depth
     float4 shoreWetnessParams2;        // x: wetness edge offset from the SDF waterline (m)
     float4 shoreFoamAlbedoParams;      // x: shore albedo scale, y: shore albedo scroll speed (shared with the modern surface)
@@ -840,9 +840,9 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float sho
 float SurfSimFoamCoverage(float2 baseXZ)
 {
     [branch]
-    if (surfSimParams.z <= 0.0f)
+    if (surfSimParams.z <= 0.0f || surfSimParams3.x <= 0.0f)
     {
-        return 0.0f; // sim off this frame - zero cost beyond the uniform branch
+        return 0.0f; // sim off or foam hidden - zero cost beyond the uniform branch
     }
     float2 simUV = (baseXZ - surfSimParams.xy) * (surfSimParams.z * 0.5f) + 0.5f;
     if (any(simUV < 0.0f) || any(simUV > 1.0f))
@@ -880,7 +880,7 @@ float SurfSimFoamCoverage(float2 baseXZ)
         lerp(max(surfSimParams2.y, 0.0f), saturate(surfSimParams2.x), age);
     const float threshold = tearAmount * pattern;
     const float coverage = saturate((foam - threshold) / max(1.0f - threshold, 1e-3f));
-    return coverage * SurfSimWindowEdgeFade(simUV);
+    return saturate(coverage * SurfSimWindowEdgeFade(simUV) * surfSimParams3.x);
 }
 
 float Pow5(float x)
@@ -1308,7 +1308,7 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
 
     float3 color = specular + lerp(refracted, reflected, fresnel);
     //color = fresnel.xxx;
-    color = lerp(color, foamLitColor, foamData.coverage.x);
+    color = lerp(color, foamLitColor, foamData.coverage.x * 1.0f);
 
     // P7. Identical to the modern surface's ending, and it has to be: this variant is the one that
     // actually runs today (`ocean::g_shoreRunup` defaults false), so fogging only the other one

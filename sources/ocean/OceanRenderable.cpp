@@ -1504,7 +1504,7 @@ Math::float4 OceanRenderable::GetSurfSimParams2() const
         std::clamp(render.surfSimDisplacement, 0.0f, 2.0f));
 }
 
-// surf sim injection: y = cap width (value-age curve power; 1 = neutral). x/z/w spare.
+// surf sim injection: x = final foam coverage multiplier, y = cap width (age-curve power).
 Math::float4 OceanRenderable::GetSurfSimParams3() const
 {
     if (!SurfSimActive() || !surfSim_->IsReady())
@@ -1513,7 +1513,7 @@ Math::float4 OceanRenderable::GetSurfSimParams3() const
     }
     const auto& render = GetRenderConfig();
     return Math::float4(
-        0.0f,
+        std::clamp(render.surfSimFoamCoverageMultiplier, 0.0f, 2.0f),
         std::clamp(render.surfSimCapWidth, 0.25f, 4.0f),
         0.0f, 0.0f);
 }

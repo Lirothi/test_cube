@@ -106,6 +106,7 @@ struct OceanRenderConfig
     float surfSimDepositStrength = 1.0f; // peak foam a breaking crest stamps (max() semantics)
     float surfSimBreakerGamma = 0.5f;    // H/d breaker index (sim-tuned; McCowan is 0.78)
     float surfSimFoamFadeTime = 2.5f;    // seconds a full-strength foam stamp takes to dissolve
+    float surfSimFoamCoverageMultiplier = 1.0f; // final visible coverage, after breakup and window fade
     float surfSimFrontBreakup = 0.5f;    // 0..1 tear of the fresh leading front
     float surfSimTailBreakup = 0.7f;     // 0..1 tear of the decaying tail
     float surfSimTearScale = 7.0f;       // metres, patch scale of the tear pattern
