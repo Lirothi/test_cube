@@ -13653,7 +13653,7 @@
       "mesh": "models/sphere.mesh.json",
       "metalRough": [
         0.0,
-        0.05000000074505806
+        0.15000000596046448
       ],
       "name": "staticMesh #722",
       "normalStrength": 0.0,

@@ -15,6 +15,7 @@
 #if WITH_EDITOR
 #include "app/scene/SceneObjectFactory.h"
 #include "rendering/renderables/RenderableObjectBase.h"
+#include "rendering/renderables/GBufferRenderable.h"
 #include "third_party/json/json.hpp"
 #endif
 
@@ -191,13 +192,14 @@ class SceneStressDriver
 {
 public:
     SceneStressDriver(HWND hWnd, Renderer& renderer, Scene& scene,
-                      LevelManager& levelManager, int iterations, bool gbvContinue)
+                      LevelManager& levelManager, int iterations, bool gbvContinue, bool roughnessEdits)
         : hWnd_(hWnd)
         , renderer_(renderer)
         , scene_(scene)
         , levelManager_(levelManager)
         , iterations_(iterations)
         , gbvContinue_(gbvContinue)
+        , roughnessEdits_(roughnessEdits)
     {
     }
 
@@ -205,6 +207,17 @@ public:
     int Run()
     {
         SetupInfoQueue_();
+        if (roughnessEdits_)
+        {
+            if (!renderer_.IsRaytracingSupported())
+            {
+                return FinishFault_(-1, "roughness-setup", "RT unsupported; regression not exercised");
+            }
+            auto settings = scene_.GetRenderSettings();
+            settings.reflectionSource = ReflectionSource::RT;
+            scene_.SetRenderSettings(settings);
+            Log("roughness regression: wind_test #722, RT, one distinct value per frame, no idle waits\n");
+        }
 
         // Pump a few warm-up frames so the pipeline is fully primed before churn.
         for (int i = 0; i < 4; ++i)
@@ -219,6 +232,8 @@ public:
             return FinishFault_(-1, "warmup", early);
         }
 
+        std::uint32_t asEnhancedStart = 0, asLegacyStart = 0;
+        barriers::AsEmitStats(asEnhancedStart, asLegacyStart);
         for (int iter = 0; iter < iterations_ && !faultCaught_; ++iter)
         {
             // Rotate op order across iterations so races surface under different
@@ -226,7 +241,8 @@ public:
             const int opCount = static_cast<int>(Op::Count);
             const Op op = static_cast<Op>((iter + iter / opCount) % opCount);
 
-            Log("[iter %d] op=%s begin\n", iter, OpName(op));
+            const char* opName = roughnessEdits_ ? "RoughnessEdit" : OpName(op);
+            Log("[iter %d] op=%s begin\n", iter, opName);
 
             // Do the churn op + frames under an SEH guard so a hard fault
             // (e.g. access violation from a dead/removed device) is attributed
@@ -238,19 +254,33 @@ public:
             case StepStatus::Ok:
                 break;
             case StepStatus::FrameThrew:
-                return FinishFault_(iter, OpName(op), faultDetail_[0] ? faultDetail_ : "render-frame threw");
+                return FinishFault_(iter, opName, faultDetail_[0] ? faultDetail_ : "render-frame threw");
             case StepStatus::HardFault:
-                return FinishFault_(iter, OpName(op), faultDetail_);
+                return FinishFault_(iter, opName, faultDetail_);
             }
 
             if (const char* reason = CheckFault_())
             {
-                return FinishFault_(iter, OpName(op), reason);
+                return FinishFault_(iter, opName, reason);
             }
 
-            Log("[iter %d] op=%s ok\n", iter, OpName(op));
+            Log("[iter %d] op=%s ok\n", iter, opName);
         }
 
+        // Drain the final in-flight frames before declaring success, too.
+        renderer_.WaitForPreviousFrame();
+        if (const char* reason = CheckFault_()) { return FinishFault_(iterations_, "drain", reason); }
+        if (roughnessEdits_)
+        {
+            std::uint32_t asEnhanced = 0, asLegacy = 0;
+            barriers::AsEmitStats(asEnhanced, asLegacy);
+            const auto builds = asEnhanced + asLegacy - asEnhancedStart - asLegacyStart;
+            Log("roughness regression: AS barriers during edits=%u\n", builds);
+            if (builds < static_cast<unsigned>(iterations_))
+            {
+                return FinishFault_(iterations_, "roughness-coverage", "RT stopped building; possible SSR fallback");
+            }
+        }
         LogBarrierEmits_();
         Log("verdict: CLEAN after %d iterations\n", iterations_);
         if (gLog) { fflush(gLog); }
@@ -289,6 +319,25 @@ private:
     StepStatus RunStepBody_(Op op, int iter)
     {
         faultDetail_[0] = '\0';
+        if (roughnessEdits_)
+        {
+#if WITH_EDITOR
+            auto* object = scene_.FindEditorObject(722);
+            auto* gb = object ? object->AsGBufferRenderable() : nullptr;
+            if (!gb)
+            {
+                std::snprintf(faultDetail_, sizeof(faultDetail_), "wind_test sphere #722 missing");
+                return StepStatus::FrameThrew;
+            }
+            // Exactly the inspector's live mutation, without recreating materials or flushing GPU.
+            auto& params = gb->MaterialParamsRef();
+            params.metalRough.y = 0.001f + 0.998f * float((iter * 173) % 10007) / 10006.0f;
+            return RenderFrames_(1, "roughness-edit") ? StepStatus::Ok : StepStatus::FrameThrew;
+#else
+            std::snprintf(faultDetail_, sizeof(faultDetail_), "roughness regression requires WITH_EDITOR");
+            return StepStatus::FrameThrew;
+#endif
+        }
 
         // Some ops interleave a resize tightly with the churn to shake out
         // a deferred-target recreate racing an in-flight frame.
@@ -960,6 +1009,7 @@ private:
     LevelManager& levelManager_;
     int iterations_ = 0;
     bool gbvContinue_ = false;
+    bool roughnessEdits_ = false;
 
     ComPtr<ID3D12InfoQueue> infoQueue_;
     FILE* dredFile_ = nullptr;
@@ -983,7 +1033,7 @@ constexpr const char* SceneStressDriver::kLevels_[3];
 
 } // namespace
 
-int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool gbvContinue)
+int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool gbvContinue, bool roughnessEdits)
 {
     if (iterations <= 0)
     {
@@ -1025,7 +1075,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         try
         {
             (void)input;
-            SceneStressDriver driver(hWnd_, renderer, scene, levelManager, iterations, gbvContinue);
+            SceneStressDriver driver(hWnd_, renderer, scene, levelManager, iterations, gbvContinue, roughnessEdits);
             exitCode = driver.Run();
             faultCaught = driver.FaultCaught();
         }
@@ -1080,8 +1130,8 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
     return exitCode; // not reached (TerminateProcess doesn't return)
 }
 
-int RunSceneStress(HINSTANCE__* hInstance, int nCmdShow, int iterations, bool gbvContinue)
+int RunSceneStress(HINSTANCE__* hInstance, int nCmdShow, int iterations, bool gbvContinue, bool roughnessEdits)
 {
     App app;
-    return app.RunSceneStress(reinterpret_cast<HINSTANCE>(hInstance), nCmdShow, iterations, gbvContinue);
+    return app.RunSceneStress(reinterpret_cast<HINSTANCE>(hInstance), nCmdShow, iterations, gbvContinue, roughnessEdits);
 }

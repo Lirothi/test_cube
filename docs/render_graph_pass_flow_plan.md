@@ -10,7 +10,9 @@ a Prepare that declares points and a Record that must walk them in the same orde
 conditions — kept in sync by discipline plus the comparator. Every conditional pass carries a
 shared predicate (D1.1) or a prediction helper (`OceanSurfSim::CurrentAfterFrame`) whose only
 job is to reproduce the record's control flow without running it. That is the friction this
-plan removes, in three separable steps. The engine behaviour must not change at any step.
+plan removes: S1-S3 built the machinery and proved it on four pilots; S4-S9 carry it across every
+remaining pass and then make the old shape unreachable. The engine behaviour must not change at
+any step.
 
 ## Steps
 
@@ -63,6 +65,226 @@ plan removes, in three separable steps. The engine behaviour must not change at 
   one redundant barrier") is the CORRECT authoring form for such a pass, not debt. Rule of
   thumb this yields: AddPass2 fits passes whose frame decisions are knowable before recording;
   union-style Prepare stays the right tool for bodies that discover outcomes mid-record.
+
+- **S4 — The conversion contract (documentation step, no code).** Everything after this converts
+  passes; this step fixes what "converted" MEANS, so the tiers below can be judged mechanically
+  instead of by taste, and so a conversion done six months from now looks like the S3 pilots.
+  - **A pass is converted when** (a) it is authored with `AddPass2`; (b) every frame decision is a
+    LOCAL in the builder, captured BY VALUE into the returned lambda; (c) cross-frame state it
+    mutates — dirty flags, ping-pong indices, history counters — is committed IN THE BUILDER, which
+    runs serially before any recording; (d) the body names no resource and no state: every
+    transition is `renderer->EmitPoint(cl, point)` with the point index carried as a capture, and
+    `ctx.ApplyDeclaredStates(cl)` (which is just N named `Transition` calls, RenderGraph.h:144) is
+    gone with them. A pass that still calls a named `Transition` is MIXED: legal during migration,
+    but not converted — the comparator's FATAL "MISSING" direction keeps watching it.
+  - **Conversion is NOT a graph-shape change.** `if (rtBuildAS)`, the RT/SSR/clear variant chain,
+    `pShadow = pShadowCull` in VSM mode, `pObjectIdReadback = pTransp` without a pending pick — those
+    decide WHICH pass exists and what the prereq edges are. The pass name and the dependency list are
+    fixed at Add time, so they stay outside the builder. `AddPass2` removes the Prepare/Record
+    duplication INSIDE one pass and nothing else. (One free win: a builder is attached at Add time,
+    so the "set the Prepare inside the `if`, or it lands on the pass this index aliases" trap —
+    SceneRenderer.cpp:1673 — stops existing for converted passes.)
+  - **Three rules S1–S3 paid for, in the order they bit:**
+    1. A point is a POSITION in the pass's barrier program and a body request may only match the
+       CURRENT point. Never gate a `NextPoint()`; gate what goes INSIDE it. Dropping one point
+       stalled the tonemap's whole program and left the bloom chains in `UNORDERED_ACCESS` under the
+       tonemap's read (P8C-2m).
+    2. Declaring and then early-outing in the body is the FATAL case, not the benign one: the compile
+       advances past barriers nobody emits and every later use of those resources gets a wrong
+       before-state. The builder's single gate exists precisely to make that unrepresentable.
+    3. Two states for the same resource in ONE point, with a copy recorded between them, is a silent
+       wrong-state — the point is emitted wholesale at its first match (S3b's `physOwnerPrev`).
+       Split the point around the copy.
+  - **The standard gate** (every step below; steps only name their EXTRAS):
+    ```
+    both builds 0 Warning(s) 0 Error(s)   (Debug first: WITH_EDITOR + /analyze, the stricter one)
+    x64\Debug\test_cube.exe --scene-stress-gbv=20 --barrier-cmp --canonical-check
+    x64\Debug\test_cube.exe --shadow-mode=legacy --scene-stress-gbv=20 --barrier-cmp --canonical-check
+    x64\Debug\test_cube.exe --scene-stress=12
+    ```
+    Bar: `verdict: CLEAN`, **0 MISSING**, zero debug-layer ids outside the known noise
+    (939 / 940 / 1006 / 1358). The comparator is default-on in Debug since S1, so `--barrier-cmp`
+    only adds the log file. `--scene-stress-gbv` proves NOTHING in Release (the debug layer is
+    `#ifdef _DEBUG`).
+  - **Any step claiming "the compiled barrier program is unchanged" must add
+    `--scene-stress-gbv=20 --barrier-cache-verify`** — the compile is cached per frame-in-flight, and
+    a diff taken while the cache serves is the cache against itself.
+  - **Commit granularity:** one commit per pass in Tiers B and C. Tier A may go one commit per
+    cluster: a declaration-only conversion registers the same `UseDeclared()` set in the same order,
+    so it cannot change the barrier program by construction.
+  - **Inventory at S4** (main + epilogue graphs; the reflection-source family is three registrations
+    behind one Prepare, counted once):
+    - CONVERTED (7): `Main_SurfSim`, `Main_ShoreWetness`, `Main_VsmPageRequest`,
+      `Main_VsmPageRender`, `Main_Hzb`, `Main_Gtao`, `Main_DebugPreview`.
+    - Tier A — declaration-only or empty Prepare (12): `Main_BuildAS`, `Main_PrologueClear`,
+      `Epilogue_Overlay`, `Main_Lighting`, `Main_Skybox`, `Main_ReflectionSource` /
+      `Main_RTReflections` / clear variant, `Main_ReflectionTemporal`, `Main_RTDebug`,
+      `Main_GlassReflGbuffer`, `Main_GlassReflections`, `Main_ObjectIdReadback`,
+      `Main_SelectionOutline`.
+    - Tier B — the Prepare repeats a PREDICATE the body also evaluates (10): `Main_TerrainDepth`,
+      `Main_SpotShadows`, `Main_PointShadows`, `Main_SpotLights`, `Main_PointLights`,
+      `Main_ReflectionBlur`, `Main_Compose`, `Main_DebugDraw`, `Main_ExposureMetering`, `Main_Debug`.
+    - Tier C — the Prepare repeats a WALK, or mirrors a nested graph (5): `Main_ObjectCompute`,
+      `Main_ShadowCull`, `Main_CSM`, `Main_GBuffer`, `Main_Transparent`.
+    - Counterexample (1): `Main_Tonemap` — see S8.
+
+- **S5 — Tier A: the declaration-only passes.** Purely mechanical, no decision to hoist. Shape:
+  ```cpp
+  const size_t p = rg.AddPass2(RenderPass::X, { prev }, /*mtDeps*/ {}, { decls... },
+      [this, renderer](RenderGraphPassContext& ctx) -> ExecFn {
+          ctx.UseDeclared();
+          const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+          return [this, renderer, point](RenderGraphPassContext c) {
+              CPU_SCOPE(...);
+              Pass_X(renderer, c, point);   // ApplyDeclaredStates -> EmitPoint(cl, point)
+          };
+      });
+  ```
+  Notes that decide the sub-order:
+  - `Main_BuildAS`, `Main_PrologueClear`, `Epilogue_Overlay` register NOTHING. Their builders return
+    the body unchanged and emit no marker at all (`EmitPoint` with no compiled barriers installed is
+    an invariant failure, and these passes have none). The value here is uniformity, and it is what
+    lets S9 close the door; do these three first, they are the cheapest possible exercise of the
+    epilogue graph's Prepare path.
+  - The reflection-source family keeps its `if/else` outside: three different pass NAMES, one shared
+    `UseDeclared()` builder body. Same for the two glass-reflection variants.
+  - `Main_ObjectIdReadback` and `Main_SelectionOutline` are `WITH_EDITOR`-only and only added under a
+    runtime condition — that condition stays at Add time (see S4), the builder is unconditional.
+  - Everything with declarations goes on the 5-argument overload
+    `(name, prereqs, mtDeps, declares, builder)`: `Main_Lighting` (AddPassMT today) fills all five,
+    `Main_Skybox` and the rest pass `{}` for mtDeps. No new overload is needed for the main graph —
+    the runtime `DependencyList` form has no AddPass2 equivalent yet, but only the inner graphs use
+    it, so that gap is S7d's, not this step's.
+  GATE: standard, plus `--barrier-cache-verify` — this tier's entire claim is "byte-identical
+  program". One commit per cluster (empty-Prepare trio / lighting+skybox / reflection+glass /
+  editor pair).
+
+- **S6 — Tier B: kill the shared predicates.** One commit per pass; each one deletes a predicate that
+  is evaluated twice today. In every case the builder decides ONCE, the decision rides as a by-value
+  capture, and the body loses its gate entirely (a second evaluation could only disagree — and under
+  compiled barriers an early-out after declaring is the fatal case, not a benign skip).
+  - `Main_TerrainDepth` (Prepare SceneRenderer.cpp:843, body :2476): `ShouldRenderShoreDepth()` and
+    `ShouldBuildShoreSdf()` are read in both. The builder captures `drawDepth` / `buildSdf` + the
+    three point indices. **And it must take over `MarkShoreSdfBuilt()`** (:2544): that is cross-frame
+    state mutated DURING recording today — exactly what rule (c) moves into the builder. Watch the
+    ordering with the SDF's own null checks (`GetShoreSdfSourceResource` / `Scratch` / `Sdf`): the
+    resource pointers are part of the decision, so they are captured too, not re-fetched in the body.
+  - `Main_SpotShadows` (:928) and `Main_PointShadows` (:954): both compute
+    `n = min(views.size(), lightManager->GetShadowedSpotCount())` (resp. `* 6`) in the Prepare and
+    the body recomputes the same clamp. The builder computes `n` once and `Pass_SpotShadows` /
+    `Pass_PointShadows` take it as a parameter. The `render::VsmActive()` early-out becomes the
+    builder's gate: in VSM mode the builder returns `{}` and the pass is a no-op with no declarations.
+  - `Main_SpotLights` (:1338) and `Main_PointLights` (:1342): the light-count early-out is duplicated
+    between Prepare and body. Builder gate; both are on the mtDeps+declares overload.
+  - `Main_ReflectionBlur` (:1461-1483): **the original D1.1 debt named in this repo's own comment**
+    ("the predicate is evaluated here AND in the body — that duplication is exactly what D1.1
+    forbids; step 5 hoists it into pass state" — it never was). `GetBlurMaterial() &&
+    GetBlurCBSizeBytes() != 0` decides whether the vertical dispatch's ping-pong point exists. The
+    builder decides it and captures `{ hasVertical, point0, pointPingPong }`.
+  - `Main_Compose` (:1504): `frame_->ocean && IsWetnessReady()` gates the wetness `Use`, and the
+    trailing `scene -> RENDER_TARGET` point is unconditional on every path including the early-outs.
+    Keep that asymmetry EXPLICIT in the builder (the second point is unconditional; only its content
+    is gated) — this is rule (1) in miniature.
+  - `Main_DebugDraw` (:1686): `dd->HasCommands()`, read in Prepare and again in the body.
+  - `Main_ExposureMetering` (:1723): the trap is documented in place and must survive conversion —
+    the FIRST point is unconditional because the body applies the declared `scene -> NPS` BEFORE it
+    checks whether the camera is dormant. Converted shape: the builder decides `meter =
+    cameraExposure.enabled && metering.IsReady()`, always declares point 0, and declares the
+    histogram/exposure/baseLum points only when `meter`; the body always emits marker 0 and emits the
+    rest only under the captured `meter`. This is the one Tier B pass where "just move the gate up"
+    is wrong.
+  - `Main_Debug` (:1937/:1949): `debugTexOn` / `debugPick` / `debugCanon` are already computed once
+    outside and captured into BOTH lambdas — the mildest case in the tier. Converting makes the
+    builder their single home and removes the three-way capture.
+  GATE: standard. Extra per pass: exercise BOTH sides of the predicate in one session
+  (`--scene-stress` already flips light counts, level content and editor state; for
+  `Main_ReflectionBlur` toggle the blur material path, for `Main_ExposureMetering` use a level with
+  NO `cameraExposure` block — `d_emissive_test` is the one that caught the original MISSING).
+  `--barrier-cache-verify` on any pass whose point COUNT is claimed unchanged.
+
+- **S7 — Tier C: the walks and the nested graphs.** These are not predicate duplication — the Prepare
+  walks the same list the body walks, with the same filter, and the two can drift when the list or
+  the filter changes. Each sub-step is its own commit.
+  - **S7a — `Main_ShadowCull`.** The closest analogue to the S3 pilots and therefore FIRST:
+    `ShadowGpuData::PrepareCullPass` (ShadowGpuData.cpp:490+) mirrors `RecordCull` (:1747) through two
+    shared-predicate helpers, `WillUseUnifiedBuffers` and `WillRecordValidationReadback`, plus a walk
+    of `giCasters_` that must skip exactly what the body skips. Convert exactly as `PrepareRenderPass`
+    was: `PrepareCullPass` RETURNS a `CullDecisions { useUnified, giOn, readback, point indices, the
+    filtered caster snapshot }`, `RecordCull` takes it as a parameter, both helpers become builder
+    locals and stop being public API. The GI caster snapshot matters: the body must iterate the
+    LIST THE BUILDER FILTERED, not re-filter, or the "walk twice" bug survives the conversion.
+  - **S7b — `Main_ObjectCompute` and the per-object mirror.** `RenderableObjectBase::PrepareCompute` /
+    `PrepareRender` (RenderableObjectBase.h:101/104) are the object-granularity version of the same
+    problem — `OceanSimulation::WillCopyDisplacementHistory` (OceanSimulation.h:42) exists for no
+    reason except keeping `PrepareUpdate` and `Update` from disagreeing. Two options; take the
+    cheaper one first and only escalate if it fails to kill the helper:
+    1. **Snapshot** — the builder walks once, records the objects that actually registered into a
+       captured `tc::inl_vector`, and the body iterates THAT. Kills the double filter, keeps the
+       object API as it is.
+    2. **`BuildCompute(ctx) -> ExecFn` per object** — AddPass2 at object granularity, the pass builder
+       collecting the returned lambdas. Strictly better (it kills `WillCopyDisplacementHistory` too)
+       and strictly more churn: every renderable with a Prepare has to move.
+    Recommendation: (1) for the pass, (2) for `OceanSimulation` alone, since it is the only object
+    that carries a cross-frame decision.
+  - **S7c — `Main_CSM` + `PrepareOpaqueDrawStates`.** `PrepareOpaqueDrawStates`
+    (SceneRenderer.cpp:2395) reproduces the bodies' own indirect/GPU-instanced gate
+    (`indirect && (!gpuInstanced || IsGiFoldedActive(obj))`) so it can register exactly what will be
+    drawn. Same fix as S7b(1): the builder produces the registered-object list once and hands it to
+    the body, so `Pass_CSM` / `Pass_SpotShadows` / `Pass_PointShadows` stop re-deriving it. This
+    step is what makes S6's spot/point conversions complete rather than half-converted.
+  - **S7d — `Main_GBuffer` and `Main_Transparent`, the nested graphs.** The outer Prepare mirrors an
+    INNER graph: `Pass_GBuffer`'s `rgGB` driver declares the seven G-buffer targets
+    (SceneRenderer.cpp:2978) and the outer Prepare re-lists them (:974); the transparent driver
+    records a conditional copy sequence with raw `Transition` calls (:4746) that the outer Prepare
+    re-states as four points (:1607). Inner graphs have NO Prepare and do not compile barriers —
+    `ApplyDeclaredStates`/`Transition` are the real emitters there — so the fix is ONE declaration
+    table owned by the outer builder and PASSED to the inner graph as its driver's `declares`,
+    instead of two lists that happen to agree. The conditional copies (`depthCopy` / `sceneOpaque`
+    null checks) become builder decisions captured into the driver body. API gap this step must
+    fill: `AddPass2` has no runtime-`DependencyList` overload (the inner graphs use it for
+    `selectedDeps`), and no `(prereqs, mtDeps, builder)` overload without declares. Add them here,
+    where they are first needed, not speculatively.
+  GATE: standard, in BOTH shadow modes, plus a visual check on `wind_test` (shadows + foliage) and
+  on an ocean level for S7b/S7d. `--barrier-cache-verify` after each. These passes carry the fan-out
+  paths, so also run `--scene-stress=12` twice: the first run's level switches are what killed the
+  original spot/point registration (freed object pointers in stale view slots).
+
+- **S8 — `Main_Tonemap`: the hybrid, or nothing.** The S3 finding stands — `ranDlss =
+  EvaluateDLSS(cl)` can come back false only DURING recording, so its union registration ("declare
+  both alternatives; a skipped state is one redundant barrier") is the CORRECT form and must survive
+  any conversion. But the union is the DLSS branch only: `bloomActive_`, `bloomConvolution_`,
+  `flaresGhosts_ || flaresStreak_`, the FXAA readiness conjunction and the tonemap-material /
+  backbuffer gate are all knowable before recording, and every one of them is evaluated twice today
+  (Prepare SceneRenderer.cpp:1764-1900, body `Pass_Tonemap`). The hybrid: `AddPass2` builder decides
+  and captures all of those, keeps the DLSS union verbatim, body emits markers everywhere EXCEPT the
+  DLSS branch, which keeps its named transitions (a legal mixed pass — the comparator still watches
+  it, which is what you want here). **Do this only when something else already forces a change to
+  this pass.** It carries the most hard-won barrier layout in the engine (P8C-2l/m: two separate
+  incidents of a gated point shifting the program), the win is the smallest in the plan, and "convert
+  it because the plan says all passes" is exactly the reasoning that produced those two incidents. If
+  it is not converted, S9 records it as the one permitted exception rather than pretending otherwise.
+
+- **S9 — Close the door.** Only after S5–S7 (S8 optional). The point of converting everything is not
+  tidiness, it is that the OLD authoring shape stops being reachable:
+  - `SetPassPrepare` becomes private — `AddPass2Internal` is its only caller, so the two-phase
+    machinery survives as an implementation detail and no new pass can be authored as a mirror.
+  - A `Pass::builtByBuilder` flag plus one Debug assert in `RunPrepares`: a pass with a non-empty
+    exec that did not come from `AddPass2` is an authoring error, not a style choice. This is what
+    turns the whole plan from discipline into a property.
+  - `ApplyDeclaredStates` and the `declares` list can only die if S7d lands (inner graphs are their
+    last real user). If S7d is skipped, they stay — say so in the Status rather than leaving a
+    half-deleted API.
+  - The comparator changes ROLE: with every body on markers, its INFO/SKIPPED directions are dead by
+    construction and only the FATAL MISSING direction still has anything to say. Keep it default-on
+    in Debug (it costs nothing and it is the net under any future hand-rolled `Transition`), but
+    document that a MISSING now means someone wrote a raw transition in a marker body.
+  - Record the exceptions explicitly: `Main_Tonemap`'s DLSS union (if S8 is not taken), and any pass
+    whose body genuinely discovers an outcome mid-record. The rule of thumb from S3 is the criterion:
+    **AddPass2 fits passes whose frame decisions are knowable before recording; union-style Prepare
+    stays the right tool for bodies that discover outcomes mid-record.**
+  GATE: standard, both shadow modes, `--barrier-cache-verify`, plus one full editor session (the
+  editor-only passes are the ones a stress run never registers) and a `--shot` A/B against the
+  pre-S5 binary on `wind_test` with `--wind-freeze=3.0`.
 
 ## Detachability
 
@@ -126,3 +348,12 @@ be reverted independently.
   interleaved copy/transition sequence was already point-safe (all three sources reach
   COPY_SOURCE before the first copy) — the markers just make that explicit. Gates green (both
   builds, both stress shadow modes, comparator silent, shadows intact). S3 COMPLETE.
+- Since S3, four MORE passes carry the AddPass2 shape in the tree today (written new in it, or
+  converted when they were touched anyway, which is the clause S3 left open): `Main_ShoreWetness`
+  (`OceanRenderable::BuildWetnessPass`), `Main_Hzb` and `Main_Gtao` (P6C/P6B — the GTAO builder is
+  the reference example of cross-frame state committed at Prepare time: history size, history
+  frame counter, frame index), and `Main_DebugPreview`. Seven converted in total; the S4 inventory
+  counts them.
+- S4-S9: NOT STARTED. S4 is documentation only (the conversion contract + the gate + the
+  inventory); S5 is the mechanical tier and the cheapest place to start; S8 is deliberately
+  conditional and S9 is what makes the whole thing structural rather than a habit.

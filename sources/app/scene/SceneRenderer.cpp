@@ -434,7 +434,7 @@ void SceneRenderer::Reset()
 void SceneRenderer::InvalidateRaytracing()
 {
     // RT-only subset of Reset() — keep materials/handles, rebuild the acceleration structures +
-    // bindless geom-info next RT frame. The per-frame register loop (GetOrRegisterMesh) re-runs
+    // bindless geom-info next RT frame. The per-frame register loop (GetOrUpdateMesh) re-runs
     // and re-reads current material SRVs after this clear.
     asManager_.Reset();
     bindless_.Reset();
@@ -505,13 +505,13 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // the screen-space reflection source runs). The AS is built only when RT reflections or the debug
     // viz need it; otherwise the frame is byte-identical to the SSR/None/SkyOnly path.
     const bool rtSupported = renderer->IsRaytracingSupported();
-    // S13: once an AS allocation has failed (low VRAM / device lost), disable RT for
+    // S13: once an AS/table allocation has failed (low VRAM / descriptor exhaustion), disable RT for
     // the rest of this scene and fall back to SSR — cleanly, never a crash. Sticky
     // until the next level (asManager_.Reset clears it).
-    const bool rtFailed = asManager_.BuildFailed();
+    const bool rtFailed = asManager_.BuildFailed() || bindless_.BuildFailed();
     if (rtFailed && !rtFailureLogged_)
     {
-        OutputDebugStringA("[RT] Acceleration-structure allocation failed; disabling RT, "
+        OutputDebugStringA("[RT] Acceleration-structure or bindless-table allocation failed; disabling RT, "
                            "falling back to SSR.\n");
         rtFailureLogged_ = true;
     }
@@ -2111,10 +2111,9 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
         // wind_test has hundreds of identical multi-slot palms. Keep this scratch allocation
         // across objects instead of allocating/freeing a 4-5 element vector for every palm.
         std::vector<rt::BindlessTable::SlotMaterial> slotMats;
-        const GBufferRenderable* lastPerSlotObject = nullptr;
-        uint32_t lastPerSlotInstanceId = 0;
         for (size_t objectIndex = 0; objectIndex < objects.size(); ++objectIndex)
         {
+            if (bindless_.BuildFailed()) { break; }
             const auto& obj = objects[objectIndex];
             // The editor's Enabled command maps to visibility. In no-editor
             // builds ordinary level objects retain their default visible state,
@@ -2143,18 +2142,15 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
             // GeometryIndex). Single-slot objects and GI instance clouds keep the slot-0 path.
             GBufferRenderable* gb = obj->AsGBufferRenderable();
             const bool perSlot = bindless_.Ready() && gb && gb->MultiSlotDraw();
-            // Auto-instanced render queues already define exact multi-slot compatibility. Reuse
-            // the bindless id for a matching mesh/material set instead of rebuilding and hashing
-            // the same five palm slots hundreds of times.
+            // Cache unchanged multi-slot objects, but never share mutable material records between
+            // owners: editing one palm must not change its neighbours. BindlessTable independently
+            // shares the immutable mesh/texture descriptors, so this does not multiply heap usage.
             RtBindlessObjectCache& objectCache = rtBindlessObjectCache_[objectIndex];
             const uint64_t materialFingerprint = perSlot ? RtMaterialFingerprint(*gb) : 0;
-            const bool reuseObjectCache = perSlot && objectCache.valid &&
+            bool reuseObjectCache = perSlot && objectCache.valid &&
                 objectCache.object == obj.get() && objectCache.mesh == gb->GetMesh() &&
                 objectCache.materialFingerprint == materialFingerprint;
-            bool reusePerSlotId = !reuseObjectCache && perSlot && lastPerSlotObject &&
-                gb->GetMesh() == lastPerSlotObject->GetMesh() &&
-                gb->SameInstanceSlots(*lastPerSlotObject);
-            if (perSlot && !reuseObjectCache && !reusePerSlotId)
+            if (perSlot && !reuseObjectCache)
             {
                 // assign() value-initializes reused entries too, clearing descriptor handles left
                 // by the preceding object when this one has no texture for a slot.
@@ -2181,8 +2177,8 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                 entry.mesh = desc.mesh;
                 entry.world = desc.world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
                 // TLAS InstanceID = the mesh's bindless geometry index (S9), so a hit
-                // can index the geometry/material table directly. Same mesh+material ->
-                // same index (all instances of a cloud share one record). Falls back to
+                // can index the geometry/material table directly. Same owner+mesh ->
+                // same index (all instances of a cloud share one record run). Falls back to
                 // a running index if the bindless table isn't up.
                 if (perSlot && desc.mesh == gb->GetMesh())
                 {
@@ -2190,17 +2186,10 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                     {
                         entry.instanceId = objectCache.instanceId;
                     }
-                    else if (reusePerSlotId)
-                    {
-                        entry.instanceId = lastPerSlotInstanceId;
-                    }
                     else
                     {
-                        entry.instanceId = bindless_.GetOrRegisterMesh(
-                            desc.mesh, slotMats.data(), slotMats.size());
-                        lastPerSlotObject = gb;
-                        lastPerSlotInstanceId = entry.instanceId;
-                        reusePerSlotId = true;
+                        entry.instanceId = bindless_.GetOrUpdateMesh(
+                            obj.get(), desc.mesh, slotMats.data(), slotMats.size());
                     }
                     if (!reuseObjectCache)
                     {
@@ -2208,27 +2197,28 @@ void SceneRenderer::Pass_BuildAS(Renderer* renderer, RenderGraphPassContext ctx)
                         objectCache.mesh = desc.mesh;
                         objectCache.materialFingerprint = materialFingerprint;
                         objectCache.instanceId = entry.instanceId;
-                        objectCache.valid = true;
+                        objectCache.valid = entry.instanceId != rt::BindlessTable::kInvalidGeometry;
+                        reuseObjectCache = objectCache.valid;
                     }
-                    lastPerSlotObject = gb;
-                    lastPerSlotInstanceId = entry.instanceId;
                 }
                 else
                 {
                     entry.instanceId = bindless_.Ready()
-                        ? bindless_.GetOrRegisterMesh(desc.mesh, desc.albedoSrv, desc.mrSrv, &desc.baseColor.x,
+                        ? bindless_.GetOrUpdateMesh(obj.get(), desc.mesh, desc.albedoSrv, desc.mrSrv, &desc.baseColor.x,
                                                       /*roughness*/ desc.metalRough.y, /*metalness*/ desc.metalRough.x,
                                                       desc.mrMultiply)
                         : instanceId;
                 }
+                if (entry.instanceId == rt::BindlessTable::kInvalidGeometry) { break; }
                 rtInstances_.push_back(entry);
                 ++instanceId;
             }
         }
     }
-    if (bindless_.Ready())
+    if (!bindless_.UploadGeometryInfo(renderer->GetCurrentFrameIndex()))
     {
-        bindless_.UploadGeometryInfo();
+        // Never trace a partial/old material table. The next frame selects SSR on a sticky failure.
+        rtInstances_.clear();
     }
 
     auto t = ctx.BeginCL();
@@ -3941,15 +3931,15 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager_.TlasSrvCpu(frameIndex);
         Skybox* skybox = frame_->skybox;
-        if (!reflectMaterial || !bindless_.Ready() || tlasSrv.ptr == 0 ||
+        if (!reflectMaterial || !bindless_.FrameReady(frameIndex) || tlasSrv.ptr == 0 ||
             asManager_.TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight || !skybox)
         {
             // No usable TLAS/bindless/light/skybox this frame: leave reflection as is.
             break;
         }
 
-        // Per-frame scene descriptors into the bindless heap (geometry VB/IB +
-        // geometry-info are persistent, populated in Pass_BuildAS). Scene slots
+        // Per-frame scene descriptors into the bindless heap (VB/IB descriptors are immutable;
+        // geometry-info has a separate buffer/SRV per frame, populated in Pass_BuildAS). Scene slots
         // 0-7 are this pass's; the debug pass uses 13-16 (distinct, so passes in
         // the same frame never alias heap slots). The RT reflection is written
         // straight into the main reflection target -- the denoise pass was removed
@@ -4008,7 +3998,7 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         c.skyIrradianceIndex = haveSkyIrradiance ? bindless_.SceneIndex(frameIndex, 8) : 0u; // P16.9
         c.skyIrradianceScale = skybox->GetExposure() * dl.GetSkyFillIntensity();
         c.groundAlbedoRgb = dl.GetGroundAlbedo(); // P16.12, same value lighting_cs gets
-        c.geomInfoIndex = bindless_.GeomInfoIndex();
+        c.geomInfoIndex = bindless_.GeomInfoIndex(frameIndex);
         c.spotLightIndex = bindless_.SceneIndex(frameIndex, 6);
         c.spotCount = haveSpots ? spotCount : 0u;
         c.pointLightIndex = bindless_.SceneIndex(frameIndex, 7);
@@ -4114,7 +4104,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager_.TlasSrvCpu(frameIndex);
         Skybox* skybox = frame_->skybox;
-        if (!reflectMaterial || !bindless_.Ready() || tlasSrv.ptr == 0 ||
+        if (!reflectMaterial || !bindless_.FrameReady(frameIndex) || tlasSrv.ptr == 0 ||
             asManager_.TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight || !skybox)
         {
             break;
@@ -4165,7 +4155,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         c.reflectionUavIndex = bindless_.SceneIndex(frameIndex, B + 4);
         c.skyboxIndex = bindless_.SceneIndex(frameIndex, B + 5);
         c.skyboxIntensity = skybox->GetExposure();
-        c.geomInfoIndex = bindless_.GeomInfoIndex();
+        c.geomInfoIndex = bindless_.GeomInfoIndex(frameIndex);
         c.spotLightIndex = bindless_.SceneIndex(frameIndex, B + 6);
         c.spotCount = haveSpots ? spotCount : 0u;
         c.pointLightIndex = bindless_.SceneIndex(frameIndex, B + 7);
@@ -4570,15 +4560,15 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
         auto debugMaterial = resources_.GetRtDebugMaterial();
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = asManager_.TlasSrvCpu(frameIndex);
-        if (!debugMaterial || !bindless_.Ready() || tlasSrv.ptr == 0 ||
+        if (!debugMaterial || !bindless_.FrameReady(frameIndex) || tlasSrv.ptr == 0 ||
             asManager_.TlasInstanceCount(frameIndex) == 0)
         {
             break; // no TLAS / bindless table this frame - leave reflection as compose left it
         }
 
         // Copy this frame's scene descriptors into the persistent bindless heap so
-        // the shader can reach them via ResourceDescriptorHeap[]. (Geometry VB/IB +
-        // geometry-info live in the heap persistently, populated in Pass_BuildAS.)
+        // the shader can reach them via ResourceDescriptorHeap[]. Geometry VB/IB descriptors are
+        // immutable; Pass_BuildAS uploads the geometry-info buffer/SRV for this frame slot only.
         // Scene slots 13-16 (distinct from the reflection 0-7 / denoise 8-12
         // ranges, so the debug pass never aliases their heap slots in a frame).
         bindless_.WriteSceneDescriptor(frameIndex, 13, tlasSrv);    // TLAS SRV
@@ -4593,7 +4583,7 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
         c.gb1Index = bindless_.SceneIndex(frameIndex, 14);
         c.depthIndex = bindless_.SceneIndex(frameIndex, 15);
         c.reflectionUavIndex = bindless_.SceneIndex(frameIndex, 16);
-        c.geomInfoIndex = bindless_.GeomInfoIndex();
+        c.geomInfoIndex = bindless_.GeomInfoIndex(frameIndex);
         c.outWidth = renderer->GetReflectionTextureWidth();
         c.outHeight = renderer->GetReflectionTextureHeight();
 

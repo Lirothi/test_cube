@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <array>
 #include <vector>
 
 #include "third_party/robin_hood.h"
@@ -47,9 +48,9 @@ struct GeometryInfoGPU
 // ByteAddressBuffer SRVs plus a geometry-info structured buffer, and reserves a
 // small per-frame region the RT pass copies its scene SRVs/UAVs into.
 //
-//   heap[0]                                      geometry-info structured SRV
+//   heap[f]                                      per-frame geometry-info structured SRV
 //   heap[kSceneBase + f*kScenePerFrame + i]      per-frame scene descriptor i
-//   heap[kGeoBase + kDescPerGeom*g + {0,1,2}]    mesh g: VB raw, IB raw, albedo SRVs
+//   heap[kGeoBase + kDescPerGeom*d + {0,1,2,3}]  immutable VB/IB/albedo/MR descriptor set d
 class BindlessTable
 {
 public:
@@ -58,15 +59,17 @@ public:
                                                // denoise 8-12, debug 13-16, glass refl 17-25)
                                                // so passes in the same frame never alias slots
     static constexpr UINT kDescPerGeom = 4;    // VB raw, IB raw, albedo texture, MR texture
-    static constexpr UINT kGeomInfoSlot = 0;
-    static constexpr UINT kSceneBase = 1;
+    static constexpr UINT kSceneBase = render::kFrameCount;
     static constexpr UINT kGeoBase = kSceneBase + kScenePerFrame * render::kFrameCount;
     static constexpr UINT kMaxDescriptors = 8192;
+    static constexpr uint32_t kInvalidGeometry = 0xFFFFFFFFu;
 
     void Init(ID3D12Device* device);
     void Reset();
 
     bool Ready() const { return heap_ != nullptr; }
+    bool BuildFailed() const { return buildFailed_; }
+    bool FrameReady(UINT frameIndex) const;
     ID3D12DescriptorHeap* Heap() const { return heap_.Get(); }
 
     // Per-slot material inputs for a multi-submesh registration (mirrors what the single-
@@ -81,13 +84,12 @@ public:
         bool mrMultiply = false;
     };
 
-    // Register a mesh (idempotent): one geometry-info record PER SUBMESH (contiguous — the BLAS
-    // has one geometry per submesh, so hit shaders index geom[InstanceID + GeometryIndex]), each
-    // with its own VB/IB/albedo/MR descriptors. Submesh s uses slots[min(s, slotCount-1)], so a
-    // single-slot call replicates its material (pre-per-slot behavior). Returns the FIRST
-    // record's index (the TLAS InstanceID).
-    uint32_t GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots, size_t slotCount);
-    uint32_t GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
+    // One stable, contiguous record run per owner + mesh (InstanceID + GeometryIndex).
+    // Scalar edits update that owner's CPU records in place, never another object's material.
+    // Submesh s uses slots[min(s, slotCount-1)]. Descriptor sets are shared separately and are
+    // immutable until Reset (which requires GPU idle). Returns kInvalidGeometry on exhaustion.
+    uint32_t GetOrUpdateMesh(const void* owner, Mesh* mesh, const SlotMaterial* slots, size_t slotCount);
+    uint32_t GetOrUpdateMesh(const void* owner, Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
                                const float* baseColor4, float roughness, float metalness,
                                bool mrMultiply);
@@ -97,32 +99,56 @@ public:
     {
         return kSceneBase + frameIndex * kScenePerFrame + which;
     }
-    UINT GeomInfoIndex() const { return kGeomInfoSlot; }
+    UINT GeomInfoIndex(UINT frameIndex) const { return frameIndex; }
 
     // Copy a CPU descriptor (SRV or UAV) into a per-frame scene slot.
     void WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_DESCRIPTOR_HANDLE srcCpu);
 
-    // Upload the geometry-info array and recreate its SRV at slot 0 when registrations changed.
-    // Call after registering meshes for the frame; unchanged frames return immediately.
-    void UploadGeometryInfo();
+    // Call only AFTER BeginFrame waited for this frame slot's fence, and before recording RT.
+    // Neither the other frame buffers nor their SRVs are overwritten/released by this upload.
+    bool UploadGeometryInfo(UINT frameIndex);
 
     UINT GeometryCount() const { return static_cast<UINT>(geomInfo_.size()); }
+    UINT DescriptorSetCount() const { return static_cast<UINT>(descriptorCache_.size()); }
 
 private:
     D3D12_CPU_DESCRIPTOR_HANDLE CpuHandle(UINT index) const;
+    uint32_t GetOrRegisterDescriptors(Mesh* mesh, const SlotMaterial& material);
 
     ID3D12Device* device_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_; // shader-visible CBV_SRV_UAV
     UINT incr_ = 0;
 
-    // Keyed by mesh + material (not just Mesh*): instances that share a mesh but
-    // differ in material — e.g. the metal/rough sphere grid — must each get their
-    // own geometry-info record, else they'd all inherit the first one's material.
-    robin_hood::unordered_map<uint64_t, uint32_t> geomCache_;
-    std::vector<GeometryInfoGPU> geomInfo_;                  // CPU mirror
-    Microsoft::WRL::ComPtr<ID3D12Resource> geomInfoBuffer_;  // UPLOAD, structured
-    UINT geomInfoCapacity_ = 0;                              // in records
-    bool geomInfoDirty_ = false;                             // CPU mirror changed since upload
+    struct GeometryKey
+    {
+        const void* owner;
+        Mesh* mesh;
+        bool operator==(const GeometryKey&) const = default;
+    };
+    struct DescriptorKey
+    {
+        Mesh* mesh;
+        SIZE_T albedo;
+        SIZE_T mr;
+        bool operator==(const DescriptorKey&) const = default;
+    };
+    struct KeyHash
+    {
+        size_t operator()(const GeometryKey& key) const;
+        size_t operator()(const DescriptorKey& key) const;
+    };
+    struct FrameGeometry
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> buffer; // UPLOAD, structured
+        UINT capacity = 0;
+        uint64_t version = 0;
+    };
+    robin_hood::unordered_map<GeometryKey, uint32_t, KeyHash> geomCache_;
+    robin_hood::unordered_map<DescriptorKey, uint32_t, KeyHash> descriptorCache_;
+    std::vector<GeometryInfoGPU> geomInfo_; // latest CPU material state
+    std::array<FrameGeometry, render::kFrameCount> frameGeometry_{};
+    uint64_t geomVersion_ = 0;
+    bool buildFailed_ = false; // sticky until Reset; renderer falls back to SSR
 };
 
 } // namespace rt

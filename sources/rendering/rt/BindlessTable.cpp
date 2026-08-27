@@ -7,27 +7,22 @@
 
 namespace rt {
 
-namespace {
-// FNV-1a hash of the fields that make a geometry-info record unique: the mesh
-// (geometry) plus the material (albedo SRV, base color, roughness, metalness).
-// Two instances with the same mesh AND material share one record; different
-// materials on a shared mesh get distinct records.
-uint64_t FloatBits(float f) { uint32_t b; std::memcpy(&b, &f, sizeof(b)); return b; }
-uint64_t MakeGeomKey(Mesh* mesh, SIZE_T albedoSrvPtr, SIZE_T mrSrvPtr, const float* baseColor4,
-                     float roughness, float metalness, bool mrMultiply)
+size_t BindlessTable::KeyHash::operator()(const GeometryKey& key) const
 {
     uint64_t h = 1469598103934665603ull;
-    auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ull; };
-    mix(reinterpret_cast<uint64_t>(mesh));
-    mix(static_cast<uint64_t>(albedoSrvPtr));
-    mix(static_cast<uint64_t>(mrSrvPtr));
-    mix(FloatBits(roughness));
-    mix(FloatBits(metalness));
-    mix(mrMultiply ? 1ull : 0ull);
-    if (baseColor4) { for (int i = 0; i < 4; ++i) { mix(FloatBits(baseColor4[i])); } }
-    return h;
+    h = (h ^ reinterpret_cast<uintptr_t>(key.owner)) * 1099511628211ull;
+    h = (h ^ reinterpret_cast<uintptr_t>(key.mesh)) * 1099511628211ull;
+    return static_cast<size_t>(h);
 }
-} // namespace
+
+size_t BindlessTable::KeyHash::operator()(const DescriptorKey& key) const
+{
+    uint64_t h = 1469598103934665603ull;
+    h = (h ^ reinterpret_cast<uintptr_t>(key.mesh)) * 1099511628211ull;
+    h = (h ^ key.albedo) * 1099511628211ull;
+    h = (h ^ key.mr) * 1099511628211ull;
+    return static_cast<size_t>(h);
+}
 
 void BindlessTable::Init(ID3D12Device* device)
 {
@@ -41,18 +36,22 @@ void BindlessTable::Init(ID3D12Device* device)
     desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     if (SUCCEEDED(device_->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heap_)))) {
         incr_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    } else {
+        buildFailed_ = true;
     }
 }
 
 void BindlessTable::Reset()
 {
     geomCache_.clear();
+    descriptorCache_.clear();
     geomInfo_.clear();
-    geomInfoBuffer_.Reset();
-    geomInfoCapacity_ = 0;
-    geomInfoDirty_ = false;
+    frameGeometry_ = {};
+    geomVersion_ = 0;
+    buildFailed_ = false;
     heap_.Reset();
     incr_ = 0;
+    device_ = nullptr;
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE BindlessTable::CpuHandle(UINT index) const
@@ -64,44 +63,35 @@ D3D12_CPU_DESCRIPTOR_HANDLE BindlessTable::CpuHandle(UINT index) const
 
 void BindlessTable::WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_DESCRIPTOR_HANDLE srcCpu)
 {
-    if (!heap_ || srcCpu.ptr == 0) {
+    if (!heap_ || frameIndex >= render::kFrameCount || which >= kScenePerFrame || srcCpu.ptr == 0) {
         return;
     }
     device_->CopyDescriptorsSimple(1, CpuHandle(SceneIndex(frameIndex, which)), srcCpu,
                                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
-uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
+uint32_t BindlessTable::GetOrUpdateMesh(const void* owner, Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                           D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
                                           const float* baseColor4, float roughness, float metalness,
                                           bool mrMultiply)
 {
     const SlotMaterial one{ albedoSrv, mrSrv, baseColor4, roughness, metalness, mrMultiply };
-    return GetOrRegisterMesh(mesh, &one, 1);
+    return GetOrUpdateMesh(owner, mesh, &one, 1);
 }
 
-uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots, size_t slotCount)
+uint32_t BindlessTable::GetOrRegisterDescriptors(Mesh* mesh, const SlotMaterial& material)
 {
-    static const SlotMaterial kDefaultSlot{};
-    if (!slots || slotCount == 0) { slots = &kDefaultSlot; slotCount = 1; }
-
-    // Key = mesh + every slot's material (two objects sharing a mesh but overriding a slot get
-    // distinct record runs).
-    uint64_t key = MakeGeomKey(mesh, slots[0].albedoSrv.ptr, slots[0].mrSrv.ptr,
-                               slots[0].baseColor4, slots[0].roughness, slots[0].metalness,
-                               slots[0].mrMultiply);
-    for (size_t s = 1; s < slotCount; ++s) {
-        key ^= MakeGeomKey(mesh, slots[s].albedoSrv.ptr, slots[s].mrSrv.ptr,
-                           slots[s].baseColor4, slots[s].roughness, slots[s].metalness,
-                           slots[s].mrMultiply) + s;
-    }
-    auto it = geomCache_.find(key);
-    if (it != geomCache_.end()) {
+    const DescriptorKey key{ mesh, material.albedoSrv.ptr, material.mrSrv.ptr };
+    auto it = descriptorCache_.find(key);
+    if (it != descriptorCache_.end()) {
         return it->second;
     }
-
-    ID3D12Resource* vb = mesh ? mesh->GetVertexBufferResource() : nullptr;
-    ID3D12Resource* ib = mesh ? mesh->GetIndexBufferResource() : nullptr;
+    if (descriptorCache_.size() >= (kMaxDescriptors - kGeoBase) / kDescPerGeom) {
+        buildFailed_ = true;
+        OutputDebugStringA("[RT] Bindless descriptor capacity exhausted; refusing out-of-bounds write.\n");
+        return kInvalidGeometry;
+    }
+    const UINT geoSlot = kGeoBase + kDescPerGeom * static_cast<UINT>(descriptorCache_.size());
 
     // Raw (ByteAddressBuffer) SRVs over the whole VB/IB.
     auto makeRawSrv = [&](ID3D12Resource* res, UINT slot) {
@@ -119,23 +109,56 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots,
         device_->CreateShaderResourceView(res, &srv, CpuHandle(slot));
     };
 
-    // One record per submesh (contiguous — hits resolve via geom[InstanceID + GeometryIndex]),
-    // each with its OWN kDescPerGeom descriptor block (VB/IB duplicated per record for uniform
-    // spacing; albedo/MR from that submesh's slot — palms reflect per-slot, not slot-0).
-    const uint32_t base = static_cast<uint32_t>(geomInfo_.size());
+    makeRawSrv(mesh ? mesh->GetVertexBufferResource() : nullptr, geoSlot);
+    makeRawSrv(mesh ? mesh->GetIndexBufferResource() : nullptr, geoSlot + 1u);
+    if (material.albedoSrv.ptr != 0) {
+        device_->CopyDescriptorsSimple(1, CpuHandle(geoSlot + 2u), material.albedoSrv,
+                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+    if (material.mrSrv.ptr != 0) {
+        device_->CopyDescriptorsSimple(1, CpuHandle(geoSlot + 3u), material.mrSrv,
+                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+    descriptorCache_.emplace(key, geoSlot);
+    return geoSlot;
+}
+
+uint32_t BindlessTable::GetOrUpdateMesh(const void* owner, Mesh* mesh,
+                                       const SlotMaterial* slots, size_t slotCount)
+{
+    if (!Ready() || buildFailed_) { return kInvalidGeometry; }
+    static const SlotMaterial kDefaultSlot{};
+    if (!slots || slotCount == 0) { slots = &kDefaultSlot; slotCount = 1; }
+
     const size_t submeshCount = mesh ? std::max<size_t>(mesh->GetSubmeshCount(), 1u) : 1u;
+    const GeometryKey key{ owner, mesh };
+    auto it = geomCache_.find(key);
+    const bool newOwner = it == geomCache_.end();
+    const uint32_t base = newOwner ? static_cast<uint32_t>(geomInfo_.size()) : it->second;
+    if (newOwner) {
+        // InstanceID is 24 bits. Check the entire contiguous submesh run before appending.
+        if (geomInfo_.size() + submeshCount > (1u << 24)) {
+            buildFailed_ = true;
+            return kInvalidGeometry;
+        }
+        geomInfo_.resize(geomInfo_.size() + submeshCount);
+        geomCache_.emplace(key, base);
+    }
+
+    bool changed = newOwner;
     static const std::vector<Mesh::Submesh> kNoSubs;
     const std::vector<Mesh::Submesh>& subs = mesh ? mesh->GetSubmeshes() : kNoSubs;
     for (size_t s = 0; s < submeshCount; ++s) {
         const SlotMaterial& sm = slots[s < slotCount ? s : slotCount - 1];
-        const uint32_t geomIndex = static_cast<uint32_t>(geomInfo_.size());
-        const UINT geoSlot = kGeoBase + kDescPerGeom * geomIndex;
+        const UINT geoSlot = GetOrRegisterDescriptors(mesh, sm);
+        if (geoSlot == kInvalidGeometry) { return kInvalidGeometry; }
 
         GeometryInfoGPU rec{};
         rec.vbIndex = geoSlot;
         rec.ibIndex = geoSlot + 1u;
         rec.indexIs32 = (mesh && mesh->GetIndexFormat() == DXGI_FORMAT_R32_UINT) ? 1u : 0u;
-        rec.albedoTexIndex = 0xFFFFFFFFu;
+        rec.albedoTexIndex = sm.albedoSrv.ptr ? geoSlot + 2u : 0xFFFFFFFFu;
+        rec.mrTexIndex = sm.mrSrv.ptr ? geoSlot + 3u : 0xFFFFFFFFu;
         rec.roughness = sm.roughness;
         rec.metalness = sm.metalness;
         rec.mrMultiply = sm.mrMultiply ? 1u : 0u;
@@ -146,65 +169,68 @@ uint32_t BindlessTable::GetOrRegisterMesh(Mesh* mesh, const SlotMaterial* slots,
         rec.firstTri = (s < subs.size()) ? subs[s].indexOffset / 3u : 0u;
         rec.vertexStride = mesh ? mesh->GetVertexStride() : 0u;
 
-        makeRawSrv(vb, rec.vbIndex);
-        makeRawSrv(ib, rec.ibIndex);
-        if (sm.albedoSrv.ptr != 0 && heap_) {
-            const UINT albedoSlot = geoSlot + 2u;
-            device_->CopyDescriptorsSimple(1, CpuHandle(albedoSlot), sm.albedoSrv,
-                                           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-            rec.albedoTexIndex = albedoSlot;
+        GeometryInfoGPU& current = geomInfo_[base + s];
+        if (std::memcmp(&current, &rec, sizeof(rec)) != 0) {
+            current = rec;
+            changed = true;
         }
-        if (sm.mrSrv.ptr != 0 && heap_) {
-            const UINT mrSlot = geoSlot + 3u;
-            device_->CopyDescriptorsSimple(1, CpuHandle(mrSlot), sm.mrSrv,
-                                           D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-            rec.mrTexIndex = mrSlot;
-        }
-        geomInfo_.push_back(rec);
     }
 
-    geomCache_.emplace(key, base);
-    geomInfoDirty_ = true;
+    if (changed) { ++geomVersion_; }
     return base;
 }
 
-void BindlessTable::UploadGeometryInfo()
+bool BindlessTable::FrameReady(UINT frameIndex) const
 {
-    if (!heap_ || geomInfo_.empty() || !geomInfoDirty_) {
-        return;
+    return Ready() && !buildFailed_ && frameIndex < render::kFrameCount &&
+        frameGeometry_[frameIndex].buffer && frameGeometry_[frameIndex].version == geomVersion_;
+}
+
+bool BindlessTable::UploadGeometryInfo(UINT frameIndex)
+{
+    if (!Ready() || buildFailed_ || frameIndex >= render::kFrameCount || geomInfo_.empty()) {
+        return false;
     }
+    auto& frame = frameGeometry_[frameIndex];
+    if (FrameReady(frameIndex)) { return true; }
 
     const UINT count = static_cast<UINT>(geomInfo_.size());
     const UINT64 bytes = static_cast<UINT64>(count) * sizeof(GeometryInfoGPU);
 
-    if (geomInfoCapacity_ < count || !geomInfoBuffer_) {
+    if (frame.capacity < count || !frame.buffer) {
+        const UINT capacity = std::max(count, std::max(64u, frame.capacity * 2u));
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        desc.Width = bytes;
+        desc.Width = static_cast<UINT64>(capacity) * sizeof(GeometryInfoGPU);
         desc.Height = 1;
         desc.DepthOrArraySize = 1;
         desc.MipLevels = 1;
         desc.Format = DXGI_FORMAT_UNKNOWN;
         desc.SampleDesc.Count = 1;
         desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        geomInfoBuffer_.Reset();
+        Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
         if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
                                                     D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                    IID_PPV_ARGS(&geomInfoBuffer_)))) {
-            return;
+                                                    IID_PPV_ARGS(&buffer)))) {
+            buildFailed_ = true;
+            return false;
         }
-        geomInfoCapacity_ = count;
+        // Only this slot is fence-safe. The other slots must retain both resource and SRV.
+        frame.buffer = std::move(buffer);
+        frame.capacity = capacity;
     }
 
     void* mapped = nullptr;
     D3D12_RANGE noRead{ 0, 0 };
-    if (FAILED(geomInfoBuffer_->Map(0, &noRead, &mapped))) {
-        return; // keep dirty so the next frame retries the upload
+    if (FAILED(frame.buffer->Map(0, &noRead, &mapped))) {
+        buildFailed_ = true;
+        return false;
     }
     std::memcpy(mapped, geomInfo_.data(), static_cast<size_t>(bytes));
-    geomInfoBuffer_->Unmap(0, nullptr);
+    const D3D12_RANGE written{ 0, static_cast<SIZE_T>(bytes) };
+    frame.buffer->Unmap(0, &written);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
     srv.Format = DXGI_FORMAT_UNKNOWN;
@@ -213,8 +239,9 @@ void BindlessTable::UploadGeometryInfo()
     srv.Buffer.FirstElement = 0;
     srv.Buffer.NumElements = count;
     srv.Buffer.StructureByteStride = sizeof(GeometryInfoGPU);
-    device_->CreateShaderResourceView(geomInfoBuffer_.Get(), &srv, CpuHandle(kGeomInfoSlot));
-    geomInfoDirty_ = false;
+    device_->CreateShaderResourceView(frame.buffer.Get(), &srv, CpuHandle(GeomInfoIndex(frameIndex)));
+    frame.version = geomVersion_;
+    return true;
 }
 
 } // namespace rt

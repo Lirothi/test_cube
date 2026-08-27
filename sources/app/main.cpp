@@ -325,7 +325,9 @@ int WINAPI WinMain(
             if (gbv) {
                 GraphicsDevice::EnableGbvForStress(true);
             }
-            return RunSceneStress(hInstance, nShowCmd, iterations, /*gbvContinue=*/gbv);
+            const bool roughnessEdits = std::strstr(lpCmdLine, "--scene-stress-roughness") != nullptr;
+            if (roughnessEdits) { g_bootLevelPath = "data/levels/wind_test.json"; }
+            return RunSceneStress(hInstance, nShowCmd, iterations, /*gbvContinue=*/gbv, roughnessEdits);
         }
 
         // "--gbv" on an ORDINARY run. GBV was reachable only through the stress harness, and the

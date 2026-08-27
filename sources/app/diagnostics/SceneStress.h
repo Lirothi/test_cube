@@ -30,4 +30,7 @@
 // findings) are logged but NOT treated as fatal, so the run proceeds through the
 // churn to the actual device-removal — letting GBV annotate the frames leading
 // up to the hang. Device-removed and exceptions remain fatal.
-int RunSceneStress(struct HINSTANCE__* hInstance, int nCmdShow, int iterations, bool gbvContinue);
+// --scene-stress-roughness: instead of lifecycle churn, edit wind_test sphere #722 every frame
+// with RT enabled. No GPU-idle waits between edits; exercises in-flight material-table updates.
+int RunSceneStress(struct HINSTANCE__* hInstance, int nCmdShow, int iterations, bool gbvContinue,
+                   bool roughnessEdits = false);
