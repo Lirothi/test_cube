@@ -7,6 +7,11 @@ namespace ProfilerScopes {
 // App
 extern const Profiler::ScopeNameKey kWholeCycle;
 extern const Profiler::ScopeNameKey kWinMessages;
+// The stretch between the message pump and AppController::Tick used to be unattributed on the
+// timeline — three calls with no scopes of their own.
+extern const Profiler::ScopeNameKey kBeginImGuiFrame;
+extern const Profiler::ScopeNameKey kProfilerTick;
+extern const Profiler::ScopeNameKey kRendererTick;
 extern const Profiler::ScopeNameKey kAppControllerTick;
 extern const Profiler::ScopeNameKey kBuildDeveloperWindow;
 extern const Profiler::ScopeNameKey kTextureDebugViewerDraw;

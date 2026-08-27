@@ -234,6 +234,9 @@ public:
         SuccessorList successors;
         ResourceStateDeclList declares; // resource states the pass needs on entry
         size_t groupId = kNoGroup;      // CL group this pass belongs to (kNoGroup = ungrouped)
+        // Pass-flow S9: authored through AddPass2, i.e. its declarations and its body come from
+        // ONE builder. Asserted for every pass of a barrier-compiling graph — see RunPrepares.
+        bool builtByBuilder = false;
     };
 
     // A.1s: everything the two-phase path needs, kept OFF the Pass array and off the
@@ -386,21 +389,6 @@ public:
         ExecFn fn)
     {
         return AddPassInternal(name, prereqs, mtDeps, {}, std::move(fn));
-    }
-
-    // A.1s: attach a Prepare callback to a pass added above. A separate setter rather
-    // than more AddPass overloads — there are already six, and every combination of
-    // (prereqs form, mtDeps, declares) would need one.
-    //
-    //   const size_t p = rg.AddPass(RenderPass::X, { prev }, [..](PassContext ctx) { ... });
-    //   rg.SetPassPrepare(p, [..](PassContext& ctx) { ctx.Use(res, state); ... });
-    //
-    void SetPassPrepare(size_t passIndex, PrepareFn fn)
-    {
-        assert(passIndex < passesNum_ && "SetPassPrepare on an unknown pass");
-        if (passIndex >= passesNum_) { return; }
-        if (!prepare_) { prepare_ = std::make_unique<PrepareState>(); }
-        prepare_->fns[passIndex] = std::move(fn);
     }
 
     // Pass-flow S2 (docs/render_graph_pass_flow_plan.md): the RDG authoring shape — ONE builder
@@ -673,6 +661,18 @@ private:
     {
         if (!prepare_) { return; }
         CPU_SCOPE(ProfilerScopes::kRenderGraphPrepares);
+        // Pass-flow S9: in a graph that COMPILES barriers, every pass must be authored with
+        // AddPass2 — declarations and body from one builder. A pass added the old way would
+        // declare nothing while its body transitions, which is the FATAL direction (a barrier the
+        // compile never registered simply is not emitted). Graphs without a Prepare block (the
+        // inner G-buffer/transparent graphs, whose states belong to their outer pass) never reach
+        // here, which is exactly the intended exemption.
+#ifndef NDEBUG
+        for (size_t i = 0; i < passesNum_ && i < MaxPasses; ++i) {
+            assert((!passes_[i].exec || passes_[i].builtByBuilder) &&
+                   "pass-flow S9: a barrier-compiling graph takes AddPass2 passes only");
+        }
+#endif
         prepare_->arenaSize = 0; // one arena per frame; slices handed out in schedule order
         for (const FlatNode& n : schedule) {
             const size_t gid = passes_[n.pass].groupId;
@@ -1275,6 +1275,18 @@ private:
     }
 
 private:
+    // Pass-flow S9: PRIVATE. Attaching a Prepare to a pass added separately was the old authoring
+    // shape — the one this plan removed, because a Prepare and a Record kept in step by hand is
+    // exactly what drifts. `AddPass2Internal` is its only caller now, so the two-phase machinery
+    // survives as an implementation detail and no new pass can be written as a mirror.
+    void SetPassPrepare(size_t passIndex, PrepareFn fn)
+    {
+        assert(passIndex < passesNum_ && "SetPassPrepare on an unknown pass");
+        if (passIndex >= passesNum_) { return; }
+        if (!prepare_) { prepare_ = std::make_unique<PrepareState>(); }
+        prepare_->fns[passIndex] = std::move(fn);
+    }
+
     // Pass-flow S2: create the pass with a placeholder body (RunPrepareOne skips an empty exec),
     // then install a Prepare that runs the builder and replaces the body with its return.
     template <typename RangePrereqs, typename RangeDeps>
@@ -1287,6 +1299,7 @@ private:
         CPU_SCOPE(ProfilerScopes::kAddPass);
         const size_t idx = AddPassInternal(name, prereqs, deps, declares,
             [](PassContext) {});
+        passes_[idx].builtByBuilder = true;
         SetPassPrepare(idx, [this, idx, builder = std::move(builder)](PassContext& ctx)
         {
             ExecFn exec = builder(ctx);

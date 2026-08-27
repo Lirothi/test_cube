@@ -156,10 +156,43 @@ private:
     // dispatches exactly the levels that were declared.
     void Pass_SsrTemporal(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
     void Pass_Hzb(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
+    // pass-flow S8: the tonemap's decisions and the barrier points they were declared under.
+    // Declared HERE, above the bloom helpers, because they take it: the bloom records into the
+    // tonemap's command list and therefore emits the tonemap's points.
+    //
+    // This pass used to be THE counterexample: `ranDlss` was the return of an evaluate that could
+    // only be known mid-record, so its Prepare had to declare both alternatives. The DLSS split
+    // moved that evaluate into its own pass, and nothing else in here is discovered while
+    // recording — bloom method, flares, FXAA readiness, the tonemap material and the backbuffer
+    // are all frame state. So the union is gone and this is an ordinary builder-decided pass.
+    //
+    // The point layout is deliberately the SAME for both bloom methods (write / flare RT / flare
+    // read / read) even though the pyramid path used to fold the flare's render-target barrier
+    // into its write point. P8C-2l/m were both caused by a point moving or vanishing under a
+    // gate; one shape for both methods is what makes the shared `Bloom_FlaresBuild` able to emit
+    // its markers without knowing which method called it.
+    struct TonemapPoints
+    {
+        std::uint32_t apply = 0;       // tonemap + fxaa -> UAV, plus the exposure record
+        std::uint32_t source = 0;      // the tone curve's input (and the forward targets back)
+        std::uint32_t bloomWrite = 0;  // the bloom chains -> UAV
+        std::uint32_t flareRt = 0;     // lens flare -> RENDER_TARGET
+        std::uint32_t flareRead = 0;   // lens flare -> shader-readable
+        std::uint32_t bloomRead = 0;   // the bloom chains -> shader-readable
+        std::uint32_t fxaaRead = 0;    // tonemap -> shader-readable, the FXAA input
+        std::uint32_t resolveCopy = 0; // the resolve source -> COPY_SOURCE
+        std::uint32_t resolveBack = 0; // ...and back to UAV (with `tonemap` when FXAA ran)
+        bool ranDlss = false;   // the prediction Main_DLSS was built from
+        bool bloom = false;
+        bool convolution = false;
+        bool flares = false;
+        bool fxaa = false;
+        bool resolve = false;   // the tonemap material and a backbuffer both exist
+    };
     // P8: the bloom pyramid. Not a pass of its own -- it records into the tonemap pass's list,
     // between the DLSS evaluate and the tone curve, because both of those live in that pass.
     void Bloom_Build(Renderer* r, ID3D12GraphicsCommandList* cl,
-                     D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
+                     D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const TonemapPoints& pts);
     // The thresholded DOWN chain on its own. Split out because BOTH methods need it: the pyramid
     // builds on it, and the convolution -- which has no pyramid of its own -- needs it as the SOFT
     // source its ghosts are gathered from. Assumes bloomDown is already UNORDERED_ACCESS.
@@ -175,7 +208,8 @@ private:
     // P8C-2l: the lens flares, shared by BOTH bloom methods. Build runs before the bloom target
     // is written (scatter + streak pyramid), composite after it (both add into mip 0).
     void Bloom_FlaresBuild(Renderer* r, ID3D12GraphicsCommandList* cl,
-                           D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const BloomConvConstants& conv);
+                           D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const BloomConvConstants& conv,
+                           const TonemapPoints& pts);
     void Bloom_FlaresComposite(Renderer* r, ID3D12GraphicsCommandList* cl,
                                D3D12_CPU_DESCRIPTOR_HANDLE hdrSource,
                                const BloomConvConstants& conv);
@@ -191,7 +225,7 @@ private:
     BloomApplyConstants Bloom_ApplyConstants() const;
     float Bloom_TonemapBloomScale() const;
     void Bloom_Convolve(Renderer* r, ID3D12GraphicsCommandList* cl,
-                        D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
+                        D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const TonemapPoints& pts);
 
     // P6C step 6: fills the HZB tracer's half of the SSR constants. ONE definition, called by the
     // opaque and the glass dispatch, so the two can never disagree about whether the furthest
@@ -361,9 +395,7 @@ private:
         std::uint32_t output = 0;
     };
     void Pass_Dlss(Renderer* r, RenderGraphPassContext ctx, const DlssPoints& pts);
-    // `ranDlss` is the prediction Main_DLSS was built from, captured by value: the two passes are
-    // recorded in parallel, so the tonemap cannot be told what the evaluate returned.
-    void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx, bool ranDlss);
+    void Pass_Tonemap(Renderer* r, RenderGraphPassContext ctx, const TonemapPoints& pts);
     void Pass_Overlay(Renderer* r, RenderGraphPassContext ctx, TaskSystem::TaskHandle& overlayPrepTask);
 
     // Barrier plan step 4: create/grow everything the pass bodies used to create lazily,

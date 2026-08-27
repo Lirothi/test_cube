@@ -2039,17 +2039,36 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     const std::initializer_list<size_t> tonemapPrereqs = willDlss
         ? std::initializer_list<size_t>{ pExposure, pDlss }
         : std::initializer_list<size_t>{ pExposure };
-    auto pTone = rg.AddPass(RenderPass::Main_Tonemap, tonemapPrereqs,
+    // pass-flow S8: the last pass on the old API, and the one the plan called a counterexample.
+    // It is not one any more — the DLSS split took the only mid-record discovery out of it, so
+    // every remaining gate (bloom method, flares, FXAA readiness, the tonemap material, the
+    // backbuffer) is frame state the builder can decide once and the body just walks.
+    auto pTone = rg.AddPass2(RenderPass::Main_Tonemap, tonemapPrereqs, /*mtDeps=*/{},
         { { D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
           { D.fxaa.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
-        [this, renderer, willDlss](RenderGraphPassContext ctx) { CPU_SCOPE(ProfilerScopes::kPassTonemap); Pass_Tonemap(renderer, ctx, willDlss); });
-    // The resolve SOURCE (fxaa vs tonemap) is still decided inside the body, so BOTH alternatives
-    // are registered — a state the body skips is one redundant barrier, the one it takes and never
-    // registered is a missing barrier. The DLSS half of that union is gone: the upscale is its own
-    // pass now and `willDlss` is decided before either of them records.
-    rg.SetPassPrepare(pTone, [this, willDlss](RenderGraphPassContext& p) {
+        [this, renderer, willDlss](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        RenderGraphPassContext& p = ctx;
         constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        TonemapPoints pts{};
+        pts.ranDlss = willDlss;
+        // The body records the bloom, the FXAA and the resolve only AFTER it has a tone-curve
+        // material, so every one of those points has to be gated on it too — declaring them
+        // without it left five points behind a `break`.
+        const bool haveTonemap = resources_.GetTonemapMaterial() != nullptr;
+        pts.bloom = haveTonemap && bloomActive_;
+        // The METHOD comes from the same flag the readiness check produced. The body used to read
+        // `settings.bloom.method` directly, so a frame with method=convolution but an unready
+        // convolution (no baked kernel, missing FFT material) recorded the convolution against
+        // declarations made for the PYRAMID — its FFT grids then went to UAV with no barrier at all.
+        pts.convolution = bloomConvolution_;
+        pts.flares = flaresGhosts_ || flaresStreak_;
+        pts.fxaa = haveTonemap && frame_->settings.doFxaa && resources_.GetFxaaMaterial() &&
+                   resources_.GetFxaaCBSizeBytes() > 0 &&
+                   renderer->GetWidth() > 0 && renderer->GetHeight() > 0;
+        pts.resolve = haveTonemap && renderer->GetCurrentBackbuffer() != nullptr;
+
         p.UseDeclared(); // tonemap + fxaa -> UAV
+        pts.apply = p.usePoint ? *p.usePoint : 0u;
         // P2: the exposure record is bound to the tonemap dispatch on every path. It rests at
         // UNORDERED_ACCESS and is used at UNORDERED_ACCESS, so this declares intent without
         // emitting a barrier — but an undeclared resource would be an invariant failure.
@@ -2059,6 +2078,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         }
         const auto& DTM = p.renderer->GetDeferredForFrame();
         p.NextPoint();
+        pts.source = p.usePoint ? *p.usePoint : 0u;
         if (!willDlss)
         {
             // Hand the forward targets back. The transparent pass ends with depth as DEPTH_WRITE
@@ -2077,10 +2097,16 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
         // chains go to UNORDERED_ACCESS for the build and come back shader-readable -- the same
         // shape as the HZB pyramid, and for the same reason: a level reads the level above it
         // through its own UAV because this barrier layer transitions whole resources.
-        if (bloomActive_)
+        if (pts.bloom)
         {
             p.NextPoint();
-            if (bloomConvolution_)
+            pts.bloomWrite = p.usePoint ? *p.usePoint : 0u;
+            // ONE point layout for both methods: write / flare RT / flare read / read. The
+            // pyramid path used to fold the flare's render-target barrier into its write point,
+            // which is why the shared Bloom_FlaresBuild had to know which method called it. Both
+            // P8C-2l and P8C-2m were a point moving or vanishing under a gate, so the layout stays
+            // fixed and only its CONTENT is gated.
+            if (pts.convolution)
             {
                 // P8C: three grids instead of the two pyramid chains. Declared in the SAME order
                 // the body transitions them, because a compiled barrier is matched against the
@@ -2095,85 +2121,76 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
                 p.Use(DTM.bloomFftA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 p.Use(DTM.bloomFftB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 p.Use(DTM.bloomFftKernel.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                // P8C-2l/m: the streak pyramid's own targets -- declared only when the flares
-                // actually run this frame, so "off" costs not even a barrier.
-                if (flaresGhosts_ || flaresStreak_)
-                {
-                    p.Use(DTM.streakA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                    p.Use(DTM.streakB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                }
-                p.NextPoint();
-                // P8C-2/m: the flare accumulation target, declared only when the flares run.
-                // THE POINT ITSELF IS NOT GATED. A point is a position in the pass's barrier
-                // program, and the body's transitions are matched against it positionally --
-                // dropping one shifts every later point, which is how "flares off" managed to
-                // leave the bloom chains in UNORDERED_ACCESS under the tonemap's SRV read.
-                if (flaresGhosts_ || flaresStreak_)
-                {
-                    p.Use(DTM.lensFlare.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-                }
-                p.NextPoint();
-                if (flaresGhosts_ || flaresStreak_)
-                {
-                    p.Use(DTM.lensFlare.Get(), kNps);
-                }
-                p.NextPoint();
-                p.Use(DTM.bloomUp.Get(), kNps); // the tonemap samples mip 0
-                p.Use(DTM.bloomFftA.Get(), kNps);
-                p.Use(DTM.bloomFftB.Get(), kNps);
-                p.Use(DTM.bloomFftKernel.Get(), kNps);
-                if (flaresGhosts_ || flaresStreak_)
-                {
-                    p.Use(DTM.streakA.Get(), kNps);
-                    p.Use(DTM.streakB.Get(), kNps);
-                }
             }
             else
             {
-                // P8C-2l: the pyramid runs the same flares, so it declares the same targets.
                 p.Use(DTM.bloomDown.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 p.Use(DTM.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                if (flaresGhosts_ || flaresStreak_)
-                {
-                    p.Use(DTM.streakA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                    p.Use(DTM.streakB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                    p.Use(DTM.lensFlare.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-                }
-                p.NextPoint();
-                if (flaresGhosts_ || flaresStreak_)
-                {
-                    p.Use(DTM.lensFlare.Get(), kNps);
-                }
-                p.NextPoint();
-                p.Use(DTM.bloomUp.Get(), kNps);   // the tonemap samples mip 0
+            }
+            // P8C-2l/m: the streak pyramid's own targets -- declared only when the flares actually
+            // run this frame, so "off" costs not even a barrier.
+            if (pts.flares)
+            {
+                p.Use(DTM.streakA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                p.Use(DTM.streakB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            }
+            p.NextPoint();
+            pts.flareRt = p.usePoint ? *p.usePoint : 0u;
+            // P8C-2/m: the flare accumulation target, declared only when the flares run.
+            // THE POINT ITSELF IS NOT GATED. A point is a position in the pass's barrier
+            // program, and the body's transitions are matched against it positionally --
+            // dropping one shifts every later point, which is how "flares off" managed to
+            // leave the bloom chains in UNORDERED_ACCESS under the tonemap's SRV read.
+            if (pts.flares) { p.Use(DTM.lensFlare.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET); }
+            p.NextPoint();
+            pts.flareRead = p.usePoint ? *p.usePoint : 0u;
+            if (pts.flares) { p.Use(DTM.lensFlare.Get(), kNps); }
+            p.NextPoint();
+            pts.bloomRead = p.usePoint ? *p.usePoint : 0u;
+            p.Use(DTM.bloomUp.Get(), kNps); // the tonemap samples mip 0
+            if (pts.convolution)
+            {
+                p.Use(DTM.bloomFftA.Get(), kNps);
+                p.Use(DTM.bloomFftB.Get(), kNps);
+                p.Use(DTM.bloomFftKernel.Get(), kNps);
+            }
+            else
+            {
                 p.Use(DTM.bloomDown.Get(), kNps); // back to canonical
-                if (flaresGhosts_ || flaresStreak_)
-                {
-                    p.Use(DTM.streakA.Get(), kNps);
-                    p.Use(DTM.streakB.Get(), kNps);
-                }
+            }
+            if (pts.flares)
+            {
+                p.Use(DTM.streakA.Get(), kNps);
+                p.Use(DTM.streakB.Get(), kNps);
             }
         }
         p.NextPoint();
-        // The body needs ALL of these, not just the setting — gating on the setting alone
-        // registered the FXAA resolve source on frames the FXAA pass could not run.
-        const bool fxaa = frame_->settings.doFxaa && resources_.GetFxaaMaterial() &&
-                          resources_.GetFxaaCBSizeBytes() > 0 &&
-                          p.renderer->GetWidth() > 0 && p.renderer->GetHeight() > 0;
-        if (fxaa) { p.Use(DTM.tonemap.Get(), kNps); } // FXAA input
-        // Backbuffer resolve. Gated on the SAME things the body needs: without the tonemap
-        // material it breaks out before the resolve, and the pass's trailing
-        // `Transition(tonemap, UAV)` would then fire this point's restore barrier against a
-        // resource that never went to COPY_SOURCE.
-        if (!resources_.GetTonemapMaterial() || !p.renderer->GetCurrentBackbuffer()) { return; }
-        p.NextPoint();
-        // The resolve reads whichever of the two actually produced this frame.
-        // The backbuffer is NOT registered: it is driven from outside the graph (present
-        // epilogue + RecordBindAndClear both write it with hand-rolled barriers), so the body
-        // resolves it with Renderer::TransitionExplicit and the compile models only the source.
-        p.Use(fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-        p.NextPoint();
-        p.Use(fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        pts.fxaaRead = p.usePoint ? *p.usePoint : 0u;
+        // `pts.fxaa` needed ALL of the material, the CB size, a non-zero output size AND the
+        // setting — gating on the setting alone registered the FXAA resolve source on frames the
+        // FXAA pass could not run.
+        if (pts.fxaa) { p.Use(DTM.tonemap.Get(), kNps); } // FXAA input
+        if (pts.resolve)
+        {
+            p.NextPoint();
+            pts.resolveCopy = p.usePoint ? *p.usePoint : 0u;
+            // The resolve reads whichever of the two actually produced this frame.
+            // The backbuffer is NOT registered: it is driven from outside the graph (present
+            // epilogue + RecordBindAndClear both write it with hand-rolled barriers), so the body
+            // resolves it with Renderer::TransitionExplicit and the compile models only the source.
+            p.Use(pts.fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            p.NextPoint();
+            pts.resolveBack = p.usePoint ? *p.usePoint : 0u;
+            p.Use(pts.fxaa ? DTM.fxaa.Get() : DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            // ...and `tonemap` with it on the FXAA path. The body has always asked for this (a
+            // trailing `Transition(tonemap, UAV)`), but no point ever named it, so the request was
+            // dropped and the pass left `tonemap` shader-readable instead of at its canonical UAV.
+            if (pts.fxaa) { p.Use(DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+        }
+        return [this, renderer, pts](RenderGraphPassContext c) {
+            CPU_SCOPE(ProfilerScopes::kPassTonemap);
+            Pass_Tonemap(renderer, c, pts);
+        };
     });
 
     // The inspector's preview. Must complete before the overlay draws ImGui, which is what will
@@ -5396,7 +5413,7 @@ void SceneRenderer::Bloom_Downsample(Renderer* renderer, ID3D12GraphicsCommandLi
 }
 
 void SceneRenderer::Bloom_Build(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                                D3D12_CPU_DESCRIPTOR_HANDLE hdrSource)
+                                D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const TonemapPoints& pts)
 {
     const auto& D = renderer->GetDeferredForFrame();
     auto material = resources_.GetBloomMaterial();
@@ -5405,20 +5422,19 @@ void SceneRenderer::Bloom_Build(Renderer* renderer, ID3D12GraphicsCommandList* c
 
     GPU_SCOPE(cl, ProfilerScopes::kPassBloom);
 
-    renderer->Transition(cl, D.bloomDown.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    renderer->Transition(cl, D.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // pass-flow S8: the whole chain (and the streak pair when the flares run) in one marker —
+    // the tonemap builder declared them together, in this order.
+    renderer->EmitPoint(cl, pts.bloomWrite);
 
     // P8C-2l: the streak and the ghosts are not the convolution's property. They read the HDR
     // image and add into mip 0, which this method writes too, so the pyramid gets them on the
     // same terms -- build before the chain, composite after it.
-    const bool flares = flaresGhosts_ || flaresStreak_;
+    const bool flares = pts.flares;
     const BloomConvConstants flareConv = flares ? Bloom_FlareConstants(renderer)
                                                 : BloomConvConstants{};
     if (flares)
     {
-        renderer->Transition(cl, D.streakA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        renderer->Transition(cl, D.streakB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        Bloom_FlaresBuild(renderer, cl, hdrSource, flareConv);
+        Bloom_FlaresBuild(renderer, cl, hdrSource, flareConv, pts);
     }
 
     // P8C-4: the same ABSOLUTE scaling the convolution now uses, so switching method is not also a
@@ -5480,11 +5496,9 @@ void SceneRenderer::Bloom_Build(Renderer* renderer, ID3D12GraphicsCommandList* c
     if (flares)
     {
         Bloom_FlaresComposite(renderer, cl, hdrSource, flareConv);
-        renderer->Transition(cl, D.streakA.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(cl, D.streakB.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
-    renderer->Transition(cl, D.bloomUp.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(cl, D.bloomDown.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // ...and the whole chain back to shader-readable for the tone curve, in one marker.
+    renderer->EmitPoint(cl, pts.bloomRead);
 }
 
 
@@ -5766,7 +5780,7 @@ BloomApplyConstants SceneRenderer::Bloom_ApplyConstants() const
 
 void SceneRenderer::Bloom_FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                       D3D12_CPU_DESCRIPTOR_HANDLE hdrSource,
-                                      const BloomConvConstants& conv)
+                                      const BloomConvConstants& conv, const TonemapPoints& pts)
 {
     const bool ghosts = flaresGhosts_ && flareBokehReady_;
     const bool streak = flaresStreak_;
@@ -5917,7 +5931,10 @@ void SceneRenderer::Bloom_FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandL
     // sprite, additively rasterized into the quarter-res flare target. The output is the actual
     // defocused image of the actual bright sources -- which is why no sun position is plumbed
     // anywhere and two suns give two ghost chains for free.
-    renderer->Transition(cl, D.lensFlare.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+    // pass-flow S8: its own point in BOTH bloom methods now. The pyramid path used to fold this
+    // barrier into its write point, which meant this shared helper had to know which method called
+    // it; one layout for both is what lets it just emit the marker.
+    renderer->EmitPoint(cl, pts.flareRt);
     if (ghosts)
     {
         const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -5979,8 +5996,7 @@ void SceneRenderer::Bloom_FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandL
         const UINT instances = (tiles + kFlareQuadsPerInstance - 1u) / kFlareQuadsPerInstance;
         cl->DrawInstanced(6u * kFlareQuadsPerInstance, instances, 0, 0);
     }
-    renderer->Transition(cl, D.lensFlare.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
+    renderer->EmitPoint(cl, pts.flareRead);
 }
 
 void SceneRenderer::Bloom_FlaresComposite(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -6045,7 +6061,7 @@ void SceneRenderer::Bloom_FlaresComposite(Renderer* renderer, ID3D12GraphicsComm
 // before the graph was built and the Prepare declared from the same flag.
 
 void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                                   D3D12_CPU_DESCRIPTOR_HANDLE hdrSource)
+                                   D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const TonemapPoints& pts)
 {
     const auto& D = renderer->GetDeferredForFrame();
     auto fftMaterial = resources_.GetBloomFftMaterial();
@@ -6064,19 +6080,13 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
 
     const uint2 streakGrid{ std::max(D.streakWidth, 1u), std::max(D.streakHeight, 1u) };
 
-    renderer->Transition(cl, D.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // pass-flow S8: the up chain, the three grids and (when the flares run) the streak pair in ONE
+    // marker — the tonemap builder declared them together, in this order.
     // P8C-2l: no source downsample any more -- the scatter and the streak prefilter both read
     // the HDR image directly, each with its own absolute threshold. Sharing one pre-thresholded
     // texture made `bloom.threshold` cascade with theirs, and it tied both to whichever bloom
     // method had built the chain.
-    if (ghosts || streak)
-    {
-        renderer->Transition(cl, D.streakA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        renderer->Transition(cl, D.streakB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
-    renderer->Transition(cl, D.bloomFftA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    renderer->Transition(cl, D.bloomFftB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    renderer->Transition(cl, D.bloomFftKernel.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    renderer->EmitPoint(cl, pts.bloomWrite);
 
 
     const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
@@ -6257,7 +6267,7 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
     if (flaresGhosts_ || flaresStreak_)
     {
         CPU_SCOPE(ProfilerScopes::kBloomRecFlares);
-        Bloom_FlaresBuild(renderer, cl, hdrSource, conv);
+        Bloom_FlaresBuild(renderer, cl, hdrSource, conv, pts);
     }
 
     // ---- kernel: resample the photograph, transform, add the streak's spectrum. Rebuilt only
@@ -6328,15 +6338,8 @@ void SceneRenderer::Bloom_Convolve(Renderer* renderer, ID3D12GraphicsCommandList
         CPU_SCOPE(ProfilerScopes::kBloomRecFlares);
         Bloom_FlaresComposite(renderer, cl, hdrSource, conv);
     }
-    renderer->Transition(cl, D.bloomUp.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(cl, D.bloomFftA.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(cl, D.bloomFftB.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    renderer->Transition(cl, D.bloomFftKernel.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    if (ghosts || streak)
-    {
-        renderer->Transition(cl, D.streakA.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        renderer->Transition(cl, D.streakB.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    }
+    // ...and all of them back to shader-readable for the tone curve, in one marker.
+    renderer->EmitPoint(cl, pts.bloomRead);
 }
 
 // P8C-2 step 5a: the ghost bokeh sprite -- the iris polygon with its bright rim, P8D's
@@ -6433,7 +6436,8 @@ void SceneRenderer::Pass_Dlss(Renderer* renderer, RenderGraphPassContext ctx, co
     ctx.EndCL(t);
 }
 
-void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx, bool ranDlss)
+void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
+    const TonemapPoints& pts)
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
@@ -6441,18 +6445,15 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassTonemap);
         const auto& D = renderer->GetDeferredForFrame();
-        ctx.ApplyDeclaredStates(t.cl);
-        // DLSS-split: `ranDlss` is the PREDICTION Main_DLSS was built from, not a result read back
-        // from the evaluate — the two passes record concurrently, so there is nothing to read.
-        if (!ranDlss)
-        {
-            // With DLSS on, the upscale pass performs these three as a side effect of consuming
-            // depth + velocity and reading scene colour. With it off nothing else would, and the
-            // frame would end with the forward targets still bound.
-            renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            renderer->Transition(t.cl, D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            renderer->Transition(t.cl, D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        }
+        // pass-flow S8: the body names no resource and no state. Every gate below is a value the
+        // builder decided and declared from — including `ranDlss`, which since the DLSS split is a
+        // PREDICTION Main_DLSS was built from rather than a result read out of the evaluate.
+        renderer->EmitPoint(t.cl, pts.apply);
+        // With DLSS on, the upscale pass hands depth + velocity back as a side effect of consuming
+        // them and this point is empty; with it off nothing else would, and the frame would end
+        // with the forward targets still bound. The marker is emitted either way — an empty point
+        // is a pure advance.
+        renderer->EmitPoint(t.cl, pts.source);
 
         renderer->BindDescriptorHeaps(t.cl);
 
@@ -6462,23 +6463,25 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
             break;
         }
 
-        const D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = ranDlss ? D.dlssOutputSRV : D.sceneSRV;
+        const D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = pts.ranDlss ? D.dlssOutputSRV : D.sceneSRV;
         const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
         // P8: build the bloom pyramid off whatever the tonemap is about to read — the upscaled
         // image when DLSS runs, which the submission order guarantees is finished on the GPU
         // before this list executes.
-        if (bloomActive_)
+        // pass-flow S8: `pts.bloom` and `pts.convolution` ARE the settings, read once by the
+        // builder — the body no longer asks `bloomActive_` or the method a second time.
+        if (pts.bloom)
         {
             // The CPU cost of RECORDING the bloom, which is the wide unnamed block after
             // DLSS::Evaluate on the CPU timeline -- the GPU side already has its own scope.
             CPU_SCOPE(ProfilerScopes::kTonemapBloomRecord);
-            if (frame_->settings.bloom.method == 1u)
+            if (pts.convolution)
             {
-                Bloom_Convolve(renderer, t.cl, tonemapSrc);
+                Bloom_Convolve(renderer, t.cl, tonemapSrc, pts);
             }
             else
             {
-                Bloom_Build(renderer, t.cl, tonemapSrc);
+                Bloom_Build(renderer, t.cl, tonemapSrc, pts);
             }
         }
         const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
@@ -6508,13 +6511,16 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
         }
 
         CPU_SCOPE(ProfilerScopes::kTonemapTailRecord);
-        bool ranFxaa = false;
+        // pass-flow S8: `pts.fxaa` is the SAME conjunction the builder declared from (material, CB
+        // size, a non-zero output size and the setting). It used to be evaluated here and again in
+        // the Prepare, and the two agreeing was the only thing keeping the resolve source's
+        // barriers matched to the resolve source the body actually picked.
         auto fxaaMaterial = resources_.GetFxaaMaterial();
         const UINT fxaaCbSize = resources_.GetFxaaCBSizeBytes();
-        if (fxaaMaterial && fxaaCbSize > 0 && renderer->GetWidth() > 0 && renderer->GetHeight() > 0 && frame_->settings.doFxaa)
+        if (pts.fxaa)
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kTonemapFxaa);
-            renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            renderer->EmitPoint(t.cl, pts.fxaaRead);
 
             const float width = static_cast<float>(renderer->GetWidth());
             const float height = static_cast<float>(renderer->GetHeight());
@@ -6540,15 +6546,14 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
                 { D.tonemapSRV }, { D.fxaaUAV }, samplerTable,
                 renderer->GetWidth(), renderer->GetHeight(),
                 D.fxaa.Get());
-            ranFxaa = true;
         }
 
         ID3D12Resource* const backbuffer = renderer->GetCurrentBackbuffer();
-        ID3D12Resource* const resolveSource = ranFxaa ? D.fxaa.Get() : D.tonemap.Get();
-        if (backbuffer && resolveSource)
+        ID3D12Resource* const resolveSource = pts.fxaa ? D.fxaa.Get() : D.tonemap.Get();
+        if (pts.resolve)
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kTonemapResolve);
-            renderer->Transition(t.cl, resolveSource, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            renderer->EmitPoint(t.cl, pts.resolveCopy);
             // The backbuffer's state cycle is owned OUTSIDE the graph and is fully determined:
             // RecordBindAndClear takes it PRESENT -> RENDER_TARGET at the top of the frame and the
             // present epilogue takes it back, both with hand-rolled barriers. So the resolve knows
@@ -6557,12 +6562,14 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
             Renderer::TransitionExplicit(t.cl, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
                                          D3D12_RESOURCE_STATE_COPY_DEST);
             t.cl->CopyResource(backbuffer, resolveSource);
-            renderer->Transition(t.cl, resolveSource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            // The resolve source back to UAV — and `tonemap` with it when FXAA ran, which is the
+            // one that used to be asked for by a trailing named Transition with no point behind
+            // it: on the FXAA path the pass ended with `tonemap` left shader-readable instead of
+            // at its canonical UAV, because the restore point only ever named the resolve source.
+            renderer->EmitPoint(t.cl, pts.resolveBack);
             Renderer::TransitionExplicit(t.cl, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST,
                                          D3D12_RESOURCE_STATE_RENDER_TARGET);
         }
-
-        renderer->Transition(t.cl, D.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     } while (false);
 
     ctx.EndCL(t);

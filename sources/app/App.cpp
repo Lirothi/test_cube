@@ -1023,9 +1023,18 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     }
                 }
 
-                renderer.BeginImGuiFrame();
+                // Everything from here to AppController::Tick used to be a blank stretch on the
+                // timeline between "Win Messages" and the first scoped call — three unattributed
+                // calls, one of which (the ImGui frame start) is not obviously cheap.
+                {
+                    CPU_SCOPE(ProfilerScopes::kBeginImGuiFrame);
+                    renderer.BeginImGuiFrame();
+                }
 
-                Profiler::Get().Tick();
+                {
+                    CPU_SCOPE(ProfilerScopes::kProfilerTick);
+                    Profiler::Get().Tick();
+                }
 
                 double now = GetTimeSeconds();
                 float deltaTime = static_cast<float>(now - lastTime);

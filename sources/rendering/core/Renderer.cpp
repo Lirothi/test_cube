@@ -679,6 +679,7 @@ void Renderer::ReportLiveObjects()
 
 void Renderer::Tick(float dt)
 {
+    CPU_SCOPE(ProfilerScopes::kRendererTick);
     fontManager_.Tick();
 
     if (fps_ <= 0.0f)

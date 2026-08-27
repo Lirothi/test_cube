@@ -4,6 +4,9 @@ namespace ProfilerScopes {
 
 const Profiler::ScopeNameKey kWholeCycle = Profiler::RegisterTraceLiteral(L"Whole Cycle");
 const Profiler::ScopeNameKey kWinMessages = Profiler::RegisterTraceLiteral(L"Win Messages");
+const Profiler::ScopeNameKey kBeginImGuiFrame = Profiler::RegisterTraceLiteral(L"Renderer::BeginImGuiFrame");
+const Profiler::ScopeNameKey kProfilerTick = Profiler::RegisterTraceLiteral(L"Profiler::Tick");
+const Profiler::ScopeNameKey kRendererTick = Profiler::RegisterTraceLiteral(L"Renderer::Tick");
 const Profiler::ScopeNameKey kAppControllerTick = Profiler::RegisterTraceLiteral(L"AppController::Tick");
 const Profiler::ScopeNameKey kBuildDeveloperWindow = Profiler::RegisterTraceLiteral(L"DeveloperWindow::Draw");
 const Profiler::ScopeNameKey kTextureDebugViewerDraw = Profiler::RegisterTraceLiteral(L"TextureDebugViewer::Draw");

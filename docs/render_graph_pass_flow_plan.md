@@ -263,6 +263,16 @@ any step.
   incidents of a gated point shifting the program), the win is the smallest in the plan, and "convert
   it because the plan says all passes" is exactly the reasoning that produced those two incidents. If
   it is not converted, S9 records it as the one permitted exception rather than pretending otherwise.
+  **RE-SCOPED by the DLSS split (see Detachability below): S8 is no longer a hybrid.** The union
+  existed for `ranDlss`, and `ranDlss` has left the pass — the upscale is `Main_DLSS` now and the
+  tonemap is TOLD the prediction. What is left inside `Pass_Tonemap` is `bloomActive_` /
+  `bloomConvolution_` / `flaresGhosts_ || flaresStreak_`, the FXAA readiness conjunction, the
+  tonemap-material gate and `GetCurrentBackbuffer()` — every one of them knowable before recording,
+  and every one of them evaluated twice today. So S8 becomes a PLAIN conversion like the Tier B
+  passes, and the counterexample that made this pass special is gone. The caution stands for a
+  different reason: this pass still carries the most hard-won barrier layout in the engine (P8C-2l/m,
+  two incidents of a gated point shifting the program), so it wants its own commit and its own gate,
+  not a ride along with something else.
 
 - **S9 — Close the door.** Only after S5–S7 (S8 optional). The point of converting everything is not
   tidiness, it is that the OLD authoring shape stops being reachable:
@@ -504,6 +514,53 @@ be reverted independently.
   `wind_test` is too noisy to resolve anything (six same-binary pairs span 0-21 955 pixels >16,
   eight A/B pairs span 6 291-32 604), so the verdict there rests on the gates and on the frames
   being identical by eye.
-- S8-S9: NOT STARTED. S8 is deliberately conditional; S9 is what makes the whole thing structural
-  rather than a habit, and after S7 its precondition is met — the only `SetPassPrepare` call left
-  in the engine is `Main_Tonemap`'s.
+- S8 DONE (uncommitted) — **`Main_Tonemap` converted, and it is no longer a counterexample.** The
+  DLSS split had already taken the only mid-record discovery out of it, so the builder decides all
+  of it: `bloom`, `convolution`, `flares`, the FXAA readiness conjunction, the tonemap material and
+  the backbuffer, plus nine point indices in a `TonemapPoints` that rides into the body and into
+  `Bloom_Build` / `Bloom_Convolve` / `Bloom_FlaresBuild`. Those three record into the tonemap's
+  list, so they emit the tonemap's points; every named `Transition` in the pass and its bloom
+  helpers is gone.
+  **The point layout is now the SAME for both bloom methods** (write / flare RT / flare read /
+  read). The pyramid path used to fold the flare's render-target barrier into its write point,
+  which is why the shared `Bloom_FlaresBuild` would have needed to know which method called it —
+  P8C-2l/m were both a point moving or vanishing under a gate, so the shape is fixed and only its
+  CONTENT is gated.
+  **Three defects the conversion exposed:**
+  1. **The bloom METHOD was read from two different places.** The Prepare declared from
+     `bloomConvolution_` (method == 1 AND kernel/materials/targets ready) while the body branched
+     on `frame_->settings.bloom.method == 1u` alone. On a frame with method=convolution but an
+     unready convolution, the body would record the convolution against declarations made for the
+     PYRAMID: its first request matches the pyramid's write point, and the three FFT grids then go
+     to UNORDERED_ACCESS with no barrier at all. Both sides read `pts.convolution` now.
+  2. **Five points were declared behind a `break`.** The body records bloom, FXAA and the resolve
+     only after it has a tone-curve material; the Prepare gated only the resolve pair on it. All of
+     them are gated on it now.
+  3. **The FXAA path left `tonemap` off-canonical.** The body ends with a trailing
+     `Transition(tonemap, UAV)` that no point ever named — when FXAA ran, the restore point carried
+     only the resolve source (`fxaa`), so the request was dropped and the pass finished with
+     `tonemap` shader-readable instead of at its canonical UAV. The restore point now declares both.
+     NOT verified headlessly: `doFxaa` is a dev-UI checkbox with no level key or CLI flag, so this
+     one wants an eyeball with FXAA on.
+  Gates: both builds 0/0; Debug `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN in
+  both shadow modes; `--scene-stress=12` CLEAN; `--barrier-cache-verify` silent; zero
+  flip-miss / MISSING / EmitPoint lines. **The comparator is now completely silent** — not one
+  `[barrier-cmp]` line in any run, which is the end state the plan predicted: with every body on
+  markers there is nothing left for its benign direction to report.
+  Both bloom methods were flip-traced, because no level in the repo enables the pyramid one
+  (`bloom.enabled` defaults false and only `wind_test` overrides it, with method=1): the
+  convolution runs `0 1 2(6) 3(1) 4(1) 5(6) 7(1) 8(1)`, the pyramid the same program with 4-barrier
+  write/read points, both in order with point 6 (the FXAA input) correctly swept as empty. The
+  pyramid was exercised through a scratch copy of the level with `method: 0` — no repo file touched.
+- S9 DONE (uncommitted) — **the old authoring shape is unreachable.** `SetPassPrepare` is PRIVATE
+  (`AddPass2Internal` is its only caller), and `Pass::builtByBuilder` plus a Debug assert in
+  `RunPrepares` states the rule structurally: a graph that COMPILES barriers takes AddPass2 passes
+  only. Graphs without a Prepare block — the inner G-buffer/transparent graphs, whose states belong
+  to their outer pass — never reach that check, which is exactly the intended exemption.
+  `ApplyDeclaredStates` and the `declares` list survive: `declares` still feeds `ctx.UseDeclared()`
+  in the builders, and the one remaining `ApplyDeclaredStates` caller is `Pass_RTDenoise`, the pass
+  S12 parked but deliberately kept. Nothing else in the engine calls it.
+  **The plan is complete.** Every pass of every barrier-compiling graph is authored as one builder
+  that decides, declares and returns its record; every body emits markers and names no resource and
+  no state; and the comparator, which existed to catch the two halves drifting apart, has nothing
+  left to say.
