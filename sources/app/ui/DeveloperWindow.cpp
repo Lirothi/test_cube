@@ -732,11 +732,16 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                             "config. Lower = longer history, steadier but slower to react; 1 = no "
                             "accumulation at all.");
                     ImGui::SetNextItemWidth(140.0f);
-                    ImGui::SliderFloat("Temporal clamp expand", &settings.ssrTemporalClampExpand,
+                    ImGui::SliderFloat("Temporal still inertia", &settings.ssrTemporalClampExpand,
                                        0.0f, 2.0f, "%.2f");
-                    DevHelp("How far the neighbourhood clamp box may widen when the camera is "
-                            "still. 0 = clamp hard to this frame's 3x3 box always (least ghosting, "
-                            "least accumulation); higher lets a still camera keep a longer history.");
+                    DevHelp("Extra inertia for STILL pixels, on top of the blend above. At zero "
+                            "motion this knob both RELAXES the neighbourhood clamp (the measured "
+                            "limiter of still-camera boil) and divides the frame weight by up to "
+                            "(1 + 4x this). Measured on the bronze bench: 0 = baseline 0.46, "
+                            "0.5 = 0.37, 2.0 = 0.20 frame-to-frame boil. Any motion restores the "
+                            "hard clamp and full blend, so response while moving is unchanged. "
+                            "Cost at high values: the reflection of something moving in a STILL "
+                            "mirror (a swaying palm) can trail slightly. 0 = off.");
                 }
                 ImGui::EndDisabled();
 

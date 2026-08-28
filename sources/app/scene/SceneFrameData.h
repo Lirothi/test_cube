@@ -25,9 +25,12 @@ namespace vfx { struct WindState; } // W3: global wind, read when building the g
 // The screen-space search a reflection ray uses. (The Lettier tracer was the third option and was
 // removed with P6C step 6 -- it was a fixed-step screen-space march that LogMarch strictly
 // dominates, and keeping a third code path alive made every SSR A/B a three-way.)
-// DEFAULT IS UeHzb since the byte-for-byte port: the user's verdict on the composite that mixed
-// UE's search with the LogMarch's visibility ladder was "оно странное", and the porting rule of
-// this project is their math over homegrown blends.
+// DEFAULT IS LogMarch. The UeHzb path is a byte-for-byte port of SSRTReflections.usf (kept as
+// the A/B reference), but its stock look lost the comparison: 8-16 coarse steps make the hit
+// tolerance a whole fraction of the ray's depth span, which smears reflections into elongated
+// streaks on oblique views -- the user checked the same scene in the UE editor and the artifact
+// is authentically theirs. UE bury it under their main TAA + SSD denoiser and reach for Lumen/RT
+// where it matters; this engine's LogMarch simply searches better.
 enum class SsrTechnique : uint32_t
 {
     LogMarch = 0,
@@ -465,9 +468,9 @@ struct SceneRenderSettings
     // never show theirs unfiltered either. Defaults ON -- see ssr_temporal_cs.hlsl.
     bool ssrTemporal = true;
     // UE's AA_LERP 8 for ETAAPassConfig::ScreenSpaceReflections: this frame is worth 1/8.
-    float ssrTemporalBlendWeight = 0.0625f;
+    float ssrTemporalBlendWeight = 0.125f;
     // How much the neighbourhood clamp box may widen when the camera is still (0 = never).
-    float ssrTemporalClampExpand = 0.5f;
+    float ssrTemporalClampExpand = 0.8f;
     bool doFxaa = false;
     bool debugTexMode = false;
     // Which target the fullscreen debug blit shows. It used to be hardwired to the cascade shadow

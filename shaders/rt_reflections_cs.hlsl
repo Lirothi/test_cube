@@ -51,8 +51,7 @@ cbuffer Probe : register(b0)
     // two differ for the glass reflection dispatch (primary = glass depth, screen = opaque
     // depth); for opaque reflections screenDepthIndex == depthIndex.
     // alphaMissKeep: stochastic coverage inflation for the foliage alpha test (see
-    // RtAlphaCandidatePasses); frameSeed re-rolls the dither per frame so the temporal resolve
-    // averages it into density.
+    // RtAlphaCandidatePasses); frameSeed is FROZEN by the CPU (see the fill site).
     uint screenDepthIndex; float alphaMissKeep; uint frameSeed; uint _padS2;
 }
 

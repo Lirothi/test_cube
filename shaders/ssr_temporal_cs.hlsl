@@ -177,10 +177,22 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     const float4 lo = centre - halfSpan * expand;
     const float4 hi = centre + halfSpan * expand;
 
-    const float4 reprojected = ReadHistoryClamp(prevUv, lo, hi);
+    // STILL-CAMERA CLAMP RELAXATION. Measured on the ssr_bronze_palms mirror: at a still camera
+    // the residual boil is CLAMP-limited, not blend-limited -- dividing the frame weight by 9
+    // moved it only 0.46 -> 0.40, because on 1spp foliage pixels the 3x3 box teleports with the
+    // flickering raw and drags the history along regardless of the weight. So stillness relaxes
+    // the CLAMP itself: the history blends toward its unclamped read by stillness * clampExpand.
+    // Any camera/object motion collapses stillness to 0 and restores the hard clamp, and the
+    // disocclusion agreement below still applies, so ghosting under motion is bounded exactly as
+    // before. clampExpand = 0 restores the previous behaviour bit-for-bit.
+    const float stillness = 1.0f - velocityMag;
+    const float relax = stillness * saturate(clampExpand);
+    const float4 reprojectedRaw = HistTex.SampleLevel(gSmpLinear, prevUv, 0.0f);
+    const float4 reprojected = lerp(ReadHistoryClamp(prevUv, lo, hi), reprojectedRaw, relax);
     // The un-reprojected history is the fallback when the motion disagrees: stale, but it is this
     // pixel's own past, which beats a confidently wrong neighbour's.
-    const float4 here = ClampSample(HistTex.Load(int3(px, 0)), lo, hi);
+    const float4 hereRaw = HistTex.Load(int3(px, 0));
+    const float4 here = lerp(ClampSample(hereRaw, lo, hi), hereRaw, relax);
 
     const float4 history = lerp(here, reprojected, agreement);
     // NOTE a flat lerp is a MEASURED decision, not an omission. UE's final TAA blend is luma-
@@ -191,5 +203,15 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     // leaf<->sky flips at full HDR contrast -- there the asymmetric weights (a dark sample
     // replaces a bright history almost instantly, a bright one barely lands) turn the
     // accumulator into an oscillator. Half of their pair is worse than none of it.
-    OutTex[px] = lerp(history, newC, saturate(blendWeight));
+    //
+    // STILL-CAMERA INERTIA. The residual boil at a still camera is blend * |raw - mean| per
+    // frame -- the CLAMP is not the limiter there (the history sits inside the box; widening it
+    // did nothing visually, as measured by the user), the frame WEIGHT is. So the same knob that
+    // widens the box when still now also divides the frame weight by up to (1 + 4*clampExpand):
+    // at the default 0.5 a still pixel accumulates 3x longer, at the slider max 2.0 -- 9x.
+    // Ghosting stays bounded exactly as before -- the neighbourhood clamp is untouched -- and a
+    // moving pixel (velocityMag -> 1) gets the full configured blend, so responsiveness under
+    // motion does not change. clampExpand = 0 restores the previous behaviour bit-for-bit.
+    const float effectiveBlend = saturate(blendWeight) / (1.0f + 4.0f * clampExpand * stillness);
+    OutTex[px] = lerp(history, newC, effectiveBlend);
 }
