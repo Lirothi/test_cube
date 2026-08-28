@@ -26,7 +26,7 @@ cbuffer Probe : register(b0)
     uint depthIndex;
     uint reflectionUavIndex;
     uint geomInfoIndex;
-    uint alphaTestOff; // mirrors the reflection pass, so the debug view shows what it sees
+    uint alphaMode; // mirrors the reflection pass (0 off, 1 first-hit, 2 full)
     uint outWidth;
     uint outHeight;
     uint _pad;
@@ -69,7 +69,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // Part C: same alpha-tested traversal as the reflection ray, so the debug view shows
         // what the real passes see (a solid-quad palm here would misreport a fixed bug).
         RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-        q.TraceRayInline(tlas, alphaTestOff != 0u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, ray);
+        q.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, ray);
         StructuredBuffer<GeometryInfo> cgeom = ResourceDescriptorHeap[geomInfoIndex];
         while (q.Proceed())
         {

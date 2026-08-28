@@ -192,7 +192,7 @@ struct RtReflectConstants
     // alphaMissKeep/frameSeed: stochastic coverage inflation for the RT foliage alpha test —
     // see RtAlphaCandidatePasses in rt_geometry.hlsli.
     uint32_t screenDepthIndex = 0; float alphaMissKeep = 0.0f; uint32_t frameSeed = 0;
-    uint32_t alphaTestOff = 0; // 1 = RAY_FLAG_FORCE_OPAQUE at trace time (hard alpha kill switch)
+    uint32_t alphaMode = 2; // 0 off (solid cards), 1 first-hit holes, 2 full candidates
 };
 
 } // namespace
@@ -274,7 +274,7 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, 3);
         c.screenDepthIndex = c.depthIndex; // opaque: primary == on-screen depth (no change)
         c.alphaMissKeep = std::clamp(frame_->settings.rtAlphaMissKeep, 0.0f, 1.0f);
-        c.alphaTestOff = frame_->settings.rtAlphaTest ? 0u : 1u;
+        c.alphaMode = std::min(frame_->settings.rtAlphaMode, 2u);
         // FROZEN dither, by measurement (ssr_bronze_palms, resolved frame-to-frame boil in the
         // mirror band): fill 0 = 0.41; fill 0.15 re-rolled per frame = 0.74; re-rolled once per
         // EMA time constant = 1.25 (coherent drift is the WORST case for the resolve); frozen =
@@ -446,7 +446,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 3);        // primary = glass depth
         c.screenDepthIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 8);  // visibility match = opaque depth
         c.alphaMissKeep = std::clamp(frame_->settings.rtAlphaMissKeep, 0.0f, 1.0f);
-        c.alphaTestOff = frame_->settings.rtAlphaTest ? 0u : 1u;
+        c.alphaMode = std::min(frame_->settings.rtAlphaMode, 2u);
         // FROZEN dither, by measurement (ssr_bronze_palms, resolved frame-to-frame boil in the
         // mirror band): fill 0 = 0.41; fill 0.15 re-rolled per frame = 0.74; re-rolled once per
         // EMA time constant = 1.25 (coherent drift is the WORST case for the resolve); frozen =
@@ -685,7 +685,7 @@ struct RtDebugConstants
     uint32_t depthIndex = 0;
     uint32_t reflectionUavIndex = 0;
     uint32_t geomInfoIndex = 0;
-    uint32_t alphaTestOff = 0; // mirrors the reflection pass
+    uint32_t alphaMode = 2; // mirrors the reflection pass
     uint32_t outWidth = 0;
     uint32_t outHeight = 0;
     uint32_t _pad = 0;
@@ -735,7 +735,7 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
         c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, 15);
         c.reflectionUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, 16);
         c.geomInfoIndex = rtAs_.Bindless().GeomInfoIndex(frameIndex);
-        c.alphaTestOff = frame_->settings.rtAlphaTest ? 0u : 1u;
+        c.alphaMode = std::min(frame_->settings.rtAlphaMode, 2u);
         c.outWidth = renderer->GetReflectionTextureWidth();
         c.outHeight = renderer->GetReflectionTextureHeight();
 

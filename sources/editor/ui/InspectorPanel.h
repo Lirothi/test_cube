@@ -4,6 +4,7 @@
 #include <string>
 
 #include "editor/scene/EditorSceneDocument.h" // EditorObject, EditorTransform
+#include "editor/ui/InspectorMultiEdit.h"
 
 struct EditorContext;
 class EditorCommandStack;
@@ -27,6 +28,7 @@ public:
 private:
     void DrawTransformEditor(EditorContext& ctx, EditorCommandStack& commandStack, EditorObject& object);
 
+    InspectorMultiEdit multiEdit_;
     EditorObjectId nameEditObject_{};
     char nameEditBuffer_[256] = {};
     std::string nameBeforeEdit_;

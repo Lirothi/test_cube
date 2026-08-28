@@ -432,11 +432,24 @@ namespace
         {
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(obj.id.value);
             GBufferRenderable* gbMat = runtime ? runtime->AsGBufferRenderable() : nullptr;
-            const size_t slotCount = gbMat ? gbMat->SlotCount() : 0;
+            size_t slotCount = gbMat ? gbMat->SlotCount() : 0;
 
             // Per-slot material list for multi-material (glTF) objects; a single "Material" combo
             // otherwise (back-compat). "auto" = pull the slot's material from the glTF (B2).
-            const bool multiSlot = slotCount > 1;
+            bool multiSlot = slotCount > 1;
+            if (ctx.selection.Size() > 1)
+            {
+                // Only expose slots that exist on EVERY selected mesh. A single-slot
+                // primary can still share Slot 0 with a multi-material recipient.
+                for (const auto id : ctx.selection.Ordered())
+                {
+                    auto* other = ctx.scene.FindEditorObject(id.value);
+                    const auto* gb = other ? other->AsGBufferRenderable() : nullptr;
+                    const size_t count = gb ? gb->SlotCount() : 0;
+                    multiSlot |= count > 1;
+                    slotCount = std::min(slotCount, count);
+                }
+            }
 
             if (multiSlot)
             {
@@ -518,12 +531,12 @@ namespace
                 ImGui::TextDisabled("Material params editable on spawned objects.");
                 return;
             }
-            MaterialParams& mp = gb->MaterialParamsRef();
+            const MaterialParams& mp = static_cast<const GBufferRenderable*>(gb)->MaterialParamsRef();
 
             float texOffsScale[4] = { mp.texOffsScale.x, mp.texOffsScale.y, mp.texOffsScale.z, mp.texOffsScale.w };
             if (ImGui::DragFloat4("Tex Offset/Scale", texOffsScale, 0.01f))
             {
-                mp.texOffsScale = Math::float4(texOffsScale[0], texOffsScale[1], texOffsScale[2], texOffsScale[3]);
+                gb->MaterialParamsRef().texOffsScale = Math::float4(texOffsScale[0], texOffsScale[1], texOffsScale[2], texOffsScale[3]);
                 obj.properties["texOffsScale"] = { texOffsScale[0], texOffsScale[1], texOffsScale[2], texOffsScale[3] };
                 ctx.document.SetDirty(true);
             }
@@ -531,7 +544,7 @@ namespace
             float normalStrength = mp.texFlags.w;
             if (ImGui::DragFloat("Normal Strength", &normalStrength, 0.01f, 0.0f, 10.0f))
             {
-                mp.SetNormalStrength(normalStrength);
+                gb->MaterialParamsRef().SetNormalStrength(normalStrength);
                 obj.properties["normalStrength"] = normalStrength;
                 ctx.document.SetDirty(true);
             }
@@ -550,7 +563,7 @@ namespace
             bool useMR = mp.texFlags.y > 0.5f;
             if (ImGui::Checkbox("Use MR Texture", &useMR))
             {
-                mp.SetUseMR(useMR);
+                gb->MaterialParamsRef().SetUseMR(useMR);
                 obj.properties["useMR"] = useMR;
                 ctx.document.SetDirty(true);
             }
@@ -558,7 +571,7 @@ namespace
             float metalRough[2] = { mp.metalRough.x, mp.metalRough.y };
             if (ImGui::DragFloat2("Metallic / Roughness", metalRough, 0.01f, 0.0f, 1.0f))
             {
-                mp.metalRough = Math::float2(metalRough[0], metalRough[1]);
+                gb->MaterialParamsRef().metalRough = Math::float2(metalRough[0], metalRough[1]);
                 obj.properties["metalRough"] = { metalRough[0], metalRough[1] };
                 ctx.document.SetDirty(true);
             }

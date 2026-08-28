@@ -174,6 +174,7 @@ uint32_t BindlessTable::GetOrUpdateMesh(const void* owner, Mesh* mesh,
         rec.alphaCutoff = (rec.albedoTexIndex != 0xFFFFFFFFu) ? sm.alphaCutoff : -1.0f;
 
         GeometryInfoGPU& current = geomInfo_[base + s];
+        rec.flags = current.flags; // owned by the RW reuse-deny pass, not by material state
         if (std::memcmp(&current, &rec, sizeof(rec)) != 0) {
             current = rec;
             changed = true;
@@ -182,6 +183,22 @@ uint32_t BindlessTable::GetOrUpdateMesh(const void* owner, Mesh* mesh,
 
     if (changed) { ++geomVersion_; }
     return base;
+}
+
+void BindlessTable::SetScreenReuseDenied(uint32_t baseRecord, uint32_t count, bool denied)
+{
+    if (!Ready() || buildFailed_) { return; }
+    const size_t end = std::min(geomInfo_.size(), static_cast<size_t>(baseRecord) + count);
+    bool changed = false;
+    for (size_t i = baseRecord; i < end; ++i) {
+        const uint32_t next = denied ? (geomInfo_[i].flags | kGeomFlagNoScreenReuse)
+                                     : (geomInfo_[i].flags & ~kGeomFlagNoScreenReuse);
+        if (next != geomInfo_[i].flags) {
+            geomInfo_[i].flags = next;
+            changed = true;
+        }
+    }
+    if (changed) { ++geomVersion_; }
 }
 
 bool BindlessTable::FrameReady(UINT frameIndex) const

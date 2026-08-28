@@ -276,6 +276,9 @@
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/ui/InspectorMultiEdit.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
@@ -699,6 +702,12 @@
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/InspectorPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/InspectorMultiEdit.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/InspectorPropertyDelta.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/ViewportGizmo.h">

@@ -44,8 +44,15 @@ struct GeometryInfoGPU
     // meaningful on records whose BLAS geometry was built WITHOUT the OPAQUE flag: an opaque
     // geometry never surfaces as a non-opaque candidate, so its cutoff is never read.
     float    alphaCutoff = -1.0f;
-    uint32_t _pad = 0u;
+    // RW reuse-deny: bit0 set = this record's RASTER image wind-sways this frame while its RT
+    // geometry is rest-pose (no deformed BLAS slot), so the reflection shader must not reuse the
+    // on-screen colour for hits on it -- the reflected image would slide inside a static
+    // silhouette. Owned by RtSceneAs' post-binding pass, NOT by material state: GetOrUpdateMesh
+    // preserves it across material rewrites.
+    uint32_t flags = 0u;
 };
+
+inline constexpr uint32_t kGeomFlagNoScreenReuse = 1u;
 
 // Persistent bindless table (S9): a single shader-visible CBV_SRV_UAV heap that
 // RT shaders index directly via SM6.6 ResourceDescriptorHeap[] (needs
@@ -115,6 +122,11 @@ public:
     // Call only AFTER BeginFrame waited for this frame slot's fence, and before recording RT.
     // Neither the other frame buffers nor their SRVs are overwritten/released by this upload.
     bool UploadGeometryInfo(UINT frameIndex);
+
+    // RW reuse-deny (see GeometryInfoGPU::flags): applies `denied` to the owner's record run
+    // [baseRecord, baseRecord + count). Bumps the version only when a bit actually changes, so
+    // a steady state does not re-upload the table every frame.
+    void SetScreenReuseDenied(uint32_t baseRecord, uint32_t count, bool denied);
 
     UINT GeometryCount() const { return static_cast<UINT>(geomInfo_.size()); }
     UINT DescriptorSetCount() const { return static_cast<UINT>(descriptorCache_.size()); }

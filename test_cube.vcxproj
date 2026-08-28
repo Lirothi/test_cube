@@ -266,6 +266,7 @@
     <ClCompile Include="sources/editor/commands/SetParticlePresetCommand.cpp" />
     <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp" />
+    <ClCompile Include="sources/editor/ui/InspectorMultiEdit.cpp" />
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp" />
     <ClCompile Include="sources/app/ui/DeveloperWindow.cpp" />
     <ClCompile Include="sources/ocean/OceanControlsWindow.cpp" />
@@ -430,6 +431,8 @@
     <ClInclude Include="sources/editor/commands/SetParticlePresetCommand.h" />
     <ClInclude Include="sources/editor/ui/SceneOutlinerPanel.h" />
     <ClInclude Include="sources/editor/ui/InspectorPanel.h" />
+    <ClInclude Include="sources/editor/ui/InspectorMultiEdit.h" />
+    <ClInclude Include="sources/editor/ui/InspectorPropertyDelta.h" />
     <ClInclude Include="sources/editor/ui/ViewportGizmo.h" />
     <ClInclude Include="sources/app/ui/DeveloperWindow.h" />
     <ClInclude Include="sources/ocean/OceanControlsWindow.h" />

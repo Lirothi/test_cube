@@ -314,8 +314,14 @@ namespace
         if (setting == "ssr.temporal")   { renderSettings.ssrTemporal = value != 0.0f; return true; }
         // Stochastic coverage inflation for the RT foliage alpha test (0 honest .. 1 solid cards).
         if (setting == "rt.alphaMissKeep") { renderSettings.rtAlphaMissKeep = value; return true; }
-        // The HARD kill switch for the RT foliage alpha test (0 = FORCE_OPAQUE traversal).
-        if (setting == "rt.alphaTest") { renderSettings.rtAlphaTest = value != 0.0f; return true; }
+        // RT foliage alpha mode: 0 off (solid cards), 1 first-hit holes, 2 full candidates.
+        // rt.alphaTest stays as the legacy on/off alias.
+        if (setting == "rt.alphaMode")
+        {
+            renderSettings.rtAlphaMode = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f));
+            return true;
+        }
+        if (setting == "rt.alphaTest") { renderSettings.rtAlphaMode = value != 0.0f ? 2u : 0u; return true; }
         // RW: wind-deformed BLASes for near casters (sway in RT reflections) + their radius.
         if (setting == "rt.windBlas") { renderSettings.rtWindBlas = value != 0.0f; return true; }
         if (setting == "rt.windRadius") { renderSettings.rtWindBlasRadius = value; return true; }

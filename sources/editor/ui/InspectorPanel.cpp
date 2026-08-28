@@ -186,6 +186,11 @@ namespace
             std::to_string(ctx.selection.Size()) + " Objects");
         for (const EditorObjectId id : ctx.selection.Ordered())
         {
+            bool currentEnabled = true;
+            if (TryGetEnabled(ctx.document, id, currentEnabled) && currentEnabled == enabled)
+            {
+                continue; // A no-op environment command must not abort the composite.
+            }
             std::unique_ptr<EditorCommand> command =
                 BuildEnabledCommand(ctx.document, id, enabled);
             if (command)
@@ -420,8 +425,11 @@ namespace
         // Undo snapshots and the command payload stay on `props` REGARDLESS: EditEnvironmentCommand
         // replaces an object's whole property set, so handing it a group would delete its siblings.
         std::string groupKey;
+        nlohmann::json missingGroup = nlohmann::json::object();
         const auto tgt = [&]() -> nlohmann::json& {
-            return groupKey.empty() ? props : props[groupKey];
+            if (groupKey.empty()) { return props; }
+            const auto it = props.find(groupKey);
+            return it != props.end() && it->is_object() ? *it : missingGroup;
         };
         // `after` for the commands that build one by copy-then-mutate.
         const auto withField = [&](const char* key, nlohmann::json value) {
@@ -467,27 +475,39 @@ namespace
                 label));
         };
 
-        const auto trackContinuousEdit = [&](const nlohmann::json& beforeItem, bool changed)
+        // Capture once on activation, BEFORE writing the widget's new value.
+        // Copying the entire environment JSON per visible control made expanded
+        // Post Process particularly expensive in unoptimized Debug builds.
+        const auto beginContinuousEdit = [&](bool changed)
         {
-            if (ImGui::IsItemActivated())
+            if (ImGui::IsItemActivated() ||
+                (changed && activeEditObject.value != env.id.value))
             {
                 activeEditObject = env.id;
-                propertiesBeforeEdit = beforeItem;
+                propertiesBeforeEdit = props;
             }
+        };
+        const auto trackContinuousEdit = [&](bool changed)
+        {
             if (changed)
             {
+                if (!groupKey.empty() &&
+                    (!props.contains(groupKey) || !props[groupKey].is_object()))
+                {
+                    props[groupKey] = std::move(missingGroup);
+                    missingGroup = nlohmann::json::object();
+                }
                 EnvironmentRuntime::Apply(ctx, env);
                 ctx.document.SetDirty(true);
             }
-            if (ImGui::IsItemDeactivatedAfterEdit())
+            // Checkboxes/combos can finish in the same frame as activation.
+            if (activeEditObject.value == env.id.value &&
+                (ImGui::IsItemDeactivatedAfterEdit() ||
+                    (changed && !ImGui::IsItemActive())))
             {
-                const nlohmann::json before =
-                    activeEditObject.value == env.id.value ?
-                        propertiesBeforeEdit :
-                        beforeItem;
                 commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
                     env.id,
-                    before,
+                    propertiesBeforeEdit,
                     props,
                     historyLabel));
                 activeEditObject = EditorObjectId{};
@@ -512,12 +532,12 @@ namespace
 
         auto colorEdit = [&]()
         {
-            const nlohmann::json beforeItem = props;
             const Math::float3 c = JsonFloat3(tgt(), "color", Math::float3(1.0f, 1.0f, 1.0f));
             float cv[3] = { c.x, c.y, c.z };
             const bool changed = ImGui::ColorEdit3("Color", cv);
+            beginContinuousEdit(changed);
             if (changed) { tgt()["color"] = { cv[0], cv[1], cv[2] }; }
-            trackContinuousEdit(beforeItem, changed);
+            trackContinuousEdit(changed);
         };
         // `flags` is here for P16.2's lux row: a quantity whose useful range spans five decades
         // cannot be dragged linearly, and a logarithmic drag is a property of THAT row, not a reason
@@ -525,20 +545,20 @@ namespace
         auto dragF = [&](const char* label, const char* key, float def, float speed, float lo, float hi,
                          const char* fmt = "%.3f", ImGuiSliderFlags flags = 0)
         {
-            const nlohmann::json beforeItem = props;
             float v = JsonFloat(tgt(), key, def);
             const bool changed = ImGui::DragFloat(label, &v, speed, lo, hi, fmt, flags);
+            beginContinuousEdit(changed);
             if (changed) { tgt()[key] = v; }
-            trackContinuousEdit(beforeItem, changed);
+            trackContinuousEdit(changed);
         };
         auto dragF3 = [&](const char* label, const char* key, const Math::float3& def, float speed)
         {
-            const nlohmann::json beforeItem = props;
             const Math::float3 d3 = JsonFloat3(tgt(), key, def);
             float v[3] = { d3.x, d3.y, d3.z };
             const bool changed = ImGui::DragFloat3(label, v, speed);
+            beginContinuousEdit(changed);
             if (changed) { tgt()[key] = { v[0], v[1], v[2] }; }
-            trackContinuousEdit(beforeItem, changed);
+            trackContinuousEdit(changed);
         };
         auto checkB = [&](const char* label, const char* key, bool def)
         {
@@ -834,14 +854,14 @@ namespace
             const std::string curve = tgt().value("toneCurve", std::string("legacy"));
             int curveIndex = (curve == "agx") ? 1 : ((curve == "filmic" || curve == "film") ? 2 : 0);
             {
-                const nlohmann::json beforeItem = props;
                 const char* kCurveNames[] = { "Legacy (ACES fit)", "AgX", "Filmic (Unreal)" };
                 const bool changed = ImGui::Combo("Tone Curve", &curveIndex, kCurveNames, 3);
+                beginContinuousEdit(changed);
                 if (changed)
                 {
                     tgt()["toneCurve"] = (curveIndex == 1) ? "agx" : (curveIndex == 2 ? "filmic" : "legacy");
                 }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
 
             ImGui::SeparatorText("Colour grade (applies to every curve)");
@@ -958,11 +978,11 @@ namespace
             // P6B. Every tooltip states the PERFORMANCE consequence as well as the look one, because
             // three of these knobs are linear in GPU cost and that is not guessable from the name.
             {
-                const nlohmann::json beforeItem = props;
                 bool gtaoEnabled = tgt().value("enabled", false);
                 const bool changed = ImGui::Checkbox("Enabled", &gtaoEnabled);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["enabled"] = gtaoEnabled; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Ground-truth screen-space ambient occlusion. The whole chain costs about "
                           "0.12 ms at the defaults (2 directions x 6 steps, half render resolution). "
@@ -992,11 +1012,11 @@ namespace
                           "behaviour). At 0 the second walk's COMPUTE PATH is off entirely - the "
                           "same exact no-op as Sky Radius at the bottom, kept as its own switch.");
             {
-                const nlohmann::json beforeItem = props;
                 int skyMip = static_cast<int>(tgt().value("skyMipBias", 2u));
                 const bool changed = ImGui::SliderInt("Sky Mip Bias", &skyMip, 0, 5);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["skyMipBias"] = static_cast<std::uint32_t>(skyMip < 0 ? 0 : skyMip); }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Depth-pyramid level the WIDE walk starts from (the contact walk keeps its "
                           "own bias below). Its taps are tens of pixels apart, so a mip-0 fetch lands "
@@ -1013,21 +1033,21 @@ namespace
 
             ImGui::SeparatorText("Quality (these cost GPU time)");
             {
-                const nlohmann::json beforeItem = props;
                 int angles = static_cast<int>(tgt().value("numAngles", 2u));
                 const bool changed = ImGui::SliderInt("Directions", &angles, 1, 8);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["numAngles"] = static_cast<std::uint32_t>(angles < 1 ? 1 : angles); }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Screen directions searched per pixel. Cost is LINEAR in this - doubling it "
                           "roughly doubles the raw pass. 2 is the UE default (r.GTAO.NumAngles) and "
                           "leans on the temporal stage to average the rest over time.");
             {
-                const nlohmann::json beforeItem = props;
                 int steps = static_cast<int>(tgt().value("numSteps", 6u));
                 const bool changed = ImGui::SliderInt("Steps", &steps, 2, 16);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["numSteps"] = static_cast<std::uint32_t>(steps < 1 ? 1 : steps); }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Taps along each direction. Also LINEAR in cost, and it doubles as the floor "
                           "on the pixel radius - so raising it widens the reach at distance as a side "
@@ -1041,20 +1061,20 @@ namespace
 
             ImGui::SeparatorText("Filtering");
             {
-                const nlohmann::json beforeItem = props;
                 bool denoise = tgt().value("denoise", true);
                 const bool changed = ImGui::Checkbox("Denoise", &denoise);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["denoise"] = denoise; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Bilateral 5x5 across depth and normal, about 0.017 ms. Removes roughly 40% "
                           "of the raw noise; off is immediately visible as per-pixel grain.");
             {
-                const nlohmann::json beforeItem = props;
                 bool temporal = tgt().value("temporal", true);
                 const bool changed = ImGui::Checkbox("Temporal", &temporal);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["temporal"] = temporal; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Accumulates over frames, which is what makes a 2x6-tap estimate usable at "
                           "all. About 0.012 ms plus one extra half-res target. Off is noisier than any "
@@ -1078,18 +1098,18 @@ namespace
 
             ImGui::SeparatorText("Advanced");
             {
-                const nlohmann::json beforeItem = props;
                 bool gbufferNormal = tgt().value("useGBufferNormal", false);
                 const bool changed = ImGui::Checkbox("Normal from G-buffer", &gbufferNormal);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["useGBufferNormal"] = gbufferNormal; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             {
-                const nlohmann::json beforeItem = props;
                 bool useHzb = tgt().value("useHzb", true);
                 const bool changed = ImGui::Checkbox("Use depth pyramid (HZB)", &useHzb);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["useHzb"] = useHzb; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Walks the horizon search over the hierarchical depth buffer, reading a "
                           "coarser mip the further a step reaches. Measured 22% faster on the AO pass "
@@ -1108,11 +1128,11 @@ namespace
             // UE parameter it corresponds to -- and, where a UE default does NOT carry over, says
             // why. That distinction is the whole reason these numbers are not simply theirs.
             {
-                const nlohmann::json beforeItem = props;
                 bool fogEnabled = tgt().value("enabled", false);
                 const bool changed = ImGui::Checkbox("Enabled", &fogEnabled);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["enabled"] = fogEnabled; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Global analytic height fog, applied to opaque geometry in compose AND to "
                           "the ocean surface, which share one packed parameter set so the water and "
@@ -1217,11 +1237,11 @@ namespace
             // P8. Every tooltip says where the number is measured, because the two that matter --
             // threshold and intensity -- are in units that are easy to assume wrongly.
             {
-                const nlohmann::json beforeItem = props;
                 bool bloomEnabled = tgt().value("enabled", false);
                 const bool changed = ImGui::Checkbox("Enabled", &bloomEnabled);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["enabled"] = bloomEnabled; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Exposure-aware HDR bloom: a threshold pass, a half-resolution pyramid "
                           "and a tent reconstruction, composited into the image BEFORE the tone "
@@ -1259,11 +1279,11 @@ namespace
                           "default here. Lower = a longer shoulder, so highlights ease into the "
                           "bloom instead of switching on at a fixed brightness.");
             {
-                const nlohmann::json beforeItem = props;
                 bool firefly = tgt().value("fireflyClamp", true);
                 const bool changed = ImGui::Checkbox("Firefly Clamp", &firefly);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["fireflyClamp"] = firefly; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Karis average on the FIRST downsample only: each tap is weighted by "
                           "1/(1+luma), so one blown-out texel is averaged DOWN instead of surviving "
@@ -1293,12 +1313,12 @@ namespace
 
             ImGui::SeparatorText("Method");
             {
-                const nlohmann::json beforeItem = props;
                 int method = static_cast<int>(tgt().value("method", 0u));
                 const char* kMethods[] = { "Standard (pyramid)", "Convolution (FFT)" };
                 const bool changed = ImGui::Combo("Method", &method, kMethods, 2);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["method"] = static_cast<std::uint32_t>(method < 0 ? 0 : method); }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("STANDARD is the mip pyramid: cheap, symmetric, and structurally incapable "
                           "of a streak -- a stack of Gaussians has no shape to give.\n\n"
@@ -1347,11 +1367,11 @@ namespace
                     }
                     if (!items.empty())
                     {
-                        const nlohmann::json beforeItem = props;
                         const bool changed = ImGui::Combo("Kernel Image", &sel, items.data(),
                                                           static_cast<int>(items.size()));
+                        beginContinuousEdit(changed);
                         if (changed && sel >= 0) { tgt()["convKernel"] = kernels[static_cast<size_t>(sel)]; }
-                        trackContinuousEdit(beforeItem, changed);
+                        trackContinuousEdit(changed);
                     }
                 }
                 InspectorHelp("The kernel photograph itself. Anything square and FP16 in textures/ "
@@ -1371,7 +1391,6 @@ namespace
                               "This is the ONE size control: the visible glare is the kernel "
                               "image, scaled.");
                 {
-                    const nlohmann::json beforeItem = props;
                     float ktint[3] = { 1.0f, 1.0f, 1.0f };
                     if (tgt().contains("convKernelTint") && tgt()["convKernelTint"].is_array() &&
                         tgt()["convKernelTint"].size() == 3)
@@ -1383,8 +1402,9 @@ namespace
                     }
                     const bool changed = ImGui::ColorEdit3("Kernel Tint", ktint,
                         ImGuiColorEditFlags_Float);
+                    beginContinuousEdit(changed);
                     if (changed) { tgt()["convKernelTint"] = { ktint[0], ktint[1], ktint[2] }; }
-                    trackContinuousEdit(beforeItem, changed);
+                    trackContinuousEdit(changed);
                 }
                 InspectorHelp("A colour multiplier on the kernel IMAGE, the runtime equivalent of "
                               "re-authoring the photograph. It survives the normalisation: the DC "
@@ -1468,7 +1488,6 @@ namespace
                           "red ~30% shorter at 1.0, so the tail shifts white -> blue along "
                           "its length -- the look of real cylindrical-element coatings.");
             {
-                const nlohmann::json beforeItem = props;
                 float tint[3] = { 1.0f, 1.0f, 1.0f };
                 if (tgt().contains("convAnamorphicTint") &&
                     tgt()["convAnamorphicTint"].is_array() &&
@@ -1481,19 +1500,20 @@ namespace
                 }
                 const bool changed = ImGui::ColorEdit3("Anamorphic Tint", tint,
                     ImGuiColorEditFlags_Float);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["convAnamorphicTint"] = { tint[0], tint[1], tint[2] }; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("A plain colour multiplier on the whole band, on top of the "
                           "chroma's own gradient.");
 
             ImGui::SeparatorText("Lens Ghosts (any bloom method)");
             {
-                const nlohmann::json beforeItem = props;
                 int ghosts = static_cast<int>(tgt().value("convGhosts", 0u));
                 const bool changed = ImGui::SliderInt("Ghost Count", &ghosts, 0, 8);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["convGhosts"] = static_cast<std::uint32_t>(ghosts < 0 ? 0 : ghosts); }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("P8C-2: UE's actual mechanism, both halves. A bokeh SCATTER splats "
                           "one iris sprite per bright pixel of the thresholded scene -- the "
@@ -1503,11 +1523,11 @@ namespace
                           "rest mirrored through the centre). No sun position and no sprite "
                           "atlas exist anywhere: two suns give two chains for free.");
             {
-                const nlohmann::json beforeItem = props;
                 int blades = static_cast<int>(tgt().value("convBlades", 6u));
                 const bool changed = ImGui::SliderInt("Blades", &blades, 0, 12);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["convBlades"] = static_cast<std::uint32_t>(blades < 0 ? 0 : blades); }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp("Number of iris blades in the BOKEH SPRITE the scatter splats -- 0 "
                           "is a round bokeh. It shapes the ghosts only: the bloom kernel is a "
@@ -1608,20 +1628,20 @@ namespace
                 auto dragFlicker = [&](const char* label, const char* key,
                     float def, float speed, float lo, float hi)
                 {
-                    const nlohmann::json beforeItem = props;
                     float value = JsonFloat(tgt()["flicker"], key, def);
                     const bool changed = ImGui::DragFloat(label, &value, speed, lo, hi);
+                    beginContinuousEdit(changed);
                     if (changed) { tgt()["flicker"][key] = value; }
-                    trackContinuousEdit(beforeItem, changed);
+                    trackContinuousEdit(changed);
                 };
                 dragFlicker("Amplitude", "amplitude", 0.35f, 0.01f, 0.0f, 1.0f);
                 dragFlicker("Frequency (Hz)", "frequencyHz", 7.0f, 0.1f, 0.0f, 60.0f);
 
-                const nlohmann::json beforeItem = props;
                 int seed = tgt()["flicker"].value("seed", 3);
                 const bool seedChanged = ImGui::DragInt("Seed", &seed, 1.0f, 0, 1000000);
+                beginContinuousEdit(seedChanged);
                 if (seedChanged) { tgt()["flicker"]["seed"] = std::max(seed, 0); }
-                trackContinuousEdit(beforeItem, seedChanged);
+                trackContinuousEdit(seedChanged);
             }
         }
         else if (env.type == "spotLight")
@@ -1715,13 +1735,13 @@ namespace
                 "derivatives.");
 
             {
-                const nlohmann::json beforeItem = props;
                 const Math::float3 g = JsonFloat3(tgt(), "groundAlbedo",
                                                   Math::float3(0.25f, 0.25f, 0.25f));
                 float gv[3] = { g.x, g.y, g.z };
                 const bool changed = ImGui::ColorEdit3("Ground Bounce Albedo", gv);
+                beginContinuousEdit(changed);
                 if (changed) { tgt()["groundAlbedo"] = { gv[0], gv[1], gv[2] }; }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             InspectorHelp(
                 "P16.12. The DIFFUSE REFLECTANCE OF THE GROUND -- the light that comes back UP off "
@@ -1758,10 +1778,10 @@ namespace
                 rayDirection, sourceAzimuth, sourceElevation);
 
             {
-                const nlohmann::json beforeItem = props;
                 const bool changed = ImGui::DragFloat("Source azimuth (Y)",
                     &sourceAzimuth, 0.5f, -180.0f, 180.0f, "%.1f deg",
                     ImGuiSliderFlags_AlwaysClamp);
+                beginContinuousEdit(changed);
                 if (changed)
                 {
                     rayDirection = EditorLightDirection::RayFromSourceAngles(
@@ -1769,13 +1789,13 @@ namespace
                     tgt()["direction"] = {
                         rayDirection.x, rayDirection.y, rayDirection.z };
                 }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
             {
-                const nlohmann::json beforeItem = props;
                 const bool changed = ImGui::DragFloat("Source elevation",
                     &sourceElevation, 0.5f, -89.0f, 89.0f, "%.1f deg",
                     ImGuiSliderFlags_AlwaysClamp);
+                beginContinuousEdit(changed);
                 if (changed)
                 {
                     rayDirection = EditorLightDirection::RayFromSourceAngles(
@@ -1783,7 +1803,7 @@ namespace
                     tgt()["direction"] = {
                         rayDirection.x, rayDirection.y, rayDirection.z };
                 }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             }
 
             rayDirection = EditorLightDirection::NormalizedRay(rayDirection);
@@ -1838,12 +1858,8 @@ namespace
             };
             for (const Section& section : sections)
             {
-                // A section the document has never carried still has to be editable, or a level
-                // authored before this group existed could never gain it.
-                if (!props.contains(section.key) || !props[section.key].is_object())
-                {
-                    props[section.key] = nlohmann::json::object();
-                }
+                // Missing sections use defaults without authoring empty groups just by viewing.
+                missingGroup = nlohmann::json::object();
                 if (ImGui::CollapsingHeader(section.label))
                 {
                     ImGui::PushID(section.key);
@@ -1983,13 +1999,8 @@ namespace
                 ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SetNextItemWidth(std::max(120.0f,
                 ImGui::GetContentRegionAvail().x - applyButtonWidth - ImGui::GetStyle().ItemSpacing.x));
-            const nlohmann::json beforeItem = props;
             const bool textureChanged = ImGui::InputText("Texture", buf, sizeof(buf));
-            if (ImGui::IsItemActivated())
-            {
-                activeEditObject = env.id;
-                propertiesBeforeEdit = beforeItem;
-            }
+            beginContinuousEdit(textureChanged);
             if (textureChanged)
             {
                 tgt()["texture"] = NormalizePath(buf);
@@ -1999,15 +2010,11 @@ namespace
             const bool textureCommitted = ImGui::IsItemDeactivatedAfterEdit();
             ImGui::SameLine();
             const bool applyTexture = ImGui::Button("Apply Texture");
-            if (textureCommitted)
+            if (textureCommitted && activeEditObject.value == env.id.value)
             {
-                const nlohmann::json before =
-                    activeEditObject.value == env.id.value ?
-                        propertiesBeforeEdit :
-                        beforeItem;
                 commandStack.Execute(ctx, std::make_unique<EditEnvironmentCommand>(
                     env.id,
-                    before,
+                    propertiesBeforeEdit,
                     props,
                     "Set Skybox Texture"));
                 activeEditObject = EditorObjectId{};
@@ -2695,14 +2702,13 @@ namespace
                 }
 
                 ImGui::SeparatorText("Simulation overrides");
-                const nlohmann::json windForceBefore = props;
                 float windForce = JsonFloat(tgt(), "windForce", ocean->GetWindForce01());
                 const bool windForceChanged =
                     ImGui::SliderFloat("Wind Force", &windForce, 0.0f, 1.0f);
+                beginContinuousEdit(windForceChanged);
                 if (windForceChanged) { tgt()["windForce"] = windForce; }
-                trackContinuousEdit(windForceBefore, windForceChanged);
+                trackContinuousEdit(windForceChanged);
 
-                const nlohmann::json windDirectionBefore = props;
                 float windDirection = JsonFloat(
                     tgt(),
                     "windDirectionDeg",
@@ -2714,10 +2720,10 @@ namespace
                     -360.0f,
                     360.0f,
                     "%.1f deg");
+                beginContinuousEdit(windDirectionChanged);
                 if (windDirectionChanged) { tgt()["windDirectionDeg"] = windDirection; }
-                trackContinuousEdit(windDirectionBefore, windDirectionChanged);
+                trackContinuousEdit(windDirectionChanged);
 
-                const nlohmann::json swellDirectionBefore = props;
                 float swellDirection = JsonFloat(
                     tgt(),
                     "swellDirectionDeg",
@@ -2729,8 +2735,9 @@ namespace
                     -360.0f,
                     360.0f,
                     "%.1f deg");
+                beginContinuousEdit(swellDirectionChanged);
                 if (swellDirectionChanged) { tgt()["swellDirectionDeg"] = swellDirection; }
-                trackContinuousEdit(swellDirectionBefore, swellDirectionChanged);
+                trackContinuousEdit(swellDirectionChanged);
             }
         }
         else if (env.type == "wind")
@@ -2741,11 +2748,11 @@ namespace
             dragF("Direction", "directionDeg", wind.directionDeg,
                 0.5f, -360.0f, 360.0f, "%.1f deg");
 
-            const nlohmann::json strengthBefore = props;
             float strength = JsonFloat(tgt(), "strength", wind.strength);
             const bool strengthChanged = ImGui::SliderFloat("Strength", &strength, 0.0f, 1.0f);
+            beginContinuousEdit(strengthChanged);
             if (strengthChanged) { tgt()["strength"] = strength; }
-            trackContinuousEdit(strengthBefore, strengthChanged);
+            trackContinuousEdit(strengthChanged);
 
             dragF("Sway Frequency", "swayFrequency", wind.swayFrequency,
                 0.01f, 0.0f, 10.0f, "%.2f");
@@ -2756,7 +2763,6 @@ namespace
             const auto dragGust = [&](const char* label, const char* key, float def,
                 float speed, float lo, float hi, const char* fmt)
             {
-                const nlohmann::json beforeItem = props;
                 float value = def;
                 const auto gustIt = tgt().find("gust");
                 if (gustIt != tgt().end() && gustIt->is_object())
@@ -2764,6 +2770,7 @@ namespace
                     value = JsonFloat(*gustIt, key, def);
                 }
                 const bool changed = ImGui::DragFloat(label, &value, speed, lo, hi, fmt);
+                beginContinuousEdit(changed);
                 if (changed)
                 {
                     if (!tgt().contains("gust") || !tgt()["gust"].is_object())
@@ -2772,7 +2779,7 @@ namespace
                     }
                     tgt()["gust"][key] = value;
                 }
-                trackContinuousEdit(beforeItem, changed);
+                trackContinuousEdit(changed);
             };
             dragGust("Amplitude", "amplitude", wind.gustAmplitude,
                 0.01f, 0.0f, 2.0f, "%.2f");
@@ -2813,7 +2820,7 @@ namespace
 }
 
 void InspectorPanel::Draw(EditorContext& ctx,
-    EditorCommandStack& commandStack,
+    EditorCommandStack& history,
     const AssetRegistry& registry,
     const EditorExtensionRegistry& extensions,
     bool* open)
@@ -2822,6 +2829,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
     ImGui::SetNextWindowSize(ImVec2(340.0f, 460.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Inspector", open))
     {
+        multiEdit_.Finish(ctx, history);
         ImGui::End();
         return;
     }
@@ -2831,7 +2839,35 @@ void InspectorPanel::Draw(EditorContext& ctx,
     if (multiSelection)
     {
         ImGui::Text("%zu objects selected", ctx.selection.Size());
-        DrawSharedEnabled(ctx, commandStack);
+        DrawSharedEnabled(ctx, history);
+        ImGui::Separator();
+    }
+
+    const bool sharedProperties = multiEdit_.Begin(ctx, history);
+    if (multiSelection && !sharedProperties)
+    {
+        ImGui::TextWrapped("Select objects of the same type to edit shared properties.");
+        ImGui::End();
+        return;
+    }
+    EditorCommandStack& commandStack = sharedProperties ? multiEdit_.DrawCommands() : history;
+    struct EndSharedEdit
+    {
+        InspectorMultiEdit& edit;
+        EditorContext& ctx;
+        EditorCommandStack& history;
+        bool enabled;
+        ~EndSharedEdit() { if (enabled) { edit.End(ctx, history, ImGui::IsAnyItemActive()); } }
+    } endSharedEdit{ multiEdit_, ctx, history, sharedProperties };
+    if (sharedProperties)
+    {
+        nameEditActive_ = false;
+        nameEditObject_ = EditorObjectId{};
+        ImGui::TextWrapped("Edits apply to all selected objects; untouched fields stay individual.");
+        if (multiEdit_.HasMixedValues())
+        {
+            ImGui::TextDisabled("Mixed values: showing the active object's values.");
+        }
         ImGui::Separator();
     }
 
@@ -2880,6 +2916,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
         std::snprintf(nameEditBuffer_, sizeof(nameEditBuffer_), "%s", obj->name.c_str());
     }
 
+    ImGui::BeginDisabled(multiSelection);
     const bool submitted = ImGui::InputText(
         "Name",
         nameEditBuffer_,
@@ -2909,6 +2946,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
             std::string(nameEditBuffer_)));
         std::snprintf(nameEditBuffer_, sizeof(nameEditBuffer_), "%s", obj->name.c_str());
     }
+    ImGui::EndDisabled();
 
     if (!multiSelection)
     {

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Build test_cube.vcxproj Debug|x64 first. This CPU-only executable reuses its
+       objects so tests exercise the real inspectors, runtime setters and undo stack.
+       It is deliberately NOT a dependency of the engine/solution. -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals"><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType><PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <Repo>$(MSBuildProjectDirectory)\..\</Repo>
+    <OutDir>$(Repo)x64\Debug\</OutDir>
+    <IntDir>$(Repo)x64\InspectorRegression\obj\</IntDir>
+    <BaselineDir>$(Repo)x64\InspectorRegression\</BaselineDir>
+    <WithBaseline Condition="Exists('$(BaselineDir)InspectorPanelBaseline.cpp')">INSPECTOR_BASELINE=1;</WithBaseline>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard><Optimization>Disabled</Optimization>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary><ExceptionHandling>Sync</ExceptionHandling>
+      <PreprocessorDefinitions>$(WithBaseline)_DEBUG;WITH_EDITOR=1;NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(Repo);$(Repo)sources;$(Repo)third_party;$(Repo)third_party\imgui;$(Repo)third_party\imgui\backends;$(Repo)third_party\tbb\include;$(BaselineDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem><EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
+      <AdditionalLibraryDirectories>$(OutDir);$(Repo)third_party\tbb\lib;$(Repo)third_party\mimalloc\lib\Debug;$(Repo)third_party\streamline\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>third_party_ui.lib;third_party_tasks.lib;third_party_assets.lib;mimalloc.lib;tbb12_debug.lib;sl.interposer.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="inspector_regression.cpp" />
+    <ClCompile Include="$(BaselineDir)InspectorPanelBaseline.cpp" Condition="Exists('$(BaselineDir)InspectorPanelBaseline.cpp')" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="UseEngineLinkInputs" BeforeTargets="ComputeLinkInputsFromProject">
+    <!-- The linker manifest excludes stale objects from past builds (notably old
+         ImGui objects that now live in third_party_ui.lib). Never glob *.obj. -->
+    <ReadLinesFromFile File="$(Repo)test_cube\x64\Debug\test_cube.tlog\link.command.1.tlog">
+      <Output TaskParameter="Lines" ItemName="EngineLinkLog" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <Object Include="$([System.String]::Copy('%(EngineLinkLog.Identity)').Substring(1).Split('|'))"
+              Condition="$([System.String]::Copy('%(EngineLinkLog.Identity)').StartsWith('^'))" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -802,12 +802,26 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 
                 ImGui::BeginDisabled(!rtSupported);
-                ImGui::Checkbox("RT foliage alpha test", &settings.rtAlphaTest);
-                DevHelp("The HARD kill switch for masked foliage in RT: off = rays trace with "
-                        "FORCE_OPAQUE, no alpha candidates ever surface, and the traversal cost "
-                        "drops to the pre-alpha-test opaque path. Foliage then reflects and "
-                        "occludes as solid cards. Headless: --set=rt.alphaTest.");
-                ImGui::BeginDisabled(!settings.rtAlphaTest);
+                {
+                    static const char* kAlphaModes[] = { "Off (solid cards)",
+                                                         "First hit (holes)",
+                                                         "Full (exact)" };
+                    int alphaMode = static_cast<int>(std::min(settings.rtAlphaMode, 2u));
+                    ImGui::SetNextItemWidth(180.0f);
+                    if (ImGui::Combo("RT foliage alpha", &alphaMode, kAlphaModes, 3))
+                    {
+                        settings.rtAlphaMode = static_cast<uint32_t>(alphaMode);
+                    }
+                    DevHelp("Off: FORCE_OPAQUE traversal, leaves reflect/occlude as solid cards "
+                            "-- cheapest. First hit: same cheap traversal, but the committed hit "
+                            "is alpha-tested with the albedo sample shading fetches anyway; a "
+                            "transparent texel becomes a MISS, so crowns get their holes -- the "
+                            "holes show the sky fallback, not what is really behind, and crown "
+                            "shadows lean lighter. Costs the same as Off. Full: exact "
+                            "per-candidate testing during traversal -- the expensive one. "
+                            "Headless: --set=rt.alphaMode:0/1/2.");
+                }
+                ImGui::BeginDisabled(settings.rtAlphaMode == 0u);
                 ImGui::SetNextItemWidth(140.0f);
                 ImGui::SliderFloat("RT foliage fill", &settings.rtAlphaMissKeep, 0.0f, 1.0f, "%.2f");
                 DevHelp("Stochastic coverage inflation for the RT alpha test. One sharp ray per "
@@ -815,7 +829,9 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "reads smaller than the real one. On a failed alpha test the hit is still "
                         "kept with this probability, re-rolled per pixel per frame -- the temporal "
                         "resolve averages the dither back into density. 0 = honest cutouts, "
-                        "1 = the old solid cards. Headless: --set=rt.alphaMissKeep:<v>.");
+                        "1 = the old solid cards. In FIRST-HIT mode it matters more: the "
+                        "single-layer test discards the crown's own depth, so raise it (0.3-0.5) "
+                        "to buy the density back. Headless: --set=rt.alphaMissKeep:<v>.");
                 ImGui::EndDisabled();
                 ImGui::Checkbox("RT wind sway", &settings.rtWindBlas);
                 DevHelp("Wind-deform the nearest casters' BLASes every frame so foliage sway "

@@ -52,11 +52,13 @@ cbuffer Probe : register(b0)
     // depth); for opaque reflections screenDepthIndex == depthIndex.
     // alphaMissKeep: stochastic coverage inflation for the foliage alpha test (see
     // RtAlphaCandidatePasses); frameSeed is FROZEN by the CPU (see the fill site).
-    // alphaTestOff: the HARD alpha kill switch -- 1 adds RAY_FLAG_FORCE_OPAQUE at trace time,
-    // which suppresses every non-opaque candidate at the traversal level (the loops below simply
-    // never iterate), so the cost drops to the pre-alpha-test opaque path without touching the
-    // BLAS flags. Foliage then reflects/occludes as solid cards again.
-    uint screenDepthIndex; float alphaMissKeep; uint frameSeed; uint alphaTestOff;
+    // alphaMode: 0 = OFF (FORCE_OPAQUE traversal, foliage = solid cards, cheapest);
+    // 1 = FIRST HIT (FORCE_OPAQUE traversal, then the COMMITTED hit is alpha-tested with the
+    //     albedo sample the shading already fetches -- a transparent texel becomes a miss, so
+    //     crowns get holes showing the sky fallback instead of what is truly behind them; the
+    //     cost is the opaque path plus nothing);
+    // 2 = FULL (non-opaque candidates alpha-test during traversal -- exact, the expensive one).
+    uint screenDepthIndex; float alphaMissKeep; uint frameSeed; uint alphaMode;
 }
 
 SamplerState gSmp      : register(s0);
@@ -75,7 +77,7 @@ float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 
     // or every leaf quad occludes as a solid card. Opaque geometry still never surfaces as a
     // candidate, and committing any passing candidate ends the search (ACCEPT_FIRST_HIT).
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> sq;
-    sq.TraceRayInline(tlas, alphaTestOff != 0u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, sray);
+    sq.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, sray);
     StructuredBuffer<GeometryInfo> sgeom = ResourceDescriptorHeap[geomInfoIndex];
     while (sq.Proceed())
     {
@@ -85,7 +87,17 @@ float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 
             sq.CommitNonOpaqueTriangleHit();
         }
     }
-    return (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0f : 1.0f;
+    if (sq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { return 1.0f; }
+    // First-hit mode: alpha-test the committed hit only. A transparent first leaf lets the light
+    // through even if a second leaf behind it would have blocked -- crown shadows lean lighter,
+    // which is the cheap half of the trade.
+    if (alphaMode == 1u &&
+        !RtAlphaCandidatePasses(sgeom, gSmp, sq.CommittedInstanceID(), sq.CommittedGeometryIndex(),
+                                sq.CommittedPrimitiveIndex(), sq.CommittedTriangleBarycentrics()))
+    {
+        return 1.0f;
+    }
+    return 0.0f;
 }
 
 // Trace one reflection ray; on hit, return its radiance shaded like the base pass.
@@ -103,7 +115,7 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, float tMin, uint 
     // Part C: FORCE_OPAQUE dropped so masked foliage alpha-tests instead of reflecting as solid
     // quads. A committed candidate shrinks TMax and traversal continues to the true closest hit.
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(tlas, alphaTestOff != 0u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, ray);
+    q.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, ray);
     StructuredBuffer<GeometryInfo> cgeom = ResourceDescriptorHeap[geomInfoIndex];
     while (q.Proceed())
     {
@@ -145,7 +157,25 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, float tMin, uint 
     if (g.albedoTexIndex != 0xFFFFFFFFu)
     {
         Texture2D albedoTex = ResourceDescriptorHeap[g.albedoTexIndex];
-        albedo *= albedoTex.SampleLevel(gSmp, uvHit, 0).rgb;
+        const float4 albedoSample = albedoTex.SampleLevel(gSmp, uvHit, 0);
+        // First-hit alpha: the traversal was opaque, so the closest intersection may be a
+        // transparent texel of a leaf card. Turning it into a MISS punches the hole the user
+        // asked for -- the sky fallback shows through instead of the (unknown) content behind.
+        // The alpha rides the very sample the shading fetches anyway, so this costs nothing.
+        // The FILL knob applies here too, and matters MORE than in Full mode: a single-layer
+        // test discards the crown's own depth, so without inflation the foliage reads eaten.
+        // Same frozen per-pixel dither as RtAlphaCandidatePasses.
+        if (alphaMode == 1u && g.alphaCutoff >= 0.0f &&
+            albedoSample.a * g.baseColor.a < g.alphaCutoff)
+        {
+            const uint h = RtWangHash(raySeed ^ (q.CommittedPrimitiveIndex() * 9781u) ^
+                                      (q.CommittedGeometryIndex() * 6271u) ^ q.CommittedInstanceID());
+            if ((float(h & 0xFFFFu) * (1.0f / 65535.0f)) >= alphaMissKeep)
+            {
+                return false;
+            }
+        }
+        albedo *= albedoSample.rgb;
     }
     // Roughness/metalness: from the MR texture (R=metal, G=rough, matching the
     // GBuffer) when the material has one, else the flat per-material values.
@@ -166,7 +196,12 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, float tMin, uint 
     float4 hv = mul(float4(hitWS, 1.0f), view);
     float4 hc = mul(hv, proj);
     bool haveScreen = false;
-    if (hc.w > 1e-6f)
+    // RW reuse-deny (GeometryInfo.flags bit0): this hit's RASTER image is wind-swaying while its
+    // RT geometry is rest-pose (sway toggle off, out of radius, or no free slot). The screen
+    // sample under the projected hit would show the MOVING raster leaf, so the reflected image
+    // slides inside a static silhouette. Skip the reuse; the analytic re-shade below is
+    // consistent with the geometry the ray actually hit.
+    if ((g.flags & 1u) == 0u && hc.w > 1e-6f)
     {
         float2 huv = (hc.xy / hc.w) * float2(0.5f, -0.5f) + 0.5f;
         if (all(huv >= 0.0f) && all(huv <= 1.0f))

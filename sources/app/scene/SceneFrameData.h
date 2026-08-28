@@ -462,10 +462,12 @@ struct SceneRenderSettings
     // thin fronds and the reflected crown reads smaller than the real one; this inflates
     // coverage back. 0 = honest cutout, 1 = the old solid cards.
     float rtAlphaMissKeep = 0.15f;
-    // The HARD kill switch for the RT foliage alpha test: off = rays trace with
-    // RAY_FLAG_FORCE_OPAQUE, no candidates ever surface, foliage reflects/occludes as solid
-    // cards -- the pre-alpha-test cost profile, for scenes where the traversal price bites.
-    bool rtAlphaTest = true;
+    // RT foliage alpha mode. 0 = OFF: FORCE_OPAQUE traversal, foliage = solid cards, cheapest.
+    // 1 = FIRST HIT: opaque traversal, then the committed hit is alpha-tested with the albedo
+    //     sample shading fetches anyway -- transparent texels become misses (holes show the sky
+    //     fallback, not what is truly behind); costs the same as OFF.
+    // 2 = FULL: exact per-candidate alpha testing during traversal, the expensive one.
+    uint32_t rtAlphaMode = 2u;
     // RW: wind-deformed per-instance BLASes for near casters, so foliage sway reaches RT
     // reflections (and later RT shadows). Off = every caster reflects its rest pose.
     bool rtWindBlas = true;

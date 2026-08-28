@@ -17,7 +17,9 @@ struct GeometryInfo
     uint   mrMultiply;     // 0 = texture overrides values, 1 = texture * values
     uint   vertexStride;   // bytes per vertex, from Mesh::GetVertexStride()
     float  alphaCutoff;    // Part C: < 0 = opaque; >= 0 = keep hit when baseColor.a*albedo.a >= cutoff
-    uint   _pad;
+    uint   flags;          // bit0 = raster image wind-sways while RT geometry is rest-pose:
+                           // do NOT reuse the on-screen colour for hits on this record, or the
+                           // reflected image slides inside a static silhouette (re-shade instead)
 };
 
 // B3: records are per (instance, submesh) — the BLAS carries one geometry per submesh, so the

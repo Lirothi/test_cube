@@ -148,6 +148,14 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
         const float wideR2 = tightR2 * (1.2f * 1.2f);
         struct WindCandidate { size_t entryIndex; GBufferRenderable* gb; float distSq; bool tight; };
         std::vector<WindCandidate> windCandidates;
+        // RW reuse-deny bookkeeping: every single-instance wind-CAPABLE caster, regardless of
+        // the RT sway toggle or radius. After slot binding, each one's bindless records are
+        // stamped with (or cleared of) the "raster sways but RT geometry is rest-pose" flag,
+        // which tells the reflection shader to re-shade instead of reusing the on-screen colour.
+        struct WindReuseEntry { uint32_t recordBase; uint32_t recordCount; size_t entryIndex; bool sway; };
+        std::vector<WindReuseEntry> windReuseEntries;
+        const bool rasterWindOn = frame.wind && frame.wind->active &&
+                                  frame.wind->swayAmplitude > 0.0f;
         // wind_test has hundreds of identical multi-slot palms. Keep this scratch allocation
         // across objects instead of allocating/freeing a 4-5 element vector for every palm.
         std::vector<rt::BindlessTable::SlotMaterial> slotMats;
@@ -277,16 +285,30 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 // RW: a CPU-placed single-instance wind caster near the camera is a candidate for
                 // a deformed BLAS. GPU-instanced clouds (descCount > 1) are excluded -- their
                 // per-instance transforms stream from the GPU side and stay rest-pose for now.
-                if (windActive && descCount == 1 && gb && desc.mesh == gb->GetMesh() &&
-                    gb->EffectiveWindStrength(gb->GetWindStrength()) > 0.0f)
+                if (descCount == 1 && gb && desc.mesh == gb->GetMesh())
                 {
-                    const Math::float3 d(entry.world._41 - camPos.x, entry.world._42 - camPos.y,
-                                         entry.world._43 - camPos.z);
-                    const float distSq = d.x * d.x + d.y * d.y + d.z * d.z;
-                    if (distSq < wideR2)
+                    const float sway = gb->EffectiveWindStrength(gb->GetWindStrength());
+                    if (windActive && sway > 0.0f)
                     {
-                        windCandidates.push_back({ rtInstances_.size(), gb, distSq,
-                                                   distSq < tightR2 });
+                        const Math::float3 d(entry.world._41 - camPos.x, entry.world._42 - camPos.y,
+                                             entry.world._43 - camPos.z);
+                        const float distSq = d.x * d.x + d.y * d.y + d.z * d.z;
+                        if (distSq < wideR2)
+                        {
+                            windCandidates.push_back({ rtInstances_.size(), gb, distSq,
+                                                       distSq < tightR2 });
+                        }
+                    }
+                    // RW reuse-deny: tracked even when the RT sway toggle is off -- the raster
+                    // image still sways then, which is exactly when reuse must stop. sway=false
+                    // entries only clear a stale flag (wind turned off, windStrength zeroed).
+                    if (bindless_.Ready())
+                    {
+                        const uint32_t recCount = static_cast<uint32_t>(std::max<size_t>(
+                            desc.mesh ? desc.mesh->GetSubmeshCount() : 1u, 1u));
+                        windReuseEntries.push_back({ entry.instanceId, recCount,
+                                                     rtInstances_.size(),
+                                                     rasterWindOn && sway > 0.0f });
                     }
                 }
                 rtInstances_.push_back(entry);
@@ -294,20 +316,31 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
             }
         }
 
-        // RW slot binding with HYSTERESIS: existing owners keep their slot while inside the
-        // wide radius (they refit, never rebuild); slots free only when the owner leaves the
-        // band or disappears; newcomers are admitted nearest-first from the tight radius into
-        // whatever slots remain.
+        // RW slot binding: hysteresis + EVICTION, so the animated set FOLLOWS THE CAMERA.
+        // An owner keeps its slot while inside the wide radius (refit, never rebuild) -- but a
+        // TIGHT-radius newcomer that is meaningfully closer (2x by distSq, ~1.4x by distance)
+        // evicts the FARTHEST current owner. Without eviction the first 24 palms bound at spawn
+        // kept their slots forever while the camera flew up to new ones that never got a slot:
+        // near palms stood rigid while farther (older) ones swayed.
         {
             constexpr UINT kSlots = rt::AccelerationStructureManager::kMaxWindBlasSlots;
+            // Free slots whose owner left the wide band (or vanished); note the survivors'
+            // current distances for the eviction comparisons below.
+            float slotDistSq[kSlots];
             for (UINT sIdx = 0; sIdx < kSlots; ++sIdx)
             {
+                slotDistSq[sIdx] = -1.0f;
                 const void* owner = windSlotOwner_[sIdx];
                 if (!owner) { continue; }
                 bool still = false;
                 for (const WindCandidate& c : windCandidates)
                 {
-                    if (static_cast<const void*>(c.gb) == owner) { still = true; break; }
+                    if (static_cast<const void*>(c.gb) == owner)
+                    {
+                        still = true;
+                        slotDistSq[sIdx] = c.distSq;
+                        break;
+                    }
                 }
                 if (!still) { windSlotOwner_[sIdx] = nullptr; }
             }
@@ -321,12 +354,30 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 {
                     if (windSlotOwner_[sIdx] == static_cast<const void*>(c.gb)) { slot = sIdx; break; }
                 }
-                if (slot == kSlots)
+                if (slot == kSlots && c.tight)
                 {
-                    if (!c.tight) { continue; } // newcomers only from the tight radius
+                    // Prefer a free slot; otherwise evict the farthest owner if this newcomer is
+                    // at least 2x closer by distSq (the margin that stops ping-pong at borders).
+                    UINT farthest = kSlots;
+                    float farthestDistSq = -1.0f;
                     for (UINT sIdx = 0; sIdx < kSlots; ++sIdx)
                     {
-                        if (!windSlotOwner_[sIdx]) { windSlotOwner_[sIdx] = c.gb; slot = sIdx; break; }
+                        if (!windSlotOwner_[sIdx]) { slot = sIdx; break; }
+                        if (slotDistSq[sIdx] > farthestDistSq)
+                        {
+                            farthestDistSq = slotDistSq[sIdx];
+                            farthest = sIdx;
+                        }
+                    }
+                    if (slot == kSlots && farthest < kSlots && c.distSq * 2.0f < farthestDistSq)
+                    {
+                        slot = farthest; // evict: the mesh change forces a full rebuild inside
+                                         // PrepareWindSlot; old buffers retire on the fence
+                    }
+                    if (slot < kSlots)
+                    {
+                        windSlotOwner_[slot] = c.gb;
+                        slotDistSq[slot] = c.distSq;
                     }
                 }
                 if (slot < kSlots)
@@ -334,6 +385,21 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                     windPlan.push_back({ slot, c.entryIndex, c.gb });
                 }
             }
+        }
+
+        // RW reuse-deny: with the plan final, stamp each wind-capable caster's records. Denied =
+        // its raster image sways this frame but no deformed BLAS slot animates its RT geometry
+        // (sway toggle off, out of radius, or no slot won) -- reusing the on-screen colour would
+        // slide the reflected image inside a static silhouette. Runs BEFORE UploadGeometryInfo
+        // below so this frame's table carries this frame's verdicts.
+        for (const WindReuseEntry& e : windReuseEntries)
+        {
+            bool deformed = false;
+            for (const WindPlanEntry& pe : windPlan)
+            {
+                if (pe.entryIndex == e.entryIndex) { deformed = true; break; }
+            }
+            bindless_.SetScreenReuseDenied(e.recordBase, e.recordCount, e.sway && !deformed);
         }
     }
     if (!bindless_.UploadGeometryInfo(renderer->GetCurrentFrameIndex()))
