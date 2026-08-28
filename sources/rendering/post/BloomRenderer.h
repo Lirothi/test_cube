@@ -136,6 +136,16 @@ private:
     // than falling back to a procedural kernel that no longer exists.
     Texture2D bloomKernelTex_;
     bool bloomKernelReady_ = false;
+    // The conv shader's t2 slot for EVERY conv dispatch site -- the table is positional, so the
+    // slot is always staged, but the kernel photograph is resident only once the CONVOLUTION
+    // method has loaded it. The streak/ghost stages never sample t2, yet CopyDescriptors
+    // dereferences every source handle: staging the empty texture's null handle is a driver
+    // access violation, not an unused hole (hit by pyramid bloom + anamorphic streak, where the
+    // kernel never loads). All three conv-table assembly sites must come through here.
+    D3D12_CPU_DESCRIPTOR_HANDLE KernelSrv(D3D12_CPU_DESCRIPTOR_HANDLE fallback) const
+    {
+        return bloomKernelReady_ ? bloomKernelTex_.GetSRVCPU() : fallback;
+    }
     // P8C-2r: which image is currently resident. Empty means none; comparing it against the
     // setting is the whole reload gate, which is why the old once-only `bloomKernelTried_`
     // flag is gone rather than kept beside it -- two gates would have disagreed.

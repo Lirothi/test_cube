@@ -2845,6 +2845,7 @@
       "macroNormalMipBiasNative": 1.0,
       "minMeshScale": 15.0,
       "reflectionNormalStrength": 0.10000000149011612,
+      "reflectionSkyHorizonPull": 1.0,
       "roughnessDistance": 150.0,
       "roughnessScale": 0.699999988079071,
       "scatterSpread": 0.20000000298023224,
@@ -2931,6 +2932,7 @@
       "surfSimDepositStrength": 1.0,
       "surfSimDisplacement": 1.0,
       "surfSimEnabled": false,
+      "surfSimFoamCoverageMultiplier": 1.0,
       "surfSimFoamFadeTime": 2.5,
       "surfSimFrontBreakup": 0.5,
       "surfSimMinSpawnDepth": 1.2000000476837158,
@@ -3086,13 +3088,37 @@
     }
   ],
   "postProcess": {
-    "atmosphere": {},
-    "bloom": {},
+    "atmosphere": {
+      "density": 0.0024999999441206455,
+      "enabled": true,
+      "sunScatterExponent": 8.0
+    },
+    "bloom": {
+      "convAnamorphicChroma": 1.0,
+      "convAnamorphicIntensity": 0.699999988079071,
+      "convAnamorphicThreshold": 3.0,
+      "convAnamorphicTint": [
+        0.676581859588623,
+        0.674418568611145,
+        1.0
+      ],
+      "convBlades": 6,
+      "convGhostBokeh": 2.0,
+      "convGhosts": 6,
+      "convKernel": "textures/DefaultBloomKernel.dds",
+      "convSize": 1.0,
+      "enabled": true,
+      "intensity": 1.0,
+      "method": 1,
+      "softKnee": 0.5,
+      "threshold": 5.0
+    },
     "cameraExposure": {
       "apertureFStop": 16.0,
-      "autoExposure": false,
+      "autoExposure": true,
       "compensationEv": 0.0,
       "enabled": true,
+      "highPercentile": 0.949999988079071,
       "isoSensitivity": 100.0,
       "localDetailStrength": 1.0,
       "localHighlightContrast": 0.8500000238418579,
@@ -3110,7 +3136,9 @@
       "gradeSaturation": 1.2999999523162842,
       "toneCurve": "filmic"
     },
-    "gtao": {}
+    "gtao": {
+      "enabled": true
+    }
   },
   "skybox": {
     "illuminanceLux": 16000.0,

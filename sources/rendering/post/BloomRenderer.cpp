@@ -716,7 +716,7 @@ void BloomRenderer::FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandList* c
                                     UINT w, UINT h, ID3D12Resource* barrierRes) {
         RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
             [&](uint8_t* dest) { resources_->WriteBloomConvConstants(c, dest); },
-            { hdrSource, D.lensFlareSRV, bloomKernelTex_.GetSRVCPU() },
+            { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
             { gridUav, dstUav, renderer->Exposure().ExposureUav() },
             samplerTable, w, h, barrierRes);
     };
@@ -936,7 +936,7 @@ void BloomRenderer::FlaresComposite(Renderer* renderer, ID3D12GraphicsCommandLis
                                     UINT w, UINT h, ID3D12Resource* barrierRes) {
         RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
             [&](uint8_t* dest) { resources_->WriteBloomConvConstants(c, dest); },
-            { hdrSource, D.lensFlareSRV, bloomKernelTex_.GetSRVCPU() },
+            { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
             { gridUav, dstUav, renderer->Exposure().ExposureUav() },
             samplerTable, w, h, barrierRes);
     };
@@ -1150,8 +1150,10 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
             [&](uint8_t* dest) { resources_->WriteBloomConvConstants(c, dest); },
             // t1 is the flare-blur image (only the resolve's ghost composite reads it) and t2 the
             // kernel photograph (only the resample stage reads it) -- but a descriptor table is
-            // POSITIONAL, so both are bound on every stage rather than left as holes.
-            { hdrSource, D.lensFlareSRV, bloomKernelTex_.GetSRVCPU() },
+            // POSITIONAL, so both are bound on every stage rather than left as holes. The kernel
+            // is guaranteed resident here (bloomConvolution_ requires bloomKernelReady_), but the
+            // slot still comes through KernelSrv: one assembly helper for the shared table.
+            { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
             { gridUav, dstUav, metering.ExposureUav() },
             samplerTable, w, h, barrierRes);
     };

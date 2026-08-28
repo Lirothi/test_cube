@@ -11,10 +11,13 @@ This is a capability, not an optimisation. Perf is a consequence and a regressio
 not the acceptance criterion for any step.** The engine should be able to express "this work runs
 on the async queue" because that is the shape a modern renderer needs; what it is worth on today's
 scene is a separate question, answered later and per-pass. The honest numbers on today's scene are
-computed in "Reference points" below — **3.9 % for the first mover alone, ~8.9 % theoretical across
-every pass that can move, ~4.5-6 % realistically after contention.** Write those down now so nobody
-is surprised by them at the end, and note the last one only converts to frame time because the
-frame is measurably GPU-bound.
+computed in "Reference points" below — **6.6 % for the first mover alone, ~11 % theoretical across
+every pass that can move, ~5-7 % realistically after contention** (measured 2026-08-28). Write those
+down now so nobody is surprised by them at the end, and note two things: the budget only converts to
+frame time because the frame is measurably GPU-bound, and **these percentages have already moved
+three times in two days** because the frame moves around them. The structural claims come from the
+render graph and are stable; the numbers are a dated snapshot and must be re-measured, never
+inherited.
 
 This plan is written for an AI executor. Every step is independently buildable, independently
 verifiable, independently committable. **Do not merge steps.** Several exist purely to prove the
@@ -28,13 +31,16 @@ change becomes undebuggable.
 **Repo:** `D:\Programming\test_cube`. Conventions match
 `docs/enhanced_barriers_migration_plan.md`; the essentials are repeated here.
 
-**Citations in this document were verified against the tree on 2026-08-27 at HEAD `b2a77ce`
-("scene renderer refactor"), working tree clean.** That date matters: this file was first written
-against a tree that changed underneath it within the hour — `SceneRenderer.cpp` was split into
-`SceneRenderer_{Graph,Geometry,Lighting,Post,Reflections,Shadows}.cpp`, the render graph moved to
-`AddPass2`, and four passes were added to `RenderPass`. **Re-check any `file:line` here before
-trusting it**, and if a symbol has moved, fix the citation as part of the step rather than working
-from the prose alone.
+**Citations were verified against the tree on 2026-08-28 at HEAD `fe23d99` ("rt wind reaction"),
+working tree clean; the numbers come from a capture taken at that HEAD.** Those dates matter. This
+file was first written against a tree that changed underneath it within the hour —
+`SceneRenderer.cpp` was split into `SceneRenderer_{Graph,Geometry,Lighting,Post,Reflections,Shadows}.cpp`,
+the render graph moved to `AddPass2`, and four passes were added to `RenderPass`. A day later five
+more commits landed (`RT upgrades`, `rt wind reaction`, denoiser/SSR tuning), `Main_RTDenoise` was
+deleted and folded into `Main_ReflectionTemporal`, and the measured frame changed by 38 %.
+**Re-check any `file:line` here before trusting it**, re-capture before any step that quotes a
+number, and if a symbol has moved, fix the citation as part of the step rather than working from the
+prose alone.
 
 **Build (run BOTH after every step):** use the PowerShell tool, not bash.
 ```
@@ -267,96 +273,113 @@ shortcut: fewer half-barriers to get wrong.
 
 ## Reference points — the current frame
 
-**Re-measured 2026-08-27** from `traces/trace_20260827_220752_release_000.json`, 123 captured
-frames, medians of the GPU track (`tid 0`). The previous version of this table was inherited from an
-older frame and every number in it was wrong by the time the plan was reviewed — the frame had
-roughly doubled and the DLSS/tonemap split, GTAO, the HZB, exposure metering and the surf sim had
-all landed since. **Re-measure again before Step 9 rather than trusting this table**; that is
-cheaper than the mistake it prevents.
+**Re-measured 2026-08-28** from `traces/trace_20260828_163221_release_000.json`, 123 frames,
+medians of the GPU track (`tid 0`), at HEAD `fe23d99`.
+
+**READ THIS BEFORE USING ANY NUMBER BELOW.** This table is not a property of the engine. It is a
+property of the camera, the level's settings and the code at the moment of capture, and it moves
+FAST. Between 2026-08-27 and 2026-08-28 — one day, five commits — it moved like this:
+
+| scope | 08-27 | 08-28 | |
+|---|---|---|---|
+| GPU.Frame | 3476 us | **2157 us** | -38 % |
+| Pass_VsmPageRender | 1237 us | **312 us** | -75 % |
+| Ocean.Surface | 60 us | **292 us** | x4.9 |
+| RenderObjectBatch | 63 us | **304 us** | x4.8 |
+| Pass_BloomConv | 303 us | **absent** | |
+| Pass_Gtao | 73 us | **absent** | |
+| Pass_RTReflections | 176 us | **87 us** | -51 % |
+
+Two of those passes did not merely get cheaper, they **stopped appearing** — GTAO and the bloom
+convolution are off in this configuration. So: **the structural claims in this plan come from the
+render graph's prereq lists, which are stable; the percentages come from this table, which has a
+shelf life of about a day.** Re-capture before Step 9 and again before Step 10, and treat any
+inherited number as wrong until re-measured. The first version of this plan was wrecked exactly this
+way.
 
 | scope | median | share |
 |---|---|---|
-| **GPU.Frame** | **3476 us** | 100 % |
-| Pass_VsmPageRender | 1237 us | 35.6 % |
-| Pass_Tonemap | 372 us | 10.7 % |
-| &nbsp;&nbsp;Pass_BloomConv | 303 us | 8.7 % |
-| ExecuteBundles | 295 us | 8.5 % |
-| Pass_DLSS | 283 us | 8.1 % |
-| Pass_RTReflections | 176 us | 5.1 % |
-| &nbsp;&nbsp;VsmPageRender.Scatter | 168 us | 4.8 % |
-| **Pass_ObjectCompute** | **134 us** | **3.9 %** |
-| Pass_ShadowCull | 73 us | 2.1 % |
-| Pass_Gtao | 73 us | 2.1 % |
-| Ocean.Surface | 60 us | 1.7 % |
-| Pass_VsmPageRequest | 56 us | 1.6 % |
-| Pass_Lighting | 42 us | 1.2 % |
-| Pass_ExposureMetering | 35 us | 1.0 % |
-| Pass_Hzb | 28 us | 0.8 % |
-| VsmPageRender.Setup | 14 us | 0.4 % |
+| **GPU.Frame** | **2157 us** | 100 % |
+| Pass_VsmPageRender | 312 us | 14.5 % |
+| RenderObjectBatch (transparent/ocean draws) | 304 us | 14.1 % |
+| &nbsp;&nbsp;Ocean.Surface | 292 us | 13.5 % |
+| Pass_DLSS | 265 us | 12.3 % |
+| **Pass_ObjectCompute** | **142 us** | **6.6 %** |
+| ExecuteBundles | 108 us | 5.0 % |
+| Pass_VsmPageRequest | 87 us | 4.0 % |
+| Pass_RTReflections | 87 us | 4.0 % |
+| &nbsp;&nbsp;VsmPageRender.Scatter | 83 us | 3.8 % |
+| Transparent.Driver | 73 us | 3.4 % |
+| Pass_Tonemap | 67 us | 3.1 % |
+| Pass_ShadowCull | 49 us | 2.3 % |
+| Pass_OceanReflection | 48 us | 2.2 % |
+| Pass_Lighting | 43 us | 2.0 % |
+| Pass_SpotLights | 38 us | 1.8 % |
+| Pass_ExposureMetering | 33 us | 1.5 % |
+| Pass_Hzb | 27 us | 1.3 % |
+| Pass_PointLights | 27 us | 1.3 % |
+| Pass_BuildAS | 20 us | 0.9 % |
+| VsmPageRender.Setup | 15 us | 0.7 % |
 
-**The scopes NEST — do not add the shares up.** `Pass_BloomConv`, `Tonemap.Curve` and
-`Tonemap.Resolve` sit inside `Pass_Tonemap`; `VsmPageRender.Scatter` and `.Setup` sit inside
-`Pass_VsmPageRender`. Summing all 31 named scopes gives 105 % of the frame, which is the check that
-tells you they nest.
+**The scopes NEST — do not add the shares up.** `Tonemap.Curve` and `Tonemap.Resolve` sit inside
+`Pass_Tonemap`; `VsmPageRender.Scatter` and `.Setup` sit inside `Pass_VsmPageRender`;
+`Ocean.Surface` sits inside the transparent `RenderObjectBatch`.
 
-**The frame is hard GPU-BOUND, which is what makes any of this convert to frame time.** From the
-same capture:
+**The frame is still GPU-BOUND, but by a narrower margin than a day ago.** From the same capture:
 
-| | median |
-|---|---|
-| CPU frame | 3468 us |
-| GPU frame | 3476 us |
-| `Renderer::WaitForFrame` | **2814 us** |
-| actual CPU work per frame | ~654 us |
+| | 08-27 | 08-28 |
+|---|---|---|
+| CPU frame | 3468 us | 2140 us |
+| GPU frame | 3476 us | 2157 us |
+| `Renderer::WaitForFrame` | 2814 us | **1226 us** |
+| actual CPU work per frame | ~654 us | **~915 us** |
 
-The CPU spends 81 % of the frame blocked on the frame fence. So a microsecond removed from the GPU
-is a microsecond off the frame, ~1:1, and stays that way until the GPU frame would fall below
-~660 us — which is not in reach. **This is the precondition that makes the async budget real rather
-than notional; re-check it before Step 9, because a CPU-bound frame would make every number below
-worth zero.**
+The CPU still idles 57 % of the frame on the fence, so GPU savings still convert ~1:1 — but the
+headroom is now 2157 us of GPU against 915 us of CPU work rather than 3476 against 654. **Re-check
+this ratio before Step 9**; if the scene keeps getting cheaper on the GPU while the CPU side does
+not, the whole async budget stops converting to frame time and the plan's value becomes purely
+architectural.
 
-**The frame is also almost perfectly SERIAL today.** Reconstructing one median-duration frame's GPU
-timeline from the same capture: 30 scopes, 3396 us covered by top-level scopes, **43 us of total
-gaps**. There is no accidental parallelism to lose and plenty of room to create some.
+**The frame is still almost perfectly SERIAL.** One median-duration frame, 32 scopes, **46 us of
+total gaps** out of 2157 — no accidental parallelism to lose, plenty of room to create some:
 
 ```
-Pass_BuildAS           0 ..   20     Pass_Gtao           2271 .. 2349
-Pass_PrologueClear    24 ..   40     Pass_Lighting       2352 .. 2399
-Pass_ObjectCompute    44 ..  173     Pass_Skybox         2402 .. 2410
-Pass_ShadowCull      179 ..  251     Pass_RTReflections  2413 .. 2583
-GBuffer.Driver       254 ..  261     Pass_Reflection.Blur 2587 .. 2608
-ExecuteBundles       263 ..  559     Pass_Compose        2611 .. 2642
-Pass_VsmPageRequest  562 ..  617     Glass(Gbuf+Refl)    2646 .. 2663
-Pass_Hzb             620 ..  648     Transparent.Driver  2666 .. 2713
-Pass_VsmPageRender   652 .. 2269     RenderObjectBatch   2718 .. 2781
-                                     Pass_ExposureMetering 2785 .. 2820
-                                     Pass_DLSS           2823 .. 3089
-                                     Pass_Tonemap        3093 .. 3464
-                                     Pass_Overlay        3468 .. 3473
+Pass_BuildAS            0 ..   19     Pass_Lighting         1039 .. 1081
+Pass_PrologueClear     23 ..   41     Pass_SpotLights       1085 .. 1123
+Pass_ObjectCompute     44 ..  184     Pass_PointLights      1126 .. 1153
+Pass_ShadowCull       189 ..  240     Pass_Skybox           1157 .. 1164
+GBuffer.Driver        243 ..  250     Pass_RTReflections    1167 .. 1256
+ExecuteBundles        253 ..  360     Pass_Reflection.Temporal 1259 .. 1275
+RenderObjectBatch     363 ..  385     Pass_Reflection.Blur  1279 .. 1299
+Pass_VsmPageRequest   387 ..  474     Pass_Compose          1302 .. 1324
+Pass_Hzb              477 ..  505     Glass (Gbuf + Refl)   1328 .. 1360
+Pass_VsmPageRender    509 .. 1036     Transparent.Driver    1363 .. 1436
+                                      RenderObjectBatch     1440 .. 1771
+                                      Pass_ExposureMetering 1776 .. 1809
+                                      Pass_DLSS             1811 .. 2076
+                                      Pass_Tonemap          2080 .. 2146
 ```
 
-**The first-mover ceiling: 3.9 %.** `Pass_ObjectCompute` is 134 us of a 3476 us GPU frame — *half*
-what the first draft of this plan claimed, not because the pass shrank but because the frame grew.
-The async part is smaller still, because the GI rotation stays on graphics (R11), so measure the
-split's share in Step 8 before believing any Step 9 number.
+**The first-mover ceiling: 6.6 %.** `Pass_ObjectCompute` is 142 us of a 2157 us GPU frame. The async
+part is smaller still, because the GI rotation stays on graphics (R11), so measure the split's share
+in Step 8 before believing any Step 9 number. Note the direction of travel: this ceiling was 7.8 %,
+then 3.9 %, now 6.6 % — the pass barely moved, the frame moved around it.
 
-**The full analytic budget across every pass that can move: ~308 us, 8.9 %.** Derived in Step 10
-from the graph's own prereq lists. Realistically **4.5-6 %** after contention, since both queues
-share shader cores. Judge this work on the two-track trace, not on the frame time.
+**The full analytic budget across every pass that can move: ~240 us, ~11 %.** Derived in Step 10
+from the graph's own prereq lists. Realistically **5-7 %** after contention, since both queues share
+shader cores.
 
-**What got BETTER for this plan, even as the first-mover percentage got worse.**
-`Pass_VsmPageRender` is now 1237 us median (1617 us in the frame traced above) — a third of the
-frame — of *rasterisation*, sitting between the G-buffer and lighting, i.e. squarely inside the
-window three of the four movable passes would span. And it is a good partner specifically: depth-only
-rasterisation of many instances is geometry- and fixed-function-bound with low ALU occupancy, which
-is the best case for hiding compute underneath. Until this measurement the frame did not have such a
-pass at all. **Step 9's overlap partner is named: `Pass_VsmPageRender`.** If the two-track trace does
-not show the async pass running under it, the move did not work.
+**The overlap partner is still `Pass_VsmPageRender`, but it is no longer huge.** At 527 us in the
+frame above (312 us median) it remains the single largest raster block and the only one long enough
+to hide the movers behind — and depth-only rasterisation of many instances is geometry- and
+fixed-function-bound with low ALU occupancy, which is the best case for hiding compute underneath.
+But the "a third of the frame" framing from the previous capture is gone: it is now 14.5 %.
+**Step 9's overlap partner is named: `Pass_VsmPageRender`.** If the two-track trace does not show
+the async pass running under it, the move did not work.
 
-**Context, so the 8.9 % is not oversold.** `Pass_VsmPageRender` alone is **four times the entire
-async budget**. Async compute does not touch it. If the goal is frame time rather than architecture,
-the lever is that pass — and there is already a standing investigation of ~1.1 ms inside it
-(`docs/bug_shadow_lod_bias_perf.md`). This plan is worth doing for the capability; it is not the
+**Context, so the budget is not oversold.** The two biggest items in the frame are now the
+transparent/ocean draw (`RenderObjectBatch` 304 us, of which `Ocean.Surface` is 292) and `Pass_DLSS`
+(265 us). Async compute touches neither. This plan is worth doing for the capability; it is not the
 frame's biggest number and must not be sold as one.
 
 **First mover: the ocean + particle half of `Main_ObjectCompute`** (Step 9). It is pure compute, its
@@ -582,30 +605,66 @@ does not move if it is itself transitively stuck behind that raster work.
 The answer comes from the graph's own prereq lists, which is the authoritative statement of what
 depends on what. Verified 2026-08-27 in `SceneRenderer_Graph.cpp`:
 
-**Movable — ~308 us total, 8.9 % of the frame:**
+**Movable — ~240 us total, ~11 % of the frame (2026-08-28 numbers):**
 
 | candidate | cost | hides behind | the proof |
 |---|---|---|---|
-| `Main_ObjectCompute` (ocean + particles) | <=134 us | `Pass_VsmPageRender` (1237) | consumer is `Main_Transparent`, ~2.5 ms later (Step 9) |
-| `Pass_ShadowCull` | 73 us | `ExecuteBundles` (295, the G-buffer raster) | prereqs are `{ pShoreDepth }` — it does **not** depend on the G-buffer, so the G-buffer raster can run beside it (`SceneRenderer_Graph.cpp:217`) |
-| `Pass_Gtao` | 73 us | `Pass_VsmPageRender` | prereqs are `{ pGbuf, pHzb }`, while `Main_Lighting` is `{ pGbuf, pVsmPageRender, pGtao }` — the graph itself proves GTAO does not wait on shadows (`:440`, `:584`) |
-| `Pass_Hzb` | 28 us | `Pass_VsmPageRender` | prereqs are `{ pGbuf }` and nothing else (`:409`) |
+| `Main_ObjectCompute` (ocean + particles) | <=142 us | `Pass_VsmPageRender` (527 in-frame) | consumer is `Main_Transparent` at ~1363, the pass sits at ~44 (Step 9) |
+| `Pass_ShadowCull` | 49 us | `ExecuteBundles` + the opaque `RenderObjectBatch` (129 us of raster at 253-385) | prereqs are `{ pShoreDepth }` — it does **not** depend on the G-buffer, so the G-buffer raster can run beside it (`SceneRenderer_Graph.cpp:217`) |
+| `Pass_Hzb` | 27 us | `Pass_VsmPageRender` | prereqs are `{ pGbuf }` and nothing else (`:409`) |
+| `Main_BuildAS` | 20 us | anything after it | it is the FIRST pass in the frame and its consumer is `Main_RTReflections` at ~1167 — ~1.1 ms of slack. See the note below: it declares nothing, so its edge comes from its mtDep, not from resource declarations |
+| `Pass_Gtao` | **0 here, 73 us when enabled** | `Pass_VsmPageRender` | prereqs are `{ pGbuf, pHzb }`, while `Main_Lighting` is `{ pGbuf, pVsmPageRender, pGtao }` — the graph proves GTAO does not wait on shadows (`:440`, `:584`). **Absent from the 08-28 capture** (GTAO off in that configuration), so it is structurally movable but currently free. Do not drop it from the list on one capture's evidence |
 
-All four together put ~308 us on the compute queue spread across a ~2.5 ms graphics window, so they
-do not contend with each other; the compute queue is far from saturated and they can move in any
-order.
+Together they put ~240 us on the compute queue spread across a ~1.3 ms graphics window, so they do
+not contend with each other and can move in any order.
+
+**`Main_BuildAS` is a special case worth its own line.** It declares no resource states at all — the
+AS build bypasses the barrier compile entirely and the buffers stay in
+`RAYTRACING_ACCELERATION_STRUCTURE` (`SceneRenderer_Graph.cpp:58-77`). That is R14's shape: no
+declaration, no derived edge. It is saved by having `pBuildAS` as an explicit **mtDep** of
+`Main_RTReflections` (`:797`), which is a graph edge D2 can compile a fence from without any
+resource declaration. Confirm that before moving it, because if the edge were only positional the
+move would silently unorder the TLAS against its only reader. Since `fe23d99` this pass also runs a
+wind-deformation refit (`rtAs_.Build(..., GetRtWindDeformMaterial())`), so it is real GPU work now
+and worth re-measuring rather than assuming it stays at 20 us.
 
 **Not movable, with the reason:**
 
 | candidate | cost | why not |
 |---|---|---|
-| `Pass_BloomConv` | 303 us | inside `Pass_Tonemap`; the tone curve consumes it immediately, and the whole tail chain (bloom -> curve -> DLSS -> metering) is serial by data |
-| `Pass_RTReflections` | 176 us | prereqs `{ pSky, pWetness }` (`:797`), and `pSky` follows `Main_Lighting`, which waits on `pVsmPageRender` — transitively stuck behind the shadows despite the distant consumer |
-| `Pass_VsmPageRequest` | 56 us | reads the completed depth buffer and feeds `Pass_VsmPageRender` directly; serial by construction |
-| `Pass_ExposureMetering` | 35 us | reads the finished scene colour and is already last |
-| `Pass_Lighting` | 42 us | prereqs name `pVsmPageRender` explicitly |
-| `VsmPageRender.Setup` | 14 us | collapsed from 107 us; below the level worth a step |
+| `Pass_BloomConv` | absent 08-28 (was 303 us) | inside `Pass_Tonemap`; the tone curve consumes it immediately, and the whole tail chain (bloom -> curve -> DLSS -> metering) is serial by data |
+| `Pass_RTReflections` | 87 us | **wedged, see below** — it reads the lit scene, and everything after it reads what it writes |
+| `Pass_VsmPageRequest` | 87 us | reads the completed depth buffer and feeds `Pass_VsmPageRender` directly; serial by construction |
+| `Pass_ExposureMetering` | 33 us | reads the finished scene colour and is already last |
+| `Pass_Lighting` | 43 us | prereqs name `pVsmPageRender` explicitly |
+| `VsmPageRender.Setup` | 15 us | collapsed from 107 us; below the level worth a step |
 | `Main_SurfSim` / `Main_ShoreWetness` | **<=6 us combined, and UNMEASURED** | not a cost case — see "The wetness pass" below; they ride along with Step 9 rather than getting a step |
+
+**`Pass_RTReflections` is WEDGED, and this is the question worth answering carefully, because as a
+technique RT is an excellent async candidate.** Inline RayQuery is latency- and divergence-bound
+rather than ALU-saturating, which is exactly the workload you want overlapping rasterisation. The
+blocker here is not the queue, it is the data:
+
+- The pass **declares `D.light` as a read** — the lit HDR target — alongside depth, gb1 and the
+  reflection UAV (`SceneRenderer_Graph.cpp:798-801`), and uses it as the **on-screen hit fast path**
+  (`SceneRenderer_Reflections.cpp:229`, "lit HDR (fast path)"). It also consumes the spot/point light
+  buffers filled earlier in the frame (`:242`).
+- So everything immediately BEFORE it writes what it reads: `Main_Lighting` (which itself waits on
+  `pVsmPageRender`), then `Main_SpotLights`, `Main_PointLights`, `Main_Skybox`.
+- And everything immediately AFTER it reads what it writes: `Main_ReflectionTemporal` ->
+  `Main_ReflectionBlur` -> `Main_Compose` -> glass -> transparent.
+- In the 08-28 timeline that is the stretch 1039..1363: lighting, three small light passes, RT, then
+  the reflection resolve chain. **There is no independent graphics work adjacent to it in either
+  direction.** Moving RT to the compute queue would leave the graphics queue idle for its 87 us and
+  add a fence — a guaranteed small loss.
+
+**The only way RT becomes async-useful is to split the TRACE from the SHADE.** Ray traversal needs
+the TLAS, depth and gb1 — all ready when the G-buffer finishes at ~385 — while only the on-screen
+fast path needs `D.light`. A trace pass writing hit data could then run on the compute queue
+underneath `Pass_VsmPageRender` (509..1036), leaving a cheap resolve to wait for lighting. That is
+the standard gather-then-shade split, and it is worth writing down — but it **reworks what the pass
+does**, which this plan lists as a non-goal. It belongs in the RT plan, not here. Do not attempt it
+as part of Step 10.
 
 **The wetness pass is the cleanest async candidate in the frame, and it should ride along with
 Step 9 for reasons that are not about its cost.**
@@ -722,12 +781,15 @@ produces a byte-identical graphics submission to the pre-Step-9 build.
 ## After this plan — where the second queue is actually worth more
 
 Recorded here so it is not re-derived later, and explicitly out of scope for the eleven steps above.
-The ~8.9 % budget of Step 10 covers *overlapping work that must finish this frame*, and it is bounded
+The ~11 % budget of Step 10 covers *overlapping work that must finish this frame*, and it is bounded
 by how much independent graphics work the frame contains. The larger prize is work that does **not**
 have to finish this frame at all, which is bounded by nothing:
 
-- **Wind-deformed BLAS refit** (step RW of `docs/rt_shadows_integration_plan.md`) — a per-frame
-  rebuild that nothing in the same frame needs at full freshness.
+- **Wind-deformed BLAS refit** — **this LANDED in `fe23d99`**: `Main_BuildAS` now runs a wind
+  deformation material (`rtAs_.Build(..., GetRtWindDeformMaterial())`). It measured 20 us on
+  2026-08-28, so it has moved out of this section and into Step 10's movable list. What remains here
+  is the harder version: refitting at a lower rate than once per frame, which needs the AS lifetime
+  decoupled from the frame rather than just a second queue.
 - **Editor thumbnail rendering** (`AssetThumbnailCache`), which today contends with the frame.
 - **Ocean mip chain / foam**, if the split in Step 8 shows them separable from the FFT.
 
