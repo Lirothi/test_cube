@@ -73,10 +73,8 @@ void SceneRenderer::FillSsrUeConstants(SsrPassConstants& c, bool useRoughnessTex
     c.ueNumSteps = r.numSteps;
     c.ueNumRays = r.numRays;
     c.ueGlossyRays = r.glossyRays;
-    c.ueStartMipLevel = r.startMipLevel;
-    c.ueSlopeCompareToleranceScale = r.slopeCompareToleranceScale;
-    c.ueConfirmRetries = r.confirmRetries;
-    c.ueRefineSteps = r.refineSteps;
+    c.ueIntensity = r.intensity;
+    c.ueRoughnessMaskScale = r.roughnessMaskScale;
     c.ueUseRoughnessTexture = useRoughnessTexture && s.useSurfaceRoughness ? 1u : 0u;
     c.ueRoughnessOverride = std::clamp(s.roughnessOverride, 0.0f, 1.0f);
 }
@@ -825,10 +823,6 @@ void SceneRenderer::RecordOceanReflection(Renderer* renderer, ID3D12GraphicsComm
     constants.hzbSize = float2(static_cast<float>(D.hzbWidth), static_cast<float>(D.hzbHeight));
     constants.hzbInvSize = float2(D.hzbWidth > 0u ? 1.0f / static_cast<float>(D.hzbWidth) : 0.0f,
         D.hzbHeight > 0u ? 1.0f / static_cast<float>(D.hzbHeight) : 0.0f);
-    constants.ueStartMipLevel = ue.startMipLevel;
-    constants.ueSlopeCompareToleranceScale = ue.slopeCompareToleranceScale;
-    constants.ueConfirmRetries = ue.confirmRetries;
-    constants.ueRefineSteps = ue.refineSteps;
     constants.ueNumSteps = UeSsrMirrorRaySteps(ue);
 
     const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };

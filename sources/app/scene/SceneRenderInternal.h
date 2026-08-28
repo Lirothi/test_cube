@@ -174,10 +174,12 @@ namespace scene_internal
         uint32_t frameIndexMod8 = 0u;
         float2 hzbSize{};
         float2 hzbInvSize{};
-        float ueStartMipLevel = 0.0f;
-        float ueSlopeCompareToleranceScale = 4.0f;
-        uint32_t ueConfirmRetries = 0u;
-        uint32_t ueRefineSteps = 0u;
+        // Retired by the byte-for-byte UE port (hardcoded 1.0/4.0; the confirm/refine
+        // guard was never UE's). Pads keep the memcpy'd layout at 368 bytes.
+        float _ueRetired0 = 0.0f;
+        float _ueRetired1 = 0.0f;
+        uint32_t _ueRetired2 = 0u;
+        uint32_t _ueRetired3 = 0u;
         uint32_t ueNumSteps = 8u;
         uint32_t pad0 = 0u;
         uint32_t pad1 = 0u;

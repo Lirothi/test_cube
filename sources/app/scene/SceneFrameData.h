@@ -25,6 +25,9 @@ namespace vfx { struct WindState; } // W3: global wind, read when building the g
 // The screen-space search a reflection ray uses. (The Lettier tracer was the third option and was
 // removed with P6C step 6 -- it was a fixed-step screen-space march that LogMarch strictly
 // dominates, and keeping a third code path alive made every SSR A/B a three-way.)
+// DEFAULT IS UeHzb since the byte-for-byte port: the user's verdict on the composite that mixed
+// UE's search with the LogMarch's visibility ladder was "оно странное", and the porting rule of
+// this project is their math over homegrown blends.
 enum class SsrTechnique : uint32_t
 {
     LogMarch = 0,
@@ -49,23 +52,21 @@ enum class UeSsrQualityPreset : uint32_t
 
 struct UeSsrSettings
 {
-    UeSsrQualityPreset preset = UeSsrQualityPreset::High;
+    // UE stock default: PostProcessSettings quality 50 + r.SSR.Quality 3 selects Medium.
+    UeSsrQualityPreset preset = UeSsrQualityPreset::Medium;
     uint32_t numSteps = 8u;
     uint32_t numRays = 4u;
     bool glossyRays = true;
     bool useSurfaceRoughness = true;
     float roughnessOverride = 0.0f;
 
-    // These are hard-coded in stock UE. They are exposed here because they control the tradeoff
-    // visible in grazing mirror views: coarse coverage versus exact silhouette ownership.
-    float startMipLevel = 0.0f;
-    float slopeCompareToleranceScale = 4.0f;
-
-    // Our full-depth guard layered over UE's coarse HZB result. Zero retries is the unmodified UE
-    // acceptance rule. Nonzero values refine a candidate against full-res depth and keep marching
-    // after a rejected coarse hit instead of turning it into a permanent hole.
-    uint32_t confirmRetries = 0u;
-    uint32_t refineSteps = 4u;
+    // The two SSR knobs UE actually expose, from FPostProcessSettings with their stock defaults
+    // (Scene.cpp: Intensity 100, MaxRoughness 0.6). StartMipLevel and the tolerance scale are
+    // hardcoded 1.0/4.0 inside their RayCast() and are no longer knobs here; the full-depth
+    // confirm/refine guard this engine used to layer on top is deleted -- byte-for-byte means
+    // their acceptance rule and nothing else.
+    float intensity = 1.0f;      // ScreenSpaceReflectionIntensity / 100
+    float maxRoughness = 0.6f;   // ScreenSpaceReflectionMaxRoughness
 };
 
 inline void ApplyUeSsrQualityPreset(UeSsrSettings& settings, UeSsrQualityPreset preset)
@@ -110,10 +111,9 @@ struct ResolvedUeSsrSettings
     uint32_t numSteps;
     uint32_t numRays;
     uint32_t glossyRays;
-    float startMipLevel;
-    float slopeCompareToleranceScale;
-    uint32_t confirmRetries;
-    uint32_t refineSteps;
+    float intensity;
+    // SSRParams.g: ComputeSSRParams derives -2/MaxRoughness, doubled below the High tier.
+    float roughnessMaskScale;
 };
 
 inline ResolvedUeSsrSettings ResolveUeSsrSettings(const UeSsrSettings& s)
@@ -125,10 +125,11 @@ inline ResolvedUeSsrSettings ResolveUeSsrSettings(const UeSsrSettings& s)
     r.numSteps = std::min(64u, (requestedSteps + 3u) & ~3u);
     r.numRays = std::clamp(s.numRays, 1u, 12u);
     r.glossyRays = s.glossyRays ? 1u : 0u;
-    r.startMipLevel = std::clamp(s.startMipLevel, 0.0f, 4.0f);
-    r.slopeCompareToleranceScale = std::clamp(s.slopeCompareToleranceScale, 0.25f, 8.0f);
-    r.confirmRetries = std::clamp(s.confirmRetries, 0u, 8u);
-    r.refineSteps = std::clamp(s.refineSteps, 0u, 8u);
+    r.intensity = std::clamp(s.intensity, 0.0f, 1.0f);
+    // ComputeSSRParams: RoughnessMaskScale = -2/MaxRoughness, times 2 below ESSRQuality::High.
+    // The engine's tier signal for "below High" is a preset without GGX rays.
+    const float maxRoughness = std::clamp(s.maxRoughness, 0.01f, 1.0f);
+    r.roughnessMaskScale = (-2.0f / maxRoughness) * (s.glossyRays ? 1.0f : 2.0f);
     return r;
 }
 

@@ -115,8 +115,7 @@ struct SceneSsrCBHandles
     Material::CBFieldHandle useHzb, hzbMipCount, frameIndexMod8, hzbSize, hzbInvSize;
     Material::CBFieldHandle sceneColorHistoryValid;
     Material::CBFieldHandle ueNumSteps, ueNumRays, ueGlossyRays;
-    Material::CBFieldHandle ueStartMipLevel, ueSlopeCompareToleranceScale;
-    Material::CBFieldHandle ueConfirmRetries, ueRefineSteps;
+    Material::CBFieldHandle ueIntensity, ueRoughnessMaskScale;
     Material::CBFieldHandle ueUseRoughnessTexture, ueRoughnessOverride;
     Material::CBFieldHandle invPrevPreExposure;
     Material::CBFieldHandle preExposure;
@@ -607,10 +606,9 @@ struct SsrPassConstants
     uint32_t ueNumSteps = 8u;
     uint32_t ueNumRays = 4u;
     uint32_t ueGlossyRays = 1u;
-    float ueStartMipLevel = 0.0f;
-    float ueSlopeCompareToleranceScale = 2.0f;
-    uint32_t ueConfirmRetries = 0u;
-    uint32_t ueRefineSteps = 4u;
+    // SSRParams.r/.g of SSRTReflections.usf (intensity, roughness-fade scale).
+    float ueIntensity = 1.0f;
+    float ueRoughnessMaskScale = -2.0f / 0.6f;
     uint32_t ueUseRoughnessTexture = 1u;
     float ueRoughnessOverride = 0.0f;
     // P16.1: 1 / the factor the SceneColor history was written with (1 = not pre-exposed).

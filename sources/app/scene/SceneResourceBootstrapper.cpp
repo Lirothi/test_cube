@@ -135,10 +135,8 @@ void SceneSsrCBHandles::Populate(Material* material)
     ueNumSteps = material->ComputeCB0FieldHandle("ueNumSteps");
     ueNumRays = material->ComputeCB0FieldHandle("ueNumRays");
     ueGlossyRays = material->ComputeCB0FieldHandle("ueGlossyRays");
-    ueStartMipLevel = material->ComputeCB0FieldHandle("ueStartMipLevel");
-    ueSlopeCompareToleranceScale = material->ComputeCB0FieldHandle("ueSlopeCompareToleranceScale");
-    ueConfirmRetries = material->ComputeCB0FieldHandle("ueConfirmRetries");
-    ueRefineSteps = material->ComputeCB0FieldHandle("ueRefineSteps");
+    ueIntensity = material->ComputeCB0FieldHandle("ueIntensity");
+    ueRoughnessMaskScale = material->ComputeCB0FieldHandle("ueRoughnessMaskScale");
     ueUseRoughnessTexture = material->ComputeCB0FieldHandle("ueUseRoughnessTexture");
     ueRoughnessOverride = material->ComputeCB0FieldHandle("ueRoughnessOverride");
     invPrevPreExposure = material->ComputeCB0FieldHandle("invPrevPreExposure");
@@ -1289,10 +1287,8 @@ void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, 
     matSSR_->UpdateCBField(handles.ueNumSteps, data.ueNumSteps, dest);
     matSSR_->UpdateCBField(handles.ueNumRays, data.ueNumRays, dest);
     matSSR_->UpdateCBField(handles.ueGlossyRays, data.ueGlossyRays, dest);
-    matSSR_->UpdateCBField(handles.ueStartMipLevel, data.ueStartMipLevel, dest);
-    matSSR_->UpdateCBField(handles.ueSlopeCompareToleranceScale, data.ueSlopeCompareToleranceScale, dest);
-    matSSR_->UpdateCBField(handles.ueConfirmRetries, data.ueConfirmRetries, dest);
-    matSSR_->UpdateCBField(handles.ueRefineSteps, data.ueRefineSteps, dest);
+    matSSR_->UpdateCBField(handles.ueIntensity, data.ueIntensity, dest);
+    matSSR_->UpdateCBField(handles.ueRoughnessMaskScale, data.ueRoughnessMaskScale, dest);
     matSSR_->UpdateCBField(handles.ueUseRoughnessTexture, data.ueUseRoughnessTexture, dest);
     matSSR_->UpdateCBField(handles.ueRoughnessOverride, data.ueRoughnessOverride, dest);
     matSSR_->UpdateCBField(handles.invPrevPreExposure, data.invPrevPreExposure, dest);

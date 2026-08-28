@@ -47,10 +47,12 @@ cbuffer PerFrame : register(b0)
     uint     ueNumSteps;
     uint     ueNumRays;
     uint     ueGlossyRays;
-    float    ueStartMipLevel;
-    float    ueSlopeCompareToleranceScale;
-    uint     ueConfirmRetries;
-    uint     ueRefineSteps;
+    // SSRParams.r / .g of SSRTReflections.usf: intensity in 0..1 and the roughness-fade scale
+    // derived on the CPU from MaxRoughness exactly as ComputeSSRParams does.
+    float    ueIntensity;
+    float    ueRoughnessMaskScale;
+    uint     uePad0;
+    uint     uePad1;
     uint     ueUseRoughnessTexture;
     float    ueRoughnessOverride;
     // P16.1: 1 / the pre-exposure the PREVIOUS frame's scene colour was written with. This pass
@@ -80,14 +82,6 @@ float  ReadDepth(float2 uv){ return DepthT.SampleLevel(gSmpPoint, uv, 0).r; }
 #include "ssr_trace_logmarch.hlsli"
 #include "ssr_trace_ue.hlsli" // Unreal's own SSR ray cast; reuses SSRHit / BuildSsrHit above
 
-// Port of SSRT/SSRTRayCast.ush::ComputeHitVignetteFromScreenPos. It rejects both a hit that
-// leaves the current view and its reprojected location leaving the previous view.
-float ComputeUeHitVignette(float2 screenPos)
-{
-    float2 vignette = saturate(abs(screenPos) * 5.0f - 4.0f);
-    return saturate(1.0f - dot(vignette, vignette));
-}
-
 // Port of SSRT/SSRTRayCast.ush::ReprojectHit adapted to this renderer's plain RG16F velocity.
 // UE's encoded velocity has an explicit validity sentinel; ours is cleared to zero, so zero uses
 // the camera transform. A nonzero value is already currUv-prevUv and can be subtracted directly.
@@ -107,45 +101,35 @@ void ReprojectUeHit(float3 hitUVz, out float2 prevUV, out float vignette)
         prevScreen = UVtoNDC(prevUV);
     }
 
-    vignette = min(ComputeUeHitVignette(thisScreen), ComputeUeHitVignette(prevScreen));
+    vignette = min(SsrUeHitVignette(thisScreen), SsrUeHitVignette(prevScreen));
 }
 
-float SsrUeLuminance(float3 c)
+// SSRTReflections.usf hit resolve, verbatim structure. The colour source is the previous frame's
+// full-HDR scene colour (UE bind their TAA history there; the current lit target is the fallback
+// exactly as their InputColor falls back to CurrentSceneColor when no history exists). The values
+// STAY in their stored pre-exposed space through the firefly compression -- the space UE's own
+// compression sees, and the P16.8 conditioning argument is the same one -- and the pre-exposure
+// correction comes at the END, as SSRTReflections.usf line 404 applies it.
+float4 SampleUeScreenColor(float3 hitUVz)
 {
-    return dot(c, float3(0.2126f, 0.7152f, 0.0722f));
-}
+    float2 prevUV;
+    float hitVignette;
+    ReprojectUeHit(hitUVz, prevUV, hitVignette);
 
-float4 ResolveUeHit(SSRHit ssr, bool compressForMultiRay)
-{
-    float vis = ssr.visibility;
     float3 c;
     if (sceneColorHistoryValid != 0u)
     {
-        float2 prevUV;
-        float hitVignette;
-        ReprojectUeHit(float3(ssr.uv, ssr.deviceZ), prevUV, hitVignette);
-        // Mirrors UE SampleScreenColor: bilinear history sample, NaNs/negative HDR -> black.
-        c = PrevSceneColor.SampleLevel(gSmp, prevUV, 0.0f).rgb * invPrevPreExposure; // P16.1
-        c = -min(-c, 0.0f);
-        vis *= hitVignette;
+        // SampleScreenColor: bilinear, NaNs/negative HDR -> black.
+        c = PrevSceneColor.SampleLevel(gSmp, prevUV, 0.0f).rgb;
     }
     else
     {
-        // BILINEAR + NaN guard, same rationale as the LogMarch resolve below (UE SampleScreenColor).
-        c = LightTarget.SampleLevel(gSmp, ssr.uv, 0.0f).rgb;
-        c = -min(-c, 0.0f);
+        // No history yet (first frame after a resize / level switch): the current lit target,
+        // brought into current-pre-exposed space so the tail correction below stays uniform.
+        c = LightTarget.SampleLevel(gSmp, hitUVz.xy, 0.0f).rgb * preExposure;
     }
-
-    if (compressForMultiRay)
-    {
-        // P16.8: compress in PRE-EXPOSED space. `c` is raw radiance -- thousands of cd/m2 since the
-        // lights went physical -- and `L/(1+L)` maps that to 0.9997, where the inverse `1/(1-L)` is
-        // one catastrophic cancellation away from nonsense. Pre-exposed, the same hit is near 1 and
-        // the pair is exact. The caller divides the factor back out.
-        c *= preExposure;
-        c *= rcp(1.0f + SsrUeLuminance(c));
-    }
-    return float4(c * vis, vis);
+    c = -min(-c, 0.0f);
+    return float4(c, 1.0f) * hitVignette;
 }
 
 [numthreads(8, 8, 1)]
@@ -191,82 +175,102 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
         if (tech == SSR_TECHNIQUE_UE && useHzb != 0u)
         {
+            // ScreenSpaceReflections() of SSRTReflections.usf, in its exact order: roughness fade
+            // early-out, quality permutation, one interleaved-gradient step offset per pixel, the
+            // multi-ray GGX loop with the firefly-compression pair, then fade * intensity and the
+            // pre-exposure correction. The one addition their shader does not need is the final
+            // division back to RAW radiance -- their whole pipeline stays pre-exposed, ours hands
+            // compose raw HDR, so the adapter is one rcp(preExposure) at the very end.
+            //
+            // NOTE their multi-ray tail divides by NumRays -- misses count as zeros -- and runs
+            // the `1/(1-L)` expansion on that miss-diluted mean. P16.8 replaced that here with a
+            // coverage-weighted inverse once; byte-for-byte restores THEIR form, whose
+            // conditioning is fine BECAUSE the values are pre-exposed (near 1), which was the
+            // actual P16.8 defect. Partial-coverage glossy is slightly dimmer than the coverage
+            // form -- that is UE's own look.
             const float roughness = ueUseRoughnessTexture != 0u
                 ? saturate(UnpackRM(GB0.SampleLevel(gSmpPoint, uv, 0.0f).a).x)
                 : saturate(ueRoughnessOverride);
-            const float3 unitPositionFrom = normalize(Pv);
-            const float3 viewToCamera = -unitPositionFrom;
+            // GetRoughnessFade: min(Roughness * SSRParams.y + 2, 1), and <= 0 traces nothing.
+            const float roughnessFade = min(roughness * ueRoughnessMaskScale + 2.0f, 1.0f);
 
-            uint numSteps = clamp(ueNumSteps, 4u, 64u);
-            uint numRays = ueGlossyRays != 0u ? clamp(ueNumRays, 1u, 12u) : 1u;
-            bool glossy = ueGlossyRays != 0u && numRays > 1u;
-
-            // SSRTReflections.usf collapses High/Epic's multi-ray budget into one 24-step
-            // geometric mirror ray below roughness 0.1.
-            if (glossy && roughness < 0.1f)
+            [branch] if (roughnessFade > 0.0f)
             {
-                numSteps = min(numSteps * numRays, 24u);
-                numRays = 1u;
-                glossy = false;
-            }
+                const float3 unitPositionFrom = normalize(Pv);
+                const float3 viewToCamera = -unitPositionFrom;
+                const float a = roughness * roughness;
 
-            const float3x3 tangentBasis = SsrUeTangentBasis(Nv);
-            const float3 tangentV = mul(tangentBasis, viewToCamera);
-            const uint2 random = SsrUeRand3DPCG16(
-                int3(int2(dispatchThreadId.xy), (int)frameIndexMod8)).xy;
+                uint numSteps = clamp(ueNumSteps, 4u, 64u);
+                uint numRays = ueGlossyRays != 0u ? clamp(ueNumRays, 1u, 12u) : 1u;
 
-            [loop] for (uint rayIndex = 0u; rayIndex < numRays; ++rayIndex)
-            {
-                float3 rayDirection;
-                if (glossy)
+                // One offset per pixel: InterleavedGradientNoise(SvPosition.xy,
+                // StateFrameIndexMod8) - 0.5, shared by every ray of the loop.
+                const float stepOffset =
+                    SsrUeInterleavedGradientNoise(float2(dispatchThreadId.xy),
+                                                  (float)frameIndexMod8) - 0.5f;
+
+                [branch] if (numRays > 1u)
                 {
-                    const float2 e = SsrUeHammersley16(rayIndex, numRays, random);
-                    const float alpha = roughness * roughness;
-                    const float3 tangentH = SsrUeImportanceSampleVisibleGGX(e, alpha, tangentV);
-                    const float3 h = mul(tangentH, tangentBasis);
-                    rayDirection = normalize(2.0f * dot(viewToCamera, h) * h - viewToCamera);
+                    const uint2 random = SsrUeRand3DPCG16(
+                        int3(int2(dispatchThreadId.xy), (int)frameIndexMod8)).xy;
+                    const float3x3 tangentBasis = SsrUeTangentBasis(Nv);
+                    const float3 tangentV = mul(tangentBasis, viewToCamera);
+
+                    // The mirror collapse: below roughness 0.1 the whole budget becomes one
+                    // 24-step-capped geometric ray.
+                    const bool mirror = roughness < 0.1f;
+                    if (mirror)
+                    {
+                        numSteps = min(numSteps * numRays, 24u);
+                        numRays = 1u;
+                    }
+
+                    [loop] for (uint rayIndex = 0u; rayIndex < numRays; ++rayIndex)
+                    {
+                        const float2 e = SsrUeHammersley16(rayIndex, numRays, random);
+                        const float3 h = mul(SsrUeImportanceSampleVisibleGGX(e, a, tangentV),
+                                             tangentBasis);
+                        float3 rayDirection = 2.0f * dot(viewToCamera, h) * h - viewToCamera;
+                        if (mirror)
+                        {
+                            rayDirection = reflect(unitPositionFrom, Nv);
+                        }
+
+                        float3 hitUVz;
+                        [branch] if (SsrUeRayCast(Pv, rayDirection, roughness,
+                                                  numSteps, stepOffset, hitUVz))
+                        {
+                            float4 sampleColor = SampleUeScreenColor(hitUVz);
+                            sampleColor.rgb *= rcp(1.0f + SsrUeLuminance(sampleColor.rgb));
+                            result += sampleColor;
+                        }
+                    }
+
+                    result /= max((float)numRays, 0.0001f);
+                    result.rgb *= rcp(1.0f - SsrUeLuminance(result.rgb));
                 }
                 else
                 {
-                    rayDirection = normalize(reflect(unitPositionFrom, Nv));
+                    // Low/Medium: one mirror ray. (Their single-ray glossy variant exists only
+                    // under the SSD denoiser, which this engine does not run.)
+                    const float3 rayDirection = reflect(unitPositionFrom, Nv);
+                    float3 hitUVz;
+                    [branch] if (SsrUeRayCast(Pv, rayDirection, roughness,
+                                              numSteps, stepOffset, hitUVz))
+                    {
+                        result = SampleUeScreenColor(hitUVz);
+                    }
                 }
 
-                const SSRHit ssr = TraceSSR_UeHzbRay(
-                    Pv, unitPositionFrom, rayDirection, roughness, uv,
-                    float2(dispatchThreadId.xy), frameIndexMod8, numSteps);
-                if (ssr.hit != 0)
-                {
-                    result += ResolveUeHit(ssr, glossy);
-                }
+                result *= roughnessFade;
+                result *= ueIntensity;
+                // PrevSceneColorPreExposureCorrection: View.PreExposure / PrevPreExposure when the
+                // colour came from the history, 1 when it came from the current target -- then the
+                // engine adapter back to raw radiance for compose.
+                result.rgb *= (sceneColorHistoryValid != 0u)
+                    ? preExposure * invPrevPreExposure : 1.0f;
+                result.rgb *= rcp(max(preExposure, 1.0e-12f));
             }
-
-            // P16.8 -- THE INVERSE HAS TO SEE WHAT THE COMPRESSION PRODUCED, and that is the mean
-            // of the RAYS THAT HIT, not the mean over every ray fired.
-            //
-            // It used to divide by `numRays` first, mixing the misses in as zeros, and then invert.
-            // `L/(1+L)` and `1/(1-L)` are exact inverses of each other only for a single unweighted
-            // sample; feed the second one a coverage-weighted average and it is not an inverse at
-            // all. With two of four rays hitting a surface of 3000 cd/m2 the old form returned
-            // luminance 0.999 instead of ~1500 -- and it had been returning 0.33 instead of 0.5 for
-            // years, which nobody could see while the whole scene sat near 1. That is why the
-            // bronze floor's GLOSSY reflections went black the day the lights became physical, and
-            // why the sharp ones (roughness < 0.1, single ray, never compressed) stayed correct.
-            if (glossy)
-            {
-                const float coverage = result.a; // sum of the per-hit visibilities
-                if (coverage > 1.0e-4f)
-                {
-                    float3 mean = result.rgb / coverage;   // un-premultiply: the mean COMPRESSED hit
-                    mean *= rcp(max(1.0f - SsrUeLuminance(mean), 1.0e-4f));
-                    mean *= rcp(max(preExposure, 1.0e-12f)); // back out of pre-exposed space
-                    result.rgb = mean * coverage;          // and back to premultiplied
-                }
-                else
-                {
-                    result.rgb = 0.0f.xxx;
-                }
-            }
-            result *= rcp((float)max(numRays, 1u));
         }
         else
         {

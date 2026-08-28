@@ -352,7 +352,8 @@ namespace
             renderSettings.ssrUe.roughnessOverride = value;
             return true;
         }
-        if (setting == "ssr.ueStartMip") { renderSettings.ssrUe.startMipLevel = value; return true; }
+        if (setting == "ssr.ueIntensity") { renderSettings.ssrUe.intensity = value; return true; }
+        if (setting == "ssr.ueMaxRoughness") { renderSettings.ssrUe.maxRoughness = value; return true; }
         // P7 aerial perspective. `atmosphere.enabled` is the gate; the rest are the model's own
         // parameters, so a sweep can find defaults without a rebuild.
         if (setting == "atmosphere.enabled")
@@ -477,17 +478,6 @@ namespace
         if (setting == "atmosphere.backScatter")
         {
             scene.AtmosphereRef().skyBackScatter = value;
-            return true;
-        }
-        if (setting == "ssr.ueTolerance") { renderSettings.ssrUe.slopeCompareToleranceScale = value; return true; }
-        if (setting == "ssr.ueConfirmRetries")
-        {
-            renderSettings.ssrUe.confirmRetries = static_cast<uint32_t>(std::max(0.0f, value));
-            return true;
-        }
-        if (setting == "ssr.ueRefineSteps")
-        {
-            renderSettings.ssrUe.refineSteps = static_cast<uint32_t>(std::max(0.0f, value));
             return true;
         }
         if (setting == "ssr.technique")

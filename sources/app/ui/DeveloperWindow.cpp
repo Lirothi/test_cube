@@ -703,34 +703,14 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                            0.0f, 1.0f, "%.2f");
                         ImGui::EndDisabled();
 
-                        ImGui::SliderFloat("UE start mip", &ue.startMipLevel, 0.0f, 4.0f, "%.2f");
-                        DevHelp("UE hard-code 1. Mip 0 is tighter and preserves thin shapes but "
-                                "finds fewer conservative candidates; higher mips reach more but "
-                                "broaden the candidate footprint.");
+                        ImGui::SliderFloat("UE intensity", &ue.intensity, 0.0f, 1.0f, "%.2f");
+                        DevHelp("SSRParams.r: ScreenSpaceReflectionIntensity / 100. UE stock 1.0. "
+                                "Multiplies the whole SSR output after the roughness fade.");
 
-                        ImGui::SliderFloat("UE depth tolerance", &ue.slopeCompareToleranceScale,
-                                           0.25f, 8.0f, "%.2f");
-                        DevHelp("UE hard-code 4. Lower values reduce stretched masks and false "
-                                "thickness, at the cost of more misses. Extra steps are the safer "
-                                "way to lower this.");
-
-                        int retries = static_cast<int>(ue.confirmRetries);
-                        if (ImGui::SliderInt("UE confirm retries", &retries, 0, 8))
-                        {
-                            ue.confirmRetries = static_cast<uint32_t>(retries);
-                        }
-                        DevHelp("0 is stock UE: accept the first coarse HZB hit. Above zero, confirm "
-                                "against full depth and continue after this many rejected coarse "
-                                "candidates instead of turning the first rejection into a hole.");
-
-                        int refine = static_cast<int>(ue.refineSteps);
-                        if (ImGui::SliderInt("UE full-depth refine", &refine, 0, 8))
-                        {
-                            ue.refineSteps = static_cast<uint32_t>(refine);
-                        }
-                        DevHelp("Subdivides each coarse candidate interval against full-resolution "
-                                "depth. Tightens balls/leaves and recovers a real crossing hidden "
-                                "inside a mip1 tile. Paid only when a coarse candidate exists.");
+                        ImGui::SliderFloat("UE max roughness", &ue.maxRoughness, 0.01f, 1.0f, "%.2f");
+                        DevHelp("ScreenSpaceReflectionMaxRoughness, UE stock 0.6: full SSR up to "
+                                "half this roughness, faded to nothing at it. Below the High tier "
+                                "UE double the fade slope, and so does this port.");
                         ImGui::TreePop();
                     }
                 }

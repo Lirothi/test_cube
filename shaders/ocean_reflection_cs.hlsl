@@ -37,10 +37,13 @@ cbuffer OceanReflectionCB : register(b0)
     uint frameIndexMod8;   // UE's StateFrameIndexMod8: the eight-frame sample-phase cycle
     float2 hzbSize;        // pyramid mip 0 in texels (HALF the render resolution)
     float2 hzbInvSize;
-    float ueStartMipLevel;
-    float ueSlopeCompareToleranceScale;
-    uint ueConfirmRetries;
-    uint ueRefineSteps;
+    // The four fields the byte-for-byte UE port retired (start mip and tolerance scale are
+    // hardcoded 1.0/4.0 in their RayCast; the confirm/refine guard was never theirs). Kept as
+    // pads so the memcpy'd layout does not move.
+    float _oceanUeRetired0;
+    float _oceanUeRetired1;
+    uint _oceanUeRetired2;
+    uint _oceanUeRetired3;
     // Already collapsed to UE's mirror case on the CPU: a plane is always their Roughness < 0.1
     // branch, so the ray count never reaches this shader.
     uint ueNumSteps;
@@ -143,8 +146,17 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // Integer coordinates of THIS dispatch, not uv*screenSize. The reflection target can be
         // scaled below render resolution, and a stride above one texel re-correlates UE's
         // interleaved-gradient phase across neighbours -- which is the exact defect P13 fixed.
-        ssr = TraceSSR_UeHzbRay(Pv, unitPositionFrom, pivot, 0.0f, uv,
-                                float2(dispatchThreadId.xy), frameIndexMod8, ueNumSteps);
+        const float stepOffset = SsrUeInterleavedGradientNoise(
+            float2(dispatchThreadId.xy), (float)frameIndexMod8) - 0.5f;
+        float3 hitUVz;
+        const bool hit = SsrUeRayCast(Pv, pivot, /*roughness*/ 0.0f,
+                                      clamp(ueNumSteps, 4u, 64u), stepOffset, hitUVz);
+        ssr.uv = hitUVz.xy;
+        ssr.deviceZ = hitUVz.z;
+        // UE modulate a hit only by the screen-edge vignette; the LogMarch visibility ladder no
+        // longer applies to this technique.
+        ssr.visibility = hit ? SsrUeHitVignette(UVtoNDC(hitUVz.xy)) : 0.0f;
+        ssr.hit = (hit && ssr.visibility > 0.0f) ? 1 : 0;
     }
     else
     {

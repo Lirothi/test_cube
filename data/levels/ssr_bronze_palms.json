@@ -33,7 +33,7 @@
       "mesh": "models/box.mesh.json",
       "metalRough": [
         1.0,
-        0.10000000149011612
+        0.07999999821186066
       ],
       "name": "bronze floor",
       "normalStrength": 0.35,
@@ -1817,6 +1817,7 @@
     "gtao": {
       "enabled": true,
       "intensity": 1.5,
+      "skyIntensity": 0.0,
       "skyRadius": 25.0,
       "strength": 1.0,
       "thickness": 0.75,
