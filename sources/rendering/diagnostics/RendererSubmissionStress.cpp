@@ -76,6 +76,21 @@ ID3D12GraphicsCommandList* UnexpectedFallback()
     return FakeGfxCL(0xDEAD);
 }
 
+// Async-compute step 6: the timeline now returns per-queue SEGMENTS instead of one flat array.
+// These tests are about ORDER RETENTION within a queue, so they flatten the segments back — which
+// is the identity transform while every batch is Graphics, i.e. exactly what they used to receive.
+// Flattening lives HERE and not in SubmitTimeline on purpose: merging two queues' arrays is
+// meaningless for submission, and a production helper that did it would be a trap.
+void GatherFlat(SubmitTimeline& tl, std::vector<ID3D12CommandList*>& out)
+{
+    std::vector<SubmitTimeline::Submission> segments;
+    tl.GatherFrameLists(segments, &UnexpectedFallback);
+    out.clear();
+    for (const auto& seg : segments) {
+        out.insert(out.end(), seg.lists.begin(), seg.lists.end());
+    }
+}
+
 // Registration retention + localOrder sort across batches, including a batch
 // far beyond the 8-entry inline capacity of the container this layer replaced
 // (which went out of bounds in Release). Directs only: gather now closes
@@ -113,7 +128,7 @@ void ScenarioOrderRetention(int round)
     }
 
     std::vector<ID3D12CommandList*> out;
-    tl.GatherFrameLists(out, &UnexpectedFallback);
+    GatherFlat(tl, out);
 
     const bool ok = (out == expected) && tl.ActiveBatchCount() == 0;
     char what[128];
@@ -186,7 +201,7 @@ void ScenarioConcurrentRegistration(unsigned threadCount, int clsPerThread, int 
         }
 
         std::vector<ID3D12CommandList*> out;
-        tl.GatherFrameLists(out, &UnexpectedFallback);
+        GatherFlat(tl, out);
         ok = (out == expected);
     }
 
@@ -220,7 +235,7 @@ void ScenarioPoolReuse(int frames)
             }
         }
         out.clear();
-        tl.GatherFrameLists(out, &UnexpectedFallback);
+        GatherFlat(tl, out);
         ok = (out == expected) && tl.ActiveBatchCount() == 0;
     }
 
@@ -297,7 +312,7 @@ void ScenarioDeterministicOrder(int permutations)
             tl.RegisterDirect(canonical[idx], batch, static_cast<uint32_t>(idx));
         }
         std::vector<ID3D12CommandList*> out;
-        tl.GatherFrameLists(out, &UnexpectedFallback);
+        GatherFlat(tl, out);
 
         if (p == 0) {
             firstOut = out;

@@ -94,6 +94,15 @@ inline bool g_asyncEmptySubmit = false;
 // It deliberately SERIALISES the queues, so it is separate from --async-empty-submit and is never
 // on by default. It is also the first exercise of step 2's dormant SignalCrossQueue/WaitCrossQueue.
 inline bool g_asyncOrderProbe = false;
+
+// Async-compute plan step 6: `--dump-submit-order` writes the frame's SUBMITTED command-list arrays
+// — by debug name, in submission order, per queue — to logs/submit_order.log, once, then stops.
+//
+// It exists to make step 6's acceptance checkable: per-queue submission must leave the GRAPHICS
+// array byte-identical to what a single-queue submit produced. Names rather than pointers, because
+// pointers differ between runs and say nothing; the names are the pass identities, which is what
+// "the array is unchanged" actually means.
+inline bool g_dumpSubmitOrder = false;
 } // namespace render
 
 class Renderer {
@@ -235,7 +244,9 @@ public:
     void EndThreadCommandBundle(ThreadCL& b, size_t batchIndex, uint32_t localOrder = 0);
 
     void BeginSubmitTimeline();
-    size_t BeginSubmitBatch();
+    size_t BeginSubmitBatch(RenderQueue queue = RenderQueue::Graphics);
+    // Step 6: record a cross-queue dependency for a batch (see SubmitTimeline).
+    void SetSubmitBatchCrossQueueWait(size_t batchIndex, size_t waitForBatch);
     void ExecuteTimelineAndPresent();
     void RecordBindAndClear(ID3D12GraphicsCommandList* cl);
     void RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl);
@@ -614,6 +625,11 @@ private:
     void ProbeComputeLaneOnce();
     // Async-compute step 2: one empty COMPUTE submission per frame (see render::g_asyncEmptySubmit).
     void SubmitEmptyComputeWork();
+    // Async-compute step 5/6: the emission-side queue-legality backstop, called from BOTH places
+    // that emit a compiled barrier point (Transition and EmitPoint).
+    void CheckCompiledPointOnQueue(ID3D12GraphicsCommandList* cl, const CompiledBarriers::Point& pt, int pass) const;
+    // Async-compute step 6: dump one queue's submitted array by debug name (--dump-submit-order).
+    static void DumpSubmitOrder(const char* queueName, const std::vector<ID3D12CommandList*>& lists);
     std::pair<UINT, UINT> ComputeScaledTextureSize(UINT referenceWidth, UINT referenceHeight, Math::float2 scale) const;
     std::pair<UINT, UINT> ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const;
 #if WITH_EDITOR
@@ -625,8 +641,8 @@ private:
 
 private:
     SubmitTimeline submitTimeline_;
-    std::vector<ID3D12CommandList*> submitListsScratch_;
-    std::vector<ID3D12CommandList*> fixedSubmitScratch_;
+    // Step 6: the frame's submissions, one per contiguous same-queue run of batches.
+    std::vector<SubmitTimeline::Submission> submitSegmentsScratch_;
 
     // Per-frame deferred render targets + their CPU descriptor heaps
     RenderTargetManager rtManager_;

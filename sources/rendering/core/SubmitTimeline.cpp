@@ -10,15 +10,33 @@ void SubmitTimeline::BeginTimeline()
     ResetBatchesInPlaceLocked_();
 }
 
-size_t SubmitTimeline::BeginBatch()
+size_t SubmitTimeline::BeginBatch(RenderQueue queue)
 {
     std::lock_guard<std::mutex> lk(mtx_);
     const size_t idx = activeBatchCount_;
     if (idx == batches_.size()) {
         batches_.emplace_back();
     }
+    // Step 6: set explicitly rather than relying on the pooled slot's default — the pool is reused
+    // across frames, and a batch that was AsyncCompute last frame must not stay so this frame.
+    batches_[idx].queue = queue;
+    batches_[idx].crossQueueWait = kNoCrossQueueWait;
     ++activeBatchCount_;
     return idx;
+}
+
+void SubmitTimeline::SetCrossQueueWait(size_t batchIndex, size_t waitForBatch)
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (batchIndex >= activeBatchCount_) {
+        RendererInvariantFailure("SubmitTimeline::SetCrossQueueWait: batch index outside the active range");
+    }
+    // Keep the LATEST such batch: waiting for the furthest-along producer subsumes waiting for any
+    // earlier one on the same queue, so one value per batch is enough.
+    PassBatch& batch = batches_[batchIndex];
+    if (batch.crossQueueWait == kNoCrossQueueWait || waitForBatch > batch.crossQueueWait) {
+        batch.crossQueueWait = waitForBatch;
+    }
 }
 
 void SubmitTimeline::RegisterDirect(ID3D12CommandList* cl, size_t batchIndex, uint32_t localOrder)
@@ -137,6 +155,8 @@ void SubmitTimeline::ResetBatchesInPlaceLocked_()
         batch.driver = nullptr;
         batch.bundles.clear(); // retains heap capacity
         batch.directs.clear();
+        batch.queue = RenderQueue::Graphics;   // step 6: pooled slots must not carry a queue over
+        batch.crossQueueWait = kNoCrossQueueWait;
     }
     activeBatchCount_ = 0;
 }

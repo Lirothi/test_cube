@@ -9,6 +9,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/RendererInvariantFailure.h"
+#include "rendering/core/RenderPass.h" // step 6: RenderQueue
 
 // Per-frame submission timeline: the ordered pass batches that collect the
 // command lists render-pass workers record (concurrently) for one frame.
@@ -50,14 +51,43 @@ public:
     struct PassBatch {
         ID3D12GraphicsCommandList* driver = nullptr;                  // DIRECT; executes the bundles
         std::vector<Ordered<ID3D12GraphicsCommandList*>> bundles;     // TYPE_BUNDLE
-        std::vector<Ordered<ID3D12CommandList*>> directs;             // ready DIRECT command lists
+        std::vector<Ordered<ID3D12CommandList*>> directs;             // ready command lists
+        // Async-compute step 6: which queue this batch's lists are submitted to. A batch belongs to
+        // exactly one pass node, and a pass has exactly one queue (D1), so this is well-defined.
+        RenderQueue queue = RenderQueue::Graphics;
+        // The latest batch on the OTHER queue that this batch must follow, or kNoCrossQueueWait.
+        // Derived by the graph from the pass's prereqs/mtDeps — NOT from batch order, because
+        // "later in the list" is not a dependency and treating it as one would serialise the two
+        // queues and delete the overlap this whole plan exists to create (D2).
+        size_t crossQueueWait = kNoCrossQueueWait;
+    };
+
+    static constexpr size_t kNoCrossQueueWait = (size_t)-1;
+
+    // One ExecuteCommandLists' worth of work: a contiguous run of batches on ONE queue, plus the
+    // cross-queue synchronisation that must bracket it.
+    //
+    // Segments rather than two flat arrays, because a fence edge lands BETWEEN submissions: the
+    // producer queue must be told to signal after the work its consumer waits on, and a flat array
+    // has no place to express "here". With no async pass there is exactly ONE segment and it is
+    // today's array.
+    struct Submission {
+        RenderQueue queue = RenderQueue::Graphics;
+        std::vector<ID3D12CommandList*> lists;
+        size_t waitForBatch = kNoCrossQueueWait; // wait for the other queue's progress past this
+        size_t lastBatch = kNoCrossQueueWait;    // highest batch index in this segment
     };
 
     // Start a new frame: deactivate every pooled batch (reset in place).
     void BeginTimeline();
 
     // Activate the next batch slot, reusing a pooled one when available.
-    size_t BeginBatch();
+    // `queue` fixes which queue the batch's lists will be submitted to (step 6).
+    size_t BeginBatch(RenderQueue queue = RenderQueue::Graphics);
+
+    // Step 6: record that `batchIndex` must not start before the other queue has finished
+    // `waitForBatch`. Called by the graph while it unrolls, where the prereq information lives.
+    void SetCrossQueueWait(size_t batchIndex, size_t waitForBatch);
 
     // Registration — callable from any worker thread. localOrder positions the
     // list within its batch namespace (directs / bundles).
@@ -85,21 +115,29 @@ public:
     // order and the driver is CLOSED exactly once, at gather time. Direct lists
     // were already closed by EndThreadCommandList; this only collects them.
     template <class MakeFallbackDriver>
-    void GatherFrameLists(std::vector<ID3D12CommandList*>& out, MakeFallbackDriver&& makeFallbackDriver)
+    void GatherFrameLists(std::vector<Submission>& out, MakeFallbackDriver&& makeFallbackDriver)
     {
         std::lock_guard<std::mutex> lk(mtx_);
         ApplySubmitOrderLocked_();
-        size_t expectedListCount = 0;
-        for (size_t i = 0; i < activeBatchCount_; ++i) {
-            const PassBatch& pb = batches_[i];
-            expectedListCount += pb.directs.size();
-            if (pb.driver != nullptr || !pb.bundles.empty()) {
-                ++expectedListCount;
-            }
-        }
-        out.reserve(out.size() + expectedListCount);
+        out.clear();
         for (size_t i = 0; i < activeBatchCount_; ++i) {
             PassBatch& pb = batches_[i];
+            // Step 6: open a new SEGMENT when the queue changes, or when this batch introduces a
+            // cross-queue wait (the wait has to be issued before the work that needs it, and a
+            // queue Wait applies to everything submitted after it). Otherwise keep appending, so
+            // the common case — every batch on Graphics, no waits — produces exactly ONE segment
+            // holding exactly today's array.
+            const bool needsNewSegment =
+                out.empty() ||
+                out.back().queue != pb.queue ||
+                pb.crossQueueWait != kNoCrossQueueWait;
+            if (needsNewSegment) {
+                out.push_back(Submission{});
+                out.back().queue = pb.queue;
+                out.back().waitForBatch = pb.crossQueueWait;
+            }
+            Submission& seg = out.back();
+            seg.lastBatch = i;
             ID3D12GraphicsCommandList* driver = pb.driver;
             if (driver == nullptr && !pb.bundles.empty()) {
                 driver = makeFallbackDriver();
@@ -120,10 +158,10 @@ public:
                 if (FAILED(driver->Close())) {
                     RendererInvariantFailure("SubmitTimeline::GatherFrameLists: driver Close() failed");
                 }
-                out.push_back(driver);
+                seg.lists.push_back(driver);
             }
             for (const auto& direct : pb.directs) {
-                out.push_back(direct.cl);
+                seg.lists.push_back(direct.cl);
             }
         }
         ResetBatchesInPlaceLocked_();

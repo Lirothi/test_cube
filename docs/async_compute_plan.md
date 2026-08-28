@@ -1,6 +1,6 @@
 # Async compute — architecture plan
 
-**Status: STEPS 1-3 COMMITTED (`7ac30fe`, `85b714c`, `4e014d5`). STEPS 4-5 DONE (uncommitted). Steps 6-11 not started.**
+**Status: STEPS 1-5 COMMITTED (`7ac30fe`, `85b714c`, `4e014d5`, `41f5417`, `843f6d0`). STEP 6 DONE (uncommitted). Steps 7-11 not started.**
 
 **Goal: the renderer gains a second execution queue as a first-class architectural capability.**
 The render graph learns to schedule a pass onto a `D3D12_COMMAND_LIST_TYPE_COMPUTE` queue,
@@ -764,6 +764,62 @@ submitted array is **byte-identical** to today — dump
 under a temporary flag, before and after, and diff them. The compute array is empty and no fence
 edge exists yet because no pass is async. All gates CLEAN. If the array differs, the step is not
 done, however plausible the difference looks.
+
+**DONE 2026-08-29, uncommitted.**
+
+- **`SubmitTimeline` returns SEGMENTS, not two flat arrays.** A segment is a contiguous run of
+  batches on one queue plus the cross-queue synchronisation that brackets it. Two flat arrays cannot
+  express a fence edge, because an edge lands *between* submissions — the producer must be told to
+  signal after the work its consumer waits on, and a flat array has no "here". With every pass on
+  Graphics there is exactly ONE segment, and it is today's array.
+- **`PassBatch` carries its queue and its cross-queue wait.** The wait is derived by the graph from
+  the pass's **prereqs/mtDeps**, not from batch order — "later in the list" is not a dependency, and
+  treating it as one would serialise the queues and delete the overlap the whole plan exists to
+  create. Latest producer wins, since waiting for it subsumes the earlier ones.
+- **Submission walks segments in batch order**, emitting `SignalCrossQueue`/`WaitCrossQueue` (step
+  2's dormant helpers) only where the graph recorded an edge. A segment without an edge is submitted
+  with no synchronisation at all — that is the point.
+- **The wrapping lists moved into the segments**: the profiler-begin list is inserted at the front
+  of the FIRST graphics segment and the epilogue appended to the LAST, so `GPU.Frame` still brackets
+  the same span of the direct queue's timeline.
+- `fixedSubmitScratch_` is gone — the work lists now live in the segments, already in order.
+
+**The inertness proof.** `--dump-submit-order` writes the submitted arrays by DEBUG NAME (pointers
+differ between runs and prove nothing; the names are the pass identities, which is what "unchanged"
+is a statement about). Captured before the change and after it:
+
+```
+before: 27 lines   after: 27 lines
+diff (pointers normalised): NO DIFFERENCES
+== queue=graphics count=26 ==
+```
+
+26 lists, same names, same order, ONE segment, and **no compute segment at all** — exactly what the
+acceptance asks for. The `--renderer-submission-stress` harness (which had to be adapted: it now
+flattens the segments locally, because a production helper that merged two queues' arrays would be a
+trap) passes with **0 failures**, death tests included. All three gates CLEAN, 0 MISSING.
+
+**A REAL BUG THIS STEP FOUND IN STEP 5'S WORK.** Compiled barriers reach the GPU from **two** places
+— `Renderer::Transition` and `Renderer::EmitPoint` — and step 5 guarded only the first. `EmitPoint`
+is the path every `AddPass2` body actually takes, so the emission-side queue-legality backstop was
+unreachable in practice. It is now ONE function called from both sites. This is the engine's
+standing rule paid for again: when the same thing is assembled in more than one place, a change to
+it must go through one helper.
+
+**The backstop still has not been observed FIRING, and here is exactly why.** Two attempts:
+1. mis-mark `Main_Hzb` async with the registration rule disabled -> the run dies at
+   `EndThreadCommandList: Close() failed`, i.e. the pass records something else that is illegal on a
+   compute list, and D3D12 reports it at Close;
+2. the barrier the demonstration was aiming at is not there anyway — earlier passes already read
+   `Deferred[].Depth` as `kSrvAll`, so by Hzb's turn the compile emits nothing for it.
+
+So constructing a reachable case needs a pass that is otherwise compute-legal AND whose compiled
+point genuinely contains a direct-exclusive transition. **Do not fake one.** Step 8 moves
+`Main_RTTrace`, which declares `kSrvAll` on depth and gb1 and therefore hits this naturally: if the
+D7 rework is forgotten the registration rule fires, and if a stale point survives the rework the
+backstop does. Verify it there. Recorded as an undemonstrated guard rather than a passed one — the
+second attempt is also mildly reassuring in its own right: a mis-marked pass fails loudly on its own
+recording, so the backstop is not the only thing between a mistake and silence.
 
 ### Step 7 — per-queue barrier state and ownership transfer (inert)
 

@@ -309,6 +309,13 @@ int WINAPI WinMain(
     // (compute signals, next frame's graphics waits) so the two-track trace can be checked against
     // an ordering that is true by construction. Implies --async-empty-submit, since the signal is
     // issued from that submission. Deliberately serialises the queues; diagnostics only.
+    // Async-compute plan step 6: "--dump-submit-order" writes the frame's submitted command-list
+    // arrays (by debug name, per queue) to logs/submit_order.log once. The acceptance for per-queue
+    // submission is that the GRAPHICS array is unchanged, and this is what makes that checkable.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--dump-submit-order")) {
+        render::g_dumpSubmitOrder = true;
+    }
+
     if (lpCmdLine && std::strstr(lpCmdLine, "--async-order-probe")) {
         render::g_asyncOrderProbe = true;
         render::g_asyncEmptySubmit = true;

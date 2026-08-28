@@ -885,8 +885,12 @@ void Renderer::BeginSubmitTimeline() {
     submitTimeline_.BeginTimeline();
 }
 
-size_t Renderer::BeginSubmitBatch() {
-    return submitTimeline_.BeginBatch();
+size_t Renderer::BeginSubmitBatch(RenderQueue queue) {
+    return submitTimeline_.BeginBatch(queue);
+}
+
+void Renderer::SetSubmitBatchCrossQueueWait(size_t batchIndex, size_t waitForBatch) {
+    submitTimeline_.SetCrossQueueWait(batchIndex, waitForBatch);
 }
 
 void Renderer::RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchIndex)
@@ -915,12 +919,14 @@ void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex, uint32_t l
 void Renderer::ExecuteTimelineAndPresent() {
     CPU_SCOPE(ProfilerScopes::kRendererExecuteTimelineAndPresent);
 
-    submitListsScratch_.clear();
+    submitSegmentsScratch_.clear();
 
-    // Gather batches in order
+    // Gather batches in order, split into per-queue SEGMENTS (step 6). With every pass on the
+    // graphics queue — which is every pass until step 8 — this yields exactly ONE segment holding
+    // exactly the array a single-queue submit produced.
     {
         CPU_SCOPE(ProfilerScopes::kService1);
-        submitTimeline_.GatherFrameLists(submitListsScratch_, [this]() {
+        submitTimeline_.GatherFrameLists(submitSegmentsScratch_, [this]() {
             // Fallback: a batch has bundles but no driver — create a temporary one
             FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
             ID3D12CommandAllocator* alloc =
@@ -932,8 +938,20 @@ void Renderer::ExecuteTimelineAndPresent() {
         });
     }
 
-    fixedSubmitScratch_.clear();
-    fixedSubmitScratch_.reserve(submitListsScratch_.size() * 2 + 3);
+    // Step 6: the GRAPHICS segments are what the wrapping lists bracket. The profiler-begin list
+    // goes at the front of the first graphics segment and the epilogue at the end of the last, so
+    // "the frame" still means the same span on the direct queue's timeline as it did before.
+    size_t firstGraphicsSeg = (size_t)-1;
+    size_t lastGraphicsSeg = (size_t)-1;
+    size_t graphicsListCount = 0;
+    for (size_t i = 0; i < submitSegmentsScratch_.size(); ++i) {
+        if (submitSegmentsScratch_[i].queue != RenderQueue::Graphics) { continue; }
+        if (firstGraphicsSeg == (size_t)-1) { firstGraphicsSeg = i; }
+        lastGraphicsSeg = i;
+        graphicsListCount += submitSegmentsScratch_[i].lists.size();
+    }
+
+    (void)graphicsListCount;
 
     // Acquire a fresh, open DIRECT command list from this frame's pool.
     auto acquireDirectCL = [this]() -> ID3D12GraphicsCommandList* {
@@ -943,13 +961,23 @@ void Renderer::ExecuteTimelineAndPresent() {
         return fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
     };
 
+    // Step 6: with no graphics segment at all there is nowhere to put the present transition, so
+    // make one. Cannot happen today (the frame always has graphics work) but the wrapping must not
+    // depend on that.
+    if (firstGraphicsSeg == (size_t)-1) {
+        submitSegmentsScratch_.push_back(SubmitTimeline::Submission{});
+        firstGraphicsSeg = lastGraphicsSeg = submitSegmentsScratch_.size() - 1;
+    }
+
 #if PROF_GPU_ENABLED
     {
-        // GPU-profiler frame-begin: first list submitted this frame.
+        // GPU-profiler frame-begin: first list submitted this frame — i.e. the front of the FIRST
+        // graphics segment, so GPU.Frame still brackets the same span of the direct queue.
         ID3D12GraphicsCommandList* cl = acquireDirectCL();
         Profiler::Get().BeginGpuFrame(cl);
         ThrowIfFailed(cl->Close());
-        fixedSubmitScratch_.push_back(cl);
+        auto& lists = submitSegmentsScratch_[firstGraphicsSeg].lists;
+        lists.insert(lists.begin(), cl);
     }
 #endif
 
@@ -964,9 +992,9 @@ void Renderer::ExecuteTimelineAndPresent() {
         // before the deletion: one such list per frame carrying exactly one barrier, all of it
         // for the swapchain backbuffer -- which now uses explicit before-states like the rest
         // of the out-of-graph paths. So the whole thing is a straight append.
-        for (auto* cmd : submitListsScratch_) {
-            fixedSubmitScratch_.push_back(cmd);
-        }
+        //
+        // Step 6: the work lists now live in the SEGMENTS the gather produced, already in order,
+        // so there is nothing to copy — only the two wrapping lists still have to be placed.
 
         // Dedicated epilogue list submitted last: present transition (+ GPU
         // profiler frame-end). Never reopen or append to the final work list.
@@ -988,12 +1016,22 @@ void Renderer::ExecuteTimelineAndPresent() {
         Profiler::Get().EndGpuFrame(epilogueCmd);
 #endif
         ThrowIfFailed(epilogueCmd->Close());
-        fixedSubmitScratch_.push_back(epilogueCmd);
+        submitSegmentsScratch_[lastGraphicsSeg].lists.push_back(epilogueCmd);
     }
 
     // Step 6: the frame's compiles have all run by here, so `predicted` is the frame's true
     // end state. Default off.
     ReportOffCanonicalStates();
+
+    // Step 6 acceptance: dump the submitted arrays, ONCE, by debug name and in order. Placed here —
+    // after the wrapping lists are placed and before any ExecuteCommandLists — so what is dumped is
+    // literally what is submitted, not a reconstruction of it.
+    if (render::g_dumpSubmitOrder) {
+        render::g_dumpSubmitOrder = false; // once per process; a per-frame dump drowns the diff
+        for (const auto& seg : submitSegmentsScratch_) {
+            DumpSubmitOrder(seg.queue == RenderQueue::AsyncCompute ? "compute" : "graphics", seg.lists);
+        }
+    }
 
     {
         CPU_SCOPE(ProfilerScopes::kService3);
@@ -1004,8 +1042,44 @@ void Renderer::ExecuteTimelineAndPresent() {
         if (render::g_asyncOrderProbe && asyncOrderProbeValue_ != 0) {
             frameScheduler_.WaitCrossQueue(GetCommandQueue(), asyncOrderProbeValue_);
         }
-        if (!fixedSubmitScratch_.empty()) {
-            GetCommandQueue()->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
+
+        // --- Step 6: per-queue submission with the graph's cross-queue fence edges (D2) ---
+        //
+        // Segments are submitted in BATCH ORDER, which is the order the graph unrolled them in.
+        // Before a segment that carries a cross-queue wait, the producing queue is told to signal
+        // (SignalCrossQueue) and this queue to wait (WaitCrossQueue) — both GPU-side, so the CPU
+        // never blocks on a dependency between queues.
+        //
+        // A segment WITHOUT a wait is submitted with no synchronisation at all. That is the whole
+        // point: two adjacent segments on different queues run concurrently unless the graph said
+        // they must not. Ordering them "just in case" would delete the overlap this plan exists to
+        // create.
+        //
+        // With every pass on Graphics there is exactly ONE segment, no waits, and this collapses to
+        // the single ExecuteCommandLists it replaced.
+        UINT64 signalledUpTo[2] = { 0, 0 }; // last cross-queue value signalled by each queue
+        size_t signalledBatch[2] = { 0, 0 };
+        for (const auto& seg : submitSegmentsScratch_) {
+            const bool isCompute = (seg.queue == RenderQueue::AsyncCompute);
+            ID3D12CommandQueue* q = isCompute ? GetComputeQueue() : GetCommandQueue();
+            if (q == nullptr) {
+                RendererInvariantFailure("Renderer::ExecuteTimelineAndPresent: a segment targets a queue that does not exist");
+            }
+            if (seg.waitForBatch != SubmitTimeline::kNoCrossQueueWait) {
+                const int other = isCompute ? 0 : 1;
+                ID3D12CommandQueue* producer = isCompute ? GetCommandQueue() : GetComputeQueue();
+                // Only signal if the producer has actually advanced past what we need since its
+                // last signal — repeating a signal for work already covered is pure overhead.
+                if (producer != nullptr &&
+                    (signalledUpTo[other] == 0 || signalledBatch[other] < seg.waitForBatch)) {
+                    signalledUpTo[other] = frameScheduler_.SignalCrossQueue(producer);
+                    signalledBatch[other] = seg.waitForBatch;
+                }
+                frameScheduler_.WaitCrossQueue(q, signalledUpTo[other]);
+            }
+            if (!seg.lists.empty()) {
+                q->ExecuteCommandLists(static_cast<UINT>(seg.lists.size()), seg.lists.data());
+            }
         }
     }
 
@@ -1028,6 +1102,29 @@ void Renderer::ExecuteTimelineAndPresent() {
     SignalFrame(currentFrameIndex_);
     currentFrameIndex_ = swapchain_.CurrentBackBufferIndex();
     RefreshCurrentFrameCaches();
+}
+
+// Async-compute plan step 6 — write one queue's submitted command-list array to
+// logs/submit_order.log, by debug name, in submission order.
+//
+// By NAME, not by pointer: pointers are per-run and comparing them across two builds proves
+// nothing, while the names are the pass identities — which is exactly what "the graphics array is
+// unchanged" is a statement about. Appends, so the graphics and compute arrays of one frame land in
+// one file in the order they are submitted.
+void Renderer::DumpSubmitOrder(const char* queueName,
+                               const std::vector<ID3D12CommandList*>& lists)
+{
+    FILE* f = nullptr;
+    if (fopen_s(&f, diag::LogPath("submit_order.log").c_str(), "a") != 0 || !f) {
+        return;
+    }
+    std::fprintf(f, "== queue=%s count=%zu ==\n", queueName, lists.size());
+    for (size_t i = 0; i < lists.size(); ++i) {
+        char label[160] = {};
+        render::DebugObjectLabel(lists[i], label, sizeof(label));
+        std::fprintf(f, "%3zu %s\n", i, label);
+    }
+    std::fclose(f);
 }
 
 // Async-compute plan step 2 — submit one empty COMPUTE command list to the async queue.
@@ -1372,37 +1469,7 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
             if (!names) { break; } // current point is not this request -> nothing to emit
             bool notYet = false;
             if (pt.emitted.compare_exchange_strong(notYet, true, std::memory_order_relaxed)) {
-                // Async-compute step 5 (D6) — the EMISSION-side backstop for queue legality.
-                //
-                // The registration-time rule in RenderGraph::Use is the primary check; this is the
-                // one that cannot be bypassed, because it reads the queue off the COMMAND LIST
-                // ITSELF rather than off anything the pass declared. A body that opened a compute
-                // list some other way, or a compiled point that reached the wrong list, is caught
-                // here instead of becoming a debug-layer error attributed to another resource.
-                //
-                // Same trick as step 3's queue labelling, and same reason: the truth is in the
-                // thing doing the recording, so nothing has to be plumbed and nothing can drift.
-                if (cl->GetType() == D3D12_COMMAND_LIST_TYPE_COMPUTE) {
-                    for (std::uint32_t i2 = 0; i2 < pt.count; ++i2) {
-                        const D3D12_RESOURCE_BARRIER& b = pt.entries[i2];
-                        if (b.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) { continue; }
-                        if (barriers::IsDirectQueueExclusiveState(b.Transition.StateAfter) ||
-                            barriers::IsDirectQueueExclusiveState(b.Transition.StateBefore)) {
-                            char label[96];
-                            canonicalStates_.NameOf(b.Transition.pResource, label, sizeof(label));
-                            char m[320];
-                            std::snprintf(m, sizeof(m),
-                                          "Renderer::Transition: compiled barrier for res=%s "
-                                          "(0x%X -> 0x%X) is being emitted on a COMPUTE command "
-                                          "list, but that state is DIRECT-queue only (pass=%d).",
-                                          label,
-                                          static_cast<unsigned>(b.Transition.StateBefore),
-                                          static_cast<unsigned>(b.Transition.StateAfter),
-                                          cb.pass);
-                            RendererInvariantFailure(m);
-                        }
-                    }
-                }
+                CheckCompiledPointOnQueue(cl, pt, cb.pass);
                 // Step 12: the ONE place compiled barriers reach the GPU, which is exactly why the
                 // enhanced branch is this small — steps 1-7 collapsed every emission site into it.
                 // A refusal from EmitEnhanced (a state it cannot express, too many entries, a
@@ -1485,6 +1552,41 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
 
 // Pass-flow S1 (docs/render_graph_pass_flow_plan.md): the marker realization of the dormant
 // ctx.Barrier(cl, point) design — see the header comment for the contract.
+// Async-compute step 5 (D6) — the EMISSION-side backstop for queue legality.
+//
+// The registration-time rule in RenderGraph::Use is the primary check; this is the one that cannot
+// be bypassed, because it reads the queue off the COMMAND LIST ITSELF rather than off anything the
+// pass declared. Same trick as step 3's queue labelling, and same reason: the truth is in the thing
+// doing the recording, so nothing has to be plumbed and nothing can drift.
+//
+// ONE function, called from BOTH emission sites. Step 5 first guarded only `Transition` and missed
+// `EmitPoint` — and `EmitPoint` is the path every AddPass2 body actually takes, so the backstop was
+// unreachable in practice. Compiled barriers reach the GPU from exactly these two places; a check
+// that lives in one of them is not a check.
+void Renderer::CheckCompiledPointOnQueue(ID3D12GraphicsCommandList* cl,
+                                         const CompiledBarriers::Point& pt, int pass) const
+{
+    if (cl == nullptr || cl->GetType() != D3D12_COMMAND_LIST_TYPE_COMPUTE) { return; }
+    for (std::uint32_t i = 0; i < pt.count; ++i) {
+        const D3D12_RESOURCE_BARRIER& b = pt.entries[i];
+        if (b.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) { continue; }
+        if (!barriers::IsDirectQueueExclusiveState(b.Transition.StateAfter) &&
+            !barriers::IsDirectQueueExclusiveState(b.Transition.StateBefore)) {
+            continue;
+        }
+        char label[96];
+        canonicalStates_.NameOf(b.Transition.pResource, label, sizeof(label));
+        char m[320];
+        std::snprintf(m, sizeof(m),
+                      "Renderer: compiled barrier for res=%s (0x%X -> 0x%X) is being emitted on a "
+                      "COMPUTE command list, but that state is DIRECT-queue only (pass=%d).",
+                      label,
+                      static_cast<unsigned>(b.Transition.StateBefore),
+                      static_cast<unsigned>(b.Transition.StateAfter), pass);
+        RendererInvariantFailure(m);
+    }
+}
+
 void Renderer::EmitPoint(ID3D12GraphicsCommandList* cl, std::uint32_t point) {
     CompiledBarriers* installed = CurrentThreadCompiledBarriers();
     if (installed == nullptr || cl == nullptr) {
@@ -1533,6 +1635,7 @@ void Renderer::EmitPoint(ID3D12GraphicsCommandList* cl, std::uint32_t point) {
         RendererInvariantFailure(msg);
         return;
     }
+    CheckCompiledPointOnQueue(cl, pt, cb.pass);
     if (pt.count > 0) {
         // Same emission as Transition's claimed branch: enhanced when available, legacy fallback
         // so a translation gap can never become a LOST barrier.

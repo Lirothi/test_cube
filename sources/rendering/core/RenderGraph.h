@@ -104,10 +104,10 @@ namespace render {
 // `Use` call guesswork. Most engine resources get SetName() at creation; unnamed ones fall back to
 // the address.
 //
-// A free function because two unrelated places need it — the barrier comparator inside the
-// RenderGraph template, and step 5's queue-legality check on the (non-template) pass context.
-// One definition, so the two can never format the same resource differently.
-inline void ResourceDebugLabel(ID3D12Resource* res, char* out, size_t outSize)
+// Takes ID3D12Object, not ID3D12Resource: command lists carry debug names too, and step 6's
+// submit-order dump needs exactly this formatting for them. One definition, so the barrier
+// comparator, step 5's queue-legality check and that dump can never disagree about a name.
+inline void DebugObjectLabel(ID3D12Object* res, char* out, size_t outSize)
 {
     out[0] = '\0';
     if (!res) { std::snprintf(out, outSize, "<null>"); return; }
@@ -267,7 +267,7 @@ inline void RenderGraphPassContext::CheckAsyncQueueLegality(ID3D12Resource* reso
                                                             D3D12_RESOURCE_STATES state) const
 {
     char label[160];
-    render::ResourceDebugLabel(resource, label, sizeof(label));
+    render::DebugObjectLabel(resource, label, sizeof(label));
 
     // (a) Queue-illegal state (R10). The engine's DEFAULT read state `kSrvAll` carries the PIXEL
     // bit and is used at 32 sites, so this is the rule that will actually fire when a pass moves.
@@ -1228,7 +1228,7 @@ private:
     // engine resources get SetName() at creation; unnamed ones fall back to the address.
     static void ResourceLabel(ID3D12Resource* res, char* out, size_t outSize)
     {
-        render::ResourceDebugLabel(res, out, outSize);
+        render::DebugObjectLabel(res, out, outSize);
     }
 
     static void LogComparator(RenderPass pass, const char* what, ID3D12Resource* res, D3D12_RESOURCE_STATES state)
@@ -1364,6 +1364,11 @@ private:
             if (indeg[i] == 0u) { q.push_back(i); }
         }
 
+        // Step 6: pass -> its batch, filled as the topological walk assigns them. Needed to turn a
+        // graph dependency into a cross-queue fence edge (see below).
+        tc::inl_vector<size_t, MaxPasses> batchOfPass;
+        batchOfPass.resize(N, (size_t)-1);
+
         if (!executeInplace && outFlat != nullptr) {
             outFlat->clear();
         }
@@ -1380,8 +1385,36 @@ private:
             if (OwnerOf(u) == u && passes_[u].exec) {
                 const size_t batch =
                     (submitBatchIndex_ == (size_t)-1)
-                    ? renderer->BeginSubmitBatch()
+                    ? renderer->BeginSubmitBatch(passes_[u].queue)
                     : submitBatchIndex_;
+                batchOfPass[u] = batch;
+                // Step 6 (D2): a cross-queue fence edge comes from a real graph DEPENDENCY, not
+                // from batch order. Walk this node's prereqs and mtDeps; any that ran on the other
+                // queue contributes its batch, and the LATEST one wins (waiting for the furthest
+                // producer subsumes the earlier ones). Predecessors are already assigned because
+                // this walk is topological.
+                if (submitBatchIndex_ == (size_t)-1) {
+                    size_t wait = (size_t)-1;
+                    auto consider = [&](size_t dep) {
+                        if (dep >= N) { return; }
+                        const size_t owner = OwnerOf(dep);
+                        if (passes_[owner].queue == passes_[u].queue) { return; }
+                        const size_t db = batchOfPass[owner];
+                        if (db == (size_t)-1) { return; }
+                        if (wait == (size_t)-1 || db > wait) { wait = db; }
+                    };
+                    const size_t gid = passes_[u].groupId;
+                    if (gid == kNoGroup) {
+                        for (size_t d : passes_[u].prereqs) { consider(d); }
+                        for (size_t d : passes_[u].mtDeps) { consider(d); }
+                    } else {
+                        for (size_t m : groups_[gid]) {
+                            for (size_t d : passes_[m].prereqs) { consider(d); }
+                            for (size_t d : passes_[m].mtDeps) { consider(d); }
+                        }
+                    }
+                    if (wait != (size_t)-1) { renderer->SetSubmitBatchCrossQueueWait(batch, wait); }
+                }
 
                 if (executeInplace) {
                     RunNode(renderer, u, batch);
