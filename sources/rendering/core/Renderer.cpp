@@ -1372,6 +1372,37 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
             if (!names) { break; } // current point is not this request -> nothing to emit
             bool notYet = false;
             if (pt.emitted.compare_exchange_strong(notYet, true, std::memory_order_relaxed)) {
+                // Async-compute step 5 (D6) — the EMISSION-side backstop for queue legality.
+                //
+                // The registration-time rule in RenderGraph::Use is the primary check; this is the
+                // one that cannot be bypassed, because it reads the queue off the COMMAND LIST
+                // ITSELF rather than off anything the pass declared. A body that opened a compute
+                // list some other way, or a compiled point that reached the wrong list, is caught
+                // here instead of becoming a debug-layer error attributed to another resource.
+                //
+                // Same trick as step 3's queue labelling, and same reason: the truth is in the
+                // thing doing the recording, so nothing has to be plumbed and nothing can drift.
+                if (cl->GetType() == D3D12_COMMAND_LIST_TYPE_COMPUTE) {
+                    for (std::uint32_t i2 = 0; i2 < pt.count; ++i2) {
+                        const D3D12_RESOURCE_BARRIER& b = pt.entries[i2];
+                        if (b.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) { continue; }
+                        if (barriers::IsDirectQueueExclusiveState(b.Transition.StateAfter) ||
+                            barriers::IsDirectQueueExclusiveState(b.Transition.StateBefore)) {
+                            char label[96];
+                            canonicalStates_.NameOf(b.Transition.pResource, label, sizeof(label));
+                            char m[320];
+                            std::snprintf(m, sizeof(m),
+                                          "Renderer::Transition: compiled barrier for res=%s "
+                                          "(0x%X -> 0x%X) is being emitted on a COMPUTE command "
+                                          "list, but that state is DIRECT-queue only (pass=%d).",
+                                          label,
+                                          static_cast<unsigned>(b.Transition.StateBefore),
+                                          static_cast<unsigned>(b.Transition.StateAfter),
+                                          cb.pass);
+                            RendererInvariantFailure(m);
+                        }
+                    }
+                }
                 // Step 12: the ONE place compiled barriers reach the GPU, which is exactly why the
                 // enhanced branch is this small — steps 1-7 collapsed every emission site into it.
                 // A refusal from EmitEnhanced (a state it cannot express, too many entries, a

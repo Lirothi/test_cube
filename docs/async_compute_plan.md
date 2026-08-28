@@ -1,6 +1,6 @@
 # Async compute — architecture plan
 
-**Status: STEPS 1-3 COMMITTED (`7ac30fe`, `85b714c`, `4e014d5`). STEP 4 DONE (uncommitted). Steps 5-11 not started.**
+**Status: STEPS 1-3 COMMITTED (`7ac30fe`, `85b714c`, `4e014d5`). STEPS 4-5 DONE (uncommitted). Steps 6-11 not started.**
 
 **Goal: the renderer gains a second execution queue as a first-class architectural capability.**
 The render graph learns to schedule a pass onto a `D3D12_COMMAND_LIST_TYPE_COMPUTE` queue,
@@ -705,12 +705,61 @@ pass, list the resources its record body binds and diff that against what its bu
 **each mechanical rule is demonstrated by deliberately mis-marking a pass in a throwaway edit** and
 showing the Debug message name the pass — then reverting. A rule that has never fired is not a rule.
 
+**DONE 2026-08-28, uncommitted.**
+
+**The legality predicate was TRANSCRIBED, not derived.** `barriers::IsDirectQueueExclusiveState` is
+UE's `IsDirectQueueExclusiveD3D12State` (`Source/Runtime/D3D12RHI/Private/D3D12Util.h:271`), and
+reading it first changed the answer: from first principles the natural shape is an ALLOW-list of the
+five states a compute queue accepts, and UE ships a **DENY-list of four bits** tested with ANY —
+`RENDER_TARGET | DEPTH_WRITE | DEPTH_READ | PIXEL_SHADER_RESOURCE`. The deny-list is the correct
+shape here, because what makes this engine's `kSrvAll` (`PIXEL|NON_PIXEL`, 32 sites) illegal is the
+PIXEL bit being PRESENT, not an allowed bit being absent — an allow-list containing NON_PIXEL would
+have waved it straight through. **One definition**, shared by the registration rule and the emission
+backstop, so the two can never disagree about what "legal" means.
+
+**Rules, and the evidence each one actually fires.** All three reachable ones were demonstrated by
+mis-marking a real pass in a throwaway edit, then reverted:
+
+| rule | demonstration | message |
+|---|---|---|
+| queue-illegal state at registration | `Main_Hzb` marked AsyncCompute | `pass 'Hzb' ... registers res=Deferred[0].Depth in state 0xC0, which only the DIRECT queue can carry` |
+| AsyncCompute inside a CL group | `Main_ObjectCompute` (a group member) marked AsyncCompute | `pass 'ObjectCompute' is marked AsyncCompute inside a CL group` |
+| async pass touching the swapchain | `Main_Hzb` async + a temporary `Use(backbuffer, UAV)` | `pass 'Hzb' ... registers the SWAPCHAIN backbuffer` |
+
+Each names the pass, and where a resource is involved, the resource and the state.
+
+**The fourth rule could NOT be demonstrated, and the reason is step ordering, not the rule.** The
+emission-side backstop in `Renderer::Transition` reads the queue off the recording list
+(`cl->GetType()`, the same trick as step 3) and fails if a compiled barrier carrying a
+direct-exclusive state reaches a COMPUTE list. To reach it, the registration rule has to be disabled
+AND a pass has to actually record on a compute list — and at step 5 a compute list cannot be
+SUBMITTED at all: `EndThreadCommandList` registers it into the graphics timeline, and
+`ExecuteCommandLists` on the direct queue rejects a list of the wrong type. The run died before its
+first frame, exactly as it should. **Carry this into Step 6's acceptance**: once per-queue
+submission exists, re-run this demonstration.
+
+**A diagnostic gap fixed on the way.** `RendererInvariantFailure` wrote its message only to
+`OutputDebugStringA` and then aborted — so on any headless run (the stress harness, a `--shot`
+capture) the one message explaining why the process died went nowhere. It now also appends to
+`logs/invariant_failure.log`. Without that, this step's acceptance was literally unobservable.
+
+**Results.** Both builds `0/0`; all three gates `verdict: CLEAN`, 0 MISSING, and no
+`invariant_failure.log` produced — which is the inertness proof: nothing is marked async, so no rule
+can fire in normal operation.
+
+**R14's undeclared reads remain a REVIEW item**, as the step says — nothing observes a read that
+never reaches the graph. Procedure for each candidate pass, to be run at Step 8: list the resources
+its record body binds, diff against what its builder declared.
+
 ### Step 6 — per-queue submission and fence edges (inert)
 
 `SubmitTimeline` groups batches per queue and returns one list array per queue; `Renderer` submits
 each to its own queue. Graph dependencies that cross queues compile into signal/wait pairs (D2).
 
-**Acceptance:** the graphics queue's submitted array is **byte-identical** to today — dump
+**Acceptance:** re-run Step 5's fourth-rule demonstration, which was unreachable until this step
+(mark a pass AsyncCompute with the registration rule disabled, and confirm the emission-side
+backstop in `Renderer::Transition` fires instead of a debug-layer error); the graphics queue's
+submitted array is **byte-identical** to today — dump
 `fixedSubmitScratch_` (the WRAPPED array: profiler-begin list, work lists, epilogue — R3) in order
 under a temporary flag, before and after, and diff them. The compute array is empty and no fence
 edge exists yet because no pass is async. All gates CLEAN. If the array differs, the step is not

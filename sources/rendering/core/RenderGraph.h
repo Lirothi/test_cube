@@ -99,6 +99,28 @@ inline void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
     }
 }
 
+namespace render {
+// Resource DEBUG NAME, not just the pointer: a bare address makes mapping a diagnostic back to a
+// `Use` call guesswork. Most engine resources get SetName() at creation; unnamed ones fall back to
+// the address.
+//
+// A free function because two unrelated places need it — the barrier comparator inside the
+// RenderGraph template, and step 5's queue-legality check on the (non-template) pass context.
+// One definition, so the two can never format the same resource differently.
+inline void ResourceDebugLabel(ID3D12Resource* res, char* out, size_t outSize)
+{
+    out[0] = '\0';
+    if (!res) { std::snprintf(out, outSize, "<null>"); return; }
+    wchar_t wide[128] = {};
+    UINT bytes = sizeof(wide) - sizeof(wchar_t);
+    if (SUCCEEDED(res->GetPrivateData(WKPDID_D3DDebugObjectNameW, &bytes, wide)) && wide[0]) {
+        std::snprintf(out, outSize, "%ls", wide);
+        return;
+    }
+    std::snprintf(out, outSize, "%p", static_cast<const void*>(res));
+}
+} // namespace render
+
 struct RenderGraphPassContext {
     // Shared command-list state for a CL group (step 5). Lives on the group
     // task's stack; every member's context points at the same instance so they
@@ -191,9 +213,19 @@ struct RenderGraphPassContext {
             // barrier, which corrupts invisibly. Never downgrade this to an assert.
             RendererInvariantFailure("RenderGraph::Use: resource-use arena exhausted (raise kResourceUsesPerPassBudget)");
         }
+        // Async-compute step 5 (D6): queue legality is checked HERE, at registration, where the
+        // pass, the resource and the state are all in hand and the message can name all three.
+        // Waiting for the debug layer means the failure surfaces as a barrier error on some other
+        // resource three passes later — the compile advances its model past a barrier that could
+        // never be emitted, and everything downstream of it gets a wrong before-state.
+        if (queue == RenderQueue::AsyncCompute) { CheckAsyncQueueLegality(resource, state); }
         useArena[*useCount] = ResourceUse{ resource, state, usePoint ? *usePoint : 0u };
         ++(*useCount);
     }
+
+    // Step 5: the two things an AsyncCompute pass may not register. Out of line so `Use` stays a
+    // straight-line append on the path every pass takes.
+    void CheckAsyncQueueLegality(ID3D12Resource* resource, D3D12_RESOURCE_STATES state) const;
 
     // Register everything the pass already lists in its AddPass `declares`. Most bodies
     // open with ApplyDeclaredStates(cl), so this reproduces exactly that — the right
@@ -224,6 +256,47 @@ struct RenderGraphPassContext {
         (void)point;
     }
 };
+
+// Async-compute plan step 5 (D5/D6) — what an AsyncCompute pass may not register.
+//
+// Both rules fail FAST rather than logging, because there is no safe way to continue: a compiled
+// barrier that the compute queue cannot legally emit leaves the compile's model one transition
+// ahead of the GPU, and every later user of that resource gets a wrong before-state. That is
+// silent corruption, so it must stop at the registration that caused it, naming it.
+inline void RenderGraphPassContext::CheckAsyncQueueLegality(ID3D12Resource* resource,
+                                                            D3D12_RESOURCE_STATES state) const
+{
+    char label[160];
+    render::ResourceDebugLabel(resource, label, sizeof(label));
+
+    // (a) Queue-illegal state (R10). The engine's DEFAULT read state `kSrvAll` carries the PIXEL
+    // bit and is used at 32 sites, so this is the rule that will actually fire when a pass moves.
+    if (barriers::IsDirectQueueExclusiveState(state)) {
+        char msg[320];
+        std::snprintf(msg, sizeof(msg),
+                      "RenderGraph::Use: pass '%ls' is on the ASYNC COMPUTE queue but registers "
+                      "res=%s in state 0x%X, which only the DIRECT queue can carry "
+                      "(RENDER_TARGET / DEPTH_WRITE / DEPTH_READ / PIXEL_SHADER_RESOURCE). "
+                      "Declare NON_PIXEL only here and let the graphics consumer acquire the "
+                      "PIXEL half (design D7).",
+                      RenderPassToWString(pass).data(), label, static_cast<unsigned>(state));
+        RendererInvariantFailure(msg);
+    }
+
+    // (b) The swapchain. Present is a direct-queue affair and the backbuffer is not compile-managed
+    // at all, so an async pass touching it would produce no barrier and no error — the worst
+    // combination. Checked explicitly rather than left to (a): PRESENT is not a direct-exclusive
+    // BIT, it is state 0.
+    if (renderer && resource != nullptr && resource == renderer->GetCurrentBackbuffer()) {
+        char msg[288];
+        std::snprintf(msg, sizeof(msg),
+                      "RenderGraph::Use: pass '%ls' is on the ASYNC COMPUTE queue and registers the "
+                      "SWAPCHAIN backbuffer (res=%s). Presentation belongs to the direct queue "
+                      "(design D5).",
+                      RenderPassToWString(pass).data(), label);
+        RendererInvariantFailure(msg);
+    }
+}
 
 template <std::size_t MaxPasses>
 class RenderGraph {
@@ -1155,15 +1228,7 @@ private:
     // engine resources get SetName() at creation; unnamed ones fall back to the address.
     static void ResourceLabel(ID3D12Resource* res, char* out, size_t outSize)
     {
-        out[0] = '\0';
-        if (!res) { std::snprintf(out, outSize, "<null>"); return; }
-        wchar_t wide[128] = {};
-        UINT bytes = sizeof(wide) - sizeof(wchar_t);
-        if (SUCCEEDED(res->GetPrivateData(WKPDID_D3DDebugObjectNameW, &bytes, wide)) && wide[0]) {
-            std::snprintf(out, outSize, "%ls", wide);
-            return;
-        }
-        std::snprintf(out, outSize, "%p", static_cast<const void*>(res));
+        render::ResourceDebugLabel(res, out, outSize);
     }
 
     static void LogComparator(RenderPass pass, const char* what, ID3D12Resource* res, D3D12_RESOURCE_STATES state)
@@ -1368,6 +1433,19 @@ private:
         // runs after this and before any body, so by the time a body could ask, the answer is
         // already fixed — which is precisely why the queue has to be decided here.
         passes_[idx].queue = queue;
+        // Step 5 (D5/R8): a CL GROUP shares ONE command list, so its members share one queue. A
+        // grouped pass marked AsyncCompute would silently record onto the group's DIRECT list —
+        // `BeginCL` has no way to honour it — and the result is compute work on the graphics queue
+        // that the trace would happily show as "overlapping" nothing. Fail at registration.
+        if (queue == RenderQueue::AsyncCompute && currentGroup_ != kNoGroup) {
+            char msg[288];
+            std::snprintf(msg, sizeof(msg),
+                          "RenderGraph::AddPass2: pass '%ls' is marked AsyncCompute inside a CL "
+                          "group. A group shares one command list, so its members share one queue; "
+                          "take the pass out of the group first (design D5).",
+                          RenderPassToWString(name).data());
+            RendererInvariantFailure(msg);
+        }
         SetPassPrepare(idx, [this, idx, builder = std::move(builder)](PassContext& ctx)
         {
             ExecFn exec = builder(ctx);

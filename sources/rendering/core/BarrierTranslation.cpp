@@ -513,4 +513,21 @@ bool IsTextureCompatible(D3D12_RESOURCE_STATES state)
     return remaining == 0;
 }
 
+// Step 5 (D6). Byte-for-byte the rule UE ships as `IsDirectQueueExclusiveD3D12State`
+// (Source/Runtime/D3D12RHI/Private/D3D12Util.h:271) — four bits, tested with ANY, not ALL.
+//
+// ANY is the load-bearing half of that. The engine's default read state is
+// `kSrvAll = PIXEL_SHADER_RESOURCE | NON_PIXEL_SHADER_RESOURCE` (SceneRenderer_Graph.cpp:49, 32
+// sites), and it is illegal on a compute queue BECAUSE of the PIXEL bit — an ALL test, or an
+// allow-list that happened to contain NON_PIXEL, would wave it straight through.
+bool IsDirectQueueExclusiveState(D3D12_RESOURCE_STATES state)
+{
+    constexpr D3D12_RESOURCE_STATES kDirectOnly = static_cast<D3D12_RESOURCE_STATES>(
+        D3D12_RESOURCE_STATE_RENDER_TARGET |
+        D3D12_RESOURCE_STATE_DEPTH_WRITE |
+        D3D12_RESOURCE_STATE_DEPTH_READ |
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    return (state & kDirectOnly) != 0;
+}
+
 } // namespace barriers

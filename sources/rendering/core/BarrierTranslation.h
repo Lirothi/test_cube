@@ -38,6 +38,20 @@ Translated LegacyStateToBarrier(D3D12_RESOURCE_STATES state, bool isBuffer);
 // so asking for one is a bug in the caller rather than something to guess at.
 bool IsTextureCompatible(D3D12_RESOURCE_STATES state);
 
+// Async-compute plan step 5 (D6) — states only the DIRECT queue can carry.
+//
+// TRANSCRIBED from the UE drop rather than derived here:
+// `IsDirectQueueExclusiveD3D12State` in Source/Runtime/D3D12RHI/Private/D3D12Util.h:271. That
+// matters, because from first principles the natural shape is an ALLOW-list of the five states a
+// compute queue accepts, and UE ships a DENY-list of four bits instead. The deny-list is the
+// correct shape: it stays right for combined states (the engine's `kSrvAll` is
+// PIXEL|NON_PIXEL, and what makes it illegal is the PIXEL bit, not the absence of an allowed one)
+// and it does not have to enumerate every buffer state that is fine on either queue.
+//
+// ONE definition, because the registration-time rule (RenderGraph::Use) and the emission-time
+// backstop (Renderer::Transition) must never be able to disagree about what "legal" means.
+bool IsDirectQueueExclusiveState(D3D12_RESOURCE_STATES state);
+
 // Step 12 — emit an already-COMPILED legacy transition array as enhanced barriers.
 //
 // The compile still produces `{resource, before, after}` triples; only the EMISSION changes. That
