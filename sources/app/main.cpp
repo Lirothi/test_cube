@@ -289,6 +289,14 @@ int WINAPI WinMain(
         render::g_canonicalCheck = true;
     }
 
+    // Async-compute plan step 1: "--compute-lane-probe" acquires one COMPUTE allocator + command
+    // list at boot, checks it takes the frame's descriptor heaps and closes, and writes the verdict
+    // to logs/device_caps.log. Submits nothing. Parsed here, above the scene-stress branch, for the
+    // same reason as the flags around it — that branch returns before the boot flags are read.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--compute-lane-probe")) {
+        render::g_computeLaneProbe = true;
+    }
+
     // Same reason as --barrier-cmp: parsed here rather than with the other boot flags below,
     // because the scene-stress branch returns first. Without it the stress run always takes the
     // VSM path and Main_CSM is never even added to the graph, so nothing exercises it.

@@ -62,6 +62,18 @@ inline bool g_barrierCacheVerify = false;
 // matched, and `[flip-miss]` (with the CURRENT point's contents) when it matched none. Loud; for
 // chasing a specific resource only. `--barrier-flip-trace`.
 inline bool g_barrierFlipTrace = false;
+
+// Async-compute plan step 1: `--compute-lane-probe` runs a ONE-SHOT check that the COMPUTE lane of
+// the FrameResource pools actually works, and logs the verdict to logs/device_caps.log.
+//
+// It exists because that lane has never executed: `FrameResource` has pooled per-type allocators
+// and lists since long before this plan, but nothing in the engine had ever asked for a COMPUTE
+// one, so `CreateCommandList(COMPUTE)`, its `Reset` and the `SetDescriptorHeaps` that follows were
+// all untested code paths. Proving them in isolation, at boot, on one throwaway list, is far
+// cheaper than first running them concurrently with a real pass in step 8.
+//
+// The probe SUBMITS NOTHING — it opens a list, checks it, closes it and drops it. Default off.
+inline bool g_computeLaneProbe = false;
 } // namespace render
 
 class Renderer {
@@ -212,6 +224,10 @@ public:
     // Getters
     ID3D12Device* GetDevice() const { return graphicsDevice_.Device(); }
     ID3D12CommandQueue* GetCommandQueue() const { return graphicsDevice_.Queue(); }
+    // Async-compute step 1: the second queue, created and idle. Null when the device refused it,
+    // which every later step must treat as "async compute is unavailable", not as an error.
+    ID3D12CommandQueue* GetComputeQueue() const { return graphicsDevice_.ComputeQueue(); }
+    bool HasComputeQueue() const { return graphicsDevice_.ComputeQueue() != nullptr; }
 
     // DXR (S1). On non-RT hardware GetDevice5() is null and
     // IsRaytracingSupported() is false; all ray-tracing paths gate on the latter.
@@ -573,6 +589,9 @@ private:
     void WaitForFrame(UINT frameIndex);   // wait for a specific frame (by that frame's fence value)
     void SignalFrame(UINT frameIndex);    // signal the fence for a frame
     void RefreshCurrentFrameCaches();
+    // Async-compute step 1: the one-shot COMPUTE-lane probe (see render::g_computeLaneProbe).
+    // Runs at the end of the first BeginFrame that has frame resources, then never again.
+    void ProbeComputeLaneOnce();
     std::pair<UINT, UINT> ComputeScaledTextureSize(UINT referenceWidth, UINT referenceHeight, Math::float2 scale) const;
     std::pair<UINT, UINT> ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const;
 #if WITH_EDITOR
@@ -628,6 +647,8 @@ private:
     bool     materialsHotReloaded_ = false;
 
     // D3D12 core (device/queue), presentation surface, frame pacing
+    bool computeLaneProbed_ = false;  // async-compute step 1: the probe runs at most once
+
     GraphicsDevice                    graphicsDevice_;
     SwapchainManager                  swapchain_;
     FrameScheduler                    frameScheduler_;

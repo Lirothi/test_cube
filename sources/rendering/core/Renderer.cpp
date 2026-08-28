@@ -388,6 +388,83 @@ void Renderer::BeginFrame() {
     ctxPool_.ResetForFrame();
     debugDrawSystem_.BeginFrame();
     pendingImGuiTextureResources_.clear();
+
+    // Async-compute step 1. Last thing in BeginFrame: the pools have just been reset and the
+    // frame's descriptor heaps are published, which is exactly the state a real compute pass would
+    // find. Costs one bool test per frame with the flag off.
+    ProbeComputeLaneOnce();
+}
+
+// Async-compute plan step 1 — prove the COMPUTE lane of the FrameResource pools works.
+//
+// R2 of the plan: `FrameResource` has pooled allocators and command lists per
+// D3D12_COMMAND_LIST_TYPE since long before this work, but `D3D12_COMMAND_LIST_TYPE_COMPUTE`
+// appeared in exactly two files across sources/ and both were the plumbing itself — no code had
+// ever acquired one. So this acquires exactly one, on purpose, in isolation, and throws it away.
+//
+// It deliberately does NOT submit. Step 1's whole claim is "the queue exists and is idle"; a probe
+// that executed anything would make the frame's unchanged-ness unprovable, which is the only thing
+// this step is judged on.
+void Renderer::ProbeComputeLaneOnce()
+{
+    if (!render::g_computeLaneProbe || computeLaneProbed_) {
+        return;
+    }
+    FrameResource* fr = currentFrameResource_;
+    if (!fr || !GetDevice()) {
+        return; // no frame resources yet — try again next frame rather than reporting a failure
+    }
+    computeLaneProbed_ = true;
+
+    const char* verdict = "unknown";
+    char detail[160] = {};
+    try {
+        // Both throw on failure (see FrameResource::CommandAllocPools_/CommandListPools_), and a
+        // COMPUTE list is created against a COMPUTE allocator — mismatching the two is the classic
+        // way this fails, so the pools' own type-indexed lanes are what is being tested here.
+        ID3D12CommandAllocator* alloc =
+            fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_COMPUTE);
+        ID3D12GraphicsCommandList* cl =
+            fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_COMPUTE, alloc);
+        if (!alloc || !cl) {
+            verdict = "FAILED";
+            std::snprintf(detail, sizeof(detail), " (acquire returned null)");
+        }
+        else {
+            // The same call BeginThreadCommandList makes for a COMPUTE list. A compute queue
+            // accepts CBV_SRV_UAV and SAMPLER heaps, so this must succeed; it is here because it
+            // is the first thing a real async pass would do and it has never run.
+            if (currentFrameDescriptorHeapCount_ > 0) {
+                cl->SetDescriptorHeaps(currentFrameDescriptorHeapCount_,
+                                       currentFrameDescriptorHeaps_.data());
+            }
+            const HRESULT closeHr = cl->Close();
+            if (FAILED(closeHr)) {
+                verdict = "FAILED";
+                std::snprintf(detail, sizeof(detail), " (Close hr=0x%08X)",
+                              static_cast<unsigned int>(closeHr));
+            }
+            else {
+                verdict = "OK";
+                std::snprintf(detail, sizeof(detail), " (allocator+list acquired, %u heaps bound, closed)",
+                              currentFrameDescriptorHeapCount_);
+            }
+        }
+    }
+    catch (const std::exception& e) {
+        verdict = "FAILED";
+        std::snprintf(detail, sizeof(detail), " (%s)", e.what());
+    }
+
+    char msg[288];
+    std::snprintf(msg, sizeof(msg), "[caps] compute-lane probe: %s%s | compute queue: %s\n",
+                  verdict, detail, GetComputeQueue() ? "present" : "absent");
+    OutputDebugStringA(msg);
+    FILE* f = nullptr;
+    if (fopen_s(&f, diag::LogPath("device_caps.log").c_str(), "a") == 0 && f) {
+        std::fputs(msg, f);
+        std::fclose(f);
+    }
 }
 
 void Renderer::EndFrame() {

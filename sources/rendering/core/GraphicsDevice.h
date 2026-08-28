@@ -42,6 +42,13 @@ public:
     ID3D12Device* Device() const { return device_.Get(); }
     ID3D12CommandQueue* Queue() const { return queue_.Get(); }
 
+    // Async-compute plan step 1: a second queue, created alongside the direct one and IDLE.
+    // Nothing submits to it yet — the render graph gains no notion of a queue until step 4 and no
+    // pass moves until step 8. It exists here so the later steps add scheduling, not device setup,
+    // and so a machine that cannot create it fails at boot rather than midway through the work.
+    // Null only if creation failed (logged in device_caps.log).
+    ID3D12CommandQueue* ComputeQueue() const { return computeQueue_.Get(); }
+
     // DXR capability (queried once at device creation). Device5() is null and
     // the tier is NOT_SUPPORTED on hardware/runtimes without ray tracing.
     ID3D12Device5* Device5() const { return device5_.Get(); }
@@ -76,5 +83,6 @@ private:
     bool enhancedOptIn_ = false;
     bool typedUavLoadAdditionalFormats_ = false; // ocean mip chain reads its source mip via a UAV
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> computeQueue_; // async-compute step 1; idle
     D3D12_RAYTRACING_TIER raytracingTier_ = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
 };

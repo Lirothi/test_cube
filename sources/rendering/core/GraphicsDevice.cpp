@@ -371,6 +371,39 @@ void GraphicsDevice::InitQueue()
     qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     qd.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
     ThrowIfFailed(device_->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue_)));
+    queue_->SetName(L"Queue.Direct");
+
+    // Async-compute plan step 1: the second queue. Created here and left IDLE — nothing submits to
+    // it, so this step is judged on the frame being unchanged, not on anything running.
+    //
+    // NOT fatal on failure, unlike the direct queue: a compute queue is a capability, and the
+    // engine's whole existing frame works without one. A driver that refuses it should leave the
+    // renderer running on the direct queue exactly as before rather than failing to boot, which is
+    // also what makes `--no-async-compute` (step 8) a real fallback rather than a fiction.
+    D3D12_COMMAND_QUEUE_DESC cqd{};
+    cqd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+    cqd.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    const HRESULT computeHr = device_->CreateCommandQueue(&cqd, IID_PPV_ARGS(&computeQueue_));
+    if (SUCCEEDED(computeHr) && computeQueue_) {
+        computeQueue_->SetName(L"Queue.AsyncCompute");
+    }
+    else {
+        computeQueue_.Reset();
+    }
+
+    // APPENDED to what InitDevice wrote (it opens with "w", this opens with "a"): the queue does
+    // not exist yet when the caps line is written, because the caller runs Streamline hooks
+    // between InitDevice and InitQueue.
+    char msg[192];
+    std::snprintf(msg, sizeof(msg), "[caps] async compute queue: %s%s\n",
+                  computeQueue_ ? "created (idle)" : "NOT created",
+                  computeQueue_ ? "" : " — async compute unavailable on this device");
+    OutputDebugStringA(msg);
+    FILE* f = nullptr;
+    if (fopen_s(&f, diag::LogPath("device_caps.log").c_str(), "a") == 0 && f) {
+        std::fputs(msg, f);
+        std::fclose(f);
+    }
 }
 
 void GraphicsDevice::ReportLiveObjects()
@@ -396,6 +429,11 @@ void GraphicsDevice::ReportLiveObjects()
 
 void GraphicsDevice::ReleaseQueue()
 {
+    // The compute queue goes first: it is the one nothing else holds a reference to, and releasing
+    // it before the direct queue keeps the original teardown order for everything that does.
+    if (computeQueue_) {
+        computeQueue_.Reset();
+    }
     if (queue_) {
         queue_.Reset();
     }
