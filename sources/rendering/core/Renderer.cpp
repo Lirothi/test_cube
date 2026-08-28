@@ -997,6 +997,13 @@ void Renderer::ExecuteTimelineAndPresent() {
 
     {
         CPU_SCOPE(ProfilerScopes::kService3);
+        // Step 3's ordering probe: make the graphics queue wait for LAST frame's compute signal
+        // before it starts this frame's work. A GPU-side wait — the CPU does not block. The value
+        // is from the previous frame, so the signal was always submitted before this wait and the
+        // pair can never deadlock.
+        if (render::g_asyncOrderProbe && asyncOrderProbeValue_ != 0) {
+            frameScheduler_.WaitCrossQueue(GetCommandQueue(), asyncOrderProbeValue_);
+        }
         if (!fixedSubmitScratch_.empty()) {
             GetCommandQueue()->ExecuteCommandLists(static_cast<UINT>(fixedSubmitScratch_.size()), fixedSubmitScratch_.data());
         }
@@ -1044,14 +1051,30 @@ void Renderer::SubmitEmptyComputeWork()
     if (!cl) {
         return;
     }
-    // Deliberately records NOTHING — not even a barrier. An empty list is a legal submission and
-    // is the smallest thing that proves the queue, the allocator lane and the fence path work
-    // together.
+    // Records no WORK — but step 3 adds a GPU scope around the nothing, because an empty command
+    // list produces no timestamps and therefore an EMPTY second trace row, which proves nothing
+    // about the compute queue's calibration, frequency or drain fence. One timestamped pair per
+    // frame on that row is what makes the second track evidence instead of decoration.
+    {
+        GPU_SCOPE(cl, ProfilerScopes::kAsyncEmptySubmit);
+    }
     if (FAILED(cl->Close())) {
         RendererInvariantFailure("Renderer::SubmitEmptyComputeWork: Close() failed");
     }
     ID3D12CommandList* lists[] = { cl };
     computeQueue->ExecuteCommandLists(1, lists);
+
+    // Step 3 acceptance: a KNOWN-ORDERED cross-queue pair, so the shared timebase can be checked
+    // rather than assumed. The compute queue signals here; the next frame's graphics submission
+    // waits on that value before it starts (see ExecuteTimelineAndPresent). The trace must then
+    // show every `Async.EmptySubmit` ending before the following `GPU.Frame` begins — if the two
+    // rows were calibrated independently and wrongly, that ordering would not hold.
+    //
+    // This deliberately SERIALISES the two queues, so it is its own flag and never on by default.
+    // It also gives step 2's dormant SignalCrossQueue/WaitCrossQueue their first real exercise.
+    if (render::g_asyncOrderProbe) {
+        asyncOrderProbeValue_ = frameScheduler_.SignalCrossQueue(computeQueue);
+    }
 }
 
 void Renderer::WaitForPreviousFrame() {

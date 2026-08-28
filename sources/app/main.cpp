@@ -305,6 +305,15 @@ int WINAPI WinMain(
         render::g_asyncEmptySubmit = true;
     }
 
+    // Async-compute plan step 3: "--async-order-probe" adds a known-ordered cross-queue pair
+    // (compute signals, next frame's graphics waits) so the two-track trace can be checked against
+    // an ordering that is true by construction. Implies --async-empty-submit, since the signal is
+    // issued from that submission. Deliberately serialises the queues; diagnostics only.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--async-order-probe")) {
+        render::g_asyncOrderProbe = true;
+        render::g_asyncEmptySubmit = true;
+    }
+
     // Same reason as --barrier-cmp: parsed here rather than with the other boot flags below,
     // because the scene-stress branch returns first. Without it the stress run always takes the
     // VSM path and Main_CSM is never even added to the graph, so nothing exercises it.

@@ -1,6 +1,6 @@
 # Async compute — architecture plan
 
-**Status: STEP 1 COMMITTED (`7ac30fe`). STEP 2 DONE (uncommitted). Steps 3-11 not started.**
+**Status: STEPS 1-2 COMMITTED (`7ac30fe`, `85b714c`). STEP 3 DONE (uncommitted). Steps 4-11 not started.**
 
 **Goal: the renderer gains a second execution queue as a first-class architectural capability.**
 The render graph learns to schedule a pass onto a `D3D12_COMMAND_LIST_TYPE_COMPUTE` queue,
@@ -577,6 +577,60 @@ asymmetry a later reader will assume is a bug.
 known-ordered pair (compute signal -> graphics wait) appears in the correct order on the shared
 timebase; deliberately delaying the compute resolve does NOT produce garbage timings (it produces a
 late batch); all gates CLEAN.
+
+**DONE 2026-08-28, uncommitted.**
+
+- **Per-queue calibration and frequency.** `GetTimestampFrequency` and `GetClockCalibration` are
+  queue methods; two queues are not one clock. Mapping compute timestamps through the direct queue's
+  calibration yields plausible numbers in the wrong place — the exact failure that would invent an
+  overlap or hide a real one.
+- **Per-queue drain fence**, one value signalled on both, batch readable only when both have passed.
+  The old single fence declared compute resolves readable before the compute queue had run them.
+- **Two trace tracks.** GPU rows are tid 0/1, CPU threads shift to tid 2+. The compute row is named
+  **unconditionally**, so "the async queue did nothing" is visible as an empty named row rather than
+  as an absent one.
+- **The queue label is read off the recording command list** (`ID3D12GraphicsCommandList::GetType()`)
+  instead of being plumbed through ~100 `GPU_SCOPE` call sites. Zero churn, and a scope cannot be
+  mislabelled because the label comes from the thing doing the recording.
+- **`Async.EmptySubmit` scope** added to step 2's empty compute list: an empty list emits no
+  timestamps, so without it the second track would exist and be empty, proving nothing.
+- **`--async-order-probe`**: the compute queue signals the cross-queue fence, the next frame's
+  graphics submission waits on it. Gives step 2's dormant `SignalCrossQueue`/`WaitCrossQueue` their
+  first exercise, and produces a pair whose order is true by construction.
+
+**A REAL DEFECT THIS STEP SURFACED — and the reason the no-GBV gate is not redundant.** The first
+cut shared the query heap and readback buffer between queues, reasoning that a TIMESTAMP heap is
+valid on both queue types. True, and beside the point: a GPU scope on a compute list ends in
+`ResolveQueryData`, which **writes** the readback buffer — so two queues were writing one resource
+with no synchronisation. D3D12 said so exactly:
+
+```
+d3d12 ERROR (id=1047): ExecuteCommandLists: Buffer Resource is still referenced by write GPU
+operations in-flight on another Command Queue ('Queue.Direct')
+```
+
+It fired only in the **no-GBV** gate, where break-on-error is active — the two GBV gates passed.
+Fixed with **disjoint resources per queue** (own query heap + own readback buffer) rather than
+fences: the profiler must not add synchronisation between the queues it is measuring. Cost: one
+extra 8 KB heap and one extra readback buffer.
+
+**Results (final build).** Both builds `0/0`; all three gates `verdict: CLEAN`, 0 MISSING, including
+the no-GBV gate under `--async-order-probe`. Trace: `tid0 "GPU Queue"` 3341 events, `tid1 "GPU Queue
+(async compute)"` 54 events, **0 garbage durations**, and **54 ordered pairs checked, 0 violations** —
+every `Async.EmptySubmit` ends before the following `GPU.Frame` begins, across two independently
+calibrated clocks.
+
+**Late-resolve behaviour proven, not assumed.** A throwaway build signalled the compute drain fence
+one value BEHIND (deadlock-free by construction: the value always arrives next frame). Result: same
+63 frames captured, same compute-track population, **0 garbage durations** — a late batch, not
+corruption. Reverted.
+
+**A mistake worth recording:** the first attempt at that test STRANDED the compute drain fence
+instead of delaying it, which deadlocked `WaitForGpuProfilerIdle` at capture-finish and hung the
+app. Then the analysis script read the newest trace on disk — which was the PREVIOUS run's file,
+because the hung run never produced one — and reported a confident, wrong verdict. Two lessons, both
+already rules here and both re-learned the hard way: a test that can block must be deadlock-free by
+construction, and **every run must be checked for a NEW artefact before its output is analysed**.
 
 ### Step 4 — the graph learns the word "queue" (inert)
 

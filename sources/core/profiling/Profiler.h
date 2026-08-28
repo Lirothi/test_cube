@@ -139,8 +139,15 @@ public:
     void EndFrame();
 
 #if PROF_GPU_ENABLED
-    // GPU initialization and result collection
-    void InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT maxQueries = 1024);
+    // GPU initialization and result collection.
+    //
+    // Async-compute plan step 3: `computeQueue` may be null (device refused one, or the caller does
+    // not use it). Everything the GPU side touches is PER QUEUE — query heap, readback buffer,
+    // timestamp frequency, clock calibration and drain fence. The query COUNTER stays shared, which
+    // only means slot indices are unique across both heaps. See the members: sharing the readback
+    // buffer was the first cut and the debug layer rejected it outright.
+    void InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue,
+                 ID3D12CommandQueue* computeQueue = nullptr, UINT maxQueries = 1024);
     void CollectGpuResults();
     void BeginGpuFrame(ID3D12GraphicsCommandList* cl);
     void EndGpuFrame(ID3D12GraphicsCommandList* cl);
@@ -272,12 +279,17 @@ private:
     void PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end);
 #if PROF_GPU_ENABLED
     void PushGpuSample(const ScopeNameKey& key, double ms);
+    // Step 3: ONE calibration per queue. Two queues' timestamp counters are not the same clock and
+    // are not required to tick at the same rate, so mapping a compute timestamp through the direct
+    // queue's calibration produces a plausible-looking number in the wrong place — which is exactly
+    // the failure that would make an overlap look real when it is not, or hide one that is.
     struct GpuTraceCalibration {
         UINT64 gpuTimestamp = 0;
         UINT64 cpuQpc = 0;
     };
-    bool CaptureGpuTraceCalibration(GpuTraceCalibration& calibration) const;
-    uint64_t GpuTimestampToCpuUs(UINT64 gpuTimestamp, const GpuTraceCalibration& calibration) const;
+    bool CaptureGpuTraceCalibration(UINT queueIndex, GpuTraceCalibration& calibration) const;
+    uint64_t GpuTimestampToCpuUs(UINT64 gpuTimestamp, const GpuTraceCalibration& calibration,
+                                 UINT queueIndex) const;
     void CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
         std::vector<TraceEvent>* traceOut,
         uint64_t traceStartUs);
@@ -425,13 +437,36 @@ private:
 
 #if PROF_GPU_ENABLED
     // GPU timestamp queries
+    static constexpr UINT kGpuQueueCount = 2; // 0 = direct, 1 = async compute (step 3)
     std::mutex gpuMtx_;
-    Microsoft::WRL::ComPtr<ID3D12QueryHeap> gpuQueryHeap_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> gpuReadback_;
-    Microsoft::WRL::ComPtr<ID3D12Fence> gpuDrainFence_;
-    ID3D12CommandQueue* gpuQueue_ = nullptr;
-    HANDLE gpuDrainFenceEvent_ = nullptr;
-    UINT64 gpuFreq_ = 0;
+    // Step 3, CORRECTED BY THE DEBUG LAYER: the query heap and the readback buffer are PER QUEUE.
+    //
+    // The first cut shared them, reasoning that a TIMESTAMP heap is valid on both queue types and
+    // that the counter only has to hand out unique slots. Both true, and both beside the point: a
+    // GPU scope on a compute list ends in `ResolveQueryData`, which WRITES the readback buffer — so
+    // two queues were writing one resource with no synchronisation between them. D3D12 says so
+    // plainly (id=1047, "still referenced by write GPU operations in-flight on another Command
+    // Queue"), and it says it at ExecuteCommandLists, not at the write.
+    //
+    // Disjoint resources are the fix rather than cross-queue fences around the profiler's own
+    // writes: the profiler must not add synchronisation between the queues it is measuring.
+    // Costs one extra 8 KB heap and one extra readback buffer.
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> gpuQueryHeap_[kGpuQueueCount];
+    Microsoft::WRL::ComPtr<ID3D12Resource> gpuReadback_[kGpuQueueCount];
+    // Step 3 — everything below that is [kGpuQueueCount] is per-queue BECAUSE IT HAS TO BE:
+    //   * gpuDrainFence_ decides when a resolved batch may be READ. It used to be signalled only on
+    //     the direct queue, so a ResolveQueryData recorded on the compute queue would be declared
+    //     readable before it had run, and the collector would map a readback range nobody had
+    //     written yet — fictitious numbers, silently, from the tool this whole plan is judged by.
+    //   * gpuQueue_ is what GetClockCalibration is asked of, and each queue has its own clock.
+    //   * gpuFreq_ is per queue by API contract (GetTimestampFrequency is a queue method).
+    // The query HEAP and nextGpuQuery_ deliberately stay SHARED: a TIMESTAMP heap is valid on both
+    // queue types and the counter only has to hand out unique slots. "Shared heap, split fence" is
+    // an asymmetry a later reader will assume is a bug, so it is stated here.
+    Microsoft::WRL::ComPtr<ID3D12Fence> gpuDrainFence_[kGpuQueueCount];
+    ID3D12CommandQueue* gpuQueue_[kGpuQueueCount] = {};
+    HANDLE gpuDrainFenceEvent_[kGpuQueueCount] = {};
+    UINT64 gpuFreq_[kGpuQueueCount] = {};
     UINT64 gpuTraceQpcFreq_ = 0;
     UINT64 gpuTraceQpcOrigin_ = 0;
     uint64_t gpuTraceCpuOriginUs_ = 0;
@@ -439,12 +474,19 @@ private:
     UINT maxGpuQueries_ = 0;
     UINT nextGpuQuery_ = 0;
     UINT gpuRecordingReadbackSlot_ = 0;
-    struct GpuSampleRange { ScopeNameKey key; UINT start; UINT end; bool completed; uint64_t frameNo; };
+    // Step 3: `queueIndex` is taken from the recording command list's OWN type
+    // (ID3D12GraphicsCommandList::GetType()) rather than plumbed through the ~100 GPU_SCOPE call
+    // sites. That is both zero-churn and impossible to get wrong — a scope cannot be mislabelled,
+    // because the label is read off the thing doing the recording.
+    struct GpuSampleRange { ScopeNameKey key; UINT start; UINT end; bool completed; uint64_t frameNo; UINT queueIndex; };
     std::vector<GpuSampleRange> gpuPending_;
     struct GpuResolvedBatch {
         std::vector<GpuSampleRange> ranges;
         UINT queryCount = 0;
         UINT readbackSlot = 0;
+        // Step 3: ONE value signalled on BOTH drain fences (same trick as the frame fences). The
+        // batch may hold ranges resolved on either queue, so it is readable only once BOTH have
+        // passed — one value, two fences, no per-range bookkeeping.
         UINT64 fenceValue = 0;
     };
     std::vector<GpuResolvedBatch> gpuResolvedBatches_;
@@ -473,7 +515,7 @@ inline Profiler::ScopeNameKey Profiler::RegisterTraceDynamic(std::wstring, uint3
     return {};
 }
 #if PROF_GPU_ENABLED
-inline void Profiler::InitGpu(ID3D12Device*, ID3D12CommandQueue*, UINT) {}
+inline void Profiler::InitGpu(ID3D12Device*, ID3D12CommandQueue*, ID3D12CommandQueue*, UINT) {}
 inline void Profiler::CollectGpuResults() {}
 inline void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList*) {}
 inline void Profiler::EndGpuFrame(ID3D12GraphicsCommandList*) {}

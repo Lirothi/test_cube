@@ -785,7 +785,11 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     renderer.InitD3D12(hWnd_, defWidth, defHeight);
     input.Initialize(hWnd_);
 #if PROF_GPU_ENABLED
-    Profiler::Get().InitGpu(renderer.GetDevice(), renderer.GetCommandQueue());
+    // Async-compute step 3: the profiler gets BOTH queues, so it can calibrate each clock, keep a
+    // drain fence per queue, and put compute-recorded scopes on their own trace row. The compute
+    // queue may be null (device refused it); every per-queue path in the profiler tolerates that.
+    Profiler::Get().InitGpu(renderer.GetDevice(), renderer.GetCommandQueue(),
+                            renderer.GetComputeQueue());
 #endif
 }
 

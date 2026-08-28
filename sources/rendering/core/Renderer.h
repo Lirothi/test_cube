@@ -84,6 +84,16 @@ inline bool g_computeLaneProbe = false;
 // vacuously true and the machinery would ship untested. Step 8 replaces it with the first real
 // pass. Default off.
 inline bool g_asyncEmptySubmit = false;
+
+// Async-compute plan step 3: `--async-order-probe` makes the empty compute submission SIGNAL the
+// cross-queue fence and the next frame's graphics submission WAIT on it, producing a pair whose
+// order is known by construction. The two-track trace must then show every `Async.EmptySubmit`
+// ending before the following `GPU.Frame` starts — which is how the shared timebase (two queues,
+// two calibrations) gets checked rather than assumed.
+//
+// It deliberately SERIALISES the queues, so it is separate from --async-empty-submit and is never
+// on by default. It is also the first exercise of step 2's dormant SignalCrossQueue/WaitCrossQueue.
+inline bool g_asyncOrderProbe = false;
 } // namespace render
 
 class Renderer {
@@ -660,6 +670,7 @@ private:
 
     // D3D12 core (device/queue), presentation surface, frame pacing
     bool computeLaneProbed_ = false;  // async-compute step 1: the probe runs at most once
+    UINT64 asyncOrderProbeValue_ = 0; // step 3: last frame's cross-queue signal (--async-order-probe)
 
     GraphicsDevice                    graphicsDevice_;
     SwapchainManager                  swapchain_;

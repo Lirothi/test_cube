@@ -50,8 +50,18 @@ std::string EscapeJson(const std::string& input) {
 const Profiler::ScopeNameKey kTraceHandlingKey = Profiler::RegisterTraceLiteral(L"TraceHandling");
 const Profiler::ScopeNameKey kProfilerEmitOverlayKey = Profiler::RegisterTraceLiteral(L"Profiler::EmitOverlay");
 const Profiler::ScopeNameKey kGpuFrameKey = Profiler::RegisterTraceLiteral(L"GPU.Frame");
-constexpr uint32_t kGpuTraceThreadIndex = 0u;
+// Async-compute plan step 3: TWO GPU tracks. In a single-track trace an overlap is
+// indistinguishable from a reordering, so this has to exist before any pass moves — otherwise
+// there is no way to see whether async compute is doing anything at all.
+//
+// The GPU rows take tids 0 and 1 and every CPU thread shifts to +2, so the two GPU tracks stay
+// adjacent at the top of the viewer. Trace-reading scripts that hard-coded `tid == 0` for "the GPU"
+// must now read 0 AND 1.
+constexpr uint32_t kGpuTraceThreadIndex = 0u;           // direct queue
+constexpr uint32_t kGpuTraceThreadIndexCompute = 1u;    // async compute queue
+constexpr uint32_t kCpuTraceThreadIndexBase = 2u;       // CPU threads start after both GPU rows
 constexpr const char* kGpuTraceThreadName = "GPU Queue";
+constexpr const char* kGpuTraceThreadNameCompute = "GPU Queue (async compute)";
 constexpr UINT kGpuReadbackFrameSlots = 8u;
 // Built-in whole-CPU-frame counter, emitted automatically each EndFrame so no
 // manual CPU_SCOPE is needed; spans the profiler's BeginFrame..EndFrame bracket,
@@ -224,9 +234,12 @@ void FormatOverlayRow(Profiler::OverlayRow& row, const std::wstring* name) {
 
 uint64_t TraceOutputThreadIndex(const Profiler::TraceEvent& ev) {
     if (ev.category == Profiler::TraceEvent::Category::Gpu) {
-        return kGpuTraceThreadIndex;
+        // Step 3: a GPU event carries its QUEUE index in threadIndex (0 direct / 1 compute), which
+        // is already the row number. Previously this ignored threadIndex and forced everything onto
+        // one row — the single-track blindness this step removes.
+        return static_cast<uint64_t>(ev.threadIndex);
     }
-    return static_cast<uint64_t>(ev.threadIndex) + 1u;
+    return static_cast<uint64_t>(ev.threadIndex) + kCpuTraceThreadIndexBase;
 }
 
 } // namespace
@@ -627,9 +640,19 @@ void Profiler::EndFrame() {
     // 2) prepare gpu samples for next frame
     {
         std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (!gpuPending_.empty() && nextGpuQuery_ > 0 && gpuQueue_ && gpuDrainFence_) {
+        if (!gpuPending_.empty() && nextGpuQuery_ > 0 && gpuQueue_[0] && gpuDrainFence_[0]) {
+            // Step 3: ONE value on BOTH drain fences. The batch becomes readable only when both
+            // have passed it (see CollectGpuResolvedSamples), which is what stops a compute-queue
+            // resolve from being read before the compute queue ran it.
             const UINT64 fenceValue = gpuDrainFenceValue_++;
-            if (SUCCEEDED(gpuQueue_->Signal(gpuDrainFence_.Get(), fenceValue))) {
+            bool signalled = SUCCEEDED(gpuQueue_[0]->Signal(gpuDrainFence_[0].Get(), fenceValue));
+            for (UINT q = 1; q < kGpuQueueCount && signalled; ++q) {
+                if (!gpuDrainFence_[q]) { continue; }
+                signalled = gpuQueue_[q]
+                    ? SUCCEEDED(gpuQueue_[q]->Signal(gpuDrainFence_[q].Get(), fenceValue))
+                    : SUCCEEDED(gpuDrainFence_[q]->Signal(fenceValue)); // no queue: advance on CPU
+            }
+            if (signalled) {
                 GpuResolvedBatch batch;
                 batch.ranges = std::move(gpuPending_);
                 batch.queryCount = nextGpuQuery_;
@@ -949,13 +972,14 @@ void Profiler::PushGpuSample(const ScopeNameKey& key, double ms) {
     }
 }
 
-bool Profiler::CaptureGpuTraceCalibration(GpuTraceCalibration& calibration) const {
-    if (!gpuInitialized_ || !gpuQueue_ || gpuFreq_ == 0 || gpuTraceQpcFreq_ == 0) {
+bool Profiler::CaptureGpuTraceCalibration(UINT queueIndex, GpuTraceCalibration& calibration) const {
+    if (queueIndex >= kGpuQueueCount) { return false; }
+    if (!gpuInitialized_ || !gpuQueue_[queueIndex] || gpuFreq_[queueIndex] == 0 || gpuTraceQpcFreq_ == 0) {
         return false;
     }
     UINT64 gpuTimestamp = 0;
     UINT64 cpuQpc = 0;
-    if (FAILED(gpuQueue_->GetClockCalibration(&gpuTimestamp, &cpuQpc))) {
+    if (FAILED(gpuQueue_[queueIndex]->GetClockCalibration(&gpuTimestamp, &cpuQpc))) {
         return false;
     }
     calibration.gpuTimestamp = gpuTimestamp;
@@ -963,15 +987,16 @@ bool Profiler::CaptureGpuTraceCalibration(GpuTraceCalibration& calibration) cons
     return true;
 }
 
-uint64_t Profiler::GpuTimestampToCpuUs(UINT64 gpuTimestamp, const GpuTraceCalibration& calibration) const {
-    if (gpuFreq_ == 0 || gpuTraceQpcFreq_ == 0) {
+uint64_t Profiler::GpuTimestampToCpuUs(UINT64 gpuTimestamp, const GpuTraceCalibration& calibration,
+                                       UINT queueIndex) const {
+    if (queueIndex >= kGpuQueueCount || gpuFreq_[queueIndex] == 0 || gpuTraceQpcFreq_ == 0) {
         return 0;
     }
 
     const double gpuDelta = static_cast<double>(gpuTimestamp) - static_cast<double>(calibration.gpuTimestamp);
     const double cpuQpc =
         static_cast<double>(calibration.cpuQpc) +
-        gpuDelta * static_cast<double>(gpuTraceQpcFreq_) / static_cast<double>(gpuFreq_);
+        gpuDelta * static_cast<double>(gpuTraceQpcFreq_) / static_cast<double>(gpuFreq_[queueIndex]);
     const double cpuUs =
         static_cast<double>(gpuTraceCpuOriginUs_) +
         (cpuQpc - static_cast<double>(gpuTraceQpcOrigin_)) * 1000000.0 / static_cast<double>(gpuTraceQpcFreq_);
@@ -989,9 +1014,17 @@ void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
     std::vector<GpuResolvedBatch> readyBatches;
     {
         std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (gpuResolvedBatches_.empty() || !gpuDrainFence_) { return; }
+        if (gpuResolvedBatches_.empty() || !gpuDrainFence_[0]) { return; }
 
-        const UINT64 completedFence = gpuDrainFence_->GetCompletedValue();
+        // Step 3: a batch is readable only when BOTH drain fences have passed its value. The old
+        // single-fence test declared compute-queue resolves readable before the compute queue had
+        // executed them, and the readback would then be mapped over memory nobody had written.
+        UINT64 completedFence = gpuDrainFence_[0]->GetCompletedValue();
+        for (UINT q = 1; q < kGpuQueueCount; ++q) {
+            if (gpuDrainFence_[q]) {
+                completedFence = (std::min)(completedFence, gpuDrainFence_[q]->GetCompletedValue());
+            }
+        }
         auto writeIt = gpuResolvedBatches_.begin();
         for (auto readIt = gpuResolvedBatches_.begin(); readIt != gpuResolvedBatches_.end(); ++readIt) {
             if (readIt->fenceValue != 0 && completedFence >= readIt->fenceValue) {
@@ -1011,8 +1044,16 @@ void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
         return;
     }
 
-    GpuTraceCalibration calibration{};
-    const bool collectTrace = (traceOut != nullptr && traceStartUs != 0 && CaptureGpuTraceCalibration(calibration));
+    // Step 3: one calibration PER QUEUE, captured together so both describe the same instant.
+    // Track 0 must exist for a trace to mean anything; track 1 is optional (no compute queue, or a
+    // frame with nothing on it), and a range from a queue with no calibration is simply not
+    // emitted rather than mapped through the wrong clock.
+    GpuTraceCalibration calibration[kGpuQueueCount]{};
+    bool calibrated[kGpuQueueCount] = {};
+    for (UINT q = 0; q < kGpuQueueCount; ++q) {
+        calibrated[q] = CaptureGpuTraceCalibration(q, calibration[q]);
+    }
+    const bool collectTrace = (traceOut != nullptr && traceStartUs != 0 && calibrated[0]);
 
     for (const GpuResolvedBatch& batch : readyBatches) {
         if (batch.queryCount == 0 || batch.readbackSlot >= kGpuReadbackFrameSlots) {
@@ -1021,22 +1062,38 @@ void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
 
         const SIZE_T slotBase = static_cast<SIZE_T>(batch.readbackSlot) *
             static_cast<SIZE_T>(maxGpuQueries_) * sizeof(UINT64);
-        UINT64* data = nullptr;
+        // Step 3: map EVERY queue's readback for this batch — a batch can hold ranges resolved on
+        // either queue, and each queue writes its own buffer (see the header on id=1047).
+        UINT64* slotData[kGpuQueueCount] = {};
+        bool mapped[kGpuQueueCount] = {};
         D3D12_RANGE range{ slotBase, slotBase + static_cast<SIZE_T>(batch.queryCount) * sizeof(UINT64) };
-        if (SUCCEEDED(gpuReadback_->Map(0, &range, reinterpret_cast<void**>(&data)))) {
-            UINT64* slotData = reinterpret_cast<UINT64*>(reinterpret_cast<uint8_t*>(data) + slotBase);
+        for (UINT q = 0; q < kGpuQueueCount; ++q) {
+            UINT64* data = nullptr;
+            if (gpuReadback_[q] && SUCCEEDED(gpuReadback_[q]->Map(0, &range, reinterpret_cast<void**>(&data)))) {
+                slotData[q] = reinterpret_cast<UINT64*>(reinterpret_cast<uint8_t*>(data) + slotBase);
+                mapped[q] = true;
+            }
+        }
+        if (mapped[0]) {
             for (const auto& s : batch.ranges) {
                 if (!s.completed || s.start >= batch.queryCount || s.end >= batch.queryCount) {
                     continue;
                 }
+                const UINT rq = (s.queueIndex < kGpuQueueCount) ? s.queueIndex : 0u;
+                if (!mapped[rq]) { continue; }
 
-                const UINT64 a = slotData[s.start];
-                const UINT64 b = slotData[s.end];
-                if (b <= a || gpuFreq_ == 0) {
+                const UINT64 a = slotData[rq][s.start];
+                const UINT64 b = slotData[rq][s.end];
+                if (b <= a) {
                     continue;
                 }
 
-                const double ms = static_cast<double>(b - a) * 1000.0 / static_cast<double>(gpuFreq_);
+                // Step 3: the DURATION uses this range's own queue frequency. Ticks from the
+                // compute queue divided by the direct queue's frequency is a wrong number that
+                // looks entirely reasonable, which is the worst kind.
+                const UINT q = rq;
+                if (gpuFreq_[q] == 0) { continue; }
+                const double ms = static_cast<double>(b - a) * 1000.0 / static_cast<double>(gpuFreq_[q]);
                 if (sampleOut) {
                     sampleOut->push_back(ScopeSample{ s.key, ms });
                 }
@@ -1044,9 +1101,9 @@ void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
                     PushGpuSample(s.key, ms);
                 }
 
-                if (collectTrace) {
-                    const uint64_t startCpuUs = GpuTimestampToCpuUs(a, calibration);
-                    const uint64_t endCpuUs = GpuTimestampToCpuUs(b, calibration);
+                if (collectTrace && calibrated[q]) {
+                    const uint64_t startCpuUs = GpuTimestampToCpuUs(a, calibration[q], q);
+                    const uint64_t endCpuUs = GpuTimestampToCpuUs(b, calibration[q], q);
                     if (endCpuUs <= traceStartUs || endCpuUs <= startCpuUs) {
                         continue;
                     }
@@ -1063,48 +1120,69 @@ void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
                     }
                     ev.tsUs = clippedStartUs - traceStartUs;
                     ev.durUs = endCpuUs - clippedStartUs;
-                    ev.threadIndex = kGpuTraceThreadIndex;
+                    // Step 3: the row IS the queue (see TraceOutputThreadIndex).
+                    ev.threadIndex = (q == 0) ? kGpuTraceThreadIndex : kGpuTraceThreadIndexCompute;
                     ev.category = TraceEvent::Category::Gpu;
                     traceOut->push_back(std::move(ev));
                 }
             }
-            D3D12_RANGE writtenRange{ 0, 0 };
-            gpuReadback_->Unmap(0, &writtenRange);
+        }
+        D3D12_RANGE writtenRange{ 0, 0 };
+        for (UINT q = 0; q < kGpuQueueCount; ++q) {
+            if (mapped[q]) { gpuReadback_[q]->Unmap(0, &writtenRange); }
         }
     }
 }
 
 bool Profiler::WaitForGpuProfilerIdle() {
-    if (!gpuInitialized_ || !gpuQueue_ || !gpuDrainFence_ || !gpuDrainFenceEvent_) {
+    if (!gpuInitialized_ || !gpuQueue_[0] || !gpuDrainFence_[0] || !gpuDrainFenceEvent_[0]) {
         return false;
     }
 
+    // Step 3: drain BOTH queues. This runs when a trace capture finishes, and a capture that
+    // stopped waiting for the compute queue would drop its last frames' compute scopes — the
+    // trace would look like the async work simply was not there.
     const UINT64 value = gpuDrainFenceValue_++;
-    if (FAILED(gpuQueue_->Signal(gpuDrainFence_.Get(), value))) {
-        return false;
-    }
-    if (gpuDrainFence_->GetCompletedValue() < value) {
-        if (FAILED(gpuDrainFence_->SetEventOnCompletion(value, gpuDrainFenceEvent_))) {
+    for (UINT q = 0; q < kGpuQueueCount; ++q) {
+        if (!gpuDrainFence_[q]) { continue; }
+        if (gpuQueue_[q]) {
+            if (FAILED(gpuQueue_[q]->Signal(gpuDrainFence_[q].Get(), value))) {
+                return false;
+            }
+        }
+        else if (FAILED(gpuDrainFence_[q]->Signal(value))) {
+            // No such queue: advance from the CPU so the "both passed" test stays satisfiable.
             return false;
         }
-        WaitForSingleObject(gpuDrainFenceEvent_, INFINITE);
+    }
+    for (UINT q = 0; q < kGpuQueueCount; ++q) {
+        if (!gpuDrainFence_[q] || !gpuDrainFenceEvent_[q]) { continue; }
+        if (gpuDrainFence_[q]->GetCompletedValue() < value) {
+            if (FAILED(gpuDrainFence_[q]->SetEventOnCompletion(value, gpuDrainFenceEvent_[q]))) {
+                return false;
+            }
+            WaitForSingleObject(gpuDrainFenceEvent_[q], INFINITE);
+        }
     }
     return true;
 }
 
-void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT maxQueries) {
+void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue,
+                       ID3D12CommandQueue* computeQueue, UINT maxQueries) {
 #if PROF_ENABLED
     if (!device || !queue) { return; }
-    gpuQueue_ = queue;
+    gpuQueue_[0] = queue;
+    gpuQueue_[1] = computeQueue; // step 3: may be null — every per-queue path tolerates that
     maxGpuQueries_ = maxQueries;
 
+    // Step 3: one query heap and one readback buffer PER QUEUE. Two queues writing one readback
+    // resource is a cross-queue write hazard the debug layer rejects (id=1047) — see the header.
     D3D12_QUERY_HEAP_DESC qh{};
     qh.Count = maxQueries;
     qh.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
     qh.NodeMask = 0;
-    device->CreateQueryHeap(&qh, IID_PPV_ARGS(&gpuQueryHeap_));
 
-    UINT64 bufSize = (UINT64)maxQueries * sizeof(UINT64) * kGpuReadbackFrameSlots;
+    const UINT64 bufSize = (UINT64)maxQueries * sizeof(UINT64) * kGpuReadbackFrameSlots;
     D3D12_HEAP_PROPERTIES hp{};
     hp.Type = D3D12_HEAP_TYPE_READBACK;
     D3D12_RESOURCE_DESC rd{};
@@ -1115,12 +1193,22 @@ void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue, UINT max
     rd.MipLevels = 1;
     rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     rd.SampleDesc.Count = 1;
-    device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&gpuReadback_));
+    for (UINT q = 0; q < kGpuQueueCount; ++q) {
+        device->CreateQueryHeap(&qh, IID_PPV_ARGS(&gpuQueryHeap_[q]));
+        device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&gpuReadback_[q]));
+    }
 
-    queue->GetTimestampFrequency(&gpuFreq_);
-    device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpuDrainFence_));
-    gpuDrainFenceEvent_ = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    // Step 3: frequency, fence and event PER QUEUE. `GetTimestampFrequency` is a queue method —
+    // two queues are not obliged to report the same value, and dividing compute ticks by the
+    // direct queue's frequency yields a wrong duration that looks perfectly sane.
+    for (UINT q = 0; q < kGpuQueueCount; ++q) {
+        if (gpuQueue_[q]) {
+            gpuQueue_[q]->GetTimestampFrequency(&gpuFreq_[q]);
+        }
+        device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpuDrainFence_[q]));
+        gpuDrainFenceEvent_[q] = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    }
     LARGE_INTEGER qpcFreq{};
     LARGE_INTEGER qpcNow{};
     if (QueryPerformanceFrequency(&qpcFreq) && QueryPerformanceCounter(&qpcNow)) {
@@ -1188,6 +1276,7 @@ size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const ScopeNameKe
     UINT start = 0;
     UINT end = 0;
     size_t idx = SIZE_MAX;
+    UINT heapIndex = 0;
     {
         std::lock_guard<std::mutex> lk(gpuMtx_);
         if (nextGpuQuery_ + 1 >= maxGpuQueries_) { return SIZE_MAX; }
@@ -1195,9 +1284,14 @@ size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const ScopeNameKe
         end = start + 1;
         nextGpuQuery_ += 2;
         idx = gpuPending_.size();
-        gpuPending_.push_back({ key, start, end, false, frameNo_ });
+        // Step 3: the queue is read off the RECORDING COMMAND LIST itself, so a scope cannot be
+        // mislabelled and no GPU_SCOPE call site had to change.
+        const UINT queueIndex =
+            (cl->GetType() == D3D12_COMMAND_LIST_TYPE_COMPUTE) ? 1u : 0u;
+        gpuPending_.push_back({ key, start, end, false, frameNo_, queueIndex });
+        heapIndex = queueIndex;
     }
-    cl->EndQuery(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, start);
+    cl->EndQuery(gpuQueryHeap_[heapIndex].Get(), D3D12_QUERY_TYPE_TIMESTAMP, start);
     return idx;
 #else
     (void)cl; (void)key; return SIZE_MAX;
@@ -1209,6 +1303,7 @@ void Profiler::EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx) {
     if (!gpuInitialized_ || !cl || idx == SIZE_MAX) { return; }
     UINT start = 0;
     UINT end = 0;
+    UINT q = 0;
     {
         std::lock_guard<std::mutex> lk(gpuMtx_);
         if (idx >= gpuPending_.size()) { return; }
@@ -1216,14 +1311,18 @@ void Profiler::EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx) {
         if (range.completed) { return; }
         start = range.start;
         end = range.end;
+        q = (range.queueIndex < kGpuQueueCount) ? range.queueIndex : 0u;
         range.completed = true;
     }
-    cl->EndQuery(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, end);
+    // Step 3: resolve into THIS QUEUE's own heap and readback buffer. Resolving into a shared
+    // buffer is the cross-queue write hazard the debug layer caught (id=1047).
+    if (!gpuQueryHeap_[q] || !gpuReadback_[q]) { return; }
+    cl->EndQuery(gpuQueryHeap_[q].Get(), D3D12_QUERY_TYPE_TIMESTAMP, end);
     const UINT64 readbackOffset =
         (static_cast<UINT64>(gpuRecordingReadbackSlot_) * static_cast<UINT64>(maxGpuQueries_) +
             static_cast<UINT64>(start)) * sizeof(UINT64);
-    cl->ResolveQueryData(gpuQueryHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
-        start, 2, gpuReadback_.Get(), readbackOffset);
+    cl->ResolveQueryData(gpuQueryHeap_[q].Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+        start, 2, gpuReadback_[q].Get(), readbackOffset);
 #else
     (void)cl; (void)idx;
 #endif
@@ -1242,15 +1341,19 @@ void Profiler::ShutdownGpu() {
     }
 
     gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
-    gpuQueryHeap_.Reset();
-    gpuReadback_.Reset();
-    gpuDrainFence_.Reset();
-    if (gpuDrainFenceEvent_) {
-        CloseHandle(gpuDrainFenceEvent_);
-        gpuDrainFenceEvent_ = nullptr;
+    for (UINT q = 0; q < kGpuQueueCount; ++q) {
+        gpuQueryHeap_[q].Reset();
+        gpuReadback_[q].Reset();
     }
-    gpuQueue_ = nullptr;
-    gpuFreq_ = 0;
+    for (UINT q = 0; q < kGpuQueueCount; ++q) {
+        gpuDrainFence_[q].Reset();
+        if (gpuDrainFenceEvent_[q]) {
+            CloseHandle(gpuDrainFenceEvent_[q]);
+            gpuDrainFenceEvent_[q] = nullptr;
+        }
+        gpuQueue_[q] = nullptr;
+        gpuFreq_[q] = 0;
+    }
     gpuTraceQpcFreq_ = 0;
     gpuTraceQpcOrigin_ = 0;
     gpuTraceCpuOriginUs_ = 0;
@@ -1583,12 +1686,21 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events) {
              << ",\"args\":{\"name\":\"" << EscapeJson(kGpuTraceThreadName) << "\"}}";
         writeEntry(line.str());
     }
+    // Step 3: the second GPU row. Named UNCONDITIONALLY, even on a capture with no compute work —
+    // an absent row and an empty row look the same in the viewer, and only one of them means "the
+    // async queue did nothing". A named, empty track says that out loud.
+    {
+        std::ostringstream line;
+        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << kGpuTraceThreadIndexCompute
+             << ",\"args\":{\"name\":\"" << EscapeJson(kGpuTraceThreadNameCompute) << "\"}}";
+        writeEntry(line.str());
+    }
 #endif
 
     for (size_t tid = 0; tid < threadIndexToName_.size(); ++tid) {
         if (threadIndexToName_[tid].empty()) { continue; }
         std::ostringstream line;
-        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << (tid + 1u)
+        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << (tid + kCpuTraceThreadIndexBase)
              << ",\"args\":{\"name\":\"" << EscapeJson(threadIndexToName_[tid]) << "\"}}";
         writeEntry(line.str());
     }

@@ -64,6 +64,7 @@ extern const Profiler::ScopeNameKey kSceneTickWind;
 extern const Profiler::ScopeNameKey kSceneRender;
 extern const Profiler::ScopeNameKey kPassPrologueClear;
 extern const Profiler::ScopeNameKey kPassObjectCompute;
+extern const Profiler::ScopeNameKey kAsyncEmptySubmit; // step 3: populates the second GPU track
 extern const Profiler::ScopeNameKey kPassShadowCull;
 extern const Profiler::ScopeNameKey kPassVsmPageRequest;
 extern const Profiler::ScopeNameKey kPassVsmPageRender;
