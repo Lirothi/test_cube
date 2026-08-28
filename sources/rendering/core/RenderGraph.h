@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include "core/diagnostics/DiagPaths.h" // step 7: barrier dump path
 #include <initializer_list>
 #include <iterator>
 #include <memory>
@@ -84,6 +85,9 @@ inline bool g_barrierComparator = false;
 #endif
 // Step 7: one line per frame with the compiled barrier count. DEFAULT OFF.
 inline bool g_barrierCompileLog = false;
+// Async-compute step 7: `--dump-barriers` writes every compiled barrier ONCE (pass, point,
+// resource NAME, before -> after) to logs/barrier_dump.log, for a before/after diff of the compile.
+inline bool g_dumpBarriers = false;
 } // namespace render
 
 // Debug name for a pass's command list: PIX, GBV and the breadcrumb dump all read it, so the
@@ -422,7 +426,10 @@ public:
         // targets, and there are kFrameCount rotating Deferred sets, so consecutive frames register
         // DIFFERENT resource pointers and a single-slot cache measured a 0 % hit rate on the main
         // graph. Frame N matches frame N-kFrameCount, not frame N-1.
-        struct CompiledPass { size_t index; RenderPass name; Slice slice; };
+        // Step 7: the QUEUE joins the cache key. Two frames whose uses and order match byte for
+        // byte but whose pass ran on different queues do NOT produce the same barriers, so a key
+        // without it would serve one frame's barriers to the other — silent corruption.
+        struct CompiledPass { size_t index; RenderPass name; Slice slice; RenderQueue queue; };
         struct CacheSlot {
             std::vector<CompiledPass> order;    // compile order + each pass's slice
             std::vector<ResourceUse>  uses;     // arena[0, arenaSize) verbatim
@@ -890,6 +897,7 @@ private:
         auto compileOne = [&](size_t passIdx) {
             passTouched_.clear();
             const auto& slice = prepare_->slices[passIdx];
+            const RenderQueue passQueue = passes_[passIdx].queue;
             for (std::uint32_t i = 0; i < slice.count; ++i) {
                 const ResourceUse& use = prepare_->arena[slice.begin + i];
                 if (!use.resource || use.point >= kResourceUsesPerPassBudget) { continue; }
@@ -900,8 +908,52 @@ private:
                 if (!renderer->IsResourceCompileManaged(use.resource)) { continue; }
                 auto it = compileState_.find(use.resource);
                 const D3D12_RESOURCE_STATES before =
-                    (it == compileState_.end()) ? renderer->GetPredictedState(use.resource) : it->second;
-                if (before == use.state) { continue; } // already there — no barrier
+                    (it == compileState_.end()) ? renderer->GetPredictedState(use.resource) : it->second.state;
+                const RenderQueue owner =
+                    (it == compileState_.end()) ? renderer->GetPredictedOwner(use.resource) : it->second.owner;
+
+                // --- Async-compute step 7 (D3/D7): OWNERSHIP TRANSFER ---
+                //
+                // The state is one thing; WHO LEFT IT THERE is another, and the pair is what decides
+                // whether this use is expressible. Crossing queues is legal only if the state the
+                // producer left behind is legal on the CONSUMER's queue too — that is D7, and it is
+                // why D3's release half is normally a no-op.
+                //
+                // When it is not, the fix belongs in the PRODUCING pass, not here: it declares one
+                // more `Use` handing the resource over in a both-legal state, which the compile then
+                // emits on the producer's own (graphics) list like any other barrier. The compile
+                // deliberately does NOT invent that barrier itself — it would have to be inserted
+                // into a pass the walk has already gone past, i.e. a second compile pass, to fix
+                // something a one-line declaration fixes at the source.
+                if (owner != passQueue && renderer->IsResourceCompileManaged(use.resource)) {
+                    const bool illegalForConsumer =
+                        (passQueue == RenderQueue::AsyncCompute) &&
+                        barriers::IsDirectQueueExclusiveState(before);
+                    if (illegalForConsumer) {
+                        char label[160];
+                        render::DebugObjectLabel(use.resource, label, sizeof(label));
+                        char msg[416];
+                        std::snprintf(msg, sizeof(msg),
+                                      "RenderGraph::CompileBarriers: pass '%ls' (ASYNC COMPUTE) takes "
+                                      "res=%s from the graphics queue, which left it in 0x%X — a "
+                                      "DIRECT-queue-only state. The PRODUCING pass must hand it over "
+                                      "in a state legal on both queues (design D7): add a final "
+                                      "ctx.Use(res, NON_PIXEL...) there.",
+                                      RenderPassToWString(passes_[passIdx].name).data(), label,
+                                      static_cast<unsigned>(before));
+                        RendererInvariantFailure(msg);
+                    }
+                }
+
+                if (before == use.state && owner == passQueue) { continue; } // already there — no barrier
+                if (before == use.state) {
+                    // Same state, different queue: no TRANSITION is needed (D7 guaranteed the state
+                    // is legal on both), but ownership still moves — record it so the next consumer
+                    // sees the right owner.
+                    compileState_[use.resource] = TrackedState{ use.state, passQueue };
+                    passTouched_[use.resource] = use.state;
+                    continue;
+                }
                 if (prepare_->barrierCount >= std::size(prepare_->barrierArena)) {
                     RendererInvariantFailure("RenderGraph::CompileBarriers: barrier arena exhausted");
                 }
@@ -917,7 +969,7 @@ private:
                 if (pt.count == 0) { pt.begin = prepare_->barrierCount; }
                 ++pt.count;
                 ++prepare_->barrierCount;
-                compileState_[use.resource] = use.state;
+                compileState_[use.resource] = TrackedState{ use.state, passQueue };
                 passTouched_[use.resource] = use.state;
             }
             for (const auto& kv : passTouched_) {
@@ -943,10 +995,17 @@ private:
         // If it is not a fixed point the compile still runs normally; only the caching is refused.
         // That is the conservative direction: a wrongly-refused cache costs 0.01 ms, a wrongly-
         // accepted one emits barriers whose before-state the GPU has already moved past.
+        // Step 7: the fixed-point test is now over (state, OWNER). A resource that ends in the same
+        // state but owned by the other queue is NOT a fixed point — next frame's compile would seed
+        // from a different starting point, and reusing this frame's barriers over that is exactly
+        // the silent corruption the test exists to refuse.
         bool fixedPoint = true;
         for (const auto& kv : compileState_) {
-            if (kv.second != renderer->GetPredictedState(kv.first)) { fixedPoint = false; }
-            renderer->SetPredictedState(kv.first, kv.second);
+            if (kv.second.state != renderer->GetPredictedState(kv.first) ||
+                kv.second.owner != renderer->GetPredictedOwner(kv.first)) {
+                fixedPoint = false;
+            }
+            renderer->SetPredictedState(kv.first, kv.second.state, kv.second.owner);
         }
         prepare_->compiled = true;
 
@@ -963,6 +1022,14 @@ private:
         }
 
         if (inputsMatch) { VerifyAgainstCachedOutput(); }
+
+        // Async-compute step 7 acceptance: dump every compiled barrier ONCE, by resource NAME and
+        // by (pass, point). Names not pointers, for the same reason the submit-order dump uses
+        // them — pointers differ between runs and prove nothing about the compile.
+        if (render::g_dumpBarriers) {
+            render::g_dumpBarriers = false;
+            DumpCompiledBarriers(schedule);
+        }
 
         // Throttled: one line per compile drowns any run long enough to leave the churn behind and
         // reach steady state, which is the only regime where the cache's hit rate means anything.
@@ -992,6 +1059,34 @@ private:
         }
     }
 
+    // Step 7 acceptance: the compiled barrier arrays, written out for a before/after diff.
+    void DumpCompiledBarriers(const tc::inl_vector<FlatNode, MaxPasses>& schedule) const
+    {
+        FILE* f = nullptr;
+        if (fopen_s(&f, diag::LogPath("barrier_dump.log").c_str(), "a") != 0 || !f) { return; }
+        std::fprintf(f, "== compiled barriers: %u ==\n", prepare_->barrierCount);
+        auto dumpPass = [&](size_t passIdx) {
+            for (std::uint32_t pt = 0; pt < kResourceUsesPerPassBudget; ++pt) {
+                const auto& sl = prepare_->barrierPoints[passIdx][pt];
+                for (std::uint32_t i = 0; i < sl.count; ++i) {
+                    const D3D12_RESOURCE_BARRIER& b = prepare_->barrierArena[sl.begin + i];
+                    char label[160];
+                    render::DebugObjectLabel(b.Transition.pResource, label, sizeof(label));
+                    std::fprintf(f, "%ls point=%u res=%s 0x%X->0x%X\n",
+                                 RenderPassToWString(passes_[passIdx].name).data(), pt, label,
+                                 static_cast<unsigned>(b.Transition.StateBefore),
+                                 static_cast<unsigned>(b.Transition.StateAfter));
+                }
+            }
+        };
+        for (const FlatNode& n : schedule) {
+            const size_t gid = passes_[n.pass].groupId;
+            if (gid == kNoGroup) { dumpPass(n.pass); continue; }
+            for (size_t m : groups_[gid]) { dumpPass(m); }
+        }
+        std::fclose(f);
+    }
+
     // Is every input the compile reads identical to the snapshot the cached output was built from?
     //
     // Compared as raw bytes rather than hashed on purpose: the cost of being wrong here is barriers
@@ -1015,6 +1110,7 @@ private:
             // The pass NAME as well as its index: a graph that changes shape can reuse an index for
             // a different pass, and then the slice alone would not tell them apart.
             if (c.index != passIdx || c.name != passes_[passIdx].name ||
+                c.queue != passes_[passIdx].queue ||
                 c.slice.begin != slice.begin || c.slice.count != slice.count) {
                 same = false;
             }
@@ -1040,7 +1136,8 @@ private:
         slot.order.clear();
         auto addPass = [&](size_t passIdx) {
             slot.order.push_back(
-                typename PrepareState::CompiledPass{ passIdx, passes_[passIdx].name, prepare_->slices[passIdx] });
+                typename PrepareState::CompiledPass{ passIdx, passes_[passIdx].name,
+                                                     prepare_->slices[passIdx], passes_[passIdx].queue });
         };
         for (const FlatNode& n : schedule) {
             const size_t gid = passes_[n.pass].groupId;
@@ -1578,7 +1675,14 @@ private:
     std::unique_ptr<PrepareState> prepare_;
     // Step 7: the compile's running per-resource state. A member so the per-frame compile
     // reuses its buckets; cleared at the top of every CompileBarriers.
-    robin_hood::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> compileState_;
+    // Step 7: the compile's running value is (state, owning queue). One value per resource still —
+    // a resource HAS one state — but the owner is what says whether the next consumer's queue may
+    // legally take it, so the two travel together everywhere.
+    struct TrackedState {
+        D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
+        RenderQueue           owner = RenderQueue::Graphics;
+    };
+    robin_hood::unordered_map<ID3D12Resource*, TrackedState> compileState_;
     // Scratch for the per-pass return-to-canonical estimate (see CompileBarriers).
     robin_hood::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> passTouched_;
     std::uint32_t returnBarrierEstimate_ = 0;

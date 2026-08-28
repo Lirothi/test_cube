@@ -1,6 +1,6 @@
 # Async compute — architecture plan
 
-**Status: STEPS 1-5 COMMITTED (`7ac30fe`, `85b714c`, `4e014d5`, `41f5417`, `843f6d0`). STEP 6 DONE (uncommitted). Steps 7-11 not started.**
+**Status: STEPS 1-6 COMMITTED (through `6cdd695`). STEP 7 DONE (uncommitted). Steps 8-11 not started.**
 
 **Goal: the renderer gains a second execution queue as a first-class architectural capability.**
 The render graph learns to schedule a pass onto a `D3D12_COMMAND_LIST_TYPE_COMPUTE` queue,
@@ -842,6 +842,47 @@ to today** — dump and diff them under a flag, **with `--barrier-cache-verify`*
 against a fresh compile and not against the cache (R9). `--barrier-cmp` stays at 0 MISSING and 0
 extra. All gates CLEAN, zero debug-layer messages. **Do not move a pass in this step.** The entire
 value here is a generalisation proven inert.
+
+**DONE 2026-08-29, uncommitted.**
+
+- **The compile's running value is now `(state, owning queue)`.** One value per resource still — a
+  resource HAS one state — but the owner is what says whether the next consumer's queue may legally
+  take it, so the two travel together everywhere.
+- **`Entry::predictedOwner`** joins `predicted` in the canonical registry. This is the one piece of
+  cross-frame memory the barrier system keeps, and it is now two-dimensional. `SetPredicted` bumps
+  the generation when EITHER moves: same state left by the other queue is a different starting
+  point, and a cache reused across an ownership change is exactly the silent corruption the
+  generation exists to prevent.
+- **The cache key carries the queue** (`CompiledPass::queue`), and the **fixed-point test compares
+  owner as well as state**.
+- **Ownership transfer (D3/D7)**: crossing queues is legal only if the state the producer left is
+  legal on the consumer's queue too. When it is not, the compile **fails fast naming the resource,
+  the state and the consuming pass**, and says the fix belongs in the PRODUCING pass — one more
+  `ctx.Use` handing the resource over in a both-legal state, which the compile then emits on the
+  producer's own list like any other barrier. It deliberately does not invent that barrier itself:
+  it would have to be inserted into a pass the walk has already passed, i.e. a whole second compile
+  pass, to fix something a one-line declaration fixes at the source.
+
+**Results — inert, measured against a CONTROL rather than against remembered numbers.** The barrier
+emission counters are a direct function of the compiled barriers, so the S6 commit was rebuilt and
+run to produce them:
+
+| gate | S6 control | S7 |
+|---|---|---|
+| VSM, GBV | 7892 | **7892** |
+| Legacy, GBV | 6772 | **6772** |
+| no-GBV | 5228 | **5228** |
+
+Identical, to the barrier, across **52 iterations of churn**. `--barrier-cache-verify` over the full
+GBV churn reports **0 STALE** — the cache with the queue in its key and the per-queue fixed-point
+test serves exactly what a fresh compile produces. `--barrier-cmp` 0 MISSING, all gates CLEAN, no
+invariant failures, both builds 0/0. `--dump-barriers` writes the compiled arrays (139 barriers by
+resource name) for inspection.
+
+**Taking the control was not ceremony.** The first comparison was against 7846/6742/5182 — numbers
+recorded back at Step 2 — and showed +46/+30/+46, which looks exactly like a regression. The S6
+control produced 7892/6772/5228, i.e. the drift happened somewhere in Steps 3-6 and the RT commits
+(the AS counter moved 147 -> 208 too), not here. **A baseline from four steps ago is not a control.**
 
 ### Step 8 — the first real user: `Main_RTTrace` on the async queue
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include "rendering/core/RenderPass.h" // step 7: RenderQueue
 #include <wrl/client.h>
 #include <atomic>
 #include <cstdint>
@@ -42,6 +43,15 @@ public:
         // and no submit-time stitching. Declare resets it, so a resource created at a recycled
         // address starts from its own resting state rather than the previous owner's.
         D3D12_RESOURCE_STATES predicted = D3D12_RESOURCE_STATE_COMMON;
+        // Async-compute step 7: WHICH QUEUE last left it in `predicted`. This is the one piece of
+        // cross-frame memory the barrier system keeps, and it is now TWO-DIMENSIONAL: a state on
+        // its own no longer says whether the next consumer may use it, because a state legal on the
+        // direct queue can be illegal on the compute one. Owner + state together do.
+        //
+        // Graphics for everything until step 8, so this is inert — but it is part of the cache key
+        // and of the fixed-point test from here on, which is what makes step 8 a scheduling change
+        // rather than a barrier-model change.
+        RenderQueue predictedOwner = RenderQueue::Graphics;
         // Captured HERE, at declaration, because that is the only moment the pointer is
         // guaranteed live. Not every release path unregisters (measured — see the plan's
         // Step 6 result), so the table can hold dangling keys; reading a name off one later
@@ -198,18 +208,34 @@ public:
         return (it == states_.end()) ? D3D12_RESOURCE_STATE_COMMON : it->second.predicted;
     }
 
+    // Step 7: which queue last left this resource where GetPredicted reports. Graphics for an
+    // unknown resource — the answer that keeps every existing caller's behaviour unchanged.
+    RenderQueue GetPredictedOwner(ID3D12Resource* res) const
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = states_.find(res);
+        return (it == states_.end()) ? RenderQueue::Graphics : it->second.predictedOwner;
+    }
+
     // Bumps the generation only when the value actually MOVES. That is what makes the barrier
     // compile's cross-frame cache sound: a cached compile may be reused iff no `predicted` it read
     // has changed since, and with frame-buffered resources the reuse spans kFrameCount frames, so
     // "my own compile was a fixed point" is not enough — another frame slot's compile could have
     // moved a SHARED resource in between. A generation that only ticks on real change covers both.
-    void SetPredicted(ID3D12Resource* res, D3D12_RESOURCE_STATES state)
+    void SetPredicted(ID3D12Resource* res, D3D12_RESOURCE_STATES state,
+                      RenderQueue owner = RenderQueue::Graphics)
     {
         if (res == nullptr) { return; }
         std::lock_guard<std::mutex> lk(mtx_);
         auto it = states_.find(res);
-        if (it == states_.end() || it->second.predicted == state) { return; }
+        if (it == states_.end()) { return; }
+        // Step 7: the OWNER counts as part of the value. A resource left in the same state but by
+        // the other queue is a different starting point for the next compile, so it has to bump the
+        // generation too — otherwise a cached compile would be reused across an ownership change,
+        // which is precisely the silent-corruption case the generation exists to prevent.
+        if (it->second.predicted == state && it->second.predictedOwner == owner) { return; }
         it->second.predicted = state;
+        it->second.predictedOwner = owner;
         ++generation_;
     }
 

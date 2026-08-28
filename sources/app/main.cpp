@@ -312,6 +312,12 @@ int WINAPI WinMain(
     // Async-compute plan step 6: "--dump-submit-order" writes the frame's submitted command-list
     // arrays (by debug name, per queue) to logs/submit_order.log once. The acceptance for per-queue
     // submission is that the GRAPHICS array is unchanged, and this is what makes that checkable.
+    // Async-compute plan step 7: "--dump-barriers" writes every compiled barrier once, for a
+    // before/after diff of the barrier compile itself.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--dump-barriers")) {
+        render::g_dumpBarriers = true;
+    }
+
     if (lpCmdLine && std::strstr(lpCmdLine, "--dump-submit-order")) {
         render::g_dumpSubmitOrder = true;
     }

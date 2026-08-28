@@ -355,9 +355,13 @@ public:
     bool IsResourceBuffer(ID3D12Resource* res) const { return canonicalStates_.IsBuffer(res); }
     // Where the last barrier compile left this resource; the seed for the next one.
     D3D12_RESOURCE_STATES GetPredictedState(ID3D12Resource* res) const { return canonicalStates_.GetPredicted(res); }
+    // Step 7: which QUEUE left it there. State alone no longer decides whether the next consumer
+    // may use it — a direct-queue-legal state can be illegal on the compute queue.
+    RenderQueue GetPredictedOwner(ID3D12Resource* res) const { return canonicalStates_.GetPredictedOwner(res); }
     // Bumped by every declare/forget/unmanaged/clear — the barrier compile's cache key.
     std::uint64_t DeclarationsGeneration() const { return canonicalStates_.Generation(); }
-    void SetPredictedState(ID3D12Resource* res, D3D12_RESOURCE_STATES s) { canonicalStates_.SetPredicted(res, s); }
+    void SetPredictedState(ID3D12Resource* res, D3D12_RESOURCE_STATES s,
+                           RenderQueue owner = RenderQueue::Graphics) { canonicalStates_.SetPredicted(res, s, owner); }
     // For subsystems that create resources without a Renderer& (RenderTargetManager).
     ResourceDeclarations Declarations() { return ResourceDeclarations{ &canonicalStates_, canonicalStates_.Liveness() }; }
 
