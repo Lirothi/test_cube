@@ -360,7 +360,13 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             // the frame, so this gate is exact.
             if (!render::VsmActive() || decisions_.vsmSkipUpdate) { return {}; }
             if (!frame_->vsm || !frame_->vsm->IsAllocated()) { return {}; }
-            ctx.Use(ctx.renderer->GetDeferredForFrame().depth.Get(), kSrvAll);
+            // Async-compute step 8 (D7): NON_PIXEL, not kSrvAll. This pass reads depth from a
+            // COMPUTE shader, so the PIXEL bit was never anything but the "one combined state
+            // instead of a flip" optimisation — and that bit is illegal on a compute queue, so
+            // leaving it set here would hand Main_RTTrace a state it cannot legally take.
+            // The hand-over is the producer's job (D7), and this is the producer.
+            ctx.Use(ctx.renderer->GetDeferredForFrame().depth.Get(),
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             // VSM owns the buffers its Record* functions barrier, so it declares them itself.
             const VirtualShadowMap::PageRequestPoints pts =
                 frame_->vsm->PrepareRequestPass(ctx);
@@ -417,7 +423,24 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             }
             ctx.NextPoint();
             const uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
-            ctx.Use(D.depth.Get(), kSrvAll);
+            // Async-compute step 8 (D7): NON_PIXEL for the same reason as Main_VsmPageRequest —
+            // the pyramid build is a compute shader, and the PIXEL bit would make the state
+            // illegal for Main_RTTrace to take on the compute queue.
+            ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            // D7 HAND-OVER, and the only declaration in this pass for a resource it does not use.
+            //
+            // `Main_RTTrace` runs on the compute queue and reads gb1, but the G-buffer leaves gb1 in
+            // RENDER_TARGET — a DIRECT-queue-only state. A consumer normally acquires for itself,
+            // and that is exactly what breaks here: the acquire's BEFORE state would be
+            // RENDER_TARGET on a compute list. So the graphics side has to hand it over, in a pass
+            // RTTrace explicitly depends on — this one. It costs one transition and rides the point
+            // this pass already emits, so no body changed.
+            //
+            // Before the move RTTrace declared kSrvAll and acquired gb1 itself, which worked only
+            // because it happened to be scheduled after the G-buffer's other consumers. That was
+            // incidental ordering, not a dependency; the async move turned it into a hard error and
+            // this declaration plus RTTrace's new prereq on this pass is the fix.
+            ctx.Use(D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             // The whole chain in ONE state for the whole build; the mips are separated by UAV
             // barriers, not transitions. See the shader header for why.
             ctx.Use(D.hzb.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -489,8 +512,21 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             // kSrvAll because the later forward passes really do sample them from a pixel shader.
             ctx.NextPoint();
             chain.pointRaw = ctx.usePoint ? *ctx.usePoint : 0u;
-            ctx.Use(D.gb1.Get(), kSrvAll);
-            ctx.Use(D.depth.Get(), kSrvAll);
+            // Async-compute step 8 (D7): NON_PIXEL, not kSrvAll — a deliberate reversal of the
+            // note above, and it costs one flip.
+            //
+            // GTAO reads both from a compute shader; kSrvAll was here only so the later FORWARD
+            // passes would not have to raise them again. But `Main_RTTrace` now runs on the compute
+            // queue and reads the same two, and GTAO shares its dependencies (both hang off
+            // pGbuf/pHzb) — so whichever of the two the topological order happens to put first,
+            // this pass must not leave them in a state the other cannot legally take. Declaring
+            // NON_PIXEL here makes the result INDEPENDENT of that order, which is worth more than
+            // the flip it costs: the alternative is a correctness property that holds by accident.
+            //
+            // Ordering GTAO after RTTrace instead would be worse — it would make the graphics queue
+            // wait on the async pass, which is precisely the overlap this move exists to create.
+            ctx.Use(D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             // The pyramid rests in this state, so this normally compiles to no barrier -- declaring
             // it is what makes that a fact the compile knows rather than an assumption.
             ctx.Use(D.hzb.Get(), kAoRead);
@@ -553,9 +589,24 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
     if (decisions_.rtReflect && gb.pBuildAS != static_cast<size_t>(-1))
     {
         const auto& DT = gb.D;
-        gb.pRtTrace = rg.AddPass2(RenderPass::Main_RTTrace, { gb.pGbuf, gb.pBuildAS }, { gb.pBuildAS },
-            { { DT.depth.Get(), kSrvAll },
-              { DT.gb1.Get(), kSrvAll },
+        // ASYNC COMPUTE (step 8) — the plan's first real user of the second queue.
+        //
+        // Both landmines above are now handled, not merely noted:
+        //   - the cross-queue edge to Pass_BuildAS comes from the explicit mtDep `{ gb.pBuildAS }`.
+        //     The AS buffers are undeclared, so no resource-derived edge exists; the graph turns a
+        //     graph DEPENDENCY into the fence instead (step 6), which is exactly why that mtDep is
+        //     load-bearing and must not be "cleaned up" as redundant with the prereq.
+        //   - depth and gb1 are declared NON_PIXEL here, and the producers (Main_VsmPageRequest,
+        //     Main_Hzb) hand them over in that state (D7). kSrvAll would be illegal on this queue
+        //     and the compile refuses it by name.
+        // The prereq on `pHzb` is NEW and load-bearing: it is the pass that hands depth and gb1
+        // over in a compute-legal state (D7). Before the move this pass acquired them itself and
+        // relied on being scheduled after the G-buffer's other readers — incidental ordering that
+        // the compile now rejects by name rather than tolerating.
+        gb.pRtTrace = rg.AddPass2(RenderPass::Main_RTTrace, RenderQueue::AsyncCompute,
+            { gb.pGbuf, gb.pBuildAS, gb.pHzb }, { gb.pBuildAS },
+            { { DT.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { DT.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { DT.rtPayload.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
               { DT.rtPayloadUv.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {

@@ -76,6 +76,10 @@ public:
         std::vector<ID3D12CommandList*> lists;
         size_t waitForBatch = kNoCrossQueueWait; // wait for the other queue's progress past this
         size_t lastBatch = kNoCrossQueueWait;    // highest batch index in this segment
+        // Someone on the other queue waits for THIS segment's last batch, so the producer must
+        // signal right after it — not at the end of whatever else happens to be submitted to the
+        // same queue. See the note on segment boundaries in GatherFrameLists.
+        bool signalAfter = false;
     };
 
     // Start a new frame: deactivate every pooled batch (reset in place).
@@ -120,6 +124,14 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         ApplySubmitOrderLocked_();
         out.clear();
+        // Which batches are the TARGET of some cross-queue wait. Computed first, because a segment
+        // boundary is needed AFTER each of them and the walk below is single-pass.
+        waitTargets_.assign(activeBatchCount_, false);
+        for (size_t i = 0; i < activeBatchCount_; ++i) {
+            const size_t w = batches_[i].crossQueueWait;
+            if (w != kNoCrossQueueWait && w < activeBatchCount_) { waitTargets_[w] = true; }
+        }
+        const std::vector<bool>& waitTargets = waitTargets_;
         for (size_t i = 0; i < activeBatchCount_; ++i) {
             PassBatch& pb = batches_[i];
             // Step 6: open a new SEGMENT when the queue changes, or when this batch introduces a
@@ -130,7 +142,8 @@ public:
             const bool needsNewSegment =
                 out.empty() ||
                 out.back().queue != pb.queue ||
-                pb.crossQueueWait != kNoCrossQueueWait;
+                pb.crossQueueWait != kNoCrossQueueWait ||
+                (!out.empty() && out.back().signalAfter); // previous segment ends at a signal point
             if (needsNewSegment) {
                 out.push_back(Submission{});
                 out.back().queue = pb.queue;
@@ -138,6 +151,12 @@ public:
             }
             Submission& seg = out.back();
             seg.lastBatch = i;
+            // A batch that someone on the other queue waits FOR ends its segment, so the signal can
+            // be placed immediately after it. Without this cut the signal lands after everything
+            // else already submitted to that queue, and the consumer waits for far more than the
+            // graph said — measured: the first cut of this made RTTrace wait for the whole graphics
+            // prefix and it overlapped the small light passes instead of VsmPageRender.
+            if (waitTargets[i]) { seg.signalAfter = true; }
             ID3D12GraphicsCommandList* driver = pb.driver;
             if (driver == nullptr && !pb.bundles.empty()) {
                 driver = makeFallbackDriver();
@@ -177,6 +196,7 @@ private:
     void ResetBatchesInPlaceLocked_();
 
     std::vector<PassBatch> batches_; // persistent pool; the first activeBatchCount_ belong to this frame
+    std::vector<bool> waitTargets_;  // step 8: batches some other queue waits for (reused per frame)
     size_t activeBatchCount_ = 0;
     std::mutex mtx_;
 };

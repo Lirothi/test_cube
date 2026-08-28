@@ -103,6 +103,18 @@ inline bool g_asyncOrderProbe = false;
 // pointers differ between runs and say nothing; the names are the pass identities, which is what
 // "the array is unchanged" actually means.
 inline bool g_dumpSubmitOrder = false;
+
+// Async-compute plan step 8 (design D4): `--no-async-compute` forces EVERY pass back onto the
+// graphics queue, whatever it was registered as.
+//
+// PERMANENT, exactly as `--legacy-barriers` is for the barrier model. A suspected async regression
+// must be one flag away from being bisected, not a rebuild away — and on hardware or in a
+// configuration where the second queue misbehaves, this is the switch that makes the renderer
+// whole again without touching code.
+//
+// Applied at the ONE place the queue is decided (RenderGraph::AddPass2Internal), so it cannot be
+// half-honoured: a pass forced to Graphics also declares, compiles and submits as Graphics.
+inline bool g_noAsyncCompute = false;
 } // namespace render
 
 class Renderer {
@@ -647,6 +659,8 @@ private:
     SubmitTimeline submitTimeline_;
     // Step 6: the frame's submissions, one per contiguous same-queue run of batches.
     std::vector<SubmitTimeline::Submission> submitSegmentsScratch_;
+    // Step 8: (producer batch -> cross-queue fence value) for this frame, in submission order.
+    std::vector<std::pair<size_t, UINT64>> crossQueueSignals_;
 
     // Per-frame deferred render targets + their CPU descriptor heaps
     RenderTargetManager rtManager_;

@@ -1562,6 +1562,11 @@ private:
         // Step 4 (D1): recorded at graph-build time and never touched again. The barrier compile
         // runs after this and before any body, so by the time a body could ask, the answer is
         // already fixed — which is precisely why the queue has to be decided here.
+        //
+        // Step 8 (D4): `--no-async-compute` collapses the decision to Graphics HERE, the single
+        // point where it is made, so a forced pass also declares, compiles and submits as Graphics.
+        // Honouring the flag anywhere later would leave the three disagreeing.
+        if (render::g_noAsyncCompute) { queue = RenderQueue::Graphics; }
         passes_[idx].queue = queue;
         // Step 5 (D5/R8): a CL GROUP shares ONE command list, so its members share one queue. A
         // grouped pass marked AsyncCompute would silently record onto the group's DIRECT list —

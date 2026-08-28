@@ -1057,8 +1057,13 @@ void Renderer::ExecuteTimelineAndPresent() {
         //
         // With every pass on Graphics there is exactly ONE segment, no waits, and this collapses to
         // the single ExecuteCommandLists it replaced.
-        UINT64 signalledUpTo[2] = { 0, 0 }; // last cross-queue value signalled by each queue
-        size_t signalledBatch[2] = { 0, 0 };
+        // The signal for batch B is enqueued IMMEDIATELY AFTER B's own segment, not at the moment
+        // its consumer is submitted. That distinction is the whole difference between a fence edge
+        // and a barrier across the frame: a signal issued later means "everything submitted to this
+        // queue so far", which is almost always far more than the graph asked for. Measured on the
+        // first cut of this loop — RTTrace ended up waiting for the entire graphics prefix and
+        // overlapped the small light passes instead of Pass_VsmPageRender.
+        crossQueueSignals_.clear();
         for (const auto& seg : submitSegmentsScratch_) {
             const bool isCompute = (seg.queue == RenderQueue::AsyncCompute);
             ID3D12CommandQueue* q = isCompute ? GetComputeQueue() : GetCommandQueue();
@@ -1066,19 +1071,21 @@ void Renderer::ExecuteTimelineAndPresent() {
                 RendererInvariantFailure("Renderer::ExecuteTimelineAndPresent: a segment targets a queue that does not exist");
             }
             if (seg.waitForBatch != SubmitTimeline::kNoCrossQueueWait) {
-                const int other = isCompute ? 0 : 1;
-                ID3D12CommandQueue* producer = isCompute ? GetCommandQueue() : GetComputeQueue();
-                // Only signal if the producer has actually advanced past what we need since its
-                // last signal — repeating a signal for work already covered is pure overhead.
-                if (producer != nullptr &&
-                    (signalledUpTo[other] == 0 || signalledBatch[other] < seg.waitForBatch)) {
-                    signalledUpTo[other] = frameScheduler_.SignalCrossQueue(producer);
-                    signalledBatch[other] = seg.waitForBatch;
+                UINT64 value = 0;
+                for (const auto& sig : crossQueueSignals_) {
+                    if (sig.first == seg.waitForBatch) { value = sig.second; break; }
                 }
-                frameScheduler_.WaitCrossQueue(q, signalledUpTo[other]);
+                if (value == 0) {
+                    RendererInvariantFailure("Renderer::ExecuteTimelineAndPresent: cross-queue wait "
+                                             "for a batch that was never signalled (segment order broken)");
+                }
+                frameScheduler_.WaitCrossQueue(q, value);
             }
             if (!seg.lists.empty()) {
                 q->ExecuteCommandLists(static_cast<UINT>(seg.lists.size()), seg.lists.data());
+            }
+            if (seg.signalAfter) {
+                crossQueueSignals_.emplace_back(seg.lastBatch, frameScheduler_.SignalCrossQueue(q));
             }
         }
     }

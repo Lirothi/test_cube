@@ -3,6 +3,7 @@
 #include "rendering/core/RendererInvariantFailure.h"
 
 #include <algorithm>
+#include <cstdio>
 
 void SubmitTimeline::BeginTimeline()
 {
@@ -93,7 +94,13 @@ SubmitTimeline::PassBatch& SubmitTimeline::BatchForRegistrationLocked_(size_t ba
     // Checked against the ACTIVE count, not the pool size: stale pooled slots
     // beyond it are never gathered, so a write there is a silently lost CL.
     if (batchIndex >= activeBatchCount_) {
-        RendererInvariantFailure(invariantMsg);
+        // The NUMBERS, not just the sentence: "outside the active range" on its own leaves the
+        // reader guessing whether the index is wild or the range collapsed, and those have opposite
+        // causes (a stale batch handle vs the timeline being reset while work is still recording).
+        char msg[256];
+        std::snprintf(msg, sizeof(msg), "%s [batchIndex=%zu activeBatchCount=%zu poolSize=%zu]",
+                      invariantMsg, batchIndex, activeBatchCount_, batches_.size());
+        RendererInvariantFailure(msg);
     }
     return batches_[batchIndex];
 }

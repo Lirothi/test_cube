@@ -1,6 +1,6 @@
 # Async compute — architecture plan
 
-**Status: STEPS 1-6 COMMITTED (through `6cdd695`). STEP 7 DONE (uncommitted). Steps 8-11 not started.**
+**Status: STEPS 1-7 COMMITTED (through `843f6d0`+). STEP 8 DONE (uncommitted) — THE ARCHITECTURE WORKS. Steps 9-11 not started.**
 
 **Goal: the renderer gains a second execution queue as a first-class architectural capability.**
 The render graph learns to schedule a pass onto a `D3D12_COMMAND_LIST_TYPE_COMPUTE` queue,
@@ -942,6 +942,81 @@ proven. If it cannot, the TLAS is unordered against its only reader and nothing 
   deviation. A win is welcome; the bar is "not slower outside the noise", because both queues
   contend for the same shader cores and an overlapped pass can cost more than it saves.
 - `--no-async-compute` reproduces Step 7's graphics submission byte for byte.
+
+**DONE 2026-08-29, uncommitted. `Main_RTTrace` runs on the async compute queue.**
+
+**The acceptance criterion, met exactly:** the two-track trace shows `Pass_RTTrace` **100 % overlapped**
+(mean and median, 123 frames), and its partner is **`Pass_VsmPageRender`** — the pass this plan named
+in advance. 25 393 us of overlap with it across the capture.
+
+**Two real fixes, both found by measurement rather than review:**
+
+1. **The D7 hand-over, discovered by the Step 7 guard.** The first run failed with
+   `pass 'RTTrace' (ASYNC COMPUTE) takes res=Deferred[0].GB1 ... left it in 0x4` — gb1 was still a
+   RENDER_TARGET. A consumer normally acquires for itself, and that is exactly what cannot work
+   here: the acquire's BEFORE state would be direct-queue-only, on a compute list. So the graphics
+   side hands over, in a pass RTTrace explicitly depends on. `Main_Hzb` now declares gb1 NON_PIXEL
+   (its only declaration for a resource it does not use — a hand-over, exactly as the guard's
+   message prescribes), `Main_VsmPageRequest` and `Main_Hzb` declare depth NON_PIXEL, and RTTrace
+   gained a **prereq on `pHzb`**. Before the move RTTrace acquired both itself and worked only
+   because it happened to be scheduled after the G-buffer's other readers — incidental ordering, not
+   a dependency. The async move turned that latent fragility into a named error.
+2. **The fence was correct but COARSE, and the trace said so.** The first submit loop signalled the
+   producer queue at the moment the *consumer* segment was submitted, which means "everything
+   submitted to that queue so far" — far more than the graph asked for. Result: 52 % overlap, with
+   `Pass_PointLights`/`Pass_SpotLights` as partners instead of `Pass_VsmPageRender`. The fix: cut a
+   segment boundary after any batch that someone waits FOR, and signal there. 52 % -> **100 %**, and
+   the partner became the right one. **A fence edge is not "signal before the wait" — it is "signal
+   immediately after the producer".**
+
+**`barriers::` finally learned the queue (R10 predicted this).** `NON_PIXEL_SHADER_RESOURCE`
+translates to `SYNC_VERTEX_SHADING | SYNC_COMPUTE_SHADING`, and the vertex stage does not exist on a
+compute queue — D3D12 reports that not at the barrier but as a bare `Close() failed` naming nothing.
+`EmitEnhanced` now narrows the sync mask when the target list is COMPUTE (read off `cl7->GetType()`,
+no plumbing) and REFUSES — falling back to the legacy barrier — if narrowing would empty a non-empty
+scope, because a barrier that waits for nothing is a race, not a saving.
+
+**Results.** All three gates `verdict: CLEAN`, 0 MISSING, no invariant failures, `legacy=0` (the
+enhanced path handled the compute-queue barriers; nothing fell back). The `--no-async-compute` gate
+is CLEAN too. Barrier count 7892, unchanged from the Step 6/7 control.
+
+**Perf: no regression, and no win either — the predicted outcome, not a disappointment.** A/B
+**inside one binary** via `--no-async-compute`, interleaved A/B/A/B:
+
+| | async OFF | async ON |
+|---|---|---|
+| wall-clock (CPU frame) | 3256 us | 3281 us (**+0.8 %**) |
+| run-to-run spread | 0.9 % | 0.1 % |
+| `Pass_RTTrace` | 128 us | **212 us (+84)** |
+| `Pass_VsmPageRender` | 550 us | **588 us (+38)** |
+
++0.8 % against a 0.9 % spread is inside the noise, which is the bar. Why there is no win is visible
+in the table: 128 us left the serial chain, and contention put +84 back into RTTrace and +38 into the
+pass it overlaps. **Both queues share the same shader cores** — the risk this plan registered, now
+measured rather than assumed.
+
+**Visual parity holds, and the FLOOR had to be measured twice to say so.** One same-config control
+pair gave 0.881 % of pixels differing by >8 against 2.060 % across configs, which reads as a
+regression. A second floor sample (OFF vs OFF) gave **1.853 %**, and the three cross-config pairs
+span 0.812-2.060 %. The cross differences sit inside the same-config range: this scene's RT dither
+and DLSS history make run-to-run variation large, and **one control pair is not a floor**.
+
+**One honest deviation from the acceptance text.** `--no-async-compute` restores a 26-list graphics
+submission with no compute segment, but the pass ORDER differs from Step 6's dump: RTTrace sits two
+places later. That is the new `pHzb` prereq — a deliberate correctness fix — not the flag failing.
+Byte-identity to Step 6 is not claimable and is not claimed.
+
+**Still not observed firing: the emission-side backstop** (Step 5's fourth rule). It is now on the
+live path — RTTrace really does emit compiled barriers on a compute list every frame — and it stayed
+silent, which is the correct outcome for a correct configuration.
+
+**A BUILD TRAP worth the rule.** Adding a member to `SubmitTimeline` and to `Renderer` (both widely
+included headers, so both a class-LAYOUT change) and then building INCREMENTALLY produced a Release
+binary that failed `RegisterDirect: batch index outside the active range` on every run, while Debug
+was clean. A full `/t:Rebuild` made it disappear (10 consecutive clean runs). The bad binary is gone
+so this cannot be proven retroactively, but the shape is a stale-object layout mismatch, not a race.
+**After adding a member to a widely-included header, do a full Rebuild before trusting a Release
+run** — and note that the first three failures looked perfectly deterministic.
 
 ### Step 9 — split `Main_ObjectCompute` by consumer, still all on Graphics (inert)
 

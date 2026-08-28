@@ -428,6 +428,42 @@ bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
     std::uint32_t texCount = 0;
     std::uint32_t bufCount = 0;
 
+    // Async-compute plan step 8 — the translation finally learns the QUEUE (R10 predicted this).
+    //
+    // The table maps a legacy STATE to the widest correct pipeline scope, which on the direct queue
+    // is right: NON_PIXEL_SHADER_RESOURCE becomes VERTEX_SHADING|COMPUTE_SHADING. On a COMPUTE
+    // queue the vertex stage does not exist, so that same sync scope is illegal — and D3D12 reports
+    // it not at the barrier but at Close(), as a bare "Close() failed" with no resource named.
+    //
+    // Read off the command list itself rather than plumbed in, exactly like step 3's queue labelling
+    // and step 5's emission backstop: the truth is in the thing doing the recording.
+    const bool computeQueue = (cl7->GetType() == D3D12_COMMAND_LIST_TYPE_COMPUTE);
+    // Everything a compute queue can actually wait on or signal. NONE and SPLIT are control values
+    // rather than stages and stay legal; ALL is the catch-all the runtime narrows itself.
+    constexpr D3D12_BARRIER_SYNC kComputeQueueSync = static_cast<D3D12_BARRIER_SYNC>(
+        D3D12_BARRIER_SYNC_NONE |
+        D3D12_BARRIER_SYNC_ALL |
+        D3D12_BARRIER_SYNC_COMPUTE_SHADING |
+        D3D12_BARRIER_SYNC_COPY |
+        D3D12_BARRIER_SYNC_EXECUTE_INDIRECT |
+        D3D12_BARRIER_SYNC_RAYTRACING |
+        D3D12_BARRIER_SYNC_SPLIT |
+        D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE |
+        D3D12_BARRIER_SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE |
+        D3D12_BARRIER_SYNC_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO |
+        D3D12_BARRIER_SYNC_CLEAR_UNORDERED_ACCESS_VIEW);
+    // Narrow, or REFUSE. Refusing falls back to the legacy ResourceBarrier, which is always correct
+    // — a gap in this table must never become a lost barrier. Dropping every bit of a non-empty
+    // scope would silently widen the barrier to "no wait at all", which is a race, so that case
+    // refuses rather than narrows.
+    auto narrowSync = [&](D3D12_BARRIER_SYNC sync, bool& refused) {
+        if (!computeQueue) { return sync; }
+        const D3D12_BARRIER_SYNC narrowed = static_cast<D3D12_BARRIER_SYNC>(sync & kComputeQueueSync);
+        if (sync != D3D12_BARRIER_SYNC_NONE && narrowed == D3D12_BARRIER_SYNC_NONE) { refused = true; }
+        return narrowed;
+    };
+    bool refusedSync = false;
+
     for (std::uint32_t i = 0; i < count; ++i) {
         const D3D12_RESOURCE_BARRIER& b = entries[i];
         // Only TRANSITIONs are compiled today. Anything else (UAV, aliasing) belongs to step 13.
@@ -442,8 +478,8 @@ bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
 
         if (asBuffer) {
             D3D12_BUFFER_BARRIER& out = buf[bufCount++];
-            out.SyncBefore = before.sync;
-            out.SyncAfter = after.sync;
+            out.SyncBefore = narrowSync(before.sync, refusedSync);
+            out.SyncAfter = narrowSync(after.sync, refusedSync);
             out.AccessBefore = before.access;
             out.AccessAfter = after.access;
             out.pResource = res;
@@ -458,8 +494,8 @@ bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
                 return false;
             }
             D3D12_TEXTURE_BARRIER& out = tex[texCount++];
-            out.SyncBefore = before.sync;
-            out.SyncAfter = after.sync;
+            out.SyncBefore = narrowSync(before.sync, refusedSync);
+            out.SyncAfter = narrowSync(after.sync, refusedSync);
             out.AccessBefore = before.access;
             out.AccessAfter = after.access;
             out.LayoutBefore = before.layout;
@@ -475,6 +511,11 @@ bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
             out.Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE;
         }
     }
+
+    // Step 8: a sync scope that narrowed to NOTHING on the compute queue would be a barrier that
+    // waits for nothing — a race, not a saving. Refuse the whole point and let the caller fall back
+    // to the legacy ResourceBarrier, which the runtime scopes for itself.
+    if (refusedSync) { return false; }
 
     // One group per TYPE — D3D12 requires a group to be homogeneous.
     D3D12_BARRIER_GROUP groups[2]{};
