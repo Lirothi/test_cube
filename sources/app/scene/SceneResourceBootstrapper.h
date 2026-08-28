@@ -778,6 +778,8 @@ public:
     std::shared_ptr<Material> GetOceanReflectionMaterial() const { return matOceanReflection_; }
     std::shared_ptr<Material> GetBlurMaterial() const { return matBlur_; }
     std::shared_ptr<Material> GetDebugMaterial() const { return matDebug_; }
+    // RW: rt_wind_deform_cs PSO (null on non-RT HW / before Finalize).
+    std::shared_ptr<Material> GetRtWindDeformMaterial() const { return matRtWindDeform_; }
     std::shared_ptr<Material> GetRtDebugMaterial() const { return matRtDebug_; } // S6, null on non-RT HW
     std::shared_ptr<Material> GetRtReflectMaterial() const { return matRtReflect_; } // S7, null on non-RT HW
     std::shared_ptr<Material> GetGlassReflPrepassMaterial() const { return matGlassReflPrepass_; } // S15b, null on non-RT HW
@@ -867,7 +869,8 @@ private:
     std::shared_ptr<Material> matBlur_;
     std::shared_ptr<Material> matDebug_;
     std::shared_ptr<Material> matRtDebug_;   // S6 RT debug viz (RayQuery cs_6_5); only on RT HW
-    std::shared_ptr<Material> matRtReflect_;  // S7 Tier-1 RT reflections (RayQuery cs_6_5); only on RT HW
+    std::shared_ptr<Material> matRtReflect_;
+    std::shared_ptr<Material> matRtWindDeform_; // RW wind deform for dynamic BLASes  // S7 Tier-1 RT reflections (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matGlassReflPrepass_; // S15b glass refl G-buffer prepass; only on RT HW
 #if WITH_EDITOR
     std::shared_ptr<Material> matSelectionOutlineCS_;

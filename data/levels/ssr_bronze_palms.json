@@ -243,7 +243,7 @@
         1.0499999523162842
       ],
       "type": "staticMesh",
-      "windStrength": 0.0
+      "windStrength": 1.0
     },
     {
       "enabled": true,
@@ -1577,7 +1577,7 @@
         0.7799999713897705
       ],
       "type": "staticMesh",
-      "windStrength": 0.0
+      "windStrength": 1.0
     },
     {
       "enabled": true,
@@ -1831,13 +1831,13 @@
   "spotLights": [],
   "wind": {
     "directionDeg": 90.0,
-    "foliageSwayMeters": 0.0,
+    "foliageSwayMeters": 1.2000000476837158,
     "gust": {
       "amplitude": 0.0,
       "frequencyHz": 0.1,
       "seed": 3
     },
-    "strength": 0.0,
+    "strength": 1.0,
     "swayFrequency": 1.2
   }
 }

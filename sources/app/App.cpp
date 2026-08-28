@@ -314,6 +314,11 @@ namespace
         if (setting == "ssr.temporal")   { renderSettings.ssrTemporal = value != 0.0f; return true; }
         // Stochastic coverage inflation for the RT foliage alpha test (0 honest .. 1 solid cards).
         if (setting == "rt.alphaMissKeep") { renderSettings.rtAlphaMissKeep = value; return true; }
+        // The HARD kill switch for the RT foliage alpha test (0 = FORCE_OPAQUE traversal).
+        if (setting == "rt.alphaTest") { renderSettings.rtAlphaTest = value != 0.0f; return true; }
+        // RW: wind-deformed BLASes for near casters (sway in RT reflections) + their radius.
+        if (setting == "rt.windBlas") { renderSettings.rtWindBlas = value != 0.0f; return true; }
+        if (setting == "rt.windRadius") { renderSettings.rtWindBlasRadius = value; return true; }
         if (setting == "ssr.temporalBlend") { renderSettings.ssrTemporalBlendWeight = value; return true; }
         if (setting == "ssr.temporalClampExpand") { renderSettings.ssrTemporalClampExpand = value; return true; }
         if (setting == "ssr.ueQuality")

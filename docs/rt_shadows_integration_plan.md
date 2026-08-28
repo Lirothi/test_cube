@@ -391,6 +391,28 @@ report the dependency instead of silently widening the change.
 
 ### RW — Wind-deformed casters in the BVH (deform pass + per-instance updatable BLAS)
 
+**STATUS 2026-08-28 — NEAR-TIER SUBSET IMPLEMENTED (for RT reflections; an RT shadow pass will
+inherit it).** What shipped: `shaders/rt_wind_deform_cs.hlsl` (includes `wind.hlsli`, calls
+`WindOffset` with the gbuffer VS's exact argument sourcing, writes a packed float3 position
+stream in OBJECT space so the TLAS transform applies once); a 24-slot dynamic-BLAS pool in
+`AccelerationStructureManager` (ALLOW_UPDATE + PREFER_FAST_BUILD, per-slot persistent scratch,
+staggered full rebuild every 16 frames, **LOD 1 index buffer** — LODs share the base VB so the
+deformed positions apply unchanged); stable owner->slot binding + nearest-first selection within
+40 m in `RtSceneAs` (CPU-placed single-instance casters only; GPU-instanced clouds stay
+rest-pose). Hit shading keeps reading the STATIC vertex buffer through the bindless table — UVs
+do not move with sway and stale normals on a bent frond are invisible at reflection res.
+Phase bucketing and the mid tier are still TODO for grove-scale RT shadows.
+
+**Measured (ssr_bronze_palms wind bench, 66 palms, 24 animated, Release):** whole frame 1.40 ms
+vs 1.11 ms with the AS pass off — **~0.29 ms for deform + 24 BLAS refits + trace delta**, inside
+this plan's budgeted model. Two costs the model undersold, both fixed en route: (1) interleaving
+each build with its own barrier SERIALIZED the GPU at ~34 us/palm — batching all stream
+transitions before the builds and all AS-read barriers after them cut 0.60 ms; (2) LOD 0 refits
+were fine but pointless — LOD 1 is free quality-wise at reflection res. Reflected crowns sway in
+lockstep with the raster (live series: direct-crown frame diff 4.8/3.8/5.1 vs reflections
+3.4/3.1/3.9 — the reflection tracks at ~75% through the half-res blur chain).
+
+
 - **Depends:** R3 (a rest-pose RT shadow that is already alpha-correct, so this step's only variable is
   the pose).
 - **Goal:** Make RT shadows track the wind sway, i.e. put the deformed geometry into the BVH. Without

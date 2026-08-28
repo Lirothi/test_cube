@@ -71,7 +71,7 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
             [this, renderer](RenderGraphPassContext&) -> std::function<void(RenderGraphPassContext)> {
                 return [this, renderer](RenderGraphPassContext c) {
                     CPU_SCOPE(ProfilerScopes::kPassBuildAS);
-                    rtAs_.Build(renderer, c, *frame_);
+                    rtAs_.Build(renderer, c, *frame_, resources_.GetRtWindDeformMaterial().get());
                 };
             });
     }

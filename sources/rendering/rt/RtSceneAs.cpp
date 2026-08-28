@@ -13,9 +13,12 @@
 #include <cstring>
 #include <vector>
 
+#include "app/camera/Camera.h"
 #include "app/scene/SceneFrameData.h"
+#include "vfx/WindState.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/renderables/GBufferRenderable.h"
 #include "rendering/renderables/RenderableObject.h"
@@ -51,6 +54,7 @@ namespace
 
 void RtSceneAs::Reset()
 {
+    windSlotOwner_.fill(nullptr);
     // Drop cached BLAS/TLAS — their Mesh* keys become dangling across a level reload. Re-inited
     // lazily on the next RT-enabled frame.
     asManager_.Reset();
@@ -81,8 +85,22 @@ void RtSceneAs::EnsureInit(Renderer* renderer)
     asManagerInited_ = true;
 }
 
+namespace
+{
+    // Mirrors the `Deform` cbuffer in rt_wind_deform_cs.hlsl (row-major matrices, 16B rows).
+    struct RtWindDeformCB
+    {
+        Math::mat4 world;
+        Math::mat4 invWorld;
+        Math::float2 windDirXZ; float swayAmp = 0.0f; float swayFreq = 0.0f;
+        float gustMul = 1.0f; float timeSec = 0.0f; float windStrength = 0.0f; float trunkStiff = 1.0f;
+        float leafScale = 0.0f; float foliage = 0.0f; uint32_t vertexCount = 0; uint32_t vertexStride = 0;
+    };
+
+}
+
 void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
-                      const SceneFrameData& frame)
+                      const SceneFrameData& frame, Material* windDeformMat)
 {
     if (!renderer)
     {
@@ -103,6 +121,9 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
     // (S14) and transparent/glass (S15) also return false from GetRtInstance today;
     // bringing each into RT is its own step.
     rtInstances_.clear();
+    // RW: the deform/refit recording plan for this frame -- (slot, entryIndex, gb).
+    struct WindPlanEntry { UINT slot; size_t entryIndex; GBufferRenderable* gb; };
+    std::vector<WindPlanEntry> windPlan;
     if (frame.objects)
     {
         const auto& objects = *frame.objects;
@@ -112,6 +133,21 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
         }
         uint32_t instanceId = 0;
         std::vector<RtInstanceDesc> descs; // reused across objects this frame
+        // RW: near wind casters collected during the gather; the deform + refit recording below
+        // patches their entries with a per-instance deformed BLAS.
+        const bool windActive = frame.settings.rtWindBlas && frame.wind && frame.wind->active &&
+                                frame.wind->swayAmplitude > 0.0f && windDeformMat != nullptr &&
+                                windDeformMat->GetPipelineState() != nullptr;
+        const Math::float3 camPos = frame.camera ? frame.camera->GetPosition() : Math::float3{};
+        // Radius from the settings; the WIDE radius is the hysteresis band -- an owner keeps its
+        // slot while inside it, newcomers are admitted only from the tight one. Without the band,
+        // palms at near-equal distances churn the binding every frame (rebuild storms, and the
+        // fence-retired buffer bin never drains because something new retires every frame).
+        const float tightR = std::clamp(frame.settings.rtWindBlasRadius, 0.0f, 200.0f);
+        const float tightR2 = tightR * tightR;
+        const float wideR2 = tightR2 * (1.2f * 1.2f);
+        struct WindCandidate { size_t entryIndex; GBufferRenderable* gb; float distSq; bool tight; };
+        std::vector<WindCandidate> windCandidates;
         // wind_test has hundreds of identical multi-slot palms. Keep this scratch allocation
         // across objects instead of allocating/freeing a 4-5 element vector for every palm.
         std::vector<rt::BindlessTable::SlotMaterial> slotMats;
@@ -238,8 +274,65 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                         : instanceId;
                 }
                 if (entry.instanceId == rt::BindlessTable::kInvalidGeometry) { break; }
+                // RW: a CPU-placed single-instance wind caster near the camera is a candidate for
+                // a deformed BLAS. GPU-instanced clouds (descCount > 1) are excluded -- their
+                // per-instance transforms stream from the GPU side and stay rest-pose for now.
+                if (windActive && descCount == 1 && gb && desc.mesh == gb->GetMesh() &&
+                    gb->EffectiveWindStrength(gb->GetWindStrength()) > 0.0f)
+                {
+                    const Math::float3 d(entry.world._41 - camPos.x, entry.world._42 - camPos.y,
+                                         entry.world._43 - camPos.z);
+                    const float distSq = d.x * d.x + d.y * d.y + d.z * d.z;
+                    if (distSq < wideR2)
+                    {
+                        windCandidates.push_back({ rtInstances_.size(), gb, distSq,
+                                                   distSq < tightR2 });
+                    }
+                }
                 rtInstances_.push_back(entry);
                 ++instanceId;
+            }
+        }
+
+        // RW slot binding with HYSTERESIS: existing owners keep their slot while inside the
+        // wide radius (they refit, never rebuild); slots free only when the owner leaves the
+        // band or disappears; newcomers are admitted nearest-first from the tight radius into
+        // whatever slots remain.
+        {
+            constexpr UINT kSlots = rt::AccelerationStructureManager::kMaxWindBlasSlots;
+            for (UINT sIdx = 0; sIdx < kSlots; ++sIdx)
+            {
+                const void* owner = windSlotOwner_[sIdx];
+                if (!owner) { continue; }
+                bool still = false;
+                for (const WindCandidate& c : windCandidates)
+                {
+                    if (static_cast<const void*>(c.gb) == owner) { still = true; break; }
+                }
+                if (!still) { windSlotOwner_[sIdx] = nullptr; }
+            }
+            std::sort(windCandidates.begin(), windCandidates.end(),
+                      [](const WindCandidate& a, const WindCandidate& b)
+                      { return a.distSq < b.distSq; });
+            for (const WindCandidate& c : windCandidates)
+            {
+                UINT slot = kSlots;
+                for (UINT sIdx = 0; sIdx < kSlots; ++sIdx)
+                {
+                    if (windSlotOwner_[sIdx] == static_cast<const void*>(c.gb)) { slot = sIdx; break; }
+                }
+                if (slot == kSlots)
+                {
+                    if (!c.tight) { continue; } // newcomers only from the tight radius
+                    for (UINT sIdx = 0; sIdx < kSlots; ++sIdx)
+                    {
+                        if (!windSlotOwner_[sIdx]) { windSlotOwner_[sIdx] = c.gb; slot = sIdx; break; }
+                    }
+                }
+                if (slot < kSlots)
+                {
+                    windPlan.push_back({ slot, c.entryIndex, c.gb });
+                }
             }
         }
     }
@@ -262,6 +355,96 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
         ID3D12GraphicsCommandList4* cl4 = renderer->AsCmdList4(t.cl);
         if (cl4)
         {
+            // RW: deform the near wind casters and build/refit their per-instance BLASes
+            // BEFORE the TLAS references them. Two loops on purpose: all deform dispatches
+            // first (one PSO bind, and they can overlap on the GPU), then the builds.
+            if (!windPlan.empty())
+            {
+                renderer->BindDescriptorHeaps(t.cl); // the staged SRV/UAV tables live there
+                t.cl->SetComputeRootSignature(windDeformMat->GetRootSignature());
+                t.cl->SetPipelineState(windDeformMat->GetPipelineState());
+                std::vector<uint8_t> planOk(windPlan.size(), 0);
+                for (size_t w = 0; w < windPlan.size(); ++w)
+                {
+                    const WindPlanEntry& pe = windPlan[w];
+                    Mesh* mesh = rtInstances_[pe.entryIndex].mesh;
+                    D3D12_CPU_DESCRIPTOR_HANDLE srcSrvCpu{};
+                    D3D12_CPU_DESCRIPTOR_HANDLE dstUavCpu{};
+                    UINT vertexCount = 0;
+                    if (!asManager_.PrepareWindSlot(pe.slot, mesh, cl4, srcSrvCpu, dstUavCpu,
+                                                    vertexCount))
+                    {
+                        continue;
+                    }
+                    planOk[w] = 1;
+
+                    RtWindDeformCB cb{};
+                    cb.world = Math::mat4(rtInstances_[pe.entryIndex].world);
+                    cb.invWorld = Math::mat4::Inverse(cb.world);
+                    cb.windDirXZ = frame.wind->windDirXZ;
+                    cb.swayAmp = frame.wind->swayAmplitude;
+                    cb.swayFreq = frame.wind->swayFrequency;
+                    cb.gustMul = frame.wind->gustMul;
+                    cb.timeSec = frame.wind->time;
+                    cb.windStrength = pe.gb->EffectiveWindStrength(pe.gb->GetWindStrength());
+                    cb.trunkStiff = pe.gb->GetWindTrunkStiffness();
+                    cb.leafScale = pe.gb->GetWindLeafScaleWorld();
+                    float foliage = 0.0f;
+                    for (size_t slotIdx = 0; slotIdx < pe.gb->SlotCount(); ++slotIdx)
+                    {
+                        foliage = std::max(foliage, pe.gb->FoliageForSlot(slotIdx));
+                    }
+                    cb.foliage = foliage;
+                    cb.vertexCount = vertexCount;
+                    cb.vertexStride = mesh->GetVertexStride();
+
+                    auto alloc = renderer->GetFrameResource()->AllocDynamic(
+                        sizeof(RtWindDeformCB), render::kConstantBufferAlignment);
+                    std::memcpy(alloc.cpu, &cb, sizeof(cb));
+                    t.cl->SetComputeRootConstantBufferView(0, alloc.gpu);
+                    t.cl->SetComputeRootDescriptorTable(
+                        1, renderer->StageSrvUavTable({ srcSrvCpu }).gpu);
+                    t.cl->SetComputeRootDescriptorTable(
+                        2, renderer->StageSrvUavTable({ dstUavCpu }).gpu);
+                    t.cl->Dispatch((vertexCount + 63u) / 64u, 1, 1);
+                }
+                // ONE batched transition for every deformed stream, then all builds
+                // back-to-back, then the AS-read barriers together: interleaving build+barrier
+                // per slot serialized the GPU at ~34 us/palm; batched, the builds pipeline.
+                std::vector<D3D12_RESOURCE_BARRIER> streamBarriers;
+                streamBarriers.reserve(windPlan.size());
+                for (size_t w = 0; w < windPlan.size(); ++w)
+                {
+                    if (planOk[w] == 0) { continue; }
+                    D3D12_RESOURCE_BARRIER b{};
+                    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                    b.Transition.pResource = asManager_.WindStreamResource(windPlan[w].slot);
+                    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                    b.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                    b.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                    streamBarriers.push_back(b);
+                }
+                if (!streamBarriers.empty())
+                {
+                    t.cl->ResourceBarrier(static_cast<UINT>(streamBarriers.size()),
+                                          streamBarriers.data());
+                }
+                for (size_t w = 0; w < windPlan.size(); ++w)
+                {
+                    if (planOk[w] == 0) { continue; }
+                    const WindPlanEntry& pe = windPlan[w];
+                    const D3D12_GPU_VIRTUAL_ADDRESS blasVa = asManager_.BuildOrRefitWindSlot(
+                        pe.slot, rtInstances_[pe.entryIndex].nonOpaqueSlots, frameNo, cl4);
+                    rtInstances_[pe.entryIndex].blasOverride = blasVa;
+                }
+                for (size_t w = 0; w < windPlan.size(); ++w)
+                {
+                    if (planOk[w] == 0) { continue; }
+                    barriers::EmitAccelerationStructureBuildBarrier(
+                        cl4, asManager_.WindBlasResource(windPlan[w].slot));
+                }
+            }
+
             // BuildTlas records the zero count as well. That prevents a reused
             // frame slot from exposing a previous frame's TLAS after the last
             // visible RT instance is disabled.

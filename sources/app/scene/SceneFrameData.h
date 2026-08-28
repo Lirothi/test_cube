@@ -462,6 +462,17 @@ struct SceneRenderSettings
     // thin fronds and the reflected crown reads smaller than the real one; this inflates
     // coverage back. 0 = honest cutout, 1 = the old solid cards.
     float rtAlphaMissKeep = 0.15f;
+    // The HARD kill switch for the RT foliage alpha test: off = rays trace with
+    // RAY_FLAG_FORCE_OPAQUE, no candidates ever surface, foliage reflects/occludes as solid
+    // cards -- the pre-alpha-test cost profile, for scenes where the traversal price bites.
+    bool rtAlphaTest = true;
+    // RW: wind-deformed per-instance BLASes for near casters, so foliage sway reaches RT
+    // reflections (and later RT shadows). Off = every caster reflects its rest pose.
+    bool rtWindBlas = true;
+    // Casters inside this radius get a deformed BLAS (nearest-first, capped by the slot pool);
+    // beyond it the sway is sub-pixel in a reflection and the shared static BLAS stands -- the
+    // same near-only rule the VSM applies by keeping wind rigid beyond clipmap L2.
+    float rtWindBlasRadius = 40.0f;
     // Reflection temporal resolve, BOTH sources. A screen-space ray is violently sensitive to its
     // own start, so under DLSS's per-frame jitter the raw buffer boils even with a still camera;
     // RT at half reflection res boils the same way once reflected foliage is subpixel. Unreal

@@ -802,6 +802,12 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 
                 ImGui::BeginDisabled(!rtSupported);
+                ImGui::Checkbox("RT foliage alpha test", &settings.rtAlphaTest);
+                DevHelp("The HARD kill switch for masked foliage in RT: off = rays trace with "
+                        "FORCE_OPAQUE, no alpha candidates ever surface, and the traversal cost "
+                        "drops to the pre-alpha-test opaque path. Foliage then reflects and "
+                        "occludes as solid cards. Headless: --set=rt.alphaTest.");
+                ImGui::BeginDisabled(!settings.rtAlphaTest);
                 ImGui::SetNextItemWidth(140.0f);
                 ImGui::SliderFloat("RT foliage fill", &settings.rtAlphaMissKeep, 0.0f, 1.0f, "%.2f");
                 DevHelp("Stochastic coverage inflation for the RT alpha test. One sharp ray per "
@@ -810,6 +816,19 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "kept with this probability, re-rolled per pixel per frame -- the temporal "
                         "resolve averages the dither back into density. 0 = honest cutouts, "
                         "1 = the old solid cards. Headless: --set=rt.alphaMissKeep:<v>.");
+                ImGui::EndDisabled();
+                ImGui::Checkbox("RT wind sway", &settings.rtWindBlas);
+                DevHelp("Wind-deform the nearest casters' BLASes every frame so foliage sway "
+                        "reaches RT reflections. Off = reflections show the rest pose. "
+                        "Cost scales with the animated set (~0.3 ms for 24 palms). Headless: "
+                        "--set=rt.windBlas.");
+                ImGui::BeginDisabled(!settings.rtWindBlas);
+                ImGui::SetNextItemWidth(140.0f);
+                ImGui::SliderFloat("RT wind radius", &settings.rtWindBlasRadius, 0.0f, 100.0f, "%.0f m");
+                DevHelp("Casters inside this radius sway in RT (nearest-first, 24-slot cap); "
+                        "beyond it the shared rest-pose BLAS stands. Headless: "
+                        "--set=rt.windRadius.");
+                ImGui::EndDisabled();
                 ImGui::Checkbox("RT debug view -> Reflection target [F6]", &settings.rtDebugView);
                 ImGui::EndDisabled();
                 if (rtSupported && settings.rtDebugView)

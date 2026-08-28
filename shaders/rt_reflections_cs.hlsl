@@ -52,7 +52,11 @@ cbuffer Probe : register(b0)
     // depth); for opaque reflections screenDepthIndex == depthIndex.
     // alphaMissKeep: stochastic coverage inflation for the foliage alpha test (see
     // RtAlphaCandidatePasses); frameSeed is FROZEN by the CPU (see the fill site).
-    uint screenDepthIndex; float alphaMissKeep; uint frameSeed; uint _padS2;
+    // alphaTestOff: the HARD alpha kill switch -- 1 adds RAY_FLAG_FORCE_OPAQUE at trace time,
+    // which suppresses every non-opaque candidate at the traversal level (the loops below simply
+    // never iterate), so the cost drops to the pre-alpha-test opaque path without touching the
+    // BLAS flags. Foliage then reflects/occludes as solid cards again.
+    uint screenDepthIndex; float alphaMissKeep; uint frameSeed; uint alphaTestOff;
 }
 
 SamplerState gSmp      : register(s0);
@@ -71,7 +75,7 @@ float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 
     // or every leaf quad occludes as a solid card. Opaque geometry still never surfaces as a
     // candidate, and committing any passing candidate ends the search (ACCEPT_FIRST_HIT).
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> sq;
-    sq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, sray);
+    sq.TraceRayInline(tlas, alphaTestOff != 0u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, sray);
     StructuredBuffer<GeometryInfo> sgeom = ResourceDescriptorHeap[geomInfoIndex];
     while (sq.Proceed())
     {
@@ -99,7 +103,7 @@ bool TraceReflection(float3 origin, float3 dir, float3 camPos, float tMin, uint 
     // Part C: FORCE_OPAQUE dropped so masked foliage alpha-tests instead of reflecting as solid
     // quads. A committed candidate shrinks TMax and traversal continues to the true closest hit.
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, ray);
+    q.TraceRayInline(tlas, alphaTestOff != 0u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, ray);
     StructuredBuffer<GeometryInfo> cgeom = ResourceDescriptorHeap[geomInfoIndex];
     while (q.Proceed())
     {

@@ -47,8 +47,14 @@ public:
 
     // W3: per-object wind sway strength (0 = rigid). Set pre-Init by the factory from the level
     // JSON "windStrength"; ResolveMaterialSlots writes it UNIFORMLY into every slot's MaterialParams
-    // so all submeshes of a tree sway in lockstep (it is NOT a per-slot override).
-    void SetWindStrength(float w) { windStrength_ = w; }
+    // so all submeshes of a tree sway in lockstep (it is NOT a per-slot override). A post-Init call
+    // (the editor inspector) re-propagates to every slot itself for the same lockstep reason —
+    // touching only slot 0 would sway the fronds while the bark stands still.
+    void SetWindStrength(float w)
+    {
+        windStrength_ = w;
+        for (MaterialParams& mp : matParamses_) { mp.windStrength = w; }
+    }
     float GetWindStrength() const { return windStrength_; }
 
     // Per-ASSET wind tuning (mesh.json, overridable per object in the level JSON).

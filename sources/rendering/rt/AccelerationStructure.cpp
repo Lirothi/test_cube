@@ -153,6 +153,196 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, uint64_t no
     return slot;
 }
 
+void AccelerationStructureManager::EnsureWindDescHeap()
+{
+    if (windDescHeap_ || !device5_) { return; }
+    D3D12_DESCRIPTOR_HEAP_DESC desc{};
+    desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    desc.NumDescriptors = kMaxWindBlasSlots * 2;
+    desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only; staged into the frame heap per use
+    if (SUCCEEDED(device5_->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&windDescHeap_)))) {
+        windDescIncrement_ =
+            device5_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+}
+
+bool AccelerationStructureManager::PrepareWindSlot(UINT slot, Mesh* mesh,
+                                                   ID3D12GraphicsCommandList4* cmdList4,
+                                                   D3D12_CPU_DESCRIPTOR_HANDLE& srcVbSrvCpu,
+                                                   D3D12_CPU_DESCRIPTOR_HANDLE& dstUavCpu,
+                                                   UINT& vertexCount)
+{
+    srcVbSrvCpu = {};
+    dstUavCpu = {};
+    vertexCount = 0;
+    if (!device5_ || !cmdList4 || !mesh || slot >= kMaxWindBlasSlots) { return false; }
+    ID3D12Resource* vb = mesh->GetVertexBufferResource();
+    const UINT stride = mesh->GetVertexStride();
+    if (!vb || stride == 0) { return false; }
+    EnsureWindDescHeap();
+    if (!windDescHeap_) { buildFailed_ = true; return false; }
+
+    WindBlasSlot& s = windSlots_[slot];
+    const UINT count = static_cast<UINT>(vb->GetDesc().Width / stride);
+    if (s.mesh != mesh || s.vertexCount != count || !s.deformedVb)
+    {
+        // Mesh (re)assignment. The old stream/BLAS/scratch may still be REFERENCED IN FLIGHT --
+        // the previous frames' TLASes point at the old BLAS and their command lists read the old
+        // stream -- so they retire through the same fence-guarded bin as one-time BLAS scratch
+        // instead of being destroyed here. Releasing them inline was a live device removal on
+        // wind_test: 610 palms at near-equal distances churned the slot binding every frame.
+        if (s.deformedVb) { pendingScratch_.push_back(std::move(s.deformedVb)); }
+        if (s.blas) { pendingScratch_.push_back(std::move(s.blas)); }
+        if (s.scratch) { pendingScratch_.push_back(std::move(s.scratch)); }
+        s.deformedVb = CreateUavBuffer(device5_, static_cast<UINT64>(count) * 12ull,
+                                       D3D12_RESOURCE_STATE_COMMON);
+        if (!s.deformedVb) { buildFailed_ = true; return false; }
+        s.mesh = mesh;
+        s.vertexCount = count;
+        s.builtOnce = false;
+        s.blasSize = 0;
+        s.scratchSize = 0;
+
+        // (Re)write the slot's descriptor pair: raw SRV over the source VB, raw UAV over the
+        // position stream. Raw views address in 4-byte units.
+        D3D12_CPU_DESCRIPTOR_HANDLE base = windDescHeap_->GetCPUDescriptorHandleForHeapStart();
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCpu{ base.ptr + static_cast<SIZE_T>(slot) * 2 * windDescIncrement_ };
+        D3D12_CPU_DESCRIPTOR_HANDLE uavCpu{ srvCpu.ptr + windDescIncrement_ };
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format = DXGI_FORMAT_R32_TYPELESS;
+        srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Buffer.NumElements = static_cast<UINT>(vb->GetDesc().Width / 4ull);
+        srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+        device5_->CreateShaderResourceView(vb, &srv, srvCpu);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.Format = DXGI_FORMAT_R32_TYPELESS;
+        uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uav.Buffer.NumElements = count * 3u;
+        uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+        device5_->CreateUnorderedAccessView(s.deformedVb.Get(), nullptr, &uav, uavCpu);
+    }
+
+    // No barrier here ON PURPOSE: buffers DECAY to COMMON at every ExecuteCommandLists, so at
+    // the top of this (first-in-frame) pass the stream is always COMMON and the deform's UAV
+    // write promotes it. Tracking its state across frames would assert a StateBefore the
+    // resource no longer holds.
+    D3D12_CPU_DESCRIPTOR_HANDLE base = windDescHeap_->GetCPUDescriptorHandleForHeapStart();
+    srcVbSrvCpu = { base.ptr + static_cast<SIZE_T>(slot) * 2 * windDescIncrement_ };
+    dstUavCpu = { srcVbSrvCpu.ptr + windDescIncrement_ };
+    vertexCount = s.vertexCount;
+    return true;
+}
+
+D3D12_GPU_VIRTUAL_ADDRESS AccelerationStructureManager::BuildOrRefitWindSlot(
+    UINT slot, uint64_t nonOpaqueSlots, uint64_t frameNumber, ID3D12GraphicsCommandList4* cmdList4)
+{
+    if (!device5_ || !cmdList4 || slot >= kMaxWindBlasSlots) { return 0; }
+    WindBlasSlot& s = windSlots_[slot];
+    if (!s.deformedVb || !s.mesh) { return 0; }
+
+    // The caller batched the UAV->NON_PIXEL transitions for EVERY slot in one ResourceBarrier
+    // and emits the AS-read barriers after ALL builds: 24 interleaved build+barrier pairs
+    // serialize on the GPU (measured ~34 us per palm), back-to-back builds pipeline.
+
+    // Same per-submesh geometry table as GetOrBuildBlas, but positions come from the deformed
+    // stream (tightly packed float3) and the build allows updates. The INDEX table must be LOD 0:
+    // the bindless records carry LOD 0 firstTri offsets and a hit's PrimitiveIndex is local to
+    // THIS geometry -- building from a coarser LOD made hit shading read garbage triangles (a
+    // LOD 1 experiment saved only ~0.09 ms once the barriers were batched; not worth the split
+    // index space).
+    Mesh* mesh = s.mesh;
+    ID3D12Resource* ib = mesh->GetIndexBufferResource();
+    const std::vector<Mesh::Submesh>& subs = mesh->GetSubmeshes();
+    const UINT idxBytes = (mesh->GetIndexFormat() == DXGI_FORMAT_R32_UINT) ? 4u : 2u;
+    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geoms(std::max<size_t>(subs.size(), 1));
+    for (size_t g = 0; g < geoms.size(); ++g) {
+        D3D12_RAYTRACING_GEOMETRY_DESC& geom = geoms[g];
+        geom = {};
+        geom.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+        const bool masked = g < 64u && ((nonOpaqueSlots >> g) & 1ull) != 0ull;
+        geom.Flags = masked ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE
+                            : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+        geom.Triangles.VertexBuffer.StartAddress = s.deformedVb->GetGPUVirtualAddress();
+        geom.Triangles.VertexBuffer.StrideInBytes = 12;
+        geom.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+        geom.Triangles.VertexCount = s.vertexCount;
+        if (ib && mesh->GetIndexCount() > 0) {
+            const UINT indexOffset = (g < subs.size()) ? subs[g].indexOffset : 0u;
+            const UINT indexCount = (g < subs.size()) ? subs[g].indexCount
+                                                      : static_cast<UINT>(mesh->GetIndexCount());
+            geom.Triangles.IndexBuffer = ib->GetGPUVirtualAddress() +
+                                         static_cast<UINT64>(indexOffset) * idxBytes;
+            geom.Triangles.IndexFormat = mesh->GetIndexFormat();
+            geom.Triangles.IndexCount = indexCount;
+        }
+    }
+
+    // Round-robin full rebuilds, staggered by slot so they never land on the same frame: frond
+    // tips move on the order of a metre, which is a large deformation for a pure refit chain.
+    const bool cadenceRebuild = ((frameNumber + slot) % 16ull) == 0ull;
+    const bool update = s.builtOnce && !cadenceRebuild;
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs{};
+    inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+    inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    // FAST_BUILD: this BLAS is rebuilt/refit every frame, so build speed dominates trace quality
+    // (UE make the same choice for their WPO dynamic geometry).
+    inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD |
+                   D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+    inputs.NumDescs = static_cast<UINT>(geoms.size());
+    inputs.pGeometryDescs = geoms.data();
+
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info{};
+    device5_->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
+    if (info.ResultDataMaxSizeInBytes == 0 || info.ScratchDataSizeInBytes == 0) { return 0; }
+    const UINT64 wantScratch = std::max(info.ScratchDataSizeInBytes,
+                                        info.UpdateScratchDataSizeInBytes);
+    if (!s.blas || s.blasSize < info.ResultDataMaxSizeInBytes)
+    {
+        s.blas = CreateUavBuffer(device5_, info.ResultDataMaxSizeInBytes,
+                                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+        s.blasSize = info.ResultDataMaxSizeInBytes;
+        s.builtOnce = false; // fresh result buffer cannot be PERFORM_UPDATEd
+    }
+    if (!s.scratch || s.scratchSize < wantScratch)
+    {
+        s.scratch = CreateUavBuffer(device5_, wantScratch, D3D12_RESOURCE_STATE_COMMON);
+        s.scratchSize = wantScratch;
+    }
+    if (!s.blas || !s.scratch) { buildFailed_ = true; return 0; }
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build{};
+    build.Inputs = inputs;
+    if (s.builtOnce && update)
+    {
+        build.Inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+        build.SourceAccelerationStructureData = s.blas->GetGPUVirtualAddress();
+        ++s.updatesSinceBuild;
+    }
+    else
+    {
+        s.updatesSinceBuild = 0;
+    }
+    build.DestAccelerationStructureData = s.blas->GetGPUVirtualAddress();
+    build.ScratchAccelerationStructureData = s.scratch->GetGPUVirtualAddress();
+    cmdList4->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+    s.builtOnce = true;
+    return s.blas->GetGPUVirtualAddress();
+}
+
+ID3D12Resource* AccelerationStructureManager::WindStreamResource(UINT slot) const
+{
+    return slot < kMaxWindBlasSlots ? windSlots_[slot].deformedVb.Get() : nullptr;
+}
+
+ID3D12Resource* AccelerationStructureManager::WindBlasResource(UINT slot) const
+{
+    return slot < kMaxWindBlasSlots ? windSlots_[slot].blas.Get() : nullptr;
+}
+
 void AccelerationStructureManager::EnsureSrvHeap()
 {
     if (srvHeap_ || !device5_) {
@@ -235,12 +425,17 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         d.InstanceMask = 0xFF;
         d.InstanceContributionToHitGroupIndex = e.instanceId & 0xFFFFFFu;
         d.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
-        if (!lastBlasResolved || e.mesh != lastMesh) {
-            lastMesh = e.mesh;
-            lastBlasAddress = GetOrBuildBlas(e.mesh, e.nonOpaqueSlots, cmdList4).Address();
-            lastBlasResolved = true;
+        if (e.blasOverride != 0) {
+            // RW: this instance's wind-deformed BLAS, already built earlier in this command list.
+            d.AccelerationStructure = e.blasOverride;
+        } else {
+            if (!lastBlasResolved || e.mesh != lastMesh) {
+                lastMesh = e.mesh;
+                lastBlasAddress = GetOrBuildBlas(e.mesh, e.nonOpaqueSlots, cmdList4).Address();
+                lastBlasResolved = true;
+            }
+            d.AccelerationStructure = lastBlasAddress;
         }
-        d.AccelerationStructure = lastBlasAddress;
         if (d.AccelerationStructure == 0) {
             buildFailed_ = true; // a referenced BLAS failed to build (alloc/device) — disable RT
         }
@@ -324,6 +519,11 @@ void AccelerationStructureManager::Reset()
 {
     blasCache_.clear();
     pendingScratch_.clear();
+    for (WindBlasSlot& s : windSlots_) {
+        s = WindBlasSlot{};
+    }
+    windDescHeap_.Reset();
+    windDescIncrement_ = 0;
     for (PerFrameTlas& f : tlasFrames_) {
         f = PerFrameTlas{};
     }
@@ -345,6 +545,11 @@ uint64_t AccelerationStructureManager::GetAsMemoryBytes() const
     }
     for (const auto& s : pendingScratch_) {
         if (s) { total += s->GetDesc().Width; }
+    }
+    for (const WindBlasSlot& s : windSlots_) {
+        if (s.deformedVb) { total += s.deformedVb->GetDesc().Width; }
+        if (s.blas) { total += s.blas->GetDesc().Width; }
+        if (s.scratch) { total += s.scratch->GetDesc().Width; }
     }
     return total;
 }

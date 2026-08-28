@@ -10,7 +10,9 @@
 // RT passes bind from (TLAS SRV, per-frame descriptor writes), and wrapping every one of their
 // calls in a forwarder here would be a second name for the same thing.
 
+#include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <d3d12.h>
@@ -21,6 +23,7 @@
 
 class Renderer;
 class RenderableObjectBase;
+class Material;
 class Mesh;
 struct SceneFrameData;
 
@@ -39,8 +42,10 @@ public:
     void EnsureInit(Renderer* renderer);
 
     // The Main_BuildAS pass body: gather this frame's instances, build/refit, publish the TLAS and
-    // the bindless table. Records into the pass's own command list.
-    void Build(Renderer* renderer, RenderGraphPassContext ctx, const SceneFrameData& frame);
+    // the bindless table. Records into the pass's own command list. windDeformMat is the
+    // rt_wind_deform_cs PSO (null / null-pipeline => wind casters keep their rest-pose BLAS).
+    void Build(Renderer* renderer, RenderGraphPassContext ctx, const SceneFrameData& frame,
+               Material* windDeformMat);
 
     rt::AccelerationStructureManager& Manager() { return asManager_; }
     const rt::AccelerationStructureManager& Manager() const { return asManager_; }
@@ -61,6 +66,10 @@ private:
     uint64_t asScratchRetireFrame_ = 0;
     bool asVramLogged_ = false;  // S13: one-time AS VRAM accounting log
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Build touches it)
+
+    // RW: stable owner -> dynamic-BLAS slot binding. Stability is what makes the per-frame work a
+    // REFIT instead of a rebuild -- a slot only rebuilds when its owner changes (or on cadence).
+    std::array<const void*, rt::AccelerationStructureManager::kMaxWindBlasSlots> windSlotOwner_{};
 
     // Per-object bindless registration is stable across frames even though TLAS transforms are
     // rebuilt every frame; this is what makes the rebuild incremental instead of a full

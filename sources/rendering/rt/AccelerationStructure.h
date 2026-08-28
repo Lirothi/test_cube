@@ -32,6 +32,9 @@ struct InstanceEntry {
     Mesh* mesh = nullptr;
     DirectX::XMFLOAT4X4 world{};
     uint32_t instanceId = 0;
+    // RW: non-zero = this instance uses a wind-deformed per-instance BLAS instead of the shared
+    // static per-mesh one (filled by RtSceneAs after the deform+refit recording).
+    D3D12_GPU_VIRTUAL_ADDRESS blasOverride = 0;
     // Part C alpha test: bit s set = the BLAS geometry for submesh s is built WITHOUT
     // D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE, so masked foliage surfaces as a non-opaque
     // candidate the RayQuery loops alpha-test (UE marks whole instances non-force-opaque and
@@ -77,6 +80,40 @@ public:
         return frameIndex < tlasFrames_.size() ? tlasFrames_[frameIndex].instanceCount : 0;
     }
 
+    // ---- RW (wind) subset: per-instance wind-deformed BLAS slots. -------------------------
+    // A small pool of dynamic BLASes for NEAR wind casters: a deform pass writes each slot's
+    // position stream, then the slot's BLAS is refit (ALLOW_UPDATE) from it -- or fully rebuilt
+    // on a round-robin cadence, because frond tips travel on the order of a metre and a pure
+    // refit degrades traversal quality. Distant plants keep the shared static per-mesh BLAS.
+    // All slot buffers are single-buffered ON PURPOSE: every access is recorded on the one
+    // direct queue, which executes command lists serially, so frame N+1's deform can never
+    // overlap frame N's build on the GPU (unlike the TLAS instance uploads, which the CPU
+    // writes and therefore must triple-buffer).
+    static constexpr UINT kMaxWindBlasSlots = 24;
+
+    // Ensures the slot's deformed-VB exists for `mesh` (reallocating on a mesh change) and
+    // hands back CPU descriptors for the deform dispatch: a raw SRV over the mesh's static VB
+    // and a raw UAV over the slot's position stream (both live in a manager-owned CPU-only
+    // heap, so the caller stages them into the frame's shader-visible tables like any other
+    // pass input). Returns false on alloc failure (sticky buildFailed_).
+    bool PrepareWindSlot(UINT slot, Mesh* mesh, ID3D12GraphicsCommandList4* cmdList4,
+                         D3D12_CPU_DESCRIPTOR_HANDLE& srcVbSrvCpu,
+                         D3D12_CPU_DESCRIPTOR_HANDLE& dstUavCpu, UINT& vertexCount);
+
+    // After the deform dispatch: transitions the position stream for AS input, then refits or
+    // (on the cadence / first use / mesh change) rebuilds the slot's BLAS from it. Returns the
+    // BLAS address, 0 on failure. nonOpaqueSlots: same per-submesh mask as GetOrBuildBlas.
+    // NOTE: emits NO barriers of its own -- the caller batches the stream transitions before
+    // all builds and the AS-read barriers after them, so the builds pipeline on the GPU.
+    D3D12_GPU_VIRTUAL_ADDRESS BuildOrRefitWindSlot(UINT slot, uint64_t nonOpaqueSlots,
+                                                   uint64_t frameNumber,
+                                                   ID3D12GraphicsCommandList4* cmdList4);
+
+    // The slot's deformed position stream / BLAS result (null when unbound) -- for the caller's
+    // batched barriers.
+    ID3D12Resource* WindStreamResource(UINT slot) const;
+    ID3D12Resource* WindBlasResource(UINT slot) const;
+
     // Release scratch buffers retained from BLAS builds. Call ONLY after the
     // fence for the command list(s) that ran the builds has completed.
     void ReleaseCompletedScratch() { pendingScratch_.clear(); }
@@ -119,7 +156,29 @@ private:
         UINT refitsSinceBuild = 0;    // in-place updates since the last full rebuild (bounded)
     };
 
+    // RW: one dynamic-BLAS slot (see kMaxWindBlasSlots). Buffers persist across frames; the
+    // deformed VB's state is tracked here because these are manager-internal resources that,
+    // like every AS buffer, stay outside the render graph's declared-state machinery.
+    struct WindBlasSlot {
+        Microsoft::WRL::ComPtr<ID3D12Resource> deformedVb; // float3 * vertexCount, UAV
+        Microsoft::WRL::ComPtr<ID3D12Resource> blas;       // ALLOW_UPDATE result
+        Microsoft::WRL::ComPtr<ID3D12Resource> scratch;    // max(build, update) size, persistent
+        Mesh* mesh = nullptr;
+        UINT vertexCount = 0;
+        UINT64 blasSize = 0;
+        UINT64 scratchSize = 0;
+        bool builtOnce = false;
+        UINT updatesSinceBuild = 0;
+    };
+
+    void EnsureWindDescHeap();
+
     ID3D12Device5* device5_ = nullptr;
+    std::array<WindBlasSlot, kMaxWindBlasSlots> windSlots_;
+    // CPU-only heap: 2 descriptors per wind slot (raw SRV over the source VB, raw UAV over the
+    // deformed position stream), created alongside the slot's buffers.
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> windDescHeap_;
+    UINT windDescIncrement_ = 0;
     robin_hood::unordered_map<Mesh*, Blas> blasCache_;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> pendingScratch_;
     bool buildFailed_ = false; // sticky: an AS allocation failed (see BuildFailed())

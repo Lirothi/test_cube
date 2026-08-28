@@ -12740,19 +12740,19 @@
       "mesh": "models/curly_palm.mesh.json",
       "name": "staticMesh #27 Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy Copy",
       "position": [
-        -51.11929702758789,
-        7.596854209899902,
-        42.150550842285156
+        -49.619300842285156,
+        1.33827543258667,
+        42.15055465698242
       ],
       "rotationDeg": [
         180.0,
-        -80.23362731933594,
+        -80.2336196899414,
         180.0
       ],
       "scale": [
-        1.0000001192092896,
         1.0,
-        1.0000001192092896
+        1.0,
+        1.0
       ],
       "type": "staticMesh"
     },

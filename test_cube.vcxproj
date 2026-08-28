@@ -637,6 +637,7 @@
     <None Include="shaders\rt_compile_probe.hlsl" />
     <None Include="shaders\rt_debug_cs.hlsl" />
     <None Include="shaders\rt_reflections_cs.hlsl" />
+    <None Include="shaders\rt_wind_deform_cs.hlsl" />
     <None Include="shaders\shadow_cull_clear_cs.hlsl" />
     <None Include="shaders\shadow_cull_cs.hlsl" />
     <None Include="shaders\shadow_gi_scatter_cs.hlsl" />

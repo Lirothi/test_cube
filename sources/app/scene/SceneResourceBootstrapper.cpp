@@ -627,6 +627,15 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matRtReflect_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    // RW: wind deform for per-instance dynamic BLASes -- only meaningful with RT.
+    if (!matRtWindDeform_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/rt_wind_deform_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matRtWindDeform_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     // S15b: glass reflection G-buffer prepass PSO (front-face normal RTV + depth DSV). Built on
     // all HW — glass off-screen reflections work in SSR mode too (ssr_cs), not just RT.
     if (!matGlassReflPrepass_)

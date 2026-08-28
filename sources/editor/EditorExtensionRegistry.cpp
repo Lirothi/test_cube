@@ -536,6 +536,17 @@ namespace
                 ctx.document.SetDirty(true);
             }
 
+            // W3: per-OBJECT sway strength (0 = rigid). The setter re-propagates to every slot so
+            // all submeshes stay in lockstep; the asset-level default lives in the Mesh Editor's
+            // Wind section (mesh.json), and this overrides it for this object only.
+            float windStrength = gb->GetWindStrength();
+            if (ImGui::DragFloat("Wind Strength", &windStrength, 0.01f, 0.0f, 1.0f))
+            {
+                gb->SetWindStrength(windStrength);
+                obj.properties["windStrength"] = windStrength;
+                ctx.document.SetDirty(true);
+            }
+
             bool useMR = mp.texFlags.y > 0.5f;
             if (ImGui::Checkbox("Use MR Texture", &useMR))
             {
