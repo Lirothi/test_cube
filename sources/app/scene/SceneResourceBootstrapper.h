@@ -782,6 +782,9 @@ public:
     std::shared_ptr<Material> GetRtWindDeformMaterial() const { return matRtWindDeform_; }
     std::shared_ptr<Material> GetRtDebugMaterial() const { return matRtDebug_; } // S6, null on non-RT HW
     std::shared_ptr<Material> GetRtReflectMaterial() const { return matRtReflect_; } // S7, null on non-RT HW
+    // Gather-then-shade split of the opaque RT reflection (async prep); null on non-RT HW.
+    std::shared_ptr<Material> GetRtTraceMaterial() const { return matRtTrace_; }
+    std::shared_ptr<Material> GetRtResolveMaterial() const { return matRtResolve_; }
     std::shared_ptr<Material> GetGlassReflPrepassMaterial() const { return matGlassReflPrepass_; } // S15b, null on non-RT HW
 #if WITH_EDITOR
     std::shared_ptr<Material> GetSelectionOutlineMaterial() const { return matSelectionOutlineCS_; }
@@ -870,6 +873,8 @@ private:
     std::shared_ptr<Material> matDebug_;
     std::shared_ptr<Material> matRtDebug_;   // S6 RT debug viz (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matRtReflect_;
+    std::shared_ptr<Material> matRtTrace_;   // gather phase of the opaque RT reflection split
+    std::shared_ptr<Material> matRtResolve_; // shade phase (the only RT consumer of lightT)
     std::shared_ptr<Material> matRtWindDeform_; // RW wind deform for dynamic BLASes  // S7 Tier-1 RT reflections (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matGlassReflPrepass_; // S15b glass refl G-buffer prepass; only on RT HW
 #if WITH_EDITOR

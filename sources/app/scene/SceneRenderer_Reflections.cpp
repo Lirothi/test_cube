@@ -193,55 +193,60 @@ struct RtReflectConstants
     // see RtAlphaCandidatePasses in rt_geometry.hlsli.
     uint32_t screenDepthIndex = 0; float alphaMissKeep = 0.0f; uint32_t frameSeed = 0;
     uint32_t alphaMode = 2; // 0 off (solid cards), 1 first-hit holes, 2 full candidates
+    // Gather-then-shade payload slots: UAV heap indices for the trace dispatch, SRV heap indices
+    // for the resolve dispatch; the monolithic glass dispatch leaves them 0.
+    uint32_t payloadRadianceIndex = 0; uint32_t payloadUvIndex = 0; uint32_t rtPad2 = 0; uint32_t rtPad3 = 0;
 };
 
 } // namespace
 
-void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContext ctx,
+// Gather-then-shade split, GATHER phase (async-compute prep). Traversal + the full hit shading
+// EXCEPT the lit-HDR screen sample, into the payload pair (radiancePart + mode, reuse uv).
+// Everything this pass reads -- TLAS, depth, gb1, the bindless table, the sky cubes, the
+// spot/point light buffers (CPU-filled in EnsureFrameResources, no longer by the lighting
+// passes) -- exists before the shadow/lighting passes run. That is the whole point: when the
+// async-compute plan lands, THIS pass moves to the compute queue and overlaps VsmPageRender +
+// lighting; the cross-queue edge to Pass_BuildAS must then be an EXPLICIT fence, because the
+// AS buffers bypass the barrier compile (undeclared reads generate no cross-queue edge).
+void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, std::uint32_t point)
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     do
     {
-        GPU_SCOPE(t.cl, ProfilerScopes::kPassRTReflections);
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassRTTrace);
         const auto& D = renderer->GetDeferredForFrame();
-        renderer->EmitPoint(t.cl, point); // depth/gb1/light -> NPS, reflection scratch -> UAV
+        renderer->EmitPoint(t.cl, point); // depth/gb1 -> NPS, payload pair -> UAV
 
-        auto reflectMaterial = resources_.GetRtReflectMaterial();
+        auto traceMaterial = resources_.GetRtTraceMaterial();
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = rtAs_.Manager().TlasSrvCpu(frameIndex);
         Skybox* skybox = frame_->skybox;
-        if (!reflectMaterial || !rtAs_.Bindless().FrameReady(frameIndex) || tlasSrv.ptr == 0 ||
+        // The SAME gate as Pass_RTResolve, deciding from the SAME state (Pass_BuildAS recorded
+        // before both, per mtDeps): either both dispatch or neither does, so the resolve can
+        // never consume a payload the trace did not write this frame.
+        if (!traceMaterial || !rtAs_.Bindless().FrameReady(frameIndex) || tlasSrv.ptr == 0 ||
             rtAs_.Manager().TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight || !skybox)
         {
-            // No usable TLAS/bindless/light/skybox this frame: leave reflection as is.
-            break;
+            break; // no usable TLAS/bindless/light/skybox: the resolve breaks too
         }
 
-        // Per-frame scene descriptors into the bindless heap (VB/IB descriptors are immutable;
-        // geometry-info has a separate buffer/SRV per frame, populated in Pass_BuildAS). Scene slots
-        // 0-7 are this pass's; the debug pass uses 13-16 (distinct, so passes in
-        // the same frame never alias heap slots). The RT reflection is written
-        // straight into the main reflection target -- the denoise pass was removed
-        // in S12 (it was an inert pass-through once glossy was parked).
+        // Scene slots: reflections own 0-12 (the resolve uses 1/4/11/12; debug starts at 13).
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 0, tlasSrv);     // TLAS
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 1, D.lightSRV);  // lit HDR (fast path)
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 2, D.gbSRV[1]);  // GB1 (normal)
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 3, D.depthSRV);  // Depth
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 4, D.reflectionUAV); // reflection out -> blur/compose
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 5, skybox->GetTex()->GetSRVCPU()); // skybox cube (env reflection)
-        // P16.9: the cosine-convolved irradiance, so an OFF-SCREEN re-shade gets the same sky
-        // fill the main pass uses instead of the legacy `ambient * sunColour` fraction.
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 5, skybox->GetTex()->GetSRVCPU()); // skybox cube
         const bool haveSkyIrradiance = skybox->HasIbl();
         if (haveSkyIrradiance)
         {
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 8, skybox->GetIrradianceTex()->GetSRVCPU());
         }
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 9, D.rtPayloadUAV);    // payload radiance+mode
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 10, D.rtPayloadUvUAV); // payload reuse uv
 
-        // Spot/point light buffers (filled earlier this frame by Pass_SpotLights /
-        // Pass_PointLights) so off-screen reflected surfaces are lit by the same
-        // local lights as the base pass. Slots 6-7.
+        // Spot/point light buffers -- filled on the CPU in EnsureFrameResources, so this pass
+        // does NOT depend on the lighting passes for them.
         LightManager* lm = frame_->lightManager;
         const UINT spotCount = lm ? static_cast<UINT>(lm->GetSpotLightCount()) : 0u;
         const UINT pointCount = lm ? static_cast<UINT>(lm->PointLights().size()) : 0u;
@@ -269,10 +274,10 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         c.outWidth = renderer->GetReflectionTextureWidth();
         c.outHeight = renderer->GetReflectionTextureHeight();
         c.tlasIndex = rtAs_.Bindless().SceneIndex(frameIndex, 0);
-        c.lightIndex = rtAs_.Bindless().SceneIndex(frameIndex, 1);
+        c.lightIndex = 0; // the one input this phase must NOT touch -- rt_resolve's alone
         c.gb1Index = rtAs_.Bindless().SceneIndex(frameIndex, 2);
         c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, 3);
-        c.screenDepthIndex = c.depthIndex; // opaque: primary == on-screen depth (no change)
+        c.screenDepthIndex = c.depthIndex; // opaque: primary == on-screen depth
         c.alphaMissKeep = std::clamp(frame_->settings.rtAlphaMissKeep, 0.0f, 1.0f);
         c.alphaMode = std::min(frame_->settings.rtAlphaMode, 2u);
         // FROZEN dither, by measurement (ssr_bronze_palms, resolved frame-to-frame boil in the
@@ -282,17 +287,19 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         // and the EMA has nothing to chase. The seed still reaches the shader so a future
         // animated-dither experiment only touches this line.
         c.frameSeed = 0u;
-        c.reflectionUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, 4);
+        c.reflectionUavIndex = 0;
         c.skyboxIndex = rtAs_.Bindless().SceneIndex(frameIndex, 5);
         c.skyboxIntensity = skybox->GetExposure();
-        c.skyIrradianceIndex = haveSkyIrradiance ? rtAs_.Bindless().SceneIndex(frameIndex, 8) : 0u; // P16.9
+        c.skyIrradianceIndex = haveSkyIrradiance ? rtAs_.Bindless().SceneIndex(frameIndex, 8) : 0u;
         c.skyIrradianceScale = skybox->GetExposure() * dl.GetSkyFillIntensity();
-        c.groundAlbedoRgb = dl.GetGroundAlbedo(); // P16.12, same value lighting_cs gets
+        c.groundAlbedoRgb = dl.GetGroundAlbedo();
         c.geomInfoIndex = rtAs_.Bindless().GeomInfoIndex(frameIndex);
         c.spotLightIndex = rtAs_.Bindless().SceneIndex(frameIndex, 6);
         c.spotCount = haveSpots ? spotCount : 0u;
         c.pointLightIndex = rtAs_.Bindless().SceneIndex(frameIndex, 7);
         c.pointCount = havePoints ? pointCount : 0u;
+        c.payloadRadianceIndex = rtAs_.Bindless().SceneIndex(frameIndex, 9);
+        c.payloadUvIndex = rtAs_.Bindless().SceneIndex(frameIndex, 10);
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
         std::memcpy(cb.cpu, &c, sizeof(c));
@@ -300,8 +307,72 @@ void SceneRenderer::Pass_RTReflections(Renderer* renderer, RenderGraphPassContex
         // Bespoke bindless dispatch (binds the persistent heap, not the frame heap).
         ID3D12DescriptorHeap* heaps[] = { rtAs_.Bindless().Heap() };
         t.cl->SetDescriptorHeaps(1, heaps);
-        t.cl->SetComputeRootSignature(reflectMaterial->GetRootSignature());
-        t.cl->SetPipelineState(reflectMaterial->GetPipelineState());
+        t.cl->SetComputeRootSignature(traceMaterial->GetRootSignature());
+        t.cl->SetPipelineState(traceMaterial->GetPipelineState());
+        t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
+        const UINT gx = (c.outWidth + 7u) / 8u;
+        const UINT gy = (c.outHeight + 7u) / 8u;
+        if (gx > 0 && gy > 0)
+        {
+            t.cl->Dispatch(gx, gy, 1);
+        }
+        // No UAV barrier here: the resolve declares the payload pair NON_PIXEL_SHADER_RESOURCE,
+        // and the compiled UAV->NPS transition at its point is the write/read sync.
+
+        // Restore the frame heap for whatever shares or follows this command list.
+        renderer->BindDescriptorHeaps(t.cl);
+    } while (false);
+    ctx.EndCL(t);
+}
+
+// Gather-then-shade split, SHADE phase: payload + lit HDR -> the premultiplied reflection
+// target. The ONLY RT reflection dispatch that consumes the lighting output, which is what
+// leaves the expensive trace free to overlap the shadow/lighting passes on the compute queue.
+void SceneRenderer::Pass_RTResolve(Renderer* renderer, RenderGraphPassContext ctx,
+    std::uint32_t point)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    do
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassRTResolve);
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->EmitPoint(t.cl, point); // light/payloads -> NPS, reflection -> UAV
+
+        auto resolveMaterial = resources_.GetRtResolveMaterial();
+        const UINT frameIndex = renderer->GetCurrentFrameIndex();
+        const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = rtAs_.Manager().TlasSrvCpu(frameIndex);
+        Skybox* skybox = frame_->skybox;
+        // MUST mirror Pass_RTTrace's gate (see the note there); the extra material check only
+        // adds this pass's own PSO.
+        if (!resolveMaterial || !resources_.GetRtTraceMaterial() ||
+            !rtAs_.Bindless().FrameReady(frameIndex) || tlasSrv.ptr == 0 ||
+            rtAs_.Manager().TlasInstanceCount(frameIndex) == 0 || !frame_->dirLight || !skybox)
+        {
+            // No trace ran this frame: leave reflection as is (same as the monolithic gate).
+            break;
+        }
+
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 1, D.lightSRV);        // lit HDR
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 4, D.reflectionUAV);   // reflection out
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 11, D.rtPayloadSRV);   // payload radiance+mode
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 12, D.rtPayloadUvSRV); // payload reuse uv
+
+        RtReflectConstants c{};
+        c.outWidth = renderer->GetReflectionTextureWidth();
+        c.outHeight = renderer->GetReflectionTextureHeight();
+        c.lightIndex = rtAs_.Bindless().SceneIndex(frameIndex, 1);
+        c.reflectionUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, 4);
+        c.payloadRadianceIndex = rtAs_.Bindless().SceneIndex(frameIndex, 11);
+        c.payloadUvIndex = rtAs_.Bindless().SceneIndex(frameIndex, 12);
+
+        auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
+        std::memcpy(cb.cpu, &c, sizeof(c));
+
+        ID3D12DescriptorHeap* heaps[] = { rtAs_.Bindless().Heap() };
+        t.cl->SetDescriptorHeaps(1, heaps);
+        t.cl->SetComputeRootSignature(resolveMaterial->GetRootSignature());
+        t.cl->SetPipelineState(resolveMaterial->GetPipelineState());
         t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
         const UINT gx = (c.outWidth + 7u) / 8u;
         const UINT gy = (c.outHeight + 7u) / 8u;

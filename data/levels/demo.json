@@ -2767,6 +2767,147 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 248,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #210 Copy Copy",
+      "position": [
+        16.759838104248047,
+        -0.2999992370605469,
+        6.049247741699219
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 249,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #210 Copy Copy Copy",
+      "position": [
+        14.4598388671875,
+        -0.2999992370605469,
+        -4.050753116607666
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 250,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #210 Copy Copy Copy Copy",
+      "position": [
+        17.9598388671875,
+        -0.2999992370605469,
+        0.449246883392334
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 251,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #210 Copy Copy Copy Copy Copy",
+      "position": [
+        4.359838485717773,
+        -0.2999992370605469,
+        3.249246835708618
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 252,
+      "mesh": "models/date_palm.mesh.json",
+      "name": "staticMesh #210 Copy Copy Copy Copy Copy Copy",
+      "position": [
+        10.9598388671875,
+        -0.2999992370605469,
+        10.849246978759766
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 253,
+      "material": "bronze",
+      "mesh": "models/box.mesh.json",
+      "name": "staticMesh #17 Copy",
+      "normalStrength": 0.01,
+      "position": [
+        16.400001525878906,
+        -0.40000003576278687,
+        -0.30000001192092896
+      ],
+      "renderLayer": "Terrain",
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        14.999998092651367,
+        1.0,
+        23.499998092651367
+      ],
+      "texOffsScale": [
+        0.5,
+        0.0,
+        10.0,
+        10.0
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -3370,5 +3511,16 @@
       "shadowNormalBias": 0.05,
       "shadowsEnabled": true
     }
-  ]
+  ],
+  "wind": {
+    "directionDeg": 0.0,
+    "foliageSwayMeters": 1.0,
+    "gust": {
+      "amplitude": 0.5,
+      "frequencyHz": 0.15000000596046448,
+      "seed": 3.0
+    },
+    "strength": 1.0,
+    "swayFrequency": 0.8999999761581421
+  }
 }

@@ -627,6 +627,24 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matRtReflect_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    // Gather-then-shade split of the OPAQUE RT reflection (async-compute prep): trace = traversal
+    // + full hit shading except the lit-HDR sample, resolve = payload + lightT. The monolithic
+    // matRtReflect_ stays for the glass dispatch.
+    if (!matRtTrace_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/rt_trace_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matRtTrace_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    if (!matRtResolve_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/rt_resolve_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matRtResolve_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+
     // RW: wind deform for per-instance dynamic BLASes -- only meaningful with RT.
     if (!matRtWindDeform_ && renderer->IsRaytracingSupported())
     {

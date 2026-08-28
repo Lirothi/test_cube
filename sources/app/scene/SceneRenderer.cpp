@@ -137,6 +137,52 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
         if (spots > 0) { lm.EnsureSpotLightBuffer(renderer, spots); }
         const size_t points = lm.PointLights().size();
         if (points > 0) { lm.EnsurePointLightBuffer(renderer, points); }
+
+        // The GPU light buffers are CPU-filled HERE, before the graph runs, not in the lighting
+        // pass bodies any more (async prep): Pass_RTTrace consumes them and must not depend on
+        // the lighting passes' RECORD -- on the compute queue it could not. Everything read here
+        // is settled by now: the light set is frozen for the frame and the shadow slots were
+        // assigned in Scene's update (SelectShadowedSpots/Points). This frame slot's fence was
+        // waited at BeginFrame, so writing the persistently-mapped ring is safe.
+        const UINT frameIdx = renderer->GetCurrentFrameIndex();
+        if (auto* spotCPU = lm.GetSpotLightBufferCPU(frameIdx); spotCPU && spots > 0)
+        {
+            const auto& spotLights = lm.SpotLights();
+            for (size_t i = 0; i < spots; ++i)
+            {
+                const auto& light = spotLights[i];
+                const auto& desc = light.GetDesc();
+                spotCPU[i].positionRange = Math::float4(desc.position, desc.range);
+                spotCPU[i].directionCosOuter = Math::float4(light.GetDirection(), light.GetCosOuter());
+                spotCPU[i].colorIntensity =
+                    Math::float4(desc.color, render::CandelaFromLumens(desc.luminousFluxLm)); // P16.5
+                spotCPU[i].shadowParams = Math::float4(light.GetCosInner(),
+                    static_cast<float>(lm.GetSpotShadowSlot(i)), light.GetInvAngleRange(),
+                    light.GetShadowDepthBias());
+                spotCPU[i].shadowParams2 = Math::float4(light.GetShadowNormalBias(), 0.0f, 0.0f, 0.0f);
+                spotCPU[i].viewProj = light.GetViewProjMatrix();
+            }
+        }
+        if (auto* pointCPU = lm.GetPointLightBufferCPU(frameIdx); pointCPU && points > 0)
+        {
+            const auto& pointLights = lm.PointLights();
+            for (size_t i = 0; i < points; ++i)
+            {
+                const auto& desc = pointLights[i].GetDesc();
+                pointCPU[i].position = desc.position;
+                pointCPU[i].radius = desc.radius;
+                pointCPU[i].color = desc.color;
+                pointCPU[i].intensity = render::CandelaFromLumens(desc.luminousFluxLm); // P16.5
+                // Per-light cube-shadow params = (slot/-1, worldDepthBias, near, far=radius).
+                // near MUST match Scene.cpp's cube-face projection EXACTLY — PointShadowFactor
+                // reconstructs the compare depth from it. Bias is WORLD-space (B4 tuning).
+                const float pointShadowNear = std::max(0.2f, desc.radius * 0.02f);
+                constexpr float kPointShadowBias = 0.10f; // world units
+                pointCPU[i].shadowParams = Math::float4(
+                    static_cast<float>(lm.GetPointShadowSlot(i)),
+                    kPointShadowBias, pointShadowNear, desc.radius);
+            }
+        }
     }
 }
 

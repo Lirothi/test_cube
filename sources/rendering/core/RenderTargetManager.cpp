@@ -429,6 +429,10 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflectionScratch, DeferredSrvSlot::ReflectionScratch, DeferredSrvSlot::ReflectionScratchUAV, f, D.reflectionScratch, D.reflectionScratchSRV, D.reflectionScratchUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         // SSR temporal history. Same format and size as the reflection buffer it accumulates.
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::ReflectionHistory, DeferredSrvSlot::ReflectionHistoryUAV, f, D.reflectionHistory, D.reflectionHistorySRV, D.reflectionHistoryUAV, sizes.reflectionWidth, sizes.reflectionHeight);
+        // RT gather-then-shade payload (async prep): radiancePart + mode in the reflection's own
+        // HDR format, the lit-HDR reuse uv in RG16_UNORM (see RenderTargetManager.h note).
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::RtPayload, DeferredSrvSlot::RtPayloadUAV, f, D.rtPayload, D.rtPayloadSRV, D.rtPayloadUAV, sizes.reflectionWidth, sizes.reflectionHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, DXGI_FORMAT_R16G16_UNORM, DeferredSrvSlot::RtPayloadUv, DeferredSrvSlot::RtPayloadUvUAV, f, D.rtPayloadUv, D.rtPayloadUvSRV, D.rtPayloadUvUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.oceanReflection, DeferredSrvSlot::OceanReflection, DeferredSrvSlot::OceanReflectionUAV, f, D.oceanReflection, D.oceanReflectionSRV, D.oceanReflectionUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
 
         // S15 off-screen glass reflections (reflection res): a glass G-buffer (front-face

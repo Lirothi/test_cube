@@ -537,6 +537,42 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                 Pass_Gtao(renderer, c, *frame_->camera, chain);
             };
         });
+
+    // Gather-then-shade split (async-compute prep): the RT reflection's GATHER phase, added HERE
+    // -- before the shadow/lighting passes -- because its inputs (TLAS, depth, gb1, the sky
+    // cubes, the CPU-filled spot/point light buffers) are complete once the G-buffer and
+    // Pass_BuildAS are done. On the direct queue this only moves the cost earlier in the frame;
+    // when the async plan lands, THIS pass moves to the compute queue and overlaps
+    // VsmPageRender + lighting. Two landmines for that move, both deliberate today:
+    //   - the TLAS/bindless reads BYPASS the barrier compile (AS buffers are undeclared), so the
+    //     cross-queue edge to Pass_BuildAS must become an EXPLICIT fence -- undeclared reads
+    //     generate no edge;
+    //   - depth/gb1 are declared kSrvAll here (their resting state at this point, no barrier);
+    //     kSrvAll contains PIXEL_SHADER_RESOURCE, which is ILLEGAL on a compute queue, so the
+    //     move must re-declare them NON_PIXEL_SHADER_RESOURCE.
+    if (decisions_.rtReflect && gb.pBuildAS != static_cast<size_t>(-1))
+    {
+        const auto& DT = gb.D;
+        gb.pRtTrace = rg.AddPass2(RenderPass::Main_RTTrace, { gb.pGbuf, gb.pBuildAS }, { gb.pBuildAS },
+            { { DT.depth.Get(), kSrvAll },
+              { DT.gb1.Get(), kSrvAll },
+              { DT.rtPayload.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+              { DT.rtPayloadUv.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                const auto& DP = renderer->GetDeferredForFrame();
+                if (!resources_.GetRtTraceMaterial() || DP.rtPayloadUAV.ptr == 0 ||
+                    DP.rtPayloadUvUAV.ptr == 0)
+                {
+                    return {};
+                }
+                ctx.UseDeclared();
+                const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+                return [this, renderer, point](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassRTTrace);
+                    Pass_RTTrace(renderer, c, *frame_->camera, point);
+                };
+            });
+    }
 }
 
 // directional, spot and point lighting, skybox.
@@ -775,7 +811,11 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
     // The dependency therefore rides the group's first member, which orders the whole list after
     // the wetness update and keeps Compose's guarantee. Reflection waiting too costs nothing:
     // wetness is the tail of the early compute group and has long since finished.
-    const bool useRtReflections = decisions_.rtReflect && gb.pBuildAS != (size_t)-1;
+    // The opaque RT reflection is the gather-then-shade split (Main_RTTrace upstream +
+    // Main_RTResolve here); the old monolithic dispatch was deleted after a pixel-parity A/B
+    // (only the HUD digits differed). rt_reflections_cs.hlsl survives for the GLASS dispatch.
+    const bool useRtReflections = decisions_.rtReflect && gb.pBuildAS != (size_t)-1 &&
+                                  gb.pRtTrace != (size_t)-1;
     const std::initializer_list<ResourceStateDecl> reflectDecls = {
         { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -790,21 +830,20 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
     size_t pReflectionSource; // node the blur depends on (reflection chain end)
     if (useRtReflections)
     {
-        // RT (S7/S10): trace one sharp reflection ray per surface and shade the hit;
-        // write the premultiplied reflection straight into the main reflection target
-        // (S12: the old temporal-denoise pass was an inert pass-through once glossy was
-        // parked, so it was removed -- blur + compose consume `reflection` directly).
-        pReflectionSource = rg.AddPass2(RenderPass::Main_RTReflections, { gb.pSky, gb.pWetness }, { gb.pSky, gb.pBuildAS },
-            { { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-              { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
-              { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+        // The SHADE phase of the split: payload + lit HDR -> reflection. The only RT dispatch
+        // that waits for the lighting output; the expensive trace ran long before, upstream.
+        pReflectionSource = rg.AddPass2(RenderPass::Main_RTResolve,
+            { gb.pSky, gb.pWetness, gb.pRtTrace }, { gb.pSky, gb.pBuildAS },
+            { { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.rtPayload.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.rtPayloadUv.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 ctx.UseDeclared();
                 const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
                 return [this, renderer, point](RenderGraphPassContext c) {
-                    CPU_SCOPE(ProfilerScopes::kPassRTReflections);
-                    Pass_RTReflections(renderer, c, *frame_->camera, point);
+                    CPU_SCOPE(ProfilerScopes::kPassRTResolve);
+                    Pass_RTResolve(renderer, c, point);
                 };
             });
     }

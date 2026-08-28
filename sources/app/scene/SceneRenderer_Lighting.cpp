@@ -454,7 +454,6 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
     LightManager& lightManager = *frame_->lightManager;
     const size_t spotLightCount = lightManager.GetSpotLightCount();
     const UINT frameIdx = renderer->GetCurrentFrameIndex();
-    auto* spotLightBufferCPU = lightManager.GetSpotLightBufferCPU(frameIdx);
     const D3D12_CPU_DESCRIPTOR_HANDLE spotLightSrvHandle = lightManager.GetSpotLightSrv(frameIdx);
 
     // Rung 2 / Step 21+24b: the shader's root sig always binds t7 (VSM page table) + t8 (VSM pool).
@@ -472,22 +471,8 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         const auto& D = renderer->GetDeferredForFrame();
         renderer->EmitPoint(t.cl, point);
 
-        const auto& spotLights = lightManager.SpotLights();
-        for (size_t i = 0; i < spotLightCount; ++i)
-        {
-            const auto& light = spotLights[i];
-            const auto& desc = light.GetDesc();
-            const mat4 viewProj = light.GetViewProjMatrix();
-            const float3 dir = light.GetDirection();
-
-            spotLightBufferCPU[i].positionRange = float4(desc.position, desc.range);
-            spotLightBufferCPU[i].directionCosOuter = float4(dir, light.GetCosOuter());
-            spotLightBufferCPU[i].colorIntensity =
-                float4(desc.color, render::CandelaFromLumens(desc.luminousFluxLm)); // P16.5
-            spotLightBufferCPU[i].shadowParams = float4(light.GetCosInner(), static_cast<float>(lightManager.GetSpotShadowSlot(i)), light.GetInvAngleRange(), light.GetShadowDepthBias());
-            spotLightBufferCPU[i].shadowParams2 = float4(light.GetShadowNormalBias(), 0.0f, 0.0f, 0.0f);
-            spotLightBufferCPU[i].viewProj = viewProj;
-        }
+        // The spot buffer's CPU fill moved to EnsureFrameResources (async prep): Pass_RTTrace
+        // reads it too and must not depend on this pass's record.
 
         auto spotMaterial = resources_.GetSpotLightMaterial();
         const UINT cbSize = resources_.GetSpotLightCBSizeBytes();
@@ -537,7 +522,6 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
     LightManager& lightManager = *frame_->lightManager;
     auto& pointLights = lightManager.PointLights();
     const UINT frameIdx = renderer->GetCurrentFrameIndex();
-    auto* pointLightBufferCPU = lightManager.GetPointLightBufferCPU(frameIdx);
     const D3D12_CPU_DESCRIPTOR_HANDLE pointLightSrvHandle = lightManager.GetPointLightSrv(frameIdx);
 
     // Rung 2 / Step 21+24b: the shader always binds t7 (VSM page table) + t8 (VSM pool). Bind inert
@@ -555,24 +539,8 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         const auto& D = renderer->GetDeferredForFrame();
         renderer->EmitPoint(t.cl, point);
 
-        for (size_t i = 0; i < pointLights.size(); ++i)
-        {
-            const auto& desc = pointLights[i].GetDesc();
-            pointLightBufferCPU[i].position = desc.position;
-            pointLightBufferCPU[i].radius = desc.radius;
-            pointLightBufferCPU[i].color = desc.color;
-            pointLightBufferCPU[i].intensity = render::CandelaFromLumens(desc.luminousFluxLm); // P16.5
-            // Per-light cube-shadow params = (slot/-1, worldDepthBias, near, far=radius).
-            // near MUST match Scene.cpp's cube-face projection EXACTLY — PointShadowFactor
-            // reconstructs the compare depth from it. Bias is WORLD-space (subtracted from the
-            // compare distance before projecting); a constant NDC bias is unusable in the
-            // crushed far region of a perspective depth buffer (B4 tuning).
-            const float pointShadowNear = std::max(0.2f, desc.radius * 0.02f);
-            constexpr float kPointShadowBias = 0.10f; // world units
-            pointLightBufferCPU[i].shadowParams = float4(
-                static_cast<float>(lightManager.GetPointShadowSlot(i)),
-                kPointShadowBias, pointShadowNear, desc.radius);
-        }
+        // The point buffer's CPU fill moved to EnsureFrameResources (async prep), next to the
+        // spot fill -- Pass_RTTrace reads it too and must not depend on this pass's record.
 
         auto pointMaterial = resources_.GetPointLightMaterial();
         const UINT cbSize = resources_.GetPointLightCBSizeBytes();

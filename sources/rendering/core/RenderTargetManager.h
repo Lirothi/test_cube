@@ -63,6 +63,11 @@ public:
         GpuResource fxaa;    // FXAA output (R8G8B8A8)
         GpuResource reflection;        // premultiplied; compose samples this after blur
         GpuResource reflectionScratch; // ping-pong/scratch target for reflection filtering
+        // RT gather-then-shade payload (async prep): rt_trace_cs writes radiancePart + mode
+        // (rgba16f) and the lit-HDR reuse uv (rg16unorm -- fp16 would wobble the exact screen
+        // fetch by more than a pixel); rt_resolve_cs reads both. Reflection-resolution sized.
+        GpuResource rtPayload;
+        GpuResource rtPayloadUv;
         GpuResource oceanReflection;   // premultiplied ocean SSR sampled by transparent ocean
         GpuResource shadow; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
         GpuResource spotShadow; // R16_TYPELESS array for spot lights
@@ -144,6 +149,8 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionSRV{}, reflectionUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionScratchSRV{}, reflectionScratchUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionHistorySRV{}, reflectionHistoryUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE rtPayloadSRV{}, rtPayloadUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE rtPayloadUvSRV{}, rtPayloadUvUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSRV{}, oceanReflectionUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxShadowedSpotLights> spotShadowDSV{};
@@ -289,6 +296,8 @@ private:
     LensFlareAccum,
     // P8C-2l: the anamorphic streak's own pyramid.
     StreakA, StreakAUAV, StreakB, StreakBUAV,
+    // RT gather-then-shade payload (async prep).
+    RtPayload, RtPayloadUAV, RtPayloadUv, RtPayloadUvUAV,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

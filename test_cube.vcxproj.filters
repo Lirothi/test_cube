@@ -1342,6 +1342,15 @@
     <None Include="shaders\rt_wind_deform_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\rt_reflect_common.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\rt_trace_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\rt_resolve_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\shadow_cull_clear_cs.hlsl">
       <Filter>shaders</Filter>
     </None>

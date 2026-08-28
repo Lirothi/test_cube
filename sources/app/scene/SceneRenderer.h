@@ -138,6 +138,7 @@ private:
         size_t pVsmPageRender = kNone;
         size_t pHzb = kNone;       // gbuffer  -> SSR
         size_t pGtao = kNone;      // gbuffer  -> lighting
+        size_t pRtTrace = kNone;   // gbuffer/AS -> RT resolve (gather phase of the RT split)
         size_t pSky = kNone;       // lighting -> reflection source
         size_t pCompose = kNone;   // reflections -> transparent
         size_t pGlassReflect = kNone;
@@ -329,8 +330,12 @@ private:
         const SceneView* view, const ShoreDepthPoints& pts);
     void Pass_ScreenSpaceReflections(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, std::uint32_t point);
-    void Pass_RTReflections(Renderer* r, RenderGraphPassContext ctx,
+    // Gather-then-shade split of the opaque RT reflection (async-compute prep). Trace = traversal
+    // + full hit shading except the lit-HDR sample (inputs exist before shadows/lighting run --
+    // the pass that later moves to the compute queue); Resolve = payload + lightT -> reflection.
+    void Pass_RTTrace(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, std::uint32_t point);
+    void Pass_RTResolve(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
     // S15b off-screen glass reflections: render a glass front-face normal/depth G-buffer,
     // then dispatch rt_reflections_cs over it into glassReflection (sampled by forward glass).
     void Pass_GlassReflGbuffer(Renderer* r, RenderGraphPassContext ctx,

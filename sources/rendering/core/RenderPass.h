@@ -29,7 +29,11 @@ enum class RenderPass : uint16_t {
     Main_ReflectionTemporal, // SSR temporal resolve, between the trace and the glossy blur
     Main_ReflectionBlur,
     Main_Compose,
-    Main_RTReflections,
+    // Gather-then-shade split of the opaque RT reflection (async-compute prep): RTTrace needs
+    // only TLAS/depth/gb1 and is the pass that later moves to the compute queue; RTResolve is
+    // the only RT consumer of the lighting output.
+    Main_RTTrace,
+    Main_RTResolve,
     Main_RTDebug,
     Main_GlassReflGbuffer,
     Main_GlassReflections,
@@ -91,7 +95,8 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_ReflectionTemporal: return L"Reflection.Temporal";
     case RenderPass::Main_ReflectionBlur: return L"Reflection.Blur";
     case RenderPass::Main_Compose: return L"Compose";
-    case RenderPass::Main_RTReflections: return L"RTReflections";
+    case RenderPass::Main_RTTrace: return L"RTTrace";
+    case RenderPass::Main_RTResolve: return L"RTResolve";
     case RenderPass::Main_GlassReflGbuffer: return L"GlassReflGbuffer";
     case RenderPass::Main_GlassReflections: return L"GlassReflections";
     case RenderPass::Main_RTDebug: return L"RTDebug";
