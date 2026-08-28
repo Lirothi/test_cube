@@ -1,6 +1,6 @@
 # Async compute — architecture plan
 
-**Status: STEPS 1-2 COMMITTED (`7ac30fe`, `85b714c`). STEP 3 DONE (uncommitted). Steps 4-11 not started.**
+**Status: STEPS 1-3 COMMITTED (`7ac30fe`, `85b714c`, `4e014d5`). STEP 4 DONE (uncommitted). Steps 5-11 not started.**
 
 **Goal: the renderer gains a second execution queue as a first-class architectural capability.**
 The render graph learns to schedule a pass onto a `D3D12_COMMAND_LIST_TYPE_COMPUTE` queue,
@@ -641,6 +641,48 @@ The pass context exposes the queue so `BeginCL` (`RenderGraph.h:131`) acquires t
 
 **Acceptance:** all gates CLEAN; GPU.Frame unchanged within noise; the enum is threaded through but
 provably unused — grep shows no `AsyncCompute` at any call site.
+
+**DONE 2026-08-28, uncommitted.** 77 insertions / 7 deletions in `RenderPass.h` + `RenderGraph.h`.
+Two files, because the queue is a property of pass IDENTITY and of the GRAPH, and of nothing else.
+
+- **`RenderQueue { Graphics, AsyncCompute }`** in `RenderPass.h`, next to `RenderPass` — the header
+  that already carries pass identity and is cheap to include.
+- **`Pass::queue`**, set in `AddPass2Internal` and cleared to `Graphics` by `Reset()` so a reused
+  graph cannot inherit last frame's queue.
+- **Two new `AddPass2` overloads** taking the queue as the SECOND argument, beside the pass name —
+  not as a trailing default. `builder` is always the last argument and is always a multi-line
+  lambda, so a trailing queue parameter would sit after twenty lines of lambda at every call site
+  that used it, where it is both unreadable and easy to attach to the wrong pass.
+- **`PassContext::queue` + `CommandListType()`**, and `BeginCL` now opens a list of the pass's own
+  type. The mapping queue -> `D3D12_COMMAND_LIST_TYPE` lives in exactly one function, because step 6
+  (per-queue submission) and step 8 (the first move) must agree with whatever a body already opened.
+- **The CL-group branch stays DIRECT** and says why: a group shares one list, so its members share
+  one queue. Step 5 turns "an AsyncCompute pass inside a CL group" into a fail-fast rather than a
+  silent recording onto the wrong queue.
+- **The 8 remaining v1 `AddPass` call sites were left alone.** All of them are the inner
+  GBuffer/Transparent sub-graphs — raster fan-out that will never be an async candidate — so
+  threading a queue through v1 would add API surface nothing can use.
+
+**Results.** Both builds `0/0`; all three gates `verdict: CLEAN`, 0 MISSING.
+**The inertness proof:** `RenderQueue::AsyncCompute` appears in exactly two places in the entire
+tree — the `CommandListType()` mapping and a comment — and in **zero call sites**. Every pass is
+Graphics, `BeginCL` therefore still asks for `TYPE_DIRECT` everywhere, and the frame is unchanged by
+construction.
+
+**PERF VERDICT DEFERRED — the machine was compiling Unreal Engine during this step, and the
+measurement is not attributable.** Recorded so it is re-done, not quietly skipped:
+`GPU.Frame` mean 3328 us (step 3) -> 3653 us (step 4), i.e. +9.8 %, with a 1.5 % run-to-run spread
+(vs 0.2-0.6 % on a quiet machine). Three reasons not to read that as a regression, none of them
+"it can't be, I only added an enum":
+1. the **CPU frame moved in lockstep** (3383 -> 3658, +8.1 %) — a renderer change that added GPU
+   work would show up in the fence wait, not in CPU work itself;
+2. the per-scope deltas are concentrated in the heaviest passes (`Pass_Tonemap` +154 us,
+   `Pass_BloomConv` +135 us) while others went DOWN (`Pass_Gtao` -29 us, `Ocean.Surface` -24 us) —
+   broad inflation, not a located cost;
+3. nothing in the diff reaches the GPU: an enum, a field, two assignments per pass per frame, and a
+   `BeginCL` that still resolves to `TYPE_DIRECT`.
+**Re-measure on a quiet machine before treating step 4 as perf-clean**, and prefer an interleaved
+A/B/A/B against the previous commit's binary over a comparison across sessions.
 
 ### Step 5 — eligibility and queue legality as checked rules (inert)
 

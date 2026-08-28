@@ -124,20 +124,37 @@ struct RenderGraphPassContext {
     std::uint32_t  useCapacity = 0;
     std::uint32_t* usePoint = nullptr;
 
-    // Provision the pass's command list. Ungrouped: a fresh DIRECT list, closed
-    // into the batch by EndCL. Grouped: the group's shared list (opened on first
-    // call), and EndCL is a no-op — the group closes it after its last member.
+    // Async-compute step 4 (D1): the queue this pass was registered on. Read-only to the body —
+    // a pass cannot change its own queue, because the barrier compile has already run by then.
+    RenderQueue queue = RenderQueue::Graphics;
+
+    // The command-list TYPE this pass's queue needs. Its own function so the mapping lives in one
+    // place: step 6 submits per queue and step 8 moves the first pass, and both must agree with
+    // whatever a body already opened.
+    D3D12_COMMAND_LIST_TYPE CommandListType() const
+    {
+        return (queue == RenderQueue::AsyncCompute) ? D3D12_COMMAND_LIST_TYPE_COMPUTE
+                                                    : D3D12_COMMAND_LIST_TYPE_DIRECT;
+    }
+
+    // Provision the pass's command list. Ungrouped: a fresh list of the pass's own queue type,
+    // closed into the batch by EndCL. Grouped: the group's shared list (opened on first call), and
+    // EndCL is a no-op — the group closes it after its last member.
     // Pass bodies are agnostic: same shape either way, only the provider differs.
     Renderer::ThreadCL BeginCL(ID3D12PipelineState* initialPSO = nullptr) const
     {
         if (groupCL) {
+            // A CL GROUP shares one list, so its members share one queue — the group's, which is
+            // DIRECT. Step 5 makes "an AsyncCompute pass inside a CL group" fail fast rather than
+            // silently record onto the wrong queue here; until then no pass is async, so this
+            // branch is unreachable with anything but Graphics.
             if (!groupCL->opened) {
                 groupCL->shared = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT, initialPSO);
                 groupCL->opened = true;
             }
             return groupCL->shared;
         }
-        return renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT, initialPSO);
+        return renderer->BeginThreadCommandList(CommandListType(), initialPSO);
     }
 
     void EndCL(Renderer::ThreadCL& t) const
@@ -250,6 +267,9 @@ public:
         // Pass-flow S9: authored through AddPass2, i.e. its declarations and its body come from
         // ONE builder. Asserted for every pass of a barrier-compiling graph — see RunPrepares.
         bool builtByBuilder = false;
+        // Async-compute step 4 (D1): which queue this pass records onto. Fixed at graph-build time
+        // and never changed afterwards. Every pass is Graphics until step 8.
+        RenderQueue queue = RenderQueue::Graphics;
     };
 
     // A.1s: everything the two-phase path needs, kept OFF the Pass array and off the
@@ -433,7 +453,7 @@ public:
     size_t AddPass2(RenderPass name, std::initializer_list<size_t> prereqs, BuildFn builder)
     {
         return AddPass2Internal(name, prereqs, std::initializer_list<size_t>{}, {},
-            std::move(builder));
+            std::move(builder), RenderQueue::Graphics);
     }
 
     size_t AddPass2(RenderPass name,
@@ -442,7 +462,33 @@ public:
         std::initializer_list<ResourceStateDecl> declares,
         BuildFn builder)
     {
-        return AddPass2Internal(name, prereqs, mtDeps, declares, std::move(builder));
+        return AddPass2Internal(name, prereqs, mtDeps, declares, std::move(builder),
+            RenderQueue::Graphics);
+    }
+
+    // --- Async-compute step 4 (D1): the same two overloads, with an explicit QUEUE ---
+    //
+    // Separate overloads rather than a defaulted trailing parameter: `builder` is the last argument
+    // and is always a lambda, so a trailing default would put the queue AFTER a multi-line lambda
+    // at every call site that wanted it — unreadable, and easy to attach to the wrong pass. Putting
+    // the queue up front next to the pass name keeps it where the reader looks for pass identity.
+    //
+    // NOTHING calls these at step 4. That is the step's deliverable: the enum is threaded through
+    // and provably unused (grep for `RenderQueue::AsyncCompute` outside the graph itself).
+    size_t AddPass2(RenderPass name, RenderQueue queue,
+        std::initializer_list<size_t> prereqs, BuildFn builder)
+    {
+        return AddPass2Internal(name, prereqs, std::initializer_list<size_t>{}, {},
+            std::move(builder), queue);
+    }
+
+    size_t AddPass2(RenderPass name, RenderQueue queue,
+        std::initializer_list<size_t> prereqs,
+        std::initializer_list<size_t> mtDeps,
+        std::initializer_list<ResourceStateDecl> declares,
+        BuildFn builder)
+    {
+        return AddPass2Internal(name, prereqs, mtDeps, declares, std::move(builder), queue);
     }
 
     // Command-list group brackets (step 5). Passes added between Begin/End share
@@ -618,6 +664,7 @@ public:
             p.successors.clear_fast();
             p.declares.clear_fast();
             p.groupId = kNoGroup;
+            p.queue = RenderQueue::Graphics; // step 4: a reused graph must not inherit a queue
         }
         // Pending edges and groups are indexed independently of passesNum_, so clear all.
         for (auto& pending : pendingSuccessors_) { pending.clear_fast(); }
@@ -658,6 +705,7 @@ private:
         ctx.pass = passes_[passIdx].name;
         ctx.declares = &passes_[passIdx].declares;
         ctx.groupCL = nullptr;   // Prepare records nothing; there is no command list yet
+        ctx.queue = passes_[passIdx].queue; // step 4: the builder sees its own queue
         ctx.useArena = ps.arena;
         ctx.useCount = &ps.arenaSize;
         ctx.useCapacity = static_cast<std::uint32_t>(std::size(ps.arena));
@@ -1182,6 +1230,7 @@ private:
             ctx.pass = passes_[ownerIdx].name;
             ctx.declares = &passes_[ownerIdx].declares;
             ctx.groupCL = nullptr;
+            ctx.queue = passes_[ownerIdx].queue; // step 4
             RunPassBody(renderer, ownerIdx, ctx);
             return;
         }
@@ -1195,6 +1244,7 @@ private:
             ctx.pass = passes_[m].name;
             ctx.declares = &passes_[m].declares;
             ctx.groupCL = &groupCL;
+            ctx.queue = passes_[m].queue; // step 4 (a group's members are all Graphics — see BeginCL)
             RunPassBody(renderer, m, ctx);
         }
         if (groupCL.opened) {
@@ -1307,12 +1357,17 @@ private:
         const RangePrereqs& prereqs,
         const RangeDeps& deps,
         std::initializer_list<ResourceStateDecl> declares,
-        BuildFn builder)
+        BuildFn builder,
+        RenderQueue queue)
     {
         CPU_SCOPE(ProfilerScopes::kAddPass);
         const size_t idx = AddPassInternal(name, prereqs, deps, declares,
             [](PassContext) {});
         passes_[idx].builtByBuilder = true;
+        // Step 4 (D1): recorded at graph-build time and never touched again. The barrier compile
+        // runs after this and before any body, so by the time a body could ask, the answer is
+        // already fixed — which is precisely why the queue has to be decided here.
+        passes_[idx].queue = queue;
         SetPassPrepare(idx, [this, idx, builder = std::move(builder)](PassContext& ctx)
         {
             ExecFn exec = builder(ctx);
