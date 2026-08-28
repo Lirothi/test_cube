@@ -330,7 +330,9 @@ void Renderer::WaitForFrame(UINT frameIndex) {
 }
 
 void Renderer::SignalFrame(UINT frameIndex) {
-    frameScheduler_.SignalFrame(GetCommandQueue(), frameIndex);
+    // Step 2: both queues, one value. GetComputeQueue() is null when the device refused one, which
+    // FrameScheduler handles by advancing the compute fence from the CPU instead.
+    frameScheduler_.SignalFrame(GetCommandQueue(), GetComputeQueue(), frameIndex);
 }
 
 void Renderer::RefreshCurrentFrameCaches() {
@@ -375,6 +377,15 @@ void Renderer::BeginFrame() {
     FrameResource* fr = currentFrameResource_;
 
     ++totalFrameNumber_;
+
+    // Step 2: the invariant this whole step exists to protect (R6). Everything below recycles
+    // per-frame state — command allocators, the descriptor and sampler rings, the upload ring — on
+    // the assumption that the GPU is done with this SLOT. That is now a two-queue question, and a
+    // path that resets the pools without having waited would corrupt silently: the symptom is a
+    // descriptor address handed out twice, which GBV reports as a wrong descriptor TYPE somewhere
+    // else entirely. Debug-only; WaitForFrame above is what makes it true.
+    assert(frameScheduler_.IsFrameComplete(currentFrameIndex_) &&
+           "BeginFrame: per-frame pools reused before BOTH queues passed this slot's fence");
 
     // Reset per-frame pools
     if (fr) {
@@ -991,6 +1002,17 @@ void Renderer::ExecuteTimelineAndPresent() {
         }
     }
 
+    // Step 2's proof device: a deliberately EMPTY compute submission, so the two-queue frame fence
+    // is exercised by something real rather than by a queue that never receives work. Opens a
+    // COMPUTE list, closes it, submits it — no barriers, no dispatches, nothing to get wrong. The
+    // signal that follows in SignalFrame then genuinely orders behind a GPU submission on that
+    // queue, which is what makes "the slot waits for both" a claim with evidence.
+    //
+    // Off by default (`--async-empty-submit`); step 8 replaces it with the first real pass.
+    if (render::g_asyncEmptySubmit) {
+        SubmitEmptyComputeWork();
+    }
+
     {
         CPU_SCOPE(ProfilerScopes::kService4);
         lastPresentedIndex_ = currentFrameIndex_; // the buffer about to be shown (screenshots)
@@ -1001,9 +1023,46 @@ void Renderer::ExecuteTimelineAndPresent() {
     RefreshCurrentFrameCaches();
 }
 
+// Async-compute plan step 2 — submit one empty COMPUTE command list to the async queue.
+//
+// The point is NOT the work (there is none). It is that the compute queue receives a real
+// submission every frame, so the Signal that follows has something to order behind and the
+// "a frame slot is free only when BOTH queues passed its value" rule is exercised rather than
+// merely written. Without this the compute fence would be signalled on an idle queue and complete
+// instantly, and every wait added in this step would be vacuously true.
+void Renderer::SubmitEmptyComputeWork()
+{
+    ID3D12CommandQueue* computeQueue = GetComputeQueue();
+    FrameResource* fr = currentFrameResource_;
+    if (!computeQueue || !fr || !GetDevice()) {
+        return;
+    }
+    ID3D12CommandAllocator* alloc =
+        fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_COMPUTE);
+    ID3D12GraphicsCommandList* cl =
+        fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_COMPUTE, alloc);
+    if (!cl) {
+        return;
+    }
+    // Deliberately records NOTHING — not even a barrier. An empty list is a legal submission and
+    // is the smallest thing that proves the queue, the allocator lane and the fence path work
+    // together.
+    if (FAILED(cl->Close())) {
+        RendererInvariantFailure("Renderer::SubmitEmptyComputeWork: Close() failed");
+    }
+    ID3D12CommandList* lists[] = { cl };
+    computeQueue->ExecuteCommandLists(1, lists);
+}
+
 void Renderer::WaitForPreviousFrame() {
-    // Fully wait for the GPU (for resize/destructor)
-    frameScheduler_.WaitForGpuIdle(GetCommandQueue());
+    // Fully wait for the GPU (for resize/destructor) — step 2: BOTH queues.
+    //
+    // This is the ONE function every idle path in the engine funnels through: ~50 call sites across
+    // level switch, resize, editor commands, thumbnail eviction, screenshots and shutdown all call
+    // it rather than touching the scheduler. That is why making it queue-correct here makes all of
+    // them queue-correct, and why the plan puts this in step 2 instead of the hardening step — the
+    // gates for every step in between are exactly that churn.
+    frameScheduler_.WaitForGpuIdle(GetCommandQueue(), GetComputeQueue());
 }
 
 void Renderer::OnResize(UINT width, UINT height) {

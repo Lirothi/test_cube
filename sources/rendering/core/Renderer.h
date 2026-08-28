@@ -74,6 +74,16 @@ inline bool g_barrierFlipTrace = false;
 //
 // The probe SUBMITS NOTHING — it opens a list, checks it, closes it and drops it. Default off.
 inline bool g_computeLaneProbe = false;
+
+// Async-compute plan step 2: `--async-empty-submit` submits ONE empty COMPUTE command list to the
+// async queue every frame, so the two-queue frame fence is exercised by a real submission instead
+// of by a queue that never receives work.
+//
+// It is the step's proof device, not a feature: without it the compute fence is signalled on an
+// idle queue and completes instantly, so every "wait for both queues" added in step 2 would be
+// vacuously true and the machinery would ship untested. Step 8 replaces it with the first real
+// pass. Default off.
+inline bool g_asyncEmptySubmit = false;
 } // namespace render
 
 class Renderer {
@@ -592,6 +602,8 @@ private:
     // Async-compute step 1: the one-shot COMPUTE-lane probe (see render::g_computeLaneProbe).
     // Runs at the end of the first BeginFrame that has frame resources, then never again.
     void ProbeComputeLaneOnce();
+    // Async-compute step 2: one empty COMPUTE submission per frame (see render::g_asyncEmptySubmit).
+    void SubmitEmptyComputeWork();
     std::pair<UINT, UINT> ComputeScaledTextureSize(UINT referenceWidth, UINT referenceHeight, Math::float2 scale) const;
     std::pair<UINT, UINT> ComputeReflectionTextureSize(UINT referenceWidth, UINT referenceHeight) const;
 #if WITH_EDITOR

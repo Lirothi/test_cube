@@ -1,6 +1,6 @@
 # Async compute — architecture plan
 
-**Status: STEP 1 DONE (uncommitted). Steps 2-11 not started.**
+**Status: STEP 1 COMMITTED (`7ac30fe`). STEP 2 DONE (uncommitted). Steps 3-11 not started.**
 
 **Goal: the renderer gains a second execution queue as a first-class architectural capability.**
 The render graph learns to schedule a pass onto a `D3D12_COMMAND_LIST_TYPE_COMPUTE` queue,
@@ -500,6 +500,55 @@ close it, submit it, signal, and make the slot's release depend on that signal t
 **Acceptance:** all three gates CLEAN with the empty compute submission running; a Debug assert
 fires if any per-frame ring or allocator is reused before both fences; 500+ frames of
 `--scene-stress`; GPU.Frame unchanged within noise.
+
+**DONE 2026-08-28, uncommitted.** 240 insertions / 16 deletions across `FrameScheduler.{h,cpp}`,
+`Renderer.{h,cpp}`, `main.cpp`.
+
+- **Two fences, one value.** `Fence.Frame.Direct` + `Fence.Frame.AsyncCompute`, both signalled with
+  the same value per slot, so `frameFenceValues_` stays one array and "free" is one expression.
+  NOT one fence signalled by both queues: a shared fence completes out of order, so
+  `GetCompletedValue() >= V` would stop meaning "both queues passed V" — which is the only question
+  this class answers.
+- **`WaitForFrame`** waits on both (direct first — it is almost always the later of the two, so the
+  second wait usually returns immediately). **`IsFrameComplete`** is the non-blocking form.
+- **`SignalFrame(direct, compute, slot)`** signals both. When the device refused a compute queue the
+  compute fence is advanced **from the CPU**, so the "both passed V" rule needs no null special case
+  anywhere else.
+- **`WaitForGpuIdle(direct, compute)`** idles both. This is the whole reason the step is here and
+  not in hardening: every resize, level switch, editor command, thumbnail eviction, screenshot and
+  shutdown path in the engine — ~50 call sites — funnels through `Renderer::WaitForPreviousFrame`
+  into this one function, so one edit makes all of them queue-correct.
+- **`SignalCrossQueue` / `WaitCrossQueue`** on a third fence (`Fence.CrossQueue`), dormant, for
+  step 6's D2 edges. `WaitCrossQueue` is a GPU-side `ID3D12CommandQueue::Wait` — a cross-queue
+  dependency must cost the CPU nothing.
+- **`--async-empty-submit`** puts one empty COMPUTE list on the async queue every frame. It is the
+  step's proof device: without it the compute fence is signalled on an idle queue and completes
+  instantly, so every wait added here would be vacuously true and would ship untested.
+- **The Debug assert** sits in `BeginFrame` immediately before the per-frame pools are reset — the
+  exact point where reuse would happen.
+
+**Results.** Both builds `0/0` (object timestamps checked, not just the log). All three gates
+`verdict: CLEAN` **with `--async-empty-submit` on**, plus a 45-iteration run (well past 500 frames)
+CLEAN. `0 MISSING`, and `--canonical-check` reported `frame end: 0 of 257 declared resources
+off-canonical`.
+
+**The assert was PROVEN to fire, not just written.** A throwaway build stranded the compute half
+(never signal its fence, skip its wait) and logged the predicate:
+
+```
+[step2-selftest] slot=0 frameValue=5 directCompleted=6 computeCompleted=4 -> IsFrameComplete=FALSE
+```
+
+The direct fence had already passed (6 >= 5) — under the old single-queue rule that slot would have
+been declared free and its rings recycled — while the compute fence sat at 4. The guard catches
+exactly the case the old code could not see. The self-test was then **removed entirely** rather than
+left behind a `#if 0`: a disabled switch that silently corrupts frames when flipped is a landmine,
+not documentation. Confirmed removed by the rebuilt `FrameScheduler.obj` returning to its exact
+pre-self-test byte size.
+
+**Perf: inert.** `GPU.Frame` mean 3258 us -> 3251 us (**-0.2 %**) with the empty submission running,
+against a 0.2 % run-to-run floor. Per-scope deltas all <=18 us and mixed in sign — noise, no
+systematic shift.
 
 ### Step 3 — the profiler sees the second queue
 

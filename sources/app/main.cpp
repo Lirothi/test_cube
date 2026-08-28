@@ -297,6 +297,14 @@ int WINAPI WinMain(
         render::g_computeLaneProbe = true;
     }
 
+    // Async-compute plan step 2: "--async-empty-submit" puts one EMPTY compute command list on the
+    // async queue every frame, so the two-queue frame fence is exercised by a real submission. The
+    // step's proof device — the gates are run with it ON. Parsed above the scene-stress branch for
+    // the same reason as everything around it.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--async-empty-submit")) {
+        render::g_asyncEmptySubmit = true;
+    }
+
     // Same reason as --barrier-cmp: parsed here rather than with the other boot flags below,
     // because the scene-stress branch returns first. Without it the stress run always takes the
     // VSM path and Main_CSM is never even added to the graph, so nothing exercises it.
