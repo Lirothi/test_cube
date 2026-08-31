@@ -365,7 +365,11 @@ namespace scene_internal
                                   csmCfg ? csmCfg->csmReceiverBias : 0.9f,
                                   csmCfg ? (csmCfg->shadowFilterSharpen * 7.0f + 1.0f) : 1.0f,
                                   (csmCfg && !csmCfg->pcfOverBlurCorrection) ? 0.0f : 1.0f);
-        vc.csmFilterParams = float4(0.0f, 0.0f, 0.0f, csmCfg ? csmCfg->normalBiasInTexels : 1.0f);
+        // S10 rides the three spare slots of glass's existing float4 (see glass.hlsl).
+        vc.csmFilterParams = float4(cascades.splitsVS[SceneFrameData::kCascades],
+                                    csmCfg ? csmCfg->blendFraction : 0.1f,
+                                    csmCfg ? csmCfg->distanceFadeFraction : 0.1f,
+                                    csmCfg ? csmCfg->normalBiasInTexels : 1.0f);
 
         return UploadFrameCB(renderer, vc);
     }

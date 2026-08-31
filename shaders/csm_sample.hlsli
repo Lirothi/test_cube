@@ -37,6 +37,11 @@ struct CsmParams
     float    overBlurCorrect; // S8: 1 = apply UE's Square(shadow), 0 = off
     // Receiver normal offset in TEXELS; the world amount is this times cascadeTexelWS[c].
     float    normalBiasTexels;
+    // S10. `farSplit` is splitsVS[4] -- the last cascade's far plane, which splitsVS.xyzw cannot
+    // carry (it holds splits 0..3). Both fractions are of a cascade's OWN slice length.
+    float    farSplit;
+    float    blendFraction;
+    float    distanceFadeFraction;
     // S8 filter mode. 0 = legacy 3x3 SampleCmp box (A/B + emergency fallback),
     // 1 = 4x4 tent / 4 gathers  (UE Manual3x3PCF, their SHADOW_QUALITY 3),
     // 2 = 6x6 tent / 9 gathers  (UE Manual5x5PCF, their SHADOW_QUALITY 4-5 -- and r.ShadowQuality
@@ -44,8 +49,8 @@ struct CsmParams
     uint     useGatherPcf;
 };
 
-// Fraction of the split distance over which cascade c cross-fades into cascade c+1.
-static const float kCsmBlendFraction = 0.1f;
+// (S10 moved the cross-fade fraction into CsmParams -- it is UE's CascadeTransitionFraction, an
+// authored property, not a shader constant.)
 
 // 4 = the sample fell past cascade 3, i.e. there is no shadow data for this pixel at all. Kept as a
 // named constant because the debug tint (S0.3) and the fallback chain must agree on it.
@@ -265,15 +270,23 @@ float CsmSampleShadow(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, 
     const int idx = CsmChooseCascade(p, Pws);
     float shadow = CsmSampleChain(p, atlas, cmp, smp, idx, Pws, Nws, NdotL, outCascade);
 
-    // Blend band: in a band just before cascade idx's far split, cross-fade into cascade idx+1 so
-    // the hard switch (and its jump in bias / texel density / PCF radius) becomes a gradient instead
-    // of a seam. Cascade 3 has no coarser neighbour. Costs a second sample only inside the band.
+    const float zView = dot(Pws - p.camPosWS, p.camDirWS);
+    // This cascade's own slice. near = the previous split (the camera near plane for c0), far = its
+    // own. UE size the transition off THIS length (CascadeTransitionFraction * (SplitFar-SplitNear),
+    // DirectionalLightComponent.cpp:925); measuring it off the absolute distance instead made far
+    // cascades fade over half again too much ground.
+    const float sNear = (idx == 0) ? p.splitsVS.x : ((idx == 1) ? p.splitsVS.y
+                       : ((idx == 2) ? p.splitsVS.z : p.splitsVS.w));
+    const float sFar  = (idx == 0) ? p.splitsVS.y : ((idx == 1) ? p.splitsVS.z
+                       : ((idx == 2) ? p.splitsVS.w : p.farSplit));
+
     if (idx < 3)
     {
-        const float zView = dot(Pws - p.camPosWS, p.camDirWS);
-        const float splitNext = idx == 0 ? p.splitsVS.y : (idx == 1 ? p.splitsVS.z : p.splitsVS.w);
-        const float band = splitNext * kCsmBlendFraction;
-        const float t = saturate((zView - (splitNext - band)) / max(1e-4f, band));
+        // Cross-fade into the next cascade so the switch (and its jump in bias, texel density and
+        // kernel footprint) reads as a gradient rather than a seam. Costs a second sample only
+        // inside the band.
+        const float band = max(1e-4f, (sFar - sNear) * p.blendFraction);
+        const float t = saturate((zView - (sFar - band)) / band);
         if (t > 0.0f)
         {
             // The partner's resolved index is deliberately dropped: outCascade stays the primary
@@ -282,6 +295,15 @@ float CsmSampleShadow(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, 
             const float shadowNext = CsmSampleChain(p, atlas, cmp, smp, idx + 1, Pws, Nws, NdotL, blendCascade);
             shadow = lerp(shadow, shadowNext, t);
         }
+    }
+    else if (p.distanceFadeFraction > 0.0f)
+    {
+        // The last cascade has no coarser neighbour to hand over to, so UE pull its fade plane
+        // INWARD by the same extension and fade the shadow out to lit. Skipping this is what leaves
+        // a hard terminator line at maxDistance -- the shadow simply stops.
+        const float fade = max(1e-4f, (sFar - sNear) * p.distanceFadeFraction);
+        const float t = saturate((zView - (sFar - fade)) / fade);
+        shadow = lerp(shadow, 1.0f, t);
     }
 
     return shadow;

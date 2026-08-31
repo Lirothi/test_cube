@@ -2071,6 +2071,32 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "\n"
                                       "UE has no equivalent - their legacy CSM relies on the depth pass alone, and their\n"
                                       "stock defaults acne and peter-pan visibly. This is deliberately not a transcription.");
+                ImGui::SeparatorText("Cascade transition");
+                ImGui::SliderFloat("Blend fraction", &csmCfg.blendFraction, 0.0f, 0.3f, "%.3f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("WHAT IT DOES: over the last this-much of a cascade's OWN SLICE LENGTH, cross-fade\n"
+                                      "into the next cascade instead of switching at the split. Hides the jump in texel\n"
+                                      "density, bias and kernel footprint that a hard switch makes visible as a seam.\n"
+                                      "\n"
+                                      "COST: pixels inside the band take a SECOND shadow sample. 0 = hard switch.\n"
+                                      "\n"
+                                      "Fraction of the SLICE, not of the absolute distance - that was the bug this fixes:\n"
+                                      "measured off the distance, c2 (35..100 m) faded over 10 m where UE fade over 6.5.\n"
+                                      "[CascadeTransitionFraction = 0.1, UE clamp it to 0.3 and so does this slider]");
+                ImGui::SliderFloat("Distance fade", &csmCfg.distanceFadeFraction, 0.0f, 0.3f, "%.3f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("WHAT IT DOES: the LAST cascade has no coarser neighbour to hand over to, so instead\n"
+                                      "of blending it fades the shadow out to fully lit over the last this-much of its slice.\n"
+                                      "\n"
+                                      "WITHOUT IT shadows end in a hard terminator LINE at the shadow distance - everything\n"
+                                      "is shadowed at 299 m and nothing at 301 m. That line is the artifact this removes.\n"
+                                      "\n"
+                                      "COST: shadows go missing slightly earlier than the shadow distance says. Raise the\n"
+                                      "Split distances / max distance if that bites before this does.\n"
+                                      "0 = the hard line back (the rollback check).\n"
+                                      "\n"
+                                      "UE do the same by moving the last cascade's fade plane inward by the same extension.");
+
                 if (ImGui::Button("Reset CSM config to defaults"))
                     csmCfg = CascadeShadowConfig{};
                 if (ImGui::IsItemHovered())

@@ -72,7 +72,7 @@ cbuffer GlassView : register(b1)
     // S8: x = 0 legacy 3x3 SampleCmp box, 1 = soft-occlusion ramp + 4x4 Gather tent. APPENDED at the
     // tail on purpose -- inserting anywhere else shifts every offset after it.
     float4 csmFilterMode;         // x = kernel mode, y = receiver bias, z = sharpen, w = over-blur
-    float4 csmFilterParams;       // w = receiver normal bias in texels (xyz spare)
+    float4 csmFilterParams;       // S10 x = far split, y = blend, z = distance fade; w = normal bias
 };
 
 Texture2D SceneOpaque : register(t0);
@@ -228,6 +228,9 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
     p.sharpen          = csmFilterMode.z;
     p.overBlurCorrect  = csmFilterMode.w;
     p.normalBiasTexels = csmFilterParams.w;
+    p.farSplit             = csmFilterParams.x;
+    p.blendFraction        = csmFilterParams.y;
+    p.distanceFadeFraction = csmFilterParams.z;
     p.useGatherPcf     = (uint)csmFilterMode.x;
 
     int cascade;

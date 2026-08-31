@@ -59,6 +59,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle csmDebugMode;      // S0.3: Legacy CSM cascade-tint visualization
     Material::CBFieldHandle csmFilterMode;     // S8: soft-occlusion ramp + Gather tent kernel
     Material::CBFieldHandle csmFilterParams;   // S8: receiver bias / sharpen / over-blur
+    Material::CBFieldHandle csmFadeParams;     // S10: cascade cross-fade + distance fade
     // The sky's indirect specular, moved here from compose so the SSR pass can see it.
     Material::CBFieldHandle enableSkySpecular, skySpecMipCount, skyboxIntensity;
 
@@ -541,6 +542,7 @@ struct LightingPassConstants
     uint32_t csmDebugMode = 0;  // S0.3: 0 = off, 1 = cascade tint (Legacy CSM only)
     uint32_t csmFilterMode = 2; // S8 kernel: 0 = 3x3 box, 1 = 4x4 tent, 2 = 6x6 tent (UE default)
     float4 csmFilterParams{};   // S8: x = receiver bias, y = sharpen (shader units), z = over-blur
+    float4 csmFadeParams{};     // S10: x = far split, y = blend fraction, z = distance fade
     // Mirrors the same three fields in ComposePassConstants; both passes must agree or the sky
     // term one adds and the other subtracts stop cancelling.
     uint32_t enableSkySpecular = 1;

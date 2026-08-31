@@ -89,6 +89,17 @@ struct CascadeShadowConfig
     // revision of the plan had 3.0, i.e. three times UE's clamp.
     float maxSlope = 1.0f;
 
+    // --- S10: cascade cross-fade + distance fade ------------------------------------------------
+    // [UDirectionalLightComponent::CascadeTransitionFraction = 0.1, clamped to 0.3] Fraction of a
+    // cascade's OWN SLICE LENGTH over which it cross-fades into the next one. Was a hardcoded
+    // `kCsmBlendFraction` in csm_sample.hlsli measured off the ABSOLUTE split distance instead --
+    // on c2 (35..100 m) that made the band 10 m where UE's is 6.5.
+    float blendFraction = 0.1f;
+    // The last cascade has no coarser neighbour, so UE move its fade plane INWARD by the same
+    // extension and let the shadow fade to "lit" (DirectionalLightComponent.cpp:936-941). Without
+    // it the shadows end in a hard terminator line at `maxDistance`. 0 restores that line.
+    float distanceFadeFraction = 0.1f;
+
     // --- Split distribution ------------------------------------------------------------------
     // OFF (default): the four `sliceDistances` above are authored by hand.
     // ON: only `maxDistance` is authored; the three intermediate splits come from UE's exponential

@@ -381,6 +381,11 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
             // ShadowRendering.h:1299). Done on the CPU, once, exactly as they do it.
             const CascadeShadowConfig* cfg = frame_->cascadeConfig;
             constants.csmFilterMode = cfg ? cfg->filterMode : 1u; // 0 box, 1 = 4x4 tent, 2 = 6x6 tent
+            // S10: splitsVS[4] cannot ride cascadeSplits (that float4 is splits 0..3), so the last
+            // cascade's far plane travels here -- without it c3 has no slice length to fade over.
+            constants.csmFadeParams = float4(cascades.splitsVS[kCascades],
+                                             cfg ? cfg->blendFraction : 0.1f,
+                                             cfg ? cfg->distanceFadeFraction : 0.1f, 0.0f);
             constants.csmFilterParams = cfg
                 ? float4(cfg->csmReceiverBias, cfg->shadowFilterSharpen * 7.0f + 1.0f,
                          cfg->pcfOverBlurCorrection ? 1.0f : 0.0f, cfg->normalBiasInTexels)

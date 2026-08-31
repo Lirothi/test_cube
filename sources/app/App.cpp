@@ -289,6 +289,22 @@ namespace
         if (setting == "csm.maxSlope") { scene.CascadeConfig().maxSlope = std::max(0.0f, value); return true; }
         if (setting == "csm.depthBias")  { scene.CascadeConfig().depthBiasInTexels  = std::max(0.0f, value); return true; }
         if (setting == "csm.normalBias") { scene.CascadeConfig().normalBiasInTexels = std::max(0.0f, value); return true; }
+        // S10. UE clamp CascadeTransitionFraction to 0.3; the same cap applies to both.
+        // Shadow distance, headless. S10's terminator lives at this plane, and on a small level
+        // it is otherwise off-screen -- pulling it in is how the fade gets tested at all.
+        if (setting == "csm.maxDistance")
+        {
+            CascadeShadowConfig& c = scene.CascadeConfig();
+            const float f = std::max(1.0f, value);
+            const float scale = f / std::max(1e-3f, c.maxDistance);
+            c.maxDistance = f;
+            // Scale the authored splits with it, or BuildSplitScheme clamps them all to the new
+            // far and every cascade collapses onto the same plane.
+            for (float& d : c.sliceDistances) { d *= scale; }
+            return true;
+        }
+        if (setting == "csm.blendFraction") { scene.CascadeConfig().blendFraction = std::clamp(value, 0.0f, 0.3f); return true; }
+        if (setting == "csm.distanceFade")  { scene.CascadeConfig().distanceFadeFraction = std::clamp(value, 0.0f, 0.3f); return true; }
         // The Ctrl-key toggle, headless. Two draw paths write the SAME atlas (GPU-driven indirect
         // vs the CPU object walk) and S6 has to bias both identically -- that is only checkable
         // if a capture can select the path.

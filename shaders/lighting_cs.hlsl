@@ -136,6 +136,8 @@ cbuffer PerFrame : register(b0)
     uint csmFilterMode;
     // S8 knobs: x = receiver bias, y = sharpen (already in UE shader units), z = over-blur correct.
     float4 csmFilterParams;
+    // S10: x = last cascade's far split, y = blend fraction, z = distance-fade fraction.
+    float4 csmFadeParams;
     // The sky specular block, mirroring compose's own fields so both passes agree by construction.
     // `skySpecMipCount` 0 also selects the raw-cube fallback path (see IblSkyRadiance).
     uint enableSkySpecular;
@@ -251,6 +253,9 @@ CsmParams MakeCsmParams()
     p.sharpen          = csmFilterParams.y;
     p.overBlurCorrect  = csmFilterParams.z;
     p.normalBiasTexels = csmFilterParams.w;
+    p.farSplit             = csmFadeParams.x;
+    p.blendFraction        = csmFadeParams.y;
+    p.distanceFadeFraction = csmFadeParams.z;
     p.useGatherPcf     = csmFilterMode;
     return p;
 }
