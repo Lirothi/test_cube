@@ -1429,12 +1429,14 @@ Shipped, and neither is a diagnosis:
   `Present` was a bare `ThrowIfFailed`, so the real occurrence left NOTHING on disk. The reason
   class is most of the answer: `DEVICE_HUNG` = a wait whose signal never came, `DEVICE_RESET` = a
   fault in this app's work, `DRIVER_INTERNAL_ERROR` = a malformed command.
-  The per-frame poll is switchable with **`--no-dr-check`** (`render::g_deviceRemovalCheck`), and the
-  switch is labelled with what it actually buys rather than left to imagination: `GetDeviceRemovedReason`
-  costs **0.207 us** — 20000 calls over three Release runs gave 0.2060 / 0.2069 / 0.2109 us — so once
-  per frame against a ~3270 us CPU frame is **0.006 %**, some fifty times under the 0.6 % run-to-run
-  spread. The flag is there to rule the call out, not to buy frame time. `Present`'s catch reports
-  either way: that path costs nothing until something has already gone wrong.
+  The per-frame poll is **DEFAULT OFF** and turned on with **`--dr-check`**
+  (`render::g_deviceRemovalCheck`). Off by choice, not by cost: `GetDeviceRemovedReason` was measured
+  at **0.207 us** — 20000 calls over three Release runs gave 0.2060 / 0.2069 / 0.2109 us — so once per
+  frame against a ~3270 us CPU frame is **0.006 %**, some fifty times under the 0.6 % run-to-run
+  spread, i.e. unmeasurable. It is off to keep the frame loop free of a diagnostic nobody is
+  currently using; turn it on when hunting a removal that does not surface at Present.
+  `Present`'s catch is NOT gated and always reports: that path costs nothing until something has
+  already gone wrong, so there is no reason to be able to lose it.
 
 **USER REPORT after the drain moved to the graph-build point: rapid clicking no longer fires it.**
 One session, so it is evidence and not proof — but it is the first thing that has changed the
@@ -1506,6 +1508,56 @@ Gates: `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN; the same i
 `--shadow-mode=legacy` CLEAN; the same under `--no-async-compute` CLEAN. Barriers
 `enhanced=8050 legacy=0` (7912 before — the prologue release and the foam acquire), and legacy=0
 confirms the new narrowing forces no fallbacks.
+
+## FIXED: async BuildAS hung the device (in-place wind BLAS refit)
+
+Open since step 10 and only caught once the diagnostics below existed. `Main_BuildAS` on the compute
+queue intermittently hung the GPU: **DXGI_ERROR_DEVICE_HUNG, no page fault**.
+
+**Cause.** `AccelerationStructureManager::BuildOrRefitWindSlot` updated the wind BLAS **in place**
+(`Source == Dest == s.blas`, one buffer and one scratch per slot, no per-frame copies), while
+`Main_BuildAS` is registered with **no prereqs at all** — its compute segment is submitted first,
+with no cross-queue wait. With kFrameCount frames in flight, frame N+1's refit therefore overwrote a
+BLAS that frame N's graphics RT passes (RTResolve / GlassReflections / RTDebug) were still tracing.
+A traversal over a half-rewritten BVH does not fault, it spins. On the graphics queue the same refit
+was strictly ordered after those readers, which is why it never bit before step 10.
+
+**Evidence, in the order it arrived:**
+
+| arm (~3500-frame sessions) | hangs |
+|---|---|
+| async on | **4 / 6** |
+| `--no-async-compute` | 0 / 6 |
+| `--set=rt.windBlas:0` (async on) | 0 / 4 |
+| HEAD without the ObjectCompute move | 1 / 4 — so not that change |
+| **after the fix** | **0 / 8** |
+
+DRED, once it printed the op HISTORY rather than just a count, put the stall inside the build itself:
+`op[15] BUILD_AS, op[16] BUILD_AS, op[17] <-- STALLED HERE BUILD_AS`, with every later compute list
+parked at BEGIN_COMMAND_LIST and all graphics done.
+
+**Fix.** One BLAS + scratch **per frame in flight** (`WindBlasSlot::frames`). The deformed VB does
+not need it: only the compute queue touches it, and that queue is serial. The rebuild cadence moved
+from a frame-number test to a per-copy refit count (`kWindRefitsBeforeRebuild`), because a copy is
+now only touched every kFrameCount frames and the old rule would have tripled each chain's length.
+
+**Cost:** GPU.Frame 3049 -> 3080 us, i.e. +1.0 % against a 1.4 % control spread — no measurable
+regression. `Pass_BuildAS` mean actually fell (178 -> 146 us) while its max rose (877 -> 1130 us):
+fewer, larger rebuilds. Total AS memory **25.24 MB** including the tripling, so the extra is bounded
+by ~17 MB and is not a real budget item. Gate `--scene-stress-gbv=20 --barrier-cmp
+--canonical-check` CLEAN, `enhanced=8050 legacy=0`.
+
+**Why nothing caught this earlier, worth keeping:**
+
+- **GBV cannot.** No API rule is broken — the commands are legal, `Close()` succeeds, the barriers
+  are all present. And GBV serialises the queues, which removes the very concurrency that causes it.
+  The debug layer catches CONTRACT violations (it named the PIXEL_SHADING sync instantly); this is a
+  data race between queues, which is a different category.
+- **The report did not survive.** A device removal usually surfaces as a `ThrowIfFailed`, and on a
+  worker thread that is an uncaught throw: the process dies through `std::terminate` (0xC0000409)
+  before the next BeginFrame. One hang in three left nothing on disk until a `std::set_terminate`
+  handler was installed.
+- **A breadcrumb count names nothing.** "op 17 of 29" became useful only as `op[17] BUILD_AS`.
 
 ## Non-goals
 

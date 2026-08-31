@@ -7,6 +7,8 @@
 #include "core/Helpers.h"
 #include <cassert>
 #include <cmath>
+#include <cstdlib>   // std::abort, for the terminate handler that reports a device removal
+#include <exception> // std::set_terminate
 #include <vector>
 #include <utility>
 #include <dxgidebug.h>
@@ -366,6 +368,20 @@ void Renderer::RefreshCurrentFrameCaches() {
 static bool s_asyncModeApplied = false;
 static bool s_deviceRemovalReported = false;
 
+// The renderer the terminate handler below reports through, and the one-shot install flag.
+//
+// A device removal usually surfaces as a ThrowIfFailed, and when that happens on a WORKER thread
+// (any pass body recording commands) the throw is never caught: the process dies through
+// std::terminate with exit code 0xC0000409 and the report never runs, because the next BeginFrame
+// never happens. Measured, not theorised — one hang in three left nothing on disk for exactly this
+// reason while the others logged fine. A terminate handler is the only place that path passes.
+static Renderer* s_reportRenderer = nullptr;
+static void ReportOnTerminate()
+{
+    if (s_reportRenderer) { s_reportRenderer->ReportDeviceRemovalOnce(); }
+    std::abort();
+}
+
 // Async-compute: apply a change to the async switch, draining BOTH queues first.
 //
 // Called from the ONE place the new value first matters — immediately before the frame's graph is
@@ -449,7 +465,105 @@ void Renderer::ReportDeviceRemovalOnce()
             static_cast<unsigned long long>(totalFrameNumber_),
             render::g_noAsyncCompute ? "off" : "on",
             render::g_asyncComputeLists, render::g_crossQueueWaits);
+        DumpDredBreadcrumbs(f);
         std::fclose(f);
+    }
+}
+
+// The driver's own account of what was executing when the device died, appended to the same report.
+//
+// DRED is armed by `--dred` (and automatically in Debug / under --scene-stress), but until now the
+// only code that READ it back lived inside the scene-stress harness — so an interactive run could
+// arm the breadcrumbs and still produce nothing. That is the gap this closes.
+//
+// Breadcrumbs are printed by COMMAND LIST NAME rather than by op code, because the names are the
+// PASS names (SetCommandListName) — "which pass was still running" is the question a hang actually
+// poses, and an op-code table would answer a different one.
+// Only the ops this engine can actually record; anything else prints its number. A partial table
+// that is honest about being partial beats a 45-entry transcription nobody will keep in step.
+static const char* DredOpName(D3D12_AUTO_BREADCRUMB_OP op)
+{
+    switch (op) {
+    case D3D12_AUTO_BREADCRUMB_OP_SETMARKER:                 return "SETMARKER";
+    case D3D12_AUTO_BREADCRUMB_OP_BEGINEVENT:                return "BEGINEVENT";
+    case D3D12_AUTO_BREADCRUMB_OP_ENDEVENT:                  return "ENDEVENT";
+    case D3D12_AUTO_BREADCRUMB_OP_DRAWINSTANCED:             return "DRAWINSTANCED";
+    case D3D12_AUTO_BREADCRUMB_OP_DRAWINDEXEDINSTANCED:      return "DRAWINDEXEDINSTANCED";
+    case D3D12_AUTO_BREADCRUMB_OP_EXECUTEINDIRECT:           return "EXECUTEINDIRECT";
+    case D3D12_AUTO_BREADCRUMB_OP_DISPATCH:                  return "DISPATCH";
+    case D3D12_AUTO_BREADCRUMB_OP_COPYBUFFERREGION:          return "COPYBUFFERREGION";
+    case D3D12_AUTO_BREADCRUMB_OP_COPYRESOURCE:              return "COPYRESOURCE";
+    case D3D12_AUTO_BREADCRUMB_OP_CLEARUNORDEREDACCESSVIEW:  return "CLEARUAV";
+    case D3D12_AUTO_BREADCRUMB_OP_RESOURCEBARRIER:           return "RESOURCEBARRIER";
+    case D3D12_AUTO_BREADCRUMB_OP_EXECUTEBUNDLE:             return "EXECUTEBUNDLE";
+    case D3D12_AUTO_BREADCRUMB_OP_RESOLVEQUERYDATA:          return "RESOLVEQUERYDATA";
+    case D3D12_AUTO_BREADCRUMB_OP_BUILDRAYTRACINGACCELERATIONSTRUCTURE: return "BUILD_AS";
+    case D3D12_AUTO_BREADCRUMB_OP_COPYRAYTRACINGACCELERATIONSTRUCTURE:  return "COPY_AS";
+    case D3D12_AUTO_BREADCRUMB_OP_EMITRAYTRACINGACCELERATIONSTRUCTUREPOSTBUILDINFO:
+                                                             return "EMIT_AS_POSTBUILD";
+    default: break;
+    }
+    static char other[24];
+    std::snprintf(other, sizeof(other), "op#%d", static_cast<int>(op));
+    return other;
+}
+
+void Renderer::DumpDredBreadcrumbs(FILE* f)
+{
+    if (!f || !GetDevice()) { return; }
+    Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedData> dred;
+    if (FAILED(GetDevice()->QueryInterface(IID_PPV_ARGS(&dred)))) {
+        std::fprintf(f, "  DRED: unavailable (run with --dred to arm it before device creation)\n");
+        return;
+    }
+
+    D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT crumbs{};
+    if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&crumbs))) {
+        int printed = 0;
+        for (const D3D12_AUTO_BREADCRUMB_NODE* n = crumbs.pHeadAutoBreadcrumbNode;
+             n != nullptr && printed < 12; n = n->pNext) {
+            const UINT last = n->pLastBreadcrumbValue ? *n->pLastBreadcrumbValue : 0u;
+            // A node whose last completed op EQUALS its op count finished; the interesting ones are
+            // those that did not, and they are what a hang leaves behind.
+            const bool finished = (last == n->BreadcrumbCount);
+            std::fprintf(f, "  DRED %s list='%ls' queue='%ls' ops=%u lastCompleted=%u\n",
+                         finished ? "done   " : "PENDING",
+                         n->pCommandListDebugNameW ? n->pCommandListDebugNameW : L"<unnamed>",
+                         n->pCommandQueueDebugNameW ? n->pCommandQueueDebugNameW : L"<unnamed>",
+                         n->BreadcrumbCount, last);
+            // For a list that STOPPED, "op 14 of 29" names nothing on its own. The op history
+            // does: print the window around the stall so the failing operation has a TYPE.
+            if (!finished && n->pCommandHistory && n->BreadcrumbCount > 0) {
+                const UINT lo = last > 2u ? last - 2u : 0u;
+                const UINT hi = (last + 3u) < n->BreadcrumbCount ? (last + 3u) : n->BreadcrumbCount;
+                for (UINT i = lo; i < hi; ++i) {
+                    std::fprintf(f, "      op[%u]%s %s\n", i, (i == last) ? " <-- STALLED HERE" : "",
+                                 DredOpName(n->pCommandHistory[i]));
+                }
+            }
+            ++printed;
+        }
+        if (printed == 0) { std::fprintf(f, "  DRED: no breadcrumb nodes\n"); }
+    }
+
+    D3D12_DRED_PAGE_FAULT_OUTPUT pf{};
+    if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&pf))) {
+        std::fprintf(f, "  DRED page fault VA=0x%llx\n",
+                     static_cast<unsigned long long>(pf.PageFaultVA));
+        int printed = 0;
+        for (const D3D12_DRED_ALLOCATION_NODE* a = pf.pHeadExistingAllocationNode;
+             a != nullptr && printed < 8; a = a->pNext, ++printed) {
+            std::fprintf(f, "    existing alloc '%ls' type=%d\n",
+                         a->ObjectNameW ? a->ObjectNameW : L"<unnamed>",
+                         static_cast<int>(a->AllocationType));
+        }
+        printed = 0;
+        for (const D3D12_DRED_ALLOCATION_NODE* a = pf.pHeadRecentFreedAllocationNode;
+             a != nullptr && printed < 8; a = a->pNext, ++printed) {
+            std::fprintf(f, "    recently freed '%ls' type=%d\n",
+                         a->ObjectNameW ? a->ObjectNameW : L"<unnamed>",
+                         static_cast<int>(a->AllocationType));
+        }
     }
 }
 
@@ -460,7 +574,15 @@ void Renderer::BeginFrame() {
     // a TDR that kills the queue between frames — and until now it surfaced as a bare throw with
     // nothing written to disk, which is exactly why the one real report of the async toggle removing
     // the device left no evidence at all. One call per frame catches it wherever it happened, for a
-    // measured 0.207 us (see g_deviceRemovalCheck). `--no-dr-check` skips the poll.
+    // measured 0.207 us (see g_deviceRemovalCheck). DEFAULT OFF; `--dr-check` turns the poll on.
+    //
+    // The terminate handler is installed here rather than at construction only because this is the
+    // first point at which a Renderer is guaranteed to be fully built and about to touch the GPU.
+    // It costs one branch per frame and it is what makes a worker-thread death reportable at all.
+    if (s_reportRenderer == nullptr) {
+        s_reportRenderer = this;
+        std::set_terminate(&ReportOnTerminate);
+    }
     if (render::g_deviceRemovalCheck) {
         ReportDeviceRemovalOnce();
     }

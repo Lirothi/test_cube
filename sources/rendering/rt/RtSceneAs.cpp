@@ -10,6 +10,8 @@
 #include "rendering/rt/RtSceneAs.h"
 
 #include <algorithm>
+#include <cstdio>
+#include "core/diagnostics/DiagPaths.h" // the AS VRAM line also goes to disk, not just DBWIN
 #include <cstring>
 #include <vector>
 
@@ -500,14 +502,16 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                     if (planOk[w] == 0) { continue; }
                     const WindPlanEntry& pe = windPlan[w];
                     const D3D12_GPU_VIRTUAL_ADDRESS blasVa = asManager_.BuildOrRefitWindSlot(
-                        pe.slot, rtInstances_[pe.entryIndex].nonOpaqueSlots, frameNo, cl4);
+                        pe.slot, rtInstances_[pe.entryIndex].nonOpaqueSlots, frameNo,
+                        renderer->GetCurrentFrameIndex(), cl4);
                     rtInstances_[pe.entryIndex].blasOverride = blasVa;
                 }
                 for (size_t w = 0; w < windPlan.size(); ++w)
                 {
                     if (planOk[w] == 0) { continue; }
                     barriers::EmitAccelerationStructureBuildBarrier(
-                        cl4, asManager_.WindBlasResource(windPlan[w].slot));
+                        cl4, asManager_.WindBlasResource(windPlan[w].slot,
+                                                         renderer->GetCurrentFrameIndex()));
                 }
             }
 
@@ -527,6 +531,14 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                               "[RT] Acceleration structures: %.2f MB VRAM, %zu instances.\n",
                               asManager_.GetAsMemoryBytes() / (1024.0 * 1024.0), rtInstances_.size());
                 OutputDebugStringA(buf);
+                // ...and to disk. This is the only report of what the acceleration structures
+                // cost, and DBWIN-only meant it could not be read on a headless run — which is
+                // exactly where the per-frame-in-flight BLAS copies had to be priced.
+                if (FILE* vf = nullptr;
+                    fopen_s(&vf, diag::LogPath("device_caps.log").c_str(), "a") == 0 && vf) {
+                    std::fputs(buf, vf);
+                    std::fclose(vf);
+                }
                 asVramLogged_ = true;
             }
         }

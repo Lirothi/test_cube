@@ -134,16 +134,20 @@ inline bool g_noAsyncCompute = false;
 inline std::uint32_t g_asyncComputeLists = 0;
 inline std::uint32_t g_crossQueueWaits = 0;
 
-// Poll GetDeviceRemovedReason() once per BeginFrame, so a device removal leaves a file behind no
-// matter where it surfaces — a failed Present, a fence wait that never returns, a TDR between
-// frames. `--no-dr-check` turns the POLL off; the report from Present's own catch block stays
-// either way, because that path costs nothing until something has already gone wrong.
+// `--dr-check`: poll GetDeviceRemovedReason() once per BeginFrame, so a device removal leaves a
+// file behind no matter where it surfaces — a failed Present, a fence wait that never returns, a
+// TDR between frames.
 //
-// MEASURED, so the switch does not pretend to be a perf lever: GetDeviceRemovedReason costs
-// **0.207 us** (20000 calls, three Release runs: 0.2060 / 0.2069 / 0.2109 us). Once per frame
-// against a ~3270 us CPU frame is 0.006 % — some fifty times under the 0.6 % run-to-run spread,
-// i.e. unmeasurable. The flag exists to rule the call out, not to buy frame time.
-inline bool g_deviceRemovalCheck = true;
+// DEFAULT OFF, by request. Not because of cost: it was measured at **0.207 us** per call (20000
+// calls, three Release runs: 0.2060 / 0.2069 / 0.2109), which once per frame against a ~3270 us CPU
+// frame is 0.006 % — some fifty times under the 0.6 % run-to-run spread, i.e. unmeasurable. Off is
+// a deliberate choice to keep the frame loop free of a diagnostic nobody is currently using.
+//
+// The report from Present's own catch block is NOT gated by this and always runs: that path costs
+// nothing until something has already gone wrong, so there is no reason to be able to lose it. The
+// poll is what additionally catches a removal that never reaches Present — turn it on when hunting
+// one (the open async-toggle report is exactly that case).
+inline bool g_deviceRemovalCheck = false;
 } // namespace render
 
 class Renderer {
@@ -309,6 +313,9 @@ public:
     // Append the D3D12 debug layer's queued messages to logs/invariant_failure.log. No-op without
     // the debug layer; with it, this is what makes the layer's diagnosis readable headless.
     void DumpDebugLayerMessages(const char* context);
+    // Append the DRED breadcrumbs + page-fault report to an open device-removal report. Needs
+    // `--dred` (armed before device creation); says so instead of staying silent when it is absent.
+    void DumpDredBreadcrumbs(FILE* f);
     bool HasComputeQueue() const { return graphicsDevice_.ComputeQueue() != nullptr; }
 
     // DXR (S1). On non-RT hardware GetDevice5() is null and

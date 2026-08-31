@@ -192,16 +192,19 @@ bool AccelerationStructureManager::PrepareWindSlot(UINT slot, Mesh* mesh,
         // instead of being destroyed here. Releasing them inline was a live device removal on
         // wind_test: 610 palms at near-equal distances churned the slot binding every frame.
         if (s.deformedVb) { pendingScratch_.push_back(std::move(s.deformedVb)); }
-        if (s.blas) { pendingScratch_.push_back(std::move(s.blas)); }
-        if (s.scratch) { pendingScratch_.push_back(std::move(s.scratch)); }
+        for (WindBlasSlot::PerFrame& pf : s.frames)
+        {
+            if (pf.blas) { pendingScratch_.push_back(std::move(pf.blas)); }
+            if (pf.scratch) { pendingScratch_.push_back(std::move(pf.scratch)); }
+            pf = WindBlasSlot::PerFrame{};
+        }
         s.deformedVb = CreateUavBuffer(device5_, static_cast<UINT64>(count) * 12ull,
                                        D3D12_RESOURCE_STATE_COMMON);
         if (!s.deformedVb) { buildFailed_ = true; return false; }
         s.mesh = mesh;
         s.vertexCount = count;
-        s.builtOnce = false;
-        s.blasSize = 0;
-        s.scratchSize = 0;
+        // Every per-frame copy was reset with its buffers in the retire loop above; nothing left
+        // to clear here now that builtOnce/blasSize/scratchSize live on the copy.
 
         // (Re)write the slot's descriptor pair: raw SRV over the source VB, raw UAV over the
         // position stream. Raw views address in 4-byte units.
@@ -237,10 +240,13 @@ bool AccelerationStructureManager::PrepareWindSlot(UINT slot, Mesh* mesh,
 }
 
 D3D12_GPU_VIRTUAL_ADDRESS AccelerationStructureManager::BuildOrRefitWindSlot(
-    UINT slot, uint64_t nonOpaqueSlots, uint64_t frameNumber, ID3D12GraphicsCommandList4* cmdList4)
+    UINT slot, uint64_t nonOpaqueSlots, uint64_t frameNumber, UINT frameIndex,
+    ID3D12GraphicsCommandList4* cmdList4)
 {
     if (!device5_ || !cmdList4 || slot >= kMaxWindBlasSlots) { return 0; }
+    if (frameIndex >= render::kFrameCount) { return 0; }
     WindBlasSlot& s = windSlots_[slot];
+    WindBlasSlot::PerFrame& f = s.frames[frameIndex];
     if (!s.deformedVb || !s.mesh) { return 0; }
 
     // The caller batched the UAV->NON_PIXEL transitions for EVERY slot in one ResourceBarrier
@@ -282,8 +288,14 @@ D3D12_GPU_VIRTUAL_ADDRESS AccelerationStructureManager::BuildOrRefitWindSlot(
 
     // Round-robin full rebuilds, staggered by slot so they never land on the same frame: frond
     // tips move on the order of a metre, which is a large deformation for a pure refit chain.
-    const bool cadenceRebuild = ((frameNumber + slot) % 16ull) == 0ull;
-    const bool update = s.builtOnce && !cadenceRebuild;
+    // Counted per COPY (kWindRefitsBeforeRebuild), not per frame number: with one BLAS per frame
+    // in flight a copy is only touched every kFrameCount frames, so a frame-number cadence would
+    // give each copy a chain kFrameCount times longer than intended. The slot stagger survives as
+    // an offset, so the rebuilds still do not all land on one frame.
+    const bool cadenceRebuild =
+        f.updatesSinceBuild >= kWindRefitsBeforeRebuild + (slot % render::kFrameCount);
+    const bool update = f.builtOnce && !cadenceRebuild;
+    (void)frameNumber;
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs{};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
@@ -300,37 +312,37 @@ D3D12_GPU_VIRTUAL_ADDRESS AccelerationStructureManager::BuildOrRefitWindSlot(
     if (info.ResultDataMaxSizeInBytes == 0 || info.ScratchDataSizeInBytes == 0) { return 0; }
     const UINT64 wantScratch = std::max(info.ScratchDataSizeInBytes,
                                         info.UpdateScratchDataSizeInBytes);
-    if (!s.blas || s.blasSize < info.ResultDataMaxSizeInBytes)
+    if (!f.blas || f.blasSize < info.ResultDataMaxSizeInBytes)
     {
-        s.blas = CreateUavBuffer(device5_, info.ResultDataMaxSizeInBytes,
+        f.blas = CreateUavBuffer(device5_, info.ResultDataMaxSizeInBytes,
                                  D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
-        s.blasSize = info.ResultDataMaxSizeInBytes;
-        s.builtOnce = false; // fresh result buffer cannot be PERFORM_UPDATEd
+        f.blasSize = info.ResultDataMaxSizeInBytes;
+        f.builtOnce = false; // fresh result buffer cannot be PERFORM_UPDATEd
     }
-    if (!s.scratch || s.scratchSize < wantScratch)
+    if (!f.scratch || f.scratchSize < wantScratch)
     {
-        s.scratch = CreateUavBuffer(device5_, wantScratch, D3D12_RESOURCE_STATE_COMMON);
-        s.scratchSize = wantScratch;
+        f.scratch = CreateUavBuffer(device5_, wantScratch, D3D12_RESOURCE_STATE_COMMON);
+        f.scratchSize = wantScratch;
     }
-    if (!s.blas || !s.scratch) { buildFailed_ = true; return 0; }
+    if (!f.blas || !f.scratch) { buildFailed_ = true; return 0; }
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build{};
     build.Inputs = inputs;
-    if (s.builtOnce && update)
+    if (f.builtOnce && update)
     {
         build.Inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
-        build.SourceAccelerationStructureData = s.blas->GetGPUVirtualAddress();
-        ++s.updatesSinceBuild;
+        build.SourceAccelerationStructureData = f.blas->GetGPUVirtualAddress();
+        ++f.updatesSinceBuild;
     }
     else
     {
-        s.updatesSinceBuild = 0;
+        f.updatesSinceBuild = 0;
     }
-    build.DestAccelerationStructureData = s.blas->GetGPUVirtualAddress();
-    build.ScratchAccelerationStructureData = s.scratch->GetGPUVirtualAddress();
+    build.DestAccelerationStructureData = f.blas->GetGPUVirtualAddress();
+    build.ScratchAccelerationStructureData = f.scratch->GetGPUVirtualAddress();
     cmdList4->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
-    s.builtOnce = true;
-    return s.blas->GetGPUVirtualAddress();
+    f.builtOnce = true;
+    return f.blas->GetGPUVirtualAddress();
 }
 
 ID3D12Resource* AccelerationStructureManager::WindStreamResource(UINT slot) const
@@ -338,9 +350,10 @@ ID3D12Resource* AccelerationStructureManager::WindStreamResource(UINT slot) cons
     return slot < kMaxWindBlasSlots ? windSlots_[slot].deformedVb.Get() : nullptr;
 }
 
-ID3D12Resource* AccelerationStructureManager::WindBlasResource(UINT slot) const
+ID3D12Resource* AccelerationStructureManager::WindBlasResource(UINT slot, UINT frameIndex) const
 {
-    return slot < kMaxWindBlasSlots ? windSlots_[slot].blas.Get() : nullptr;
+    if (slot >= kMaxWindBlasSlots || frameIndex >= render::kFrameCount) { return nullptr; }
+    return windSlots_[slot].frames[frameIndex].blas.Get();
 }
 
 void AccelerationStructureManager::EnsureSrvHeap()
@@ -548,8 +561,10 @@ uint64_t AccelerationStructureManager::GetAsMemoryBytes() const
     }
     for (const WindBlasSlot& s : windSlots_) {
         if (s.deformedVb) { total += s.deformedVb->GetDesc().Width; }
-        if (s.blas) { total += s.blas->GetDesc().Width; }
-        if (s.scratch) { total += s.scratch->GetDesc().Width; }
+        for (const WindBlasSlot::PerFrame& pf : s.frames) {
+            if (pf.blas) { total += pf.blas->GetDesc().Width; }
+            if (pf.scratch) { total += pf.scratch->GetDesc().Width; }
+        }
     }
     return total;
 }

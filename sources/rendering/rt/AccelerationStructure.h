@@ -105,14 +105,16 @@ public:
     // BLAS address, 0 on failure. nonOpaqueSlots: same per-submesh mask as GetOrBuildBlas.
     // NOTE: emits NO barriers of its own -- the caller batches the stream transitions before
     // all builds and the AS-read barriers after them, so the builds pipeline on the GPU.
+    // `frameIndex` picks the per-frame-in-flight copy; see WindBlasSlot::frames for why there is
+    // one. `frameNumber` now only staggers the rebuild cadence across slots.
     D3D12_GPU_VIRTUAL_ADDRESS BuildOrRefitWindSlot(UINT slot, uint64_t nonOpaqueSlots,
-                                                   uint64_t frameNumber,
+                                                   uint64_t frameNumber, UINT frameIndex,
                                                    ID3D12GraphicsCommandList4* cmdList4);
 
     // The slot's deformed position stream / BLAS result (null when unbound) -- for the caller's
     // batched barriers.
     ID3D12Resource* WindStreamResource(UINT slot) const;
-    ID3D12Resource* WindBlasResource(UINT slot) const;
+    ID3D12Resource* WindBlasResource(UINT slot, UINT frameIndex) const;
 
     // Release scratch buffers retained from BLAS builds. Call ONLY after the
     // fence for the command list(s) that ran the builds has completed.
@@ -161,15 +163,42 @@ private:
     // like every AS buffer, stay outside the render graph's declared-state machinery.
     struct WindBlasSlot {
         Microsoft::WRL::ComPtr<ID3D12Resource> deformedVb; // float3 * vertexCount, UAV
-        Microsoft::WRL::ComPtr<ID3D12Resource> blas;       // ALLOW_UPDATE result
-        Microsoft::WRL::ComPtr<ID3D12Resource> scratch;    // max(build, update) size, persistent
         Mesh* mesh = nullptr;
         UINT vertexCount = 0;
-        UINT64 blasSize = 0;
-        UINT64 scratchSize = 0;
-        bool builtOnce = false;
-        UINT updatesSinceBuild = 0;
+
+        // ONE BLAS+SCRATCH PER FRAME IN FLIGHT, and this is load-bearing rather than tidy.
+        //
+        // The refit writes IN PLACE (Source == Dest), and Main_BuildAS runs on the ASYNC COMPUTE
+        // queue with no prereqs, so its segment is submitted first with no cross-queue wait. With
+        // one shared BLAS, frame N+1's refit therefore overwrote a structure that frame N's
+        // graphics RT passes (RTResolve / GlassReflections / RTDebug) were still tracing — a
+        // traversal over a half-rewritten BVH, which the GPU answers with DXGI_ERROR_DEVICE_HUNG
+        // and no page fault. Measured before the fix: 4 hangs in 6 long sessions with async on, 0
+        // in 6 under --no-async-compute, 0 in 4 with the wind refit disabled; DRED put the stall
+        // inside BUILD_AS itself.
+        //
+        // The deformed VB does NOT need this: only the compute queue touches it, and that queue is
+        // serial, so the write and the build it feeds can never overlap.
+        struct PerFrame {
+            Microsoft::WRL::ComPtr<ID3D12Resource> blas;    // ALLOW_UPDATE result
+            Microsoft::WRL::ComPtr<ID3D12Resource> scratch; // max(build, update) size, persistent
+            UINT64 blasSize = 0;
+            UINT64 scratchSize = 0;
+            bool builtOnce = false;
+            UINT updatesSinceBuild = 0;
+        };
+        std::array<PerFrame, render::kFrameCount> frames;
     };
+
+    // How many refits a COPY absorbs before it is rebuilt from scratch.
+    //
+    // The cadence has to be counted in USES OF THIS COPY, not in frame numbers: a copy is only
+    // touched every kFrameCount frames, so each refit now has to absorb kFrameCount frames of
+    // motion instead of one. The old rule was "rebuild every 16 frames", i.e. a chain that
+    // absorbed 16 frames of movement; 8 uses x 3 frames = 24, so this trades a slightly longer
+    // chain for 2x the rebuild rate rather than taking 3x of either. Lower it if fronds start
+    // shadowing wrong, raise it if the rebuild spikes hurt.
+    static constexpr UINT kWindRefitsBeforeRebuild = 8;
 
     void EnsureWindDescHeap();
 
