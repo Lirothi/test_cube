@@ -231,7 +231,7 @@ namespace
             MakeTarget(TextureDebugViewer::Target::Velocity, "GBuffer", "Motion vectors.", D.gbVelocity.Get(), renderer.GetGBufferVelocityFormat()),
             MakeTarget(TextureDebugViewer::Target::Depth, "Depth", "Main deferred depth SRV.", D.depth.Get(), renderer.GetDepthSrvFormat()),
             MakeTarget(TextureDebugViewer::Target::DepthCopy, "Depth", "Depth copy before transparent pass.", D.depthCopy.Get(), renderer.GetDepthSrvFormat()),
-            MakeTarget(TextureDebugViewer::Target::ShadowAtlas, "Shadows", "Directional cascade shadow atlas.", D.shadow.Get(), DXGI_FORMAT_R16_UNORM),
+            MakeTarget(TextureDebugViewer::Target::ShadowAtlas, "Shadows", "Directional cascade shadow atlas.", D.shadow, DXGI_FORMAT_R16_UNORM),
             MakeTarget(TextureDebugViewer::Target::OceanShoreDepth, "Ocean", "Orthographic terrain depth used by ocean shore blending.", oceanShoreDepth, DXGI_FORMAT_R16_UNORM),
         };
     }

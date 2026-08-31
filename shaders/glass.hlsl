@@ -6,6 +6,7 @@
 #include "utils.hlsli"
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
 #include "vsm_sample.hlsli"
+#include "csm_sample.hlsli"
 
 struct PointLightData
 {
@@ -181,31 +182,6 @@ VSOut VSMain(VSIn input)
 #define NORMALMAP_IS_RG 0
 #endif
 
-int ChooseCascadeIndex(float3 Pws)
-{
-    float3 camPos = camPosSky.xyz;
-    float3 camDir = normalize(camDirWS.xyz);
-    float z = dot(Pws - camPos, camDir);
-    float3 gt = saturate(sign(z.xxx - cascadeSplitsVS.yzw));
-    return (int)(gt.x + gt.y + gt.z);
-}
-
-float ShadowPCF3x3Texture(Texture2D atlas, float2 uv, float depth, float2 texel)
-{
-    float s = 0.0f;
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
-    {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
-        {
-            float2 offset = float2(x, y) * texel;
-            s += atlas.SampleCmpLevelZero(ShadowSampler, uv + offset, depth);
-        }
-    }
-    return s / 9.0f;
-}
-
 float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
 {
     // Step 24f: VSM mode samples the directional clipmap (matches lighting_cs.hlsl); Legacy = cascades.
@@ -218,30 +194,28 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
                                 invProj._11, clipmapUvNormal,
                                 clipmapViewProj, VsmPageTable, VsmPool, ShadowSampler);
     }
-    int idx = ChooseCascadeIndex(Pws);
-    float4 sb = cascadeScaleBias[idx];
-    float2 scale = sb.xy;
-    float2 bias = sb.zw;
 
-    float normalBias = normalBiasWS[idx];
-    float depthBias = shadowBiasNDC[idx];
-
-    float3 Poff = Pws + Nws * normalBias;
-    float4 clip = mul(float4(Poff, 1.0f), lightViewProj[idx]);
-    float3 ndc = clip.xyz / max(clip.w, 1e-6f);
-    float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-    float z = ndc.z;
-
-    uv = uv * scale + bias;
-
-    if (any(uv < 0.0f) || any(uv > 1.0f))
+    // S3: the cascade path now goes through the SHARED csm_sample.hlsli, same as lighting_cs.
+    // This is a deliberate behaviour FIX, not a refactor: the copy that used to live here had no
+    // coarser-cascade fallback (it returned "lit" the moment the point left the tile) and no blend
+    // band, so glass disagreed with the geometry next to it at every cascade boundary.
+    CsmParams p;
+    [unroll]
+    for (int i = 0; i < 4; ++i)
     {
-        return 1.0f;
+        p.lightViewProj[i] = lightViewProj[i];
+        p.scaleBias[i]     = cascadeScaleBias[i];
     }
+    p.splitsVS     = cascadeSplitsVS;
+    p.depthBiasNDC = shadowBiasNDC;
+    p.normalBiasWS = normalBiasWS;
+    p.atlasSize    = shadowAtlasSizeInv.xy;   // xy = size, zw = 1/size (see the GlassView cbuffer)
+    p.camPosWS     = camPosSky.xyz;
+    p.camDirWS     = normalize(camDirWS.xyz);
+    p.pcfRadius    = 1.0f;
 
-    float biasFactor = depthBias + (1.0f - NdotL) * depthBias;
-    float2 texel = shadowAtlasSizeInv.zw;
-    return ShadowPCF3x3Texture(ShadowAtlas, uv, z - biasFactor, texel);
+    int cascade;
+    return CsmSampleShadow(p, ShadowAtlas, ShadowSampler, Pws, Nws, NdotL, cascade);
 }
 
 float ShadowPCF3x3Array(Texture2DArray atlas, float3 uvw, float depth, float2 texel)

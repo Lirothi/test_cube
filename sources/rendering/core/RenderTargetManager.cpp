@@ -80,6 +80,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         ThrowIfFailed(dev->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&deferredSrvCpuHeap_)));
     }
 
+
     // --- Common placement parameters (Default heap) ---
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -413,8 +414,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             0.0f, DXGI_FORMAT_UNKNOWN, DeferredSrvSlot::Stencil, &D.stencilSRV, render::kDeferredStencilSrvFormat);
         CreateSrvTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.depth, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, formats.depthSrv);
 
+        // S3.5: ONE atlas for all frames — created after this loop. The per-frame field is kept
+        // because readers (lighting CB, Renderer::BindShadowTarget) index it through Deferred(f).
         D.shadowRes = 4096; // could be driven by config/parameter
-        CreateShadowResource(dev, decls, f, D.shadowRes);
 
         D.spotShadowRes = 512;
         CreateSpotShadowResource(dev, decls, f, D.spotShadowRes);
@@ -739,7 +741,6 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.depth.Get(), L"Depth", kNps);
         nameRes(D.depthCopy.Get(), L"DepthCopy", kPs);
         // Legacy shadow atlases: written every frame, never sampled after the last light pass.
-        nameRes(D.shadow.Get(), L"CascadeShadow", kNps);
         nameRes(D.spotShadow.Get(), L"SpotShadow", kNps);
         nameRes(D.pointShadow.Get(), L"PointShadow", kNps | kPs);
         nameRes(D.light.Get(), L"Light", kNps);
@@ -773,15 +774,18 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.tonemap.Get(), L"Tonemap", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         nameRes(D.fxaa.Get(), L"Fxaa", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
+
+    // S3.5: the cascade shadow atlas is ONE resource for every frame in flight, so it is
+    // created here rather than inside the loop above; the per-frame DSV/SRV are built inside.
+    CreateShadowResource(dev, decls, deferred_[0].shadowRes);
 }
 
 // Step 24f-2: CSM cascade atlas (R16_TYPELESS 2D, DSV=D16, SRV=R16). Writes deferred_[f].shadow + its
 // views. `resolution` = full-res (Legacy) or 1 (VSM: tiny, directional comes from the clipmap).
-void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution)
+void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution)
 {
     if (!dev) { return; }
     if (resolution == 0) { resolution = 4096; }
-    auto& D = deferred_[f];
 
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -804,26 +808,37 @@ void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclar
     cv.DepthStencil.Depth = 1.0f;
     cv.DepthStencil.Stencil = 0;
 
+    // S3.5: ONE resource for every frame in flight. GetAddressOfForCreate resets + unregisters the
+    // outgoing one first, so a rebuild (resize, residency toggle) cannot leave a stale declaration
+    // behind at a recycled address.
     ThrowIfFailed(render::CreateCommittedTexture(dev,
         heapProps, D3D12_HEAP_FLAG_NONE, rd,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, D.shadow.GetAddressOfForCreate()));
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, shadowAtlas_.GetAddressOfForCreate()));
 
-    D.shadowDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
-    D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-    dsv.Format = DXGI_FORMAT_D16_UNORM;
-    dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-    dev->CreateDepthStencilView(D.shadow.Get(), &dsv, D.shadowDSV);
+    shadowAtlas_->SetName(L"CascadeShadow"); // also created by SetLocalShadowResidency, after Create's naming block
+    shadowAtlas_.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); // created in its resting state
 
-    D.shadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::Shadow);
-    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-    sd.Format = DXGI_FORMAT_R16_UNORM;
-    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    sd.Texture2D.MipLevels = 1;
-    dev->CreateShaderResourceView(D.shadow.Get(), &sd, D.shadowSRV);
+    // The views DO stay per-frame: they live in the per-frame descriptor heaps. Only the resource
+    // is shared, and every frame's DSV/SRV is built against that one resource.
+    for (UINT f = 0; f < render::kFrameCount; ++f)
+    {
+        auto& D = deferred_[f];
+        D.shadow = shadowAtlas_.Get();
 
-    D.shadow->SetName(L"CascadeShadow"); // also created by SetLocalShadowResidency, after Create's naming block
-    D.shadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); // created in its resting state
+        D.shadowDSV = DeferredDsvCPU(f, DeferredDsvSlot::Shadow);
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+        dsv.Format = DXGI_FORMAT_D16_UNORM;
+        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dev->CreateDepthStencilView(D.shadow, &dsv, D.shadowDSV);
+
+        D.shadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::Shadow);
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_R16_UNORM;
+        sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels = 1;
+        dev->CreateShaderResourceView(D.shadow, &sd, D.shadowSRV);
+    }
 }
 
 // Step 24c: spot shadow atlas (R16_TYPELESS 2D-array, DSV=D16 per slice, SRV=R16 Texture2DArray).
@@ -962,16 +977,17 @@ void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceDec
         auto& D = deferred_[f];
         // Untrack the outgoing resources (ReleaseAndGetAddressOf inside the create calls frees them),
         // so a re-used address can't inherit a stale tracked state.
-        if (D.shadow) { decls.Forget(D.shadow.Get()); }          // Step 24f-2: CSM cascade atlas
         if (D.spotShadow) { decls.Forget(D.spotShadow.Get()); }
         if (D.pointShadow) { decls.Forget(D.pointShadow.Get()); }
         // Keep the configured resolutions; only the created size changes (1 = tiny placeholder). VSM mode
         // retires the CSM cascade atlas (~96 MB across frames) as well: the render graph omits the
         // Main_CSM pass in VSM mode, so nothing renders into this 1x1 placeholder.
-        CreateShadowResource(dev, decls, f, full ? D.shadowRes : 1u);
         CreateSpotShadowResource(dev, decls, f, full ? D.spotShadowRes : 1u);
         CreatePointShadowResource(dev, decls, f, full ? D.pointShadowRes : 1u);
     }
+    // S3.5: the cascade atlas is ONE resource, so it is forgotten and rebuilt once, not per frame.
+    // (GetAddressOfForCreate inside does the Forget; the explicit one here would be redundant.)
+    CreateShadowResource(dev, decls, full ? deferred_[0].shadowRes : 1u);
     localShadowFull_ = full;
 }
 
@@ -1011,7 +1027,7 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         collect(D.reflectionScratch);
         collect(D.reflectionHistory);
         collect(D.oceanReflection);
-        collect(D.shadow);
+        D.shadow = nullptr; // S3.5: non-owning alias; shadowAtlas_ below is the owner
         collect(D.spotShadow);
         collect(D.pointShadow);
         collect(D.dlssOutput);
@@ -1022,6 +1038,8 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         collect(D.streakA);
         collect(D.streakB);
     }
+
+    shadowAtlas_.Reset(); // S3.5: the single cascade atlas; Reset unregisters it
 
     decls.ForgetMany(released);
 

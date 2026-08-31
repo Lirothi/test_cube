@@ -631,6 +631,7 @@
     <None Include="shaders\ui_rect.hlsl" />
     <None Include="shaders\utils.hlsli" />
     <None Include="shaders\caustics.hlsli" />
+    <None Include="shaders\csm_sample.hlsli" />
     <None Include="shaders\terrain_tiling.hlsli" />
     <None Include="shaders\rt_geometry.hlsli" />
     <None Include="shaders\rt_lights.hlsli" />

@@ -496,7 +496,7 @@ SceneRenderer::DebugTexPick SceneRenderer::PickDebugTexTarget(
     // that answers "did the ray find anything" WITHOUT the answer being filtered through shading,
     // the glossy blur and compose -- which is what a tracer A/B actually needs to compare.
     case 8: return { D.reflection.Get(), D.reflectionSRV };
-    default: return { D.shadow.Get(), D.shadowSRV };
+    default: return { D.shadow, D.shadowSRV }; // S3.5: non-owning alias, already a raw pointer
     }
 }
 

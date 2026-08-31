@@ -1,6 +1,9 @@
 # План улучшения каскадных теней (CSM) в `D:\programming\test_cube`
 
-Документ для ИИ-исполнителя. **Самодостаточен** — доступ к исходникам Unreal Engine не требуется.
+Документ для ИИ-исполнителя. **Исходники UE лежат локально** — `D:/Programming/ue_strip`
+(две ветки: `Shaders/` и `Source/`, карта в `ue_strip/README.md`). Читать оригинал ПЕРЕД тем,
+как выводить что-то из первых принципов: сверка 2026-08-31 подтвердила четыре транскрипции
+байт-в-байт и вскрыла **три неверных числа** — см. «§5. Сверка с оригиналом UE».
 Весь код приведён уже переведённым на типы и конвенции `test_cube` (`mat4`/`float3`, прямой Z
 в shadow-атласе, имена полей CB проекта). Алгоритмы восстановлены по реализации CSM в UE 5.6;
 названия UE-функций/cvar'ов оставлены как ориентиры, но копий исходников Epic в документе нет.
@@ -18,6 +21,52 @@
 
 ---
 
+## 0-. Сверка с кодом — 2026-08-31, HEAD `f486bdb`
+
+Документ писался на состоянии ~2026-08-03. С тех пор в `master` легло **135 коммитов**
+(async compute, VSM single-draw, распил SceneRenderer, RT-пассы, bloom/tonemap, GTAO).
+Сверено заново; ниже — только то, что реально разошлось. **Шаги S0/S1/S2 закоммичены и живы**
+(`ca887ed`, `4e42c40`, `f8726b7`), их код на месте и работает.
+
+| Что | Было в документе | Сейчас |
+|---|---|---|
+| `SceneRenderer.cpp:NNNN` | все ссылки | **МЕРТВЫ.** Файл распилен 6703 → 483 строки на `SceneRenderer_{Geometry,Graph,Lighting,Post,Reflections,Shadows}.cpp` + `SceneRenderInternal.h` |
+| Очередей команд | одна | **две**: графическая + `computeQueue_` (`GraphicsDevice.cpp:373/386`). На async сидят `Main_BuildAS`, `Main_ObjectCompute`, `Main_RTTrace` |
+| `ResourceStateTracker` | файл существовал | **выпилен** (barrier plan). Барьеры = прекомпилированные декларации `AddPass2` |
+| PSO индирект-теней | «один, общий с VSM» | **шесть** из одного шейдера: D16/D32 × opaque/masked + `VSM_PAGE` (см. правило 3) |
+| Байты 224..239 слота `PageProj` | свободны, S6 хотел их занять | **заняты** `gWindFade`/`w2` — S6 переезжает на 240..255 |
+| `normalBiasInTexels` / `depthBiasInTexels` | 0.75 / 2.0 | **1.0 / 1.5** (перетюнено юзером) |
+| Baseline S0.4 | CSM 0.456 / VSM 1.267 мс | **устарел, перемерен** — см. S0.4 |
+
+**Что НЕ изменилось** (проверено поимённо): дефолт `g_shadowMode = VSM`; `Main_CSM` отсутствует
+в графе в VSM-режиме; `Renderer::BindShadowTarget` по-прежнему хардкодит сетку 2×2
+(`Renderer.cpp:2568`); атлас по-прежнему `R16_TYPELESS` / DSV `D16_UNORM` / SRV `R16_UNORM`
+и создаётся в per-frame цикле (`RenderTargetManager.cpp:396-417`); `gSmpLinear` по-прежнему
+`COMPARISON_MIN_MAG_LINEAR` (`SamplerManager.cpp:156`); `Frustum::FromOrthoBounds` по-прежнему
+строит ortho-БОКС с near-плоскостью и кормит GPU-куллинг (`Scene.cpp:346`, `Scene.cpp:1322`) —
+**ловушка S7 в силе**; `glass.hlsl` по-прежнему держит вторую копию сэмплирования каскадов
+(`glass.hlsl:184-247`) — **S3 в силе**; основная глубина по-прежнему reverse-Z (clear 0.0).
+
+### Актуальная карта символов (взамен мёртвых ссылок)
+
+| Символ | Где теперь |
+|---|---|
+| `PerViewCB` + `static_assert(... == 224)` | `SceneRenderInternal.h:105-122` |
+| `GlassViewCB` | `SceneRenderInternal.h:125` |
+| `BuildShadowViewCB` | `SceneRenderInternal.h:231` |
+| `shadowAtlasSizeInv` заполнение | `SceneRenderInternal.h:283` |
+| `SceneRenderer::Pass_CSM` | `SceneRenderer_Shadows.cpp:253` |
+| `IndirectShadowDrawsActive` | `SceneRenderer_Shadows.cpp:171` |
+| `LightingPassConstants` каскадный блок | `SceneRenderer_Lighting.cpp:320-333` |
+| Регистрация `Main_CSM` в графе | `SceneRenderer_Graph.cpp:326` |
+| Декларации `D.shadow` в графе | `SceneRenderer_Graph.cpp:327` (DEPTH_WRITE), `:760`, `:776` (SRV, обе — `Main_Lighting`) |
+| Создание PSO индирект-теней | `ShadowGpuData.cpp:1451-1535` |
+| `IndirectShadowMaterial` / `...PoolMaterial` | `ShadowGpuData.cpp:366` / `:372` |
+
+**Правило на будущее:** номера строк здесь — на `f486bdb`. Ищи по имени символа, а не по строке.
+
+---
+
 ## 0. Правила работы (обязательно к прочтению)
 
 1. **Line endings.** Репозиторий требует CRLF во всех C++/HLSL/project-файлах
@@ -26,27 +75,42 @@
 2. **Не ломать VSM-режим.** В проекте два режима направленных теней:
    * Legacy CSM (`Pass_CSM`, атлас `D.shadow`) — предмет этого документа;
    * VSM clipmap (`VirtualShadowMap.cpp`, `vsm_sample.hlsli`) — **не трогать**.
-   Переключение — `render::VsmActive()`; в лайтинге ветка `useVsm != 0` (`shaders/lighting_cs.hlsl:189`).
+   Переключение — `render::VsmActive()`; в лайтинге ветка `useVsm != 0` (`shaders/lighting_cs.hlsl:338`).
 
    **⚠ Дефолт билда — VSM**, а не CSM: `sources/rendering/renderables/InstanceTypes.h:133`
    (`inline ShadowMode g_shadowMode = ShadowMode::VSM;`). В VSM-режиме пас `Main_CSM` вообще
-   **не попадает в граф** (`SceneRenderer.cpp:1374`), поэтому **любая проверка любого шага этого
+   **не попадает в граф** (`SceneRenderer_Shadows.cpp:257`), поэтому **любая проверка любого шага этого
    документа начинается с переключения в Legacy**: Ctrl+V (`AppController.cpp:90-96`, действие
    `ToggleVsmPageRequest`) или тумблер в `DeveloperWindow.cpp:518`. Забыть это — значит «проверить»
    шаг на коде, который не исполнялся.
 
    Обратная сторона: шаги S6/S7 меняют код, который в VSM-режиме исполняется, поэтому у них
    в приёмке стоит отдельная проверка VSM.
-3. **⚠ Три общих ресурса CSM↔VSM.** Это главный источник риска в шагах S6/S7:
-   * `shaders/shadow_indirect_csm.hlsl` — **один и тот же шейдер** для CSM-каскадов и для VSM-страниц;
-   * его PSO **тоже один**: `VirtualShadowMap.cpp:755` вызывает `shadowGpu->IndirectShadowMaterial()`
-     (`ShadowGpuData.cpp:331-334`). **Любое изменение rasterizer/depth state этого PSO меняет и VSM.**
-   * его `cbuffer PerView (b1)`: для CSM заполняется `SceneRenderer::BuildShadowViewCB`
-     (`SceneRenderer.cpp:219-226`), для VSM — вычислительным шейдером `vsm_page_setup_cs.hlsl`
-     в слот `PageProj` со шагом **256 байт** (`vsm_page_setup_cs.hlsl:122-131`: viewProj в 0..63,
-     ветровой хвост в 192..223, байты 64..191 и 224..255 **не пишутся**).
-   Следствие: любое новое поле CB, которое читает этот шейдер, обязано записываться **и** в
-   `vsm_page_setup_cs.hlsl` (хотя бы нулями), иначе VSM получит мусор.
+3. **⚠ Что CSM и VSM делят на самом деле** (перепроверено 2026-08-31 — картина сильно изменилась):
+
+   * **Шейдер один** — `shaders/shadow_indirect_csm.hlsl` обслуживает и CSM-каскады, и VSM-страницы. Это по-прежнему так.
+   * **Но PSO уже не один, а шесть** (`ShadowGpuData.cpp:1451-1535`), из одного шаблона `GraphicsDesc`:
+
+     | Вариант | DSV | Кто использует |
+     |---|---|---|
+     | `indirectShadowMat_` / `...MaskedMat_` | **D16** | Legacy CSM-атлас |
+     | `indirectShadowPoolMat_` / `...PoolMaskedMat_` | **D32** | VSM per-page цикл-фолбэк |
+     | `VSM_PAGE=1` пермутации | D32 | VSM single-draw (основной путь) |
+
+     Они строятся из **одного и того же `gd`**, последовательно мутируемого, — то есть правка raster/depth
+     в начале блока всё равно уезжает **во все шесть**. Старое предупреждение в силе, просто механизм другой:
+     не «общий объект PSO», а «общий шаблон, из которого штампуют шесть».
+   * **Input layout общий** — `PosOnly_InstCasterId` / `PosUV_InstCasterId`
+     (`InputLayoutManager.cpp:78-96`) используют все шесть. Предупреждение S6 про `NORMAL` в силе.
+   * **А вот CB больше НЕ общий.** В пермутации `VSM_PAGE=1` **`b1` вообще убран из root signature**
+     (`shadow_indirect_csm.hlsl:20-48`): один ExecuteIndirect на все страницы не может нести пер-страничные root-аргументы,
+     поэтому VS читает проекцию и ветер из SRV через `LoadPageVP(page, w0, w1, w2)`
+     (`shadow_indirect_csm.hlsl:138`). `cbuffer PerView` остался только у Legacy CSM и у VSM-цикл-фолбэка.
+   * **Слот `PageProj` почти заполнен.** `vsm_page_setup_cs.hlsl:216-229` пишет в 256-байтный слот:
+     viewProj в 0..63, ветровой хвост в 192..207 и 208..223, и **теперь ещё `gWindFade` в 224..239**
+     (`w2` = camPos.xyz + windFadeEnd). Байты 64..191 не пишутся и не читаются.
+     **Свободны только 240..255** — ровно 4 float’а. Это прямо ограничивает S6 (см. там).
+
 4. **Два потребителя CSM в шейдерах.** Каскады (`lightViewProj[4]` / `cascadeScaleBias[4]`) читают
    **ровно два** шейдера — `shaders/lighting_cs.hlsl` и `shaders/glass.hlsl` — и они содержат
    **две независимые копии** логики, уже разошедшиеся по поведению (в `glass.hlsl`
@@ -59,11 +123,11 @@
    (scissor в S11, кэш в S13), обязана это учитывать.
 5. **Один шаг = один коммит.** Не переходить к следующему шагу, пока «Критерий приёмки» текущего
    не выполнен.
-6. **Шейдеры компилируются в рантайме** через DXC (`sources/materials/Material.cpp:102-140`),
+6. **Шейдеры компилируются в рантайме** через DXC (`sources/materials/Material.cpp` (`CompileDXC`)),
    профиль автоматически поднимается до максимально поддерживаемого (до `SM 6.7`,
-   `Material.cpp:33`), есть hot-reload по времени файла (`Material.cpp:305-330`). `Gather()`
+   `Material.cpp`), есть hot-reload по времени файла. `Gather()`
    доступен. Производные (`ddx`/`ddy`) в compute-шейдере — **нет** (требуют SM 6.6), см. S9.
-7. **Числа** посчитаны для дефолтной камеры (`sources/app/camera/Camera.h:21-23`: `hfov = 90°`,
+7. **Числа** посчитаны для дефолтной камеры (`sources/app/camera/Camera.h` (конструктор): `hfov = 90°`,
    `zNear = 0.01`, `zFar = 10000`) при aspect 16:9 (`vfov ≈ 58.7°`, `tan(vfov/2) = 0.5625`).
 
 ---
@@ -77,23 +141,23 @@
 | Число каскадов | `sources/app/scene/SceneFrameData.h:81` | `kCascades = 4` (жёстко) |
 | Атлас | `sources/rendering/core/RenderTargetManager.cpp:404`, `.h:87` | `4096 × 4096` |
 | Формат | `RenderTargetManager.cpp:491,507,513` | ресурс `R16_TYPELESS`, DSV `D16_UNORM`, **SRV `R16_UNORM`** (важно для S8: `Gather` вернёт нормализованные глубины) |
-| Раскладка тайлов | `Scene.cpp:144,258-261` **и** `Renderer.cpp:1474-1485` | жёсткая сетка 2×2, тайл `shadowRes/2 = 2048` — **захардкожено в двух местах** |
-| Очистка | `Renderer.cpp:1489` | `ClearDepthStencilView` на **весь** атлас |
+| Раскладка тайлов | `Scene.cpp:208,335-340` **и** `Renderer.cpp:2576-2588` | жёсткая сетка 2×2, тайл `shadowRes/2 = 2048` — **захардкожено в двух местах** |
+| Очистка | `Renderer.cpp:2592` | `ClearDepthStencilView` на **весь** атлас |
 | Сплиты | `sources/app/scene/SceneRenderConfig.h:8` | `{10, 35, 100, 300}` м, абсолютные |
-| Fit каскада | `Scene.cpp:183-195` | bounding-сфера по **центроиду** 8 углов слайса |
+| Fit каскада | `Scene.cpp:259` (`ComputeCascadeSphere`) | **S1: минимальная объемлющая сфера** (было — центроид 8 углов) |
 | Padding | `SceneRenderConfig.h:11` | `overlap = 2.0f` **мировых единиц** |
-| Стабилизация | `Scene.cpp:200-220` | texel snap в фиксированном light-фрейме — **корректно, не менять** |
-| «Глаз» света | `Scene.cpp:198` | `lightDistance = max(1, maxDistance) = 300` м для **всех** каскадов |
+| Стабилизация | `Scene.cpp:276-296` | texel snap в фиксированном light-фрейме — **корректно, не менять** |
+| «Глаз» света | `Scene.cpp:274` | `lightDistance = max(1, maxDistance) = 300` м для **всех** каскадов |
 | Расширение near | `SceneRenderConfig.h:19` | `casterReachWS = 150` м |
 | z-padding | `SceneRenderConfig.h:12` | `zPadding = 25` м |
-| Bias | `Scene.cpp:253-256` | normal offset `0.75` текселя + depth bias `2.0` текселя |
+| Bias | `Scene.cpp` (после S1/S2) | normal offset **1.0** текселя + depth bias **1.5** текселя — перетюнено юзером, было 0.75 / 2.0 |
 | Depth-функция shadow-PSO | `RenderableObject.cpp:458`, `ShadowGpuData.cpp:1091` | `LESS_EQUAL`, clear `1.0` → **прямой Z** (0 = у света, 1 = далеко) |
 | Настройка shadow-PSO (не-индирект) | `RenderableObject.cpp:445-461` | **единственное** место; overrides отсутствуют |
 | Настройка shadow-PSO (индирект) | `ShadowGpuData.cpp:1080-1110` | **общий с VSM** (см. правило 3) |
 | Rasterizer по умолчанию | `sources/materials/Material.h:66-79` | `DepthClipEnable = TRUE`, `DepthBias = 0`, `SlopeScaledDepthBias = 0` |
-| CB лайтинга | `SceneResourceBootstrapper.h:147-178`, `.cpp:15-50`, `.cpp:469-515` | добавление поля = HLSL + struct + handle + write |
-| PerView CB shadow-паса | `SceneRenderer.cpp:120-138` (`static_assert(sizeof == 224)`) | HLSL: `gbuffer_common.hlsli:68-83` + **копия** в `shadow_indirect_csm.hlsl:63-75` |
-| Input layouts индиректа | `InputLayoutManager.cpp:80-96` | `PosOnly_InstCasterId`, `PosUV_InstCasterId` — **без NORMAL** (см. S6) |
+| CB лайтинга | `SceneResourceBootstrapper.h:494` (`LightingPassConstants`) + handles/Populate/Update в `.cpp` | добавление поля = HLSL + struct + handle + write |
+| PerView CB shadow-паса | `SceneRenderInternal.h:105-122` (`static_assert(sizeof == 224)`) | HLSL: `gbuffer_common.hlsli:72` + **копия** в `shadow_indirect_csm.hlsl` (только при `VSM_PAGE=0`) |
+| Input layouts индиректа | `InputLayoutManager.cpp:78-96` | `PosOnly_InstCasterId`, `PosUV_InstCasterId` — **без NORMAL** (см. S6) |
 | Shadow-depth VS | `gbuffer_csm.hlsl`, `gbuffer_inst_csm.hlsl`, `gbuffer_instcb_csm.hlsl`, `glass_csm.hlsl`, `shadow_indirect_csm.hlsl` | depth-only, никакого bias |
 
 ### 1.2. Шейдер (`shaders/lighting_cs.hlsl`)
@@ -118,7 +182,7 @@ unitsPerTexel = 2*14.51/2048      = 14.17 мм/тексель        <-- тек�
 
 nearLS ≈ 300 - 14.5 - 150 = 135.5;  farLS ≈ 300 + 14.5 + 25 = 339.5
 диапазон = 204 м на D16 -> шаг квантования 3.11 мм
-depth bias = 2 текселя = 28 мм peter-panning
+depth bias = 1.5 текселя = 16.8 мм peter-panning (на текущем текселе 11.23 мм после S1+S2)
 ```
 
 ---
@@ -201,11 +265,11 @@ for (int c = 0; c < 4; ++c)
 `zPadding`, `casterReachWS` + тумблеры шагов S7/S8/S11/S12/S13 и пресет атласа (S4).
 
 Смена размера атласа требует пересоздания GPU-ресурсов на GPU-idle — в проекте такой паттерн уже
-есть (переключение режима теней в `Scene::Render`, см. комментарий `Scene.cpp:105-108`).
+есть (переключение режима теней в `Scene::Render`).
 
 ### S0.3. Debug-режим «cascade tint»
 
-В `LightingPassConstants` (`SceneResourceBootstrapper.h:147`) добавить `uint32_t csmDebugMode = 0;`
+В `LightingPassConstants` (`SceneResourceBootstrapper.h:494`) добавить `uint32_t csmDebugMode = 0;`
 (handle + write по образцу `useVsm`), в шейдере — тонировка вклада каскада:
 
 ```hlsl
@@ -227,28 +291,32 @@ x64\Release\test_cube.exe --level=data/levels/wind_test.json --shadow-mode=legac
 x64\Release\test_cube.exe --level=data/levels/wind_test.json --shadow-mode=vsm    --profdump=<out> --shot-delay=30
 ```
 
-**wind_test, Release, 2560×1440, DLSS Perf (scale 0.58), SSR on, камера `-30.74 4.75 70.70`,
-30 с прогрева, живой ветер:**
+**ЗАМЕР 2026-08-31, HEAD `f486bdb`** — заменяет августовский: за 135 коммитов кадр потяжелел,
+старые числа больше не годятся для решений. wind_test, Release, 2560x1440, DLSS Perf (scale 0.58),
+SSR on, камера `-30.74 4.75 70.70`, 30 с прогрева, живой ветер:
 
 | | shadow pass GPU (ms) | `Pass_Lighting` GPU | `GPU.Frame` | `CPU.Frame` | FPS |
 |---|---|---|---|---|---|
-| **Legacy CSM** | `Pass_CSM` **0.456** | 0.027 | **2.011** | 2.032 | **496** |
-| **VSM** | `Pass_VsmPageRender` 1.205 + `Pass_VsmPageRequest` 0.062 = **1.267** | 0.032 | **2.800** | 2.817 | **356** |
+| **Legacy CSM** | `Pass_CSM` **0.512** | 0.136 | **3.277** | 3.295 | **303** |
+| **VSM** | `Pass_VsmPageRender` 2.032 + `Pass_VsmPageRequest` 0.061 = **2.093** | 0.075 | **4.051** | 4.067 | **246** |
 
-**Вывод, на который опирается весь документ: CSM уже в 2.8 раза дешевле VSM на самом теневом пасе
-и на 0.79 мс дешевле по кадру (+140 FPS).** Это и есть бюджет: у CSM есть **≈0.8 мс GPU** запаса,
-прежде чем он перестанет быть «быстрой альтернативой». Все дорогие шаги тратят именно его:
+Для сравнения, замер 2026-08-03: CSM 0.456 / 2.011 / 496 FPS; VSM 1.267 / 2.800 / 356 FPS.
 
-* S4 `Quality` (c0 2048→4096) — ×4 площади c0, самая крупная статья;
-* S4 `Quality` (c0 4096) — ×4 площади c0, почти наверняка съедает бюджет целиком;
-* S8/S9/S12 — тратят `Pass_Lighting`, который сейчас смехотворные 0.027 мс, т.е. там запас огромен
-  (даже +0.3 мс на contact shadows укладывается);
-* S11 — единственный шаг, который бюджет возвращает.
+**Вывод, на котором стоит весь документ, стал СИЛЬНЕЕ: CSM теперь в 4.1 раза дешевле VSM на
+теневом пасе** (было 2.8x) **и на 0.77 мс дешевле по кадру (+57 FPS).** Бюджет прежний:
+**~0.77 мс GPU** запаса, прежде чем CSM перестанет быть «быстрой альтернативой».
 
-Обратите внимание, где узкое место: `Pass_Lighting` = 1.3 % кадра, `Pass_CSM` = 23 %. **Качество
-фильтра почти бесплатно, а разрешение атласа — нет.** Это прямо противоречит интуиции «сделаем
-атлас побольше» и задаёт приоритет: сначала бесплатное уплотнение (S1/S2) и качество выборки
-(S6/S8/S9/S10), и только потом — и только как пресет — разрешение (S4).
+Что поменялось в раскладе:
+
+* `Pass_Lighting` вырос 0.027 -> **0.136 мс** в Legacy. Это всё ещё лишь 4 % кадра, так что вывод
+  «качество фильтра почти бесплатно» в силе, но запас уже не «огромен»: S8/S9/S12 суммарно должны
+  укладываться в пару десятых миллисекунды, а не в любую.
+* **Новое наблюдение:** `Pass_Lighting` в Legacy (0.136) вдвое дороже, чем в VSM (0.075) — цепочка
+  каскадов сама по себе дороже выборки клипмапа. Это дополнительный аргумент за S8 (4 `Gather`
+  вместо 9 `SampleCmp`): там теперь есть что экономить, чего в августе не было.
+* `Pass_CSM` = 16 % кадра (было 23 %), `Pass_Lighting` = 4 % (было 1.3 %). Приоритет прежний:
+  сначала бесплатное уплотнение (S1/S2, сделано) и качество выборки, разрешение атласа (S4) —
+  последним и только пресетом.
 
 Методические заметки:
 * `--wind-freeze=3.0` замер **не искажает** (проверено: Legacy 0.467 против 0.456, VSM 1.194 против
@@ -305,7 +373,7 @@ x64\Release\test_cube.exe --level=data/levels/wind_test.json --shadow-mode=vsm  
 запаса бы не осталось.
 
 ### Почему
-`Scene.cpp:183-185` берёт центр сферы как **центроид** 8 углов слайса — это не минимальная сфера.
+(на момент написания) `Scene.cpp` брала центр сферы как **центроид** 8 углов слайса — это не минимальная сфера.
 Минимальная сфера слайса пирамиды всегда имеет центр **на оси взгляда**, и его смещение находится
 в закрытой форме из условия равенства расстояний до near- и far-углов:
 
@@ -378,7 +446,7 @@ static CascadeSphere ComputeCascadeSphere(const Camera& camera,
 }
 ```
 
-Заменить в `Scene::UpdateCascades` блок `Scene.cpp:183-192` (вычисление `sphereCenter`/`sphereRadius`) на:
+Заменить в `Scene::UpdateCascades` блок вычисления `sphereCenter`/`sphereRadius` на:
 
 ```cpp
         const CascadeSphere sphere = ComputeCascadeSphere(camera, cornersWS, sliceNear, sliceFar);
@@ -410,12 +478,22 @@ static CascadeSphere ComputeCascadeSphere(const Camera& camera,
 Выигрыш максимален у c0 — того каскада, ради которого документ и пишется. Это не совпадение:
 чем «шире» слайс относительно своей длины, тем дальше центроид от истинного центра.
 
-### Методика проверки (переиспользовать в S2)
+### Методика проверки (переиспользуется во всех визуальных шагах)
 Диф двух захватов сам по себе ничего не доказывает — DLSS темпорален, и два прогона **одного и
 того же** билда расходятся. Поэтому измеряется **шумовой пол**: прогон A vs прогон B того же билда
 дал 0.58 % пикселей с разницей > 8, а before-vs-after — 1.40 %. Реальный эффект = 1.26 % пикселей,
 максимум разницы тот же (194 против 197), т.е. ничего не появилось и не исчезло.
 Захваты сравнимы только с `--wind-freeze=<то же значение>`.
+
+**Дополнено на S3.** Во-первых, для ШЕЙДЕРНЫХ шагов «до» снимается на ТОМ ЖЕ бинаре: шейдеры
+компилируются в рантайме, поэтому достаточно `git stash push -- shaders/<файлы>`, прогон, `git stash pop`.
+Это убирает из сравнения различия сборки целиком.
+Во-вторых, **одной пары для шумового пола мало**: на S3 пара `pre vs a` дала 2.63 %, а `pre vs b` —
+2.18 % при поле 2.02 %, то есть разброс метрики между прогонами того же билда сопоставим с
+измеряемым эффектом. Нужны минимум две пары с каждой стороны.
+В-третьих, **у времени должен быть контроль** — скоуп, который шаг заведомо не трогает
+(для S3 это `Pass_CSM`). Он «сдвинулся» на +0.6 %, что и есть разрешение замера: любую дельту
+меньше этого объявлять эффектом нельзя.
 
 ### Замечание (вне рамок S1)
 Солнце **точно** в зените/надире (`sunDir` строго вертикален) вырождает
@@ -438,8 +516,8 @@ fallback, а `LookAtLH` — нет. Дефект существовал до S1 
 дрожанием в тексель запас бы обнулился. Порядок S1 → S2 обязателен.
 
 ### Почему
-`SceneRenderConfig.h:11` задаёт `overlap = 2.0f` **мировых единиц**, `Scene.cpp:194` делает
-`radius = sphereRadius + overlap`. Комментарий `Scene.cpp:235-237` объясняет, что это padding под
+`SceneRenderConfig.h` задавал `overlap = 2.0f` **мировых единиц**, а `Scene.cpp` делал
+`radius = sphereRadius + overlap`. Комментарий у ассерта объясняет, что это padding под
 сдвиг от texel snap — а `std::floor` сдвигает центр не более чем на **1 тексель** по каждой оси
 (≈ 14 мм для c0). 2 метра padding на радиус 11.5 м — ~15 % выброшенной плотности.
 
@@ -516,12 +594,12 @@ fallback, а `LookAtLH` — нет. Дефект существовал до S1 
 
 ---
 
-## S3. Вынести сэмплирование CSM в общий `shaders/csm_sample.hlsli`
+## S3. Вынести сэмплирование CSM в общий `shaders/csm_sample.hlsli` — ✅ СДЕЛАНО
 
-**Зависит от:** ничего. **Эффект:** 0 визуально в lighting-пути; **обязательный enabler** для S8/S9/S10/S12. **Риск:** средний (рефакторинг).
+**Зависит от:** ничего. **Эффект:** 0 в lighting-пути (подтверждено замером); **обязательный enabler** для S8/S9/S10/S12. **Риск:** средний (рефакторинг). **Цена: не разрешается замером.**
 
 ### Почему
-Логика существует в двух копиях: `lighting_cs.hlsl:80-181` и `glass.hlsl:176-233`. Вторая уже
+Логика существует в двух копиях: `lighting_cs.hlsl:219-334` и `glass.hlsl:184-247`. Вторая уже
 разошлась (нет fallback-цепочки и blend-полосы). VSM-путь вынесен правильно (`vsm_sample.hlsli`) —
 сделать симметрично.
 
@@ -708,7 +786,7 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
     p.splitsVS     = cascadeSplitsVS;
     p.depthBiasNDC = shadowBiasNDC;
     p.normalBiasWS = normalBiasWS;
-    p.atlasSize    = shadowAtlasSizeInv.xy;      // xy = размер атласа (см. GlassView, glass.hlsl:55)
+    p.atlasSize    = shadowAtlasSizeInv.xy;      // xy = размер атласа (см. GlassView, glass.hlsl:56)
     p.camPosWS     = camPosSky.xyz;
     p.camDirWS     = normalize(camDirWS.xyz);
     p.pcfRadius    = 1.0f;
@@ -721,33 +799,67 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
 Третьей копии логики каскадов нет (проверено): `shaders/debug_texture.hlsl` только визуализирует
 атлас, `shaders/spotlight_cs.hlsl` работает с отдельным `SpotShadowAtlas`.
 
+**Новый файл — не забыть про проект:** `shaders/csm_sample.hlsli` добавлен и в `test_cube.vcxproj`,
+и в `test_cube.vcxproj.filters` (обратные слэши, CRLF), рядом с `caustics.hlsli`.
+
 **⚠ Перф-риск рефакторинга.** `CsmParams` передаётся **по значению** и несёт 4×`float4x4` +
 4×`float4` + хвост скаляров (≈ 350 Б). После инлайна DXC это обычно разбирает (SROA), но
 `lighting_cs.hlsl` чувствителен к occupancy, а критерий «скриншот идентичен» просадку не поймает.
 Если `Pass_Lighting` вырастет — передавать `CsmParams` через `inout`/`in` ссылку либо разбить
 на «дешёвую часть + индекс каскада», не таща все 4 матрицы в каждый вызов.
 
-### Критерий приёмки
-* Скриншот сцены до/после для lighting-пути — **идентичен** (`sources/rendering/core/Screenshot.cpp`).
-* **`Pass_Lighting` не выросло** относительно S0.4 (порог: +2 %). Это отдельный критерий, потому
-  что визуально шаг no-op и регрессию видно только в профайлере.
-* Стекло теперь сэмплирует каскады так же, как остальная геометрия (проверить на границе каскадов
-  и на границе тайла) — намеренное исправление, зафиксировать в сообщении коммита.
-* Оба шейдера компилируются (hot-reload покажет ошибки сразу).
+### Критерий приёмки — ВЫПОЛНЕН
+
+| Критерий | Результат |
+|---|---|
+| Скриншот lighting-пути идентичен | **не отличается от шума.** A/B на ОДНОМ бинаре (шейдеры компилируются в рантайме, поэтому «до» снималось через `git stash` двух шейдеров — тот же .exe): шумовой пол (два прогона одного билда) 2.024 % пикселей с разницей > 8; `pre vs post` дал 2.631 % и 2.178 % — то есть **разброс самой метрики больше, чем зазор до пола**, а у пары `pre vs b` среднее даже НИЖЕ, чем у пары одного билда |
+| `Pass_Lighting` не выросло | медиана 3 прогонов: 0.1410 → 0.1430 (**+1.4 %**). **Контроль: `Pass_CSM`, который S3 не трогает вообще, «сдвинулся» на +0.6 %** — значит разрешение замера ~1 %, и +1.4 % не разрешается. Риск `CsmParams` по значению **не материализовался**: DXC инлайнит и разбирает структуру |
+| Оба шейдера компилируются | `lighting_cs` cs_6_5 + cs_6_7, `glass` vs/ps_6_5 и пермутация `NORMALMAP_IS_RG` — все автономным `dxc`, до запуска движка |
+| Стекло согласовано с геометрией | **сделано в коде, но НЕ продемонстрировано** — см. ниже |
+
+**Про стекло — честно.** Замер на `demo.json` (единственный уровень с `transparentMesh`) дал разницу
+**0.158 %** при шумовом поле **0.636 %**, то есть ниже шума. Причина не в том, что правка не
+приехала, а в том, что стекло там — зеркальная плита на переднем плане, в глубине каскада 0, где
+старый и новый пути обязаны совпадать: они расходятся **только** в margin у границы тайла и в
+blend-полосе. Так что доказано «нет регрессии», а не «стало лучше». Улучшение следует из
+конструкции (обе площадки зовут одну функцию), но увидеть его можно лишь на сцене, где стекло
+попадает на стык каскадов. Проверять глазами при случае.
+
+`wind_test` для проверки стекла **не годится** — там 618 `staticMesh` и ни одного прозрачного
+(совпадения по строке «blend» в его JSON — это настройки каустики океана).
+
+### Что реально изменилось в коде
+* новый `shaders/csm_sample.hlsli`: `CsmParams`, `CsmChooseCascade`, `CsmPcf3x3`, `CsmSampleChain`,
+  `CsmSampleShadow` — перенесены из `lighting_cs` дословно, включая `outCascade` из S0.3 и
+  константу `kCsmNoCascade = 4`;
+* `lighting_cs.hlsl`: локальные копии удалены, осталась только `MakeCsmParams()` — маппинг имён
+  полей ЭТОГО cbuffer на `CsmParams`;
+* `glass.hlsl`: собственные `ChooseCascadeIndex` / `ShadowPCF3x3Texture` удалены, `SampleShadowCSM`
+  собирает `CsmParams` из своих имён (`shadowAtlasSizeInv.xy`, `camPosSky.xyz`,
+  `normalize(camDirWS.xyz)`) и зовёт общую функцию.
+
+Единственные намеренные различия между площадками: имена полей CB, сэмплер
+(`gSmpLinear` / `ShadowSampler`) и то, что стекло игнорирует `outCascade`.
 
 ### Откат
-Удалить файл, вернуть две копии.
+Удалить файл (и обе строки из vcxproj/filters), вернуть две копии.
 
 ---
 
-## S3.5. Один CSM-атлас вместо `kFrameCount` копий
+## S3.5. Один CSM-атлас вместо `kFrameCount` копий — ✅ СДЕЛАНО
 
-**Зависит от:** ничего. **Эффект:** −67 МБ VRAM сейчас; **−134 МБ на пресете S4** — то есть шаг, который делает S4 обсуждаемым по памяти. **Риск:** низкий, но это барьеры. **Делать до S4**, иначе S4 меряется в утроенной памяти.
+**Зависит от:** ничего. **Эффект:** **−67 МБ VRAM в Legacy-режиме**; на пресете `Quality` из S4 это будет −134 МБ. **Риск:** низкий, но это барьеры. **Делать до S4**, иначе S4 меряется в утроенной памяти.
+
+**⚠ Уточнение к первой редакции:** «−67 МБ сейчас» было неточно. Дефолт билда — VSM, а там
+`SetLocalShadowResidency(false)` и так ужимает атлас до 1×1 во всех трёх кадрах
+(`Scene::ReconcileShadowMode` → `RenderTargetManager::SetLocalShadowResidency`). Так что 100 МБ
+существовали **только в Legacy** — то есть ровно в том режиме, ради которого пишется документ,
+но говорить «сейчас» про дефолтную конфигурацию было нельзя.
 
 ### Почему
 
 CSM-атлас создаётся внутри общего per-frame цикла `RenderTargetManager`
-(`RenderTargetManager.cpp:384-405`), поэтому живёт в `render::kFrameCount` = **3 копиях**
+(`RenderTargetManager.cpp:396-417`), поэтому живёт в `render::kFrameCount` = **3 копиях**
 по 33.5 МБ = ~100 МБ. VSM-пул (`VirtualShadowMap::EnsureResources`, `VirtualShadowMap.cpp:43`)
 создаётся **одним** `CreateCommittedResource` вне всякого цикла по кадрам — одна копия.
 
@@ -761,15 +873,20 @@ CSM-атлас создаётся внутри общего per-frame цикла
 CSM-атлас — ни то, ни другое:
 * пишется `Pass_CSM` и читается `lighting_cs` + `glass.hlsl` **в том же кадре**; ни один потребитель
   `D.shadowSRV` не смотрит на атлас прошлого кадра (проверено: SRV-таблица лайтинга
-  `SceneRenderer.cpp:1959`, `TransparentStaticMesh.cpp:236`, `TextureDebugViewer`);
-* в движке **ровно одна очередь команд** (`GraphicsDevice.cpp:112`; вторая, в `RtSmoke.cpp`, —
-  отдельный headless-харнесс, не рендер-путь), значит порядок submit = порядок исполнения, и
-  `Pass_CSM` кадра N+1 физически не может начать писать раньше, чем лайтинг кадра N дочитал.
-  Async compute, ради которого копии были бы обязательны, отсутствует.
+  `SceneRenderer_Lighting.cpp`, `TransparentStaticMesh.cpp`, `TextureDebugViewer`);
+* **атлас не пересекает границу очередей.** ⚠ Аргумент «в движке одна очередь» УСТАРЕЛ: с
+  `async_compute_plan` появилась вторая, `computeQueue_` (`GraphicsDevice.cpp:373/386`), и на ней
+  живут `Main_BuildAS`, `Main_ObjectCompute`, `Main_RTTrace`. Но **ни один из них не объявляет
+  `D.shadow`**: единственные декларации — `SceneRenderer_Graph.cpp:327` (DEPTH_WRITE, `Main_CSM`)
+  и `:760`/`:776` (SRV, обе — `Main_Lighting`), и все три паса на графической очереди. Значит
+  внутри графической очереди порядок submit = порядок исполнения, и `Pass_CSM` кадра N+1 не может
+  начать писать раньше, чем лайтинг кадра N дочитал.
+  **Это условие надо перепроверять**, если теневой или читающий тени пас переедет на async:
+  тогда одной копии станет мало без фенса, и вывод шага изменится.
 
 ### Код
 
-Вынести создание `D.shadow` из цикла `for (UINT f = 0; f < render::kFrameCount; ++f)` в один
+Вынести создание `D.shadow` из цикла `for (UINT f = 0; f < render::kFrameCount; ++f)` (`:396`) в один
 общий слот. `shadowDSV` / `shadowSRV` каждого кадра указывают на один и тот же ресурс — дескрипторы
 дублировать можно и нужно (они лежат в per-frame кучах), дублировать не нужно **ресурс**.
 
@@ -777,26 +894,58 @@ CSM-атлас — ни то, ни другое:
 (`VirtualShadowMap.cpp:979`). Паттерн в движке уже есть, изобретать нечего.
 
 ### ⚠ Что проверить внимательно
-`ResourceStateTracker` сейчас ведёт **три независимых** состояния (по одному на копию). После
-схлопывания состояние одно и переключается каждый кадр. Точки, которые надо пересмотреть:
-* `RenderTargetManager.cpp:656` — `ClearResourceState(D.shadow.Get())` при пересоздании: теперь
-  вызовется трижды для одного ресурса;
-* `RenderTargetManager.cpp:702` — `collect(D.shadow)` в списке ресурсов на удержание;
-* объявленные состояния в графе (`SceneRenderer.cpp:489/601/616`) — они по указателю ресурса,
-  так что три одинаковых объявления схлопнутся в одно; убедиться, что граф это переваривает;
-* путь «сжать до 1×1 в VSM-режиме» (`RenderTargetManager.cpp:662`) — теперь одно пересоздание,
+⚠ `ResourceStateTracker` **больше не существует** — barrier plan его выпилил, барьеры теперь
+компилируются из деклараций `AddPass2`. Поэтому «три состояния схлопнутся в одно» касается не
+трекера, а **графа**: три копии `D.shadow` были тремя разными указателями ресурса, после
+схлопывания декларации разных кадров указывают на один. Точки, которые надо пересмотреть:
+* путь пересоздания атласа в `RenderTargetManager.cpp` (сброс состояния/дескрипторов): теперь
+  сработает трижды для одного ресурса;
+* `collect(D.shadow)` в списке ресурсов на удержание (`RenderTargetManager.cpp`);
+* объявленные состояния в графе (`SceneRenderer_Graph.cpp:327/760/776`) — они по указателю
+  ресурса, так что декларации разных кадров схлопнутся; убедиться, что граф это переваривает;
+* путь «сжать до 1×1 в VSM-режиме» (`RenderTargetManager.cpp:971`) — теперь одно пересоздание,
   а не три.
 
-Включить GBV на прогон: рассинхрон состояний — ровно тот класс бага, который он ловит.
+Включить GBV на прогон: рассинхрон барьеров — ровно тот класс бага, который он ловит.
 
-### Критерий приёмки
-* Скриншот **идентичен** baseline (шаг чисто аллокационный, картинку менять не имеет права).
-* VRAM CSM-атласа: **100 МБ → 33.5 МБ** (залогировать при создании).
-* GBV чистый; `--scene-stress` без падений (переключение режимов теней пересоздаёт атлас).
-* Ctrl+V туда-обратно не крэшится.
+### Критерий приёмки — ВЫПОЛНЕН
+
+| Критерий | Результат |
+|---|---|
+| Скриншот идентичен | **да, в пределах шума.** Кросс-билд диф (S3 → S3.5) 2.407 % и 2.470 % пикселей > 8, при шумовых полах **2.024 %** (пара S3) и **3.043 %** (пара S3.5) — то есть эффект лежит МЕЖДУ двумя полами |
+| VRAM | 3 × 33.55 МБ → **1 × 33.55 МБ**, освобождено **67.1 МБ** в Legacy. Косвенно подтверждено: `--canonical-check` рапортует **238** объявленных ресурсов вместо 240 |
+| GBV чистый | `--scene-stress=6 --scene-stress-gbv` (Debug): **verdict CLEAN**, барьеров 3243 enhanced / 0 legacy. Прогон покрывает ReloadLevel, **SwitchLevel**, **ResizeWindow**, DlssMode, RenderScale, ReflectionScale — resize и reload как раз пересоздают все таргеты, то есть новый путь создания |
+| Атлас корректно завершает кадр | `--canonical-check`: **`CascadeShadow` НИ РАЗУ не появился в off-canonical**. В списке только `Ocean.SurfSim{Wave,Foam}{A,B}` — пинг-понг по построению, к шагу отношения не имеет. Это прицельная проверка главного риска: три ресурса схлопнулись в один, и состояние теперь переносится между кадрами по-настоящему |
+| Барьеры совпадают с декларациями | `--barrier-cmp`: **0 mismatch** за прогон |
+| Переключение режима не крэшит | оба режима грузятся и рисуют; VSM-загрузка прогоняет путь ужатия до 1×1 (теперь один раз вместо трёх) |
+| Цена | `Pass_CSM` 0.509 → 0.510, `GPU.Frame` 3.283 → 3.245 — без изменений |
+
+### Что реально изменилось в коде
+* `RenderTargetManager::shadowAtlas_` — **единственный владелец** (`GpuResource`);
+* `DeferredTargets::shadow` из `GpuResource` стал **невладеющим** `ID3D12Resource*`-алиасом на него;
+* `CreateShadowResource` потерял параметр `f`: создаёт ресурс один раз и внутри цикла строит
+  **пер-кадровые DSV/SRV** (дескрипторы живут в пер-кадровых кучах, общий только ресурс);
+* вызов вынесен из пер-кадрового цикла `Create()`; в `SetLocalShadowResidency` — тоже один вызов;
+* `Destroy` освобождает `shadowAtlas_`, а алиасы просто обнуляет;
+* call-sites: `SceneRenderer_Graph.cpp` ×3, `SceneRenderer_Post.cpp`, `TextureDebugViewer.cpp` —
+  `D.shadow.Get()` → `D.shadow`.
+
+### Почему это безопасно (модель барьеров, проверено по коду)
+`CanonicalStateRegistry::Entry::predicted` хранит **одно** состояние **на ресурс** и передаёт его
+«из этого кадра в следующий» (`RenderGraph.h`, комментарий у `CompileBarriers`), а НЕ пересеивает
+из canonical каждый кадр. С тремя копиями у каждой была своя запись; с одной запись общая и
+состояние течёт в порядке сабмита — для модели это честнее, а не рискованнее. Fixed-point-тест
+(«ресурс обязан закончить там же, где начал») держится: атлас идёт NON_PIXEL → DEPTH_WRITE
+(`Main_CSM`) → NON_PIXEL (`Main_Lighting`), то есть кэш барьеров по-прежнему разрешён.
+
+### Инструмент, который пришлось сделать
+`--canonical-check` и `--barrier-cmp` пишут в `OutputDebugString`, а готового захвата DBWIN
+в проекте не было. Скрипт лежит в скрэтчпаде (`dbwin.py`). Грабли: `MapViewOfFile` без
+явного `restype` усекается ctypes до 32 бит на x64, и всё чтение из буфера — мусор.
 
 ### Откат
-Вернуть создание в per-frame цикл.
+Вернуть `GpuResource shadow` в `DeferredTargets`, параметр `f` в `CreateShadowResource`, вызов —
+внутрь пер-кадрового цикла.
 
 ---
 
@@ -918,7 +1067,7 @@ UE не раскладывает каскады сеткой: каждый ка�
 * существующая ветка обнуления ставит `view.frustum = Frustum{}`, а невалидный `Frustum` в
   `Intersects()` возвращает **`true` (принять всё)**, а не reject-all;
 * `cascadeViews_[i].frustum` безусловно уходит в `shadowGpu_.UpdateViewFrustums` слотами 0..3
-  (`Scene.cpp:1107`) и в `enqueueView` (`Scene.cpp:1019`) — **в обоих режимах**.
+  (`Scene.cpp:1322`) и в `enqueueView` (`Scene.cpp` — `enqueueView(cascadeView)`) — **в обоих режимах**.
 
 То есть вырожденная раскладка в VSM-режиме превратила бы каскадный куллинг из «отбраковывает» в
 «пропускает всё» и добавила бы работы там, где её сейчас нет. Guard `atlasReady` остаётся ровно
@@ -926,7 +1075,7 @@ UE не раскладывает каскады сеткой: каждый ка�
 
 *(Отдельное наблюдение, вне рамок этого документа: каскадные view куллятся каждый кадр и в
 VSM-режиме, хотя `Main_CSM` в графе отсутствует. Слоты 0..3 в `UpdateViewFrustums` можно было бы
-занулять при `VsmActive()` тем же приёмом, каким Legacy зануляет клипмап-слоты, `Scene.cpp:1119-1124`.
+занулять при `VsmActive()` тем же приёмом, каким Legacy зануляет клипмап-слоты, `Scene.cpp:1334-1339`.
 Это чистая экономия в VSM-пути, к CSM отношения не имеет — отдельная задача.)*
 
 **4) `sources/app/scene/Scene.cpp`** — в `UpdateCascades` заменить `tileRes` (`:144`) и блок
@@ -1008,7 +1157,7 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
 Добавить явное поле в `CsmParams` и в CB:
 
 ```cpp
-// LightingPassConstants (SceneResourceBootstrapper.h:147) + handle + write:
+// LightingPassConstants (SceneResourceBootstrapper.h:494) + handle + write:
     float4 cascadeTexelWorld{};   // мировых единиц на тексель, по каскадам (S4)
 ```
 ```hlsl
@@ -1019,7 +1168,7 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
 ```
 Заполнять `cascades.dbgUnitsPerTexel[idx]` (S0) → `constants.cascadeTexelWorld`. Для `glass.hlsl`
 добавить `float4 cascadeTexelWorld;` в `cbuffer GlassView` (`glass.hlsl:41-66`) и в
-`GlassViewCB` (`SceneRenderer.cpp:141+`) — **в хвост**, чтобы не сдвинуть существующие смещения.
+`GlassViewCB` (`SceneRenderInternal.h:125`) — **в хвост**, чтобы не сдвинуть существующие смещения.
 
 ### Критерий приёмки
 * `TextureDebugViewer` (`sources/rendering/debug/TextureDebugViewer.cpp`) показывает новую раскладку:
@@ -1064,7 +1213,7 @@ UE резервирует 4 текселя внутри тайла, домнож
 **1) Включить border:** `render::g_cascadeAtlasBorder = 4;` (S4, п.1). `ContentSize(c)` уже
 учитывает это, и `tileRes` в `UpdateCascades` автоматически становится content-размером.
 
-**2) Border-scale проекции.** В `Scene::UpdateCascades` после построения `lightProj` (`Scene.cpp:251`):
+**2) Border-scale проекции.** В `Scene::UpdateCascades` после построения `lightProj` (`Scene.cpp:327`):
 
 ```cpp
         // S5: контент каскада должен занять внутренние ContentSize текселей тайла, оставив
@@ -1077,7 +1226,7 @@ UE резервирует 4 текселя внутри тайла, домнож
 ```
 Дальше использовать `lightProjBordered` **везде**, где раньше стоял `lightProj`
 (`cascades.lightProj[idx]`, `cascadeView.proj`, `cascadeView.invProj`). Frustum для куллинга
-(`Frustum::FromOrthoBounds`, `Scene.cpp:270`) оставить по **немасштабированным** `minX..maxY`:
+(`Frustum::FromOrthoBounds`, `Scene.cpp:346`) оставить по **немасштабированным** `minX..maxY`:
 мировая область каскада не изменилась, изменилось только её место в тайле.
 
 `unitsPerTexel` уже считается по content-размеру (п.1) — bias автоматически корректен.
@@ -1171,7 +1320,7 @@ Bias применяется только при **сэмплировании**. 
 slope-компоненту — по нормали вершины: `slope = tan(угол между поверхностью и светом) =
 sqrt(1-NoL²)/NoL`, с клампом (иначе поверхность, стоящая почти ребром к свету, требует бесконечный
 bias). Дефолты UE: константа 10, slope-scale 3, обе нормированы на диапазон глубины и на мировой
-размер текселя. Нормировка у нас уже правильная (`Scene.cpp:253-256`) — не хватает slope-члена
+размер текселя. Нормировка у нас уже правильная (`Scene.cpp:330-334`) — не хватает slope-члена
 и переноса bias в depth-пас.
 
 ### Код
@@ -1181,28 +1330,43 @@ bias). Дефолты UE: константа 10, slope-scale 3, обе норм�
 ```cpp
     // S6: slope-scaled bias при записи глубины. slopeScale множит константный NDC-bias;
     // maxSlope ограничивает tan(угла) — иначе поверхность ребром к свету требует бесконечный bias.
+    // Значения — из UE (сверено 2026-08-31): r.Shadow.CSMSlopeScaleDepthBias = 3,
+    // r.Shadow.ShadowMaxSlopeScaleDepthBias = 1. ⚠ maxSlope именно 1.0, а НЕ 3.0 —
+    // в первой редакции этого документа было 3.0, то есть втрое мягче клампа, чем у UE.
     float slopeScale = 3.0f;
-    float maxSlope   = 3.0f;
+    float maxSlope   = 1.0f;
     // S7: pancaking. 1 = вершину перед near-плоскостью прижать к ней вместо отсечения.
     float clampToNear = 0.0f;
 ```
 
-**2) `sources/app/scene/SceneRenderer.cpp`** — расширить `PerViewCB` (`:120-138`), **строго в хвост**:
+**⚠ ОБНОВЛЕНО 2026-08-31: хвост CB переезжает с 224 на 240.** Когда документ писался, байты
+224..255 слота `PageProj` были свободны. Теперь 224..239 занял `gWindFade` (`w2` = camPos + windFadeEnd,
+`vsm_page_setup_cs.hlsl:229`, читается через `LoadPageVP`). Осталось ровно **240..255 = 4 float'а** —
+столько S6 и нужно, но **запаса больше нет**: следующее поле в этот слот уже не влезет, придётся
+расширять шаг слота с 256 байт. Ниже всё смещено на 240; `static_assert` становится **256**, а не 240.
+
+Дополнительно: в основной VSM-пермутации (`VSM_PAGE=1`) **`b1` отсутствует** (см. правило 3), поэтому
+«записать нули в `vsm_page_setup_cs`» — уже не единственное, что нужно: значения оттуда читает
+`LoadPageVP`, и его надо расширить (`w3 = PageProjRows[b + 15u]`) либо явно передать нули в
+`ApplyShadowDepthBias` на этом пути.
+
+**2) `SceneRenderInternal.h`** — расширить `PerViewCB` (`:105-122`), **строго в хвост**:
 
 ```cpp
         float windPrevGustMul = 1.0f;
-        // S6/S7: параметры bias'а shadow-depth паса. Смещение 224 в 256-байтном слоте PageProj,
-        // который vsm_page_setup_cs.hlsl заполняет для VSM-страниц — там пишутся нули, поэтому
-        // ApplyShadowDepthBias в VSM-режиме превращается в no-op (см. правило 3 в шапке).
-        float shadowConstBias = 0.0f;   // 224
-        float shadowSlopeBias = 0.0f;   // 228
-        float shadowMaxSlope  = 0.0f;   // 232
-        float shadowClampNear = 0.0f;   // 236
+        // S6/S7: параметры bias'а shadow-depth паса. Смещение 240 — ПОСЛЕДНИЕ свободные 16 байт
+        // 256-байтного слота PageProj (224..239 занял gWindFade/w2, см. правило 3). Для VSM там
+        // пишутся нули, поэтому ApplyShadowDepthBias на VSM-путях — no-op.
+        float _pad224[4] = {};          // 224..239: занято gWindFade в VSM-слоте, не трогать
+        float shadowConstBias = 0.0f;   // 240
+        float shadowSlopeBias = 0.0f;   // 244
+        float shadowMaxSlope  = 0.0f;   // 248
+        float shadowClampNear = 0.0f;   // 252
     };
-    static_assert(sizeof(PerViewCB) == 240, "PerViewCB must match the gbuffer/shadow HLSL layout");
+    static_assert(sizeof(PerViewCB) == 256, "PerViewCB must match the gbuffer/shadow HLSL layout");
 ```
 
-**3) `BuildShadowViewCB`** (`SceneRenderer.cpp:219-226`) — принимать индекс каскада и заполнять:
+**3) `BuildShadowViewCB`** (`SceneRenderInternal.h:231`) — принимать индекс каскада и заполнять:
 
 ```cpp
     D3D12_GPU_VIRTUAL_ADDRESS BuildShadowViewCB(Renderer* renderer, const mat4& lightView,
@@ -1220,27 +1384,32 @@ bias). Дефолты UE: константа 10, slope-scale 3, обе норм�
         return UploadFrameCB(renderer, vc);
     }
 ```
-В `Pass_CSM` (`:1409` и `:1472`) передавать `cascades.depthBiasNDC[cascadeIndex]`,
+В `Pass_CSM` (`SceneRenderer_Shadows.cpp:253+`) передавать `cascades.depthBiasNDC[cascadeIndex]`,
 `cascades.depthBiasNDC[cascadeIndex] * cfg.slopeScale`, `cfg.maxSlope`, `cfg.clampToNear`.
-Для spot/point (`:1339`) передавать нули — их bias-путь этот шаг не затрагивает.
+(Это ровно `ShaderSlopeDepthBias = DepthBias * SlopeScaleDepthBias` из UE — сверено.)
+**Добавить кламп UE, которого в первой редакции не было:** `DepthBias = min(DepthBias, 0.1f)`
+(`ShadowRendering.cpp:1905`, комментарий Epic: «Prevent a large depth bias due to low resolution
+from causing near plane clipping»).
+Для spot/point передавать нули — их bias-путь этот шаг не затрагивает.
 
 **4) HLSL PerView — в ДВУХ местах, байт-в-байт одинаково.**
 `shaders/gbuffer_common.hlsli` (после `:82`) и `shaders/shadow_indirect_csm.hlsl` (после `:74`):
 
 ```hlsl
-    float  shadowConstBias;   // 224 (S6)
-    float  shadowSlopeBias;   // 228
-    float  shadowMaxSlope;    // 232
-    float  shadowClampNear;   // 236 (S7)
+    float4 _pad224;           // 224..239 = gWindFade/w2 в VSM-слоте (см. правило 3)
+    float  shadowConstBias;   // 240 (S6)
+    float  shadowSlopeBias;   // 244
+    float  shadowMaxSlope;    // 248
+    float  shadowClampNear;   // 252 (S7)
 ```
 
-**5) `shaders/vsm_page_setup_cs.hlsl`** — после `:130` добавить:
+**5) `shaders/vsm_page_setup_cs.hlsl`** — после `:229` добавить (240, НЕ 224 — 224 занят):
 
 ```hlsl
     // S6/S7: хвост shadow-bias параметров PerView. VSM-страницы получают НУЛИ: ApplyShadowDepthBias
     // тогда прибавляет 0 и не клампит, т.е. VSM-путь остаётся бит-в-бит прежним. Без этой записи
-    // байты 224..239 слота остались бы мусором (см. правило 3).
-    PageProj.Store4(po + 224u, asuint(float4(0.0f, 0.0f, 0.0f, 0.0f)));
+    // байты 240..255 слота остались бы мусором (см. правило 3). Это ПОСЛЕДНИЕ свободные байты слота.
+    PageProj.Store4(po + 240u, asuint(float4(0.0f, 0.0f, 0.0f, 0.0f)));
 ```
 
 **6) Новый файл `shaders/shadow_depth_common.hlsli`:**
@@ -1279,11 +1448,16 @@ float4 ApplyShadowDepthBias(float4 H, float3 normalWS, float4x4 lightVP, float4 
         H.z += params.x + params.y * slope;
     }
 
-    // S7 pancaking: кастер перед near-плоскостью прижимается к ней, а не отсекается. Кламп в VS
+    // S7 pancaking: кастер перед near-плоскостью прижимается к ней, а не отсекается.
+    // Сверено с UE (ShadowDepthVertexShader.usf:67-71): там reverse-Z и потому
+    // `if (z > w) { z = 0.999999; w = 1; }` — зеркальный эквивалент нашего прямого Z.
+    // Эпсилон UE стоит взять: клампить не в ровный 0, а чуть внутрь. UE клампит ДО прибавления
+    // bias, мы — после; наш порядок безопаснее (bias не вытолкнет панкейкнутую вершину обратно).
+    // Кламп в VS
     // возвращает вершину внутрь фрустума, поэтому DepthClipEnable менять НЕ нужно (что критично:
     // PSO индирект-теней общий с VSM). Побочный эффект тот же, что и в UE: если у треугольника
     // часть вершин клампится, а часть нет — треугольник деформируется. Это принятый компромисс.
-    if (params.w > 0.0f) { H.z = max(H.z, 0.0f); }
+    if (params.w > 0.0f) { H.z = max(H.z, 1e-6f); }
     return H;
 }
 
@@ -1353,8 +1527,8 @@ offset 0 in every mesh vertex format, so one layout serves all shadow-caster mes
 ```
 То же для `PosUV_InstCasterId` (`:90-96`).
 
-**9) После этого уменьшить sample-time bias:** `SceneRenderConfig.h:10` `depthBiasInTexels`
-с `2.0` до `0.5…1.0` (подобрать на глаз через S0.2) — его роль теперь берёт depth-пас.
+**9) После этого уменьшить sample-time bias:** `SceneRenderConfig.h` `depthBiasInTexels`
+с текущих `1.5` до `0.5…1.0` (подобрать на глаз через S0.2) — его роль теперь берёт depth-пас.
 
 ### Критерий приёмки
 * На наклонной геометрии (склон, пандус, скат крыши) при низком солнце acne исчезло **без**
@@ -1365,12 +1539,14 @@ offset 0 in every mesh vertex format, so one layout serves all shadow-caster mes
   *цены* этого шага (см. предупреждение в начале). Если вырос — ранний выход в
   `ApplyShadowDepthBias` не сработал (проверить дизассемблер/`--profdump`), следующий ход —
   перестановка PSO.
-* Все 5 shadow-шейдеров компилируются; `static_assert(sizeof(PerViewCB) == 240)` проходит.
+* Все 5 shadow-шейдеров компилируются; `static_assert(sizeof(PerViewCB) == 256)` проходит.
+* Пермутация `VSM_PAGE=1` тоже собирается и её путь получает нули (там `b1` нет — значения идут
+  через `LoadPageVP`, см. правило 3).
 * Индирект-путь (`render::g_indirectShadowsEnabled`) и CPU-fallback дают одинаковые тени.
 
 ### Откат
 `slopeScale = 0` → формула становится no-op'ом. Полный откат — вернуть `static_assert` на 224
-и убрать хвост CB.
+и убрать хвост CB (вместе с `_pad224`).
 
 ---
 
@@ -1385,12 +1561,12 @@ offset 0 in every mesh vertex format, so one layout serves all shadow-caster mes
 
 Механизм клампа уже добавлен в S6 (`params.w`). **PSO менять не нужно** — кламп в VS возвращает
 вершину внутрь фрустума, так что `DepthClipEnable` остаётся `TRUE`. Это существенно: PSO
-индирект-теней общий с VSM (`VirtualShadowMap.cpp:755`), и его изменение затронуло бы VSM.
+индирект-теней штампуется из общего с VSM шаблона (`ShadowGpuData.cpp:1451-1535`), и его изменение затронуло бы VSM.
 
 ### ⚠ Ловушка, без которой шаг ломает сам себя: near-плоскость КУЛЛИНГА
 
 Наивная реализация («сжать `nearLS` и включить кламп») **не работает** и даёт ровно тот баг,
-который `casterReachWS` и был призван закрыть. Причина — `Scene.cpp:270`:
+который `casterReachWS` и был призван закрыть. Причина — `Scene.cpp:346`:
 
 ```cpp
 cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, minY, maxY, nearLS, farLS);
@@ -1399,7 +1575,7 @@ cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, 
 `FromOrthoBounds` строит ortho-**бокс с настоящей near-плоскостью** (`Frustum::BuildOrthoLs`), и
 его 6 планов уходят не только в CPU-куллинг, но и в GPU-куллинг: `Frustum::Planes()`
 (комментарий в `Frustum.h`: *«Exposed for GPU shadow culling»*) → `shadowGpu_.UpdateViewFrustums`,
-слоты 0..3 (`Scene.cpp:1101-1110`).
+слоты 0..3 (`Scene.cpp:1322`).
 
 Если сжать `nearLS`, то кастеры между солнцем и слайсом **отбраковываются на стадии куллинга** —
 до вершинного шейдера они не доезжают, и клампить `max(H.z, 0)` становится нечего. Крона дерева,
@@ -1421,7 +1597,7 @@ cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, 
 `shadowClampNear`.
 
 **2) Отодвинуть «глаз» света ровно настолько, чтобы ortho-z оставался положительным.**
-Заменить `lightDistance` (`Scene.cpp:198`):
+Заменить `lightDistance` (`Scene.cpp:274`):
 
 ```cpp
         // S7: «глаз» ставится за сферой каскада + casterReachWS, а не на фиксированные
@@ -1433,7 +1609,7 @@ cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, 
         const float lightDistance = radius + cascadeConfig_.casterReachWS + 1.0f;
 ```
 
-**3) Развести near проекции и near куллинга.** Заменить `Scene.cpp:245-251`:
+**3) Развести near проекции и near куллинга.** Заменить `Scene.cpp:321-327`:
 
 ```cpp
         // z-диапазон пропорционален экстенту каскада — так один NDC-bias работает на всех
@@ -1453,7 +1629,7 @@ cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, 
 
         const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearProjLS, farLS);
 ```
-и ниже, в построении фрустума (`Scene.cpp:270`), поставить `nearCullLS`:
+и ниже, в построении фрустума (`Scene.cpp:346`), поставить `nearCullLS`:
 ```cpp
         cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, minY, maxY,
                                                        nearCullLS, farLS);
@@ -1547,10 +1723,12 @@ lit = saturate((storedDepth - receiverDepth) * transitionScale + 1)
 SRV атласа — `R16_UNORM` (`RenderTargetManager.cpp:513`), поэтому `Gather` вернёт нормализованные
 глубины в `[0,1]` — ту же величину, что и NDC-z ортопроекции. Дополнительный сэмплер не нужен:
 `Gather` использует SamplerState только для адресации, годится существующий `gSmpPoint`
-(`lighting_cs.hlsl:29`) / `LinearSampler` (`glass.hlsl:80`).
+(`lighting_cs.hlsl:47`) / `LinearSampler` (`glass.hlsl:88`).
 
 **Важно:** офсеты задаются **не** через `int2`-параметр `Gather`, а сложением UV — тогда каждый
 тап можно заклампить границами контента (S5). С `int2`-офсетами clamp обходится аппаратно.
+(UE использует именно `int2`, `ShadowFilteringCommon.ush:255-258` — отличие сознательное и
+единственное во всём S8; остальное сверено как идентичное, см. §5.)
 
 ### Код
 
@@ -1608,7 +1786,7 @@ float CsmSharpen(float shadow, float sharpen)
 Расширить `CsmParams`:
 ```hlsl
     float4 transitionScale;   // S8: 1/ширина переходной зоны по глубине, на каскад
-    float  receiverBiasMin;   // S8: множитель transitionScale при NoL == 0 (старт 0.1)
+    float  receiverBiasMin;   // S8: множитель transitionScale при NoL == 0. UE: r.Shadow.CSMReceiverBias = 0.9
     float  sharpen;           // S8: 1.0 = выключено
     uint   useGatherPcf;      // S8: 0 = старый SampleCmp путь (аварийный откат)
 ```
@@ -1632,7 +1810,7 @@ float CsmSharpen(float shadow, float sharpen)
 **CPU-часть.** `LightingPassConstants` + `GlassViewCB` + handles + write:
 ```cpp
     float4 cascadeTransitionScale{};   // S8
-    float  csmReceiverBiasMin = 0.1f;  // S8
+    float  csmReceiverBiasMin = 0.9f;  // S8: r.Shadow.CSMReceiverBias (⚠ было 0.1 — вдесятеро мимо UE)
     float  csmSharpen = 1.0f;          // S8
     uint32_t csmUseGatherPcf = 1;      // S8
 ```
@@ -1762,6 +1940,21 @@ fade-плоскость **внутрь** последнего каскада н�
 
 Плюс: текущая blend-полоса берёт `band = splitNext * 0.1` — долю от **абсолютной** дистанции.
 UE берёт долю от **длины слайса**. Для c0 разница мала, для c3 (100…300) существенна: 30 м против 20 м.
+
+**⚠ Сверено с UE 2026-08-31 — полоса у нас с ДРУГОЙ стороны.**
+`DirectionalLightComponent.cpp:920-943`: у UE для не-последнего каскада
+`FadeExtension = (SplitFar - SplitNear) * CascadeTransitionFraction`, и дальше
+**`SplitFar += FadeExtension`** — каскад *расширяется*, чтобы полоса перехода была покрыта им самим
+на полном качестве; `FadePlane` при этом остаётся на исходном сплите. Для последнего каскада
+наоборот: `FadePlane -= FadeExtension`, плоскость уезжает внутрь — это и есть то, что предлагает S10.
+
+У нас полоса лежит **внутри** каскада N, а сэмплируется каскад N+1, слайс которого начинается только
+на сплите. Работает лишь потому, что объемлющая сфера N+1 заметно больше его слайса, плюс есть
+fallback-цепочка. Это не гарантия, а везение. При реализации выбрать одно:
+* **как UE** — расширить `sliceFar` каскада N на `FadeExtension` при фите сферы (тогда полоса
+  честно покрыта каскадом N, а мы гасим его вклад), либо
+* оставить текущую схему, но **доказать** замером, что сфера N+1 накрывает полосу во всех
+  каскадах и при всех сплитах, которые допускают слайдеры S0.2.
 
 ### Код
 
@@ -2132,7 +2325,7 @@ cascades.needsRedraw[idx] = needsRedraw;   // новое поле в CascadeData
 | baseline | 14.51 м | 2048 | 14.17 мм | — | — |
 | +S1 (минимальная сфера) ✅ | 13.47 м | 2048 | **13.16 мм (замерено)** | −7.2 % | **0** |
 | +S2 (overlap в текселях) ✅ | 11.50 м | 2048 | **11.23 мм (замерено)** | −20.8 % | **0** |
-| +S3.5 (один атлас) | — | — | — | — | **−67 МБ VRAM**, картинка не меняется |
+| +S3.5 (один атлас) ✅ | — | — | — | — | **−67 МБ VRAM** (Legacy), картинка не меняется |
 | +S4 пресет `Quality` | 11.50 м | 4096 | 5.61 мм | −60 % | ×4 растеризации c0; 33.5 → 67 МБ (после S3.5) |
 | +сокращение c0 до 6 м (тюнинг через S0.2) | 6.90 м | 4096 | 3.37 мм | −76 % | c1 берёт на себя 6…35 м |
 
@@ -2143,7 +2336,7 @@ cascades.needsRedraw[idx] = needsRedraw;   // новое поле в CascadeData
 бесплатных шагов, дорогие остаются пресетами.
 
 Независимо от плотности: **S7** даёт шаг квантования D16 ≈ 0.5 мм вместо 3.11 мм (бесплатно);
-**S6 + S8 + S9** позволяют снизить bias (сейчас ≈ 28 мм peter-panning) и заменить бинарное
+**S6 + S8 + S9** позволяют снизить bias (сейчас ~16.8 мм peter-panning) и заменить бинарное
 сравнение мягкой рампой — примерно за те же деньги, при условии, что гейт в S6 и паритет
 `Gather` в S8 подтверждены замером.
 
@@ -2152,10 +2345,10 @@ cascades.needsRedraw[idx] = needsRedraw;   // новое поле в CascadeData
 ## 4. Рекомендованный порядок
 
 ```
-S0                                  enabler + перф-baseline, обязательно первым
-S1  ->  S2                          дешёвые чистые выигрыши плотности (бесплатно)
-S3                                  рефакторинг-enabler для шейдеров
-S3.5                                один атлас вместо 3 копий (-67 МБ)  [enabler памяти для S4]
+S0                                  enabler + перф-baseline                 [СДЕЛАНО]
+S1  ->  S2                          дешёвые чистые выигрыши плотности        [СДЕЛАНО]
+S3                                  рефакторинг-enabler для шейдеров        [СДЕЛАНО]
+S3.5                                один атлас вместо 3 копий (-67 МБ)     [СДЕЛАНО]
 S4  ->  S5                          per-cascade разрешение + gutter   [S4 = пресет, не дефолт]
 S6  ->  S7                          bias в depth-пасе + pancaking
 S8  ->  S9                          качество фильтра                  [S8 ТРЕБУЕТ S6]
@@ -2187,11 +2380,84 @@ S13                                 опционально, крупная ра�
 
 ---
 
-## 5. Что ещё можно достать из UE, если понадобится
+## 5. Сверка с оригиналом UE (`D:/Programming/ue_strip`, 2026-08-31)
 
-Документ самодостаточен, исходники Epic для его выполнения не нужны. Но если по ходу вскроется
-расхождение и захочется свериться с первоисточником, полезны именно эти файлы (порядок по
-убыванию пользы):
+Дроп UE лежит локально, и первая редакция этого документа зря объявляла себя «самодостаточной».
+Проверены все транскрипции. **Четыре совпали дословно, три числа были неверны.**
+
+### Совпало байт-в-байт (можно не перепроверять)
+
+| Наш шаг | Оригинал | Вердикт |
+|---|---|---|
+| **S1** сфера каскада | `DirectionalLightComponent.cpp:876-889` (`GetShadowSplitBoundsDepthRange`) | **идентично**, включая формулу `OptimalOffset`, кламп `CentreZ` в `[SplitNear, SplitFar]`, замер радиуса по 8 углам и пол `max(sqrt, 1.0f)` |
+| **S1** неджиттернутая матрица | там же: `ViewMatrices.GetProjectionNoAAMatrix()` | UE **тоже** фитит каскады по no-AA проекции — независимое подтверждение фикса джиттера |
+| **S8** рампа `CalculateOcclusion` | `ShadowFilteringCommon.ush:151-181` | **идентично**, включая вынос `ConstantFactor` из пер-сэмплового кода |
+| **S8** tent-свёртка 4×4 | `ShadowFilteringCommon.ush:97-118` (`PCF3x3gather`) | **идентично терм-в-терм** — 16 слагаемых и `dot(..., float4(1-Fy,1,1,Fy)) * 1/9` сошлись. Выведено независимо, совпало |
+| **S8** позиционирование гатеров | `ShadowFilteringCommon.ush:246-259` (`Manual3x3PCF`) | **идентично**: `TexelPos = uv*size-0.5`, `SamplePos = (floor+1)*texelSize`, четыре гатера на ±1 |
+| **S8** `Square()` и sharpen | `ShadowProjectionPixelShader.usf:89-91`, `:375` | **идентично**: `Square(Shadow)` и `saturate((Shadow-0.5)*Sharpen+0.5)` |
+| **S6** формула slope | `ShadowDepthVertexShader.usf:77-90` | **идентично**: `NoL = abs(dot(колонка z матрицы, нормаль))`, `slope = clamp(sqrt(1-NoL²)/NoL, 0, maxSlope)`, `bias = const + slopeScale*slope` |
+
+### ⚠ Три числа были неверны — исправлены в тексте
+
+| Что | Было в документе | В UE | Последствие ошибки |
+|---|---|---|---|
+| `maxSlope` (S6) | 3.0 | **1.0** (`r.Shadow.ShadowMaxSlopeScaleDepthBias`, `ShadowRendering.cpp:194-199`) | кламп втрое мягче → на поверхностях под острым углом к свету bias втрое больше нужного, лишний peter-panning |
+| `receiverBiasMin` (S8) | 0.1 | **0.9** (`r.Shadow.CSMReceiverBias`, `ShadowRendering.cpp:73-77`) | **вдесятеро мимо**. `lerp(0.9,1,NoL)` — лёгкая коррекция; `lerp(0.1,1,NoL)` расширяет переходную зону в 10 раз на касательных углах и размывает тени в кашу |
+| кламп bias | отсутствовал | `DepthBias = min(DepthBias, 0.1f)` (`ShadowRendering.cpp:1905`) | на низком разрешении bias может дорасти до отсечения near-плоскостью |
+
+Подтверждённые значения, которые уже стояли верно: `r.Shadow.CSMDepthBias = 10`,
+`r.Shadow.CSMSlopeScaleDepthBias = 3`, `CascadeTransitionFraction`/`ShadowDistanceFadeoutFraction`
+как доли **длины слайса**.
+
+### Расхождения по устройству (не ошибки, но знать надо)
+
+* **S8, offsets гатера.** UE даёт смещения через `int2`-параметр `Gather` (аппаратно). Мы складываем
+  UV — сознательно, чтобы каждый тап можно было заклампить границами контента (S5). Отличие
+  осознанное; при отказе от S5 можно вернуться к `int2` и сэкономить ALU.
+* **S8, `TransitionScale`.** UE: `TransitionSize = CSMDepthBias / zRange * (ShadowBounds.W / ResolutionX)`,
+  в шейдер уходит `1/TransitionSize` (`ShadowRendering.cpp:1913-1954`). Наше
+  `transitionScale = 1/depthBiasNDC` — та же величина. **Но осторожно с константой 10:**
+  у UE `ShadowBounds.W / ResolutionX` = radius/res, то есть **половина** нашего `unitsPerTexel`
+  (`2*radius/res`). Переносить число 10 буквально нельзя, единица другая.
+* **S7, порядок клампа.** UE: `if (bClampToNearPlane && OutPosition.z > OutPosition.w) { z = 0.999999; w = 1; }`
+  — **до** прибавления bias, в reverse-Z. У нас атлас прямой Z, зеркальный эквивалент —
+  `H.z = max(H.z, 0)`, и в нашем коде это **после** bias. Для ortho `w == 1`, так что присваивание
+  `w` нам не нужно. Наш порядок безопаснее (bias не может вытолкнуть панкейкнутую вершину),
+  но стоит взять эпсилон UE: клампить не в 0, а в ~1e-6.
+* **S10, сторона fade-полосы.** Тут наш план и UE расходятся принципиально.
+  UE (`DirectionalLightComponent.cpp:920-943`): для НЕ-последнего каскада
+  `FadeExtension = (SplitFar-SplitNear)*CascadeTransitionFraction` и **`SplitFar += FadeExtension`** —
+  каскад **расширяется**, чтобы полоса перехода была покрыта им самим на полном качестве, а
+  `FadePlane` остаётся на исходном сплите. Для последнего — наоборот, `FadePlane -= FadeExtension`
+  (плоскость уезжает ВНУТРЬ), и это ровно то, что S10 и предлагает.
+  У нас полоса лежит **внутри** каскада N, а сэмплится каскад N+1, чей слайс начинается только на
+  сплите — работает лишь потому, что объемлющая сфера N+1 сильно больше его слайса, плюс есть
+  fallback-цепочка. **Это не гарантия, а везение.** При реализации S10 надо либо расширять
+  `sliceFar` каскада N на `FadeExtension` (как UE), либо явно доказать, что сфера N+1 накрывает полосу.
+* **S6, нормализация.** UE не нормализует ни колонку матрицы, ни нормаль вершины. Мы нормализуем
+  обе — безопаснее при неравномерном масштабе, ценой пары инструкций.
+
+### Где что лежит
+
+| Файл UE | Путь в дропе | Для шага |
+|---|---|---|
+| `ShadowFilteringCommon.ush` | `Shaders/Private/` | S8 |
+| `ShadowPercentageCloserFiltering.ush` | `Shaders/Private/` | S9 (ещё не сверялось) |
+| `ShadowProjectionPixelShader.usf` | `Shaders/Private/` | S8 |
+| `ShadowDepthVertexShader.usf` | `Shaders/Private/` | S6, S7 |
+| `ShadowRendering.cpp` / `.h` | `Source/Runtime/Renderer/Private/` | S6, S8 (константы, `UpdateShaderDepthBias`, `ComputeTransitionSize`) |
+| `DirectionalLightComponent.cpp` | `Source/Runtime/Engine/Private/Components/` | S1, S10 |
+| `ShadowSetup.cpp` | `Source/Runtime/Renderer/Private/` | S4, S5, S11, S13 (ещё не сверялось) |
+
+**Не сверено пока:** S9 (receiver-plane bias), S5 (`SHADOW_BORDER`), S11 (`ComputeScissorRectOptim`),
+S13 (CSM caching). Перед их реализацией — читать оригинал, а не выводить заново.
+
+---
+
+## 6. (устарело) Что ещё можно достать из UE, если понадобится
+
+⚠ Раздел устарел: дроп лежит локально, и сверка уже проведена — см. §5 выше. Таблица оставлена
+как указатель на файлы.
 
 | Файл UE 5.6 | Зачем | Для шага |
 |---|---|---|

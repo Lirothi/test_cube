@@ -1312,6 +1312,9 @@
     <None Include="shaders\caustics.hlsli">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\csm_sample.hlsli">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\terrain_tiling.hlsli">
       <Filter>shaders</Filter>
     </None>

@@ -69,7 +69,12 @@ public:
         GpuResource rtPayload;
         GpuResource rtPayloadUv;
         GpuResource oceanReflection;   // premultiplied ocean SSR sampled by transparent ocean
-        GpuResource shadow; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
+        // S3.5: NON-OWNING alias of RenderTargetManager::shadowAtlas_ — ONE atlas serves every
+        // frame in flight. Per-frame copies exist for resources the CPU writes or that carry
+        // history across frames; this one is written by Pass_CSM and consumed by Pass_Lighting
+        // inside the SAME frame, on the graphics queue, so a second copy buys nothing but VRAM.
+        // The DSV/SRV below still live in the per-frame descriptor heaps and point here.
+        ID3D12Resource* shadow = nullptr; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
         GpuResource spotShadow; // R16_TYPELESS array for spot lights
         GpuResource pointShadow; // R16_TYPELESS cube array (6*kMaxShadowedPointLights slices), DSV=D16/SRV=R16: depth-cube point shadows
         GpuResource dlssOutput; // scene color format, upscaled
@@ -321,7 +326,8 @@ private:
     // Step 24c: (re)create the spot / point shadow atlas resource + its SRV/DSV views at `resolution`
     // for frame `f` (operates on deferred_[f]). Extracted from Create()'s lambdas so the residency
     // toggle can rebuild them at 1x1 / full res.
-    void CreateShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution); // Step 24f-2: CSM atlas
+    // S3.5: creates the ONE atlas and every frame's views onto it (hence no frame index).
+    void CreateShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution); // Step 24f-2: CSM atlas
     void CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution);
     void CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution);
 
@@ -334,5 +340,7 @@ private:
     // Per-frame sets
     DeferredTargets deferred_[render::kFrameCount];
 
+    // S3.5: the ONE cascade shadow atlas. deferred_[f].shadow aliases this; nothing else owns it.
+    GpuResource shadowAtlas_;
     bool localShadowFull_ = true; // Step 24c: spot/point atlases at full res (Legacy) vs 1x1 (VSM)
 };

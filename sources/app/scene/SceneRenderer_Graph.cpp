@@ -324,7 +324,7 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
         // (GPU-instanced casters go through the cull when GI folding is active), so the two sides
         // disagreeing means a caster transitioning its instance buffer with nothing declared.
         gb.pShadow = rg.AddPass2(RenderPass::Main_CSM, { pShadowCull }, /*mtDeps=*/{},
-            { { D.shadow.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
+            { { D.shadow, D3D12_RESOURCE_STATE_DEPTH_WRITE } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 if (!frame_->cascadeViews) { return {}; }
                 ctx.UseDeclared(); // the CSM atlas -> DEPTH_WRITE
@@ -757,7 +757,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         pLight = rg.AddPass2(RenderPass::Main_Lighting, { gb.pGbuf, gb.pVsmPageRender, gb.pGtao }, { gb.pShadow },
             { { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
               { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
-              { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { vpool, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { vpt, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.gtaoUpsampled.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -773,7 +773,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
               { D.gbVelocity.Get(), kSrvAll },
               { D.gbAux.Get(), kSrvAll },
               { D.depth.Get(), kSrvAll },
-              { D.shadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.gtaoUpsampled.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             lightBuilder);

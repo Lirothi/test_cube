@@ -13,6 +13,7 @@
 #include "utils.hlsli"
 #include "ibl_common.hlsli"
 #include "vsm_sample.hlsli"
+#include "csm_sample.hlsli"
 #include "caustics.hlsli"
 
 Texture2D GB0 : register(t0);
@@ -139,7 +140,6 @@ cbuffer PerFrame : register(b0)
     float _padSkySpec;
 }
 
-static const float pcfRadius = 1.0f;
 
 // P6B item 6 -- the one place the two occlusion terms meet. Shared shape with compose_cs; if this
 // rule ever changes, both change together or the diffuse and specular halves disagree about how
@@ -216,115 +216,25 @@ float3 GroundBounceOverPi(float3 N)
     return groundAlbedoRgb * (sunOnGroundOverPi + skyOnGroundOverPi) * groundViewFactor;
 }
 
-int ChooseCascadeIndex(float3 Pws)
+// S3: cascade sampling itself lives in csm_sample.hlsli, shared with glass.hlsl. This wrapper is
+// the only thing that stays here — it maps THIS shader's cbuffer field names onto CsmParams.
+CsmParams MakeCsmParams()
 {
-    float z = dot(Pws - camPosWS, camDirWS);
-    float3 gt = saturate(sign(z.xxx - cascadeSplitsVS.yzw));
-    return (int)(gt.x + gt.y + gt.z);
-}
-
-float ShadowPCF3x3(float2 uv, float zRef, float2 texel, float radiusPx)
-{
-    float s = 0.0;
+    CsmParams p;
     [unroll]
-    for (int y = -1; y <= 1; ++y)
+    for (int i = 0; i < 4; ++i)
     {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
-        {
-            float2 off = float2(x, y) * texel * radiusPx;
-            s += ShadowAtlas.SampleCmpLevelZero(gSmpLinear, uv + off, zRef).r;
-        }
+        p.lightViewProj[i] = lightViewProj[i];
+        p.scaleBias[i]     = cascadeScaleBias[i];
     }
-    return s / 9.0;
-}
-
-// Blend-band width as a fraction of each split distance (Step 3).
-static const float kBlendFraction = 0.1;
-
-// Sample the shadow factor starting at cascade `start`, falling back to a coarser cascade
-// if the (normal-bias-offset) point lands outside `start`'s atlas tile. Tests the
-// cascade-local UV (BEFORE atlas scale+bias) so a neighbour tile is never sampled, and
-// insets by the PCF reach so 3x3 taps never bleed across the gutterless tile border.
-// Returns 1.0 (lit) only when the point is beyond cascade 3 — past the shadow range.
-// outCascade reports which cascade the chain RESOLVED to (4 = fell past cascade 3, no shadow
-// data). That is the cascade the pixel was actually shaded from, which is not always the one
-// ChooseCascadeIndex picked — the difference is exactly the tile-border fallback (S0.3 tints it).
-float SampleCascadeChain(int start, float3 Pws, float NdotL, float3 Nws, out int outCascade)
-{
-    const float2 texel = 1.0 / shadowAtlasSize;
-    outCascade = 4;
-
-    [unroll]
-    for (int c = 0; c < 4; ++c)
-    {
-        if (c < start)
-        {
-            continue;
-        }
-
-        const float4x4 LVP = lightViewProj[c];
-        const float4 sb = cascadeScaleBias[c];
-        const float2 scale = sb.xy;
-        const float2 biasUV = sb.zw;
-
-        // Re-evaluate the offset per cascade: each has its own texel size.
-        const float3 Poff = Pws + Nws * normalBiasWS[c];
-
-        const float4 lc = mul(float4(Poff, 1), LVP);
-        const float2 uvLocal = (lc.xy / max(1e-6, lc.w)) * float2(0.5, -0.5) + float2(0.5, 0.5);
-        const float z = lc.z / max(1e-6, lc.w);
-
-        const float2 margin = (pcfRadius * texel) / max(1e-6, scale);
-        if (any(uvLocal < margin) || any(uvLocal > 1.0 - margin))
-        {
-            continue;
-        }
-
-        const float2 uv = uvLocal * scale + biasUV;
-        const float bBase = shadowBiasNDC[c];
-        const float b = bBase + (1.0 - saturate(NdotL)) * bBase;
-
-        // Step 4: every cascade uses 3x3 PCF, but the texel radius is scaled per cascade
-        // so the WORLD-space penumbra is anchored to cascade 0 instead of growing with the
-        // cascade. A fixed 1-texel radius blurs far cascades ~10-16x more in world space
-        // (their texels are that much larger) — that turned the last cascade into mush.
-        // normalBiasWS[c] is proportional to cascade c's world texel size, so its ratio to
-        // cascade 0 is the scale (the normalBiasInTexels factor cancels); c==0 -> 1.0.
-        const float pcfR = pcfRadius * pow((normalBiasWS[0] / max(1e-6, normalBiasWS[c])), 0.25);
-        outCascade = c;
-        return ShadowPCF3x3(uv, z - b, texel, pcfR);
-    }
-
-    return 1.0;
-}
-
-float SampleShadowCSM(float3 Pws, float NdotL, float3 Nws, out int outCascade)
-{
-    const int idx = ChooseCascadeIndex(Pws);
-    float shadow = SampleCascadeChain(idx, Pws, NdotL, Nws, outCascade);
-
-    // Step 3: blend band. In a band just before cascade idx's far split, cross-fade into
-    // cascade idx+1 so the hard cascade switch (and its bias / texel-density / PCF
-    // discontinuity) becomes a gradient instead of a visible seam. Cascade 3 has no
-    // coarser neighbour, so it never blends. Costs a second sample only inside the band.
-    if (idx < 3)
-    {
-        const float zView = dot(Pws - camPosWS, camDirWS);
-        const float splitNext = idx == 0 ? cascadeSplitsVS.y : (idx == 1 ? cascadeSplitsVS.z : cascadeSplitsVS.w);
-        const float band = splitNext * kBlendFraction;
-        const float t = saturate((zView - (splitNext - band)) / max(1e-4, band));
-        if (t > 0.0)
-        {
-            // The blend partner's resolved index is not reported: outCascade stays the primary
-            // cascade, so the debug tint shows zones rather than a striped blend band.
-            int blendCascade;
-            const float shadowNext = SampleCascadeChain(idx + 1, Pws, NdotL, Nws, blendCascade);
-            shadow = lerp(shadow, shadowNext, t);
-        }
-    }
-
-    return shadow;
+    p.splitsVS     = cascadeSplitsVS;
+    p.depthBiasNDC = shadowBiasNDC;
+    p.normalBiasWS = normalBiasWS;
+    p.atlasSize    = shadowAtlasSize;
+    p.camPosWS     = camPosWS;
+    p.camDirWS     = camDirWS;
+    p.pcfRadius    = 1.0f;
+    return p;
 }
 
 // Directional sun visibility for a receiver at P with surface normal N and cosine ndl. Wraps
@@ -345,7 +255,7 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade)
                                 invProj._11, clipmapUvNormal,
                                 clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
     }
-    return SampleShadowCSM(P, ndl, N, outCascade);
+    return CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, P, N, ndl, outCascade);
 }
 
 // Assemble the caustics inputs; returns tint.w == 0 when the feature is off for this frame.
@@ -478,7 +388,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // sample a shadow (facing away from the sun) still show their zone. A real sample below
     // overwrites it with the cascade the fallback chain resolved to — that difference is what
     // makes the tile-border ring visible. Costs nothing when the mode is off.
-    int csmCascade = (csmDebugMode != 0u) ? ChooseCascadeIndex(P) : 0;
+    int csmCascade = (csmDebugMode != 0u) ? CsmChooseCascade(MakeCsmParams(), P) : 0;
 
     // Caustics scale the sun's irradiance, so they multiply the direct term rather than being
     // added on top: a surface the sun cannot reach gets none, and the bright filaments ride the
