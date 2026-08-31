@@ -358,8 +358,76 @@ void Renderer::RefreshCurrentFrameCaches() {
     }
 }
 
+// Mirrors `render::g_noAsyncCompute` as the frame loop last APPLIED it, and a latch so the device
+// removal is reported once rather than every frame after it happens. File statics rather than
+// Renderer members on purpose: the flag one of them shadows is itself a global, and adding a member
+// to this widely-included header changes the class layout — which an incremental Release build does
+// not notice and which then fails as "batch index outside the active range" (paid for in step 8).
+static bool s_asyncModeApplied = false;
+static bool s_deviceRemovalReported = false;
+
+// Async-compute: apply a change to the async switch, draining BOTH queues first.
+//
+// Called from the ONE place the new value first matters — immediately before the frame's graph is
+// built. NOT from BeginFrame, which is where this started and where it was a frame LATE: the
+// developer window is drawn between BeginFrame and the graph build, so a click lands after the
+// former, and the first frame under the new topology went out undrained.
+//
+// Why drain at all: the switch changes which queue owns which pass. Every guard in the compile
+// validates ONE frame's graph, so none of them can see two in-flight frames disagreeing about queue
+// ownership. This removes that class.
+//
+// HONEST STATUS: unproven as a fix. The reported repro is rapid clicking of the developer-window
+// checkbox; flipping the flag every frame in this same phase, with the drain both enabled and
+// bypassed, stayed clean over six Release_Editor runs. So this is hygiene that happens to be
+// correct, not a demonstrated cure.
+void Renderer::SyncAsyncQueueMode()
+{
+    if (render::g_noAsyncCompute != s_asyncModeApplied) {
+        WaitForPreviousFrame();
+        s_asyncModeApplied = render::g_noAsyncCompute;
+    }
+}
+
+// Write the device-removed reason to logs/device_removed.log, once per process.
+void Renderer::ReportDeviceRemovalOnce()
+{
+    if (s_deviceRemovalReported || !GetDevice()) {
+        return;
+    }
+    const HRESULT reason = GetDevice()->GetDeviceRemovedReason();
+    if (SUCCEEDED(reason)) {
+        return;
+    }
+    s_deviceRemovalReported = true;
+    FILE* f = nullptr;
+    if (fopen_s(&f, diag::LogPath("device_removed.log").c_str(), "a") == 0 && f) {
+        // The reason CLASS is most of the answer: DXGI_ERROR_DEVICE_HUNG (0x887A0006) is a wait
+        // whose signal never came, DXGI_ERROR_DEVICE_RESET (0x887A0007) a fault in this app's own
+        // work, DXGI_ERROR_DRIVER_INTERNAL_ERROR (0x887A0020) a malformed command reaching the
+        // driver. The async state and the queue counters say which topology was live when it died.
+        std::fprintf(f,
+            "device removed: reason=0x%08X frame=%llu asyncCompute=%s computeLists=%u crossQueueWaits=%u\n",
+            static_cast<unsigned>(reason),
+            static_cast<unsigned long long>(totalFrameNumber_),
+            render::g_noAsyncCompute ? "off" : "on",
+            render::g_asyncComputeLists, render::g_crossQueueWaits);
+        std::fclose(f);
+    }
+}
+
 void Renderer::BeginFrame() {
     CPU_SCOPE(ProfilerScopes::kRendererBeginFrame);
+
+    // A device removal can surface anywhere — a failed Present, a fence wait that never completes,
+    // a TDR that kills the queue between frames — and until now it surfaced as a bare throw with
+    // nothing written to disk, which is exactly why the one real report of the async toggle removing
+    // the device left no evidence at all. One call per frame catches it wherever it happened, for a
+    // measured 0.207 us (see g_deviceRemovalCheck). `--no-dr-check` skips the poll.
+    if (render::g_deviceRemovalCheck) {
+        ReportDeviceRemovalOnce();
+    }
+
     // Wait for the GPU using its back buffer fence value
     WaitForFrame(currentFrameIndex_);
 
@@ -1064,6 +1132,11 @@ void Renderer::ExecuteTimelineAndPresent() {
         // first cut of this loop — RTTrace ended up waiting for the entire graphics prefix and
         // overlapped the small light passes instead of Pass_VsmPageRender.
         crossQueueSignals_.clear();
+        // Counted here rather than at graph-build time: what the developer window's async toggle
+        // has to answer for is what reached the QUEUE, not what the graph intended. Reset per
+        // frame, so the numbers describe this frame and cannot go stale when the toggle flips.
+        render::g_asyncComputeLists = 0;
+        render::g_crossQueueWaits = 0;
         for (const auto& seg : submitSegmentsScratch_) {
             const bool isCompute = (seg.queue == RenderQueue::AsyncCompute);
             ID3D12CommandQueue* q = isCompute ? GetComputeQueue() : GetCommandQueue();
@@ -1080,9 +1153,13 @@ void Renderer::ExecuteTimelineAndPresent() {
                                              "for a batch that was never signalled (segment order broken)");
                 }
                 frameScheduler_.WaitCrossQueue(q, value);
+                ++render::g_crossQueueWaits;
             }
             if (!seg.lists.empty()) {
                 q->ExecuteCommandLists(static_cast<UINT>(seg.lists.size()), seg.lists.data());
+                if (isCompute) {
+                    render::g_asyncComputeLists += static_cast<std::uint32_t>(seg.lists.size());
+                }
             }
             if (seg.signalAfter) {
                 crossQueueSignals_.emplace_back(seg.lastBatch, frameScheduler_.SignalCrossQueue(q));
@@ -1104,7 +1181,17 @@ void Renderer::ExecuteTimelineAndPresent() {
     {
         CPU_SCOPE(ProfilerScopes::kService4);
         lastPresentedIndex_ = currentFrameIndex_; // the buffer about to be shown (screenshots)
-        swapchain_.Present();
+        // Present is the most likely place a device removal surfaces, and it was a bare throw: the
+        // process died leaving nothing on disk. Report before rethrowing — BeginFrame's per-frame
+        // check catches the cases that never reach here (a fence wait that never returns, a TDR
+        // between frames), and the latch inside means only the first one is written.
+        try {
+            swapchain_.Present();
+        }
+        catch (...) {
+            ReportDeviceRemovalOnce();
+            throw;
+        }
     }
     SignalFrame(currentFrameIndex_);
     currentFrameIndex_ = swapchain_.CurrentBackBufferIndex();

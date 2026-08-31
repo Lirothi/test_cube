@@ -316,6 +316,38 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::Checkbox("Trace capture window", &traceWindowOpen_);
 
+                // Async compute (plan step 8's `--no-async-compute`, made live). Sits next to the
+                // trace controls because that is where its effect is READ: the passes it moves
+                // change GPU track, and the counters below say whether they actually did.
+                //
+                // Stored inverted, because the command-line switch is a DISABLE and the checkbox
+                // has to read the way the feature is thought about. On a device where the second
+                // queue failed to create there is no toggle at all, only the state: a control that
+                // cannot change anything is worse than no control.
+                if (renderer.GetComputeQueue() == nullptr)
+                {
+                    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
+                        "Async compute: no second queue on this device - graphics queue only.");
+                }
+                else
+                {
+                    bool asyncCompute = !render::g_noAsyncCompute;
+                    if (ImGui::Checkbox("Async compute", &asyncCompute))
+                    {
+                        render::g_noAsyncCompute = !asyncCompute;
+                    }
+                    DevHelp("Runs Pass_BuildAS and Pass_RTTrace on the second (compute) queue, "
+                            "overlapped with shadow rasterisation. Worth about -3% frame time on "
+                            "this scene; the passes themselves get SLOWER (BuildAS +17%, RTTrace "
+                            "+88%) and win by hiding behind raster. Takes effect next frame - the "
+                            "graph is rebuilt every frame. Turn it off to bisect a suspected async "
+                            "regression without a rebuild.");
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%u list%s, %u cross-queue wait%s last frame)",
+                        render::g_asyncComputeLists, render::g_asyncComputeLists == 1u ? "" : "s",
+                        render::g_crossQueueWaits, render::g_crossQueueWaits == 1u ? "" : "s");
+                }
+
                 // P6B. The chain produces a render-resolution AO target that NOTHING samples yet
                 // (items 6-7 are the consumption step), so these controls change the debug view and
                 // the GPU cost and nothing else. That is stated on screen rather than left for the

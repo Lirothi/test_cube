@@ -1,6 +1,6 @@
 # Async compute — architecture plan
 
-**Status: STEPS 1-7 COMMITTED (through `843f6d0`+). STEP 8 DONE (uncommitted) — THE ARCHITECTURE WORKS. Steps 9-11 not started.**
+**Status: PLAN COMPLETE. Steps 1-8 committed (through `2be588e`); steps 9-11 done, uncommitted. The renderer has a second queue, two passes use it, and it is worth -3.0 % wall-clock.**
 
 **Goal: the renderer gains a second execution queue as a first-class architectural capability.**
 The render graph learns to schedule a pass onto a `D3D12_COMMAND_LIST_TYPE_COMPUTE` queue,
@@ -1050,6 +1050,35 @@ two new scopes appear in the trace with the expected split; the frame's CPU cost
 the dissolved group's worth of per-CL overhead (report the number, do not hide it); the async
 submission from Step 8 is unaffected.
 
+**DONE 2026-08-31, uncommitted.**
+
+- **`ComputeFeedsShadowCull()`**, a new virtual on `RenderableObjectBase`, is the split predicate —
+  deliberately NOT a reuse of `IsGpuInstancedCaster()`. That one means "casts shadows through GPU
+  instancing", a statement about DRAWING which happens to be true of the same class today; tying the
+  compute split to it would mis-split silently the moment the two stop coinciding.
+- **One builder, two passes.** The lambda that walks the scene is shared and parameterised by the
+  predicate, so there is still ONE walk and ONE overflow rule — only the filter differs.
+- **The CL group became two groups plus a loose pass**: `{PrologueClear, GpuInstanceCompute}`,
+  then `ObjectCompute` alone (a grouped pass cannot change queue), then `{SurfSim, ShoreWetness}`.
+  SurfSim is its group's FIRST member, which is what lets it keep an outside prereq. That is **+1**
+  command list, not the +3 a full dissolution would have cost.
+- **`Main_ShoreWetness` got the GPU scope it never had.**
+
+**The split, measured:** `Pass_GpuInstanceCompute` **11 us**, `Pass_ObjectCompute` (ocean +
+particles) **145 us**, sum 155 against 147-164 before — no work lost, none duplicated. The GI half
+being 11 us confirms what the plan assumed but had never measured: essentially all of the movable
+value is in the ocean/particle half.
+
+**Costs nothing.** CPU frame 3273 us vs Step 8's 3281; GPU.Frame 3268 vs 3281. Gates CLEAN, 0
+MISSING. Visual parity: cross-step 1.52 % / 1.53 % against a same-config floor of 1.19 % today and
+0.88-1.85 % measured at Step 8 — inside it.
+
+**A bug this step made and then caught, worth keeping:** the first cut passed the new scope name to
+the CPU scope only, while `Pass_ObjectCompute`'s body hard-coded the GPU scope. Result:
+`Pass_GpuInstanceCompute` was **absent from the GPU track** and `Pass_ObjectCompute` appeared TWICE
+per frame. Two passes sharing one body must be handed their identity, not assume it — the trace said
+so immediately (n=488 where 244 was expected).
+
 ### Step 10 — the remaining movers, one at a time
 
 Move the remaining eligible compute passes one at a time, each with **Step 8's acceptance** in full.
@@ -1188,6 +1217,53 @@ hardware never exercises the async queue at all. `Main_ObjectCompute` and `Pass_
 every configuration, so moving either closes that gap — do one of them early in this step rather than
 last.
 
+---
+
+**DONE 2026-08-31, uncommitted. `Main_BuildAS` moved, and it is the one that pays.**
+
+**The headline: -3.0 % wall-clock**, against a 0.6 % run-to-run spread — five times the noise. A/B
+inside one binary via `--no-async-compute`, interleaved.
+
+**WHY, and why Step 8's conclusion was too pessimistic.** Step 8 measured RTTrace alone at +0.8 %
+(a wash) and I generalised from it that contention would eat every mover. That was ONE data point,
+and it happened to be the worst case. The discriminating experiment says the cost depends entirely
+on the mover's WORKLOAD CHARACTER:
+
+| mover | on graphics | on compute | slowdown |
+|---|---|---|---|
+| `Pass_BuildAS` (AS build, fixed-function-ish) | 204 us | 238 us | **+17 %** |
+| `Pass_RTTrace` (BVH traversal, bandwidth/latency-bound) | 137 us | 257 us | **+88 %** |
+
+An acceleration-structure build contends **five times less** than incoherent BVH traversal against
+the same depth-only raster, so its 204 us hide almost for free. Net across the frame: `GPU.Frame`
+3247 -> 3148 us. **Run the discriminating experiment before generalising from one candidate.**
+
+**`Main_BuildAS` is also the cleanest possible mover, by construction:** it declares NOTHING (the AS
+buffers bypass the barrier compile), so it has no D7 hand-over problem at all — the exact blocker
+that stopped the ocean sim below. Its cross-queue edge comes from `Main_RTTrace`'s explicit **mtDep**
+on it, not from any resource declaration, which is R14's shape with the dependency written down. It
+moved on the first try with no invariant failures.
+
+**`Main_ObjectCompute` (ocean + particles, 145 us): TRIED, BLOCKED, reverted to Graphics.** The
+compile refused it by name — `takes res=Ocean.PrevDisplacement from the graphics queue, which left
+it in 0xC0`. The blocker is structural, not a missing declaration: the ocean's displacement and foam
+maps cross the queue boundary **in both directions every frame** — a PIXEL shader samples them in
+`Main_Transparent` at the end of the frame, and this compute pass takes them at the start of the
+next. Moving it needs D7's release half from the transparent pass, and that pass fans out over
+several command lists, so the release cannot ride an existing barrier point the way `Main_Hzb`'s did
+for RTTrace. Lowering the sim's own declarations to NON_PIXEL was necessary but not sufficient, and
+was reverted with them. **Reopen only with a plan for the hand-back**, not by weakening the guard.
+
+**Declined without moving, with the reason:** `Pass_Gtao` (60 us), `Pass_ShadowCull` (50 us) and
+`Pass_Hzb` (28 us) are all depth-sampling or cull compute — RTTrace's character, not BuildAS's. The
+measured model puts their expected value near zero against a real risk of another D7 rework.
+Recorded as declined rather than attempted, which is what this step allows; revisit if the model is
+ever contradicted.
+
+**Results.** All three gates `verdict: CLEAN`, 0 MISSING, no invariant failures, barrier count 7912
+unchanged from step 9. Visual parity: cross-config 1.961 % / 1.569 % against a same-config floor of
+1.966 % measured in the same session — at or below the floor.
+
 ### Step 11 — hardening
 
 Device removal, window resize, and level switch **with work in flight on both queues** — the idle
@@ -1204,6 +1280,39 @@ one of the options — this is the same shape as the staging-cache bug in the ri
 shadow modes; a forced device removal is handled without a hang; an upload issued during a frame
 that has async work in flight is proven ordered (test it deliberately); `--no-async-compute` still
 produces a byte-identical graphics submission to the pre-Step-8 build.
+
+**DONE 2026-08-31, uncommitted.**
+
+**Churn with both queues live:** `--scene-stress-gbv=30` CLEAN in **VSM** and in **Legacy** shadow
+mode, plus 30 iterations under `--no-async-compute`. 0 MISSING, no invariant failures. That harness
+is nothing but level reload, level switch, window resize, DLSS-mode and render-scale changes — i.e.
+exactly the paths that idle the GPU and rebuild resources, now doing it with two queues.
+
+**R12 (out-of-band submissions) is CLOSED, and by construction rather than by hope.** Every
+`UploadBatch` call site in the engine — level load, scene mega-buffer rebuild, and eleven editor
+commands — uses `SubmitAndWait`, and the editor's thumbnail cache pairs its direct-queue signal with
+`WaitForPreviousFrame`. Both funnel into `FrameScheduler::WaitForGpuIdle`, which **Step 2 made idle
+BOTH queues**. So an upload can never be in flight against async work: the wait between them is a
+full two-queue idle. Verified by grep over every call site, not by sampling one.
+
+**The async pass VANISHING mid-session is covered, which also closes Step 8's non-RT-hardware hole.**
+`--scene-stress-gbv=20 --rt-force-as-fail` forces every acceleration-structure allocation to fail,
+which stickily disables RT — and with it BOTH async passes (`Main_BuildAS` and `Main_RTTrace`)
+disappear from the graph entirely, mid-run, while the two-queue machinery stays live (both fences
+still signalled per frame, slots still released on both). **CLEAN after 20 iterations.** That is the
+same shape as running on hardware with no RT at all, which is the configuration Step 8 flagged as
+never exercising the async queue.
+
+**NOT tested, and not claimed: a forced device removal.** The engine has no hook for it — DRED is
+configured for diagnosis, and `--rt-force-as-fail` is an allocation-failure hook, not a removal one.
+Writing one was out of scope for this step. The gap is narrow (`WaitForGpuIdle` now signals and waits
+on both queues, and a removed device fails both identically), but it is a gap, and it is recorded as
+one rather than glossed.
+
+**`--no-async-compute` restores the single-queue frame** — 30 CLEAN iterations, and the submission is
+26 lists with no compute segment. It is NOT byte-identical to the pre-Step-8 dump, and Step 8 records
+why: `Main_RTTrace` gained a real prereq on `Main_Hzb`, which moves it two places in the topological
+order. That is a correctness fix, not the flag failing.
 
 ---
 
@@ -1245,6 +1354,96 @@ produces a byte-identical graphics submission to the pre-Step-8 build.
   in the reference table. Re-verify citations at the start of each step (see the Executor Guide).
 - ~~The bind cache is `thread_local` and reset per command-list acquire.~~ **Closed** — R13:
   `BeginThreadCommandList` already resets it for every list type (`Renderer.cpp:751`).
+
+## Follow-on: the runtime toggle (developer window)
+
+Step 8 shipped `--no-async-compute` as a boot flag. It is now **also a checkbox** on the developer
+window's Render tab, next to the trace controls — because that is where its effect is read.
+
+Flipping it at runtime is sound for three reasons, and would be a landmine without any one of them:
+
+- the graph is **rebuilt from scratch every frame** (`SceneRenderer::Render` -> `RenderGraph::Reset`),
+  so `g_noAsyncCompute` is read per frame, on the main thread, before `ExecuteParallel`;
+- the barrier compile cache carries the pass **queue in its key** (`CompileInputsUnchanged` compares
+  `c.queue`), so a flip MISSES the slot instead of serving barriers compiled for the other queue;
+- `SubmitTimeline::BeginBatch` sets the batch queue explicitly, so a pooled slot cannot keep the
+  queue it had last frame.
+
+The control does not lie in either direction. On a device where the second queue failed to create
+(`GraphicsDevice::ComputeQueue() == nullptr`, non-fatal since Step 1) there is no checkbox at all,
+only the state line — an inert control is worse than none. And the checkbox is followed by what the
+switch actually PRODUCED on the GPU last frame: `render::g_asyncComputeLists` /
+`render::g_crossQueueWaits`, counted in the submit loop over the segments that were really executed,
+not over what the graph intended.
+
+**Measured, not assumed** (this is the whole point of the counters):
+
+- One process, one trace, the flag flipped halfway through a 120-frame capture:
+  `Pass_BuildAS` and `Pass_RTTrace` both run **tid1 x62 -> tid0 x60** — one clean transition, no
+  interleaving. Control: `Pass_VsmPageRender` is **tid0 x123**, it never moves.
+- The readout itself: **lists=2 waits=3** with async on, **lists=0 waits=0** under
+  `--no-async-compute` (the single-segment collapse, no synchronisation at all).
+- Gate after the change: `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN,
+  `barriers: emit enhanced=7912` — the same count as Step 10.
+
+### OPEN BUG: device removed by RAPID toggling of the async checkbox
+
+Reported live and REPRODUCIBLE FOR THE USER, in `Release_Editor`: boot in the current configuration,
+click the developer-window async checkbox repeatedly. **Clicking about once a second is fine; speed
+the clicking up and it fires.** The first report added CSM and some RT-control toggling to the
+sequence, but those turned out to be incidental — the rate is the variable. No
+`logs/invariant_failure.log`, so none of the registration or compile guards saw it: the GPU faulted.
+
+**NOT reproduced headlessly, in fifteen runs.** Flipping the flag in the phase a click actually
+lands (after `BeginFrame`, before the graph build), 600 times at frame rate — far faster than any
+clicking — stayed clean in Release_Editor with the drain both ENABLED and BYPASSED (an env switch so
+both arms ran on one binary). The earlier scripted sequence (async off -> SSR -> rtDebugView ->
+RT -> Legacy -> async on) was likewise clean in Debug+GBV, Release and Release_Editor, three runs
+each, every one verified to have crossed the feature (`lists 0 -> 2, waits 3`).
+
+So a headless flip is NOT the same event as a click, and the missing ingredient is still unknown.
+The most obvious untested difference: in a headless run the developer window is CLOSED, so the frame
+that a real click lands in also carries the whole ImGui/editor panel workload.
+
+Killed by reading, not by running:
+
+- **command-list type reuse.** `FrameResource` pools allocators and lists in TYPE-INDEXED lanes
+  (`QueueIndex_`), so a flip cannot hand a DIRECT list to the compute queue.
+- **a split graph.** `DeveloperWindow::Draw` runs on the main thread before `scene.Render`, so a
+  click cannot land between two `AddPass2` calls and put half a frame on each queue.
+- **an unsynchronised AS build.** `Main_RTDebug` carries its own mtDep on `gb.pBuildAS`, so the
+  `rtDebugView && !rtReflect` shape (BuildAS async, RTTrace absent) still has a fence edge.
+- **the frame fences.** `SignalFrame` signals BOTH with one value every frame, submitted or not;
+  `SignalCrossQueue` is monotonic and its wait is GPU-side. Neither starves when a queue goes idle.
+- **`ProbeComputeLaneOnce`.** Gated on `--compute-lane-probe`, and it never submits.
+
+Shipped, and neither is a diagnosis:
+
+- **`Renderer::SyncAsyncQueueMode()`** drains both queues when the switch changes, called from
+  `SceneRenderer::Render` immediately before the graph is built. It started in `BeginFrame` and was
+  wrong there: the developer window is drawn BETWEEN `BeginFrame` and the graph build, so a click
+  landed after the check and the first frame under the new topology went out undrained. Correct
+  hygiene either way — every compile guard validates ONE frame's graph and none can see two
+  in-flight frames disagreeing about queue ownership — but **unproven as a fix**.
+- **`Renderer::ReportDeviceRemovalOnce()`**, called every `BeginFrame` and from `Present`'s catch.
+  `Present` was a bare `ThrowIfFailed`, so the real occurrence left NOTHING on disk. The reason
+  class is most of the answer: `DEVICE_HUNG` = a wait whose signal never came, `DEVICE_RESET` = a
+  fault in this app's work, `DRIVER_INTERNAL_ERROR` = a malformed command.
+  The per-frame poll is switchable with **`--no-dr-check`** (`render::g_deviceRemovalCheck`), and the
+  switch is labelled with what it actually buys rather than left to imagination: `GetDeviceRemovedReason`
+  costs **0.207 us** — 20000 calls over three Release runs gave 0.2060 / 0.2069 / 0.2109 us — so once
+  per frame against a ~3270 us CPU frame is **0.006 %**, some fifty times under the 0.6 % run-to-run
+  spread. The flag is there to rule the call out, not to buy frame time. `Present`'s catch reports
+  either way: that path costs nothing until something has already gone wrong.
+
+**USER REPORT after the drain moved to the graph-build point: rapid clicking no longer fires it.**
+One session, so it is evidence and not proof — but it is the first thing that has changed the
+behaviour, and it points at in-flight topology overlap being the mechanism after all.
+
+**Next step is the user's, not a script's:** reproduce on a binary built after this, then read
+`logs/device_removed.log`.
+
+Gate after both: `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN, `enhanced=7912`.
 
 ## Non-goals
 

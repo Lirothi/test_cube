@@ -107,6 +107,17 @@ public:
     // scene twice and rely on the two filters agreeing. Default false: an object whose compute
     // records nothing transitions nothing and is skipped by both sides.
     virtual bool PrepareCompute(RenderGraphPassContext& ctx) { (void)ctx; return false; }
+    // Async-compute step 9: does this object's ExecuteCompute produce something `Main_ShadowCull`
+    // consumes? The object-compute pass is split on this answer, because the two halves have
+    // completely different slack: a shadow-cull input must finish two passes later, while the ocean
+    // and particle sims are not read until Main_Transparent at the end of the frame — so only the
+    // second half can ever move to the async queue.
+    //
+    // A dedicated question rather than reusing IsGpuInstancedCaster(): that one means "casts
+    // shadows through GPU instancing", which happens to be true of the same class today but is a
+    // statement about DRAWING. Tying the compute split to it would silently mis-split the moment
+    // the two stop coinciding.
+    virtual bool ComputeFeedsShadowCull() const { return false; }
     // Same contract for the graphics side: the states Render transitions to. Each pass that
     // draws objects walks its own half of the scene (opaque vs transparent) calling this.
     virtual void PrepareRender(RenderGraphPassContext& ctx) { (void)ctx; }

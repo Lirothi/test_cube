@@ -181,7 +181,7 @@ private:
     static constexpr size_t kMaxComputeObjects = 64;
     using ObjectComputeList = tc::inl_vector<RenderableObjectBase*, kMaxComputeObjects>;
     void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx,
-        const ObjectComputeList& objects);
+                            const ObjectComputeList& objects, Profiler::ScopeNameKey gpuScope);
 
     void Pass_ShadowCull(Renderer* r, RenderGraphPassContext ctx,
         const ShadowGpuData::CullDecisions& dec);

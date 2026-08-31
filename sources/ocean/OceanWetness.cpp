@@ -237,6 +237,10 @@ std::function<void(RenderGraphPassContext)> OceanWetness::BuildUpdatePass(
         Renderer* renderer = pass.renderer;
         auto token = pass.BeginCL();
         ID3D12GraphicsCommandList* cl = token.cl;
+        // Async-compute step 9: this pass had NO GPU scope, so its cost was invisible in every
+        // trace — it could only ever be bounded by the gap between its neighbours' scopes. An
+        // unmeasured pass is one nobody can argue about.
+        GPU_SCOPE(cl, ProfilerScopes::kPassShoreWetness);
         renderer->EmitPoint(cl, updatePoint);
 
         WetnessUpdateCB constants{};

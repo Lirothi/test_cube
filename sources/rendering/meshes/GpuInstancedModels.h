@@ -38,6 +38,10 @@ public:
     // entry — the GPU-driven shadow path (Step 6) skips it and it draws via its own instanced
     // RenderShadow instead.
     bool IsGpuInstancedCaster() const override { return true; }
+    // Async-compute step 9: the rotation compute writes `instanceBuffer_`, and ShadowGpuData's GI
+    // scatter reads exactly that buffer in Main_ShadowCull — two passes later. So this object's
+    // compute stays on the graphics queue no matter what the ocean and particles do.
+    bool ComputeFeedsShadowCull() const override { return true; }
     // GI→VSM (Step 1): expose the per-instance transform buffer for the GI-scatter compute.
     D3D12_CPU_DESCRIPTOR_HANDLE GetInstanceCasterSrv() const override { return instanceBuffer_.GetSRVCPU(); }
     UINT GetInstanceCasterCount() const override { return instanceCount_; }

@@ -319,6 +319,14 @@ int WINAPI WinMain(
         render::g_noAsyncCompute = true;
     }
 
+    // "--no-dr-check": stop polling GetDeviceRemovedReason() once per frame. The poll is what makes
+    // a device removal leave logs/device_removed.log behind when it does NOT surface at Present.
+    // Measured at 0.207 us per call, i.e. 0.006 % of the frame — this is here to rule the call out,
+    // not to buy frame time. Present's own catch still reports either way.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--no-dr-check")) {
+        render::g_deviceRemovalCheck = false;
+    }
+
     // Async-compute plan step 7: "--dump-barriers" writes every compiled barrier once, for a
     // before/after diff of the barrier compile itself.
     if (lpCmdLine && std::strstr(lpCmdLine, "--dump-barriers")) {

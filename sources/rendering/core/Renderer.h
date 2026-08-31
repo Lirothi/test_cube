@@ -114,7 +114,36 @@ inline bool g_dumpSubmitOrder = false;
 //
 // Applied at the ONE place the queue is decided (RenderGraph::AddPass2Internal), so it cannot be
 // half-honoured: a pass forced to Graphics also declares, compiles and submits as Graphics.
+//
+// ALSO FLIPPABLE AT RUNTIME (developer window, Render tab), which is sound for three reasons and
+// would be a landmine without any one of them:
+//   - the graph is rebuilt from scratch every frame (SceneRenderer::Render -> RenderGraph::Reset),
+//     so the read above happens per frame, on the main thread, before ExecuteParallel;
+//   - the barrier compile cache carries the pass QUEUE in its key (CompileInputsUnchanged), so a
+//     flip misses the slot instead of serving barriers compiled for the other queue;
+//   - SubmitTimeline::BeginBatch sets the batch queue explicitly, so a pooled slot cannot keep the
+//     queue it had last frame.
+// The ON->OFF direction is already exercised mid-session by `--rt-force-as-fail` (step 11): both
+// async passes vanish from the graph while the two-queue machinery stays live.
 inline bool g_noAsyncCompute = false;
+
+// What the switch above actually PRODUCED on the GPU last frame: command lists submitted to the
+// compute queue, and cross-queue waits the graph asked for. Written by the submit loop, read by the
+// developer window. A checkbox for a scheduling decision is worth nothing without the number that
+// says the decision reached the queue — with every pass on Graphics both are 0 by construction.
+inline std::uint32_t g_asyncComputeLists = 0;
+inline std::uint32_t g_crossQueueWaits = 0;
+
+// Poll GetDeviceRemovedReason() once per BeginFrame, so a device removal leaves a file behind no
+// matter where it surfaces — a failed Present, a fence wait that never returns, a TDR between
+// frames. `--no-dr-check` turns the POLL off; the report from Present's own catch block stays
+// either way, because that path costs nothing until something has already gone wrong.
+//
+// MEASURED, so the switch does not pretend to be a perf lever: GetDeviceRemovedReason costs
+// **0.207 us** (20000 calls, three Release runs: 0.2060 / 0.2069 / 0.2109 us). Once per frame
+// against a ~3270 us CPU frame is 0.006 % — some fifty times under the 0.6 % run-to-run spread,
+// i.e. unmeasurable. The flag exists to rule the call out, not to buy frame time.
+inline bool g_deviceRemovalCheck = true;
 } // namespace render
 
 class Renderer {
@@ -270,6 +299,13 @@ public:
     // Async-compute step 1: the second queue, created and idle. Null when the device refused it,
     // which every later step must treat as "async compute is unavailable", not as an error.
     ID3D12CommandQueue* GetComputeQueue() const { return graphicsDevice_.ComputeQueue(); }
+
+    // Async-compute: apply a pending change to `render::g_noAsyncCompute`, draining both queues so
+    // the switch never takes effect while frames under the old queue topology are in flight. Call
+    // immediately before building the frame's graph — that is where the new value first matters.
+    void SyncAsyncQueueMode();
+    // Write logs/device_removed.log if the device is gone. Once per process; cheap enough per frame.
+    void ReportDeviceRemovalOnce();
     bool HasComputeQueue() const { return graphicsDevice_.ComputeQueue() != nullptr; }
 
     // DXR (S1). On non-RT hardware GetDevice5() is null and

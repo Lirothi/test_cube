@@ -414,6 +414,11 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     // per-frame allocation either.
     using MainRenderGraph = RenderGraph<kMainRenderGraphPassCount>;
     if (!mainRenderGraph_) { mainRenderGraph_ = std::make_unique<MainRenderGraph>(); }
+    // The async switch is read by every AddPass2 below, so this is where a change to it first
+    // matters and the only place it can be applied without splitting a frame between two queue
+    // topologies. The developer window is drawn between BeginFrame and here, which is why the
+    // drain cannot live in BeginFrame: it would always be one frame behind the click.
+    renderer->SyncAsyncQueueMode();
     mainRenderGraph_->Reset();
     MainRenderGraph& rg = *mainRenderGraph_;
 

@@ -67,7 +67,17 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
         // transitions (the AS build bypasses the barrier compile entirely). The builder is the
         // whole registration, so there is no second lambda that could start declaring behind the
         // body's back.
-        gb.pBuildAS = rg.AddPass2(RenderPass::Main_BuildAS, {},
+        // ASYNC COMPUTE (step 10). The cleanest mover in the frame, and the one that tests a
+        // different WORKLOAD character than RTTrace did:
+        //   - it declares NOTHING (the AS buffers bypass the barrier compile entirely), so it has
+        //     no D7 hand-over problem at all — the class of blocker that stopped the ocean sim;
+        //   - it is the FIRST pass of the frame and its only consumer is Main_RTTrace, so the slack
+        //     is ~1 ms;
+        //   - its cross-queue edge comes from Main_RTTrace's explicit mtDep on it, NOT from any
+        //     resource declaration. That mtDep is load-bearing (R14) and must not be tidied away.
+        // An acceleration-structure build is more fixed-function than the bandwidth-bound compute
+        // RTTrace runs, which is exactly why it is worth measuring separately.
+        gb.pBuildAS = rg.AddPass2(RenderPass::Main_BuildAS, RenderQueue::AsyncCompute, {},
             [this, renderer](RenderGraphPassContext&) -> std::function<void(RenderGraphPassContext)> {
                 return [this, renderer](RenderGraphPassContext c) {
                     CPU_SCOPE(ProfilerScopes::kPassBuildAS);
@@ -92,29 +102,63 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     // pass-flow S7b: the builder walks the scene ONCE and collects the objects whose compute will
     // actually record; the body runs that list instead of re-walking and re-filtering. The two
     // walks agreeing was previously a matter of the two filters staying identical by hand.
-    auto pCompute = rg.AddPass2(RenderPass::Main_ObjectCompute, { pClear },
-        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+    //
+    // Async-compute step 9: ONE builder, TWO passes, split on `ComputeFeedsShadowCull()`. The two
+    // halves have nothing in common but the walk: the GI rotation is read by Main_ShadowCull two
+    // passes later (no slack, never moves), while the ocean sim and the particles are not read
+    // until Main_Transparent at the end of the frame. Sharing the lambda keeps the ONE walk and
+    // the ONE overflow rule; only the predicate differs.
+    auto computeBuilder = [this, renderer](bool feedsShadowCull, Profiler::ScopeNameKey scope) {
+        return [this, renderer, feedsShadowCull, scope](RenderGraphPassContext& ctx)
+            -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->objects) { return {}; }
             ObjectComputeList list;
             for (const auto& obj : *frame_->objects)
             {
                 if (!obj) { continue; }
+                if (obj->ComputeFeedsShadowCull() != feedsShadowCull) { continue; }
                 if (!obj->PrepareCompute(ctx)) { continue; }
                 if (list.size() >= list.capacity())
                 {
                     // The cap is a budget, not a guess: it must not silently drop work.
-                    RendererInvariantFailure("Main_ObjectCompute: compute-object list overflow "
-                                             "(raise kMaxComputeObjects)");
+                    RendererInvariantFailure("object compute: list overflow (raise kMaxComputeObjects)");
                     break;
                 }
                 list.push_back(obj.get());
             }
             if (list.empty()) { return {}; }
-            return [this, renderer, list](RenderGraphPassContext c) {
-                CPU_SCOPE(ProfilerScopes::kPassObjectCompute);
-                Pass_ObjectCompute(renderer, c, list);
+            return [this, renderer, list, scope](RenderGraphPassContext c) {
+                CPU_SCOPE(scope);
+                Pass_ObjectCompute(renderer, c, list, scope);
             };
-        });
+        };
+    };
+
+    // The GI rotation. Stays on the graphics queue permanently — Main_ShadowCull's scatter reads
+    // the very buffer this writes, so there is no window to hide it in.
+    auto pGiCompute = rg.AddPass2(RenderPass::Main_GpuInstanceCompute, { pClear },
+        computeBuilder(/*feedsShadowCull=*/true, ProfilerScopes::kPassGpuInstanceCompute));
+    rg.EndCLGroup();
+
+    // Ocean sim + particles. OUT of the CL group (a grouped pass cannot change queue), which is the
+    // +1 command list the split costs.
+    //
+    // STAYS ON GRAPHICS, and step 10 records why rather than leaving it looking unfinished: the
+    // ocean's displacement/foam maps cross the queue boundary in BOTH directions every frame — a
+    // PIXEL shader samples them in Main_Transparent at the end of the frame, and this compute pass
+    // takes them at the start of the next. Moving it needs a hand-back from the transparent pass
+    // (D7's release half), which has no natural home: that pass fans out over several command
+    // lists, so the release cannot ride an existing barrier point the way Hzb's did for RTTrace.
+    // The compile refuses it loudly (it named `Ocean.PrevDisplacement` in 0xC0) rather than
+    // guessing, which is the designed behaviour.
+    auto pCompute = rg.AddPass2(RenderPass::Main_ObjectCompute,
+        { pGiCompute },
+        computeBuilder(/*feedsShadowCull=*/false, ProfilerScopes::kPassObjectCompute));
+
+    // The surf sim and the wetness update follow the ocean sim and are grouped with each other:
+    // both are tiny, both are ocean, and neither is an async candidate on its own. SurfSim is the
+    // group's FIRST member, which is what lets it keep an outside prereq (BeginCLGroup's contract).
+    rg.BeginCLGroup();
     // surf sim injection (pass-flow S3 pilot): the surf sim as its OWN pass, authored with
     // AddPass2 — the builder makes the frame's decisions, declares from them and returns the
     // record lambda; there is no separate Prepare to mirror. Third member of the compute CL

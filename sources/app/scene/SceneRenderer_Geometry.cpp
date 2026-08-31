@@ -191,14 +191,17 @@ void SceneRenderer::PrepareOpaqueDrawStates(RenderGraphPassContext& p, const Sce
 }
 
 void SceneRenderer::Pass_ObjectCompute(Renderer* renderer, RenderGraphPassContext ctx,
-    const ObjectComputeList& objects)
+    const ObjectComputeList& objects, Profiler::ScopeNameKey gpuScope)
 {
     // pass-flow S7b: `objects` is what the builder declared for — no second walk of the scene and
     // no second copy of the "does this object's compute record anything" test.
     auto compute = ctx.BeginCL();
     SetCommandListName(compute.cl, ctx.pass);
     {
-        GPU_SCOPE(compute.cl, ProfilerScopes::kPassObjectCompute);
+        // Step 9: the scope NAME comes from the caller. Both halves of the split run this same
+        // body, and a hard-coded name would put them on one trace row — which is exactly what the
+        // first cut did: two "Pass_ObjectCompute" events per frame and no GpuInstanceCompute at all.
+        GPU_SCOPE(compute.cl, gpuScope);
         for (RenderableObjectBase* obj : objects)
         {
             obj->ExecuteCompute(renderer, compute.cl);

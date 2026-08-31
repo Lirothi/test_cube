@@ -21,7 +21,10 @@ enum class RenderQueue : uint8_t {
 enum class RenderPass : uint16_t {
     Main_BuildAS,
     Main_PrologueClear,
-    Main_ObjectCompute,
+    // Async-compute step 9: the GI rotation compute, split out of Main_ObjectCompute because
+    // Main_ShadowCull consumes its output two passes later — it has no slack and never moves.
+    Main_GpuInstanceCompute,
+    Main_ObjectCompute,   // ocean sim + particles: consumed by Main_Transparent, whole-frame slack
     Main_SurfSim,
     Main_ShoreWetness,
     Main_TerrainDepth,
@@ -87,6 +90,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     {
     case RenderPass::Main_BuildAS: return L"BuildAS";
     case RenderPass::Main_PrologueClear: return L"PrologueClear";
+    case RenderPass::Main_GpuInstanceCompute: return L"GpuInstanceCompute";
     case RenderPass::Main_ObjectCompute: return L"ObjectCompute";
     case RenderPass::Main_SurfSim: return L"SurfSim";
     case RenderPass::Main_ShoreWetness: return L"ShoreWetness";
