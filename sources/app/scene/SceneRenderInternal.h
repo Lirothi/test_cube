@@ -159,7 +159,7 @@ namespace scene_internal
         mat4   lightViewProj[4];
         float4 vsmParams;             // x = useVsm, y = refDist, z = depth-bias floor, w = clip blend width
         float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
-        mat4   clipmapViewProj[8];    // Step 24f: directional clipmap level viewProjs
+        mat4   clipmapViewProj[vsm::kNumClipmapLevels]; // Step 24f: directional clipmap level viewProjs
         mat4   clipmapUvNormal;       // P16.16: receiver-plane transform, mirrors lighting_cs
         float4 preExposureParams;     // P16.1: x = pre-exposure, yzw reserved
         float4 csmFilterMode;         // S8: x = kernel, y = receiver bias, z = sharpen, w = over-blur
@@ -344,7 +344,7 @@ namespace scene_internal
                                   vsm::g_clipmapDepthBias, vsm::g_clipmapDepthBiasDecay);
         if (frame.clipmapViews)
         {
-            for (size_t i = 0; i < 8 && i < frame.clipmapViews->size(); ++i)
+            for (size_t i = 0; i < vsm::kNumClipmapLevels && i < frame.clipmapViews->size(); ++i)
             {
                 const SceneView& cv = (*frame.clipmapViews)[i];
                 vc.clipmapViewProj[i] = cv.view * cv.proj;

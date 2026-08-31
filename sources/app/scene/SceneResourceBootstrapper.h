@@ -10,6 +10,7 @@
 
 #include "app/scene/SceneRenderConfig.h"
 #include "rendering/core/PhotographicSettings.h" // P3: ColorPipelineSettings in the tonemap CB writer
+#include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumClipmapLevels (lighting CB mirror)
 #include "materials/Material.h"
 
 class Renderer;
@@ -531,7 +532,7 @@ struct LightingPassConstants
     float clipmapDepthBiasDecay = 1.0f;           // bias(L) = max(vsmDepthBias * decay^L, floorNdc)
     float clipmapDepthBiasFloorNdc = 0.0f;        // already converted texels -> NDC on the CPU
     float clipmapBlendWidth = 0.0f;               // outer level fraction blended into parent; 0 = off
-    std::array<mat4, 8> clipmapViewProj{};
+    std::array<mat4, vsm::kNumClipmapLevels> clipmapViewProj{}; // == lighting_cs's clipmapViewProj
     mat4 clipmapUvNormal{}; // P16.16: receiver-plane transform (inverse transpose world->shadow UV)        // camera-centered ortho viewProj per clipmap level
     // Underwater caustics (see shaders/caustics.hlsli). causticsTint.w == 0 disables the block,
     // which is what a level without an ocean produces.

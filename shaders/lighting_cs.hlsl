@@ -118,7 +118,7 @@ cbuffer PerFrame : register(b0)
     float clipmapDepthBiasFloorNdc;
     float clipmapBlendWidth; // outer fraction of a fine level blended into its parent; 0 = off
     float _padClipBias;
-    float4x4 clipmapViewProj[8];
+    float4x4 clipmapViewProj[VSM_NUM_CLIPMAP_LEVELS]; // mirrored in LightingPassConstants
     // P16.16: inverse transpose of world -> shadow UVZ, for the receiver-plane depth bias. One
     // matrix covers every level (the extent cancels out of the gradient); UE build theirs the same
     // way in CalcTranslatedWorldToShadowUVNormalMatrix.

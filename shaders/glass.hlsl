@@ -64,7 +64,7 @@ cbuffer GlassView : register(b1)
     float4x4 lightViewProj[4];
     float4 vsmParams;             // x = useVsm, y = refDist, z = depth-bias floor, w = clip blend width
     float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (UE units), z = depthBias (NDC), w = depth-bias decay/level
-    float4x4 clipmapViewProj[8];  // Step 24f: directional clipmap level viewProjs
+    float4x4 clipmapViewProj[VSM_NUM_CLIPMAP_LEVELS]; // Step 24f: directional clipmap level viewProjs
     float4x4 clipmapUvNormal;     // P16.16: receiver-plane transform, must match lighting_cs
     // P16.1: x = the pre-exposure every writer of scene colour applies. Glass writes in the
     // transparent pass, which runs AFTER compose, so compose's own scaling never reaches it.

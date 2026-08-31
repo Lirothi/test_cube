@@ -15,7 +15,7 @@
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 // Must match the vsm:: constants in VirtualShadowMap.h.
-static const uint kMaxViews     = 40u;   // kMaxVirtualViews (32 local + 8 clipmap levels, Step 24d)
+static const uint kMaxViews     = 42u;   // kMaxVirtualViews (32 local + 10 clipmap levels)
 static const uint kNumLocalViews = 32u;  // views [0,32) = local (mip chain); [32,40) = directional clipmap
 static const uint kL0Axis       = 16u;   // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
 static const uint kMaxLevel     = 4u;    // kMaxMipLevel

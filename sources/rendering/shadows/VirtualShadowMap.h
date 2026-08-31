@@ -101,8 +101,12 @@ namespace vsm
     // rung0View = view + kNumCascades maps a clipmap VSM view straight to its cull slot. Hence
     // render::kMaxShadowViews == kNumCascades + kMaxVirtualViews. VSM_MAX_VIEWS / kMaxViews in the
     // shaders must equal kMaxVirtualViews.
-    inline constexpr std::uint32_t kNumClipmapLevels = 8;
-    inline constexpr std::uint32_t kMaxVirtualViews = kNumLocalVirtualViews + kNumClipmapLevels; // 40
+    // 10 levels (was 8, 2026-08-28): the coarsest level's half-extent is g_clipmapBaseExtent*2^9
+    // = ~6.1 km at the default 12 m base, so directional shadows reach 4x farther for +682 page
+    // table entries and two more cull/scatter views; the physical pool is untouched (far levels
+    // are coarse and resident pages stay demand-driven).
+    inline constexpr std::uint32_t kNumClipmapLevels = 10;
+    inline constexpr std::uint32_t kMaxVirtualViews = kNumLocalVirtualViews + kNumClipmapLevels; // 42
     static_assert(kNumCascades + kMaxVirtualViews == render::kMaxShadowViews,
                   "cull view layout must be [cascades | local | clipmap]");
     inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*40 = 13640
@@ -161,7 +165,7 @@ namespace vsm
     inline std::uint32_t g_requestDownscale = kRequestDownscale;
     // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
-    inline float         g_clipmapBaseExtent = 12.0f;
+    inline float         g_clipmapBaseExtent = 8.0f;
     // Fraction of a directional clipmap level's half-extent used to cross-fade its shadow factor
     // into the next coarser level. 0 is a strict kill switch: no parent page requests and no second
     // PCF sample. 0.12 blends the outer 12% of each nested square and hides caster-LOD silhouette
@@ -277,7 +281,7 @@ inline bool g_scatterLocalViews = true;
 // this animate wind (and re-render every frame while it blows); levels at/above render their
 // casters RIGID and can cache. Locals always animate. Only matters with g_pageCaching on —
 // without caching every page redraws anyway. --set=vsm.windMaxLevel; >= level count = all.
-inline std::uint32_t g_windAnimateMaxLevel = 2;
+inline std::uint32_t g_windAnimateMaxLevel = 3;
 
     // Periodically log the VSM page stats to DBWIN ("[VSM] request ... | resident=..."). DEFAULT OFF
     // — it spams a captured stress/dev run. The on-screen dev-window "VSM" tab always shows the live
