@@ -306,6 +306,9 @@ public:
     void SyncAsyncQueueMode();
     // Write logs/device_removed.log if the device is gone. Once per process; cheap enough per frame.
     void ReportDeviceRemovalOnce();
+    // Append the D3D12 debug layer's queued messages to logs/invariant_failure.log. No-op without
+    // the debug layer; with it, this is what makes the layer's diagnosis readable headless.
+    void DumpDebugLayerMessages(const char* context);
     bool HasComputeQueue() const { return graphicsDevice_.ComputeQueue() != nullptr; }
 
     // DXR (S1). On non-RT hardware GetDevice5() is null and

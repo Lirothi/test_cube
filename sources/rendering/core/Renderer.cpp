@@ -389,6 +389,43 @@ void Renderer::SyncAsyncQueueMode()
     }
 }
 
+// Drain whatever the D3D12 debug layer has queued into logs/invariant_failure.log.
+//
+// A no-op without the debug layer (`--gbv` / a Debug device); with it, this is the one place the
+// layer's own diagnosis becomes readable on a headless run instead of vanishing into DBWIN.
+void Renderer::DumpDebugLayerMessages(const char* context)
+{
+    Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue;
+    if (!GetDevice() || FAILED(GetDevice()->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+        return;
+    }
+    const UINT64 count = infoQueue->GetNumStoredMessages();
+    if (count == 0) {
+        return;
+    }
+    FILE* f = nullptr;
+    if (fopen_s(&f, diag::LogPath("invariant_failure.log").c_str(), "a") != 0 || !f) {
+        return;
+    }
+    std::fprintf(f, "-- debug layer (%s), %llu message(s) --\n", context,
+                 static_cast<unsigned long long>(count));
+    // The LAST few are the ones about the command that just failed; earlier ones are usually
+    // warnings from setup that have already been read once.
+    const UINT64 first = count > 8 ? count - 8 : 0;
+    std::vector<char> scratch;
+    for (UINT64 i = first; i < count; ++i) {
+        SIZE_T bytes = 0;
+        if (FAILED(infoQueue->GetMessage(i, nullptr, &bytes)) || bytes == 0) { continue; }
+        scratch.assign(bytes, 0);
+        auto* m = reinterpret_cast<D3D12_MESSAGE*>(scratch.data());
+        if (FAILED(infoQueue->GetMessage(i, m, &bytes))) { continue; }
+        std::fprintf(f, "  [sev=%d id=%d] %.*s\n", static_cast<int>(m->Severity),
+                     static_cast<int>(m->ID), static_cast<int>(m->DescriptionByteLength),
+                     m->pDescription);
+    }
+    std::fclose(f);
+}
+
 // Write the device-removed reason to logs/device_removed.log, once per process.
 void Renderer::ReportDeviceRemovalOnce()
 {
@@ -938,7 +975,24 @@ void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex, uint32_t loc
     // a list that failed to Close would lose its GPU work.
     const HRESULT hr = t.cl->Close();
     if (FAILED(hr)) {
-        RendererInvariantFailure("Renderer::EndThreadCommandList: Close() failed");
+        // Name the LIST and the code. "Close() failed" alone says only that some command in some
+        // pass was invalid, which is the least useful half of what is already known here: the list
+        // carries the pass name (SetCommandListName) and Close returns why.
+        char label[128] = {};
+        render::DebugObjectLabel(t.cl, label, sizeof(label));
+        char msg[224];
+        std::snprintf(msg, sizeof(msg),
+                      "Renderer::EndThreadCommandList: Close() failed on '%s' (%s queue) hr=0x%08X",
+                      label[0] ? label : "<unnamed>",
+                      t.type == D3D12_COMMAND_LIST_TYPE_COMPUTE ? "compute" : "direct",
+                      static_cast<unsigned>(hr));
+        // With the debug layer on, it has ALREADY said exactly which command was invalid — and
+        // that text went to OutputDebugString, i.e. nowhere on a headless run. Drain it into the
+        // same log the failure goes to. E_INVALIDARG from Close means "some command in this list
+        // was rejected", and the layer's own message is the difference between reading it and
+        // bisecting the pass by hand.
+        DumpDebugLayerMessages("EndThreadCommandList");
+        RendererInvariantFailure(msg);
     }
     submitTimeline_.RegisterDirect(t.cl, batchIndex, localOrder);
 

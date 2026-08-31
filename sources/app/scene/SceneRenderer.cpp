@@ -468,12 +468,15 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     frame_ = nullptr;
 }
 
-void SceneRenderer::Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx)
+void SceneRenderer::Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point)
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassPrologueClear);
+        // The ocean maps' D7 release for Main_ObjectCompute on the compute queue (see the builder).
+        // Empty, and therefore free, on a level without an ocean.
+        r->EmitPoint(t.cl, point);
         r->RecordBindAndClear(t.cl);
     }
     ctx.EndCL(t);

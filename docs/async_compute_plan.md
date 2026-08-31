@@ -1445,6 +1445,68 @@ behaviour, and it points at in-flight topology overlap being the mechanism after
 
 Gate after both: `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN, `enhanced=7912`.
 
+## Follow-on: Main_ObjectCompute moved to the compute queue
+
+Step 10 left the ocean sim + particles on the graphics queue and recorded the blocker. Both halves of
+that blocker are now gone, and the pass runs async for **-2.6 % wall-clock**.
+
+**The state cycle.** The sim's maps crossed the queue boundary twice a frame and the sim itself set
+the state its far-away consumer wanted: `NON_PIXEL|PIXEL`. That PIXEL bit is direct-queue-exclusive,
+so it made every transition in the pass illegal the moment it changed queue. The fix is to let each
+side own its half:
+
+- the sim leaves the maps **NON_PIXEL** (`OceanSimulation::kSimMapReadState`), legal on both queues;
+- **`OceanRenderable::PrepareRender`** acquires the PIXEL bit on the graphics queue, where adding it
+  is legal — including the FOAM map, which was being read undeclared and only worked because the sim
+  pre-set its state;
+- **`Main_PrologueClear`** strips it again at the top of the next frame. That is D7's release half,
+  and the reason it had no home before was that the search was aimed at the transparent pass. The
+  prologue is on the graphics queue, is the frame's first pass, and is already a direct prereq —
+  exactly the shape `Main_Hzb` has for `Main_RTTrace`.
+
+**The slack.** Legality alone bought NOTHING: measured, `Pass_ObjectCompute` overlapped **0 %** of
+any graphics work, because `Main_SurfSim` and `Main_TerrainDepth` had prereqs on it and the whole
+frame chains behind them. Neither reads anything the sim writes — the surf sim owns its own
+wave/foam/spawner textures, the terrain-depth pass renders the shore map and builds its SDF — so
+those arcs were ordering inherited from when this was all one graphics chain. Repointed to
+`Main_GpuInstanceCompute`, and the real consumer named instead: `Main_Transparent`, where the ocean
+surface samples the maps and the particle emitters (transparent objects) are drawn.
+
+**That prereq on `Main_Transparent` is load-bearing.** The graph derives a cross-queue fence from
+prereqs and mtDeps and NOT from resource declarations, so without it the transparent pass would read
+maps the compute queue is still writing.
+
+| | control (HEAD) | async + slack |
+|---|---|---|
+| GPU.Frame mean | 3108, 3151 us | 3052, 3048, 3048 us |
+| | mean 3130 | mean **3049 (-2.6 %)** |
+| `Pass_ObjectCompute` | 113 us | 234 us (**+107 %**) |
+| overlap | n/a | **95 %** covered (ExecuteBundles, VsmPageRequest, VsmPageRender) |
+
+The ranges do not touch (worst control 3108 > best after 3052) and the control spread is 1.4 %. The
+pass itself more than doubles under contention — a worse ratio than RTTrace's +88 %, as expected for
+a bandwidth-bound FFT — and still wins, because 95 % of it is hidden.
+
+**A real barrier defect fell out of this.** `barriers::EmitOne`'s UAV-barrier path hard-coded
+`SyncBefore = COMPUTE_SHADING | PIXEL_SHADING` and never saw step 8's compute-queue narrowing, which
+lived inside `EmitEnhanced` only. The ocean sim UAV-barriers its textures between dispatches, so the
+first pass to do that on the compute queue failed `Close()` with E_INVALIDARG. Both sites now share
+one `kComputeQueueSync` table and one `NarrowSyncForQueue`. A queue-legality rule that lives at one
+of two emit sites is not a rule.
+
+**Diagnostics that made this cheap** (both kept):
+
+- `Renderer::EndThreadCommandList` names the LIST and the HRESULT on a Close failure instead of
+  "Close() failed" — that alone pointed at `ObjectCompute (compute queue) hr=0x80070057`;
+- `Renderer::DumpDebugLayerMessages` drains the D3D12 debug layer into
+  `logs/invariant_failure.log`, because with `--gbv` the layer had already named the exact problem
+  and was saying it to `OutputDebugString`, i.e. nowhere on a headless run.
+
+Gates: `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN; the same in
+`--shadow-mode=legacy` CLEAN; the same under `--no-async-compute` CLEAN. Barriers
+`enhanced=8050 legacy=0` (7912 before — the prologue release and the foam acquire), and legacy=0
+confirms the new narrowing forces no fallbacks.
+
 ## Non-goals
 
 - **A copy queue** for uploads. The same architecture makes it straightforward afterwards, but it

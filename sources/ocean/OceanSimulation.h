@@ -146,6 +146,20 @@ public:
 
     const FoamParams& GetFoamParams() const { return inputs_.foam; }
 
+    // The read state the sim leaves its displacement/foam maps in, in ONE place.
+    //
+    // It was written out longhand in three: PrepareUpdate's declarations, Update's mirroring
+    // transitions, and a third hard-coded copy inside DispatchFoam. Moving Main_ObjectCompute to
+    // the compute queue meant dropping the PIXEL bit (direct-queue-exclusive), and the third copy
+    // was missed — the pass then failed Close() with E_INVALIDARG, which is a much worse way to
+    // learn it than a compile error. A declaration and the transition that mirrors it are ONE fact;
+    // they get one name.
+    //
+    // NON_PIXEL, not NON_PIXEL|PIXEL: the pixel-shader bit is added by the consumer that actually
+    // needs it (OceanRenderable::PrepareRender) and stripped again by Main_PrologueClear.
+    static constexpr D3D12_RESOURCE_STATES kSimMapReadState =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
 private:
     void BuildSpectrum();
     void CreateResources(Renderer* renderer,

@@ -200,6 +200,40 @@ void SetWideSync(bool enable) { gWideSync.store(enable, std::memory_order_relaxe
 void SetEnabled(bool enable) { gEnabled.store(enable, std::memory_order_relaxed); }
 bool Enabled() { return gEnabled.load(std::memory_order_relaxed); }
 
+// Everything a compute queue can actually wait on or signal. NONE and SPLIT are control values
+// rather than stages and stay legal; ALL is the catch-all the runtime narrows itself.
+//
+// ONE table, used by every enhanced emit site in this file. It started as a local inside
+// EmitEnhanced and that was a bug waiting to be found: the UAV-barrier path below hard-codes
+// `COMPUTE_SHADING | PIXEL_SHADING`, never saw the narrowing, and the first pass to put a texture
+// UAV barrier on the compute queue (Main_ObjectCompute, the ocean sim) failed Close() with
+// E_INVALIDARG. A queue-legality rule that lives at one of two emit sites is not a rule.
+constexpr D3D12_BARRIER_SYNC kComputeQueueSync = static_cast<D3D12_BARRIER_SYNC>(
+    D3D12_BARRIER_SYNC_NONE |
+    D3D12_BARRIER_SYNC_ALL |
+    D3D12_BARRIER_SYNC_COMPUTE_SHADING |
+    D3D12_BARRIER_SYNC_COPY |
+    D3D12_BARRIER_SYNC_EXECUTE_INDIRECT |
+    D3D12_BARRIER_SYNC_RAYTRACING |
+    D3D12_BARRIER_SYNC_SPLIT |
+    D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE |
+    D3D12_BARRIER_SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE |
+    D3D12_BARRIER_SYNC_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO |
+    D3D12_BARRIER_SYNC_CLEAR_UNORDERED_ACCESS_VIEW);
+
+// Narrow a sync scope to what `type` accepts. `refused` is set when a non-empty scope narrows to
+// NOTHING — that would be a barrier waiting for nothing, i.e. a race rather than a saving, and the
+// caller must fall back to the legacy ResourceBarrier instead of emitting it.
+static D3D12_BARRIER_SYNC NarrowSyncForQueue(D3D12_BARRIER_SYNC sync,
+                                             D3D12_COMMAND_LIST_TYPE type,
+                                             bool& refused)
+{
+    if (type != D3D12_COMMAND_LIST_TYPE_COMPUTE) { return sync; }
+    const D3D12_BARRIER_SYNC narrowed = static_cast<D3D12_BARRIER_SYNC>(sync & kComputeQueueSync);
+    if (sync != D3D12_BARRIER_SYNC_NONE && narrowed == D3D12_BARRIER_SYNC_NONE) { refused = true; }
+    return narrowed;
+}
+
 void EmitOne(ID3D12GraphicsCommandList* cl, const D3D12_RESOURCE_BARRIER& barrier)
 {
     if (cl == nullptr) { return; }
@@ -241,7 +275,14 @@ void EmitOne(ID3D12GraphicsCommandList* cl, const D3D12_RESOURCE_BARRIER& barrie
                 D3D12_BARRIER_GROUP grp{};
                 if (isBuffer) {
                     D3D12_BUFFER_BARRIER bb{};
-                    bb.SyncBefore = D3D12_BARRIER_SYNC_COMPUTE_SHADING | D3D12_BARRIER_SYNC_PIXEL_SHADING;
+                    // Narrowed for the recording queue: PIXEL_SHADING is illegal on a compute list.
+                    // Refusal is impossible here — COMPUTE_SHADING survives the narrowing on both
+                    // queue types — so this cannot lose a barrier.
+                    bool uavRefused = false;
+                    bb.SyncBefore = NarrowSyncForQueue(
+                        static_cast<D3D12_BARRIER_SYNC>(D3D12_BARRIER_SYNC_COMPUTE_SHADING |
+                                                        D3D12_BARRIER_SYNC_PIXEL_SHADING),
+                        cl->GetType(), uavRefused);
                     bb.SyncAfter = bb.SyncBefore;
                     bb.AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
                     bb.AccessAfter = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
@@ -255,7 +296,15 @@ void EmitOne(ID3D12GraphicsCommandList* cl, const D3D12_RESOURCE_BARRIER& barrie
                 }
                 else {
                     D3D12_TEXTURE_BARRIER tb{};
-                    tb.SyncBefore = D3D12_BARRIER_SYNC_COMPUTE_SHADING | D3D12_BARRIER_SYNC_PIXEL_SHADING;
+                    // Same narrowing as the buffer branch above, and the one this bug was actually
+                    // found through: the ocean sim UAV-barriers its displacement/foam TEXTURES
+                    // between dispatches, so every one of them carried PIXEL_SHADING onto the
+                    // compute list the moment Main_ObjectCompute moved queue.
+                    bool uavRefused = false;
+                    tb.SyncBefore = NarrowSyncForQueue(
+                        static_cast<D3D12_BARRIER_SYNC>(D3D12_BARRIER_SYNC_COMPUTE_SHADING |
+                                                        D3D12_BARRIER_SYNC_PIXEL_SHADING),
+                        cl->GetType(), uavRefused);
                     tb.SyncAfter = tb.SyncBefore;
                     tb.AccessBefore = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
                     tb.AccessAfter = D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
@@ -437,30 +486,13 @@ bool EmitEnhanced(ID3D12GraphicsCommandList7* cl7,
     //
     // Read off the command list itself rather than plumbed in, exactly like step 3's queue labelling
     // and step 5's emission backstop: the truth is in the thing doing the recording.
-    const bool computeQueue = (cl7->GetType() == D3D12_COMMAND_LIST_TYPE_COMPUTE);
-    // Everything a compute queue can actually wait on or signal. NONE and SPLIT are control values
-    // rather than stages and stay legal; ALL is the catch-all the runtime narrows itself.
-    constexpr D3D12_BARRIER_SYNC kComputeQueueSync = static_cast<D3D12_BARRIER_SYNC>(
-        D3D12_BARRIER_SYNC_NONE |
-        D3D12_BARRIER_SYNC_ALL |
-        D3D12_BARRIER_SYNC_COMPUTE_SHADING |
-        D3D12_BARRIER_SYNC_COPY |
-        D3D12_BARRIER_SYNC_EXECUTE_INDIRECT |
-        D3D12_BARRIER_SYNC_RAYTRACING |
-        D3D12_BARRIER_SYNC_SPLIT |
-        D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE |
-        D3D12_BARRIER_SYNC_COPY_RAYTRACING_ACCELERATION_STRUCTURE |
-        D3D12_BARRIER_SYNC_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO |
-        D3D12_BARRIER_SYNC_CLEAR_UNORDERED_ACCESS_VIEW);
-    // Narrow, or REFUSE. Refusing falls back to the legacy ResourceBarrier, which is always correct
-    // — a gap in this table must never become a lost barrier. Dropping every bit of a non-empty
-    // scope would silently widen the barrier to "no wait at all", which is a race, so that case
-    // refuses rather than narrows.
-    auto narrowSync = [&](D3D12_BARRIER_SYNC sync, bool& refused) {
-        if (!computeQueue) { return sync; }
-        const D3D12_BARRIER_SYNC narrowed = static_cast<D3D12_BARRIER_SYNC>(sync & kComputeQueueSync);
-        if (sync != D3D12_BARRIER_SYNC_NONE && narrowed == D3D12_BARRIER_SYNC_NONE) { refused = true; }
-        return narrowed;
+    // Narrow, or REFUSE. Refusing falls back to the legacy ResourceBarrier, which is always
+    // correct — a gap in this table must never become a lost barrier. Dropping every bit of a
+    // non-empty scope would silently widen the barrier to "no wait at all", which is a race, so
+    // that case refuses rather than narrows. Table and rule are shared with EmitOne's UAV path.
+    const D3D12_COMMAND_LIST_TYPE clType = cl7->GetType();
+    auto narrowSync = [clType](D3D12_BARRIER_SYNC sync, bool& refused) {
+        return NarrowSyncForQueue(sync, clType, refused);
     };
     bool refusedSync = false;
 

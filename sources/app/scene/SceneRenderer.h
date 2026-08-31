@@ -129,6 +129,13 @@ private:
         static constexpr size_t kNone = static_cast<size_t>(-1);
 
         size_t pBuildAS = kNone;   // prologue -> reflections, RT debug, glass
+        // ASYNC COMPUTE: the ocean sim + particles, on the compute queue. Its ONLY graphics
+        // consumer is Main_Transparent (the ocean surface samples the maps, and particles are
+        // transparent objects drawn in the same pass), which is why it is carried this far instead
+        // of being consumed by the next pass along. That dependency is LOAD-BEARING: the graph
+        // derives a cross-queue fence from prereqs and mtDeps, NOT from resource declarations, so
+        // without it the transparent pass would read maps the compute queue is still writing.
+        size_t pObjectCompute = kNone; // prologue -> transparent (cross-queue)
         size_t pWetness = kNone;   // prologue -> reflection source
         size_t pShoreDepth = kNone;// prologue -> shadow cull
         size_t pShadow = kNone;    // shadows  -> lighting (mtDep)
@@ -174,7 +181,9 @@ private:
     // never go through the indirect path.
     bool IndirectShadowDrawsActive() const;
 
-    void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx);
+    // `point` is the D7 release the builder declared for Main_ObjectCompute's move to the compute
+    // queue — the ocean maps handed over in a compute-legal state. Empty on an ocean-less level.
+    void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
     // pass-flow S7b: the objects whose compute records something this frame, collected by the
     // Main_ObjectCompute builder as it declares for them. Fixed capacity because it rides into the
     // record lambda by value — an overflow is an invariant failure, never a silent drop.

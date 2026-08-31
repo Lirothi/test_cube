@@ -1296,9 +1296,9 @@ void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
         Initialize(renderer, cl, nullptr);
     }
 
-    const D3D12_RESOURCE_STATES srvState =
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    // ASYNC COMPUTE: see kSimMapReadState. Mirrors PrepareUpdate exactly — the two must agree or
+    // the compile advances past a barrier nobody emits.
+    const D3D12_RESOURCE_STATES srvState = kSimMapReadState;
 
     if (displacement_ && prevDisplacement_)
     {
@@ -1351,9 +1351,8 @@ bool OceanSimulation::WillCopyDisplacementHistory() const
 
 void OceanSimulation::PrepareUpdate(RenderGraphPassContext& ctx)
 {
-    const D3D12_RESOURCE_STATES srvState =
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    // ASYNC COMPUTE: see kSimMapReadState.
+    const D3D12_RESOURCE_STATES srvState = kSimMapReadState;
 
     if (displacement_ && prevDisplacement_)
     {
@@ -1623,8 +1622,9 @@ void OceanSimulation::DispatchFoam(Renderer* renderer, ID3D12GraphicsCommandList
     lastFoamSimTime_ = simTime;
 
     renderer->Transition(cl, foamTurbulence_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    renderer->Transition(cl, displacement_.Get(),
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    // The third copy of the sim's read state, and the one that was missed: the declarations moved
+    // to NON_PIXEL and this stayed NON_PIXEL|PIXEL, which Close() rejected on the compute queue.
+    renderer->Transition(cl, displacement_.Get(), kSimMapReadState);
 
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     auto& ctx = ctxHandle.ref();

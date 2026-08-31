@@ -780,6 +780,14 @@ void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)
     {
         ctx.Use(prevDisplacement, srvState);
     }
+    // ASYNC COMPUTE: the foam map is bound into this draw (RecordGraphics pushes its SRV) and was
+    // read UNDECLARED, which worked only because the sim parked it in NON_PIXEL|PIXEL for us. The
+    // sim now leaves it NON_PIXEL so it can run on the compute queue, so the pixel read has to
+    // acquire the bit here — on the graphics queue, where adding PIXEL is legal.
+    if (ID3D12Resource* foam = simulation_->GetFoamResource())
+    {
+        ctx.Use(foam, srvState);
+    }
     if (wetness_ && wetness_->IsReady())
     {
         ctx.Use(wetness_->GetCurrentStampResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -955,6 +963,13 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     if (auto* prevDisplacement = simulation_->GetPreviousDisplacementResource())
     {
         renderer->Transition(cl, prevDisplacement, srvState);
+    }
+    // Mirrors the declaration PrepareRender now makes for the foam map. A declared transition that
+    // the body never emits advances the compile past a barrier nobody wrote — the exact failure the
+    // guards in this file warn about, and the reason the pair has to move together.
+    if (ID3D12Resource* foam = simulation_->GetFoamResource())
+    {
+        renderer->Transition(cl, foam, srvState);
     }
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);

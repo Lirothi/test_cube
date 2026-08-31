@@ -89,13 +89,43 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     // CL group (step 5): the prologue clear and the object-compute dispatches are
     // two tiny back-to-back lists with no mtDeps; share one command list.
     rg.BeginCLGroup();
-    // pass-flow S5: declares nothing (measured: the prologue clear performs no transitions), so
-    // the builder just hands back the body.
+    // pass-flow S5: the clear itself performs no transitions (measured), so the only declarations
+    // here are for resources this pass does not touch — see below.
+    //
+    // ASYNC COMPUTE — D7's RELEASE half for Main_ObjectCompute, and the thing whose absence kept
+    // that pass on the graphics queue through step 10.
+    //
+    // The ocean's maps go round a cycle that crosses the queue boundary twice per frame: the sim
+    // writes them (compute), the ocean surface samples them in a PIXEL shader at the end of the
+    // frame (graphics), and the next frame's sim takes them again. The acquire half has always had
+    // a home — OceanRenderable::PrepareRender adds the PIXEL bit on the graphics queue. The release
+    // half did not: stripping that bit has to happen on the graphics queue too, and the transparent
+    // pass fans out over several command lists, so it cannot ride a barrier point there.
+    //
+    // It rides one HERE instead. This pass is the frame's first, it is on the graphics queue, and
+    // Main_ObjectCompute depends on it directly — which is exactly the shape Main_Hzb has for
+    // Main_RTTrace. One transition per map, in a pass that was already being recorded.
     auto pClear = rg.AddPass2(RenderPass::Main_PrologueClear, {},
-        [this, renderer](RenderGraphPassContext&) -> std::function<void(RenderGraphPassContext)> {
-            return [this, renderer](RenderGraphPassContext c) {
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            // The point is taken UNCONDITIONALLY, so the pass has one shape whether or not the
+            // level has an ocean; with no maps to hand over the point is empty and the emit is a
+            // no-op. A barrier set that appears and disappears with the level is the kind of thing
+            // that works everywhere except the one scene nobody captures.
+            ctx.NextPoint();
+            const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+            if (OceanSimulation* oceanSim = Systems::GetOceanSimulation())
+            {
+                // Guarded per resource exactly as the sim's own Prepare guards them: registering a
+                // transition the compile then cannot match is fatal under compiled barriers.
+                constexpr D3D12_RESOURCE_STATES kComputeLegal =
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                if (ID3D12Resource* d = oceanSim->GetDisplacementResource()) { ctx.Use(d, kComputeLegal); }
+                if (ID3D12Resource* p = oceanSim->GetPreviousDisplacementResource()) { ctx.Use(p, kComputeLegal); }
+                if (ID3D12Resource* f = oceanSim->GetFoamResource()) { ctx.Use(f, kComputeLegal); }
+            }
+            return [this, renderer, point](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassPrologueClear);
-                Pass_PrologueClear(renderer, c);
+                Pass_PrologueClear(renderer, c, point);
             };
         });
 
@@ -143,16 +173,21 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     // Ocean sim + particles. OUT of the CL group (a grouped pass cannot change queue), which is the
     // +1 command list the split costs.
     //
-    // STAYS ON GRAPHICS, and step 10 records why rather than leaving it looking unfinished: the
-    // ocean's displacement/foam maps cross the queue boundary in BOTH directions every frame — a
-    // PIXEL shader samples them in Main_Transparent at the end of the frame, and this compute pass
-    // takes them at the start of the next. Moving it needs a hand-back from the transparent pass
-    // (D7's release half), which has no natural home: that pass fans out over several command
-    // lists, so the release cannot ride an existing barrier point the way Hzb's did for RTTrace.
-    // The compile refuses it loudly (it named `Ocean.PrevDisplacement` in 0xC0) rather than
-    // guessing, which is the designed behaviour.
-    auto pCompute = rg.AddPass2(RenderPass::Main_ObjectCompute,
-        { pGiCompute },
+    // ASYNC COMPUTE. Step 10 left this on the graphics queue because D7's release half had no home
+    // and the compile refused the move by name (`Ocean.PrevDisplacement` in 0xC0). Both halves now
+    // exist, and neither is a special case bolted onto this pass:
+    //   - the sim stopped parking its maps in NON_PIXEL|PIXEL, a state it set only for a consumer
+    //     several passes away. It leaves them NON_PIXEL, which is legal on both queues.
+    //   - the consumer that actually samples them in a pixel shader acquires the bit itself
+    //     (OceanRenderable::PrepareRender, graphics queue) — including the foam map, which was
+    //     being read UNDECLARED and only worked because the sim pre-set its state.
+    //   - Main_PrologueClear strips the bit again at the top of the next frame, on the graphics
+    //     queue, in a pass this one depends on directly. That is the release.
+    // The prereq on `pClear` is therefore LOAD-BEARING and not redundant with pGiCompute: it is
+    // both the hand-over and the fence edge (a cross-queue wait comes from prereqs and mtDeps
+    // alike — see RenderGraph's batch walk).
+    gb.pObjectCompute = rg.AddPass2(RenderPass::Main_ObjectCompute, RenderQueue::AsyncCompute,
+        { pClear, pGiCompute },
         computeBuilder(/*feedsShadowCull=*/false, ProfilerScopes::kPassObjectCompute));
 
     // The surf sim and the wetness update follow the ocean sim and are grouped with each other:
@@ -163,7 +198,12 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     // AddPass2 — the builder makes the frame's decisions, declares from them and returns the
     // record lambda; there is no separate Prepare to mirror. Third member of the compute CL
     // group, so it records into the same command list right after the FFT dispatches.
-    const size_t pSurfSim = rg.AddPass2(RenderPass::Main_SurfSim, { pCompute },
+    // NOT the ocean sim: the surf sim touches none of the FFT sim's maps (it owns its own
+    // wave/foam/spawner textures and reads the shore maps), so that prereq was ordering inherited
+    // from when all of this was one graphics chain. Keeping it made the GRAPHICS queue wait for the
+    // compute queue at the very top of the frame — measured: Pass_ObjectCompute overlapped exactly
+    // 0% of anything until this arc and Main_TerrainDepth's were repointed.
+    const size_t pSurfSim = rg.AddPass2(RenderPass::Main_SurfSim, { pGiCompute },
         [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->ocean) { return {}; }
             return frame_->ocean->BuildSurfSimPass(ctx);
@@ -184,7 +224,9 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     // to keep the surf sim off a frame that rebuilds the shore maps. Its pass (Main_SurfSim) sits
     // earlier in the schedule, so its builder runs BEFORE this one — the flag it sees is the same
     // one it saw when the clear lived in the record body.
-    gb.pShoreDepth = rg.AddPass2(RenderPass::Main_TerrainDepth, { pCompute },
+    // Repointed off the ocean sim for the same reason as Main_SurfSim above: this pass renders the
+    // shore depth map and builds its SDF, and reads nothing the sim writes.
+    gb.pShoreDepth = rg.AddPass2(RenderPass::Main_TerrainDepth, { pGiCompute },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             OceanSimulation* oceanSim = Systems::GetOceanSimulation();
             if (!oceanSim) { return {}; }
@@ -1187,9 +1229,16 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
     // before rebinding the targets — inherently ordered work. When glass reflections are active,
     // order the transparent pass after the glass-reflection compute (it samples glassReflection;
     // gb.pCompose + the AS build are covered transitively through it).
+    //
+    // ASYNC COMPUTE: `gb.pObjectCompute` runs on the compute queue and this is its ONLY graphics
+    // consumer — the ocean surface samples the sim's maps here, and particle emitters are
+    // transparent objects drawn in this same pass. The graph derives a cross-queue fence from
+    // prereqs and mtDeps and NOT from resource declarations, so this entry is what makes the wait
+    // exist at all. Dropping it as "already covered by the barriers" would be a read of maps the
+    // compute queue is still writing.
     const std::initializer_list<size_t> transpDeps = decisions_.glassRefl
-        ? std::initializer_list<size_t>{ gb.pCompose, gb.pGlassReflect }
-        : std::initializer_list<size_t>{ gb.pCompose };
+        ? std::initializer_list<size_t>{ gb.pCompose, gb.pGlassReflect, gb.pObjectCompute }
+        : std::initializer_list<size_t>{ gb.pCompose, gb.pObjectCompute };
     auto pTransp = rg.AddPass2(RenderPass::Main_Transparent, transpDeps,
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
         RenderGraphPassContext& p = ctx;
