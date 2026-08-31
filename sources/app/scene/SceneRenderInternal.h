@@ -149,6 +149,7 @@ namespace scene_internal
         mat4   clipmapViewProj[8];    // Step 24f: directional clipmap level viewProjs
         mat4   clipmapUvNormal;       // P16.16: receiver-plane transform, mirrors lighting_cs
         float4 preExposureParams;     // P16.1: x = pre-exposure, yzw reserved
+        float4 csmFilterMode;         // S8: x = 0 legacy 3x3 SampleCmp, 1 = ramp + Gather tent
     };
 
     // MIRRORS the OceanReflectionCB in shaders/ocean_reflection_cs.hlsl. This one is uploaded by
@@ -334,6 +335,13 @@ namespace scene_internal
         // reaches it and it applies the factor itself -- and its refraction tap reads the opaque
         // scene copy, which already has the factor on it. Both halves live in glass.hlsl.
         vc.preExposureParams = float4(render::g_preExposure, 0.0f, 0.0f, 0.0f);
+        // S8: glass must filter cascades exactly like the geometry beside it (that is what S3 was for).
+        // S8: glass filters cascades identically to the geometry beside it — same four numbers.
+        const CascadeShadowConfig* csmCfg = frame.cascadeConfig;
+        vc.csmFilterMode = float4(static_cast<float>(render::g_csmFilterMode),
+                                  csmCfg ? csmCfg->csmReceiverBias : 0.9f,
+                                  csmCfg ? (csmCfg->shadowFilterSharpen * 7.0f + 1.0f) : 1.0f,
+                                  (csmCfg && !csmCfg->pcfOverBlurCorrection) ? 0.0f : 1.0f);
 
         return UploadFrameCB(renderer, vc);
     }

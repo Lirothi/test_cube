@@ -59,6 +59,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     causticsParams1 = material->ComputeCB0FieldHandle("causticsParams1");
     causticsParams2 = material->ComputeCB0FieldHandle("causticsParams2");
     csmDebugMode = material->ComputeCB0FieldHandle("csmDebugMode");
+    csmFilterMode = material->ComputeCB0FieldHandle("csmFilterMode");
+    csmFilterParams = material->ComputeCB0FieldHandle("csmFilterParams");
     enableSkySpecular = material->ComputeCB0FieldHandle("enableSkySpecular");
     skySpecMipCount = material->ComputeCB0FieldHandle("skySpecMipCount");
     skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
@@ -1233,6 +1235,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);
     matLighting_->UpdateCBField(handles.causticsParams2, data.causticsParams2, dest);
     matLighting_->UpdateCBField(handles.csmDebugMode, data.csmDebugMode, dest);
+    matLighting_->UpdateCBField(handles.csmFilterMode, data.csmFilterMode, dest);
+    matLighting_->UpdateCBField(handles.csmFilterParams, data.csmFilterParams, dest);
     matLighting_->UpdateCBField(handles.enableSkySpecular, data.enableSkySpecular, dest);
     matLighting_->UpdateCBField(handles.skySpecMipCount, data.skySpecMipCount, dest);
     matLighting_->UpdateCBField(handles.skyboxIntensity, data.skyboxIntensity, dest);

@@ -375,6 +375,16 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         // S0.3: cascade-tint debug. Forced off whenever the clipmap is the shadow source — the
         // tint visualizes CSM cascades, which that path does not sample.
         constants.csmDebugMode = vsmDir ? 0u : static_cast<uint32_t>(render::g_csmDebugMode);
+        constants.csmFilterMode = render::g_csmFilterMode; // S8: 0 box, 1 = 4x4 tent, 2 = 6x6 tent
+        {
+            // UE maps the artist's 0..1 Shadow Filter Sharpen to shader units as x*7+1 (see
+            // ShadowRendering.h:1299). Done on the CPU, once, exactly as they do it.
+            const CascadeShadowConfig* cfg = frame_->cascadeConfig;
+            constants.csmFilterParams = cfg
+                ? float4(cfg->csmReceiverBias, cfg->shadowFilterSharpen * 7.0f + 1.0f,
+                         cfg->pcfOverBlurCorrection ? 1.0f : 0.0f, 0.0f)
+                : float4(0.9f, 1.0f, 1.0f, 0.0f);
+        }
         constants.vsmDepthBias = vsm::g_clipmapDepthBias;
         // Per-level depth-bias shaping (see VsmClipmapShadow). The floor is authored in TEXELS of
         // the landed level; NDC per texel = 1 / (6 * 2048): a level's depth range is 6x its extent

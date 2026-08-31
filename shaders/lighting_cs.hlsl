@@ -132,6 +132,10 @@ cbuffer PerFrame : register(b0)
     // S0.3: Legacy CSM debug visualization. 0 = off, 1 = tint by the RESOLVED cascade.
     // Always 0 in VSM mode (the CPU side forces it), so the branch below is dead there.
     uint csmDebugMode;
+    // S8: 0 = the legacy 3x3 SampleCmp box, 1 = soft-occlusion ramp + 4x4 Gather tent.
+    uint csmFilterMode;
+    // S8 knobs: x = receiver bias, y = sharpen (already in UE shader units), z = over-blur correct.
+    float4 csmFilterParams;
     // The sky specular block, mirroring compose's own fields so both passes agree by construction.
     // `skySpecMipCount` 0 also selects the raw-cube fallback path (see IblSkyRadiance).
     uint enableSkySpecular;
@@ -234,6 +238,19 @@ CsmParams MakeCsmParams()
     p.camPosWS     = camPosWS;
     p.camDirWS     = camDirWS;
     p.pcfRadius    = 1.0f;
+    // S8: the ramp width is 1 / (transition zone in NDC), and the zone we want is exactly the depth
+    // bias this cascade already carries -- shadowBiasNDC[c] = depthBiasInTexels * unitsPerTexel[c] /
+    // zRange[c], i.e. ALREADY proportional to the cascade's world texel, which is the proportionality
+    // UE gets from TransitionSize. So no new constant buffer field is needed for it.
+    [unroll]
+    for (int t = 0; t < 4; ++t)
+    {
+        p.transitionScale[t] = 1.0f / max(1e-6f, shadowBiasNDC[t]);
+    }
+    p.receiverBiasMin  = csmFilterParams.x;
+    p.sharpen          = csmFilterParams.y;
+    p.overBlurCorrect  = csmFilterParams.z;
+    p.useGatherPcf     = csmFilterMode;
     return p;
 }
 
@@ -255,7 +272,7 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade)
                                 invProj._11, clipmapUvNormal,
                                 clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
     }
-    return CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, P, N, ndl, outCascade);
+    return CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, N, ndl, outCascade);
 }
 
 // Assemble the caustics inputs; returns tint.w == 0 when the feature is off for this frame.

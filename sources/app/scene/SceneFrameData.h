@@ -9,6 +9,7 @@
 
 #include "core/math/Math.h"
 #include "app/scene/SceneView.h"
+#include "app/scene/SceneRenderConfig.h" // S8: CascadeShadowConfig, read by the lighting/glass CBs
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumClipmapLevels (Step 24d)
@@ -565,6 +566,9 @@ struct SceneFrameData
     Skybox* skybox = nullptr;
     const std::vector<std::unique_ptr<RenderableObjectBase>>* objects = nullptr;
     const DirectionalLight* dirLight = nullptr;
+    // S8: the CSM knobs the lighting pass needs (receiver bias / sharpen / over-blur). Same object
+    // the developer window edits, so a slider move reaches the shader the very next frame.
+    const CascadeShadowConfig* cascadeConfig = nullptr;
     ShadowGpuData* shadowGpu = nullptr; // Rung 0: GPU-driven shadow cull inputs/outputs
     VirtualShadowMap* vsm = nullptr;    // Rung 2: page pool + page table (Step 18; unused yet)
     const vfx::WindState* wind = nullptr; // W3: global wind, folded into the gbuffer per-view CB

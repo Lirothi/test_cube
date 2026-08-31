@@ -139,4 +139,13 @@ inline bool VsmActive() { return g_shadowMode == ShadowMode::VSM; }
 // what makes the tile-border fallback ring visible. Legacy-only; the VSM branch ignores it.
 enum class CsmDebugMode : std::uint32_t { Off = 0, CascadeTint = 1 };
 inline CsmDebugMode g_csmDebugMode = CsmDebugMode::Off;
+
+// S8 — Legacy CSM filter kernel.
+//   0 = the original 3x3 hardware-PCF box with its per-cascade radius shrink (A/B arm, fallback)
+//   1 = soft-occlusion ramp + 4x4 tent / 4 gathers   (UE Manual3x3PCF, their SHADOW_QUALITY 3)
+//   2 = soft-occlusion ramp + 6x6 tent / 9 gathers   (UE Manual5x5PCF, their SHADOW_QUALITY 4-5)
+// DEFAULT 2, because `r.ShadowQuality` defaults to 5 in Unreal and `ManualPCF` then selects
+// Manual5x5PCF — a stock UE runs the 6x6 kernel, which is why its CSM reads softer than a 4x4 one
+// at the same resolution. Matching the default is the point of the whole plan.
+inline uint32_t g_csmFilterMode = 2;
 } // namespace render

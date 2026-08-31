@@ -1,6 +1,7 @@
 #include "app/ui/DeveloperWindow.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -1942,10 +1943,43 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("Far edge of cascade 3 \xE2\x80\x94 the hard shadow terminator.\n"
                                       "Shrinking it is the cheapest way to buy texel density everywhere\n"
                                       "(no extra memory, no extra rasterization).");
-                ImGui::DragFloat4("Split distances (m)", csmCfg.sliceDistances.data(), 0.25f, 0.5f, 1000.0f, "%.1f");
+                ImGui::Checkbox("Auto splits (UE distribution)", &csmCfg.useUeSplitDistribution);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Far plane of cascades 0..3 in view space. BuildSplitScheme clamps them\n"
-                                      "monotonic and caps them at max distance, so out-of-order values are safe.");
+                    ImGui::SetTooltip("ON: author ONLY the max distance above; the three intermediate splits come from\n"
+                                      "UE's exponential distribution (ComputeAccumulatedScale, exponent below).\n"
+                                      "OFF: the hand-authored row is used.\n"
+                                      "The two schemes are stored SEPARATELY -- turning this on never overwrites the\n"
+                                      "custom distances, so the toggle is reversible and both are shown here.\n");
+
+                ImGui::BeginDisabled(!csmCfg.useUeSplitDistribution);
+                ImGui::SliderFloat("Distribution exponent", &csmCfg.cascadeDistributionExponent, 0.1f, 10.0f, "%.2f");
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE's CascadeDistributionExponent (default 3, clamp 0.1..10). Cascade weights are\n"
+                                      "exponent^i and a split sits at the running sum over the total: for exponent 3 and\n"
+                                      "4 cascades that is 1,3,9,27 of 40 = 2.5% / 10% / 32.5% / 100% of the range.\n"
+                                      "Higher = more resolution pulled toward the camera. UE substitutes 4 when a scene\n"
+                                      "has no valid precomputed lighting, i.e. the fully dynamic case.\n");
+
+                // Both schemes side by side. The row that is NOT driving is greyed rather than hidden,
+                // so the toggle never conceals the numbers it is not using -- nor destroys them.
+                ImGui::BeginDisabled(csmCfg.useUeSplitDistribution);
+                ImGui::DragFloat4("Split distances (m)", csmCfg.sliceDistances.data(), 0.25f, 0.5f, 1000.0f, "%.1f");
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Hand-authored far plane of cascades 0..3 in view space. BuildSplitScheme clamps them\n"
+                                      "monotonic and caps them at max distance, so out-of-order values are safe.\n"
+                                      "Greyed while auto splits drive the cascades -- the values are kept, not cleared.\n");
+                {
+                    const std::array<float, 4> ueSplits =
+                        csmCfg.ComputeUeSplitDistances(scene.CameraRef().GetZNear());
+                    ImGui::Text("UE auto splits (m):  %7.2f %7.2f %7.2f %7.2f",
+                        ueSplits[0], ueSplits[1], ueSplits[2], ueSplits[3]);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("What UE's distribution produces for the current max distance and exponent. Shown\n"
+                                          "whether or not the toggle is on, so the two schemes can be compared BEFORE\n"
+                                          "switching. A readout, not an editable control.\n");
+                }
 
                 ImGui::SeparatorText("Fit");
                 ImGui::SliderFloat("Overlap (texels)", &csmCfg.overlapInTexels, 0.0f, 8.0f, "%.2f");
@@ -1983,6 +2017,47 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Back to the compile-time defaults in SceneRenderConfig.h \xE2\x80\x94 the\n"
                                       "baseline every plan step is measured against.");
+
+                ImGui::SeparatorText("Filtering");
+                int csmFilter = static_cast<int>(render::g_csmFilterMode);
+                if (ImGui::SliderInt("Filter kernel", &csmFilter, 0, 2, csmFilter == 0 ? "3x3 box" : (csmFilter == 1 ? "4x4 tent (UE q3)" : "6x6 tent (UE q5, default)")))
+                    render::g_csmFilterMode = static_cast<uint32_t>(csmFilter);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("0 = the original 3x3 SampleCmp box with its per-cascade radius shrink (the A/B arm).\n"
+                                      "1 = soft-occlusion RAMP + 4x4 tent from 4 Gather quads -- UE's Manual3x3PCF.\n"
+                                      "2 = the same ramp + 6x6 tent from 9 gathers -- UE's Manual5x5PCF, and the DEFAULT,\n"
+                                      "    because r.ShadowQuality defaults to 5 in Unreal and ManualPCF selects 5x5 there.\n"
+                                      "The ramp's width is proportional to the cascade's world texel, so softness and\n"
+                                      "resolution drop by the SAME factor at a boundary; the kernel WIDTH is what sets the\n"
+                                      "absolute softness. A stock UE reads softer than a 4x4 tent for exactly that reason.\n");
+
+                ImGui::SliderFloat("Shadow filter sharpen", &csmCfg.shadowFilterSharpen, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE's per-light Shadow Filter Sharpen, same 0..1 artist range and same\n"
+                                      "default of 0 (= off). The shader receives x*7+1 and multiplies the raw\n"
+                                      "PCF ratio by it before saturating, so partial occlusion is pushed toward\n"
+                                      "0 or 1: the penumbra keeps its WIDTH but loses its gradient. 1.0 leaves a\n"
+                                      "kernel roughly as hard as no filtering at all.\n"
+                                      "Only affects the two tent kernels -- the 3x3 box arm never had it.");
+
+                ImGui::SliderFloat("Receiver bias", &csmCfg.csmReceiverBias, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE r.Shadow.CSMReceiverBias, default 0.9. Scales the soft-occlusion ramp\n"
+                                      "by how edge-on the receiver is to the light: at grazing angles a texel\n"
+                                      "spans much more depth, so the ramp has to widen or the surface\n"
+                                      "shadows itself. 0 removes the term entirely (acne on shallow ground),\n"
+                                      "1 is the widest ramp (peter-panning on those same slopes).\n"
+                                      "Only affects the two tent kernels.");
+
+                ImGui::Checkbox("PCF over-blur correction", &csmCfg.pcfOverBlurCorrection);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE's ApplyPCFOverBlurCorrection: square the resulting visibility.\n"
+                                      "A wide tent leaks light INTO the umbra, because every tap inside the\n"
+                                      "kernel votes equally regardless of how far the blocker is; squaring\n"
+                                      "darkens the mid-tones and pulls the shadow core back to solid while\n"
+                                      "leaving 0 and 1 untouched. UE apply it unconditionally to every\n"
+                                      "filtered shadow, so ON is the matching default.\n"
+                                      "Applied AFTER sharpen, in UE's order. Only affects the tent kernels.");
 
                 ImGui::SeparatorText("Debug");
                 bool csmTint = render::g_csmDebugMode == render::CsmDebugMode::CascadeTint;

@@ -69,6 +69,9 @@ cbuffer GlassView : register(b1)
     // P16.1: x = the pre-exposure every writer of scene colour applies. Glass writes in the
     // transparent pass, which runs AFTER compose, so compose's own scaling never reaches it.
     float4 preExposureParams;
+    // S8: x = 0 legacy 3x3 SampleCmp box, 1 = soft-occlusion ramp + 4x4 Gather tent. APPENDED at the
+    // tail on purpose -- inserting anywhere else shifts every offset after it.
+    float4 csmFilterMode;         // x = kernel mode, y = receiver bias, z = sharpen, w = over-blur
 };
 
 Texture2D SceneOpaque : register(t0);
@@ -213,9 +216,20 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
     p.camPosWS     = camPosSky.xyz;
     p.camDirWS     = normalize(camDirWS.xyz);
     p.pcfRadius    = 1.0f;
+    // S8: same derivation as lighting_cs -- shadowBiasNDC already scales with the cascade's world
+    // texel, so it IS the transition width. Glass must match the geometry beside it exactly.
+    [unroll]
+    for (int t = 0; t < 4; ++t)
+    {
+        p.transitionScale[t] = 1.0f / max(1e-6f, shadowBiasNDC[t]);
+    }
+    p.receiverBiasMin  = csmFilterMode.y;
+    p.sharpen          = csmFilterMode.z;
+    p.overBlurCorrect  = csmFilterMode.w;
+    p.useGatherPcf     = (uint)csmFilterMode.x;
 
     int cascade;
-    return CsmSampleShadow(p, ShadowAtlas, ShadowSampler, Pws, Nws, NdotL, cascade);
+    return CsmSampleShadow(p, ShadowAtlas, ShadowSampler, LinearSampler, Pws, Nws, NdotL, cascade);
 }
 
 float ShadowPCF3x3Array(Texture2DArray atlas, float3 uvw, float depth, float2 texel)
