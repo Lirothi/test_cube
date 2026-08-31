@@ -342,7 +342,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterMetaSrv() const { return caster
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::PerGroupSrv() const { return perGroup_.Srv(0); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::GroupLodMegaSrv() const { return groupLodMegaBuf_.Srv(0); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::GroupLodOverrideSrv(UINT f) const { return groupLodOverrideBuf_.Srv(f); }
-D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::PerViewGroupSrv() const { return perViewGroup_.Srv(0); }
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::PerGroupVgSrv(UINT f) const { return perGroupVg_.Srv(f); }
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::UnifiedInstanceSrv(UINT f) const
 {
@@ -445,6 +445,54 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
         casterLodPrev_ = casterLod_;
     }
     UploadCasterLods(renderer);
+    RefreshVirtualGroups(renderer);
+}
+
+// S3.6: bucket every caster into its VIRTUAL group (real group * kMaxShadowLods + receiver LOD) and
+// publish this frame's per-bucket visible-list bases. Done on the CPU because both inputs already
+// live here, and because the bucket is VIEW-INDEPENDENT: the caster LOD comes from the receiver, so
+// unlike the VSM scatter there is nothing per-view to decide. The prefix sum still totals count_,
+// which is why the visible list does NOT grow -- each caster occupies exactly one slot per view.
+void ShadowGpuData::RefreshVirtualGroups(Renderer* renderer)
+{
+    if (!renderer || numVirtualGroups_ == 0) { return; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return; }
+
+    vgCasterCount_.assign(numVirtualGroups_, 0u);
+    const std::uint32_t n = std::min<std::uint32_t>(count_,
+        static_cast<std::uint32_t>(std::min(casterGroupCpu_.size(), casterLod_.size())));
+    for (std::uint32_t c = 0; c < n; ++c)
+    {
+        const std::uint32_t g = casterGroupCpu_[c];
+        if (g >= numMeshGroups_) { continue; }
+        const std::uint32_t lod = casterLod_[c] & render::kCasterLodMask;
+        const std::uint32_t vg = g * render::kMaxShadowLods +
+            (lod < render::kMaxShadowLods ? lod : render::kMaxShadowLods - 1u);
+        ++vgCasterCount_[vg];
+    }
+
+    if (!EnsureRing(renderer, perGroupVg_, numVirtualGroups_, 4 * sizeof(std::uint32_t),
+                    L"ShadowGpuData.PerGroupVg"))
+    {
+        return;
+    }
+    auto* dst = reinterpret_cast<std::uint32_t*>(perGroupVg_.Region(f));
+    if (!dst) { return; }
+    std::uint32_t base = 0;
+    for (std::uint32_t vg = 0; vg < numVirtualGroups_; ++vg)
+    {
+        // Ranges are STATIC per (group, lod) -- groupLodMega_ already carries them, mesh-IB-relative:
+        // [.1] = start within that LOD's own index buffer, [.2] = index count.
+        const size_t o = static_cast<size_t>(vg) * 4u;
+        const std::uint32_t count = (o + 2 < groupLodMega_.size()) ? groupLodMega_[o + 2] : 0u;
+        const std::uint32_t start = (o + 1 < groupLodMega_.size()) ? groupLodMega_[o + 1] : 0u;
+        dst[vg * 4 + 0] = base;
+        dst[vg * 4 + 1] = count;
+        dst[vg * 4 + 2] = start;
+        dst[vg * 4 + 3] = vgCasterCount_[vg];
+        base += vgCasterCount_[vg];
+    }
 }
 
 // The override table's home is a PER-FRAME ring region: it is rewritten every frame, so writing it
@@ -497,7 +545,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     if (count_ == 0 || numMeshGroups_ == 0) { return dec; }
     if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return dec; }
     if (!bounds_.Valid() || !viewFrustums_.Valid() || !casterGroup_.Valid() || !perGroup_.Valid() ||
-        !perViewGroup_.Valid()) { return dec; }
+        !perGroupVg_.Valid()) { return dec; }
     if (!cullUavHeap_) { return dec; }
     if (ctx.renderer == nullptr || ctx.renderer->GetCurrentFrameIndex() >= render::kFrameCount) { return dec; }
     dec.active = true;
@@ -814,6 +862,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
 
     count_ = totalCount;
     numMeshGroups_ = numGroups;
+    numVirtualGroups_ = numMeshGroups_ * render::kMaxShadowLods; // S3.6: one bucket per (group, receiver LOD)
     numStaticGroups_ = staticGroups; // groups below this are static (LOD-biased); the rest are GI (LOD0)
 
     // (3) group id -> Mesh*: static groups from the first-seen map (B3: a mesh's submesh groups
@@ -931,6 +980,13 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             int lod = render::ShadowTierBaseLod(tier)
                     + ((nearTier && !render::g_shadowLodBiasNearTier) ? 0 : render::g_shadowLodBias);
             lod = lod < 0 ? 0 : (lod > lodCap ? lodCap : lod);
+            // S3.6: CSM CASCADES take no per-view LOD at all. UE has no per-cascade coarsening
+            // either -- r.Shadow.LODDistanceFactor.CascadeScale defaults to 0 and the shadow depth
+            // pass reuses CurrentView.PrimitivesLODMask, i.e. the LOD the CAMERA picked. Our caster
+            // LOD now comes from the receiver (casterLod_ -> virtual groups), so a tier curve on top
+            // could only push the caster COARSER than its receiver, which is the tent-smudge family.
+            // viewLod_ still serves VSM, which reads only the local (+4) and clipmap entries.
+            if (v < kCasc) { lod = 0; }
             viewLod_[v] = static_cast<std::uint32_t>(lod);
         }
     }
@@ -950,39 +1006,9 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // For a static submesh group, use the mesh's clamped view LOD; GI groups stay whole-buffer LOD0.
     // Layout mirrors the args: index = view * numMeshGroups_ + group. `base` (visible-list slice) is
     // view-independent but replicated per view so the cull-clear reads one struct.
-    std::vector<std::uint32_t> perViewGroup(
-        static_cast<size_t>(render::kMaxShadowViews) * std::max<std::uint32_t>(numMeshGroups_, 1u) * 4u, 0u);
-    for (std::uint32_t v = 0; v < render::kMaxShadowViews; ++v)
-    {
-        for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
-        {
-            std::uint32_t count = groupIndexCount[g]; // LOD0 default (GI groups + no-LOD meshes)
-            std::uint32_t start = groupStartIndex[g];
-            const Mesh* m = (g < groupMesh_.size()) ? groupMesh_[g] : nullptr;
-            if (m && g < staticGroups) // static submesh group -> per-view LOD
-            {
-                const auto it = meshToGroup.find(m);
-                const std::uint32_t s = (it != meshToGroup.end()) ? (g - it->second) : 0u;
-                const UINT lod = m->ClampExplicitLod(biasedLod(v, g));
-                const auto& subs = m->SubmeshesForLod(lod);
-                if (s < subs.size()) { count = subs[s].indexCount; start = subs[s].indexOffset; }
-                else                 { count = m->GetLodIndexCount(lod); start = 0u; }
-            }
-            const size_t o = (static_cast<size_t>(v) * numMeshGroups_ + g) * 4u;
-            perViewGroup[o + 0] = groupBase[g];
-            perViewGroup[o + 1] = count;
-            perViewGroup[o + 2] = start;
-            perViewGroup[o + 3] = 0u;
-        }
-    }
-    if (EnsureRing(renderer, perViewGroup_,
-            std::max<size_t>(static_cast<size_t>(render::kMaxShadowViews) * numMeshGroups_, 1),
-            4 * sizeof(std::uint32_t), L"ShadowGpuData.PerViewGroup") &&
-        numMeshGroups_ > 0)
-    {
-        std::memcpy(perViewGroup_.Region(0), perViewGroup.data(),
-                    static_cast<size_t>(render::kMaxShadowViews) * numMeshGroups_ * 4u * sizeof(std::uint32_t));
-    }
+    // S3.6: the per-(view, group) LOD range table is GONE. With the caster LOD coming from the
+    // receiver, the range depends on (group, lod) only -- the view axis carried no information,
+    // and the one place that read it indexed by group anyway (see shadow_cull_clear_cs).
 
     // --- Per (group, lod) draw ranges, mesh-IB-relative (the VSM setup CB's gGroupLodMega). Filled for
     // EVERY group/lod here so the non-mega fallback works; the mega block below adds the absolute mega
@@ -1009,6 +1035,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             groupLodMega_[o + 2] = count;
         }
     }
+
+    // S3.6 keeps a CPU copy: the per-frame virtual-group bucketing needs caster -> group without
+    // reading back the GPU buffer.
+    casterGroupCpu_ = casterGroupId;
 
     // Upload the static cull inputs (region 0; never rewritten after Rebuild). CasterGroup is sized
     // to the TOTAL count_ so Step 4's cull (numCasters=count_) can read the GI ids' group.
@@ -1191,7 +1221,8 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // Worst case: every caster visible in every view (visible list) and one draw per
     // (view, mesh-group) (args), one draw count per view. Still unused (no descriptors).
     const size_t numViews = render::kMaxShadowViews;
-    const size_t groups = std::max<size_t>(numMeshGroups_, 1);
+    // S3.6: the indirect args are indexed per (view, VIRTUAL group).
+    const size_t groups = std::max<size_t>(numVirtualGroups_, 1);
     const size_t casters = std::max<size_t>(count_, 1); // TOTAL (static + GI): visible-list + unified width
     // P12.1. This buffer USED to declare NON_PIXEL_SHADER_RESOURCE and drifted: --canonical-check
     // reported it off-canonical on some levels and not others, and flipping the label alone merely
@@ -1748,7 +1779,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     const UINT f = renderer->GetCurrentFrameIndex();
 
     const std::uint32_t numViews = render::kMaxShadowViews;
-    const std::uint32_t numGroups = numMeshGroups_;
+    const std::uint32_t numGroups = numVirtualGroups_; // S3.6: args are per (view, VIRTUAL group)
     // Step 4 (GI→VSM): when the GI folding path is active this frame, the cull covers ALL count_
     // casters (the scatter below fills the GI region first); otherwise only the static Nstatic (GI
     // dormant, drawn by the retained CPU tail). numCasters is also the per-view visible-list stride
@@ -1868,10 +1899,10 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
 
-    // Clear/init the per-(view, mesh-group) indirect args + per-view draw counts. Reads perViewGroup_
-    // so each view's args carry THAT view's shadow-LOD index count + start (per-view LOD, Legacy + Rung0).
+    // Clear/init the per-(view, VIRTUAL group) indirect args + per-view draw counts. Reads perGroupVg_:
+    // ranges are per (mesh group, receiver LOD) and therefore VIEW-INDEPENDENT (S3.6).
     RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCB,
-        { perViewGroup_.Srv(0) },
+        { perGroupVg_.Srv(f) },
         { cullUav_[f], cullUav_[2 * render::kFrameCount + f] },
         noSampler,
         numViews * numGroups, 1,
@@ -1880,7 +1911,8 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     // Cull: frustum-test every caster into the visible list + InstanceCounts. Reads bounds from the
     // unified buffer (Step 2) when built, else the upload ring (fallback).
     RecordComputeDispatch(renderer, cl, cullMat_.get(), cbSize, writeCB,
-        { BoundsReadSrv(f), viewFrustums_.Srv(f), casterGroup_.Srv(0), perGroup_.Srv(0) },
+        { BoundsReadSrv(f), viewFrustums_.Srv(f), casterGroup_.Srv(0), perGroupVg_.Srv(f),
+          CasterLodSrv(f) },
         { cullUav_[f], cullUav_[render::kFrameCount + f] },
         noSampler,
         numCasters, 1,
@@ -1950,19 +1982,28 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
 
     const UINT64 argRegionBase = static_cast<UINT64>(f) * indirectArgs_.regionBytes;
     const Mesh* boundMesh = nullptr; // B3: a mesh's submesh groups are contiguous — bind once
-    for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+    UINT boundLod = 0xFFFFFFFFu;
+    // S3.6: one draw per (view, VIRTUAL group) = (mesh group, receiver LOD). Buckets nobody landed
+    // in this frame are skipped on the CPU, so the kMaxShadowLods-fold of the group axis does NOT
+    // become a kMaxShadowLods-fold of ExecuteIndirect calls — only groups whose instances actually
+    // straddle two LODs cost a second draw.
+    for (std::uint32_t vg = 0; vg < numVirtualGroups_; ++vg)
     {
+        if (vg < vgCasterCount_.size() && vgCasterCount_[vg] == 0u) { continue; }
+        const std::uint32_t g = vg / render::kMaxShadowLods;
+        const std::uint32_t vgLod = vg % render::kMaxShadowLods;
         const Mesh* mesh = (g < groupMesh_.size()) ? groupMesh_[g] : nullptr;
         if (!mesh) { continue; }
         ID3D12Resource* vb = mesh->GetVertexBufferResource();
-        // Per-view shadow LOD: bind THIS view's shadow-LOD index buffer for static groups (the args'
-        // IndexCount/StartIndex were seeded from perViewGroup_ = this view+LOD's submesh ranges).
-        // GI groups (g >= numStaticGroups_) draw the whole LOD0 buffer, so keep LOD0. VB shared.
-        const UINT groupLod = (g < numStaticGroups_) ? mesh->ClampExplicitLod(ViewLodAt(viewSlot)) : 0u;
+        // The bucket's own LOD IS the receiver's LOD (UE's rule). GI groups have only LOD0 geometry
+        // registered, so they stay there. No per-view term: viewLod_ is 0 for cascades by S3.6, and
+        // the ranges the cull-clear seeded come from the same (group, lod) row, so IB and index
+        // range can never disagree -- which is exactly how they used to.
+        const UINT groupLod = (g < numStaticGroups_) ? mesh->ClampExplicitLod(vgLod) : 0u;
         ID3D12Resource* ib = mesh->GetLodIndexBufferResource(groupLod);
         if (!vb || !ib) { continue; }
 
-        if (mesh != boundMesh)
+        if (mesh != boundMesh || groupLod != boundLod)
         {
             D3D12_VERTEX_BUFFER_VIEW vbv{};
             vbv.BufferLocation = vb->GetGPUVirtualAddress();
@@ -1976,13 +2017,14 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
             ibv.Format = mesh->GetIndexFormat();
             cl->IASetIndexBuffer(&ibv);
             boundMesh = mesh;
+            boundLod = groupLod;
         }
 
         // One indirect draw per (view, mesh-group). InstanceCount (from the cull) may be 0 -> a
         // free no-op, so empty groups cost nothing beyond the binding. B3: the args carry the
         // group's submesh StartIndexLocation (seeded by the cull-clear from PerGroup).
         const UINT64 argOffset = argRegionBase +
-            static_cast<UINT64>(viewSlot * numMeshGroups_ + g) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+            static_cast<UINT64>(viewSlot * numVirtualGroups_ + vg) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
         renderer->ExecuteIndirect(cl, sig, 1, indirectArgs_.buffer.Get(), argOffset, nullptr, 0);
     }
     return true;
@@ -2132,6 +2174,7 @@ void ShadowGpuData::Reset()
     staticCount_ = 0;
     viewFrustumCount_ = 0;
     numMeshGroups_ = 0;
+    numVirtualGroups_ = 0;
     cpuInstances_.clear();
     cpuBounds_.clear();
     pending_.clear();

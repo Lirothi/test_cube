@@ -272,7 +272,9 @@ public:
     // (mega off) and the Legacy per-view path. `cullView` indexes the cull-view layout; clamp per mesh
     // at the call site via Mesh::ClampExplicitLod. Returns 0 if out of range.
     std::uint32_t ViewLodAt(std::uint32_t cullView) const { return cullView < viewLod_.size() ? viewLod_[cullView] : 0u; }
-    D3D12_CPU_DESCRIPTOR_HANDLE PerViewGroupSrv() const;
+    // S3.6: per VIRTUAL group (group * kMaxShadowLods + receiverLod). Per-frame: the .x base moves
+    // as instances migrate between LODs. {base, indexCount, lodRelStartIndex, casterCount}.
+    D3D12_CPU_DESCRIPTOR_HANDLE PerGroupVgSrv(UINT frameIndex) const;
 
 private:
     // One upload-heap structured buffer of kFrameCount regions x `capacity` elements of
@@ -336,6 +338,8 @@ public:
     // by one frame at every LOD transition. Takes the renderer because it UPLOADS: the tables land
     // in this frame's ring regions, and Scene calls this after UpdateForFrame, so there is no later
     // per-frame hook to defer to.
+    // S3.6: per-frame virtual-group bucketing + visible-list bases (see the .cpp).
+    void RefreshVirtualGroups(Renderer* renderer);
     void RefreshCasterLods(Renderer* renderer,
                            const std::vector<std::unique_ptr<RenderableObjectBase>>& objects,
                            const Math::float3& cameraPos);
@@ -372,7 +376,14 @@ private:
     Ring casterGroup_;   // per-caster mesh-group id (uint); static, region 0 only
     Ring casterMeta_;    // per-caster meta (uint: bit0=dynamic, bits1+=object slot count on its FIRST slot); static, region 0 only
     Ring perGroup_;      // per-group {base, indexCount, startIndex, 0} (uint4); static, region 0 only
-    Ring perViewGroup_;  // per (view, group) {base, indexCount@viewLOD, startIndex@viewLOD, 0} (uint4);
+    // S3.6: the caster==receiver LOD contract for the Legacy/Rung-0 path. A caster's LOD comes from
+    // its RECEIVER (casterLod_), exactly as UE takes it from CurrentView.PrimitivesLODMask, so it is
+    // the SAME for every shadow view — which is why the bucketing is done once on the CPU here
+    // rather than per view in a scatter (VSM needs the latter only because it kept a per-level floor).
+    Ring perGroupVg_;                        // per virtual group, PER FRAME
+    std::uint32_t numVirtualGroups_ = 0;     // numMeshGroups_ * render::kMaxShadowLods
+    std::vector<std::uint32_t> casterGroupCpu_; // caster -> REAL group id (Rebuild's mapping, kept)
+    std::vector<std::uint32_t> vgCasterCount_;  // per virtual group, this frame (0 => skip the draw)
                          // static, region 0. Seeds the cull-clear args with each view's LOD (Legacy + Rung0).
 
     UavRing indirectArgs_;   // per (view, mesh-group) D3D12_DRAW_INDEXED_ARGUMENTS

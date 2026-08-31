@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "rendering/core/RenderConstants.h"
+#include "rendering/meshes/LodSelect.h" // S3.6: render::EffectiveDrawLod (receiver LOD for casters)
 
 #include "app/camera/Camera.h"
 #include "app/Systems.h"
@@ -250,6 +251,28 @@ void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext c
 }
 
 // ---- Pass_CSM + Pass_SpotShadows + Pass_PointShadows ----
+namespace
+{
+    // S3.6: UE's rule for the CPU shadow paths. A caster draws at the LOD its RECEIVER draws -- the
+    // one the CAMERA picked (UE: FProjectedShadowInfo::CalcAndUpdateLODToRender starts from
+    // CurrentView.PrimitivesLODMask, and CurrentView is a camera view). These loops used to pass the
+    // CASCADE INDEX as the LOD, which is the mismatch the whole contract exists to remove: a caster
+    // FINER than its receiver puts the coarse receiver inside the finer caster's hull and it fails
+    // its own depth test (the "black squares" family).
+    //
+    // Recomputed from the camera rather than read off the object, exactly like
+    // ShadowGpuData::RefreshCasterLods: a stored per-object LOD is stale for anything the camera did
+    // not select this frame, and these loops iterate the SHADOW view's visible set, not the camera's.
+    UINT ReceiverCasterLod(const RenderableObjectBase* obj, const Math::float3& cameraPos)
+    {
+        const RenderableObject* ro = obj ? obj->AsRenderableObject() : nullptr;
+        const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
+        if (!mesh) { return 0u; }
+        return mesh->ClampExplicitLod(
+            static_cast<UINT>(render::EffectiveDrawLod(ro->ComputeReceiverLodTier(cameraPos))));
+    }
+} // namespace
+
 void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     const std::array<SceneView, kCascades>& cascadeViews,
     std::uint32_t atlasPoint, bool indirect)
@@ -280,7 +303,11 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     // Step 7: the compiled barriers travel with the log — a fan-out worker must emit its
     // pass's barriers too, or the flip loses exactly the passes that record in parallel.
     Renderer::CompiledBarriers* const cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
-    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind, cmpLog, cmpBarriers](std::size_t cascadeIndex)
+    // S3.6: captured by value — the lambda has no `this`, and every caster in it needs the camera
+    // position to resolve its RECEIVER's LOD.
+    const Math::float3 csmCamPos = frame_->camera ? frame_->camera->GetPosition()
+                                                  : Math::float3(0.0f, 0.0f, 0.0f);
+    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind, cmpLog, cmpBarriers, csmCamPos](std::size_t cascadeIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
         Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
@@ -316,20 +343,22 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
                 // cast via the indirect cull/scatter like everything else, so skip them here. Otherwise
                 // (flag off, over the group cap, or scatter PSO failure) draw them through their own
                 // instanced shadow path so they still cast — IsGiFoldedActive encodes exactly that.
-                const UINT giLod = static_cast<UINT>(cascadeIndex);
+                // GI casters register LOD0 geometry only (their mega rows past lod 0 are empty),
+                // so LOD0 is both the receiver's and the only valid choice -- NOT the cascade index.
+                const UINT giLod = 0u;
                 for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, giLod); }
                 for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, giLod); }
             }
             else
             {
-                // Step 6c: far cascades cast coarse LODs (texels are huge there; silhouette error
-                // invisible). Cascade 0 (near, sharp shadows) stays full detail. Mesh clamps.
-                const UINT shadowLod = static_cast<UINT>(cascadeIndex);
+                // S3.6: per-object receiver LOD (see ReceiverCasterLod). Was the cascade index.
+                const Math::float3& camPos = csmCamPos;
                 for (auto* obj : opaqueSimple)
                 {
                     if (obj)
                     {
-                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod, /*chunkCameraLods=*/true);
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true);
                     }
                 }
 
@@ -337,7 +366,8 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
                 {
                     if (obj)
                     {
-                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod, /*chunkCameraLods=*/true);
+                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true);
                     }
                 }
             }
@@ -370,12 +400,15 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             GPU_SCOPE(t.cl, ProfilerScopes::kPassCSM);
             renderer->BindShadowTarget(t.cl, static_cast<int>(idx), /*clear=*/false);
 
-            const UINT shadowLod = static_cast<UINT>(idx); // Step 6c: cascade-index LOD floor
+            // S3.6: per-object receiver LOD (see ReceiverCasterLod). Was the cascade index.
+            const Math::float3 camPos = frame_->camera ? frame_->camera->GetPosition()
+                                                       : Math::float3(0.0f, 0.0f, 0.0f);
             for (auto* obj : opaqueSimple)
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod, /*chunkCameraLods=*/true);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true);
                 }
             }
 
@@ -383,7 +416,8 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, shadowLod, /*chunkCameraLods=*/true);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true);
                 }
             }
         }

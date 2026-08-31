@@ -5,7 +5,7 @@
 // indirect draw args consumed later by ExecuteIndirect (Step 6); nothing draws from it yet.
 #define SHADOW_CULL_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer CullParams : register(b0)
@@ -29,7 +29,14 @@ struct ViewFrustum
 StructuredBuffer<CasterBounds> Bounds      : register(t0);
 StructuredBuffer<ViewFrustum>  Frustums    : register(t1);
 StructuredBuffer<uint>         CasterGroup : register(t2); // per-caster mesh-group id
-StructuredBuffer<uint4>        PerGroup    : register(t3); // x = base offset within a view's region
+StructuredBuffer<uint4>        PerGroup    : register(t3); // per VIRTUAL group; x = base offset
+// S3.6: the LOD the caster's RECEIVER draws this frame (bit 7 = chunk EXACT, irrelevant here -- the
+// bucket is that LOD either way). This is what keeps a caster from being FINER than its receiver,
+// which is UE's rule: the shadow depth pass reuses the LOD the CAMERA picked for that primitive.
+StructuredBuffer<uint>         CasterLod   : register(t4);
+
+static const uint kMaxShadowLods = 4u;   // must match render::kMaxShadowLods
+static const uint kCasterLodMask = 0x0Fu;
 
 RWByteAddressBuffer      Args        : register(u0); // InterlockedAdd on InstanceCount
 RWStructuredBuffer<uint> VisibleList : register(u1); // appended caster ids
@@ -62,7 +69,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     CasterBounds b = Bounds[caster];
     float3 c = b.center.xyz;
     float3 e = b.halfExtents.xyz;
-    uint g = CasterGroup[caster];
+    // Real mesh group -> VIRTUAL group (group * kMaxShadowLods + receiver LOD). The bucket is the
+    // same for every shadow view, so it is chosen once here instead of per view in a scatter.
+    uint lod = CasterLod[caster] & kCasterLodMask;
+    if (lod >= kMaxShadowLods) { lod = kMaxShadowLods - 1u; }
+    uint g = CasterGroup[caster] * kMaxShadowLods + lod;
     uint base = PerGroup[g].x;
 
     for (uint v = 0; v < gNumViews; ++v)

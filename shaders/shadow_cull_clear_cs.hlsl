@@ -36,6 +36,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     uint v = idx / gNumGroups;
     uint g = idx % gNumGroups;
+    // S3.6: the bound buffer is now perGroupVg_ -- per VIRTUAL group (group * kMaxShadowLods +
+    // receiver LOD), which is VIEW-INDEPENDENT, so indexing by the group alone is correct here.
+    // It was NOT before: the buffer was perViewGroup_, laid out (view * numGroups + group), and
+    // this same index handed EVERY view cascade 0's index range while the draw bound that view's
+    // own LOD index buffer. Measured at ~6.5% of the frame. The view axis is gone now, not
+    // papered over -- the LOD moved into the group id.
     uint4 pg = PerGroup[g];
 
     uint base = idx * kArgStride;

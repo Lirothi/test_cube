@@ -2055,38 +2055,40 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("ON: GPU-instanced objects cast shadows in VSM (and via the indirect path in\n"
                                       "Legacy), dropping their CPU RenderShadow tail. OFF: Legacy CPU tail only (no VSM).");
 
-                // Shadow LOD bias applies to BOTH Legacy cascades and VSM (it shifts the per-view caster
-                // LOD the shadow passes rasterize), so it lives OUTSIDE the VSM-only disabled block below.
-                // A change triggers a GPU-idle caster rebuild (Scene::ReconcileShadowLodBias) next frame.
-ImGui::SliderInt("Shadow LOD bias", &render::g_shadowLodBias, -2, 3);
-                ImGui::Checkbox("Bias the NEAREST tier too", &render::g_shadowLodBiasNearTier);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Default OFF. The bias shifts the TIER curve, but clipmap level 0 and the\n"
-                                      "local lights (which are pinned at tier 0) have no distance to hide a\n"
-                                      "coarser caster behind, so biasing them lands as self-shadow blobs on thin\n"
-                                      "shells. Measured on demo.json's tent, 5 interleaved samples: dark canvas\n"
-                                      "pixels 2698 with this OFF vs 3996 ON (Legacy CSM floor is 1168), for about\n"
-                                      "+0.2 ms. Turn it on to get those 0.2 ms back in a scene with no thin\n"
-                                      "shells near the camera. A change rebuilds the caster tables at GPU idle.");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("ADDITIVE offset on the per-view shadow LOD. Each shadow view (CSM cascade /\n"
-                                      "VSM clipmap level / local light) already picks a base LOD by its tier (near =\n"
-                                      "fine, far = coarse); this shifts the whole curve. 0 = the tier curve alone;\n"
-                                      "+ = coarser everywhere (cheaper), - = sharper. Shadows don't resolve fine\n"
-                                      "geometry, so coarser is usually invisible. Changing it rebuilds casters (a hitch).");
-
-                ImGui::SliderInt("Shadow tiers per LOD", &render::g_shadowLodTierStride, 1, 8);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("How many consecutive shadow-view tiers share one caster mesh LOD.\n"
-                                      "1 = original aggressive 0,1,2,3 curve; 2 = 0,0,1,1,2,2 and avoids\n"
-                                      "changing caster geometry at every VSM clip boundary. Shadow LOD bias\n"
-                                      "is added afterwards. Applies to CSM cascades too; changing it rebuilds\n"
-                                      "casters (a hitch).");
-
                 // (Chunked-terrain LOD selection moved to the "LOD" tab — it is a camera-LOD
                 // control, not a shadow one; the caster follows the drawn LOD by construction.)
 
                 ImGui::BeginDisabled(!render::VsmActive());
+
+                // S3.6: these two used to live OUTSIDE this block because they also applied to the
+                // Legacy cascades. They no longer do: the Legacy/Rung-0 caster LOD now comes from the
+                // RECEIVER (UE's rule), so viewLod_ -- the only thing these knobs feed -- is zeroed for
+                // cascades and is not read by the Legacy draw at all. A control that claims a scope it
+                // does not have is worse than no control, hence the move and the renames.
+                ImGui::SliderInt("Shadow LOD bias (VSM only)", &render::g_shadowLodBias, -2, 3);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ADDITIVE offset on the per-view shadow LOD, VSM ONLY (clipmap levels plus\n"
+                                      "the local lights, which are pinned at tier 0). Each view picks a base LOD by\n"
+                                      "its tier (near = fine, far = coarse); this shifts the whole curve. 0 = the\n"
+                                      "tier curve alone; + = coarser everywhere (cheaper), - = sharper.\n"
+                                      "Legacy CSM ignores it: its casters draw at their RECEIVER's LOD.\n"
+                                      "Changing it rebuilds the caster tables at GPU idle (a hitch).\n");
+
+                ImGui::Checkbox("Bias the NEAREST tier too (VSM only)", &render::g_shadowLodBiasNearTier);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Default OFF. The bias shifts the TIER curve, but clipmap level 0 and the local\n"
+                                      "lights (pinned at tier 0) have no distance to hide a coarser caster behind, so\n"
+                                      "biasing them lands as self-shadow blobs on thin shells. Measured on demo.json's\n"
+                                      "tent, 5 interleaved samples: dark canvas pixels 2698 OFF vs 3996 ON, ~+0.2 ms.\n"
+                                      "A change rebuilds the caster tables at GPU idle.\n");
+
+                ImGui::SliderInt("Shadow tiers per LOD (VSM only)", &render::g_shadowLodTierStride, 1, 8);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How many consecutive shadow-view tiers share one caster mesh LOD.\n"
+                                      "1 = the aggressive 0,1,2,3 curve; 2 = 0,0,1,1,2,2, which avoids changing caster\n"
+                                      "geometry at every VSM clip boundary. The bias above is added afterwards.\n"
+                                      "VSM only -- Legacy CSM has no per-view LOD curve at all.\n"
+                                      "Changing it rebuilds the caster tables (a hitch).\n");
 
                 ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist, 1.0f, 40.0f, "%.1f");
                 if (ImGui::IsItemHovered())
