@@ -20,6 +20,7 @@
 #include "rendering/renderables/GBufferRenderable.h" // C2: per-slot MaterialData accessor
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/IInstanceable.h"
+#include "rendering/shadows/ShadowSettings.h"
 #include "vfx/WindState.h" // W8: g_windFadeStart/End (distance-fade mover re-check)
 
 // ---- Ring: upload-heap kFrameCount-region structured buffer ----------------
@@ -1485,7 +1486,12 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         gd.shaderFile = L"shaders/shadow_indirect_csm.hlsl";
         gd.vsEntry = "VSMain";
         gd.psEntry = "PSMain";
-        gd.inputLayoutKey = "PosOnly_InstCasterId";
+        // S6: the two ATLAS PSOs (Legacy CSM cascades, spot, point) carry the vertex normal and
+        // the SHADOW_DEPTH_BIAS permutation. The four VSM PSOs below deliberately do not -- each
+        // starts from a gd.defines.clear() and the position-only layout, so the VSM page render
+        // fetches position alone and this step costs it nothing at all.
+        gd.defines.emplace_back("SHADOW_DEPTH_BIAS", "1");
+        gd.inputLayoutKey = "PosNrm_InstCasterId";
         gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         gd.numRT = 0;
         gd.dsvFormat = DXGI_FORMAT_D16_UNORM;
@@ -1501,7 +1507,7 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         // PSO serves the whole set and the single-ExecuteIndirect structure stays). CULL_NONE:
         // masked foliage is authored double-sided, and depth-only backface culling would drop
         // casters. Failure is non-fatal — masked groups just cast solid shadows.
-        gd.inputLayoutKey = "PosUV_InstCasterId";
+        gd.inputLayoutKey = "PosNrmUV_InstCasterId";
         gd.defines.emplace_back("SHADOW_MASKED", "1");
         gd.raster.CullMode = D3D12_CULL_MODE_NONE;
         indirectShadowMaskedMat_ = mm->GetOrCreateGraphics(renderer, gd);

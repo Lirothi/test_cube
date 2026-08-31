@@ -36,6 +36,7 @@
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/shadows/VirtualShadowMap.h"
+#include "rendering/shadows/ShadowSettings.h"
 #include "vfx/WindState.h"
 
 #include "app/scene/SceneRenderInternal.h"

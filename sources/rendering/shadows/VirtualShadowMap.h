@@ -13,6 +13,7 @@
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/ResourceDeclarations.h"
 
+#include "rendering/shadows/ShadowSettings.h"
 class Renderer;
 class Material;
 class Camera;

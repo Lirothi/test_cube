@@ -53,6 +53,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
+#include "rendering/shadows/ShadowSettings.h"
 #if WITH_EDITOR
 #include "editor/EditorController.h"
 #endif
@@ -276,13 +277,22 @@ namespace
         if (setting == "lod.bound2")  { render::g_lodBound2 = std::max(0.5f, value); return true; }
         if (setting == "lod.fadeBand") { render::g_lodFadeBand = std::clamp(value, 0.0f, 0.35f); return true; }
         // S8 A/B lever: 1 = soft ramp + Gather tent (default), 0 = the legacy 3x3 SampleCmp box.
-        if (setting == "csm.filterMode") { render::g_csmFilterMode = (uint32_t)std::clamp((int)value, 0, 2); return true; }
+        if (setting == "csm.filterMode") { scene.CascadeConfig().filterMode = (uint32_t)std::clamp((int)value, 0, 2); return true; }
         // The three filter knobs beside the kernel selector, so a softness A/B is a command line.
         // Artist units here, exactly as the sliders show them: the *7+1 mapping to shader units
         // happens once, on the CPU, where UE do it too.
         if (setting == "csm.sharpen") { scene.CascadeConfig().shadowFilterSharpen = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "csm.receiverBias") { scene.CascadeConfig().csmReceiverBias = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "csm.overBlurCorrect") { scene.CascadeConfig().pcfOverBlurCorrection = value != 0.0f; return true; }
+        // S6: UE's three legacy-CSM bias cvars.
+        if (setting == "csm.slopeScale") { scene.CascadeConfig().slopeScale = std::max(0.0f, value); return true; }
+        if (setting == "csm.maxSlope") { scene.CascadeConfig().maxSlope = std::max(0.0f, value); return true; }
+        if (setting == "csm.depthBias")  { scene.CascadeConfig().depthBiasInTexels  = std::max(0.0f, value); return true; }
+        if (setting == "csm.normalBias") { scene.CascadeConfig().normalBiasInTexels = std::max(0.0f, value); return true; }
+        // The Ctrl-key toggle, headless. Two draw paths write the SAME atlas (GPU-driven indirect
+        // vs the CPU object walk) and S6 has to bias both identically -- that is only checkable
+        // if a capture can select the path.
+        if (setting == "shadow.indirect") { render::g_indirectShadowsEnabled = value != 0.0f; return true; }
         if (setting == "lod.enabled") { render::g_lodEnabled = value != 0.0f; return true; }
         if (setting == "lod.forced")  { render::g_forcedLod = std::clamp((int)value, -1, 3); return true; }
         // LOD selection debug view (dev "LOD" tab). 0 off, 1 tier colours, 2 apparent-triangle-size

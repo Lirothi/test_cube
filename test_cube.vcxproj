@@ -546,6 +546,7 @@
     <ClInclude Include="sources/rendering/renderables/RenderableObject.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h" />
     <ClInclude Include="sources/rendering/shadows/ShadowGpuData.h" />
+    <ClInclude Include="sources/rendering/shadows/ShadowSettings.h" />
     <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h" />
     <ClInclude Include="sources/rendering/RenderLayers.h" />
     <ClInclude Include="sources/text/FontAtlas.h" />
@@ -632,6 +633,7 @@
     <None Include="shaders\utils.hlsli" />
     <None Include="shaders\caustics.hlsli" />
     <None Include="shaders\csm_sample.hlsli" />
+    <None Include="shaders\shadow_depth_common.hlsli" />
     <None Include="shaders\terrain_tiling.hlsli" />
     <None Include="shaders\rt_geometry.hlsli" />
     <None Include="shaders\rt_lights.hlsli" />

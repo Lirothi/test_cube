@@ -61,6 +61,26 @@
     "DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 #endif
 
+#include "shadow_depth_common.hlsli"
+
+// SHADOW_DEPTH_BIAS (S6) is its OWN permutation, not a runtime branch, and that is the whole point:
+// the slope term needs the caster NORMAL, and fetching one costs +12 B per vertex on a path that
+// also draws every VSM page. The VSM PSOs (both the VSM_PAGE single draw and the pool-format loop
+// twins) are simply built without this define and keep the position-only input layout, so they pay
+// EXACTLY nothing -- no fetch, no ALU, not even a branch. The plan had one shared layout plus a
+// runtime gate; the permutation already existed, so this is strictly cheaper and provable by
+// looking at which layout each PSO binds (ShadowGpuData::EnsurePipelines).
+#ifndef SHADOW_DEPTH_BIAS
+#define SHADOW_DEPTH_BIAS 0
+#endif
+#if SHADOW_DEPTH_BIAS
+#define SHADOW_NORMAL_IN  float3 N : NORMAL;   // per-vertex, offset 12 of VertexPNTUV (slot 0)
+#define SHADOW_VS_NORMAL(i) (i).N
+#else
+#define SHADOW_NORMAL_IN
+#define SHADOW_VS_NORMAL(i) float3(0.0f, 0.0f, 1.0f)
+#endif
+
 // Matches render::InstancePerObject (224 bytes) / the InstanceArray element in gbuffer_common.
 // W3 grew it 208 -> 224 to add windStrength; the tail (emissive + pad) is unused by the shadow
 // pass, so it is aliased as padding. W5 reads `windStrength` here to sway the shadow.
@@ -184,17 +204,31 @@ cbuffer PerView : register(b1)
     float  windSwayFreq;  // 212
     float  windGustMul;   // 216
     float  windPrevGustMul; // 220 (unused: depth-only, but kept layout-identical to gbuffer)
+    // S6: shadow-depth bias params, 224..239. Zero everywhere except a Legacy CSM cascade with
+    // `depthBiasAtWrite` on; ApplyShadowDepthBias early-outs on zero.
+    float  shadowConstBias;   // 224
+    float  shadowSlopeBias;   // 228
+    float  shadowMaxSlope;    // 232
+    float  shadowClampNear;   // 236 (S7)
 };
 
-inline float4 WindTransformH(float3 objPos, float4x4 world, float4 windWeights,
+inline float4 WindTransformH(float3 objPos, float3 objNormal, float4x4 world, float4 windWeights,
                              float windStrengthValue, float foliageValue, float trunkStiffValue,
                              float leafScaleValue)
 {
-    return WindTransformCore(objPos, world, windWeights, windStrengthValue, foliageValue,
-                             trunkStiffValue, leafScaleValue, viewProj,
-                             float4(windTime, windPrevTime, windDirXZ),
-                             float4(windSwayAmp, windSwayFreq, windGustMul, windPrevGustMul),
-                             float4(0.0f, 0.0f, 0.0f, 0.0f)); // no falloff on the legacy path
+    const float4 H = WindTransformCore(objPos, world, windWeights, windStrengthValue, foliageValue,
+                                       trunkStiffValue, leafScaleValue, viewProj,
+                                       float4(windTime, windPrevTime, windDirXZ),
+                                       float4(windSwayAmp, windSwayFreq, windGustMul, windPrevGustMul),
+                                       float4(0.0f, 0.0f, 0.0f, 0.0f)); // no falloff on the legacy path
+#if SHADOW_DEPTH_BIAS
+    // S6. Wind has already moved the vertex; the normal is NOT re-oriented by the sway, exactly as
+    // the gbuffer leaves it -- a swayed leaf's lighting normal and its shadow bias then agree.
+    return ApplyShadowDepthBias(H, mul(objNormal, (float3x3)world), viewProj,
+                                float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear));
+#else
+    return H;
+#endif
 }
 
 #endif // VSM_PAGE
@@ -213,6 +247,7 @@ SamplerState gMaskSmp        : register(s0);
 struct VSInMasked
 {
     float3 P        : POSITION;  // per-vertex (slot 0)
+    SHADOW_NORMAL_IN             // S6, only in the SHADOW_DEPTH_BIAS permutation
     float2 UV       : TEXCOORD;  // per-vertex, offset 40 of VertexPNTUV (slot 0)
     float4 WIND     : COLOR0;    // per-vertex, offset 48 — the W7.2 baked wind weights
     uint   casterId : CASTERID;  // per-instance, visible-list stream (slot 1)
@@ -253,8 +288,8 @@ VSOutMasked VSMain(VSInMasked i)
 #else
     const uint cid = i.casterId;
     const InstancePerObject ip = Instances[cid];
-    o.H = WindTransformH(i.P, ip.world, i.WIND, ip.windStrength, ip.windFoliage, ip.windTrunkStiff,
-                         ip.windLeafScale);
+    o.H = WindTransformH(i.P, SHADOW_VS_NORMAL(i), ip.world, i.WIND, ip.windStrength, ip.windFoliage,
+                         ip.windTrunkStiff, ip.windLeafScale);
 #endif
     o.UV = i.UV;
     const uint2 gm = GroupMask[CasterGroup[cid]];
@@ -276,6 +311,7 @@ void PSMain(PSInMasked i)
 struct VSInIndirect
 {
     float3 P        : POSITION;  // per-vertex, from the mesh vertex buffer (slot 0)
+    SHADOW_NORMAL_IN             // S6, only in the SHADOW_DEPTH_BIAS permutation
     float4 WIND     : COLOR0;    // per-vertex, offset 48 — the W7.2 baked wind weights
     uint   casterId : CASTERID;  // per-instance, from the visible-list stream (slot 1)
 };
@@ -303,8 +339,8 @@ VSOutD VSMain(VSInIndirect i)
     PagePlace(page, hLocal, o.H, o.CD);
 #else
     const InstancePerObject ip = Instances[i.casterId];
-    o.H = WindTransformH(i.P, ip.world, i.WIND, ip.windStrength, ip.windFoliage, ip.windTrunkStiff,
-                         ip.windLeafScale);
+    o.H = WindTransformH(i.P, SHADOW_VS_NORMAL(i), ip.world, i.WIND, ip.windStrength, ip.windFoliage,
+                         ip.windTrunkStiff, ip.windLeafScale);
 #endif
     return o;
 }

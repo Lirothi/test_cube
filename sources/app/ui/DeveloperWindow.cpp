@@ -26,6 +26,7 @@
 #include "rendering/debug/LodDebugView.h"
 #include "rendering/renderables/InstanceTypes.h"
 #include "rendering/shadows/VirtualShadowMap.h"
+#include "rendering/shadows/ShadowSettings.h"
 #include "ocean/OceanSimulation.h"
 #include "text/TextManager.h"
 
@@ -2001,17 +2002,75 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "(and the D16 step) in the readout. Drop it to 0 and watch tall casters'\n"
                                       "shadows get clipped \xE2\x80\x94 that is the problem pancaking exists to solve.");
 
-                ImGui::SeparatorText("Bias");
+                // UE's three legacy-CSM bias cvars first, then the one knob that is OURS. Split in
+                // two on purpose: the user could not tell which of the four numbers were a
+                // transcription and which were invented here.
+                // Exactly UE's three legacy-CSM bias cvars, nothing else. The receiver normal
+                // offset that used to sit here is deleted: UE has no such term, and it only
+                // existed to cover a depth-bias budget that was a quarter of theirs.
+                // The three that decide ACNE vs PETER-PANNING. Everything here is measured on
+                // wind_test at the user camera; see docs/csm_improvement_plan.md S6.
+                ImGui::SeparatorText("Bias \xE2\x80\x94 depth pass");
+                ImGui::SliderFloat("Depth bias (texels)", &csmCfg.depthBiasInTexels, 0.0f, 12.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("WHAT IT DOES: pushes every caster AWAY from the sun when its depth is written,\n"
+                                      "by this many cascade texels. Uniform - it does not care how the surface is angled.\n"
+                                      "\n"
+                                      "RAISE to kill acne. COST: peter-panning, i.e. shadows detach from what casts them.\n"
+                                      "\n"
+                                      "Measured here: acne collapses between 0.5 (79% of lit pixels) and 1.0 (0.03%), then\n"
+                                      "stays FLAT to 7.0 - so above ~1 it buys NOTHING but peter-panning, which keeps\n"
+                                      "growing (shadow lift -0.81 at 1.0, +0.60 at 1.5, +3.13 at 5.0).\n"
+                                      "\n"
+                                      "[r.Shadow.CSMDepthBias = 10] Their 10 is 5.00 here: their bias scales by\n"
+                                      "radius/resolution, our texel is 2*radius/resolution, exactly twice theirs. We ship\n"
+                                      "1.50 because we measured this scene; they ship 10 to cover every scene.\n"
+                                      "SIDE EFFECT: this number also sets the penumbra WIDTH (UE derive TransitionSize from\n"
+                                      "the same expression), so raising it softens shadow edges as well.");
+                ImGui::SliderFloat("Slope scale", &csmCfg.slopeScale, 0.0f, 8.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("WHAT IT DOES: adds EXTRA depth push, proportional to tan(angle between the surface\n"
+                                      "and the sun) - so a wall raking the light gets more, a surface facing it gets none.\n"
+                                      "Total push = depthBias * (1 + this * slope).\n"
+                                      "\n"
+                                      "THIS IS THE KNOB THAT SEPARATES THE TWO PROBLEMS. Acne only happens where the light\n"
+                                      "rakes the surface; peter-panning is only visible where it does not. Spending here\n"
+                                      "instead of on Depth bias buys acne protection that costs nothing where you can see it.\n"
+                                      "It needs the CASTER's normal, which only the depth pass has - the sampler cannot\n"
+                                      "do this at all.\n"
+                                      "\n"
+                                      "0 = flat bias everywhere. [r.Shadow.CSMSlopeScaleDepthBias = 3]");
+                ImGui::SliderFloat("Max slope", &csmCfg.maxSlope, 0.0f, 4.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("WHAT IT DOES: caps the tan() above. Mandatory: at exactly 90 degrees to the light the\n"
+                                      "required bias is infinite.\n"
+                                      "\n"
+                                      "WATCH OUT: at 1.0 the cap engages at 45 degrees from the sun, so with a LOW sun almost\n"
+                                      "all flat ground is already AT the cap. Raising this then moves the entire ground plane,\n"
+                                      "not just steep geometry - it stops behaving like a slope knob and behaves like a second\n"
+                                      "Depth bias.\n"
+                                      "\n"
+                                      "[r.Shadow.ShadowMaxSlopeScaleDepthBias = 1]");
+                ImGui::Text("effective: %.2f texels facing the sun, %.2f grazing",
+                            csmCfg.depthBiasInTexels,
+                            csmCfg.depthBiasInTexels * (1.0f + csmCfg.slopeScale * csmCfg.maxSlope));
+
+                ImGui::SeparatorText("Bias \xE2\x80\x94 sample time (not in UE)");
                 ImGui::SliderFloat("Normal bias (texels)", &csmCfg.normalBiasInTexels, 0.0f, 4.0f, "%.2f");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Receiver offset along its normal, in cascade texels (so it scales with\n"
-                                      "each cascade's world texel size). Raise to kill acne, at the cost of\n"
-                                      "detaching contact shadows.");
-                ImGui::SliderFloat("Depth bias (texels)", &csmCfg.depthBiasInTexels, 0.0f, 8.0f, "%.2f");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Sample-time depth offset, in cascade texels. The readout converts it to\n"
-                                      "millimetres of peter-panning \xE2\x80\x94 that number is the one to minimise.");
-
+                    ImGui::SetTooltip("WHAT IT DOES: before looking the shadow up, slides the RECEIVER's sample point out\n"
+                                      "along its own normal by this many cascade texels. It moves WHERE we look, not what\n"
+                                      "was stored - so unlike the three knobs above it costs NO depth push.\n"
+                                      "\n"
+                                      "WHY IT IS THE CHEAPEST ACNE FIX: acne is a surface sampling its own stored depth.\n"
+                                      "Stepping off the surface stops that without moving the shadow toward the light, so\n"
+                                      "peter-panning barely responds to it.\n"
+                                      "\n"
+                                      "COST: it detaches shadows from CONVEX EDGES and thin geometry, because the offset\n"
+                                      "point can leave the object. Too high and contact shadows creep away from corners.\n"
+                                      "\n"
+                                      "UE has no equivalent - their legacy CSM relies on the depth pass alone, and their\n"
+                                      "stock defaults acne and peter-pan visibly. This is deliberately not a transcription.");
                 if (ImGui::Button("Reset CSM config to defaults"))
                     csmCfg = CascadeShadowConfig{};
                 if (ImGui::IsItemHovered())
@@ -2019,9 +2078,9 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "baseline every plan step is measured against.");
 
                 ImGui::SeparatorText("Filtering");
-                int csmFilter = static_cast<int>(render::g_csmFilterMode);
+                int csmFilter = static_cast<int>(csmCfg.filterMode);
                 if (ImGui::SliderInt("Filter kernel", &csmFilter, 0, 2, csmFilter == 0 ? "3x3 box" : (csmFilter == 1 ? "4x4 tent (UE q3)" : "6x6 tent (UE q5, default)")))
-                    render::g_csmFilterMode = static_cast<uint32_t>(csmFilter);
+                    csmCfg.filterMode = static_cast<uint32_t>(csmFilter);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("0 = the original 3x3 SampleCmp box with its per-cascade radius shrink (the A/B arm).\n"
                                       "1 = soft-occlusion RAMP + 4x4 tent from 4 Gather quads -- UE's Manual3x3PCF.\n"

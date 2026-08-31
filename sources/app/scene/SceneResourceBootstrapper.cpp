@@ -40,7 +40,7 @@ void SceneLightingCBHandles::Populate(Material* material)
     cascadeSplits = material->ComputeCB0FieldHandle("cascadeSplitsVS");
     shadowAtlasSize = material->ComputeCB0FieldHandle("shadowAtlasSize");
     shadowBiasNDC = material->ComputeCB0FieldHandle("shadowBiasNDC");
-    normalBiasWS = material->ComputeCB0FieldHandle("normalBiasWS");
+    cascadeTexelWS = material->ComputeCB0FieldHandle("cascadeTexelWS");
     screenSize = material->ComputeCB0FieldHandle("screenSize");
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
     sunMetalSpec = material->ComputeCB0FieldHandle("sunMetalSpec");
@@ -1218,7 +1218,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.cascadeSplits, data.cascadeSplits, dest);
     matLighting_->UpdateCBField(handles.shadowAtlasSize, data.shadowAtlasSize, dest);
     matLighting_->UpdateCBField(handles.shadowBiasNDC, data.shadowBiasNDC, dest);
-    matLighting_->UpdateCBField(handles.normalBiasWS, data.normalBiasWS, dest);
+    matLighting_->UpdateCBField(handles.cascadeTexelWS, data.cascadeTexelWS, dest);
     matLighting_->UpdateCBField(handles.screenSize, data.screenSize, dest);
     matLighting_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
     matLighting_->UpdateCBField(handles.sunMetalSpec, data.sunMetalSpec, dest);

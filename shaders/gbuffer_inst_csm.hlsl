@@ -2,6 +2,7 @@
 // Use the shared b0 (per-object) + b1 (per-view: viewProj) from gbuffer_common
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsli"
+#include "shadow_depth_common.hlsli"
 
 struct InstanceData
 {
@@ -25,7 +26,8 @@ VSOutD VSMain(VSInInst i)
     float4 wp = mul(float4(i.P, 1.0f), w);
     wp.xyz += ApplyWindWS(i.P, wp.xyz, w, windStrength, i.WIND, windFoliage,
                           windTrunkStiff, windLeafScale, windGustMul, windTime);
-    o.H = mul(wp, viewProj);
+    const float3 nWS = mul(i.N, (float3x3)w); // S6
+    o.H = ApplyShadowDepthBias(mul(wp, viewProj), nWS, viewProj, float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear));
     return o;
 }
 

@@ -38,6 +38,7 @@
 #include "ocean/OceanSimulation.h"
 #include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
+#include "rendering/shadows/ShadowSettings.h"
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
 #include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
@@ -330,7 +331,7 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().shadowRes);
         constants.shadowAtlasSize = float2(shadowRes, shadowRes);
         constants.shadowBiasNDC = float4(cascades.depthBiasNDC[0], cascades.depthBiasNDC[1], cascades.depthBiasNDC[2], cascades.depthBiasNDC[3]);
-        constants.normalBiasWS = float4(cascades.normalBiasWS[0], cascades.normalBiasWS[1], cascades.normalBiasWS[2], cascades.normalBiasWS[3]);
+        constants.cascadeTexelWS = float4(cascades.cascadeTexelWS[0], cascades.cascadeTexelWS[1], cascades.cascadeTexelWS[2], cascades.cascadeTexelWS[3]);
         const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
         const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
         constants.screenSize = float2(width, height);
@@ -375,15 +376,15 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         // S0.3: cascade-tint debug. Forced off whenever the clipmap is the shadow source — the
         // tint visualizes CSM cascades, which that path does not sample.
         constants.csmDebugMode = vsmDir ? 0u : static_cast<uint32_t>(render::g_csmDebugMode);
-        constants.csmFilterMode = render::g_csmFilterMode; // S8: 0 box, 1 = 4x4 tent, 2 = 6x6 tent
         {
             // UE maps the artist's 0..1 Shadow Filter Sharpen to shader units as x*7+1 (see
             // ShadowRendering.h:1299). Done on the CPU, once, exactly as they do it.
             const CascadeShadowConfig* cfg = frame_->cascadeConfig;
+            constants.csmFilterMode = cfg ? cfg->filterMode : 1u; // 0 box, 1 = 4x4 tent, 2 = 6x6 tent
             constants.csmFilterParams = cfg
                 ? float4(cfg->csmReceiverBias, cfg->shadowFilterSharpen * 7.0f + 1.0f,
-                         cfg->pcfOverBlurCorrection ? 1.0f : 0.0f, 0.0f)
-                : float4(0.9f, 1.0f, 1.0f, 0.0f);
+                         cfg->pcfOverBlurCorrection ? 1.0f : 0.0f, cfg->normalBiasInTexels)
+                : float4(0.9f, 1.0f, 1.0f, 1.0f);
         }
         constants.vsmDepthBias = vsm::g_clipmapDepthBias;
         // Per-level depth-bias shaping (see VsmClipmapShadow). The floor is authored in TEXELS of

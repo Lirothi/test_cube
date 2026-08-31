@@ -13,6 +13,7 @@
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::kMaxShadowLods (per-view shadow LOD table)
+#include "rendering/shadows/ShadowSettings.h"
 #include "core/diagnostics/DiagPaths.h" // logs/vsm_pages.log (g_logPageStats file mirror)
 #include "vfx/WindState.h" // W5: wind params copied into each page's shadow view CB
 

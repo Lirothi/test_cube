@@ -10,6 +10,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/renderables/InstanceTypes.h"
+#include "rendering/shadows/ShadowSettings.h"
 #include "text/TextManager.h"
 
 void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime)

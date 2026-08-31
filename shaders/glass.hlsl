@@ -56,7 +56,7 @@ cbuffer GlassView : register(b1)
     float4 screenSizeInv;         // xy = screen size, zw = inverse screen size
     float4 shadowAtlasSizeInv;    // xy = atlas size, zw = inverse atlas size
     float4 shadowBiasNDC;         // cascade depth bias
-    float4 normalBiasWS;          // cascade normal bias
+    float4 cascadeTexelWS;        // world size of one cascade texel
     float4 cascadeSplitsVS;       // cascade splits in view space
     float4 cascadeScaleBias[4];   // xy = scale, zw = bias per cascade
     float4 spotShadowInfo;        // xy = spot shadow size, zw = inverse size
@@ -72,6 +72,7 @@ cbuffer GlassView : register(b1)
     // S8: x = 0 legacy 3x3 SampleCmp box, 1 = soft-occlusion ramp + 4x4 Gather tent. APPENDED at the
     // tail on purpose -- inserting anywhere else shifts every offset after it.
     float4 csmFilterMode;         // x = kernel mode, y = receiver bias, z = sharpen, w = over-blur
+    float4 csmFilterParams;       // w = receiver normal bias in texels (xyz spare)
 };
 
 Texture2D SceneOpaque : register(t0);
@@ -211,7 +212,7 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
     }
     p.splitsVS     = cascadeSplitsVS;
     p.depthBiasNDC = shadowBiasNDC;
-    p.normalBiasWS = normalBiasWS;
+    p.cascadeTexelWS = cascadeTexelWS;
     p.atlasSize    = shadowAtlasSizeInv.xy;   // xy = size, zw = 1/size (see the GlassView cbuffer)
     p.camPosWS     = camPosSky.xyz;
     p.camDirWS     = normalize(camDirWS.xyz);
@@ -226,6 +227,7 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
     p.receiverBiasMin  = csmFilterMode.y;
     p.sharpen          = csmFilterMode.z;
     p.overBlurCorrect  = csmFilterMode.w;
+    p.normalBiasTexels = csmFilterParams.w;
     p.useGatherPcf     = (uint)csmFilterMode.x;
 
     int cascade;

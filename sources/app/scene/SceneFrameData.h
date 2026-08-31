@@ -541,7 +541,7 @@ struct SceneFrameData
         float2 atlasScale[kCascades];
         float2 atlasBias[kCascades];
         float splitsVS[kCascades + 1] = {}; // near..far in view space
-        float normalBiasWS[kCascades] = {};
+        float cascadeTexelWS[kCascades] = {}; // world size of one cascade texel (see Scene.cpp)
         float depthBiasNDC[kCascades] = {};
 
         // S0.1: per-cascade diagnostics for the developer window. Written by Scene::UpdateCascades

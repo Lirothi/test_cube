@@ -38,7 +38,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle cascadeSplits;
     Material::CBFieldHandle shadowAtlasSize;
     Material::CBFieldHandle shadowBiasNDC;
-    Material::CBFieldHandle normalBiasWS;
+    Material::CBFieldHandle cascadeTexelWS;
     Material::CBFieldHandle screenSize;
     Material::CBFieldHandle invScreenSize;
     Material::CBFieldHandle sunMetalSpec;
@@ -518,7 +518,7 @@ struct LightingPassConstants
     float4 cascadeSplits{};
     float2 shadowAtlasSize{};
     float4 shadowBiasNDC{};
-    float4 normalBiasWS{};
+    float4 cascadeTexelWS{};
     float2 screenSize{};
     float2 invScreenSize{};
     float sunMetalSpec = 0.0f;

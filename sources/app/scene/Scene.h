@@ -70,7 +70,7 @@ public:
     const mat4& GetCascadeProj(size_t index) const;
     float2 GetCascadeScale(size_t index) const;
     float2 GetCascadeBias(size_t index) const;
-    float GetCascadeNormalBias(size_t index) const;
+    float GetCascadeTexelWS(size_t index) const;
     float GetCascadeDepthBias(size_t index) const;
     const float* GetCascadeSplitsVS() const { return frameData_.cascades.splitsVS; }
     // S0.1: the whole cascade block, including the *Dbg diagnostics the developer window reads.

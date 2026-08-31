@@ -110,42 +110,8 @@ inline constexpr uint32_t kInstancingThreshold = 8;
 // before/after measurement; when off, BuildInstancedBatches is a no-op (per-object path).
 inline bool g_instancingEnabled = true;
 
-// Rung 0 runtime toggle (default ON): the shadow passes draw via GPU cull + ExecuteIndirect
-// (ShadowGpuData) instead of the per-object CPU RenderShadow loop — the CPU-submission win.
-// Toggle OFF (Ctrl+I, "ToggleIndirectShadows") for the CPU-path A/B. If the cull PSOs fail to
-// build, IndirectDrawReady() returns false and the passes fall back to the CPU path anyway.
-inline bool g_indirectShadowsEnabled = true;
-
-// GI→VSM runtime toggle (default ON): fold GPU-instanced casters' instances into the consolidated
-// ShadowGpuData caster set (GPU scatter → cull → indirect), so they cast in VSM and via the indirect
-// path in Legacy (dropping their per-view CPU RenderShadow tail). Toggle OFF (Ctrl+G,
-// "ToggleGiIndirectShadows") for the A/B: GI reverts to the Legacy CPU tail only (nothing in VSM) —
-// exactly today's behavior. Also the safety fallback: if the scatter PSO fails or an object is over
-// the group cap, GI keeps drawing through the retained CPU tail. Requires g_indirectShadowsEnabled.
-inline bool g_giIndirectShadowsEnabled = true;
-
-// Rung 2 / Step 24a — active shadow method. Legacy = the CSM directional + spot/point/glass ATLAS
-// path; VSM = the virtual page pool (spot/point/glass today; directional after Step 24). Drives both
-// whether the VSM pipeline passes run AND which sampler the light/glass shaders use (VsmActive() →
-// useVsm). Default Legacy (VSM opt-in). Toggle Legacy<->VSM with Ctrl+V ("ToggleVsmPageRequest").
-// Step 24b makes the switch free the inactive mode's GPU resources (only one mode ever resident).
-enum class ShadowMode : std::uint32_t { Legacy = 0, VSM = 1 };
-inline ShadowMode g_shadowMode = ShadowMode::VSM;
-inline bool VsmActive() { return g_shadowMode == ShadowMode::VSM; }
-
-// S0.3 — Legacy CSM debug visualization, forwarded to lighting_cs.hlsl as `csmDebugMode`.
-// 0 = off (the shader's only cost is one uint compare). 1 = tint each pixel by the cascade the
-// sample RESOLVED to (not the one the split picked): that difference is the point, because it is
-// what makes the tile-border fallback ring visible. Legacy-only; the VSM branch ignores it.
-enum class CsmDebugMode : std::uint32_t { Off = 0, CascadeTint = 1 };
-inline CsmDebugMode g_csmDebugMode = CsmDebugMode::Off;
-
-// S8 — Legacy CSM filter kernel.
-//   0 = the original 3x3 hardware-PCF box with its per-cascade radius shrink (A/B arm, fallback)
-//   1 = soft-occlusion ramp + 4x4 tent / 4 gathers   (UE Manual3x3PCF, their SHADOW_QUALITY 3)
-//   2 = soft-occlusion ramp + 6x6 tent / 9 gathers   (UE Manual5x5PCF, their SHADOW_QUALITY 4-5)
-// DEFAULT 2, because `r.ShadowQuality` defaults to 5 in Unreal and `ManualPCF` then selects
-// Manual5x5PCF — a stock UE runs the 6x6 kernel, which is why its CSM reads softer than a 4x4 one
-// at the same resolution. Matching the default is the point of the whole plan.
-inline uint32_t g_csmFilterMode = 2;
+// Shadow-system state lives in rendering/shadows/ShadowSettings.h (mode, indirect toggles,
+// the cascade-tint debug view) and in CascadeShadowConfig (per-scene CSM tuning, incl. the
+// filter kernel). This header is about instance and draw-submission types; a shadow mode
+// only ever sat here because that is where the first toggle happened to be typed.
 } // namespace render

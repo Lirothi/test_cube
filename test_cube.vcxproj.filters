@@ -1025,6 +1025,9 @@
     <ClInclude Include="sources/rendering/shadows/ShadowGpuData.h">
       <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/shadows/ShadowSettings.h">
+      <Filter>sources\rendering\shadows</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h">
       <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
@@ -1313,6 +1316,9 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\csm_sample.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\shadow_depth_common.hlsli">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\terrain_tiling.hlsli">

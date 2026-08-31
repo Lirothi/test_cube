@@ -17,7 +17,9 @@ struct CsmParams
     float4   scaleBias[4];    // xy = atlas scale, zw = atlas bias
     float4   splitsVS;        // x = near (unused), yzw = far of cascades 0..2
     float4   depthBiasNDC;
-    float4   normalBiasWS;
+    // World size of one texel, per cascade. Only the legacy 3x3 arm's per-cascade radius ratio
+    // still reads it -- the receiver normal offset it used to carry is gone (UE has no such term).
+    float4   cascadeTexelWS;
     float2   atlasSize;       // (W, H) in texels
     float3   camPosWS;
     float3   camDirWS;        // normalized
@@ -33,6 +35,8 @@ struct CsmParams
     float    receiverBiasMin;
     float    sharpen;         // S8: already mapped to UE's shader units (artist*7+1); 1 = off
     float    overBlurCorrect; // S8: 1 = apply UE's Square(shadow), 0 = off
+    // Receiver normal offset in TEXELS; the world amount is this times cascadeTexelWS[c].
+    float    normalBiasTexels;
     // S8 filter mode. 0 = legacy 3x3 SampleCmp box (A/B + emergency fallback),
     // 1 = 4x4 tent / 4 gathers  (UE Manual3x3PCF, their SHADOW_QUALITY 3),
     // 2 = 6x6 tent / 9 gathers  (UE Manual5x5PCF, their SHADOW_QUALITY 4-5 -- and r.ShadowQuality
@@ -192,9 +196,10 @@ float CsmSampleChain(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, S
         const float2 scale  = p.scaleBias[c].xy;
         const float2 biasUV = p.scaleBias[c].zw;
 
-        // Re-evaluated per cascade: each has its own world texel size.
-        const float3 Poff = Pws + Nws * p.normalBiasWS[c];
-
+        // Receiver normal offset, per cascade (each has its own world texel). Not a UE term: theirs
+        // rely on the depth-pass bias alone, and it shows. Offsetting the SAMPLE POINT instead of
+        // pushing depth is what makes it cheap in peter-panning.
+        const float3 Poff = Pws + Nws * (p.normalBiasTexels * p.cascadeTexelWS[c]);
         const float4 lc = mul(float4(Poff, 1.0f), p.lightViewProj[c]);
         const float2 uvLocal = (lc.xy / max(1e-6f, lc.w)) * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
         const float  z = lc.z / max(1e-6f, lc.w);
@@ -215,8 +220,6 @@ float CsmSampleChain(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, S
         // This cascade's tile in atlas UV, inset by one texel: belt and braces for the Gather quads,
         // whose 2x2 footprint is picked by hardware rounding and can straddle a texel boundary.
         const float4 uvClampAll = float4(biasUV + texel, biasUV + scale - texel);
-        const float bBase = p.depthBiasNDC[c];
-        const float b = bBase + (1.0f - saturate(NdotL)) * bBase;
 
         outCascade = c;
 
@@ -234,12 +237,11 @@ float CsmSampleChain(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, S
             // Attenuating the ramp by NoL is UE's receiver bias: the more grazing the light, the
             // wider the transition and the harder it is to self-shadow.
             const float ts = p.transitionScale[c] * lerp(p.receiverBiasMin, 1.0f, saturate(NdotL));
-            // NOTE: `z - b` keeps the SAMPLE-TIME bias. UE feeds the raw receiver depth here because
-            // its bias lives in the depth pass (our S6). Until S6 lands, dropping it would put the
-            // whole lit scene at ramp centre (~0.5) -- a uniform grey haze. Swap to `z` with S6.
+            // RAW receiver depth: the depth pass owns the bias now, exactly as in UE
+            // (`Settings.SceneDepth = LightSpacePixelDepthForOpaque`, ShadowProjectionPixelShader.usf:248).
             float sh = (p.useGatherPcf == 2u)
-                ? CsmTent6x6Gather(atlas, smp, uv, z - b, ts, p.atlasSize, texel, uvClampAll)
-                : CsmTent4x4Gather(atlas, smp, uv, z - b, ts, p.atlasSize, texel, uvClampAll);
+                ? CsmTent6x6Gather(atlas, smp, uv, z, ts, p.atlasSize, texel, uvClampAll)
+                : CsmTent4x4Gather(atlas, smp, uv, z, ts, p.atlasSize, texel, uvClampAll);
             // ORDER MATTERS and it is UE's: sharpen FIRST, over-blur correction SECOND
             // (ShadowProjectionPixelShader.usf:375 then :385). Squaring a sharpened curve is not the
             // same as sharpening a squared one; with sharpen at its 1.0 no-op the two agree, which is
@@ -250,8 +252,8 @@ float CsmSampleChain(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, S
 
         // Legacy path (useGatherPcf == 0): kept for the A/B and as the emergency fallback. The
         // radius shrink stays HERE only so this arm reproduces the pre-S8 image exactly.
-        const float pcfR = p.pcfRadius * pow((p.normalBiasWS[0] / max(1e-6f, p.normalBiasWS[c])), 0.25f);
-        return CsmPcf3x3(atlas, cmp, uv, z - b, texel, pcfR);
+        const float pcfR = p.pcfRadius * pow((p.cascadeTexelWS[0] / max(1e-6f, p.cascadeTexelWS[c])), 0.25f);
+        return CsmPcf3x3(atlas, cmp, uv, z, texel, pcfR);
     }
 
     return 1.0f;

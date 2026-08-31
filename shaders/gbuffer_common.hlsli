@@ -84,6 +84,12 @@ cbuffer PerView : register(b1)
     float  windSwayFreq;
     float  windGustMul;
     float  windPrevGustMul;
+    // S6: shadow-depth bias params at 224..239. The GBUFFER VS never reads them; the three
+    // CPU-fallback shadow VS in this header do. Declared here because they share this cbuffer.
+    float  shadowConstBias;   // 224
+    float  shadowSlopeBias;   // 228
+    float  shadowMaxSlope;    // 232
+    float  shadowClampNear;   // 236 (S7)
 };
 
 // W4/W5: single call site of the PerView wind fields for every shader that includes this header

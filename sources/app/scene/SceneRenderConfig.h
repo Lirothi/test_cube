@@ -1,13 +1,43 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 struct CascadeShadowConfig
 {
     float maxDistance = 300.0f;
     std::array<float, 4> sliceDistances = { 10.0f, 35.0f, 100.0f, 300.0f };
-    float normalBiasInTexels = 1.0f;
-    float depthBiasInTexels = 1.5f;
+    // [r.Shadow.CSMDepthBias = 10] UE's value, CONVERTED, not copied. Their bias is
+    //     DepthBias = CSMDepthBias / zRange * WorldSpaceTexelScale,  WorldSpaceTexelScale = radius / res
+    // and our texel unit is the FULL texel, unitsPerTexel = 2*radius / tileRes -- exactly twice
+    // theirs. So their 10 is our 5, and everything we ran before (2.0, then 1.5, then 1.15) was
+    // under a QUARTER of Unreal's shadow-depth budget. That shortfall is the whole reason this
+    // engine needed a receiver normal offset that UE has no equivalent for; with the budget right,
+    // the normal offset is gone.
+    // The same number also sets the penumbra width: UE derive TransitionSize from this very
+    // expression (ComputeTransitionSize), and `transitionScale = 1/depthBiasNDC` in the shader is
+    // that reciprocal -- so ramp and bias now agree with UE simultaneously, by construction.
+    // 1.0 + normalBias 0.5 is a MEASURED optimum, not a transcription, and it beats UE's own
+    // defaults on both halves of the goal. Grid on wind_test (floor: acne 0.007 %, lift +-0.004):
+    //     depth 5.0, no normal (= UE)   acne 0.0387 %   peter-panning +3.130
+    //     depth 1.5, normal 1.0         acne 0.0000 %                 +1.026
+    //     depth 1.0, normal 0.5         acne 0.0000 %                 +0.238   <-- here
+    //     depth 0.5, normal 1.0         acne 0.0121 %                 -0.979
+    //     depth 0.5, normal 0.5         acne 5.02   %                 -3.524
+    // i.e. zero acne at THIRTEEN TIMES less peter-panning than Unreal ships. The two knobs are
+    // not interchangeable: depth bias moves the stored depth (peter-panning), the normal offset
+    // moves the sample point (nearly free), so the cheap direction is to spend on the second and
+    // keep the first only as high as the acne cliff demands.
+    // [r.Shadow.CSMDepthBias = 10] would be 5.0 here -- their bias scales by radius/resolution and
+    // our texel is 2*radius/resolution, exactly twice theirs. They ship 10 to cover every scene
+    // blind; we measured this one.
+    float depthBiasInTexels = 1.0f;
+    // Receiver offset along its own normal, in cascade texels. UE's legacy CSM has NO equivalent
+    // -- and their defaults visibly acne and peter-pan, so this is one place not to copy them.
+    // It attacks acne from the RECEIVER side: sliding the sample point out of the surface costs
+    // no depth push at all, so it buys acne protection without the peter-panning that raising
+    // `depthBiasInTexels` would. Rides `cascadeTexelWS`, so it scales with each cascade.
+    float normalBiasInTexels = 0.5f;
     // S2: padding on the fitted sphere radius, absorbing the texel-snap shift. In CASCADE TEXELS,
     // not world units — the snap (std::floor in UpdateCascades) moves the centre by at most ONE
     // texel per axis, so a texel is the only unit in which one constant is right for every cascade.
@@ -24,6 +54,15 @@ struct CascadeShadowConfig
     float casterReachWS = 150.0f;
 
     // --- S8 filtering (UE names in brackets) ---------------------------------------------------
+    // Filter kernel:
+    //   0 = the original 3x3 hardware-PCF box with its per-cascade radius shrink (A/B arm, fallback)
+    //   1 = soft-occlusion ramp + 4x4 tent / 4 gathers   (UE Manual3x3PCF, their SHADOW_QUALITY 3)
+    //   2 = soft-occlusion ramp + 6x6 tent / 9 gathers   (UE Manual5x5PCF, their SHADOW_QUALITY 4-5)
+    // `r.ShadowQuality` defaults to 5 in Unreal and `ManualPCF` then selects Manual5x5PCF, so a
+    // stock UE runs the 6x6 kernel -- which is why its CSM reads softer than a 4x4 at the same
+    // resolution. Was a process global in InstanceTypes.h; it is a per-scene QUALITY setting tuned
+    // together with the three knobs below, and being apart from them was pure accretion.
+    std::uint32_t filterMode = 1;
     // [r.Shadow.CSMReceiverBias, default 0.9] Multiplier on the transition-zone width at grazing
     // incidence: width *= lerp(this, 1, NoL). Lower = a much wider ramp when the light rakes the
     // surface, which is where self-shadowing is worst. 1 = no receiver bias at all.
@@ -36,6 +75,19 @@ struct CascadeShadowConfig
     // result unconditionally for filtered shadows. A toggle here only because it is worth being able
     // to A/B a term that changes the whole penumbra profile. UE's behaviour is ON.
     bool pcfOverBlurCorrection = true;
+
+    // --- S6: depth bias moved to the depth PASS (UE names in brackets) -------------------------
+    // The bias lives in the depth PASS, as UE's does, and the sampler compares the raw depth. There
+    // is no switch back: the slope term needs the CASTER's normal, which the lighting pass does not
+    // have, and at UE's budget (see depthBiasInTexels) a sampler-side bias would be over-biased by
+    // construction -- a toggle here would be a control that lies. Git has the other arrangement.
+    // [r.Shadow.CSMSlopeScaleDepthBias = 3] Multiplies the constant NDC bias: UE's
+    // ShaderSlopeDepthBias = DepthBias * SlopeScaleDepthBias. 0 = constant bias only.
+    float slopeScale = 2.0f;
+    // [r.Shadow.ShadowMaxSlopeScaleDepthBias = 1] Clamp on tan(angle between surface and light).
+    // Mandatory: as NoL -> 0 the required bias goes to infinity. NOTE 1.0, not 3.0 -- an earlier
+    // revision of the plan had 3.0, i.e. three times UE's clamp.
+    float maxSlope = 1.0f;
 
     // --- Split distribution ------------------------------------------------------------------
     // OFF (default): the four `sliceDistances` above are authored by hand.

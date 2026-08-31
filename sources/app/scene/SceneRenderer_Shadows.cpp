@@ -39,6 +39,7 @@
 #include "ocean/OceanSimulation.h"
 #include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
+#include "rendering/shadows/ShadowSettings.h"
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
 #include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
@@ -273,6 +274,31 @@ namespace
     }
 } // namespace
 
+namespace
+{
+// S6: the four numbers a cascade's depth pass needs. Mirrors UE's UpdateShaderDepthBias:
+//   ShaderDepthBias      = max(DepthBias, 0)                       (DepthBias itself already clamped)
+//   ShaderSlopeDepthBias = max(DepthBias * SlopeScaleDepthBias, 0)
+//   ShaderMaxSlopeDepthBias = r.Shadow.ShadowMaxSlopeScaleDepthBias
+// including their `DepthBias = min(DepthBias, .1f)` clamp, whose comment reads: prevent a large
+// depth bias due to low resolution from causing near plane clipping (ShadowRendering.cpp:1905).
+struct CascadeDepthBias { float constBias, slopeBias, maxSlope, clampNear; };
+
+// UpdateShaderDepthBias, transcribed. `depthBiasNDC` already carries UE's whole expression
+// (CSMDepthBias / zRange * worldTexel -- see depthBiasInTexels), so it is fed RAW: no compatibility
+// factor, because there is no longer a second arrangement to stay compatible with.
+//   ShaderDepthBias      = max(DepthBias, 0)
+//   ShaderSlopeDepthBias = max(DepthBias * SlopeScaleDepthBias, 0)
+//   ShaderMaxSlopeDepthBias = r.Shadow.ShadowMaxSlopeScaleDepthBias
+// plus their clamp (ShadowRendering.cpp:1905, "prevent a large depth bias due to low resolution
+// from causing near plane clipping").
+CascadeDepthBias ComputeCascadeDepthBias(const CascadeShadowConfig& cfg, float depthBiasNDC)
+{
+    const float b = std::max(0.0f, std::min(depthBiasNDC, 0.1f));
+    return CascadeDepthBias{ b, std::max(0.0f, b * cfg.slopeScale), cfg.maxSlope, 0.0f };
+}
+} // namespace
+
 void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     const std::array<SceneView, kCascades>& cascadeViews,
     std::uint32_t atlasPoint, bool indirect)
@@ -307,7 +333,14 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     // position to resolve its RECEIVER's LOD.
     const Math::float3 csmCamPos = frame_->camera ? frame_->camera->GetPosition()
                                                   : Math::float3(0.0f, 0.0f, 0.0f);
-    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind, cmpLog, cmpBarriers, csmCamPos](std::size_t cascadeIndex)
+    // S6: same reason -- copies, because the workers have no `this`. The per-cascade NDC bias is
+    // the cascade's NDC bias, the only place a directional shadow is biased at all now.
+    const CascadeShadowConfig csmCfg = frame_->cascadeConfig ? *frame_->cascadeConfig
+                                                             : CascadeShadowConfig{};
+    std::array<float, kCascades> csmDepthBiasNDC{};
+    std::copy(std::begin(frame_->cascades.depthBiasNDC), std::end(frame_->cascades.depthBiasNDC),
+              csmDepthBiasNDC.begin());
+    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind, cmpLog, cmpBarriers, csmCamPos, &csmCfg, &csmDepthBiasNDC](std::size_t cascadeIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
         Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
@@ -326,7 +359,10 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             return;
         }
 
-        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
+        const CascadeDepthBias cb = ComputeCascadeDepthBias(csmCfg, csmDepthBiasNDC[cascadeIndex]);
+        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind,
+                                                                   cb.constBias, cb.slopeBias,
+                                                                   cb.maxSlope, cb.clampNear);
 
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(t.cl, passName);
@@ -392,7 +428,13 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             continue;
         }
 
-        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind);
+        const CascadeDepthBias cb = ComputeCascadeDepthBias(frame_->cascadeConfig
+                                                               ? *frame_->cascadeConfig
+                                                               : CascadeShadowConfig{},
+                                                           frame_->cascades.depthBiasNDC[idx]);
+        const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind,
+                                                                   cb.constBias, cb.slopeBias,
+                                                                   cb.maxSlope, cb.clampNear);
 
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(t.cl, ctx.pass);

@@ -23,6 +23,7 @@
 #include "rendering/shadows/VirtualShadowMap.h" // temporary VSM perf-harness tunables (--vsm-*)
 #include "rendering/meshes/LodSelect.h"          // shadow caster LOD curve (--vsm-lodbias/--vsm-lodstride)
 #include "rendering/renderables/InstanceTypes.h"  // S0: g_shadowMode / g_csmDebugMode (--shadow-mode, --csm-tint)
+#include "rendering/shadows/ShadowSettings.h"
 #include "text/TextManager.h"
 #include "vfx/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
 

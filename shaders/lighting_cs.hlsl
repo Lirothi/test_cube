@@ -92,7 +92,7 @@ cbuffer PerFrame : register(b0)
     float4 cascadeSplitsVS;
     float2 shadowAtlasSize;
     float4 shadowBiasNDC;
-    float4 normalBiasWS;
+    float4 cascadeTexelWS;
     float2 screenSize;
     float2 invScreenSize;
     // Configurable artist boost for the analytic sun specular on metals. The lobe is
@@ -233,7 +233,7 @@ CsmParams MakeCsmParams()
     }
     p.splitsVS     = cascadeSplitsVS;
     p.depthBiasNDC = shadowBiasNDC;
-    p.normalBiasWS = normalBiasWS;
+    p.cascadeTexelWS = cascadeTexelWS;
     p.atlasSize    = shadowAtlasSize;
     p.camPosWS     = camPosWS;
     p.camDirWS     = camDirWS;
@@ -250,6 +250,7 @@ CsmParams MakeCsmParams()
     p.receiverBiasMin  = csmFilterParams.x;
     p.sharpen          = csmFilterParams.y;
     p.overBlurCorrect  = csmFilterParams.z;
+    p.normalBiasTexels = csmFilterParams.w;
     p.useGatherPcf     = csmFilterMode;
     return p;
 }

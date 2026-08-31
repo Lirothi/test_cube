@@ -22,6 +22,7 @@
 #include "rendering/renderables/GBufferRenderable.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/shadows/VirtualShadowMap.h"
+#include "rendering/shadows/ShadowSettings.h"
 #include "vfx/WindState.h"
 
 namespace scene_internal
@@ -118,8 +119,20 @@ namespace scene_internal
         float windSwayFreq = 0.0f;
         float windGustMul = 1.0f;
         float windPrevGustMul = 1.0f;
+        // S6: the shadow-depth pass's bias parameters, at bytes 224..239. Zero on every path but
+        // Pass_CSM -- ApplyShadowDepthBias early-outs on all-zero, so this tail costs the gbuffer
+        // and the VSM paths nothing.
+        //
+        // NOTE, deliberately NOT at 240 as the plan drafted: 224 is occupied only in the VSM PAGE
+        // slot (gWindFade), and the VSM_PAGE shader permutation declares no `cbuffer PerView` at
+        // all -- it reads its per-view data out of that slot instead. So this CB and that slot are
+        // two independent layouts, and there is nothing here to keep in step with byte 224 there.
+        float shadowConstBias = 0.0f;   // 224
+        float shadowSlopeBias = 0.0f;   // 228
+        float shadowMaxSlope  = 0.0f;   // 232
+        float shadowClampNear = 0.0f;   // 236 (S7 pancaking; plumbed here, still unused)
     };
-    static_assert(sizeof(PerViewCB) == 224, "PerViewCB must match the gbuffer/shadow HLSL layout");
+    static_assert(sizeof(PerViewCB) == 240, "PerViewCB must match the gbuffer/shadow HLSL layout");
 
     // Matches glass.hlsl `cbuffer GlassView : register(b1)`.
     struct GlassViewCB
@@ -138,7 +151,7 @@ namespace scene_internal
         float4 screenSizeInv;
         float4 shadowAtlasSizeInv;
         float4 shadowBiasNDC;
-        float4 normalBiasWS;
+        float4 cascadeTexelWS;
         float4 cascadeSplitsVS;
         float4 cascadeScaleBias[4];
         float4 spotShadowInfo;
@@ -149,7 +162,8 @@ namespace scene_internal
         mat4   clipmapViewProj[8];    // Step 24f: directional clipmap level viewProjs
         mat4   clipmapUvNormal;       // P16.16: receiver-plane transform, mirrors lighting_cs
         float4 preExposureParams;     // P16.1: x = pre-exposure, yzw reserved
-        float4 csmFilterMode;         // S8: x = 0 legacy 3x3 SampleCmp, 1 = ramp + Gather tent
+        float4 csmFilterMode;         // S8: x = kernel, y = receiver bias, z = sharpen, w = over-blur
+        float4 csmFilterParams;       // w = receiver normal bias in texels
     };
 
     // MIRRORS the OceanReflectionCB in shaders/ocean_reflection_cs.hlsl. This one is uploaded by
@@ -229,12 +243,22 @@ namespace scene_internal
         return UploadFrameCB(renderer, vc);
     }
 
+    // S6: `constBias`/`slopeBias` are NDC, `maxSlope` is a tangent, `clampNear` is a flag. They
+    // default to zero so only Pass_CSM has to pass anything -- shore depth, spot and point all get
+    // the early-out. Spot/point are excluded on purpose: their bias lives in vsm_sample.hlsli's
+    // local-light path (see [[vsm-local-shadow-bias]]) and mixing the two would double it.
     inline D3D12_GPU_VIRTUAL_ADDRESS BuildShadowViewCB(Renderer* renderer, const mat4& lightView, const mat4& lightProj,
-                                                       const vfx::WindState* wind)
+                                                       const vfx::WindState* wind,
+                                                       float constBias = 0.0f, float slopeBias = 0.0f,
+                                                       float maxSlope = 0.0f, float clampNear = 0.0f)
     {
         PerViewCB vc{};
         vc.viewProj = lightView * lightProj; // viewProjNoJitter/prevViewProjNoJitter unused by shadow shaders
         ApplyWind(vc, wind); // W5: the shadow VS sways casters with the SAME params as the gbuffer
+        vc.shadowConstBias = constBias;
+        vc.shadowSlopeBias = slopeBias;
+        vc.shadowMaxSlope  = maxSlope;
+        vc.shadowClampNear = clampNear;
         return UploadFrameCB(renderer, vc);
     }
 
@@ -285,7 +309,7 @@ namespace scene_internal
 
         const SceneFrameData::CascadeData& cascades = frame.cascades;
         vc.shadowBiasNDC = float4(cascades.depthBiasNDC[0], cascades.depthBiasNDC[1], cascades.depthBiasNDC[2], cascades.depthBiasNDC[3]);
-        vc.normalBiasWS = float4(cascades.normalBiasWS[0], cascades.normalBiasWS[1], cascades.normalBiasWS[2], cascades.normalBiasWS[3]);
+        vc.cascadeTexelWS = float4(cascades.cascadeTexelWS[0], cascades.cascadeTexelWS[1], cascades.cascadeTexelWS[2], cascades.cascadeTexelWS[3]);
         vc.cascadeSplitsVS = float4(cascades.splitsVS[0], cascades.splitsVS[1], cascades.splitsVS[2], cascades.splitsVS[3]);
         for (int i = 0; i < 4; ++i)
         {
@@ -336,12 +360,12 @@ namespace scene_internal
         // scene copy, which already has the factor on it. Both halves live in glass.hlsl.
         vc.preExposureParams = float4(render::g_preExposure, 0.0f, 0.0f, 0.0f);
         // S8: glass must filter cascades exactly like the geometry beside it (that is what S3 was for).
-        // S8: glass filters cascades identically to the geometry beside it — same four numbers.
         const CascadeShadowConfig* csmCfg = frame.cascadeConfig;
-        vc.csmFilterMode = float4(static_cast<float>(render::g_csmFilterMode),
+        vc.csmFilterMode = float4(static_cast<float>(csmCfg ? csmCfg->filterMode : 1u),
                                   csmCfg ? csmCfg->csmReceiverBias : 0.9f,
                                   csmCfg ? (csmCfg->shadowFilterSharpen * 7.0f + 1.0f) : 1.0f,
                                   (csmCfg && !csmCfg->pcfOverBlurCorrection) ? 0.0f : 1.0f);
+        vc.csmFilterParams = float4(0.0f, 0.0f, 0.0f, csmCfg ? csmCfg->normalBiasInTexels : 1.0f);
 
         return UploadFrameCB(renderer, vc);
     }

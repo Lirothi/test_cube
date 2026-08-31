@@ -74,9 +74,11 @@ void InputLayoutManager::InitBuiltins() {
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
         .Build(*this, "PosOnly");
 
-    // pos (slot 0) + per-instance caster id (slot 1) — Rung 0 indirect shadow VS. POSITION is
-    // at offset 0 in every mesh vertex format, so one layout serves all shadow-caster meshes;
-    // slot 1 is the visible-list stream (uint caster id), stepped once per instance.
+    // pos (slot 0) + per-instance caster id (slot 1) — Rung 0 indirect shadow VS. Slot 1 is the
+    // visible-list stream (uint caster id), stepped once per instance.
+    // This layout is NOT format-agnostic any more, whatever an older comment here claimed: W7.1
+    // put COLOR at offset 48, so it hard-requires VertexPNTUV. A new caster vertex format has to
+    // be checked against this file or shadows break silently.
     Builder()
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
         .Add("COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 48) // W7.1: wind bake; depth-only VS needs the same weights
@@ -94,6 +96,28 @@ void InputLayoutManager::InitBuiltins() {
         .Add("CASTERID", 0, DXGI_FORMAT_R32_UINT, 1, D3D12_APPEND_ALIGNED_ELEMENT,
              D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1)
         .Build(*this, "PosUV_InstCasterId");
+
+    // S6 twins of the two above, with the vertex NORMAL the slope-scaled shadow-depth bias needs
+    // (offset 12 of VertexPNTUV). SEPARATE layouts on purpose: only the Legacy CSM / spot / point
+    // atlas PSOs bind these, so the VSM page render keeps fetching position alone and this step
+    // costs it nothing. Both layouts already require VertexPNTUV (UV@40, COLOR@48), so the added
+    // NORMAL@12 is not a new assumption -- see the note over PosOnly_InstCasterId.
+    Builder()
+        .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
+        .Add("NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12)
+        .Add("COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 48)
+        .Add("CASTERID", 0, DXGI_FORMAT_R32_UINT, 1, D3D12_APPEND_ALIGNED_ELEMENT,
+             D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1)
+        .Build(*this, "PosNrm_InstCasterId");
+
+    Builder()
+        .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
+        .Add("NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12)
+        .Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40)
+        .Add("COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 48)
+        .Add("CASTERID", 0, DXGI_FORMAT_R32_UINT, 1, D3D12_APPEND_ALIGNED_ELEMENT,
+             D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1)
+        .Build(*this, "PosNrmUV_InstCasterId");
 
     // pos+color (slot 0) + instance matrix 4x4 in slot 1 (TEXCOORD4..7)
     Builder()

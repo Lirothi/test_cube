@@ -4,6 +4,7 @@
 #pragma pack_matrix(row_major)
 #define GBUFFER_SKIP_PEROBJECT
 #include "gbuffer_common.hlsli"
+#include "shadow_depth_common.hlsli"
 
 #define GBUFFER_INSTCB_CSM_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1)"
 
@@ -24,7 +25,8 @@ VSOutD VSMain(VSInInst i)
     wp.xyz += ApplyWindWS(i.P, wp.xyz, w, inst[i.IID].windStrength, i.WIND,
                           inst[i.IID].windFoliage, inst[i.IID].windTrunkStiff,
                           inst[i.IID].windLeafScale, windGustMul, windTime);
-    o.H = mul(wp, viewProj);
+    const float3 nWS = mul(i.N, (float3x3)w); // S6
+    o.H = ApplyShadowDepthBias(mul(wp, viewProj), nWS, viewProj, float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear));
     return o;
 }
 

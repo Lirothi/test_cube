@@ -17,6 +17,7 @@
 #include "rendering/core/UploadBatch.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias (shadow caster LOD)
 #include "rendering/debug/LodDebugView.h" // render::DrawLodDebug (LOD selection debug view)
+#include "rendering/shadows/ShadowSettings.h"
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
@@ -50,10 +51,10 @@ float2 Scene::GetCascadeBias(size_t index) const
     return frameData_.cascades.atlasBias[index];
 }
 
-float Scene::GetCascadeNormalBias(size_t index) const
+float Scene::GetCascadeTexelWS(size_t index) const
 {
     assert(index < static_cast<size_t>(kCascades));
-    return frameData_.cascades.normalBiasWS[index];
+    return frameData_.cascades.cascadeTexelWS[index];
 }
 
 float Scene::GetCascadeDepthBias(size_t index) const
@@ -326,9 +327,11 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
 
         const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
 
-        const float normalBiasInTexels = cascadeConfig_.normalBiasInTexels;
         const float depthBiasInTexels = cascadeConfig_.depthBiasInTexels;
-        cascades.normalBiasWS[idx] = normalBiasInTexels * unitsPerTexel;
+        // The cascade's world texel. Was `normalBiasInTexels * unitsPerTexel` until the receiver
+        // normal offset was deleted for UE parity; the legacy 3x3 filter arm still needs the
+        // per-cascade RATIO, which is the same number with the artist multiplier divided out.
+        cascades.cascadeTexelWS[idx] = unitsPerTexel;
         cascades.depthBiasNDC[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
 
         const float2 scale = float2(static_cast<float>(tileRes) / static_cast<float>(deferred.shadowRes));

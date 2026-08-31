@@ -31,6 +31,7 @@
 #include "ocean/OceanSimulation.h"
 #include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
+#include "rendering/shadows/ShadowSettings.h"
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
 #include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
