@@ -25,6 +25,24 @@ foreach ($f in $files) {
 
 - If a touched source file has mixed endings, normalize it to CRLF before the final response.
 
+## Session Log
+
+Every process (the app, every `--*` harness) writes one event log:
+`logs/session_YYYYMMDD_HHMMSS_<pid>_<debug|release|release_editor>.log`; `logs/latest.txt` names
+the newest one. Line shape:
+
+```
+00001234 2026-09-02 01:14:22.381 +12.443s [WARN ] [render.rt] [frame=1842] [tid=7632/Worker2] message (File.cpp:123)
+```
+
+A missing `session end: clean shutdown` footer means the process did not shut down cleanly. Use
+`LOG_INFO(logging::LogCategory::Scene, "Loaded {}", path)` and friends (`core/logging/Log.h`);
+never `OutputDebugString` or `printf` for events. Switches: `--log-level=<trace|debug|info|warning|error|fatal>`,
+`--log-category=<name>:<level>` (repeatable; names are the `[..]` column, e.g. `render.rt`),
+`--log-sync` (render every record on the calling thread — for a crash whose last lines never
+reach the writer), `--log-no-file`, `--log-file=<path>`. `--log-stress` runs the logging harness
+(verdict `logs/log_stress.log`, exit = failed checks). Design and status: `docs/logging_system_plan.md`.
+
 ## Reproducing a Camera View From a Screenshot
 
 The on-screen HUD prints the camera POSITION and its ORIENTATION QUATERNION:

@@ -13,6 +13,7 @@
 #include "core/Helpers.h"
 #include "core/diagnostics/BootProfile.h"
 #include "core/diagnostics/DiagPaths.h"
+#include "core/logging/Log.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
 
@@ -45,6 +46,31 @@ namespace
     std::atomic<bool> g_barrierMsgTrace{ false };
 
 #ifdef _DEBUG
+    // Logging plan L4: the two debug-layer callbacks below run on the thread that raised the
+    // message, inside the offending D3D call. They used to fopen/append/close a file per message,
+    // which is filesystem work (and a create_directories) at the worst possible point. Now each
+    // artifact is opened ONCE when its callback is registered, as an append-only handle, and the
+    // callback does a single WriteFile; the one-line event goes to the session log via WriteRaw
+    // (no heap, never blocks; a full ring drops and counts). The handles live for the process:
+    // a callback can still fire during device teardown, and a closed handle under it would be a
+    // race for nothing the OS does not already do at exit.
+    HANDLE g_gbvLogHandle = INVALID_HANDLE_VALUE;
+    HANDLE g_barrierTraceHandle = INVALID_HANDLE_VALUE;
+
+    HANDLE OpenArtifactAppend(const char* name)
+    {
+        return CreateFileA(diag::LogPath(name).c_str(), FILE_APPEND_DATA | SYNCHRONIZE,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    }
+
+    void AppendArtifact(HANDLE handle, const char* text)
+    {
+        if (handle == INVALID_HANDLE_VALUE || text == nullptr) { return; }
+        DWORD written = 0;
+        WriteFile(handle, text, static_cast<DWORD>(std::strlen(text)), &written, nullptr);
+    }
+
     // The barrier-interop family. Deliberately NOT every message: the point is to attribute the
     // legacy/enhanced mixing errors to a MODULE, and a trace of all debug-layer chatter would be
     // unreadable and would slow the run enough to change what it reproduces.
@@ -133,12 +159,15 @@ namespace
             std::snprintf(msg, sizeof(msg), "\n[msg-trace] id=%d %s\n", static_cast<int>(id),
                           description ? description : "");
             AppendModuleBacktrace(msg, sizeof(msg));
-            FILE* f = nullptr;
-            if (fopen_s(&f, diag::LogPath("barrier_msg_trace.log").c_str(), "a") == 0 && f) {
-                std::fputs(msg, f);
-                std::fclose(f);
-            }
-            OutputDebugStringA(msg);
+            // The multi-line stack is the artifact; the session log gets the one-line event that
+            // points at it. Never Fatal from here: Fatal flushes synchronously, and this runs
+            // under the callback's own spin lock inside a D3D call.
+            AppendArtifact(g_barrierTraceHandle, msg);
+            char event[512];
+            std::snprintf(event, sizeof(event),
+                          "barrier msg-trace id=%d %.400s (stack in logs/barrier_msg_trace.log)",
+                          static_cast<int>(id), description ? description : "");
+            logging::WriteRaw(logging::LogLevel::Warning, logging::LogCategory::RenderValidation, event);
         }
         lock.clear(std::memory_order_release);
     }
@@ -179,12 +208,14 @@ namespace
                 char msg[4096];
                 std::snprintf(msg, sizeof(msg), "[gbv] %s id=%d: %s\n", sev, static_cast<int>(id),
                               description ? description : "");
-                FILE* f = nullptr;
-                if (fopen_s(&f, diag::LogPath("gbv.log").c_str(), "a") == 0 && f) {
-                    std::fputs(msg, f);
-                    std::fclose(f);
-                }
-                OutputDebugStringA(msg);
+                // gbv.log stays: "gbv.log is empty" is a documented verdict
+                // (docs/gbv_startup_profile.md). Same line to the session log as an event, with
+                // the D3D severity mapped onto the log level; the dedupe above is unchanged.
+                AppendArtifact(g_gbvLogHandle, msg);
+                logging::WriteRaw(severity == D3D12_MESSAGE_SEVERITY_WARNING ? logging::LogLevel::Warning
+                                                                              : logging::LogLevel::Error,
+                                  logging::LogCategory::RenderValidation,
+                                  std::string_view(msg + 6)); // past "[gbv] "; the category column says it
             }
         }
         lock.clear(std::memory_order_release);
@@ -306,7 +337,7 @@ void GraphicsDevice::InitDevice()
                           (requested >= 0 && requested <= 3) ? kModeNames[requested] : "?",
                           static_cast<unsigned>(qiHr), static_cast<unsigned>(setHr),
                           SUCCEEDED(setHr) ? "yes" : "NO");
-            OutputDebugStringA(line);
+            logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderRhi, line);
             // NOT written here. gbv.log already exists as the GBV message log, and the info-queue
             // setup further down does `std::remove` on it "fresh per run" -- which ran AFTER this
             // point and silently deleted the line, making a knob that demonstrably worked look
@@ -372,7 +403,9 @@ void GraphicsDevice::InitDevice()
                       UseEnhancedBarriers() ? "yes" : "no",
                       forceLegacy ? " (forced off by --legacy-barriers)" : "",
                       typedUavLoadAdditionalFormats_ ? "yes" : "no");
-        OutputDebugStringA(msg);
+        // "Selected GPU/feature mode" is the canonical session-log event (logging plan L4);
+        // device_caps.log stays as the artifact other probes append to.
+        logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderRhi, msg);
         // Also to a file. A capability the whole enhanced-barrier half is gated on has to be
         // readable from a plain run, not only under a debugger — DBWIN output is lost otherwise,
         // the same trap that hid the stress verdict and the barrier trace earlier in this work.
@@ -409,15 +442,13 @@ void GraphicsDevice::SetupDebugBreaks()
         if (g_gbvForStress.load(std::memory_order_relaxed)) {
             Microsoft::WRL::ComPtr<ID3D12InfoQueue1> gbvQueue;
             if (SUCCEEDED(device_.As(&gbvQueue))) {
-                std::remove(diag::LogPath("gbv.log").c_str()); // fresh per run
-                // Header line: which patch mode this run used. Every message below it costs what
-                // that mode costs, and the modes differ by an order of magnitude in wall time.
+                // Fresh per run (CREATE_ALWAYS), opened once here so the callback never touches
+                // the filesystem. Header line: which patch mode this run used. Every message below
+                // it costs what that mode costs, and the modes differ by an order of magnitude
+                // in wall time.
+                g_gbvLogHandle = OpenArtifactAppend("gbv.log");
                 if (gbvModeLine_[0]) {
-                    if (FILE* f = nullptr;
-                        fopen_s(&f, diag::LogPath("gbv.log").c_str(), "w") == 0 && f) {
-                        std::fputs(gbvModeLine_, f);
-                        std::fclose(f);
-                    }
+                    AppendArtifact(g_gbvLogHandle, gbvModeLine_);
                 }
                 DWORD gbvCookie = 0;
                 gbvQueue->RegisterMessageCallback(&GbvMessageCallback,
@@ -431,7 +462,7 @@ void GraphicsDevice::SetupDebugBreaks()
         if (g_barrierMsgTrace.load(std::memory_order_relaxed)) {
             Microsoft::WRL::ComPtr<ID3D12InfoQueue1> info1;
             if (SUCCEEDED(device_.As(&info1))) {
-                std::remove(diag::LogPath("barrier_msg_trace.log").c_str()); // fresh per run
+                g_barrierTraceHandle = OpenArtifactAppend("barrier_msg_trace.log"); // fresh per run
                 DWORD cookie = 0;
                 info1->RegisterMessageCallback(&BarrierMessageCallback,
                                                D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
@@ -474,7 +505,8 @@ void GraphicsDevice::InitQueue()
     std::snprintf(msg, sizeof(msg), "[caps] async compute queue: %s%s\n",
                   computeQueue_ ? "created (idle)" : "NOT created",
                   computeQueue_ ? "" : " — async compute unavailable on this device");
-    OutputDebugStringA(msg);
+    logging::WriteRaw(computeQueue_ ? logging::LogLevel::Info : logging::LogLevel::Warning,
+                      logging::LogCategory::RenderRhi, msg);
     FILE* f = nullptr;
     if (fopen_s(&f, diag::LogPath("device_caps.log").c_str(), "a") == 0 && f) {
         std::fputs(msg, f);

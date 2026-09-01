@@ -10,6 +10,8 @@
 #include "app/diagnostics/CullBenchmark.h"
 #include "app/diagnostics/SceneStress.h"
 #include "app/scene/SceneRenderQueue.h"
+#include "core/logging/Log.h"
+#include "core/logging/diagnostics/LogStress.h"
 #include "core/task/diagnostics/TaskSystemStress.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
@@ -151,6 +153,27 @@ int WINAPI WinMain(
     _In_ int nShowCmd
 )
 {
+    // "--log-stress" runs the logging stress harness instead of the app; exit code is the number
+    // of failed checks. It owns the logger's lifetime itself (repeated Initialize/Shutdown is one
+    // of the things it tests), so it is dispatched BEFORE the normal session below.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--log-stress") != nullptr) {
+        return RunLogStress(lpCmdLine);
+    }
+
+    // The log session is the first thing that exists and the last thing that goes away: every
+    // early-return harness below runs inside it, and the RAII object flushes the session file on
+    // each of those returns. --log-level / --log-category / --log-sync / --log-no-file / --log-file
+    // are read here so they reach the harnesses too.
+    struct LogSession {
+        explicit LogSession(const char* commandLine) {
+            logging::LogConfig config;
+            logging::ApplyCommandLine(commandLine, config);
+            logging::Initialize(config);
+            logging::SetCurrentThreadName("Main");
+        }
+        ~LogSession() { logging::Shutdown(); }
+    } logSession(lpCmdLine);
+
     // "--tasksystem-stress" runs the task-system stress harness instead of the
     // app; exit code is the number of failed checks. With "--stress-overflow"
     // the process is expected to abort (dependents_ overflow death test).

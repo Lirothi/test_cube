@@ -1,3 +1,4 @@
+#include "core/logging/Log.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/task/TaskSystem.h"
@@ -8,6 +9,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <immintrin.h>
 #include <limits>
@@ -493,6 +495,13 @@ void TaskSystem::OnDependencyComplete(TaskWithDeps* dependent)
 void TaskSystem::WorkerLoop(std::size_t index)
 {
     workerIndex_ = index;
+    {
+        // Name for the session log's [tid=.../Name] column and the debugger. Once per thread
+        // start; does not touch scheduling.
+        char name[32];
+        std::snprintf(name, sizeof(name), "Worker%zu", index);
+        logging::SetCurrentThreadName(name);
+    }
     while (true) {
         TaskWithDeps* task = nullptr;
         if (queue_ && queue_->pop(task)) {

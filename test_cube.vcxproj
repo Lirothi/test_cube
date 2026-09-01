@@ -293,6 +293,10 @@
     <ClCompile Include="sources/app/Systems.cpp" />
     <ClCompile Include="sources/app/main.cpp" />
     <ClCompile Include="sources/core/diagnostics/BootProfile.cpp" />
+    <ClCompile Include="sources/core/logging/Log.cpp" />
+    <ClCompile Include="sources/core/logging/LogQueue.cpp" />
+    <ClCompile Include="sources/core/logging/LogSinks.cpp" />
+    <ClCompile Include="sources/core/logging/diagnostics/LogStress.cpp" />
     <ClCompile Include="sources/core/profiling/Profiler.cpp" />
     <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp" />
     <ClCompile Include="sources\core\task\TaskSystemEnki.cpp" />
@@ -466,6 +470,13 @@
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
     <ClInclude Include="sources/core/diagnostics/BootProfile.h" />
     <ClInclude Include="sources/core/diagnostics/DiagPaths.h" />
+    <ClInclude Include="sources/core/logging/Log.h" />
+    <ClInclude Include="sources/core/logging/LogCategory.h" />
+    <ClInclude Include="sources/core/logging/LogLevel.h" />
+    <ClInclude Include="sources/core/logging/LogRecord.h" />
+    <ClInclude Include="sources/core/logging/LogQueue.h" />
+    <ClInclude Include="sources/core/logging/LogSinks.h" />
+    <ClInclude Include="sources/core/logging/diagnostics/LogStress.h" />
     <ClInclude Include="sources/core/task/TaskSystem.h" />
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />
     <ClInclude Include="sources/core/task/diagnostics/TaskSystemStress.h" />

@@ -55,6 +55,12 @@
     <Filter Include="sources\core\diagnostics">
       <UniqueIdentifier>{a14b2f1c-8fb2-4acf-8009-3349f15bfe0b}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\logging">
+      <UniqueIdentifier>{6f44c70a-61ec-4fdf-8ca0-69f61a0c45a4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sources\core\logging\diagnostics">
+      <UniqueIdentifier>{7a2d9c31-5b8e-4f60-9d1c-2e4b8a7f3c15}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\core\task">
       <UniqueIdentifier>{614b2f1c-8fb2-4acf-8009-3349f15bfe0b}</UniqueIdentifier>
     </Filter>
@@ -362,6 +368,18 @@
     </ClCompile>
     <ClCompile Include="sources/core/diagnostics/BootProfile.cpp">
       <Filter>sources\core\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/logging/Log.cpp">
+      <Filter>sources\core\logging</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/logging/LogQueue.cpp">
+      <Filter>sources\core\logging</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/logging/LogSinks.cpp">
+      <Filter>sources\core\logging</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/logging/diagnostics/LogStress.cpp">
+      <Filter>sources\core\logging\diagnostics</Filter>
     </ClCompile>
     <ClCompile Include="sources/core/profiling/Profiler.cpp">
       <Filter>sources\core\profiling</Filter>
@@ -811,6 +829,27 @@
     </ClInclude>
     <ClInclude Include="sources/core/diagnostics/DiagPaths.h">
       <Filter>sources\core\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/logging/Log.h">
+      <Filter>sources\core\logging</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/logging/LogCategory.h">
+      <Filter>sources\core\logging</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/logging/LogLevel.h">
+      <Filter>sources\core\logging</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/logging/LogRecord.h">
+      <Filter>sources\core\logging</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/logging/LogQueue.h">
+      <Filter>sources\core\logging</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/logging/LogSinks.h">
+      <Filter>sources\core\logging</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/logging/diagnostics/LogStress.h">
+      <Filter>sources\core\logging\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystem.h">
       <Filter>sources\core\task</Filter>

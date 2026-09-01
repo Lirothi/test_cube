@@ -4,6 +4,7 @@
 #include "core/diagnostics/BootProfile.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "core/logging/Log.h"
 #include <algorithm>
 #include <cassert>
 #include <climits>
@@ -1112,6 +1113,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 boot::Dump("first frame presented");
             }
             Profiler::Get().BeginFrame(renderer.GetTotalFrameNumber());
+            logging::SetFrameNumber(renderer.GetTotalFrameNumber());
             render::g_renderStats.NextFrame(); // snapshot last frame's draw/primitive counts
             TaskSystem::Get().WaitForTrackedAsyncTasks();
             renderer.BeginFrame();

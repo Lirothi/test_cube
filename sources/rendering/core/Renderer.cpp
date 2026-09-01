@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include "core/diagnostics/DiagPaths.h"
+#include "core/logging/Log.h"
 #include "rendering/core/RendererInvariantFailure.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/CommandListBindState.h"
@@ -38,9 +39,15 @@ Renderer::~Renderer() {
     // (the frame fence event is closed by FrameScheduler's destructor)
 }
 
+// Streamline's log callback: SDK text, already formatted, possibly from another thread. Raw
+// frontend (no formatting, no heap); its Info chatter lands at Debug so a Release session only
+// keeps the warnings and errors.
 static void logFunctionCallback(sl::LogType type, const char* msg)
 {
-    OutputDebugStringA(msg);
+    const logging::LogLevel level = type == sl::LogType::eError ? logging::LogLevel::Error
+                                  : type == sl::LogType::eWarn  ? logging::LogLevel::Warning
+                                                                : logging::LogLevel::Debug;
+    logging::WriteRaw(level, logging::LogCategory::RenderRhi, msg != nullptr ? msg : "(null)");
 }
 
 // Step 9: the enhanced-barrier command list. Same borrowed-view contract as AsCmdList4 — the
@@ -426,6 +433,11 @@ static Renderer* s_reportRenderer = nullptr;
 static void ReportOnTerminate()
 {
     if (s_reportRenderer) { s_reportRenderer->ReportDeviceRemovalOnce(); }
+    // The process is going down without unwinding; the RAII log session never runs, so this is
+    // the emergency path: DBWIN + unbuffered append, no writer thread, one attempt.
+    logging::EmergencyWrite(logging::LogLevel::Fatal, logging::LogCategory::Render,
+        "std::terminate reached (an uncaught exception, typically a ThrowIfFailed on a worker "
+        "thread); device-removal report attempted, see logs/device_removed.log if the device was lost");
     std::abort();
 }
 
@@ -487,6 +499,12 @@ void Renderer::DumpDebugLayerMessages(const char* context)
                      m->pDescription);
     }
     std::fclose(f);
+    // The caller aborts right after this, so the pointer to the artifact goes the emergency way.
+    char line[256];
+    std::snprintf(line, sizeof(line),
+                  "debug layer: %llu message(s) drained to logs/invariant_failure.log (%s)",
+                  static_cast<unsigned long long>(count), context != nullptr ? context : "");
+    logging::EmergencyWrite(logging::LogLevel::Warning, logging::LogCategory::RenderValidation, line);
 }
 
 // Write the device-removed reason to logs/device_removed.log, once per process.
@@ -515,6 +533,17 @@ void Renderer::ReportDeviceRemovalOnce()
         DumpDredBreadcrumbs(f);
         std::fclose(f);
     }
+    // One central record for the removal itself. Emergency rather than queued: this runs from
+    // the terminate handler as often as from BeginFrame, and either way the process is about to
+    // stop. The DRED breadcrumbs stay in the artifact; the record says where to look.
+    char line[320];
+    std::snprintf(line, sizeof(line),
+                  "device removed: reason=0x%08X frame=%llu asyncCompute=%s computeLists=%u "
+                  "crossQueueWaits=%u; breadcrumbs in logs/device_removed.log",
+                  static_cast<unsigned>(reason), static_cast<unsigned long long>(totalFrameNumber_),
+                  render::g_noAsyncCompute ? "off" : "on", render::g_asyncComputeLists,
+                  render::g_crossQueueWaits);
+    logging::EmergencyWrite(logging::LogLevel::Error, logging::LogCategory::Render, line);
 }
 
 // The driver's own account of what was executing when the device died, appended to the same report.
