@@ -1,6 +1,6 @@
 # VSM SMRT sampling plan (shadow-map ray marching)
 
-**Status: PLAN COMPLETE, Steps 1-4 (uncommitted). SMRT marches, uses many rays, produces a penumbra
+**Status: PLAN COMPLETE, Steps 1-4 + the two follow-ups (uncommitted). SMRT marches, uses many rays, produces a penumbra
 that widens with distance from contact, and the clipmap depth range now ships at UE's 1000.
 Default is still `vsm.smrtRayCount 0` -- the single-tap path is untouched.**
 Written 2026-09-01 after the user identified the cause of a measured gap.
@@ -284,6 +284,59 @@ constant depth bias set to 0 for the SMRT arm. Target: acne at or below the sing
 `RayCount` 7, texel dither 2.0, adaptive early-out. **Verify:** penumbra quality vs the single-tap
 path; `Pass_Lighting` cost (this is per-pixel work in the lighting pass, so the budget question is
 "how much of the frame", not "how much of VSM").
+
+### FOLLOW-UPS (done, measured)
+
+**Adaptive ray count** -- UE's `SMRTAdaptiveRayCount`, transcribed including the part that is easy
+to miss: they divide by the rays ACTUALLY SHOT (`RayCount = min(i+1, MaxRayCount)`), not by the
+maximum. Dividing by the maximum after an early break would report a fully occluded pixel as
+partially lit, i.e. the optimisation would silently lighten every umbra. Guarded by
+`VSM_SMRT_COMPUTE`, mirroring UE's `#if COMPUTESHADER`: `WaveActiveAllTrue` over a pixel shader's
+helper lanes does not mean what the heuristic assumes, so glass always shoots the full count.
+
+| | Pass_Lighting (GPU) |
+|---|---|
+| single-tap | 0.147 ms |
+| SMRT 7 rays, adaptive OFF | 0.863 / 0.859 ms |
+| SMRT 7 rays, adaptive ON | 0.425 / 0.425 ms |
+
+**2.0x**, repeated twice with under 0.5 % spread, for 0.232 % of pixels changed (floor 0.007 %) and
+shadow coverage 54.959 % -> 54.948 %. SMRT with it on costs +0.28 ms over the single-tap path.
+
+**Temporal dither** -- rotates the per-pixel sample set once per frame (UE's `View.StateFrameIndex`
+into their blue-noise lookup). Noise inside the shadow, DLSS ON:
+
+| | temporal OFF | temporal ON | |
+|---|---|---|---|
+| 1 ray | 2.9462 | 2.5417 | **-13.7 %** |
+| 7 rays | 2.4586 | 2.3947 | -2.6 % |
+
+It is a temporal sample-count multiplier, so it helps most exactly where the spatial count is
+lowest. Default ON; turn it off to judge a still frame or when running `--dlss=off`.
+
+**What the TEXEL dither actually costs and buys** (asked because it is invisible at 7 rays -- and
+it is, on a camera at the finest clipmap level):
+
+| | |
+|---|---|
+| cost | Pass_Lighting 0.418 -> 0.430 ms, **+0.011 ms** (2.6 %) |
+| effect, 7 rays, FINE texels | **none measurable** -- 4.965 % of pixels vs a 3.876 % run-to-run floor under DLSS; in-shadow noise 2.4589 vs 2.4617 |
+| effect, COARSE texels (`clipmapBaseExtent` 8 -> 96) | **29.853 %** of pixels, floor 0.116 % |
+
+The coarse case is the whole point and it is exactly UE's stated purpose ("hide aliasing due to
+insufficient shadow resolution"): without the dither the shadow-map texel grid shows through as a
+regular checkerboard staircase; with it the same shadow is smooth. Where resolution is sufficient
+there is nothing to hide, which is why it is invisible on the shadow camera. Kept at UE's 2.0 --
+it is insurance for distance and coarse levels at 2.6 % of one pass.
+
+**Two transcription corrections found by re-reading the original rather than trusting the port:**
+
+* `UniformSampleDiskConcentric` -- my first version carried a SIGNED radius, which puts every
+  sample from a negative quadrant on its ANTIPODE. Still a uniform disc, but no longer the mapping
+  the quasirandom sequence was stratified for. Now transcribed from `ConcentricDiskSamplingHelper`
+  including the 0.99999994 rescale, the 2^-64 epsilon and the sign-bit copy.
+* The dither scale was missing UE's factor of **0.5** (`0.5f / CalcLevelDimsTexels(0)`), so it ran
+  at twice their amplitude -- on a one-ray march, twice the noise for nothing.
 
 ### WHAT THE USER'S SCREENSHOTS CAUGHT THAT THE METRICS DID NOT
 

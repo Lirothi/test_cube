@@ -12,6 +12,9 @@
 
 #include "utils.hlsli"
 #include "ibl_common.hlsli"
+// SMRT's adaptive ray count uses wave intrinsics, which UE gate with #if COMPUTESHADER because
+// the "all lanes agree" test is only meaningful outside a pixel shader's helper lanes.
+#define VSM_SMRT_COMPUTE 1
 #include "vsm_sample.hlsli"
 #include "csm_sample.hlsli"
 #include "caustics.hlsli"
@@ -126,6 +129,8 @@ cbuffer PerFrame : register(b0)
     float smrtSourceRadius;      // Step 3: sin of the light's angular radius
     float smrtTexelDitherScale;
     float smrtLevelMargin;
+    uint smrtFrameIndex;   // 0 = no temporal rotation of the sample set
+    uint smrtAdaptiveRayCount;
     float _padClipBias;
     float4x4 clipmapViewProj[VSM_NUM_CLIPMAP_LEVELS]; // mirrored in LightingPassConstants
     // P16.16: inverse transpose of world -> shadow UVZ, for the receiver-plane depth bias. One
@@ -290,6 +295,8 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade)
         smrt.sourceRadius = smrtSourceRadius;
         smrt.texelDitherScale = smrtTexelDitherScale;
         smrt.levelMargin = smrtLevelMargin;
+        smrt.frameIndex = smrtFrameIndex;
+        smrt.adaptiveRayCount = smrtAdaptiveRayCount;
         // `sunDirWS` is the direction the light TRAVELS; SMRT marches TOWARDS the light.
         return VsmClipmapShadow(P, N, camPosWS, clipmapNormalBias, vsmDepthBias,
                                 clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,

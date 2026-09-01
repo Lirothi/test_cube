@@ -323,6 +323,16 @@ namespace vsm
     // were leaflets. Default 1.0: the theory the margin was added for (rays running out of level)
     // was disproven by instrumenting the march, so it has to earn its place on looks alone.
     inline float         g_smrtLevelMargin = 1.0f;
+    // TEMPORAL DITHER. Rotates the whole per-pixel sample set once per frame, the way UE feed
+    // View.StateFrameIndex into their blue-noise lookup. On its own it makes a still frame NOISIER;
+    // it pays off through the temporal pass, which sees a different set each frame and averages
+    // them. Default ON because this engine ships with DLSS on -- turn it off to judge a single
+    // frame, or when running with --dlss=off.
+    inline bool          g_smrtTemporalDither = true;
+    // r.Shadow.Virtual.SMRT.AdaptiveRayCount (UE default 1): after this many rays, a wave whose
+    // lanes ALL agree stops early. Fully lit and fully umbral regions are most of the screen and
+    // need one or two rays; only penumbrae need the full count. 0 disables it.
+    inline std::uint32_t g_smrtAdaptiveRayCount = 1u;
     // Local-light (spot + point) VSM shadow bias, in units of one shadow texel at the receiver
     // (auto-sized per-pixel from the light's cone width, distance and mip level in the shaders).
     // Lateral = surface-normal offset (~1 texel keeps Peter-panning to a texel); depth push =

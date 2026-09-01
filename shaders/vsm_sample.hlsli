@@ -301,18 +301,30 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, floa
             // One hash per pixel; each ray then walks the R2 sequence from it, which is UE's
             // arrangement (a per-pixel base plus a low-discrepancy per-ray offset) and is what
             // stops the N rays of one pixel from landing on top of each other.
-            const float2 pixelHash = VsmSmrtHash2(P);
+            // Rotated once per frame when temporal dithering is on: the pixel keeps its own base,
+            // but the whole set walks the R2 sequence so consecutive frames sample DIFFERENT points
+            // of the light's disc. A still frame gets noisier; the temporal pass gets something to
+            // average, which is the trade UE make with View.StateFrameIndex.
+            const float2 pixelHash = frac(VsmSmrtHash2(P) + VsmSmrtR2(smrt.frameIndex));
 
             // Dither in TEXELS of this level, converted to UV. `levelTexels` is the level's full
             // virtual resolution, which is what a "texel" means for a clipmap level.
+            // UE: `DitherScale = (0.5 / CalcLevelDimsTexels(0)) * TexelDitherScale *
+            // DistanceFromViewOrigin / exp2(ClipmapLevel - ResolutionLodBias)`. Their distance term
+            // over 2^level is ~constant BECAUSE their level is chosen as log2(distance), so what
+            // survives is half a texel of the sampled level times the scale. The 0.5 is theirs and
+            // is not decoration -- omitting it ran the dither at TWICE UE's amplitude, which on a
+            // one-ray march is twice the noise for nothing. Their own note: "0.5 is arbitrary but
+            // makes it consistent with the previous dither scale cvar".
             const float levelTexels = (float)(VSM_L0_AXIS * VSM_PAGE_SIZE);
-            const float ditherUV = smrt.texelDitherScale / levelTexels;
+            const float ditherUV = 0.5f * smrt.texelDitherScale / levelTexels;
 
             // Bounded by a LITERAL -- the CB count can only end the loop early. See the caps in
             // vsm_smrt.hlsli for why a CB-driven loop bound is a device-hang generator.
             const uint rays = min(smrt.rayCount, VSM_SMRT_MAX_RAYS);
             uint rayMissCount = 0u;
-            [loop] for (uint r = 0u; r < VSM_SMRT_MAX_RAYS; ++r)
+            uint r = 0u;
+            [loop] for (; r < VSM_SMRT_MAX_RAYS; ++r)
             {
                 if (r >= rays) { break; }
 
@@ -351,10 +363,35 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, floa
                 const VsmSmrtResult hit = VsmSmrtRayCast(st, (int)smrt.samplesPerRay, 0.0f,
                                                          clipVP, PageTable, Pool);
                 if (!hit.validHit) { ++rayMissCount; }
+
+                // ADAPTIVE RAY COUNT, transcribed from UE (VirtualShadowMapProjectionDirectional):
+                // stop early where the whole wave agrees, which is most of the screen -- fully lit
+                // and fully umbral regions need one or two rays, only penumbrae need seven.
+                //
+                // Guarded by VSM_SMRT_COMPUTE for the same reason UE guard it with #if COMPUTESHADER:
+                // WaveActiveAllTrue over a pixel shader's helper lanes does not mean what it means
+                // here. Glass therefore always shoots the full count.
+#if defined(VSM_SMRT_COMPUTE)
+                if (smrt.adaptiveRayCount > 0u)
+                {
+                    if (r == 0u)
+                    {
+                        if (WaveActiveAllTrue(!hit.validHit)) { break; }   // every lane missed
+                    }
+                    else if (r >= smrt.adaptiveRayCount)
+                    {
+                        if (WaveActiveAllTrue(rayMissCount == 0u)) { break; } // every lane in umbra
+                    }
+                }
+#endif
             }
+            // UE divide by the rays ACTUALLY SHOT, not by the maximum: `RayCount = min(i+1, Max)`.
+            // Dividing by the maximum after an early break would report a fully occluded pixel as
+            // partially lit -- the adaptive path would darken nothing and lighten everything.
+            const uint raysShot = min(r + 1u, rays);
             // UE's ShadowFactor: the fraction of rays that reached the light. THIS is where a
             // penumbra comes from -- a partially occluded light disc gives a partial count.
-            return (float)rayMissCount / (float)rays;
+            return (float)rayMissCount / (float)max(raysShot, 1u);
         }
         // ---- end SMRT ------------------------------------------------------------------------
 

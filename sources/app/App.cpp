@@ -263,6 +263,8 @@ namespace
         if (setting == "vsm.smrtSourceAngleDeg") { vsm::g_smrtSourceAngleDeg = std::clamp(value, 0.0f, 45.0f); return true; }
         if (setting == "vsm.smrtTexelDitherScale") { vsm::g_smrtTexelDitherScale = std::clamp(value, 0.0f, 8.0f); return true; }
         if (setting == "vsm.smrtLevelMargin") { vsm::g_smrtLevelMargin = std::clamp(value, 0.25f, 1.0f); return true; }
+        if (setting == "vsm.smrtTemporalDither") { vsm::g_smrtTemporalDither = value != 0.0f; return true; }
+        if (setting == "vsm.smrtAdaptiveRayCount") { vsm::g_smrtAdaptiveRayCount = (std::uint32_t)std::clamp(value, 0.0f, 16.0f); return true; }
         // The dev-window "Shadow LOD bias" slider, headless. A change triggers the same GPU-idle
         // caster rebuild the slider does (Scene::ReconcileShadowLodBias polls it) — which is the
         // point: the round-trip perf leak is only reproducible in ONE process

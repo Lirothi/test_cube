@@ -348,7 +348,8 @@ namespace scene_internal
         vc.smrtParams = float4((float)vsm::g_smrtRayCount, (float)vsm::g_smrtSamplesPerRay,
                                vsm::g_smrtRayLengthScale, vsm::g_smrtExtrapolateMaxSlope);
         vc.smrtParams2 = float4(std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f),
-                                vsm::g_smrtTexelDitherScale, vsm::g_smrtLevelMargin, 0.0f);
+                                vsm::g_smrtTexelDitherScale, vsm::g_smrtLevelMargin,
+                                (float)frame.smrtFrameIndex);
         if (frame.clipmapViews)
         {
             for (size_t i = 0; i < vsm::kNumClipmapLevels && i < frame.clipmapViews->size(); ++i)

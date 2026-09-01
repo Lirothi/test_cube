@@ -63,6 +63,12 @@ struct VsmSmrtParams
     // covers twice the radius its selection tests. A margin costs a LEVEL OF SHADOW RESOLUTION,
     // which is why this is a knob and not a constant.
     float levelMargin;
+    // Rotates the per-pixel sample set once per frame (UE's View.StateFrameIndex). 0 = off, which
+    // is what a single-frame comparison wants; non-zero pays off only through a temporal pass.
+    uint frameIndex;
+    // r.Shadow.Virtual.SMRT.AdaptiveRayCount (UE default 1). 0 = always shoot the full count.
+    // Only honoured where wave ops mean what UE assume -- see VSM_SMRT_COMPUTE at the use site.
+    uint adaptiveRayCount;
 };
 
 VsmSmrtParams VsmSmrtParamsOff()
@@ -75,6 +81,8 @@ VsmSmrtParams VsmSmrtParamsOff()
     p.sourceRadius = 0.0f;
     p.texelDitherScale = 0.0f;
     p.levelMargin = 1.0f;
+    p.frameIndex = 0u;
+    p.adaptiveRayCount = 0u;
     return p;
 }
 
@@ -101,16 +109,25 @@ float2 VsmSmrtHash2(float3 p)
     return frac(sin(float2(h, h + 1.0f)) * 43758.5453f);
 }
 
-// UE's UniformSampleDiskConcentric: maps the unit square onto the unit disc preserving area
-// without the clumping a naive polar mapping produces.
+// UE's UniformSampleDiskConcentric, via ConcentricDiskSamplingHelper (MonteCarlo.ush) --
+// transcribed rather than re-derived, because the details are load-bearing:
+//   * the input is rescaled by 0.99999994, not 1, so the radius stays in [0,1);
+//   * the 2^-64 epsilon avoids 0/0 at the origin WITHOUT bending the rest of the mapping;
+//   * the sign bits are copied from `p` onto the circle point, which is what puts the sample in
+//     the right quadrant. My first cut instead carried a SIGNED radius, which lands every sample
+//     from a negative quadrant on its antipode -- still a uniform disc, but no longer the mapping
+//     the quasirandom sequence was stratified for.
 float2 VsmSmrtDiskConcentric(float2 e)
 {
-    const float2 o = 2.0f * e - 1.0f;
-    if (all(o == 0.0f)) { return float2(0.0f, 0.0f); }
-    float r, theta;
-    if (abs(o.x) > abs(o.y)) { r = o.x; theta = (3.14159265f / 4.0f) * (o.y / o.x); }
-    else                     { r = o.y; theta = (3.14159265f / 2.0f) - (3.14159265f / 4.0f) * (o.x / o.y); }
-    return r * float2(cos(theta), sin(theta));
+    const float2 p = 2.0f * e - 0.99999994f;
+    const float2 a = abs(p);
+    const float lo = min(a.x, a.y);
+    const float hi = max(a.x, a.y);
+    const float eps = 5.42101086243e-20f; // 2^-64
+    const float phi = (3.14159265f / 4.0f) * (lo / (hi + eps) + 2.0f * (float)(a.y >= a.x));
+    const uint signMask = 0x80000000u;
+    const float2 disk = asfloat((asuint(float2(cos(phi), sin(phi))) & ~signMask) | (asuint(p) & signMask));
+    return disk * hi; // uniform sampling: point on the circle, scaled by the radius
 }
 
 // UE's GetRandomDirectionalLightRayDir: jitter the direction within the light's angular disc.

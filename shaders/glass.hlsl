@@ -78,7 +78,7 @@ cbuffer GlassView : register(b1)
     // Glass samples the SAME clipmap lighting_cs does, so it has to get the same numbers or a
     // window shades against a differently-sampled shadow than the ground under it.
     float4 smrtParams;
-    float4 smrtParams2;           // x = source radius (sin), y = texel dither, z = level margin
+    float4 smrtParams2;           // x = source radius (sin), y = texel dither, z = margin, w = frame
 };
 
 Texture2D SceneOpaque : register(t0);
@@ -207,6 +207,8 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
         smrt.sourceRadius = smrtParams2.x;
         smrt.texelDitherScale = smrtParams2.y;
         smrt.levelMargin = smrtParams2.z;
+        smrt.frameIndex = (uint)smrtParams2.w;
+        smrt.adaptiveRayCount = 0u; // pixel shader: no wave-op early out (see VSM_SMRT_COMPUTE)
         return VsmClipmapShadow(Pws, Nws, camPosSky.xyz, clipmapParams.y, clipmapParams.z,
                                 clipmapParams.w, vsmParams.z, vsmParams.w,
                                 invProj._11, clipmapUvNormal,

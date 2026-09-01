@@ -58,6 +58,8 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle smrtSourceRadius;
     Material::CBFieldHandle smrtTexelDitherScale;
     Material::CBFieldHandle smrtLevelMargin;
+    Material::CBFieldHandle smrtFrameIndex;
+    Material::CBFieldHandle smrtAdaptiveRayCount;
     Material::CBFieldHandle clipmapViewProj;
     Material::CBFieldHandle clipmapUvNormal; // P16.16
     Material::CBFieldHandle causticsTint;      // rgb = tint, w = master enable
@@ -548,6 +550,8 @@ struct LightingPassConstants
     float smrtSourceRadius = 0.0f;          // sin of the light's angular radius (Step 3)
     float smrtTexelDitherScale = 2.0f;
     float smrtLevelMargin = 1.0f;
+    uint32_t smrtFrameIndex = 0;            // 0 = temporal dither off; else the frame phase
+    uint32_t smrtAdaptiveRayCount = 1;
     std::array<mat4, vsm::kNumClipmapLevels> clipmapViewProj{}; // == lighting_cs's clipmapViewProj
     mat4 clipmapUvNormal{}; // P16.16: receiver-plane transform (inverse transpose world->shadow UV)        // camera-centered ortho viewProj per clipmap level
     // Underwater caustics (see shaders/caustics.hlsli). causticsTint.w == 0 disables the block,

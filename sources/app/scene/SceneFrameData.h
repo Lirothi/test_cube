@@ -563,6 +563,10 @@ struct SceneFrameData
     // The same levels expressed in the SHARED light frame, for the clipmap LOD fallback chain
     // (shaders/vsm_page_propagate_cs.hlsl). Null when the level has no valid sun.
     const vsm::ClipmapSquares* clipmapSquares = nullptr;
+    // SMRT temporal dither phase, 1..64; 0 = temporal rotation off. Lives here so the lighting
+    // pass and the glass pass rotate their sample sets IDENTICALLY -- two different phases would
+    // make a window shade against a differently-sampled shadow than the ground beneath it.
+    std::uint32_t smrtFrameIndex = 0;
     std::array<SceneView, LightManager::kMaxShadowedSpotLights>* spotShadowViews = nullptr;
     std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>* pointShadowViews = nullptr;
     LightManager* lightManager = nullptr;

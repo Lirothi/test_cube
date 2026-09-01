@@ -1055,6 +1055,9 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.cascadeViews = &cascadeViews_;
     frameData_.clipmapViews = &clipmapViews_;
     frameData_.clipmapSquares = &clipmapSquares_;
+    frameData_.smrtFrameIndex = vsm::g_smrtTemporalDither
+        ? static_cast<std::uint32_t>((renderer->GetTotalFrameNumber() & 63ull) + 1ull)
+        : 0u;
     frameData_.spotShadowViews = &spotShadowViews_;
     frameData_.pointShadowViews = &pointShadowViews_;
     frameData_.lightManager = &lightManager_;

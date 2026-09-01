@@ -62,6 +62,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     smrtSourceRadius = material->ComputeCB0FieldHandle("smrtSourceRadius");
     smrtTexelDitherScale = material->ComputeCB0FieldHandle("smrtTexelDitherScale");
     smrtLevelMargin = material->ComputeCB0FieldHandle("smrtLevelMargin");
+    smrtFrameIndex = material->ComputeCB0FieldHandle("smrtFrameIndex");
+    smrtAdaptiveRayCount = material->ComputeCB0FieldHandle("smrtAdaptiveRayCount");
     clipmapViewProj = material->ComputeCB0FieldHandle("clipmapViewProj");
     clipmapUvNormal = material->ComputeCB0FieldHandle("clipmapUvNormal");
     causticsTint = material->ComputeCB0FieldHandle("causticsTint");
@@ -90,6 +92,8 @@ void SceneLightingCBHandles::Populate(Material* material)
         { "smrtSourceRadius", &smrtSourceRadius },
         { "smrtTexelDitherScale", &smrtTexelDitherScale },
         { "smrtLevelMargin", &smrtLevelMargin },
+        { "smrtFrameIndex", &smrtFrameIndex },
+        { "smrtAdaptiveRayCount", &smrtAdaptiveRayCount },
     };
     for (const auto& [name, handle] : kRequired)
     {
@@ -1277,6 +1281,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.smrtSourceRadius, data.smrtSourceRadius, dest);
     matLighting_->UpdateCBField(handles.smrtTexelDitherScale, data.smrtTexelDitherScale, dest);
     matLighting_->UpdateCBField(handles.smrtLevelMargin, data.smrtLevelMargin, dest);
+    matLighting_->UpdateCBField(handles.smrtFrameIndex, data.smrtFrameIndex, dest);
+    matLighting_->UpdateCBField(handles.smrtAdaptiveRayCount, data.smrtAdaptiveRayCount, dest);
     matLighting_->UpdateCBField(handles.causticsTint, data.causticsTint, dest);
     matLighting_->UpdateCBField(handles.causticsParams0, data.causticsParams0, dest);
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);

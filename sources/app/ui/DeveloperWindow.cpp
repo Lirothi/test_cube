@@ -2364,6 +2364,25 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("Steps along each ray (UE default 8). Too few and a thin occluder is\n"
                                       "stepped over, so its shadow disappears rather than softening.");
 
+                ImGui::Checkbox("SMRT temporal dither", &vsm::g_smrtTemporalDither);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Rotates the sample set once per frame, so the temporal pass sees a\n"
+                                      "different set each frame and averages them (UE feed StateFrameIndex\n"
+                                      "into their blue noise the same way).\n\n"
+                                      "It makes a SINGLE frame noisier and only pays off through DLSS, so\n"
+                                      "turn it off when judging a still. Measured with DLSS on: -13.7%% noise\n"
+                                      "at 1 ray, -2.6%% at 7 -- it matters most where quality is worst.");
+
+                int adaptive = static_cast<int>(vsm::g_smrtAdaptiveRayCount);
+                if (ImGui::SliderInt("SMRT adaptive after N rays", &adaptive, 0, 8))
+                    vsm::g_smrtAdaptiveRayCount = static_cast<std::uint32_t>(adaptive);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("After N rays, a wave whose lanes ALL agree stops early (UE default 1).\n"
+                                      "Fully lit and fully umbral pixels are most of the screen and need one\n"
+                                      "or two rays; only penumbrae need the full count. 0 disables it.\n\n"
+                                      "Measured at 7 rays: Pass_Lighting 0.861 -> 0.425 ms, a 2.0x saving for\n"
+                                      "0.23%% of pixels changed. Compute only -- glass always shoots them all.");
+
                 ImGui::SliderFloat("SMRT level margin", &vsm::g_smrtLevelMargin, 0.25f, 1.0f, "%.2f");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Fraction of a clipmap level square within which a receiver is accepted.\n"

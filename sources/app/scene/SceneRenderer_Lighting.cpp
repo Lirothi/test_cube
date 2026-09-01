@@ -419,6 +419,9 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
             std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f);
         constants.smrtTexelDitherScale = vsm::g_smrtTexelDitherScale;
         constants.smrtLevelMargin = vsm::g_smrtLevelMargin;
+        // 0 is the reserved "no temporal rotation" value, so the phase runs 1..64.
+        constants.smrtFrameIndex = frame_->smrtFrameIndex;
+        constants.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount;
         if (frame_->clipmapViews)
         {
             for (size_t i = 0; i < constants.clipmapViewProj.size() && i < frame_->clipmapViews->size(); ++i)
