@@ -57,7 +57,7 @@
       "localLightMode": 1,
       "maxDistance": 0.0,
       "maxThickness": 0.25,
-      "minDistance": 0.0,
+      "minDistance": 200.0,
       "normalOffset": 0.03999999910593033,
       "steps": 8,
       "temporalDither": true
