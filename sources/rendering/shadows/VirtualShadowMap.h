@@ -166,6 +166,32 @@ namespace vsm
     // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
     inline float         g_clipmapBaseExtent = 8.0f;
+    // [r.Shadow.Virtual.Clipmap.ZRangeScale, UE default 1000] A clipmap level's reach UP-SUN as a
+    // multiple of its RADIUS -- same shape as UE's, so the number is directly comparable to theirs.
+    //
+    // This was `extent * 5`, i.e. radius * 10, which is exactly the MINIMUM UE's own cvar help calls
+    // survivable ("should generally be at least 10 or it will result in excessive cache
+    // invalidations"). At the finest level that is 40 m of reach: a caster taller than that has its
+    // top CLIPPED by the level's near plane, and the piece of shadow that top casts simply vanishes.
+    // Measured on a 100-unit pole -- the shadow stopped dead partway down the frame under VSM while
+    // CSM drew it in full. Raising g_clipmapBaseExtent "fixed" it only by making every near shadow
+    // proportionally coarser.
+    //
+    // Kept PROPORTIONAL rather than floored at an absolute distance: the per-level NDC depth bias
+    // relies on the range scaling with the level (see UpdateClipmap), and an absolute floor would
+    // silently change what that bias means at fine levels. UE's own warning bounds the other end --
+    // "values that are too large cause depth imprecisions and shadow flickering" -- so this is a
+    // measured value, not their 1000.
+    // 50 is the MEASURED minimum that restores full shadow reach on a 100-unit caster; below it the
+    // shadow visibly truncates (25 -> half length, 10 -> a third). It is not larger because the
+    // per-level NDC depth bias is a constant, so a longer range is a proportionally larger WORLD
+    // bias -- i.e. peter-panning grows linearly with this number. Measured against scale 10 on
+    // ordinary content (noise floor: shadow lift +0.011): 50 -> +0.532, 75 -> +0.731, 100 -> +0.963,
+    // and UE's own 1000 -> +8.083, which is unusable here. No flicker at any of them (run-to-run
+    // spread 0.06 throughout), so UE's stated failure mode is not what bounds us -- the bias is.
+    // Taking UE's 1000 would first require deriving the depth bias FROM the range instead of
+    // holding it constant; then the range would be free and this could stop being a compromise.
+    inline float         g_clipmapZRangeScale = 50.0f;
     // Fraction of a directional clipmap level's half-extent used to cross-fade its shadow factor
     // into the next coarser level. 0 is a strict kill switch: no parent page requests and no second
     // PCF sample. 0.12 blends the outer 12% of each nested square and hides caster-LOD silhouette

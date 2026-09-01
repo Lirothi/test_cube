@@ -472,11 +472,15 @@ void Scene::UpdateClipmap(const Camera& camera)
             + right  * (std::floor(cx / unitsPerTexel) * unitsPerTexel - cx)
             + trueUp * (std::floor(cy / unitsPerTexel) * unitsPerTexel - cy);
 
-        // PER-LEVEL depth range that scales with the level extent (Step 24f): tight for fine near
-        // levels (good D16 precision -> a small NDC bias actually clears acne), proportionally larger
-        // for coarse far levels. Because the range ∝ extent, a SINGLE NDC depth bias works at every
-        // level. depthUp = caster reach up-sun (well above the level's ground); depthDown = receivers.
-        const float depthUp = extent * 5.0f;
+        // PER-LEVEL depth range that scales with the level extent (Step 24f): proportionally larger
+        // for coarse far levels, so a SINGLE NDC depth bias works at every level. depthUp = caster
+        // reach up-sun (well above the level's ground); depthDown = receivers.
+        // Reach up-sun is radius * g_clipmapZRangeScale, the same shape as UE's
+        // r.Shadow.Virtual.Clipmap.ZRangeScale. It used to be `extent * 5` = radius * 10, which is
+        // UE's stated MINIMUM and left the finest levels reaching 40 m -- short enough to clip the
+        // top off a tall caster and delete the shadow it casts. (The original "tight range for D16
+        // precision" reasoning died when the page pool became D32_FLOAT; see VirtualShadowMap.cpp.)
+        const float depthUp = radius * vsm::g_clipmapZRangeScale;
         const float depthDown = extent * 1.0f;
         const float originDist = depthUp + 1.0f;
         const mat4 lightView = mat4::LookAtLH(center - sunDirWS * originDist, center, up);

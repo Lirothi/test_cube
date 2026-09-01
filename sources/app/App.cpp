@@ -249,6 +249,9 @@ namespace
         if (setting == "vsm.clipmapDepthBiasFloor") { vsm::g_clipmapDepthBiasFloorTexels = std::max(0.0f, value); return true; }
         if (setting == "vsm.clipmapNormalBias") { vsm::g_clipmapNormalBias = value; return true; }
         if (setting == "vsm.clipmapBaseExtent") { vsm::g_clipmapBaseExtent = std::max(0.1f, value); return true; }
+        // r.Shadow.Virtual.Clipmap.ZRangeScale: reach up-sun as a multiple of the level radius.
+        // 10 reproduces the old `extent * 5`; UE ship 1000.
+        if (setting == "vsm.clipmapZRangeScale") { vsm::g_clipmapZRangeScale = std::max(1.0f, value); return true; }
         if (setting == "vsm.clipmapBlend") { vsm::g_clipmapBlendEnabled = value != 0.0f; return true; }
         if (setting == "vsm.clipmapBlendWidth") { vsm::g_clipmapBlendWidth = std::clamp(value, 0.0f, 0.5f); return true; }
         // The dev-window "Shadow LOD bias" slider, headless. A change triggers the same GPU-idle
