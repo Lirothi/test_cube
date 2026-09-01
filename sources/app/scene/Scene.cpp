@@ -404,7 +404,10 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     // S7: the readout the dev-window CSM tab shows, dumped once so a HEADLESS run can check it.
     // zRange and the D16 step are the whole acceptance criterion for pancaking, and until now they
     // existed only behind a GUI that a --shot capture cannot drive.
-    if (render::g_csmDumpReadout)
+    // Not on frame 0: `--set=` is applied after the first UpdateCascades, so an immediate dump
+    // reports the compile-time defaults no matter what the command line asked for -- a readout
+    // that quietly contradicts the flags beside it.
+    if (render::g_csmDumpReadout && renderer->GetTotalFrameNumber() > 8)
     {
         render::g_csmDumpReadout = false;
         FILE* f = nullptr;

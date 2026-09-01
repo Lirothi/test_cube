@@ -105,7 +105,20 @@ struct CascadeShadowConfig
     // Why one might want it: a triangle with SOME vertices clamped and some not is deformed, so a
     // caster straddling the near plane can shadow itself wrongly across that triangle. Slack pushes
     // the plane out of the geometry instead.
-    float pancakeSlackWS = 0.0f;
+    // 40 m, NOT 0, and that is a measured retreat from "maximum precision".
+    //
+    // At slack 0 the near plane is fitted tight to the slice, so a caster taller than the slice
+    // STRADDLES it: some of a triangle's vertices are clamped and some are not, the triangle is
+    // deformed, and since every cascade fits its own near plane the cascades disagree -- which shows
+    // up as GAPS IN THE SHADOW at cascade boundaries. Measured on a 100-unit pole (wind_test, ocean
+    // off): slack 0 loses 2.38 % of the shadow; slack 2 already removes 99 % of that, and 40 removes
+    // it entirely. The price is only the depth range S7 bought: cascade 0 goes 35.38 m -> 75.38 m,
+    // i.e. a D16 step of 0.540 mm -> 1.150 mm -- still 2.5x better than the 2.829 mm before S7, and
+    // S7's precision was measured to buy no visible improvement anyway (see the plan's S7 section).
+    //
+    // CONTENT-DEPENDENT: 40 clears the tallest caster in this project's scenes. A taller one needs
+    // more, and the symptom is unmistakable -- the shadow breaks at a cascade boundary.
+    float pancakeSlackWS = 40.0f;
 
     // --- S10: cascade cross-fade + distance fade ------------------------------------------------
     // [UDirectionalLightComponent::CascadeTransitionFraction = 0.1, clamped to 0.3] Fraction of a

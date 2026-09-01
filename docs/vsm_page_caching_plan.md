@@ -70,6 +70,48 @@ Capture avg + max. Optional: coarse skip — test the page frustum against the u
 to skip the cull entirely for pages far from any mover (makes the setup cheaper too, not just the draw).
 Update memory + this doc.
 
+### Step 4 — per-mover page invalidation instead of `forceAll` (NOT STARTED, measured 2026-09-01)
+
+**Problem, measured.** `forceAll` is set by ANY moving caster:
+
+```cpp
+d.forceAll = (!d.caching || cacheWarmup_ || shadowGpu->MoverCount() > 0 ||
+              shadowGpu->ConsumeCasterLodsChanged()) ? 1u : 0u;
+```
+
+`MoverCount()` is last frame's `uploaded` count, so **one** object that moved sets it to 1 and every
+resident page in the pool is marked dirty and re-rendered. The whole scene pays for one mover.
+
+Traced in the editor (Debug, `traces/trace_20260901_151613_debug_000.json`, 500 frames) while a mesh
+was dragged: `Pass_VsmPageRender` is **bimodal** — median **0.38 ms**, and **~195 ms on the frames a
+mover exists**, i.e. about **5 fps**, with three warm-up frames at 710-750 ms. Nothing in between:
+either the cache holds or the entire pool is redone. `RenderGraph::ExecuteParallel` was 79 % of the
+frame and essentially all of it was this pass.
+
+**Why it matters beyond the drag.** The editor's spawn preview was taken out of the caster set
+(`RenderableObject::SetCastsShadow(false)`) so THAT case no longer triggers it, but the mechanism is
+untouched: a gizmo drag, an animated prop, a physics object, anything that moves collapses the page
+cache to nothing every frame it moves.
+
+**Design.** Replace the global flag with a per-page test, which is the "coarse skip" Step 3 left as
+optional -- inverted from "skip pages far from movers" to "dirty only pages near movers":
+* `ShadowGpuData` already uploads only the casters that changed. Have that path also produce the
+  **world AABB union of the movers** for the frame (and, better, the mover list itself).
+* The setup CS already computes `perPageDirty_` per page. Add: a page is dirty if `forceAll`, OR its
+  own footprint intersects a mover's bounds. The page frustum is already available there -- this is
+  the same test the per-page instance cull does (`vsm_page_cull`), so the machinery exists.
+* `forceAll` keeps its remaining real uses: `!caching`, `cacheWarmup_`, and a caster-LOD change
+  (cached pages hold geometry at the old LOD).
+
+**Acceptance.** With one object moving in a static scene, `Pass_VsmPageRender` must stay within a few
+times its static median rather than jumping 500x; capture avg AND max, because the bug is invisible in
+an average. Re-trace the editor drag with the preview put BACK on the caster set -- that is the honest
+worst case. VSM `--scene-stress-gbv` CLEAN; the shadow of the moving object must be correct at every
+frame (a missed page shows as a shadow lagging behind its object).
+
+**Rollback.** Keep `forceAll` as an override: `--set=vsm.pageCaching:0` already forces it, and the new
+path should be one boolean away from behaving exactly as today.
+
 ## Risks / notes
 - **physOwnerPrev copy timing**: frame N setup reads last frame's copy; copy `physOwner → physOwnerPrev`
   AFTER the setup reads it. State: physOwner COPY_SOURCE, physOwnerPrev COPY_DEST → SRV next frame.

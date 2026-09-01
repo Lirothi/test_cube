@@ -13674,10 +13674,32 @@
       ],
       "type": "staticMesh",
       "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 729,
+      "mesh": "models/box.mesh.json",
+      "name": "staticMesh #729",
+      "position": [
+        29.900434494018555,
+        25.33994483947754,
+        91.35096740722656
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        100.0,
+        1.0
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {
-    "enabled": true,
+    "enabled": false,
     "preset": "data/ocean/default.json",
     "render": {
       "absorptionColors": [
@@ -13712,7 +13734,7 @@
       "causticsBias": 0.0,
       "causticsDepthFade": 4.0,
       "causticsDispersion": 0.0,
-      "causticsEnabled": true,
+      "causticsEnabled": false,
       "causticsIntensity": 2.0,
       "causticsLayerBlend": 1.0,
       "causticsScale": 10.0,
