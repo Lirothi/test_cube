@@ -2231,8 +2231,6 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             // Its own tab because it belongs to NEITHER shadow mode: the trace reads the camera
             // depth buffer, so Legacy CSM and VSM get the identical term. Putting it under either
             // one would say it is a property of that mode, which it is not.
-            // Its own tab because it belongs to NEITHER shadow mode: the trace reads the camera
-            // depth buffer, so Legacy CSM and VSM get the identical term.
             if (ImGui::BeginTabItem("Contact"))
             {
                 ImGui::Checkbox("Contact shadows ENABLED", &render::contact::g_enabled);
@@ -2240,10 +2238,44 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("Master switch, and OFF is the default -- which matches UE, whose per-light\n"
                                       "ContactShadowLength defaults to 0. Off takes not a single depth sample.\n\n"
                                       "A short march through the CAMERA depth buffer toward the sun, recovering the\n"
-                                      "scale a shadow-map texel cannot. Works in BOTH shadow modes.");
+                                      "scale a shadow-map texel cannot. Works in BOTH shadow modes and for"
+                                      " EVERY light -- sun, spot and point -- as UE run it from one"
+                                      " GetShadowTermsBase.");
                 ImGui::BeginDisabled(!render::contact::g_enabled);
+
+                {
+                    // Either/or for spot + point. The sun is not on this list: there the contact
+                    // term sits on top of CSM/VSM by design.
+                    static const char* kLocalModes[] = { "Shadow map (contacts off for locals)",
+                                                         "Contacts INSTEAD of the shadow map",
+                                                         "Auto: contacts only where no shadow slot" };
+                    int mode = (int)std::min<std::uint32_t>(render::contact::g_localMode, 2u);
+                    if (ImGui::Combo("Local lights (spot/point)", &mode, kLocalModes, 3))
+                        render::contact::g_localMode = (std::uint32_t)mode;
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("A local light uses ONE shadow source, never both. Stacking a contact trace\n"
+                                          "on a small-range light's shadow map darkens the same contact twice and\n"
+                                          "buys nothing.\n\n"
+                                          "Shadow map: what you had; this tab does nothing for locals.\n"
+                                          "Contacts instead: the map is not even sampled (9 atlas taps saved per\n"
+                                          "pixel), the 8-step depth trace is the light's only shadow. Cheap, but a\n"
+                                          "contact only reaches as far as the trace length -- nothing casts across\n"
+                                          "the room.\n"
+                                          "Auto: slotted lights keep their map, unslotted ones get contacts, so a\n"
+                                          "light that lost the atlas budget is not left with no shadow at all.");
+                }
+
                 ImGui::Separator();
                 ImGui::TextDisabled("As in UE (CastScreenSpaceShadowRay)");
+
+                ImGui::Checkbox("Temporal dither (TAA/DLSS averages it)", &render::contact::g_temporalDither);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE: InterleavedGradientNoise(PixelPos, StateFrameIndexMod8). The dither\n"
+                                      "pattern shifts every frame over an 8-frame cycle, so the temporal pass\n"
+                                      "averages the binary per-pixel hit/miss into a smooth value. This is the\n"
+                                      "cheapest denoiser there is -- no extra pass, no extra buffer.\n\n"
+                                      "It makes a SINGLE frame noisier and only pays off through DLSS/TAA; turn\n"
+                                      "it off to judge a still or when running --dlss=off.");
 
                 ImGui::Checkbox("Length in METRES", &render::contact::g_lengthInWorldSpace);
                 if (ImGui::IsItemHovered())

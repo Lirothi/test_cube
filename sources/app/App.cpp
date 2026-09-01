@@ -277,6 +277,8 @@ namespace
         if (setting == "contact.maxDistance") { render::contact::g_maxDistanceM = std::max(0.0f, value); return true; }
         if (setting == "contact.fadeBand") { render::contact::g_fadeBandM = std::max(0.1f, value); return true; }
         if (setting == "contact.thickness") { render::contact::g_maxThicknessFrac = std::max(0.0f, value); return true; }
+        if (setting == "contact.temporal") { render::contact::g_temporalDither = value != 0.0f; return true; }
+        if (setting == "contact.localMode") { render::contact::g_localMode = (std::uint32_t)std::clamp(value, 0.0f, 2.0f); return true; }
         if (setting == "contact.intensity") { render::contact::g_intensity = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "contact.steps") { render::contact::g_steps = (std::uint32_t)std::clamp(value, 1.0f, 32.0f); return true; }
         // The dev-window "Shadow LOD bias" slider, headless. A change triggers the same GPU-idle

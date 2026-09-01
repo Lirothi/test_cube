@@ -133,4 +133,78 @@ float CastScreenSpaceShadowRay(float3 originWS, float3 rayDir, float rayLength, 
     return -1.0f;
 }
 
+// ---- The whole effect, shared by every light pass -------------------------------------------
+// One function, three callers (sun, spot, point). UE do the same: GetShadowTermsBase runs for
+// every light type, with `ContactShadowLength` living on the light and `L` being whatever points
+// at THAT light -- a constant for the sun, `normalize(lightPos - P)` for a local light. Nothing
+// else differs, so nothing else is duplicated.
+struct ContactShadowParams
+{
+    float length;          // metres, or a multiple of view depth (see lengthInWS)
+    float intensity;
+    uint  steps;
+    uint  lengthInWS;
+    float normalOffset;    // fraction of the ray length
+    float grazingFade;     // NdotL below which the term fades out
+    float minDist;         // metres from the camera
+    float maxDist;         // metres, 0 = no far limit
+    float fadeBand;        // metres
+    float thickness;       // fraction of the ray length
+    uint  frameId;         // StateFrameIndexMod8 + 1, 0 = static dither
+};
+
+float ApplyContactShadow(float shadow, float3 P, float3 N, float3 dirToLight, float ndl,
+                         uint2 pixel, float3 camPosWS,
+                         float4x4 viewProj, float4x4 projMatrix, float4x4 invProj, float4x4 invView,
+                         Texture2D depthTex, SamplerState pointSampler, ContactShadowParams cp)
+{
+    if (cp.length <= 0.0f || cp.intensity <= 0.0f) { return shadow; }
+    // Facing away from the light: already fully shadowed by NdotL, and a trace there only ever
+    // finds the surface it started on.
+    if (ndl <= 0.0f) { return shadow; }
+
+    const float viewDepth = length(P - camPosWS);
+
+    // ---- OURS: distance window (UE have none) ------------------------------------------------
+    if (viewDepth < cp.minDist) { return shadow; }
+    float distFade = 1.0f;
+    if (cp.maxDist > 0.0f)
+    {
+        if (viewDepth > cp.maxDist) { return shadow; }
+        distFade = saturate((cp.maxDist - viewDepth) / max(cp.fadeBand, 0.1f));
+    }
+
+    // ---- OURS: grazing guard -----------------------------------------------------------------
+    // As NdotL falls the ray runs ever more parallel to the surface it started on and the march
+    // measures depth-buffer quantisation instead of geometry. Faded, not cut.
+    const float grazeFade = (cp.grazingFade > 0.0f) ? smoothstep(0.0f, cp.grazingFade, ndl) : 1.0f;
+    const float weight = distFade * grazeFade;
+    if (weight <= 0.001f) { return shadow; }
+
+    // LENGTH. UE support both readings and encode the choice in the SIGN of their value; split
+    // into a flag here. Screen scale = a multiple of view depth, which keeps the trace the same
+    // size in SCREEN pixels at any distance -- what lets it keep working far away. NOT capped in
+    // metres: that was tried and it broke the image (the ray must keep spanning enough DEVICE
+    // depth for the compare tolerance to mean anything).
+    const float rayLength = (cp.lengthInWS != 0u) ? cp.length : cp.length * viewDepth;
+
+    // ---- OURS: start off the surface, as a fraction of the ray so it scales with distance ----
+    const float3 origin = P + N * (cp.normalOffset * rayLength);
+
+    // UE's InterleavedGradientNoise(PixelPos, StateFrameIndexMod8), verbatim. FrameId 0 reduces
+    // it to the static IGN. SCREEN-space noise on purpose: the banding it hides is a screen-space
+    // artifact of a screen-space march.
+    const float frameId = (cp.frameId > 0u) ? (float)(cp.frameId - 1u) : 0.0f;
+    const float2 px = (float2)pixel + frameId * (float2(47.0f, 17.0f) * 0.695f);
+    const float dither = frac(52.9829189f * frac(0.06711056f * px.x + 0.00583715f * px.y));
+
+    const float hit = CastScreenSpaceShadowRay(origin, dirToLight, rayLength, cp.steps,
+                                               dither, 2.0f, // UE's CompareToleranceScale
+                                               cp.thickness, camPosWS,
+                                               viewProj, projMatrix, invProj, invView,
+                                               depthTex, pointSampler);
+    if (hit <= 0.0f) { return shadow; } // miss
+    return shadow * (1.0f - cp.intensity * weight);
+}
+
 #endif // CONTACT_SHADOW_HLSLI

@@ -438,6 +438,10 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         constants.contactShadowMaxDist = render::contact::g_maxDistanceM;
         constants.contactShadowFadeBand = render::contact::g_fadeBandM;
         constants.contactShadowThickness = render::contact::g_maxThicknessFrac;
+        // UE's StateFrameIndexMod8, +1 so that 0 stays the "static dither" sentinel.
+        constants.contactShadowFrameId = render::contact::g_temporalDither
+            ? static_cast<std::uint32_t>((renderer->GetTotalFrameNumber() & 7ull) + 1ull)
+            : 0u;
         constants.contactShadowIntensity = render::contact::g_intensity;
         constants.contactShadowSteps = render::contact::g_steps;
         if (frame_->clipmapViews)
@@ -548,6 +552,9 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         constants.vsmRefDist = vsm::g_refDist;
         constants.localLateralTexels = vsm::g_localLateralTexels;
         constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
+        render::contact::FillConstants(constants, camera.GetViewMatrix() * camera.GetProjMatrix(),
+                                       camera.GetProjMatrix(), renderer->GetTotalFrameNumber());
+        constants.contactShadowLocalMode = render::contact::EffectiveLocalMode();
 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         RecordComputeDispatch(renderer, t.cl, spotMaterial.get(), cbSize,
@@ -614,6 +621,9 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         constants.vsmRefDist = vsm::g_refDist;
         constants.localLateralTexels = vsm::g_localLateralTexels;
         constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
+        render::contact::FillConstants(constants, camera.GetViewMatrix() * camera.GetProjMatrix(),
+                                       camera.GetProjMatrix(), renderer->GetTotalFrameNumber());
+        constants.contactShadowLocalMode = render::contact::EffectiveLocalMode();
 
         // s2 = comparison sampler for the point shadow cube (B3).
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };

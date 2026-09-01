@@ -145,6 +145,27 @@ namespace contact
     // real contacts. As a fraction it rides the ray and stays meaningful at 10 m and at 3 km.
     // 0 = no thickness test (UE behaviour).
     inline float         g_maxThicknessFrac = 0.5f;
+    // TEMPORAL DITHER -- and this one IS UE's: their contact dither is
+    // `InterleavedGradientNoise(PixelPos, View.StateFrameIndexMod8)`, i.e. it rotates over an
+    // 8-frame cycle and TAA averages the binary per-pixel outcomes into a smooth value. That is
+    // the cheapest "denoiser" there is: no extra pass, no extra buffer, the temporal pass we
+    // already run does the work. Off = today's static IGN (UE's formula with FrameId 0 IS the
+    // static one), for judging a single still frame.
+    inline bool          g_temporalDither = true;
+    // LOCAL LIGHTS (spot + point): which shadow source they use once contacts are enabled.
+    //   0 = their shadow map; contacts stay off for locals.
+    //   1 = contacts INSTEAD of the map -- the map is not sampled at all, which is also a cost
+    //       lever: a shadowed spot costs 9 atlas taps per pixel, a contact trace 8 depth taps
+    //       and no atlas render.
+    //   2 = auto: contacts only where the light has no shadow slot; slotted lights keep their map.
+    // Never both. Stacking them on a small-range light darkens the same contact twice; the user
+    // asked for an either/or and that is what this is. Sun is unaffected -- there the contact
+    // term sits on top of CSM/VSM by design, recovering what a far cascade cannot resolve.
+    inline std::uint32_t g_localMode = 1u;
+    // What the local-light passes actually receive. The mode is meaningless with the master
+    // switch off, and mode 1 with a zero-length trace would leave spot/point with NO shadow at
+    // all -- so off always means "shadow map", whatever the combo says.
+    inline std::uint32_t EffectiveLocalMode() { return g_enabled ? g_localMode : 0u; }
     // Distance window in METRES from the camera. Outside it the term is off. maxDistance 0 = no
     // far limit. The far end fades over the last `g_fadeBandM` metres so it does not pop.
     inline float         g_minDistanceM = 0.0f;
@@ -154,6 +175,34 @@ namespace contact
     // feature. The speckle at 350 m is still open -- see the note on the real conflict below.
     inline float         g_maxDistanceM = 0.0f;
     inline float         g_fadeBandM = 10.0f;
+
+    // ONE writer for the contact fields of every light pass's constants (sun, spot, point). The
+    // three CBs carry identically named members -- that is the contract that lets the same
+    // shader function serve all three -- and this is what keeps their VALUES identical too. A
+    // template rather than a struct copy because the three constants types are unrelated.
+    template <class Constants, class Mat4>
+    inline void FillConstants(Constants& c, const Mat4& viewProj, const Mat4& proj,
+                              std::uint64_t frameNumber)
+    {
+        c.viewProj = viewProj;
+        c.projMatrix = proj;
+        // The master switch folds into the length: 0 means the shader takes no samples at all,
+        // so "off" costs nothing rather than costing a branch per pixel.
+        c.contactShadowLength = g_enabled ? g_length : 0.0f;
+        c.contactShadowIntensity = g_intensity;
+        c.contactShadowSteps = g_steps;
+        c.contactShadowLengthInWS = g_lengthInWorldSpace ? 1u : 0u;
+        c.contactShadowNormalOffset = g_normalOffsetFrac;
+        c.contactShadowGrazingFade = g_grazingFadeNdotL;
+        c.contactShadowMinDist = g_minDistanceM;
+        c.contactShadowMaxDist = g_maxDistanceM;
+        c.contactShadowFadeBand = g_fadeBandM;
+        c.contactShadowThickness = g_maxThicknessFrac;
+        // UE's StateFrameIndexMod8, +1 so that 0 stays the "static dither" sentinel.
+        c.contactShadowFrameId = g_temporalDither
+            ? static_cast<std::uint32_t>((frameNumber & 7ull) + 1ull)
+            : 0u;
+    }
 }
 
 } // namespace render

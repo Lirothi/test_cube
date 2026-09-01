@@ -78,6 +78,7 @@ void SceneLightingCBHandles::Populate(Material* material)
     contactShadowMaxDist = material->ComputeCB0FieldHandle("contactShadowMaxDist");
     contactShadowFadeBand = material->ComputeCB0FieldHandle("contactShadowFadeBand");
     contactShadowThickness = material->ComputeCB0FieldHandle("contactShadowThickness");
+    contactShadowFrameId = material->ComputeCB0FieldHandle("contactShadowFrameId");
     clipmapViewProj = material->ComputeCB0FieldHandle("clipmapViewProj");
     clipmapUvNormal = material->ComputeCB0FieldHandle("clipmapUvNormal");
     causticsTint = material->ComputeCB0FieldHandle("causticsTint");
@@ -147,6 +148,20 @@ void ScenePointLightCBHandles::Populate(Material* material)
     vsmRefDist = material->ComputeCB0FieldHandle("vsmRefDist");
     localLateralTexels = material->ComputeCB0FieldHandle("localLateralTexels");
     localDepthPushTexels = material->ComputeCB0FieldHandle("localDepthPushTexels");
+    viewProj = material->ComputeCB0FieldHandle("viewProj");
+    projMatrix = material->ComputeCB0FieldHandle("projMatrix");
+    contactShadowLength = material->ComputeCB0FieldHandle("contactShadowLength");
+    contactShadowIntensity = material->ComputeCB0FieldHandle("contactShadowIntensity");
+    contactShadowSteps = material->ComputeCB0FieldHandle("contactShadowSteps");
+    contactShadowLengthInWS = material->ComputeCB0FieldHandle("contactShadowLengthInWS");
+    contactShadowNormalOffset = material->ComputeCB0FieldHandle("contactShadowNormalOffset");
+    contactShadowGrazingFade = material->ComputeCB0FieldHandle("contactShadowGrazingFade");
+    contactShadowMinDist = material->ComputeCB0FieldHandle("contactShadowMinDist");
+    contactShadowMaxDist = material->ComputeCB0FieldHandle("contactShadowMaxDist");
+    contactShadowFadeBand = material->ComputeCB0FieldHandle("contactShadowFadeBand");
+    contactShadowThickness = material->ComputeCB0FieldHandle("contactShadowThickness");
+    contactShadowFrameId = material->ComputeCB0FieldHandle("contactShadowFrameId");
+    contactShadowLocalMode = material->ComputeCB0FieldHandle("contactShadowLocalMode");
 }
 
 void SceneSpotLightCBHandles::Populate(Material* material)
@@ -168,6 +183,20 @@ void SceneSpotLightCBHandles::Populate(Material* material)
     vsmRefDist = material->ComputeCB0FieldHandle("vsmRefDist");
     localLateralTexels = material->ComputeCB0FieldHandle("localLateralTexels");
     localDepthPushTexels = material->ComputeCB0FieldHandle("localDepthPushTexels");
+    viewProj = material->ComputeCB0FieldHandle("viewProj");
+    projMatrix = material->ComputeCB0FieldHandle("projMatrix");
+    contactShadowLength = material->ComputeCB0FieldHandle("contactShadowLength");
+    contactShadowIntensity = material->ComputeCB0FieldHandle("contactShadowIntensity");
+    contactShadowSteps = material->ComputeCB0FieldHandle("contactShadowSteps");
+    contactShadowLengthInWS = material->ComputeCB0FieldHandle("contactShadowLengthInWS");
+    contactShadowNormalOffset = material->ComputeCB0FieldHandle("contactShadowNormalOffset");
+    contactShadowGrazingFade = material->ComputeCB0FieldHandle("contactShadowGrazingFade");
+    contactShadowMinDist = material->ComputeCB0FieldHandle("contactShadowMinDist");
+    contactShadowMaxDist = material->ComputeCB0FieldHandle("contactShadowMaxDist");
+    contactShadowFadeBand = material->ComputeCB0FieldHandle("contactShadowFadeBand");
+    contactShadowThickness = material->ComputeCB0FieldHandle("contactShadowThickness");
+    contactShadowFrameId = material->ComputeCB0FieldHandle("contactShadowFrameId");
+    contactShadowLocalMode = material->ComputeCB0FieldHandle("contactShadowLocalMode");
 }
 
 void SceneSsrCBHandles::Populate(Material* material)
@@ -1315,6 +1344,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.contactShadowMaxDist, data.contactShadowMaxDist, dest);
     matLighting_->UpdateCBField(handles.contactShadowFadeBand, data.contactShadowFadeBand, dest);
     matLighting_->UpdateCBField(handles.contactShadowThickness, data.contactShadowThickness, dest);
+    matLighting_->UpdateCBField(handles.contactShadowFrameId, data.contactShadowFrameId, dest);
     matLighting_->UpdateCBField(handles.causticsTint, data.causticsTint, dest);
     matLighting_->UpdateCBField(handles.causticsParams0, data.causticsParams0, dest);
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);
@@ -1352,6 +1382,20 @@ void SceneResourceBootstrapper::WritePointLightConstants(const PointLightPassCon
     matPointLightCS_->UpdateCBField(handles.vsmRefDist, data.vsmRefDist, dest);
     matPointLightCS_->UpdateCBField(handles.localLateralTexels, data.localLateralTexels, dest);
     matPointLightCS_->UpdateCBField(handles.localDepthPushTexels, data.localDepthPushTexels, dest);
+    matPointLightCS_->UpdateCBField(handles.viewProj, data.viewProj, dest);
+    matPointLightCS_->UpdateCBField(handles.projMatrix, data.projMatrix, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowLength, data.contactShadowLength, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowIntensity, data.contactShadowIntensity, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowSteps, data.contactShadowSteps, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowLengthInWS, data.contactShadowLengthInWS, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowNormalOffset, data.contactShadowNormalOffset, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowGrazingFade, data.contactShadowGrazingFade, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowMinDist, data.contactShadowMinDist, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowMaxDist, data.contactShadowMaxDist, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowFadeBand, data.contactShadowFadeBand, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowThickness, data.contactShadowThickness, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowFrameId, data.contactShadowFrameId, dest);
+    matPointLightCS_->UpdateCBField(handles.contactShadowLocalMode, data.contactShadowLocalMode, dest);
 }
 
 void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConstants& data, uint8_t* dest) const
@@ -1373,6 +1417,20 @@ void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConst
     matSpotLightCS_->UpdateCBField(handles.vsmRefDist, data.vsmRefDist, dest);
     matSpotLightCS_->UpdateCBField(handles.localLateralTexels, data.localLateralTexels, dest);
     matSpotLightCS_->UpdateCBField(handles.localDepthPushTexels, data.localDepthPushTexels, dest);
+    matSpotLightCS_->UpdateCBField(handles.viewProj, data.viewProj, dest);
+    matSpotLightCS_->UpdateCBField(handles.projMatrix, data.projMatrix, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowLength, data.contactShadowLength, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowIntensity, data.contactShadowIntensity, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowSteps, data.contactShadowSteps, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowLengthInWS, data.contactShadowLengthInWS, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowNormalOffset, data.contactShadowNormalOffset, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowGrazingFade, data.contactShadowGrazingFade, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowMinDist, data.contactShadowMinDist, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowMaxDist, data.contactShadowMaxDist, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowFadeBand, data.contactShadowFadeBand, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowThickness, data.contactShadowThickness, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowFrameId, data.contactShadowFrameId, dest);
+    matSpotLightCS_->UpdateCBField(handles.contactShadowLocalMode, data.contactShadowLocalMode, dest);
 }
 
 void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, uint8_t* dest) const

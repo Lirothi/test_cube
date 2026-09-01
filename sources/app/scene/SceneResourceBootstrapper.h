@@ -74,6 +74,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle contactShadowMaxDist;
     Material::CBFieldHandle contactShadowFadeBand;
     Material::CBFieldHandle contactShadowThickness;
+    Material::CBFieldHandle contactShadowFrameId;
     Material::CBFieldHandle clipmapViewProj;
     Material::CBFieldHandle clipmapUvNormal; // P16.16
     Material::CBFieldHandle causticsTint;      // rgb = tint, w = master enable
@@ -103,6 +104,12 @@ struct ScenePointLightCBHandles
     Material::CBFieldHandle vsmRefDist;
     Material::CBFieldHandle localLateralTexels;
     Material::CBFieldHandle localDepthPushTexels;
+    Material::CBFieldHandle viewProj, projMatrix;          // contact shadows (S12)
+    Material::CBFieldHandle contactShadowLength, contactShadowIntensity, contactShadowSteps,
+                            contactShadowLengthInWS, contactShadowNormalOffset,
+                            contactShadowGrazingFade, contactShadowMinDist, contactShadowMaxDist,
+                            contactShadowFadeBand, contactShadowThickness, contactShadowFrameId,
+                            contactShadowLocalMode;
 
     void Populate(Material* material);
 };
@@ -120,6 +127,12 @@ struct SceneSpotLightCBHandles
     Material::CBFieldHandle vsmRefDist;
     Material::CBFieldHandle localLateralTexels;
     Material::CBFieldHandle localDepthPushTexels;
+    Material::CBFieldHandle viewProj, projMatrix;          // contact shadows (S12)
+    Material::CBFieldHandle contactShadowLength, contactShadowIntensity, contactShadowSteps,
+                            contactShadowLengthInWS, contactShadowNormalOffset,
+                            contactShadowGrazingFade, contactShadowMinDist, contactShadowMaxDist,
+                            contactShadowFadeBand, contactShadowThickness, contactShadowFrameId,
+                            contactShadowLocalMode;
 
     void Populate(Material* material);
 };
@@ -580,6 +593,7 @@ struct LightingPassConstants
     float contactShadowMaxDist = 0.0f;      // ours: metres, 0 = no far limit
     float contactShadowFadeBand = 10.0f;
     float contactShadowThickness = 0.5f;    // ours: FRACTION of the ray length; 0 = UE behaviour
+    uint32_t contactShadowFrameId = 0;      // 0 = static dither; else (frame mod 8) + 1
     std::array<mat4, vsm::kNumClipmapLevels> clipmapViewProj{}; // == lighting_cs's clipmapViewProj
     mat4 clipmapUvNormal{}; // P16.16: receiver-plane transform (inverse transpose world->shadow UV)        // camera-centered ortho viewProj per clipmap level
     // Underwater caustics (see shaders/caustics.hlsli). causticsTint.w == 0 disables the block,
@@ -612,6 +626,22 @@ struct PointLightPassConstants
     float vsmRefDist = 10.0f;
     float localLateralTexels = 1.0f;   // VSM local-light bias (texels) — mirrors HLSL PointLightFrame
     float localDepthPushTexels = 0.5f;
+    // Contact shadows (S12). Same member names as LightingPassConstants -- one shader function
+    // and one CPU writer (render::contact::FillConstants) serve every light pass.
+    mat4 viewProj{};
+    mat4 projMatrix{};
+    float contactShadowLength = 0.0f;
+    float contactShadowIntensity = 1.0f;
+    uint32_t contactShadowSteps = 8;
+    uint32_t contactShadowLengthInWS = 0;
+    float contactShadowNormalOffset = 0.0f;
+    float contactShadowGrazingFade = 0.0f;
+    float contactShadowMinDist = 0.0f;
+    float contactShadowMaxDist = 0.0f;
+    float contactShadowFadeBand = 10.0f;
+    float contactShadowThickness = 0.5f;
+    uint32_t contactShadowFrameId = 0;
+    uint32_t contactShadowLocalMode = 1;    // local lights only; see render::contact::g_localMode
     float _vsmPad0 = 0.0f;
     float _vsmPad1 = 0.0f;
     float _vsmPad2 = 0.0f;
@@ -630,6 +660,22 @@ struct SpotLightPassConstants
     float vsmRefDist = 10.0f;
     float localLateralTexels = 1.0f;   // VSM local-light bias (texels) — mirrors HLSL SpotLightFrame
     float localDepthPushTexels = 0.5f;
+    // Contact shadows (S12). Same member names as LightingPassConstants -- one shader function
+    // and one CPU writer (render::contact::FillConstants) serve every light pass.
+    mat4 viewProj{};
+    mat4 projMatrix{};
+    float contactShadowLength = 0.0f;
+    float contactShadowIntensity = 1.0f;
+    uint32_t contactShadowSteps = 8;
+    uint32_t contactShadowLengthInWS = 0;
+    float contactShadowNormalOffset = 0.0f;
+    float contactShadowGrazingFade = 0.0f;
+    float contactShadowMinDist = 0.0f;
+    float contactShadowMaxDist = 0.0f;
+    float contactShadowFadeBand = 10.0f;
+    float contactShadowThickness = 0.5f;
+    uint32_t contactShadowFrameId = 0;
+    uint32_t contactShadowLocalMode = 1;    // local lights only; see render::contact::g_localMode
     float _vsmPad0 = 0.0f;
     float _vsmPad1 = 0.0f;
 };

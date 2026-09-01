@@ -15,6 +15,7 @@
 
 #include "utils.hlsli"
 #include "vsm_sample.hlsli"
+#include "contact_shadow.hlsli"
 
 struct PointLightData
 {
@@ -59,7 +60,50 @@ cbuffer PointLightFrame : register(b0)
     float  _vsmPad0;
     float  _vsmPad1;
     float  _vsmPad2;
+    // Contact shadows (docs/csm_improvement_plan.md S12). Same names in every light pass.
+    float4x4 viewProj;           // camera world -> clip
+    float4x4 projMatrix;         // camera view -> clip; the contact ray's compare tolerance
+    float contactShadowLength;
+    float contactShadowIntensity;
+    uint  contactShadowSteps;
+    uint  contactShadowLengthInWS;
+    float contactShadowNormalOffset;
+    float contactShadowGrazingFade;
+    float contactShadowMinDist;
+    float contactShadowMaxDist;
+    float contactShadowFadeBand;
+    float contactShadowThickness;
+    uint  contactShadowFrameId;
+    // LOCAL LIGHTS ONLY. 0 = shadow map, contacts off here. 1 = contacts INSTEAD of the shadow
+    // map (the map is not even sampled). 2 = contacts only where the light has no shadow slot.
+    // Stacking both on a small-range light darkens the same contact twice and buys nothing.
+    uint  contactShadowLocalMode;
 }
+ContactShadowParams MakeContactParams()
+{
+    ContactShadowParams cp;
+    cp.length = contactShadowLength;
+    cp.intensity = contactShadowIntensity;
+    cp.steps = contactShadowSteps;
+    cp.lengthInWS = contactShadowLengthInWS;
+    cp.normalOffset = contactShadowNormalOffset;
+    cp.grazingFade = contactShadowGrazingFade;
+    cp.minDist = contactShadowMinDist;
+    cp.maxDist = contactShadowMaxDist;
+    cp.fadeBand = contactShadowFadeBand;
+    cp.thickness = contactShadowThickness;
+    cp.frameId = contactShadowFrameId;
+    return cp;
+}
+
+// Which of the two shadow sources this light uses, by contactShadowLocalMode (see the CB).
+void LocalShadowSources(bool hasSlot, out bool useMap, out bool useContact)
+{
+    useMap = true; useContact = false;
+    if (contactShadowLocalMode == 1u)      { useMap = false;   useContact = true; }
+    else if (contactShadowLocalMode == 2u) { useMap = hasSlot; useContact = !hasSlot; }
+}
+
 
 // Omnidirectional (cube) point shadow, depth-cube approach (B3). Reconstructs the
 // standard-projection compare depth from the world offset (matches the render:
@@ -208,14 +252,31 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 bi, subsurface, 0.0f, transmissionNormalWeight);
             if (fr.NdotL > 0.0)
             {
-                float shadow = PointShadowFactor(Ld, P, N, invPointShadowSize);
+                bool useMap, useContact;
+                LocalShadowSources(Ld.shadowParams.x >= 0.0f, useMap, useContact);
+                float shadow = useMap ? PointShadowFactor(Ld, P, N, invPointShadowSize) : 1.0f;
+                if (useContact)
+                {
+                    shadow = ApplyContactShadow(shadow, P, N, L, fr.NdotL, dispatchThreadId.xy, camPosWS,
+                                                viewProj, projMatrix, invProj, invView, DepthT, gSmpPoint,
+                                                MakeContactParams());
+                }
                 accum += (fr.diffBRDF + fr.specBRDF) * fr.NdotL * radiance * shadow;
             }
             // Transmission: flipped-normal shadow sample so the leaf's light-facing face does not
             // self-shadow the light passing through it (mirrors lighting_cs F4).
             if (any(fr.transBRDF > 0.0))
             {
-                float shadowT = PointShadowFactor(Ld, P, -N, invPointShadowSize);
+                bool useMapT, useContactT;
+                LocalShadowSources(Ld.shadowParams.x >= 0.0f, useMapT, useContactT);
+                float shadowT = useMapT ? PointShadowFactor(Ld, P, -N, invPointShadowSize) : 1.0f;
+                if (useContactT)
+                {
+                    shadowT = ApplyContactShadow(shadowT, P, -N, L, saturate(dot(-N, L)),
+                                                 dispatchThreadId.xy, camPosWS,
+                                                 viewProj, projMatrix, invProj, invView, DepthT, gSmpPoint,
+                                                 MakeContactParams());
+                }
                 accum += fr.transBRDF * radiance * shadowT;
             }
         }
@@ -227,7 +288,15 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 continue;
             }
 
-            float shadow = PointShadowFactor(Ld, P, N, invPointShadowSize);
+            bool useMap, useContact;
+            LocalShadowSources(Ld.shadowParams.x >= 0.0f, useMap, useContact);
+            float shadow = useMap ? PointShadowFactor(Ld, P, N, invPointShadowSize) : 1.0f;
+            if (useContact)
+            {
+                shadow = ApplyContactShadow(shadow, P, N, L, br.NdotL, dispatchThreadId.xy, camPosWS,
+                                            viewProj, projMatrix, invProj, invView, DepthT, gSmpPoint,
+                                            MakeContactParams());
+            }
             if (shadow <= 0.0f)
             {
                 continue;

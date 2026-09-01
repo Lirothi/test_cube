@@ -150,7 +150,8 @@ cbuffer PerFrame : register(b0)
     float contactShadowMaxDist;
     float contactShadowFadeBand;
     float contactShadowThickness;     // ours: FRACTION of the ray length; 0 = UE behaviour
-    float2 _padContact;
+    uint  contactShadowFrameId;       // UE StateFrameIndexMod8 + 1; 0 = static dither
+    float _padContact;
     float4x4 clipmapViewProj[VSM_NUM_CLIPMAP_LEVELS]; // mirrored in LightingPassConstants
     // P16.16: inverse transpose of world -> shadow UVZ, for the receiver-plane depth bias. One
     // matrix covers every level (the extent cancels out of the gradient); UE build theirs the same
@@ -303,70 +304,21 @@ CsmParams MakeCsmParams()
 // property of the camera depth buffer and not of any shadow map: a cascade covering hundreds of
 // metres cannot resolve the scale this recovers, and neither can a coarse clipmap level.
 // UE combine it multiplicatively (`OutShadow.SurfaceShadow *= ContactShadow`), not with a min.
-float ApplyContactShadow(float shadow, float3 P, float3 N, float3 dirToLight, float ndl,
-                         uint2 pixel)
+ContactShadowParams MakeContactParams()
 {
-    if (contactShadowLength <= 0.0f || contactShadowIntensity <= 0.0f) { return shadow; }
-    // Facing away from the light: already fully shadowed by NdotL, and a trace there only ever
-    // finds the surface it started on.
-    if (ndl <= 0.0f) { return shadow; }
-
-    const float viewDepth = length(P - camPosWS);
-
-    // ---- OURS: distance window ---------------------------------------------------------------
-    // UE have no such thing -- their contact shadows are a per-light artist opt-in on content
-    // chosen to suit them. Here the far field is flat sand under a low sun, which is the exact
-    // case a screen-space march cannot do well, so it can be bounded. The far edge fades over a
-    // band instead of cutting, or the boundary itself becomes a visible line.
-    if (viewDepth < contactShadowMinDist) { return shadow; }
-    float distFade = 1.0f;
-    if (contactShadowMaxDist > 0.0f)
-    {
-        if (viewDepth > contactShadowMaxDist) { return shadow; }
-        distFade = saturate((contactShadowMaxDist - viewDepth) / max(contactShadowFadeBand, 0.1f));
-    }
-
-    // ---- OURS: grazing guard -----------------------------------------------------------------
-    // As NdotL falls the ray runs ever more parallel to the surface it started on, and the march
-    // starts measuring depth-buffer quantisation instead of geometry -- speckles on flat ground.
-    // Faded, not cut.
-    const float grazeFade = (contactShadowGrazingFade > 0.0f)
-        ? smoothstep(0.0f, contactShadowGrazingFade, ndl)
-        : 1.0f;
-    const float weight = distFade * grazeFade;
-    if (weight <= 0.001f) { return shadow; }
-
-    // LENGTH. UE support both readings and encode the choice in the SIGN of their value; split
-    // into a flag here. World space = plain metres. Screen scale = a multiple of view depth, which
-    // keeps the trace the same size in SCREEN pixels at any distance -- that is what lets it keep
-    // working far away rather than shrinking below a pixel.
-    // NOT capped in metres -- that was tried and it broke the image; see ShadowSettings.h. The
-    // ray must keep spanning enough DEVICE depth for the compare tolerance to mean anything, and
-    // at distance a short world ray does not. Bounding contacts at distance is the distance
-    // window's job, above.
-    const float rayLength = (contactShadowLengthInWS != 0u)
-        ? contactShadowLength
-        : contactShadowLength * viewDepth;
-
-    // ---- OURS: start off the surface ---------------------------------------------------------
-    // A ray that begins ON the surface is ambiguous at its very first step. UE do not do this --
-    // they start at the shaded point. Expressed as a FRACTION OF THE RAY LENGTH so it scales with
-    // distance the way the ambiguity it fights does (see ShadowSettings.h).
-    const float3 origin = P + N * (contactShadowNormalOffset * rayLength);
-
-    // Interleaved-gradient noise on the step phase. SCREEN-space on purpose: the banding this
-    // hides is a screen-space artifact of a screen-space march, so a world-space hash (what the
-    // SMRT path uses) would not break it up where it actually appears.
-    const float2 px = (float2)pixel;
-    const float dither = frac(52.9829189f * frac(0.06711056f * px.x + 0.00583715f * px.y));
-
-    const float hit = CastScreenSpaceShadowRay(origin, dirToLight, rayLength, contactShadowSteps,
-                                               dither, 2.0f, // UE's CompareToleranceScale
-                                               contactShadowThickness, camPosWS,
-                                               viewProj, projMatrix, invProj, invView,
-                                               DepthT, gSmpPoint);
-    if (hit <= 0.0f) { return shadow; } // miss
-    return shadow * (1.0f - contactShadowIntensity * weight);
+    ContactShadowParams cp;
+    cp.length = contactShadowLength;
+    cp.intensity = contactShadowIntensity;
+    cp.steps = contactShadowSteps;
+    cp.lengthInWS = contactShadowLengthInWS;
+    cp.normalOffset = contactShadowNormalOffset;
+    cp.grazingFade = contactShadowGrazingFade;
+    cp.minDist = contactShadowMinDist;
+    cp.maxDist = contactShadowMaxDist;
+    cp.fadeBand = contactShadowFadeBand;
+    cp.thickness = contactShadowThickness;
+    cp.frameId = contactShadowFrameId;
+    return cp;
 }
 
 float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade, uint2 pixel)
@@ -410,11 +362,15 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade, uint2 p
                                 clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,
                                 invProj._11, clipmapUvNormal, dirToLight, smrt, rayStartOffset,
                                 clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
-        return ApplyContactShadow(vsmShadow, P, N, dirToLight, ndl, pixel);
+        return ApplyContactShadow(vsmShadow, P, N, dirToLight, ndl, pixel, camPosWS,
+                                  viewProj, projMatrix, invProj, invView, DepthT, gSmpPoint,
+                                  MakeContactParams());
     }
     const float csmShadow =
         CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, N, ndl, outCascade);
-    return ApplyContactShadow(csmShadow, P, N, normalize(-sunDirWS), ndl, pixel);
+    return ApplyContactShadow(csmShadow, P, N, normalize(-sunDirWS), ndl, pixel, camPosWS,
+                              viewProj, projMatrix, invProj, invView, DepthT, gSmpPoint,
+                              MakeContactParams());
 }
 
 // Assemble the caustics inputs; returns tint.w == 0 when the feature is off for this frame.
