@@ -73,6 +73,11 @@ extern const Profiler::ScopeNameKey kPassVsmPageRender;
 // Sub-scope of Pass_VsmPageRender: the per-page instance cull / draw-arg setup compute (splits the
 // pass's cull cost from its rasterization cost — they scale with different things).
 extern const Profiler::ScopeNameKey kVsmPageSetup;
+// A caster-set REBUILD. It resizes casterLod_, which reads as a LOD change, which sets VSM's
+// forceAll -- so one rebuild costs a full page-pool re-render. If it shows up per frame in a
+// trace, that is the bug, and without this scope it is invisible: the cost lands in
+// Pass_VsmPageRender's draws, nowhere near the call that caused it.
+extern const Profiler::ScopeNameKey kShadowCastersRebuild;
 // Sub-scope: the spatial scatter cull (clear + scatter) that feeds the clipmap pages.
 extern const Profiler::ScopeNameKey kVsmPageScatter;
 extern const Profiler::ScopeNameKey kPassCSM;

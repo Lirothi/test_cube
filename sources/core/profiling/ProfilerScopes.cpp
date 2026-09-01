@@ -66,6 +66,7 @@ const Profiler::ScopeNameKey kPassShadowCull = Profiler::RegisterTraceLiteral(L"
 const Profiler::ScopeNameKey kPassVsmPageRequest = Profiler::RegisterTraceLiteral(L"Pass_VsmPageRequest");
 const Profiler::ScopeNameKey kPassVsmPageRender = Profiler::RegisterTraceLiteral(L"Pass_VsmPageRender");
 const Profiler::ScopeNameKey kVsmPageSetup = Profiler::RegisterTraceLiteral(L"VsmPageRender.Setup");
+const Profiler::ScopeNameKey kShadowCastersRebuild = Profiler::RegisterTraceLiteral(L"ShadowGpuData::Rebuild");
 const Profiler::ScopeNameKey kVsmPageScatter = Profiler::RegisterTraceLiteral(L"VsmPageRender.Scatter");
 const Profiler::ScopeNameKey kPassCSM = Profiler::RegisterTraceLiteral(L"Pass_CSM");
 const Profiler::ScopeNameKey kPassShoreDepth = Profiler::RegisterTraceLiteral(L"Pass_ShoreDepth");

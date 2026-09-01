@@ -191,21 +191,21 @@ namespace
     };
     SpawnPreviewState g_spawnPreview;
 
-    // Take the preview off screen WITHOUT destroying it. The cursor crosses off a surface
-    // constantly during a drag -- sky, water, the gap between palms -- and destroying the object
-    // there meant rebuilding it on the way back: a mesh create plus an UploadBatch::SubmitAndWait,
-    // i.e. a full GPU round trip, tens of times per drag. Hiding costs a bool.
+    // Leave the preview exactly where it was. NOT hidden, and certainly not destroyed.
+    //
+    // The cursor crosses off a surface constantly during a drag -- sky, water, the gaps between palm
+    // fronds -- so whatever happens here happens many times a second. Destroying was the first cut
+    // (a mesh create plus an UploadBatch::SubmitAndWait, a full GPU round trip, each way). Hiding
+    // looked free but is not: `ShadowGpuData::IsCaster` reads IsVisible(), so toggling it changes the
+    // size of the CASTER SET, and `UpdateForFrame` answers a changed count with a full Rebuild. With
+    // the ray alternating hit/miss the rebuild ran EVERY FRAME -- traced as ten consecutive frames at
+    // ~250 ms, all of it Pass_VsmPageRender, while dragging the same mesh already spawned was smooth.
+    //
+    // So: change nothing. The ghost stays at its last valid position and the tooltip says to point at
+    // a surface. Doing nothing is the only option here that does not touch the caster set.
     void HideSpawnPreview(EditorContext& ctx)
     {
-        if (!g_spawnPreview.alive)
-        {
-            return;
-        }
-        RenderableObjectBase* runtime = ctx.scene.FindEditorObject(kSpawnPreviewId);
-        if (runtime)
-        {
-            runtime->SetVisible(false);
-        }
+        (void)ctx;
     }
 
     // The real teardown: only when the drag is over, or the dragged asset changed under us.
@@ -217,6 +217,9 @@ namespace
         }
         ctx.scene.RemoveEditorObject(kSpawnPreviewId);
         g_spawnPreview = SpawnPreviewState{};
+        // Same reason as on the add below: the caster set changed, so the mega VB/IB has to be
+        // rebuilt or VSM stays on its per-page fallback.
+        ctx.scene.RefreshShadowGpuForEditor(ctx.renderer);
     }
 
     // Places the preview at `position`, building it first if this is a new asset. Returns false
@@ -232,9 +235,8 @@ namespace
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(kSpawnPreviewId);
             if (RenderableObject* ro = runtime ? runtime->AsRenderableObject() : nullptr)
             {
-                // The cheap path: every frame of the drag lands here. Un-hide, because the cursor
-                // may have crossed off a surface and back.
-                runtime->SetVisible(true);
+                // The cheap path: every frame of the drag lands here. Position only -- visibility is
+                // never touched during a drag, see HideSpawnPreview.
                 ro->SetPosition(position);
                 return true;
             }
@@ -250,15 +252,10 @@ namespace
         {
             return false;
         }
-        // The preview is a GHOST: it must not cast a shadow while it is being positioned. One moving
-        // caster sets VSM's forceAll (ShadowGpuData::MoverCount() > 0), which marks every resident
-        // page dirty and re-renders the whole pool. Traced while dragging: Pass_VsmPageRender jumps
-        // from a 0.38 ms median to ~195 ms EVERY frame, i.e. the drag runs at about 5 fps. The real
-        // object spawned on drop is a normal caster; only the ghost opts out.
-        if (RenderableObject* ro = runtime->AsRenderableObject())
-        {
-            ro->SetCastsShadow(false);
-        }
+        // The preview casts a shadow like any other object again. It was taken OUT of the caster set
+        // as a workaround while one moving caster still forced the whole VSM page pool to re-render;
+        // Step 4 of docs/vsm_page_caching_plan.md removed that, so a mover now dirties only its own
+        // pages and the ghost can be honest about where it will land.
         UploadBatch uploads;
         if (!uploads.Begin(&ctx.renderer))
         {
@@ -271,6 +268,18 @@ namespace
         {
             return false;
         }
+        // THE PREVIEW IS CREATED OUTSIDE THE COMMAND STACK, so it misses the choke point every
+        // editor COMMAND passes through (EditorCommandStack, which calls this after each command).
+        // Without it `ShadowGpuData::Rebuild` drops `megaReady_` and nothing ever puts it back, so
+        // VirtualShadowMap::RecordPageRender falls back to per-group binding -- 1024 pool pages x
+        // mesh groups x (bind VB/IB + ExecuteIndirect) -- for the whole drag.
+        //
+        // That is the difference the user spotted between dragging the GHOST and dragging an
+        // already-spawned object: the spawn went through a command, the ghost did not. Traced at
+        // ~240 ms per frame against 0.82 ms for a genuinely busy VSM frame, with the engine's own
+        // "[VSM] single-draw page render OFF: mega buffer unavailable" line explaining it to a log
+        // nobody was reading.
+        ctx.scene.RefreshShadowGpuForEditor(ctx.renderer);
         g_spawnPreview.alive = true;
         g_spawnPreview.assetKey = record.id.key;
         return true;

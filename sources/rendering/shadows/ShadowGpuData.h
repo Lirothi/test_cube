@@ -179,7 +179,10 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE CasterGroupSrv() const;
     // Per-caster dynamic flag SRV (static, region 0; 1 = animating). The VSM page-cache marks a page
     // dirty when a dynamic caster overlaps it. {0} until Rebuild.
-    D3D12_CPU_DESCRIPTOR_HANDLE CasterMetaSrv() const;
+    // Per FRAME now: the dynamic bit is republished each frame so a caster that MOVED this frame
+    // reads as dynamic, which is what lets the page cache dirty only ITS pages (Step 4 of
+    // docs/vsm_page_caching_plan.md) instead of forcing the whole pool.
+    D3D12_CPU_DESCRIPTOR_HANDLE CasterMetaSrv(UINT frameIndex) const;
     // Per-group {visible-list base, index count, start index, 0}. The VSM scatter cull reads .x as
     // the group's global base inside every page's visible-list slice.
     D3D12_CPU_DESCRIPTOR_HANDLE PerGroupSrv() const;
@@ -434,6 +437,8 @@ private:
     std::uint32_t count_ = 0;            // live caster count (TOTAL: static + folded GI instances)
     std::uint32_t staticCount_ = 0;      // CPU static casters (id range [0, staticCount_)); GI ids follow
     std::uint32_t lastMoverCount_ = 0;   // casters re-uploaded last UpdateForFrame (VSM skip gate)
+    // Rebuild's meta, kept so UpdateForFrame can re-publish it with this frame's mover bits ORed in.
+    std::vector<std::uint32_t> cpuCasterMeta_;
     bool          forceContentRefresh_ = false; // editor rebuild changed material/geometry content
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count
     std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)

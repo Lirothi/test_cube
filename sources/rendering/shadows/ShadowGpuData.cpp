@@ -1,4 +1,6 @@
 #include "rendering/shadows/ShadowGpuData.h"
+#include "core/profiling/ProfilerScopes.h"
+#include "core/profiling/Profiler.h"
 
 #include <algorithm>
 #include <array>
@@ -339,7 +341,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::InstanceSrv(UINT frameIndex) const { 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsSrv(UINT frameIndex) const { return bounds_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::ViewFrustumSrv(UINT frameIndex) const { return viewFrustums_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterGroupSrv() const { return casterGroup_.Srv(0); }
-D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterMetaSrv() const { return casterMeta_.Srv(0); }
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::CasterMetaSrv(UINT frameIndex) const { return casterMeta_.Srv(frameIndex); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::PerGroupSrv() const { return perGroup_.Srv(0); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::GroupLodMegaSrv() const { return groupLodMegaBuf_.Srv(0); }
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::GroupLodOverrideSrv(UINT f) const { return groupLodOverrideBuf_.Srv(f); }
@@ -700,6 +702,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
 {
     if (!renderer) { return; }
+    // Scoped because a rebuild is never just its own cost: it resizes casterLod_, which reads as a
+    // LOD change, which sets VSM forceAll -- a full page-pool re-render. In a trace that lands in
+    // Pass_VsmPageRender, nowhere near here, so without this scope the cause is invisible.
+    CPU_SCOPE(ProfilerScopes::kShadowCastersRebuild);
 
     // Snapshot the shadow LOD curve this build baked into the per-view LOD tables
     // (viewLod_/perViewGroup_/groupLodMega_). Scene compares both knobs to the live globals and
@@ -1052,7 +1058,16 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     if (EnsureRing(renderer, casterMeta_, std::max<std::uint32_t>(count_, 1u), sizeof(std::uint32_t), L"ShadowGpuData.CasterMeta") &&
         count_ > 0)
     {
-        std::memcpy(casterMeta_.Region(0), casterMeta.data(), count_ * sizeof(std::uint32_t));
+        // Every region, not just 0: the SRV is per-frame now and a frame that has not been
+        // republished yet must still read a valid table.
+        for (UINT f = 0; f < render::kFrameCount; ++f)
+        {
+            if (auto* dst = casterMeta_.Region(f))
+            {
+                std::memcpy(dst, casterMeta.data(), count_ * sizeof(std::uint32_t));
+            }
+        }
+        cpuCasterMeta_ = casterMeta;
     }
     // B3: uint4 per group — {visible-list base, index count, start index, caster count}. The clear
     // CS seeds the indirect args' StartIndexLocation from .z so submesh groups draw their range;
@@ -1385,6 +1400,32 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         std::snprintf(buf, sizeof(buf),
             "[ShadowGpuData] frame update: %u/%u casters re-uploaded.\n", uploaded, count_);
         OutputDebugStringA(buf);
+    }
+
+    // Step 4 (docs/vsm_page_caching_plan.md): republish the caster meta for THIS frame with the
+    // movers' dynamic bit set. `pending_ > 0` is already exactly "this caster changed recently" --
+    // it is what propagates a transform across every ring region -- so it is the mover signal, and
+    // it stays set for kFrameCount frames, which is precisely how long the stale pages live.
+    //
+    // The page setup CS already dirties a page when a DYNAMIC caster overlaps it (`dynamicOverlap`
+    // from the scatter pass). Until now a moved STATIC caster could not reach that path, so the only
+    // way to invalidate its pages was `forceAll` -- the whole resident pool, for one object. This is
+    // what made dragging a mesh in the editor cost ~195 ms a frame against a 0.38 ms baseline.
+    if (!cpuCasterMeta_.empty() && count_ > 0)
+    {
+        const UINT frameSlot = renderer->GetCurrentFrameIndex();
+        if (auto* metaDst = reinterpret_cast<std::uint32_t*>(casterMeta_.Region(frameSlot)))
+        {
+            const std::uint32_t n = std::min<std::uint32_t>(count_,
+                static_cast<std::uint32_t>(cpuCasterMeta_.size()));
+            for (std::uint32_t i = 0; i < n; ++i)
+            {
+                // bit 0 = dynamic, bits 1.. = slot count (see Rebuild). OR, never overwrite: an
+                // object that reports IsDynamicCaster must stay dynamic when it is standing still.
+                const std::uint32_t moved = (i < pending_.size() && pending_[i] > 0) ? 1u : 0u;
+                metaDst[i] = cpuCasterMeta_[i] | moved;
+            }
+        }
     }
 
     if (forceContentRefresh_)

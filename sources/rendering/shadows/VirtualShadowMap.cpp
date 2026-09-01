@@ -460,7 +460,14 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
     // ANIMATE it (near clipmap levels + locals; gWindDirtyMaxLevel in the setup CB) — the far
     // levels render rigid casters and cache. A caster-LOD change DOES force everything:
     // cached pages hold geometry at the old receiver LOD, and RefreshCasterLods flags it.
-    d.forceAll = (!d.caching || cacheWarmup_ || shadowGpu->MoverCount() > 0 ||
+    // MoverCount() is NOT here any more (Step 4, docs/vsm_page_caching_plan.md). One moving caster
+    // used to dirty EVERY resident page -- traced at ~195 ms a frame against a 0.38 ms baseline
+    // while a mesh was dragged in the editor. A mover now publishes its own dynamic bit in the
+    // caster meta (ShadowGpuData::UpdateForFrame), and the setup CS's existing `dynamicOverlap`
+    // test dirties exactly the pages it touches.
+    // The rest stay: no caching means everything is dirty by definition, warmup has nothing to
+    // reuse, and a caster-LOD change invalidates cached GEOMETRY rather than a position.
+    d.forceAll = (!d.caching || cacheWarmup_ ||
                   shadowGpu->ConsumeCasterLodsChanged()) ? 1u : 0u;
     d.windDirtyMaxLevel = windAnimating
         ? std::min(vsm::g_windAnimateMaxLevel, vsm::kNumClipmapLevels) : 0u;
@@ -981,7 +988,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     const D3D12_CPU_DESCRIPTOR_HANDLE casterGroupSrv = shadowGpu->CasterGroupSrv();
     // The setup shader always reads physOwnerPrev (t4) + casterMeta (t5) + writes perPageDirty (u3),
     // so those must be non-null whenever it dispatches (bail otherwise, like the other inputs).
-    const D3D12_CPU_DESCRIPTOR_HANDLE casterMetaSrv = shadowGpu->CasterMetaSrv();
+    const D3D12_CPU_DESCRIPTOR_HANDLE casterMetaSrv = shadowGpu->CasterMetaSrv(renderer->GetCurrentFrameIndex());
     if (boundsSrv.ptr == 0 || casterGroupSrv.ptr == 0 || pageVisibleListUav_.ptr == 0 ||
         physOwnerPrevSrv_.ptr == 0 || casterMetaSrv.ptr == 0 || perPageDirtyUav_.ptr == 0) { return; }
     const std::uint32_t activeCasters = shadowGpu->ActiveCasterCount();
@@ -1051,9 +1058,18 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 "VSM_PAGE PSO unavailable" };
             char msg[192];
             std::snprintf(msg, sizeof(msg),
-                          "[VSM] single-draw page render OFF: %s — using the per-page loop.\n",
+                          "[VSM] single-draw page render OFF: %s -- using the per-page loop.\n",
                           kReason[reason]);
             OutputDebugStringA(msg);
+            // ...and to a FILE. OutputDebugString alone means nobody sees it: the per-page loop is
+            // the slow path, and "why is dragging this mesh 150x slower than flying the camera"
+            // cost a long hunt precisely because the engine already knew the answer and whispered it
+            // somewhere unreadable.
+            if (FILE* f = nullptr; fopen_s(&f, diag::LogPath("vsm.log").c_str(), "a") == 0 && f)
+            {
+                std::fputs(msg, f);
+                std::fclose(f);
+            }
         }
     }
     else if (singleDraw) { singleDrawFallbackLogged_ = 0; }
