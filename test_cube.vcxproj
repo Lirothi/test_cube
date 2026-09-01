@@ -660,6 +660,7 @@
     <None Include="shaders\vsm_page_alloc_freelist_cs.hlsl" />
     <None Include="shaders\vsm_page_alloc_init_cs.hlsl" />
     <None Include="shaders\vsm_page_alloc_map_cs.hlsl" />
+    <None Include="shaders\vsm_page_propagate_cs.hlsl" />
     <None Include="shaders\vsm_page_alloc_touch_cs.hlsl" />
     <None Include="shaders\vsm_page_clear.hlsl" />
     <None Include="shaders\vsm_page_request_clear_cs.hlsl" />
@@ -668,6 +669,7 @@
     <None Include="shaders\vsm_page_scatter_cs.hlsl" />
     <None Include="shaders\vsm_page_setup_cs.hlsl" />
     <None Include="shaders\vsm_sample.hlsli" />
+    <None Include="shaders\vsm_smrt.hlsli" />
     <None Include="textures\ocean\ContactFoam.png" />
     <None Include="textures\ocean\FoamAlbedo.png" />
     <None Include="textures\ocean\FoamTrail.png" />

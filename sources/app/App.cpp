@@ -255,6 +255,14 @@ namespace
         if (setting == "vsm.clipmapZRangeScale") { vsm::g_clipmapZRangeScale = std::max(1.0f, value); return true; }
         if (setting == "vsm.clipmapBlend") { vsm::g_clipmapBlendEnabled = value != 0.0f; return true; }
         if (setting == "vsm.clipmapBlendWidth") { vsm::g_clipmapBlendWidth = std::clamp(value, 0.0f, 0.5f); return true; }
+        // SMRT (docs/vsm_smrt_plan.md). rayCount 0 = the single-tap SampleCmp path -- the A/B arm.
+        if (setting == "vsm.smrtRayCount") { vsm::g_smrtRayCount = (std::uint32_t)std::clamp(value, 0.0f, (float)vsm::kSmrtMaxRays); return true; }
+        if (setting == "vsm.smrtSamplesPerRay") { vsm::g_smrtSamplesPerRay = (std::uint32_t)std::clamp(value, 1.0f, (float)vsm::kSmrtMaxSamplesPerRay); return true; }
+        if (setting == "vsm.smrtRayLengthScale") { vsm::g_smrtRayLengthScale = std::max(0.0f, value); return true; }
+        if (setting == "vsm.smrtExtrapolateMaxSlope") { vsm::g_smrtExtrapolateMaxSlope = std::max(0.0f, value); return true; }
+        if (setting == "vsm.smrtSourceAngleDeg") { vsm::g_smrtSourceAngleDeg = std::clamp(value, 0.0f, 45.0f); return true; }
+        if (setting == "vsm.smrtTexelDitherScale") { vsm::g_smrtTexelDitherScale = std::clamp(value, 0.0f, 8.0f); return true; }
+        if (setting == "vsm.smrtLevelMargin") { vsm::g_smrtLevelMargin = std::clamp(value, 0.25f, 1.0f); return true; }
         // The dev-window "Shadow LOD bias" slider, headless. A change triggers the same GPU-idle
         // caster rebuild the slider does (Scene::ReconcileShadowLodBias polls it) — which is the
         // point: the round-trip perf leak is only reproducible in ONE process

@@ -117,6 +117,15 @@ cbuffer PerFrame : register(b0)
     float clipmapDepthBiasDecay;
     float clipmapDepthBiasFloorNdc;
     float clipmapBlendWidth; // outer fraction of a fine level blended into its parent; 0 = off
+    // SMRT (docs/vsm_smrt_plan.md). smrtRayCount 0 = the single-tap SampleCmp path, unchanged.
+    // MIRRORS LightingPassConstants; the four sit together in both so the 16-byte rows line up.
+    uint smrtRayCount;
+    uint smrtSamplesPerRay;
+    float smrtRayLengthScale;
+    float smrtExtrapolateMaxSlope;
+    float smrtSourceRadius;      // Step 3: sin of the light's angular radius
+    float smrtTexelDitherScale;
+    float smrtLevelMargin;
     float _padClipBias;
     float4x4 clipmapViewProj[VSM_NUM_CLIPMAP_LEVELS]; // mirrored in LightingPassConstants
     // P16.16: inverse transpose of world -> shadow UVZ, for the receiver-plane depth bias. One
@@ -273,9 +282,18 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade)
         outCascade = 0;
         // invProj._11 is tan(hFov/2) for this projection, which is the term UE's normal offset
         // needs; no extra constant for something the matrix already carries.
+        VsmSmrtParams smrt;
+        smrt.rayCount = smrtRayCount;
+        smrt.samplesPerRay = smrtSamplesPerRay;
+        smrt.rayLengthScale = smrtRayLengthScale;
+        smrt.extrapolateMaxSlope = smrtExtrapolateMaxSlope;
+        smrt.sourceRadius = smrtSourceRadius;
+        smrt.texelDitherScale = smrtTexelDitherScale;
+        smrt.levelMargin = smrtLevelMargin;
+        // `sunDirWS` is the direction the light TRAVELS; SMRT marches TOWARDS the light.
         return VsmClipmapShadow(P, N, camPosWS, clipmapNormalBias, vsmDepthBias,
                                 clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,
-                                invProj._11, clipmapUvNormal,
+                                invProj._11, clipmapUvNormal, normalize(-sunDirWS), smrt,
                                 clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
     }
     return CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, N, ndl, outCascade);

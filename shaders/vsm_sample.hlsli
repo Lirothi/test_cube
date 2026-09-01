@@ -7,9 +7,10 @@
 #ifndef VSM_SAMPLE_HLSLI
 #define VSM_SAMPLE_HLSLI
 #include "vsm_addressing.hlsli"
+#include "vsm_smrt.hlsli"
 
-static const uint VSM_SAMPLE_RESIDENT_BIT = 0x80000000u;
-static const uint VSM_SAMPLE_PHYS_MASK    = 0x0000FFFFu;
+static const uint VSM_SAMPLE_RESIDENT_BIT = VSM_RESIDENT_BIT_C; // see vsm_addressing.hlsli
+static const uint VSM_SAMPLE_PHYS_MASK    = VSM_PHYS_MASK_C;
 
 // P16.16. UE clamp the receiver-plane bias to `abs(100 * ShadowViewToClipMatrix._33)` -- a hundred
 // world units expressed in the level's own NDC. Ours is already NDC, and a clipmap level's depth
@@ -222,9 +223,15 @@ float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, fl
 // per-level lower bound (authored in texels on the CPU). With the D32 pool (2026-08-21) the
 // quantization floor is ~2^-24 of the range -- effectively zero -- so the constant CAN sit at 0
 // with the receiver-plane bias below doing all the work, which is UE's configuration.
+//
+// SMRT (`smrt.rayCount > 0`) replaces the single-tap SampleCmp for the level the receiver lands on
+// with a ray march toward the light -- see vsm_smrt.hlsli. `dirToLight` is the unit direction
+// TOWARDS the light (callers hold `sunDirWS`, the direction light TRAVELS, so they negate it).
+// rayCount 0 leaves every instruction below untouched, which is what makes the A/B an A/B.
 float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
                        float depthBiasDecay, float depthBiasFloorNdc, float clipBlendWidth,
-                       float tanHalfFovX, float4x4 uvNormalMatrix,
+                       float tanHalfFovX, float4x4 uvNormalMatrix, float3 dirToLight,
+                       VsmSmrtParams smrt,
                        float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
                        StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
@@ -246,7 +253,25 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, floa
         float4 clip = mul(float4(Poff, 1.0f), clipVP[i]);
         if (clip.w <= 0.0f) { continue; }
         float3 ndc = clip.xyz / clip.w;
-        if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { continue; } // outside this level
+        // LEVEL ACCEPTANCE MARGIN -- the reason a marched ray was never able to march.
+        //
+        // UE keep TWO different radii per clipmap level: `GetLevelRadius(L) = 2^(L+1)` is what the
+        // level must COVER and is what their level selection tests against, while the level's ortho
+        // projection is built with `HalfLevelDim = 2.0 * RawLevelRadius`
+        // (VirtualShadowMapClipmap.cpp:349). Their own comment says it outright: "the actual clipmap
+        // dimensions will be larger". So every receiver sits at worst HALFWAY out in its level's
+        // square, and a ray of 1.5x distance-to-camera still has somewhere to go.
+        //
+        // Ours used one quantity for both: accept the finest level whose square contains the
+        // receiver AT ALL. A receiver can then sit hard against the edge with zero margin, and the
+        // very first sample above it lands outside the level -- which is why samplesPerRay 1 and 32
+        // produced identical images.
+        //
+        // Applied only when SMRT is marching. The single-tap path samples one texel at the receiver
+        // and wants the FINEST level it can get; giving it this margin would cost it a level of
+        // shadow resolution to buy room no single tap uses.
+        const float acceptEdge = (smrt.rayCount > 0u) ? smrt.levelMargin : 1.0f;
+        if (any(abs(ndc.xy) > acceptEdge) || ndc.z < 0.0f || ndc.z > 1.0f) { continue; } // outside
         const float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
         // Residency pre-check: if this level's page isn't resident (a level-boundary strip the
         // sub-sampled request missed), fall through to the NEXT, coarser clipmap level — which covers
@@ -255,6 +280,84 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, floa
         const uint py = min((uint)(uv.y * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
         const uint entry = PageTable[VsmPageId(VSM_NUM_LOCAL_VIEWS + i, 0u, px, py)];
         if ((entry & VSM_SAMPLE_RESIDENT_BIT) == 0u) { continue; } // not resident -> coarser level
+        // ---- SMRT ----------------------------------------------------------------------------
+        // Marches this level instead of taking one biased comparison. Returns before the constant
+        // depth bias is even computed: the march's own CompareTolerance is what replaces it, and
+        // leaving the constant in would put both biases on the same sample.
+        //
+        // The cross-level BLEND below is deliberately skipped here, and on this path it is not
+        // needed: it exists because a single tap has no way to continue past a level's edge, and
+        // the march does exactly that instead -- it walks INTO the coarser level and keeps going
+        // (VsmSmrtFindSample). Blending two independent marches would be a third thing that is
+        // neither, and would double the cost to hide a seam that is no longer there.
+        if (smrt.rayCount > 0u)
+        {
+            // The ray is held in WORLD space and projected per level, because it may cross into a
+            // coarser clipmap level mid-march and has to be re-projected there (see
+            // VsmSmrtRayState). `Poff` is the normal-offset receiver -- the offset is kept on the
+            // SMRT path because it is already UE's formula and it is what stops the ray starting
+            // inside the surface it is testing.
+            const float rayLength = max(smrt.rayLengthScale * dist, 1e-4f);
+            // One hash per pixel; each ray then walks the R2 sequence from it, which is UE's
+            // arrangement (a per-pixel base plus a low-discrepancy per-ray offset) and is what
+            // stops the N rays of one pixel from landing on top of each other.
+            const float2 pixelHash = VsmSmrtHash2(P);
+
+            // Dither in TEXELS of this level, converted to UV. `levelTexels` is the level's full
+            // virtual resolution, which is what a "texel" means for a clipmap level.
+            const float levelTexels = (float)(VSM_L0_AXIS * VSM_PAGE_SIZE);
+            const float ditherUV = smrt.texelDitherScale / levelTexels;
+
+            // Bounded by a LITERAL -- the CB count can only end the loop early. See the caps in
+            // vsm_smrt.hlsli for why a CB-driven loop bound is a device-hang generator.
+            const uint rays = min(smrt.rayCount, VSM_SMRT_MAX_RAYS);
+            uint rayMissCount = 0u;
+            [loop] for (uint r = 0u; r < VSM_SMRT_MAX_RAYS; ++r)
+            {
+                if (r >= rays) { break; }
+
+                const float2 e0 = frac(pixelHash + VsmSmrtR2(r));
+                const float2 e1 = frac(pixelHash + VsmSmrtR2(r + rays));
+                const float3 rayDir = VsmSmrtRayDir(dirToLight, e0, smrt.sourceRadius);
+
+                VsmSmrtRayState st;
+                st.originWS = Poff;
+                st.rayLength = rayLength;
+                st.vecWS = rayDir * rayLength;
+                st.extrapolateMaxSlopeWS = smrt.extrapolateMaxSlope;
+                st.level = i;
+                st.startUVZ = float3(0.0f, 0.0f, 0.0f);
+                st.stepUVZ = float3(0.0f, 0.0f, 0.0f);
+                st.extrapolateSlope = 0.0f;
+                // Built per ray, not once: each ray has its own direction, so its projection into
+                // the level differs. The march also MUTATES this state (it can change level), so
+                // ray r+1 must not inherit where ray r ended up.
+                VsmSmrtSetLevel(st, i, clipVP);
+
+                // Texel dither on the ray's start, with the receiver-plane bias that offset earns
+                // -- UE apply exactly this pair (SMRTClipmapRayInitialize), and applying the offset
+                // without the bias is what turns a dither into acne.
+                const float2 texelOffset = (e1 - 0.5f) * ditherUV;
+                st.startUVZ.xy += texelOffset;
+                // SUBTRACTED -- the FOURTH direct-Z flip, and the one that cost a measurement.
+                // UE write `RayStartUVZ.z += OptimalBias` because larger depth is NEARER the light
+                // for them. Adding it here pushes the ray's start AWAY from the light, i.e. BELOW
+                // the surface it stands on, so every ray immediately finds that surface as its own
+                // occluder. Measured with the sign wrong: shadow coverage 54.96% -> 73.70%, a scene
+                // drowning in self-shadow that looks superficially like "softer shadows".
+                st.startUVZ.z -= min(2.0f * max(0.0f, -dot(depthSlopeUV, texelOffset)),
+                                     VSM_MAX_SLOPE_BIAS_NDC);
+
+                const VsmSmrtResult hit = VsmSmrtRayCast(st, (int)smrt.samplesPerRay, 0.0f,
+                                                         clipVP, PageTable, Pool);
+                if (!hit.validHit) { ++rayMissCount; }
+            }
+            // UE's ShadowFactor: the fraction of rays that reached the light. THIS is where a
+            // penumbra comes from -- a partially occluded light disc gives a partial count.
+            return (float)rayMissCount / (float)rays;
+        }
+        // ---- end SMRT ------------------------------------------------------------------------
+
         // Bias of the level we LANDED on (matches how the receiver-plane bias scales: a residency
         // fallback to a coarser level uses that level's own values).
         const float levelDepthBias = max(depthBias * pow(depthBiasDecay, (float)i), depthBiasFloorNdc);

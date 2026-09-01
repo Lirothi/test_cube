@@ -2315,6 +2315,93 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Hides caster-LOD silhouette changes at clip boundaries. 0 is a strict off\n"
                                       "switch: no parent page requests and no second 3x3 PCF sample. Non-zero\n"
                                       "costs the extra sample only inside this transition band.");
+                // ---- SMRT (docs/vsm_smrt_plan.md) --------------------------------------------
+                // Marches a ray from the receiver toward the light through the clipmap instead of
+                // taking one biased comparison. Directional clipmap only, so it sits with the
+                // clipmap knobs and inside the same VsmActive() gate.
+                ImGui::Separator();
+                bool smrtOn = vsm::g_smrtRayCount > 0u;
+                // Remembers the ray count across an off/on cycle, so unticking is not destructive.
+                // 7 = UE's RayCountDirectional default, and the right thing to hand someone who
+                // just ticked the box. ONE ray is the noisiest configuration this feature has: the
+                // per-pixel direction jitter is not averaged and the march point-samples one texel
+                // per step with no filter, so a single ray measures twice the reference's
+                // salt-and-pepper (10.09 vs 5.37; 7 rays 6.06, 16 rays 5.29).
+                static int smrtLastRays = 7;
+                if (ImGui::Checkbox("SMRT ray-marched clipmap", &smrtOn))
+                {
+                    vsm::g_smrtRayCount = smrtOn
+                        ? static_cast<std::uint32_t>(smrtLastRays)
+                        : 0u;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("OFF = one SampleCmp per level with a constant depth bias (today's path).\n"
+                                      "ON  = UE's SMRT: a ray from the receiver toward the light, whose own\n"
+                                      "depth step per sample IS the tolerance -- so the constant bias below is\n"
+                                      "not applied at all and its sliders grey out.\n\n"
+                                      "1 ray is HARD-EDGED by design (no dither, no filter). Softness needs\n"
+                                      "more rays; measured on wind_test it moves shadow coverage by 0.56pp,\n"
+                                      "i.e. the shadow stays where it was.");
+
+                ImGui::BeginDisabled(!smrtOn);
+                int smrtRays = static_cast<int>(vsm::g_smrtRayCount);
+                if (ImGui::SliderInt("SMRT rays", &smrtRays, 1, static_cast<int>(vsm::kSmrtMaxRays)))
+                {
+                    vsm::g_smrtRayCount = static_cast<std::uint32_t>(smrtRays);
+                    smrtLastRays = smrtRays;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Rays per pixel; UE's r.Shadow.Virtual.SMRT.RayCountDirectional default is 7.\n"
+                                      "Cost lands in Pass_Lighting, not in the shadow passes.\n"
+                                      "Until Step 3 adds the per-ray dither every ray is identical, so counts\n"
+                                      "above 1 buy nothing yet and only cost.");
+
+                int smrtSteps = static_cast<int>(vsm::g_smrtSamplesPerRay);
+                if (ImGui::SliderInt("SMRT samples/ray", &smrtSteps, 1,
+                                     static_cast<int>(vsm::kSmrtMaxSamplesPerRay)))
+                    vsm::g_smrtSamplesPerRay = static_cast<std::uint32_t>(smrtSteps);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Steps along each ray (UE default 8). Too few and a thin occluder is\n"
+                                      "stepped over, so its shadow disappears rather than softening.");
+
+                ImGui::SliderFloat("SMRT level margin", &vsm::g_smrtLevelMargin, 0.25f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Fraction of a clipmap level square within which a receiver is accepted.\n"
+                                      "1.0 = the finest level that contains it at all -- the sharpest data there is.\n"
+                                      "Lower values mirror UE, whose level covers twice the radius its selection\n"
+                                      "tests, giving a marched ray room before it leaves the level.\n\n"
+                                      "A margin is bought with A LEVEL OF SHADOW RESOLUTION: at 0.5 the coarse\n"
+                                      "level pages show through as rectangular slabs and palm fronds lose their\n"
+                                      "leaflets. Measured as unnecessary here, hence the 1.0 default.");
+
+                ImGui::SliderFloat("SMRT sun angle (deg)", &vsm::g_smrtSourceAngleDeg, 0.0f, 8.0f, "%.3f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The light angular SIZE -- what a penumbra is actually made of.\n"
+                                      "UE default is 0.5357 deg, the real sun disc. At 0 every ray collapses\n"
+                                      "onto the light axis and the ray count buys nothing at all.\n\n"
+                                      "Raise it for visibly soft shadows: the penumbra then WIDENS with\n"
+                                      "distance from the contact point, which no single-tap filter can do.");
+
+                ImGui::SliderFloat("SMRT texel dither", &vsm::g_smrtTexelDitherScale, 0.0f, 4.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Jitters each ray start by up to this many shadow texels (UE default 2.0),\n"
+                                      "trading the resolution staircase for noise the temporal pass absorbs.\n"
+                                      "0 is a clean off switch. Each offset carries its own receiver-plane\n"
+                                      "bias; without that the jitter is simply acne.");
+
+                ImGui::SliderFloat("SMRT ray length scale", &vsm::g_smrtRayLengthScale, 0.0f, 4.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Ray length as a multiple of distance-to-camera (UE default 1.5). This is\n"
+                                      "the knob that REPLACES the depth bias as the thing to tune, and UE's own\n"
+                                      "warning applies: too high detaches shadows from their contact points\n"
+                                      "unless samples/ray goes up; too low caps how large a penumbra can get.");
+                ImGui::EndDisabled();
+                ImGui::Separator();
+
+                // The constant depth bias is DEAD on the SMRT path -- VsmClipmapShadow returns from
+                // the march before levelDepthBias is even computed. Greyed rather than left live,
+                // because a slider that visibly does nothing is worse than an absent one.
+                ImGui::BeginDisabled(smrtOn);
                 ImGui::SliderFloat("Clipmap depth bias", &vsm::g_clipmapDepthBias, 0.0f, 0.01f, "%.4f");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Directional clipmap NDC depth bias at LEVEL 0 (0.0001 = 1.23 shadow texels).\n"
@@ -2330,6 +2417,11 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("Lower bound of the decayed bias, in texels of the level actually sampled.\n"
                                       "The D32 pool has effectively no quantization floor, so 0 is legal -- the\n"
                                       "receiver-plane bias carries the slope; raise this only if residual acne shows.");
+                ImGui::EndDisabled(); // constant depth bias group (inert under SMRT)
+
+                // NOT in the disabled group: the normal offset is applied on BOTH paths (SMRT keeps
+                // it -- it is already UE's formula and it is what stops the ray starting inside the
+                // receiver).
                 ImGui::SliderFloat("Clipmap normal bias (UE units)", &vsm::g_clipmapNormalBias, 0.0f, 4.0f, "%.3f");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Receiver offset along the normal, UE's r.Shadow.Virtual.NormalBias units\n"

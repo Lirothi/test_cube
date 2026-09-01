@@ -73,6 +73,12 @@ cbuffer GlassView : register(b1)
     // tail on purpose -- inserting anywhere else shifts every offset after it.
     float4 csmFilterMode;         // x = kernel mode, y = receiver bias, z = sharpen, w = over-blur
     float4 csmFilterParams;       // S10 x = far split, y = blend, z = distance fade; w = normal bias
+    // SMRT (docs/vsm_smrt_plan.md). x = ray count (0 = single-tap path), y = samples per ray,
+    // z = ray length scale, w = extrapolate max slope. APPENDED at the tail, same rule as above.
+    // Glass samples the SAME clipmap lighting_cs does, so it has to get the same numbers or a
+    // window shades against a differently-sampled shadow than the ground under it.
+    float4 smrtParams;
+    float4 smrtParams2;           // x = source radius (sin), y = texel dither, z = level margin
 };
 
 Texture2D SceneOpaque : register(t0);
@@ -193,9 +199,18 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
     {
         // P16.16: same arithmetic and the same numbers lighting_cs gets, or glass shades against
         // a differently-biased shadow.
+        VsmSmrtParams smrt;
+        smrt.rayCount = (uint)smrtParams.x;
+        smrt.samplesPerRay = (uint)smrtParams.y;
+        smrt.rayLengthScale = smrtParams.z;
+        smrt.extrapolateMaxSlope = smrtParams.w;
+        smrt.sourceRadius = smrtParams2.x;
+        smrt.texelDitherScale = smrtParams2.y;
+        smrt.levelMargin = smrtParams2.z;
         return VsmClipmapShadow(Pws, Nws, camPosSky.xyz, clipmapParams.y, clipmapParams.z,
                                 clipmapParams.w, vsmParams.z, vsmParams.w,
                                 invProj._11, clipmapUvNormal,
+                                normalize(-sunDirAmbient.xyz), smrt,
                                 clipmapViewProj, VsmPageTable, VsmPool, ShadowSampler);
     }
 

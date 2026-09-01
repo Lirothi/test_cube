@@ -560,6 +560,9 @@ struct SceneFrameData
     SceneView* mainView = nullptr;
     std::array<SceneView, kCascades>* cascadeViews = nullptr;
     std::array<SceneView, vsm::kNumClipmapLevels>* clipmapViews = nullptr; // Step 24d: directional clipmap (VSM)
+    // The same levels expressed in the SHARED light frame, for the clipmap LOD fallback chain
+    // (shaders/vsm_page_propagate_cs.hlsl). Null when the level has no valid sun.
+    const vsm::ClipmapSquares* clipmapSquares = nullptr;
     std::array<SceneView, LightManager::kMaxShadowedSpotLights>* spotShadowViews = nullptr;
     std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>* pointShadowViews = nullptr;
     LightManager* lightManager = nullptr;

@@ -41,7 +41,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
 
     const uint phys = FreeList[prevFree - 1u];
-    PageTable[i] = VSM_RESIDENT_BIT | (phys & VSM_PHYS_MASK);
+    // ANY_LOD is set on a mapped page too: "mapped here" implies "resolvable here", so a sampler
+    // tests one bit instead of two. The LOD offset field stays 0, which is what marks it as this
+    // level's own page rather than a pointer to a coarser one.
+    PageTable[i] = VSM_RESIDENT_BIT | VSM_ANY_LOD_BIT | (phys & VSM_PHYS_MASK);
     PhysOwner[phys] = i;
     PhysLastFrame[phys] = gCurFrame;
 

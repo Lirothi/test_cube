@@ -126,7 +126,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
         frame_->vsm->RecordPageRequest(renderer, t.cl, cb, D.depthSRV, rw, rh);
         // Step 20: allocate physical pages for the just-marked requests (same CL — request buffer
         // stays UAV between them). Add-dormant: nothing samples/renders the pages yet.
-        frame_->vsm->RecordPageAllocate(renderer, t.cl, pts);
+        frame_->vsm->RecordPageAllocate(renderer, t.cl, pts, frame_->clipmapSquares);
     }
     ctx.EndCL(t);
 }

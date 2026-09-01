@@ -51,6 +51,13 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle clipmapDepthBiasDecay;    // per-level depth-bias shaping (see VsmClipmapShadow)
     Material::CBFieldHandle clipmapDepthBiasFloorNdc;
     Material::CBFieldHandle clipmapBlendWidth;
+    Material::CBFieldHandle smrtRayCount;             // SMRT, docs/vsm_smrt_plan.md
+    Material::CBFieldHandle smrtSamplesPerRay;
+    Material::CBFieldHandle smrtRayLengthScale;
+    Material::CBFieldHandle smrtExtrapolateMaxSlope;
+    Material::CBFieldHandle smrtSourceRadius;
+    Material::CBFieldHandle smrtTexelDitherScale;
+    Material::CBFieldHandle smrtLevelMargin;
     Material::CBFieldHandle clipmapViewProj;
     Material::CBFieldHandle clipmapUvNormal; // P16.16
     Material::CBFieldHandle causticsTint;      // rgb = tint, w = master enable
@@ -532,6 +539,15 @@ struct LightingPassConstants
     float clipmapDepthBiasDecay = 1.0f;           // bias(L) = max(vsmDepthBias * decay^L, floorNdc)
     float clipmapDepthBiasFloorNdc = 0.0f;        // already converted texels -> NDC on the CPU
     float clipmapBlendWidth = 0.0f;               // outer level fraction blended into parent; 0 = off
+    // SMRT (docs/vsm_smrt_plan.md). MIRRORS lighting_cs.hlsl's block of the same names -- these
+    // four sit together in both places, and the 16-byte rule is what decides where the pad goes.
+    uint32_t smrtRayCount = 0;                    // 0 = single-tap SampleCmp path (default)
+    uint32_t smrtSamplesPerRay = 8;
+    float smrtRayLengthScale = 1.5f;
+    float smrtExtrapolateMaxSlope = 0.05f;  // UE's 5.0 is CENTIMETRES; ours is metres
+    float smrtSourceRadius = 0.0f;          // sin of the light's angular radius (Step 3)
+    float smrtTexelDitherScale = 2.0f;
+    float smrtLevelMargin = 1.0f;
     std::array<mat4, vsm::kNumClipmapLevels> clipmapViewProj{}; // == lighting_cs's clipmapViewProj
     mat4 clipmapUvNormal{}; // P16.16: receiver-plane transform (inverse transpose world->shadow UV)        // camera-centered ortho viewProj per clipmap level
     // Underwater caustics (see shaders/caustics.hlsli). causticsTint.w == 0 disables the block,

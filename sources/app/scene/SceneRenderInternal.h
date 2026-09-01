@@ -8,6 +8,7 @@
 // same symbols are not silently duplicated per translation unit) and the free functions became
 // `inline` (a header included by more than one TU would otherwise multiply-define them).
 
+#include <cmath>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -164,6 +165,8 @@ namespace scene_internal
         float4 preExposureParams;     // P16.1: x = pre-exposure, yzw reserved
         float4 csmFilterMode;         // S8: x = kernel, y = receiver bias, z = sharpen, w = over-blur
         float4 csmFilterParams;       // w = receiver normal bias in texels
+        float4 smrtParams;            // SMRT: x = rayCount, y = samplesPerRay, z = lengthScale, w = maxSlope
+        float4 smrtParams2;           // x = source radius (sin), y = texel dither scale
     };
 
     // MIRRORS the OceanReflectionCB in shaders/ocean_reflection_cs.hlsl. This one is uploaded by
@@ -342,6 +345,10 @@ namespace scene_internal
         // .w = the per-level depth-bias decay (see VsmClipmapShadow).
         vc.clipmapParams = float4(vsm::g_clipmapBaseExtent, vsm::g_clipmapNormalBias * 0.001f,
                                   vsm::g_clipmapDepthBias, vsm::g_clipmapDepthBiasDecay);
+        vc.smrtParams = float4((float)vsm::g_smrtRayCount, (float)vsm::g_smrtSamplesPerRay,
+                               vsm::g_smrtRayLengthScale, vsm::g_smrtExtrapolateMaxSlope);
+        vc.smrtParams2 = float4(std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f),
+                                vsm::g_smrtTexelDitherScale, vsm::g_smrtLevelMargin, 0.0f);
         if (frame.clipmapViews)
         {
             for (size_t i = 0; i < vsm::kNumClipmapLevels && i < frame.clipmapViews->size(); ++i)

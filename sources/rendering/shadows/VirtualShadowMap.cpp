@@ -356,6 +356,7 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     allocTouchMat_ = makeCompute(L"shaders/vsm_page_alloc_touch_cs.hlsl");
     allocFreeMat_  = makeCompute(L"shaders/vsm_page_alloc_freelist_cs.hlsl");
     allocMapMat_   = makeCompute(L"shaders/vsm_page_alloc_map_cs.hlsl");
+    allocPropagateMat_ = makeCompute(L"shaders/vsm_page_propagate_cs.hlsl");
     pageSetupMat_  = makeCompute(L"shaders/vsm_page_setup_cs.hlsl");
     // Spatial scatter cull (directional clipmap). Optional: if either fails to compile the setup
     // shader still culls those pages the brute-force way, so shadows stay correct (just slower).
@@ -618,7 +619,8 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
 }
 
 void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                                          const PageRequestPoints& pts)
+                                          const PageRequestPoints& pts,
+                                          const vsm::ClipmapSquares* squares)
 {
     if (!renderer || !cl || !IsAllocated() || !allocCounters_ || !allocUavHeap_) { return; }
     // Creation happens in EnsureFrameResources, before the graph runs (barrier plan step 4).
@@ -684,6 +686,48 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
         noSampler,
         numEntries, 1,
         needsRender_.Get());
+
+    // Pass 4 (propagate): give every UNMAPPED clipmap page a pointer to the nearest mapped page of
+    // a coarser level. Must run AFTER pass 3, or it would miss this frame's new mappings, and it
+    // rewrites every non-mapped clipmap page unconditionally because the table persists across
+    // frames (a pointer left from last frame may name a page that now belongs to someone else).
+    // See shaders/vsm_page_propagate_cs.hlsl for why the read/write race is benign.
+    // Gated on SMRT being ON. Nothing else reads the fallback bit -- every existing consumer tests
+    // "mapped here" (bit 31), which these entries never set -- so with SMRT off this dispatch would
+    // be pure cost for output nobody reads.
+    if (vsm::g_smrtRayCount > 0u && allocPropagateMat_ && squares && squares->count > 0)
+    {
+        renderer->UAVBarrier(cl, pageTable_.Get());
+
+        struct PropagateCB
+        {
+            std::uint32_t numClipLevels, pagesPerAxis, pad0, pad1;
+            vsm::ClipmapLevelSquare level[vsm::kNumClipmapLevels];
+        };
+        static_assert(sizeof(PropagateCB) ==
+                          16 + sizeof(vsm::ClipmapLevelSquare) * vsm::kNumClipmapLevels,
+                      "PropagateCB must stay a tight mirror of VsmPropagateCB in the shader");
+        auto writePropagateCB = [&](std::uint8_t* dst)
+        {
+            PropagateCB c{};
+            c.numClipLevels = squares->count;
+            c.pagesPerAxis = vsm::kVirtualPagesL0Axis;
+            for (std::uint32_t l = 0; l < squares->count && l < vsm::kNumClipmapLevels; ++l)
+            {
+                c.level[l] = squares->level[l];
+            }
+            std::memcpy(dst, &c, sizeof(c));
+        };
+        const std::uint32_t propagateThreads =
+            squares->count * vsm::kVirtualPagesL0Axis * vsm::kVirtualPagesL0Axis;
+        RecordComputeDispatch(renderer, cl, allocPropagateMat_.get(),
+            static_cast<UINT>(sizeof(PropagateCB)), writePropagateCB,
+            {},
+            { pageTableUav_ },
+            noSampler,
+            propagateThreads, 1,
+            pageTable_.Get());
+    }
 
     // Step 20 debug: sample the request bitfield + alloc counters a few frames later.
     RecordDebugReadback(renderer, cl, pts);

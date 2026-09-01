@@ -1,3 +1,6 @@
+#include "core/diagnostics/DiagPaths.h"
+#include <cstdio>
+#include <utility>
 #include "app/scene/SceneResourceBootstrapper.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 
@@ -52,6 +55,13 @@ void SceneLightingCBHandles::Populate(Material* material)
     clipmapDepthBiasDecay = material->ComputeCB0FieldHandle("clipmapDepthBiasDecay");
     clipmapDepthBiasFloorNdc = material->ComputeCB0FieldHandle("clipmapDepthBiasFloorNdc");
     clipmapBlendWidth = material->ComputeCB0FieldHandle("clipmapBlendWidth");
+    smrtRayCount = material->ComputeCB0FieldHandle("smrtRayCount");
+    smrtSamplesPerRay = material->ComputeCB0FieldHandle("smrtSamplesPerRay");
+    smrtRayLengthScale = material->ComputeCB0FieldHandle("smrtRayLengthScale");
+    smrtExtrapolateMaxSlope = material->ComputeCB0FieldHandle("smrtExtrapolateMaxSlope");
+    smrtSourceRadius = material->ComputeCB0FieldHandle("smrtSourceRadius");
+    smrtTexelDitherScale = material->ComputeCB0FieldHandle("smrtTexelDitherScale");
+    smrtLevelMargin = material->ComputeCB0FieldHandle("smrtLevelMargin");
     clipmapViewProj = material->ComputeCB0FieldHandle("clipmapViewProj");
     clipmapUvNormal = material->ComputeCB0FieldHandle("clipmapUvNormal");
     causticsTint = material->ComputeCB0FieldHandle("causticsTint");
@@ -65,6 +75,35 @@ void SceneLightingCBHandles::Populate(Material* material)
     enableSkySpecular = material->ComputeCB0FieldHandle("enableSkySpecular");
     skySpecMipCount = material->ComputeCB0FieldHandle("skySpecMipCount");
     skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
+
+    // A name that does not resolve leaves `field` null, UpdateCBField writes NOTHING, and the
+    // shader then reads whatever was in that constant-buffer memory. That is normally a cosmetic
+    // wrong number -- but a field used as a LOOP BOUND turns it into a device hang, with no bad
+    // pointer and nothing for the debug layer to report. It happens without anyone editing a
+    // handle: a stale entry in shader_cache/ carries the OLD reflection, so the field genuinely is
+    // not there. Silence is what makes that expensive, so it says so once, by name.
+    const std::pair<const char*, const Material::CBFieldHandle*> kRequired[] = {
+        { "smrtRayCount", &smrtRayCount },
+        { "smrtSamplesPerRay", &smrtSamplesPerRay },
+        { "smrtRayLengthScale", &smrtRayLengthScale },
+        { "smrtExtrapolateMaxSlope", &smrtExtrapolateMaxSlope },
+        { "smrtSourceRadius", &smrtSourceRadius },
+        { "smrtTexelDitherScale", &smrtTexelDitherScale },
+        { "smrtLevelMargin", &smrtLevelMargin },
+    };
+    for (const auto& [name, handle] : kRequired)
+    {
+        if (handle->field != nullptr) { continue; }
+        if (FILE* f = nullptr;
+            fopen_s(&f, diag::LogPath("cb_field_missing.log").c_str(), "a") == 0 && f)
+        {
+            std::fprintf(f,
+                         "lighting_cs.hlsl cbuffer has no field '%s' -- it will read UNINITIALIZED\n"
+                         "  memory. If the shader is stale, delete shader_cache/ and re-run.\n",
+                         name);
+            std::fclose(f);
+        }
+    }
 }
 
 void ScenePointLightCBHandles::Populate(Material* material)
@@ -1231,6 +1270,13 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.clipmapDepthBiasDecay, data.clipmapDepthBiasDecay, dest);
     matLighting_->UpdateCBField(handles.clipmapDepthBiasFloorNdc, data.clipmapDepthBiasFloorNdc, dest);
     matLighting_->UpdateCBField(handles.clipmapBlendWidth, data.clipmapBlendWidth, dest);
+    matLighting_->UpdateCBField(handles.smrtRayCount, data.smrtRayCount, dest);
+    matLighting_->UpdateCBField(handles.smrtSamplesPerRay, data.smrtSamplesPerRay, dest);
+    matLighting_->UpdateCBField(handles.smrtRayLengthScale, data.smrtRayLengthScale, dest);
+    matLighting_->UpdateCBField(handles.smrtExtrapolateMaxSlope, data.smrtExtrapolateMaxSlope, dest);
+    matLighting_->UpdateCBField(handles.smrtSourceRadius, data.smrtSourceRadius, dest);
+    matLighting_->UpdateCBField(handles.smrtTexelDitherScale, data.smrtTexelDitherScale, dest);
+    matLighting_->UpdateCBField(handles.smrtLevelMargin, data.smrtLevelMargin, dest);
     matLighting_->UpdateCBField(handles.causticsTint, data.causticsTint, dest);
     matLighting_->UpdateCBField(handles.causticsParams0, data.causticsParams0, dest);
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);

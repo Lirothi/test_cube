@@ -106,6 +106,24 @@ namespace vsm
     // table entries and two more cull/scatter views; the physical pool is untouched (far levels
     // are coarse and resident pages stay demand-driven).
     inline constexpr std::uint32_t kNumClipmapLevels = 10;
+
+    // The square each clipmap level covers in the FIXED light frame Scene::UpdateClipmap snaps
+    // every level in (its `right` / `trueUp` axes are shared by all levels, which is the whole
+    // reason a level-to-level page mapping is 2D arithmetic instead of a matrix inverse).
+    // Consumed by the LOD fallback chain, shaders/vsm_page_propagate_cs.hlsl -- MIRRORS its
+    // `gLevelXform`, so the layout is float4 per level.
+    struct ClipmapLevelSquare
+    {
+        float centreX = 0.0f;   // world centre projected on the light frame's right axis
+        float centreY = 0.0f;   // ... and on its up axis
+        float extent  = 0.0f;   // full edge length; 0 marks a level with no valid sun
+        float _pad    = 0.0f;
+    };
+    struct ClipmapSquares
+    {
+        std::uint32_t count = 0;
+        std::array<ClipmapLevelSquare, kNumClipmapLevels> level{};
+    };
     inline constexpr std::uint32_t kMaxVirtualViews = kNumLocalVirtualViews + kNumClipmapLevels; // 42
     static_assert(kNumCascades + kMaxVirtualViews == render::kMaxShadowViews,
                   "cull view layout must be [cascades | local | clipmap]");
@@ -191,7 +209,19 @@ namespace vsm
     // spread 0.06 throughout), so UE's stated failure mode is not what bounds us -- the bias is.
     // Taking UE's 1000 would first require deriving the depth bias FROM the range instead of
     // holding it constant; then the range would be free and this could stop being a compromise.
-    inline float         g_clipmapZRangeScale = 50.0f;
+    // STEP 4 of docs/vsm_smrt_plan.md: raised 50 -> 1000, which is UE's own default.
+    //
+    // It sat at 50 because the constant NDC depth bias is expressed as a fraction of this range, so
+    // stretching the range stretched the bias with it and detached shadows. That coupling is gone:
+    // the SMRT march derives its tolerance from its own depth step, and the single-tap arm rescales
+    // its constant by kClipmapRangeMultipleRef/ClipmapRangeMultiple() so the bias keeps its meaning.
+    //
+    // MEASURED on wind_test at the shadow camera, one binary, wind frozen, noise floor 0.008 % of
+    // pixels: 50 -> 1000 moves 0.022 % with SMRT and 0.030 % on the shipping single-tap path, with
+    // shadow coverage identical to three decimals on both. The control that makes those numbers
+    // mean something is ZRangeScale 3, where the range DOES bind: coverage falls to 53.632 % and
+    // 3.197 % of pixels change, i.e. the tall caster's shadow is being cut off.
+    inline float         g_clipmapZRangeScale = 1000.0f;
 
     // A clipmap level's depth range as a MULTIPLE OF ITS EXTENT:
     //     depthUp = radius * ZRangeScale = extent * ZRangeScale/2,  depthDown = extent * 1
@@ -220,6 +250,11 @@ namespace vsm
     // cover -- the per-tap receiver-plane bias plus the normal offset carry everything, which is
     // UE's configuration (they run no constant either). Verified at the 2.8-degree-sun banding
     // camera and the palm-contact camera; raise only if a new scene shows residual acne.
+    // NOT zeroed by Step 4, and the measurement is the reason: with SMRT on this value is already
+    // dead (VsmClipmapShadow returns from the march before it is even computed), but the SINGLE-TAP
+    // arm still needs it -- zeroing it there moves shadow coverage 54.958 % -> 56.922 %, and that
+    // 2-point gain is acne, not shadow. The plan's "set it to 0" assumed SMRT would be the only
+    // path; while both ship, the constant belongs to the one that has no march to derive it from.
     inline float         g_clipmapDepthBias = 0.0002f;
     // Per-level shaping of the constant bias: bias(L) = max(g_clipmapDepthBias * decay^L, floor).
     // decay 1 = constant-in-texels (world size doubles per level -- raising the base then detaches
@@ -234,6 +269,60 @@ namespace vsm
     // world size of a SCREEN PIXEL, not to the shadow texel. The old form was "texels * dist/1024",
     // which at its shipped 2.0 worked out 3.9x this and ignored the field of view entirely.
     inline float         g_clipmapNormalBias = 1.0f;
+
+    // ---- SMRT (shadow-map ray tracing), docs/vsm_smrt_plan.md -------------------------------
+    // Marches a ray from the receiver toward the light through the clipmap instead of taking one
+    // biased comparison. The march's own step size IS the tolerance, which is what lets the
+    // constant depth bias above go to zero -- and with it the ceiling on the clipmap depth range.
+    //
+    // DORMANT BY DEFAULT (rayCount 0 = today's single-tap SampleCmp path, untouched). Step 1 of
+    // the plan ships the machinery, not the behaviour: the single-tap path stays as both the
+    // fallback and the A/B arm, exactly as csm.filterMode:0 did for the CSM tent kernels.
+    // `--set=vsm.smrtRayCount:1` to turn it on.
+    // MUST MATCH VSM_SMRT_MAX_RAYS / VSM_SMRT_MAX_SAMPLES_PER_RAY in shaders/vsm_smrt.hlsli. The
+    // shader is bounded by its own literals and cannot be talked past these by any CB value -- that
+    // is the actual safety. These exist so a setting is REJECTED at the knob instead of being
+    // silently truncated on the GPU, which would make the knob lie about what it is doing.
+    inline constexpr std::uint32_t kSmrtMaxRays = 16u;
+    inline constexpr std::uint32_t kSmrtMaxSamplesPerRay = 32u;
+    inline std::uint32_t g_smrtRayCount = 7u;
+    // UE's r.Shadow.Virtual.SMRT.SamplesPerRayDirectional (their default 8).
+    inline std::uint32_t g_smrtSamplesPerRay = 8u;
+    // UE's r.Shadow.Virtual.SMRT.RayLengthScaleDirectional (their default 1.5), scaled by distance
+    // to camera. Dimensionless, so it transfers from their centimetres unchanged. Their own
+    // warning, and it is the knob that replaces the depth bias as the thing to tune: "Too high
+    // values will cause shadows to detach from their contact points (unless more samples are
+    // used). Too low values will greatly restrict how large penumbras can be."
+    inline float         g_smrtRayLengthScale = 1.5f;
+    // UE's r.Shadow.Virtual.SMRT.ExtrapolateMaxSlopeDirectional. THEIR DEFAULT 5.0 IS IN
+    // CENTIMETRES -- this engine's world unit is the metre, so the same quantity is 0.05 here.
+    // Copying the 5.0 would have been a hundredfold over-clamp, i.e. no clamp at all.
+    //
+    // What it does (step 2): once the march passes BEHIND an occluder it stops comparing against
+    // the occluder's surface and starts extrapolating that surface along its own measured slope,
+    // so a penumbra keeps widening past the silhouette instead of ending at it. The clamp is what
+    // stops that extrapolation from leaking light behind a SECOND occluder. UE's own note: "Higher
+    // values allow softer penumbra edges but can introduce light leaks behind second occluders.
+    // Setting to 0 will disable slope extrapolation."
+    //
+    // 0 is still a valid setting and is exactly their SMRT_EXTRAPOLATE_SLOPE=0 path -- with the
+    // clamp at 0 the extrapolated depth collapses to the last recorded one.
+    inline float         g_smrtExtrapolateMaxSlope = 0.05f;
+    // Step 3 -- the light's angular SIZE, which is what a penumbra is made of. UE's directional
+    // default SourceAngle is 0.5357 degrees (the real sun's disc); the shader wants sin of the
+    // RADIUS, so half of it. With 0 here every ray collapses onto the light axis and rayCount is
+    // pure cost -- which is exactly the state Steps 1 and 2 shipped in.
+    inline float         g_smrtSourceAngleDeg = 0.5357f;
+    // r.Shadow.Virtual.SMRT.TexelDitherScaleDirectional (UE default 2.0), in texels.
+    inline float         g_smrtTexelDitherScale = 2.0f;
+    // Fraction of a clipmap level's square within which a receiver is accepted, SMRT only.
+    // 1.0 = the finest level that contains it at all, which is the single-tap rule and keeps the
+    // sharpest level available. 0.5 mirrors UE, whose level covers twice the radius its selection
+    // tests (VirtualShadowMapClipmap.cpp:349) -- but a margin is bought with A LEVEL OF SHADOW
+    // RESOLUTION, and on fine geometry like palm fronds that reads as blocky slabs where there
+    // were leaflets. Default 1.0: the theory the margin was added for (rays running out of level)
+    // was disproven by instrumenting the march, so it has to earn its place on looks alone.
+    inline float         g_smrtLevelMargin = 1.0f;
     // Local-light (spot + point) VSM shadow bias, in units of one shadow texel at the receiver
     // (auto-sized per-pixel from the light's cone width, distance and mip level in the shaders).
     // Lateral = surface-normal offset (~1 texel keeps Peter-panning to a texel); depth push =
@@ -317,7 +406,7 @@ inline bool g_scatterLocalViews = true;
 // this animate wind (and re-render every frame while it blows); levels at/above render their
 // casters RIGID and can cache. Locals always animate. Only matters with g_pageCaching on —
 // without caching every page redraws anyway. --set=vsm.windMaxLevel; >= level count = all.
-inline std::uint32_t g_windAnimateMaxLevel = 3;
+inline std::uint32_t g_windAnimateMaxLevel = 4;
 
     // Periodically log the VSM page stats to DBWIN ("[VSM] request ... | resident=..."). DEFAULT OFF
     // — it spams a captured stress/dev run. The on-screen dev-window "VSM" tab always shows the live
@@ -449,8 +538,11 @@ public:
     // allocate a physical page for each requested-but-not-resident page and append it to the
     // needs-render list (Step 22 input). Persists the page table + free-list/LRU state across
     // frames. Nothing samples/renders the pages yet (add-dormant). Also records the debug readback.
+    // `squares` feeds the clipmap LOD fallback chain (pass 4); null or count 0 skips it, which is
+    // the correct behaviour when the level has no sun.
     void RecordPageAllocate(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                            const PageRequestPoints& pts);
+                            const PageRequestPoints& pts,
+                            const vsm::ClipmapSquares* squares);
 
     // Step 22: render shadow casters into the resident physical pages. A setup compute builds a
     // per-page off-center projection + per-page indirect args (copied from Rung 0's per-view cull),
@@ -531,6 +623,7 @@ private:
     std::shared_ptr<Material> allocTouchMat_;        // vsm_page_alloc_touch_cs.hlsl
     std::shared_ptr<Material> allocFreeMat_;         // vsm_page_alloc_freelist_cs.hlsl
     std::shared_ptr<Material> allocMapMat_;          // vsm_page_alloc_map_cs.hlsl
+    std::shared_ptr<Material> allocPropagateMat_;    // vsm_page_propagate_cs.hlsl (clipmap LOD fallback)
     std::shared_ptr<Material> pageSetupMat_;         // vsm_page_setup_cs.hlsl (Step 22)
     std::shared_ptr<Material> pageScatterMat_;       // vsm_page_scatter_cs.hlsl (spatial scatter cull)
     std::shared_ptr<Material> pageScatterClearMat_;  // vsm_page_scatter_clear_cs.hlsl (zero the counts)

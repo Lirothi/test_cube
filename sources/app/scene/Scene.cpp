@@ -438,6 +438,7 @@ void Scene::UpdateClipmap(const Camera& camera)
     const float3 fwd = sunDirWS.Normalized();
     if (fwd.Dot(fwd) < 1e-8f) // no valid sun direction -> reject-all views
     {
+        clipmapSquares_ = {}; // no sun -> no squares; the fallback chain skips every level
         for (auto& v : clipmapViews_)
         {
             v.frustum = Frustum{};
@@ -491,6 +492,14 @@ void Scene::UpdateClipmap(const Camera& camera)
         const float farLS = originDist + depthDown;
 
         const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
+        // For the LOD fallback chain: this level's square in the FIXED light frame. `center` is
+        // already texel-snapped in that frame just above, so the value stored here is exactly the
+        // one the page mapping must agree with.
+        clipmapSquares_.level[i].centreX = center.Dot(right);
+        clipmapSquares_.level[i].centreY = center.Dot(trueUp);
+        clipmapSquares_.level[i].extent = extent;
+        clipmapSquares_.count = static_cast<std::uint32_t>(i + 1);
+
         SceneView& v = clipmapViews_[i];
         v.view = lightView;
         v.proj = lightProj;
@@ -1045,6 +1054,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.mainView = &camera_.GetView();
     frameData_.cascadeViews = &cascadeViews_;
     frameData_.clipmapViews = &clipmapViews_;
+    frameData_.clipmapSquares = &clipmapSquares_;
     frameData_.spotShadowViews = &spotShadowViews_;
     frameData_.pointShadowViews = &pointShadowViews_;
     frameData_.lightManager = &lightManager_;

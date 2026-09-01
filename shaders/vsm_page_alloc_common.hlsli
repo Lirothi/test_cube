@@ -5,9 +5,12 @@
 //   bits 0..15 : physical page index (0..kPoolPageCount-1)
 #ifndef VSM_PAGE_ALLOC_COMMON_HLSLI
 #define VSM_PAGE_ALLOC_COMMON_HLSLI
+// The entry bit layout lives in vsm_addressing.hlsli -- ONE definition shared with the samplers,
+// because a page-table format that is spelled out in two places is a format that will drift.
+#include "vsm_addressing.hlsli"
 
-static const uint VSM_RESIDENT_BIT = 0x80000000u;
-static const uint VSM_PHYS_MASK    = 0x0000FFFFu;
+static const uint VSM_RESIDENT_BIT = VSM_RESIDENT_BIT_C;
+static const uint VSM_PHYS_MASK    = VSM_PHYS_MASK_C;
 static const uint VSM_INVALID      = 0xFFFFFFFFu; // "no owner" sentinel for a free physical page
 
 // AllocCounters[] slot layout (a small RWStructuredBuffer<uint>). Reset each frame in the touch

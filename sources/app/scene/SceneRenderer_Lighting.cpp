@@ -5,6 +5,7 @@
 // deliberately NOT part of this step, because an unused include is not a defect and a
 // trimmed one is a second thing to review.
 
+#include <cmath>
 #include "app/scene/SceneRenderer.h"
 
 #include <algorithm>
@@ -408,6 +409,16 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         // (GetNormalBiasForShader, VirtualShadowMapArray.cpp:561). Same here, so the authored
         // number stays directly comparable to `r.Shadow.Virtual.NormalBias`.
         constants.clipmapNormalBias = vsm::g_clipmapNormalBias * 0.001f;
+        // SMRT (docs/vsm_smrt_plan.md). rayCount 0 = the single-tap path, bit-for-bit unchanged.
+        constants.smrtRayCount = vsm::g_smrtRayCount;
+        constants.smrtSamplesPerRay = vsm::g_smrtSamplesPerRay;
+        constants.smrtRayLengthScale = vsm::g_smrtRayLengthScale;
+        constants.smrtExtrapolateMaxSlope = vsm::g_smrtExtrapolateMaxSlope;
+        // Degrees of full ANGLE -> sin of the angular RADIUS, which is what the shader jitters by.
+        constants.smrtSourceRadius =
+            std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f);
+        constants.smrtTexelDitherScale = vsm::g_smrtTexelDitherScale;
+        constants.smrtLevelMargin = vsm::g_smrtLevelMargin;
         if (frame_->clipmapViews)
         {
             for (size_t i = 0; i < constants.clipmapViewProj.size() && i < frame_->clipmapViews->size(); ++i)
