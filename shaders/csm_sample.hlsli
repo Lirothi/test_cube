@@ -160,7 +160,7 @@ int CsmChooseCascade(CsmParams p, float3 Pws)
 }
 
 float CsmPcf3x3(Texture2D atlas, SamplerComparisonState cmp,
-                float2 uv, float zRef, float2 texel, float radiusPx)
+                float2 uv, float zRef, float2 texel, float radiusPx, float4 uvClamp)
 {
     float s = 0.0f;
     [unroll]
@@ -169,8 +169,11 @@ float CsmPcf3x3(Texture2D atlas, SamplerComparisonState cmp,
         [unroll]
         for (int x = -1; x <= 1; ++x)
         {
+            // S5: every tap clamped to the content rect. This arm used to rely on the caller's
+            // margin test to keep its 3x3 grid inside the tile; that test is gone, so the clamp is
+            // now what stops a tap crossing into the neighbouring cascade.
             const float2 off = float2(x, y) * texel * radiusPx;
-            s += atlas.SampleCmpLevelZero(cmp, uv + off, zRef).r;
+            s += atlas.SampleCmpLevelZero(cmp, clamp(uv + off, uvClamp.xy, uvClamp.zw), zRef).r;
         }
     }
     return s / 9.0f;
@@ -209,22 +212,25 @@ float CsmSampleChain(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, S
         const float2 uvLocal = (lc.xy / max(1e-6f, lc.w)) * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
         const float  z = lc.z / max(1e-6f, lc.w);
 
-        // The Gather tent reaches TWO texels, the 3x3 SampleCmp grid one. Insetting by the actual
-        // reach is what keeps a tap from crossing into the neighbouring tile (S5 replaces this with
-        // a real gutter).
-        // Kernel reach in texels: 3 for the 6x6 tent, 2 for the 4x4, the PCF radius for the box.
-        const float reach = (p.useGatherPcf == 2u) ? 3.0f
-                          : ((p.useGatherPcf == 1u) ? 2.0f : p.pcfRadius);
-        const float2 margin = (reach * texel) / max(1e-6f, scale);
-        if (any(uvLocal < margin) || any(uvLocal > 1.0f - margin))
+        // S5: fall through to a coarser cascade only when the point is genuinely OUTSIDE this
+        // cascade's world square -- not merely near the edge of its tile. `scale`/`biasUV` now map
+        // that square onto the CONTENT rect, so [0,1] is exactly the right test.
+        //
+        // What used to be here: an inset of `reach` texels, i.e. a ring 3 texels wide (at the 6x6
+        // kernel) around EVERY cascade silently demoted to the next one down. That ring is what the
+        // Cascade tint debug view showed. The gutter replaces it: a stray tap now lands on cleared
+        // (1.0 = lit) border texels instead of on the neighbouring tile.
+        if (any(uvLocal < 0.0f) || any(uvLocal > 1.0f))
         {
             continue;
         }
 
         const float2 uv = uvLocal * scale + biasUV;
-        // This cascade's tile in atlas UV, inset by one texel: belt and braces for the Gather quads,
-        // whose 2x2 footprint is picked by hardware rounding and can straddle a texel boundary.
-        const float4 uvClampAll = float4(biasUV + texel, biasUV + scale - texel);
+        // This cascade's CONTENT rect in atlas UV, inset half a texel so a bilinear/Gather
+        // footprint centred on the last content texel cannot reach past it. Beyond it lies the S5
+        // gutter (cleared, 1.0 = lit), so even a rounding miss is harmless -- that is the point of
+        // the border: correctness by construction rather than by margin.
+        const float4 uvClampAll = float4(biasUV + 0.5f * texel, biasUV + scale - 0.5f * texel);
 
         outCascade = c;
 
@@ -258,7 +264,7 @@ float CsmSampleChain(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, S
         // Legacy path (useGatherPcf == 0): kept for the A/B and as the emergency fallback. The
         // radius shrink stays HERE only so this arm reproduces the pre-S8 image exactly.
         const float pcfR = p.pcfRadius * pow((p.cascadeTexelWS[0] / max(1e-6f, p.cascadeTexelWS[c])), 0.25f);
-        return CsmPcf3x3(atlas, cmp, uv, z, texel, pcfR);
+        return CsmPcf3x3(atlas, cmp, uv, z, texel, pcfR, uvClampAll);
     }
 
     return 1.0f;

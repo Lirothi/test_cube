@@ -18,6 +18,20 @@
 namespace render
 {
 
+// S5 — GUTTER. Texels reserved on every side of a Legacy CSM tile that the depth pass never draws
+// into, so they keep the atlas clear value (1.0 = far = LIT). The cascade's world square is rendered
+// into the inner `tile - 2*border` texels and sampled from exactly that rect.
+//
+// Why a filter tap must never leave it: `Gather()` picks its 2x2 quad by hardware UV rounding, so a
+// tap sitting exactly on the content edge can pull in the NEIGHBOURING TILE -- another cascade,
+// showing shadow from a different part of the scene. Clamping the UV is not a proof on its own
+// (the rounding happens after the clamp); a ring of cleared texels makes the miss HARMLESS BY
+// CONSTRUCTION rather than by margin.
+// 4 is UE's SHADOW_BORDER (ShadowSetup.cpp:831), and like theirs it is cut OUT of the tile
+// (`MaxShadowResolution = ... - SHADOW_BORDER * 2`), not added around it.
+// 0 disables the whole mechanism: content == tile, and every UV clamp collapses to a no-op.
+inline constexpr unsigned kCascadeAtlasBorder = 4u;
+
 // Rung 0 runtime toggle (default ON): the shadow passes draw via GPU cull + ExecuteIndirect
 // (ShadowGpuData) instead of the per-object CPU RenderShadow loop — the CPU-submission win.
 // Toggle OFF (Ctrl+I, "ToggleIndirectShadows") for the CPU-path A/B. If the cull PSOs fail to

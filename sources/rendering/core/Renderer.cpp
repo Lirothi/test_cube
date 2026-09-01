@@ -19,6 +19,7 @@
 #include "app/camera/Camera.h"
 #include "materials/Texture2D.h" // shared-texture cache stats reported at shutdown
 #include "rendering/core/DlssHandler.h"
+#include "rendering/shadows/ShadowSettings.h" // S5: kCascadeAtlasBorder
 #include "streamline/include/sl.h"
 
 #pragma comment(lib, "dxguid.lib")
@@ -2582,8 +2583,17 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
     	if (cascadeIndex == 2) { topLeftX = 0.0f; topLeftY = tile; }
     	if (cascadeIndex == 3) { topLeftX = tile; topLeftY = tile; }
 
-    	D3D12_VIEWPORT vp{ topLeftX, topLeftY, tile, tile, 0.0f, 1.0f };
-    	D3D12_RECT sc{ (LONG)topLeftX, (LONG)topLeftY, (LONG)(topLeftX + tile), (LONG)(topLeftY + tile) };
+    	// S5 gutter: draw into the INNER rect only and leave a border of cleared (1.0 = lit) texels,
+    	// the way UE place their viewport at (X + BorderSize, Y + BorderSize) with size ResolutionX.
+    	// Scene::UpdateCascades derives unitsPerTexel and the atlas scale/bias from the same content
+    	// size, so the cascade's world square lands exactly on this rect. See kCascadeAtlasBorder.
+    	const float border = float(render::kCascadeAtlasBorder);
+    	const float content = (tile > 2.0f * border) ? (tile - 2.0f * border) : tile;
+    	topLeftX += border;
+    	topLeftY += border;
+
+    	D3D12_VIEWPORT vp{ topLeftX, topLeftY, content, content, 0.0f, 1.0f };
+    	D3D12_RECT sc{ (LONG)topLeftX, (LONG)topLeftY, (LONG)(topLeftX + content), (LONG)(topLeftY + content) };
     	cl->RSSetViewports(1, &vp);
     	cl->RSSetScissorRects(1, &sc);
     }

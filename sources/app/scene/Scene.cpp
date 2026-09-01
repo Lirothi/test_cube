@@ -207,6 +207,12 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
 
     const auto& deferred = renderer->GetDeferredForFrame();
     const UINT tileRes = deferred.shadowRes > 0 ? deferred.shadowRes / 2u : 0u;
+    // S5: the depth pass draws into the inner rect only (Renderer::BindShadowTarget), so the
+    // cascade's world square covers `contentRes` texels, not `tileRes`. EVERY texel-derived
+    // quantity below -- the snap grid, unitsPerTexel, both biases, the atlas scale/bias -- has to
+    // use this one, or the sampled rect and the rendered rect stop agreeing.
+    const UINT borderRes = (tileRes > 2u * render::kCascadeAtlasBorder) ? render::kCascadeAtlasBorder : 0u;
+    const UINT contentRes = tileRes - 2u * borderRes;
     if (tileRes == 0)
     {
         for (auto& view : cascadeViews_)
@@ -267,9 +273,9 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         // (~0.2% for cascade 0), and the slack below is a whole texel, so the fixed point is
         // never needed. Assert safety is structural, not empirical: the snap shifts the centre by
         // at most one unitsPerTexel per axis, and the padding is two estimated texels.
-        const float texelEstimate = (2.0f * sphereRadius) / static_cast<float>(tileRes);
+        const float texelEstimate = (2.0f * sphereRadius) / static_cast<float>(contentRes);
         const float radius = sphereRadius + cascadeConfig_.overlapInTexels * texelEstimate;
-        const float unitsPerTexel = (2.0f * radius) / static_cast<float>(tileRes);
+        const float unitsPerTexel = (2.0f * radius) / static_cast<float>(contentRes);
 
         const float3 up(0, 1, 0);
         const float lightDistance = std::max(1.0f, cascadeConfig_.maxDistance);
@@ -334,8 +340,14 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascades.cascadeTexelWS[idx] = unitsPerTexel;
         cascades.depthBiasNDC[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
 
-        const float2 scale = float2(static_cast<float>(tileRes) / static_cast<float>(deferred.shadowRes));
-        const float2 bias = float2((idx % 2) * scale.x, (idx / 2) * scale.y);
+        // S5: the sampled rect is the CONTENT rect -- tile origin pushed in by the border, sized
+        // contentRes. uvLocal in [0,1] therefore means "inside the cascade's world square" again,
+        // which is what lets the shader drop the old margin test entirely.
+        const float atlasRes = static_cast<float>(deferred.shadowRes);
+        const float2 scale = float2(static_cast<float>(contentRes) / atlasRes);
+        const float tileOriginX = static_cast<float>((idx % 2) * tileRes + borderRes);
+        const float tileOriginY = static_cast<float>((idx / 2) * tileRes + borderRes);
+        const float2 bias = float2(tileOriginX / atlasRes, tileOriginY / atlasRes);
         cascades.atlasScale[idx] = scale;
         cascades.atlasBias[idx] = bias;
         cascades.lightView[idx] = lightView;
@@ -363,7 +375,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascades.unitsPerTexelDbg[idx] = unitsPerTexel;
         cascades.nearLsDbg[idx] = nearLS;
         cascades.farLsDbg[idx] = farLS;
-        cascades.tileSizeDbg[idx] = tileRes;
+        cascades.tileSizeDbg[idx] = contentRes;
     }
 }
 
