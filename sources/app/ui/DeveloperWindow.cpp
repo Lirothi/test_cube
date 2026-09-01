@@ -2228,6 +2228,100 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::EndTabItem();
             }
 
+            // Its own tab because it belongs to NEITHER shadow mode: the trace reads the camera
+            // depth buffer, so Legacy CSM and VSM get the identical term. Putting it under either
+            // one would say it is a property of that mode, which it is not.
+            // Its own tab because it belongs to NEITHER shadow mode: the trace reads the camera
+            // depth buffer, so Legacy CSM and VSM get the identical term.
+            if (ImGui::BeginTabItem("Contact"))
+            {
+                ImGui::Checkbox("Contact shadows ENABLED", &render::contact::g_enabled);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Master switch, and OFF is the default -- which matches UE, whose per-light\n"
+                                      "ContactShadowLength defaults to 0. Off takes not a single depth sample.\n\n"
+                                      "A short march through the CAMERA depth buffer toward the sun, recovering the\n"
+                                      "scale a shadow-map texel cannot. Works in BOTH shadow modes.");
+                ImGui::BeginDisabled(!render::contact::g_enabled);
+                ImGui::Separator();
+                ImGui::TextDisabled("As in UE (CastScreenSpaceShadowRay)");
+
+                ImGui::Checkbox("Length in METRES", &render::contact::g_lengthInWorldSpace);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE support both readings and pick between them by the SIGN of the value.\n\n"
+                                      "OFF (their default): length is a MULTIPLE OF VIEW DEPTH, so the trace covers\n"
+                                      "the same number of SCREEN pixels near and far and keeps working at distance.\n"
+                                      "ON: plain metres. Predictable, but shrinks below a pixel far away and stops\n"
+                                      "doing anything there.");
+
+                const float lenMax = render::contact::g_lengthInWorldSpace ? 2.0f : 0.3f;
+                ImGui::SliderFloat(render::contact::g_lengthInWorldSpace ? "Length (m)"
+                                                                        : "Length (x view depth)",
+                                   &render::contact::g_length, 0.0f, lenMax, "%.4f");
+
+                ImGui::SliderFloat("Intensity", &render::contact::g_intensity, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How dark a hit makes the pixel (UE ContactShadowCastingIntensity).");
+
+                int csSteps = static_cast<int>(render::contact::g_steps);
+                if (ImGui::SliderInt("Steps", &csSteps, 1, 16))
+                    render::contact::g_steps = static_cast<std::uint32_t>(csSteps);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Depth samples along the ray. UE hardcode 8, and that is not laziness: their\n"
+                                      "compare tolerance is |rayDepthSpan| * (1/steps) * 2, so THE STEP COUNT IS\n"
+                                      "BAKED INTO THE ACCEPTANCE WINDOW.\n\n"
+                                      "Raising it narrows the window per sample while adding samples along a ray\n"
+                                      "that hugs the surface, so each pixel gets more sensitive to the dither\n"
+                                      "phase -- MORE speckle, not less. Measured added speckle: 4 -> +3.49pp,\n"
+                                      "8 -> +4.00, 16 -> +4.05, 32 -> +5.77. Capped at 16 for that reason.");
+
+                ImGui::Separator();
+                ImGui::TextDisabled("OURS -- Epic ship no denoiser and no distance fade");
+
+                ImGui::SliderFloat("Max thickness (x ray length)", &render::contact::g_maxThicknessFrac,
+                                   0.0f, 3.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("THE knob for far-field speckle. A hit whose occluder sits further BEHIND\n"
+                                      "the ray point than this fraction of the ray length is rejected -- it is not\n"
+                                      "a contact, it is the far side of something.\n\n"
+                                      "A FRACTION, not metres, on purpose: the ray length is itself a multiple of\n"
+                                      "view depth, so it grows with distance. A fixed metre threshold cannot\n"
+                                      "track it -- near it is a no-op, far it kills the real contacts too. Tied\n"
+                                      "to the ray it stays meaningful at 10 m and at 3 km alike.\n\n"
+                                      "0 = no test, which is UE behaviour and is only safe at close range.");
+
+                ImGui::SliderFloat("Normal offset (x ray length)", &render::contact::g_normalOffsetFrac,
+                                   0.0f, 0.5f, "%.3f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Starts the ray this far off the surface along the normal. A ray that begins\n"
+                                      "ON the surface is ambiguous at its very first step. UE do not do this --\n"
+                                      "they start at the shaded point.\n\n"
+                                      "A FRACTION of the ray length, not metres: what it fights is the world\n"
+                                      "footprint of a SCREEN PIXEL plus depth precision, and both grow with\n"
+                                      "distance. 0.02 m is meaningful at 10 m and far below a pixel at 350 m,\n"
+                                      "where it would quietly stop doing anything.");
+
+                ImGui::SliderFloat("Grazing fade (NdotL)", &render::contact::g_grazingFadeNdotL, 0.0f, 0.5f, "%.3f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Fades the term out below this NdotL. As the sun grazes a surface the ray\n"
+                                      "runs nearly PARALLEL to it and the march measures depth-buffer quantisation\n"
+                                      "rather than geometry -- that is the speckle field on flat distant ground.\n"
+                                      "0 = no guard (UE behaviour).");
+
+                ImGui::SliderFloat("Min distance (m)", &render::contact::g_minDistanceM, 0.0f, 200.0f, "%.1f");
+                ImGui::SliderFloat("Max distance (m)", &render::contact::g_maxDistanceM, 0.0f, 2000.0f, "%.0f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Metres from the camera. 0 max = no far limit. Outside the window the term\n"
+                                      "is off entirely -- which is the blunt way to kill artifacts in the far field\n"
+                                      "where contacts buy the least anyway.");
+                ImGui::SliderFloat("Far fade band (m)", &render::contact::g_fadeBandM, 0.1f, 200.0f, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The last N metres before Max fade out instead of cutting, or the boundary\n"
+                                      "itself reads as a line across the ground.");
+
+                ImGui::EndDisabled();
+                ImGui::EndTabItem();
+            }
+
             if (ImGui::BeginTabItem("VSM"))
             {
                 ImGui::TextWrapped("Virtual Shadow Maps (Rung 2, experimental) for local lights "

@@ -64,6 +64,20 @@ void SceneLightingCBHandles::Populate(Material* material)
     smrtLevelMargin = material->ComputeCB0FieldHandle("smrtLevelMargin");
     smrtFrameIndex = material->ComputeCB0FieldHandle("smrtFrameIndex");
     smrtAdaptiveRayCount = material->ComputeCB0FieldHandle("smrtAdaptiveRayCount");
+    smrtScreenRayLength = material->ComputeCB0FieldHandle("smrtScreenRayLength");
+    smrtScreenRaySamples = material->ComputeCB0FieldHandle("smrtScreenRaySamples");
+    viewProj = material->ComputeCB0FieldHandle("viewProj");
+    projMatrix = material->ComputeCB0FieldHandle("projMatrix");
+    contactShadowLength = material->ComputeCB0FieldHandle("contactShadowLength");
+    contactShadowIntensity = material->ComputeCB0FieldHandle("contactShadowIntensity");
+    contactShadowSteps = material->ComputeCB0FieldHandle("contactShadowSteps");
+    contactShadowLengthInWS = material->ComputeCB0FieldHandle("contactShadowLengthInWS");
+    contactShadowNormalOffset = material->ComputeCB0FieldHandle("contactShadowNormalOffset");
+    contactShadowGrazingFade = material->ComputeCB0FieldHandle("contactShadowGrazingFade");
+    contactShadowMinDist = material->ComputeCB0FieldHandle("contactShadowMinDist");
+    contactShadowMaxDist = material->ComputeCB0FieldHandle("contactShadowMaxDist");
+    contactShadowFadeBand = material->ComputeCB0FieldHandle("contactShadowFadeBand");
+    contactShadowThickness = material->ComputeCB0FieldHandle("contactShadowThickness");
     clipmapViewProj = material->ComputeCB0FieldHandle("clipmapViewProj");
     clipmapUvNormal = material->ComputeCB0FieldHandle("clipmapUvNormal");
     causticsTint = material->ComputeCB0FieldHandle("causticsTint");
@@ -94,6 +108,10 @@ void SceneLightingCBHandles::Populate(Material* material)
         { "smrtLevelMargin", &smrtLevelMargin },
         { "smrtFrameIndex", &smrtFrameIndex },
         { "smrtAdaptiveRayCount", &smrtAdaptiveRayCount },
+        { "smrtScreenRayLength", &smrtScreenRayLength },
+        { "viewProj", &viewProj },
+        { "projMatrix", &projMatrix },
+        { "contactShadowLength", &contactShadowLength },
     };
     for (const auto& [name, handle] : kRequired)
     {
@@ -1283,6 +1301,20 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.smrtLevelMargin, data.smrtLevelMargin, dest);
     matLighting_->UpdateCBField(handles.smrtFrameIndex, data.smrtFrameIndex, dest);
     matLighting_->UpdateCBField(handles.smrtAdaptiveRayCount, data.smrtAdaptiveRayCount, dest);
+    matLighting_->UpdateCBField(handles.smrtScreenRayLength, data.smrtScreenRayLength, dest);
+    matLighting_->UpdateCBField(handles.smrtScreenRaySamples, data.smrtScreenRaySamples, dest);
+    matLighting_->UpdateCBField(handles.viewProj, data.viewProj, dest);
+    matLighting_->UpdateCBField(handles.projMatrix, data.projMatrix, dest);
+    matLighting_->UpdateCBField(handles.contactShadowLength, data.contactShadowLength, dest);
+    matLighting_->UpdateCBField(handles.contactShadowIntensity, data.contactShadowIntensity, dest);
+    matLighting_->UpdateCBField(handles.contactShadowSteps, data.contactShadowSteps, dest);
+    matLighting_->UpdateCBField(handles.contactShadowLengthInWS, data.contactShadowLengthInWS, dest);
+    matLighting_->UpdateCBField(handles.contactShadowNormalOffset, data.contactShadowNormalOffset, dest);
+    matLighting_->UpdateCBField(handles.contactShadowGrazingFade, data.contactShadowGrazingFade, dest);
+    matLighting_->UpdateCBField(handles.contactShadowMinDist, data.contactShadowMinDist, dest);
+    matLighting_->UpdateCBField(handles.contactShadowMaxDist, data.contactShadowMaxDist, dest);
+    matLighting_->UpdateCBField(handles.contactShadowFadeBand, data.contactShadowFadeBand, dest);
+    matLighting_->UpdateCBField(handles.contactShadowThickness, data.contactShadowThickness, dest);
     matLighting_->UpdateCBField(handles.causticsTint, data.causticsTint, dest);
     matLighting_->UpdateCBField(handles.causticsParams0, data.causticsParams0, dest);
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);

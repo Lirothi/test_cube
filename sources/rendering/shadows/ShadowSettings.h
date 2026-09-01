@@ -70,4 +70,90 @@ inline CsmDebugMode g_csmDebugMode = CsmDebugMode::Off;
 // are exactly what S7 pancaking is judged on.
 inline bool g_csmDumpReadout = false;
 
+// ---- CONTACT SHADOWS (docs/csm_improvement_plan.md S12) ------------------------------------
+// A short march through the CAMERA depth buffer toward the light, recovering the scale a shadow
+// map texel cannot resolve. Lives HERE rather than beside the VSM tunables because it is
+// SHADOW-MODE INDEPENDENT: it reads no shadow map, so Legacy CSM and VSM get the identical term.
+// That is also the reason it exists -- a far cascade covering hundreds of metres has nothing to
+// say about a blade of grass touching the ground, and neither has a coarse clipmap level.
+//
+// Transcribed from UE's `CastScreenSpaceShadowRay` (ScreenSpaceShadowRayCast.ush) and its use in
+// DeferredLightingCommon.ush.
+namespace contact
+{
+    // MASTER SWITCH, default OFF -- and that matches UE, whose per-light ContactShadowLength
+    // defaults to 0. Contact shadows are an opt-in artist tool there, not a global on. Off means
+    // not a single depth sample is taken.
+    inline bool          g_enabled = false;
+
+    // ---- the four knobs UE actually expose --------------------------------------------------
+    // Trace length. UE support BOTH interpretations and encode the choice in the SIGN of their
+    // value (`ContactShadowLengthInWS = ContactShadowLength < 0`); split into two fields here
+    // because a sign-encoded mode is a lousy thing to put on a slider.
+    //   world space OFF -> a MULTIPLE OF VIEW DEPTH (UE's screen-scale form). The trace then covers
+    //                      the same number of SCREEN pixels near and far, which is what keeps it
+    //                      alive at distance instead of shrinking below a pixel.
+    //   world space ON  -> METRES, flat. Predictable, but at distance it shrinks to sub-pixel and
+    //                      stops doing anything.
+    inline float         g_length = 0.05f;
+    inline bool          g_lengthInWorldSpace = false;
+    // A CAP ON THE RAY LENGTH IN METRES WAS TRIED HERE AND REMOVED. It looked right on paper --
+    // the screen-scaled ray is 17.5 m at 350 m, so shorten it -- and a median-based metric even
+    // said it worked. The IMAGE said otherwise: a 0.5 m ray at 350 m is shorter than the depth
+    // buffer can resolve there, the compare tolerance (built from the ray's own depth span)
+    // collapses toward zero, and the test then fires almost everywhere -- the whole slope went
+    // black. The distance window below is the fix that actually holds up.
+    // How dark a hit makes the pixel. UE's ContactShadowCastingIntensity.
+    inline float         g_intensity = 1.0f;
+    // UE hardcode 8 at their call site, and that is NOT laziness: their compare tolerance is
+    // `|rayDepthSpan| * (1/steps) * 2`, so the step count is baked into the acceptance window.
+    // Raising it narrows the window per sample while adding samples along a ray that hugs the
+    // surface, and the outcome per pixel becomes more sensitive to the dither phase -- i.e. MORE
+    // speckle, not less. Measured added speckle: 4 steps +3.49 pp, 8 +4.00, 16 +4.05, 32 +5.77.
+    // Capped at 16 in the UI for that reason; it is a cost/robustness knob, not a quality one.
+    inline std::uint32_t g_steps = 8u;
+
+    // ---- OURS, not UE's. Everything below is a departure and is here for one reason ----------
+    // A screen-space march along a ray that runs nearly PARALLEL to the surface it started on
+    // cannot tell "just below the surface" from "behind an occluder": depth quantisation alone
+    // dips the ray under the ground, and the result is a field of dark speckles on flat, distant
+    // terrain under a low sun. UE ship no denoiser and no distance fade for this -- their answer is
+    // that an artist enables contact shadows per light, on content where it looks right.
+    //
+    // Since the sun here IS low and the terrain IS flat, these three exist to bound the damage.
+
+    // Push the ray's start off the surface along the normal, as a FRACTION OF THE RAY LENGTH.
+    // A ray that begins ON the surface is ambiguous at step one, and this is the cheapest guard
+    // against that.
+    //
+    // Not metres, for the same reason the thickness is not: what it fights is the world footprint
+    // of a SCREEN PIXEL plus depth-buffer precision, and both grow with distance. A fixed 0.02 m
+    // is meaningful at 10 m and far below one pixel at 350 m, where it silently stops doing
+    // anything. Tied to the ray -- which is itself a multiple of view depth -- it keeps its
+    // meaning at any range, and this feature then has ONE scaling concept instead of three.
+    inline float         g_normalOffsetFrac = 0.04f;
+    // Below this NdotL the sun is grazing, the ray is nearly parallel to the surface, and the
+    // march is measuring quantisation rather than geometry. Faded out, not cut, so no visible edge.
+    inline float         g_grazingFadeNdotL = 0.15f;
+    // OURS. A FRACTION OF THE RAY LENGTH -- deliberately not metres. A hit whose occluder sits
+    // further behind the ray point than this is not a contact: without the test a hit can be the
+    // far side of a dune, reported per pixel as binary occlusion, i.e. a speckle field.
+    //
+    // It was metres first, and that was wrong: the ray length is itself a multiple of view depth,
+    // so it grows with distance, and a fixed metre threshold cannot track it. Near, any value big
+    // enough to matter far is a no-op; far, any value tight enough to kill speckle also kills the
+    // real contacts. As a fraction it rides the ray and stays meaningful at 10 m and at 3 km.
+    // 0 = no thickness test (UE behaviour).
+    inline float         g_maxThicknessFrac = 0.5f;
+    // Distance window in METRES from the camera. Outside it the term is off. maxDistance 0 = no
+    // far limit. The far end fades over the last `g_fadeBandM` metres so it does not pop.
+    inline float         g_minDistanceM = 0.0f;
+    // 0 = NO LIMIT, and it stays that way. A 150 m default was tried here and it was the wrong
+    // answer to the wrong question: the ask was contacts that KEEP WORKING at distance, and
+    // switching them off past 150 m is not a fix for the far-field speckle, it is deleting the
+    // feature. The speckle at 350 m is still open -- see the note on the real conflict below.
+    inline float         g_maxDistanceM = 0.0f;
+    inline float         g_fadeBandM = 10.0f;
+}
+
 } // namespace render

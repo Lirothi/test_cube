@@ -228,10 +228,14 @@ float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, fl
 // with a ray march toward the light -- see vsm_smrt.hlsli. `dirToLight` is the unit direction
 // TOWARDS the light (callers hold `sunDirWS`, the direction light TRAVELS, so they negate it).
 // rayCount 0 leaves every instruction below untouched, which is what makes the A/B an A/B.
+// `rayStartOffset` is where the SMRT ray begins, in world units along the light -- the result of
+// the screen-space trace (vsm_screen_ray.hlsli). Computed by the CALLER because it needs the
+// camera depth buffer, which is exactly how UE structure it (VirtualShadowMapProjection.usf
+// computes SMRTRayOffset and hands it to TraceDirectional). 0 = no screen trace.
 float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
                        float depthBiasDecay, float depthBiasFloorNdc, float clipBlendWidth,
                        float tanHalfFovX, float4x4 uvNormalMatrix, float3 dirToLight,
-                       VsmSmrtParams smrt,
+                       VsmSmrtParams smrt, float rayStartOffset,
                        float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
                        StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
@@ -333,7 +337,9 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, floa
                 const float3 rayDir = VsmSmrtRayDir(dirToLight, e0, smrt.sourceRadius);
 
                 VsmSmrtRayState st;
-                st.originWS = Poff;
+                // UE: `RayStart = RayOrigin + RayDir * RayStartOffset`. Per RAY, because the
+                // direction differs per ray, and the offset is along that direction.
+                st.originWS = Poff + rayDir * rayStartOffset;
                 st.rayLength = rayLength;
                 st.vecWS = rayDir * rayLength;
                 st.extrapolateMaxSlopeWS = smrt.extrapolateMaxSlope;
@@ -357,8 +363,15 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, floa
                 // the surface it stands on, so every ray immediately finds that surface as its own
                 // occluder. Measured with the sign wrong: shadow coverage 54.96% -> 73.70%, a scene
                 // drowning in self-shadow that looks superficially like "softer shadows".
-                st.startUVZ.z -= min(2.0f * max(0.0f, -dot(depthSlopeUV, texelOffset)),
-                                     VSM_MAX_SLOPE_BIAS_NDC);
+                // UE subtract the part of the bias the ray start has ALREADY covered:
+                // `OptimalBias = max(0, OptimalBias - abs(RayStartOffset * ShadowViewToClip._33))`.
+                // Our NDC-per-world along the light is the ray step's own z over its length.
+                const float ndcPerWorld = abs(st.stepUVZ.z) / max(st.rayLength, 1e-6f);
+                const float covered = abs(rayStartOffset) * ndcPerWorld;
+                const float slopeBias = max(0.0f,
+                    min(2.0f * max(0.0f, -dot(depthSlopeUV, texelOffset)), VSM_MAX_SLOPE_BIAS_NDC)
+                        - covered);
+                st.startUVZ.z -= slopeBias;
 
                 const VsmSmrtResult hit = VsmSmrtRayCast(st, (int)smrt.samplesPerRay, 0.0f,
                                                          clipVP, PageTable, Pool);

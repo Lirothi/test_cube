@@ -333,6 +333,31 @@ namespace vsm
     // lanes ALL agree stops early. Fully lit and fully umbral regions are most of the screen and
     // need one or two rays; only penumbrae need the full count. 0 disables it.
     inline std::uint32_t g_smrtAdaptiveRayCount = 1u;
+
+    // SCREEN-SPACE RAY (r.Shadow.Virtual.ScreenRayLength, UE default 0.015). A short march through
+    // the CAMERA depth buffer away from the receiver, whose result becomes the SMRT ray's start
+    // offset. UE call it "smart shadow bias": it buys contact detail below the shadow map's texel
+    // scale AND skips the near band where every bias argument lives.
+    //
+    // The value is a MULTIPLE OF VIEW DEPTH, not a distance -- so it is dimensionless and their
+    // 0.015 transfers from centimetres unchanged. 0 disables the trace.
+    // DEFAULT 0 -- OFF, against UE's 0.015, and the measurement is why.
+    //
+    // Its job is to skip the ambiguous band next to the receiver so the SMRT ray does not start
+    // inside its own surface. UE need that because they run with no constant depth bias at all.
+    // WE DO NOT HAVE THAT PROBLEM: SMRT here already measures 0.044 % acne with the constant bias
+    // not applied, so there is nothing for the trace to rescue.
+    //
+    // And it is not free of consequence. Starting the ray further out moves shadow coverage
+    // MONOTONICALLY DOWN -- 54.948 % (off) -> 54.902 % (0.015) -> 54.795 % (0.05) -- which is the
+    // peter-panning direction: shadows lifting off their contact points. That is precisely what
+    // contact shadows (render::contact) exist to tighten, so paying four depth samples to work
+    // against them is a bad trade here.
+    //
+    // Kept, not deleted: the code is a faithful transcription and a scene with real acne would
+    // want it. Turn it on with `--set=vsm.smrtScreenRayLength:0.015`.
+    inline float         g_smrtScreenRayLength = 0.0f;
+    inline std::uint32_t g_smrtScreenRaySamples = 4u; // UE's SCREEN_RAY_SAMPLES
     // Local-light (spot + point) VSM shadow bias, in units of one shadow texel at the receiver
     // (auto-sized per-pixel from the light's cone width, distance and mip level in the shaders).
     // Lateral = surface-normal offset (~1 texel keeps Peter-panning to a texel); depth push =

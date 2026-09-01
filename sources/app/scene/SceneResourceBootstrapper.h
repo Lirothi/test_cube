@@ -60,6 +60,20 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle smrtLevelMargin;
     Material::CBFieldHandle smrtFrameIndex;
     Material::CBFieldHandle smrtAdaptiveRayCount;
+    Material::CBFieldHandle smrtScreenRayLength;
+    Material::CBFieldHandle smrtScreenRaySamples;
+    Material::CBFieldHandle viewProj;
+    Material::CBFieldHandle projMatrix;
+    Material::CBFieldHandle contactShadowLength;
+    Material::CBFieldHandle contactShadowIntensity;
+    Material::CBFieldHandle contactShadowSteps;
+    Material::CBFieldHandle contactShadowLengthInWS;
+    Material::CBFieldHandle contactShadowNormalOffset;
+    Material::CBFieldHandle contactShadowGrazingFade;
+    Material::CBFieldHandle contactShadowMinDist;
+    Material::CBFieldHandle contactShadowMaxDist;
+    Material::CBFieldHandle contactShadowFadeBand;
+    Material::CBFieldHandle contactShadowThickness;
     Material::CBFieldHandle clipmapViewProj;
     Material::CBFieldHandle clipmapUvNormal; // P16.16
     Material::CBFieldHandle causticsTint;      // rgb = tint, w = master enable
@@ -552,6 +566,20 @@ struct LightingPassConstants
     float smrtLevelMargin = 1.0f;
     uint32_t smrtFrameIndex = 0;            // 0 = temporal dither off; else the frame phase
     uint32_t smrtAdaptiveRayCount = 1;
+    float smrtScreenRayLength = 0.015f;
+    uint32_t smrtScreenRaySamples = 4;
+    mat4 viewProj{};              // camera world->clip, for the screen-space rays
+    mat4 projMatrix{};            // camera view->clip; the contact ray's compare tolerance
+    float contactShadowLength = 0.0f;       // 0 = off (master switch folds into this)
+    float contactShadowIntensity = 1.0f;
+    uint32_t contactShadowSteps = 8;
+    uint32_t contactShadowLengthInWS = 0;   // 1 = length is METRES, 0 = multiple of view depth
+    float contactShadowNormalOffset = 0.0f; // ours: FRACTION of the ray length
+    float contactShadowGrazingFade = 0.0f;  // ours: NdotL below which the march is unreliable
+    float contactShadowMinDist = 0.0f;      // ours: metres
+    float contactShadowMaxDist = 0.0f;      // ours: metres, 0 = no far limit
+    float contactShadowFadeBand = 10.0f;
+    float contactShadowThickness = 0.5f;    // ours: FRACTION of the ray length; 0 = UE behaviour
     std::array<mat4, vsm::kNumClipmapLevels> clipmapViewProj{}; // == lighting_cs's clipmapViewProj
     mat4 clipmapUvNormal{}; // P16.16: receiver-plane transform (inverse transpose world->shadow UV)        // camera-centered ortho viewProj per clipmap level
     // Underwater caustics (see shaders/caustics.hlsli). causticsTint.w == 0 disables the block,

@@ -1426,6 +1426,9 @@
     <None Include="shaders\vsm_sample.hlsli">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\vsm_screen_ray.hlsli">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\vsm_smrt.hlsli">
       <Filter>shaders</Filter>
     </None>

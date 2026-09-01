@@ -422,6 +422,24 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         // 0 is the reserved "no temporal rotation" value, so the phase runs 1..64.
         constants.smrtFrameIndex = frame_->smrtFrameIndex;
         constants.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount;
+        constants.smrtScreenRayLength = vsm::g_smrtScreenRayLength;
+        constants.smrtScreenRaySamples = vsm::g_smrtScreenRaySamples;
+        // World -> clip for the screen-space ray. The CB carries only the inverses today, and
+        // inverting them back in the shader would cost a matrix inverse per pixel.
+        constants.viewProj = camera.GetViewMatrix() * camera.GetProjMatrix();
+        constants.projMatrix = camera.GetProjMatrix();
+        // The master switch folds into the length: 0 means the shader takes no samples at all,
+        // so "off" costs literally nothing rather than costing a branch per pixel.
+        constants.contactShadowLength = render::contact::g_enabled ? render::contact::g_length : 0.0f;
+        constants.contactShadowLengthInWS = render::contact::g_lengthInWorldSpace ? 1u : 0u;
+        constants.contactShadowNormalOffset = render::contact::g_normalOffsetFrac;
+        constants.contactShadowGrazingFade = render::contact::g_grazingFadeNdotL;
+        constants.contactShadowMinDist = render::contact::g_minDistanceM;
+        constants.contactShadowMaxDist = render::contact::g_maxDistanceM;
+        constants.contactShadowFadeBand = render::contact::g_fadeBandM;
+        constants.contactShadowThickness = render::contact::g_maxThicknessFrac;
+        constants.contactShadowIntensity = render::contact::g_intensity;
+        constants.contactShadowSteps = render::contact::g_steps;
         if (frame_->clipmapViews)
         {
             for (size_t i = 0; i < constants.clipmapViewProj.size() && i < frame_->clipmapViews->size(); ++i)

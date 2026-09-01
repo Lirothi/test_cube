@@ -265,6 +265,20 @@ namespace
         if (setting == "vsm.smrtLevelMargin") { vsm::g_smrtLevelMargin = std::clamp(value, 0.25f, 1.0f); return true; }
         if (setting == "vsm.smrtTemporalDither") { vsm::g_smrtTemporalDither = value != 0.0f; return true; }
         if (setting == "vsm.smrtAdaptiveRayCount") { vsm::g_smrtAdaptiveRayCount = (std::uint32_t)std::clamp(value, 0.0f, 16.0f); return true; }
+        if (setting == "vsm.smrtScreenRayLength") { vsm::g_smrtScreenRayLength = std::clamp(value, 0.0f, 0.5f); return true; }
+        if (setting == "vsm.smrtScreenRaySamples") { vsm::g_smrtScreenRaySamples = (std::uint32_t)std::clamp(value, 1.0f, 16.0f); return true; }
+        // Contact shadows (S12) -- shadow-mode independent, so they are not under vsm.*
+        if (setting == "contact.enabled") { render::contact::g_enabled = value != 0.0f; return true; }
+        if (setting == "contact.length") { render::contact::g_length = std::max(0.0f, value); return true; }
+        if (setting == "contact.lengthInWorldSpace") { render::contact::g_lengthInWorldSpace = value != 0.0f; return true; }
+        if (setting == "contact.normalOffset") { render::contact::g_normalOffsetFrac = std::clamp(value, 0.0f, 2.0f); return true; }
+        if (setting == "contact.grazingFade") { render::contact::g_grazingFadeNdotL = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "contact.minDistance") { render::contact::g_minDistanceM = std::max(0.0f, value); return true; }
+        if (setting == "contact.maxDistance") { render::contact::g_maxDistanceM = std::max(0.0f, value); return true; }
+        if (setting == "contact.fadeBand") { render::contact::g_fadeBandM = std::max(0.1f, value); return true; }
+        if (setting == "contact.thickness") { render::contact::g_maxThicknessFrac = std::max(0.0f, value); return true; }
+        if (setting == "contact.intensity") { render::contact::g_intensity = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "contact.steps") { render::contact::g_steps = (std::uint32_t)std::clamp(value, 1.0f, 32.0f); return true; }
         // The dev-window "Shadow LOD bias" slider, headless. A change triggers the same GPU-idle
         // caster rebuild the slider does (Scene::ReconcileShadowLodBias polls it) — which is the
         // point: the round-trip perf leak is only reproducible in ONE process

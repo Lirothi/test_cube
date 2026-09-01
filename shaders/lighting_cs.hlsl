@@ -15,6 +15,8 @@
 // SMRT's adaptive ray count uses wave intrinsics, which UE gate with #if COMPUTESHADER because
 // the "all lanes agree" test is only meaningful outside a pixel shader's helper lanes.
 #define VSM_SMRT_COMPUTE 1
+#include "contact_shadow.hlsli"
+#include "vsm_screen_ray.hlsli"
 #include "vsm_sample.hlsli"
 #include "csm_sample.hlsli"
 #include "caustics.hlsli"
@@ -131,7 +133,24 @@ cbuffer PerFrame : register(b0)
     float smrtLevelMargin;
     uint smrtFrameIndex;   // 0 = no temporal rotation of the sample set
     uint smrtAdaptiveRayCount;
+    float smrtScreenRayLength;   // multiple of view depth; 0 = no screen trace
+    uint smrtScreenRaySamples;
     float _padClipBias;
+    float4x4 viewProj;           // camera world -> clip, for the screen-space rays
+    float4x4 projMatrix;         // camera view -> clip; the contact ray's compare tolerance needs it
+    // Contact shadows (S12). Length is a MULTIPLE OF VIEW DEPTH, as UE's is, so the trace covers a
+    // constant number of screen pixels at any distance. 0 = off.
+    float contactShadowLength;
+    float contactShadowIntensity;
+    uint  contactShadowSteps;
+    uint  contactShadowLengthInWS;    // 1 = METRES; 0 = multiple of view depth (UE's screen scale)
+    float contactShadowNormalOffset;  // ours: FRACTION of the ray length -- see ShadowSettings.h
+    float contactShadowGrazingFade;
+    float contactShadowMinDist;
+    float contactShadowMaxDist;
+    float contactShadowFadeBand;
+    float contactShadowThickness;     // ours: FRACTION of the ray length; 0 = UE behaviour
+    float2 _padContact;
     float4x4 clipmapViewProj[VSM_NUM_CLIPMAP_LEVELS]; // mirrored in LightingPassConstants
     // P16.16: inverse transpose of world -> shadow UVZ, for the receiver-plane depth bias. One
     // matrix covers every level (the extent cancels out of the gradient); UE build theirs the same
@@ -280,7 +299,77 @@ CsmParams MakeCsmParams()
 // toward the sun-facing side (see CSMain).
 // outCascade: the resolved CSM cascade (S0.3 debug tint). Left untouched in VSM mode — the
 // clipmap has no cascades, and the CPU side forces csmDebugMode to 0 there anyway.
-float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade)
+// CONTACT SHADOWS. Applied to whatever the shadow map returned, in BOTH modes, because it is a
+// property of the camera depth buffer and not of any shadow map: a cascade covering hundreds of
+// metres cannot resolve the scale this recovers, and neither can a coarse clipmap level.
+// UE combine it multiplicatively (`OutShadow.SurfaceShadow *= ContactShadow`), not with a min.
+float ApplyContactShadow(float shadow, float3 P, float3 N, float3 dirToLight, float ndl,
+                         uint2 pixel)
+{
+    if (contactShadowLength <= 0.0f || contactShadowIntensity <= 0.0f) { return shadow; }
+    // Facing away from the light: already fully shadowed by NdotL, and a trace there only ever
+    // finds the surface it started on.
+    if (ndl <= 0.0f) { return shadow; }
+
+    const float viewDepth = length(P - camPosWS);
+
+    // ---- OURS: distance window ---------------------------------------------------------------
+    // UE have no such thing -- their contact shadows are a per-light artist opt-in on content
+    // chosen to suit them. Here the far field is flat sand under a low sun, which is the exact
+    // case a screen-space march cannot do well, so it can be bounded. The far edge fades over a
+    // band instead of cutting, or the boundary itself becomes a visible line.
+    if (viewDepth < contactShadowMinDist) { return shadow; }
+    float distFade = 1.0f;
+    if (contactShadowMaxDist > 0.0f)
+    {
+        if (viewDepth > contactShadowMaxDist) { return shadow; }
+        distFade = saturate((contactShadowMaxDist - viewDepth) / max(contactShadowFadeBand, 0.1f));
+    }
+
+    // ---- OURS: grazing guard -----------------------------------------------------------------
+    // As NdotL falls the ray runs ever more parallel to the surface it started on, and the march
+    // starts measuring depth-buffer quantisation instead of geometry -- speckles on flat ground.
+    // Faded, not cut.
+    const float grazeFade = (contactShadowGrazingFade > 0.0f)
+        ? smoothstep(0.0f, contactShadowGrazingFade, ndl)
+        : 1.0f;
+    const float weight = distFade * grazeFade;
+    if (weight <= 0.001f) { return shadow; }
+
+    // LENGTH. UE support both readings and encode the choice in the SIGN of their value; split
+    // into a flag here. World space = plain metres. Screen scale = a multiple of view depth, which
+    // keeps the trace the same size in SCREEN pixels at any distance -- that is what lets it keep
+    // working far away rather than shrinking below a pixel.
+    // NOT capped in metres -- that was tried and it broke the image; see ShadowSettings.h. The
+    // ray must keep spanning enough DEVICE depth for the compare tolerance to mean anything, and
+    // at distance a short world ray does not. Bounding contacts at distance is the distance
+    // window's job, above.
+    const float rayLength = (contactShadowLengthInWS != 0u)
+        ? contactShadowLength
+        : contactShadowLength * viewDepth;
+
+    // ---- OURS: start off the surface ---------------------------------------------------------
+    // A ray that begins ON the surface is ambiguous at its very first step. UE do not do this --
+    // they start at the shaded point. Expressed as a FRACTION OF THE RAY LENGTH so it scales with
+    // distance the way the ambiguity it fights does (see ShadowSettings.h).
+    const float3 origin = P + N * (contactShadowNormalOffset * rayLength);
+
+    // Interleaved-gradient noise on the step phase. SCREEN-space on purpose: the banding this
+    // hides is a screen-space artifact of a screen-space march, so a world-space hash (what the
+    // SMRT path uses) would not break it up where it actually appears.
+    const float2 px = (float2)pixel;
+    const float dither = frac(52.9829189f * frac(0.06711056f * px.x + 0.00583715f * px.y));
+
+    const float hit = CastScreenSpaceShadowRay(origin, dirToLight, rayLength, contactShadowSteps,
+                                               dither, 2.0f, // UE's CompareToleranceScale
+                                               contactShadowThickness, camPosWS,
+                                               viewProj, projMatrix, invProj, invView,
+                                               DepthT, gSmpPoint);
+    if (hit <= 0.0f) { return shadow; } // miss
+    return shadow * (1.0f - contactShadowIntensity * weight);
+}
+
+float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade, uint2 pixel)
 {
     if (useVsm != 0u)
     {
@@ -298,12 +387,34 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade)
         smrt.frameIndex = smrtFrameIndex;
         smrt.adaptiveRayCount = smrtAdaptiveRayCount;
         // `sunDirWS` is the direction the light TRAVELS; SMRT marches TOWARDS the light.
-        return VsmClipmapShadow(P, N, camPosWS, clipmapNormalBias, vsmDepthBias,
+        const float3 dirToLight = normalize(-sunDirWS);
+
+        // SCREEN-SPACE RAY, ahead of the shadow-map march. UE's ScreenRayLength is a MULTIPLE OF
+        // VIEW DEPTH (their default 0.015), so the trace is short near the camera and grows with
+        // distance -- which is what keeps it the same size in SCREEN space, where it is sampled.
+        // Skipped entirely when SMRT is off: there is no ray for it to offset.
+        float rayStartOffset = 0.0f;
+        if (smrt.rayCount > 0u && smrtScreenRayLength > 0.0f)
+        {
+            const float viewDepth = length(P - camPosWS);
+            // Reuses the SMRT dither so the screen trace and the march are decorrelated the same
+            // way, rather than inventing a second noise source with its own banding.
+            const float dither = frac(VsmSmrtHash2(P).x + VsmSmrtR2(smrt.frameIndex).x);
+            rayStartOffset = VsmScreenRayCast(P, dirToLight,
+                                              smrtScreenRayLength * viewDepth,
+                                              dither, smrtScreenRaySamples,
+                                              viewProj, DepthT, gSmpPoint);
+        }
+
+        const float vsmShadow = VsmClipmapShadow(P, N, camPosWS, clipmapNormalBias, vsmDepthBias,
                                 clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,
-                                invProj._11, clipmapUvNormal, normalize(-sunDirWS), smrt,
+                                invProj._11, clipmapUvNormal, dirToLight, smrt, rayStartOffset,
                                 clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
+        return ApplyContactShadow(vsmShadow, P, N, dirToLight, ndl, pixel);
     }
-    return CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, N, ndl, outCascade);
+    const float csmShadow =
+        CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, N, ndl, outCascade);
+    return ApplyContactShadow(csmShadow, P, N, normalize(-sunDirWS), ndl, pixel);
 }
 
 // Assemble the caustics inputs; returns tint.w == 0 when the feature is off for this frame.
@@ -459,7 +570,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // and same shadow as DefaultLit.
         if (fr.NdotL > 0.0)
         {
-            float shadow = SampleSunShadow(P, N, fr.NdotL, csmCascade);
+            float shadow = SampleSunShadow(P, N, fr.NdotL, csmCascade, dispatchThreadId.xy);
             const float3 specSun = fr.specBRDF * (1.0 + metal * sunMetalSpec * 1);
             color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow * causticsGain;
         }
@@ -475,7 +586,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             // Separate index, discarded: the transmission lobe samples with a flipped normal and
             // must not decide which cascade the debug tint reports for this pixel.
             int transCascade;
-            float shadowT = SampleSunShadow(P, -N, saturate(dot(-N, L)), transCascade);
+            float shadowT = SampleSunShadow(P, -N, saturate(dot(-N, L)), transCascade, dispatchThreadId.xy);
             color += fr.transBRDF * lightRgb * shadowT;
         }
     }
@@ -485,7 +596,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (br.NdotL > 0.0)
         {
             // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
-            float shadow = SampleSunShadow(P, N, br.NdotL, csmCascade);
+            float shadow = SampleSunShadow(P, N, br.NdotL, csmCascade, dispatchThreadId.xy);
             // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
             // highlight reads against the environment reflection. metal=0 -> no change.
             const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);

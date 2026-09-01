@@ -213,6 +213,10 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
                                 clipmapParams.w, vsmParams.z, vsmParams.w,
                                 invProj._11, clipmapUvNormal,
                                 normalize(-sunDirAmbient.xyz), smrt,
+                                // No screen-space ray here: the transparent pass has no scene
+                                // depth to march, and a glass surface is not where contact detail
+                                // is judged. Same scope note as the adaptive ray count above.
+                                0.0f,
                                 clipmapViewProj, VsmPageTable, VsmPool, ShadowSampler);
     }
 
