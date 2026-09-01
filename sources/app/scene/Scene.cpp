@@ -18,6 +18,7 @@
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias (shadow caster LOD)
 #include "rendering/debug/LodDebugView.h" // render::DrawLodDebug (LOD selection debug view)
 #include "rendering/shadows/ShadowSettings.h"
+#include "core/diagnostics/DiagPaths.h" // S7: headless cascade readout dump
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
@@ -278,7 +279,12 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         const float unitsPerTexel = (2.0f * radius) / static_cast<float>(contentRes);
 
         const float3 up(0, 1, 0);
-        const float lightDistance = std::max(1.0f, cascadeConfig_.maxDistance);
+        // S7: the light "eye" sits behind the cascade sphere by casterReachWS, not at a fixed
+        // maxDistance for every cascade. It does NOT set the depth range (near/far below do) -- it
+        // only guarantees that any caster within casterReachWS of the light still has z_ls > 0, i.e.
+        // lies inside the culling ortho box. The old max(1, maxDistance) put the eye INSIDE the
+        // volume for the far cascade (lightDistance < radius), where near hit the 0.001 clamp.
+        const float lightDistance = radius + cascadeConfig_.casterReachWS + 1.0f;
 
         // Texel snap — the actual stabilization. Snap the cascade center along the FIXED
         // light right/up axes to whole-texel steps in WORLD space, BEFORE building the
@@ -325,20 +331,34 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         const float minY = centerLS.y - radius;
         const float maxY = centerLS.y + radius;
 
-        // Step 2b: pull the near plane TOWARD the light by casterReachWS so casters
-        // between the sun and this slice still render and cast; the far side stays fitted.
+        // S7 -- PANCAKING. `nearLS` used to be ONE number pulled back by casterReachWS so casters
+        // between the sun and this slice would not be clipped; that inflated cascade 0's ortho depth
+        // range to ~200 m on a D16 atlas. It is now TWO numbers, and keeping them apart is the whole
+        // step:
+        //
+        //   nearProjLS  tight, = minZ            -> OrthoOffCenterLH. Shrinks the D16 range.
+        //   nearCullLS  wide,  = minZ - reach    -> Frustum::FromOrthoBounds. Keeps the casters.
+        //
+        // Casters in front of the projection near plane are NOT clipped: the pancake clamp in the
+        // shadow-depth VS (ApplyShadowDepthBias, shadow_depth_common.hlsli) presses them onto it.
+        // Shrinking the CULL near instead would delete exactly the casters pancaking exists to save
+        // -- they would never reach the VS -- and `Frustum::FromOrthoBounds` feeds both the CPU cull
+        // (SceneView::frustum) and the GPU cull (Frustum::Planes -> ShadowGpuData::UpdateViewFrustums,
+        // slots 0..3). So `casterReachWS` stays alive; only its meaning narrows, from "how far back
+        // to push the projection" to "how far toward the light to look for casters".
         const float zPad = cascadeConfig_.zPadding;
-        const float nearLS = std::max(0.001f, minZ - cascadeConfig_.casterReachWS);
+        const float nearProjLS = std::max(0.001f, minZ - cascadeConfig_.pancakeSlackWS);
+        const float nearCullLS = std::max(0.001f, minZ - cascadeConfig_.casterReachWS);
         const float farLS = maxZ + zPad;
 
-        const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
+        const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearProjLS, farLS);
 
         const float depthBiasInTexels = cascadeConfig_.depthBiasInTexels;
         // The cascade's world texel. Was `normalBiasInTexels * unitsPerTexel` until the receiver
         // normal offset was deleted for UE parity; the legacy 3x3 filter arm still needs the
         // per-cascade RATIO, which is the same number with the artist multiplier divided out.
         cascades.cascadeTexelWS[idx] = unitsPerTexel;
-        cascades.depthBiasNDC[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearLS);
+        cascades.depthBiasNDC[idx] = (depthBiasInTexels * unitsPerTexel) / (farLS - nearProjLS);
 
         // S5: the sampled rect is the CONTENT rect -- tile origin pushed in by the border, sized
         // contentRes. uvLocal in [0,1] therefore means "inside the cascade's world square" again,
@@ -358,7 +378,10 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascadeView.proj = lightProj;
         cascadeView.invView = mat4::Inverse(lightView);
         cascadeView.invProj = mat4::Inverse(lightProj);
-        cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, minY, maxY, nearLS, farLS);
+        // The ONLY consumer of the wide near: everything else (proj, invProj, depthBiasNDC, the
+        // readout) takes the projection pair.
+        cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, minY, maxY,
+                                                      nearCullLS, farLS);
         cascadeView.renderLayerMask = camera.GetRenderLayerMask();
         cascadeView.position = center;
         cascadeView.type = SceneView::Type::Shadow;
@@ -373,9 +396,32 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascades.sphereRadiusDbg[idx] = sphereRadius;
         cascades.radiusDbg[idx] = radius;
         cascades.unitsPerTexelDbg[idx] = unitsPerTexel;
-        cascades.nearLsDbg[idx] = nearLS;
+        cascades.nearLsDbg[idx] = nearProjLS;
         cascades.farLsDbg[idx] = farLS;
         cascades.tileSizeDbg[idx] = contentRes;
+    }
+
+    // S7: the readout the dev-window CSM tab shows, dumped once so a HEADLESS run can check it.
+    // zRange and the D16 step are the whole acceptance criterion for pancaking, and until now they
+    // existed only behind a GUI that a --shot capture cannot drive.
+    if (render::g_csmDumpReadout)
+    {
+        render::g_csmDumpReadout = false;
+        FILE* f = nullptr;
+        if (fopen_s(&f, diag::LogPath("csm_readout.log").c_str(), "w") == 0 && f)
+        {
+            std::fprintf(f, "cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)\n");
+            for (int i = 0; i < kCascades; ++i)
+            {
+                const float zRange = cascades.farLsDbg[i] - cascades.nearLsDbg[i];
+                std::fprintf(f, "%d  %8.2f..%-8.2f %5u  %8.3f  %9.2f  %7.2f %7.2f  %9.2f  %11.4f\n",
+                             i, cascades.splitsVS[i], cascades.splitsVS[i + 1],
+                             cascades.tileSizeDbg[i], cascades.unitsPerTexelDbg[i] * 1000.0f,
+                             cascades.radiusDbg[i], cascades.nearLsDbg[i], cascades.farLsDbg[i],
+                             zRange, (zRange / 65535.0f) * 1000.0f);
+            }
+            std::fclose(f);
+        }
     }
 }
 

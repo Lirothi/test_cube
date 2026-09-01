@@ -179,7 +179,13 @@ public:
 
     virtual bool IsTransparent() const;
 
-    virtual bool CastsShadow() const { return true; }
+    bool CastsShadow() const override { return castsShadow_; }
+    // Take an object OUT of the shadow-caster set without touching its visibility. One moving caster
+    // is enough to set VSM's `forceAll` (ShadowGpuData::MoverCount() > 0), which marks EVERY resident
+    // page dirty and re-renders the whole pool -- measured at ~195 ms per frame in Debug against a
+    // 0.38 ms baseline while a mesh was being dragged. A transient ghost like the editor's spawn
+    // preview has no business paying that, or making the rest of the scene pay it.
+    void SetCastsShadow(bool v) { castsShadow_ = v; }
 
     // Draw identity (no MaterialData at this tier; GBufferRenderable adds textures).
     RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), graphicsMaterial_.get(), nullptr }; }
@@ -200,7 +206,9 @@ public:
 
 protected:
     virtual void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) {}
-    virtual void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
+    // Returns Material::Bind's verdict: false = the root signature declares a table this draw has
+    // no handle for, so the CALLER must skip the draw (GBufferBindingGuard.h explains why).
+    virtual bool RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
 
     // C1b: the material actually BOUND for the draw being recorded. Defaults to the object's
     // graphics material; GBufferRenderable overrides it to return the current slot's per-slot
@@ -208,10 +216,13 @@ protected:
     // GetGraphicsMaterial() (slot 0) — all slot permutations share the PerObject layout.
     virtual Material* CurrentGraphicsMaterial() const { return graphicsMaterial_.get(); }
     virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx);
-    void UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
+    // Forwards Material::Bind's verdict; see RecordGraphics.
+    bool UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
     virtual void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod = 0);
 
     void MarkTransformDirty();
+
+    bool castsShadow_ = true; // see SetCastsShadow
 
     template<typename T>
     bool UpdateUniform(const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData)

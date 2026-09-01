@@ -1,5 +1,7 @@
 {
   "geometry": "models/box/box.mesh.bin",
   "lod3Aggressive": false,
-  "source": "import_staging\\box\\box.obj"
+  "material": "bronze",
+  "source": "import_staging\\box\\box.obj",
+  "texOffsScale": null
 }

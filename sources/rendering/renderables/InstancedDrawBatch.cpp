@@ -13,6 +13,7 @@
 #include "app/camera/Camera.h"
 #include "materials/Material.h"
 #include "materials/MaterialData.h"
+#include "rendering/core/GBufferBindingGuard.h"
 
 void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*>::const_iterator first,
                                    std::vector<RenderableObjectBase*>::const_iterator last,
@@ -273,9 +274,30 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
                     ctx.samplerTable[0] = binding.samplerTable;
                     if (binding.material) { slotMaterial = binding.material; }
                 }
+
+                // (the check moved into Material::Bind -- only it knows the root signature)
+                // A slot with NO material (or a material with no textures at all) leaves these
+                // handles null. Material::Bind then skips the descriptor-table binds -- it has
+                // nothing to bind -- and the draw would still go out, with gbuffer.hlsl's root
+                // parameters 3 and 4 (SRV table, sampler table) UNBOUND. The pixel shader samples
+                // them anyway, so the GPU reads whatever those root slots happen to contain.
+                //
+                // That is not a cosmetic glitch. Caught by GPU-based validation as
+                // "Draw, Uninitialized root argument accessed ... gbuffer_common.hlsli(289)", and
+                // its real-world symptom is the graphics QUEUE going quiet mid-batch: the device
+                // stays healthy, TDR never fires (nothing faulted), our fences simply stop
+                // advancing and every idle path waits forever. Dragging an un-materialed mesh into
+                // the viewport hung the editor exactly this way.
+                //
+                // So: skip the DRAW, not just the bind. An invisible submesh is a bug worth seeing;
+                // an unbound root argument is undefined behaviour.
             }
 
-            slotMaterial->Bind(cl, ctx, wireframe);
+            if (!slotMaterial->Bind(cl, ctx, wireframe))
+            {
+                render::ReportMissingGBufferBindings(slotMaterial, slot, "InstancedDrawBatch::Record");
+                continue; // see GBufferBindingGuard.h -- never draw with an unbound root parameter
+            }
             mesh_->DrawSubmeshInstanced(cl, static_cast<UINT>(s), count, lod);
         }
     }

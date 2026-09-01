@@ -295,7 +295,8 @@ struct CascadeDepthBias { float constBias, slopeBias, maxSlope, clampNear; };
 CascadeDepthBias ComputeCascadeDepthBias(const CascadeShadowConfig& cfg, float depthBiasNDC)
 {
     const float b = std::max(0.0f, std::min(depthBiasNDC, 0.1f));
-    return CascadeDepthBias{ b, std::max(0.0f, b * cfg.slopeScale), cfg.maxSlope, 0.0f };
+    return CascadeDepthBias{ b, std::max(0.0f, b * cfg.slopeScale), cfg.maxSlope,
+                             cfg.pancakeCasters ? 1.0f : 0.0f };
 }
 } // namespace
 

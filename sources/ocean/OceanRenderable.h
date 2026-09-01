@@ -97,7 +97,7 @@ public:
     std::function<void(RenderGraphPassContext)> BuildSurfSimPass(RenderGraphPassContext& ctx);
     std::function<void(RenderGraphPassContext)> BuildWetnessPass(RenderGraphPassContext& ctx);
     void PrepareRender(RenderGraphPassContext& ctx) override;
-    void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
+    bool RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     // Only to give the surface draw a GPU scope — see the note on the definition.
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera,
         D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;

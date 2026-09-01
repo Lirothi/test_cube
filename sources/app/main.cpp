@@ -24,6 +24,7 @@
 #include "rendering/meshes/LodSelect.h"          // shadow caster LOD curve (--vsm-lodbias/--vsm-lodstride)
 #include "rendering/renderables/InstanceTypes.h"  // S0: g_shadowMode / g_csmDebugMode (--shadow-mode, --csm-tint)
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/core/CommandListBindState.h" // --no-bind-batching
 #include "text/TextManager.h"
 #include "vfx/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
 
@@ -318,6 +319,44 @@ int WINAPI WinMain(
     // away from being bisected, not a rebuild away.
     if (lpCmdLine && std::strstr(lpCmdLine, "--no-async-compute")) {
         render::g_noAsyncCompute = true;
+    }
+
+    // "--no-streamline": take the Streamline SDK out entirely (no slInit, no device proxy).
+    // PERMANENT, like "--no-async-compute": a hang that survives "--dlss=off" still has the SDK
+    // wrapping the queue, and that must be one flag away from being excluded, not a rebuild away.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--no-streamline")) {
+        render::g_noStreamline = true;
+    }
+
+    // "--no-bind-batching": make every Material::Bind issue its root bindings in full instead of
+    // skipping ones the per-command-list cache believes are already set. The cache is
+    // thread_local and reset in BeginThreadCommandList, so it is only correct while a thread
+    // records exactly one list at a time -- BUNDLES inherit their root state from the PARENT at
+    // execution time, which the cache cannot model. A skipped bind leaves a root parameter
+    // unbound, which GPU-based validation reports as "Uninitialized root argument accessed" and
+    // which shows up in the wild as the graphics queue quietly stopping mid-batch.
+    // PERMANENT, like "--no-async-compute": one flag, not a rebuild.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--no-bind-batching")) {
+        render::g_bindBatchingEnabled = false;
+    }
+
+    // "--async-pass=<names>": narrow which passes may use the async compute queue. Only three ever
+    // ask for it. `--no-async-compute` proves the second queue is involved in a hang but not WHICH
+    // pass, and bisecting that by rebuild is a rebuild per guess.
+    //   --async-pass=none                 every pass back on graphics (same as --no-async-compute)
+    //   --async-pass=BuildAS              only BuildAS stays async
+    //   --async-pass=BuildAS,RTTrace      those two stay async, ObjectCompute goes back
+    if (lpCmdLine) {
+        if (const char* flag = std::strstr(lpCmdLine, "--async-pass=")) {
+            const char* list = flag + std::strlen("--async-pass=");
+            // Read to the next space: the value is a comma-separated name list, never a path.
+            char buf[128] = {};
+            for (size_t i = 0; i < sizeof(buf) - 1 && list[i] && list[i] != ' '; ++i) { buf[i] = list[i]; }
+            const auto has = [&buf](const char* n) { return std::strstr(buf, n) != nullptr; };
+            render::g_asyncPassBuildAS = has("BuildAS");
+            render::g_asyncPassObjectCompute = has("ObjectCompute");
+            render::g_asyncPassRtTrace = has("RTTrace");
+        }
     }
 
     // "--dr-check": poll GetDeviceRemovedReason() once per frame, so a device removal leaves
@@ -635,6 +674,12 @@ int WINAPI WinMain(
         // from the command line, so the tint can be captured with --shot.
         if (std::strstr(lpCmdLine, "--csm-tint")) {
             render::g_csmDebugMode = render::CsmDebugMode::CascadeTint;
+        }
+        // "--csm-readout": dump the cascade fit table to logs/csm_readout.log on the first frame.
+        // The dev window shows the same numbers, but a headless capture cannot open it, and zRange
+        // / D16 step are what the pancaking step is judged on.
+        if (std::strstr(lpCmdLine, "--csm-readout")) {
+            render::g_csmDumpReadout = true;
         }
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
         // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our

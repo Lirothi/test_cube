@@ -88,6 +88,24 @@ struct CascadeShadowConfig
     // Mandatory: as NoL -> 0 the required bias goes to infinity. NOTE 1.0, not 3.0 -- an earlier
     // revision of the plan had 3.0, i.e. three times UE's clamp.
     float maxSlope = 1.0f;
+    // S7 -- PANCAKING [UE: FShadowDepthPassUniformParameters::bClampToNearPlane].
+    // A caster in front of the cascade's projection near plane is pressed ONTO it instead of being
+    // clipped. That is what lets the near plane be fitted tight (`nearProjLS = minZ` in
+    // Scene::UpdateCascades) instead of pulled back by casterReachWS -- cascade 0's D16 depth range
+    // drops from ~200 m to a few tens, i.e. the quantisation step from millimetres to fractions.
+    // Casters are kept by the SEPARATE, wide culling near plane; see the block comment there.
+    // Side effect, the same one UE document: a triangle with some vertices clamped and some not is
+    // deformed. Only bites on casters straddling the projection near plane.
+    bool pancakeCasters = true;
+    // Metres of slack between the slice and the PROJECTION near plane. 0 = fitted tight (all the D16
+    // precision, and every caster in front of the slice gets pancaked). Raising it trades precision
+    // back for a lower clamp rate, and at `slack == casterReachWS` the projection near equals the
+    // culling near and the step degenerates to its pre-S7 baseline exactly -- which is what makes
+    // this the A/B lever for pancaking inside ONE binary.
+    // Why one might want it: a triangle with SOME vertices clamped and some not is deformed, so a
+    // caster straddling the near plane can shadow itself wrongly across that triangle. Slack pushes
+    // the plane out of the geometry instead.
+    float pancakeSlackWS = 0.0f;
 
     // --- S10: cascade cross-fade + distance fade ------------------------------------------------
     // [UDirectionalLightComponent::CascadeTransitionFraction = 0.1, clamped to 0.3] Fraction of a

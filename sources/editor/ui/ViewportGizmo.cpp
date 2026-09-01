@@ -191,7 +191,25 @@ namespace
     };
     SpawnPreviewState g_spawnPreview;
 
-    void ClearSpawnPreview(EditorContext& ctx)
+    // Take the preview off screen WITHOUT destroying it. The cursor crosses off a surface
+    // constantly during a drag -- sky, water, the gap between palms -- and destroying the object
+    // there meant rebuilding it on the way back: a mesh create plus an UploadBatch::SubmitAndWait,
+    // i.e. a full GPU round trip, tens of times per drag. Hiding costs a bool.
+    void HideSpawnPreview(EditorContext& ctx)
+    {
+        if (!g_spawnPreview.alive)
+        {
+            return;
+        }
+        RenderableObjectBase* runtime = ctx.scene.FindEditorObject(kSpawnPreviewId);
+        if (runtime)
+        {
+            runtime->SetVisible(false);
+        }
+    }
+
+    // The real teardown: only when the drag is over, or the dragged asset changed under us.
+    void DestroySpawnPreview(EditorContext& ctx)
     {
         if (!g_spawnPreview.alive)
         {
@@ -214,13 +232,16 @@ namespace
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(kSpawnPreviewId);
             if (RenderableObject* ro = runtime ? runtime->AsRenderableObject() : nullptr)
             {
-                ro->SetPosition(position); // the cheap path: every frame of the drag lands here
+                // The cheap path: every frame of the drag lands here. Un-hide, because the cursor
+                // may have crossed off a surface and back.
+                runtime->SetVisible(true);
+                ro->SetPosition(position);
                 return true;
             }
-            ClearSpawnPreview(ctx); // it went away underneath us; fall through and rebuild
+            DestroySpawnPreview(ctx); // it went away underneath us; fall through and rebuild
         }
 
-        ClearSpawnPreview(ctx);
+        DestroySpawnPreview(ctx); // a DIFFERENT asset: the old mesh really has to go
         const nlohmann::json objectJson =
             factory.BuildDefaultJson(&record, ctx, registry, &position);
         std::unique_ptr<RenderableObjectBase> runtime =
@@ -228,6 +249,15 @@ namespace
         if (!runtime)
         {
             return false;
+        }
+        // The preview is a GHOST: it must not cast a shadow while it is being positioned. One moving
+        // caster sets VSM's forceAll (ShadowGpuData::MoverCount() > 0), which marks every resident
+        // page dirty and re-renders the whole pool. Traced while dragging: Pass_VsmPageRender jumps
+        // from a 0.38 ms median to ~195 ms EVERY frame, i.e. the drag runs at about 5 fps. The real
+        // object spawned on drop is a normal caster; only the ghost opts out.
+        if (RenderableObject* ro = runtime->AsRenderableObject())
+        {
+            ro->SetCastsShadow(false);
         }
         UploadBatch uploads;
         if (!uploads.Begin(&ctx.renderer))
@@ -270,7 +300,7 @@ namespace
         // flight at all" is what stops a cancelled drag leaving a ghost mesh in the level.
         if (!ImGui::IsDragDropActive())
         {
-            ClearSpawnPreview(ctx);
+            DestroySpawnPreview(ctx);
         }
 
         const ImRect targetRect(
@@ -278,7 +308,7 @@ namespace
             ImVec2(viewport->Pos.x + width, viewport->Pos.y + height));
         if (!ImGui::BeginDragDropTargetViewport(viewport, &targetRect))
         {
-            ClearSpawnPreview(ctx); // dragged back out of the viewport
+            HideSpawnPreview(ctx); // still dragging, may come straight back -- do not rebuild
             return;
         }
 
@@ -372,7 +402,7 @@ namespace
                     if (payload->IsDelivery())
                     {
                         // Remove the preview BEFORE the real spawn, so the two never coexist.
-                        ClearSpawnPreview(ctx);
+                        DestroySpawnPreview(ctx);
                         nlohmann::json objectJson =
                             factory->BuildDefaultJson(record, ctx, registry, positionHintPtr);
                         commandStack.Execute(ctx,
@@ -385,9 +415,10 @@ namespace
                     }
                     else
                     {
-                        // Nothing under the cursor to place on: no preview, and say so rather
-                        // than leaving a stale ghost from the last position that did hit.
-                        ClearSpawnPreview(ctx);
+                        // Nothing under the cursor to place on. HIDE, do not destroy: this fires
+                        // every time the cursor crosses onto sky or water, and destroying here is
+                        // what made the return trip cost a mesh rebuild plus a GPU round trip.
+                        HideSpawnPreview(ctx);
                         ImGui::SetTooltip("Spawn %s  (point at a surface)",
                             record->displayName.c_str());
                     }

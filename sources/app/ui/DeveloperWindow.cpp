@@ -2010,6 +2010,36 @@ void DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // existed to cover a depth-bias budget that was a quarter of theirs.
                 // The three that decide ACNE vs PETER-PANNING. Everything here is measured on
                 // wind_test at the user camera; see docs/csm_improvement_plan.md S6.
+                ImGui::Checkbox("Pancake casters", &csmCfg.pancakeCasters);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("WHAT IT DOES: a caster in front of the cascade's near plane is pressed ONTO it\n"
+                                      "instead of being clipped away. That is what lets the near plane be fitted TIGHT to\n"
+                                      "the slice instead of pulled back by Caster reach, and that is where the D16 precision\n"
+                                      "comes from - watch zRange and D16 step in the readout table drop on cascade 0.\n"
+                                      "\n"
+                                      "Casters are kept by a SEPARATE, wider culling near plane, so Caster reach still\n"
+                                      "matters; its meaning just narrows from \"how far to push the projection back\" to\n"
+                                      "\"how far toward the light to look for casters\".\n"
+                                      "\n"
+                                      "COST: a triangle with some vertices clamped and some not is deformed. Only on casters\n"
+                                      "straddling the near plane - UE document the same side effect.\n"
+                                      "\n"
+                                      "Turn OFF and tall casters should visibly lose their tops. If nothing changes, they are\n"
+                                      "being CULLED instead and pancaking is not doing anything.");
+
+                ImGui::SliderFloat("Pancake slack (m)", &csmCfg.pancakeSlackWS, 0.0f, 160.0f, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Metres of room between the slice and the near plane casters are clamped to.\n"
+                                      "0 = fitted tight: maximum D16 precision, and everything in front of the\n"
+                                      "slice gets pancaked.\n"
+                                      "Raise it if a caster STRADDLING the near plane shadows itself wrongly - a\n"
+                                      "triangle with some vertices clamped and some not is deformed, and slack\n"
+                                      "pushes the plane out of that geometry.\n"
+                                      "At slack == Caster reach the projection near equals the CULLING near and\n"
+                                      "the whole step degenerates to its pre-pancaking baseline - which also makes\n"
+                                      "this the A/B lever without rebuilding.\n"
+                                      "Watch zRange / D16 step in the readout table pay for it.");
+
                 ImGui::SeparatorText("Bias \xE2\x80\x94 depth pass");
                 ImGui::SliderFloat("Depth bias (texels)", &csmCfg.depthBiasInTexels, 0.0f, 12.0f, "%.2f");
                 if (ImGui::IsItemHovered())

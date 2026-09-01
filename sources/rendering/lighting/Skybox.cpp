@@ -228,12 +228,13 @@ void Skybox::Init(Renderer* renderer,
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 }
 
-void Skybox::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
+bool Skybox::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     ctx.srvTable[0] = cube_.GetSRVForFrame(renderer);
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
+    return true;
 }
 
 void Skybox::BuildCubeMesh_(Renderer* r,

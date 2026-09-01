@@ -64,4 +64,10 @@ inline bool VsmActive() { return g_shadowMode == ShadowMode::VSM; }
 enum class CsmDebugMode : std::uint32_t { Off = 0, CascadeTint = 1 };
 inline CsmDebugMode g_csmDebugMode = CsmDebugMode::Off;
 
+// Set by `--csm-readout`: dump the cascade fit table (slice, texel, near/far, zRange, D16 step)
+// to logs/csm_readout.log on the next UpdateCascades, then clear itself. The dev window has the
+// same table, but a headless --shot/--profdump run cannot open a GUI -- and zRange / D16 step
+// are exactly what S7 pancaking is judged on.
+inline bool g_csmDumpReadout = false;
+
 } // namespace render

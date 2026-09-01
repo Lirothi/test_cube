@@ -1028,6 +1028,12 @@
     <ClInclude Include="sources/rendering/shadows/ShadowSettings.h">
       <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/GBufferBindingGuard.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClCompile Include="sources/rendering/core/GBufferBindingGuard.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h">
       <Filter>sources\rendering\shadows</Filter>
     </ClInclude>

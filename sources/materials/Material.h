@@ -116,7 +116,13 @@ public:
     ID3D12RootSignature* GetRootSignature() const { return rootSignature_.Get(); }
     ID3D12PipelineState* GetPipelineState() const { return pipelineState_.Get(); }
 
-    void Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx, bool wireframe = false) const;
+    // Returns FALSE when the root signature DECLARES a descriptor table the context has no handle
+    // for. Bind cannot skip the draw itself, so the caller must: issuing it would leave that root
+    // parameter unbound while the shader samples it -- "Uninitialized root argument accessed" to
+    // GPU-based validation, and a graphics queue that quietly stops mid-batch in the wild, with a
+    // healthy device and a silent TDR. Checking HERE rather than at each call site is the point:
+    // only Bind knows what the root signature actually declares.
+    bool Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx, bool wireframe = false) const;
 
     // Hot reload
     bool FSProbeAndFlagPending();

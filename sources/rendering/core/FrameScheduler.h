@@ -50,8 +50,21 @@ public:
     // DORMANT: nothing calls these yet. They are here so step 6 adds scheduling rather than
     // fence plumbing, and so the ownership of that fence is settled now — a hand-rolled fence
     // inside a pass body is exactly what D2 forbids.
-    UINT64 SignalCrossQueue(ID3D12CommandQueue* producer);
-    void   WaitCrossQueue(ID3D12CommandQueue* consumer, UINT64 value);
+    // A cross-queue edge: WHICH fence, and the value on it. The fence is part of the answer
+    // because there is one PER PRODUCING QUEUE -- see the comment on the members.
+    struct CrossQueuePoint
+    {
+        ID3D12Fence* fence = nullptr;
+        UINT64       value = 0;
+        bool valid() const { return fence != nullptr && value != 0; }
+    };
+    CrossQueuePoint SignalCrossQueue(ID3D12CommandQueue* producer);
+    void            WaitCrossQueue(ID3D12CommandQueue* consumer, const CrossQueuePoint& point);
+    // Diagnostics only (the fence-stall report).
+    ID3D12Fence* CrossQueueFenceGraphics() const { return crossQueueFenceGraphics_.Get(); }
+    ID3D12Fence* CrossQueueFenceCompute() const { return crossQueueFenceCompute_.Get(); }
+    UINT64 NextCrossQueueGraphics() const { return nextCrossGraphics_; }
+    UINT64 NextCrossQueueCompute() const { return nextCrossCompute_; }
 
     bool HasFence() const { return fence_ != nullptr; }
     FrameResource* GetFrameResource(UINT frameIndex) const
@@ -77,8 +90,27 @@ private:
 
     // Step 2: the cross-queue edge fence (see SignalCrossQueue). Separate from the frame fences so
     // a mid-frame edge cannot perturb frame pacing, and so its counter stays readable in a capture.
-    Microsoft::WRL::ComPtr<ID3D12Fence> crossQueueFence_;
-    UINT64 nextCrossQueueValue_ = 1;
+    // ONE FENCE PER PRODUCING QUEUE, and that is load-bearing, not tidiness.
+    //
+    // There used to be a single `crossQueueFence_` with one shared counter, signalled by BOTH
+    // queues. `ID3D12CommandQueue::Signal` ASSIGNS the fence value -- it does not take a maximum --
+    // so with values handed out in submission order but executed concurrently on two queues, a
+    // lower-valued signal can land AFTER a higher one and walk the fence BACKWARDS. A `Wait` on a
+    // value the fence had already passed then blocks forever.
+    //
+    // It needed three async passes to deadlock, which is exactly why it looked like anything but a
+    // fence bug: with A(compute) B(graphics) C(compute) D(graphics) E(compute), B landing before A
+    // rewinds the fence once (survivable -- D pulls it forward again), but C then rewinds it a
+    // SECOND time past D, and now compute waits for D while graphics waits for E that only compute
+    // can signal. Observed exactly: cross fence stuck at C's value, `COMPUTE wait=D NOT SATISFIED`,
+    // `graphics wait=E NOT SATISFIED`, both queues idle, device healthy, TDR silent.
+    //
+    // With one fence per producer each fence has a single writer, so its values are monotonic by
+    // construction and no ordering of the two queues can rewind it.
+    Microsoft::WRL::ComPtr<ID3D12Fence> crossQueueFenceGraphics_;
+    Microsoft::WRL::ComPtr<ID3D12Fence> crossQueueFenceCompute_;
+    UINT64 nextCrossGraphics_ = 1;
+    UINT64 nextCrossCompute_ = 1;
 
     std::unique_ptr<FrameResource> frameResources_[render::kFrameCount];
 };

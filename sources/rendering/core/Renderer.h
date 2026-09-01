@@ -93,7 +93,36 @@ inline bool g_asyncEmptySubmit = false;
 //
 // It deliberately SERIALISES the queues, so it is separate from --async-empty-submit and is never
 // on by default. It is also the first exercise of step 2's dormant SignalCrossQueue/WaitCrossQueue.
+// "--no-streamline": skip slInit/slSetD3DDevice entirely. NOT the same as "--dlss=off", which
+// only skips slEvaluateFeature -- the SDK still proxies the device and the command queue, and a
+// proxy can hold fences and queue waits that no engine-side instrumentation can see. When a
+// stall shows an idle queue, a healthy device and no cross-queue edge of ours outstanding, this
+// is the only switch that actually takes the SDK out of the picture.
+inline bool g_noStreamline = false;
+
 inline bool g_asyncOrderProbe = false;
+
+// The last frame's per-queue submission TOPOLOGY, recorded so a fence stall can print the exact
+// cross-queue edge it is parked on. The command-list dump (--dump-submit-order) shows WHAT was
+// submitted; this shows the WAIT/SIGNAL pairs between the queues, which is the only thing that
+// explains a deadlock where both queues are idle and the driver never calls it a hang.
+// Plain globals for the same reason g_crossQueueWaits is one: the reporter lives in FrameScheduler,
+// which knows nothing about the render graph.
+struct SubmitEdge
+{
+    unsigned long long frame = 0;       // which frame submitted this segment
+    bool     compute = false;           // which queue this segment went to
+    unsigned lists = 0;                 // command lists executed
+    unsigned long long waitValue = 0;   // cross-queue value waited for (0 = no wait)
+    unsigned long long signalValue = 0; // cross-queue value signalled after (0 = none)
+};
+// A RING across frames, not just the last one: the first UNSIGNALLED cross-queue value usually
+// belongs to an EARLIER frame than the one that was submitted last, and a single-frame snapshot
+// therefore shows a topology that is perfectly satisfiable while the actual cycle sits off-screen.
+inline constexpr unsigned kSubmitEdgeRing = 64;
+inline SubmitEdge g_submitEdgeRing[kSubmitEdgeRing];
+inline unsigned   g_submitEdgeNext = 0;   // write cursor, wraps
+inline unsigned   g_submitEdgeCount = 0;  // saturates at kSubmitEdgeRing
 
 // Async-compute plan step 6: `--dump-submit-order` writes the frame's SUBMITTED command-list arrays
 // — by debug name, in submission order, per queue — to logs/submit_order.log, once, then stops.
@@ -125,6 +154,16 @@ inline bool g_dumpSubmitOrder = false;
 //     queue it had last frame.
 // The ON->OFF direction is already exercised mid-session by `--rt-force-as-fail` (step 11): both
 // async passes vanish from the graph while the two-queue machinery stays live.
+// "--async-pass=<list>": which passes are ALLOWED on the async compute queue, by name. Only three
+// passes ever ask for it (Main_BuildAS, Main_ObjectCompute, Main_RTTrace), and `--no-async-compute`
+// is all-or-nothing -- which proves the second queue is involved in a hang but not WHICH pair of
+// passes. This narrows that in one repro each instead of by argument.
+// Empty string = the default, every pass keeps whatever queue it asked for.
+// Examples: `--async-pass=none`, `--async-pass=BuildAS`, `--async-pass=BuildAS,RTTrace`.
+inline bool g_asyncPassBuildAS = true;
+inline bool g_asyncPassObjectCompute = true;
+inline bool g_asyncPassRtTrace = true;
+
 inline bool g_noAsyncCompute = false;
 
 // What the switch above actually PRODUCED on the GPU last frame: command lists submitted to the
@@ -706,7 +745,9 @@ private:
     // Step 6: the frame's submissions, one per contiguous same-queue run of batches.
     std::vector<SubmitTimeline::Submission> submitSegmentsScratch_;
     // Step 8: (producer batch -> cross-queue fence value) for this frame, in submission order.
-    std::vector<std::pair<size_t, UINT64>> crossQueueSignals_;
+    // batch -> the edge that batch signalled. Carries the FENCE too, because there is one per
+    // producing queue now (FrameScheduler: a fence with two writers is not monotonic).
+    std::vector<std::pair<size_t, FrameScheduler::CrossQueuePoint>> crossQueueSignals_;
 
     // Per-frame deferred render targets + their CPU descriptor heaps
     RenderTargetManager rtManager_;
@@ -750,7 +791,7 @@ private:
 
     // D3D12 core (device/queue), presentation surface, frame pacing
     bool computeLaneProbed_ = false;  // async-compute step 1: the probe runs at most once
-    UINT64 asyncOrderProbeValue_ = 0; // step 3: last frame's cross-queue signal (--async-order-probe)
+    FrameScheduler::CrossQueuePoint asyncOrderProbeValue_{}; // last frame's edge (--async-order-probe)
 
     GraphicsDevice                    graphicsDevice_;
     SwapchainManager                  swapchain_;

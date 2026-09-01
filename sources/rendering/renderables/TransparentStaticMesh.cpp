@@ -180,11 +180,11 @@ void TransparentStaticMesh::Tick(float deltaTime)
     SetRotationEulerRad(rotEuler);
 }
 
-void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
+bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     if (!renderer || !scene_)
     {
-        return;
+        return false;
     }
 
     const auto& deferred = renderer->GetDeferredForFrame();
@@ -206,7 +206,7 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     if (!lights.EnsurePointLightBuffer(renderer, std::max<size_t>(pointCount, size_t(1))) ||
         !lights.EnsureSpotLightBuffer(renderer, std::max<size_t>(spotCount, size_t(1))))
     {
-        return;
+        return false;
     }
 
     // Defensive: the deferred shadow SRVs staged below must be valid (see the
@@ -214,7 +214,7 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     if (deferred.shadowSRV.ptr == 0 || deferred.spotShadowSRV.ptr == 0 ||
         deferred.pointShadowSRV.ptr == 0)
     {
-        return;
+        return false;
     }
 
     const D3D12_CPU_DESCRIPTOR_HANDLE sceneColorSrv =
@@ -229,7 +229,7 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     // loaded). Skip the draw if not set (its root sig binds them; a null staged SRV is invalid).
     if (renderer->GetVsmPageTableSrv().ptr == 0 || renderer->GetVsmPoolSrv().ptr == 0)
     {
-        return;
+        return false;
     }
     // P5 (t11): the GGX-prefiltered sky. Falls back to the display cube so the table is never
     // half-populated; the shader gates on camDirWS.w (the mip count), which is 0 without it.
@@ -263,7 +263,7 @@ void TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     };
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-    RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
+    return RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
 
 void TransparentStaticMesh::SetNormalMap(const std::wstring& path, bool normalIsRG)

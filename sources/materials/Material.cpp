@@ -12,6 +12,10 @@
 #include <cstdio>
 
 #include "core/diagnostics/DiagPaths.h"
+#include <atomic>
+#include <functional>
+#include <string>
+#include <utility>
 
 #include <d3d12shader.h>    // ID3D12ShaderReflection
 #include <d3dcompiler.h>    // D3DReflect (DXBC)
@@ -1301,15 +1305,44 @@ void Material::CollectRetired(uint64_t frameNumber, uint64_t keepAliveFrames)
     }
 }
 
-void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx, bool wireframe) const
+namespace
+{
+// Called from Material::Bind, i.e. once per DRAW on every path in the engine -- so it must not lock
+// and must not allocate. A mutex + std::set here (the first cut) serialised every recording thread
+// on a shared lock for a message that is only ever printed a handful of times.
+//
+// Instead: one atomic word, one bit per (shader, root index) bucket. fetch_or returns the old value,
+// so the first thread to set a bit is the only one that reports. A hash collision merely suppresses
+// a duplicate report, which for a diagnostic is free.
+std::atomic<std::uint64_t> g_unboundReported{ 0 };
+
+void ReportUnboundRootTable(const std::wstring& shaderFile, UINT rootIndex, const char* kind)
+{
+    std::uint64_t h = static_cast<std::uint64_t>(rootIndex) * 0x9E3779B97F4A7C15ull;
+    h ^= std::hash<std::wstring>{}(shaderFile);
+    const std::uint64_t bit = 1ull << (h & 63u);
+    if (g_unboundReported.fetch_or(bit, std::memory_order_relaxed) & bit) { return; }
+    FILE* f = nullptr;
+    if (fopen_s(&f, diag::LogPath("unbound_root.log").c_str(), "a") == 0 && f) {
+        std::fprintf(f, "UNBOUND %s at root index %u -- shader: %ls\n"
+                        "  the draw that follows reads this parameter without it ever being set\n",
+                     kind, rootIndex, shaderFile.c_str());
+        std::fclose(f);
+    }
+}
+} // namespace
+
+bool Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx, bool wireframe) const
 {
     // A failed build (e.g. a shader missing its [RootSignature]) leaves the material
     // with no PSO/root signature. Skip binding rather than feed null state to D3D12.
-    if (!rootSignature_ || !pipelineState_) { return; }
+    // No PSO also means no draw: a null pipeline cannot be bound, so the caller must not draw.
+    if (!rootSignature_ || !pipelineState_) { return false; }
 
     // Step 3: skip redundant state via the per-command-list bind cache (reset at CL
     // acquire). Skipping is safe because the command list retains bound state across
     // draws; a root-signature change invalidates root arguments (handled below).
+    bool allBound = true; // cleared when the root signature declares a table the context lacks
     render::CommandListBindState& cache = render::g_clBindState;
     const bool batch = render::g_bindBatchingEnabled;
 
@@ -1350,6 +1383,16 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
             }
             break;
         case RootParameterInfo::TableSRV:
+            // A root signature that DECLARES an SRV table and a context that has none means the
+            // draw about to be issued leaves that root parameter UNBOUND, and the shader will
+            // sample it anyway. GPU-based validation calls it "Uninitialized root argument
+            // accessed"; in the wild it stops the graphics queue mid-batch with a healthy device
+            // and a silent TDR. Reported HERE because every draw path converges on Bind -- a guard
+            // at a call site can only cover the path it is in.
+            if (ctx.srvTable[reg].ptr == 0) {
+                ReportUnboundRootTable(isCompute_ ? cachedCmpDesc_.shaderFile : cachedGfxDesc_.shaderFile, p.rootIndex, "SRV table");
+                allBound = false;
+            }
             if (ctx.srvTable[reg].ptr != 0 && (!batch || cache.srvTable[reg].ptr != ctx.srvTable[reg].ptr)) {
                 if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.srvTable[reg]); }
                 else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.srvTable[reg]); }
@@ -1364,6 +1407,10 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
             }
             break;
         case RootParameterInfo::TableSampler:
+            if (ctx.samplerTable[reg].ptr == 0) {
+                ReportUnboundRootTable(isCompute_ ? cachedCmpDesc_.shaderFile : cachedGfxDesc_.shaderFile, p.rootIndex, "sampler table");
+                allBound = false;
+            }
             if (ctx.samplerTable[reg].ptr != 0 && (!batch || cache.samplerTable[reg].ptr != ctx.samplerTable[reg].ptr)) {
                 if (isCompute_) { cmdList->SetComputeRootDescriptorTable(p.rootIndex, ctx.samplerTable[reg]); }
                 else { cmdList->SetGraphicsRootDescriptorTable(p.rootIndex, ctx.samplerTable[reg]); }
@@ -1372,6 +1419,7 @@ void Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
             break;
         }
     }
+    return allBound;
 }
 
 // ===== Root signature from compiler-embedded blob ([RootSignature] attribute) =====

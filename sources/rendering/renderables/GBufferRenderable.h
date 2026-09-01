@@ -203,7 +203,7 @@ public:
     virtual std::string GetGltfMaterialSourcePath() const { return {}; }
 
 protected:
-    void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
+    bool RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
 
     // C1b: bind the current slot's PSO inside the multi-slot submesh loop (slot 0 == the base

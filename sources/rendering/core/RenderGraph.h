@@ -1567,6 +1567,16 @@ private:
         // point where it is made, so a forced pass also declares, compiles and submits as Graphics.
         // Honouring the flag anywhere later would leave the three disagreeing.
         if (render::g_noAsyncCompute) { queue = RenderQueue::Graphics; }
+        // Per-pass narrowing (--async-pass=...). Same single decision point, same rule: a pass
+        // forced back to Graphics also DECLARES, COMPILES and SUBMITS as Graphics, so the three
+        // can never disagree. Only the three passes that ask for the compute queue are listed.
+        if (queue == RenderQueue::AsyncCompute) {
+            const bool allowed = (name == RenderPass::Main_BuildAS)       ? render::g_asyncPassBuildAS
+                               : (name == RenderPass::Main_ObjectCompute) ? render::g_asyncPassObjectCompute
+                               : (name == RenderPass::Main_RTTrace)       ? render::g_asyncPassRtTrace
+                                                                         : true;
+            if (!allowed) { queue = RenderQueue::Graphics; }
+        }
         passes_[idx].queue = queue;
         // Step 5 (D5/R8): a CL GROUP shares ONE command list, so its members share one queue. A
         // grouped pass marked AsyncCompute would silently record onto the group's DIRECT list —

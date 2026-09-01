@@ -1,5 +1,7 @@
 #include "rendering/renderables/RenderableObject.h"
 
+#include "rendering/core/GBufferBindingGuard.h"
+
 #include <stdexcept>
 #include <cstring>
 
@@ -109,7 +111,7 @@ void RenderableObject::ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandL
     RecordCompute(renderer, cl);
 }
 
-void RenderableObject::UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
+bool RenderableObject::UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     if (uniformBinder_)
     {
@@ -119,7 +121,8 @@ void RenderableObject::UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsC
     // graphics material everywhere else — the default override keeps this a no-op).
     Material* bindMat = CurrentGraphicsMaterial();
     if (!bindMat) { bindMat = graphicsMaterial_.get(); }
-    bindMat->Bind(cl, ctx, renderer->GetWireframeMode() && allowWireframe_);
+    if (!bindMat) { return false; }
+    return bindMat->Bind(cl, ctx, renderer->GetWireframeMode() && allowWireframe_);
 }
 
 void RenderableObject::DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod)
@@ -131,15 +134,15 @@ void RenderableObject::DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod)
     }
 }
 
-void RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
+bool RenderableObject::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
-    if (!renderer) { return; }
-    if (cl == nullptr) { return; }
-    if (!graphicsMaterial_) { return; }
+    if (!renderer) { return false; }
+    if (cl == nullptr) { return false; }
+    if (!graphicsMaterial_) { return false; }
 
     // Binds only — the draw is issued by Render()/RenderShadow() so the per-pass LOD index
     // can be passed to DrawGeometry without threading it through the Record* virtuals.
-    UpdateAndBindGraphics(renderer, cl, ctx, camera, cbData);
+    return UpdateAndBindGraphics(renderer, cl, ctx, camera, cbData);
 }
 
 void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
@@ -172,7 +175,12 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                         (cameraLod_ + 1u) < mesh->GetLodCount();
 
     drawLodFade_ = fading ? -cameraLodFade_ : 0.0f;
-    RecordGraphics(renderer, cl, ctx, camera, cbData);
+    // GBufferBindingGuard.h: never issue a draw whose root signature has an unbound table.
+    if (!RecordGraphics(renderer, cl, ctx, camera, cbData))
+    {
+        render::ReportMissingGBufferBindings(this, 0, "RenderableObject::Render");
+        return;
+    }
     // Step 6: draw at the camera LOD chosen in PrepareViews (see SelectLod). Mesh::SelectLod
     // clamps to available LODs. No selection/mutation here — recording is side-effect-free.
     //

@@ -47,7 +47,7 @@ public:
     bool UsesGlassReflection() const override { return true; }
 
 protected:
-    void RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
+    bool RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
 
 private:

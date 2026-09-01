@@ -316,6 +316,7 @@
     <ClCompile Include="sources/ocean/OceanSimulationSettings.cpp" />
     <ClCompile Include="sources/ocean/OceanSpectrum.cpp" />
     <ClCompile Include="sources/rendering/core/FrameResource.cpp" />
+    <ClCompile Include="sources/rendering/core/GBufferBindingGuard.cpp" />
     <ClCompile Include="sources/rendering/core/RenderContextPool.cpp" />
     <ClCompile Include="sources/rendering/core/DlssHandler.cpp" />
     <ClCompile Include="sources/rendering/core/FrameScheduler.cpp" />
@@ -547,6 +548,7 @@
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h" />
     <ClInclude Include="sources/rendering/shadows/ShadowGpuData.h" />
     <ClInclude Include="sources/rendering/shadows/ShadowSettings.h" />
+    <ClInclude Include="sources/rendering/core/GBufferBindingGuard.h" />
     <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h" />
     <ClInclude Include="sources/rendering/RenderLayers.h" />
     <ClInclude Include="sources/text/FontAtlas.h" />

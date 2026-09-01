@@ -1,5 +1,7 @@
 #include "rendering/renderables/GBufferRenderable.h"
 
+#include "rendering/core/GBufferBindingGuard.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -495,7 +497,13 @@ void GBufferRenderable::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl
             ctx.cbv[0] = alloc.gpu;
             ctx.cbv[1] = viewCB;
 
-            RecordGraphics(renderer, cl, ctx, camera, cbData); // stages the slot's SRVs + binds
+            // RecordGraphics stages the slot's SRVs and binds; its return says whether the root
+            // signature got everything it declares. See GBufferBindingGuard.h.
+            if (!RecordGraphics(renderer, cl, ctx, camera, cbData))
+            {
+                render::ReportMissingGBufferBindings(this, currentDrawSlot_, "GBufferRenderable::Render");
+                continue;
+            }
             mesh->DrawSubmesh(cl, static_cast<UINT>(s), drawLod);
         }
     }
@@ -604,11 +612,11 @@ float GBufferRenderable::GetWindLeafScaleWorld() const
     return objScale * std::max({ std::abs(s.x), std::abs(s.y), std::abs(s.z) });
 }
 
-void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
+bool GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     if (!renderer)
     {
-        return;
+        return false;
     }
 
     if (MaterialData* md = GetMaterialDataForSlot(currentDrawSlot_))
@@ -621,7 +629,7 @@ void GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommand
         MaterialData::StageNeutralGBufferSurfaceParams(renderer, ctx, 2);
     }
 
-    RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
+    return RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
 }
 
 void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const

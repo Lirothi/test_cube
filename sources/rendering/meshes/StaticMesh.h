@@ -23,7 +23,6 @@ public:
     void SetChunkGrid(unsigned int grid) { chunkGrid_ = grid; }
 
     bool IsSimpleRender() const override { return true; }
-    bool CastsShadow() const override { return true; }
 
 protected:
     // A3: a glTF model with "material":"auto" (or no preset) sources its material from the glTF.

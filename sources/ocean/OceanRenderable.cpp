@@ -794,11 +794,11 @@ void OceanRenderable::PrepareRender(RenderGraphPassContext& ctx)
     }
 }
 
-void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
+bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     if (!renderer || !simulation_)
     {
-        return;
+        return false;
     }
 
     const auto& deferred = renderer->GetDeferredForFrame();
@@ -973,6 +973,7 @@ void OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);
+    return true;
 }
 
 void OceanRenderable::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,

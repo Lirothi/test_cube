@@ -2,7 +2,7 @@
   "geometry": "models/sphere/sphere.mesh.bin",
   "lod3Aggressive": false,
   "lodDistanceScale": 2.0,
-  "material": "auto",
+  "material": "bronze",
   "source": "import_staging\\sphere\\sphere.obj",
   "texOffsScale": null
 }

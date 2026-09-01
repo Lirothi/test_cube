@@ -224,13 +224,19 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     pref.renderAPI = sl::RenderAPI::eD3D12;
 
-    auto slRes = slInit(pref, sl::kSDKVersion);
+    // --no-streamline: never load the SDK at all. `--dlss=off` is NOT equivalent -- it only skips
+    // slEvaluateFeature, leaving the device and queue proxied.
+    auto slRes = render::g_noStreamline ? sl::Result::eErrorNotInitialized
+                                        : slInit(pref, sl::kSDKVersion);
     streamlineInitialized_ = (slRes == sl::Result::eOk);
 
     // --- Device (debug layer enabled inside, in debug builds) ---
     graphicsDevice_.InitDevice();
 
-    slSetD3DDevice(GetDevice());
+    if (streamlineInitialized_)
+    {
+        slSetD3DDevice(GetDevice());
+    }
 
     if (dlssHandler_)
     {
@@ -1284,7 +1290,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         // before it starts this frame's work. A GPU-side wait — the CPU does not block. The value
         // is from the previous frame, so the signal was always submitted before this wait and the
         // pair can never deadlock.
-        if (render::g_asyncOrderProbe && asyncOrderProbeValue_ != 0) {
+        if (render::g_asyncOrderProbe && asyncOrderProbeValue_.valid()) {
             frameScheduler_.WaitCrossQueue(GetCommandQueue(), asyncOrderProbeValue_);
         }
 
@@ -1316,21 +1322,24 @@ void Renderer::ExecuteTimelineAndPresent() {
         render::g_crossQueueWaits = 0;
         for (const auto& seg : submitSegmentsScratch_) {
             const bool isCompute = (seg.queue == RenderQueue::AsyncCompute);
+            UINT64 edgeWait = 0;
+            UINT64 edgeSignal = 0;
             ID3D12CommandQueue* q = isCompute ? GetComputeQueue() : GetCommandQueue();
             if (q == nullptr) {
                 RendererInvariantFailure("Renderer::ExecuteTimelineAndPresent: a segment targets a queue that does not exist");
             }
             if (seg.waitForBatch != SubmitTimeline::kNoCrossQueueWait) {
-                UINT64 value = 0;
+                FrameScheduler::CrossQueuePoint value{};
                 for (const auto& sig : crossQueueSignals_) {
                     if (sig.first == seg.waitForBatch) { value = sig.second; break; }
                 }
-                if (value == 0) {
+                if (!value.valid()) {
                     RendererInvariantFailure("Renderer::ExecuteTimelineAndPresent: cross-queue wait "
                                              "for a batch that was never signalled (segment order broken)");
                 }
                 frameScheduler_.WaitCrossQueue(q, value);
                 ++render::g_crossQueueWaits;
+                edgeWait = value.value;
             }
             if (!seg.lists.empty()) {
                 q->ExecuteCommandLists(static_cast<UINT>(seg.lists.size()), seg.lists.data());
@@ -1339,7 +1348,19 @@ void Renderer::ExecuteTimelineAndPresent() {
                 }
             }
             if (seg.signalAfter) {
-                crossQueueSignals_.emplace_back(seg.lastBatch, frameScheduler_.SignalCrossQueue(q));
+                const FrameScheduler::CrossQueuePoint sig = frameScheduler_.SignalCrossQueue(q);
+                crossQueueSignals_.emplace_back(seg.lastBatch, sig);
+                edgeSignal = sig.value;
+            }
+            {
+                render::SubmitEdge& e = render::g_submitEdgeRing[render::g_submitEdgeNext];
+                e.frame = totalFrameNumber_;
+                e.compute = isCompute;
+                e.lists = static_cast<unsigned>(seg.lists.size());
+                e.waitValue = edgeWait;
+                e.signalValue = edgeSignal;
+                render::g_submitEdgeNext = (render::g_submitEdgeNext + 1) % render::kSubmitEdgeRing;
+                if (render::g_submitEdgeCount < render::kSubmitEdgeRing) { ++render::g_submitEdgeCount; }
             }
         }
     }
@@ -2587,10 +2608,13 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
     	// the way UE place their viewport at (X + BorderSize, Y + BorderSize) with size ResolutionX.
     	// Scene::UpdateCascades derives unitsPerTexel and the atlas scale/bias from the same content
     	// size, so the cascade's world square lands exactly on this rect. See kCascadeAtlasBorder.
+    	// The guard has to gate the OFFSET too, not just the size: on the VSM path the atlas is
+    	// shrunk to 1x1, and shifting the origin by 4 while keeping the full size put the viewport
+    	// and scissor outside the resource.
     	const float border = float(render::kCascadeAtlasBorder);
-    	const float content = (tile > 2.0f * border) ? (tile - 2.0f * border) : tile;
-    	topLeftX += border;
-    	topLeftY += border;
+    	const bool fits = tile > 2.0f * border;
+    	const float content = fits ? (tile - 2.0f * border) : tile;
+    	if (fits) { topLeftX += border; topLeftY += border; }
 
     	D3D12_VIEWPORT vp{ topLeftX, topLeftY, content, content, 0.0f, 1.0f };
     	D3D12_RECT sc{ (LONG)topLeftX, (LONG)topLeftY, (LONG)(topLeftX + content), (LONG)(topLeftY + content) };
