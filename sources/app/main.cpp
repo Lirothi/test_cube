@@ -14,6 +14,8 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "core/diagnostics/BootProfile.h"
+#include "rendering/core/GBufferBindingGuard.h"
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
@@ -41,6 +43,9 @@ int ForceMi() { return mi_version(); }
 
 namespace
 {
+void ApplyGbvModeArg(const char* cmd);
+void ApplyGbvSelfTestArg(const char* cmd);
+
 // Extract a CLI value for `key`, accepting both "key=value" and "key value" (optionally quoted
 // for paths with spaces). Returns "" when the key is absent or has no value.
 std::string ExtractArgValue(const char* cmd, const char* key)
@@ -57,6 +62,36 @@ std::string ExtractArgValue(const char* cmd, const char* key)
         while (*p && !std::isspace(static_cast<unsigned char>(*p))) { v.push_back(*p); ++p; }
     }
     return v;
+}
+
+
+// `--gbv-selftest=N`: deliberately issue N draws with unbound descriptor tables, to find out what
+// a given --gbv-mode actually CATCHES. Debug only; see GBufferBindingGuard.h.
+void ApplyGbvSelfTestArg(const char* cmd)
+{
+    const std::string n = ExtractArgValue(cmd, "--gbv-selftest");
+    if (!n.empty()) { render::g_gbvSelfTestDraws = std::atoi(n.c_str()); }
+}
+
+// `--gbv-mode=guarded|unguarded|state|none` -- how much shader rewriting GBV does.
+//
+// This is a WALL-CLOCK knob, not a correctness one for the common case. GBV rewrites every shader
+// the first time its pipeline is bound, on the CPU, inside the pass body that binds it. Measured on
+// this project with `--scene-stress-gbv=2`: 151 s total, of which 116 s were TWO frames, of which
+// 76 s was the single first dispatch of lighting_cs.hlsl. Boot itself was 5 s.
+//
+// guarded (default) -- D3D12's own default; bounds-check control flow around every access.
+// unguarded        -- same out-of-bounds/uninitialized reports, without the guard branches.
+// state            -- resource-state and descriptor validation only; no shader rewriting.
+// none             -- GBV on, shader patching off entirely.
+void ApplyGbvModeArg(const char* cmd)
+{
+    const std::string mode = ExtractArgValue(cmd, "--gbv-mode");
+    if (mode.empty()) { return; }
+    if (mode == "none")           { GraphicsDevice::SetGbvShaderPatchMode(0); }
+    else if (mode == "state")     { GraphicsDevice::SetGbvShaderPatchMode(1); }
+    else if (mode == "unguarded") { GraphicsDevice::SetGbvShaderPatchMode(2); }
+    else if (mode == "guarded")   { GraphicsDevice::SetGbvShaderPatchMode(3); }
 }
 
 void EnableDpiAwareness()
@@ -418,9 +453,14 @@ int WINAPI WinMain(
             const bool gbv = std::strstr(lpCmdLine, "scene-stress-gbv") != nullptr;
             if (gbv) {
                 GraphicsDevice::EnableGbvForStress(true);
+                ApplyGbvModeArg(lpCmdLine);
+                ApplyGbvSelfTestArg(lpCmdLine);
             }
             const bool roughnessEdits = std::strstr(lpCmdLine, "--scene-stress-roughness") != nullptr;
             if (roughnessEdits) { g_bootLevelPath = "data/levels/wind_test.json"; }
+            // The stress harness is a diagnostic run by definition, so the per-frame buckets are
+            // wanted here without a separate flag.
+            boot::SetFrameProfiling(true);
             return RunSceneStress(hInstance, nShowCmd, iterations, /*gbvContinue=*/gbv, roughnessEdits);
         }
 
@@ -431,6 +471,15 @@ int WINAPI WinMain(
         // because that is where the debug layer itself is enabled.
         if (std::strstr(lpCmdLine, "--gbv") != nullptr) {
             GraphicsDevice::EnableGbvForStress(true);
+            ApplyGbvModeArg(lpCmdLine);
+            boot::SetFrameProfiling(true);
+        }
+
+        // `--boot-profile`: the per-frame buckets on an ORDINARY run. The boot TIMELINE is always
+        // written; this adds the per-pass / per-submit / per-present breakdown, which costs a mutex
+        // and a string per pass per frame and so is not on by default.
+        if (std::strstr(lpCmdLine, "--boot-profile") != nullptr) {
+            boot::SetFrameProfiling(true);
         }
     }
 

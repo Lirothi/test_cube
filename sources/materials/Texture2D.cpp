@@ -1,4 +1,8 @@
 #include "materials/Texture2D.h"
+
+#include "core/diagnostics/BootProfile.h"
+
+#include <chrono>
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
 #include "materials/TextureDecodeCache.h"
@@ -630,6 +634,25 @@ bool Texture2D::LoadFromFileUncached_(Renderer* renderer,
     const CreateDesc& d,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
+    // Only the UNCACHED path is timed: a cache hit costs a map lookup and is not what makes boot
+    // slow. Measures decode + upload-record together, which is the unit that can actually be moved
+    // off the boot path.
+    const auto texBegin = std::chrono::steady_clock::now();
+    struct TexTimer
+    {
+        std::chrono::steady_clock::time_point begin;
+        const std::wstring* path;
+        ~TexTimer()
+        {
+            const double ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - begin).count();
+            std::string narrow;
+            narrow.reserve(path->size());
+            for (wchar_t c : *path) { narrow.push_back((c > 0 && c < 128) ? static_cast<char>(c) : '?'); }
+            boot::AddBucket("texture load (uncached)", ms, narrow);
+        }
+    } texTimer{ texBegin, &d.path };
+
     debugName_ = L"Tex2D:" + d.path; // distinct per texture — see the header
 
     // DDS uses a separate path

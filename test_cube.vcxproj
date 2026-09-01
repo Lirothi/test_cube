@@ -291,6 +291,7 @@
     <ClCompile Include="sources/app/scene/SceneResourceBootstrapper.cpp" />
     <ClCompile Include="sources/app/Systems.cpp" />
     <ClCompile Include="sources/app/main.cpp" />
+    <ClCompile Include="sources/core/diagnostics/BootProfile.cpp" />
     <ClCompile Include="sources/core/profiling/Profiler.cpp" />
     <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp" />
     <ClCompile Include="sources\core\task\TaskSystemEnki.cpp" />
@@ -461,6 +462,7 @@
     <ClInclude Include="sources/core/math/Math.h" />
     <ClInclude Include="sources/core/profiling/Profiler.h" />
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
+    <ClInclude Include="sources/core/diagnostics/BootProfile.h" />
     <ClInclude Include="sources/core/diagnostics/DiagPaths.h" />
     <ClInclude Include="sources/core/task/TaskSystem.h" />
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />

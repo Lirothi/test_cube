@@ -25,6 +25,12 @@ public:
     // it doesn't hide the device-hang race DRED is meant to catch.
     static void EnableDredForStress(bool enable);
     static void EnableGbvForStress(bool enable);
+
+    // GBV shader patch mode, as D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE (0 none,
+    // 1 state-tracking-only, 2 unguarded, 3 guarded = the D3D12 default we keep). Only read when
+    // GBV is on. `--gbv-mode=` sets it; see the comment on g_gbvPatchMode in the .cpp for why this
+    // is the knob that decides whether a GBV run takes seconds or minutes.
+    static void SetGbvShaderPatchMode(int mode);
     // Barrier plan step 15: log a MODULE-attributed stack for every barrier-interop message the
     // debug layer raises (1350/1334/527/538). The enhanced work reached a point where the message
     // names a resource but not the code that emitted the offending call — and the answer turned
@@ -76,6 +82,9 @@ public:
     bool UseEnhancedBarriers() const { return enhancedBarriers_ && enhancedOptIn_; }
 
 private:
+    // The GBV patch-mode verdict, held from device creation until the info-queue setup wipes
+    // gbv.log "fresh per run" and this can be written as its header. See InitDevice.
+    char gbvModeLine_[256] = {};
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
     Microsoft::WRL::ComPtr<ID3D12Device5> device5_; // null if DXR unsupported
     Microsoft::WRL::ComPtr<ID3D12Device10> device10_; // null without the enhanced-barrier interfaces

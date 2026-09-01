@@ -1,5 +1,8 @@
 #include "materials/Material.h"
 
+#include "core/diagnostics/BootProfile.h"
+#include "rendering/core/GBufferBindingGuard.h"
+
 #include <d3dcompiler.h>
 #include <fstream>
 #include <sstream>
@@ -676,6 +679,16 @@ std::wstring BuildComputePipelineName(const D3D12_COMPUTE_PIPELINE_STATE_DESC& d
     return hash.Finish(L'c');
 }
 
+// Wide shader path -> narrow, for the boot profile. Shader paths are ASCII here; anything else
+// degrades to '?' rather than dragging a locale-dependent conversion into a diagnostic.
+std::string NarrowForLog(const std::wstring& w)
+{
+    std::string out;
+    out.reserve(w.size());
+    for (wchar_t c : w) { out.push_back((c > 0 && c < 128) ? static_cast<char>(c) : '?'); }
+    return out;
+}
+
 // Keep PSO creation on the normal device path so Streamline returns its expected
 // proxy objects. Loading objects directly from ID3D12PipelineLibrary is unsafe with
 // the current Streamline interposer; D3D12_CACHED_PIPELINE_STATE preserves the
@@ -768,11 +781,18 @@ void StorePipelineBlob(const std::wstring& name, ID3D12PipelineState* pipeline)
     g_psoCacheSerializedBytes.fetch_add(blobSize, std::memory_order_relaxed);
 }
 
+// `debugLabel` is the shader file the caller built this from. The cache key is a hash, which is
+// the right identity for a file on disk and useless in a profile: under GBV the create cost is
+// concentrated on a few pipelines and the only actionable output is WHICH ones.
 HRESULT CreateGraphicsPipelineStateCached(ID3D12Device* device,
     const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc,
-    ComPtr<ID3D12PipelineState>& out)
+    ComPtr<ID3D12PipelineState>& out,
+    const std::wstring& debugLabel)
 {
     const std::wstring name = BuildGraphicsPipelineName(desc);
+    const auto psoBegin = std::chrono::steady_clock::now();
+    const std::string label = NarrowForLog(debugLabel.empty() ? name : debugLabel);
+    bool fromCache = false;
     if (PipelineCacheEnabled())
     {
         g_psoCacheAttempts.fetch_add(1, std::memory_order_relaxed);
@@ -791,9 +811,12 @@ HRESULT CreateGraphicsPipelineStateCached(ID3D12Device* device,
                 g_psoCacheHits.fetch_add(1, std::memory_order_relaxed);
                 g_psoCacheSerializedBytes.fetch_add(
                     static_cast<uint64_t>(cachedBytes.size()), std::memory_order_relaxed);
+                boot::AddBucket("PSO from cache blob",
+                                ElapsedMicroseconds(psoBegin) / 1000.0, label);
                 return cachedHr;
             }
             g_psoCacheRejects.fetch_add(1, std::memory_order_relaxed);
+            fromCache = true;
             out.Reset();
         }
         else
@@ -813,14 +836,22 @@ HRESULT CreateGraphicsPipelineStateCached(ID3D12Device* device,
     {
         StorePipelineBlob(name, out.Get());
     }
+    // Separate bucket from the cache-blob path on purpose: "87 pipelines, 0 from cache" is a
+    // different bug from "87 pipelines, all cached, still slow".
+    boot::AddBucket(fromCache ? "PSO create (cache REJECTED)" : "PSO create (compile)",
+                    ElapsedMicroseconds(psoBegin) / 1000.0, label);
     return hr;
 }
 
 HRESULT CreateComputePipelineStateCached(ID3D12Device* device,
     const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc,
-    ComPtr<ID3D12PipelineState>& out)
+    ComPtr<ID3D12PipelineState>& out,
+    const std::wstring& debugLabel)
 {
     const std::wstring name = BuildComputePipelineName(desc);
+    const auto psoBegin = std::chrono::steady_clock::now();
+    const std::string label = NarrowForLog(debugLabel.empty() ? name : debugLabel);
+    bool fromCache = false;
     if (PipelineCacheEnabled())
     {
         g_psoCacheAttempts.fetch_add(1, std::memory_order_relaxed);
@@ -839,9 +870,12 @@ HRESULT CreateComputePipelineStateCached(ID3D12Device* device,
                 g_psoCacheHits.fetch_add(1, std::memory_order_relaxed);
                 g_psoCacheSerializedBytes.fetch_add(
                     static_cast<uint64_t>(cachedBytes.size()), std::memory_order_relaxed);
+                boot::AddBucket("PSO from cache blob",
+                                ElapsedMicroseconds(psoBegin) / 1000.0, label);
                 return cachedHr;
             }
             g_psoCacheRejects.fetch_add(1, std::memory_order_relaxed);
+            fromCache = true;
             out.Reset();
         }
         else
@@ -861,6 +895,10 @@ HRESULT CreateComputePipelineStateCached(ID3D12Device* device,
     {
         StorePipelineBlob(name, out.Get());
     }
+    // Separate bucket from the cache-blob path on purpose: "87 pipelines, 0 from cache" is a
+    // different bug from "87 pipelines, all cached, still slow".
+    boot::AddBucket(fromCache ? "PSO create (cache REJECTED)" : "PSO create (compile)",
+                    ElapsedMicroseconds(psoBegin) / 1000.0, label);
     return hr;
 }
 } // namespace
@@ -926,8 +964,17 @@ static HRESULT CompileDXC(const std::wstring& file,
     const std::wstring target = BuildProfile(stage4cc, sm);
     const uint64_t cacheIdentity = BuildShaderCacheIdentity(
         path, entry, stage4cc, target, defines);
+    const auto shaderBegin = std::chrono::steady_clock::now();
+    const std::string shaderLabel = NarrowForLog(path.filename().wstring()) + ":" + entry;
     if (TryLoadShaderCache(cacheIdentity, outBlob, outIncludes))
     {
+        // DXIL SIZE is in the label because it is the thing GBV's cost tracks: GBV rewrites the
+        // bytecode at first use, so the biggest blob is the pass that stalls the first frame.
+        // Without this the two halves of that story live in two different logs.
+        boot::AddBucket("shader from cache",
+                        ElapsedMicroseconds(shaderBegin) / 1000.0,
+                        shaderLabel + " (" +
+                            std::to_string(outBlob ? outBlob->GetBufferSize() / 1024 : 0) + " KB DXIL)");
         return S_OK;
     }
 
@@ -1022,6 +1069,10 @@ static HRESULT CompileDXC(const std::wstring& file,
     std::memcpy(blob->GetBufferPointer(), dxil->GetBufferPointer(), dxil->GetBufferSize());
     outBlob = blob;
     StoreShaderCache(cacheIdentity, path, outBlob.Get(), outIncludes);
+    boot::AddBucket("shader COMPILE (dxc)",
+                    ElapsedMicroseconds(shaderBegin) / 1000.0,
+                    shaderLabel + " (" +
+                        std::to_string(outBlob ? outBlob->GetBufferSize() / 1024 : 0) + " KB DXIL)");
 
     return S_OK;
 }
@@ -1346,8 +1397,24 @@ bool Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
     render::CommandListBindState& cache = render::g_clBindState;
     const bool batch = render::g_bindBatchingEnabled;
 
+    // GBV self-test (`--gbv-selftest=N`, Debug only, never armed by default). Commits the exact
+    // violation the GBufferBindingGuard exists to prevent, so a GBV mode can be shown to catch it
+    // rather than assumed to. Re-setting the root signature is what makes it deterministic: that
+    // INVALIDATES every root argument, so the tables skipped below are genuinely unbound at draw
+    // time and not merely left over from a previous draw on this command list.
     ID3D12RootSignature* rs = rootSignature_.Get();
-    if (!batch || cache.rs != rs || cache.isCompute != isCompute_) {
+
+    bool selfTestDraw = false;
+#ifdef _DEBUG
+    if (!isCompute_ && render::g_gbvSelfTestDraws > 0) {
+        --render::g_gbvSelfTestDraws;
+        selfTestDraw = true;
+        cmdList->SetGraphicsRootSignature(rs);
+        if (batch) { cache.rs = rs; cache.isCompute = isCompute_; cache.OnRootSignatureChanged(); }
+    }
+#endif
+
+    if (!selfTestDraw && (!batch || cache.rs != rs || cache.isCompute != isCompute_)) {
         if (isCompute_) { cmdList->SetComputeRootSignature(rs); }
         else { cmdList->SetGraphicsRootSignature(rs); }
         if (batch) { cache.rs = rs; cache.isCompute = isCompute_; cache.OnRootSignatureChanged(); }
@@ -1366,6 +1433,13 @@ bool Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
     for (const auto& p : rootParams_) {
         const uint32_t reg = p.bindingRegister;
         if (reg >= RenderContext::kMaxBindings) { continue; } // shape guarded at build time
+        // Self-test: leave the DESCRIPTOR TABLES unbound (CBVs and root constants still go, so the
+        // draw is well-formed in every other respect and the only complaint can be this one).
+        if (selfTestDraw && (p.type == RootParameterInfo::TableSRV ||
+                             p.type == RootParameterInfo::TableSampler ||
+                             p.type == RootParameterInfo::TableUAV)) {
+            continue;
+        }
         switch (p.type) {
         case RootParameterInfo::Constants:
             // Root constants are tiny and rarely repeated across draws; always set.
@@ -1629,7 +1703,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     pso.DSVFormat = gd.dsvFormat;
     pso.SampleDesc.Count = gd.sampleCount;
 
-    if (FAILED(CreateGraphicsPipelineStateCached(r->GetDevice(), pso, outPSO))) {
+    if (FAILED(CreateGraphicsPipelineStateCached(r->GetDevice(), pso, outPSO, gd.shaderFile))) {
         return false;
     }
     outPSO->SetName(gd.shaderFile.c_str()); // so GBV/PIX name the shader, not 'Unnamed'
@@ -1690,7 +1764,8 @@ bool Material::EnsureWireframePipeline_() const
     pso.SampleDesc.Count = cachedGfxDesc_.sampleCount;
 
     ComPtr<ID3D12PipelineState> wireframe;
-    if (FAILED(CreateGraphicsPipelineStateCached(renderer_->GetDevice(), pso, wireframe)))
+    if (FAILED(CreateGraphicsPipelineStateCached(renderer_->GetDevice(), pso, wireframe,
+                                                 cachedGfxDesc_.shaderFile + L" (wireframe)")))
     {
         return false;
     }
@@ -1735,7 +1810,7 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     D3D12_COMPUTE_PIPELINE_STATE_DESC pso{};
     pso.pRootSignature = outRS.Get();
     pso.CS = { cs->GetBufferPointer(), cs->GetBufferSize() };
-    if (FAILED(CreateComputePipelineStateCached(r->GetDevice(), pso, outPSO))) {
+    if (FAILED(CreateComputePipelineStateCached(r->GetDevice(), pso, outPSO, cd.shaderFile))) {
         return false;
     }
     // Name the PSO after the shader that made it. Every GPU-based-validation message carries

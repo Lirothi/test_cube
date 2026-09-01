@@ -22,7 +22,10 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h> // ID3D12InfoQueue
+#include "core/diagnostics/BootProfile.h"
 #include "core/diagnostics/DiagPaths.h"
+
+#include <chrono>
 #include <dbghelp.h>        // StackWalk64 / SymFromAddr (crash-stack logger)
 #include <wrl/client.h>
 
@@ -220,12 +223,15 @@ public:
         }
 
         // Pump a few warm-up frames so the pipeline is fully primed before churn.
+        {
+        BOOT_SCOPE("stress warmup frames");
         for (int i = 0; i < 4; ++i)
         {
             if (!RenderFrames_(1, "warmup"))
             {
                 return FinishFault_(-1, "warmup", "render-frame threw");
             }
+        }
         }
         if (const char* early = CheckFault_())
         {
@@ -248,7 +254,12 @@ public:
             // (e.g. access violation from a dead/removed device) is attributed
             // to this op instead of crashing the process with no verdict. The
             // returned status distinguishes the failure modes.
+            const auto stepBegin = std::chrono::steady_clock::now();
             const StepStatus status = RunStep_(op, iter);
+            boot::AddBucket("stress iteration",
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - stepBegin).count(),
+                            opName);
             switch (status)
             {
             case StepStatus::Ok:
@@ -282,7 +293,9 @@ public:
             }
         }
         LogBarrierEmits_();
-        Log("verdict: CLEAN after %d iterations\n", iterations_);
+        Log("verdict: CLEAN after %d iterations (total %.1f s)\n",
+            iterations_, boot::ElapsedMs() / 1000.0);
+        boot::Dump("scene-stress: iterations complete");
         if (gLog) { fflush(gLog); }
         return 0;
     }
@@ -344,14 +357,32 @@ private:
         const bool tightResize = (iter % 3 == 0);
         if (tightResize && op != Op::ResizeWindow)
         {
+            const auto resizeBegin = std::chrono::steady_clock::now();
             CycleResize_();
+            boot::AddBucket("stress CycleResize_",
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - resizeBegin).count(),
+                            OpName(op));
         }
 
-        PerformOp_(op, iter);
+        {
+            const auto opBegin = std::chrono::steady_clock::now();
+            PerformOp_(op, iter);
+            boot::AddBucket("stress op (churn only)",
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - opBegin).count(),
+                            OpName(op));
+        }
 
         // Render K real frames to pump the pipeline (K rotates 2..4).
         const int framesToRender = 2 + (iter % 3);
-        if (!RenderFrames_(framesToRender, OpName(op)))
+        const auto frameBegin = std::chrono::steady_clock::now();
+        const bool framesOk = RenderFrames_(framesToRender, OpName(op));
+        boot::AddBucket("stress frames (after op)",
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - frameBegin).count(),
+                        OpName(op));
+        if (!framesOk)
         {
             return StepStatus::FrameThrew;
         }
@@ -398,7 +429,9 @@ private:
 
         if (infoQueue_)
         {
+            const auto drainBegin = std::chrono::steady_clock::now();
             const UINT64 n = infoQueue_->GetNumStoredMessages();
+            boot::AddCount("infoqueue messages drained", static_cast<long long>(n));
             const char* firstError = nullptr;
             for (UINT64 i = 0; i < n; ++i)
             {
@@ -431,6 +464,10 @@ private:
                 }
             }
             infoQueue_->ClearStoredMessages();
+            boot::AddBucket("InfoQueue drain",
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - drainBegin).count(),
+                            "CheckFault_");
             // In continue-mode (GBV diagnostics) InfoQueue errors are logged but
             // NOT treated as fatal, so the run proceeds through the churn to the
             // actual device-hung — letting GBV annotate the frames leading up to
@@ -793,9 +830,21 @@ private:
     {
         for (int f = 0; f < count && !faultCaught_; ++f)
         {
+            // Per-FRAME breakdown, in buckets rather than tree scopes: a stress run renders
+            // hundreds of frames and the tree would grow without bound. The split matters because
+            // "a GBV frame costs 17 s" has three very different explanations -- the wait for the
+            // previous frame, recording, or the submit -- and they need different fixes.
+            const auto frameBegin = std::chrono::steady_clock::now();
             Profiler::Get().BeginFrame(renderer_.GetTotalFrameNumber());
             TaskSystem::Get().WaitForTrackedAsyncTasks();
-            renderer_.BeginFrame();
+            {
+                const auto beginFrameBegin = std::chrono::steady_clock::now();
+                renderer_.BeginFrame();
+                boot::AddBucket("frame: Renderer::BeginFrame",
+                                std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() - beginFrameBegin).count(),
+                                label);
+            }
 
             // Service window messages (WM_SIZE from our resizes, paint, etc.).
             MSG msg = {};
@@ -814,7 +863,12 @@ private:
 
                 PumpPendingLevelRequest_();
 
+                const auto renderBegin = std::chrono::steady_clock::now();
                 scene_.Render(&renderer_);
+                boot::AddBucket("frame: Scene::Render",
+                                std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() - renderBegin).count(),
+                                label);
             }
             catch (const std::exception& e)
             {
@@ -826,6 +880,11 @@ private:
             }
 
             Profiler::Get().EndFrame();
+            boot::AddBucket("frame: WHOLE",
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - frameBegin).count(),
+                            label);
+            boot::AddCount("frames rendered");
         }
         return true;
     }
@@ -1064,12 +1123,22 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         auto& input = systems_->input;
         auto& levelManager = systems_->levelManager;
 
-        InitWindow(hInstance, nCmdShow);
-        TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
+        {
+            BOOT_SCOPE("App::InitWindow");
+            InitWindow(hInstance, nCmdShow);
+        }
+        {
+            BOOT_SCOPE("TaskSystem::Start");
+            TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
+        }
         Profiler::Get().SetThreadName("MainThread");
 
         InitScene();
-        Log("boot: window + device + scene ready (initial level loaded)\n");
+        Log("boot: window + device + scene ready (initial level loaded) at %.1f s\n",
+            boot::ElapsedMs() / 1000.0);
+        // The whole point of the split: this run's headline number is minutes, and until
+        // now nothing said how much of it was boot and how much was the churn loop.
+        boot::Dump("scene-stress: boot complete");
 
         bool faultCaught = false;
         try
@@ -1087,7 +1156,10 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
             faultCaught = true;
         }
 
-        TaskSystem::Get().Stop();
+        {
+            BOOT_SCOPE("TaskSystem::Stop");
+            TaskSystem::Get().Stop();
+        }
 
         // On a caught fault the device is typically removed; the normal GPU
         // teardown (WaitForPreviousFrame / Clear / Shutdown) then dereferences
@@ -1097,10 +1169,23 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         // down normally.
         if (!faultCaught)
         {
-            renderer.WaitForPreviousFrame();
-            scene.Clear();
-            Systems::DestroyOceanSimulation();
-            renderer.Shutdown();
+            BOOT_SCOPE("GPU teardown");
+            {
+                BOOT_SCOPE("WaitForPreviousFrame");
+                renderer.WaitForPreviousFrame();
+            }
+            {
+                BOOT_SCOPE("Scene::Clear");
+                scene.Clear();
+            }
+            {
+                BOOT_SCOPE("DestroyOceanSimulation");
+                Systems::DestroyOceanSimulation();
+            }
+            {
+                BOOT_SCOPE("Renderer::Shutdown");
+                renderer.Shutdown();
+            }
         }
         else
         {
@@ -1114,10 +1199,16 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         }
     }
 
-    Systems::Shutdown();
-    systems_.reset();
+    {
+        BOOT_SCOPE("Systems::Shutdown");
+        Systems::Shutdown();
+        systems_.reset();
+    }
 
-    Log("shutdown complete; exit code %d\n", exitCode);
+    // Final dump: the run's tail (teardown) is a real part of "why does this take so long" and is
+    // the one stretch that produces no log line at all while it happens.
+    boot::Dump("scene-stress: shutdown complete");
+    Log("shutdown complete; exit code %d at %.1f s\n", exitCode, boot::ElapsedMs() / 1000.0);
     if (gLog) { fflush(gLog); fclose(gLog); gLog = nullptr; }
 
     // Skip the CRT exit-time teardown (execute_onexit_table). Streamline/NGX registers a static

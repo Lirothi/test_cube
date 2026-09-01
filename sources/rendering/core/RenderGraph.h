@@ -68,6 +68,11 @@ struct ResourceUse {
 // fan-out chunks each add two more.
 inline constexpr std::size_t kResourceUsesPerPassBudget = 48;
 
+#include "core/diagnostics/BootProfile.h"
+
+#include <chrono>
+#include <string>
+
 namespace render {
 // Barrier plan step 3: diff every converted pass's registered state usage against what
 // its body actually transitioned, and log the differences. DEFAULT OFF — it installs a
@@ -1347,6 +1352,30 @@ private:
     // cost, and nothing to compare it against).
     void RunPassBody(Renderer* renderer, size_t passIdx, PassContext& ctx)
     {
+        // Per-PASS CPU cost, aggregated by pass name. Buckets, not tree scopes, because this runs
+        // for every pass of every frame; and on the recording thread, so a mutex per pass is
+        // acceptable only because passes are coarse (tens per frame, not thousands).
+        // Exists for one question: when a frame costs seconds instead of milliseconds, is it one
+        // pass or all of them? Nothing in the engine could answer that on the CPU side, because the
+        // profiler's per-pass scopes are GPU timestamps.
+        const auto passBegin = std::chrono::steady_clock::now();
+        struct PassTimer
+        {
+            std::chrono::steady_clock::time_point begin;
+            RenderPass                            pass;
+            ~PassTimer()
+            {
+                if (!boot::g_frameProfiling) { return; }
+                const double ms = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - begin).count();
+                const std::wstring_view nameW = RenderPassToWString(pass);
+                std::string narrow;
+                narrow.reserve(nameW.size());
+                for (wchar_t c : nameW) { narrow.push_back((c > 0 && c < 128) ? static_cast<char>(c) : '?'); }
+                boot::AddBucket("render pass (CPU record)", ms, narrow);
+            }
+        } passTimer{ passBegin, passes_[passIdx].name };
+
         // Step 7: install this pass's compiled barriers for the duration of its body — this is
         // what its Transition calls emit. Independent of the comparator: barriers must work with
         // every diagnostic off.

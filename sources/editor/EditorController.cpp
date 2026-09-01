@@ -1,4 +1,6 @@
 #include "editor/EditorController.h"
+
+#include "core/diagnostics/BootProfile.h"
 #include "app/scene/GtaoSettingsJson.h"
 #if WITH_EDITOR
 
@@ -2917,7 +2919,14 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
     // If there is no saved record, the camera keeps the loader's zero baseline.
     if (!firstOpenInitialized_)
     {
-        assetRegistry_.Refresh();
+        // Runs inside FRAME 1, after InitScene, so it lands between the two boot dumps. It is a
+        // recursive directory scan of the whole asset tree plus editor-state I/O, and under a Debug
+        // STL that is not free -- it belongs on the boot timeline even though it is not "boot".
+        BOOT_SCOPE("Editor first-frame init");
+        {
+            BOOT_SCOPE("AssetRegistry::Refresh");
+            assetRegistry_.Refresh();
+        }
         nextAssetRegistryPollTimeSec_ = ImGui::GetTime() + 2.0;
         LoadEditorState(recentLevelPaths_, selectionOutlineRadius_);
         LoadEditorPanelState(showContentBrowser_, showOutliner_, showInspector_, showCommandHistory_,

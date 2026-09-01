@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "core/Helpers.h"
+#include "core/diagnostics/BootProfile.h"
 #include "core/diagnostics/DiagPaths.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
@@ -22,6 +23,18 @@ namespace
     // device creation, read here.
     std::atomic<bool> g_dredForStress{ false };
     std::atomic<bool> g_gbvForStress{ false };
+
+    // GBV shader patch mode. GBV works by REWRITING each shader with validation code, and the
+    // rewrite happens the first time a pipeline is used in a command list -- which is why the cost
+    // lands on one frame, on the CPU, inside a pass body, and not at PSO creation where anyone
+    // would look for it. It scales with shader complexity: measured on this project, patching
+    // lighting_cs.hlsl alone costs ~76 s, and the whole first frame ~77 s.
+    //
+    // GUARDED (the D3D12 default) wraps every resource access in bounds-checking control flow.
+    // UNGUARDED still reports the same out-of-bounds and uninitialized-access errors but does not
+    // add the guard branches, so the rewrite is far cheaper. STATE_TRACKING keeps only the
+    // resource-state validation and does no shader rewriting at all.
+    std::atomic<int> g_gbvPatchMode{ 3 }; // 3 = GUARDED (D3D12 default), unchanged unless asked
     // Step 9: --legacy-barriers. Lives here rather than in render:: because GraphicsDevice cannot
     // see Renderer.h — Renderer.h includes THIS header, so the dependency only runs one way.
     std::atomic<bool> g_forceLegacyBarriers{ false };
@@ -194,6 +207,11 @@ void GraphicsDevice::EnableDredForStress(bool enable)
     g_dredForStress.store(enable, std::memory_order_relaxed);
 }
 
+void GraphicsDevice::SetGbvShaderPatchMode(int mode)
+{
+    g_gbvPatchMode.store(mode, std::memory_order_relaxed);
+}
+
 void GraphicsDevice::EnableGbvForStress(bool enable)
 {
     g_gbvForStress.store(enable, std::memory_order_relaxed);
@@ -254,6 +272,55 @@ void GraphicsDevice::InitDevice()
     }
 
     ThrowIfFailed(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device_)));
+
+#ifdef _DEBUG
+    // The patch mode can only be set on the DEVICE, after creation -- SetEnableGPUBasedValidation
+    // (pre-creation, above) only turns GBV on. Skipped entirely unless GBV is on, so a normal Debug
+    // run never touches the debug device.
+    if (gbvStress) {
+        const int requested = g_gbvPatchMode.load(std::memory_order_relaxed);
+        Microsoft::WRL::ComPtr<ID3D12DebugDevice1> debugDevice;
+        const HRESULT qiHr = device_.As(&debugDevice);
+        HRESULT setHr = E_NOINTERFACE;
+        if (SUCCEEDED(qiHr) && debugDevice) {
+            D3D12_DEBUG_DEVICE_GPU_BASED_VALIDATION_SETTINGS settings{};
+            settings.MaxMessagesPerCommandList = 256;
+            settings.DefaultShaderPatchMode =
+                static_cast<D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE>(requested);
+            settings.PipelineStateCreateFlags = D3D12_GPU_BASED_VALIDATION_PIPELINE_STATE_CREATE_FLAG_NONE;
+            setHr = debugDevice->SetDebugParameter(
+                D3D12_DEBUG_DEVICE_PARAMETER_GPU_BASED_VALIDATION_SETTINGS,
+                &settings, sizeof(settings));
+        }
+        // Logged UNCONDITIONALLY, failure paths included. A knob whose only evidence is "the run
+        // got faster" proves nothing here: consecutive GBV runs speed up on their own as the
+        // runtime's patched-shader cache warms, which is exactly the shape of a false positive.
+        // The two HRESULTs say whether the request actually reached the debug device.
+        {
+            static const char* kModeNames[] = { "NONE", "STATE_TRACKING_ONLY",
+                                                "UNGUARDED_VALIDATION", "GUARDED_VALIDATION" };
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                          "[gbv] requested patch mode = %s | QueryInterface(ID3D12DebugDevice1)=0x%08X"
+                          " | SetDebugParameter=0x%08X | APPLIED=%s\n",
+                          (requested >= 0 && requested <= 3) ? kModeNames[requested] : "?",
+                          static_cast<unsigned>(qiHr), static_cast<unsigned>(setHr),
+                          SUCCEEDED(setHr) ? "yes" : "NO");
+            OutputDebugStringA(line);
+            // NOT written here. gbv.log already exists as the GBV message log, and the info-queue
+            // setup further down does `std::remove` on it "fresh per run" -- which ran AFTER this
+            // point and silently deleted the line, making a knob that demonstrably worked look
+            // like dead code. Stashed instead, and written as gbv.log's header after that reset.
+            strncpy_s(gbvModeLine_, line, _TRUNCATE);
+            // Also into the boot profile's counters. Redundant on purpose: a diagnostic that can
+            // only be read from a file which may or may not have been written is not evidence, and
+            // this one has to answer "did the knob reach the device" for a run that costs minutes.
+            boot::AddCount("gbv: patch mode requested", requested);
+            boot::AddCount("gbv: SetDebugParameter succeeded", SUCCEEDED(setHr) ? 1 : 0);
+            boot::AddCount("gbv: debug-device QI succeeded", SUCCEEDED(qiHr) ? 1 : 0);
+        }
+    }
+#endif
 
     // DXR capability detection (S1). Both queries are optional: older runtimes
     // leave device5_ null and the tier at NOT_SUPPORTED, and every RT path is
@@ -343,6 +410,15 @@ void GraphicsDevice::SetupDebugBreaks()
             Microsoft::WRL::ComPtr<ID3D12InfoQueue1> gbvQueue;
             if (SUCCEEDED(device_.As(&gbvQueue))) {
                 std::remove(diag::LogPath("gbv.log").c_str()); // fresh per run
+                // Header line: which patch mode this run used. Every message below it costs what
+                // that mode costs, and the modes differ by an order of magnitude in wall time.
+                if (gbvModeLine_[0]) {
+                    if (FILE* f = nullptr;
+                        fopen_s(&f, diag::LogPath("gbv.log").c_str(), "w") == 0 && f) {
+                        std::fputs(gbvModeLine_, f);
+                        std::fclose(f);
+                    }
+                }
                 DWORD gbvCookie = 0;
                 gbvQueue->RegisterMessageCallback(&GbvMessageCallback,
                                                   D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &gbvCookie);

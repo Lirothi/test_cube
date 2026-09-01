@@ -1,6 +1,7 @@
 #include "app/App.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposureEnabled
 #include "core/math/Math.h"
+#include "core/diagnostics/BootProfile.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include <algorithm>
@@ -819,12 +820,16 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
 
     auto& renderer = systems_->renderer;
     auto& input = systems_->input;
-    renderer.InitD3D12(hWnd_, defWidth, defHeight);
+    {
+        BOOT_SCOPE("Renderer::InitD3D12");
+        renderer.InitD3D12(hWnd_, defWidth, defHeight);
+    }
     input.Initialize(hWnd_);
 #if PROF_GPU_ENABLED
     // Async-compute step 3: the profiler gets BOTH queues, so it can calibrate each clock, keep a
     // drain fence per queue, and put compute-recorded scopes on their own trace row. The compute
     // queue may be null (device refused it); every per-queue path in the profiler tolerates that.
+    BOOT_SCOPE("Profiler::InitGpu");
     Profiler::Get().InitGpu(renderer.GetDevice(), renderer.GetCommandQueue(),
                             renderer.GetComputeQueue());
 #endif
@@ -832,6 +837,7 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
 
 void App::InitScene()
 {
+    BOOT_SCOPE("App::InitScene");
     assert(systems_);
 
     auto& renderer = systems_->renderer;
@@ -847,8 +853,11 @@ void App::InitScene()
     // I0: materials are per-file assets in data/materials/ (one json per material, name = stem).
     // The legacy monolith loads first so per-file materials win on a name clash during migration.
     MaterialDataManager* materials = renderer.GetMaterialDataManager();
-    (void)materials->LoadPresetsFromJsonFile(L"data/materials.json"); // legacy, absent post-migration
-    (void)materials->LoadPresetsFromDirectory(L"data/materials");
+    {
+        BOOT_SCOPE("MaterialPresets");
+        (void)materials->LoadPresetsFromJsonFile(L"data/materials.json"); // legacy, absent post-migration
+        (void)materials->LoadPresetsFromDirectory(L"data/materials");
+    }
     assert(materials->PresetCount() > 0 && "No material presets found (data/materials/)!");
 
     UploadBatch uploadBatch;
@@ -856,9 +865,13 @@ void App::InitScene()
     assert(batchBegun && "Failed to begin upload batch");
     (void)batchBegun;
 
-    renderer.InitTextSystem(uploadBatch.CommandList(), uploadBatch.KeepAlive(), L"fonts");
+    {
+        BOOT_SCOPE("InitTextSystem");
+        renderer.InitTextSystem(uploadBatch.CommandList(), uploadBatch.KeepAlive(), L"fonts");
+    }
     if (auto* debugDraw = renderer.GetDebugDrawSystem())
     {
+        BOOT_SCOPE("DebugDraw::Initialize");
         debugDraw->Initialize(&renderer, uploadBatch.CommandList(), uploadBatch.KeepAlive());
     }
 
@@ -880,7 +893,11 @@ void App::InitScene()
         levelManager.RegisterLevel<JsonLevel>(bootLevel);
     }
 
-    const bool levelLoaded = levelManager.LoadLevel(JsonLevel::kName, loadCtx);
+    bool levelLoaded = false;
+    {
+        BOOT_SCOPE("LevelManager::LoadLevel");
+        levelLoaded = levelManager.LoadLevel(JsonLevel::kName, loadCtx);
+    }
     assert(levelLoaded && "Failed to load initial level");
 
     // Applied after the level so it beats the level's own freeCameraStart.
@@ -915,7 +932,10 @@ void App::InitScene()
         cam.SetYawPitchRoll(yaw, pitch, std::atan2(sinR, cosR));
     }
 
-    uploadBatch.SubmitAndWait(&renderer);
+    {
+        BOOT_SCOPE("UploadBatch::SubmitAndWait");
+        uploadBatch.SubmitAndWait(&renderer);
+    }
     HideLoadingScreen();
 }
 
@@ -1025,12 +1045,24 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         auto& input = systems_->input;
         auto& levelManager = systems_->levelManager;
 
-        InitWindow(hInstance, nCmdShow);
-        TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
+        {
+            BOOT_SCOPE("App::InitWindow");
+            InitWindow(hInstance, nCmdShow);
+        }
+        {
+            BOOT_SCOPE("TaskSystem::Start");
+            TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
+        }
         //TaskSystem::Get().Start(8);
         Profiler::Get().SetThreadName("MainThread");
 
         InitScene();
+
+        // Dumped HERE, not only at exit: under Debug + GBV a boot takes minutes, and a run that is
+        // abandoned (or that hangs in frame 1) must still have produced its boot timing. Dumped
+        // again after the first frame, because "device ready" and "first pixel" are different
+        // questions -- PSO warmup and the first upload flush land between them.
+        boot::Dump("InitScene complete");
 
         // "--dlss=<mode>": apply the boot override once the device, the DLSS handler and the
         // deferred targets exist, so this takes exactly the same path as the dev-window combo
@@ -1042,7 +1074,13 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
         MSG msg = {};
         double lastTime = GetTimeSeconds();
+        bool firstFrameDumped = false;
         while (isRunning_) {
+            if (!firstFrameDumped && renderer.GetTotalFrameNumber() > 0)
+            {
+                firstFrameDumped = true;
+                boot::Dump("first frame presented");
+            }
             Profiler::Get().BeginFrame(renderer.GetTotalFrameNumber());
             render::g_renderStats.NextFrame(); // snapshot last frame's draw/primitive counts
             TaskSystem::Get().WaitForTrackedAsyncTasks();

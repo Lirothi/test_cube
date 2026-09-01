@@ -32,4 +32,16 @@ inline bool HasGBufferMaterialBindings(const RenderContext& ctx)
 // invisible until it turned into a queue stall, so it says so exactly once and then shuts up.
 void ReportMissingGBufferBindings(const void* owner, std::size_t slot, const char* where);
 
+// SELF-TEST (`--gbv-selftest=N`). Deliberately issues N draws that commit the exact violation
+// above: root signature re-set (which invalidates every root argument), descriptor tables then NOT
+// bound, draw issued anyway.
+//
+// It exists to answer one question that cannot be answered by reading a mode's name: does
+// `--gbv-mode=state` still CATCH this? A validation mode chosen for being 11x faster is worth
+// nothing if it is silent on the bug that motivated the gate, and "it probably still catches it"
+// is not something to hand someone who is deciding what to trust.
+//
+// Never armed by default; the flag is Debug-only and the counter is one-shot.
+inline int g_gbvSelfTestDraws = 0;
+
 } // namespace render

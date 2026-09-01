@@ -1,5 +1,9 @@
 #include "app/levels/JsonLevel.h"
 
+#include "core/diagnostics/BootProfile.h"
+
+#include <chrono>
+
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -190,6 +194,7 @@ void AddAnonymousObjects(Scene& scene, SceneObjectRegistry::ObjectList objects)
 
 void JsonLevel::Load(const LevelLoadContext& ctx)
 {
+    BOOT_SCOPE("JsonLevel::Load");
     auto& renderer = ctx.renderer;
     auto& scene = ctx.scene;
     auto& lightManager = scene.GetLightManager();
@@ -228,6 +233,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
 
     if (j.contains("skybox") && j["skybox"].contains("texture"))
     {
+        BOOT_SCOPE("Skybox + IBL");
         auto skybox = std::make_unique<Skybox>(Widen(j["skybox"]["texture"].get<std::string>()));
         // P16.3b: BEFORE Init(). Init loads `_diffuse.dds`, measures the sky's own illuminance and
         // logs the physical scale it implies -- with the authored lux set afterwards that line would
@@ -478,7 +484,15 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
                     ? ctx.editorDocument->ReadOrAllocateObjectId(o)
                     : EditorObjectId{ ReadOrAllocateEditorObjectId(o, nextEditorObjectId) };
 #endif
+            const auto objBegin = std::chrono::steady_clock::now();
             SceneObjectRegistry::ObjectList objects = objectRegistry.Create(type, creationCtx, o);
+            // Bucketed by TYPE, not per object: a level has hundreds of objects and three or four
+            // kinds, and the actionable answer is "terrain chunks cost X", not a list of names.
+            boot::AddBucket("level object create",
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - objBegin).count(),
+                            type);
+            boot::AddCount("level objects");
             AddLoadedObjects(scene, std::move(objects)
 #if WITH_EDITOR
                 , editorObjectId.value, enabled

@@ -1,4 +1,8 @@
 #include "rendering/meshes/MeshManager.h"
+
+#include "core/diagnostics/BootProfile.h"
+
+#include <chrono>
 #include "rendering/core/Renderer.h"
 #include <fstream>
 #include "third_party/json/json.hpp" // MeshManager::ApplyManifestOptions (mesh.json -> bake options)
@@ -1468,7 +1472,13 @@ std::shared_ptr<Mesh> MeshManager::Load(const std::string& path,
         {
             const std::string memKeyBin = MeshCacheKey(path, opt);
             if (auto cit = cache_.find(memKeyBin); cit != cache_.end()) { return cit->second; }
+            // Timed on the MISS only, same rule as the texture bucket: a hit is a map lookup.
+            const auto meshBegin = std::chrono::steady_clock::now();
             std::shared_ptr<Mesh> m = LoadBinaryDirect(geom, renderer, uploadCmdList, uploadKeepAlive, opt);
+            boot::AddBucket("mesh load (.mesh.bin)",
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - meshBegin).count(),
+                            geom);
             if (m) { cache_[memKeyBin] = m; }
             return m;
         }

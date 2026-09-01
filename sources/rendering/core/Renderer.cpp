@@ -1,5 +1,8 @@
 #include "rendering/core/Renderer.h"
 #include <unordered_set>
+#include "core/diagnostics/BootProfile.h"
+
+#include <chrono>
 #include "core/diagnostics/DiagPaths.h"
 #include "rendering/core/RendererInvariantFailure.h"
 #include "rendering/core/BarrierTranslation.h"
@@ -226,12 +229,19 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     // --no-streamline: never load the SDK at all. `--dlss=off` is NOT equivalent -- it only skips
     // slEvaluateFeature, leaving the device and queue proxied.
-    auto slRes = render::g_noStreamline ? sl::Result::eErrorNotInitialized
-                                        : slInit(pref, sl::kSDKVersion);
+    sl::Result slRes = sl::Result::eErrorNotInitialized;
+    {
+        BOOT_SCOPE("slInit (Streamline)");
+        slRes = render::g_noStreamline ? sl::Result::eErrorNotInitialized
+                                       : slInit(pref, sl::kSDKVersion);
+    }
     streamlineInitialized_ = (slRes == sl::Result::eOk);
 
     // --- Device (debug layer enabled inside, in debug builds) ---
-    graphicsDevice_.InitDevice();
+    {
+        BOOT_SCOPE("GraphicsDevice::InitDevice");
+        graphicsDevice_.InitDevice();
+    }
 
     if (streamlineInitialized_)
     {
@@ -251,35 +261,65 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     //    int a = 0;
     //}
 
-    graphicsDevice_.SetupDebugBreaks();
+    {
+        BOOT_SCOPE("GraphicsDevice::SetupDebugBreaks");
+        graphicsDevice_.SetupDebugBreaks();
+    }
 
     // --- Queue ---
-    graphicsDevice_.InitQueue();
+    {
+        BOOT_SCOPE("GraphicsDevice::InitQueue");
+        graphicsDevice_.InitQueue();
+    }
 
     // --- SwapChain + RTVs (render::kFrameCount) ---
-    CreateSwapChainAndRTVs(width_, height_);
+    {
+        BOOT_SCOPE("CreateSwapChainAndRTVs");
+        CreateSwapChainAndRTVs(width_, height_);
+    }
 
     // --- Depth ---
-    CreateDepthResources(width_, height_);
-    CreateDeferredTargets(width_, height_);
+    {
+        BOOT_SCOPE("CreateDepthResources");
+        CreateDepthResources(width_, height_);
+    }
+    {
+        BOOT_SCOPE("CreateDeferredTargets");
+        CreateDeferredTargets(width_, height_);
+    }
 
     // --- Fence + event ---
     frameScheduler_.InitFence(GetDevice());
 
     // --- Frame resources ---
-    frameScheduler_.CreateFrameResources(GetDevice());
+    {
+        BOOT_SCOPE("CreateFrameResources");
+        frameScheduler_.CreateFrameResources(GetDevice());
+    }
 
-    AllocateDlssResourcesIfNeeded();
+    {
+        BOOT_SCOPE("AllocateDlssResourcesIfNeeded");
+        AllocateDlssResourcesIfNeeded();
+    }
 
     RefreshCurrentFrameCaches();
 
-    samplerManager_.Init(GetDevice(), 512);
-    InitImGui();
+    {
+        BOOT_SCOPE("SamplerManager::Init");
+        samplerManager_.Init(GetDevice(), 512);
+    }
+    {
+        BOOT_SCOPE("InitImGui");
+        InitImGui();
+    }
 
     // P1: the persistent exposure buffers. Created unconditionally rather than when the feature is
     // switched on -- they are about 1 KB, and gating them would mean the default (dormant) state
     // exercises none of the lifecycle this step exists to prove.
-    exposureMetering_.EnsureResources(this);
+    {
+        BOOT_SCOPE("ExposureMetering::EnsureResources");
+        exposureMetering_.EnsureResources(this);
+    }
 
     InitFence();
 }
@@ -1342,7 +1382,18 @@ void Renderer::ExecuteTimelineAndPresent() {
                 edgeWait = value.value;
             }
             if (!seg.lists.empty()) {
+                // Bucketed, not scoped: this runs several times per frame forever. Under GBV the
+                // runtime patches and validates every list HERE, which is the first place to look
+                // when a frame costs seconds instead of milliseconds.
+                const auto execBegin = std::chrono::steady_clock::now();
                 q->ExecuteCommandLists(static_cast<UINT>(seg.lists.size()), seg.lists.data());
+                if (boot::g_frameProfiling) {
+                    boot::AddBucket("D3D12 ExecuteCommandLists",
+                                    std::chrono::duration<double, std::milli>(
+                                        std::chrono::steady_clock::now() - execBegin).count(),
+                                    isCompute ? "compute queue" : "graphics queue");
+                    boot::AddCount("command lists submitted", static_cast<long long>(seg.lists.size()));
+                }
                 if (isCompute) {
                     render::g_asyncComputeLists += static_cast<std::uint32_t>(seg.lists.size());
                 }
@@ -1384,7 +1435,16 @@ void Renderer::ExecuteTimelineAndPresent() {
         // check catches the cases that never reach here (a fence wait that never returns, a TDR
         // between frames), and the latch inside means only the first one is written.
         try {
-            swapchain_.Present();
+            {
+                const auto presentBegin = std::chrono::steady_clock::now();
+                swapchain_.Present();
+                if (boot::g_frameProfiling) {
+                    boot::AddBucket("DXGI Present",
+                                    std::chrono::duration<double, std::milli>(
+                                        std::chrono::steady_clock::now() - presentBegin).count(),
+                                    "swapchain");
+                }
+            }
         }
         catch (...) {
             ReportDeviceRemovalOnce();
@@ -1506,9 +1566,18 @@ void Renderer::OnResize(UINT width, UINT height) {
     swapchain_.ResizeBuffers(width_, height_);
 
     // Recreate RTV and DSV
-    CreateSwapChainAndRTVs(width_, height_);
-    CreateDepthResources(width_, height_);
-    CreateDeferredTargets(width_, height_);
+    {
+        BOOT_SCOPE("CreateSwapChainAndRTVs");
+        CreateSwapChainAndRTVs(width_, height_);
+    }
+    {
+        BOOT_SCOPE("CreateDepthResources");
+        CreateDepthResources(width_, height_);
+    }
+    {
+        BOOT_SCOPE("CreateDeferredTargets");
+        CreateDeferredTargets(width_, height_);
+    }
     AllocateDlssResourcesIfNeeded();
 
     // P1 / plan section 6.4: the exposure buffers are resolution-independent, so a resize must NOT
