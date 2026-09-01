@@ -282,6 +282,9 @@
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/GraphicsSettings.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/ui/DeveloperWindow.cpp">
       <Filter>sources\app\ui</Filter>
     </ClCompile>
@@ -716,6 +719,9 @@
     <ClInclude Include="sources/editor/ui/ViewportGizmo.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/GraphicsSettings.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/ui/DeveloperWindow.h">
       <Filter>sources\app\ui</Filter>
     </ClInclude>
@@ -1120,6 +1126,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <None Include="graphics_settings.json" />
     <None Include="shaders\axes.hlsl">
       <Filter>shaders</Filter>
     </None>

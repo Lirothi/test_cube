@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/GraphicsSettings.h"
 #include "app/ui/DeveloperWindow.h"
 #include "app/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
@@ -19,6 +20,9 @@ struct LevelChangeRequest;
 class AppController
 {
 public:
+    void InitializeGraphicsSettings(Renderer& renderer, Scene& scene);
+    void ApplySceneGraphicsSettings(Scene& scene) const;
+    void FlushGraphicsSettings(Renderer& renderer, const Scene& scene);
     void Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime);
     void BuildHud(Renderer& renderer, const Scene& scene) const;
     void WaitForHudBuild();
@@ -40,6 +44,7 @@ private:
     void ScheduleHudBuild(Renderer& renderer, const Scene& scene);
 
     SceneRenderSettings settings_{};
+    GraphicsSettingsManager graphicsSettings_;
     TaskSystem::TaskHandle hudBuildTask_ = nullptr;
     DeveloperWindow developerWindow_;
 #if WITH_EDITOR

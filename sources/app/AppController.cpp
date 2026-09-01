@@ -13,6 +13,21 @@
 #include "rendering/shadows/ShadowSettings.h"
 #include "text/TextManager.h"
 
+void AppController::InitializeGraphicsSettings(Renderer& renderer, Scene& scene)
+{
+    graphicsSettings_.Initialize(renderer, scene, settings_);
+}
+
+void AppController::ApplySceneGraphicsSettings(Scene& scene) const
+{
+    graphicsSettings_.ApplySceneSettings(scene);
+}
+
+void AppController::FlushGraphicsSettings(Renderer& renderer, const Scene& scene)
+{
+    graphicsSettings_.Flush(renderer, scene, settings_);
+}
+
 void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime)
 {
     CPU_SCOPE(ProfilerScopes::kAppControllerTick);
@@ -149,11 +164,13 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         }
     }
 
-    developerWindow_.Draw(renderer, scene, input, levelManager, settings_
+    const bool graphicsSettingsDirty = developerWindow_.Draw(
+        renderer, scene, input, levelManager, settings_, graphicsSettings_
 #if WITH_EDITOR
         , editorController_
 #endif
     );
+    graphicsSettings_.ObserveUiEdit(renderer, scene, settings_, graphicsSettingsDirty, deltaTime);
     scene.SetRenderSettings(settings_);
 
 #if WITH_EDITOR

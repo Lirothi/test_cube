@@ -12,6 +12,7 @@
 class EditorController;
 #endif
 class InputManager;
+class GraphicsSettingsManager;
 class LevelManager;
 class Renderer;
 class Scene;
@@ -28,7 +29,8 @@ public:
 
     // Scene is non-const because the CSM tab edits CascadeShadowConfig live (S0.2); everything
     // else here still reads through const accessors.
-    void Draw(Renderer& renderer, Scene& scene, const InputManager& input, LevelManager& levelManager, SceneRenderSettings& settings
+    bool Draw(Renderer& renderer, Scene& scene, const InputManager& input, LevelManager& levelManager,
+        SceneRenderSettings& settings, GraphicsSettingsManager& graphicsSettings
 #if WITH_EDITOR
         , EditorController& editorController
 #endif

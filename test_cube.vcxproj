@@ -268,6 +268,7 @@
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorMultiEdit.cpp" />
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp" />
+    <ClCompile Include="sources/app/GraphicsSettings.cpp" />
     <ClCompile Include="sources/app/ui/DeveloperWindow.cpp" />
     <ClCompile Include="sources/ocean/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
@@ -436,6 +437,7 @@
     <ClInclude Include="sources/editor/ui/InspectorMultiEdit.h" />
     <ClInclude Include="sources/editor/ui/InspectorPropertyDelta.h" />
     <ClInclude Include="sources/editor/ui/ViewportGizmo.h" />
+    <ClInclude Include="sources/app/GraphicsSettings.h" />
     <ClInclude Include="sources/app/ui/DeveloperWindow.h" />
     <ClInclude Include="sources/ocean/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
@@ -562,6 +564,7 @@
     <ClInclude Include="sources\core\containers\inl_vector.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="graphics_settings.json" />
     <None Include="shaders\axes.hlsl" />
     <None Include="shaders\particle_common.hlsli" />
     <None Include="shaders\particle_sort_cs.hlsl" />

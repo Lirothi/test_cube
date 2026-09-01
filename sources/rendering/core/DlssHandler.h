@@ -45,6 +45,9 @@ public:
     bool IsJitterPaused() const { return jitterPaused_; }
 
     bool IsActive() const;
+    // User/config intent, independent of hardware/plugin availability. Persist this rather than
+    // IsActive(), otherwise opening the project on a non-NVIDIA machine rewrites "enabled" false.
+    bool IsRequestedActive() const { return active_; }
     void SetActive(bool active);
     bool IsAvailable() const { return available_; }
     bool ShouldUseUpscaledOutput() const { return IsActive() && outputValid_; }

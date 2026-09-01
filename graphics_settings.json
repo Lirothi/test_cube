@@ -1,0 +1,124 @@
+{
+  "antiAliasing": {
+    "dlssEnabled": true,
+    "dlssMode": "balanced",
+    "fxaa": false,
+    "renderScale": 0.580078125
+  },
+  "lod": {
+    "chunkDistance": 24.0,
+    "chunkFactor": 2.0,
+    "crossfadeBand": 0.10000000149011612,
+    "enabled": true,
+    "regularMeshRatios": [
+      10.0,
+      20.0,
+      40.0
+    ]
+  },
+  "performance": {
+    "asyncCompute": true
+  },
+  "reflections": {
+    "glossyBlur": 1.0,
+    "oceanResolution": 0.5,
+    "resolution": 0.5,
+    "rtFoliageAlphaMode": 2,
+    "rtFoliageFill": 0.15000000596046448,
+    "rtWindRadius": 40.0,
+    "rtWindSway": true,
+    "source": "rt",
+    "ssrTechnique": "logMarch",
+    "sunAngularSize": 0.009999999776482582,
+    "sunMetalSpec": 0.0,
+    "temporal": true,
+    "temporalBlend": 0.125,
+    "temporalStillInertia": 0.800000011920929,
+    "ueSsr": {
+      "glossyRays": true,
+      "intensity": 1.0,
+      "maxRoughness": 0.6000000238418579,
+      "preset": 2,
+      "raysPerPixel": 4,
+      "roughnessOverride": 0.0,
+      "stepsPerRay": 8,
+      "useSurfaceRoughness": true
+    }
+  },
+  "scope": "Global runtime graphics quality. Scene look stays in level environment data.",
+  "shadows": {
+    "contact": {
+      "enabled": true,
+      "fadeBand": 10.0,
+      "grazingFade": 0.15000000596046448,
+      "intensity": 1.0,
+      "length": 0.05000000074505806,
+      "lengthInWorldSpace": false,
+      "localLightMode": 1,
+      "maxDistance": 0.0,
+      "maxThickness": 0.25,
+      "minDistance": 0.0,
+      "normalOffset": 0.03999999910593033,
+      "steps": 8,
+      "temporalDither": true
+    },
+    "gpuInstancedCasters": true,
+    "legacyCsm": {
+      "autoSplits": false,
+      "blendFraction": 0.10000000149011612,
+      "casterReach": 150.0,
+      "depthBiasTexels": 1.0,
+      "distanceFadeFraction": 0.10000000149011612,
+      "distributionExponent": 3.0,
+      "filterMode": 1,
+      "filterSharpen": 0.0,
+      "maxDistance": 300.0,
+      "maxSlope": 1.0,
+      "normalBiasTexels": 0.5,
+      "overlapTexels": 2.0,
+      "pancakeCasters": true,
+      "pancakeSlack": 40.0,
+      "pcfOverBlurCorrection": true,
+      "receiverBias": 0.8999999761581421,
+      "slopeScale": 2.0,
+      "splitDistances": [
+        10.0,
+        35.0,
+        100.0,
+        300.0
+      ],
+      "zPadding": 25.0
+    },
+    "mode": "legacy",
+    "vsm": {
+      "biasNearestTier": false,
+      "clipmapBaseExtent": 8.0,
+      "clipmapBlend": true,
+      "clipmapBlendWidth": 0.11999999731779099,
+      "clipmapDepthBias": 0.00019999999494757503,
+      "clipmapNormalBias": 1.0,
+      "depthBiasDecay": 1.0,
+      "depthBiasFloorTexels": 0.0,
+      "localDepthPushTexels": 0.5,
+      "localLateralBiasTexels": 1.0,
+      "lodRefDistance": 5.0,
+      "lruFrames": 16,
+      "pageCaching": true,
+      "requestDownscale": 4,
+      "residentOnly": true,
+      "shadowLodBias": 1,
+      "shadowTiersPerLod": 2,
+      "singleDraw": true,
+      "smrtAdaptiveAfterRays": 1,
+      "smrtLevelMargin": 1.0,
+      "smrtRayCount": 7,
+      "smrtRayLengthScale": 1.5,
+      "smrtSamplesPerRay": 8,
+      "smrtSunAngleDeg": 0.5357000231742859,
+      "smrtTemporalDither": true,
+      "smrtTexelDither": 2.0,
+      "windAnimateBelowLevel": 4
+    }
+  },
+  "version": 1
+}

@@ -2462,6 +2462,11 @@ bool Renderer::IsDlssActive() const
     return dlssHandler_ && dlssHandler_->IsActive();
 }
 
+bool Renderer::IsDlssRequestedActive() const
+{
+    return dlssHandler_ && dlssHandler_->IsRequestedActive();
+}
+
 bool Renderer::WillEvaluateDlss() const
 {
     return dlssHandler_ && dlssHandler_->WillEvaluate();
@@ -2774,4 +2779,3 @@ D3D12_CPU_DESCRIPTOR_HANDLE Renderer::GetTonemapSourceSrvCPU() const
     }
     return D.sceneSRV;
 }
-

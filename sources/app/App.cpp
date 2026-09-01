@@ -1084,6 +1084,10 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
         InitScene();
 
+        // Project-wide quality settings are applied after the renderer and level exist, so the
+        // exact same live setters used by the developer window can rebuild dependent targets.
+        appController_.InitializeGraphicsSettings(renderer, scene);
+
         // Dumped HERE, not only at exit: under Debug + GBV a boot takes minutes, and a run that is
         // abandoned (or that hangs in frame 1) must still have produced its boot timing. Dumped
         // again after the first frame, because "device ready" and "first pixel" are different
@@ -1192,6 +1196,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         if (levelLoaded)
                         {
                             levelBatch.SubmitAndWait(&renderer);
+                            appController_.ApplySceneGraphicsSettings(scene);
                         }
                     }
 #if WITH_EDITOR
@@ -1334,6 +1339,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             Profiler::Get().EndFrame();
         }
 
+        appController_.FlushGraphicsSettings(renderer, scene);
         TaskSystem::Get().Stop();
 
         renderer.WaitForPreviousFrame();
