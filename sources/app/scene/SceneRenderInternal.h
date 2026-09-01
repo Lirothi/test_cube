@@ -335,7 +335,7 @@ namespace scene_internal
         // .z = the depth-bias floor, texels -> NDC (same conversion as the lighting CB: a level's
         // depth range is 6x its extent, virtual res 2048, both scale with the extent).
         vc.vsmParams = float4(vsmOn ? 1.0f : 0.0f, vsm::g_refDist,
-                              vsm::g_clipmapDepthBiasFloorTexels / (6.0f * (float)vsm::kVirtualRes),
+                              vsm::g_clipmapDepthBiasFloorTexels / (vsm::ClipmapRangeMultiple() * (float)vsm::kVirtualRes),
                               vsm::ClipmapBlendWidth());
         // Step 24f: directional clipmap for glass (matches lighting_cs). Same tunables + level viewProjs.
         // .y carries the SAME scaled value the lighting CB gets (UE divide by 1000 on the CPU);

@@ -391,14 +391,17 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
                          cfg->pcfOverBlurCorrection ? 1.0f : 0.0f, cfg->normalBiasInTexels)
                 : float4(0.9f, 1.0f, 1.0f, 1.0f);
         }
-        constants.vsmDepthBias = vsm::g_clipmapDepthBias;
-        // Per-level depth-bias shaping (see VsmClipmapShadow). The floor is authored in TEXELS of
-        // the landed level; NDC per texel = 1 / (6 * 2048): a level's depth range is 6x its extent
-        // (Scene::UpdateClipmap, depthUp 5E + depthDown 1E) and its virtual res is 2048, and both
-        // scale with the extent, so one conversion serves every level.
+        // Both of these are NDC values that mean a WORLD distance, so both must be divided by the
+        // level's depth range -- see vsm::ClipmapRangeMultiple(). `vsmDepthBias` is authored against
+        // the historical range (6x the extent), so it is rescaled to keep that meaning when
+        // ZRangeScale moves; the floor is authored in TEXELS and converted with the same multiple.
+        // Leaving a hardcoded 6 here is what made ZRangeScale 10 -> 50 detach shadows from casters.
+        const float clipRangeMul = vsm::ClipmapRangeMultiple();
+        constants.vsmDepthBias =
+            vsm::g_clipmapDepthBias * (vsm::kClipmapRangeMultipleRef / clipRangeMul);
         constants.clipmapDepthBiasDecay = vsm::g_clipmapDepthBiasDecay;
         constants.clipmapDepthBiasFloorNdc =
-            vsm::g_clipmapDepthBiasFloorTexels / (6.0f * (float)vsm::kVirtualRes);
+            vsm::g_clipmapDepthBiasFloorTexels / (clipRangeMul * (float)vsm::kVirtualRes);
         constants.clipmapBlendWidth = vsm::ClipmapBlendWidth();
         constants.clipmapBaseExtent = vsm::g_clipmapBaseExtent;
         // P16.16: UE divide their CVar by 1000 before it reaches the shader

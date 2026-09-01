@@ -192,6 +192,16 @@ namespace vsm
     // Taking UE's 1000 would first require deriving the depth bias FROM the range instead of
     // holding it constant; then the range would be free and this could stop being a compromise.
     inline float         g_clipmapZRangeScale = 50.0f;
+
+    // A clipmap level's depth range as a MULTIPLE OF ITS EXTENT:
+    //     depthUp = radius * ZRangeScale = extent * ZRangeScale/2,  depthDown = extent * 1
+    // Every NDC quantity that is really a WORLD distance has to be divided by this, or changing the
+    // range silently rescales it. That is exactly what went wrong when ZRangeScale went 10 -> 50: a
+    // hardcoded `6` (the old 5E + 1E) stayed behind in the depth-bias conversion, so the same NDC
+    // bias became 4.3x more world distance and shadows visibly detached from their casters.
+    // At the historical ZRangeScale = 10 this returns 6, so the old numbers are preserved exactly.
+    inline float ClipmapRangeMultiple() { return g_clipmapZRangeScale * 0.5f + 1.0f; }
+    inline constexpr float kClipmapRangeMultipleRef = 6.0f; // what the authored biases were tuned at
     // Fraction of a directional clipmap level's half-extent used to cross-fade its shadow factor
     // into the next coarser level. 0 is a strict kill switch: no parent page requests and no second
     // PCF sample. 0.12 blends the outer 12% of each nested square and hides caster-LOD silhouette
