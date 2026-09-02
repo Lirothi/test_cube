@@ -392,12 +392,8 @@ void GraphicsDevice::InitDevice()
         // "Selected GPU/feature mode" is the canonical session-log event (logging plan L4);
         // device_caps.log stays as the artifact other probes append to.
         logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderRhi, msg);
-        // Also to a file. A capability the whole enhanced-barrier half is gated on has to be
-        // readable from a plain run, not only under a debugger — DBWIN output is lost otherwise,
-        // the same trap that hid the stress verdict and the barrier trace earlier in this work.
-        // This is the first device_caps.log write of the process, so PerRunTruncate starts the
-        // file; InitQueue, the compute-lane probe and the RT AS report append to it.
-        diag::WriteArtifact("device_caps.log", diag::ArtifactMode::PerRunTruncate, msg);
+        // (device_caps.log, which mirrored this line, was retired: the session log is readable
+        // from a plain run, which is all the file existed for.)
     }
 }
 
@@ -491,7 +487,6 @@ void GraphicsDevice::InitQueue()
                   computeQueue_ ? "" : " — async compute unavailable on this device");
     logging::WriteRaw(computeQueue_ ? logging::LogLevel::Info : logging::LogLevel::Warning,
                       logging::LogCategory::RenderRhi, msg);
-    diag::WriteArtifact("device_caps.log", diag::ArtifactMode::PerRunTruncate, msg);
 }
 
 void GraphicsDevice::ReportLiveObjects()

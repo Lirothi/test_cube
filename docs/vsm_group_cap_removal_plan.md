@@ -324,7 +324,7 @@ x64/Release/test_cube.exe --reimport-src=import_staging/atoll_island/atoll_islan
 ```
 
 plus `"chunkGrid": 7` in the mesh.json (or the import dialog at 7 tiles per axis — it will warn at
-69/64; after S4 that warning text is stale, which is S6's job). Verify: `logs/shadow_casters.log`
+69/64; after S4 that warning text is stale, which is S6's job). Verify: the `[ShadowGpuData]` session-log lines (formerly `logs/shadow_casters.log`, retired 2026-09-02)
 shows 69 groups and **no** "mega path disabled" line; image clean; then restore grid 6 the same
 way. Before S1..S4 land, do NOT run a >64 level expecting anything — F2 says what happens.
 
@@ -546,7 +546,7 @@ with `Pass_Compose` control and FIVE samples per quoted scope; shader edits via 
 replacement only; never write assets without the user; `models/**` is gitignored except
 `*.mesh.json`). Additional, specific to this plan:
 
-- `logs/shadow_casters.log` (truncate-per-process) is the ground truth for group counts and the
+- the `[ShadowGpuData]` session-log lines (formerly `logs/shadow_casters.log`, retired 2026-09-02) are the ground truth for group counts and the
   cull-validation verdict — read it, don't infer.
 - The cull validator (`PollValidation`) checks *view-level* counts, not per-page lists — it will
   NOT catch a page-level regression from S1/S2. The page-level check is the image A/B under the

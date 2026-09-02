@@ -135,7 +135,6 @@ void Renderer::Shutdown()
                       "[texcache] %u loads, %u shared (GPU copies avoided), %zu live entries\n",
                       loaded, saved, entries);
         logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, line);
-        diag::WriteArtifact("texcache.log", diag::ArtifactMode::AtomicReplace, line);
     }
     materialDataManager_.ClearAll();
     Texture2D::ClearCache();
@@ -773,7 +772,6 @@ void Renderer::ProbeComputeLaneOnce()
                   verdict, detail, GetComputeQueue() ? "present" : "absent");
     logging::WriteRaw(std::strcmp(verdict, "OK") == 0 ? logging::LogLevel::Info : logging::LogLevel::Warning,
                       logging::LogCategory::RenderRhi, msg);
-    diag::WriteArtifact("device_caps.log", diag::ArtifactMode::PerRunTruncate, msg);
 }
 
 void Renderer::EndFrame() {

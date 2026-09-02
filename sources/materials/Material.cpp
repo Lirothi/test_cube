@@ -15,7 +15,6 @@
 #include <chrono>
 #include <cstdio>
 
-#include "core/diagnostics/ArtifactWriter.h"
 #include <atomic>
 #include <functional>
 #include <string>
@@ -1274,24 +1273,26 @@ void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
     // Material::Bind keys every binding on that register, and when it disagrees with what the
     // caller filled in, the root argument is simply never set — which surfaces only as a
     // GPU-based-validation "Uninitialized root argument accessed", naming a dispatch and not a
-    // cause. A dozen lines per run, Debug only.
+    // cause. One Debug record per shader (was a table in its own file).
     {
-        diag::ArtifactFile f("material_rootparams.log", diag::ArtifactMode::PerRunTruncate);
-        if (f) {
-            f.Printf("%ls:%s\n", cd.shaderFile.c_str(), cd.csEntry ? cd.csEntry : "?");
-            for (const RootParameterInfo& p : rootParams_) {
-                const char* kind = "?";
-                switch (p.type) {
-                case RootParameterInfo::Constants:    kind = "constants"; break;
-                case RootParameterInfo::CBV:          kind = "cbv";       break;
-                case RootParameterInfo::TableSRV:     kind = "tableSRV";  break;
-                case RootParameterInfo::TableUAV:     kind = "tableUAV";  break;
-                case RootParameterInfo::TableSampler: kind = "tableSmp";  break;
-                }
-                f.Printf("    root[%u] %-9s register=%u space=%u\n", p.rootIndex, kind,
-                         p.bindingRegister, p.bindingSpace);
+        char line[1024];
+        int used = std::snprintf(line, sizeof(line), "rootparams %ls:%s:", cd.shaderFile.c_str(), cd.csEntry ? cd.csEntry : "?");
+        for (const RootParameterInfo& p : rootParams_) {
+            const char* kind = "?";
+            switch (p.type) {
+            case RootParameterInfo::Constants:    kind = "constants"; break;
+            case RootParameterInfo::CBV:          kind = "cbv";       break;
+            case RootParameterInfo::TableSRV:     kind = "tableSRV";  break;
+            case RootParameterInfo::TableUAV:     kind = "tableUAV";  break;
+            case RootParameterInfo::TableSampler: kind = "tableSmp";  break;
             }
+            if (used < 0 || used >= static_cast<int>(sizeof(line)) - 1) { break; }
+            const int n = std::snprintf(line + used, sizeof(line) - static_cast<size_t>(used), " [%u]%s r%u s%u",
+                                        p.rootIndex, kind, p.bindingRegister, p.bindingSpace);
+            if (n <= 0) { break; }
+            used += n;
         }
+        LOG_DEBUG(logging::LogCategory::Render, "{}", line);
     }
 #endif
 
@@ -1378,10 +1379,11 @@ void ReportUnboundRootTable(const std::wstring& shaderFile, UINT rootIndex, cons
     h ^= std::hash<std::wstring>{}(shaderFile);
     const std::uint64_t bit = 1ull << (h & 63u);
     if (g_unboundReported.fetch_or(bit, std::memory_order_relaxed) & bit) { return; }
-    diag::WriteArtifactf("unbound_root.log", diag::ArtifactMode::Append,
-                         "UNBOUND %s at root index %u -- shader: %ls\n"
-                         "  the draw that follows reads this parameter without it ever being set\n",
-                         kind, rootIndex, shaderFile.c_str());
+    // Draw path: the record is formatted into a stack buffer and pushed without a lock, which
+    // is exactly what the old fopen-per-report could not promise.
+    LOG_ERROR(logging::LogCategory::Render,
+              "UNBOUND {} at root index {} -- shader: {}; the draw that follows reads this parameter without it ever being set",
+              kind, rootIndex, shaderFile);
 }
 } // namespace
 
@@ -2021,7 +2023,6 @@ void MaterialManager::Clear()
         "[shadercache] %u hits, %u misses, %u writes\n",
         hits, attempts >= hits ? attempts - hits : 0u, writes);
     logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, line);
-    diag::WriteArtifact("shader_cache.log", diag::ArtifactMode::AtomicReplace, line);
 
     const uint32_t psoAttempts = g_psoCacheAttempts.load(std::memory_order_relaxed);
     const uint32_t psoHits = g_psoCacheHits.load(std::memory_order_relaxed);
@@ -2039,7 +2040,6 @@ void MaterialManager::Clear()
         static_cast<double>(psoCreateUs) / 1000.0,
         static_cast<unsigned long long>(psoBytes));
     logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, psoLine);
-    diag::WriteArtifact("pso_cache.log", diag::ArtifactMode::AtomicReplace, psoLine);
     materials_.clear();
 }
 

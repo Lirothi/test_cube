@@ -1105,12 +1105,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             std::snprintf(msg, sizeof(msg),
                           "[VSM] single-draw page render OFF: %s -- using the per-page loop.\n",
                           kReason[reason]);
+            // A Warning in the session log, readable from any run: the per-page loop is the slow
+            // path, and "why is dragging this mesh 150x slower than flying the camera" cost a
+            // long hunt precisely because the engine knew the answer and whispered it somewhere
+            // unreadable (DBWIN, then a side file — both gone).
             logging::WriteRaw(logging::LogLevel::Warning, logging::LogCategory::RenderShadow, msg);
-            // ...and to a FILE. OutputDebugString alone means nobody sees it: the per-page loop is
-            // the slow path, and "why is dragging this mesh 150x slower than flying the camera"
-            // cost a long hunt precisely because the engine already knew the answer and whispered it
-            // somewhere unreadable.
-            diag::WriteArtifact("vsm.log", diag::ArtifactMode::Append, msg);
         }
     }
     else if (singleDraw) { singleDrawFallbackLogged_ = 0; }

@@ -4837,7 +4837,7 @@ to occlude. Two things that were worth a stop each: auto exposure metering a fra
 bright water (0.939 stops) and the subject of this section.
 
 **The gap, in numbers.** Read out of the level's own irradiance cube
-(`rustig_koppie_puresky_4k_diffuse.dds`, physical scale x10985 from `logs/ibl.log`):
+(`rustig_koppie_puresky_4k_diffuse.dds`, physical scale x10985 from the `[ibl]` session-log line, formerly `logs/ibl.log`):
 
 | normal | E(N) |
 |---|---|
@@ -5752,7 +5752,7 @@ their whole design is built around; on the derived star it is 92.5 / 7.5.
 
 **The CPU survey is not in the frame, and here is the number.** It is gated on `ratio`, which moves
 only when `convSize`, the bloom resolution or the kernel image changes: **one survey per run, 0.56
-ms**, logged with its own timing to `logs/bloom_kernel.log`. Per steady frame it costs one float
+ms**, logged with its own timing to the `[p8c-2o]` session-log record (formerly `logs/bloom_kernel.log`). Per steady frame it costs one float
 compare. Moving it to the GPU would make it *worse*, not better -- the tonemap needs the constants
 in its own constant buffer, so a GPU survey means either a readback the tonemap cannot wait for, or
 a per-frame structured buffer plus a descriptor plus a barrier, every frame, to replace 0.56 ms
@@ -5837,7 +5837,7 @@ reference frame used `BloomKernelStar` and every new frame used `DefaultBloomKer
 level had been saved from the editor mid-session with the new kernel picker, at 15:20, choosing UE's
 image. The arithmetic said the two frames had to match (33 vs 32) and they did not, which was the
 signal to go looking at the INPUTS rather than at the change. `[p8c-2t]` now logs
-`s / match / invariant / scatterApply` on every change to `logs/bloom_kernel.log`, so which kernel
+`s / match / invariant / scatterApply` on every change to the `[p8c-2o]` session-log record (formerly `logs/bloom_kernel.log`), so which kernel
 and which scale are live is one grep away.
 
 **On splitting the bloom out of Pass_Tonemap:** nothing structural forbids it. The ordering is real

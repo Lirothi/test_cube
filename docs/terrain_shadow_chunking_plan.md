@@ -141,7 +141,7 @@ LOD0 near the camera" cheap — the finest clipmap ring (12 m) sits inside 1–4
    stands.
 5. **F4 re-confirmed and now READABLE HEADLESS.** `ShadowGpuData::Rebuild`'s summary and the cull
    validation verdict were `OutputDebugStringA`-only, i.e. invisible to exactly the headless runs
-   that gate this work; both now also append to `logs/shadow_casters.log`. Pre-chunking wind_test:
+   that gate this work; both now also go to the session log as `[ShadowGpuData]` records (`logs/shadow_casters.log`, which mirrored them, was retired 2026-09-02). Pre-chunking wind_test:
 
    ```
    [ShadowGpuData] rebuilt: 2673 casters (2673 static + 0 GI in 0 objs), 21 mesh-groups
@@ -396,7 +396,7 @@ The user re-imported through the dialog. Everything predicted came out exactly:
 * The shipped `.mesh.bin` is **byte-identical from offset 32 to the scratch bake validated in S1**
   (identical `optionsHash` too), so S1's proofs — LOD0 a pure partition, zero cracks at every LOD —
   apply verbatim to the shipped asset. 36 submeshes; 82,944 / 41,450 / 20,734 / 10,150 tris.
-* `logs/shadow_casters.log`, exactly the predicted numbers:
+* the `[ShadowGpuData] rebuilt:` session-log line (formerly `logs/shadow_casters.log`), exactly the predicted numbers:
 
   ```
   [ShadowGpuData] rebuilt: 2708 casters (2708 static + 0 GI in 0 objs), 56 mesh-groups
@@ -413,7 +413,7 @@ The user re-imported through the dialog. Everything predicted came out exactly:
 
 **What to check after it runs** (recipes above; the first two are hard numbers, not opinions):
 
-* `logs/shadow_casters.log` must read **2708 casters, 56 mesh-groups, 1 chunked of 9 meshes**
+* the `[ShadowGpuData] rebuilt:` session-log line (formerly `logs/shadow_casters.log`) must read **2708 casters, 56 mesh-groups, 1 chunked of 9 meshes**
   (from 2673 / 21 / 0) and still `cull validation PASS`. If groups exceed 64 the mega path degrades
   — stop and drop the grid.
 * `Pass_VsmPageRender` should fall from **0.92 ms** even before the S4 bias is exercised, because

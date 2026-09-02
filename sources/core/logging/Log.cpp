@@ -6,6 +6,7 @@
 #include <Windows.h>
 #include <process.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -14,7 +15,9 @@
 #include <iterator>
 #include <limits>
 #include <new>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace logging
 {
@@ -520,6 +523,86 @@ namespace logging
             return true;
         }
 
+        // ---- Retention ----------------------------------------------------------------------
+
+        // Any session log: "session_<anything>.log" — the auto-named ones AND explicit
+        // --log-file names that follow the convention (the owner wants at most 10 session logs
+        // on disk, whoever named them). Fixed-name artifacts use other prefixes and are never
+        // candidates. Checked by name, not only by the FindFirstFile pattern, because Win32
+        // wildcards also match short-name aliases.
+        [[nodiscard]] bool IsSessionLogName(const wchar_t* name) noexcept
+        {
+            const std::wstring_view text(name);
+            constexpr std::wstring_view prefix = L"session_";
+            constexpr std::wstring_view suffix = L".log";
+            return text.size() > prefix.size() + suffix.size() &&
+                text.substr(0, prefix.size()) == prefix &&
+                text.substr(text.size() - suffix.size()) == suffix;
+        }
+
+        [[nodiscard]] std::wstring_view FileNameOf(const wchar_t* path) noexcept
+        {
+            const std::wstring_view full(path);
+            const std::size_t slash = full.find_last_of(L"/\\");
+            return slash == std::wstring_view::npos ? full : full.substr(slash + 1);
+        }
+
+        struct RetentionResult
+        {
+            std::uint32_t deleted = 0;
+            std::uint64_t deletedBytes = 0;
+            std::uint32_t kept = 0;
+        };
+
+        // Newest first by LAST-WRITE TIME (explicit names do not sort chronologically), name as
+        // the tie-break. The current session file always survives. Heap is fine here — this
+        // runs once, at Initialize, on the initialising thread.
+        RetentionResult ApplyRetention(const wchar_t* currentPath, std::uint32_t keepCount, std::uint64_t keepBytes) noexcept
+        {
+            RetentionResult result;
+            if (keepCount == 0 && keepBytes == 0) { return result; }
+
+            struct Item { std::wstring name; std::uint64_t size; std::uint64_t written; };
+            std::vector<Item> items;
+            WIN32_FIND_DATAW data{};
+            const HANDLE find = FindFirstFileW(L"logs/session_*.log", &data);
+            if (find == INVALID_HANDLE_VALUE) { return result; }
+            do
+            {
+                if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 || !IsSessionLogName(data.cFileName)) { continue; }
+                items.push_back(Item{ data.cFileName,
+                    (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow,
+                    (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime });
+            } while (FindNextFileW(find, &data));
+            FindClose(find);
+
+            std::sort(items.begin(), items.end(), [](const Item& a, const Item& b)
+            {
+                return a.written != b.written ? a.written > b.written : a.name > b.name;
+            });
+            const std::wstring_view current = FileNameOf(currentPath != nullptr ? currentPath : L"");
+            std::uint64_t cumulative = 0;
+            for (std::size_t i = 0; i < items.size(); ++i)
+            {
+                cumulative += items[i].size;
+                const bool overCount = keepCount != 0 && result.kept >= keepCount;
+                const bool overBytes = keepBytes != 0 && cumulative > keepBytes;
+                const bool isCurrent = _wcsicmp(items[i].name.c_str(), std::wstring(current).c_str()) == 0;
+                if (isCurrent || (!overCount && !overBytes))
+                {
+                    ++result.kept;
+                    continue;
+                }
+                const std::wstring path = L"logs/" + items[i].name;
+                if (DeleteFileW(path.c_str()))
+                {
+                    ++result.deleted;
+                    result.deletedBytes += items[i].size;
+                }
+            }
+            return result;
+        }
+
         std::size_t WideToUtf8(const wchar_t* text, char* out, std::size_t capacity) noexcept
         {
             if (capacity == 0)
@@ -736,6 +819,12 @@ namespace logging
                 sinks::WriteLatestHint(state->sessionPath);
             }
         }
+        RetentionResult retention;
+        if (config.fileSink)
+        {
+            // After the current file exists, so it is counted (and never deleted).
+            retention = ApplyRetention(state->sessionPath, config.retainSessionCount, config.retainSessionBytes);
+        }
         state->consoleEnabled = config.consoleSink != ConsoleMode::Off && state->console.Detect();
 
         state->wakeEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -780,6 +869,12 @@ namespace logging
             {
                 LOG_INFO(LogCategory::Core, "session file=<none> (disabled) queue={} sync={}",
                     state->queue.Capacity(), config.synchronous);
+            }
+            if (retention.deleted != 0)
+            {
+                LOG_INFO(LogCategory::Core, "session retention: deleted {} older session logs ({} bytes), keeping {} (limits {} files / {} MiB)",
+                    retention.deleted, retention.deletedBytes, retention.kept, config.retainSessionCount,
+                    config.retainSessionBytes >> 20);
             }
         }
         return true;

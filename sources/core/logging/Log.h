@@ -66,6 +66,13 @@ namespace logging
 #else
         LogLevel debuggerMinimum = LogLevel::Debug;
 #endif
+        // Retention, applied once at Initialize: of every logs/session_*.log (auto-named or an
+        // explicit --log-file that follows the convention; fixed-name artifacts use other
+        // prefixes and are never candidates) keep the newest `retainSessionCount` by last-write
+        // time, and stop keeping once their cumulative size passes `retainSessionBytes`. The
+        // current file always survives. Either 0 disables that limit.
+        std::uint32_t retainSessionCount = 10;
+        std::uint64_t retainSessionBytes = 100ull << 20;
         // Explicit session file path; empty = logs/session_<stamp>_<pid>_<tag>.log.
         wchar_t filePath[512] = {};
         // Recorded in the session header (not owned; must outlive Initialize).

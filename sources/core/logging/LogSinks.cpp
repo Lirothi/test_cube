@@ -15,7 +15,7 @@ namespace logging::sinks
 
         constexpr std::string_view kLevelTags[kLogLevelCount] =
         {
-            "TRACE", "DEBUG", "INFO ", "WARN ", "ERROR", "FATAL"
+            "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"
         };
 
         // Minimal bounded appender for the writer side (same contract as the producer-side
@@ -245,29 +245,28 @@ namespace logging::sinks
     {
         LineWriter line(out, capacity);
 
-        line.AppendUnsigned(record.sequence, 8, '0');
-        line.Append(' ');
-
+        // Prefix, as the owner wants it: "HH:MM:SS.mmm LEVEL [category] <frame> " — single
+        // spaces, no column padding, the category bracketed Unreal-style, the frame a bare
+        // number ("-" before the first frame), no thread (the viewer has it; the file rarely
+        // needs it). The date is in the session header and file name, the sequence number in
+        // the viewer.
+        (void)threadNames;
         char wallClock[32];
         const std::size_t wallClockLength = clock.FormatWallClock(record.qpcTimestamp, wallClock, sizeof(wallClock));
-        line.Append(wallClockLength != 0 ? std::string_view(wallClock, wallClockLength) : std::string_view("----------- --:--:--.---"));
-        line.Append(' ');
-
+        // FormatWallClock yields "YYYY-MM-DD HH:MM:SS.mmm"; keep the time of day.
+        if (wallClockLength >= 23)
         {
-            const double elapsed = clock.ElapsedSeconds(record.qpcTimestamp);
-            const std::uint64_t milliseconds =
-                elapsed > 0.0 ? static_cast<std::uint64_t>(elapsed * 1000.0 + 0.5) : 0;
-            line.Append('+');
-            line.AppendUnsigned(milliseconds / 1000);
-            line.Append('.');
-            line.AppendUnsigned(milliseconds % 1000, 3, '0');
-            line.Append("s [");
+            line.Append(std::string_view(wallClock + 11, 12));
         }
-
+        else
+        {
+            line.Append("--:--:--.---");
+        }
+        line.Append(' ');
         line.Append(IsValid(record.level) ? kLevelTags[static_cast<std::size_t>(record.level)] : std::string_view("?????"));
-        line.Append("] [");
+        line.Append(" [");
         line.Append(LogCategoryName(record.category));
-        line.Append("] [frame=");
+        line.Append("] ");
         if (record.frame == kInvalidLogFrame)
         {
             line.Append('-');
@@ -276,18 +275,7 @@ namespace logging::sinks
         {
             line.AppendUnsigned(record.frame);
         }
-        line.Append("] [tid=");
-        line.AppendUnsigned(record.threadId);
-        {
-            char name[ThreadNameTable::kNameCapacity];
-            const std::size_t nameLength = threadNames.Get(record.threadId, name, sizeof(name));
-            if (nameLength != 0)
-            {
-                line.Append('/');
-                line.Append(std::string_view(name, nameLength));
-            }
-        }
-        line.Append("] ");
+        line.Append(' ');
 
         {
             std::size_t messageBytes = record.messageByteCount;

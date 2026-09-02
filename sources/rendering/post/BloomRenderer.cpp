@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-#include "core/diagnostics/ArtifactWriter.h" // P8C-2o kernel survey verdict
+#include "core/logging/Log.h" // P8C-2o kernel survey verdict, lens-flare readiness
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/ComputeDispatch.h"
@@ -129,11 +129,11 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
             if (!warned)
             {
                 warned = true;
-                diag::WriteArtifactf("bloom_kernel.log", diag::ArtifactMode::Append,
-                                     "[ghost] DISABLED: lens flare material=%p pso=%p cb=%u\n",
-                                     (void*)flareMat.get(),
-                                     flareMat ? (void*)flareMat->GetPipelineState() : nullptr,
-                                     resources_->GetLensFlareCBSizeBytes());
+                LOG_WARNING(logging::LogCategory::Render,
+                            "lens flare ghosts DISABLED: material={} pso={} cb={}",
+                            static_cast<const void*>(flareMat.get()),
+                            flareMat ? static_cast<const void*>(flareMat->GetPipelineState()) : nullptr,
+                            resources_->GetLensFlareCBSizeBytes());
             }
         }
         flaresGhosts_ = frame.settings.bloom.enabled && ghostsWanted && flareReady &&
@@ -607,13 +607,11 @@ void BloomRenderer::SurveyKernel(float ratio)
     bloomKernelScatterEnergy_ = scatterEnergy;
     bloomSurveyRatio_ = ratio;
     const float total = centerEnergy[1] + scatterEnergy[1];
-    diag::WriteArtifactf("bloom_kernel.log", diag::ArtifactMode::Append,
-                         "[p8c-2o] survey ratio %.3f  clamp %.4g  centre %.4g (%.2f%% of total)  "
-                         "scatter %.4g  took %.2f ms\n",
-                         ratio, clampLevel[1], centerEnergy[1],
-                         (total > 0.0f) ? (centerEnergy[1] / total * 100.0f) : 0.0f, scatterEnergy[1],
-                         std::chrono::duration<double, std::milli>(
-                             std::chrono::steady_clock::now() - surveyStart).count());
+    LOG_INFO(logging::LogCategory::Render,
+             "[p8c-2o] bloom kernel survey ratio {:.3f}  clamp {}  centre {} ({:.2f}% of total)  scatter {}  took {:.2f} ms",
+             ratio, clampLevel[1], centerEnergy[1],
+             (total > 0.0f) ? (centerEnergy[1] / total * 100.0f) : 0.0f, scatterEnergy[1],
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - surveyStart).count());
 }
 
 // P8C-2o -- BloomFinalizeApplyConstants.usf, line for line.

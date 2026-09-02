@@ -60,9 +60,8 @@ namespace logging::sinks
         std::size_t count_ = 0;
     };
 
-    // Renders the stable one-line shape:
-    //   00001234 2026-09-02 01:14:22.381 +12.443s [WARN ] [render.rt] [frame=1842]
-    //   [tid=7632/RenderWorker2] message [truncated] (Renderer.cpp:1234)\n
+    // Renders the stable one-line shape (the date is in the session header; no thread column):
+    //   01:14:22.381 WARN [render.rt] 1842 message [truncated] (Renderer.cpp:1234)\n
     // Trailing CR/LF in the message is dropped; the source suffix is added for Warning and above.
     // Returns the byte count written into `out` (terminated, never exceeds capacity - 1).
     std::size_t FormatLine(

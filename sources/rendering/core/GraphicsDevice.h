@@ -52,7 +52,7 @@ public:
     // Nothing submits to it yet — the render graph gains no notion of a queue until step 4 and no
     // pass moves until step 8. It exists here so the later steps add scheduling, not device setup,
     // and so a machine that cannot create it fails at boot rather than midway through the work.
-    // Null only if creation failed (logged in device_caps.log).
+    // Null only if creation failed (logged in the session log, [caps] async compute queue).
     ID3D12CommandQueue* ComputeQueue() const { return computeQueue_.Get(); }
 
     // DXR capability (queried once at device creation). Device5() is null and

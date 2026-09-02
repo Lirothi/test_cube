@@ -1,9 +1,10 @@
 # Logging system — execution plan
 
-**Status: L1-L7 COMPLETE and committed; L8 COMPLETE (uncommitted), 2026-09-02. L9 remains
-plan-only.** L1 was delivered by a first pass and then corrected (see its "Review findings");
-L2-L8 followed in the same session. Gate results and measured numbers are recorded under each
-step. Next: L9 (retention, repository check, final cleanup).
+**Status: ALL STEPS L1-L9 COMPLETE, 2026-09-02 (L1-L8 committed, L9 uncommitted).** L1 was
+delivered by a first pass and then corrected (see its "Review findings"); L2-L9 followed in the
+same session. Gate results and measured numbers are recorded under each step; the final file
+list and overhead summary are at the end. The owner's decision on the artifacts that duplicated
+session-log lines: **retired** (see "Retired artifacts" under L9).
 
 This document is written as an execution contract for an AI working in this repository. Each step
 must leave the tree buildable and independently verifiable. Do not silently combine steps, change
@@ -189,12 +190,17 @@ fixed UTF-8 message buffer (target 768–1024 bytes)
 The file sink renders one line in this stable shape:
 
 ```text
-00001234 2026-09-02 01:14:22.381 +12.443s [WARN ] [render.rt]
-[frame=1842] [tid=7632/RenderWorker2] RT allocation failed; switching to SSR
+01:14:22.381 WARN [render.rt] 1842 RT allocation failed; switching to SSR (SceneRenderer.cpp:217)
 ```
 
-It may stay physically on one line; the example wraps only for this document. Session files are
-UTF-8 without BOM. The debugger sink converts UTF-8 to UTF-16 and calls `OutputDebugStringW`.
+Fields, single-spaced: time of day, level, `[category]` (bracketed, Unreal-style), frame (`-`
+before the first frame), message, and for Warning+ the `(File.cpp:line)` suffix. **Amended
+twice after L8 at the owner's request** — the original shape also carried the sequence number,
+the full date, the elapsed clock and the thread name, padded into columns (85 characters of
+prefix per line, then ~50); now ~30. The date lives only in the session header and file name,
+the sequence and the thread only in the viewer, and elapsed time is what the viewer's time
+column shows. Session files are UTF-8 without BOM. The debugger sink converts UTF-8 to UTF-16
+and calls `OutputDebugStringW`.
 
 ### Producer/consumer model
 
@@ -1031,6 +1037,99 @@ filters are correct; close-window 120-frame trace shows no `AppController` regre
 - no mixed line endings or `git diff --check` failures;
 - direct-output audit is empty except documented allowlist;
 - clean normal exit footer reports zero unexpected dropped records.
+
+**Status: COMPLETE (2026-09-02). The plan is closed.**
+
+**Implemented result:**
+
+- Retention (`Log.cpp`, at `Initialize`, after the current session file exists): candidates are
+  every `logs/session_*.log` (`IsSessionLogName`: the auto-named ones AND explicit `--log-file`
+  names that keep the prefix — the owner's rule is "never more than 10 session logs on disk,
+  whoever named them"; fixed-name artifacts use other prefixes and can never match). Newest
+  first by last-write time (name as tie-break), keep `retainSessionCount` (10) and stop keeping
+  once the cumulative size passes `retainSessionBytes` (100 MiB); the current file always
+  survives. One Info record reports what was deleted. Verified on a real boot with 14 planted
+  2020-stamped files: `deleted 5 older session logs (1000 bytes), keeping 10`; the
+  `--log-stress` scenario back-dates its plants with `SetFileTime` and computes its expectations
+  from whatever real session logs already sit in the folder.
+- `tools/check_logging.py`: scans `sources/` for `OutputDebugString`, event-style
+  `printf`/`fprintf(stderr)`/`std::cout|cerr`, `fopen(diag::LogPath(...))` and any
+  `diag::LogPath(` outside an allowlist (the logging core, the three harness outputs that own
+  their `FILE*`, the importer's stream), ignoring comment text; exit code = findings.
+  **0 findings** on the final tree.
+- Compact line shape (user request after L8): the sequence number, the date and the elapsed
+  clock left the prefix (85 -> ~50 characters); see "Record layout".
+- `--log-stress` gained a session-retention scenario (count and byte limits, computed against
+  whatever real sessions already sit in `logs/` so a developer's files are neither deleted nor
+  counted) and now deletes its own `log_stress_*` scratch files, leaving only the verdict.
+- Rules and switches documented in `AGENTS.md` ("Session Log": line shape, levels, gates,
+  artifacts, retention, the check script, F3 / `--log-window`).
+
+**Retired artifacts (owner's decision, 2026-09-02).** Twelve fixed-name files folded into the
+session log. Eight were pure duplicates once L5 landed (every line already a session record at
+Info or above): `texcache.log`, `shader_cache.log`, `pso_cache.log`, `device_caps.log` (the
+`[caps]` lines and the RT AS VRAM report), `shadow_casters.log` (the `[ShadowGpuData]` rebuild
+summary and cull verdict), `vsm.log` (single-draw OFF), `texcreate.log` (legacy-creation
+fallback), `ibl.log` (the `[ibl]` path line; the retained sessions are its history). Four
+carried their own content and were translated: `bloom_kernel.log` -> `lens flare ghosts
+DISABLED` (Warning) and the `[p8c-2o]` survey line (Info); `unbound_root.log` -> one Error per
+(shader, root index), now formatted on the stack and pushed lock-free from the draw path the
+old fopen sat on; `material_rootparams.log` -> one Debug record per shader
+(`rootparams <file>:<entry>: [i]kind rN sM ...`) instead of a per-run table;
+`boot_profile.log` -> `[profiling]` records: header, aggregated work and counters at Info, the
+per-scope timeline at Debug (a Release session keeps the summary, a Debug session the whole
+report). Writers gone, code comments and the two inspector help texts now point at the
+session log, forward-looking docs (`terrain_shadow_chunking_plan.md`,
+`vsm_group_cap_removal_plan.md`, `two_sided_foliage_and_ibl_plan.md`,
+`photographic_rendering_improvement_plan.md`, `gbv_startup_profile.md`) say "session log
+(formerly ...)"; closed historical plans keep their wording. Kept: dumps/tables/crash artifacts
+that are not events (`vsm_pages`, `barrier_*`, `submit_order`, `csm_readout`, `dred_dump`,
+`crash_stack`, `invariant_failure`, `device_removed`, `fence_stall`, `missing_material`,
+`cb_field_missing`, `thumbnail_profile`, the harness verdicts) and the two documented verdict
+files (`gbv.log`, `barrier_diag.log`).
+
+**Final gate (2026-09-02):**
+
+- Debug, Release, Release_Editor build.
+- `--log-stress` (Debug): two sequential runs 0 failed; two CONCURRENT instances (separate
+  working directories, i.e. separate `logs/` — the scratch-heavy scenarios are not meant to
+  share one folder, sessions and `UniqueSession` artifacts are and were proven so in L3/L7)
+  both 0 failed.
+- Exit codes and artifacts preserved: `--import <missing dir>` exits 1 with `=== asset import
+  ===` / `FATAL: staging dir does not exist` (Error) / `=== done ===` in the session and in
+  `asset_import.log`; `--tasksystem-stress` 0, `--renderer-submission-stress` 0, `--rt-smoke` 0,
+  `--scene-stress=3` CLEAN, `--shot` and `--trace` runs as in L5-L8.
+- Forced fatal (the `--log-stress` fatal child) leaves the FATAL record, the records queued
+  before it, and no footer; `RendererInvariantFailure` keeps its `invariant_failure.log` artifact
+  beside the emergency record (L4).
+- `tools/check_logging.py`: 0 findings. `git diff --check` clean, no mixed line endings.
+- Every normal run's footer: `session end: clean shutdown; ... dropped=0`.
+
+## Final file list
+
+- `sources/core/logging/`: `LogLevel.h`, `LogCategory.h`, `LogRecord.h`, `Log.h/.cpp` (frontend,
+  lifecycle, CLI, retention, self-tests), `LogQueue.h/.cpp` (bounded MPSC ring),
+  `LogSinks.h/.cpp` (clock, thread names, line shape, file/DBWIN/console/memory sinks),
+  `diagnostics/LogStress.h/.cpp` (`--log-stress`).
+- `sources/core/diagnostics/`: `ArtifactWriter.h/.cpp` (L7), `DiagPaths.h` (path helper, cached
+  directory), `BootProfile.cpp` (migrated writer).
+- `sources/app/ui/LogWindow.h/.cpp` (L8 viewer); `tools/check_logging.py` (L9).
+- Wiring: `main.cpp` (LogSession RAII, `--log-*`, `--log-stress`, `--log-window`), `App.cpp`,
+  `AppController.cpp`, `DeveloperWindow.h/.cpp`, `TaskSystemLockFree.cpp`, `SceneStress.cpp`.
+- Migrated call sites across `rendering/`, `materials/`, `assets/`, `editor/`, `vfx/`, `app/`
+  (L4-L7; see each step).
+
+## Measured overhead (Release, wind_test, from the gates above)
+
+- Producer: filtered call 0.2-0.7 ns; accepted call 113-174 ns (format + stamp + push);
+  0 records per frame at default thresholds in steady state (50 records per ~2100-frame run,
+  all boot/shutdown).
+- Consumer: 0.9-3.3 M records/s to file; 12 000 records/s sustained under `--barrier-flip-trace`
+  with 0 dropped.
+- Memory: 8192-slot ring = 8.8 MiB, 4096-record viewer ring = 4.3 MiB, viewer window up to
+  8192 compact entries (only while open).
+- Viewer: closed 0 (early return; `AppController::Tick` 0.006 ms vs 0.010 before it existed),
+  open under 12 k records/s 0.069 ms avg / 0.161 ms max.
 
 ## Failure policies
 

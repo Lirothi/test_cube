@@ -10,7 +10,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core/diagnostics/ArtifactWriter.h" // shadow_casters.log: the group count a headless run cannot print
 #include "core/math/Frustum.h"
 #include "materials/MaterialData.h" // C2: per-slot alphaMask/alphaCutoff/albedo for masked shadows
 #include "rendering/core/Renderer.h"
@@ -292,14 +291,6 @@ void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBo
     // old all-axis worst case — and bake it at level load too, or the pad hysteresis bug returns.
     out.center = DirectX::XMFLOAT4(c.x, c.y, c.z, b.GetRadius());
     out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
-}
-
-// `[ShadowGpuData]` verdict lines also go to a file the headless caster-set gates read back.
-// Per-run: the first write of a process truncates and the rest append, so one run's rebuilds stay
-// together without the file growing forever (the artifact API owns that protocol now).
-static void LogCasterLine(const char* line)
-{
-    diag::WriteArtifact("shadow_casters.log", diag::ArtifactMode::PerRunTruncate, line);
 }
 
 // Terrain chunking: bounds for ONE slot of a chunked mesh (Mesh::IsChunkedSubmeshes). Its submeshes
@@ -1274,10 +1265,9 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         (instances_.capacity * sizeof(render::InstancePerObject)) / 1024.0,
         (bounds_.capacity * sizeof(render::CasterBounds)) / 1024.0,
         render::kFrameCount);
-    logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderShadow, buf);
     // The group count is the number this whole feature is capped by (VSM_MAX_SETUP_GROUPS), so a
-    // re-bake's effect on the caster set can be READ rather than assumed.
-    LogCasterLine(buf);
+    // re-bake's effect on the caster set can be READ (session log) rather than assumed.
+    logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderShadow, buf);
     logFramesRemaining_ = 5;
 }
 
@@ -2198,10 +2188,10 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
             "[ShadowGpuData] cull validation MISMATCH: %u/%u views differ (first view %u: cpu=%u gpu=%u).\n",
             mismatchViews, valViews_, firstView, firstCpu, firstGpu);
     }
+    // The verdict this validation exists to produce, readable (session log) by the gate runs that
+    // trust it.
     logging::WriteRaw(mismatchViews == 0 ? logging::LogLevel::Info : logging::LogLevel::Warning,
                       logging::LogCategory::RenderShadow, buf);
-    // The verdict this validation exists to produce, readable by the gate runs that trust it.
-    LogCasterLine(buf);
     valState_ = 2;
 }
 

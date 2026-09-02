@@ -16,7 +16,7 @@
 //                under GBV the cost is not spread evenly, it sits on a handful of pipelines.
 //
 // Always compiled in (a QPC pair per scope, and scopes are coarse). The dump lands in
-// logs/boot_profile.log when the first frame is presented, so a run that is slow to BOOT does not
+// the session log (`[profiling]` records) when the first frame is presented, so a run that is slow to BOOT does not
 // have to also survive to exit to tell you why.
 namespace boot {
 
@@ -58,7 +58,8 @@ void AddCount(const char* name, long long delta = 1);
 inline bool g_frameProfiling = false;
 void SetFrameProfiling(bool on);
 
-// Writes logs/boot_profile.log. Safe to call more than once; each call appends a fresh report, so
+// Writes the report into the session log (summary at Info, per-scope timeline at Debug, category
+// `profiling`). Safe to call more than once; each call emits a fresh report, so
 // "at first frame" and "at exit" can both be dumped and compared.
 void Dump(const char* reason);
 

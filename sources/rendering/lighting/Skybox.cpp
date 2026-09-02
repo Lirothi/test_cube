@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include "core/diagnostics/ArtifactWriter.h"
 #include <filesystem>
 #include <memory>
 #include <system_error>
@@ -76,14 +75,12 @@ float MeasureCubeUpIlluminance(const std::wstring& diffPath)
     return 3.14159265358979f * luma;
 }
 
-// Which IBL path a level took gets asked about after the fact, from a headless capture, so
-// it goes to the diagnostic log as well as the debugger. A silent fallback to the legacy
-// mip chain is exactly the thing that looks like "F8 did nothing".
+// Which IBL path a level took gets asked about after the fact, from a headless capture, so it is
+// a session-log record (grep "[ibl]"; the retained sessions are the history). A silent fallback
+// to the legacy mip chain is exactly the thing that looks like "F8 did nothing".
 void LogIbl(logging::LogLevel level, const char* text)
 {
     logging::WriteRaw(level, logging::LogCategory::Render, text);
-    // ibl.log keeps its history across runs on purpose (Append writes a session separator).
-    diag::WriteArtifactf("ibl.log", diag::ArtifactMode::Append, "%s\n", text);
 }
 
 class SkyboxUniformBinder final : public RenderableObject::UniformBinder

@@ -32,8 +32,12 @@ Every process (the app, every `--*` harness) writes one event log:
 the newest one. Line shape:
 
 ```
-00001234 2026-09-02 01:14:22.381 +12.443s [WARN ] [render.rt] [frame=1842] [tid=7632/Worker2] message (File.cpp:123)
+01:14:22.381 WARN [render.rt] 1842 message (File.cpp:123)
 ```
+
+Fields: time of day (the date is in the session header), level, `[category]`, frame (`-` before
+the first frame), message; Warning+ carry the source suffix. The thread is not in the file (the
+F3 viewer shows it).
 
 A missing `session end: clean shutdown` footer means the process did not shut down cleanly. In
 the app, **F3** opens the Session Log viewer (filters by level/category/text, pause, copy,
@@ -44,6 +48,17 @@ never `OutputDebugString` or `printf` for events. Gates for lines evaluated ever
 `LOG_*_ONCE_PER_MESSAGE` (once per distinct text among the callsite's last 16 — for a quantised
 STATE line). `WriteRaw`/`WriteRawLines` take already-formatted text (SDK callbacks, compiler
 output) without formatting or heap.
+
+Levels: `Trace` = explicitly enabled high-detail (compiled out of Release), `Debug` = developer
+state transitions (dropped by a Release session), `Info` = lifecycle and completed operations,
+`Warning` = a recoverable fallback or degraded quality, `Error` = the requested operation failed
+but the process continues, `Fatal` = an invariant is broken and the process is about to stop.
+Pick the category by owner (`render.rt`, `render.shadow`, `asset`, `vfx`, ...), never mark
+everything Info, and never log per frame without one of the gates above. Session logs are
+rotated at boot: of every `logs/session_*.log` (auto-named or an explicit `--log-file` that keeps
+the prefix) the newest 10 by write time (or 100 MiB) are kept — never more than 10 on disk;
+fixed-name artifacts use other prefixes and are never deleted. `python tools/check_logging.py`
+reports any new direct output (exit code = findings) — run it before committing.
 
 Structured reports (a verdict file, a caps table, a dump) are ARTIFACTS, not events: write them
 with `diag::ArtifactFile` / `diag::WriteArtifact(name, mode, text)` (`core/diagnostics/ArtifactWriter.h`),

@@ -184,16 +184,18 @@ void LogWindow::RebuildVisible()
 
 void LogWindow::FormatLine(const Entry& entry, std::string& out) const
 {
+    // Same shape as the session file, with the session-relative time the viewer shows.
     char head[192];
     const double seconds = qpcFrequency_ > 0
         ? static_cast<double>(entry.qpc - qpcStart_) / static_cast<double>(qpcFrequency_)
         : 0.0;
-    std::snprintf(head, sizeof(head), "%08llu %+10.3fs [%-5s] [%s] [frame=%llu] [tid=%u%s%s] ",
-                  static_cast<unsigned long long>(entry.sequence), seconds,
+    char frame[24];
+    if (entry.frame == logging::kInvalidLogFrame) { std::snprintf(frame, sizeof(frame), "-"); }
+    else { std::snprintf(frame, sizeof(frame), "%llu", static_cast<unsigned long long>(entry.frame)); }
+    std::snprintf(head, sizeof(head), "%+.3f %s [%s] %s ",
+                  seconds,
                   logging::IsValid(entry.level) ? kLevelTags[static_cast<std::size_t>(entry.level)] : "?",
-                  logging::LogCategoryName(entry.category).data(),
-                  static_cast<unsigned long long>(entry.frame == logging::kInvalidLogFrame ? 0ull : entry.frame),
-                  entry.threadId, entry.threadName[0] ? "/" : "", entry.threadName);
+                  logging::LogCategoryName(entry.category).data(), frame);
     out += head;
     out += entry.message;
     if (entry.level >= logging::LogLevel::Warning && entry.sourceFile[0] != '\0')

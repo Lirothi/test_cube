@@ -17,7 +17,7 @@ time its pipeline is bound, and `lighting_cs.hlsl` alone costs **76 s** to rewri
 | `--scene-stress=2` (no GBV) | **9.1 s** |
 | `--scene-stress-gbv=2` | **151–166 s** |
 
-Where the GBV time goes (from `logs/boot_profile.log`):
+Where the GBV time goes (from the `[profiling]` boot-profile records in the session log (formerly `logs/boot_profile.log`)):
 
 | phase | time |
 |---|---|
@@ -121,12 +121,12 @@ across runs. Running **guarded twice in a row** gave 166.3 s and 163.2 s: repeat
 Only then was the 14 s meaningful.
 
 The knob was also verified to actually reach the driver rather than being inferred from wall time —
-`logs/boot_profile.log` counters carry `QueryInterface` and `SetDebugParameter` HRESULTs, and
+the `[profiling]` boot-profile records in the session log (formerly `logs/boot_profile.log`) counters carry `QueryInterface` and `SetDebugParameter` HRESULTs, and
 `logs/gbv.log` opens with the mode the run actually used.
 
 ## The instrumentation (kept)
 
-`sources/core/diagnostics/BootProfile.h` — writes `logs/boot_profile.log`.
+`sources/core/diagnostics/BootProfile.h` — writes the `[profiling]` boot-profile records in the session log (formerly `logs/boot_profile.log`).
 
 - **Scopes** (`BOOT_SCOPE`): a nested timeline with wall and *self* time, so unattributed work is
   visible as a gap rather than invisible. Dumped at "InitScene complete", at the first frame, and

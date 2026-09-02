@@ -14,6 +14,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <string>
 #include <thread>
 #include <vector>
@@ -305,8 +306,13 @@ namespace
         Check(stats.DroppedTotal() == 0, "zero drops with a sufficient ring");
         Check(orderOk, "per-thread order preserved");
         Check(text.find("session end: clean shutdown") != std::string::npos, "clean-shutdown footer present");
-        Check(text.find("[tid=") != std::string::npos && text.find("/Producer0]") != std::string::npos,
-            "thread names rendered");
+        // The file no longer carries the thread column; the name table itself is what the
+        // viewer reads, so check it directly.
+        logging::SetCurrentThreadName("StressMain");
+        char threadName[32] = {};
+        Check(logging::GetThreadName(GetCurrentThreadId(), threadName, sizeof(threadName)) != 0 &&
+                  std::strcmp(threadName, "StressMain") == 0,
+            "thread names published and readable");
     }
 
     void ScenarioOverflow()
@@ -506,7 +512,7 @@ namespace
         Check(exitCode == 7, "child exited through TerminateProcess with its own code");
         std::string text;
         Check(ReadFileText(L"logs/log_stress_fatal.log", text), "child session file exists");
-        Check(text.find("[FATAL]") != std::string::npos && text.find("fatal marker 42") != std::string::npos,
+        Check(text.find(" FATAL ") != std::string::npos && text.find("fatal marker 42") != std::string::npos,
             "fatal record reached the file before the process died");
         Check(text.find("child line three") != std::string::npos, "records queued before the fatal were flushed too");
         Check(text.find("session end") == std::string::npos, "no footer (unclean end is visible as its absence)");
@@ -601,6 +607,118 @@ namespace
         DeleteFileA(pathB.c_str());
     }
 
+    // Session logs already in logs/ (a developer's real ones, any name): the retention scenario
+    // must neither delete them nor let them skew its expectations, so the limits it configures
+    // are "everything that is already there, plus N". Their last-write times are all newer than
+    // the 2020 stamp the planted files get, so retention orders them first.
+    void PreexistingSessions(std::uint32_t& count, std::uint64_t& bytes)
+    {
+        count = 0;
+        bytes = 0;
+        WIN32_FIND_DATAW data{};
+        const HANDLE find = FindFirstFileW(L"logs/session_*.log", &data);
+        if (find == INVALID_HANDLE_VALUE) { return; }
+        do
+        {
+            if (std::wcsstr(data.cFileName, L"session_20200101_") != nullptr) { continue; } // our plants
+            ++count;
+            bytes += (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+        } while (FindNextFileW(find, &data));
+        FindClose(find);
+    }
+
+    // Retention orders by last-write time, so a planted file must LOOK old on disk, not just in
+    // its name.
+    void BackdateFile(const wchar_t* path)
+    {
+        const HANDLE file = CreateFileW(path, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) { return; }
+        SYSTEMTIME old{};
+        old.wYear = 2020; old.wMonth = 1; old.wDay = 1; old.wHour = 12;
+        FILETIME stamp{};
+        SystemTimeToFileTime(&old, &stamp);
+        SetFileTime(file, nullptr, nullptr, &stamp);
+        CloseHandle(file);
+    }
+
+    void ScenarioRetention()
+    {
+        Log("\n[session retention]\n");
+        // A session log with an explicit name is a candidate too (the owner wants at most N on
+        // disk, whoever named them); written NOW, so it is the newest and survives both passes.
+        diag::WriteArtifact("session_keepme.log", diag::ArtifactMode::PerRunTruncate, "explicit name\n");
+
+        std::uint32_t preexistingCount = 0;
+        std::uint64_t preexistingBytes = 0;
+        PreexistingSessions(preexistingCount, preexistingBytes);
+        Log("pre-existing session logs: %u (%llu bytes) - kept out of the expectations\n",
+            preexistingCount, static_cast<unsigned long long>(preexistingBytes));
+
+        // Plant 14 session files back-dated to 2020 (older than anything real).
+        for (int i = 1; i <= 14; ++i)
+        {
+            wchar_t name[96];
+            _snwprintf_s(name, _TRUNCATE, L"logs/session_20200101_%06d_%d_debug.log", i, 1000 + i);
+            const HANDLE file = CreateFileW(name, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file != INVALID_HANDLE_VALUE)
+            {
+                char body[200];
+                std::memset(body, 'x', sizeof(body));
+                DWORD written = 0;
+                WriteFile(file, body, sizeof(body), &written, nullptr);
+                CloseHandle(file);
+            }
+            BackdateFile(name);
+        }
+
+        const auto countPlanted = []() -> int
+        {
+            int count = 0;
+            WIN32_FIND_DATAW data{};
+            const HANDLE find = FindFirstFileW(L"logs/session_20200101_*_debug.log", &data);
+            if (find == INVALID_HANDLE_VALUE) { return 0; }
+            do { ++count; } while (FindNextFileW(find, &data));
+            FindClose(find);
+            return count;
+        };
+
+        // Count limit: keep (pre-existing + the new session + 9) -> exactly 9 planted survive.
+        logging::LogConfig config;
+        config.debuggerSink = false;
+        config.consoleSink = logging::ConsoleMode::Off;
+        config.retainSessionCount = preexistingCount + 1 + 9;
+        config.retainSessionBytes = 0;
+        Check(logging::Initialize(config), "Initialize (count limit)");
+        char sessionPath[512] = {};
+        logging::GetSessionFilePath(sessionPath, sizeof(sessionPath));
+        logging::Shutdown();
+        Check(countPlanted() == 9, "count limit keeps the 9 newest planted files beside the new session");
+        Check(GetFileAttributesW(L"logs/session_keepme.log") != INVALID_FILE_ATTRIBUTES,
+            "the newest explicitly named session survives (it is a candidate, ordered by write time)");
+        Check(sessionPath[0] != '\0' && GetFileAttributesA(sessionPath) != INVALID_FILE_ATTRIBUTES, "the current session file survives");
+        DeleteFileA(sessionPath);
+
+        // Byte limit: the pre-existing bytes (all newer, so counted first) + 1500 over 200-byte
+        // plants; the new session is empty when retention runs -> exactly 7 planted survive.
+        config.retainSessionCount = 0;
+        config.retainSessionBytes = preexistingBytes + 1500;
+        Check(logging::Initialize(config), "Initialize (byte limit)");
+        logging::GetSessionFilePath(sessionPath, sizeof(sessionPath));
+        logging::Shutdown();
+        Check(countPlanted() == 7, "byte limit keeps 7 planted files");
+        DeleteFileA(sessionPath);
+
+        // Cleanup.
+        for (int i = 1; i <= 14; ++i)
+        {
+            wchar_t name[96];
+            _snwprintf_s(name, _TRUNCATE, L"logs/session_20200101_%06d_%d_debug.log", i, 1000 + i);
+            DeleteFileW(name);
+        }
+        DeleteFileW(L"logs/session_keepme.log");
+    }
+
     void ScenarioMicrobenchmark()
     {
         Log("\n[microbenchmark]\n");
@@ -676,9 +794,28 @@ int RunLogStress(const char* commandLine)
     ScenarioFatalChild();
     ScenarioConcurrentSessions();
     ScenarioArtifacts();
+    ScenarioRetention();
     ScenarioMicrobenchmark();
 
     Log("\n%d failed checks\n", gFailures);
     gLog.Close();
+
+    // Leave only the verdict behind: every scenario file above is scratch, and a logs/ folder
+    // full of log_stress_* is noise for whoever opens it next.
+    {
+        WIN32_FIND_DATAW data{};
+        const HANDLE find = FindFirstFileW(L"logs/log_stress_*", &data);
+        if (find != INVALID_HANDLE_VALUE)
+        {
+            do
+            {
+                if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) { continue; }
+                std::wstring path = L"logs/";
+                path += data.cFileName;
+                DeleteFileW(path.c_str());
+            } while (FindNextFileW(find, &data));
+            FindClose(find);
+        }
+    }
     return gFailures;
 }

@@ -680,7 +680,7 @@ needs the user's eye**, which is why the plan allowed splitting it out.
    that kept `ambient` as a multiplier, which is a FRACTION OF THE SUN COLOUR and meaningless
    against an absolute irradiance: it buried the fill ~20x too deep.
 
-**`logs/ibl.log` now records which path each level took** (`split-sum ON  spec=1 diffuse=1 lut=1
+**The session log's `[ibl]` line (originally `logs/ibl.log`, retired 2026-09-02) records which path each level took** (`split-sum ON  spec=1 diffuse=1 lut=1
 specMips=8`, or the fallback line). Without it these three bugs were indistinguishable from "F8 has
 no visible effect" in a headless capture. Check it first when the IBL appears inert.
 

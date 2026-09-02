@@ -69,7 +69,7 @@ inline bool g_barrierCacheVerify = false;
 inline bool g_barrierFlipTrace = false;
 
 // Async-compute plan step 1: `--compute-lane-probe` runs a ONE-SHOT check that the COMPUTE lane of
-// the FrameResource pools actually works, and logs the verdict to logs/device_caps.log.
+// the FrameResource pools actually works, and logs the verdict to the session log ([caps] line).
 //
 // It exists because that lane has never executed: `FrameResource` has pooled per-type allocators
 // and lists since long before this plan, but nothing in the engine had ever asked for a COMPUTE

@@ -22,9 +22,9 @@ enum class ArtifactMode : std::uint8_t {
     // First open in this process truncates; every later open in the same process appends. The
     // shape most per-run reports want (a rebuild summary per level, a dump per graph).
     PerRunTruncate,
-    // History across sessions, explicitly. The first open per process writes a
-    // "---- session ... ----" separator so a line can be attributed to its run — the plan's
-    // baseline complaint about ibl.log / bloom_kernel.log / unbound_root.log.
+    // History across sessions, explicitly (crash-class reports: invariant_failure.log,
+    // device_removed.log, fence_stall.log, ...). The first open per process writes a
+    // "---- session ... ----" separator so a line can be attributed to its run.
     Append,
     // logs/<stem>_<YYYYMMDD_HHMMSS>_<pid><ext>: two processes can never truncate each other.
     UniqueSession,

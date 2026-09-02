@@ -1,6 +1,10 @@
 #include "core/diagnostics/BootProfile.h"
 
-#include "core/diagnostics/ArtifactWriter.h"
+#include "core/logging/Log.h"
+
+#include <cstdarg>
+#include <cstdio>
+#include <string>
 
 #include <algorithm>
 #include <chrono>
@@ -145,14 +149,31 @@ void AddCount(const char* name, long long delta)
     g_counts[name ? name : "?"] += delta;
 }
 
+// printf into a string, one report section at a time (the report used to be a file).
+struct LineSink
+{
+    std::string* out;
+    void Printf(const char* format, ...)
+    {
+        char buffer[1024];
+        va_list args;
+        va_start(args, format);
+        const int length = std::vsnprintf(buffer, sizeof(buffer), format, args);
+        va_end(args);
+        if (length > 0) { out->append(buffer, static_cast<std::size_t>(length) < sizeof(buffer) ? static_cast<std::size_t>(length) : sizeof(buffer) - 1); }
+    }
+};
+
 void Dump(const char* reason)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
 
-    // Per run: the first Dump of the process truncates, later ones ("first frame presented",
-    // shutdown) append — the artifact API owns that protocol now.
-    diag::ArtifactFile f("boot_profile.log", diag::ArtifactMode::PerRunTruncate);
-    if (!f) { return; }
+    // Into the session log (no separate boot_profile.log, by the owner's decision): the header,
+    // the aggregated work and the counters at Info under `profiling`, the per-scope timeline at
+    // Debug — a Release session keeps the summary, a Debug session the whole report.
+    std::string summary;
+    std::string timeline;
+    LineSink f{ &summary };
     ++g_dumpCount;
 
     const double total = NowMs();
@@ -165,6 +186,7 @@ void Dump(const char* reason)
     const std::thread::id mainThread = g_entries.empty() ? std::this_thread::get_id()
                                                          : g_entries.front().thread;
 
+    f.out = &timeline;
     for (std::size_t i = 0; i < g_entries.size(); ++i)
     {
         const Entry& e = g_entries[i];
@@ -206,9 +228,10 @@ void Dump(const char* reason)
         f.Printf("\n");
     }
 
+    f.out = &summary;
     if (!g_buckets.empty())
     {
-        f.Printf("\n  ---- aggregated work (repeated items) ----\n");
+        f.Printf("  ---- aggregated work (repeated items) ----\n");
         std::vector<const std::pair<const std::string, Bucket>*> sorted;
         sorted.reserve(g_buckets.size());
         for (const auto& kv : g_buckets) { sorted.push_back(&kv); }
@@ -231,7 +254,7 @@ void Dump(const char* reason)
 
     if (!g_counts.empty())
     {
-        f.Printf("\n  ---- counters ----\n");
+        f.Printf("  ---- counters ----\n");
         std::vector<const std::pair<const std::string, long long>*> sorted;
         sorted.reserve(g_counts.size());
         for (const auto& kv : g_counts) { sorted.push_back(&kv); }
@@ -243,7 +266,8 @@ void Dump(const char* reason)
         }
     }
 
-    f.Printf("\n");
+    logging::WriteRawLines(logging::LogLevel::Info, logging::LogCategory::Profiling, summary);
+    logging::WriteRawLines(logging::LogLevel::Debug, logging::LogCategory::Profiling, timeline);
 }
 
 } // namespace boot
