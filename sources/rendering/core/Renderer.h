@@ -248,7 +248,10 @@ public:
     void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
-    void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth);
+    // S11: `scissor` (atlas texels, optional) narrows the cascade's scissor to the camera's view
+    // cone; it is intersected with the tile's content rect, and the VIEWPORT stays the full rect.
+    void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth,
+                          const D3D12_RECT* scissor = nullptr);
     void BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth);
     // Bind one cube face (cubeSlot in [0,kMaxShadowedPointLights), face in [0,6)) of the
     // point shadow atlas as the color render target, with the shared scratch depth. When

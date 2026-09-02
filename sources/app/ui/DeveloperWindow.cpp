@@ -1163,6 +1163,27 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "(and the D16 step) in the readout. Drop it to 0 and watch tall casters'\n"
                                       "shadows get clipped \xE2\x80\x94 that is the problem pancaking exists to solve.");
 
+                // S11 [r.Shadow.CSMScissorOptim]. Off by default like UE's, and the readout column
+                // shows the rect it WOULD apply, so the saving is visible before the risk is taken.
+                graphicsEdit(ImGui::Checkbox("Scissor to view cone (UE CSMScissorOptim)", &csmCfg.scissorOptim));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The cascade tile is a square around the slice's bounding sphere; the camera\n"
+                                      "sees only a cone inside it. UE scissor the depth pass to that cone's projection\n"
+                                      "(camera + 4 far corners, rays extended to the tile border) -- pure rasterisation\n"
+                                      "saving, identical result for every receiver the CAMERA can see. Watch the\n"
+                                      "'scissor %%' column: 100 = nothing to cut (camera outside the tile, or looking\n"
+                                      "along the sun).\n\n"
+                                      "OFF by default, as in UE, and for a reason: GLASS shades reflected/refracted\n"
+                                      "receivers that can lie outside the camera cone, and those read the undrawn\n"
+                                      "part of the tile as LIT. Check water and glass before shipping it on.");
+                graphicsEdit(ImGui::SliderFloat("Scissor pad (texels)", &csmCfg.scissorPadTexels,
+                                                 0.0f, 16.0f, "%.0f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("OURS -- UE pad nothing. The filter's taps (6x6 tent = 3 texels) plus the\n"
+                                      "receiver normal offset can reach past the cone's edge at the screen border;\n"
+                                      "a tap on a scissored-out texel reads LIT and lightens the shadow there.\n"
+                                      "Set 0 to see the flaw UE ship, 4 covers the widest kernel.");
+
                 // UE's three legacy-CSM bias cvars first, then the one knob that is OURS. Split in
                 // two on purpose: the user could not tell which of the four numbers were a
                 // transcription and which were invented here.
@@ -1366,7 +1387,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 const SceneFrameData::CascadeData& csm = scene.GetCascadeData();
                 const ImGuiTableFlags csmTableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                                       ImGuiTableFlags_SizingFixedFit;
-                if (ImGui::BeginTable("CsmReadout", 8, csmTableFlags))
+                if (ImGui::BeginTable("CsmReadout", 9, csmTableFlags))
                 {
                     ImGui::TableSetupColumn("c");
                     ImGui::TableSetupColumn("slice (m)");
@@ -1376,6 +1397,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::TableSetupColumn("zRange (m)");
                     ImGui::TableSetupColumn("D16 (mm)");
                     ImGui::TableSetupColumn("bias (mm)");
+                    ImGui::TableSetupColumn("scissor %");
                     ImGui::TableHeadersRow();
 
                     for (int c = 0; c < SceneFrameData::kCascades; ++c)
@@ -1392,12 +1414,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         ImGui::TableSetColumnIndex(5); ImGui::Text("%.1f", range);
                         ImGui::TableSetColumnIndex(6); ImGui::Text("%.2f", (range / 65535.0f) * 1000.0f);
                         ImGui::TableSetColumnIndex(7); ImGui::Text("%.1f", csm.depthBiasNDC[c] * range * 1000.0f);
+                        ImGui::TableSetColumnIndex(8); ImGui::Text("%.0f", csm.scissorAreaDbg[c] * 100.0f);
                     }
                     ImGui::EndTable();
                 }
                 ImGui::TextDisabled("texel = world mm per shadow texel (lower is sharper).  R fit/pad = sphere\n"
                                     "radius before/after overlap.  D16 = quantization step of the 16-bit depth\n"
-                                    "atlas over zRange.  bias = depth bias in world mm (= peter-panning).");
+                                    "atlas over zRange.  bias = depth bias in world mm (= peter-panning).\n"
+                                    "scissor %% = share of the tile the view-cone scissor would rasterise (S11).");
 
                 ImGui::EndTabItem();
             }

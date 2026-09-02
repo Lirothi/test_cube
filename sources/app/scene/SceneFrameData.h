@@ -554,6 +554,13 @@ struct SceneFrameData
         float nearLsDbg[kCascades] = {};         // light-space ortho near plane
         float farLsDbg[kCascades] = {};          // light-space ortho far plane
         std::uint32_t tileSizeDbg[kCascades] = {}; // atlas tile edge in texels
+
+        // S11: the cascade's view-cone scissor in ATLAS texels (Scene::ComputeCascadeScissor).
+        // Always computed, applied by Pass_CSM only while CascadeShadowConfig::scissorOptim is on,
+        // so the readout can show what the optimisation WOULD cut before it is switched on.
+        struct ScissorRect { std::int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
+        ScissorRect scissor[kCascades] = {};
+        float scissorAreaDbg[kCascades] = {};    // rect area / content-rect area, 1 = nothing cut
     };
 
     const Camera* camera = nullptr;

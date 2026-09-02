@@ -375,6 +375,9 @@ namespace
         }
         if (setting == "csm.blendFraction") { scene.CascadeConfig().blendFraction = std::clamp(value, 0.0f, 0.3f); return true; }
         if (setting == "csm.distanceFade")  { scene.CascadeConfig().distanceFadeFraction = std::clamp(value, 0.0f, 0.3f); return true; }
+        // S11 [r.Shadow.CSMScissorOptim]: scissor each cascade's depth pass to the camera's view cone.
+        if (setting == "csm.scissorOptim") { scene.CascadeConfig().scissorOptim = value != 0.0f; return true; }
+        if (setting == "csm.scissorPad")   { scene.CascadeConfig().scissorPadTexels = std::clamp(value, 0.0f, 64.0f); return true; }
         // The Ctrl-key toggle, headless. Two draw paths write the SAME atlas (GPU-driven indirect
         // vs the CPU object walk) and S6 has to bias both identically -- that is only checkable
         // if a capture can select the path.

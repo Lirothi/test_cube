@@ -341,7 +341,17 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
     std::array<float, kCascades> csmDepthBiasNDC{};
     std::copy(std::begin(frame_->cascades.depthBiasNDC), std::end(frame_->cascades.depthBiasNDC),
               csmDepthBiasNDC.begin());
-    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind, cmpLog, cmpBarriers, csmCamPos, &csmCfg, &csmDepthBiasNDC](std::size_t cascadeIndex)
+    // S11: the per-cascade view-cone scissor, copied for the workers like the biases. Passed as
+    // null while the optimisation is off, so BindShadowTarget keeps its full-tile rect and the A/B
+    // is one flag inside one binary.
+    const bool csmUseScissor = csmCfg.scissorOptim;
+    std::array<D3D12_RECT, kCascades> csmScissor{};
+    for (std::size_t c = 0; c < kCascades; ++c)
+    {
+        const auto& r = frame_->cascades.scissor[c];
+        csmScissor[c] = D3D12_RECT{ r.x0, r.y0, r.x1, r.y1 };
+    }
+    auto renderCascade = [renderer, &cascadeViews, batchIndex = ctx.batchIndex, passName, shadowGpu, indirect, wind, cmpLog, cmpBarriers, csmCamPos, &csmCfg, &csmDepthBiasNDC, csmUseScissor, &csmScissor](std::size_t cascadeIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
         Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
@@ -369,7 +379,8 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
         SetCommandListName(t.cl, passName);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassCSM);
-            renderer->BindShadowTarget(t.cl, static_cast<int>(cascadeIndex), /*clear=*/false);
+            renderer->BindShadowTarget(t.cl, static_cast<int>(cascadeIndex), /*clear=*/false,
+                                       csmUseScissor ? &csmScissor[cascadeIndex] : nullptr);
 
             if (indirect)
             {
@@ -441,7 +452,12 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
         SetCommandListName(t.cl, ctx.pass);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassCSM);
-            renderer->BindShadowTarget(t.cl, static_cast<int>(idx), /*clear=*/false);
+            // S11: same view-cone scissor as the parallel path.
+            const auto& sr = frame_->cascades.scissor[idx];
+            const D3D12_RECT scRect{ sr.x0, sr.y0, sr.x1, sr.y1 };
+            const bool useSc = frame_->cascadeConfig && frame_->cascadeConfig->scissorOptim;
+            renderer->BindShadowTarget(t.cl, static_cast<int>(idx), /*clear=*/false,
+                                       useSc ? &scRect : nullptr);
 
             // S3.6: per-object receiver LOD (see ReceiverCasterLod). Was the cascade index.
             const Math::float3 camPos = frame_->camera ? frame_->camera->GetPosition()

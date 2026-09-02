@@ -2671,7 +2671,8 @@ void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMo
     }
 }
 
-void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth)
+void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth,
+                                const D3D12_RECT* scissor)
 {
     auto& D = rtManager_.Deferred(currentFrameIndex_);
 
@@ -2702,6 +2703,18 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
 
     	D3D12_VIEWPORT vp{ topLeftX, topLeftY, content, content, 0.0f, 1.0f };
     	D3D12_RECT sc{ (LONG)topLeftX, (LONG)topLeftY, (LONG)(topLeftX + content), (LONG)(topLeftY + content) };
+    	// S11: the cascade's view-cone scissor (Scene::ComputeCascadeScissor), intersected with the
+    	// content rect so it can never reach the S5 gutter or a neighbouring tile. The VIEWPORT is
+    	// left alone on purpose: the projection maps the cascade's world square onto the full
+    	// content rect, and a narrower viewport would rescale every caster (UE do the same --
+    	// SetViewport full, SetScissorRect narrowed). An empty intersection means a bad rect, and
+    	// the safe answer to a bad rect is the whole tile.
+    	if (scissor)
+    	{
+    	    const D3D12_RECT n{ std::max(sc.left, scissor->left), std::max(sc.top, scissor->top),
+    	                        std::min(sc.right, scissor->right), std::min(sc.bottom, scissor->bottom) };
+    	    if (n.right > n.left && n.bottom > n.top) { sc = n; }
+    	}
     	cl->RSSetViewports(1, &vp);
     	cl->RSSetScissorRects(1, &sc);
     }

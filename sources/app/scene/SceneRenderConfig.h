@@ -120,6 +120,20 @@ struct CascadeShadowConfig
     // more, and the symptom is unmistakable -- the shadow breaks at a cascade boundary.
     float pancakeSlackWS = 40.0f;
 
+    // --- S11: view-cone scissor [r.Shadow.CSMScissorOptim, default false] ----------------------
+    // The cascade tile is a square around the slice's bounding SPHERE, but the camera only sees a
+    // pyramid inside it. UE scissor the depth pass to the projection of that pyramid (extended to
+    // the tile border, so it is a cone, not a pyramid -- see Scene::ComputeCascadeScissor). Pure
+    // rasterisation saving; the sampled result is identical for every receiver the camera can see.
+    // OFF by default, as in UE, and that is a safeguard, not a formality: the rect is derived from
+    // the CAMERA frustum, and glass.hlsl shades reflected/refracted receivers that may lie outside
+    // it -- those would read the undrawn part of the tile as LIT (S5 clear = 1.0).
+    bool scissorOptim = false;
+    // OURS (UE pad nothing). Texels added on every side of the rect: the receiver normal offset
+    // (0.5 texel) plus the 6x6 tent's half-width (3 texels) can reach past the cone's edge at the
+    // screen border, and a tap that lands on a scissored-out texel reads LIT. Cheap insurance.
+    float scissorPadTexels = 4.0f;
+
     // --- S10: cascade cross-fade + distance fade ------------------------------------------------
     // [UDirectionalLightComponent::CascadeTransitionFraction = 0.1, clamped to 0.3] Fraction of a
     // cascade's OWN SLICE LENGTH over which it cross-fades into the next one. Was a hardcoded

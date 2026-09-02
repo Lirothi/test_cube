@@ -190,6 +190,104 @@ void Scene::SyncObjectsForRender(SceneObjectSyncReason reason)
     }
 }
 
+namespace
+{
+struct CascadeScissor
+{
+    SceneFrameData::CascadeData::ScissorRect rect;
+    float areaFrac = 1.0f;
+};
+
+// S11 -- UE FProjectedShadowInfo::ComputeScissorRectOptim (ShadowSetup.cpp:2945), transcribed.
+// The cascade tile is a square around the slice's bounding SPHERE, but the camera sees only a
+// pyramid inside it, and everything the lighting pass can ever sample from this cascade projects,
+// along the light, into the image of that pyramid. UE take the slice's four far corners, the
+// far-plane centre and the camera position, project them into the tile, and -- the step that makes
+// it a CONE rather than a pyramid -- extend every camera->point ray to the tile border. The
+// extension covers receivers beyond the slice's far plane that still sample this tile (our blend
+// band into the next cascade, the UV-containment fallback chain) at the price of a somewhat larger
+// rect. The bounding box of those points is the scissor. It only fires when the camera itself
+// projects inside the tile; otherwise the whole tile is drawn, as in UE.
+//
+// Deltas from the original, all deliberate:
+//  * texel space is our CONTENT rect (0..contentRes), not UE's border-inclusive FullRes: the
+//    viewport already excludes the S5 gutter, so a rect reaching into it would draw nothing extra
+//    and would void the "border stays clear" guarantee;
+//  * the far corners come from BuildFrustumSliceCornersWS (the same tan(halfFov)*SplitFar
+//    construction UE spell out inline); their AsymmetricFOVScale terms are the off-centre part of
+//    the projection, which for us is only the DLSS jitter, and the cascade is fitted to the
+//    non-jittered frustum (S1);
+//  * `padTexels` is OURS, UE pad nothing -- see CascadeShadowConfig::scissorPadTexels;
+//  * a degenerate ray (camera looking along the light: origin and corner coincide in the tile)
+//    falls back to the whole tile instead of UE's silent (0,0) point, which drags their rect to
+//    the tile corner;
+//  * the atlas offset is added ONCE (UE add X,Y both here and again in SetStateForView).
+CascadeScissor ComputeCascadeScissor(const std::array<float3, 8>& cornersWS, const float3& eye,
+                                     const mat4& lightViewProj, UINT contentRes,
+                                     UINT tileOriginX, UINT tileOriginY, float padTexels)
+{
+    const float res = static_cast<float>(contentRes);
+    CascadeScissor full;
+    full.rect = { static_cast<std::int32_t>(tileOriginX), static_cast<std::int32_t>(tileOriginY),
+                  static_cast<std::int32_t>(tileOriginX + contentRes),
+                  static_cast<std::int32_t>(tileOriginY + contentRes) };
+    full.areaFrac = 1.0f;
+    if (contentRes == 0) { return full; }
+
+    // UE's FrustumCorners[0..3] = far corners, [4] = far-plane centre, [5] = view origin.
+    // BuildFrustumSliceCornersWS interleaves near/far per corner, so the far ones are the odd slots.
+    float3 pts[6] = { cornersWS[1], cornersWS[3], cornersWS[5], cornersWS[7], float3(0, 0, 0), eye };
+    pts[4] = (pts[0] + pts[1] + pts[2] + pts[3]) * 0.25f;
+
+    // World -> content texels. Ortho, so w == 1; the divide is kept for parity with the original.
+    float2 tp[6];
+    for (int i = 0; i < 6; ++i)
+    {
+        const float4 clip = lightViewProj * float4(pts[i], 1.0f);
+        const float w = (std::abs(clip.w) > 1e-6f) ? clip.w : 1.0f;
+        tp[i] = float2(((clip.x / w) * 0.5f + 0.5f) * res, ((clip.y / w) * -0.5f + 0.5f) * res);
+    }
+
+    // UE: the optimisation applies only when the view origin lands inside the tile.
+    const float2 origin = tp[5];
+    if (origin.x < 0.0f || origin.x > res || origin.y < 0.0f || origin.y > res) { return full; }
+
+    float minX = origin.x, maxX = origin.x, minY = origin.y, maxY = origin.y;
+    for (int i = 0; i < 5; ++i)
+    {
+        // Extend the origin->point ray to the first tile border it exits through (UE's
+        // ComputeScissorIntersection: nearest positive-distance hit among the four border lines).
+        const float dx = tp[i].x - origin.x;
+        const float dy = tp[i].y - origin.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1e-3f) { return full; }   // degenerate: camera axis parallel to the light
+        const float ux = dx / len, uy = dy / len;
+        float t = 1e30f;
+        if (ux > 0.0f) { t = std::min(t, (res - origin.x) / ux); }
+        if (ux < 0.0f) { t = std::min(t, (0.0f - origin.x) / ux); }
+        if (uy > 0.0f) { t = std::min(t, (res - origin.y) / uy); }
+        if (uy < 0.0f) { t = std::min(t, (0.0f - origin.y) / uy); }
+        const float px = std::clamp(origin.x + ux * t, 0.0f, res);
+        const float py = std::clamp(origin.y + uy * t, 0.0f, res);
+        minX = std::min(minX, px); maxX = std::max(maxX, px);
+        minY = std::min(minY, py); maxY = std::max(maxY, py);
+    }
+
+    const float pad = std::max(0.0f, padTexels);
+    const std::int32_t x0 = std::clamp(static_cast<std::int32_t>(std::floor(minX - pad)), 0, static_cast<std::int32_t>(contentRes));
+    const std::int32_t y0 = std::clamp(static_cast<std::int32_t>(std::floor(minY - pad)), 0, static_cast<std::int32_t>(contentRes));
+    const std::int32_t x1 = std::clamp(static_cast<std::int32_t>(std::ceil (maxX + pad)), 0, static_cast<std::int32_t>(contentRes));
+    const std::int32_t y1 = std::clamp(static_cast<std::int32_t>(std::ceil (maxY + pad)), 0, static_cast<std::int32_t>(contentRes));
+    if (x1 <= x0 || y1 <= y0) { return full; }
+
+    CascadeScissor r;
+    r.rect = { static_cast<std::int32_t>(tileOriginX) + x0, static_cast<std::int32_t>(tileOriginY) + y0,
+               static_cast<std::int32_t>(tileOriginX) + x1, static_cast<std::int32_t>(tileOriginY) + y1 };
+    r.areaFrac = static_cast<float>(x1 - x0) * static_cast<float>(y1 - y0) / (res * res);
+    return r;
+}
+} // namespace
+
 void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
 {
     CPU_SCOPE(ProfilerScopes::kUpdateCascades);
@@ -374,6 +472,17 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascades.lightView[idx] = lightView;
         cascades.lightProj[idx] = lightProj;
 
+        // S11: the view-cone scissor, from the FINAL projection (anything else and the rect drifts
+        // off the tile's content). Computed even while the toggle is off, for the readout.
+        {
+            const CascadeScissor sc = ComputeCascadeScissor(
+                cornersWS, camera.GetPosition(), lightView * lightProj, contentRes,
+                static_cast<UINT>(tileOriginX), static_cast<UINT>(tileOriginY),
+                cascadeConfig_.scissorPadTexels);
+            cascades.scissor[idx] = sc.rect;
+            cascades.scissorAreaDbg[idx] = sc.areaFrac;
+        }
+
         SceneView& cascadeView = cascadeViews_[idx];
         cascadeView.view = lightView;
         cascadeView.proj = lightProj;
@@ -415,15 +524,22 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         diag::ArtifactFile f("csm_readout.log", diag::ArtifactMode::AtomicReplace);
         if (f)
         {
-            f.Printf("cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)\n");
+            // S11: the last two columns are the view-cone scissor -- what share of the tile it
+            // rasterises and the rect itself (atlas texels). Printed whether or not the toggle is on
+            // (the rect is always computed), so a headless A/B can prove the scissor actually FIRED
+            // rather than infer it from a neutral image; `applied` says which.
+            f.Printf("cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)  scissor%%  rect(atlas)  applied=%d\n",
+                     cascadeConfig_.scissorOptim ? 1 : 0);
             for (int i = 0; i < kCascades; ++i)
             {
                 const float zRange = cascades.farLsDbg[i] - cascades.nearLsDbg[i];
-                f.Printf("%d  %8.2f..%-8.2f %5u  %8.3f  %9.2f  %7.2f %7.2f  %9.2f  %11.4f\n",
+                const auto& sr = cascades.scissor[i];
+                f.Printf("%d  %8.2f..%-8.2f %5u  %8.3f  %9.2f  %7.2f %7.2f  %9.2f  %11.4f  %7.1f  %d,%d-%d,%d\n",
                          i, cascades.splitsVS[i], cascades.splitsVS[i + 1],
                          cascades.tileSizeDbg[i], cascades.unitsPerTexelDbg[i] * 1000.0f,
                          cascades.radiusDbg[i], cascades.nearLsDbg[i], cascades.farLsDbg[i],
-                         zRange, (zRange / 65535.0f) * 1000.0f);
+                         zRange, (zRange / 65535.0f) * 1000.0f,
+                         cascades.scissorAreaDbg[i] * 100.0f, sr.x0, sr.y0, sr.x1, sr.y1);
             }
         }
     }
