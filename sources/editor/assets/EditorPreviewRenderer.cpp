@@ -1,4 +1,5 @@
 #include "editor/assets/EditorPreviewRenderer.h"
+#include "core/logging/Log.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
 #if WITH_EDITOR
@@ -90,7 +91,8 @@ namespace
         {
             if (errors)
             {
-                OutputDebugStringA(static_cast<const char*>(errors->GetBufferPointer()));
+                logging::WriteRawLines(logging::LogLevel::Error, logging::LogCategory::Editor,
+                                       static_cast<const char*>(errors->GetBufferPointer()));
             }
             return nullptr;
         }
@@ -169,7 +171,8 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
     {
         if (rsError)
         {
-            OutputDebugStringA(static_cast<const char*>(rsError->GetBufferPointer()));
+            logging::WriteRawLines(logging::LogLevel::Error, logging::LogCategory::Editor,
+                                   static_cast<const char*>(rsError->GetBufferPointer()));
         }
         return false;
     }

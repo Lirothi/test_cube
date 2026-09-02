@@ -1,4 +1,5 @@
 #include "rendering/shadows/ShadowGpuData.h"
+#include "core/logging/Log.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/profiling/Profiler.h"
 
@@ -1092,7 +1093,8 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     hasMaskedGroups_ = maskedAlbedoCount_ > 0;
     if (maskedOverflow)
     {
-        OutputDebugStringA("[ShadowGpuData] WARNING: masked shadow groups exceed the albedo table cap; excess groups cast solid shadows.\n");
+        LOG_WARNING(logging::LogCategory::RenderShadow,
+                    "masked shadow groups exceed the albedo table cap; excess groups cast solid shadows");
     }
     if (EnsureRing(renderer, groupMask_, std::max<size_t>(numMeshGroups_, 1), sizeof(DirectX::XMUINT2), L"ShadowGpuData.GroupMask") &&
         numMeshGroups_ > 0)
@@ -1280,7 +1282,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         (instances_.capacity * sizeof(render::InstancePerObject)) / 1024.0,
         (bounds_.capacity * sizeof(render::CasterBounds)) / 1024.0,
         render::kFrameCount);
-    OutputDebugStringA(buf);
+    logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderShadow, buf);
     // The group count is the number this whole feature is capped by (VSM_MAX_SETUP_GROUPS), so a
     // re-bake's effect on the caster set can be READ rather than assumed.
     LogCasterLine(buf);
@@ -1395,11 +1397,9 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
 
     if (logFramesRemaining_ > 0)
     {
+        // The five frames after a rebuild only (the counter above), never a standing per-frame line.
         --logFramesRemaining_;
-        char buf[160];
-        std::snprintf(buf, sizeof(buf),
-            "[ShadowGpuData] frame update: %u/%u casters re-uploaded.\n", uploaded, count_);
-        OutputDebugStringA(buf);
+        LOG_DEBUG(logging::LogCategory::RenderShadow, "frame update: {}/{} casters re-uploaded", uploaded, count_);
     }
 
     // Step 4 (docs/vsm_page_caching_plan.md): republish the caster meta for THIS frame with the
@@ -1554,7 +1554,7 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         indirectShadowMaskedMat_ = mm->GetOrCreateGraphics(renderer, gd);
         if (!indirectShadowMaskedMat_ || !indirectShadowMaskedMat_->GetPipelineState())
         {
-            OutputDebugStringA("[ShadowGpuData] masked indirect shadow PSO FAILED (masked casters cast solid shadows).\n");
+            LOG_ERROR(logging::LogCategory::RenderShadow, "masked indirect shadow PSO FAILED (masked casters cast solid shadows)");
             indirectShadowMaskedMat_.reset();
         }
 
@@ -1569,7 +1569,7 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         indirectShadowPoolMat_ = mm->GetOrCreateGraphics(renderer, gd);
         if (!indirectShadowPoolMat_ || !indirectShadowPoolMat_->GetPipelineState())
         {
-            OutputDebugStringA("[ShadowGpuData] pool-format indirect shadow PSO FAILED (per-page loop fallback off).\n");
+            LOG_ERROR(logging::LogCategory::RenderShadow, "pool-format indirect shadow PSO FAILED (per-page loop fallback off)");
             indirectShadowPoolMat_.reset();
         }
         gd.defines.emplace_back("SHADOW_MASKED", "1");
@@ -1578,7 +1578,7 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         indirectShadowPoolMaskedMat_ = mm->GetOrCreateGraphics(renderer, gd);
         if (!indirectShadowPoolMaskedMat_ || !indirectShadowPoolMaskedMat_->GetPipelineState())
         {
-            OutputDebugStringA("[ShadowGpuData] pool-format masked indirect shadow PSO FAILED (per-page loop fallback off).\n");
+            LOG_ERROR(logging::LogCategory::RenderShadow, "pool-format masked indirect shadow PSO FAILED (per-page loop fallback off)");
             indirectShadowPoolMaskedMat_.reset();
         }
 
@@ -1597,7 +1597,7 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         indirectShadowPageMat_ = mm->GetOrCreateGraphics(renderer, gd);
         if (!indirectShadowPageMat_ || !indirectShadowPageMat_->GetPipelineState())
         {
-            OutputDebugStringA("[ShadowGpuData] VSM_PAGE indirect shadow PSO FAILED (single-draw page render off).\n");
+            LOG_ERROR(logging::LogCategory::RenderShadow, "VSM_PAGE indirect shadow PSO FAILED (single-draw page render off)");
             indirectShadowPageMat_.reset();
         }
 
@@ -1607,7 +1607,7 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         indirectShadowPageMaskedMat_ = mm->GetOrCreateGraphics(renderer, gd);
         if (!indirectShadowPageMaskedMat_ || !indirectShadowPageMaskedMat_->GetPipelineState())
         {
-            OutputDebugStringA("[ShadowGpuData] VSM_PAGE masked indirect shadow PSO FAILED (single-draw page render off).\n");
+            LOG_ERROR(logging::LogCategory::RenderShadow, "VSM_PAGE masked indirect shadow PSO FAILED (single-draw page render off)");
             indirectShadowPageMaskedMat_.reset();
         }
     }
@@ -1617,23 +1617,23 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
     const bool drawOk = indirectShadowMat_ && indirectShadowMat_->GetPipelineState();
     if (!cullOk)
     {
-        OutputDebugStringA("[ShadowGpuData] cull compute PSO creation FAILED (shader compile?).\n");
+        LOG_ERROR(logging::LogCategory::RenderShadow, "cull compute PSO creation FAILED (shader compile?)");
         cullClearMat_.reset();
         cullMat_.reset();
     }
     if (!drawOk)
     {
-        OutputDebugStringA("[ShadowGpuData] indirect shadow PSO creation FAILED (shader compile?).\n");
+        LOG_ERROR(logging::LogCategory::RenderShadow, "indirect shadow PSO creation FAILED (shader compile?)");
         indirectShadowMat_.reset();
     }
     if (!giScatterMat_ || !giScatterMat_->GetPipelineState())
     {
-        OutputDebugStringA("[ShadowGpuData] GI-scatter PSO creation FAILED (GI stays on the CPU tail).\n");
+        LOG_ERROR(logging::LogCategory::RenderShadow, "GI-scatter PSO creation FAILED (GI stays on the CPU tail)");
         giScatterMat_.reset();
     }
     if (cullOk && drawOk)
     {
-        OutputDebugStringA("[ShadowGpuData] shaders ready: cull (clear+cull) + indirect-shadow PSOs created.\n");
+        LOG_INFO(logging::LogCategory::RenderShadow, "shaders ready: cull (clear+cull) + indirect-shadow PSOs created");
     }
 }
 
@@ -2206,7 +2206,8 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
             "[ShadowGpuData] cull validation MISMATCH: %u/%u views differ (first view %u: cpu=%u gpu=%u).\n",
             mismatchViews, valViews_, firstView, firstCpu, firstGpu);
     }
-    OutputDebugStringA(buf);
+    logging::WriteRaw(mismatchViews == 0 ? logging::LogLevel::Info : logging::LogLevel::Warning,
+                      logging::LogCategory::RenderShadow, buf);
     // The verdict this validation exists to produce, readable by the gate runs that trust it.
     LogCasterLine(buf);
     valState_ = 2;

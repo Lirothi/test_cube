@@ -1,4 +1,5 @@
 #include "vfx/ParticleEmitterObject.h"
+#include "core/logging/Log.h"
 
 #include <algorithm>
 #include <atomic>
@@ -65,7 +66,8 @@ void ParticleEmitterObject::Init(Renderer* renderer,
     sortEnabled_ = desc_.sortParticles && desc_.maxParticles <= kSortMax;
     if (desc_.sortParticles && !sortEnabled_)
     {
-        OutputDebugStringA("[vfx] emitter maxParticles > sort cap (1024); back-to-front sort disabled\n");
+        LOG_WARNING(logging::LogCategory::Vfx, "emitter maxParticles {} > sort cap {}; back-to-front sort disabled",
+                    desc_.maxParticles, kSortMax);
     }
     if (sortEnabled_)
     {
@@ -383,10 +385,10 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
             // Oldest ring slot: written kReadbackSlots-1 frames ago — safely retired.
             const uint32_t dead = readbackPtr_[(frameCounter_ + 1u) % kReadbackSlots];
             const uint32_t alive = dead <= desc_.maxParticles ? desc_.maxParticles - dead : 0u;
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "[vfx] emitter alive=%u/%u (rate=%.0f/s)\n",
-                alive, desc_.maxParticles, desc_.spawnRate);
-            OutputDebugStringA(buf);
+            // Opt-in (vfx::g_debugAliveLog) and once per second per emitter (logAccum_): a
+            // sampled counter, so Debug and still behind both gates.
+            LOG_DEBUG(logging::LogCategory::Vfx, "emitter alive={}/{} (rate={:.0f}/s)",
+                      alive, desc_.maxParticles, desc_.spawnRate);
         }
     }
 }

@@ -8,6 +8,7 @@
 // has to be recorded into a command list like anything else. What moved is the ownership.
 
 #include "rendering/rt/RtSceneAs.h"
+#include "core/logging/Log.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -530,7 +531,7 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 std::snprintf(buf, sizeof(buf),
                               "[RT] Acceleration structures: %.2f MB VRAM, %zu instances.\n",
                               asManager_.GetAsMemoryBytes() / (1024.0 * 1024.0), rtInstances_.size());
-                OutputDebugStringA(buf);
+                logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderRt, buf);
                 // ...and to disk. This is the only report of what the acceleration structures
                 // cost, and DBWIN-only meant it could not be read on a headless run — which is
                 // exactly where the per-frame-in-flight BLAS copies had to be priced.

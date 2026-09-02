@@ -735,7 +735,7 @@ private:
     // periodically so a live/stress run samples several times. The single readback buffer holds
     // [request words | alloc counters].
     static constexpr std::uint64_t kRequestReadbackPeriod = 30; // frames between samples (dev-window live-ish)
-    static constexpr std::uint64_t kDbwinLogPeriod = 180;       // throttle the OutputDebugStringA log separately
+    static constexpr std::uint64_t kDbwinLogPeriod = 180;       // throttle the session-log mirror (vsm::g_logPageStats) separately
     Microsoft::WRL::ComPtr<ID3D12Resource> debugReadback_;
     std::uint64_t debugReadbackFrame_ = 0;     // frame the copy was scheduled
     std::uint64_t debugReadbackDoneFrame_ = 0; // frame the last sample logged

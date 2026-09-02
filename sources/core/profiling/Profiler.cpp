@@ -12,6 +12,7 @@
 #include <memory>
 #include <limits>
 #include "third_party/robin_hood.h"
+#include "core/logging/Log.h"
 #include "text/TextManager.h"
 #include "input/InputManager.h"
 #include "app/Systems.h"
@@ -1539,20 +1540,20 @@ void Profiler::RequestTraceCapture(uint32_t frameCount) {
     std::lock_guard<std::mutex> lk(mtx_);
     if (traceCapturing_) {
         traceStopRequested_ = true;
-        std::printf("Profiler trace capture stop requested\n");
+        LOG_INFO(logging::LogCategory::Profiling, "trace capture stop requested");
         return;
     }
     if (traceCaptureRequested_) {
         traceCaptureRequested_ = false;
         traceRequestFrameCount_ = 0;
-        std::printf("Profiler trace capture canceled\n");
+        LOG_INFO(logging::LogCategory::Profiling, "trace capture canceled");
         return;
     }
     traceCaptureRequested_ = true;
     traceRequestFrameCount_ = frameCount;
     traceOpenEnded_ = false;
     traceStopRequested_ = false;
-    std::printf("Profiler trace capture requested: %u frames\n", frameCount);
+    LOG_INFO(logging::LogCategory::Profiling, "trace capture requested: {} frames", frameCount);
 }
 
 void Profiler::BeginTraceCapture() {
@@ -1662,7 +1663,7 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events) {
     std::filesystem::create_directory("traces");
     std::ofstream out(fileName, std::ios::binary);
     if (!out) {
-        std::printf("Failed to write profiler trace to %s\n", fileName.c_str());
+        LOG_ERROR(logging::LogCategory::Profiling, "trace capture FAILED: cannot write {}", fileName);
         return;
     }
 
@@ -1733,7 +1734,8 @@ void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events) {
 
     out << "\n],\n\"displayTimeUnit\":\"us\"\n}\n";
     out.close();
-    std::printf("Profiler trace saved to %s (%zu events)\n", fileName.c_str(), events.size());
+    // The artifact-producing event: path plus verdict, the trace itself stays a Chrome JSON file.
+    LOG_INFO(logging::LogCategory::Profiling, "trace saved: {} ({} events)", fileName, events.size());
 }
 
 #endif // PROF_ENABLED

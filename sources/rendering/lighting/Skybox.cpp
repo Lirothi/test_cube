@@ -1,4 +1,5 @@
 #include "rendering/lighting/Skybox.h"
+#include "core/logging/Log.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadManager.h"
@@ -78,10 +79,10 @@ float MeasureCubeUpIlluminance(const std::wstring& diffPath)
 // Which IBL path a level took gets asked about after the fact, from a headless capture, so
 // it goes to the diagnostic log as well as the debugger. A silent fallback to the legacy
 // mip chain is exactly the thing that looks like "F8 did nothing".
-void LogIbl(const char* text)
+void LogIbl(logging::LogLevel level, const char* text)
 {
-    OutputDebugStringA(text);
-    OutputDebugStringA("\n");
+    logging::WriteRaw(level, logging::LogCategory::Render, text);
+    // ibl.log (append across runs) stays the artifact until L7.
     std::FILE* f = nullptr;
     if (fopen_s(&f, diag::LogPath("ibl.log").c_str(), "a") == 0 && f)
     {
@@ -208,11 +209,12 @@ void Skybox::Init(Renderer* renderer,
                 hasIbl_ ? "split-sum ON" : "FAILED, falling back to the sky mip chain",
                 (int)specOk, (int)diffOk, (int)lutOk, specCube_.GetMips(),
                 measuredUpIlluminance_, illuminanceLux_, PhysicalScale());
-            LogIbl(msg);
+            LogIbl(hasIbl_ ? logging::LogLevel::Info : logging::LogLevel::Warning, msg);
         }
         else
         {
-            LogIbl("[ibl] no F7 derivatives beside this skybox; using the legacy sky mip "
+            LogIbl(logging::LogLevel::Warning,
+                   "[ibl] no F7 derivatives beside this skybox; using the legacy sky mip "
                    "chain (re-import the HDRI to get them)");
         }
     }

@@ -810,7 +810,7 @@ int WINAPI WinMain(
             const std::string manifest = getArg("--reimport-manifest=");
             if (!manifest.empty()) {
                 if (!MeshManager::ApplyManifestOptions(manifest, opt)) {
-                    OutputDebugStringA("--reimport-manifest: could not read the manifest\n");
+                    LOG_ERROR(logging::LogCategory::Asset, "--reimport-manifest: could not read {}", manifest);
                     return 3;
                 }
             }

@@ -1098,6 +1098,36 @@ namespace logging
         detail::SubmitRecord(record);
     }
 
+    void WriteRawLines(
+        LogLevel level,
+        LogCategory category,
+        std::string_view text,
+        std::source_location location) noexcept
+    {
+        if (!ShouldLog(level, category))
+        {
+            return;
+        }
+        while (!text.empty())
+        {
+            const std::size_t newline = text.find('\n');
+            std::string_view line = text.substr(0, newline);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+            {
+                line.remove_suffix(1);
+            }
+            if (!line.empty())
+            {
+                WriteRaw(level, category, line, location);
+            }
+            if (newline == std::string_view::npos)
+            {
+                break;
+            }
+            text.remove_prefix(newline + 1);
+        }
+    }
+
     void WriteRawWide(
         LogLevel level,
         LogCategory category,

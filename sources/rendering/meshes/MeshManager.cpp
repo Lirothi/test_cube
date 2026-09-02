@@ -25,7 +25,8 @@
 #include <functional> // LOD3 foliage prune: union-find's recursive-free find lambda
 #include "meshoptimizer.h"
 #include "third_party/cgltf/cgltf.h"
-#include <Windows.h> // OutputDebugStringA for load diagnostics
+#include <Windows.h> // Win32 file/time helpers (load diagnostics now go through core/logging)
+#include "core/logging/Log.h"
 
 using namespace DirectX;
 
@@ -334,7 +335,7 @@ bool PruneFoliageRange(std::vector<VertexPNTUV>& verts, const uint32_t* srcIdx, 
         "[meshbake] LOD3 foliage prune: %zu comps -> %zu kept, tris %zu -> %zu -> inner %zu, scale x%.2f\n",
         comps.size(), (size_t)std::count(kept.begin(), kept.end(), (char)1), totalTris, keptTris,
         emitCount / 3, scale);
-    OutputDebugStringA(msg);
+    logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Asset, msg);
     return true;
 }
 
@@ -1398,7 +1399,8 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
                     : "[meshbake] chunkGrid=%u REJECTED (needs a single-submesh mesh with a "
                       "non-degenerate XZ extent); baking unchunked. submeshes=%zu\n",
             opt.chunkGrid, lod0Subs.size());
-        OutputDebugStringA(cmsg);
+        logging::WriteRaw(chunked ? logging::LogLevel::Info : logging::LogLevel::Warning,
+                          logging::LogCategory::Asset, cmsg);
     }
 
     // allowVertexAppend = true: the prune's scaled leaf copies grow cpu.vertices BEFORE
@@ -1417,7 +1419,7 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
         if (len < (int)sizeof(msg) - 24) { len += std::snprintf(msg + len, sizeof(msg) - len, "/%zu", l.indices.size() / 3); }
     }
     std::snprintf(msg + len, sizeof(msg) - len, ")\n");
-    OutputDebugStringA(msg);
+    logging::WriteRaw(ok ? logging::LogLevel::Info : logging::LogLevel::Error, logging::LogCategory::Asset, msg);
     return ok;
 }
 
@@ -1432,7 +1434,7 @@ std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
     std::vector<MeshLodCpu> lods;
     if (!ReadMeshBinary(binPath, nullptr, nullptr, verts, lods) || verts.empty() || lods.empty())
     {
-        OutputDebugStringA(("[meshbin] FAILED to read '" + binPath + "'\n").c_str());
+        LOG_ERROR(logging::LogCategory::Asset, "failed to read mesh binary '{}'", binPath);
         return nullptr;
     }
     std::shared_ptr<Mesh> mesh = std::make_shared<Mesh>();
@@ -1972,8 +1974,11 @@ GltfSelector ParseGltfSelector(const std::string& path) {
     return s;
 }
 
-void GltfLog(const std::string& msg) {
-    OutputDebugStringA(("[gltf] " + msg + "\n").c_str());
+// glTF load diagnostics. Failures are Errors, a selector falling back is a Warning, and the
+// per-file/per-material summaries are Debug: a level with many un-baked glTF meshes would
+// otherwise print one Info line per mesh per boot.
+void GltfLog(logging::LogLevel level, const std::string& msg) {
+    logging::WriteRaw(level, logging::LogCategory::Asset, "[gltf] " + msg);
 }
 
 constexpr cgltf_size kNoMat = static_cast<cgltf_size>(-1);
@@ -2041,7 +2046,7 @@ size_t SelectGltfGroup(const GltfSelector& sel, const std::string& fullPath, siz
         return 0;
     }
     if (sel.groupIndex < 0 || static_cast<size_t>(sel.groupIndex) >= groupCount) {
-        GltfLog("group index " + std::to_string(sel.groupIndex) + " out of range (" +
+        GltfLog(logging::LogLevel::Warning, "group index " + std::to_string(sel.groupIndex) + " out of range (" +
             std::to_string(groupCount) + " groups); using 0: " + fullPath);
         return 0;
     }
@@ -2083,11 +2088,11 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
     cgltf_options options{};
     cgltf_data* data = nullptr;
     if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success) {
-        GltfLog("parse failed: " + sel.file);
+        GltfLog(logging::LogLevel::Error, "parse failed: " + sel.file);
         return false;
     }
     if (cgltf_load_buffers(&options, data, sel.file.c_str()) != cgltf_result_success) {
-        GltfLog("load_buffers failed (missing .bin / external URI?): " + sel.file);
+        GltfLog(logging::LogLevel::Error, "load_buffers failed (missing .bin / external URI?): " + sel.file);
         cgltf_free(data);
         return false;
     }
@@ -2095,7 +2100,7 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
     std::vector<GltfGroup> groups;
     std::string err;
     if (!ResolveGltfGroups(data, sel, groups, err)) {
-        GltfLog(err + ": " + fullPath);
+        GltfLog(logging::LogLevel::Error, err + ": " + fullPath);
         cgltf_free(data);
         return false;
     }
@@ -2185,7 +2190,7 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
         static_cast<uint32_t>(g - firstGroup) });
     } // per-group loop
 
-    GltfLog("loaded '" + fullPath + "': " + std::to_string(outSubmeshes.size()) + "/" +
+    GltfLog(logging::LogLevel::Debug, "loaded '" + fullPath + "': " + std::to_string(outSubmeshes.size()) + "/" +
         std::to_string(groups.size()) + " group(s), " + std::to_string(outVerts.size()) +
         " verts, " + std::to_string(outIndices.size() / 3) + " tris");
 
@@ -2271,7 +2276,7 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
     cgltf_options options{};
     cgltf_data* data = nullptr;
     if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success) {
-        GltfLog("material parse failed: " + sel.file);
+        GltfLog(logging::LogLevel::Error, "material parse failed: " + sel.file);
         return out; // valid=false
     }
     // No cgltf_load_buffers: material + image URIs don't need buffer data.
@@ -2279,7 +2284,7 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
     std::vector<GltfGroup> groups;
     std::string err;
     if (!ResolveGltfGroups(data, sel, groups, err)) {
-        GltfLog("material " + err + ": " + pathWithFragment);
+        GltfLog(logging::LogLevel::Error, "material " + err + ": " + pathWithFragment);
         cgltf_free(data);
         return out;
     }
@@ -2325,7 +2330,7 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
         gGltfMaterialCache[pathWithFragment] = GltfMaterialCacheEntry{ stamp, std::move(all) };
     }
 
-    GltfLog("material '" + pathWithFragment + "': group " + std::to_string(want) +
+    GltfLog(logging::LogLevel::Debug, "material '" + pathWithFragment + "': group " + std::to_string(want) +
         ", metal=" + std::to_string(out.metallic) + " rough=" + std::to_string(out.roughness) +
         (out.alphaMask ? " MASK" : "") + (out.doubleSided ? " 2sided" : "") +
         " albedo=" + (out.albedoPath.empty() ? "-" : "y") +

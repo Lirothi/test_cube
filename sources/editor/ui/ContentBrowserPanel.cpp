@@ -1,4 +1,5 @@
 #include "editor/ui/ContentBrowserPanel.h"
+#include "core/logging/Log.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -3743,7 +3744,8 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
                 const fs::path path = fs::path(kMaterialsPhysicalRoot) / (name + ".json");
                 if (!materials->LoadPresetFromFile(path.wstring()))
                 {
-                    OutputDebugStringA("[editor] Material file was created but could not be registered at runtime.\n");
+                    LOG_ERROR(logging::LogCategory::Editor,
+                              "material file {} was created but could not be registered at runtime", path.wstring());
                 }
             }
             registry.Refresh();

@@ -1,4 +1,5 @@
 #include "rendering/rt/BindlessTable.h"
+#include "core/logging/Log.h"
 
 #include "rendering/meshes/Mesh.h"
 
@@ -87,8 +88,14 @@ uint32_t BindlessTable::GetOrRegisterDescriptors(Mesh* mesh, const SlotMaterial&
         return it->second;
     }
     if (descriptorCache_.size() >= (kMaxDescriptors - kGeoBase) / kDescPerGeom) {
+        // On the transition only: every registration after exhaustion lands here again, and the
+        // renderer has already switched to SSR on the first one.
+        if (!buildFailed_) {
+            LOG_ERROR(logging::LogCategory::RenderRt,
+                      "bindless descriptor capacity exhausted ({} geometries); refusing out-of-bounds write, RT off until the next level",
+                      descriptorCache_.size());
+        }
         buildFailed_ = true;
-        OutputDebugStringA("[RT] Bindless descriptor capacity exhausted; refusing out-of-bounds write.\n");
         return kInvalidGeometry;
     }
     const UINT geoSlot = kGeoBase + kDescPerGeom * static_cast<UINT>(descriptorCache_.size());

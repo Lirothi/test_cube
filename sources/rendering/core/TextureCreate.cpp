@@ -1,4 +1,5 @@
 #include "rendering/core/TextureCreate.h"
+#include "core/logging/Log.h"
 
 #include <atomic>
 #include <cstdio>
@@ -82,7 +83,7 @@ HRESULT CreateCommittedTexture(ID3D12Device* device,
                               static_cast<unsigned>(hr), static_cast<int>(layout),
                               static_cast<int>(desc.Format), static_cast<unsigned>(desc.Flags),
                               static_cast<int>(desc.Dimension), static_cast<unsigned>(initialState));
-                OutputDebugStringA(msg);
+                logging::WriteRaw(logging::LogLevel::Warning, logging::LogCategory::RenderRhi, msg);
                 FILE* f = nullptr;
                 if (fopen_s(&f, diag::LogPath("texcreate.log").c_str(), "a") == 0 && f) {
                     std::fputs(msg, f);

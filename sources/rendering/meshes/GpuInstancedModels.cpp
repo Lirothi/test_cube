@@ -1,4 +1,5 @@
 #include "rendering/meshes/GpuInstancedModels.h"
+#include "core/logging/Log.h"
 
 #include <array>
 #include <algorithm>
@@ -72,10 +73,7 @@ void GpuInstancedModels::Init(Renderer* renderer,
         // A level referencing geometry that no longer exists (e.g. a raw .obj after the asset was
         // migrated to .mesh.bin) must not take the process down — report and leave this object
         // inert. Everything below dereferences mesh_.
-        char msg[512];
-        std::snprintf(msg, sizeof(msg),
-            "[GpuInstancedModels] '%s' failed to load; object disabled.\n", modelName_.c_str());
-        OutputDebugStringA(msg);
+        LOG_ERROR(logging::LogCategory::Asset, "instanced model '{}' failed to load; object disabled", modelName_);
         return;
     }
     {   // Resource states for VB/IB

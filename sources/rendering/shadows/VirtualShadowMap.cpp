@@ -1,4 +1,5 @@
 #include "rendering/shadows/VirtualShadowMap.h"
+#include "core/logging/Log.h"
 #include "rendering/core/TextureCreate.h"
 
 #include <cstdint>
@@ -183,7 +184,7 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         "[VSM] allocated: pool %ux%u D16 (%u pages), page table %u entries (%.2f MB pool).\n",
         vsm::kPoolTexels, vsm::kPoolTexels, vsm::kPoolPageCount, vsm::kPageTableEntries,
         (static_cast<double>(vsm::kPoolTexels) * vsm::kPoolTexels * 2.0) / (1024.0 * 1024.0));
-    OutputDebugStringA(buf);
+    logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderShadow, buf);
 }
 
 namespace
@@ -385,22 +386,22 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     auto ok = [](const std::shared_ptr<Material>& m) { return m && m->GetPipelineState(); };
     if (!ok(pageRequestClearMat_) || !ok(pageRequestMat_))
     {
-        OutputDebugStringA("[VSM] page-request PSO creation FAILED (shader compile?).\n");
+        LOG_ERROR(logging::LogCategory::RenderShadow, "VSM page-request PSO creation FAILED (shader compile?)");
         pageRequestClearMat_.reset();
         pageRequestMat_.reset();
     }
     else if (!ok(allocInitMat_) || !ok(allocTouchMat_) || !ok(allocFreeMat_) || !ok(allocMapMat_) || !ok(pageSetupMat_))
     {
-        OutputDebugStringA("[VSM] page-alloc/setup PSO creation FAILED (shader compile?).\n");
+        LOG_ERROR(logging::LogCategory::RenderShadow, "VSM page-alloc/setup PSO creation FAILED (shader compile?)");
         allocInitMat_.reset(); allocTouchMat_.reset(); allocFreeMat_.reset(); allocMapMat_.reset(); pageSetupMat_.reset();
     }
     else
     {
-        OutputDebugStringA("[VSM] page-request + page-alloc + page-setup shaders ready.\n");
+        LOG_INFO(logging::LogCategory::RenderShadow, "VSM page-request + page-alloc + page-setup shaders ready");
     }
     if (!ok(pageClearMat_))
     {
-        OutputDebugStringA("[VSM] page-clear PSO creation FAILED (page cache off -> whole-pool clear).\n");
+        LOG_ERROR(logging::LogCategory::RenderShadow, "VSM page-clear PSO creation FAILED (page cache off -> whole-pool clear)");
         pageClearMat_.reset();
     }
 }
@@ -1104,7 +1105,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             std::snprintf(msg, sizeof(msg),
                           "[VSM] single-draw page render OFF: %s -- using the per-page loop.\n",
                           kReason[reason]);
-            OutputDebugStringA(msg);
+            logging::WriteRaw(logging::LogLevel::Warning, logging::LogCategory::RenderShadow, msg);
             // ...and to a FILE. OutputDebugString alone means nobody sees it: the per-page loop is
             // the slow path, and "why is dragging this mesh 150x slower than flying the camera"
             // cost a long hunt precisely because the engine already knew the answer and whispered it
@@ -1670,9 +1671,9 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
         }
     }
 
-    // DBWIN log — OFF by default (vsm::g_logPageStats), throttled independently of the (faster) stats
-    // sampling so a captured stress/dev run is not flooded. The on-screen readout updates every
-    // sample regardless; this only mirrors it into the debug output when explicitly enabled.
+    // Session-log mirror — OFF by default (vsm::g_logPageStats), throttled independently of the
+    // (faster) stats sampling so a captured stress/dev run is not flooded. The on-screen readout
+    // updates every sample regardless; this only mirrors it into the log when explicitly enabled.
     if (vsm::g_logPageStats && renderer->GetTotalFrameNumber() >= debugLoggedFrame_ + kDbwinLogPeriod)
     {
         char buf[384];
@@ -1682,7 +1683,7 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
             resident, newAlloc, failCount,
             perSpot[0], perSpot[1], perSpot[2], perSpot[3], perSpot[4], perSpot[5], perSpot[6], perSpot[7],
             vsm::kPoolPageCount);
-        OutputDebugStringA(buf);
+        logging::WriteRaw(logging::LogLevel::Debug, logging::LogCategory::RenderShadow, buf);
         debugLoggedFrame_ = renderer->GetTotalFrameNumber();
     }
     debugReadbackState_ = 2;

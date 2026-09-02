@@ -63,7 +63,45 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "windowscodecs.lib")
 
-static void MiOut(const char* msg, void* /*arg*/) { OutputDebugStringA(msg); }
+// mimalloc's output callback (its exit statistics, plus any "mimalloc: warning/error:" it raises
+// from ANY thread). Allocator callback, so the raw no-allocation frontend only. The statistics
+// printer emits one table row as several fragments through separate calls, so fragments are
+// accumulated per thread until a newline and then written as one record; a stray fragment
+// longer than the buffer is written as-is rather than lost.
+static void MiOut(const char* msg, void* /*arg*/)
+{
+    if (msg == nullptr) { return; }
+    static thread_local char line[1024];
+    static thread_local size_t length = 0;
+
+    const auto emit = [](const char* text, size_t count)
+    {
+        while (count != 0 && (text[count - 1] == '\n' || text[count - 1] == '\r')) { --count; }
+        if (count == 0) { return; }
+        const std::string_view view(text, count);
+        const logging::LogLevel level =
+            view.starts_with("mimalloc: error")   ? logging::LogLevel::Error
+          : view.starts_with("mimalloc: warning") ? logging::LogLevel::Warning
+                                                   : logging::LogLevel::Info;
+        logging::WriteRaw(level, logging::LogCategory::Core, view);
+    };
+
+    for (const char* cursor = msg; *cursor != '\0'; ++cursor)
+    {
+        if (*cursor == '\n')
+        {
+            emit(line, length);
+            length = 0;
+            continue;
+        }
+        if (length + 1 >= sizeof(line))
+        {
+            emit(line, length);
+            length = 0;
+        }
+        line[length++] = *cursor;
+    }
+}
 
 namespace
 {
@@ -1223,10 +1261,15 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     {
                         const bool known = ApplySweepValue(scene, appController_.SettingsRef(),
                                                            kv.first, kv.second);
-                        char msg[192];
-                        std::snprintf(msg, sizeof(msg), "[set] %s = %g%s\n", kv.first.c_str(),
-                                      kv.second, known ? "" : "  (UNKNOWN SETTING)");
-                        OutputDebugStringA(msg);
+                        if (known)
+                        {
+                            LOG_INFO(logging::LogCategory::App, "--set {} = {}", kv.first, kv.second);
+                        }
+                        else
+                        {
+                            LOG_WARNING(logging::LogCategory::App, "--set {} = {}: UNKNOWN SETTING (ignored)",
+                                        kv.first, kv.second);
+                        }
                     }
                 }
             }
@@ -1261,16 +1304,16 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                                                       g_sweepSetting, value);
                     if (!known && !sweepNameReported)
                     {
-                        OutputDebugStringA(("[sweep] unknown setting: " + g_sweepSetting + "\n").c_str());
+                        // Once per run on purpose (the flag, not LOG_WARNING_ONCE): the sweep name
+                        // does not change between shots, so every shot would repeat it.
+                        LOG_WARNING(logging::LogCategory::App, "--sweep {}: unknown setting", g_sweepSetting);
                         sweepNameReported = true;
                     }
                     // The camera must not carry the previous value's adaptation into this shot.
                     renderer.Exposure().RequestReset();
                     appliedSweepIndex = shotIndex;
-                    char msg[160];
-                    std::snprintf(msg, sizeof(msg), "[sweep] shot %d: %s = %g\n",
-                        shotIndex, g_sweepSetting.c_str(), value);
-                    OutputDebugStringA(msg);
+                    LOG_INFO(logging::LogCategory::App, "--sweep shot {}: {} = {}", shotIndex,
+                             g_sweepSetting, value);
                 }
 
                 const double delay = shotIndex == 0 ? g_shotDelaySec : g_shotIntervalSec;
@@ -1286,7 +1329,15 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         else { path += suffix; }
                     }
                     const bool ok = Screenshot::SaveBackbufferPng(renderer, path);
-                    OutputDebugStringA(ok ? "[shot] saved\n" : "[shot] FAILED\n");
+                    if (ok)
+                    {
+                        LOG_INFO(logging::LogCategory::App, "screenshot saved: {} (frame {})", path,
+                                 renderer.GetTotalFrameNumber());
+                    }
+                    else
+                    {
+                        LOG_ERROR(logging::LogCategory::App, "screenshot FAILED: {}", path);
+                    }
                     ++shotIndex;
                     if (shotIndex >= g_shotCount)
                     {
@@ -1309,7 +1360,14 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 if (GetTimeSeconds() - profStart >= g_shotDelaySec)
                 {
                     const bool ok = Profiler::Get().DumpOverlay(g_profDumpPath);
-                    OutputDebugStringA(ok ? "[profdump] saved\n" : "[profdump] FAILED\n");
+                    if (ok)
+                    {
+                        LOG_INFO(logging::LogCategory::Profiling, "profiler overlay dump saved: {}", g_profDumpPath);
+                    }
+                    else
+                    {
+                        LOG_ERROR(logging::LogCategory::Profiling, "profiler overlay dump FAILED: {}", g_profDumpPath);
+                    }
                     g_profDumpPath.clear();
                     isRunning_ = false;
                 }
@@ -1355,6 +1413,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
     mi_register_output(MiOut, nullptr);
     mi_collect(true);
-    mi_option_set(mi_option_show_stats, 1);
-    //mi_stats_print(nullptr);
+    // Printed HERE, through the session log, instead of `mi_option_show_stats` at process exit:
+    // by then WinMain's log session is already closed and the table would only reach DBWIN
+    // (which is exactly where it used to vanish on a headless run). The output callback stays
+    // registered so an allocator warning during teardown still lands somewhere.
+    mi_stats_print_out(MiOut, nullptr);
 }

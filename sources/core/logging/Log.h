@@ -163,6 +163,14 @@ namespace logging
         std::wstring_view message,
         std::source_location location = std::source_location::current()) noexcept;
 
+    // Multi-line already-formatted text (shader compiler output, SDK dumps): one record per
+    // line, trailing CR/space trimmed, empty lines skipped. Keeps the session file greppable.
+    void WriteRawLines(
+        LogLevel level,
+        LogCategory category,
+        std::string_view text,
+        std::source_location location = std::source_location::current()) noexcept;
+
     // ---- Self tests ---------------------------------------------------------------------------
 
     // Optional allocation counter for the self tests. Supplied by the harness (mimalloc stats);

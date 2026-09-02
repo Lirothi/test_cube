@@ -11,6 +11,7 @@
 #include "core/Helpers.h"
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>   // std::abort, for the terminate handler that reports a device removal
 #include <exception> // std::set_terminate
 #include <vector>
@@ -133,7 +134,7 @@ void Renderer::Shutdown()
         std::snprintf(line, sizeof(line),
                       "[texcache] %u loads, %u shared (GPU copies avoided), %zu live entries\n",
                       loaded, saved, entries);
-        OutputDebugStringA(line);
+        logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, line);
         if (FILE* f = nullptr; fopen_s(&f, diag::LogPath("texcache.log").c_str(), "w") == 0 && f) {
             std::fputs(line, f);
             std::fclose(f);
@@ -773,7 +774,8 @@ void Renderer::ProbeComputeLaneOnce()
     char msg[288];
     std::snprintf(msg, sizeof(msg), "[caps] compute-lane probe: %s%s | compute queue: %s\n",
                   verdict, detail, GetComputeQueue() ? "present" : "absent");
-    OutputDebugStringA(msg);
+    logging::WriteRaw(std::strcmp(verdict, "OK") == 0 ? logging::LogLevel::Info : logging::LogLevel::Warning,
+                      logging::LogCategory::RenderRhi, msg);
     FILE* f = nullptr;
     if (fopen_s(&f, diag::LogPath("device_caps.log").c_str(), "a") == 0 && f) {
         std::fputs(msg, f);
@@ -1757,6 +1759,8 @@ Renderer::CompiledBarriers* Renderer::CurrentThreadCompiledBarriers() { return t
 // debugger attached, so DBWIN output is simply lost (the same trap as the stress harness's own
 // verdict). Flushed per line — a crash mid-frame must not take the last line with it, which is the
 // one that matters.
+// Logging plan: this sink and DiagLogOnce are the L6 target (callsite ONCE/throttle on the session
+// log replaces them); the direct OutputDebugStringA below is deliberately left until then.
 void Renderer::DiagLog(const char* line) {
     static std::mutex mtx;
     static FILE* f = nullptr;

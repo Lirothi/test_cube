@@ -1,4 +1,5 @@
 #include "app/scene/Scene.h"
+#include "core/logging/Log.h"
 
 #include <memory>
 #include <algorithm>
@@ -974,13 +975,11 @@ void Scene::Tick(float deltaTime) {
                 oceanDir = ocean->GetSimulation()->GetLocalWindDirectionDegrees();
                 oceanForce = ocean->GetSimulation()->GetWindForce01();
             }
-            char buf[256];
-            std::snprintf(buf, sizeof(buf),
-                "[wind] frame=%d time=%.4f active=%d windDir=%.1f strength=%.2f swayAmp=%.3f | ocean=%s oceanDir=%.1f oceanForce=%.2f |dir|=%.4f\n",
+            LOG_DEBUG(logging::LogCategory::Vfx,
+                "wind verify frame={} time={:.4f} active={} windDir={:.1f} strength={:.2f} swayAmp={:.3f} | ocean={} oceanDir={:.1f} oceanForce={:.2f} |dir|={:.4f}",
                 s_windLogFrames, windState_.time, windState_.active ? 1 : 0,
                 windState_.directionDeg, windState_.strength, windState_.swayAmplitude,
                 ocean ? "yes" : "none", oceanDir, oceanForce, len);
-            OutputDebugStringA(buf);
         }
     }
 }

@@ -1,4 +1,5 @@
 #include "app/scene/SceneRenderer.h"
+#include "core/logging/Log.h"
 
 #include <algorithm>
 #include <array>
@@ -211,8 +212,10 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     const bool rtFailed = rtAs_.Manager().BuildFailed() || rtAs_.Bindless().BuildFailed();
     if (rtFailed && !rtFailureLogged_)
     {
-        OutputDebugStringA("[RT] Acceleration-structure or bindless-table allocation failed; disabling RT, "
-                           "falling back to SSR.\n");
+        // Once per scene via the flag (it resets with the AS manager on a level change), which is
+        // narrower than LOG_WARNING_ONCE's once-per-process.
+        LOG_WARNING(logging::LogCategory::RenderRt,
+                    "acceleration-structure or bindless-table allocation failed; disabling RT, falling back to SSR");
         rtFailureLogged_ = true;
     }
     decisions_.rtDebugView = decisions_.rtSupported && !rtFailed && frame.settings.rtDebugView;

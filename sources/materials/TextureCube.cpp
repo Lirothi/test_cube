@@ -1,4 +1,5 @@
 #include "materials/TextureCube.h"
+#include "core/logging/Log.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/TextureCreate.h"
@@ -83,7 +84,7 @@ bool TextureCube::CreateFromDDS(Renderer* r,
     // 1) Read the file
     std::vector<uint8_t> file;
     if (!LoadFileToMemory_(path, file)) {
-        OutputDebugStringW((L"[TextureCube] failed to read: " + path + L"\n").c_str());
+        LOG_ERROR(logging::LogCategory::Asset, "cubemap failed to read: {}", path);
         return false;
     }
 
@@ -94,11 +95,11 @@ bool TextureCube::CreateFromDDS(Renderer* r,
     bool isCube = false;
 
     if (!ParseDDS_(file.data(), file.size(), w, h, mips, arr, fmt, dataOfs, isCube)) {
-        OutputDebugStringW((L"[TextureCube] unsupported DDS (need DX10 cubemap): " + path + L"\n").c_str());
+        LOG_ERROR(logging::LogCategory::Asset, "cubemap: unsupported DDS (need DX10 cubemap): {}", path);
         return false;
     }
     if (!isCube || arr == 0 || (arr % 6) != 0) {
-        OutputDebugStringW(L"[TextureCube] DDS is not a cubemap (arraySize not multiple of 6)\n");
+        LOG_ERROR(logging::LogCategory::Asset, "cubemap: DDS is not a cubemap (arraySize {} not a multiple of 6): {}", arr, path);
         return false;
     }
 

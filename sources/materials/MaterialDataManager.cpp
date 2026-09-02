@@ -1,4 +1,5 @@
 #include "materials/MaterialDataManager.h"
+#include "core/logging/Log.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h" // GltfMaterialDesc + DescribeGltfMaterial (A3)
 
@@ -45,9 +46,7 @@ namespace
                 const std::string value = it->is_string()
                     ? it->get_ref<const std::string&>()
                     : std::string("<non-string>");
-                const std::string warning = "[MaterialDataManager] Unknown shadingModel '" + value +
-                    "'; using defaultLit.\n";
-                OutputDebugStringA(warning.c_str());
+                LOG_WARNING(logging::LogCategory::Asset, "unknown shadingModel '{}'; using defaultLit", value);
             }
         }
 

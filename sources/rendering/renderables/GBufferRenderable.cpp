@@ -1,4 +1,5 @@
 #include "rendering/renderables/GBufferRenderable.h"
+#include "core/logging/Log.h"
 
 #include "rendering/core/GBufferBindingGuard.h"
 
@@ -297,7 +298,8 @@ void GBufferRenderable::BuildSlotMaterials(Renderer* renderer)
             m->GetCBSizeBytesAligned(0, kAlign) == baseCbSize;
         if (!usable && m)
         {
-            OutputDebugStringA("[gbuffer] slot material unusable (PSO/CB layout); falling back to slot 0\n");
+            LOG_WARNING(logging::LogCategory::Render,
+                        "gbuffer slot {} material unusable (PSO/CB layout); falling back to slot 0", i);
         }
         slotGraphicsMaterials_[i] = usable ? m : graphicsMaterial_;
     }

@@ -1,9 +1,11 @@
 # Logging system — execution plan
 
-**Status: L1, L2, L3, L4 COMPLETE, 2026-09-02 (all uncommitted). L5-L9 remain plan-only.** L1
-was delivered by a first pass and then corrected (see its "Review findings"); L2/L3/L4 followed
-in the same session. Gate results and measured numbers are recorded under each step. Next:
-L5a (App/Core: `App.cpp`, `main.cpp`, profiler status messages, allocator callback).
+**Status: L1-L4 COMPLETE and committed (`73cf5bf`); L5 (a-d) COMPLETE (uncommitted),
+2026-09-02. L6-L9 remain plan-only.** L1 was delivered by a first pass and then corrected (see
+its "Review findings"); L2/L3/L4/L5 followed in the same session. Gate results and measured
+numbers are recorded under each step. Next: L6 (delete `Renderer::DiagLog/DiagLogOnce`,
+`Texture2D::LogTextureResolveOnce`'s set and the remaining per-frame diagnostics; measure the
+disabled cost).
 
 This document is written as an execution contract for an AI working in this repository. Each step
 must leave the tree buildable and independently verifiable. Do not silently combine steps, change
@@ -612,6 +614,139 @@ This step is intentionally divisible. Complete and gate one domain at a time:
 
 **Gate per substep:** builds; representative headless path; no duplicate lines in DBWIN; expected
 artifact still produced; no render/image behavior change.
+
+**L5a App/Core — COMPLETE (2026-09-02).** Domain = `sources/app/App.cpp`, `sources/app/main.cpp`,
+`sources/core/**` (of which only `profiling/Profiler.cpp` emitted anything). `sources/app/scene/*`
+is L5b, `sources/app/diagnostics/SceneStress.cpp` writes its own artifact and was handled in L4.
+
+- `App.cpp`: mimalloc output callback `MiOut` -> `WriteRaw` (allocator callback = raw frontend).
+  The statistics printer emits one table row as several fragments through separate calls, so
+  the callback accumulates per thread (thread_local, 1 KiB, no heap) until a newline; level by
+  prefix: `mimalloc: error` -> Error, `mimalloc: warning` -> Warning, else Info under `core`.
+  The exit statistics are printed explicitly at the end of `App::Run` through
+  `mi_stats_print_out(MiOut, ...)` instead of `mi_option_show_stats` at process exit, because
+  by process exit the log session is closed and the table only reached DBWIN (headless: nowhere).
+- `App.cpp` events: `--set <name> = <v>` Info / `... UNKNOWN SETTING (ignored)` Warning;
+  `--sweep <name>: unknown setting` Warning, still once per run via the existing flag (the
+  name does not change between shots, so `LOG_WARNING_ONCE` would have been the wrong tool
+  only by accident); `--sweep shot <i>: <name> = <v>` Info; `screenshot saved: <path> (frame N)`
+  Info / `screenshot FAILED: <path>` Error; `profiler overlay dump saved/FAILED: <path>` under
+  `profiling`.
+- `main.cpp`: `--reimport-manifest: could not read <path>` Error under `asset` (exit code 3
+  unchanged; the RAII session flushes it).
+- `Profiler.cpp`: five `std::printf` (invisible in a Windows-subsystem process) -> `profiling`
+  records: trace capture requested/stop requested/canceled (Info), `trace capture FAILED:
+  cannot write <path>` (Error), `trace saved: <path> (<n> events)` (Info — the
+  artifact-producing event; the Chrome JSON stays the artifact).
+- Direct-output audit of the domain after the step: zero `OutputDebugString` / `printf`.
+
+L5a gate (2026-09-02): Debug/Release/Release_Editor build. Debug run with
+`--sweep=exposure.lowPercentile:0.02,0.35 --set=exposure.compensationEv:-0.15;bogus.setting:1
+--trace=30`: both `--set` records (the unknown one as a Warning with `(App.cpp:1270)`), both
+`--sweep shot` records, `screenshot saved: ... (frame 577)`, `trace capture requested: 30
+frames`, `trace saved: traces/trace_..._debug_000.json (7028 events)` emitted from `Worker14`,
+0 dropped. A second Debug run without `--trace` produced both PNGs, two `screenshot saved`
+records and the mimalloc statistics table assembled row-by-row at the end of the session.
+`--reimport-manifest=nonexistent.mesh.json` still exits 3 and leaves `[ERROR] [asset]
+--reimport-manifest: could not read nonexistent.mesh.json (main.cpp:813)` in its session.
+Release run: 34 records, zero Streamline/Debug lines, `[caps]` + `--set` + `screenshot saved` +
+footer. (Note for anyone combining flags: `--trace=N` ends the run N+30 frames after its
+request regardless of a pending `--shot-count`; pre-existing, not a logging change.)
+
+**L5b Scene/Render — COMPLETE (2026-09-02).** 27 sites in 12 files; every artifact writer next to
+them (`shadow_casters.log`, `vsm.log`, `vsm_pages.log`, `ibl.log`, `texcache.log`,
+`texcreate.log`, `device_caps.log`) is untouched for L7. Mapping:
+
+- `render.shadow`: `ShadowGpuData` rebuilt summary / `VSM allocated` / `shaders ready` Info
+  (`WriteRaw` where the same text also goes to the artifact); the seven PSO-creation failures
+  Error; masked-group overflow Warning; `frame update: n/N casters re-uploaded` Debug behind
+  the existing five-frames-after-rebuild counter; cull validation verdict Info on PASS,
+  Warning on MISMATCH; `single-draw page render OFF: <reason>` Warning (still once per reason
+  via `singleDrawFallbackLogged_`); the page-stats sample Debug behind `vsm::g_logPageStats`
+  and `kDbwinLogPeriod` (the constant keeps its name; the comment now says what it throttles).
+- `render.rt`: AS VRAM report Info (once per level via `asVramLogged_`); "AS/bindless
+  allocation failed; disabling RT, falling back to SSR" Warning once per scene via
+  `rtFailureLogged_` (narrower than ONCE-per-process on purpose); bindless descriptor
+  exhaustion Error **on the transition only** (`if (!buildFailed_)`) — the old line repeated on
+  every registration after exhaustion.
+- `render`: IBL path (`split-sum ON` Info / any fallback to the legacy sky mip chain Warning;
+  `LogIbl` now takes the level), multi-slot instancing batch active `LOG_INFO_ONCE` (replaces
+  the local `loggedOnce` static), gbuffer slot material unusable Warning (per object slot, at
+  material resolution, not per frame), texcache summary Info at shutdown.
+- `render.rhi`: compute-lane probe Info/Warning by verdict; `CreateCommittedResource3`
+  refusal Warning (per call, as before: "a refusal is rare and worth every line").
+- `vfx`: the W1/W2 wind self-check Debug, still exactly the first 8 frames.
+- `asset`: instanced model failed to load; object disabled — Error.
+- Left with a comment: `Renderer::DiagLog` (L6). Left for L5c: `MeshManager.cpp` (5).
+
+L5b gate: Debug/Release/Release_Editor build. Debug `--shot` run: `render.shadow` 9,
+`vfx` 8, `render` 3, `render.rt` 1, `app` 1 records, all with the expected levels; the five
+`frame update` Debug lines stop after frame 4; `shadow_casters.log`, `ibl.log`,
+`texcache.log`, `device_caps.log` updated by the run (`vsm.log`/`vsm_pages.log` are gated on
+conditions this run does not hit, `texcreate.log` absent = no refusals). Release run: 41
+records, zero Debug-level, same Info/Warning set. Surfaced, not caused: `[ShadowGpuData] cull
+validation MISMATCH` reports 5/46 views in Debug and 15/46 in Release — the validation is
+non-deterministic and was previously readable only in `shadow_casters.log`.
+
+**L5c Assets/Materials — COMPLETE (2026-09-02).** 27 sites in 7 files + the importer's logger.
+
+- `Material.cpp` (`render`): shader-compiler output goes through a file-local
+  `LogShaderCompilerOutput` that emits one record per line (DXC and D3DCompile output is
+  multi-line); DXC output is Warning when the compile succeeded (warnings) and Error when it
+  failed, D3DCompile output is only ever seen on failure (Error). `DXC <stage> compile failed
+  for <file> (<entry>); falling back to D3DCompile SM5` Warning; `missing/invalid
+  [RootSignature] in <file>` Error; `material CreateGraphics/CreateCompute failed: <file>` Error
+  (the old lines named no file at all). Shader-cache and PSO-cache summaries Info at shutdown
+  (their artifact files unchanged).
+- `Texture2D.cpp` (`asset`): `<png> -> DDS sibling <dds>` Debug, `unmipped texture (no DDS
+  sibling, WIC fallback)` Warning — both still behind the per-path dedupe set in
+  `LogTextureResolveOnce` (L6 decides its fate); DDS/WIC load failures Error with the path.
+- `TextureCube.cpp`, `MaterialDataManager.cpp`, `FontManager.cpp` (`asset`): read/parse
+  failures Error (the "not a cubemap" line now carries the array size and the path), unknown
+  `shadingModel` Warning, font atlas generation failure Error.
+- `MeshManager.cpp` (`asset`): `[meshbake]` prune/chunk/bake summaries Info (chunk-grid
+  REJECTED Warning, bake FAILED Error) via `WriteRaw`; `failed to read mesh binary` Error;
+  `GltfLog` takes a level: parse/load_buffers/resolve failures Error, group-index fallback
+  Warning, per-file "loaded" and per-material summaries Debug (a level with many un-baked
+  glTF meshes would otherwise print one Info line per mesh per boot).
+- `AssetImporter.cpp` (`asset`): the importer's `Log::Line` keeps `asset_import.log` as the
+  artifact and mirrors each line to the session at a level read off the importer's OWN
+  markers (they are its severity convention): `FAIL`/`FATAL` Error, `SKIPPED`/`WARN`
+  Warning, `=== ... ===` banners Info, everything else Debug. So a Release session keeps the
+  begin/end banners plus failures, exactly the "important begin/end/failure events" the plan
+  asks for, and the DBWIN mirror is gone. Not exercised at runtime here: `--import` writes
+  into the content tree and is the user's call (compile-verified only).
+
+L5c gate: Debug/Release/Release_Editor build. Debug `--shot` run: 61 `asset` records (the
+per-texture DDS-sibling resolutions at Debug, deduped per path as before), `render` 5 including
+the shader-cache/PSO-cache summaries at shutdown. Release run: 49 records, zero Debug-level,
+six `[WARN ] [asset] unmipped texture (no DDS sibling, WIC fallback): textures/ocean/*.png`
+(real, previously DBWIN-only), cache summaries at Info, clean footer. Domain audit after the
+step: zero direct output left in `materials/`, `text/`, `assets/`, `rendering/meshes/`.
+
+**L5d Editor/VFX/Ocean — COMPLETE (2026-09-02).** Five sites in three files; `ocean/` had no
+direct event output (its diagnostics are artifacts).
+
+- Core addition used here and by L5c: `logging::WriteRawLines(level, category, text)` — one
+  record per line of an already-formatted multi-line blob (trailing CR/space trimmed, empty
+  lines skipped). `Material.cpp`'s file-local splitter was replaced by it.
+- `EditorPreviewRenderer.cpp` (`editor`, WITH_EDITOR builds): D3DCompile and root-signature
+  serialisation errors -> `WriteRawLines(Error)`.
+- `ContentBrowserPanel.cpp` (`editor`): "material file <path> was created but could not be
+  registered at runtime" Error (the path was missing from the old line).
+- `ParticleEmitterObject.cpp` (`vfx`): "emitter maxParticles N > sort cap 1024; back-to-front
+  sort disabled" Warning at emitter init; the per-emitter `alive=n/N (rate)` sample Debug,
+  still behind BOTH existing gates (`vfx::g_debugAliveLog` opt-in and the one-second
+  `logAccum_`).
+
+L5d gate: Debug/Release/Release_Editor build (the editor TUs compile in the first and last).
+Debug `--shot` run 392 records / Release 49 records, zero Debug-level in Release, clean
+footers; `--log-stress` re-run in Debug after the core addition: 0 failed checks.
+
+**L5 as a whole — direct-output audit of `sources/` after the step:** exactly ONE
+`OutputDebugString` call site remains, `Renderer::DiagLog` (`Renderer.cpp`), carrying the L6
+comment; zero `printf`-family event output. Every artifact writer next to a migrated line is
+untouched (L7).
 
 ### L6 — Replace ad-hoc dedupe/throttle and remove hot-path logging hazards
 

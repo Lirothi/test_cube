@@ -1,4 +1,5 @@
 #include "materials/Material.h"
+#include "core/logging/Log.h"
 
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/core/GBufferBindingGuard.h"
@@ -1048,7 +1049,12 @@ static HRESULT CompileDXC(const std::wstring& file,
     ComPtr<IDxcBlobUtf16> dummyNameErr;
     result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errs), dummyNameErr.ReleaseAndGetAddressOf());
     if (errs && errs->GetStringLength() > 0) {
-        OutputDebugStringA(errs->GetStringPointer());
+        // Warnings when the compile succeeded, errors when it did not (the caller then says
+        // which stage fell back to D3DCompile).
+        HRESULT compileStatus = S_OK;
+        result->GetStatus(&compileStatus);
+        logging::WriteRawLines(FAILED(compileStatus) ? logging::LogLevel::Error : logging::LogLevel::Warning,
+                               logging::LogCategory::Render, errs->GetStringPointer());
     }
 
     HRESULT status = S_OK;
@@ -1165,7 +1171,8 @@ HRESULT Material::CompileWithIncludes(const std::wstring& file,
     HRESULT hr = D3DCompileFromFile(p.c_str(), macros.empty() ? nullptr : macros.data(),
         &inc, entry, target, flags, 0, &outBlob, &errs);
     if (FAILED(hr) && errs) {
-        OutputDebugStringA((const char*)errs->GetBufferPointer());
+        logging::WriteRawLines(logging::LogLevel::Error, logging::LogCategory::Render,
+                               (const char*)errs->GetBufferPointer());
     }
     return hr;
 }
@@ -1218,7 +1225,8 @@ void Material::CreateGraphics(Renderer* r, const GraphicsDesc& gd)
     std::vector<std::wstring> inc;
 
     if (!BuildGraphicsPSO(r, gd, rootSignature_, pipelineState_, vertexShader_, pixelShader_, params, inc)) {
-        OutputDebugStringA("[Material] CreateGraphics failed\n");
+        LOG_ERROR(logging::LogCategory::Render, "material CreateGraphics failed: {} (vs={} ps={})",
+                  gd.shaderFile, gd.vsEntry, gd.psEntry);
         return;
     }
     {
@@ -1247,7 +1255,7 @@ void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
     std::vector<std::wstring> inc;
 
     if (!BuildComputePSO(r, cd, rs, pso, params, inc)) {
-        OutputDebugStringA("[Material] CreateCompute failed\n");
+        LOG_ERROR(logging::LogCategory::Render, "material CreateCompute failed: {} (cs={})", cd.shaderFile, cd.csEntry);
         return;
     }
 
@@ -1638,7 +1646,8 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
 
     // SM6+ via DXC
     if (FAILED(CompileDXC(gd.shaderFile, gd.vsEntry, "vs", r->GetDevice(), gd.defines, vs, incVS))) {
-        OutputDebugStringA("[Material] DXC VS failed, fallback to D3DCompile SM5\n");
+        LOG_WARNING(logging::LogCategory::Render, "DXC VS compile failed for {} ({}); falling back to D3DCompile SM5",
+                    gd.shaderFile, gd.vsEntry);
         UINT cf =
 #ifdef _DEBUG
         (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
@@ -1650,7 +1659,8 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
         }
     }
     if (FAILED(CompileDXC(gd.shaderFile, gd.psEntry, "ps", r->GetDevice(), gd.defines, ps, incPS))) {
-        OutputDebugStringA("[Material] DXC PS failed, fallback to D3DCompile SM5\n");
+        LOG_WARNING(logging::LogCategory::Render, "DXC PS compile failed for {} ({}); falling back to D3DCompile SM5",
+                    gd.shaderFile, gd.psEntry);
         UINT cf =
 #ifdef _DEBUG
         (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
@@ -1674,7 +1684,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     // only PS (or has no embedded RS) therefore fails the build below.
     ComPtr<ID3DBlob> embeddedRS = ExtractEmbeddedRootSig(vs.Get());
     if (!embeddedRS || !BuildRootFromEmbedded(r->GetDevice(), embeddedRS.Get(), outRS, outParams)) {
-        OutputDebugStringW((L"[Material] missing/invalid [RootSignature] in " + gd.shaderFile + L"\n").c_str());
+        LOG_ERROR(logging::LogCategory::Render, "missing/invalid [RootSignature] in {} (vs={})", gd.shaderFile, gd.vsEntry);
         return false;
     }
 
@@ -1784,7 +1794,8 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     ComPtr<ID3DBlob> cs;
     std::vector<std::wstring> incCS;
     if (FAILED(CompileDXC(cd.shaderFile, cd.csEntry, "cs", r->GetDevice(), cd.defines, cs, incCS))) {
-        OutputDebugStringA("[Material] DXC CS failed, fallback to D3DCompile SM5\n");
+        LOG_WARNING(logging::LogCategory::Render, "DXC CS compile failed for {} ({}); falling back to D3DCompile SM5",
+                    cd.shaderFile, cd.csEntry);
         UINT cf =
 #ifdef _DEBUG
         (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
@@ -1803,7 +1814,7 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     // attribute (extracted from the CS blob, deserialized into rootParams_).
     ComPtr<ID3DBlob> embeddedRS = ExtractEmbeddedRootSig(cs.Get());
     if (!embeddedRS || !BuildRootFromEmbedded(r->GetDevice(), embeddedRS.Get(), outRS, outParams)) {
-        OutputDebugStringW((L"[Material] missing/invalid [RootSignature] in " + cd.shaderFile + L"\n").c_str());
+        LOG_ERROR(logging::LogCategory::Render, "missing/invalid [RootSignature] in {} (cs={})", cd.shaderFile, cd.csEntry);
         return false;
     }
 
@@ -2015,7 +2026,7 @@ void MaterialManager::Clear()
     std::snprintf(line, sizeof(line),
         "[shadercache] %u hits, %u misses, %u writes\n",
         hits, attempts >= hits ? attempts - hits : 0u, writes);
-    OutputDebugStringA(line);
+    logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, line);
     if (FILE* file = nullptr;
         fopen_s(&file, diag::LogPath("shader_cache.log").c_str(), "w") == 0 && file)
     {
@@ -2038,7 +2049,7 @@ void MaterialManager::Clear()
         psoStores, psoRejects, static_cast<double>(psoLoadUs) / 1000.0,
         static_cast<double>(psoCreateUs) / 1000.0,
         static_cast<unsigned long long>(psoBytes));
-    OutputDebugStringA(psoLine);
+    logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, psoLine);
     if (FILE* file = nullptr;
         fopen_s(&file, diag::LogPath("pso_cache.log").c_str(), "w") == 0 && file)
     {

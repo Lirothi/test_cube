@@ -1,4 +1,5 @@
 #include "assets/AssetImporter.h"
+#include "core/logging/Log.h"
 
 // Vendored DirectXTex (third_party/DirectXTex) — CPU-path only (no D3D11/D3D12/DirectCompute
 // translation units are compiled in; offline compression runs entirely on the CPU).
@@ -43,11 +44,30 @@ class Log
 public:
     explicit Log(const std::string& path) : file_(path, std::ios::trunc) {}
 
+    // The artifact (asset_import.log) gets every line. The session log gets it at a level read
+    // off the importer's own markers — they ARE its severity convention: "FAIL "/"FATAL" lines
+    // are errors, "SKIPPED"/"WARN" lines are warnings, the "=== ... ===" banners are the
+    // begin/end events, everything else is progress and stays Debug (dropped by a Release
+    // session, kept by the artifact).
     void Line(const std::string& s)
     {
         std::lock_guard<std::mutex> lk(mu_);
         if (file_) { file_ << s << '\n'; file_.flush(); }
-        OutputDebugStringA(("[import] " + s + "\n").c_str());
+        logging::WriteRaw(LevelOf(s), logging::LogCategory::Asset, s);
+    }
+
+    static logging::LogLevel LevelOf(const std::string& s)
+    {
+        if (s.find("FAIL") != std::string::npos || s.find("FATAL") != std::string::npos) {
+            return logging::LogLevel::Error;
+        }
+        if (s.find("SKIPPED") != std::string::npos || s.find("WARN") != std::string::npos) {
+            return logging::LogLevel::Warning;
+        }
+        if (s.rfind("===", 0) == 0) {
+            return logging::LogLevel::Info;
+        }
+        return logging::LogLevel::Debug;
     }
 
 private:

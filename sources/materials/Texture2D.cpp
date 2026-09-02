@@ -1,4 +1,5 @@
 #include "materials/Texture2D.h"
+#include "core/logging/Log.h"
 
 #include "core/diagnostics/BootProfile.h"
 
@@ -75,10 +76,12 @@ static void LogTextureResolveOnce(const std::wstring& src, const std::wstring& d
     if (!seen.insert(src).second) {
         return;
     }
+    // Per-path dedupe (the set above) is kept for now; the plan's L6 decides whether the
+    // callsite primitives replace it.
     if (useDds) {
-        OutputDebugStringW((L"[Texture2D] DDS sibling: " + src + L" -> " + dds + L"\n").c_str());
+        LOG_DEBUG(logging::LogCategory::Asset, "texture {} -> DDS sibling {}", src, dds);
     } else {
-        OutputDebugStringW((L"[Texture2D] unmipped texture (no DDS sibling, WIC fallback): " + src + L"\n").c_str());
+        LOG_WARNING(logging::LogCategory::Asset, "unmipped texture (no DDS sibling, WIC fallback): {}", src);
     }
 }
 
@@ -658,7 +661,7 @@ bool Texture2D::LoadFromFileUncached_(Renderer* renderer,
     // DDS uses a separate path
     if (EndsWithNoCase(d.path, L".dds")) {
         if (!CreateFromDDS_(renderer, uploadCmd, d, keepAlive)) {
-            OutputDebugStringW((L"[Texture2D] DDS load failed: " + d.path + L"\n").c_str());
+            LOG_ERROR(logging::LogCategory::Asset, "DDS texture load failed: {}", d.path);
             return false;
         }
         return true;
@@ -681,7 +684,7 @@ bool Texture2D::LoadFromFileUncached_(Renderer* renderer,
         }
     }
     if (!haveMips && !DecodeToMips(d, mips, w, h)) {
-        OutputDebugStringW((L"[Texture2D] WIC load failed: " + d.path + L"\n").c_str());
+        LOG_ERROR(logging::LogCategory::Asset, "WIC texture load failed: {}", d.path);
         return false;
     }
 

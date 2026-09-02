@@ -1,4 +1,5 @@
 #include "rendering/renderables/InstancedDrawBatch.h"
+#include "core/logging/Log.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -37,15 +38,9 @@ void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*>::const_ite
         if (inst && inst->InstanceSlotCount() > 1)
         {
             leadInst_ = inst;
-            static bool loggedOnce = false; // diagnosable without stats HUD (headless runs)
-            if (!loggedOnce)
-            {
-                loggedOnce = true;
-                char buf[128];
-                sprintf_s(buf, "[instancing] multi-slot batch active: %zu instances x %zu submeshes\n",
+            // Once per process: diagnosable without the stats HUD (headless runs).
+            LOG_INFO_ONCE(logging::LogCategory::Render, "multi-slot instancing batch active: {} instances x {} submeshes",
                           members_.size(), mesh_->GetSubmeshCount());
-                OutputDebugStringA(buf);
-            }
         }
     }
 

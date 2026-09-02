@@ -1,4 +1,5 @@
 #include "text/FontManager.h"
+#include "core/logging/Log.h"
 #include "rendering/core/Renderer.h"
 #include "text/FontGenerator.h"
 #include "input/InputManager.h"
@@ -160,6 +161,6 @@ void FontManager::Tick()
     }
 
     if (!generator.Generate(params)) {
-        OutputDebugStringA("Font generation failed\n");
+        LOG_ERROR(logging::LogCategory::Asset, "font atlas generation failed");
     }
 }
