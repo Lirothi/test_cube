@@ -284,6 +284,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         settings.debugTexMode = true;
     }
         oceanControlsWindow_.Draw(renderer);
+        logWindow_.Draw(); // returns immediately unless open (logging plan L8 cost rule)
         DrawTraceControls();
         return false;
     }
@@ -797,6 +798,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::Checkbox("Ocean controls [F7]", &oceanControlsOpen))
                 {
                     oceanControlsWindow_.SetOpen(oceanControlsOpen);
+                }
+                bool logWindowOpen = logWindow_.IsOpen();
+                if (ImGui::Checkbox("Session log [F3]", &logWindowOpen))
+                {
+                    logWindow_.SetOpen(logWindowOpen);
                 }
 #if WITH_EDITOR
                 bool levelEditorOpen = editorController.IsOpen();
@@ -1997,6 +2003,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
     textureDebugViewer_.Draw(renderer, GetOceanShoreDepthResource());
     oceanControlsWindow_.Draw(renderer);
+    logWindow_.Draw();
     DrawTraceControls();
     return graphicsSettingsDirty;
 }

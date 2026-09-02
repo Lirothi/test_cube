@@ -927,6 +927,25 @@ namespace logging
         }
     }
 
+    bool GetSessionEpoch(std::int64_t* qpcStart, std::int64_t* qpcFrequency) noexcept
+    {
+        StateGuard guard;
+        if (guard.state == nullptr)
+        {
+            if (qpcStart != nullptr) { *qpcStart = 0; }
+            if (qpcFrequency != nullptr) { *qpcFrequency = 0; }
+            return false;
+        }
+        if (qpcStart != nullptr) { *qpcStart = guard.state->clock.qpcStart; }
+        if (qpcFrequency != nullptr) { *qpcFrequency = guard.state->clock.qpcFrequency; }
+        return true;
+    }
+
+    std::size_t GetThreadName(std::uint32_t threadId, char* out, std::size_t capacity) noexcept
+    {
+        return g_threadNames.Get(threadId, out, capacity);
+    }
+
     std::size_t CopyRecentRecords(
         std::uint64_t cursor, LogRecord* out, std::size_t maxCount, std::uint64_t* newCursor) noexcept
     {

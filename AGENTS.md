@@ -35,7 +35,9 @@ the newest one. Line shape:
 00001234 2026-09-02 01:14:22.381 +12.443s [WARN ] [render.rt] [frame=1842] [tid=7632/Worker2] message (File.cpp:123)
 ```
 
-A missing `session end: clean shutdown` footer means the process did not shut down cleanly. Use
+A missing `session end: clean shutdown` footer means the process did not shut down cleanly. In
+the app, **F3** opens the Session Log viewer (filters by level/category/text, pause, copy,
+source location); `--log-window` opens it at boot so a `--shot` can capture it. Use
 `LOG_INFO(logging::LogCategory::Scene, "Loaded {}", path)` and friends (`core/logging/Log.h`);
 never `OutputDebugString` or `printf` for events. Gates for lines evaluated every frame:
 `LOG_*_ONCE` (once per process), `LOG_*_EVERY_N(n, ...)`, `LOG_*_THROTTLED(duration, ...)`,

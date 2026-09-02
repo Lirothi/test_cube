@@ -129,6 +129,14 @@ namespace logging
     std::size_t CopyRecentRecords(
         std::uint64_t cursor, LogRecord* out, std::size_t maxCount, std::uint64_t* newCursor) noexcept;
 
+    // For a viewer to render a record's QPC stamp as session-relative time: the session's QPC
+    // origin and the counter frequency. False (and zeros) when the logger is not running.
+    bool GetSessionEpoch(std::int64_t* qpcStart, std::int64_t* qpcFrequency) noexcept;
+
+    // Name published with SetCurrentThreadName for `threadId`; 0 (and an empty string) when
+    // that thread never named itself. Try-lock inside, so never blocks.
+    std::size_t GetThreadName(std::uint32_t threadId, char* out, std::size_t capacity) noexcept;
+
     // ---- Emergency path -----------------------------------------------------------------------
 
     // Writes one record immediately: DBWIN first, then an unbuffered append to the session file.

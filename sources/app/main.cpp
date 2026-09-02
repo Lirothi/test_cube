@@ -654,6 +654,10 @@ int WINAPI WinMain(
             else if (is("quality"))      { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eMaxQuality); }
             else if (is("dlaa"))         { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eDLAA); }
         }
+        // "--log-window": open the session-log viewer at boot (see App.h).
+        if (std::strstr(lpCmdLine, "--log-window")) {
+            g_bootLogWindow = true;
+        }
         // "--no-hud": empty HUD text buffer, so a --shot carries no frame-varying FPS readout.
         if (std::strstr(lpCmdLine, "--no-hud")) {
             g_hudHidden = true;

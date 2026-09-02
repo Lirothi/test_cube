@@ -48,6 +48,9 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     const bool toggleOceanControls =
         input.WasActionPressed("ToggleOceanControls") ||
         ImGui::IsKeyPressed(ImGuiKey_F7, false);
+    const bool toggleLogWindow =
+        input.WasActionPressed("ToggleLogWindow") ||
+        ImGui::IsKeyPressed(ImGuiKey_F3, false);
 
     if (toggleDeveloperWindow)
     {
@@ -66,6 +69,15 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     if (toggleOceanControls)
     {
         developerWindow_.ToggleOceanControls();
+    }
+    if (toggleLogWindow)
+    {
+        developerWindow_.ToggleLogWindow();
+    }
+    if (g_bootLogWindow)
+    {
+        g_bootLogWindow = false; // once: "--log-window" opens the viewer for a headless capture
+        developerWindow_.ToggleLogWindow();
     }
 
     if (!uiCapturingKeyboard)

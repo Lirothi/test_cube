@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "app/scene/SceneFrameData.h"
+#include "app/ui/LogWindow.h"
 #include "ocean/OceanControlsWindow.h"
 #include "rendering/debug/TextureDebugViewer.h"
 #include "ui/ImGuiWindowUtils.h"
@@ -26,6 +27,7 @@ public:
     void ToggleTextureInspector();
     void ToggleOceanControls() { oceanControlsWindow_.ToggleOpen(); }
     void OpenOceanControls() { oceanControlsWindow_.SetOpen(true); }
+    void ToggleLogWindow() { logWindow_.ToggleOpen(); }
 
     // Scene is non-const because the CSM tab edits CascadeShadowConfig live (S0.2); everything
     // else here still reads through const accessors.
@@ -45,6 +47,7 @@ private:
 
     TextureDebugViewer textureDebugViewer_;
     OceanControlsWindow oceanControlsWindow_;
+    LogWindow logWindow_;
     ui::ImGuiWindowMaximizeState windowMaximize_;
     std::vector<std::string> availableLevelPaths_;
     std::string levelChangeStatus_;

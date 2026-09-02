@@ -39,6 +39,7 @@ uint32_t g_traceFrames = 0;
 int g_bootDlssMode = -1;
 // Empty-HUD capture mode; see App.h. Set by main.cpp from "--no-hud".
 bool g_hudHidden = false;
+bool g_bootLogWindow = false;
 // Single-process settings sweep; see App.h. Set by main.cpp from "--sweep=<setting>:<v0>,...".
 std::string g_sweepSetting;
 std::vector<float> g_sweepValues;

@@ -1,9 +1,9 @@
 # Logging system — execution plan
 
-**Status: L1-L6 COMPLETE and committed; L7 COMPLETE (uncommitted), 2026-09-02. L8-L9 remain
+**Status: L1-L7 COMPLETE and committed; L8 COMPLETE (uncommitted), 2026-09-02. L9 remains
 plan-only.** L1 was delivered by a first pass and then corrected (see its "Review findings");
-L2-L7 followed in the same session. Gate results and measured numbers are recorded under each
-step. Next: L8 (ImGui log viewer over `logging::CopyRecentRecords`).
+L2-L8 followed in the same session. Gate results and measured numbers are recorded under each
+step. Next: L9 (retention, repository check, final cleanup).
 
 This document is written as an execution contract for an AI working in this repository. Each step
 must leave the tree buildable and independently verifiable. Do not silently combine steps, change
@@ -957,6 +957,54 @@ formatting. When open, it requests only records newer than its last sequence cur
 
 **Gate:** Debug and Release_Editor build; 10k-record stress remains responsive; category/search
 filters are correct; close-window 120-frame trace shows no `AppController` regression.
+
+**Status: COMPLETE (2026-09-02).**
+
+**Implemented result:**
+
+- `sources/app/ui/LogWindow.h/.cpp`: a dedicated window ("Session Log", **F3**, also a checkbox
+  in Developer Controls > Debug and `--log-window` at boot), owned by `DeveloperWindow` like the
+  ocean controls and drawn from the same two sites. Core additions for it (no ImGui in core):
+  `logging::GetSessionEpoch` (QPC origin + frequency, so the viewer renders session-relative
+  time) and `logging::GetThreadName` (try-lock, never blocks).
+- Cost rule, literally: `Draw()` is `if (!open_) return;` first — a closed viewer performs no
+  snapshot, copy, filter or format. Open, it pulls only records past its cursor
+  (`CopyRecentRecords`, 256 per batch), converts each to a compact `Entry` (header fields,
+  thread name resolved once at pull, `std::string` message), keeps at most 8192 (twice the core
+  ring; the oldest half is dropped in one move), and rebuilds the visible index only when the
+  entry set or a filter changed. Rows render through `ImGuiListClipper`.
+- UI: Pause (stops pulling; on resume the cursor picks up what the ring still holds and the
+  status line says how many records the ring overwrote meanwhile), Auto-scroll, Details pane
+  (source file:line, function, full text, flags), Clear view (view only — file and ring
+  untouched), Copy visible / Copy selected (the same one-line shape as the session file),
+  per-level toggles (coloured), a Categories popup with All/None, case-insensitive message
+  search, counters (records/visible, warnings, errors — over all retained entries — and the
+  logger's dropped total), the exact session path with Copy path, and "Emit 10k": 10 000 real
+  records through the producer path across all levels/categories, the plan's responsiveness
+  check reachable from the window itself. Rows and the selected row show the source location
+  in a tooltip. No open-folder action: the codebase has no ShellExecute convention to follow.
+- Levels colour the whole row (Warning amber, Error red, Fatal magenta, Debug/Trace grey);
+  `[truncated]` is flagged inline.
+
+**Gate results (2026-09-02):**
+
+- Debug, Release, Release_Editor build.
+- Rendering verified from a headless capture (`--log-window --shot=...`, Debug): the window
+  shows toolbar, level toggles, path, counters (314 records, 17 warnings, 0 errors,
+  0 dropped), the table with coloured rows, auto-scrolled to the newest records, details
+  pane — see the run's PNG; the process exits 0 with a clean footer.
+- Release `--profdump` (wind_test, `--wind-freeze --no-hud`, ~2000 frames each):
+  - viewer closed: `AppController::Tick` **0.006 ms** avg (L6 baseline before the viewer
+    existed: 0.010) — no regression; 59 session records.
+  - viewer closed under `--barrier-flip-trace`: **118 777 records in 10 s (~12 000/s,
+    ~59 per frame), 0 dropped**, `AppController::Tick` 0.006 ms — the flood itself adds
+    ~0.17 ms to `Whole Cycle` (the trace's own formatting), the closed viewer nothing.
+  - viewer open under the same flood: `AppController::Tick` **0.069 ms avg, 0.161 max** while
+    pulling ~59 records/frame, filtering up to 8192 entries and rendering; 117 950 records,
+    0 dropped. That is the "10k-record stress remains responsive" bar, exceeded ten-fold.
+- Filter correctness: `Passes()` is one pure function (level toggle AND category toggle AND
+  case-insensitive substring); the capture shows the default all-pass state. Toggling them
+  interactively is the user's check — it is UI.
 
 ### L9 — Retention, enforcement and final cleanup
 
