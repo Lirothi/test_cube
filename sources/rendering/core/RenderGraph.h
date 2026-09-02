@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include "core/diagnostics/DiagPaths.h" // step 7: barrier dump path
+#include "core/diagnostics/ArtifactWriter.h" // step 7: barrier dump artifact
 #include <initializer_list>
 #include <iterator>
 #include <memory>
@@ -1067,9 +1067,11 @@ private:
     // Step 7 acceptance: the compiled barrier arrays, written out for a before/after diff.
     void DumpCompiledBarriers(const tc::inl_vector<FlatNode, MaxPasses>& schedule) const
     {
-        FILE* f = nullptr;
-        if (fopen_s(&f, diag::LogPath("barrier_dump.log").c_str(), "a") != 0 || !f) { return; }
-        std::fprintf(f, "== compiled barriers: %u ==\n", prepare_->barrierCount);
+        // Per run: the first graph to dump truncates, the others append, so one run's dumps
+        // sit in one file and the before/after diff is between two files, not two halves.
+        diag::ArtifactFile f("barrier_dump.log", diag::ArtifactMode::PerRunTruncate);
+        if (!f) { return; }
+        f.Printf("== compiled barriers: %u ==\n", prepare_->barrierCount);
         auto dumpPass = [&](size_t passIdx) {
             for (std::uint32_t pt = 0; pt < kResourceUsesPerPassBudget; ++pt) {
                 const auto& sl = prepare_->barrierPoints[passIdx][pt];
@@ -1077,10 +1079,10 @@ private:
                     const D3D12_RESOURCE_BARRIER& b = prepare_->barrierArena[sl.begin + i];
                     char label[160];
                     render::DebugObjectLabel(b.Transition.pResource, label, sizeof(label));
-                    std::fprintf(f, "%ls point=%u res=%s 0x%X->0x%X\n",
-                                 RenderPassToWString(passes_[passIdx].name).data(), pt, label,
-                                 static_cast<unsigned>(b.Transition.StateBefore),
-                                 static_cast<unsigned>(b.Transition.StateAfter));
+                    f.Printf("%ls point=%u res=%s 0x%X->0x%X\n",
+                             RenderPassToWString(passes_[passIdx].name).data(), pt, label,
+                             static_cast<unsigned>(b.Transition.StateBefore),
+                             static_cast<unsigned>(b.Transition.StateAfter));
                 }
             }
         };
@@ -1089,7 +1091,6 @@ private:
             if (gid == kNoGroup) { dumpPass(n.pass); continue; }
             for (size_t m : groups_[gid]) { dumpPass(m); }
         }
-        std::fclose(f);
     }
 
     // Is every input the compile reads identical to the snapshot the cached output was built from?

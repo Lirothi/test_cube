@@ -3,7 +3,7 @@
 #include "core/diagnostics/BootProfile.h"
 
 #include <chrono>
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include "core/logging/Log.h"
 #include "rendering/core/RendererInvariantFailure.h"
 #include "rendering/core/BarrierTranslation.h"
@@ -135,10 +135,7 @@ void Renderer::Shutdown()
                       "[texcache] %u loads, %u shared (GPU copies avoided), %zu live entries\n",
                       loaded, saved, entries);
         logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, line);
-        if (FILE* f = nullptr; fopen_s(&f, diag::LogPath("texcache.log").c_str(), "w") == 0 && f) {
-            std::fputs(line, f);
-            std::fclose(f);
-        }
+        diag::WriteArtifact("texcache.log", diag::ArtifactMode::AtomicReplace, line);
     }
     materialDataManager_.ClearAll();
     Texture2D::ClearCache();
@@ -480,11 +477,11 @@ void Renderer::DumpDebugLayerMessages(const char* context)
     if (count == 0) {
         return;
     }
-    FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath("invariant_failure.log").c_str(), "a") != 0 || !f) {
+    diag::ArtifactFile f("invariant_failure.log", diag::ArtifactMode::Append);
+    if (!f) {
         return;
     }
-    std::fprintf(f, "-- debug layer (%s), %llu message(s) --\n", context,
+    f.Printf("-- debug layer (%s), %llu message(s) --\n", context,
                  static_cast<unsigned long long>(count));
     // The LAST few are the ones about the command that just failed; earlier ones are usually
     // warnings from setup that have already been read once.
@@ -496,11 +493,11 @@ void Renderer::DumpDebugLayerMessages(const char* context)
         scratch.assign(bytes, 0);
         auto* m = reinterpret_cast<D3D12_MESSAGE*>(scratch.data());
         if (FAILED(infoQueue->GetMessage(i, m, &bytes))) { continue; }
-        std::fprintf(f, "  [sev=%d id=%d] %.*s\n", static_cast<int>(m->Severity),
+        f.Printf("  [sev=%d id=%d] %.*s\n", static_cast<int>(m->Severity),
                      static_cast<int>(m->ID), static_cast<int>(m->DescriptionByteLength),
                      m->pDescription);
     }
-    std::fclose(f);
+    f.Close();
     // The caller aborts right after this, so the pointer to the artifact goes the emergency way.
     char line[256];
     std::snprintf(line, sizeof(line),
@@ -520,20 +517,19 @@ void Renderer::ReportDeviceRemovalOnce()
         return;
     }
     s_deviceRemovalReported = true;
-    FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath("device_removed.log").c_str(), "a") == 0 && f) {
+    diag::ArtifactFile f("device_removed.log", diag::ArtifactMode::Append);
+    if (f) {
         // The reason CLASS is most of the answer: DXGI_ERROR_DEVICE_HUNG (0x887A0006) is a wait
         // whose signal never came, DXGI_ERROR_DEVICE_RESET (0x887A0007) a fault in this app's own
         // work, DXGI_ERROR_DRIVER_INTERNAL_ERROR (0x887A0020) a malformed command reaching the
         // driver. The async state and the queue counters say which topology was live when it died.
-        std::fprintf(f,
+        f.Printf(
             "device removed: reason=0x%08X frame=%llu asyncCompute=%s computeLists=%u crossQueueWaits=%u\n",
             static_cast<unsigned>(reason),
             static_cast<unsigned long long>(totalFrameNumber_),
             render::g_noAsyncCompute ? "off" : "on",
             render::g_asyncComputeLists, render::g_crossQueueWaits);
         DumpDredBreadcrumbs(f);
-        std::fclose(f);
     }
     // One central record for the removal itself. Emergency rather than queued: this runs from
     // the terminate handler as often as from BeginFrame, and either way the process is about to
@@ -586,12 +582,12 @@ static const char* DredOpName(D3D12_AUTO_BREADCRUMB_OP op)
     return other;
 }
 
-void Renderer::DumpDredBreadcrumbs(FILE* f)
+void Renderer::DumpDredBreadcrumbs(diag::ArtifactFile& f)
 {
     if (!f || !GetDevice()) { return; }
     Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedData> dred;
     if (FAILED(GetDevice()->QueryInterface(IID_PPV_ARGS(&dred)))) {
-        std::fprintf(f, "  DRED: unavailable (run with --dred to arm it before device creation)\n");
+        f.Printf("  DRED: unavailable (run with --dred to arm it before device creation)\n");
         return;
     }
 
@@ -604,7 +600,7 @@ void Renderer::DumpDredBreadcrumbs(FILE* f)
             // A node whose last completed op EQUALS its op count finished; the interesting ones are
             // those that did not, and they are what a hang leaves behind.
             const bool finished = (last == n->BreadcrumbCount);
-            std::fprintf(f, "  DRED %s list='%ls' queue='%ls' ops=%u lastCompleted=%u\n",
+            f.Printf("  DRED %s list='%ls' queue='%ls' ops=%u lastCompleted=%u\n",
                          finished ? "done   " : "PENDING",
                          n->pCommandListDebugNameW ? n->pCommandListDebugNameW : L"<unnamed>",
                          n->pCommandQueueDebugNameW ? n->pCommandQueueDebugNameW : L"<unnamed>",
@@ -615,30 +611,30 @@ void Renderer::DumpDredBreadcrumbs(FILE* f)
                 const UINT lo = last > 2u ? last - 2u : 0u;
                 const UINT hi = (last + 3u) < n->BreadcrumbCount ? (last + 3u) : n->BreadcrumbCount;
                 for (UINT i = lo; i < hi; ++i) {
-                    std::fprintf(f, "      op[%u]%s %s\n", i, (i == last) ? " <-- STALLED HERE" : "",
+                    f.Printf("      op[%u]%s %s\n", i, (i == last) ? " <-- STALLED HERE" : "",
                                  DredOpName(n->pCommandHistory[i]));
                 }
             }
             ++printed;
         }
-        if (printed == 0) { std::fprintf(f, "  DRED: no breadcrumb nodes\n"); }
+        if (printed == 0) { f.Printf("  DRED: no breadcrumb nodes\n"); }
     }
 
     D3D12_DRED_PAGE_FAULT_OUTPUT pf{};
     if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&pf))) {
-        std::fprintf(f, "  DRED page fault VA=0x%llx\n",
+        f.Printf("  DRED page fault VA=0x%llx\n",
                      static_cast<unsigned long long>(pf.PageFaultVA));
         int printed = 0;
         for (const D3D12_DRED_ALLOCATION_NODE* a = pf.pHeadExistingAllocationNode;
              a != nullptr && printed < 8; a = a->pNext, ++printed) {
-            std::fprintf(f, "    existing alloc '%ls' type=%d\n",
+            f.Printf("    existing alloc '%ls' type=%d\n",
                          a->ObjectNameW ? a->ObjectNameW : L"<unnamed>",
                          static_cast<int>(a->AllocationType));
         }
         printed = 0;
         for (const D3D12_DRED_ALLOCATION_NODE* a = pf.pHeadRecentFreedAllocationNode;
              a != nullptr && printed < 8; a = a->pNext, ++printed) {
-            std::fprintf(f, "    recently freed '%ls' type=%d\n",
+            f.Printf("    recently freed '%ls' type=%d\n",
                          a->ObjectNameW ? a->ObjectNameW : L"<unnamed>",
                          static_cast<int>(a->AllocationType));
         }
@@ -777,11 +773,7 @@ void Renderer::ProbeComputeLaneOnce()
                   verdict, detail, GetComputeQueue() ? "present" : "absent");
     logging::WriteRaw(std::strcmp(verdict, "OK") == 0 ? logging::LogLevel::Info : logging::LogLevel::Warning,
                       logging::LogCategory::RenderRhi, msg);
-    FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath("device_caps.log").c_str(), "a") == 0 && f) {
-        std::fputs(msg, f);
-        std::fclose(f);
-    }
+    diag::WriteArtifact("device_caps.log", diag::ArtifactMode::PerRunTruncate, msg);
 }
 
 void Renderer::EndFrame() {
@@ -1498,17 +1490,16 @@ void Renderer::ExecuteTimelineAndPresent() {
 void Renderer::DumpSubmitOrder(const char* queueName,
                                const std::vector<ID3D12CommandList*>& lists)
 {
-    FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath("submit_order.log").c_str(), "a") != 0 || !f) {
+    diag::ArtifactFile f("submit_order.log", diag::ArtifactMode::PerRunTruncate);
+    if (!f) {
         return;
     }
-    std::fprintf(f, "== queue=%s count=%zu ==\n", queueName, lists.size());
+    f.Printf("== queue=%s count=%zu ==\n", queueName, lists.size());
     for (size_t i = 0; i < lists.size(); ++i) {
         char label[160] = {};
         render::DebugObjectLabel(lists[i], label, sizeof(label));
-        std::fprintf(f, "%3zu %s\n", i, label);
+        f.Printf("%3zu %s\n", i, label);
     }
-    std::fclose(f);
 }
 
 // Async-compute plan step 2 — submit one empty COMPUTE command list to the async queue.
@@ -1758,19 +1749,18 @@ Renderer::CompiledBarriers* Renderer::CurrentThreadCompiledBarriers() { return t
 
 // Barrier-diagnostics artifact, shared by --barrier-flip-trace and --barrier-cmp. A FILE because
 // the --scene-stress runs that reproduce the residual mismatches have no debugger attached, and
-// "no barrier_diag.log produced" is a documented verdict (docs/async_compute_plan.md). Flushed
-// per line ON PURPOSE even though the logging plan's L6 removes per-line flushes elsewhere: the
-// stress harness exits through TerminateProcess, which discards a buffered CRT tail, and the last
-// line is the one that matters. These paths only run under their diagnostic flags, so the cost
-// is opt-in. The session log gets the same line through the normal path (L6 replaced the old
-// direct OutputDebugStringA).
+// "no barrier_diag.log produced" is a documented verdict (docs/async_compute_plan.md). Opened on
+// the first line (so a clean run produces no file), kept open for the process; every write
+// reaches the OS immediately, which is what survives the stress harness's TerminateProcess exit
+// — the old per-line fflush protocol went with the CRT stream. The session log gets the same
+// line through the normal path.
 void Renderer::DiagLog(logging::LogLevel level, const char* line) {
     static std::mutex mtx;
-    static FILE* f = nullptr;
+    static diag::ArtifactFile f;
     {
         std::lock_guard<std::mutex> lk(mtx);
-        if (f == nullptr) { fopen_s(&f, diag::LogPath("barrier_diag.log").c_str(), "w"); }
-        if (f != nullptr) { std::fputs(line, f); std::fflush(f); }
+        if (!f) { f.Open("barrier_diag.log", diag::ArtifactMode::PerRunTruncate); }
+        f.Write(line);
     }
     logging::WriteRaw(level, logging::LogCategory::RenderGraph, line);
 }

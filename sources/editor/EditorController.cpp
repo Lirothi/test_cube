@@ -25,7 +25,7 @@
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
 #include "assets/AssetInvalidation.h"      // what one import rewrote, so the caches can drop it
-#include "core/diagnostics/DiagPaths.h"    // the invalidation verdict rides the import's own log
+#include "core/diagnostics/ArtifactWriter.h"    // the invalidation verdict rides the import's own log
 #include "materials/MaterialDataManager.h" // built MaterialData is path-keyed too
 #include "materials/Texture2D.h"           // shared-texture index: evicted per path on re-import
 #include "materials/TextureDecodeCache.h"  // decoded images, same
@@ -502,8 +502,7 @@ namespace
     // exactly the failure this code exists to prevent and the one that looks like success.
     void LogImportInvalidation(const std::string& line)
     {
-        std::ofstream out(diag::LogPath("asset_import.log"), std::ios::app);
-        if (out) { out << line << "\n"; }
+        diag::WriteArtifactf("asset_import.log", diag::ArtifactMode::Append, "%s\n", line.c_str());
     }
 
     // A material definition the preset table keys by FILE STEM: data/materials/<name>.json, flat.

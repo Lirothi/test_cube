@@ -3,7 +3,7 @@
 #include <atomic>
 #include <cstdio>
 
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 
 namespace barriers {
 namespace {
@@ -420,11 +420,12 @@ void DumpCensus(const char* logName)
 {
     if (!gCensusEnabled.load(std::memory_order_relaxed) || logName == nullptr) { return; }
     while (gCensusLock.test_and_set(std::memory_order_acquire)) {}
-    FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath(logName).c_str(), "w") == 0 && f) {
-        std::fputs("[barrier-census] emitted (before -> after) pairs, hottest first.\n"
-                   "count | before -> after | syncBefore -> syncAfter | accessBefore -> accessAfter"
-                   " | layoutBefore -> layoutAfter\n", f);
+    // One complete table at shutdown, replaced atomically.
+    diag::ArtifactFile f(logName, diag::ArtifactMode::AtomicReplace);
+    if (f) {
+        f.Write("[barrier-census] emitted (before -> after) pairs, hottest first.\n"
+                "count | before -> after | syncBefore -> syncAfter | accessBefore -> accessAfter"
+                " | layoutBefore -> layoutAfter\n");
         // Selection sort by count: at most 96 rows, once, at shutdown.
         bool used[kCensusMax] = {};
         for (int n = 0; n < gCensusCount; ++n) {
@@ -437,15 +438,14 @@ void DumpCensus(const char* logName)
             const CensusEntry& e = gCensus[best];
             const Translated b = LegacyStateToBarrier(e.before, e.isBuffer);
             const Translated a = LegacyStateToBarrier(e.after, e.isBuffer);
-            std::fprintf(f, "%6u | %s 0x%X -> 0x%X | sync 0x%X -> 0x%X | access 0x%X -> 0x%X | "
-                            "layout %d -> %d\n",
-                         e.count, e.isBuffer ? "buf" : "tex",
-                         static_cast<unsigned>(e.before), static_cast<unsigned>(e.after),
-                         static_cast<unsigned>(b.sync), static_cast<unsigned>(a.sync),
-                         static_cast<unsigned>(b.access), static_cast<unsigned>(a.access),
-                         static_cast<int>(b.layout), static_cast<int>(a.layout));
+            f.Printf("%6u | %s 0x%X -> 0x%X | sync 0x%X -> 0x%X | access 0x%X -> 0x%X | "
+                     "layout %d -> %d\n",
+                     e.count, e.isBuffer ? "buf" : "tex",
+                     static_cast<unsigned>(e.before), static_cast<unsigned>(e.after),
+                     static_cast<unsigned>(b.sync), static_cast<unsigned>(a.sync),
+                     static_cast<unsigned>(b.access), static_cast<unsigned>(a.access),
+                     static_cast<int>(b.layout), static_cast<int>(a.layout));
         }
-        std::fclose(f);
     }
     gCensusLock.clear(std::memory_order_release);
 }

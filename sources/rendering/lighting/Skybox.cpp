@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include <filesystem>
 #include <memory>
 #include <system_error>
@@ -82,13 +82,8 @@ float MeasureCubeUpIlluminance(const std::wstring& diffPath)
 void LogIbl(logging::LogLevel level, const char* text)
 {
     logging::WriteRaw(level, logging::LogCategory::Render, text);
-    // ibl.log (append across runs) stays the artifact until L7.
-    std::FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath("ibl.log").c_str(), "a") == 0 && f)
-    {
-        std::fprintf(f, "%s\n", text);
-        std::fclose(f);
-    }
+    // ibl.log keeps its history across runs on purpose (Append writes a session separator).
+    diag::WriteArtifactf("ibl.log", diag::ArtifactMode::Append, "%s\n", text);
 }
 
 class SkyboxUniformBinder final : public RenderableObject::UniformBinder

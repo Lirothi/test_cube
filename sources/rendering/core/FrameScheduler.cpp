@@ -3,7 +3,7 @@
 #include "core/Helpers.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include "rendering/core/Renderer.h" // g_crossQueueWaits / g_asyncComputeLists
 
 #include <cstdio>
@@ -35,30 +35,30 @@ void WaitFenceOrReport(ID3D12Fence* fence, HANDLE evt, UINT64 target, const char
         if (r != WAIT_TIMEOUT) { return; }
         if (s_reported) { continue; }
         s_reported = true;
-        FILE* f = nullptr;
-        if (fopen_s(&f, diag::LogPath("fence_stall.log").c_str(), "a") == 0 && f)
+        diag::ArtifactFile f("fence_stall.log", diag::ArtifactMode::Append);
+        if (f)
         {
-            std::fprintf(f, "STALL in %s: waiting for %llu on %s\n",
+            f.Printf("STALL in %s: waiting for %llu on %s\n",
                          what, static_cast<unsigned long long>(target),
                          (fence == directFence) ? "DIRECT fence" : "COMPUTE fence");
-            std::fprintf(f, "  direct  completed = %llu\n",
+            f.Printf("  direct  completed = %llu\n",
                          directFence ? static_cast<unsigned long long>(directFence->GetCompletedValue()) : 0ull);
-            std::fprintf(f, "  compute completed = %llu\n",
+            f.Printf("  compute completed = %llu\n",
                          computeFence ? static_cast<unsigned long long>(computeFence->GetCompletedValue()) : 0ull);
-            std::fprintf(f, "  next value to hand out = %llu\n",
+            f.Printf("  next value to hand out = %llu\n",
                          static_cast<unsigned long long>(nextValue));
             // The cross-queue fence is the one that can park a QUEUE without the driver calling
             // it a hang: ID3D12CommandQueue::Wait is a legal wait, so TDR never fires, the device
             // is never removed and DRED stays empty. Everything queued behind such a Wait --
             // including the frame Signal this stall is waiting for -- can then never run.
-            std::fprintf(f, "  cross gfx completed = %llu (next %llu) | cross cmp = %llu (next %llu)\n",
+            f.Printf("  cross gfx completed = %llu (next %llu) | cross cmp = %llu (next %llu)\n",
                          crossGfx ? static_cast<unsigned long long>(crossGfx->GetCompletedValue()) : 0ull,
                          static_cast<unsigned long long>(nextCrossGfx),
                          crossCmp ? static_cast<unsigned long long>(crossCmp->GetCompletedValue()) : 0ull,
                          static_cast<unsigned long long>(nextCrossCmp));
-            std::fprintf(f, "  cross-queue waits issued = %u, async compute lists = %u\n",
+            f.Printf("  cross-queue waits issued = %u, async compute lists = %u\n",
                          render::g_crossQueueWaits, render::g_asyncComputeLists);
-            std::fprintf(f, "  -> if `cross completed` < `next cross` - 1, a queue is parked on a\n"
+            f.Printf("  -> if `cross completed` < `next cross` - 1, a queue is parked on a\n"
                             "     cross-queue Wait nobody signalled: THAT is the deadlock, not a GPU\n"
                             "     stall. If they agree, the GPU really stopped on submitted work.\n");
 
@@ -71,21 +71,20 @@ void WaitFenceOrReport(ID3D12Fence* fence, HANDLE evt, UINT64 target, const char
             // Per-queue now, so an edge is judged against the fence of the queue that signals it.
             const unsigned long long doneGfx = crossGfx ? crossGfx->GetCompletedValue() : 0ull;
             const unsigned long long doneCmp = crossCmp ? crossCmp->GetCompletedValue() : 0ull;
-            std::fprintf(f, "  submission history, oldest first (%u edges):\n",
+            f.Printf("  submission history, oldest first (%u edges):\n",
                          render::g_submitEdgeCount);
             for (unsigned k = 0; k < render::g_submitEdgeCount; ++k)
             {
                 const unsigned idx = (render::g_submitEdgeNext + render::kSubmitEdgeRing
                                       - render::g_submitEdgeCount + k) % render::kSubmitEdgeRing;
                 const render::SubmitEdge& e = render::g_submitEdgeRing[idx];
-                std::fprintf(f, "    f%-6llu %-8s lists=%-3u wait=%-6llu signal=%-6llu%s\n",
+                f.Printf("    f%-6llu %-8s lists=%-3u wait=%-6llu signal=%-6llu%s\n",
                              e.frame, e.compute ? "COMPUTE" : "graphics", e.lists,
                              e.waitValue, e.signalValue,
                              // a segment waits on the OTHER queue's fence and signals its own
                              (e.waitValue > (e.compute ? doneGfx : doneCmp)) ? "   <== NOT SATISFIED"
                              : ((e.signalValue > (e.compute ? doneCmp : doneGfx)) ? "   (signal pending)" : ""));
             }
-            std::fclose(f);
         }
     }
 }

@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core/diagnostics/DiagPaths.h" // shadow_casters.log: the group count a headless run cannot print
+#include "core/diagnostics/ArtifactWriter.h" // shadow_casters.log: the group count a headless run cannot print
 #include "core/math/Frustum.h"
 #include "materials/MaterialData.h" // C2: per-slot alphaMask/alphaCutoff/albedo for masked shadows
 #include "rendering/core/Renderer.h"
@@ -294,20 +294,12 @@ void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBo
     out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
 }
 
-// `[ShadowGpuData]` lines also go to a file: they are OutputDebugStringA-only otherwise, i.e.
-// invisible to exactly the headless runs that gate caster-set work. Truncates on the first write of
-// a process and appends after, so one run's rebuilds stay together without the file growing forever.
+// `[ShadowGpuData]` verdict lines also go to a file the headless caster-set gates read back.
+// Per-run: the first write of a process truncates and the rest append, so one run's rebuilds stay
+// together without the file growing forever (the artifact API owns that protocol now).
 static void LogCasterLine(const char* line)
 {
-    static bool started = false;
-    FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath("shadow_casters.log").c_str(), started ? "a" : "w") != 0 || !f)
-    {
-        return; // a diagnostic must never be the reason a run fails
-    }
-    started = true;
-    std::fputs(line, f);
-    std::fclose(f);
+    diag::WriteArtifact("shadow_casters.log", diag::ArtifactMode::PerRunTruncate, line);
 }
 
 // Terrain chunking: bounds for ONE slot of a chunked mesh (Mesh::IsChunkedSubmeshes). Its submeshes

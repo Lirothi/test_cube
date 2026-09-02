@@ -15,7 +15,7 @@
 #include <chrono>
 #include <cstdio>
 
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include <atomic>
 #include <functional>
 #include <string>
@@ -1276,11 +1276,9 @@ void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
     // GPU-based-validation "Uninitialized root argument accessed", naming a dispatch and not a
     // cause. A dozen lines per run, Debug only.
     {
-        static bool first = true; // truncate once per run, then append
-        FILE* f = nullptr;
-        if (fopen_s(&f, diag::LogPath("material_rootparams.log").c_str(), first ? "w" : "a") == 0 && f) {
-            first = false;
-            std::fprintf(f, "%ls:%s\n", cd.shaderFile.c_str(), cd.csEntry ? cd.csEntry : "?");
+        diag::ArtifactFile f("material_rootparams.log", diag::ArtifactMode::PerRunTruncate);
+        if (f) {
+            f.Printf("%ls:%s\n", cd.shaderFile.c_str(), cd.csEntry ? cd.csEntry : "?");
             for (const RootParameterInfo& p : rootParams_) {
                 const char* kind = "?";
                 switch (p.type) {
@@ -1290,10 +1288,9 @@ void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
                 case RootParameterInfo::TableUAV:     kind = "tableUAV";  break;
                 case RootParameterInfo::TableSampler: kind = "tableSmp";  break;
                 }
-                std::fprintf(f, "    root[%u] %-9s register=%u space=%u\n", p.rootIndex, kind,
-                             p.bindingRegister, p.bindingSpace);
+                f.Printf("    root[%u] %-9s register=%u space=%u\n", p.rootIndex, kind,
+                         p.bindingRegister, p.bindingSpace);
             }
-            std::fclose(f);
         }
     }
 #endif
@@ -1381,13 +1378,10 @@ void ReportUnboundRootTable(const std::wstring& shaderFile, UINT rootIndex, cons
     h ^= std::hash<std::wstring>{}(shaderFile);
     const std::uint64_t bit = 1ull << (h & 63u);
     if (g_unboundReported.fetch_or(bit, std::memory_order_relaxed) & bit) { return; }
-    FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath("unbound_root.log").c_str(), "a") == 0 && f) {
-        std::fprintf(f, "UNBOUND %s at root index %u -- shader: %ls\n"
-                        "  the draw that follows reads this parameter without it ever being set\n",
-                     kind, rootIndex, shaderFile.c_str());
-        std::fclose(f);
-    }
+    diag::WriteArtifactf("unbound_root.log", diag::ArtifactMode::Append,
+                         "UNBOUND %s at root index %u -- shader: %ls\n"
+                         "  the draw that follows reads this parameter without it ever being set\n",
+                         kind, rootIndex, shaderFile.c_str());
 }
 } // namespace
 
@@ -2027,12 +2021,7 @@ void MaterialManager::Clear()
         "[shadercache] %u hits, %u misses, %u writes\n",
         hits, attempts >= hits ? attempts - hits : 0u, writes);
     logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, line);
-    if (FILE* file = nullptr;
-        fopen_s(&file, diag::LogPath("shader_cache.log").c_str(), "w") == 0 && file)
-    {
-        std::fputs(line, file);
-        std::fclose(file);
-    }
+    diag::WriteArtifact("shader_cache.log", diag::ArtifactMode::AtomicReplace, line);
 
     const uint32_t psoAttempts = g_psoCacheAttempts.load(std::memory_order_relaxed);
     const uint32_t psoHits = g_psoCacheHits.load(std::memory_order_relaxed);
@@ -2050,12 +2039,7 @@ void MaterialManager::Clear()
         static_cast<double>(psoCreateUs) / 1000.0,
         static_cast<unsigned long long>(psoBytes));
     logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, psoLine);
-    if (FILE* file = nullptr;
-        fopen_s(&file, diag::LogPath("pso_cache.log").c_str(), "w") == 0 && file)
-    {
-        std::fputs(psoLine, file);
-        std::fclose(file);
-    }
+    diag::WriteArtifact("pso_cache.log", diag::ArtifactMode::AtomicReplace, psoLine);
     materials_.clear();
 }
 

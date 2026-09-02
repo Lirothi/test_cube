@@ -19,7 +19,7 @@
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias (shadow caster LOD)
 #include "rendering/debug/LodDebugView.h" // render::DrawLodDebug (LOD selection debug view)
 #include "rendering/shadows/ShadowSettings.h"
-#include "core/diagnostics/DiagPaths.h" // S7: headless cascade readout dump
+#include "core/diagnostics/ArtifactWriter.h" // S7: headless cascade readout dump
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
@@ -411,20 +411,20 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     if (render::g_csmDumpReadout && renderer->GetTotalFrameNumber() > 8)
     {
         render::g_csmDumpReadout = false;
-        FILE* f = nullptr;
-        if (fopen_s(&f, diag::LogPath("csm_readout.log").c_str(), "w") == 0 && f)
+        // One complete table, replaced atomically: a reader never sees a half-written readout.
+        diag::ArtifactFile f("csm_readout.log", diag::ArtifactMode::AtomicReplace);
+        if (f)
         {
-            std::fprintf(f, "cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)\n");
+            f.Printf("cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)\n");
             for (int i = 0; i < kCascades; ++i)
             {
                 const float zRange = cascades.farLsDbg[i] - cascades.nearLsDbg[i];
-                std::fprintf(f, "%d  %8.2f..%-8.2f %5u  %8.3f  %9.2f  %7.2f %7.2f  %9.2f  %11.4f\n",
-                             i, cascades.splitsVS[i], cascades.splitsVS[i + 1],
-                             cascades.tileSizeDbg[i], cascades.unitsPerTexelDbg[i] * 1000.0f,
-                             cascades.radiusDbg[i], cascades.nearLsDbg[i], cascades.farLsDbg[i],
-                             zRange, (zRange / 65535.0f) * 1000.0f);
+                f.Printf("%d  %8.2f..%-8.2f %5u  %8.3f  %9.2f  %7.2f %7.2f  %9.2f  %11.4f\n",
+                         i, cascades.splitsVS[i], cascades.splitsVS[i + 1],
+                         cascades.tileSizeDbg[i], cascades.unitsPerTexelDbg[i] * 1000.0f,
+                         cascades.radiusDbg[i], cascades.nearLsDbg[i], cascades.farLsDbg[i],
+                         zRange, (zRange / 65535.0f) * 1000.0f);
             }
-            std::fclose(f);
         }
     }
 }

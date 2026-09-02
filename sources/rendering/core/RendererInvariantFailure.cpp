@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include "core/logging/Log.h"
 
 [[noreturn]] void RendererInvariantFailure(const char* msg)
@@ -15,13 +15,8 @@
     // --shot capture) the one message explaining WHY the process died went nowhere. The engine has
     // already learned this for the device caps, the stress verdict and the barrier trace; an
     // invariant failure is the one message that most needs to survive. (Artifact kept until L7.)
-    FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath("invariant_failure.log").c_str(), "a") == 0 && f) {
-        std::fputs("RENDERER INVARIANT FAILURE: ", f);
-        std::fputs(msg != nullptr ? msg : "(null)", f);
-        std::fputc('\n', f);
-        std::fclose(f);
-    }
+    diag::WriteArtifactf("invariant_failure.log", diag::ArtifactMode::Append,
+                         "RENDERER INVARIANT FAILURE: %s\n", msg != nullptr ? msg : "(null)");
     // Then the one central Fatal record: DBWIN immediately plus an unbuffered append to the
     // session log, with no dependency on the writer thread (logging plan L4). Stack buffer only.
     char line[1024];

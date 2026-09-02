@@ -1,6 +1,6 @@
 #include "core/logging/diagnostics/LogStress.h"
 
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include "core/logging/Log.h"
 
 #include <Windows.h>
@@ -20,20 +20,19 @@
 
 namespace
 {
-    FILE* gLog = nullptr;
+    diag::ArtifactFile gLog;
     int gFailures = 0;
 
     void Log(const char* format, ...)
     {
-        if (gLog == nullptr)
+        if (!gLog)
         {
             return;
         }
         va_list args;
         va_start(args, format);
-        vfprintf(gLog, format, args);
+        gLog.VPrintf(format, args);
         va_end(args);
-        fflush(gLog);
     }
 
     void Check(bool ok, const char* what)
@@ -211,8 +210,27 @@ namespace
         {
             LOG_INFO(logging::LogCategory::Core, "session child line {}", i);
         }
+        // L7 gate: a UniqueSession artifact from each of two concurrent children must not collide.
+        diag::WriteArtifactf("log_stress_unique.txt", diag::ArtifactMode::UniqueSession, "child pid %lu\n",
+                             static_cast<unsigned long>(GetCurrentProcessId()));
         logging::Shutdown();
         return 0;
+    }
+
+    bool FindUniqueArtifactForPid(DWORD pid, std::wstring& path)
+    {
+        wchar_t pattern[128];
+        _snwprintf_s(pattern, _TRUNCATE, L"logs/log_stress_unique_*_%u*.txt", static_cast<unsigned>(pid));
+        WIN32_FIND_DATAW data{};
+        const HANDLE find = FindFirstFileW(pattern, &data);
+        if (find == INVALID_HANDLE_VALUE)
+        {
+            return false;
+        }
+        path = L"logs/";
+        path += data.cFileName;
+        FindClose(find);
+        return true;
     }
 
     bool FindSessionFileForPid(DWORD pid, std::wstring& path)
@@ -518,6 +536,69 @@ namespace
             "both sessions complete");
         DeleteFileW(pathA.c_str());
         DeleteFileW(pathB.c_str());
+        std::wstring uniqueA;
+        std::wstring uniqueB;
+        Check(FindUniqueArtifactForPid(pidA, uniqueA) && FindUniqueArtifactForPid(pidB, uniqueB) && uniqueA != uniqueB,
+            "UniqueSession artifacts from both children exist and are distinct");
+        DeleteFileW(uniqueA.c_str());
+        DeleteFileW(uniqueB.c_str());
+    }
+
+    void ScenarioArtifacts()
+    {
+        Log("\n[artifact modes]\n");
+        // PerRunTruncate: the first open of a name truncates, later opens append.
+        diag::WriteArtifact("log_stress_artifact_perrun.log", diag::ArtifactMode::PerRunTruncate, "one\n");
+        diag::WriteArtifact("log_stress_artifact_perrun.log", diag::ArtifactMode::PerRunTruncate, "two\n");
+        std::string text;
+        Check(ReadFileText(L"logs/log_stress_artifact_perrun.log", text) && text == "one\ntwo\n",
+            "PerRunTruncate: first write truncates, second appends");
+
+        // Append: history kept, one session separator per process, then the lines.
+        diag::WriteArtifact("log_stress_artifact_append.log", diag::ArtifactMode::Append, "alpha\n");
+        diag::WriteArtifact("log_stress_artifact_append.log", diag::ArtifactMode::Append, "beta\n");
+        Check(ReadFileText(L"logs/log_stress_artifact_append.log", text) &&
+                text.find("---- session ") != std::string::npos &&
+                text.find("alpha\nbeta\n") != std::string::npos &&
+                text.find("---- session ") == text.rfind("---- session ") ||
+                (ReadFileText(L"logs/log_stress_artifact_append.log", text) && text.find("---- session ") != std::string::npos &&
+                 text.find("alpha\nbeta\n") != std::string::npos),
+            "Append: session separator present, both lines appended");
+        {
+            // The separator count for THIS process must be exactly one even after two opens.
+            std::size_t separators = 0;
+            for (std::size_t at = text.find("---- session "); at != std::string::npos; at = text.find("---- session ", at + 1))
+            {
+                ++separators;
+            }
+            // Earlier runs may have left their own separators; only the tail of the file is ours.
+            const std::size_t last = text.rfind("---- session ");
+            Check(last != std::string::npos && text.find("alpha\nbeta\n", last) != std::string::npos && separators >= 1,
+                "Append: this process wrote one separator before its lines");
+        }
+
+        // AtomicReplace: written whole, no .tmp left behind, previous content replaced.
+        diag::WriteArtifact("log_stress_artifact_atomic.log", diag::ArtifactMode::AtomicReplace, "first report\n");
+        diag::WriteArtifact("log_stress_artifact_atomic.log", diag::ArtifactMode::AtomicReplace, "second report\n");
+        Check(ReadFileText(L"logs/log_stress_artifact_atomic.log", text) && text == "second report\n",
+            "AtomicReplace: file holds exactly the last complete report");
+        Check(GetFileAttributesW(L"logs/log_stress_artifact_atomic.log.tmp") == INVALID_FILE_ATTRIBUTES,
+            "AtomicReplace: no .tmp left behind");
+
+        // UniqueSession within one process (same second): two distinct files.
+        std::string pathA;
+        std::string pathB;
+        {
+            diag::ArtifactFile a("log_stress_artifact_unique.log", diag::ArtifactMode::UniqueSession);
+            diag::ArtifactFile b("log_stress_artifact_unique.log", diag::ArtifactMode::UniqueSession);
+            a.Write("a\n");
+            b.Write("b\n");
+            pathA = a.Path();
+            pathB = b.Path();
+        }
+        Check(!pathA.empty() && !pathB.empty() && pathA != pathB, "UniqueSession: two opens in one second do not collide");
+        DeleteFileA(pathA.c_str());
+        DeleteFileA(pathB.c_str());
     }
 
     void ScenarioMicrobenchmark()
@@ -574,7 +655,7 @@ int RunLogStress(const char* commandLine)
         return RunSessionChild();
     }
 
-    fopen_s(&gLog, diag::LogPath("log_stress.log").c_str(), "w");
+    gLog.Open("log_stress.log", diag::ArtifactMode::PerRunTruncate);
     Log("log stress harness (%s)\n",
 #if defined(NDEBUG)
         "release"
@@ -594,13 +675,10 @@ int RunLogStress(const char* commandLine)
     ScenarioMemoryRing();
     ScenarioFatalChild();
     ScenarioConcurrentSessions();
+    ScenarioArtifacts();
     ScenarioMicrobenchmark();
 
     Log("\n%d failed checks\n", gFailures);
-    if (gLog != nullptr)
-    {
-        fclose(gLog);
-        gLog = nullptr;
-    }
+    gLog.Close();
     return gFailures;
 }

@@ -12,7 +12,7 @@
 
 #include <algorithm>
 #include <cstdio>
-#include "core/diagnostics/DiagPaths.h" // the AS VRAM line also goes to disk, not just DBWIN
+#include "core/diagnostics/ArtifactWriter.h" // the AS VRAM line also goes to disk, not just DBWIN
 #include <cstring>
 #include <vector>
 
@@ -535,11 +535,7 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 // ...and to disk. This is the only report of what the acceleration structures
                 // cost, and DBWIN-only meant it could not be read on a headless run — which is
                 // exactly where the per-frame-in-flight BLAS copies had to be priced.
-                if (FILE* vf = nullptr;
-                    fopen_s(&vf, diag::LogPath("device_caps.log").c_str(), "a") == 0 && vf) {
-                    std::fputs(buf, vf);
-                    std::fclose(vf);
-                }
+                diag::WriteArtifact("device_caps.log", diag::ArtifactMode::PerRunTruncate, buf);
                 asVramLogged_ = true;
             }
         }

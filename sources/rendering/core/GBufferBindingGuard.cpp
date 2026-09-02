@@ -1,6 +1,6 @@
 #include "rendering/core/GBufferBindingGuard.h"
 
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 
 #include <cstdio>
 #include <atomic>
@@ -19,16 +19,11 @@ void ReportMissingGBufferBindings(const void* owner, std::size_t slot, const cha
     h ^= static_cast<std::uint64_t>(slot) * 0xC2B2AE3D27D4EB4Full;
     const std::uint64_t bit = 1ull << ((h >> 17) & 63u);
     if (reported.fetch_or(bit, std::memory_order_relaxed) & bit) { return; }
-    FILE* f = nullptr;
-    if (fopen_s(&f, diag::LogPath("missing_material.log").c_str(), "a") == 0 && f)
-    {
-        std::fprintf(f,
-                     "%s: gbuffer slot %zu (owner %p) has no SRV/sampler table -- submesh SKIPPED\n"
-                     "  cause: the mesh has no material, or its material has no textures at all\n"
-                     "  drawing it would leave gbuffer.hlsl root parameters 3 and 4 unbound\n",
-                     where ? where : "?", slot, owner);
-        std::fclose(f);
-    }
+    diag::WriteArtifactf("missing_material.log", diag::ArtifactMode::Append,
+                         "%s: gbuffer slot %zu (owner %p) has no SRV/sampler table -- submesh SKIPPED\n"
+                         "  cause: the mesh has no material, or its material has no textures at all\n"
+                         "  drawing it would leave gbuffer.hlsl root parameters 3 and 4 unbound\n",
+                         where ? where : "?", slot, owner);
 }
 
 } // namespace render

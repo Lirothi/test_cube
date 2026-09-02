@@ -1,5 +1,5 @@
 #include "core/task/diagnostics/TaskSystemStress.h"
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include "core/task/TaskSystem.h"
 
 #include <algorithm>
@@ -17,7 +17,7 @@
 
 namespace {
 
-FILE* gLog = nullptr;
+diag::ArtifactFile gLog;
 int gFailures = 0;
 
 // Cumulative per-scenario wall time across all rounds, for benchmarking
@@ -46,9 +46,8 @@ void Log(const char* fmt, ...)
     }
     va_list args;
     va_start(args, fmt);
-    vfprintf(gLog, fmt, args);
+    gLog.VPrintf(fmt, args);
     va_end(args);
-    fflush(gLog);
 }
 
 void Check(bool ok, const char* what)
@@ -231,15 +230,12 @@ void RunOverflowDeathTest()
 
 int RunTaskSystemStress(bool overflowDeathTest)
 {
-    gLog = nullptr;
-    fopen_s(&gLog, diag::LogPath("tasksystem_stress.log").c_str(), "w");
+    gLog.Open("tasksystem_stress.log", diag::ArtifactMode::PerRunTruncate);
     gFailures = 0;
 
     if (overflowDeathTest) {
         RunOverflowDeathTest();
-        if (gLog) {
-            fclose(gLog);
-        }
+        gLog.Close();
         return 100; // surviving the death test is a failure
     }
 
@@ -276,9 +272,6 @@ int RunTaskSystemStress(bool overflowDeathTest)
     Log("scenario totals: churn %.2fs, nested %.2fs, fanout %.2fs, startstop %.2fs\n",
         gChurnSeconds, gNestedSeconds, gFanOutSeconds, gStartStopSeconds);
     Log("done in %.1fs, failures: %d\n", seconds, gFailures);
-    if (gLog) {
-        fclose(gLog);
-        gLog = nullptr;
-    }
+    gLog.Close();
     return gFailures;
 }

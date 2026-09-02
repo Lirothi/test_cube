@@ -366,6 +366,9 @@
     <ClCompile Include="sources/app/main.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
+    <ClCompile Include="sources/core/diagnostics/ArtifactWriter.cpp">
+      <Filter>sources\core\diagnostics</Filter>
+    </ClCompile>
     <ClCompile Include="sources/core/diagnostics/BootProfile.cpp">
       <Filter>sources\core\diagnostics</Filter>
     </ClCompile>
@@ -823,6 +826,9 @@
     </ClInclude>
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h">
       <Filter>sources\core\profiling</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/diagnostics/ArtifactWriter.h">
+      <Filter>sources\core\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/diagnostics/BootProfile.h">
       <Filter>sources\core\diagnostics</Filter>

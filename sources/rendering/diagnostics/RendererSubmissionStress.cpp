@@ -1,5 +1,5 @@
 #include "rendering/diagnostics/RendererSubmissionStress.h"
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include "rendering/core/SubmitTimeline.h"
 #include "rendering/core/BarrierTranslation.h"
 
@@ -30,7 +30,7 @@ constexpr const char* kFlagDuplicateCl = "--stress-duplicate-cl";
 constexpr const char* kFlagDupOrderDirect = "--stress-dup-order-direct";
 constexpr const char* kFlagDupOrderBundle = "--stress-dup-order-bundle";
 
-FILE* gLog = nullptr;
+diag::ArtifactFile gLog;
 int gFailures = 0;
 
 void Log(const char* fmt, ...)
@@ -40,9 +40,8 @@ void Log(const char* fmt, ...)
     }
     va_list args;
     va_start(args, fmt);
-    vfprintf(gLog, fmt, args);
+    gLog.VPrintf(fmt, args);
     va_end(args);
-    fflush(gLog);
 }
 
 void Check(bool ok, const char* what)
@@ -518,8 +517,7 @@ int RunRendererSubmissionStress(const char* cmdLine)
         }
     }
 
-    gLog = nullptr;
-    fopen_s(&gLog, diag::LogPath("renderer_submission_stress.log").c_str(), "w");
+    gLog.Open("renderer_submission_stress.log", diag::ArtifactMode::PerRunTruncate);
     gFailures = 0;
     gUnexpectedFallbacks = 0;
 
@@ -556,9 +554,6 @@ int RunRendererSubmissionStress(const char* cmdLine)
 
     const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     Log("done in %.1fs, failures: %d\n", seconds, gFailures);
-    if (gLog) {
-        fclose(gLog);
-        gLog = nullptr;
-    }
+    gLog.Close();
     return gFailures;
 }

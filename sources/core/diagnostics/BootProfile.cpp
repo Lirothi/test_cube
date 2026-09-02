@@ -1,6 +1,6 @@
 #include "core/diagnostics/BootProfile.h"
 
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 
 #include <algorithm>
 #include <chrono>
@@ -149,16 +149,17 @@ void Dump(const char* reason)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
 
-    FILE* f = nullptr;
-    const char* mode = (g_dumpCount == 0) ? "w" : "a";
-    if (fopen_s(&f, diag::LogPath("boot_profile.log").c_str(), mode) != 0 || !f) { return; }
+    // Per run: the first Dump of the process truncates, later ones ("first frame presented",
+    // shutdown) append — the artifact API owns that protocol now.
+    diag::ArtifactFile f("boot_profile.log", diag::ArtifactMode::PerRunTruncate);
+    if (!f) { return; }
     ++g_dumpCount;
 
     const double total = NowMs();
-    std::fprintf(f, "==== boot profile (%s) : %s : %.1f ms since process start ====\n",
+    f.Printf("==== boot profile (%s) : %s : %.1f ms since process start ====\n",
                  ConfigTag(), reason ? reason : "?", total);
-    std::fprintf(f, "  columns: [start ms] wall ms (self ms) label\n");
-    std::fprintf(f, "  'self' = wall minus the direct children on the SAME thread; a big self time\n"
+    f.Printf("  columns: [start ms] wall ms (self ms) label\n");
+    f.Printf("  'self' = wall minus the direct children on the SAME thread; a big self time\n"
                     "  is unattributed work, i.e. exactly where the next scope should go.\n\n");
 
     const std::thread::id mainThread = g_entries.empty() ? std::this_thread::get_id()
@@ -188,26 +189,26 @@ void Dump(const char* reason)
             }
         }
 
-        std::fprintf(f, "  [%9.1f] ", e.startMs);
-        for (int d = 0; d < e.depth; ++d) { std::fprintf(f, "  "); }
+        f.Printf("  [%9.1f] ", e.startMs);
+        for (int d = 0; d < e.depth; ++d) { f.Printf("  "); }
 
         if (instant)
         {
-            std::fprintf(f, ". %s", e.label.c_str());
+            f.Printf(". %s", e.label.c_str());
         }
         else
         {
-            std::fprintf(f, "%9.1f (%8.1f) %s", wall, wall - childSum, e.label.c_str());
+            f.Printf("%9.1f (%8.1f) %s", wall, wall - childSum, e.label.c_str());
         }
-        if (!e.detail.empty()) { std::fprintf(f, "  [%s]", e.detail.c_str()); }
-        if (e.thread != mainThread) { std::fprintf(f, "  {worker}"); }
-        if (e.endMs < 0.0) { std::fprintf(f, "  <<< STILL OPEN"); }
-        std::fprintf(f, "\n");
+        if (!e.detail.empty()) { f.Printf("  [%s]", e.detail.c_str()); }
+        if (e.thread != mainThread) { f.Printf("  {worker}"); }
+        if (e.endMs < 0.0) { f.Printf("  <<< STILL OPEN"); }
+        f.Printf("\n");
     }
 
     if (!g_buckets.empty())
     {
-        std::fprintf(f, "\n  ---- aggregated work (repeated items) ----\n");
+        f.Printf("\n  ---- aggregated work (repeated items) ----\n");
         std::vector<const std::pair<const std::string, Bucket>*> sorted;
         sorted.reserve(g_buckets.size());
         for (const auto& kv : g_buckets) { sorted.push_back(&kv); }
@@ -217,20 +218,20 @@ void Dump(const char* reason)
         for (const auto* kv : sorted)
         {
             const Bucket& b = kv->second;
-            std::fprintf(f, "  %-28s %6lld items, %10.1f ms total, %8.2f ms avg\n",
+            f.Printf("  %-28s %6lld items, %10.1f ms total, %8.2f ms avg\n",
                          kv->first.c_str(), b.count, b.totalMs,
                          b.count ? b.totalMs / static_cast<double>(b.count) : 0.0);
             for (const WorstItem& w : b.worst)
             {
                 if (w.ms <= 0.0) { continue; }
-                std::fprintf(f, "        %9.1f ms  %s\n", w.ms, w.item.c_str());
+                f.Printf("        %9.1f ms  %s\n", w.ms, w.item.c_str());
             }
         }
     }
 
     if (!g_counts.empty())
     {
-        std::fprintf(f, "\n  ---- counters ----\n");
+        f.Printf("\n  ---- counters ----\n");
         std::vector<const std::pair<const std::string, long long>*> sorted;
         sorted.reserve(g_counts.size());
         for (const auto& kv : g_counts) { sorted.push_back(&kv); }
@@ -238,12 +239,11 @@ void Dump(const char* reason)
                   [](auto* a, auto* b) { return a->first < b->first; });
         for (const auto* kv : sorted)
         {
-            std::fprintf(f, "  %-28s %lld\n", kv->first.c_str(), kv->second);
+            f.Printf("  %-28s %lld\n", kv->first.c_str(), kv->second);
         }
     }
 
-    std::fprintf(f, "\n");
-    std::fclose(f);
+    f.Printf("\n");
 }
 
 } // namespace boot

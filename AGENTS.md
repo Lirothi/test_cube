@@ -41,7 +41,15 @@ never `OutputDebugString` or `printf` for events. Gates for lines evaluated ever
 `LOG_*_ONCE` (once per process), `LOG_*_EVERY_N(n, ...)`, `LOG_*_THROTTLED(duration, ...)`,
 `LOG_*_ONCE_PER_MESSAGE` (once per distinct text among the callsite's last 16 — for a quantised
 STATE line). `WriteRaw`/`WriteRawLines` take already-formatted text (SDK callbacks, compiler
-output) without formatting or heap. Switches: `--log-level=<trace|debug|info|warning|error|fatal>`,
+output) without formatting or heap.
+
+Structured reports (a verdict file, a caps table, a dump) are ARTIFACTS, not events: write them
+with `diag::ArtifactFile` / `diag::WriteArtifact(name, mode, text)` (`core/diagnostics/ArtifactWriter.h`),
+declaring the mode — `PerRunTruncate` (first open per process truncates, later ones append),
+`Append` (history across runs, session separator written once), `UniqueSession`
+(`<stem>_<stamp>_<pid>`), `AtomicReplace` (temp + rename, one complete report). Never
+`fopen(diag::LogPath(...))` with a hand-rolled "w"/"a" protocol; the API logs one
+`artifact logs/<name> (<mode>)` event per name per process for you. Switches: `--log-level=<trace|debug|info|warning|error|fatal>`,
 `--log-category=<name>:<level>` (repeatable; names are the `[..]` column, e.g. `render.rt`),
 `--log-sync` (render every record on the calling thread — for a crash whose last lines never
 reach the writer), `--log-no-file`, `--log-file=<path>`. `--log-stress` runs the logging harness

@@ -16,6 +16,8 @@
 #include <unordered_set>
 #include "core/logging/LogLevel.h" // DiagLog/CanonicalLogOnce take the session-log level
 
+namespace diag { class ArtifactFile; } // device_removed.log writer (ArtifactWriter.h)
+
 #include "core/math/Math.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "rendering/core/FrameResource.h"
@@ -357,7 +359,7 @@ public:
     void DumpDebugLayerMessages(const char* context);
     // Append the DRED breadcrumbs + page-fault report to an open device-removal report. Needs
     // `--dred` (armed before device creation); says so instead of staying silent when it is absent.
-    void DumpDredBreadcrumbs(FILE* f);
+    void DumpDredBreadcrumbs(diag::ArtifactFile& f);
     bool HasComputeQueue() const { return graphicsDevice_.ComputeQueue() != nullptr; }
 
     // DXR (S1). On non-RT hardware GetDevice5() is null and

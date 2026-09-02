@@ -1,5 +1,5 @@
 #include "rendering/rt/RtSmoke.h"
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/meshes/Mesh.h"
 
@@ -18,7 +18,7 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
-FILE* gLog = nullptr;
+diag::ArtifactFile gLog;
 
 void Log(const char* fmt, ...)
 {
@@ -27,9 +27,8 @@ void Log(const char* fmt, ...)
     }
     va_list args;
     va_start(args, fmt);
-    vfprintf(gLog, fmt, args);
+    gLog.VPrintf(fmt, args);
     va_end(args);
-    fflush(gLog);
 }
 
 void WriteVerdict(const char* outPath, const char* verdict)
@@ -47,7 +46,7 @@ void WriteVerdict(const char* outPath, const char* verdict)
 
 int RunRtSmoke(const char* outPath)
 {
-    fopen_s(&gLog, diag::LogPath("rt_smoke.log").c_str(), "w");
+    gLog.Open("rt_smoke.log", diag::ArtifactMode::PerRunTruncate);
     Log("rt smoke harness\n");
 
 #ifdef _DEBUG
@@ -71,7 +70,7 @@ int RunRtSmoke(const char* outPath)
     if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
         Log("D3D12CreateDevice failed\n");
         WriteVerdict(outPath, "FAIL device-create");
-        if (gLog) { fclose(gLog); gLog = nullptr; }
+        gLog.Close();
         return 1;
     }
 
@@ -90,7 +89,7 @@ int RunRtSmoke(const char* outPath)
     if (!device5 || tier < D3D12_RAYTRACING_TIER_1_1) {
         // No hardware ray tracing — this is a graceful skip, not a failure.
         WriteVerdict(outPath, "SKIP no-rt");
-        if (gLog) { fclose(gLog); gLog = nullptr; }
+        gLog.Close();
         return 0;
     }
 
@@ -129,7 +128,7 @@ int RunRtSmoke(const char* outPath)
         Log("command-list/fence bring-up failed (CommandList4 unavailable?)\n");
         WriteVerdict(outPath, "FAIL cmdlist4");
         if (evt) { CloseHandle(evt); }
-        if (gLog) { fclose(gLog); gLog = nullptr; }
+        gLog.Close();
         return 1;
     }
 
@@ -212,7 +211,7 @@ int RunRtSmoke(const char* outPath)
         Log("exception: %s\n", e.what());
         WriteVerdict(outPath, "FAIL exception");
         CloseHandle(evt);
-        if (gLog) { fclose(gLog); gLog = nullptr; }
+        gLog.Close();
         return 1;
     }
 
@@ -229,6 +228,6 @@ int RunRtSmoke(const char* outPath)
     }
 
     CloseHandle(evt);
-    if (gLog) { fclose(gLog); gLog = nullptr; }
+    gLog.Close();
     return result;
 }

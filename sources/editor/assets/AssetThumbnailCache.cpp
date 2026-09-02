@@ -22,7 +22,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/task/TaskSystem.h"
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include "editor/assets/AssetRegistry.h"
 #include "materials/MaterialData.h"
 #include "materials/MaterialDataManager.h"
@@ -1380,18 +1380,16 @@ public:
         const double total = std::chrono::duration<double, std::milli>(Clock::now() - start_).count();
         if (total < 0.5) { return; } // sub-millisecond jobs are not the problem being chased
         static std::mutex mtx;
-        static FILE* f = nullptr;
+        static diag::ArtifactFile f;
         std::lock_guard<std::mutex> lk(mtx);
-        if (f == nullptr) { fopen_s(&f, diag::LogPath("thumbnail_profile.log").c_str(), "w"); }
-        if (f == nullptr) { return; }
-        std::fprintf(f, "%-10s total %8.2f ms |", kind_, total);
-        for (int i = 0; i < used_; ++i) { std::fprintf(f, " %s %.2f", names_[i], ms_[i]); }
+        if (!f) { f.Open("thumbnail_profile.log", diag::ArtifactMode::PerRunTruncate); }
+        if (!f) { return; }
+        f.Printf("%-10s total %8.2f ms |", kind_, total);
+        for (int i = 0; i < used_; ++i) { f.Printf(" %s %.2f", names_[i], ms_[i]); }
         std::uint32_t taken = 0, missed = 0;
         texdecode::Stats(taken, missed);
-        std::fprintf(f, "  decode cache=%u inline=%u prewarm slots=%u descs=%u  | %s",
-                     taken, missed, slots_, descs_, what_.c_str());
-        std::fputc('\n', f);
-        std::fflush(f);
+        f.Printf("  decode cache=%u inline=%u prewarm slots=%u descs=%u  | %s\n",
+                 taken, missed, slots_, descs_, what_.c_str());
     }
 
 private:

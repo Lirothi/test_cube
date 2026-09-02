@@ -1,4 +1,4 @@
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include <cstdio>
 #include <utility>
 #include "app/scene/SceneResourceBootstrapper.h"
@@ -117,15 +117,10 @@ void SceneLightingCBHandles::Populate(Material* material)
     for (const auto& [name, handle] : kRequired)
     {
         if (handle->field != nullptr) { continue; }
-        if (FILE* f = nullptr;
-            fopen_s(&f, diag::LogPath("cb_field_missing.log").c_str(), "a") == 0 && f)
-        {
-            std::fprintf(f,
-                         "lighting_cs.hlsl cbuffer has no field '%s' -- it will read UNINITIALIZED\n"
-                         "  memory. If the shader is stale, delete shader_cache/ and re-run.\n",
-                         name);
-            std::fclose(f);
-        }
+        diag::WriteArtifactf("cb_field_missing.log", diag::ArtifactMode::Append,
+                             "lighting_cs.hlsl cbuffer has no field '%s' -- it will read UNINITIALIZED\n"
+                             "  memory. If the shader is stale, delete shader_cache/ and re-run.\n",
+                             name);
     }
 }
 

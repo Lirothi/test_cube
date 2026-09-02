@@ -23,7 +23,7 @@
 #include <d3d12.h>
 #include <d3d12sdklayers.h> // ID3D12InfoQueue
 #include "core/diagnostics/BootProfile.h"
-#include "core/diagnostics/DiagPaths.h"
+#include "core/diagnostics/ArtifactWriter.h"
 #include "core/logging/Log.h"
 
 #include <chrono>
@@ -46,7 +46,9 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
-FILE* gLog = nullptr;
+// scene_stress.log: every write goes straight to the OS (ArtifactFile), so the TerminateProcess
+// exits below lose nothing and the old per-line fflush protocol is gone.
+diag::ArtifactFile gLog;
 
 void Log(const char* fmt, ...)
 {
@@ -56,9 +58,8 @@ void Log(const char* fmt, ...)
     }
     va_list args;
     va_start(args, fmt);
-    vfprintf(gLog, fmt, args);
+    gLog.VPrintf(fmt, args);
     va_end(args);
-    fflush(gLog);
 }
 
 // Last-chance crash-stack logger for the stress harness. The driver's
@@ -76,15 +77,14 @@ LONG WINAPI StressCrashFilter(EXCEPTION_POINTERS* ep)
 {
     const DWORD code = (ep && ep->ExceptionRecord) ? ep->ExceptionRecord->ExceptionCode : 0;
 
-    FILE* cf = nullptr;
-    fopen_s(&cf, diag::LogPath("crash_stack.txt").c_str(), "w");
+    diag::ArtifactFile cf("crash_stack.txt", diag::ArtifactMode::PerRunTruncate);
     auto emit = [&](const char* fmt, ...)
     {
         char line[1024];
         va_list a; va_start(a, fmt);
         std::vsnprintf(line, sizeof(line), fmt, a);
         va_end(a);
-        if (cf) { std::fputs(line, cf); std::fflush(cf); }
+        cf.Write(line);
         Log("%s", line);
     };
 
@@ -109,7 +109,7 @@ LONG WINAPI StressCrashFilter(EXCEPTION_POINTERS* ep)
              static_cast<unsigned long long>(ep->ExceptionRecord->ExceptionInformation[1]));
     }
 
-    if (!ep || !ep->ContextRecord) { if (cf) { std::fclose(cf); } return EXCEPTION_EXECUTE_HANDLER; }
+    if (!ep || !ep->ContextRecord) { cf.Close(); return EXCEPTION_EXECUTE_HANDLER; }
 
     HANDLE proc = GetCurrentProcess();
     HANDLE thread = GetCurrentThread();
@@ -164,8 +164,7 @@ LONG WINAPI StressCrashFilter(EXCEPTION_POINTERS* ep)
         }
     }
     emit("==== end stack ====\n");
-    if (cf) { std::fclose(cf); }
-    if (gLog) { std::fflush(gLog); }
+    cf.Close();
     return EXCEPTION_EXECUTE_HANDLER; // log, then let the process terminate
 }
 
@@ -311,7 +310,6 @@ public:
         LOG_INFO(logging::LogCategory::App, "scene-stress verdict: CLEAN after {} iterations ({:.1f} s); details in logs/scene_stress.log",
                  iterations_, boot::ElapsedMs() / 1000.0);
         boot::Dump("scene-stress: iterations complete");
-        if (gLog) { fflush(gLog); }
         return 0;
     }
 
@@ -516,7 +514,6 @@ private:
         Log("[iter %d] op=%s FAULT: %s\n", iter, op, reason);
         LogBarrierEmits_();
         Log("verdict: FAULT op=%s iter=%d detail=%s\n", op, iter, reason);
-        if (gLog) { fflush(gLog); }
         LOG_ERROR(logging::LogCategory::App,
                   "scene-stress verdict: FAULT op={} iter={} detail={}; details in logs/scene_stress.log, DRED in logs/dred_dump.txt",
                   op, iter, reason);
@@ -607,7 +604,7 @@ private:
         std::vsnprintf(line, sizeof(line), fmt, args);
         va_end(args);
         Log("%s", line);
-        if (dredFile_) { std::fputs(line, dredFile_); std::fflush(dredFile_); }
+        dredFile_.Write(line);
     }
 
     void DumpDred_(int iter, const char* op)
@@ -619,7 +616,7 @@ private:
             return;
         }
 
-        fopen_s(&dredFile_, diag::LogPath("dred_dump.txt").c_str(), "w");
+        dredFile_.Open("dred_dump.txt", diag::ArtifactMode::PerRunTruncate);
 
         DredLine_("==== DRED dump (fault op=%s iter=%d) ====\n", op, iter);
         DredLine_("GetDeviceRemovedReason=0x%08X\n",
@@ -633,7 +630,7 @@ private:
             if (FAILED(dev->QueryInterface(IID_PPV_ARGS(&dred0))))
             {
                 DredLine_("DRED: DeviceRemovedExtendedData interface unavailable (DRED not enabled or unsupported)\n");
-                if (dredFile_) { std::fclose(dredFile_); dredFile_ = nullptr; }
+                dredFile_.Close();
                 return;
             }
         }
@@ -645,7 +642,7 @@ private:
         DumpPageFault_(dred1.Get(), dred0.Get(), have1);
 
         DredLine_("==== end DRED dump ====\n");
-        if (dredFile_) { std::fclose(dredFile_); dredFile_ = nullptr; }
+        dredFile_.Close();
     }
 
     void DumpBreadcrumbs_(ID3D12DeviceRemovedExtendedData1* dred1,
@@ -1090,7 +1087,7 @@ private:
     bool roughnessEdits_ = false;
 
     ComPtr<ID3D12InfoQueue> infoQueue_;
-    FILE* dredFile_ = nullptr;
+    diag::ArtifactFile dredFile_;
     bool faultCaught_ = false;
     char faultDetail_[320] = {};
 
@@ -1118,7 +1115,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         iterations = 300; // default: a few hundred churn steps
     }
 
-    fopen_s(&gLog, diag::LogPath("scene_stress.log").c_str(), "w");
+    gLog.Open("scene_stress.log", diag::ArtifactMode::PerRunTruncate);
     SetUnhandledExceptionFilter(StressCrashFilter); // symbolize worker-thread/teardown/WndProc faults
     Log("scene lifecycle stress harness\n");
     Log("gbvContinue=%d\n", gbvContinue ? 1 : 0);
@@ -1213,7 +1210,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
             // Scene) would itself access-violate and mask the result. The OS
             // reclaims everything on process exit.
             Log("fault caught: skipping GPU teardown (device likely removed); terminating with exit code %d\n", exitCode);
-            if (gLog) { fflush(gLog); fclose(gLog); gLog = nullptr; }
+            gLog.Close();
             // TerminateProcess skips WinMain's RAII session: close it by hand so the session log
             // carries its footer and everything queued before the verdict.
             logging::Shutdown();
@@ -1231,7 +1228,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
     // the one stretch that produces no log line at all while it happens.
     boot::Dump("scene-stress: shutdown complete");
     Log("shutdown complete; exit code %d at %.1f s\n", exitCode, boot::ElapsedMs() / 1000.0);
-    if (gLog) { fflush(gLog); fclose(gLog); gLog = nullptr; }
+    gLog.Close();
 
     // Skip the CRT exit-time teardown (execute_onexit_table). Streamline/NGX registers a static
     // destructor that intermittently access-violates there — AFTER our explicit slShutdown() + device

@@ -1,10 +1,9 @@
 # Logging system — execution plan
 
-**Status: L1-L5 COMPLETE and committed; L6 COMPLETE (uncommitted), 2026-09-02. L7-L9 remain
+**Status: L1-L6 COMPLETE and committed; L7 COMPLETE (uncommitted), 2026-09-02. L8-L9 remain
 plan-only.** L1 was delivered by a first pass and then corrected (see its "Review findings");
-L2-L6 followed in the same session. Gate results and measured numbers are recorded under each
-step. Next: L7 (explicit diagnostic artifact API replacing `diag::LogPath`'s 35 literal
-destinations, domain by domain).
+L2-L7 followed in the same session. Gate results and measured numbers are recorded under each
+step. Next: L8 (ImGui log viewer over `logging::CopyRecentRecords`).
 
 This document is written as an execution contract for an AI working in this repository. Each step
 must leave the tree buildable and independently verifiable. Do not silently combine steps, change
@@ -866,6 +865,71 @@ AtomicReplace   — write temporary + replace for one complete report
 **Gate:** run the harness/feature that owns each migrated artifact and compare its content shape;
 two same-process writes obey the declared mode; concurrent unique artifacts do not collide;
 existing documentation paths remain valid.
+
+**Status: COMPLETE (2026-09-02).**
+
+**Implemented result:**
+
+- `sources/core/diagnostics/ArtifactWriter.h/.cpp`: `diag::ArtifactMode` (the four modes
+  above), `diag::ArtifactFile` (RAII, Win32 handle — every `Write`/`Printf` reaches the OS
+  immediately, so nothing is lost under `TerminateProcess` and no per-line flush protocol
+  exists any more), and the one-shots `WriteArtifact` / `WriteArtifactf`. `EnsureLogDirectory`
+  creates `logs/` once per process (function-local static); `diag::LogPath` now calls it
+  instead of `std::filesystem::create_directories` on every invocation, and `DiagPaths.h` no
+  longer pulls in `<filesystem>`.
+- Mode semantics: **PerRunTruncate** keeps a per-process set of opened names — the first open
+  truncates, later ones open append-only. **Append** opens append-only and, on the first open
+  per process, writes `---- session YYYY-MM-DD HH:MM:SS pid N (<build>) ----`, which answers
+  the baseline's "a line has no reliable session identity" for `ibl.log`, `bloom_kernel.log`,
+  `unbound_root.log`. **UniqueSession** generates `<stem>_<stamp>_<pid><ext>` with
+  `CREATE_NEW` and a numbered retry, so two opens within one second (same process, or a child
+  that reuses a pid) cannot clobber each other. **AtomicReplace** writes `<name>.tmp` and
+  `MoveFileEx(REPLACE_EXISTING | WRITE_THROUGH)` over `<name>` on `Close`.
+- One ordinary session event per artifact NAME per process: `artifact logs/<name> (<mode>)`
+  at Info on the first successful open, Error on the first failed open (`--log-stress`'s
+  session shows the pattern; a run that writes 200 `shadow_casters.log` lines logs it once).
+- Migrated (32 of the 35 destinations; mode declared at every call site):
+  - PerRunTruncate: `scene_stress.log`, `crash_stack.txt`, `dred_dump.txt`,
+    `tasksystem_stress.log`, `renderer_submission_stress.log`, `rt_smoke.log`,
+    `log_stress.log`, `boot_profile.log` (the `g_dumpCount` "w"/"a" switch is gone),
+    `device_caps.log` (InitDevice truncates; InitQueue, the compute-lane probe and the RT AS
+    report append), `material_rootparams.log` (static `first` deleted), `shadow_casters.log`
+    (static `started` deleted), `vsm_pages.log` (static `firstLine` deleted),
+    `barrier_dump.log` (was "a" across runs; one run's graphs now share one file),
+    `submit_order.log`, `barrier_diag.log` (opened on first line, kept open),
+    `thumbnail_profile.log` (kept open), `gbv.log`, `barrier_msg_trace.log` (the L4 raw
+    handles are `ArtifactFile`s now; the callbacks call `Write`, still no CRT/heap/lock).
+  - Append: `invariant_failure.log`, `device_removed.log` (`DumpDredBreadcrumbs` takes an
+    `ArtifactFile&`), `fence_stall.log`, `missing_material.log`, `cb_field_missing.log`,
+    `unbound_root.log`, `texcreate.log`, `vsm.log`, `ibl.log`, `bloom_kernel.log`,
+    `asset_import.log` (the editor's invalidation verdict line).
+  - AtomicReplace: `texcache.log`, `shader_cache.log`, `pso_cache.log`, `csm_readout.log`,
+    `barrier_census.log`.
+- Left on `diag::LogPath` (path only, directory creation cached): the three harness outputs
+  that own their `FILE*` (`textmanager_benchmark.csv`, `cull_benchmark.txt`, `rt_smoke.txt`)
+  and the importer's own `asset_import.log` stream (`AssetImporter.h` / `ImportPanel.cpp`).
+  They truncate per run through their own `fopen`, which is the behaviour they had.
+- `--log-stress` gained an `[artifact modes]` scenario (per-run truncate-then-append, append
+  separator + lines, atomic replace with no `.tmp` left, two unique opens in one second) and
+  the two concurrent session children each write a `UniqueSession` artifact the parent checks
+  for distinctness.
+
+**Gate results (2026-09-02):**
+
+- Debug, Release, Release_Editor build (Debug clean on the first attempt, `<filesystem>` gone
+  from `DiagPaths.h` without fallout).
+- `--log-stress` Debug: 0 failed checks (7 artifact-mode checks + the unique-children check).
+- `--tasksystem-stress` 0, `--renderer-submission-stress` 0, `--rt-smoke` 0 (`PASS tier=12`);
+  Release `--scene-stress=3 --barrier-census`: `verdict: CLEAN`, exit 0 through
+  `TerminateProcess`, `scene_stress.log` complete (14 lines) and `barrier_census.log` written
+  (63 lines) — the two files whose tails the CRT buffer used to be able to lose.
+- Debug `--shot` with `--dump-barriers --csm-readout --shadow-mode=legacy --barrier-cmp
+  --canonical-check`: every artifact above was produced; the session carries 13
+  `artifact ... (mode)` events, one per name.
+- Content-shape comparison against a snapshot of `logs/` taken before the migration, for the
+  20 artifacts present in both: line counts and first-line shape identical for every file
+  whose owning run was repeated (differences are run-to-run numbers only; Append files grew by
+  exactly the new session's lines plus one separator).
 
 ### L8 — ImGui log viewer
 

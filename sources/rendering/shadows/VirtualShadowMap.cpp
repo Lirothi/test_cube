@@ -15,7 +15,7 @@
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::kMaxShadowLods (per-view shadow LOD table)
 #include "rendering/shadows/ShadowSettings.h"
-#include "core/diagnostics/DiagPaths.h" // logs/vsm_pages.log (g_logPageStats file mirror)
+#include "core/diagnostics/ArtifactWriter.h" // logs/vsm_pages.log (g_logPageStats file mirror)
 #include "vfx/WindState.h" // W5: wind params copied into each page's shadow view CB
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
@@ -1110,11 +1110,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             // the slow path, and "why is dragging this mesh 150x slower than flying the camera"
             // cost a long hunt precisely because the engine already knew the answer and whispered it
             // somewhere unreadable.
-            if (FILE* f = nullptr; fopen_s(&f, diag::LogPath("vsm.log").c_str(), "a") == 0 && f)
-            {
-                std::fputs(msg, f);
-                std::fclose(f);
-            }
+            diag::WriteArtifact("vsm.log", diag::ArtifactMode::Append, msg);
         }
     }
     else if (singleDraw) { singleDrawFallbackLogged_ = 0; }
@@ -1653,22 +1649,15 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
                 ++ownersClip[v - vsm::kNumLocalVirtualViews];
             }
         }
-        static bool firstLine = true;
-        FILE* f = nullptr;
-        if (fopen_s(&f, diag::LogPath("vsm_pages.log").c_str(), firstLine ? "w" : "a") == 0 && f)
-        {
-            firstLine = false;
-            std::fprintf(f,
-                "frame=%llu bias=%d req=%u (L0=%u L1=%u L2=%u L3=%u L4=%u) resident=%u new=%u fail=%u"
-                " | owners: total=%u local=%u clip=[%u %u %u %u %u %u %u %u]\n",
-                static_cast<unsigned long long>(debugReadbackFrame_), render::g_shadowLodBias,
-                total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
-                resident, newAlloc, failCount,
-                ownersTotal, ownersLocal,
-                ownersClip[0], ownersClip[1], ownersClip[2], ownersClip[3],
-                ownersClip[4], ownersClip[5], ownersClip[6], ownersClip[7]);
-            std::fclose(f);
-        }
+        diag::WriteArtifactf("vsm_pages.log", diag::ArtifactMode::PerRunTruncate,
+            "frame=%llu bias=%d req=%u (L0=%u L1=%u L2=%u L3=%u L4=%u) resident=%u new=%u fail=%u"
+            " | owners: total=%u local=%u clip=[%u %u %u %u %u %u %u %u]\n",
+            static_cast<unsigned long long>(debugReadbackFrame_), render::g_shadowLodBias,
+            total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
+            resident, newAlloc, failCount,
+            ownersTotal, ownersLocal,
+            ownersClip[0], ownersClip[1], ownersClip[2], ownersClip[3],
+            ownersClip[4], ownersClip[5], ownersClip[6], ownersClip[7]);
     }
 
     // Session-log mirror — OFF by default (vsm::g_logPageStats), throttled independently of the
