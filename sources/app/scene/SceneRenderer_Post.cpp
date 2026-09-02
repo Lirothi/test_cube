@@ -6,6 +6,7 @@
 // trimmed one is a second thing to review.
 
 #include "app/scene/SceneRenderer.h"
+#include "core/logging/Log.h"
 
 #include <algorithm>
 #include <array>
@@ -179,7 +180,10 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
                                   std::floor(logLum), std::exp2(std::floor(logLum)),
                                   std::isfinite(ev) ? std::round(ev * 2.0f) * 0.5f : 0.0f,
                                   std::floor(preExpLog), std::floor(logLum + preExpLog));
-                    Renderer::DiagLogOnce(msg);
+                    // One record per DISTINCT quantised state (logging plan L6; this used to
+                    // dedupe through the barrier-diagnostics sink). The peak flips between two
+                    // stops on an unsettled scene, so "on change" would print every frame.
+                    LOG_INFO_ONCE_PER_MESSAGE(logging::LogCategory::Render, "{}", msg);
                 }
             }
         }

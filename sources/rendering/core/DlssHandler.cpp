@@ -1,4 +1,5 @@
 #include "rendering/core/DlssHandler.h"
+#include "core/logging/Log.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
 
@@ -468,7 +469,10 @@ bool DlssHandler::Evaluate(ID3D12GraphicsCommandList* cl)
     {
         if (skipEvaluateFrames_ == 0)
         {
-            Renderer::DiagLog("[dlss] evaluate failed - falling back to scene colour, retrying shortly\n");
+            // Once per backoff window (the guard above), not once per frame of a broken Streamline.
+            LOG_WARNING(logging::LogCategory::Render,
+                        "DLSS evaluate failed; falling back to scene colour, retrying in {} frames",
+                        kEvaluateBackoffFrames);
         }
         skipEvaluateFrames_ = kEvaluateBackoffFrames;
     }

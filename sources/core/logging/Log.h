@@ -567,6 +567,74 @@ namespace logging
         // Stamps QPC/sequence/ids/frame and hands the record to the queue (or the fallback).
         void SubmitRecord(LogRecord& record) noexcept;
 
+        [[nodiscard]] inline std::uint64_t HashMessage(const LogRecord& record) noexcept
+        {
+            // FNV-1a over the message bytes; the only consumer is the ONCE_PER_MESSAGE gate
+            // below. Zero is the ring's "empty slot" value, so it is never returned.
+            std::uint64_t hash = 14695981039346656037ull;
+            for (std::uint16_t i = 0; i < record.messageByteCount; ++i)
+            {
+                hash ^= static_cast<unsigned char>(record.message[i]);
+                hash *= 1099511628211ull;
+            }
+            return hash == 0 ? 1 : hash;
+        }
+
+        // Callsite memory for ONCE_PER_MESSAGE: the hashes of the last kSlots DISTINCT messages
+        // this callsite emitted. Fixed size, atomics only, constant-initialised.
+        struct MessageHashRing
+        {
+            static constexpr std::uint32_t kSlots = 16;
+            std::atomic<std::uint64_t> slots[kSlots] = {};
+            std::atomic<std::uint32_t> next{ 0 };
+
+            // True when the hash was already present; otherwise records it (evicting the
+            // oldest) and returns false. Racing threads may at worst duplicate a record.
+            [[nodiscard]] bool SeenOrRemember(std::uint64_t hash) noexcept
+            {
+                for (const std::atomic<std::uint64_t>& slot : slots)
+                {
+                    if (slot.load(std::memory_order_relaxed) == hash)
+                    {
+                        return true;
+                    }
+                }
+                const std::uint32_t index = next.fetch_add(1, std::memory_order_relaxed) % kSlots;
+                slots[index].store(hash, std::memory_order_relaxed);
+                return false;
+            }
+        };
+
+        // Emits a message only if THIS callsite has not emitted the same text among its last 16
+        // distinct ones. The tool for a STATE line evaluated every frame (quantised so a settled
+        // scene formats identically): each distinct state is reported once, an oscillation
+        // between two states costs two records rather than one per frame, and a value that keeps
+        // moving (a climbing leak count) still gets every new line. "Last since this callsite"
+        // would be wrong here — that re-emits on every flip. Formatting happens before the gate,
+        // so keep such lines off hot paths or behind their own flag.
+        template <typename... Args>
+        void WriteFormattedOncePerMessage(
+            LogLevel level,
+            LogCategory category,
+            std::source_location location,
+            MessageHashRing& ring,
+            std::string_view format,
+            Args&&... args) noexcept
+        {
+            LogRecord record;
+            record.level = level;
+            record.category = category;
+            record.sourceFile = location.file_name();
+            record.sourceFunction = location.function_name();
+            record.sourceLine = location.line();
+            FormatRecord(record, format, std::forward<Args>(args)...);
+            if (ring.SeenOrRemember(HashMessage(record)))
+            {
+                return;
+            }
+            SubmitRecord(record);
+        }
+
         [[nodiscard]] bool ThrottleAllows(
             std::atomic<std::int64_t>& nextAllowedNanoseconds,
             std::int64_t intervalNanoseconds) noexcept;
@@ -664,6 +732,28 @@ namespace logging
             }                                                                                    \
         }                                                                                        \
     } while (false)
+
+#define TC_LOG_ONCE_PER_MESSAGE_IMPL(levelValue, categoryValue, ...)                             \
+    do                                                                                           \
+    {                                                                                            \
+        const ::logging::LogCategory tcLogCategory = (categoryValue);                           \
+        if (::logging::ShouldLog((levelValue), tcLogCategory))                                  \
+        {                                                                                        \
+            static ::logging::detail::MessageHashRing tcLogSeen;                                \
+            ::logging::detail::WriteFormattedOncePerMessage(                                    \
+                (levelValue), tcLogCategory, std::source_location::current(), tcLogSeen,        \
+                __VA_ARGS__);                                                                    \
+        }                                                                                        \
+    } while (false)
+
+#define LOG_DEBUG_ONCE_PER_MESSAGE(categoryValue, ...)                                           \
+    TC_LOG_ONCE_PER_MESSAGE_IMPL(::logging::LogLevel::Debug, categoryValue, __VA_ARGS__)
+#define LOG_INFO_ONCE_PER_MESSAGE(categoryValue, ...)                                            \
+    TC_LOG_ONCE_PER_MESSAGE_IMPL(::logging::LogLevel::Info, categoryValue, __VA_ARGS__)
+#define LOG_WARNING_ONCE_PER_MESSAGE(categoryValue, ...)                                         \
+    TC_LOG_ONCE_PER_MESSAGE_IMPL(::logging::LogLevel::Warning, categoryValue, __VA_ARGS__)
+#define LOG_ERROR_ONCE_PER_MESSAGE(categoryValue, ...)                                           \
+    TC_LOG_ONCE_PER_MESSAGE_IMPL(::logging::LogLevel::Error, categoryValue, __VA_ARGS__)
 
 #if defined(NDEBUG)
 #define LOG_TRACE(categoryValue, ...) do { } while (false)

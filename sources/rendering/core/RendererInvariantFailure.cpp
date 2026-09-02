@@ -28,5 +28,8 @@
     std::snprintf(line, sizeof(line), "RENDERER INVARIANT FAILURE: %s (also in logs/invariant_failure.log)",
                   msg != nullptr ? msg : "(null)");
     logging::EmergencyWrite(logging::LogLevel::Fatal, logging::LogCategory::Render, line);
+    // Drain the frames queued before the failure while the writer thread is still alive; the
+    // timeout keeps this from ever holding up the abort.
+    logging::Flush(2000);
     std::abort();
 }

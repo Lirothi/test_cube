@@ -37,7 +37,11 @@ the newest one. Line shape:
 
 A missing `session end: clean shutdown` footer means the process did not shut down cleanly. Use
 `LOG_INFO(logging::LogCategory::Scene, "Loaded {}", path)` and friends (`core/logging/Log.h`);
-never `OutputDebugString` or `printf` for events. Switches: `--log-level=<trace|debug|info|warning|error|fatal>`,
+never `OutputDebugString` or `printf` for events. Gates for lines evaluated every frame:
+`LOG_*_ONCE` (once per process), `LOG_*_EVERY_N(n, ...)`, `LOG_*_THROTTLED(duration, ...)`,
+`LOG_*_ONCE_PER_MESSAGE` (once per distinct text among the callsite's last 16 — for a quantised
+STATE line). `WriteRaw`/`WriteRawLines` take already-formatted text (SDK callbacks, compiler
+output) without formatting or heap. Switches: `--log-level=<trace|debug|info|warning|error|fatal>`,
 `--log-category=<name>:<level>` (repeatable; names are the `[..]` column, e.g. `render.rt`),
 `--log-sync` (render every record on the calling thread — for a crash whose last lines never
 reach the writer), `--log-no-file`, `--log-file=<path>`. `--log-stress` runs the logging harness

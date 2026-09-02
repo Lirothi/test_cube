@@ -335,7 +335,13 @@ namespace logging
         {
             if (state.config.synchronous)
             {
-                AcquireSRWLockExclusive(&state.syncLock);
+                // Try-lock: a crash handler may call Flush on the very thread that died inside
+                // the synchronous render path while holding this lock (SRW locks are not
+                // recursive). Better to skip the sync than to hang the handler.
+                if (!TryAcquireSRWLockExclusive(&state.syncLock))
+                {
+                    return false;
+                }
                 state.file.Sync();
                 ReleaseSRWLockExclusive(&state.syncLock);
                 return true;

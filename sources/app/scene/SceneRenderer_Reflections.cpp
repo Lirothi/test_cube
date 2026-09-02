@@ -6,6 +6,7 @@
 // trimmed one is a second thing to review.
 
 #include "app/scene/SceneRenderer.h"
+#include "core/logging/Log.h"
 
 #include <algorithm>
 #include <array>
@@ -104,7 +105,9 @@ void SceneRenderer::FillSsrReprojectionConstants(const Camera& camera, SsrPassCo
                           ? "READ (hits are pre-exposed, undone in-shader)"
                           : "not read (hits come from the light target)",
                       std::floor(std::log2(std::max(prevPreExposure_, 1.0e-8f))));
-        Renderer::DiagLogOnce(msg);
+        // One record per DISTINCT (quantised) state, not one per frame; used to ride the
+        // barrier-diagnostics sink's text dedupe, now the callsite's own (logging plan L6).
+        LOG_INFO_ONCE_PER_MESSAGE(logging::LogCategory::Render, "{}", msg);
     }
 }
 

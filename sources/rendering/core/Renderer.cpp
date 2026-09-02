@@ -439,6 +439,7 @@ static void ReportOnTerminate()
     logging::EmergencyWrite(logging::LogLevel::Fatal, logging::LogCategory::Render,
         "std::terminate reached (an uncaught exception, typically a ThrowIfFailed on a worker "
         "thread); device-removal report attempted, see logs/device_removed.log if the device was lost");
+    logging::Flush(2000); // the frames before the throw are still in the ring; the writer is alive
     std::abort();
 }
 
@@ -1655,7 +1656,7 @@ void Renderer::ReportOffCanonicalStates() {
         char msg[320];
         std::snprintf(msg, sizeof(msg), "[canonical] off-canonical res=%s canonical=0x%X actual=0x%X\n",
                       entry.name, static_cast<unsigned>(entry.state), static_cast<unsigned>(actual));
-        Renderer::DiagLogOnce(msg);
+        CanonicalLogOnce(logging::LogLevel::Warning, msg);
     }
 
     // Step 6b part 2: name the resources that share a debug name. The original premise here was
@@ -1705,7 +1706,7 @@ void Renderer::ReportOffCanonicalStates() {
                           "[canonical] duplicate-name %s: %d live entries "
                           "(check the referrer count before reading this as a leak)\n",
                           name.c_str(), net);
-            Renderer::DiagLogOnce(dup);
+            CanonicalLogOnce(logging::LogLevel::Warning, dup);
         }
 
         unsigned anonymous = 0;
@@ -1718,7 +1719,7 @@ void Renderer::ReportOffCanonicalStates() {
         char anon[160];
         std::snprintf(anon, sizeof(anon), "[canonical] %u named + %u UNNAMED entries declared\n",
                       static_cast<unsigned>(canonicalNetScratch_.size()), anonymous);
-        Renderer::DiagLogOnce(anon);
+        CanonicalLogOnce(logging::LogLevel::Info, anon);
     }
 
     // One summary line so an empty log is distinguishable from a check that never ran — the same
@@ -1732,7 +1733,8 @@ void Renderer::ReportOffCanonicalStates() {
         char summary[160];
         std::snprintf(summary, sizeof(summary), "[canonical] frame end: %u of %u declared resources off-canonical\n",
                       drifted, declaredCount);
-        Renderer::DiagLogOnce(summary);
+        DiagLog(logging::LogLevel::Info, summary); // already change-gated above
+
     }
 }
 
@@ -1754,44 +1756,31 @@ static thread_local Renderer::CompiledBarriers* tlCompiledBarriers = nullptr;
 void Renderer::SetThreadCompiledBarriers(CompiledBarriers* cb) { tlCompiledBarriers = cb; }
 Renderer::CompiledBarriers* Renderer::CurrentThreadCompiledBarriers() { return tlCompiledBarriers; }
 
-// Barrier-diagnostics sink, shared by --barrier-flip-trace and --barrier-cmp. Goes to a FILE as
-// well as the debugger: the --scene-stress runs that reproduce the residual mismatches have no
-// debugger attached, so DBWIN output is simply lost (the same trap as the stress harness's own
-// verdict). Flushed per line — a crash mid-frame must not take the last line with it, which is the
-// one that matters.
-// Logging plan: this sink and DiagLogOnce are the L6 target (callsite ONCE/throttle on the session
-// log replaces them); the direct OutputDebugStringA below is deliberately left until then.
-void Renderer::DiagLog(const char* line) {
+// Barrier-diagnostics artifact, shared by --barrier-flip-trace and --barrier-cmp. A FILE because
+// the --scene-stress runs that reproduce the residual mismatches have no debugger attached, and
+// "no barrier_diag.log produced" is a documented verdict (docs/async_compute_plan.md). Flushed
+// per line ON PURPOSE even though the logging plan's L6 removes per-line flushes elsewhere: the
+// stress harness exits through TerminateProcess, which discards a buffered CRT tail, and the last
+// line is the one that matters. These paths only run under their diagnostic flags, so the cost
+// is opt-in. The session log gets the same line through the normal path (L6 replaced the old
+// direct OutputDebugStringA).
+void Renderer::DiagLog(logging::LogLevel level, const char* line) {
     static std::mutex mtx;
     static FILE* f = nullptr;
-    std::lock_guard<std::mutex> lk(mtx);
-    if (f == nullptr) { fopen_s(&f, diag::LogPath("barrier_diag.log").c_str(), "w"); }
-    if (f != nullptr) { std::fputs(line, f); std::fflush(f); }
-    OutputDebugStringA(line);
-}
-
-// Same sink, but a line that is IDENTICAL to one already written is dropped.
-//
-// Every one of these diagnostics is evaluated per frame, so a single standing condition writes a
-// line per frame forever: an eight-second headless run produced 3779 lines of which SEVEN were
-// distinct, and the two that mattered (an off-canonical resource and a leak) sat in the middle of
-// three thousand copies of "0 of 176 off-canonical". A per-frame repeat carries no information the
-// first line did not — these report STATE, not events — so the whole log becomes the set of
-// conditions that occurred, which is what anyone reading it actually wants.
-//
-// Deliberately keyed on the FORMATTED TEXT: any number that moves (a leak count climbing, a drift
-// count changing) makes a new line and still gets through, so a condition that is developing is
-// never the thing that gets swallowed.
-void Renderer::DiagLogOnce(const char* line) {
-    static std::mutex mtx;
-    static std::unordered_set<std::string> seen;
     {
         std::lock_guard<std::mutex> lk(mtx);
-        // Past the cap everything prints again: losing a diagnostic is worse than repeating one,
-        // so the overflow direction is "say too much", never "go quiet".
-        if (seen.size() < 8192 && !seen.insert(line).second) { return; }
+        if (f == nullptr) { fopen_s(&f, diag::LogPath("barrier_diag.log").c_str(), "w"); }
+        if (f != nullptr) { std::fputs(line, f); std::fflush(f); }
     }
-    DiagLog(line);
+    logging::WriteRaw(level, logging::LogCategory::RenderGraph, line);
+}
+
+// See the declaration. Only ReportOffCanonicalStates calls this, from the frame-end thread, so
+// the set needs no lock. Past the cap everything prints again: losing a diagnostic is worse
+// than repeating one, so the overflow direction is "say too much", never "go quiet".
+void Renderer::CanonicalLogOnce(logging::LogLevel level, const char* line) {
+    if (canonicalSeen_.size() < 8192 && !canonicalSeen_.insert(line).second) { return; }
+    DiagLog(level, line);
 }
 
 void Renderer::TransitionExplicit(ID3D12GraphicsCommandList* cl, ID3D12Resource* res,
@@ -1887,7 +1876,7 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
                     char m[280];
                     std::snprintf(m, sizeof(m), "[flip] pass=%d point %u/%u (%u barriers) asked %s 0x%X\n",
                                   cb.pass, p, cb.pointCount, pt.count, label, static_cast<unsigned>(after));
-                    Renderer::DiagLog(m);
+                    Renderer::DiagLog(logging::LogLevel::Info, m);
                 }
             }
             return;
@@ -1920,7 +1909,7 @@ void Renderer::Transition(ID3D12GraphicsCommandList* cl, ID3D12Resource* res, D3
             char m[520];
             std::snprintf(m, sizeof(m), "[flip-miss] pass=%d res=%s want=0x%X cur=%u/%u [%s]\n",
                           cb.pass, label, static_cast<unsigned>(after), cur, cb.pointCount, detail);
-            Renderer::DiagLog(m);
+            Renderer::DiagLog(logging::LogLevel::Warning, m);
         }
         cb.unmatched.fetch_add(1, std::memory_order_relaxed);
         return;
@@ -2049,7 +2038,7 @@ void Renderer::EmitPoint(ID3D12GraphicsCommandList* cl, std::uint32_t point) {
         char m[160];
         std::snprintf(m, sizeof(m), "[flip] pass=%d point %u/%u (%u barriers) marker\n",
                       cb.pass, point, cb.pointCount, pt.count);
-        Renderer::DiagLog(m);
+        Renderer::DiagLog(logging::LogLevel::Info, m);
     }
 }
 

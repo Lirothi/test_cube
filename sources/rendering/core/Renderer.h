@@ -12,6 +12,9 @@
 #include <mutex>
 #include <utility>
 #include <vector>
+#include <string>
+#include <unordered_set>
+#include "core/logging/LogLevel.h" // DiagLog/CanonicalLogOnce take the session-log level
 
 #include "core/math/Math.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
@@ -547,14 +550,11 @@ public:
     // conversion bug that would otherwise lose or reorder barriers silently.
     void EmitPoint(ID3D12GraphicsCommandList* cl, std::uint32_t point);
 
-    // Barrier-diagnostics sink for --barrier-cmp / --barrier-flip-trace: barrier_diag.log plus the
-    // debugger. A file because the --scene-stress harness runs with no debugger attached.
-    static void DiagLog(const char* line);
-    // Same sink, dropping a line identical to one already written. These diagnostics report STATE
-    // and are evaluated every frame, so without this one standing condition buries the log (3779
-    // lines, 7 distinct, in an 8-second run). Keyed on the formatted text, so any moving number
-    // still gets through.
-    static void DiagLogOnce(const char* line);
+    // Barrier-diagnostics artifact for --barrier-cmp / --barrier-flip-trace: appends the line to
+    // barrier_diag.log (a documented verdict file; --scene-stress exits through TerminateProcess,
+    // so it is flushed per line) and mirrors it into the session log at `level` under
+    // render.graph. Nothing goes to the debugger directly any more (logging plan L6).
+    static void DiagLog(logging::LogLevel level, const char* line);
 
     // Carries both the log and the compiled barriers onto a fan-out worker (see TransitionLogScope).
     struct CompiledBarrierScope {
@@ -826,6 +826,13 @@ private:
     // releases it explicitly anyway; this ordering only covers the path where Shutdown never ran.
     ExposureMetering exposureMetering_;
     robin_hood::unordered_map<std::string, int> canonicalNetPeak_;
+    // --canonical-check reports STATE every frame; a line identical to one already written is
+    // dropped so a standing condition does not bury the log (3779 lines, 7 distinct, in an
+    // 8-second run). Keyed on the formatted text so any moving number still gets through; capped,
+    // and past the cap everything prints again ("say too much", never "go quiet"). Scoped to this
+    // subsystem on purpose — it is a bounded per-key cache, not a global dedupe table.
+    void CanonicalLogOnce(logging::LogLevel level, const char* line);
+    std::unordered_set<std::string> canonicalSeen_;
     unsigned canonicalLastDrift_ = ~0u;    // summary prints on change only — see the note there
     unsigned canonicalLastDeclared_ = ~0u;
 

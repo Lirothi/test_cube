@@ -97,6 +97,9 @@ LONG WINAPI StressCrashFilter(EXCEPTION_POINTERS* ep)
                       "unhandled exception code=0x%08lX tid=%lu; stack in logs/crash_stack.txt",
                       code, GetCurrentThreadId());
         logging::EmergencyWrite(logging::LogLevel::Fatal, logging::LogCategory::App, line);
+        // The writer thread is (normally) still alive: drain whatever the frame queued before it
+        // died, so the session log ends with the frames leading up to the fault, not a gap.
+        logging::Flush(2000);
     }
     if (ep && ep->ExceptionRecord && code == EXCEPTION_ACCESS_VIOLATION &&
         ep->ExceptionRecord->NumberParameters >= 2)

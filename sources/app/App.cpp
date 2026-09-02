@@ -1292,7 +1292,6 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 static double shotStart = GetTimeSeconds();
                 static int shotIndex = 0;
                 static int appliedSweepIndex = -1;
-                static bool sweepNameReported = false;
 
                 // Apply before the settle delay is judged, so the value is in place for the whole
                 // interval rather than only for the frame the shot is taken on.
@@ -1302,12 +1301,10 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     const float value = g_sweepValues[static_cast<size_t>(shotIndex)];
                     const bool known = ApplySweepValue(scene, appController_.SettingsRef(),
                                                       g_sweepSetting, value);
-                    if (!known && !sweepNameReported)
+                    if (!known)
                     {
-                        // Once per run on purpose (the flag, not LOG_WARNING_ONCE): the sweep name
-                        // does not change between shots, so every shot would repeat it.
-                        LOG_WARNING(logging::LogCategory::App, "--sweep {}: unknown setting", g_sweepSetting);
-                        sweepNameReported = true;
+                        // Once per process: the sweep name never changes between shots.
+                        LOG_WARNING_ONCE(logging::LogCategory::App, "--sweep {}: unknown setting", g_sweepSetting);
                     }
                     // The camera must not carry the previous value's adaptation into this shot.
                     renderer.Exposure().RequestReset();

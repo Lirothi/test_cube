@@ -1,11 +1,10 @@
 # Logging system — execution plan
 
-**Status: L1-L4 COMPLETE and committed (`73cf5bf`); L5 (a-d) COMPLETE (uncommitted),
-2026-09-02. L6-L9 remain plan-only.** L1 was delivered by a first pass and then corrected (see
-its "Review findings"); L2/L3/L4/L5 followed in the same session. Gate results and measured
-numbers are recorded under each step. Next: L6 (delete `Renderer::DiagLog/DiagLogOnce`,
-`Texture2D::LogTextureResolveOnce`'s set and the remaining per-frame diagnostics; measure the
-disabled cost).
+**Status: L1-L5 COMPLETE and committed; L6 COMPLETE (uncommitted), 2026-09-02. L7-L9 remain
+plan-only.** L1 was delivered by a first pass and then corrected (see its "Review findings");
+L2-L6 followed in the same session. Gate results and measured numbers are recorded under each
+step. Next: L7 (explicit diagnostic artifact API replacing `diag::LogPath`'s 35 literal
+destinations, domain by domain).
 
 This document is written as an execution contract for an AI working in this repository. Each step
 must leave the tree buildable and independently verifiable. Do not silently combine steps, change
@@ -774,6 +773,64 @@ untouched (L7).
 scope appears as a meaningful `AppController::Tick` or renderer hot-path cost; a 120-frame trace is
 within the established run-to-run CPU noise floor. Record measured numbers in this document when
 the step is completed.
+
+**Status: COMPLETE (2026-09-02).**
+
+**Implemented result:**
+
+- `Renderer::DiagLog(level, line)` is now only the `barrier_diag.log` artifact writer plus a
+  session-log mirror under `render.graph`; the direct `OutputDebugStringA` is gone — the LAST
+  one in `sources/`. The per-line `fflush` is KEPT on purpose and documented at the function:
+  `--scene-stress` exits through `TerminateProcess`, which discards a buffered CRT tail, and
+  "no barrier_diag.log produced" is a documented verdict; the paths only run under their
+  diagnostic flags, so the cost is opt-in. Levels: `[flip]` Info, `[flip-miss]` Warning,
+  `[barrier-compile]` Info, `[barrier-cache] STALE` Error, `[barrier-cmp]` Warning.
+- `Renderer::DiagLogOnce` (a global text-keyed dedupe set) is deleted. Its callers got the
+  semantics they actually needed:
+  - `--canonical-check`: `Renderer::CanonicalLogOnce` — the same bounded (8192) text-keyed
+    cache, but a member of the one subsystem that reports state every frame; no lock because
+    only the frame-end thread calls it. The change-gated frame summary no longer needs it.
+  - `--barrier-cmp` (`RenderGraph::LogComparator`): the comparator's own bounded set behind
+    a mutex (pass bodies run on workers). A per-key bounded subsystem cache, not a global one.
+  - The two `[p16]` state lines (`SceneRenderer_Reflections/_Post`): a NEW callsite primitive
+    `LOG_<LEVEL>_ONCE_PER_MESSAGE` — emits unless this callsite already emitted the same text
+    among its last 16 distinct messages (`detail::MessageHashRing`: 16 atomic FNV-1a hashes,
+    no heap). "Once per change since last" was tried first and was WRONG: the scene-peak
+    line flips between two stops on an unsettled scene and printed 404 lines in a 700-frame
+    run; the ring gives exactly 2. These lines move from `barrier_diag.log` (a sink they were
+    only borrowing) to the session log — `grep "\[p16\]" logs/session_*.log`.
+- `DlssHandler`: "evaluate failed" no longer borrows the barrier sink; `LOG_WARNING(render)`
+  once per backoff window (the existing guard).
+- `Texture2D::LogTextureResolveOnce` and its `unordered_set<wstring>` + mutex are deleted. The
+  DDS-sibling / unmipped line is emitted where the texture is actually LOADED (the shared-cache
+  miss), so a cache hit is silent by construction and a reload after `ClearCache` is a new
+  event. `App.cpp`'s `sweepNameReported` flag became `LOG_WARNING_ONCE` (identical semantics:
+  the sweep name never changes within a process).
+- Crash paths now DRAIN the ring: `StressCrashFilter`, `RendererInvariantFailure` and
+  `ReportOnTerminate` call `logging::Flush(2000)` after their emergency record — the writer
+  thread is normally still alive, so the frames leading up to the fault reach the file instead
+  of dying in the queue. The synchronous-mode branch of `Flush` uses a try-lock so a handler
+  running on a thread that died inside the sync render path cannot self-deadlock.
+- Kept, as state that gates behaviour rather than output: `rtFailureLogged_` (per scene),
+  `asVramLogged_` (per level), `singleDrawFallbackLogged_` (per reason), `s_deviceRemovalReported`
+  (also gates the artifact), `g_unboundReported` (a bounded per-slot bitmask), the wind
+  8-frame and shadow 5-frame counters.
+
+**Measured (Release x64, wind_test, `--wind-freeze --no-hud --profdump`, 2 consecutive runs
+of ~2140 frames each, machine otherwise idle):**
+
+- Session records per run: **50 and 50** — all boot/shutdown; zero records are produced per
+  frame in steady state at default thresholds. The only per-frame logging work in the frame
+  loop is `SetFrameNumber` (one relaxed atomic store) plus the threshold checks of flag-gated
+  diagnostics (0.2-0.7 ns each, L3 microbenchmark).
+- `Whole Cycle` avg 1.575 / 1.766 ms, `CPU.Frame` avg 2.847 / 3.336 ms, `Scene::Render`
+  1.402 / 1.563 ms — the spread between two identical binaries IS the run-to-run noise floor
+  here (~10%); the profiler has no logging scope at all, so nothing to attribute.
+- `--log-stress` after the core change (ONCE_PER_MESSAGE, try-lock Flush): 0 failed checks.
+- Debug run with `--barrier-cmp --canonical-check`: 7 `render.graph` records, `barrier_diag.log`
+  with the same 7 lines (comparator clean), `[p16]` 2 records, 0 dropped.
+- Direct-output audit of `sources/`: **zero** `OutputDebugString`, zero `printf`-family event
+  output outside `core/logging`.
 
 ### L7 — Explicit diagnostic artifact API
 

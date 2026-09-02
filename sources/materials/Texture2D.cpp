@@ -66,25 +66,6 @@ static bool FileExistsW(const std::wstring& path)
     return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-// One diagnostic line per source path: which sibling won, or (when none) a one-time "unmipped"
-// warning so shimmer from a not-yet-imported PNG is traceable.
-static void LogTextureResolveOnce(const std::wstring& src, const std::wstring& dds, bool useDds)
-{
-    static std::mutex mu;
-    static std::unordered_set<std::wstring> seen;
-    std::lock_guard<std::mutex> lk(mu);
-    if (!seen.insert(src).second) {
-        return;
-    }
-    // Per-path dedupe (the set above) is kept for now; the plan's L6 decides whether the
-    // callsite primitives replace it.
-    if (useDds) {
-        LOG_DEBUG(logging::LogCategory::Asset, "texture {} -> DDS sibling {}", src, dds);
-    } else {
-        LOG_WARNING(logging::LogCategory::Asset, "unmipped texture (no DDS sibling, WIC fallback): {}", src);
-    }
-}
-
 // ========================= WIC loader (to RGBA8) =========================
 bool Texture2D::LoadRGBA8_WIC_(const std::wstring& path, std::vector<uint8_t>& outRGBA, UINT& outW, UINT& outH)
 {
@@ -564,11 +545,10 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     // one naming "x.dds" load the same bytes, and keying on the requested path would give them
     // separate GPU copies — the exact duplication this cache exists to remove.
     CreateDesc resolved = desc;
-    if (!EndsWithNoCase(resolved.path, L".dds")) {
+    const bool requestedDds = EndsWithNoCase(resolved.path, L".dds");
+    if (!requestedDds) {
         const std::wstring sibling = DdsSiblingPath(resolved.path);
-        const bool useDds = !sibling.empty() && FileExistsW(sibling);
-        LogTextureResolveOnce(resolved.path, sibling, useDds);
-        if (useDds) {
+        if (!sibling.empty() && FileExistsW(sibling)) {
             resolved.path = sibling;
         }
     }
@@ -621,6 +601,17 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     auto owner = std::make_shared<Texture2D>();
     if (!owner->LoadFromFileUncached_(renderer, uploadCmd, resolved, keepAlive)) {
         return false; // a failed load is never cached: the next caller must be free to retry
+    }
+    // Which sibling won, or (when none) the "unmipped" warning so shimmer from a not-yet-imported
+    // PNG is traceable. Logged HERE, on the actual load, rather than on every request through a
+    // per-path dedupe set (logging plan L6): a cache hit is not a resolution event, and a reload
+    // after ClearCache is a new one.
+    if (!requestedDds) {
+        if (resolved.path != desc.path) {
+            LOG_DEBUG(logging::LogCategory::Asset, "texture {} -> DDS sibling {}", desc.path, resolved.path);
+        } else {
+            LOG_WARNING(logging::LogCategory::Asset, "unmipped texture (no DDS sibling, WIC fallback): {}", desc.path);
+        }
     }
     {
         std::lock_guard<std::mutex> lk(gSharedTexMutex);

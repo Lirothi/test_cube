@@ -1060,7 +1060,7 @@ private:
                           prepare_->barrierCount, compileState_.size(), returnBarrierEstimate_,
                           prepare_->cacheHits, prepare_->cacheMisses, prepare_->cacheNotFixedPoint,
                           emitEnhanced, emitLegacy, asEnhanced, asLegacy);
-            Renderer::DiagLog(msg);
+            Renderer::DiagLog(logging::LogLevel::Info, msg); // per frame, but only under --barrier-compile-log
         }
     }
 
@@ -1176,7 +1176,7 @@ private:
         auto complain = [](const char* what) {
             char msg[200];
             std::snprintf(msg, sizeof(msg), "[barrier-cache] STALE: %s\n", what);
-            Renderer::DiagLog(msg);
+            Renderer::DiagLog(logging::LogLevel::Error, msg);
         };
         if (prepare_->verifyBarriers.size() != prepare_->barrierCount) { complain("barrier count"); return; }
         for (std::uint32_t i = 0; i < prepare_->barrierCount; ++i) {
@@ -1197,7 +1197,7 @@ private:
                               static_cast<unsigned>(b.Transition.StateBefore),
                               static_cast<unsigned>(b.Transition.StateAfter));
                 (void)label;
-                Renderer::DiagLog(msg);
+                Renderer::DiagLog(logging::LogLevel::Error, msg);
                 return;
             }
         }
@@ -1343,8 +1343,17 @@ private:
         // ONCE per distinct line. The comparator runs every frame, so the two long-standing benign
         // divergences (Exposure.Value, Ocean.Wetness*) otherwise write one line each per frame and
         // bury anything new in the middle of them. The SKIPPED direction above already had to
-        // solve the same problem by hand (VsmPageRender, 31k lines).
-        Renderer::DiagLogOnce(msg);
+        // solve the same problem by hand (VsmPageRender, 31k lines). The set is the comparator's
+        // own bounded per-key cache (logging plan L6: no global dedupe table); past the cap
+        // everything prints again rather than going quiet. Pass bodies run on workers, hence
+        // the lock — it only ever contends when the comparator is on.
+        static std::mutex seenMutex;
+        static std::unordered_set<std::string> seen;
+        {
+            std::lock_guard<std::mutex> lk(seenMutex);
+            if (seen.size() < 8192 && !seen.insert(msg).second) { return; }
+        }
+        Renderer::DiagLog(logging::LogLevel::Warning, msg);
     }
 
     // Step 3: run one pass body with its transitions observed, when it has a Prepare and
