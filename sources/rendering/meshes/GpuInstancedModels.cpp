@@ -11,6 +11,8 @@
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
+#include "rendering/core/VisibilityStats.h" // S1: g_visChunkMask
+#include "core/math/Frustum.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/renderables/InstanceTypes.h"
@@ -140,27 +142,44 @@ void GpuInstancedModels::PrepareRender(RenderGraphPassContext& ctx)
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
-void GpuInstancedModels::BuildLodPartition(const Math::float3& camPos)
+void GpuInstancedModels::BuildLodPartition(const Math::float3& camPos, const Frustum& cameraFrustum)
 {
     tierBase_.fill(0u);
     tierCount_.fill(0u);
+    visibleInstanceCount_ = 0u;
     const UINT n = std::min(instanceCount_, kMaxLodInstances);
     if (n == 0u || !GetMesh()) { return; }
 
     const Math::mat4 model = GetModelMatrix();
-    const float radius = GetMesh()->GetBoundingBox().GetRadius();
+    const AABB& local = GetMesh()->GetBoundingBox();
+    const float radius = local.GetRadius();
     const UINT maxTier = std::min<UINT>(GetMesh()->GetLodCount() - 1u, kLodTiers - 1u);
+
+    // S1: per-instance frustum test, so the camera draws the instances in front of it and not the
+    // whole cloud. A sphere about the instance PIVOT (the grid offset the object matrix places),
+    // radius = the farthest mesh corner from that pivot times the object's largest scale axis.
+    // Rotation-invariant on purpose: the instance's Y rotation lives on the GPU (instance_anim.hlsl)
+    // and the CPU copy of the angle must never decide visibility. Conservative like the object
+    // cull -- an instance is dropped only when its whole sphere misses the frustum. Shadows are
+    // untouched: DrawGeometry/GetRtInstances still walk instanceCount_, this only shapes the remap.
+    const Math::float3 sc = GetScale();
+    const float kScale = std::max(std::abs(sc.x), std::max(std::abs(sc.y), std::abs(sc.z)));
+    const float cullRadius = (local.IsValid() ? local.GetCenter().Length() + radius : radius) * kScale;
+    const bool cull = render::g_visChunkMask && cameraFrustum.IsValid();
+    constexpr uint8_t kCulled = 0xFFu;
 
     // Per-instance tier from its world position (rotation/scale don't move the center).
     std::array<uint8_t, kMaxLodInstances> tierOf{};
     for (UINT i = 0; i < n; ++i)
     {
         const Math::float3 wp = model.TransformPoint(ComputeInstanceOffset(i));
+        if (cull && !cameraFrustum.Intersects(wp, cullRadius)) { tierOf[i] = kCulled; continue; }
         UINT t = render::SelectLodTier(wp, radius, camPos, instanceLastTier_[i]); // per-instance hysteresis
         if (t > maxTier) { t = maxTier; }
         instanceLastTier_[i] = static_cast<uint8_t>(t);
         tierOf[i] = static_cast<uint8_t>(t);
         ++tierCount_[t];
+        ++visibleInstanceCount_;
     }
     // Prefix-sum the per-tier counts into start offsets, then scatter instance indices.
     UINT acc = 0u;
@@ -168,14 +187,15 @@ void GpuInstancedModels::BuildLodPartition(const Math::float3& camPos)
     std::array<UINT, kLodTiers> cursor = tierBase_;
     for (UINT i = 0; i < n; ++i)
     {
+        if (tierOf[i] == kCulled) { continue; }
         instanceRemap_[cursor[tierOf[i]]++] = i;
     }
 }
 
-void GpuInstancedModels::SelectLod(const Camera& camera)
+void GpuInstancedModels::SelectLod(const Camera& camera, const Frustum& cameraFrustum)
 {
     // Step 6: build the per-instance LOD partition once per frame in PrepareViews; Render reads it.
-    BuildLodPartition(camera.GetPosition());
+    BuildLodPartition(camera.GetPosition(), cameraFrustum);
 }
 
 void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB)

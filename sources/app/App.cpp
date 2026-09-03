@@ -24,6 +24,9 @@ float g_camFly[2] = { 0.0f, 0.0f }; // "--cam-fly=x,z": constant camera drift in
 // the motion-ONSET transient (converged temporal histories -> first frames of motion), which a
 // from-boot drift can never show.
 float g_camFlyDelay = 0.0f;
+// "--cam-fly-yaw=<deg/s>": constant yaw rate on top of the drift -- the headless stand-in for
+// mouse look. A turning camera is what moves the cascade boxes between frames (S14 cross-check).
+float g_camFlyYaw = 0.0f;
 float g_camRot[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 // One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
 std::string g_shotPath;
@@ -456,6 +459,8 @@ namespace
         if (setting == "csm.scissorPad")   { scene.CascadeConfig().scissorPadTexels = std::clamp(value, 0.0f, 64.0f); return true; }
         // S14 [UE ShadowBoundsAccurate]: cull cascade casters against the slice extruded toward the sun.
         if (setting == "csm.accurateCull") { scene.CascadeConfig().accurateCasterCull = value != 0.0f; return true; }
+        // Occlusion plan S1: per-chunk / per-GI-instance frustum mask below the object cull. 0 = rollback.
+        if (setting == "vis.chunkMask") { render::g_visChunkMask = value != 0.0f; return true; }
         // The Ctrl-key toggle, headless. Two draw paths write the SAME atlas (GPU-driven indirect
         // vs the CPU object walk) and S6 has to bias both identically -- that is only checkable
         // if a capture can select the path.
@@ -1286,7 +1291,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 // "--cam-fly=x,z": drift the camera at a constant world velocity (m/s). The ONLY
                 // headless way to exercise motion-dependent paths — window relocations (wetness,
                 // surf sim), clipmap snapping, DLSS history — a fixed --cam-pos never triggers them.
-                if (g_camFly[0] != 0.0f || g_camFly[1] != 0.0f)
+                if (g_camFly[0] != 0.0f || g_camFly[1] != 0.0f || g_camFlyYaw != 0.0f)
                 {
                     static const double flyStart = GetTimeSeconds();
                     if (now - flyStart >= (double)g_camFlyDelay)
@@ -1295,6 +1300,10 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         const float3 p = cam.GetPosition();
                         cam.SetPosition(float3(p.x + g_camFly[0] * deltaTime, p.y,
                                                p.z + g_camFly[1] * deltaTime));
+                        if (g_camFlyYaw != 0.0f)
+                        {
+                            cam.AddYaw(DirectX::XMConvertToRadians(g_camFlyYaw) * deltaTime);
+                        }
                     }
                 }
                 renderer.Tick(deltaTime);

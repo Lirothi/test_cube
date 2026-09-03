@@ -236,7 +236,7 @@ InstancedDrawBatch* SceneRenderQueue::AcquireBatch(size_t& cursor)
     return instancedBatches_[cursor++].get();
 }
 
-void SceneRenderQueue::SelectLods(const Camera& camera)
+void SceneRenderQueue::SelectLods(const Camera& camera, const Frustum& cameraFrustum)
 {
     CPU_SCOPE(ProfilerScopes::kSceneRenderQueueSelectLods);
     // Once per frame, ahead of every SelectLod: the ratio bounds are a screen size only at the
@@ -247,7 +247,7 @@ void SceneRenderQueue::SelectLods(const Camera& camera)
     {
         for (RenderableObjectBase* obj : bucket)
         {
-            if (obj) { obj->SelectLod(camera); }
+            if (obj) { obj->SelectLod(camera, cameraFrustum); }
         }
     }
 }

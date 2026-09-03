@@ -400,13 +400,16 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
             else
             {
                 // S3.6: per-object receiver LOD (see ReceiverCasterLod). Was the cascade index.
+                // S1: the cascade's cull volume (S14 accurate frustum) rides along so a chunked
+                // caster draws only the chunks that volume keeps -- the CPU twin of the GPU path's
+                // per-chunk cull.
                 const Math::float3& camPos = csmCamPos;
                 for (auto* obj : opaqueSimple)
                 {
                     if (obj)
                     {
                         obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
-                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true);
+                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true, &view.frustum);
                     }
                 }
 
@@ -415,7 +418,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
                     if (obj)
                     {
                         obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
-                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true);
+                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true, &view.frustum);
                     }
                 }
             }
@@ -467,7 +470,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
                 if (obj)
                 {
                     obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
-                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true);
+                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true, &view.frustum); // S1
                 }
             }
 
@@ -476,7 +479,7 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
                 if (obj)
                 {
                     obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
-                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true);
+                            ReceiverCasterLod(obj, camPos), /*chunkCameraLods=*/true, &view.frustum); // S1
                 }
             }
         }

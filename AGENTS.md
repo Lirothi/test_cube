@@ -61,7 +61,17 @@ the prefix) the newest 10 by write time (or 100 MiB) are kept — never more tha
 fixed-name artifacts use other prefixes and are never deleted. `python tools/check_logging.py`
 reports any new direct output (exit code = findings) — run it before committing.
 
-Structured reports (a verdict file, a caps table, a dump) are ARTIFACTS, not events: write them
+**Diagnostics are events, not files.** Anything a subsystem wants to say -- a pre-assert dump, a
+validator's mismatch list, a self-test's per-case lines and verdict, a cross-check that fired --
+goes through `LOG_*` into the session log (Fatal before an assert: it is flushed synchronously, so
+the record survives whatever the dialog's button does). Do NOT add a new `logs/<name>.log` for it:
+the owner said so (2026-09-03) after `s14_assert.log` / `hzb_cull_selftest.log` appeared beside
+the session log. A headless gate reads its verdict line from the session log (`Select-String` for
+`cull validation PASS`, `hzb cull self-test: PASS`, ...) and the exit code.
+
+Structured reports a SCRIPT parses as a table (`csm_readout.log`, `visibility_readout.log`,
+`cull_benchmark.txt`, the stress verdicts) are ARTIFACTS, not events -- an existing, closed set;
+a new one needs the owner's OK first. Write them
 with `diag::ArtifactFile` / `diag::WriteArtifact(name, mode, text)` (`core/diagnostics/ArtifactWriter.h`),
 declaring the mode — `PerRunTruncate` (first open per process truncates, later ones append),
 `Append` (history across runs, session separator written once), `UniqueSession`

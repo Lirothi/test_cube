@@ -24,6 +24,7 @@
 #include "meshoptimizer.h"                // --reimport-drop-small= -> meshopt_SimplifyPrune
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/RtSmoke.h"
+#include "rendering/visibility/HzbCullSelfTest.h" // occlusion plan S2: --hzb-cull-selftest
 #include "rendering/shadows/VirtualShadowMap.h" // temporary VSM perf-harness tunables (--vsm-*)
 #include "rendering/meshes/LodSelect.h"          // shadow caster LOD curve (--vsm-lodbias/--vsm-lodstride)
 #include "rendering/renderables/InstanceTypes.h"  // S0: g_shadowMode / g_csmDebugMode (--shadow-mode, --csm-tint)
@@ -212,6 +213,13 @@ int WINAPI WinMain(
     // exit code 0 on PASS/SKIP, non-zero on FAIL.
     if (lpCmdLine && std::strstr(lpCmdLine, "rt-smoke") != nullptr) {
         return RunRtSmoke(diag::LogPath("rt_smoke.txt").c_str());
+    }
+
+    // "--hzb-cull-selftest" (occlusion plan S2) runs the headless box -> HZB visibility self-test
+    // instead of the app: a synthetic pyramid, hand-set verdicts, the GPU held equal to the CPU
+    // mirror. Per-case lines and the verdict go to the session log; exit code = failed checks.
+    if (lpCmdLine && std::strstr(lpCmdLine, "hzb-cull-selftest") != nullptr) {
+        return RunHzbCullSelfTest();
     }
 
     // "--rt-force-as-fail" (S13 test hook): make every acceleration-structure
@@ -560,6 +568,8 @@ int WINAPI WinMain(
             readFloats("--cam-fly=", g_camFly, 2);
             // "--cam-fly-delay=<sec>": hold still this long first (motion-onset transient capture).
             readFloats("--cam-fly-delay=", &g_camFlyDelay, 1);
+            // "--cam-fly-yaw=<deg/s>": turn while drifting (headless mouse look; moves the cascade boxes).
+            readFloats("--cam-fly-yaw=", &g_camFlyYaw, 1);
         }
         // W8: "--wind-freeze[=<seconds>]" pins the wind clock, so a --shot is reproducible to the
         // pixel without touching a single authored wind parameter. Two runs at the SAME value must

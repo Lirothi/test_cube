@@ -29,6 +29,8 @@ extern float g_camPos[3];
 extern float g_camFly[2];
 // "--cam-fly-delay=<sec>": hold still this long before the drift starts (motion-onset capture).
 extern float g_camFlyDelay;
+// "--cam-fly-yaw=<deg/s>": constant yaw rate on top of the drift (headless mouse look).
+extern float g_camFlyYaw;
 extern float g_camRot[4]; // orientation quaternion (x,y,z,w)
 
 // "--shot=<path>" one-shot capture: after g_shotDelaySec of runtime, read back the presented

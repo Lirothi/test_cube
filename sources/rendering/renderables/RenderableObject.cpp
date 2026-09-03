@@ -10,6 +10,8 @@
 #include "core/Helpers.h"
 #include "rendering/descriptors/InputLayoutManager.h"
 #include "rendering/meshes/LodSelect.h"
+#include "rendering/core/VisibilityStats.h" // S1: g_visChunkMask
+#include "core/math/Frustum.h"
 #include "app/camera/Camera.h"
 
 using namespace DirectX;
@@ -186,11 +188,14 @@ void RenderableObject::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     //
     // Chunked-terrain: one ranged draw per chunk at ITS tier from SelectLod. This is the receiver
     // half of the caster==receiver contract — the shadow paths consume the same chunkLods_ array.
+    // S1: chunks the camera frustum missed are skipped (mask from the same SelectLod) -- the
+    // object-level cull passed the island whole, this is where the 90 chunks stop being 90 draws.
     if (chunked)
     {
         const size_t n = std::min(chunkLods_.size(), mesh->SubmeshesForLod(0).size());
         for (size_t s = 0; s < n; ++s)
         {
+            if (s < chunkVisCamera_.size() && chunkVisCamera_[s] == 0u) { continue; }
             mesh->DrawSubmesh(cl, static_cast<UINT>(s), chunkLods_[s]);
         }
         return;
@@ -267,7 +272,15 @@ float RenderableObject::GetLodRadius() const
     return local * k;
 }
 
-void RenderableObject::SelectLod(const Camera& camera)
+bool RenderableObject::ChunkInFrustum(const AABB& worldBox, const Frustum& frustum)
+{
+    // Off = the pre-S1 behaviour (every chunk of a passed object draws). An invalid box is a chunk
+    // the bake left without bounds -- keep it, exactly as the object cull keeps an invalid object.
+    if (!render::g_visChunkMask) { return true; }
+    return !worldBox.IsValid() || frustum.Intersects(worldBox);
+}
+
+void RenderableObject::SelectLod(const Camera& camera, const Frustum& cameraFrustum)
 {
     // Hysteresis off the current tier (or the stateless crossfade band when g_lodFadeBand is
     // on); per-instance radius (GetLodRadius) so cloud/instanced objects select on their
@@ -285,17 +298,21 @@ void RenderableObject::SelectLod(const Camera& camera)
     // distance, not centre distance — a 60 m chunk whose near edge the camera stands on must be
     // LOD0 even though its centre is 40 m away. The same array feeds the gbuffer draw, the Legacy
     // shadow loop and (through ShadowGpuData's per-group override) the VSM page render.
+    // S1: the same world box, tested against the camera frustum, is the chunk's camera mask. Only
+    // the mask -- the tier is still chosen for every chunk, visible or not (see ChunkCameraVisible).
     const Mesh* mesh = GetMesh();
     if (mesh && mesh->IsChunkedSubmeshes())
     {
         const std::vector<AABB>& boxes = mesh->GetSubmeshBounds();
         chunkLods_.resize(boxes.size(), 0u);
+        chunkVisCamera_.resize(boxes.size(), 1u);
         const Math::float3 cam = camera.GetPosition();
         const mat4 model = GetModelMatrix();
         for (size_t s = 0; s < boxes.size(); ++s)
         {
-            if (!boxes[s].IsValid()) { chunkLods_[s] = 0u; continue; }
+            if (!boxes[s].IsValid()) { chunkLods_[s] = 0u; chunkVisCamera_[s] = 1u; continue; }
             const AABB w = boxes[s].Transform(model);
+            chunkVisCamera_[s] = ChunkInFrustum(w, cameraFrustum) ? 1u : 0u;
             const Math::float3 mn = w.GetMin(), mx = w.GetMax();
             const Math::float3 cp(
                 cam.x < mn.x ? mn.x : (cam.x > mx.x ? mx.x : cam.x),
@@ -338,7 +355,7 @@ void RenderableObject::OnMaterialHotReload(Renderer* /*renderer*/)
 
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod,
-    bool chunkCameraLods)
+    bool chunkCameraLods, const Frustum* chunkCullFrustum)
 {
     if (!renderer || !cl || !shadowMaterial_)
     {
@@ -380,8 +397,19 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
         // caller is an actual shadow view (`chunkCameraLods`): the shore-depth/SDF bakes reuse
         // this entry point and need stable camera-INdependent LOD0 (see RenderableObjectBase.h).
         const bool chunked = chunkCameraLods && mesh->IsChunkedSubmeshes() && !chunkLods_.empty();
+        // S1: per-cascade chunk mask from the CALLER's cull volume, computed here and now from the
+        // mesh's chunk boxes -- not the camera's mask (a chunk behind the camera still casts into
+        // the cascade) and not a cached world box either: SelectLod runs only for camera-visible
+        // objects, so a cache would be stale for precisely the off-screen caster a shadow needs.
+        // 90 AABB tests per cascade -- microseconds.
+        const std::vector<AABB>* boxes = (chunked && chunkCullFrustum) ? &mesh->GetSubmeshBounds() : nullptr;
+        const mat4& model = GetModelMatrix();
         for (UINT s = 0; s < static_cast<UINT>(subs->size()); ++s)
         {
+            if (boxes && s < boxes->size() && !ChunkInFrustum((*boxes)[s].Transform(model), *chunkCullFrustum))
+            {
+                continue;
+            }
             const UINT drawLod = (chunked && s < chunkLods_.size()) ? chunkLods_[s] : lod;
             mesh->DrawSubmesh(cl, s, drawLod);
         }

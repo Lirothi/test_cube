@@ -10,6 +10,7 @@
 #include "rendering/core/RenderGraph.h"
 
 class Renderer;
+class Frustum;
 
 // One ray-traced instance's geometry + material, gathered for the TLAS/bindless
 // table (S9/S10). albedoTex is null when the renderable has no albedo texture
@@ -129,7 +130,11 @@ public:
     // top-down renders) MUST leave it false: they need STABLE, camera-independent geometry, and
     // feeding them camera tiers made the baked waterline change with every camera move — the
     // "ocean blinks with wetness on" bug (2026-08-21).
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0, bool chunkCameraLods = false) = 0;
+    // `chunkCullFrustum` (occlusion plan S1): the caller's cull volume -- a chunked mesh skips the
+    // chunks whose world box misses it, tested ON THE SPOT (never the camera's mask: a chunk behind
+    // the camera still casts into the cascade). Null = draw every chunk; only the Legacy CSM
+    // cascade loops pass one (their `view.frustum`, the S14 accurate volume).
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0, bool chunkCameraLods = false, const Frustum* chunkCullFrustum = nullptr) = 0;
     virtual bool IsTransparent() const = 0;
     virtual bool IsSimpleRender() const = 0;
     // Editor: does the viewport ray-vs-bounds pick consider this object? False for helpers that
@@ -161,6 +166,10 @@ public:
     // only for IsGpuInstancedCaster() objects; default null/0 (dormant — no consumer yet).
     virtual D3D12_CPU_DESCRIPTOR_HANDLE GetInstanceCasterSrv() const { return {}; }
     virtual UINT GetInstanceCasterCount() const { return 0; }
+    // Occlusion plan S1: how many of those instances the CAMERA pass will draw this frame (after the
+    // per-instance frustum test in SelectLod). Shadows keep casting all of them -- the caster count
+    // above stays the truth for every shadow view. Read by the visibility counters only.
+    virtual UINT GetCameraInstanceCount() const { return GetInstanceCasterCount(); }
     // The instance-caster buffer resource itself, so the GI-scatter pass can transition it to a
     // shader-read state at the call site. Null for non-GPU-instanced casters.
     virtual ID3D12Resource* GetInstanceCasterResource() const { return nullptr; }
@@ -179,7 +188,10 @@ public:
     // object in Scene::PrepareViews (NOT during recording) so the per-object/per-instance
     // state (incl. hysteresis) is updated outside the parallel record. Render() just reads it.
     // Shadow LOD is the cascade index, chosen per-pass by the renderer — not here.
-    virtual void SelectLod(const Camera& /*camera*/) {}
+    // `cameraFrustum` (occlusion plan S1): the camera view's cull frustum -- the same planes the
+    // object-level cull just passed this object through -- for the finer tests below the object:
+    // per terrain chunk (RenderableObject) and per GI instance (GpuInstancedModels).
+    virtual void SelectLod(const Camera& /*camera*/, const Frustum& /*cameraFrustum*/) {}
     virtual unsigned int GetCameraLod() const { return 0u; }
     // Dithered LOD crossfade weight chosen with the tier in PrepareViews: 0 = solid at
     // GetCameraLod(); in (0,1) = that tier fades OUT and tier+1 fades IN with this weight

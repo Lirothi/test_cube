@@ -88,6 +88,9 @@
     <Filter Include="sources\rendering\diagnostics">
       <UniqueIdentifier>{5cb7c7b9-fdcc-4910-aa3c-f415f30f3de0}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\rendering\visibility">
+      <UniqueIdentifier>{9ab19082-de2c-4bba-987b-777159fe53a0}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\rendering\debug">
       <UniqueIdentifier>{5b663f47-cdab-4683-891d-f6186e6cdece}</UniqueIdentifier>
     </Filter>
@@ -503,6 +506,9 @@
     </ClCompile>
     <ClCompile Include="sources/rendering/diagnostics/RendererSubmissionStress.cpp">
       <Filter>sources\rendering\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/visibility/HzbCullSelfTest.cpp">
+      <Filter>sources\rendering\visibility</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp">
       <Filter>sources\rendering\core</Filter>
@@ -1022,6 +1028,12 @@
     <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h">
       <Filter>sources\rendering\diagnostics</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/visibility/HzbCull.h">
+      <Filter>sources\rendering\visibility</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/visibility/HzbCullSelfTest.h">
+      <Filter>sources\rendering\visibility</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/SubmitTimeline.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
@@ -1350,6 +1362,12 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\hzb_build_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\hzb_cull.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\hzb_cull_selftest_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\bloom_cs.hlsl">

@@ -48,4 +48,11 @@ inline VisibilityStats g_visibilityStats;
 // Set by `--vis-readout`: dump the per-view table once to logs/visibility_readout.log, on frame
 // 600 (not earlier -- the level is still streaming in, see the csm_readout note in Scene.cpp).
 inline bool g_visDumpReadout = false;
+
+// S1: the frustum test BELOW the object level -- terrain chunks (camera: RenderableObject::SelectLod
+// writes the mask; cascades: RenderShadow tests on the spot against the cascade's cull volume) and
+// GI instances (GpuInstancedModels::BuildLodPartition). `--set=vis.chunkMask:0` is the step's
+// rollback: every chunk/instance whose OBJECT passed is drawn, as before S1. Shadows cast by the
+// GPU-driven path (ExecuteIndirect, VSM) never read this -- their per-chunk cull is the GPU's.
+inline bool g_visChunkMask = true;
 } // namespace render

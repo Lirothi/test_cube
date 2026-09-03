@@ -449,7 +449,14 @@ CascadeCullVolume BuildCascadeCullVolume(const std::array<float3, 8>& cornersWor
 // Occlusion plan S0: fill one view's visibility counters from its culled queue (before batching).
 // Triangles are the CPU-path estimate: index count / 3 at the object's camera LOD (chunked meshes:
 // per chunk at the chunk's tier), times the GI instance count where there is one.
-void AccumulateVisibility(render::VisibilityViewCounters& c, const SceneRenderQueue& queue, size_t sourceCount)
+// S1: `chunksDrawn` / `trianglesSubmitted` / `instancesDrawn` count what the view's frustum KEEPS
+// below the object level. The camera reads the mask its SelectLod just wrote (and the GI cloud's
+// visible-instance count); a cascade re-tests the chunk boxes against its own frustum right here,
+// through the same predicate RenderShadow applies at draw time -- it must not read the camera's
+// mask, and not only because a chunk behind the camera still casts: this runs on the cascade's
+// prepare task, concurrently with the camera task that is writing that mask.
+void AccumulateVisibility(render::VisibilityViewCounters& c, const SceneRenderQueue& queue, size_t sourceCount,
+                          const Frustum& frustum, bool cameraView)
 {
     c.objectsIn = static_cast<std::uint32_t>(sourceCount);
     c.objectsFrustum = static_cast<std::uint32_t>(queue.VisibleObjectCount());
@@ -458,7 +465,7 @@ void AccumulateVisibility(render::VisibilityViewCounters& c, const SceneRenderQu
         for (const RenderableObjectBase* obj : bucket)
         {
             if (!obj) { continue; }
-            const UINT gi = obj->GetInstanceCasterCount();
+            const UINT gi = cameraView ? obj->GetCameraInstanceCount() : obj->GetInstanceCasterCount();
             const std::uint32_t instances = gi > 0u ? static_cast<std::uint32_t>(gi) : 1u;
             c.instancesDrawn += instances;
             const RenderableObject* ro = obj->AsRenderableObject();
@@ -468,11 +475,18 @@ void AccumulateVisibility(render::VisibilityViewCounters& c, const SceneRenderQu
             if (mesh->IsChunkedSubmeshes())
             {
                 const std::vector<std::uint8_t>& lods = ro->ChunkCameraLods();
+                const std::vector<std::uint8_t>& camMask = ro->ChunkCameraVisible();
+                const std::vector<AABB>& boxes = mesh->GetSubmeshBounds();
+                const Math::mat4& model = ro->GetModelMatrix();
                 const size_t n = std::min(lods.size(), mesh->SubmeshesForLod(0).size());
                 c.chunksIn += static_cast<std::uint32_t>(n);
-                c.chunksDrawn += static_cast<std::uint32_t>(n); // == chunksIn until S1's per-view mask
                 for (size_t s = 0; s < n; ++s)
                 {
+                    const bool drawn = cameraView
+                        ? (s >= camMask.size() || camMask[s] != 0u)
+                        : (s >= boxes.size() || RenderableObject::ChunkInFrustum(boxes[s].Transform(model), frustum));
+                    if (!drawn) { continue; }
+                    ++c.chunksDrawn;
                     const UINT lod = std::min<UINT>(lods[s], lodCount - 1u);
                     const auto& subs = mesh->SubmeshesForLod(lod);
                     if (s < subs.size()) { c.trianglesSubmitted += subs[s].indexCount / 3u; }
@@ -744,7 +758,20 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
                                                        : boxFrustum;
             // Built even while the toggle is off (a few hundred flops), so the readout can report
             // both directions of the cross-check: see CascadeData::cullLeakDbg.
-            const Frustum& other = cascadeConfig_.accurateCasterCull ? boxFrustum : accFrustum;
+            //
+            // The survivors in the queue were culled LAST frame, by last frame's volume, so the
+            // cross-check tests them against last frame's OTHER arm (cascadeBoxPrev_/AccPrev_) --
+            // this frame's box has moved with the camera, and on a fly-through the object it no
+            // longer covers is not a leak but a turn of the head (Debug assert, 2026-09-03). Objects
+            // whose bounds may have changed since that cull -- dynamic casters, an editor move this
+            // frame -- prove nothing either way and are left out. Frame 0 has no previous pair; an
+            // invalid Frustum passes everything.
+            const Frustum& otherPrev = cascadeConfig_.accurateCasterCull ? cascadeBoxPrev_[idx] : cascadeAccPrev_[idx];
+            const auto settledCaster = [](const RenderableObjectBase* o)
+            {
+                const RenderableObject* ro = o->AsRenderableObject();
+                return !o->IsDynamicCaster() && !(ro && ro->MovedThisFrame());
+            };
             const bool listSurvivors = previousCascadeQueuesCurrent && render::g_csmDumpReadout &&
                 renderer->GetTotalFrameNumber() > 600 && idx == 0;
             if (previousCascadeQueuesCurrent)
@@ -755,11 +782,12 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
                     {
                         if (!obj) { continue; }
                         const AABB& b = obj->GetWorldBounds();
-                        if (b.IsValid() && !other.Intersects(b)) { ++cascades.cullLeakDbg[idx]; }
+                        if (settledCaster(obj) && b.IsValid() && !otherPrev.Intersects(b)) { ++cascades.cullLeakDbg[idx]; }
                         if (listSurvivors)
                         {
-                            // Readout diagnostic: every cascade-0 survivor with both verdicts, so a
-                            // box-vs-volume count mismatch can be traced to the object, not guessed at.
+                            // Readout diagnostic: every cascade-0 survivor with both verdicts (of the
+                            // frame that culled it), so a box-vs-volume count mismatch can be traced
+                            // to the object, not guessed at.
                             char line[200];
                             const float3 mn = b.IsValid() ? b.GetMin() : float3(0, 0, 0);
                             const float3 mx = b.IsValid() ? b.GetMax() : float3(0, 0, 0);
@@ -767,27 +795,91 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
                             std::snprintf(line, sizeof(line), "  c0 %p members=%u valid=%d box=%d acc=%d min=(%.1f,%.1f,%.1f) max=(%.1f,%.1f,%.1f)\n",
                                           static_cast<const void*>(obj), batch ? static_cast<unsigned>(batch->InstanceCount()) : 1u,
                                           b.IsValid() ? 1 : 0,
-                                          (!b.IsValid() || boxFrustum.Intersects(b)) ? 1 : 0,
-                                          (!b.IsValid() || accFrustum.Intersects(b)) ? 1 : 0,
+                                          (!b.IsValid() || cascadeBoxPrev_[idx].Intersects(b)) ? 1 : 0,
+                                          (!b.IsValid() || cascadeAccPrev_[idx].Intersects(b)) ? 1 : 0,
                                           mn.x, mn.y, mn.z, mx.x, mx.y, mx.z);
                             c0Survivors += line;
                         }
                     }
                 }
             }
+#ifndef NDEBUG
+            // Session-log records BEFORE the assert below can abort -- the dialog names the check,
+            // these name the object, with its verdict against BOTH frames' pairs:
+            //   LEAK  (Fatal, flushed synchronously) -- a settled survivor fails last frame's other
+            //          arm: a real defect of the volume; every leaker and the volume's planes are
+            //          logged, then the assert fires;
+            //   stale (Debug) -- it passes last frame's arm but fails THIS frame's: the camera moved
+            //          between the cull and the check. This is what the cross-frame check asserted
+            //          on until 2026-09-03; capped so a fly-through cannot flood the log.
+            if (previousCascadeQueuesCurrent)
+            {
+                static std::uint32_t staleLogged = 0;
+                const Frustum& otherNow = cascadeConfig_.accurateCasterCull ? boxFrustum : accFrustum;
+                for (const auto& bucket : cascadeView.queue.VisibleBuckets())
+                {
+                    for (const RenderableObjectBase* obj : bucket)
+                    {
+                        if (!obj) { continue; }
+                        const AABB& b = obj->GetWorldBounds();
+                        if (!b.IsValid()) { continue; }
+                        const bool failPrev = !otherPrev.Intersects(b);
+                        const bool failNow = !otherNow.Intersects(b);
+                        if (!failPrev && !failNow) { continue; }
+                        const bool settled = settledCaster(obj);
+                        const bool leak = failPrev && settled;
+                        if (!leak && staleLogged >= 32u) { continue; }
+                        if (!leak) { ++staleLogged; }
+                        const float3 mn = b.GetMin(), mx = b.GetMax();
+                        const float3 cam = camera.GetPosition();
+                        const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
+                        char line[400];
+                        std::snprintf(line, sizeof(line),
+                                      "S14 cascade %zu: %s obj %p members=%u settled=%d dyn=%d boxPrev=%d accPrev=%d boxNow=%d accNow=%d "
+                                      "min=(%.2f,%.2f,%.2f) max=(%.2f,%.2f,%.2f) cam=(%.2f,%.2f,%.2f) accurateCull=%d planes=%d",
+                                      idx, leak ? "LEAK" : "stale",
+                                      static_cast<const void*>(obj), batch ? static_cast<unsigned>(batch->InstanceCount()) : 1u,
+                                      settled ? 1 : 0, obj->IsDynamicCaster() ? 1 : 0,
+                                      cascadeBoxPrev_[idx].Intersects(b) ? 1 : 0, cascadeAccPrev_[idx].Intersects(b) ? 1 : 0,
+                                      boxFrustum.Intersects(b) ? 1 : 0, accFrustum.Intersects(b) ? 1 : 0,
+                                      mn.x, mn.y, mn.z, mx.x, mx.y, mx.z, cam.x, cam.y, cam.z,
+                                      cascadeConfig_.accurateCasterCull ? 1 : 0, vol.count);
+                        if (leak)
+                        {
+                            LOG_FATAL(logging::LogCategory::RenderShadow, "{}", line);
+                            for (int i = 0; i < cascadeAccPrev_[idx].PlaneCount(); ++i)
+                            {
+                                const float4& pl = cascadeAccPrev_[idx].Planes()[i];
+                                LOG_FATAL(logging::LogCategory::RenderShadow, "   prev plane {:2d}: ({:.5f},{:.5f},{:.5f}, {:.3f})",
+                                          i, pl.x, pl.y, pl.z, pl.w);
+                            }
+                        }
+                        else
+                        {
+                            LOG_DEBUG(logging::LogCategory::RenderShadow, "{}", line);
+                        }
+                    }
+                }
+            }
+#endif
+            // Remembered for next frame's cross-check: the pair the queue about to be rebuilt will
+            // have been culled with (accFrustum already IS the box when the volume degenerated).
+            cascadeBoxPrev_[idx] = boxFrustum;
+            cascadeAccPrev_[idx] = accFrustum;
             if (cascadeConfig_.accurateCasterCull && vol.count > 0)
             {
                 cascadeView.frustum = accFrustum;
                 cascades.cullPlanesDbg[idx] = static_cast<std::uint32_t>(vol.count);
 #ifndef NDEBUG
                 // The volume carries every box plane, so it can pass no object the box rejects:
-                // last frame's survivors (each passed the volume) must all pass the box.
+                // last frame's survivors (each passed last frame's volume) must all pass last
+                // frame's box. Leakers, if any, are already in the session log (LEAK records above).
                 assert(cascades.cullLeakDbg[idx] == 0u && "S14 cull volume passed an object the ortho box rejects");
                 // Self-check, the same spirit as the ortho-radius assert above: the volume must
                 // hold the whole (unextended) slice and everything toward the sun within reach,
                 // and must reject points past the far cap and beside the silhouette.
-                // `inside` also reports the worst plane, and a failing probe is written to
-                // logs/s14_assert.log BEFORE the assert aborts -- the dialog names the check, not
+                // `inside` also reports the worst plane, and a failing probe goes to the session
+                // log (Fatal) BEFORE the assert aborts -- the dialog names the check, not
                 // the plane, and the plane is what tells the geometry from the tolerance.
                 int worstPlane = -1;
                 float worstDist = 0.0f;
@@ -804,18 +896,18 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
                 };
                 const auto report = [&](const char* what, int corner, const float3& p)
                 {
-                    diag::ArtifactFile af("s14_assert.log", diag::ArtifactMode::Append);
-                    if (af)
+                    // Fatal: flushed synchronously, so the record is on disk whatever the dialog's
+                    // button does to the process.
+                    LOG_FATAL(logging::LogCategory::RenderShadow,
+                              "S14 cascade {}: {}  corner {}  p=({:.3f},{:.3f},{:.3f})  worst plane {}/{} dist {:.5f}  "
+                              "sun=({:.4f},{:.4f},{:.4f}) reach={:.1f} nearCull={:.3f} minZ~{:.3f} radius={:.3f}",
+                              idx, what, corner, p.x, p.y, p.z, worstPlane, vol.count, worstDist,
+                              sunDirWS.x, sunDirWS.y, sunDirWS.z, cascadeConfig_.casterReachWS,
+                              nearCullLS, minZ, radius);
+                    for (int i = 0; i < vol.count; ++i)
                     {
-                        af.Printf("cascade %zu: %s  corner %d  p=(%.3f,%.3f,%.3f)  worst plane %d/%d dist %.5f  "
-                                  "sun=(%.4f,%.4f,%.4f) reach=%.1f nearCull=%.3f minZ~%.3f radius=%.3f\n",
-                                  idx, what, corner, p.x, p.y, p.z, worstPlane, vol.count, worstDist,
-                                  sunDirWS.x, sunDirWS.y, sunDirWS.z, cascadeConfig_.casterReachWS,
-                                  nearCullLS, minZ, radius);
-                        for (int i = 0; i < vol.count; ++i)
-                        {
-                            af.Printf("   plane %2d: (%.5f,%.5f,%.5f, %.3f)\n", i, vol.planes[i].x, vol.planes[i].y, vol.planes[i].z, vol.planes[i].w);
-                        }
+                        LOG_FATAL(logging::LogCategory::RenderShadow, "   plane {:2d}: ({:.5f},{:.5f},{:.5f}, {:.3f})",
+                                  i, vol.planes[i].x, vol.planes[i].y, vol.planes[i].z, vol.planes[i].w);
                     }
                 };
                 // Toward the sun the volume is open down to the CULL near plane -- which is
@@ -1522,7 +1614,9 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
     {
         view.queue.SortTransparent(view.view);
         // Camera LOD must be selected before camera batches build their per-tier member lists.
-        view.queue.SelectLods(camera_);
+        // S1: the view's own frustum rides along -- the chunk/instance masks use the planes the
+        // object cull above used, so "object in, chunk out" is the same test at a finer grain.
+        view.queue.SelectLods(camera_, view.frustum);
     }
     if (!usesSharedShadowSource && !usesSharedCameraSource)
     {
@@ -1536,7 +1630,8 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
         const size_t sourceCount = usesSharedShadowSource ? shadowCasterSource_.SourceObjectCount()
                                  : usesSharedCameraSource ? cameraObjectSource_.SourceObjectCount()
                                  : view.queue.SourceObjectCount();
-        AccumulateVisibility(render::g_visibilityStats.current[static_cast<size_t>(slot)], view.queue, sourceCount);
+        AccumulateVisibility(render::g_visibilityStats.current[static_cast<size_t>(slot)], view.queue, sourceCount,
+                             view.frustum, view.type == SceneView::Type::Camera);
     }
     view.queue.BuildInstancedBatches(view.type == SceneView::Type::Camera);
 }

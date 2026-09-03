@@ -223,6 +223,12 @@ private:
     std::uint32_t selectionOutlineRadius_ = 1;
 #endif
     std::array<SceneView, kCascades> cascadeViews_{};
+    // S14 cross-check state: the ortho box and the accurate volume each cascade was culled with
+    // LAST frame. UpdateCascades runs before this frame's queues are rebuilt, so the survivors it
+    // can inspect were chosen by these planes and no others -- testing them against THIS frame's
+    // box reads a camera turn as a cull leak (Debug assert on a fly-through, 2026-09-03).
+    std::array<Frustum, kCascades> cascadeBoxPrev_{};
+    std::array<Frustum, kCascades> cascadeAccPrev_{};
     std::array<SceneView, vsm::kNumClipmapLevels> clipmapViews_{}; // Step 24d: directional clipmap (VSM)
     // Built beside clipmapViews_ in UpdateClipmap; feeds the clipmap LOD fallback chain. Kept
     // separate from SceneView because it is expressed in the SHARED light frame, which no single

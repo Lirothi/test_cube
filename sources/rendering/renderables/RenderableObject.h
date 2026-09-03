@@ -62,7 +62,7 @@ public:
     void RenderSelectionStencil(Renderer* renderer, ID3D12GraphicsCommandList* cl, Material* material, const Camera& camera) override;
 #endif
     void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods) override;
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods, const Frustum* chunkCullFrustum) override;
     virtual void OnMaterialHotReload(Renderer* renderer);
 
     // Transform
@@ -158,7 +158,7 @@ public:
     unsigned int ComputeReceiverLodTier(const Math::float3& cameraPos) const;
 
     // Step 6: camera LOD chosen in PrepareViews (with hysteresis), read at draw time.
-    void SelectLod(const Camera& camera) override;
+    void SelectLod(const Camera& camera, const Frustum& cameraFrustum) override;
     unsigned int GetCameraLod() const override { return cameraLod_; }
     float GetCameraLodFade() const override { return cameraLodFade_; }
     // The fade value of the draw being RECORDED right now (0 outside transitions): -fade for
@@ -172,6 +172,16 @@ public:
     // draw, the Legacy per-view shadow loop, and (via ShadowGpuData's per-group override) the VSM
     // page render — one array is what makes caster == receiver a construction, not a hope.
     const std::vector<std::uint8_t>& ChunkCameraLods() const { return chunkLods_; }
+    // Occlusion plan S1: 1 = the chunk's world box meets the CAMERA frustum this frame (written by
+    // SelectLod next to the tier, read by the gbuffer draw and the camera's visibility counters).
+    // A MASK beside chunkLods_, not a filter of it: the tier of a camera-invisible chunk stays
+    // selected because the shadow paths above still cast that chunk at that tier. Shadow views do
+    // not read this -- they test their own frustum on the spot (RenderShadow / ChunkInFrustum).
+    const std::vector<std::uint8_t>& ChunkCameraVisible() const { return chunkVisCamera_; }
+    // THE chunk-vs-view predicate, shared by the camera mask, the cascade loop and the counters so
+    // a number in the readout is the draw's decision and not a look-alike. Conservative like the
+    // object cull (AABB positive vertex); honours the `vis.chunkMask` rollback (off = always true).
+    static bool ChunkInFrustum(const AABB& worldBox, const Frustum& frustum);
 
     Material* GetGraphicsMaterial() const { return graphicsMaterial_.get(); }
     void SetGraphicsMaterial(Material* m);
@@ -295,6 +305,7 @@ private:
     float lodDistanceScale_ = 1.0f; // mesh.json "lodDistanceScale"; see SetLodDistanceScale
     float drawLodFade_ = 0.0f;    // transient: the fade of the draw being recorded (binder reads it)
     std::vector<std::uint8_t> chunkLods_; // per-chunk camera tier (chunked meshes only; hysteresis state)
+    std::vector<std::uint8_t> chunkVisCamera_; // S1: per-chunk camera frustum mask (see ChunkCameraVisible)
 
     Math::float3 pos_{};
     Math::float3 scale_ = Math::float3(1.0f, 1.0f, 1.0f);

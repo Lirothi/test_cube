@@ -36,7 +36,9 @@ public:
     void SortTransparent(const mat4& view);
     // Step 6: choose each visible object's camera LOD (PrepareViews, camera view only) so it's
     // ready before batching + recording. Call AFTER Cull, BEFORE BuildInstancedBatches.
-    void SelectLods(const Camera& camera);
+    // `cameraFrustum` (occlusion plan S1) = the frustum Cull just used, forwarded to each object's
+    // finer per-chunk / per-instance test.
+    void SelectLods(const Camera& camera, const Frustum& cameraFrustum);
     // Step 4: collapse contiguous runs of instanceable (mesh,material) objects in the
     // visible OPAQUE buckets into one InstancedDrawBatch each. Call AFTER SortOpaque (so
     // identical objects are contiguous) and after Cull (so only visible members instance).

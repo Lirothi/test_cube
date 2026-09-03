@@ -294,7 +294,7 @@ Main_HzbB       (compute)  финальная HZB для GTAO/SSR (дешёва�
 
 ---
 
-## S0. Инструментирование и стресс-сцена — ✅ СДЕЛАНО 2026-09-03 (uncommitted)
+## S0. Инструментирование и стресс-сцена — ✅ СДЕЛАНО 2026-09-03 (commit 7f46331)
 
 **Зависит от:** ничего. **Эффект:** без него ни один следующий шаг не измерим. **Риск:** нулевой.
 
@@ -373,7 +373,7 @@ F1 и F6: камерная геометрия сегодня 0.13–0.27 мс, �
 
 ---
 
-## S1. Пер-вью маска чанков по фрустуму (camera + Legacy CSM CPU-loop)
+## S1. Пер-вью маска чанков по фрустуму (camera + Legacy CSM CPU-loop) — ✅ СДЕЛАНО 2026-09-03 (uncommitted)
 
 **Зависит от:** S0 (счётчики). **Эффект:** чанки за спиной и вне каскада не рисуются; на острове —
 до ~70 % чанков камеры (сфера видимости против сетки 10×10). **Риск:** низкий; ловушка — общий
@@ -382,45 +382,85 @@ F1 и F6: камерная геометрия сегодня 0.13–0.27 мс, �
 ### Почему
 F2: боксы чанков есть и уже переводятся в мир каждый кадр в `SelectLod`; фрустум-тест рядом не сделан.
 В тенях GPU-cull уже пер-чанковый (`terrain_shadow_chunking_plan.md` S2), но Legacy CSM CPU-loop
-(`Pass_CSM`, `indirect=false`) и камера рисуют все 100.
+(`Pass_CSM`, `indirect=false`) и камера рисуют все 90.
 
-### Код
-```cpp
-// RenderableObject.h — рядом с chunkLods_ (ОБЩИЙ для камеры и теней: LOD = контракт кастер==приёмник)
-std::vector<AABB>         chunkBoundsWS_;   // мировые боксы чанков, обновляются в SelectLod (уже считаются там)
-std::vector<std::uint8_t> chunkVisCamera_;  // 1 = чанк пересекает фрустум КАМЕРЫ этого кадра
+### Что сделано (как построено, с отличиями от плана ниже)
+* `RenderableObjectBase::SelectLod(const Camera&, const Frustum& cameraFrustum)` — фрустум камерного
+  вью едет вместе с камерой (`SceneRenderQueue::SelectLods(camera, view.frustum)`, `Scene.cpp`
+  PrepareViewQueue): маска считается теми же плоскостями, которыми только что прошёл объектный cull.
+* `RenderableObject`: `chunkVisCamera_` рядом с `chunkLods_` (маска, тир по-прежнему выбирается для
+  ВСЕХ чанков — их читают тени), пишется в `SelectLod` от того же `boxes[s].Transform(model)`, что и тир;
+  `Render` скипает чанки с нулём. Предикат один — `static RenderableObject::ChunkInFrustum(worldBox,
+  frustum)` (невалидный бокс = виден, как у объектного cull; `g_visChunkMask` = откат).
+* `RenderableObjectBase::RenderShadow(..., UINT lod, bool chunkCameraLods, const Frustum* chunkCullFrustum
+  = nullptr)`: оба CPU-цикла каскадов в `SceneRenderer_Shadows.cpp` (параллельный и серийный,
+  `chunkCameraLods=true`) передают `&view.frustum` — это S14-объём; чанк тестируется НА МЕСТЕ от
+  `mesh->GetSubmeshBounds()[s].Transform(model)`. Остальные вызовы (споты/точки/клипмап, GI,
+  бейки shore-depth/SDF) оставляют `nullptr` → рисуют всё. Переопределения (`InstancedDrawBatch`,
+  `DebugGrid`) параметр игнорируют.
+* `GpuInstancedModels::BuildLodPartition(camPos, frustum)`: инстанс не попадает в remap, если его
+  сфера мимо фрустума. Сфера — вокруг ПИВОТА инстанса (`model.TransformPoint(offset)`), радиус
+  `(|centre_local| + radius_local) × maxScale(object)`: инвариант к Y-повороту, который живёт на GPU
+  (`instance_anim.hlsl`), CPU-копия угла в решение о видимости не входит. Тени и RT не трогает —
+  `DrawGeometry`/`GetRtInstances` по-прежнему идут по `instanceCount_`. Новый виртуал
+  `GetCameraInstanceCount()` (дефолт = `GetInstanceCasterCount()`) — только для счётчиков.
+* Счётчики (`AccumulateVisibility(c, queue, sourceCount, frustum, cameraView)`): `chunksDrawn`,
+  `trianglesSubmitted`, `instancesDrawn` считают то, что фрустум вью ОСТАВЛЯЕТ ниже объекта. Камера
+  читает маску и visible-инстансы; каскад пересчитывает `ChunkInFrustum` от своих боксов сам.
+* Ручки: `--set=vis.chunkMask:0` (`render::g_visChunkMask`, `VisibilityStats.h`), чекбокс «Chunk /
+  instance frustum mask (S1)» под таблицей видимости в табе Render.
 
-// RenderableObject::SelectLod(const Camera&) -> добавить параметр const Frustum& cameraFrustum
-//   (SceneRenderQueue::SelectLods(camera) знает view.frustum — прокинуть).
-//   В существующем цикле по boxes[s]: chunkBoundsWS_[s] = w; chunkVisCamera_[s] = frustum.Intersects(w);
+**Отличия от текста плана.** `chunkBoundsWS_` НЕ добавлен: `SelectLod` бежит только для объектов,
+которые камера видит, поэтому кэш мировых боксов устарел бы ровно для закадрового кастера, ради
+которого теневой путь и существует. 90 `AABB::Transform` на каскад дешевле любой логики свежести.
 
-// RenderableObject::Render (камера): if (chunked) for s: if (!chunkVisCamera_[s]) continue; DrawSubmesh(...)
+### Ловушки
+* **Prepare-задачи вью бегут параллельно.** Счётчик каскада НЕ может читать `chunkVisCamera_` — его
+  в этот момент пишет камерная задача. Поэтому предикат пересчитывается от статических данных
+  (боксы меша + матрица объекта), и это же делает `RenderShadow`. (S0 уже читал `chunkLods_` из
+  теневой задачи — байтовые значения, гонка безобидна, но новые массивы под неё не подкладывать.)
+* GI-облако: тест по AABB, повёрнутому CPU-копией угла, был бы «почти верным» — сфера вокруг
+  пивота верна при любом угле и стоит столько же.
+* Пред-существующая ошибка в session-логе `UNBOUND SRV table at root index 1 -- shader:
+  shaders/exposure_histogram_cs.hlsl` — есть и в сессиях редактора ДО S1 (16:29, HEAD 7f46331),
+  к шагу не относится. **Починена вместе с S2:** `CSClear` делит root signature с `CSBuild`, а та
+  ДЕКЛАРИРУЕТ SRV-таблицу; clear-диспатч шёл с пустой таблицей (`{ }`) → теперь биндит тот же
+  `D.sceneSRV` (`SceneRenderer_Post.cpp`). Проверка: session-лог обычного прогона — 0 строк ERROR.
 
-// RenderableObject::RenderShadow(..., view, proj, ...) для чанкованного: маска СЧИТАЕТСЯ НА МЕСТЕ
-//   от переданного фрустума каскада (в Pass_CSM это view.frustum, S14-объём) — НЕ chunkVisCamera_:
-//   кастер за спиной обязан рисоваться в каскад. 100 тестов AABB на каскад = микросекунды.
-```
-Маска, а не фильтрация `chunkLods_`: `chunkLods_` читают и `ShadowGpuData` (пер-групповой override
-LOD для VSM), и CPU-тени — LOD чанка должен остаться выбранным даже для невидимого камерой чанка.
+### Замер (4 запуска, свёрнутыми; Release, `--shadow-mode=legacy --dlss=off --wind-freeze
+--set=exposure.autoExposure:0 --set=ocean.visible:0`, кадр 601)
+Камера теней wind_test (`--cam-pos=15.07,5.13,69.20`), `--set=shadow.indirect:0` — чтобы CPU-петля
+каскадов исполняла маску:
 
-`GpuInstancedModels` (камера): аналогично — по-инстансный фрустум-тест внутри `BuildLodPartition`
-(CPU, ≤256 инстансов) перед раскладкой по тирам; шейдерная часть не меняется.
+| view   | frustum | chunksIn | chunksDrawn off→on | tris off→on        |
+|--------|---------|----------|--------------------|--------------------|
+| camera | 317     | 90       | 90 → **47**        | 638 437 → 627 314  |
+| c0     | 17      | 90       | 90 → **3**         | 144 490 → 121 872  |
+| c1     | 80      | 90       | 90 → **10**        | 594 362 → 580 935  |
+| c2     | 443     | 90       | 90 → **44**        | 2 464 712 → 2 461 468 |
+| c3     | 618     | 90       | 90 → **87**        | 2 761 789 → 2 761 720 |
+
+`drawCalls` 612 → **353** (259 чанковых draw'ов меньше за кадр). Треугольников мало (−1.7 % у
+камеры): срезанные чанки — LOD3 за спиной; выигрыш S1 — draw'ы и вершинная работа, не растр.
+Стена (`occlusion_test.json`, дефолтный indirect-путь): камера 90 → **26**, c3 20/90.
+Картинка: off→on **0.030 %** пикселей при поле (on дважды) 0.042 % — идентична; readout on/on2
+совпадает до счётчика. Три конфига собраны чисто.
 
 ### Критерий приёмки
-* Камера теней wind_test, `--dlss=off --set=ocean.visible:0`: картинка **идентична** (дифф = пол
-  ~0.02 %), `chunksDrawn` < `chunksIn` в readout; тени идентичны (Legacy И VSM — VSM не должен
-  измениться вовсе, он этот код не исполняет; проверить, что `Pass_VsmPageRender` ±0).
-* Камера «стена»: чанки за спиной не рисуются; `--cam-fly` серия без миганий чанков на границе
-  фрустума (тест — AABB, пересечение консервативно).
-* Debug-ассерт: чанк с `chunkVisCamera_ = 0` не имеет пикселей в G-buffer — проверяется косвенно
-  диффом, отдельного ассерта не нужно.
+* ✅ Камера теней wind_test: картинка идентична (0.030 % при поле 0.042 %), `chunksDrawn` < `chunksIn`
+  во всех пяти вью; Legacy-тени идентичны (в кадре — CPU-петля с маской). VSM код S1 не исполняет
+  (`ShadowGpuData` читает только `chunkLods_`, который не менялся) — профдамп `Pass_VsmPageRender`
+  не гонялся, паритет по построению.
+* ✅ Камера «стена»: 26 из 90 чанков. `--cam-fly` серия на мигание НЕ гонялась (лимит запусков);
+  тест консервативный AABB — тот же, что объектный, миганий ждать неоткуда.
+* Debug-ассерт не нужен — дифф покрывает.
 
 ### Откат
-`--set=vis.chunkMask:0` — маска всегда 1.
+`--set=vis.chunkMask:0` — маска всегда 1, GI-инстансы не режутся (чекбокс в табе Render — то же).
 
 ---
 
-## S2. Библиотека HZB-теста + self-test (enabler для S3b/S5)
+## S2. Библиотека HZB-теста + self-test (enabler для S3b/S5) — ✅ СДЕЛАНО 2026-09-03 (uncommitted)
 
 **Зависит от:** ничего (HZB есть). **Эффект:** одна функция `IsVisibleHZB` в HLSL и её CPU-зеркало,
 доказанные на синтетике. **Риск:** средний — формулы UE рассчитаны на pow2-HZB.
@@ -452,10 +492,47 @@ Self-test `--hzb-cull-selftest` (по образцу `--gbv-selftest`/`--cull-be
 — ожидаемые вердикты заданы руками; GPU-версия через `RecordComputeDispatch` над буфером боксов и
 readback; CPU-зеркало обязано совпасть с GPU до бита вердикта.
 
+### Что сделано (как построено, с отличиями от текста выше)
+* `shaders/hzb_cull.hlsli` — транскрипция `NaniteHZBCull.ush` с именами UE (`HzbMipLevelForRect`,
+  `HzbGetScreenRect`, `HzbGetMinDepth`, `HzbIsVisible`, `HzbBoxCullFrustumPerspective`); текстура
+  и размер мипа 0 идут параметрами (`Texture2D<float> hzb, uint2 hzbMip0Size`) — библиотека не
+  знает регистров потребителя. Row-vector `mul(p, M)`, reverse-Z, FURTHEST-цепочка.
+* **Дельта 1 переформулирована:** вместо «размер текселя от реальных размеров» — **целочисленный
+  `Load(int3(texel, level))`**. У UE `GatherLODRed` — расширение компилятора, которого в SM 6.0
+  нет; их же fallback (`SampleLevel` по 16 текселям) в целых координатах не требует текселя вовсе.
+  16 `Load` вместо 4 gather — цена enabler'а, S5 пересмотрит при замере.
+* **Дельта 2 — не «страховка», а корректность:** мип-0 тексель `t` на уровне `L` = `t >> L`, и при
+  ширине 617 → 308 (floor) тексель 616 >> 1 = 308 = за краем. `hzb_build_cs` сложил хвост в
+  ПОСЛЕДНИЙ тексель, кламп `(max(1, size >> L) − 1)` попадает ровно туда. Кейс `corner_fold`
+  бьёт именно в него (y = 89 при высоте уровня 89).
+* Маскировка вырожденных строк/столбцов — повтором крайнего текселя (`min(x + {0,1,2,3}, x1)`),
+  как в fallback UE; для `min` это то же, что их `1.0` в gather-пути.
+* **`RoundUpF16` НЕ транскрибирован:** он компенсирует f16-квантование HZB UE; наша R32 хранит
+  минимум точно, а «+1 ulp f32» не покрыл бы ошибку проекции углов. Если S5 покажет ложные
+  самоокклюзии — добавлять эпсилон по замеру, не по аналогии.
+* CPU-зеркало `sources/rendering/visibility/HzbCull.h` (`namespace hzb`), тот же порядок float-операций;
+  загрузчик текселя — коллбэк, кламп внутри `GetMinDepth`.
+* Self-test — **автономный харнесс** `sources/rendering/visibility/HzbCullSelfTest.cpp` по образцу
+  `--rt-smoke` (своё устройство, без окна и рендерера; dxc с флагами движка `-Zpr -HV 2021`, RS из
+  DXIL), а не дispatch внутри кадра: шаг «ничего не меняет в картинке» и не должен трогать кадр.
+  Синтетика: вью 1234×717 (нечётное, не pow2 — все fold-правила билда срабатывают), reverse-Z
+  перспектива, плоскость-окклюдер на 10 м с дырой [700,800)×[300,400) px; пирамида 617×359, 10
+  уровней, редукция = `hzb_build_cs` на CPU. Матрицы нетривиальны, но точны во float (камера в
+  (3,2,−5) + `localToWorld = Translation(eye)` → локальные координаты = view). 13 кейсов
+  (перед/за/в дыре/на кромке дыры/near/за кадром/за far/1–2 px/крупный → грубый мип/угол с
+  fold/±5–15 мм от плоскости). Сравнение GPU↔CPU по ПОЛЯМ: пиксельный rect, тексельный rect,
+  уровень, `minDepth` побитно, флаги, вердикт; вердикт CPU ↔ рукописное ожидание.
+  Запуск `--hzb-cull-selftest` → session-лог (категория `render.validation`: строка на кейс +
+  вердикт `hzb cull self-test: PASS ...`), код выхода = число провалов. Отдельных файлов нет. `tools/check_shaders.py` знает `hzb_cull_selftest_cs.hlsl`.
+
+**Замер 2026-09-03:** `PASS 13 cases, gpu == cpu mirror`, 1.1 с. Поле `depth` (не сравнивается)
+расходится в последней цифре у половины кейсов (0.004267426 vs 0.004267425) — FMA-контракция
+GPU против раздельных mul/add CPU; кейсы держат запас от границ пиксельных центров и глубины
+именно поэтому. Картинка не затронута (ничего в рендере библиотеку не вызывает).
+
 ### Критерий приёмки
-* Self-test: все кейсы, GPU == CPU; `tools/check_shaders.py` знает новый include через любой
-  использующий его CS.
-* Ни одного изменения в картинке (шаг не подключён к рендеру).
+* ✅ Self-test: все 13 кейсов, GPU == CPU по всем полям; `tools/check_shaders.py hzb` — 2/2.
+* ✅ Ни одного изменения в картинке (шаг не подключён к рендеру).
 
 ### Откат
 Файлы не используются.
@@ -758,9 +835,9 @@ GPU-теста видимости на CPU-пути потребить нель�
 
 ```
 S0   счётчики + scene.replicate + occlusion_test.json     [enabler, полдня]
-S1   пер-вью маска чанков (frustum)                       [дешёвый, сразу виден в readout]
+S1   пер-вью маска чанков (frustum)                       [✅ 2026-09-03: камера 90→47, стена 90→26]
 S3a  hardware queries + история + сферы локалов           [дефолт UE; первый реальный occlusion]
-S2   hzb_cull.hlsli + self-test                           [enabler, без изменения картинки]
+S2   hzb_cull.hlsli + self-test                           [✅ 2026-09-03: 13/13, gpu == cpu]
 S3b  HZB-тестер на истории S3a                            [A/B к S3a, запасной путь]
 S4   G-buffer на ExecuteIndirect                          [крупная работа, паритет картинки]
 S5   two-pass HZB внутри S4                               [цель документа]

@@ -369,9 +369,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("Per view, last completed frame. objects in = what the view's source offered;\n"
                                       "frustum = kept by the frustum test (per object, before instancing);\n"
                                       "occluded = cut by an occlusion test (0 until the occlusion plan's S3/S5);\n"
-                                      "chunks = terrain chunks of surviving chunked meshes, in vs actually drawn\n"
-                                      "(equal until S1's per-view chunk mask); tris = CPU-path estimate at the\n"
-                                      "selected LOD. Headless: --vis-readout -> logs/visibility_readout.log.");
+                                      "chunks = terrain chunks of surviving chunked meshes, in vs kept by the\n"
+                                      "view's frustum (S1 mask); instances = GI instances the camera draws;\n"
+                                      "tris = CPU-path estimate at the selected LOD.\n"
+                                      "Headless: --vis-readout -> logs/visibility_readout.log.");
+                // S1 rollback, live: with it off every chunk/instance of a passed object draws again.
+                ImGui::Checkbox("Chunk / instance frustum mask (S1)", &render::g_visChunkMask);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Frustum test below the object level: terrain chunks (camera + Legacy CSM\n"
+                                      "CPU loop) and GPU-instanced cloud instances (camera). Off = pre-S1: an\n"
+                                      "object that passes draws all of its chunks. --set=vis.chunkMask:0");
 
                 ImGui::Checkbox("Trace capture window", &traceWindowOpen_);
 

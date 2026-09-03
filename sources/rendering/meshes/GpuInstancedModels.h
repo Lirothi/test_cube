@@ -31,7 +31,9 @@ public:
     // LOD) — the base path would draw the whole cloud at one LOD.
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
     // Step 6: build the per-instance LOD partition in PrepareViews; Render just reads it.
-    void SelectLod(const Camera& camera) override;
+    // S1: the partition also drops the instances whose bounding sphere misses the camera frustum.
+    void SelectLod(const Camera& camera, const Frustum& cameraFrustum) override;
+    UINT GetCameraInstanceCount() const override { return visibleInstanceCount_; }
     bool IsSimpleRender() const { return false; }
     bool CastsShadow() const override { return true; }
     // One object drives many GPU-side instances, so it can't be a single per-caster indirect
@@ -105,7 +107,8 @@ private:
     std::array<UINT, kLodTiers> tierBase_{};
     std::array<UINT, kLodTiers> tierCount_{};
     std::array<uint8_t, kMaxLodInstances> instanceLastTier_{}; // per-instance hysteresis state
-    void BuildLodPartition(const Math::float3& camPos);
+    UINT visibleInstanceCount_ = 0u; // S1: instances in the partition (= the camera draw), for the counters
+    void BuildLodPartition(const Math::float3& camPos, const Frustum& cameraFrustum);
 
     void MarkInstanceBoundsDirty();
     Math::float3 ComputeInstanceOffset(UINT index) const;

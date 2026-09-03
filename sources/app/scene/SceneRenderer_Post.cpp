@@ -197,8 +197,13 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         // 1) Zero the bins. A dedicated dispatch rather than ClearUnorderedAccessViewUint, which
         // needs a shader-visible descriptor for the UAV and rejects some buffer layouts outright.
         // One 8x8 group covering 256 bins is not worth optimising further.
+        // The clear never reads t0, but CSClear shares CSBuild's root signature, which DECLARES the
+        // SRV table -- and a declared table left unbound is what Material::Bind reports as
+        // "UNBOUND SRV table at root index 1" (and what GBV calls an uninitialised root argument).
+        // Binding the same scene SRV the build binds costs one staged descriptor and keeps the two
+        // dispatches binding identically, as the shader's own header promises.
         RecordComputeDispatch(renderer, t.cl, clearMat.get(),
-            { }, { metering.HistogramUav() }, samplerTable,
+            { D.sceneSRV }, { metering.HistogramUav() }, samplerTable,
             kComputeDispatchGroupSize, kComputeDispatchGroupSize,
             metering.HistogramResource());
 

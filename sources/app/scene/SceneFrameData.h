@@ -567,10 +567,12 @@ struct SceneFrameData
         // (the queue is filled after UpdateCascades runs), so a headless run can show the cut.
         std::uint32_t cullPlanesDbg[kCascades] = {};
         std::uint32_t cullCastersDbg[kCascades] = {};
-        // Objects in LAST frame's queue that the OTHER volume rejects: with the accurate volume
-        // applied, how many of its survivors the plain box would reject (must be 0 -- the volume
-        // carries every box plane); with the box applied, how many of its survivors the accurate
-        // volume would have cut (the saving). A cross-check the image cannot give.
+        // Objects in LAST frame's queue that the OTHER volume OF THAT FRAME rejects: with the
+        // accurate volume applied, how many of its survivors the plain box would reject (must be
+        // 0 -- the volume carries every box plane); with the box applied, how many of its
+        // survivors the accurate volume would have cut (the saving). A cross-check the image
+        // cannot give. Same-frame pair on purpose (Scene::cascadeBoxPrev_/AccPrev_): against this
+        // frame's box a camera turn counts as a leak. Dynamic/moved casters are not counted.
         std::uint32_t cullLeakDbg[kCascades] = {};
     };
 
