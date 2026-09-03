@@ -1184,6 +1184,20 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "a tap on a scissored-out texel reads LIT and lightens the shadow there.\n"
                                       "Set 0 to see the flaw UE ship, 4 covers the widest kernel.");
 
+                // S14 [UE ShadowBoundsAccurate]. ON by default: it is what UE always do for a
+                // directional cascade, and it is the cut the scissor cannot make -- before the VS.
+                graphicsEdit(ImGui::Checkbox("Accurate caster cull (UE ShadowBoundsAccurate)", &csmCfg.accurateCasterCull));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Cull a cascade's casters against the camera SLICE EXTRUDED TOWARD THE SUN\n"
+                                      "(UE ComputeShadowCullingVolume) instead of the cascade's full ortho box.\n"
+                                      "In the shadow map that is the convex hull of the slice's projection -- tighter\n"
+                                      "than the scissor's rectangle -- and it acts on both the CPU and the GPU cull\n"
+                                      "before any vertex is shaded. Tall casters outside the view are kept: what\n"
+                                      "shadows the slice projects INTO it along the light, by definition.\n\n"
+                                      "Readout: 'cull pl' = planes of the volume (6 = box, 7..11 = accurate),\n"
+                                      "'casters' = objects the CPU cull passed last frame. Same glass caveat as the\n"
+                                      "scissor -- UE ship with it anyway. OFF = the old box, for the A/B.");
+
                 // UE's three legacy-CSM bias cvars first, then the one knob that is OURS. Split in
                 // two on purpose: the user could not tell which of the four numbers were a
                 // transcription and which were invented here.
@@ -1387,7 +1401,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 const SceneFrameData::CascadeData& csm = scene.GetCascadeData();
                 const ImGuiTableFlags csmTableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                                       ImGuiTableFlags_SizingFixedFit;
-                if (ImGui::BeginTable("CsmReadout", 9, csmTableFlags))
+                if (ImGui::BeginTable("CsmReadout", 11, csmTableFlags))
                 {
                     ImGui::TableSetupColumn("c");
                     ImGui::TableSetupColumn("slice (m)");
@@ -1398,6 +1412,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::TableSetupColumn("D16 (mm)");
                     ImGui::TableSetupColumn("bias (mm)");
                     ImGui::TableSetupColumn("scissor %");
+                    ImGui::TableSetupColumn("cull pl");
+                    ImGui::TableSetupColumn("casters");
                     ImGui::TableHeadersRow();
 
                     for (int c = 0; c < SceneFrameData::kCascades; ++c)
@@ -1415,6 +1431,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         ImGui::TableSetColumnIndex(6); ImGui::Text("%.2f", (range / 65535.0f) * 1000.0f);
                         ImGui::TableSetColumnIndex(7); ImGui::Text("%.1f", csm.depthBiasNDC[c] * range * 1000.0f);
                         ImGui::TableSetColumnIndex(8); ImGui::Text("%.0f", csm.scissorAreaDbg[c] * 100.0f);
+                        ImGui::TableSetColumnIndex(9); ImGui::Text("%u", csm.cullPlanesDbg[c]);
+                        ImGui::TableSetColumnIndex(10); ImGui::Text("%u", csm.cullCastersDbg[c]);
                     }
                     ImGui::EndTable();
                 }

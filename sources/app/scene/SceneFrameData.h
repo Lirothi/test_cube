@@ -561,6 +561,17 @@ struct SceneFrameData
         struct ScissorRect { std::int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
         ScissorRect scissor[kCascades] = {};
         float scissorAreaDbg[kCascades] = {};    // rect area / content-rect area, 1 = nothing cut
+
+        // S14: the cascade's caster-cull volume. Plane count (6 = the ortho box, 7..11 = the
+        // accurate convex volume) and how many objects the CPU cull let through LAST frame
+        // (the queue is filled after UpdateCascades runs), so a headless run can show the cut.
+        std::uint32_t cullPlanesDbg[kCascades] = {};
+        std::uint32_t cullCastersDbg[kCascades] = {};
+        // Objects in LAST frame's queue that the OTHER volume rejects: with the accurate volume
+        // applied, how many of its survivors the plain box would reject (must be 0 -- the volume
+        // carries every box plane); with the box applied, how many of its survivors the accurate
+        // volume would have cut (the saving). A cross-check the image cannot give.
+        std::uint32_t cullLeakDbg[kCascades] = {};
     };
 
     const Camera* camera = nullptr;

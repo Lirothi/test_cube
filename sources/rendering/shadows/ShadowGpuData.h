@@ -36,7 +36,7 @@ class Mesh;
 //  2. Per-caster BOUNDS (Step 2) — `render::CasterBounds` (world center+radius+half-extents)
 //     in lockstep with (1): same caster id, same change-detection, same ring. The Step 4
 //     cull compute tests these against the view frustum planes.
-//  3. Per-view FRUSTUM planes (Step 2) — `render::ShadowViewFrustum` (6 inward planes) for
+//  3. Per-view FRUSTUM planes (Step 2) — `render::ShadowViewFrustum` (up to 12 inward planes) for
 //     every active shadow view, rewritten each frame (views move every frame). The other
 //     per-view cull input for Step 4.
 //

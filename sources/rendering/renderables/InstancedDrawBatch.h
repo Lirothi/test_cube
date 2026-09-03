@@ -40,6 +40,7 @@ public:
     const AABB& GetWorldBounds() const override { return bounds_; }
 
     size_t InstanceCount() const { return members_.size(); }
+    const InstancedDrawBatch* AsInstancedDrawBatch() const override { return this; }
 
 private:
     struct SlotBindingScratch

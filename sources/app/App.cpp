@@ -378,10 +378,16 @@ namespace
         // S11 [r.Shadow.CSMScissorOptim]: scissor each cascade's depth pass to the camera's view cone.
         if (setting == "csm.scissorOptim") { scene.CascadeConfig().scissorOptim = value != 0.0f; return true; }
         if (setting == "csm.scissorPad")   { scene.CascadeConfig().scissorPadTexels = std::clamp(value, 0.0f, 64.0f); return true; }
+        // S14 [UE ShadowBoundsAccurate]: cull cascade casters against the slice extruded toward the sun.
+        if (setting == "csm.accurateCull") { scene.CascadeConfig().accurateCasterCull = value != 0.0f; return true; }
         // The Ctrl-key toggle, headless. Two draw paths write the SAME atlas (GPU-driven indirect
         // vs the CPU object walk) and S6 has to bias both identically -- that is only checkable
         // if a capture can select the path.
         if (setting == "shadow.indirect") { render::g_indirectShadowsEnabled = value != 0.0f; return true; }
+        // The Ctrl-G toggle, headless: GI casters folded into the indirect cull. OFF is what lets the
+        // one-shot GPU-vs-CPU cull validator run (its CPU reference covers static casters only), so
+        // a headless gate can read its PASS/MISMATCH verdict from the session log.
+        if (setting == "shadow.giIndirect") { render::g_giIndirectShadowsEnabled = value != 0.0f; return true; }
         if (setting == "lod.enabled") { render::g_lodEnabled = value != 0.0f; return true; }
         if (setting == "lod.forced")  { render::g_forcedLod = std::clamp((int)value, -1, 3); return true; }
         // LOD selection debug view (dev "LOD" tab). 0 off, 1 tier colours, 2 apparent-triangle-size

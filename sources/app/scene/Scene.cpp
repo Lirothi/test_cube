@@ -19,6 +19,7 @@
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias (shadow caster LOD)
 #include "rendering/debug/LodDebugView.h" // render::DrawLodDebug (LOD selection debug view)
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/renderables/InstancedDrawBatch.h" // S14 readout: count a batch's members, not the batch
 #include "core/diagnostics/ArtifactWriter.h" // S7: headless cascade readout dump
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
@@ -286,6 +287,162 @@ CascadeScissor ComputeCascadeScissor(const std::array<float3, 8>& cornersWS, con
     r.areaFrac = static_cast<float>(x1 - x0) * static_cast<float>(y1 - y0) / (res * res);
     return r;
 }
+
+// S14 -- UE ComputeShadowCullingVolume (DirectionalLightComponent.cpp:101), transcribed. The
+// volume a directional cascade culls its CASTERS against is not the cascade's ortho box but the
+// camera slice EXTRUDED TOWARD THE SUN: a caster can only shadow the slice if some point of it
+// lies on a light ray that enters the slice, i.e. inside slice + t*toSun, t >= 0. Its boundary:
+//   1. the slice's faces that look AWAY from the sun (their outward normal against toSun) -- the
+//      caps on the far-from-sun side; the sun-facing faces sweep off to infinity and vanish;
+//   2. for every slice edge whose two faces disagree about the sun (one lit, one not) -- the
+//      silhouette of the slice as seen from the sun -- the plane through that edge and toSun;
+//   3. ours: the ortho box's six faces. UE's volume is open toward the sun; casterReachWS is
+//      this engine's "how far toward the light to look", so its near plane keeps capping that
+//      side; the XY faces are kept for the AABB test's sake (see the body).
+// In light-space XY the result is the convex hull of the slice's projection, tighter than the S11
+// scissor's bounding box, and it acts on both culls before a single vertex is shaded.
+//
+// Deltas from the original, all deliberate: planes are oriented by an interior point (the slice
+// centroid) instead of by corner winding, which is what makes UE need bReverseCulling; UE's
+// LightDirection here is -GetDirection(), i.e. TOWARD the sun, and so is `toSun`; the corner
+// layout is BuildFrustumSliceCornersWS's (2*ndcCorner + {0 near, 1 far}, corners BL/BR/TR/TL),
+// so UE's index tables are re-expressed for it. Stored INWARD (inside == n.p + d >= 0), the
+// convention of Frustum and of the GPU cull. Empty (count 0) on a degenerate slice -> the caller
+// keeps the ortho box, which is always correct.
+struct CascadeCullVolume
+{
+    float4 planes[Frustum::kMaxPlanes] = {};
+    int count = 0;
+};
+
+CascadeCullVolume BuildCascadeCullVolume(const std::array<float3, 8>& cornersWorld, const float3& origin,
+                                         const float3& toSun, const float4* boxPlanes, int boxPlaneCount)
+{
+    enum { nBL = 0, fBL = 1, nBR = 2, fBR = 3, nTR = 4, fTR = 5, nTL = 6, fTL = 7 };
+
+    // PRECISION, and it is not optional: cascade 0's near quad is 2 cm across (zNear 0.01), and
+    // a corner at world |p| ~ 300 m carries a float ulp of 3e-5 m -- so an edge direction taken
+    // from world-space corners is only good to 1.5e-3, the plane normal inherits that, and 75 m
+    // toward the sun that is a decimetre of wrong cull. Measured before this: an edge plane with
+    // n.toSun = -3e-4 (it must be 0) and a slice corner 1.4 mm outside its own face. UE do the
+    // same arithmetic in translated world space (PreShadowTranslation) for exactly this reason.
+    // Everything below works relative to `origin` (the camera, the slice apex); only the plane
+    // offsets are moved back to world at the end: n.(p - o) + d' = n.p + (d' - n.o).
+    float3 c[8];
+    for (int i = 0; i < 8; ++i) { c[i] = cornersWorld[i] - origin; }
+    // UE's six faces (Near, Left, Right, Top, Bottom, Far) by three of their corners, and their
+    // twelve edges as (faceA, faceB, cornerA, cornerB): AdjacentPlanePairs + LineVertexIndices.
+    static const int kFaces[6][3] = {
+        { nBL, nBR, nTR }, { nBL, nTL, fTL }, { nBR, nTR, fTR },
+        { nTL, nTR, fTR }, { nBL, nBR, fBR }, { fBL, fBR, fTR } };
+    static const int kEdges[12][4] = {
+        { 0, 1, nBL, nTL }, { 0, 2, nBR, nTR }, { 0, 3, nTL, nTR }, { 0, 4, nBL, nBR },
+        { 5, 1, fBL, fTL }, { 5, 2, fBR, fTR }, { 5, 3, fTL, fTR }, { 5, 4, fBL, fBR },
+        { 1, 3, nTL, fTL }, { 2, 3, nTR, fTR }, { 1, 4, nBL, fBL }, { 2, 4, nBR, fBR } };
+
+    float3 centroid(0.0f, 0.0f, 0.0f);
+    for (const float3& p : c) { centroid += p; }
+    centroid = centroid * (1.0f / 8.0f);
+
+    // DIRECTIONS COME FROM FAR-SCALE GEOMETRY ONLY. Subtracting the origin above fixes the plane
+    // arithmetic but not the corners themselves: BuildFrustumSliceCornersWS makes each corner in
+    // world space, so a corner at |p| ~ 30 m already carries ~3e-6 m of error, and cascade 0's
+    // near quad is 2 cm across -- a direction taken across it is good to ~1.5e-4, a plane through
+    // two near corners and one far corner misses the fourth far corner by 20 m x 1.5e-4 = 3 mm,
+    // and an edge plane came out with n.toSun = -3e-4 where it must be 0 (measured; the Debug
+    // asserts caught both). So: side faces and side edges pass through the apex (the camera,
+    // the origin here) and take their directions from the corner RAYS c[far]; the near and far
+    // faces share the far quad's normal; near-quad edges are parallel to far-quad edges and
+    // borrow their direction. Only anchors come from near corners, and an anchor's absolute
+    // error does not amplify. (UE's literal corner arithmetic survives because their cascade 0
+    // starts at the 10 cm camera near plane and works in translated world space.)
+    const float3 farU = c[fBR] - c[fBL];        // far quad, BL -> BR
+    const float3 farV = c[fTL] - c[fBL];        // far quad, BL -> TL
+    const float3 viewN = farU.Cross(farV);      // near/far face normal (sign fixed below)
+    struct FaceDef { float3 n; float3 anchor; };
+    const FaceDef faceDefs[6] = {
+        { viewN,                    c[nBL] },              // Near
+        { c[fTL].Cross(c[fBL]),     float3(0.0f, 0.0f, 0.0f) }, // Left   (through the apex)
+        { c[fTR].Cross(c[fBR]),     float3(0.0f, 0.0f, 0.0f) }, // Right
+        { c[fTR].Cross(c[fTL]),     float3(0.0f, 0.0f, 0.0f) }, // Top
+        { c[fBR].Cross(c[fBL]),     float3(0.0f, 0.0f, 0.0f) }, // Bottom
+        { viewN,                    c[fBL] },              // Far
+    };
+    (void)kFaces; // the quad table documents the face/edge topology; the planes come from the rays
+
+    // Outward unit normals of the six faces.
+    float3 n[6];
+    float d[6];
+    for (int f = 0; f < 6; ++f)
+    {
+        float3 nn = faceDefs[f].n;
+        const float len = nn.Length();
+        if (len < 1e-9f) { return CascadeCullVolume{}; }
+        nn = nn * (1.0f / len);
+        float dd = -nn.Dot(faceDefs[f].anchor);
+        if (nn.Dot(centroid) + dd > 0.0f) { nn = nn * -1.0f; dd = -dd; }
+        n[f] = nn;
+        d[f] = dd;
+    }
+
+    CascadeCullVolume v;
+    bool overflow = false;
+    const auto push = [&](const float3& pn, float pd)
+    {
+        if (v.count < Frustum::kMaxPlanes) { v.planes[v.count++] = float4(pn, pd); }
+        else { overflow = true; }
+    };
+    // A plane computed in origin-relative space, moved to world.
+    const auto pushRel = [&](const float3& pn, float pdRel) { push(pn, pdRel - pn.Dot(origin)); };
+
+    // 1) Faces looking away from the sun (UE: `Normal | LightDirection < 0`), stored inward.
+    for (int f = 0; f < 6; ++f)
+    {
+        if (n[f].Dot(toSun) < 0.0f) { pushRel(n[f] * -1.0f, -d[f]); }
+    }
+    // 2) Silhouette edges, extruded along the light (UE: C = A + LightDirection * |A - B|).
+    for (int e = 0; e < 12; ++e)
+    {
+        const float dotA = n[kEdges[e][0]].Dot(toSun);
+        const float dotB = n[kEdges[e][1]].Dot(toSun);
+        if (dotA * dotB < 0.0f)
+        {
+            // Edge direction from far-scale geometry (see above): near-quad edges 0..3 borrow the
+            // parallel far-quad edge 4..7, far-quad edges use their own, side edges 8..11 are the
+            // corner rays from the apex. The anchor is the edge's own first corner.
+            const float3& a = c[kEdges[e][2]];
+            float3 dir;
+            if (e < 4)       { dir = c[kEdges[e + 4][3]] - c[kEdges[e + 4][2]]; }
+            else if (e < 8)  { dir = c[kEdges[e][3]] - c[kEdges[e][2]]; }
+            else             { dir = c[kEdges[e][3]]; }
+            const float dirLen = dir.Length();
+            if (dirLen < 1e-9f) { continue; }
+            // UE: the plane through A, B and A + LightDirection * |AB|, i.e. spanned by the edge
+            // and the light. Same plane, from the direction alone.
+            float3 pn = dir.Cross(toSun);
+            const float len = pn.Length();
+            // Ill-conditioned when the edge runs nearly along the light: |cross| = |dir| * sin(angle),
+            // and a plane whose normal is float noise can cut through the volume. Dropping the plane
+            // is always safe -- the volume just stays open along that edge (more casters, never fewer).
+            if (len < 1e-4f * dirLen) { continue; }
+            pn = pn * (1.0f / len);
+            float pd = -pn.Dot(a);
+            if (pn.Dot(centroid) + pd < 0.0f) { pn = pn * -1.0f; pd = -pd; }
+            pushRel(pn, pd);
+        }
+    }
+    // 3) The ortho box, all six faces. The depth caps bound the sweep toward the sun (UE's
+    //    volume is open there) and past the slice; the four XY faces are geometrically implied
+    //    by the prism but NOT by the AABB test that consumes it -- the positive-vertex test
+    //    over-includes at the prism's acute corners, and measured without them cascade 0 passed
+    //    17 casters where the box passed 13. With them the volume is the intersection of both
+    //    tests and can never pass a box the plain box rejects.
+    for (int i = 0; i < boxPlaneCount; ++i)
+    {
+        push(float3(boxPlanes[i].x, boxPlanes[i].y, boxPlanes[i].z), boxPlanes[i].w);
+    }
+    return overflow ? CascadeCullVolume{} : v;
+}
 } // namespace
 
 void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
@@ -340,6 +497,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     const mat4& invProj = camera.GetInvProjMatrixNoJitter();
     const float3 sunDirWS = dirLight_.GetDirection();
 
+    std::string c0Survivors; // S14 readout diagnostic, filled only on the dump frame
     for (size_t idx = 0; idx < cascadeViews_.size(); ++idx)
     {
         const float sliceNear = cascades.splitsVS[idx];
@@ -492,6 +650,148 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         // readout) takes the projection pair.
         cascadeView.frustum = Frustum::FromOrthoBounds(cascadeView.invView, minX, maxX, minY, maxY,
                                                       nearCullLS, farLS);
+
+        // S14: replace the box with UE's accurate caster volume (BuildCascadeCullVolume). The
+        // slice is extended toward the camera by the PREVIOUS cascade's blend band: receivers in
+        // that band sample this cascade too (S10 cross-fade), so the casters over them have to
+        // survive this cull. The box's depth caps carry over as planes; its XY faces are implied.
+        cascades.cullPlanesDbg[idx] = 6u;
+        cascades.cullLeakDbg[idx] = 0u;
+        {
+            const float bandPrev = (idx > 0)
+                ? (cascades.splitsVS[idx] - cascades.splitsVS[idx - 1]) * cascadeConfig_.blendFraction
+                : 0.0f;
+            std::array<float3, 8> cullCorners{};
+            BuildFrustumSliceCornersWS(invView, invProj, std::max(zNear, sliceNear - bandPrev),
+                                       sliceFar, cullCorners);
+            // The ortho box's six inward planes, taken from the box Frustum just built rather than
+            // re-derived: the volume must be the box INTERSECTED with the prism, and the only way
+            // to guarantee that is to reuse the very planes the box arm tests with.
+            const Frustum boxFrustum = cascadeView.frustum;
+            const CascadeCullVolume vol = BuildCascadeCullVolume(cullCorners, camera.GetPosition(),
+                                                                 fwd * -1.0f, boxFrustum.Planes(),
+                                                                 boxFrustum.PlaneCount());
+            const Frustum accFrustum = (vol.count > 0) ? Frustum::FromPlanes(vol.planes, vol.count)
+                                                       : boxFrustum;
+            // Built even while the toggle is off (a few hundred flops), so the readout can report
+            // both directions of the cross-check: see CascadeData::cullLeakDbg.
+            const Frustum& other = cascadeConfig_.accurateCasterCull ? boxFrustum : accFrustum;
+            const bool listSurvivors = render::g_csmDumpReadout && renderer->GetTotalFrameNumber() > 600 && idx == 0;
+            for (const auto& bucket : cascadeView.queue.VisibleBuckets())
+            {
+                for (const RenderableObjectBase* obj : bucket)
+                {
+                    if (!obj) { continue; }
+                    const AABB& b = obj->GetWorldBounds();
+                    if (b.IsValid() && !other.Intersects(b)) { ++cascades.cullLeakDbg[idx]; }
+                    if (listSurvivors)
+                    {
+                        // Readout diagnostic: every cascade-0 survivor with both verdicts, so a
+                        // box-vs-volume count mismatch can be traced to the object, not guessed at.
+                        char line[200];
+                        const float3 mn = b.IsValid() ? b.GetMin() : float3(0, 0, 0);
+                        const float3 mx = b.IsValid() ? b.GetMax() : float3(0, 0, 0);
+                        const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
+                        std::snprintf(line, sizeof(line), "  c0 %p members=%u valid=%d box=%d acc=%d min=(%.1f,%.1f,%.1f) max=(%.1f,%.1f,%.1f)\n",
+                                      static_cast<const void*>(obj), batch ? static_cast<unsigned>(batch->InstanceCount()) : 1u,
+                                      b.IsValid() ? 1 : 0,
+                                      (!b.IsValid() || boxFrustum.Intersects(b)) ? 1 : 0,
+                                      (!b.IsValid() || accFrustum.Intersects(b)) ? 1 : 0,
+                                      mn.x, mn.y, mn.z, mx.x, mx.y, mx.z);
+                        c0Survivors += line;
+                    }
+                }
+            }
+            if (cascadeConfig_.accurateCasterCull && vol.count > 0)
+            {
+                cascadeView.frustum = accFrustum;
+                cascades.cullPlanesDbg[idx] = static_cast<std::uint32_t>(vol.count);
+#ifndef NDEBUG
+                // The volume carries every box plane, so it can pass no object the box rejects:
+                // last frame's survivors (each passed the volume) must all pass the box.
+                assert(cascades.cullLeakDbg[idx] == 0u && "S14 cull volume passed an object the ortho box rejects");
+                // Self-check, the same spirit as the ortho-radius assert above: the volume must
+                // hold the whole (unextended) slice and everything toward the sun within reach,
+                // and must reject points past the far cap and beside the silhouette.
+                // `inside` also reports the worst plane, and a failing probe is written to
+                // logs/s14_assert.log BEFORE the assert aborts -- the dialog names the check, not
+                // the plane, and the plane is what tells the geometry from the tolerance.
+                int worstPlane = -1;
+                float worstDist = 0.0f;
+                const auto inside = [&](const float3& p)
+                {
+                    worstPlane = -1; worstDist = 1e30f;
+                    for (int i = 0; i < vol.count; ++i)
+                    {
+                        const float4& pl = vol.planes[i];
+                        const float d = pl.x * p.x + pl.y * p.y + pl.z * p.z + pl.w;
+                        if (d < worstDist) { worstDist = d; worstPlane = i; }
+                    }
+                    return worstDist >= -1e-3f;
+                };
+                const auto report = [&](const char* what, int corner, const float3& p)
+                {
+                    diag::ArtifactFile af("s14_assert.log", diag::ArtifactMode::Append);
+                    if (af)
+                    {
+                        af.Printf("cascade %zu: %s  corner %d  p=(%.3f,%.3f,%.3f)  worst plane %d/%d dist %.5f  "
+                                  "sun=(%.4f,%.4f,%.4f) reach=%.1f nearCull=%.3f minZ~%.3f radius=%.3f\n",
+                                  idx, what, corner, p.x, p.y, p.z, worstPlane, vol.count, worstDist,
+                                  sunDirWS.x, sunDirWS.y, sunDirWS.z, cascadeConfig_.casterReachWS,
+                                  nearCullLS, minZ, radius);
+                        for (int i = 0; i < vol.count; ++i)
+                        {
+                            af.Printf("   plane %2d: (%.5f,%.5f,%.5f, %.3f)\n", i, vol.planes[i].x, vol.planes[i].y, vol.planes[i].z, vol.planes[i].w);
+                        }
+                    }
+                };
+                // Toward the sun the volume is open down to the CULL near plane -- which is
+                // `nearCullLS`, not "minZ - casterReachWS": the two differ when the clamp to 0.001
+                // bites. So the probe steps half-way from the corner to that plane, measured the
+                // way the box measures it, (p - eye) . fwd.
+                const float3 eyeWS = center - sunDirWS * lightDistance;
+                for (int ci = 0; ci < 8; ++ci)
+                {
+                    const float3& p = cornersWS[ci];
+                    if (!inside(p)) { report("drops a slice corner", ci, p); }
+                    assert(inside(p) && "S14 cull volume drops a slice corner");
+                    const float zp = (p - eyeWS).Dot(fwd);
+                    const float step = std::max(0.0f, 0.5f * (zp - nearCullLS));
+                    const float3 q = p - fwd * step;
+                    if (!inside(q)) { report("closed toward the sun", ci, q); }
+                    assert(inside(q) && "S14 cull volume closed toward the sun");
+                }
+                {
+                    const float3 q = center + fwd * (2.0f * radius + zPad + 10.0f);
+                    if (inside(q)) { report("open past the far cap", -1, q); }
+                    assert(!inside(q) && "S14 cull volume open past the far cap");
+                }
+                {
+                    const float3 q = center + right * (2.0f * radius + 1.0f);
+                    if (inside(q)) { report("open beside the silhouette", -1, q); }
+                    assert(!inside(q) && "S14 cull volume open beside the silhouette");
+                }
+#endif
+            }
+        }
+        {
+            // LAST frame's CPU cull result for this view (the queue is rebuilt after UpdateCascades),
+            // so a headless readout can show what the volume cuts. Counts CASTERS, not queue
+            // entries: an InstancedDrawBatch stands for InstanceCount() of them, and whether a run
+            // batches at all depends on the whole bucket clearing kInstancingThreshold -- culling
+            // one bush out of a bucket of 8 un-batched six palms and made 17 entries out of 13.
+            std::uint32_t seen = 0;
+            for (const auto& bucket : cascadeView.queue.VisibleBuckets())
+            {
+                for (const RenderableObjectBase* obj : bucket)
+                {
+                    if (!obj) { continue; }
+                    const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
+                    seen += batch ? static_cast<std::uint32_t>(batch->InstanceCount()) : 1u;
+                }
+            }
+            cascades.cullCastersDbg[idx] = seen;
+        }
         cascadeView.renderLayerMask = camera.GetRenderLayerMask();
         cascadeView.position = center;
         cascadeView.type = SceneView::Type::Shadow;
@@ -517,7 +817,11 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     // Not on frame 0: `--set=` is applied after the first UpdateCascades, so an immediate dump
     // reports the compile-time defaults no matter what the command line asked for -- a readout
     // that quietly contradicts the flags beside it.
-    if (render::g_csmDumpReadout && renderer->GetTotalFrameNumber() > 8)
+    // 600, not 8 (S14): the `casters` column reads LAST frame's cull result, and at frame 8 the
+    // level is still streaming in -- two configs that cull identically showed 13 vs 17 objects on
+    // cascade 0 purely from load progress. Two seconds at 300 fps is past that; a --shot run lasts
+    // eight seconds anyway.
+    if (render::g_csmDumpReadout && renderer->GetTotalFrameNumber() > 600)
     {
         render::g_csmDumpReadout = false;
         // One complete table, replaced atomically: a reader never sees a half-written readout.
@@ -528,19 +832,23 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             // rasterises and the rect itself (atlas texels). Printed whether or not the toggle is on
             // (the rect is always computed), so a headless A/B can prove the scissor actually FIRED
             // rather than infer it from a neutral image; `applied` says which.
-            f.Printf("cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)  scissor%%  rect(atlas)  applied=%d\n",
-                     cascadeConfig_.scissorOptim ? 1 : 0);
+            // S14: `cullPl` = planes of the caster-cull volume (6 = ortho box, more = the accurate
+            // volume), `casters` = objects the CPU cull passed for that cascade LAST frame.
+            f.Printf("cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)  scissor%%  rect(atlas)  cullPl  casters  leak  applied=%d accurateCull=%d\n",
+                     cascadeConfig_.scissorOptim ? 1 : 0, cascadeConfig_.accurateCasterCull ? 1 : 0);
             for (int i = 0; i < kCascades; ++i)
             {
                 const float zRange = cascades.farLsDbg[i] - cascades.nearLsDbg[i];
                 const auto& sr = cascades.scissor[i];
-                f.Printf("%d  %8.2f..%-8.2f %5u  %8.3f  %9.2f  %7.2f %7.2f  %9.2f  %11.4f  %7.1f  %d,%d-%d,%d\n",
+                f.Printf("%d  %8.2f..%-8.2f %5u  %8.3f  %9.2f  %7.2f %7.2f  %9.2f  %11.4f  %7.1f  %d,%d-%d,%d  %6u  %7u  %4u\n",
                          i, cascades.splitsVS[i], cascades.splitsVS[i + 1],
                          cascades.tileSizeDbg[i], cascades.unitsPerTexelDbg[i] * 1000.0f,
                          cascades.radiusDbg[i], cascades.nearLsDbg[i], cascades.farLsDbg[i],
                          zRange, (zRange / 65535.0f) * 1000.0f,
-                         cascades.scissorAreaDbg[i] * 100.0f, sr.x0, sr.y0, sr.x1, sr.y1);
+                         cascades.scissorAreaDbg[i] * 100.0f, sr.x0, sr.y0, sr.x1, sr.y1,
+                         cascades.cullPlanesDbg[i], cascades.cullCastersDbg[i], cascades.cullLeakDbg[i]);
             }
+            if (!c0Survivors.empty()) { f.Printf("cascade 0 survivors (last frame), box/acc verdicts:\n%s", c0Survivors.c_str()); }
         }
     }
 }

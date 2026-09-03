@@ -1,5 +1,5 @@
 // Rung 0 / Step 4: GPU frustum cull of shadow casters. One thread per caster; each loops the
-// shadow views, tests the caster's world AABB against the view's 6 frustum planes (a direct
+// shadow views, tests the caster's world AABB against the view's cull planes (a direct
 // port of Frustum::Intersects), and for a hit appends the caster id to that (view, mesh-group)
 // slice of the visible list while atomically bumping the group's InstanceCount. Produces the
 // indirect draw args consumed later by ExecuteIndirect (Step 6); nothing draws from it yet.
@@ -21,9 +21,15 @@ struct CasterBounds
     float4 center;      // xyz world center, w bounding radius (unused here)
     float4 halfExtents; // xyz world half-extents, w unused
 };
+// S14: 16 planes, not 6 -- a cascade's caster cull is UE's ShadowBoundsAccurate (the camera slice
+// extruded toward the sun: up to 3 faces + 6 silhouette edges + 2 depth caps + the box's 4 XY
+// faces). Views with fewer planes arrive padded with the accept-all plane (0,0,0,+1), so the loop
+// below is a fixed LITERAL 16 and never reads a count out of a buffer. Must match
+// render::kShadowViewPlanes / Frustum::kMaxPlanes.
+static const uint kViewPlanes = 16u;
 struct ViewFrustum
 {
-    float4 planes[6];   // inward unit-normal planes, inside == n.p + d >= 0
+    float4 planes[16];  // inward unit-normal planes, inside == n.p + d >= 0
 };
 
 StructuredBuffer<CasterBounds> Bounds      : register(t0);
@@ -48,7 +54,7 @@ static const uint kArgStride = 20u;
 bool Intersects(uint view, float3 c, float3 e)
 {
     [unroll]
-    for (int i = 0; i < 6; ++i)
+    for (uint i = 0u; i < kViewPlanes; ++i)
     {
         float4 p = Frustums[view].planes[i];
         float signedDist = dot(p.xyz, c) + p.w;

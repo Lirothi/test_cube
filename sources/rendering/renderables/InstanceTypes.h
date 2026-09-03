@@ -91,13 +91,19 @@ struct alignas(16) CasterBounds
 };
 static_assert(sizeof(CasterBounds) == 32, "CasterBounds must be 32 bytes");
 
-// One shadow view's 6 inward-facing frustum planes (unit normal, inside == n·p + d >= 0),
-// the per-view input to the Step 4 GPU cull. Mirrors Frustum::planes_. Unused until Step 4.
+// One shadow view's inward-facing cull planes (unit normal, inside == n·p + d >= 0), the
+// per-view input to the Step 4 GPU cull. Mirrors Frustum::planes_ / Frustum::kMaxPlanes and the
+// `planes[]` array in shaders/shadow_cull_cs.hlsl. S14: 16, not 6 -- a cascade's caster cull is
+// UE's ShadowBoundsAccurate, the camera slice extruded toward the sun (up to 3 faces + 6
+// silhouette edges + 2 depth caps + the box's 4 XY faces). A view with fewer planes is padded
+// with the accept-all plane (0,0,0,+1); an inactive slot carries the reject-all sentinel
+// (0,0,0,-1) in planes[0].
+inline constexpr uint32_t kShadowViewPlanes = 16;
 struct alignas(16) ShadowViewFrustum
 {
-    DirectX::XMFLOAT4 planes[6];
+    DirectX::XMFLOAT4 planes[kShadowViewPlanes];
 };
-static_assert(sizeof(ShadowViewFrustum) == 96, "ShadowViewFrustum must be 96 bytes");
+static_assert(sizeof(ShadowViewFrustum) == 16 * kShadowViewPlanes, "ShadowViewFrustum must be 256 bytes");
 
 // Must equal GBUFFER_MAX_INSTANCES in shaders/gbuffer_common.hlsli. Runs larger than this
 // are split across multiple instanced draws.

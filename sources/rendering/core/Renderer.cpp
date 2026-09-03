@@ -198,7 +198,11 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     pref.applicationId = 0x12345678U;
 
 #if _DEBUG
-    pref.showConsole = true;
+    // No Streamline console window: everything it would print reaches logFunctionCallback and
+    // lands in the session log (logs/session_*_debug.log, category RenderRhi), so the console is
+    // a duplicate that steals focus and lands on the primary monitor. Flip to true only when
+    // Streamline itself fails before the callback is installed.
+    pref.showConsole = false;
     pref.logMessageCallback = &logFunctionCallback;
     pref.logLevel = sl::LogLevel::eDefault;
 #else

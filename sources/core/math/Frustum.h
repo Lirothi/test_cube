@@ -63,10 +63,43 @@ public:
 
     bool IsValid() const { return valid_; }
 
-    // The 6 precomputed inward-facing planes (unit normal, inside == n·p + d >= 0), valid
-    // only when IsValid(). Exposed for GPU shadow culling (the cull compute uploads these
-    // per view); the same data Intersects() uses.
+    // Upper bound on the plane count of any Frustum. Perspective and ortho volumes use 6; a
+    // Convex volume (FromPlanes) up to this many. Mirrored by render::kShadowViewPlanes and the
+    // `planes[]` array in shaders/shadow_cull_cs.hlsl -- the GPU cull uploads exactly this shape.
+    // 16: a cascade's S14 volume is up to 3 slice faces + 6 silhouette edges + 2 depth caps + the
+    // ortho box's 4 XY faces (kept because the AABB test over-includes at the prism's acute
+    // corners; with them the volume passes no box the plain box rejects).
+    static constexpr int kMaxPlanes = 16;
+
+    // S14: an arbitrary convex volume from inward-facing planes (inside == n·p + d >= 0), the
+    // shape UE's FConvexVolume gives a cascade's caster cull (ShadowBoundsAccurate). Planes are
+    // renormalised here; a zero-length normal is dropped. Intersects() is the same positive-vertex
+    // test over `count` planes, so the CPU and GPU culls agree by construction.
+    static Frustum FromPlanes(const Math::float4* inwardPlanes, int count)
+    {
+        Frustum frustum;
+        frustum.planeCount_ = 0;
+        for (int i = 0; i < count && frustum.planeCount_ < kMaxPlanes; ++i)
+        {
+            Math::float3 n(inwardPlanes[i].x, inwardPlanes[i].y, inwardPlanes[i].z);
+            float d = inwardPlanes[i].w;
+            const float len = n.Length();
+            if (len <= 1e-8f) { continue; }
+            const float inv = 1.0f / len;
+            frustum.planes_[frustum.planeCount_++] = Math::float4(n * inv, d * inv);
+        }
+        if (frustum.planeCount_ == 0) { return Frustum{}; }
+        frustum.type_ = Type::Convex;
+        frustum.valid_ = true;
+        return frustum;
+    }
+
+    // The precomputed inward-facing planes (unit normal, inside == n·p + d >= 0), valid only
+    // when IsValid(); PlaneCount() of them are meaningful (6 for perspective/ortho, up to
+    // kMaxPlanes for a convex volume). Exposed for GPU shadow culling (the cull compute uploads
+    // these per view); the same data Intersects() uses.
     const Math::float4* Planes() const { return planes_; }
+    int PlaneCount() const { return valid_ ? planeCount_ : 0; }
 
     bool GetCorners(Math::float3 outCorners[8]) const
     {
@@ -118,8 +151,9 @@ public:
         // an object that should be visible.
         const Math::float3 c = bounds.GetCenter();
         const Math::float3 e = bounds.GetHalfExtents();
-        for (const Math::float4& plane : planes_)
+        for (int i = 0; i < planeCount_; ++i)
         {
+            const Math::float4& plane = planes_[i];
             const float signedDist = plane.x * c.x + plane.y * c.y + plane.z * c.z + plane.w;
             const float projRadius = e.x * std::fabs(plane.x) + e.y * std::fabs(plane.y) + e.z * std::fabs(plane.z);
             if (signedDist + projRadius < 0.0f)
@@ -142,6 +176,11 @@ public:
         if (!bounds.IsValid())
         {
             return true;
+        }
+
+        if (type_ == Type::Convex)
+        {
+            return Intersects(bounds); // no DirectXMath primitive for it; the plane test IS the volume
         }
 
         DirectX::BoundingBox box{};
@@ -171,8 +210,9 @@ public:
 
         // Sphere-vs-planes against the same precomputed unit-normal planes (see the AABB
         // overload). Cheap scalar path, conservative in the same way.
-        for (const Math::float4& plane : planes_)
+        for (int i = 0; i < planeCount_; ++i)
         {
+            const Math::float4& plane = planes_[i];
             const float signedDist = plane.x * center.x + plane.y * center.y + plane.z * center.z + plane.w;
             if (signedDist + radius < 0.0f)
             {
@@ -189,6 +229,7 @@ private:
         Invalid,
         Perspective,
         OrthoBox,
+        Convex,      // FromPlanes: planes only, no DirectX primitive behind it
     };
 
     void Build(
@@ -352,12 +393,14 @@ private:
             }
             planes_[i] = Math::float4(n, d);
         }
+        planeCount_ = 6;
     }
 
     DirectX::BoundingFrustum frustum_{};
     DirectX::BoundingOrientedBox orthoBox_{};
     Type type_ = Type::Invalid;
     bool valid_ = false;
-    Math::float4 planes_[6] = {};
+    Math::float4 planes_[kMaxPlanes] = {};
+    int planeCount_ = 6;
 };
 

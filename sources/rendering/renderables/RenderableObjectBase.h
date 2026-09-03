@@ -37,6 +37,7 @@ class MaterialData;
 class Mesh;
 class IInstanceable;
 class RenderableObject;
+class InstancedDrawBatch;
 class GBufferRenderable;
 class TransparentStaticMesh;
 class OceanRenderable;
@@ -148,6 +149,10 @@ public:
     // instances). Such casters are excluded from the GPU cull / ExecuteIndirect path and keep
     // drawing through their own RenderShadow even when indirect shadows are enabled.
     virtual bool IsGpuInstancedCaster() const { return false; }
+    // Internal RTTI (the engine forbids dynamic_cast): non-null only for an InstancedDrawBatch,
+    // the queue's stand-in for a run of identical objects. A count of queue ENTRIES sees one where
+    // there are InstanceCount() casters; anything that counts casters has to look through it.
+    virtual const InstancedDrawBatch* AsInstancedDrawBatch() const { return nullptr; }
 
     // GI→VSM (Step 1): access to a GPU-instanced caster's own per-instance transform buffer, so
     // the GI-scatter compute can fold each instance into the consolidated ShadowGpuData caster

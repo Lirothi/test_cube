@@ -134,6 +134,17 @@ struct CascadeShadowConfig
     // screen border, and a tap that lands on a scissored-out texel reads LIT. Cheap insurance.
     float scissorPadTexels = 4.0f;
 
+    // --- S14: accurate caster cull [UE FCascadeShadowSettings::ShadowBoundsAccurate] ------------
+    // UE cull a directional cascade's casters against the CAMERA SLICE EXTRUDED TOWARD THE SUN
+    // (ComputeShadowCullingVolume), not against the cascade's ortho box: the faces of the slice
+    // that look away from the sun cap the volume, its silhouette edges are extruded along the
+    // light, and toward the sun it stays open (our casterReachWS near plane caps that side). In
+    // light-space XY this is the convex hull of the slice's projection -- tighter than the S11
+    // scissor's bounding box -- and unlike the scissor it acts BEFORE the vertex shader, on both
+    // the CPU and the GPU cull. ON by default because it is UE's default (theirs is not even a
+    // cvar); the same glass caveat as S11 applies, and UE ship with it.
+    bool accurateCasterCull = true;
+
     // --- S10: cascade cross-fade + distance fade ------------------------------------------------
     // [UDirectionalLightComponent::CascadeTransitionFraction = 0.1, clamped to 0.3] Fraction of a
     // cascade's OWN SLICE LENGTH over which it cross-fades into the next one. Was a hardcoded

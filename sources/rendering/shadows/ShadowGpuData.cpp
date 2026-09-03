@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -636,7 +637,11 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         valFrustums_ = cpuViewFrustums_;
         valCasters_ = dec.giOn ? count_ : staticCount_;
         valViews_ = render::kMaxShadowViews;
-        valGroups_ = numMeshGroups_;
+        // The args are laid out per VIRTUAL group (S3.6: real group * kMaxShadowLods + receiver
+        // LOD), so a view's row is numVirtualGroups_ entries wide. Reading it as numMeshGroups_
+        // (the pre-S3.6 layout) folded view v's LOD buckets into reader rows 4v..4v+3 and reported
+        // every view as a mismatch -- which is what this validator did from S3.6 until 2026-09-03.
+        valGroups_ = numVirtualGroups_;
         valFrame_ = ctx.renderer->GetTotalFrameNumber();
         valState_ = 1;
         ctx.NextPoint();
@@ -1451,10 +1456,18 @@ void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const*
         const Frustum* f = frustums[i];
         if (f && f->IsValid())
         {
+            // S14: PlaneCount() real planes (6 for a box/perspective view, up to 12 for a cascade's
+            // convex cull volume), the rest padded with the accept-all plane (0,0,0,+1): signedDist
+            // = +1, projRadius = 0 -> passes, so the shader can loop the full fixed array.
             const Math::float4* p = f->Planes();
-            for (int j = 0; j < 6; ++j)
+            const int n = std::min<int>(f->PlaneCount(), static_cast<int>(render::kShadowViewPlanes));
+            for (int j = 0; j < n; ++j)
             {
                 vf.planes[j] = DirectX::XMFLOAT4(p[j].x, p[j].y, p[j].z, p[j].w);
+            }
+            for (int j = n; j < static_cast<int>(render::kShadowViewPlanes); ++j)
+            {
+                vf.planes[j] = DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
             }
         }
         else
@@ -2151,6 +2164,7 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
 
     // CPU per-view totals from the snapshot (same positive-vertex test as shadow_cull_cs.hlsl).
     std::uint32_t mismatchViews = 0, firstView = 0, firstCpu = 0, firstGpu = 0;
+    std::string mismatchList;
     for (std::uint32_t v = 0; v < valViews_; ++v)
     {
         const render::ShadowViewFrustum& vf = valFrustums_[v];
@@ -2159,7 +2173,7 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
         {
             const render::CasterBounds& b = valBounds_[c];
             bool visible = true;
-            for (int i = 0; i < 6; ++i)
+            for (int i = 0; i < static_cast<int>(render::kShadowViewPlanes); ++i)
             {
                 const DirectX::XMFLOAT4& p = vf.planes[i];
                 const float signedDist = p.x * b.center.x + p.y * b.center.y + p.z * b.center.z + p.w;
@@ -2171,11 +2185,20 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
         if (cpu != gpuTotal[v])
         {
             if (mismatchViews == 0) { firstView = v; firstCpu = cpu; firstGpu = gpuTotal[v]; }
+            // Which views, with both counts: cascades-only with gpu=0 reads as an ordering problem
+            // (copy before dispatch); gpu>0 on a sentinel (reject-all) slot reads as the GPU seeing
+            // different plane bytes than the CPU mirror. The verdict line alone cannot tell them apart.
+            if (mismatchViews < 16)
+            {
+                char one[48];
+                std::snprintf(one, sizeof(one), " v%u:cpu=%u/gpu=%u", v, cpu, gpuTotal[v]);
+                mismatchList += one;
+            }
             ++mismatchViews;
         }
     }
 
-    char buf[256];
+    char buf[512];
     if (mismatchViews == 0)
     {
         std::snprintf(buf, sizeof(buf),
@@ -2185,8 +2208,8 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
     else
     {
         std::snprintf(buf, sizeof(buf),
-            "[ShadowGpuData] cull validation MISMATCH: %u/%u views differ (first view %u: cpu=%u gpu=%u).\n",
-            mismatchViews, valViews_, firstView, firstCpu, firstGpu);
+            "[ShadowGpuData] cull validation MISMATCH: %u/%u views differ (first view %u: cpu=%u gpu=%u).%s\n",
+            mismatchViews, valViews_, firstView, firstCpu, firstGpu, mismatchList.c_str());
     }
     // The verdict this validation exists to produce, readable (session log) by the gate runs that
     // trust it.
