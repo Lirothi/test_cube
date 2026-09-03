@@ -512,7 +512,8 @@ namespace
         Check(exitCode == 7, "child exited through TerminateProcess with its own code");
         std::string text;
         Check(ReadFileText(L"logs/log_stress_fatal.log", text), "child session file exists");
-        Check(text.find(" FATAL ") != std::string::npos && text.find("fatal marker 42") != std::string::npos,
+        // The level sits in the bracketed prefix run: "[HH:MM:SS.mmm][FATAL][category][frame] ".
+        Check(text.find("][FATAL][") != std::string::npos && text.find("fatal marker 42") != std::string::npos,
             "fatal record reached the file before the process died");
         Check(text.find("child line three") != std::string::npos, "records queued before the fatal were flushed too");
         Check(text.find("session end") == std::string::npos, "no footer (unclean end is visible as its absence)");

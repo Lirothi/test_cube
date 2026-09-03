@@ -89,7 +89,9 @@ namespace logging
             destination[size] = '\0';
         }
 
-        // Pre-Initialize / post-Shutdown fallback: "[level] [category] message" straight to DBWIN.
+        // Pre-Initialize / post-Shutdown fallback: "[level][category] message" straight to DBWIN --
+        // the same bracketed-run shape as the file sink's prefix, minus the clock and frame it
+        // cannot know yet.
         void EmitToDebugger(const LogRecord& record) noexcept
         {
             char line[kLogMessageCapacity + 96];
@@ -97,7 +99,7 @@ namespace logging
             line[0] = '\0';
             AppendAscii(line, sizeof(line), size, "[");
             AppendAscii(line, sizeof(line), size, LogLevelName(record.level));
-            AppendAscii(line, sizeof(line), size, "] [");
+            AppendAscii(line, sizeof(line), size, "][");
             AppendAscii(line, sizeof(line), size, LogCategoryName(record.category));
             AppendAscii(line, sizeof(line), size, "] ");
             AppendAscii(

@@ -245,15 +245,17 @@ namespace logging::sinks
     {
         LineWriter line(out, capacity);
 
-        // Prefix, as the owner wants it: "HH:MM:SS.mmm LEVEL [category] <frame> " — single
-        // spaces, no column padding, the category bracketed Unreal-style, the frame a bare
-        // number ("-" before the first frame), no thread (the viewer has it; the file rarely
-        // needs it). The date is in the session header and file name, the sequence number in
-        // the viewer.
+        // Prefix, as the owner wants it: "[HH:MM:SS.mmm][LEVEL][category][frame] " — every
+        // service field bracketed, no spaces between them, one space before the message. No
+        // column padding, the frame a bare number ("-" before the first frame), no thread (the
+        // viewer has it; the file rarely needs it). The date is in the session header and file
+        // name, the sequence number in the viewer. Amended 2026-09-03 from the space-separated
+        // "HH:MM:SS.mmm LEVEL [category] <frame> " at the owner's request.
         (void)threadNames;
         char wallClock[32];
         const std::size_t wallClockLength = clock.FormatWallClock(record.qpcTimestamp, wallClock, sizeof(wallClock));
         // FormatWallClock yields "YYYY-MM-DD HH:MM:SS.mmm"; keep the time of day.
+        line.Append('[');
         if (wallClockLength >= 23)
         {
             line.Append(std::string_view(wallClock + 11, 12));
@@ -262,11 +264,11 @@ namespace logging::sinks
         {
             line.Append("--:--:--.---");
         }
-        line.Append(' ');
+        line.Append("][");
         line.Append(IsValid(record.level) ? kLevelTags[static_cast<std::size_t>(record.level)] : std::string_view("?????"));
-        line.Append(" [");
+        line.Append("][");
         line.Append(LogCategoryName(record.category));
-        line.Append("] ");
+        line.Append("][");
         if (record.frame == kInvalidLogFrame)
         {
             line.Append('-');
@@ -275,7 +277,7 @@ namespace logging::sinks
         {
             line.AppendUnsigned(record.frame);
         }
-        line.Append(' ');
+        line.Append("] ");
 
         {
             std::size_t messageBytes = record.messageByteCount;

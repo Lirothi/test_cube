@@ -190,12 +190,15 @@ fixed UTF-8 message buffer (target 768–1024 bytes)
 The file sink renders one line in this stable shape:
 
 ```text
-01:14:22.381 WARN [render.rt] 1842 RT allocation failed; switching to SSR (SceneRenderer.cpp:217)
+[01:14:22.381][WARN][render.rt][1842] RT allocation failed; switching to SSR (SceneRenderer.cpp:217)
 ```
 
-Fields, single-spaced: time of day, level, `[category]` (bracketed, Unreal-style), frame (`-`
-before the first frame), message, and for Warning+ the `(File.cpp:line)` suffix. **Amended
-twice after L8 at the owner's request** — the original shape also carried the sequence number,
+Fields: every service field in its own `[]`, no spaces between them — time of day, level,
+category, frame (`-` before the first frame) — then one space, the message, and for Warning+ the
+`(File.cpp:line)` suffix. The pre-init DBWIN fallback uses the same run minus clock and frame:
+`[LEVEL][category] message`. **Amended three times after L8 at the owner's request** (the third,
+2026-09-03: brackets around every field, spaces removed — the previous shape was
+`01:14:22.381 WARN [render.rt] 1842 ...`) — the original shape also carried the sequence number,
 the full date, the elapsed clock and the thread name, padded into columns (85 characters of
 prefix per line, then ~50); now ~30. The date lives only in the session header and file name,
 the sequence and the thread only in the viewer, and elapsed time is what the viewer's time
