@@ -57,6 +57,22 @@ public:
 
     const ObjectBucket& GetBucket(BucketType type) const;
     ObjectBucket& GetBucket(BucketType type);
+
+    // S0 (occlusion plan): object counts for the visibility readout. Source = what Bucketize
+    // offered (after layer/caster filters); visible = what Cull kept. Both count OBJECTS, so read
+    // them BEFORE BuildInstancedBatches replaces runs with one InstancedDrawBatch entry each.
+    size_t SourceObjectCount() const
+    {
+        size_t n = 0;
+        for (const ObjectBucket& b : buckets_) { n += b.size(); }
+        return n;
+    }
+    size_t VisibleObjectCount() const
+    {
+        size_t n = 0;
+        for (const ObjectBucket& b : visibleBuckets_) { n += b.size(); }
+        return n;
+    }
     ObjectBucket& GetVisibleBucket(BucketType type);
     const std::array<ObjectBucket, 4>& Buckets() const { return buckets_; }
     const std::array<ObjectBucket, 4>& VisibleBuckets() const { return visibleBuckets_; }

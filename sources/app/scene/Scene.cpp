@@ -20,6 +20,8 @@
 #include "rendering/debug/LodDebugView.h" // render::DrawLodDebug (LOD selection debug view)
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/renderables/InstancedDrawBatch.h" // S14 readout: count a batch's members, not the batch
+#include "rendering/core/VisibilityStats.h" // occlusion plan S0: per-view visibility counters
+#include "rendering/core/RenderStats.h"     // occlusion plan S0: draw/primitive totals in the readout
 #include "core/diagnostics/ArtifactWriter.h" // S7: headless cascade readout dump
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
@@ -443,7 +445,65 @@ CascadeCullVolume BuildCascadeCullVolume(const std::array<float3, 8>& cornersWor
     }
     return overflow ? CascadeCullVolume{} : v;
 }
+
+// Occlusion plan S0: fill one view's visibility counters from its culled queue (before batching).
+// Triangles are the CPU-path estimate: index count / 3 at the object's camera LOD (chunked meshes:
+// per chunk at the chunk's tier), times the GI instance count where there is one.
+void AccumulateVisibility(render::VisibilityViewCounters& c, const SceneRenderQueue& queue, size_t sourceCount)
+{
+    c.objectsIn = static_cast<std::uint32_t>(sourceCount);
+    c.objectsFrustum = static_cast<std::uint32_t>(queue.VisibleObjectCount());
+    for (const auto& bucket : queue.VisibleBuckets())
+    {
+        for (const RenderableObjectBase* obj : bucket)
+        {
+            if (!obj) { continue; }
+            const UINT gi = obj->GetInstanceCasterCount();
+            const std::uint32_t instances = gi > 0u ? static_cast<std::uint32_t>(gi) : 1u;
+            c.instancesDrawn += instances;
+            const RenderableObject* ro = obj->AsRenderableObject();
+            const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
+            if (!mesh) { continue; }
+            const UINT lodCount = std::max(1u, mesh->GetLodCount());
+            if (mesh->IsChunkedSubmeshes())
+            {
+                const std::vector<std::uint8_t>& lods = ro->ChunkCameraLods();
+                const size_t n = std::min(lods.size(), mesh->SubmeshesForLod(0).size());
+                c.chunksIn += static_cast<std::uint32_t>(n);
+                c.chunksDrawn += static_cast<std::uint32_t>(n); // == chunksIn until S1's per-view mask
+                for (size_t s = 0; s < n; ++s)
+                {
+                    const UINT lod = std::min<UINT>(lods[s], lodCount - 1u);
+                    const auto& subs = mesh->SubmeshesForLod(lod);
+                    if (s < subs.size()) { c.trianglesSubmitted += subs[s].indexCount / 3u; }
+                }
+            }
+            else
+            {
+                const UINT lod = std::min<UINT>(obj->GetCameraLod(), lodCount - 1u);
+                c.trianglesSubmitted += static_cast<std::uint64_t>(mesh->GetLodIndexCount(lod) / 3u) * instances;
+            }
+        }
+    }
+}
 } // namespace
+
+void Scene::BumpStaticSetVersion()
+{
+    ++staticSetVersion_;
+
+    // Queue entries are non-owning raw pointers. An editor mutation can destroy an object between
+    // frames, before UpdateCascades and other previous-frame diagnostics run. Drop every borrowed
+    // pointer at the mutation boundary; PrepareViews repopulates all active queues this frame.
+    renderQueueSourcesValid_ = false;
+    shadowCasterSource_.Clear();
+    cameraObjectSource_.Clear();
+    camera_.GetView().queue.Clear();
+    for (SceneView& view : cascadeViews_) { view.queue.Clear(); }
+    for (SceneView& view : clipmapViews_) { view.queue.Clear(); }
+    for (SceneView& view : spotShadowViews_) { view.queue.Clear(); }
+    for (SceneView& view : pointShadowViews_) { view.queue.Clear(); }
+}
 
 void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
 {
@@ -498,6 +558,15 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     const float3 sunDirWS = dirLight_.GetDirection();
 
     std::string c0Survivors; // S14 readout diagnostic, filled only on the dump frame
+    // UpdateCascades runs before this frame's queues are rebuilt. Its diagnostic reads below are
+    // therefore allowed to borrow LAST frame's raw object pointers only while the object set and
+    // layer mask still match that queue. Editor placement removes the preview and bumps the set
+    // version before this function; without this gate the previous queue retains a dangling
+    // pointer until PrepareViewQueue clears it later in this same frame.
+    const bool previousCascadeQueuesCurrent =
+        renderQueueSourcesValid_ &&
+        renderQueueSourceVersion_ == staticSetVersion_ &&
+        renderQueueSourceMask_ == camera.GetRenderLayerMask();
     for (size_t idx = 0; idx < cascadeViews_.size(); ++idx)
     {
         const float sliceNear = cascades.splitsVS[idx];
@@ -676,29 +745,33 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             // Built even while the toggle is off (a few hundred flops), so the readout can report
             // both directions of the cross-check: see CascadeData::cullLeakDbg.
             const Frustum& other = cascadeConfig_.accurateCasterCull ? boxFrustum : accFrustum;
-            const bool listSurvivors = render::g_csmDumpReadout && renderer->GetTotalFrameNumber() > 600 && idx == 0;
-            for (const auto& bucket : cascadeView.queue.VisibleBuckets())
+            const bool listSurvivors = previousCascadeQueuesCurrent && render::g_csmDumpReadout &&
+                renderer->GetTotalFrameNumber() > 600 && idx == 0;
+            if (previousCascadeQueuesCurrent)
             {
-                for (const RenderableObjectBase* obj : bucket)
+                for (const auto& bucket : cascadeView.queue.VisibleBuckets())
                 {
-                    if (!obj) { continue; }
-                    const AABB& b = obj->GetWorldBounds();
-                    if (b.IsValid() && !other.Intersects(b)) { ++cascades.cullLeakDbg[idx]; }
-                    if (listSurvivors)
+                    for (const RenderableObjectBase* obj : bucket)
                     {
-                        // Readout diagnostic: every cascade-0 survivor with both verdicts, so a
-                        // box-vs-volume count mismatch can be traced to the object, not guessed at.
-                        char line[200];
-                        const float3 mn = b.IsValid() ? b.GetMin() : float3(0, 0, 0);
-                        const float3 mx = b.IsValid() ? b.GetMax() : float3(0, 0, 0);
-                        const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
-                        std::snprintf(line, sizeof(line), "  c0 %p members=%u valid=%d box=%d acc=%d min=(%.1f,%.1f,%.1f) max=(%.1f,%.1f,%.1f)\n",
-                                      static_cast<const void*>(obj), batch ? static_cast<unsigned>(batch->InstanceCount()) : 1u,
-                                      b.IsValid() ? 1 : 0,
-                                      (!b.IsValid() || boxFrustum.Intersects(b)) ? 1 : 0,
-                                      (!b.IsValid() || accFrustum.Intersects(b)) ? 1 : 0,
-                                      mn.x, mn.y, mn.z, mx.x, mx.y, mx.z);
-                        c0Survivors += line;
+                        if (!obj) { continue; }
+                        const AABB& b = obj->GetWorldBounds();
+                        if (b.IsValid() && !other.Intersects(b)) { ++cascades.cullLeakDbg[idx]; }
+                        if (listSurvivors)
+                        {
+                            // Readout diagnostic: every cascade-0 survivor with both verdicts, so a
+                            // box-vs-volume count mismatch can be traced to the object, not guessed at.
+                            char line[200];
+                            const float3 mn = b.IsValid() ? b.GetMin() : float3(0, 0, 0);
+                            const float3 mx = b.IsValid() ? b.GetMax() : float3(0, 0, 0);
+                            const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
+                            std::snprintf(line, sizeof(line), "  c0 %p members=%u valid=%d box=%d acc=%d min=(%.1f,%.1f,%.1f) max=(%.1f,%.1f,%.1f)\n",
+                                          static_cast<const void*>(obj), batch ? static_cast<unsigned>(batch->InstanceCount()) : 1u,
+                                          b.IsValid() ? 1 : 0,
+                                          (!b.IsValid() || boxFrustum.Intersects(b)) ? 1 : 0,
+                                          (!b.IsValid() || accFrustum.Intersects(b)) ? 1 : 0,
+                                          mn.x, mn.y, mn.z, mx.x, mx.y, mx.z);
+                            c0Survivors += line;
+                        }
                     }
                 }
             }
@@ -781,13 +854,16 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             // batches at all depends on the whole bucket clearing kInstancingThreshold -- culling
             // one bush out of a bucket of 8 un-batched six palms and made 17 entries out of 13.
             std::uint32_t seen = 0;
-            for (const auto& bucket : cascadeView.queue.VisibleBuckets())
+            if (previousCascadeQueuesCurrent)
             {
-                for (const RenderableObjectBase* obj : bucket)
+                for (const auto& bucket : cascadeView.queue.VisibleBuckets())
                 {
-                    if (!obj) { continue; }
-                    const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
-                    seen += batch ? static_cast<std::uint32_t>(batch->InstanceCount()) : 1u;
+                    for (const RenderableObjectBase* obj : bucket)
+                    {
+                        if (!obj) { continue; }
+                        const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
+                        seen += batch ? static_cast<std::uint32_t>(batch->InstanceCount()) : 1u;
+                    }
                 }
             }
             cascades.cullCastersDbg[idx] = seen;
@@ -821,7 +897,8 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     // level is still streaming in -- two configs that cull identically showed 13 vs 17 objects on
     // cascade 0 purely from load progress. Two seconds at 300 fps is past that; a --shot run lasts
     // eight seconds anyway.
-    if (render::g_csmDumpReadout && renderer->GetTotalFrameNumber() > 600)
+    if (render::g_csmDumpReadout && previousCascadeQueuesCurrent &&
+        renderer->GetTotalFrameNumber() > 600)
     {
         render::g_csmDumpReadout = false;
         // One complete table, replaced atomically: a reader never sees a half-written readout.
@@ -1451,7 +1528,47 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
     {
         view.queue.SortOpaque();
     }
+    // Occlusion plan S0: visibility counters, taken BEFORE batching so every object counts once.
+    // Only the camera and the four cascades have a slot; the fused path's queue holds survivors
+    // only, so there `objectsIn` == `objectsFrustum` by construction.
+    if (const int slot = VisibilitySlotFor(view); slot >= 0)
+    {
+        const size_t sourceCount = usesSharedShadowSource ? shadowCasterSource_.SourceObjectCount()
+                                 : usesSharedCameraSource ? cameraObjectSource_.SourceObjectCount()
+                                 : view.queue.SourceObjectCount();
+        AccumulateVisibility(render::g_visibilityStats.current[static_cast<size_t>(slot)], view.queue, sourceCount);
+    }
     view.queue.BuildInstancedBatches(view.type == SceneView::Type::Camera);
+}
+
+int Scene::VisibilitySlotFor(const SceneView& view) const
+{
+    if (&view == &camera_.GetView()) { return static_cast<int>(render::kVisibilityViewCamera); }
+    const SceneView* first = cascadeViews_.data();
+    if (&view >= first && &view < first + cascadeViews_.size())
+    {
+        return static_cast<int>(render::kVisibilityViewCascade0 + (&view - first));
+    }
+    return -1;
+}
+
+AABB Scene::ComputeStaticBounds() const
+{
+    // Union of every renderable's world box except the ocean (its sheet spans the world). Used by
+    // the replicate stress knob for its grid step; nothing hot calls this.
+    bool any = false;
+    float3 mn(0, 0, 0), mx(0, 0, 0);
+    for (const auto& obj : objects_)
+    {
+        if (!obj || obj->AsOceanRenderable()) { continue; }
+        const AABB& b = obj->GetWorldBounds();
+        if (!b.IsValid()) { continue; }
+        const float3 bmn = b.GetMin(), bmx = b.GetMax();
+        if (!any) { mn = bmn; mx = bmx; any = true; continue; }
+        mn = float3(std::min(mn.x, bmn.x), std::min(mn.y, bmn.y), std::min(mn.z, bmn.z));
+        mx = float3(std::max(mx.x, bmx.x), std::max(mx.y, bmx.y), std::max(mx.z, bmx.z));
+    }
+    return any ? AABB(mn, mx) : AABB::Empty();
 }
 
 void Scene::PrepareViews(Renderer* renderer)
@@ -1751,6 +1868,28 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
 }
 
 void Scene::Render(Renderer* renderer) {
+    // Occlusion plan S0: headless visibility readout, once, past the streaming window (frame 600,
+    // same reason as csm_readout). Reads LAST frame's snapshot -- complete by construction.
+    if (render::g_visDumpReadout && renderer && renderer->GetTotalFrameNumber() > 600)
+    {
+        render::g_visDumpReadout = false;
+        diag::ArtifactFile f("visibility_readout.log", diag::ArtifactMode::AtomicReplace);
+        if (f)
+        {
+            static const char* const kNames[render::kVisibilityViews] = { "camera", "c0", "c1", "c2", "c3" };
+            f.Printf("view     objectsIn  frustum  occluded  chunksIn  chunksDrawn  instances   triangles    frame=%llu drawCalls=%u primitives=%llu\n",
+                     static_cast<unsigned long long>(renderer->GetTotalFrameNumber()),
+                     render::g_renderStats.lastDrawCalls,
+                     static_cast<unsigned long long>(render::g_renderStats.lastPrimitives));
+            for (unsigned v = 0; v < render::kVisibilityViews; ++v)
+            {
+                const render::VisibilityViewCounters& c = render::g_visibilityStats.last[v];
+                f.Printf("%-8s %9u  %7u  %8u  %8u  %11u  %9u  %10llu\n", kNames[v], c.objectsIn, c.objectsFrustum,
+                         c.objectsOccluded, c.chunksIn, c.chunksDrawn, c.instancesDrawn,
+                         static_cast<unsigned long long>(c.trianglesSubmitted));
+            }
+        }
+    }
     if (!renderer) {
         return;
     }

@@ -2868,7 +2868,11 @@ bool EditorController::PanelStateMatches(const PanelStateSnapshot& a,
         ViewportGizmoStatesMatch(a.viewportGizmo, b.viewportGizmo);
 }
 
-void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager)
+void EditorController::Draw(
+    Renderer& renderer,
+    Scene& scene,
+    LevelManager& levelManager,
+    bool logWindowOpen)
 {
     CPU_SCOPE(ProfilerScopes::kEditorDraw);
     const auto markCameraStateSaved = [this](const std::string& levelPath, const LevelCameraState& cameraState)
@@ -3802,6 +3806,11 @@ void EditorController::Draw(Renderer& renderer, Scene& scene, LevelManager& leve
                 drawPanelMenuItem("meshEditor");
                 drawPanelMenuItem("materialEditor");
                 drawPanelMenuItem("levelErrors");
+                ImGui::Separator();
+                if (ImGui::MenuItem("Session Log", nullptr, logWindowOpen))
+                {
+                    toggleLogWindowRequested_ = true;
+                }
                 ImGui::EndMenu();
             }
             ImGui::EndMenuBar();

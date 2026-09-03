@@ -37,11 +37,12 @@ the newest one. Line shape:
 
 Fields: time of day (the date is in the session header), level, `[category]`, frame (`-` before
 the first frame), message; Warning+ carry the source suffix. The thread is not in the file (the
-F3 viewer shows it).
+Session Log viewer shows it).
 
 A missing `session end: clean shutdown` footer means the process did not shut down cleanly. In
-the app, **F3** opens the Session Log viewer (filters by level/category/text, pause, copy,
-source location); `--log-window` opens it at boot so a `--shot` can capture it. Use
+the app, Window > Session Log in the editor or Developer Controls > Debug opens the Session Log
+viewer (filters by level/category/text, pause, copy, source location); `--log-window` opens it at
+boot so a `--shot` can capture it. Use
 `LOG_INFO(logging::LogCategory::Scene, "Loaded {}", path)` and friends (`core/logging/Log.h`);
 never `OutputDebugString` or `printf` for events. Gates for lines evaluated every frame:
 `LOG_*_ONCE` (once per process), `LOG_*_EVERY_N(n, ...)`, `LOG_*_THROTTLED(duration, ...)`,

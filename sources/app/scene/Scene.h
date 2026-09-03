@@ -81,6 +81,9 @@ public:
     void InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void AddObject(std::unique_ptr<RenderableObjectBase> obj);
+    // Occlusion plan S0: union of every renderable's world box except the ocean. For the
+    // `scene.replicate` stress grid's step; not a per-frame call.
+    AABB ComputeStaticBounds() const;
     bool AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::unique_ptr<RenderableObjectBase> obj);
     bool RemoveOceanObjects();
     void SetOceanVisible(bool visible);
@@ -177,7 +180,10 @@ public:
     std::uint32_t GetStaticSetVersion() const { return staticSetVersion_; }
 
 private:
-    void BumpStaticSetVersion() { ++staticSetVersion_; }
+    // Every queue stores non-owning object pointers. Changing scene membership must invalidate
+    // them immediately; waiting for PrepareViews is too late because UpdateCascades reads the
+    // previous frame's cascade queues first.
+    void BumpStaticSetVersion();
 
     static constexpr int kCascades = SceneFrameData::kCascades;
 
@@ -188,6 +194,9 @@ private:
     // Poll the live shadow-LOD bias/stride against the caster tables; rebuild on a change.
     void ReconcileShadowLodCurve(Renderer* renderer);
     void UpdateCascades(const Camera& camera, Renderer* renderer);
+    // Occlusion plan S0: which render::VisibilityStats slot a view writes (camera 0, cascades
+    // 1..4), or -1 for the views that have none (local lights, clipmap levels).
+    int VisibilitySlotFor(const SceneView& view) const;
     void UpdateClipmap(const Camera& camera); // Step 24d: camera-centered directional clipmap views (VSM)
 
     void PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask);

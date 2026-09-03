@@ -84,7 +84,7 @@ extern std::vector<float> g_sweepValues;
 // after the first level is up, and before the first shot's settle delay.
 extern std::vector<std::pair<std::string, float>> g_fixedSettings;
 
-// "--log-window": open the session-log viewer (F3) at boot, so a headless --shot can capture the
+// "--log-window": open the session-log viewer at boot, so a headless --shot can capture the
 // viewer itself — the only way its rendering is verifiable without driving the GUI by hand.
 extern bool g_bootLogWindow;
 

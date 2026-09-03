@@ -27,6 +27,7 @@ public:
     void ToggleTextureInspector();
     void ToggleOceanControls() { oceanControlsWindow_.ToggleOpen(); }
     void OpenOceanControls() { oceanControlsWindow_.SetOpen(true); }
+    bool IsLogWindowOpen() const { return logWindow_.IsOpen(); }
     void ToggleLogWindow() { logWindow_.ToggleOpen(); }
 
     // Scene is non-const because the CSM tab edits CascadeShadowConfig live (S0.2); everything

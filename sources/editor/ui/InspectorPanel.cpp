@@ -1726,7 +1726,7 @@ namespace
             InspectorHelp(
                 "How much of the SKY'S OWN measured irradiance reaches diffuse surfaces. Only "
                 "active when this level's sky was imported with its IBL derivatives -- check "
-                "the session log (F3, the [ibl] line) if you are not sure which path a level took.\n\n"
+                "the Session log window (the [ibl] line) if you are not sure which path a level took.\n\n"
                 "1 = the irradiance cube at face value, which is the physical answer. It is a "
                 "separate control from Ambient above on purpose: Ambient means 'this fraction of "
                 "the SUN colour bounces around', a number authored against a different equation "
@@ -1906,7 +1906,7 @@ namespace
                 "The scale that realises the number is DERIVED, never authored -- the engine reads "
                 "this sky's own irradiance cube and divides -- so the same 12000 means the same "
                 "thing on a cube that came out of the importer bright and one that came out dim. "
-                "Check the session log's [ibl] line (F3) for the measured value and the factor it produced.\n\n"
+                "Check the Session log window's [ibl] line for the measured value and the factor it produced.\n\n"
                 "Needs the F7 IBL siblings (_spec/_diffuse). A sky imported without them has "
                 "nothing to measure and this row does nothing.");
 

@@ -971,8 +971,9 @@ filters are correct; close-window 120-frame trace shows no `AppController` regre
 
 **Implemented result:**
 
-- `sources/app/ui/LogWindow.h/.cpp`: a dedicated window ("Session Log", **F3**, also a checkbox
-  in Developer Controls > Debug and `--log-window` at boot), owned by `DeveloperWindow` like the
+- `sources/app/ui/LogWindow.h/.cpp`: a dedicated window ("Session Log", available through the
+  editor's Window menu, a checkbox in Developer Controls > Debug and `--log-window` at boot),
+  owned by `DeveloperWindow` like the
   ocean controls and drawn from the same two sites. Core additions for it (no ImGui in core):
   `logging::GetSessionEpoch` (QPC origin + frequency, so the viewer renders session-relative
   time) and `logging::GetThreadName` (try-lock, never blocks).
@@ -1066,7 +1067,7 @@ filters are correct; close-window 120-frame trace shows no `AppController` regre
   whatever real sessions already sit in `logs/` so a developer's files are neither deleted nor
   counted) and now deletes its own `log_stress_*` scratch files, leaving only the verdict.
 - Rules and switches documented in `AGENTS.md` ("Session Log": line shape, levels, gates,
-  artifacts, retention, the check script, F3 / `--log-window`).
+  artifacts, retention, the check script, Window menu / viewer checkbox / `--log-window`).
 
 **Retired artifacts (owner's decision, 2026-09-02).** Twelve fixed-name files folded into the
 session log. Eight were pure duplicates once L5 landed (every line already a session record at

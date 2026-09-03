@@ -56,6 +56,9 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
+#include "rendering/core/VisibilityStats.h" // occlusion plan S0
+#include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
+#include <fstream>
 #include "rendering/shadows/ShadowSettings.h"
 #if WITH_EDITOR
 #include "editor/EditorController.h"
@@ -242,9 +245,82 @@ namespace
     // names rather than a reflection system -- this is a capture harness, and a name that does not
     // match should be loud and cheap to diagnose, not silently ignored.
     // Returns false for an unknown name so the caller can say so once.
+    // Occlusion plan S0: `--set=scene.replicate:K` -- clone every enabled staticMesh of the loaded
+    // level K*K-1 more times on a grid whose step is the level's static extent, so a scene where
+    // the camera geometry dominates the frame exists without authoring one (wind_test x16 ~ 10k
+    // objects). Recorded here by the --set dispatcher, executed once the level is in (below),
+    // through the same factory + UploadBatch + AddInitializedObject path the editor's spawn uses.
+    // Nothing is written to disk.
+    std::uint32_t g_sceneReplicateRequest = 0;
+
+    void ReplicateLevelObjects(Scene& scene, Renderer& renderer, const std::string& levelPath, std::uint32_t k)
+    {
+        if (k < 2u || levelPath.empty()) { return; }
+        nlohmann::json level;
+        {
+            std::ifstream in(levelPath);
+            if (!in)
+            {
+                LOG_WARNING(logging::LogCategory::App, "scene.replicate: cannot open level {}", levelPath);
+                return;
+            }
+            try { in >> level; }
+            catch (...)
+            {
+                LOG_WARNING(logging::LogCategory::App, "scene.replicate: level {} is not valid JSON", levelPath);
+                return;
+            }
+        }
+        const AABB bounds = scene.ComputeStaticBounds();
+        const float3 ext = bounds.IsValid() ? (bounds.GetMax() - bounds.GetMin()) : float3(400.0f, 0.0f, 400.0f);
+        // 10 % of air between copies; a level with no static extent still gets a sane grid.
+        const float stepX = std::max(ext.x, 50.0f) * 1.1f;
+        const float stepZ = std::max(ext.z, 50.0f) * 1.1f;
+
+        UploadBatch uploads;
+        if (!uploads.Begin(&renderer))
+        {
+            LOG_WARNING(logging::LogCategory::App, "scene.replicate: UploadBatch::Begin failed");
+            return;
+        }
+        std::uint32_t added = 0, skipped = 0;
+        const nlohmann::json objects = level.value("objects", nlohmann::json::array());
+        for (const nlohmann::json& o : objects)
+        {
+            if (!o.is_object() || o.value("type", std::string{}) != "staticMesh" || !o.value("enabled", true)) { continue; }
+            const nlohmann::json* pos = o.contains("position") ? &o["position"] : nullptr;
+            if (!pos || !pos->is_array() || pos->size() < 3) { ++skipped; continue; }
+            const std::string baseName = o.value("name", std::string("staticMesh"));
+            // Centred on the original (K=4: offsets -1..2), so a camera standing in the level sees
+            // copies in every direction instead of a one-sided quadrant at +X/+Z.
+            const int lo = -static_cast<int>((k - 1u) / 2u);
+            for (int ix = lo; ix < lo + static_cast<int>(k); ++ix)
+            {
+                for (int iz = lo; iz < lo + static_cast<int>(k); ++iz)
+                {
+                    if (ix == 0 && iz == 0) { continue; } // the original is already in the scene
+                    nlohmann::json c = o;
+                    c.erase("id"); // a runtime object has no editor identity (AddInitializedObject assigns none)
+                    c["name"] = baseName + " rep(" + std::to_string(ix) + "," + std::to_string(iz) + ")";
+                    c["position"][0] = (*pos)[0].get<float>() + static_cast<float>(ix) * stepX;
+                    c["position"][2] = (*pos)[2].get<float>() + static_cast<float>(iz) * stepZ;
+                    std::unique_ptr<RenderableObjectBase> obj =
+                        SceneObjectFactory::CreateStaticMeshFromJson(SceneObjectFactory::ResolveMeshAsset(c));
+                    if (obj && scene.AddInitializedObject(renderer, uploads, std::move(obj))) { ++added; }
+                    else { ++skipped; }
+                }
+            }
+        }
+        uploads.SubmitAndWait(&renderer);
+        LOG_INFO(logging::LogCategory::App, "scene.replicate {}: +{} static meshes ({} skipped), grid step {:.1f} x {:.1f} m",
+                 k, added, skipped, stepX, stepZ);
+    }
+
     bool ApplySweepValue(Scene& scene, SceneRenderSettings& renderSettings,
                          const std::string& setting, float value)
     {
+        // Occlusion plan S0: recorded, applied after the --set loop (needs the renderer + level path).
+        if (setting == "scene.replicate") { g_sceneReplicateRequest = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 16.0f)); return true; }
         render::CameraExposureSettings& e = scene.CameraExposureRef();
         render::ColorPipelineSettings& c = scene.ColorPipelineRef();
 
@@ -1163,6 +1239,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             Profiler::Get().BeginFrame(renderer.GetTotalFrameNumber());
             logging::SetFrameNumber(renderer.GetTotalFrameNumber());
             render::g_renderStats.NextFrame(); // snapshot last frame's draw/primitive counts
+            render::g_visibilityStats.NextFrame(); // occlusion plan S0: per-view visibility, same moment
             TaskSystem::Get().WaitForTrackedAsyncTasks();
             renderer.BeginFrame();
 #if PROF_GPU_ENABLED
@@ -1280,6 +1357,13 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                             LOG_WARNING(logging::LogCategory::App, "--set {} = {}: UNKNOWN SETTING (ignored)",
                                         kv.first, kv.second);
                         }
+                    }
+                    // Occlusion plan S0: the stress grid, once the level is in and every --set is applied.
+                    if (g_sceneReplicateRequest > 1u)
+                    {
+                        ReplicateLevelObjects(scene, renderer, std::string(levelManager.GetActiveLevelSourcePath()),
+                                              g_sceneReplicateRequest);
+                        g_sceneReplicateRequest = 0u;
                     }
                 }
             }

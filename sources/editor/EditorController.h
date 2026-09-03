@@ -41,7 +41,7 @@ public:
     bool IsOpen() const { return open_; }
     void SetOpen(bool open) { open_ = open; }
     void ToggleOpen() { open_ = !open_; }
-    void Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager);
+    void Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager, bool logWindowOpen);
     bool RequestOpenLevelPath(LevelManager& levelManager,
         const std::string& path,
         bool preserveCameraTransform,
@@ -58,6 +58,15 @@ public:
     {
         const bool requested = openOceanPresetEditorRequested_;
         openOceanPresetEditorRequested_ = false;
+        return requested;
+    }
+
+    // Window > Session Log toggles the viewer owned by DeveloperWindow. AppController routes the
+    // request after Draw so the editor does not take ownership of an app-level window.
+    bool ConsumeToggleLogWindowRequest()
+    {
+        const bool requested = toggleLogWindowRequested_;
+        toggleLogWindowRequested_ = false;
         return requested;
     }
 
@@ -97,6 +106,7 @@ private:
     bool firstOpenInitialized_ = false;
     bool extensionsRegistered_ = false;
     bool openOceanPresetEditorRequested_ = false;
+    bool toggleLogWindowRequested_ = false;
     bool showContentBrowser_ = true;
     bool showOutliner_ = true;
     bool showInspector_ = true;

@@ -28,6 +28,7 @@
 #include "rendering/meshes/LodSelect.h"          // shadow caster LOD curve (--vsm-lodbias/--vsm-lodstride)
 #include "rendering/renderables/InstanceTypes.h"  // S0: g_shadowMode / g_csmDebugMode (--shadow-mode, --csm-tint)
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/core/VisibilityStats.h" // occlusion plan S0: --vis-readout
 #include "rendering/core/CommandListBindState.h" // --no-bind-batching
 #include "text/TextManager.h"
 #include "vfx/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
@@ -754,6 +755,12 @@ int WINAPI WinMain(
         // "--csm-readout": dump the cascade fit table to logs/csm_readout.log on the first frame.
         // The dev window shows the same numbers, but a headless capture cannot open it, and zRange
         // / D16 step are what the pancaking step is judged on.
+        // "--vis-readout": dump the per-view visibility counters (objects in/frustum/occluded,
+        // terrain chunks, instances, triangles) to logs/visibility_readout.log on frame 600.
+        // S0 of docs/occlusion_culling_plan.md.
+        if (std::strstr(lpCmdLine, "--vis-readout")) {
+            render::g_visDumpReadout = true;
+        }
         if (std::strstr(lpCmdLine, "--csm-readout")) {
             render::g_csmDumpReadout = true;
         }

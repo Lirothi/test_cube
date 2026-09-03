@@ -48,9 +48,6 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     const bool toggleOceanControls =
         input.WasActionPressed("ToggleOceanControls") ||
         ImGui::IsKeyPressed(ImGuiKey_F7, false);
-    const bool toggleLogWindow =
-        input.WasActionPressed("ToggleLogWindow") ||
-        ImGui::IsKeyPressed(ImGuiKey_F3, false);
 
     if (toggleDeveloperWindow)
     {
@@ -69,10 +66,6 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     if (toggleOceanControls)
     {
         developerWindow_.ToggleOceanControls();
-    }
-    if (toggleLogWindow)
-    {
-        developerWindow_.ToggleLogWindow();
     }
     if (g_bootLogWindow)
     {
@@ -186,10 +179,15 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     scene.SetRenderSettings(settings_);
 
 #if WITH_EDITOR
-    editorController_.Draw(renderer, scene, levelManager);
+    editorController_.Draw(
+        renderer, scene, levelManager, developerWindow_.IsLogWindowOpen());
     if (editorController_.ConsumeOpenOceanPresetEditorRequest())
     {
         developerWindow_.OpenOceanControls();
+    }
+    if (editorController_.ConsumeToggleLogWindowRequest())
+    {
+        developerWindow_.ToggleLogWindow();
     }
 #endif
 

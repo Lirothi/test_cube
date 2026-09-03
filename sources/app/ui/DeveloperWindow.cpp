@@ -23,6 +23,7 @@
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderStats.h"
+#include "rendering/core/VisibilityStats.h" // S0 occlusion plan: per-view visibility table
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/debug/LodDebugView.h"
 #include "rendering/renderables/InstanceTypes.h"
@@ -334,6 +335,43 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Text("Draw calls: %u   Primitives: %.3fM",
                     render::g_renderStats.lastDrawCalls,
                     static_cast<double>(render::g_renderStats.lastPrimitives) / 1.0e6);
+
+                // S0 (docs/occlusion_culling_plan.md): per-view visibility. Same numbers a headless
+                // run gets from --vis-readout, so a HUD reading and a log reading never disagree.
+                if (ImGui::BeginTable("VisibilityStats", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
+                {
+                    ImGui::TableSetupColumn("view");
+                    ImGui::TableSetupColumn("objects in");
+                    ImGui::TableSetupColumn("frustum");
+                    ImGui::TableSetupColumn("occluded");
+                    ImGui::TableSetupColumn("chunks in");
+                    ImGui::TableSetupColumn("chunks drawn");
+                    ImGui::TableSetupColumn("instances");
+                    ImGui::TableSetupColumn("tris (M)");
+                    ImGui::TableHeadersRow();
+                    static const char* kViewNames[render::kVisibilityViews] = { "camera", "c0", "c1", "c2", "c3" };
+                    for (unsigned v = 0; v < render::kVisibilityViews; ++v)
+                    {
+                        const render::VisibilityViewCounters& c = render::g_visibilityStats.last[v];
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0); ImGui::Text("%s", kViewNames[v]);
+                        ImGui::TableSetColumnIndex(1); ImGui::Text("%u", c.objectsIn);
+                        ImGui::TableSetColumnIndex(2); ImGui::Text("%u", c.objectsFrustum);
+                        ImGui::TableSetColumnIndex(3); ImGui::Text("%u", c.objectsOccluded);
+                        ImGui::TableSetColumnIndex(4); ImGui::Text("%u", c.chunksIn);
+                        ImGui::TableSetColumnIndex(5); ImGui::Text("%u", c.chunksDrawn);
+                        ImGui::TableSetColumnIndex(6); ImGui::Text("%u", c.instancesDrawn);
+                        ImGui::TableSetColumnIndex(7); ImGui::Text("%.3f", static_cast<double>(c.trianglesSubmitted) / 1.0e6);
+                    }
+                    ImGui::EndTable();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Per view, last completed frame. objects in = what the view's source offered;\n"
+                                      "frustum = kept by the frustum test (per object, before instancing);\n"
+                                      "occluded = cut by an occlusion test (0 until the occlusion plan's S3/S5);\n"
+                                      "chunks = terrain chunks of surviving chunked meshes, in vs actually drawn\n"
+                                      "(equal until S1's per-view chunk mask); tris = CPU-path estimate at the\n"
+                                      "selected LOD. Headless: --vis-readout -> logs/visibility_readout.log.");
 
                 ImGui::Checkbox("Trace capture window", &traceWindowOpen_);
 
@@ -800,7 +838,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     oceanControlsWindow_.SetOpen(oceanControlsOpen);
                 }
                 bool logWindowOpen = logWindow_.IsOpen();
-                if (ImGui::Checkbox("Session log [F3]", &logWindowOpen))
+                if (ImGui::Checkbox("Session log", &logWindowOpen))
                 {
                     logWindow_.SetOpen(logWindowOpen);
                 }

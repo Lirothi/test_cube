@@ -989,6 +989,9 @@
     <ClInclude Include="sources/rendering/core/RenderStats.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/VisibilityStats.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameScheduler.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
