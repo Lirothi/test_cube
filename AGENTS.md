@@ -69,6 +69,12 @@ the owner said so (2026-09-03) after `s14_assert.log` / `hzb_cull_selftest.log` 
 the session log. A headless gate reads its verdict line from the session log (`Select-String` for
 `cull validation PASS`, `hzb cull self-test: PASS`, ...) and the exit code.
 
+The `mem:` line (Info, `core`, every 5 s; `rendering/core/MemoryReport.h`) puts process private
+bytes, VRAM and mimalloc commit beside per-owner byte counts; a subsystem that owns memory the
+process counters cannot attribute registers a provider (`RegisterMemoryProvider`). A number that
+grows while the others stay flat names the owner -- read it before reaching for a profiler
+(docs/bug_rt_retire_bin_leak.md).
+
 Structured reports a SCRIPT parses as a table (`csm_readout.log`, `visibility_readout.log`,
 `cull_benchmark.txt`, the stress verdicts) are ARTIFACTS, not events -- an existing, closed set;
 a new one needs the owner's OK first. Write them

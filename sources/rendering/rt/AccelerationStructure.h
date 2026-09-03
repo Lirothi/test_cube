@@ -116,14 +116,32 @@ public:
     ID3D12Resource* WindStreamResource(UINT slot) const;
     ID3D12Resource* WindBlasResource(UINT slot, UINT frameIndex) const;
 
-    // Release scratch buffers retained from BLAS builds. Call ONLY after the
-    // fence for the command list(s) that ran the builds has completed.
-    void ReleaseCompletedScratch() { pendingScratch_.clear(); }
+    // ---- Fence-guarded retire bin ------------------------------------------------------------
+    // Buffers the GPU may still be reading -- one-time BLAS scratch, an evicted wind slot's
+    // stream / BLAS / scratch -- are RETIRED here instead of destroyed. Each entry carries the
+    // frame it may be freed at: the retirer (GetOrBuildBlas, PrepareWindSlot) does not know the
+    // frame number, so entries start unstamped and StampRetired() gives every unstamped one its
+    // frame at the end of the build; ReleaseRetired(frameNo) frees the entries whose frame has
+    // come (kFrameCount frames later, when that slot's fence has surely been waited on).
+    //
+    // Until 2026-09-03 this was one flat vector, released ALL AT ONCE when a single deadline
+    // passed -- and the deadline was re-armed every frame the vector was non-empty, so it never
+    // came: every buffer ever retired stayed alive for the rest of the session. A fly-through of
+    // a palm grove evicts wind slots continuously, seven buffers each, which is how it surfaced:
+    // memory growing by gigabytes while circling the atoll.
+    void StampRetired(uint64_t retireFrame);
+    void ReleaseRetired(uint64_t frameNo);
+    // GPU idle only (Reset, the smoke harness): frees everything regardless of stamps.
+    void ReleaseAllRetired() { retireBin_.clear(); }
+    uint64_t RetireBinBytes() const;
+    size_t RetireBinCount() const { return retireBin_.size(); }
+    // Bytes ever handed to the bin this session. Against RetireBinBytes() it says whether the
+    // bin drains: a total that climbs by gigabytes while the bin stays at a few MB is the
+    // fly-through working as designed; a bin that tracks the total is the leak coming back.
+    uint64_t RetiredTotalBytes() const { return retiredTotalBytes_; }
 
     // Drop every cached BLAS/TLAS, retained scratch, and the SRV heap.
     void Reset();
-
-    bool HasPendingScratch() const { return !pendingScratch_.empty(); }
 
     // S13 robustness: true once any AS allocation (BLAS/TLAS result/scratch/instance
     // buffer) has failed this session. Sticky until Reset(); the caller gates RT off
@@ -209,7 +227,19 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> windDescHeap_;
     UINT windDescIncrement_ = 0;
     robin_hood::unordered_map<Mesh*, Blas> blasCache_;
-    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> pendingScratch_;
+    struct Retired {
+        Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+        uint64_t retireFrame = kUnstamped; // free once the build's frame number reaches this
+    };
+    static constexpr uint64_t kUnstamped = ~0ull;
+    std::vector<Retired> retireBin_;
+    void Retire(Microsoft::WRL::ComPtr<ID3D12Resource>&& buffer)
+    {
+        if (!buffer) { return; }
+        retiredTotalBytes_ += buffer->GetDesc().Width;
+        retireBin_.push_back(Retired{ std::move(buffer), kUnstamped });
+    }
+    uint64_t retiredTotalBytes_ = 0;
     bool buildFailed_ = false; // sticky: an AS allocation failed (see BuildFailed())
 
     std::array<PerFrameTlas, render::kFrameCount> tlasFrames_;

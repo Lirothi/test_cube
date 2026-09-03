@@ -21,6 +21,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/MemoryReport.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/renderables/GBufferRenderable.h"
 #include "rendering/renderables/RenderableObject.h"
@@ -62,7 +63,6 @@ void RtSceneAs::Reset()
     asManager_.Reset();
     bindless_.Reset();
     asManagerInited_ = false;
-    asScratchRetireFrame_ = 0;
     rtInstances_.clear();
     rtBindlessObjectCache_.clear();
 }
@@ -74,9 +74,13 @@ void RtSceneAs::Invalidate()
     asManager_.Reset();
     bindless_.Reset();
     asManagerInited_ = false;
-    asScratchRetireFrame_ = 0;
     rtInstances_.clear();
     rtBindlessObjectCache_.clear();
+}
+
+RtSceneAs::~RtSceneAs()
+{
+    render::UnregisterMemoryProvider(this);
 }
 
 void RtSceneAs::EnsureInit(Renderer* renderer)
@@ -85,6 +89,26 @@ void RtSceneAs::EnsureInit(Renderer* renderer)
     asManager_.Init(renderer->GetDevice5());
     bindless_.Init(renderer->GetDevice());
     asManagerInited_ = true;
+    // The memory line in the session log: what the acceleration structures hold, and how much
+    // of it is sitting in the retire bin waiting for a fence -- the number that would have
+    // named the 2026-09-03 leak in its first minute. Registered once; Reset() re-inits the
+    // manager without re-registering.
+    if (!memRegistered_)
+    {
+        render::RegisterMemoryProvider("rt.as", [](const void* self)
+        {
+            return static_cast<const RtSceneAs*>(self)->asManager_.GetAsMemoryBytes();
+        }, this);
+        render::RegisterMemoryProvider("rt.as.bin", [](const void* self)
+        {
+            return static_cast<const RtSceneAs*>(self)->asManager_.RetireBinBytes();
+        }, this);
+        render::RegisterMemoryProvider("rt.as.retired", [](const void* self)
+        {
+            return static_cast<const RtSceneAs*>(self)->asManager_.RetiredTotalBytes();
+        }, this);
+        memRegistered_ = true;
+    }
 }
 
 namespace
@@ -109,14 +133,12 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
         return;
     }
 
-    // Retire scratch from earlier (one-time) BLAS builds once their command
-    // list's frame has surely completed — kFrameCount frames later, when that
-    // frame slot is reused and BeginFrame has waited on its fence.
+    // Free the retired buffers whose frame has come: an entry stamped `N + kFrameCount` below is
+    // released here in frame N + kFrameCount, after BeginFrame waited on frame N's fence. Per
+    // entry, not one deadline for the whole bin -- see AccelerationStructureManager's retire
+    // bin comment for the leak the single deadline was.
     const uint64_t frameNo = renderer->GetTotalFrameNumber();
-    if (asManager_.HasPendingScratch() && frameNo >= asScratchRetireFrame_)
-    {
-        asManager_.ReleaseCompletedScratch();
-    }
+    asManager_.ReleaseRetired(frameNo);
 
     // Gather opaque, single-mesh, CPU-placed instances. Ocean (GPU-displaced) is
     // excluded by design — kept on its planar-reflection path (S13). Instanced clouds
@@ -519,10 +541,10 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
             // frame slot from exposing a previous frame's TLAS after the last
             // visible RT instance is disabled.
             asManager_.BuildTlas(rtInstances_, cl4, renderer->GetCurrentFrameIndex());
-            if (asManager_.HasPendingScratch())
-            {
-                asScratchRetireFrame_ = frameNo + render::kFrameCount;
-            }
+            // Everything retired during this frame's build (one-time BLAS scratch inside
+            // BuildTlas, evicted wind slots in PrepareWindSlot above) may go once this frame's
+            // fence has been waited on.
+            asManager_.StampRetired(frameNo + render::kFrameCount);
             // S13: one-time AS VRAM accounting for visibility/budgeting.
             if (!rtInstances_.empty() && !asVramLogged_ && !asManager_.BuildFailed())
             {

@@ -510,6 +510,9 @@
     <ClCompile Include="sources/rendering/visibility/HzbCullSelfTest.cpp">
       <Filter>sources\rendering\visibility</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/MemoryReport.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
@@ -996,6 +999,9 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/VisibilityStats.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/MemoryReport.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameScheduler.h">

@@ -149,7 +149,7 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, uint64_t no
     barriers::EmitAccelerationStructureBuildBarrier(cmdList4, result.Get());
 
     slot.result = std::move(result);
-    pendingScratch_.push_back(std::move(scratch)); // freed via ReleaseCompletedScratch() post-fence
+    Retire(std::move(scratch)); // freed by ReleaseRetired() once the build's frame has completed
     return slot;
 }
 
@@ -191,11 +191,11 @@ bool AccelerationStructureManager::PrepareWindSlot(UINT slot, Mesh* mesh,
         // stream -- so they retire through the same fence-guarded bin as one-time BLAS scratch
         // instead of being destroyed here. Releasing them inline was a live device removal on
         // wind_test: 610 palms at near-equal distances churned the slot binding every frame.
-        if (s.deformedVb) { pendingScratch_.push_back(std::move(s.deformedVb)); }
+        Retire(std::move(s.deformedVb));
         for (WindBlasSlot::PerFrame& pf : s.frames)
         {
-            if (pf.blas) { pendingScratch_.push_back(std::move(pf.blas)); }
-            if (pf.scratch) { pendingScratch_.push_back(std::move(pf.scratch)); }
+            Retire(std::move(pf.blas));
+            Retire(std::move(pf.scratch));
             pf = WindBlasSlot::PerFrame{};
         }
         s.deformedVb = CreateUavBuffer(device5_, static_cast<UINT64>(count) * 12ull,
@@ -528,10 +528,33 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
     device5_->CreateShaderResourceView(nullptr, &srv, TlasSrvCpu(frameIndex));
 }
 
+void AccelerationStructureManager::StampRetired(uint64_t retireFrame)
+{
+    for (Retired& r : retireBin_) {
+        if (r.retireFrame == kUnstamped) { r.retireFrame = retireFrame; }
+    }
+}
+
+void AccelerationStructureManager::ReleaseRetired(uint64_t frameNo)
+{
+    // Order is irrelevant; an unstamped entry (retired this very frame, not yet stamped) can
+    // never satisfy the test because kUnstamped is the largest frame number there is.
+    std::erase_if(retireBin_, [frameNo](const Retired& r) { return r.retireFrame <= frameNo; });
+}
+
+uint64_t AccelerationStructureManager::RetireBinBytes() const
+{
+    uint64_t total = 0;
+    for (const Retired& r : retireBin_) {
+        if (r.buffer) { total += r.buffer->GetDesc().Width; }
+    }
+    return total;
+}
+
 void AccelerationStructureManager::Reset()
 {
     blasCache_.clear();
-    pendingScratch_.clear();
+    retireBin_.clear(); // GPU idle by contract of Reset()
     for (WindBlasSlot& s : windSlots_) {
         s = WindBlasSlot{};
     }
@@ -556,9 +579,7 @@ uint64_t AccelerationStructureManager::GetAsMemoryBytes() const
         if (f.scratch) { total += f.scratch->GetDesc().Width; }
         if (f.instanceUpload) { total += f.instanceUpload->GetDesc().Width; }
     }
-    for (const auto& s : pendingScratch_) {
-        if (s) { total += s->GetDesc().Width; }
-    }
+    total += RetireBinBytes();
     for (const WindBlasSlot& s : windSlots_) {
         if (s.deformedVb) { total += s.deformedVb->GetDesc().Width; }
         for (const WindBlasSlot::PerFrame& pf : s.frames) {

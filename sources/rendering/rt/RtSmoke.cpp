@@ -189,7 +189,7 @@ int RunRtSmoke(const char* outPath)
         submitAndWait();
 
         // GPU finished consuming scratch — safe to release it now.
-        asManager.ReleaseCompletedScratch();
+        asManager.ReleaseAllRetired();
 
         // The BLAS was built on demand inside BuildTlas; fetch the cached address.
         blasAddr = asManager.GetOrBuildBlas(&mesh, /*nonOpaqueSlots*/ 0, nullptr).Address();

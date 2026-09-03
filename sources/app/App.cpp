@@ -1,5 +1,6 @@
 #include "app/App.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposureEnabled
+#include "rendering/core/MemoryReport.h"    // the memory line in the session log
 #include "core/math/Math.h"
 #include "core/diagnostics/BootProfile.h"
 #include "core/profiling/Profiler.h"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cassert>
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <mimalloc.h>
 #include <vector>
@@ -27,6 +29,10 @@ float g_camFlyDelay = 0.0f;
 // "--cam-fly-yaw=<deg/s>": constant yaw rate on top of the drift -- the headless stand-in for
 // mouse look. A turning camera is what moves the cascade boxes between frames (S14 cross-check).
 float g_camFlyYaw = 0.0f;
+// "--cam-orbit=<radius>,<deg/s>": circle the start position, looking along the tangent. A
+// straight drift leaves a grove in seconds; a ring keeps crossing it, which is what churns the
+// RT wind-BLAS slots (and what leaked their retired buffers until 2026-09-03).
+float g_camOrbit[2] = { 0.0f, 0.0f };
 float g_camRot[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 // One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
 std::string g_shotPath;
@@ -1306,7 +1312,28 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         }
                     }
                 }
+                if (g_camOrbit[0] > 0.0f)
+                {
+                    static const double orbitStart = GetTimeSeconds();
+                    static float3 orbitCentre;
+                    static bool orbitInit = false;
+                    Camera& cam = scene.CameraRef();
+                    if (!orbitInit) { orbitCentre = cam.GetPosition(); orbitInit = true; }
+                    const double t = now - orbitStart - (double)g_camFlyDelay;
+                    if (t >= 0.0)
+                    {
+                        const float ang = DirectX::XMConvertToRadians(g_camOrbit[1]) * static_cast<float>(t);
+                        const float r = g_camOrbit[0];
+                        cam.SetPosition(float3(orbitCentre.x + r * std::cos(ang), orbitCentre.y,
+                                               orbitCentre.z + r * std::sin(ang)));
+                        // Tangent of the circle; yaw is measured from +Z toward +X.
+                        cam.SetYawPitch(std::atan2(-std::sin(ang), std::cos(ang)), cam.GetPitch());
+                    }
+                }
                 renderer.Tick(deltaTime);
+                // The memory line (rendering/core/MemoryReport.h): every 5 s, after the previous
+                // frame's work is joined so the providers read settled state.
+                render::TickMemoryReport(renderer.GetDevice(), now);
                 appController_.Tick(input, renderer, scene, levelManager, deltaTime);
                 scene.Tick(deltaTime);
 

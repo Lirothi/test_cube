@@ -30,6 +30,7 @@ struct SceneFrameData;
 class RtSceneAs
 {
 public:
+    ~RtSceneAs();
     // Level switch: the cached BLAS/TLAS key off Mesh*, which a reload invalidates.
     void Reset();
     // I2: a material's textures were rebuilt, so every mesh must re-register with its CURRENT
@@ -58,12 +59,12 @@ public:
 
 private:
     // S5/S9: the BLAS cache and the per-frame TLAS, plus the bindless VB/IB + geometry-info table
-    // the RT hit shading reads. `asScratchRetireFrame_` defers releasing one-time BLAS scratch
-    // until the frame that used it has surely completed.
+    // the RT hit shading reads. Buffers the GPU may still read retire through the manager's
+    // fence-guarded bin (stamped at the end of Build, released at its start).
     rt::AccelerationStructureManager asManager_;
     rt::BindlessTable bindless_;
     bool asManagerInited_ = false;
-    uint64_t asScratchRetireFrame_ = 0;
+    bool memRegistered_ = false; // memory report providers (rt.as, rt.as.bin) registered once
     bool asVramLogged_ = false;  // S13: one-time AS VRAM accounting log
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Build touches it)
 
