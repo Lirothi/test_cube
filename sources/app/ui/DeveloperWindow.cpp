@@ -382,19 +382,21 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "object that passes draws all of its chunks. --set=vis.chunkMask:0");
                 // S3a: the occlusion method, live, and what last frame asked and learned.
                 {
-                    static const char* kMethods[] = { "off", "hardware queries", "hzb (S3b, not built)" };
+                    static const char* kMethods[] = { "off", "hardware queries", "hzb tester" };
                     int method = std::clamp(vis::g_occlusion.method, 0, 2);
                     ImGui::SetNextItemWidth(180.0f);
-                    if (ImGui::Combo("Occlusion (S3a)", &method, kMethods, 3)) { vis::g_occlusion.method = method; }
+                    if (ImGui::Combo("Occlusion", &method, kMethods, 3)) { vis::g_occlusion.method = method; }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Camera-only occlusion culling against the G-buffer depth, UE's default desktop\n"
-                                          "path: one query per box after the base pass, history with a one-frame-or-more\n"
-                                          "latency. Shadows never consult it. --set=vis.method:0|1, vis.queryLatency:1..3");
+                        ImGui::SetTooltip("Camera-only occlusion culling against the G-buffer depth, with a history and a\n"
+                                          "one-frame-or-more latency. Hardware queries (S3a) = UE's default desktop path,\n"
+                                          "one query per box after the base pass. HZB tester (S3b) = UE's r.HZBOcclusion=1,\n"
+                                          "one compute dispatch of every box against the depth pyramid, binary verdicts.\n"
+                                          "Shadows never consult either. --set=vis.method:0|1|2, vis.queryLatency:1..3");
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(80.0f);
                     ImGui::SliderInt("latency", &vis::g_occlusion.queryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames));
                     const render::OcclusionFrameStats& os = render::g_visibilityStats.occlusionLast;
-                    ImGui::Text("queries: %u individual, %u grouped (x16), %u dropped; %u results read, latency %u, %u entries, %u lights occluded%s",
+                    ImGui::Text("queries/tests: %u individual, %u grouped (x16), %u dropped; %u results read, latency %u, %u entries, %u lights occluded%s",
                                 os.queriesIndividual, os.queriesGrouped, os.queriesDropped, os.queriesTested,
                                 os.latencyFrames, os.historyEntries, os.lightsOccluded,
                                 os.ignoredResults ? " [results ignored: cut]" : "");

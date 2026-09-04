@@ -74,6 +74,7 @@ const Profiler::ScopeNameKey kPassGBuffer = Profiler::RegisterTraceLiteral(L"Pas
 const Profiler::ScopeNameKey kPassGtao = Profiler::RegisterTraceLiteral(L"Pass_Gtao");
 const Profiler::ScopeNameKey kPassHzb = Profiler::RegisterTraceLiteral(L"Pass_Hzb");
 const Profiler::ScopeNameKey kPassOcclusionQueries = Profiler::RegisterTraceLiteral(L"Pass_OcclusionQueries");
+const Profiler::ScopeNameKey kPassVisTest = Profiler::RegisterTraceLiteral(L"Pass_VisTest");
 // P8: recorded inside Pass_Tonemap, so it needs its own scope to be readable at all --
 // Pass_Tonemap is already dominated by the DLSS evaluate (see the note in that pass).
 const Profiler::ScopeNameKey kPassBloom = Profiler::RegisterTraceLiteral(L"Pass_Bloom");

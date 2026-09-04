@@ -22,6 +22,7 @@
 #include "app/scene/SceneRenderer.h"
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a
 #include "rendering/visibility/OcclusionQueries.h"
+#include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
 #include "vfx/WindState.h"
 
 class Renderer;
@@ -268,6 +269,9 @@ private:
     vis::OcclusionHistory occlusionHistory_{};
     vis::OcclusionQueryHeap occlusionQueries_{};
     std::vector<std::uint64_t> occlusionResults_;
+    // S3b: the alternative producer for the same history (vis.method:2) and its CPU copy.
+    vis::HzbOcclusionTester hzbTester_{};
+    std::vector<std::uint32_t> hzbResults_;
     std::vector<std::uint8_t> spotLightOccluded_;  // S3a.6, per LightManager spot index
     std::vector<std::uint8_t> pointLightOccluded_; // per point index
     // Rung 2 (Step 18): persistent virtual-shadow-map page pool + page table. Allocated once at

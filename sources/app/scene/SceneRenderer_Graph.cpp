@@ -41,6 +41,7 @@
 
 #include "app/scene/SceneRenderInternal.h"
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: the query plan the pass draws
+#include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b: the tester Main_VisTest runs
 using namespace scene_internal;
 
 namespace
@@ -442,7 +443,11 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const vis::OcclusionQueryPlan* plan = frame_->occlusionPlan;
             const auto& D = renderer->GetDeferredForFrame();
-            if (!plan || plan->batches.empty() || !frame_->occlusionQueries || D.dsv.ptr == 0) { return {}; }
+            if (!plan || plan->method != vis::OcclusionMethod::Queries || plan->batches.empty() ||
+                !frame_->occlusionQueries || D.dsv.ptr == 0)
+            {
+                return {};
+            }
             ctx.NextPoint();
             const uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
@@ -563,6 +568,38 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             return [this, renderer, point](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassHzb);
                 Pass_Hzb(renderer, c, point);
+            };
+        });
+
+    // Occlusion plan S3b: the camera prepare's boxes tested against the pyramid just built --
+    // UE's FHZBOcclusionTester::Submit runs right after its HZB build, for the same reason. Two
+    // points: the dispatch (pyramid readable, results UAV) and the readback copy (results
+    // COPY_SOURCE, which is where the frame leaves them). Nothing downstream depends on this
+    // pass; its output is read by the CPU `vis.queryLatency` frames later. The gate repeats the
+    // pyramid's own: a plan with the Hzb method on a frame with no pyramid must not run a test
+    // against whatever the texture holds.
+    gb.pVisTest = rg.AddPass2(RenderPass::Main_VisTest, { gb.pHzb },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const vis::OcclusionQueryPlan* plan = frame_->occlusionPlan;
+            vis::HzbOcclusionTester* tester = frame_->hzbTester;
+            const auto& D = renderer->GetDeferredForFrame();
+            const bool hzbBuilt = resources_.GetHzbMaterial() && resources_.GetHzbCBSizeBytes() != 0u &&
+                                  D.depthSRV.ptr != 0 && D.hzb.Get() != nullptr && D.hzbClosest.Get() != nullptr &&
+                                  D.hzbMips != 0;
+            if (!plan || plan->method != vis::OcclusionMethod::Hzb || plan->boxes.empty() ||
+                !tester || !tester->Ready() || !hzbBuilt || D.hzbSRV.ptr == 0)
+            {
+                return {};
+            }
+            ctx.NextPoint();
+            const uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(D.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ctx.Use(tester->ResultsBuffer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint();
+            ctx.Use(tester->ResultsBuffer(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            return [this, renderer, point](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassVisTest);
+                Pass_VisTest(renderer, c, point);
             };
         });
 

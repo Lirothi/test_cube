@@ -22,9 +22,10 @@ SHADERS = PROJECT_ROOT / "shaders"
 
 # (file, entry point). Compute shaders, which need no permutation to build.
 COMPUTE_ENTRIES = [
-    # Occlusion plan S2: the only compute shader that includes hzb_cull.hlsli today, so this is
-    # where a library edit gets its compile check until S3b/S5 add consumers.
+    # Occlusion plan S2/S3b: the two compute shaders that include hzb_cull.hlsli -- a library
+    # edit gets its compile check here (S5's G-buffer cull will be the third).
     ("hzb_cull_selftest_cs.hlsl", "CSMain"),
+    ("vis_test_cs.hlsl", "CSMain"),
     ("exposure_histogram_cs.hlsl", "CSClear"),
     ("exposure_histogram_cs.hlsl", "CSBuild"),
     ("exposure_solve_cs.hlsl", "CSMain"),

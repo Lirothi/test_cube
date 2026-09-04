@@ -39,6 +39,7 @@ enum class RenderPass : uint16_t {
     Main_OcclusionQueries, // occlusion plan S3a: box queries against the G-buffer depth
     Main_Gtao,   // P6B screen-space ambient occlusion, between the G-buffer and lighting
     Main_Hzb,    // P6C hierarchical depth pyramid, built from the G-buffer depth
+    Main_VisTest, // occlusion plan S3b: the plan's boxes against the pyramid, one dispatch + readback
     Main_DebugPreview, // texture-inspector preview, drawn through our own shader
     Main_Lighting,
     Main_SpotLights,
@@ -107,6 +108,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_OcclusionQueries: return L"OcclusionQueries";
     case RenderPass::Main_Gtao: return L"Gtao";
     case RenderPass::Main_Hzb: return L"Hzb";
+    case RenderPass::Main_VisTest: return L"VisTest";
     case RenderPass::Main_DebugPreview: return L"DebugPreview";
     case RenderPass::Main_Lighting: return L"Lighting";
     case RenderPass::Main_SpotLights: return L"SpotLights";

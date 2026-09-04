@@ -51,6 +51,7 @@
 // using-directive keeps every call site spelled exactly as it was.
 #include "app/scene/SceneRenderInternal.h"
 #include "rendering/visibility/OcclusionQueries.h" // occlusion plan S3a: Pass_OcclusionQueries
+#include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b: Pass_VisTest
 using namespace scene_internal;
 
 // ---- RenderObjectBatch ----
@@ -553,6 +554,33 @@ void SceneRenderer::Pass_OcclusionQueries(Renderer* renderer, RenderGraphPassCon
         {
             frame_->occlusionQueries->Record(renderer, t.cl, *frame_->occlusionPlan, renderer->GetCurrentFrameIndex());
         }
+    }
+    ctx.EndCL(t);
+}
+
+// ---- Pass_VisTest (occlusion plan S3b) ----
+// One dispatch of vis_test_cs.hlsl over the plan's boxes against the furthest HZB, then the copy
+// of the verdicts into this frame slot's readback region. Both barrier points are emitted
+// whatever the tester does with them (a declared point left unemitted breaks the pass after).
+void SceneRenderer::Pass_VisTest(Renderer* renderer, RenderGraphPassContext ctx, uint32_t point)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassVisTest);
+        const auto& D = renderer->GetDeferredForFrame();
+        vis::HzbOcclusionTester* tester = frame_->hzbTester;
+        const vis::OcclusionQueryPlan* plan = frame_->occlusionPlan;
+        const UINT slot = renderer->GetCurrentFrameIndex();
+
+        renderer->EmitPoint(t.cl, point);
+        if (tester && plan)
+        {
+            tester->RecordTest(renderer, t.cl, *plan, slot, renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+                               D.hzbSRV, D.hzbWidth, D.hzbHeight);
+        }
+        renderer->EmitPoint(t.cl, point + 1u);
+        if (tester) { tester->RecordReadback(t.cl, slot); }
     }
     ctx.EndCL(t);
 }

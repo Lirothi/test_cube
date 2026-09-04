@@ -22,7 +22,7 @@ class Skybox;
 class ShadowGpuData;
 class VirtualShadowMap;
 namespace vfx { struct WindState; } // W3: global wind, read when building the gbuffer per-view CB
-namespace vis { struct OcclusionQueryPlan; class OcclusionQueryHeap; } // occlusion plan S3a
+namespace vis { struct OcclusionQueryPlan; class OcclusionQueryHeap; class HzbOcclusionTester; } // occlusion plan S3a / S3b
 
 // The screen-space search a reflection ray uses. (The Lettier tracer was the third option and was
 // removed with P6C step 6 -- it was a fixed-step screen-space march that LogMarch strictly
@@ -597,6 +597,8 @@ struct SceneFrameData
     // that records them; null / empty batches = the pass declares nothing.
     const vis::OcclusionQueryPlan* occlusionPlan = nullptr;
     vis::OcclusionQueryHeap* occlusionQueries = nullptr;
+    // S3b: the HZB tester that runs the plan's boxes when its method is Hzb (Main_VisTest).
+    vis::HzbOcclusionTester* hzbTester = nullptr;
     // S3a.6: per light index, 1 = the light's influence volume was occluded last frame -- the
     // GPU light entry is zeroed (it can light no visible pixel) and its shadow views were built
     // with a reject-all frustum (their passes clear and draw nothing). Sized to the light lists.

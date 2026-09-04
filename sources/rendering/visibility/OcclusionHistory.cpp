@@ -10,6 +10,7 @@ namespace vis
 void OcclusionQueryPlan::Clear()
 {
     frameNumber = 0;
+    method = OcclusionMethod::Off;
     boxes.clear();
     batches.clear();
     queryCount = 0;
@@ -43,14 +44,15 @@ float OcclusionHistory::RandomFraction()
 void OcclusionHistory::BeginFrame(std::uint64_t frameNumber, double nowSec, const Camera& camera,
                                   std::uint32_t renderWidth, std::uint32_t renderHeight,
                                   std::uint32_t sceneVersion, const FrameResults& results,
-                                  bool submitQueries)
+                                  OcclusionMethod method)
 {
     plan_.Clear();
     grouped_.Clear();
     individual_.Clear();
     queryCount_ = 0;
     testedQueries_ = 0;
-    enabled_ = submitQueries;
+    method_ = method;
+    enabled_ = method != OcclusionMethod::Off;
     if (!enabled_) { return; }
 
     frame_ = frameNumber;
@@ -59,7 +61,7 @@ void OcclusionHistory::BeginFrame(std::uint64_t frameNumber, double nowSec, cons
     issueSlot_ = static_cast<unsigned>(frame_ % kOcclusionBufferedFrames);
     lookupSlot_ = static_cast<unsigned>((frame_ + kOcclusionBufferedFrames - latencyFrames_) % kOcclusionBufferedFrames);
     results_ = results;
-    results_.frameNumber = results.samples ? results.frameNumber : ~0ull;
+    results_.frameNumber = (results.samples || results.hzbVisible) ? results.frameNumber : ~0ull;
 
     viewOrigin_ = camera.GetPosition();
     const Math::mat4& rot = camera.GetRotationMatrix(); // rows: right, up, forward
@@ -97,7 +99,18 @@ void OcclusionHistory::BeginFrame(std::uint64_t frameNumber, double nowSec, cons
     Trim();
 
     plan_.frameNumber = frame_;
+    plan_.method = method_;
     plan_.viewProj = camera.GetViewProjMatrix();
+    plan_.viewToClip = camera.GetProjMatrix();
+}
+
+std::uint32_t OcclusionHistory::AddHzbBounds(const OcclusionBox& box)
+{
+    // FHZBOcclusionTester::AddBounds (SceneOcclusion.cpp:831-838): the box's index in this
+    // frame's list is its test index; past the capacity the primitive keeps last frame's state.
+    if (queryCount_ >= kMaxHzbTests) { return kNoQuery; }
+    plan_.boxes.push_back(box);
+    return queryCount_++;
 }
 
 void OcclusionHistory::Trim()
@@ -163,8 +176,20 @@ bool OcclusionHistory::Consider(const OcclusionKey& key, const AABB& worldBounds
             // :2738-2795 -- read the pending result of the frame that can be read.
             bool haveResult = false;
             const std::uint32_t q = e->pendingQuery[lookupSlot_];
-            if (results_.samples && q != kNoQuery && q < results_.count &&
-                e->pendingQueryFrame[lookupSlot_] == results_.frameNumber)
+            const bool resultForThisEntry = q != kNoQuery && q < results_.count &&
+                                            e->pendingQueryFrame[lookupSlot_] == results_.frameNumber;
+            if (resultForThisEntry && method_ == OcclusionMethod::Hzb && results_.hzbVisible)
+            {
+                // S3b, :2727-2733 -- the HZB verdict is binary and definite. No pixel count
+                // exists; the percentage is set as for a missing result, and the stochastic
+                // re-test never consults it on this path (every entry is tested every frame).
+                occluded = results_.hzbVisible[q] == 0u;
+                e->lastPixelsPercentage = occluded ? 0.0f : g_occlusion.maxPixelsFraction;
+                definite = true;
+                haveResult = true;
+                ++testedQueries_;
+            }
+            else if (resultForThisEntry && method_ == OcclusionMethod::Queries && results_.samples)
             {
                 const std::uint64_t samples = results_.samples[q];
                 occluded = samples == 0;
@@ -235,7 +260,12 @@ bool OcclusionHistory::Consider(const OcclusionKey& key, const AABB& worldBounds
             e->lastTestFrame = frame_;
             bool runQuery = true;
             bool groupedQuery = false;
-            if (occluded)
+            if (method_ == OcclusionMethod::Hzb)
+            {
+                // S3b, :2859-2862 -- AddHZBBounds unconditionally: the whole set is one dispatch,
+                // so neither grouping nor the stochastic re-test buys anything.
+            }
+            else if (occluded)
             {
                 // Occluded last frame -> queried every frame, grouped where grouping is allowed.
                 groupedQuery = allowGrouped;
@@ -254,7 +284,9 @@ bool OcclusionHistory::Consider(const OcclusionKey& key, const AABB& worldBounds
             if (runQuery)
             {
                 const OcclusionBox box{ mn, mx };
-                const std::uint32_t q = BatchPrimitive(groupedQuery ? grouped_ : individual_, box);
+                const std::uint32_t q = method_ == OcclusionMethod::Hzb
+                    ? AddHzbBounds(box)
+                    : BatchPrimitive(groupedQuery ? grouped_ : individual_, box);
                 if (q != kNoQuery)
                 {
                     e->pendingQuery[issueSlot_] = q;
@@ -286,6 +318,14 @@ bool OcclusionHistory::Consider(const OcclusionKey& key, const AABB& worldBounds
 void OcclusionHistory::EndConsider()
 {
     if (!enabled_) { return; }
+    if (method_ == OcclusionMethod::Hzb)
+    {
+        // S3b: the boxes went straight into the plan (AddHzbBounds), no batches -- one dispatch.
+        plan_.queryCount = queryCount_;
+        plan_.individualQueries = queryCount_;
+        plan_.groupedQueries = 0;
+        return;
+    }
     // Dispatch order 0: grouped queries before individual (SceneOcclusion.cpp:1383-1404).
     plan_.boxes.clear();
     plan_.batches.clear();

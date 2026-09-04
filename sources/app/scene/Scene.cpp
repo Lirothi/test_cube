@@ -1861,36 +1861,57 @@ void Scene::PrepareViews(Renderer* renderer)
     // main thread BEFORE the camera task, which consults and extends the history; after
     // CalcMatrices, because the plan carries this frame's jittered view-projection.
     {
-        const bool queriesOn = vis::g_occlusion.method == static_cast<int>(vis::OcclusionMethod::Queries) &&
-                               occlusionQueries_.EnsureResources(renderer);
+        // S3b: one history, two producers -- the query heap's sample counts (vis.method:1) or the
+        // HZB tester's verdicts (vis.method:2). A producer whose device objects failed leaves the
+        // method off for the session rather than culling on nothing.
+        const int wanted = vis::g_occlusion.method;
+        vis::OcclusionMethod method = vis::OcclusionMethod::Off;
+        if (wanted == static_cast<int>(vis::OcclusionMethod::Queries) && occlusionQueries_.EnsureResources(renderer))
+        {
+            method = vis::OcclusionMethod::Queries;
+        }
+        else if (wanted == static_cast<int>(vis::OcclusionMethod::Hzb) && hzbTester_.EnsureResources(renderer))
+        {
+            method = vis::OcclusionMethod::Hzb;
+        }
+        const bool queriesOn = method == vis::OcclusionMethod::Queries;
+        const bool hzbOn = method == vis::OcclusionMethod::Hzb;
+        static_assert(vis::HzbOcclusionTester::kNoSlot == vis::OcclusionQueryHeap::kNoSlot, "one no-slot value for both producers");
         vis::OcclusionHistory::FrameResults results{};
         const std::uint64_t frameNo = renderer->GetTotalFrameNumber();
-        if (queriesOn)
+        if (queriesOn || hzbOn)
         {
             const std::uint32_t latency = static_cast<std::uint32_t>(
                 std::clamp(vis::g_occlusion.queryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames)));
             if (frameNo >= latency)
             {
                 const std::uint64_t readFrame = frameNo - latency;
-                const UINT slot = occlusionQueries_.SlotOfFrame(readFrame);
+                const UINT slot = queriesOn ? occlusionQueries_.SlotOfFrame(readFrame) : hzbTester_.SlotOfFrame(readFrame);
                 if (slot != vis::OcclusionQueryHeap::kNoSlot)
                 {
                     // Latency below the frame count: that frame's fence has not been waited on by
                     // BeginFrame yet -- wait here, as UE's blocking Map does (r.NumBufferedOcclusionQueries=1).
                     if (latency < vis::kOcclusionBufferedFrames) { renderer->WaitForFrameSlot(slot); }
-                    if (occlusionQueries_.ReadResults(readFrame, occlusionResults_))
+                    if (queriesOn && occlusionQueries_.ReadResults(readFrame, occlusionResults_))
                     {
                         results.samples = occlusionResults_.data();
                         results.count = static_cast<std::uint32_t>(occlusionResults_.size());
+                        results.frameNumber = readFrame;
+                    }
+                    else if (hzbOn && hzbTester_.ReadResults(readFrame, hzbResults_))
+                    {
+                        results.hzbVisible = hzbResults_.data();
+                        results.count = static_cast<std::uint32_t>(hzbResults_.size());
                         results.frameNumber = readFrame;
                     }
                 }
             }
         }
         occlusionHistory_.BeginFrame(frameNo, GetTimeSeconds(), camera_, renderer->GetRenderWidth(),
-                                     renderer->GetRenderHeight(), staticSetVersion_, results, queriesOn);
+                                     renderer->GetRenderHeight(), staticSetVersion_, results, method);
         frameData_.occlusionPlan = &occlusionHistory_.Plan();
         frameData_.occlusionQueries = &occlusionQueries_;
+        frameData_.hzbTester = &hzbTester_;
         // S3a.6: the local lights' influence volumes, on this thread, before the camera task.
         ConsiderLightOcclusion(mainView.frustum);
         frameData_.spotLightOccluded = &spotLightOccluded_;

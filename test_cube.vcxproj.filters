@@ -516,6 +516,9 @@
     <ClCompile Include="sources/rendering/visibility/OcclusionQueries.cpp">
       <Filter>sources\rendering\visibility</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/visibility/HzbOcclusionTester.cpp">
+      <Filter>sources\rendering\visibility</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/MemoryReport.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
@@ -1052,6 +1055,9 @@
     <ClInclude Include="sources/rendering/visibility/OcclusionQueries.h">
       <Filter>sources\rendering\visibility</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/visibility/HzbOcclusionTester.h">
+      <Filter>sources\rendering\visibility</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/SubmitTimeline.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
@@ -1389,6 +1395,9 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\occlusion_query.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vis_test_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\bloom_cs.hlsl">

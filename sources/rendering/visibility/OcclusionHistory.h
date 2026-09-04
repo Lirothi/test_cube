@@ -30,6 +30,13 @@
 //
 // Only the CAMERA consults this. Shadow views never do (UE: r.Shadow.OcclusionCullCascadedShadowMaps
 // = 0, cascade 0 never, VSM never) -- Scene::ApplyOcclusion asserts the view type.
+//
+// S3b (plan): the same history under UE's r.HZBOcclusion=1 path. The producer is
+// HzbOcclusionTester (one compute dispatch against the furthest HZB, vis_test_cs.hlsl) instead of
+// the query heap; the plan's boxes are the test list (AddHzbBounds = FHZBOcclusionTester::AddBounds),
+// the verdict comes back as one uint per box and is always definite (SceneVisibility.cpp:2727-2733),
+// and every considered primitive is tested every frame (:2859-2862) -- no grouping, no stochastic
+// re-test. Everything else (near-plane rule, reset rules, trim, latency slots) is shared.
 
 #include <cstdint>
 #include <vector>
@@ -49,6 +56,9 @@ inline constexpr unsigned kOcclusionBufferedFrames = render::kFrameCount;
 // GRHIMaximumInFlightQueries with a 10 %-progress throttle; ours is a hard ceiling with a
 // `droppedQueries` count in the readout (a dropped primitive keeps last frame's state).
 inline constexpr unsigned kMaxOcclusionQueries = 16384;
+// S3b: boxes per frame of the HZB tester -- UE's SizeX * SizeY = 256 * 256. A literal: the box
+// ring, the results buffer and the readback are sized from it.
+inline constexpr unsigned kMaxHzbTests = 65536;
 // UE FOcclusionQueryBatcher::OccludedPrimitiveQueryBatchSize.
 inline constexpr unsigned kOccludedPrimitiveQueryBatchSize = 16;
 // UE OCCLUSION_SLOP = 1.0 (centimetres); the engine's unit is the metre.
@@ -111,11 +121,15 @@ struct OcclusionBatch
     bool grouped = false;
 };
 
-// What the camera prepare decided to ask the GPU this frame; consumed by Pass_OcclusionQueries.
+// What the camera prepare decided to ask the GPU this frame; consumed by Pass_OcclusionQueries
+// (method Queries: `batches` over `boxes`) or Pass_VisTest (method Hzb: `boxes` alone, index =
+// test index, `batches` empty).
 struct OcclusionQueryPlan
 {
     std::uint64_t frameNumber = 0;
+    OcclusionMethod method = OcclusionMethod::Off; // which pass this plan is for
     Math::mat4 viewProj;                 // jittered -- see occlusion_query.hlsl
+    Math::mat4 viewToClip;               // the camera's (jittered) projection; S3b's near/far verdicts
     std::vector<OcclusionBox> boxes;     // grouped batches' boxes first, then the individual ones
     std::vector<OcclusionBatch> batches;
     std::uint32_t queryCount = 0;        // query indices used: [0, queryCount)
@@ -130,17 +144,20 @@ class OcclusionHistory
 public:
     struct FrameResults
     {
-        const std::uint64_t* samples = nullptr; // per query index of that frame's plan
+        const std::uint64_t* samples = nullptr;    // method Queries: per query index of that frame's plan
+        const std::uint32_t* hzbVisible = nullptr; // method Hzb: per test index, 1 = visible
         std::uint32_t count = 0;
-        std::uint64_t frameNumber = 0;          // the frame those queries were issued in
+        std::uint64_t frameNumber = 0;             // the frame those queries / tests were issued in
     };
 
-    // `submitQueries` false = the method is off: the plan stays empty, the history is left as is
-    // (so switching back on does not start from scratch) and Consider() is never called.
+    // `method` Off = the plan stays empty, the history is left as is (so switching back on does
+    // not start from scratch) and Consider() is never called. The caller passes the method whose
+    // producer actually has its device objects, not the setting.
     void BeginFrame(std::uint64_t frameNumber, double nowSec, const Camera& camera,
                     std::uint32_t renderWidth, std::uint32_t renderHeight, std::uint32_t sceneVersion,
-                    const FrameResults& results, bool submitQueries);
+                    const FrameResults& results, OcclusionMethod method);
     bool Enabled() const { return enabled_; }
+    OcclusionMethod Method() const { return method_; }
 
     // Camera prepare task only. Returns true when the primitive counts as OCCLUDED this frame.
     // `allowGrouped` is false for sub-primitives (UE: "sub queries are never grouped").
@@ -170,7 +187,8 @@ private:
         std::uint8_t becameEligibleForQueryCooldown = 0;
         bool wasOccludedLastFrame = false;
         bool stateWasDefiniteLastFrame = false;
-        std::uint32_t hzbTestIndex = 0; // S3b
+        // S3b: UE's HZBTestIndex is not a separate field -- the test index rides the pendingQuery
+        // slots, since the tester's results are read back through the same latency ring.
         Entry()
         {
             for (unsigned i = 0; i < kOcclusionBufferedFrames; ++i)
@@ -192,6 +210,7 @@ private:
     };
 
     std::uint32_t BatchPrimitive(Batcher& b, const OcclusionBox& box);
+    std::uint32_t AddHzbBounds(const OcclusionBox& box); // S3b: FHZBOcclusionTester::AddBounds
     float RandomFraction();
     void Trim();
 
@@ -201,6 +220,7 @@ private:
     Batcher individual_{ 1u };
 
     bool enabled_ = false;
+    OcclusionMethod method_ = OcclusionMethod::Off;
     bool ignoreExistingQueries_ = false;
     bool disableQuerySubmissions_ = false;
     std::uint64_t frame_ = 0;
