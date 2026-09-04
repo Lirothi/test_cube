@@ -3,15 +3,16 @@
 // mirror (sources/rendering/visibility/HzbCull.h) can be held equal field by field, not just on the
 // final bit. Nothing in the renderer runs this; it exists to be compared.
 //
-// t0: the test boxes (local-space centre/extent)
+// t0: the test boxes (local-space centre/extent; center.w = 1 -> an ORTHO case, S5b)
 // t1: the synthetic pyramid, R32_FLOAT with the full mip chain (the FURTHEST convention)
+// t2: the same scene's pyramid under the ortho projection (its device depths differ)
 // u0: one result record per box
 
 #include "hzb_cull.hlsli"
 
 #define HZB_CULL_SELFTEST_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 // Mirrors hzb::SelfTestConstants. row_major is what -Zpr gives every engine shader; spelled out
@@ -25,11 +26,12 @@ cbuffer SelfTestCB : register(b0)
     uint2 hzbSize;      // mip 0 of the pyramid
     uint  boxCount;
     uint  footprint;    // 4
+    row_major float4x4 orthoWorldToClip; // S5b: the ortho cases' projection (reverse-Z)
 };
 
 struct TestBox
 {
-    float4 center;      // xyz
+    float4 center;      // xyz; w = 1 for an ortho case
     float4 extent;      // xyz half-extents
 };
 
@@ -53,8 +55,9 @@ static const uint kFlagSideCulled    = 4u;
 static const uint kFlagFrustumVisible = 8u;
 static const uint kFlagOverlapsPixel = 16u;
 
-StructuredBuffer<TestBox>     Boxes   : register(t0);
-Texture2D<float>              Hzb     : register(t1);
+StructuredBuffer<TestBox>     Boxes    : register(t0);
+Texture2D<float>              Hzb      : register(t1);
+Texture2D<float>              HzbOrtho : register(t2);
 RWStructuredBuffer<TestResult> Results : register(u0);
 
 [numthreads(64, 1, 1)]
@@ -68,8 +71,16 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     TestResult r = (TestResult)0;
     r.level = -1;
 
-    const HzbFrustumCull cull = HzbBoxCullFrustumPerspective(box.center.xyz, box.extent.xyz,
-                                                             localToWorld, worldToClip, viewToClip, false);
+    const bool ortho = box.center.w != 0.0f;
+    HzbFrustumCull cull;
+    if (ortho)
+    {
+        cull = HzbBoxCullFrustumOrtho(box.center.xyz, box.extent.xyz, localToWorld, orthoWorldToClip, false, false);
+    }
+    else
+    {
+        cull = HzbBoxCullFrustumPerspective(box.center.xyz, box.extent.xyz, localToWorld, worldToClip, viewToClip, false);
+    }
     r.flags |= cull.crossesNearPlane  ? kFlagCrossesNear    : 0u;
     r.flags |= cull.crossesFarPlane   ? kFlagCrossesFar     : 0u;
     r.flags |= cull.frustumSideCulled ? kFlagSideCulled     : 0u;
@@ -95,8 +106,9 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
         r.hzbTexels = rect.hzbTexels;
         r.level = rect.hzbLevel;
         r.flags |= rect.overlapsPixelCenter ? kFlagOverlapsPixel : 0u;
-        r.minDepth = HzbGetMinDepth(Hzb, hzbSize, rect);
-        r.visible = (rect.overlapsPixelCenter && HzbIsVisible(Hzb, hzbSize, rect)) ? 1u : 0u;
+        r.minDepth = ortho ? HzbGetMinDepth(HzbOrtho, hzbSize, rect) : HzbGetMinDepth(Hzb, hzbSize, rect);
+        // == HzbIsVisible on the same pyramid; spelled on the value so the texture is chosen once.
+        r.visible = (rect.overlapsPixelCenter && rect.depth >= r.minDepth) ? 1u : 0u;
     }
     Results[i] = r;
 }

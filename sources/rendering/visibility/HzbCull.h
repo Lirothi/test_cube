@@ -226,4 +226,43 @@ inline FrustumCull BoxCullFrustumPerspective(const Math::float3& center, const M
     }
     return cull;
 }
+
+// S5b: mirror of HzbBoxCullFrustumOrtho (NaniteHZBCull.ush:414-442). Same float order: the
+// centre goes through both matrices as a point, each half-extent scales the transformed axis row.
+inline FrustumCull BoxCullFrustumOrtho(const Math::float3& center, const Math::float3& extent,
+                                       const Math::mat4& localToWorld, const Math::mat4& worldToClip,
+                                       bool nearClip, bool skipFrustumCull)
+{
+    FrustumCull cull;
+
+    const F4 centerClip = MulRow(MulRow(F4{ center.x, center.y, center.z, 1.0f }, localToWorld), worldToClip);
+    const F4 ax = MulRow(Row(localToWorld, 0), worldToClip);
+    const F4 ay = MulRow(Row(localToWorld, 1), worldToClip);
+    const F4 az = MulRow(Row(localToWorld, 2), worldToClip);
+    const Math::float3 clipDelta(
+        std::abs(extent.x * ax.x) + std::abs(extent.y * ay.x) + std::abs(extent.z * az.x),
+        std::abs(extent.x * ax.y) + std::abs(extent.y * ay.y) + std::abs(extent.z * az.y),
+        std::abs(extent.x * ax.z) + std::abs(extent.y * ay.z) + std::abs(extent.z * az.z));
+    cull.rectMin = Math::float3(centerClip.x - clipDelta.x, centerClip.y - clipDelta.y, centerClip.z - clipDelta.z);
+    cull.rectMax = Math::float3(centerClip.x + clipDelta.x, centerClip.y + clipDelta.y, centerClip.z + clipDelta.z);
+
+    cull.crossesFarPlane = cull.rectMin.z < 0.0f;
+    cull.crossesNearPlane = cull.rectMax.z > 1.0f;
+    cull.isVisible = cull.rectMax.z > 0.0f;
+
+    if (nearClip)
+    {
+        cull.isVisible = cull.isVisible && cull.rectMin.z < 1.0f;
+    }
+
+    cull.frustumSideCulled = false;
+    if (!skipFrustumCull)
+    {
+        const bool frustumCull = cull.rectMax.x < -1.0f || cull.rectMax.y < -1.0f ||
+                                 cull.rectMin.x > 1.0f || cull.rectMin.y > 1.0f;
+        cull.frustumSideCulled = cull.isVisible && frustumCull;
+        cull.isVisible = cull.isVisible && !frustumCull;
+    }
+    return cull;
+}
 } // namespace hzb

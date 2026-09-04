@@ -68,6 +68,8 @@ COMPUTE_ENTRIES = [
     ("shadow_cull_cs.hlsl", "CSMain"),
     ("shadow_cull_clear_cs.hlsl", "CSMain"),
     ("shadow_gi_scatter_cs.hlsl", "CSMain"),
+    # Occlusion plan S5b: the cascade HZB post cull (includes hzb_cull.hlsli, like the two above it).
+    ("shadow_cull_post_cs.hlsl", "CSMain"),
 ]
 
 # Shaders needing a target above the 6_0 default. Kept separate rather than widening every entry to
@@ -107,6 +109,10 @@ GRAPHICS_ENTRIES = [
     # Occlusion plan S3a: the box draw of the hardware occlusion queries (no permutations).
     ("occlusion_query.hlsl", "vs_6_0", "VSMain", [], ""),
     ("occlusion_query.hlsl", "ps_6_0", "PSMain", [], ""),
+    # Occlusion plan S5b: the cascade-tile permutation of the depth pyramid build (one define
+    # selects it -- the atlas rect source and the 1 - z store). A compute shader in this list
+    # because only this list carries defines.
+    ("hzb_build_cs.hlsl", "cs_6_0", "CSMain", ["HZB_LIGHT=1"], "light"),
 ]
 
 

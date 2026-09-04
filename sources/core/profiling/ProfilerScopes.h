@@ -81,6 +81,9 @@ extern const Profiler::ScopeNameKey kShadowCastersRebuild;
 // Sub-scope: the spatial scatter cull (clear + scatter) that feeds the clipmap pages.
 extern const Profiler::ScopeNameKey kVsmPageScatter;
 extern const Profiler::ScopeNameKey kPassCSM;
+extern const Profiler::ScopeNameKey kPassCsmHzb;         // occlusion plan S5b
+extern const Profiler::ScopeNameKey kPassShadowCullPost; // occlusion plan S5b
+extern const Profiler::ScopeNameKey kPassCSMPost;        // occlusion plan S5b
 extern const Profiler::ScopeNameKey kPassShoreDepth;
 extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassGtao;

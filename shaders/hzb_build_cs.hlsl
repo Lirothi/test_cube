@@ -44,6 +44,18 @@ cbuffer HzbCB : register(b0)
     uint  writeClosest;
     uint  pad1;
     uint  pad2;
+#if HZB_LIGHT
+    // Occlusion plan S5b (HZB_LIGHT=1, the CASCADE pyramids): mip 0 reduces one cascade's tile of
+    // the shadow atlas, so the source is a RECT of DepthTex -- `srcSize` is the tile's content
+    // size and `srcOffset` its origin in the atlas; the clamp to srcSize keeps the reads inside
+    // the tile (the S5 gutter and the neighbouring tiles never fold in). The atlas is FORWARD-Z
+    // (LESS_EQUAL, clear 1.0) and hzb_cull.hlsli is reverse-Z, so the pyramid stores 1 - z: the
+    // furthest surface is still the MINIMUM, and the cull tests a box whose light projection has
+    // its z flipped the same way (CascadeHzb.cpp). One min chain; the closest UAVs are bound to
+    // placeholders and writeClosest is 0.
+    uint2 srcOffset;
+    uint2 pad3;
+#endif
 };
 
 // Mip 0 reduces the shared depth buffer, so both chains start from the same four values and this
@@ -51,7 +63,11 @@ cbuffer HzbCB : register(b0)
 float LoadSource(int2 p)
 {
     const int2 c = clamp(p, int2(0, 0), int2(srcSize) - int2(1, 1));
+#if HZB_LIGHT
+    return (fromDepth != 0u) ? (1.0f - DepthTex.Load(int3(c + int2(srcOffset), 0)).r) : SrcMip[c];
+#else
     return (fromDepth != 0u) ? DepthTex.Load(int3(c, 0)).r : SrcMip[c];
+#endif
 }
 
 float LoadSourceClosest(int2 p)
@@ -70,6 +86,33 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     }
 
     const int2 dst = int2(tid.xy);
+
+#if HZB_LIGHT
+    // S5b: mip 0 of a cascade pyramid is a QUARTER of the tile, one 4x4 min per texel -- the
+    // atlas read (4 M texels per cascade) is the cost that matters, and it is the same for a
+    // half-res mip 0 whose every further level then costs four times more. The cull declares the
+    // tile as half its size (CascadeHzb::FillParams), so the library's "mip 0 = half the view"
+    // still holds; the clamp in LoadSource covers a tail the 4x grid leaves (dst = ceil(src / 4)).
+    // Conservative by construction: a 4x4 minimum is the furthest surface over a superset of any
+    // footprint the half-res pyramid would have read.
+    if (fromDepth != 0u)
+    {
+        const int2 s4 = dst * 4;
+        float z4 = 1.0f;
+        [unroll]
+        for (int j = 0; j < 4; ++j)
+        {
+            [unroll]
+            for (int i = 0; i < 4; ++i)
+            {
+                z4 = min(z4, LoadSource(s4 + int2(i, j)));
+            }
+        }
+        DstMip[dst] = z4;
+        return;
+    }
+#endif
+
     const int2 src = dst * 2;
 
     float z = min(min(LoadSource(src + int2(0, 0)), LoadSource(src + int2(1, 0))),

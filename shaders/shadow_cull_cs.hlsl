@@ -3,10 +3,21 @@
 // port of Frustum::Intersects), and for a hit appends the caster id to that (view, mesh-group)
 // slice of the visible list while atomically bumping the group's InstanceCount. Produces the
 // indirect draw args consumed later by ExecuteIndirect (Step 6); nothing draws from it yet.
+//
+// Occlusion plan S5b (light-space occlusion, cascades only): after the frustum test, a caster of
+// cascade view v < 4 is tested against LAST frame's pyramid of that cascade's tile with last
+// frame's light matrices -- Nanite's CULLING_PASS_OCCLUSION_MAIN (NaniteCullingCommon.ush:
+// 463-482): frustum side test skipped ("clamped rect HZB provides a better guess for occlusion
+// than assuming true or false; post pass will clean up bad guesses"), no near clip (a pancaked
+// caster crosses the near plane and stays visible). A caster the pyramid hides goes to the
+// DEFERRED list instead of the visible list; shadow_cull_post_cs.hlsl retests it against THIS
+// frame's pyramid after pass A and draws it in pass B if it was a bad guess.
+#include "hzb_cull.hlsli"
+
 #define SHADOW_CULL_RS \
-    "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "CBV(b0), CBV(b1), " \
+    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer CullParams : register(b0)
 {
@@ -14,6 +25,20 @@ cbuffer CullParams : register(b0)
     uint gNumViews;
     uint gNumGroups;
     uint gPad;
+};
+
+// Mirrors render::CascadeHzb::GpuParams. Both matrices are the cascade's light view-projection
+// with z FLIPPED (reverse-Z for the library; the pyramid stores 1 - z to match).
+static const uint kHzbCascades = 4u;
+cbuffer CascadeHzbCB : register(b1)
+{
+    row_major float4x4 gHzbPrevViewProj[4];
+    row_major float4x4 gHzbViewProj[4];
+    uint4 gHzbPrevValid;   // per cascade: 1 = the pyramid holds last frame's tile
+    int4  gHzbViewRect;    // (0, 0, content, content) -- the tile's content rect, full resolution
+    uint2 gHzbSize;        // mip 0 of the pyramids
+    uint  gHzbOn;          // 0 = no test this frame (placeholders bound in t5..t8)
+    uint  gHzbPad;
 };
 
 struct CasterBounds
@@ -40,14 +65,33 @@ StructuredBuffer<uint4>        PerGroup    : register(t3); // per VIRTUAL group;
 // bucket is that LOD either way). This is what keeps a caster from being FINER than its receiver,
 // which is UE's rule: the shadow depth pass reuses the LOD the CAMERA picked for that primitive.
 StructuredBuffer<uint>         CasterLod   : register(t4);
+// S5b: the four cascade pyramids (R32, 1 - z, all mips). Placeholders when gHzbOn == 0.
+Texture2D<float>               CsmHzb[4]   : register(t5);
 
 static const uint kMaxShadowLods = 4u;   // must match render::kMaxShadowLods
 static const uint kCasterLodMask = 0x0Fu;
 
-RWByteAddressBuffer      Args        : register(u0); // InterlockedAdd on InstanceCount
-RWStructuredBuffer<uint> VisibleList : register(u1); // appended caster ids
+RWByteAddressBuffer      Args          : register(u0); // InterlockedAdd on InstanceCount
+RWStructuredBuffer<uint> VisibleList   : register(u1); // appended caster ids
+RWStructuredBuffer<uint> DeferredList  : register(u2); // S5b: per cascade, caster ids the prev pyramid hid
+RWStructuredBuffer<uint> DeferredCount : register(u3); // S5b: [v] deferred this frame (cleared by the cull-clear)
 
 static const uint kArgStride = 20u;
+
+static const float4x4 kIdentity = float4x4(1, 0, 0, 0,
+                                           0, 1, 0, 0,
+                                           0, 0, 1, 0,
+                                           0, 0, 0, 1);
+
+// S5b: was this caster hidden from the light in the previous frame's tile of cascade v?
+bool HiddenLastFrame(uint v, float3 c, float3 e)
+{
+    if (v >= kHzbCascades || gHzbOn == 0u || gHzbPrevValid[v] == 0u) { return false; }
+    const HzbFrustumCull prev = HzbBoxCullFrustumOrtho(c, e, kIdentity, gHzbPrevViewProj[v], false, true);
+    if (!prev.isVisible || prev.crossesNearPlane) { return false; }
+    const HzbScreenRect rect = HzbGetScreenRect(gHzbViewRect, prev.rectMin, prev.rectMax, 4);
+    return !HzbIsVisible(CsmHzb[v], gHzbSize, rect);
+}
 
 // Positive-vertex AABB-vs-frustum test (mirrors Frustum::Intersects). Inactive view slots carry
 // a reject-all sentinel plane (0,0,0,-1) so they cull everything -> zero visible casters.
@@ -86,6 +130,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     {
         if (Intersects(v, c, e))
         {
+            if (HiddenLastFrame(v, c, e))
+            {
+                uint d;
+                InterlockedAdd(DeferredCount[v], 1u, d);
+                DeferredList[v * gNumCasters + d] = caster;
+                continue;
+            }
             uint slot;
             Args.InterlockedAdd((v * gNumGroups + g) * kArgStride + 4u, 1u, slot);
             VisibleList[v * gNumCasters + base + slot] = caster;

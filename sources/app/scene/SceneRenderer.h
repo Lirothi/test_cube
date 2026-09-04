@@ -199,6 +199,13 @@ private:
     void Pass_CSM(Renderer* r, RenderGraphPassContext ctx,
         const std::array<SceneView, kCascades>& cascadeViews,
         std::uint32_t atlasPoint, bool indirect);
+    // Occlusion plan S5b: the cascades' light-space two-pass HZB cull. The tile pyramids from
+    // pass A's atlas (point, point + 1), the deferred casters against them, pass B into the tiles.
+    void Pass_CsmHzb(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
+    void Pass_ShadowCullPost(Renderer* r, RenderGraphPassContext ctx,
+        const ShadowGpuData::CullPostDecisions& dec);
+    void Pass_CSMPost(Renderer* r, RenderGraphPassContext ctx,
+        const std::array<SceneView, kCascades>& cascadeViews, std::uint32_t atlasPoint);
     // pass-flow S7d: `bindPoint` is the outer pass's single declared point; the INNER graph's
     // driver emits it instead of carrying a second copy of the same declaration list.
     void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,

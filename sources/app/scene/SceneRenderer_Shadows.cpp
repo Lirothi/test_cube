@@ -492,6 +492,76 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
 
 const Profiler::ScopeNameKey kShadows1 = Profiler::RegisterTraceLiteral(L"SpotShadows1");
 const Profiler::ScopeNameKey kShadows2 = Profiler::RegisterTraceLiteral(L"SpotShadows2");
+// ---- Occlusion plan S5b: the cascades' light-space two-pass HZB cull ----
+// Pass A is Pass_CSM as before. Then: the tile pyramids from the atlas (this), the deferred
+// casters retested against them (Pass_ShadowCullPost), and pass B into the same tiles
+// (Pass_CSMPost). Every point the builder declared is emitted whatever the data says.
+void SceneRenderer::Pass_CsmHzb(Renderer* renderer, RenderGraphPassContext ctx, std::uint32_t point)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassCsmHzb);
+        const auto& D = renderer->GetDeferredForFrame();
+        // The atlas readable, the pyramids writable.
+        renderer->EmitPoint(t.cl, point);
+        if (frame_->shadowGpu)
+        {
+            const UINT tile = D.shadowRes / 2u;
+            frame_->shadowGpu->CascadeHzbRef().RecordBuild(renderer, t.cl, D.shadowSRV, tile, render::kCascadeAtlasBorder);
+        }
+        // ...and the pyramids readable for the post cull and next frame's main cull.
+        renderer->EmitPoint(t.cl, point + 1u);
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_ShadowCullPost(Renderer* renderer, RenderGraphPassContext ctx,
+    const ShadowGpuData::CullPostDecisions& dec)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassShadowCullPost);
+        if (frame_->shadowGpu) { frame_->shadowGpu->RecordCullPost(renderer, t.cl, dec); }
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_CSMPost(Renderer* renderer, RenderGraphPassContext ctx,
+    const std::array<SceneView, kCascades>& cascadeViews, std::uint32_t atlasPoint)
+{
+    // One list for all four cascades: pass B is the bad guesses of the main cull, a handful of
+    // casters on a settled frame, so there is nothing to fan out.
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassCSMPost);
+        renderer->EmitPoint(t.cl, atlasPoint);
+        ShadowGpuData* shadowGpu = frame_->shadowGpu;
+        const CascadeShadowConfig csmCfg = frame_->cascadeConfig ? *frame_->cascadeConfig : CascadeShadowConfig{};
+        for (std::size_t c = 0; c < cascadeViews.size(); ++c)
+        {
+            const SceneView& view = cascadeViews[c];
+            if (!view.frustum.IsValid()) { continue; }
+            // The same bias and scissor as pass A: pass B draws into the same tile with the
+            // same projection, and a different bias would seam the two halves of one shadow.
+            const CascadeDepthBias cb = ComputeCascadeDepthBias(csmCfg, frame_->cascades.depthBiasNDC[c]);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind,
+                                                                       cb.constBias, cb.slopeBias, cb.maxSlope, cb.clampNear);
+            const auto& sr = frame_->cascades.scissor[c];
+            const D3D12_RECT scRect{ sr.x0, sr.y0, sr.x1, sr.y1 };
+            renderer->BindShadowTarget(t.cl, static_cast<int>(c), /*clear=*/false,
+                                       csmCfg.scissorOptim ? &scRect : nullptr);
+            if (shadowGpu)
+            {
+                shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, static_cast<std::uint32_t>(c), viewCB, /*passB=*/true);
+            }
+        }
+    }
+    ctx.EndCL(t);
+}
+
 void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
     const std::array<SceneView, LightManager::kMaxShadowedSpotLights>& spotViews,
     size_t viewCount, std::uint32_t atlasPoint, bool indirect)

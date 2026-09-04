@@ -216,4 +216,43 @@ HzbFrustumCull HzbBoxCullFrustumPerspective(float3 center, float3 extent, float4
     return cull;
 }
 
+// Orthographic box cull (NaniteHZBCull.ush:414-442, BoxCullFrustumOrtho): clip w == 1, so the
+// rect is the transformed centre +- the sum of the transformed half-extents, and the near/far
+// verdicts read straight off z. `nearClip` false is the directional-shadow convention
+// (NaniteCullingCommon.ush: "disabling near clipping is a feature for directional light shadows"):
+// a box in front of the near plane is not culled here -- it reports crossesNearPlane and the
+// caller treats it as visible (the shadow VS pancakes it onto the plane). The z convention is
+// still REVERSE (near = 1, far = 0): a forward-Z light projection is handed in with its z flipped
+// (S5b: viewProj * FlipZ on the CPU), and the light pyramid stores 1 - z to match.
+HzbFrustumCull HzbBoxCullFrustumOrtho(float3 center, float3 extent, float4x4 localToWorld,
+                                      float4x4 worldToClip, bool nearClip, bool skipFrustumCull)
+{
+    HzbFrustumCull cull;
+
+    const float3 centerClip = mul(mul(float4(center, 1.0f), localToWorld), worldToClip).xyz;
+    const float3 clipDelta = abs(extent.x * mul(localToWorld[0], worldToClip).xyz)
+                           + abs(extent.y * mul(localToWorld[1], worldToClip).xyz)
+                           + abs(extent.z * mul(localToWorld[2], worldToClip).xyz);
+    cull.rectMin = centerClip - clipDelta;
+    cull.rectMax = centerClip + clipDelta;
+
+    cull.crossesFarPlane = cull.rectMin.z < 0.0f;
+    cull.crossesNearPlane = cull.rectMax.z > 1.0f;
+    cull.isVisible = cull.rectMax.z > 0.0f; // far clip
+
+    if (nearClip)
+    {
+        cull.isVisible = cull.isVisible && cull.rectMin.z < 1.0f;
+    }
+
+    cull.frustumSideCulled = false;
+    if (!skipFrustumCull)
+    {
+        const bool frustumCull = any(cull.rectMax.xy < -1.0f) || any(cull.rectMin.xy > 1.0f);
+        cull.frustumSideCulled = cull.isVisible && frustumCull;
+        cull.isVisible = cull.isVisible && !frustumCull;
+    }
+    return cull;
+}
+
 #endif // HZB_CULL_HLSLI

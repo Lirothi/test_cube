@@ -80,6 +80,8 @@ public:
     const SceneFrameData::CascadeData& GetCascadeData() const { return frameData_.cascades; }
     CascadeShadowConfig& CascadeConfig() { return cascadeConfig_; }
     const CascadeShadowConfig& CascadeConfig() const { return cascadeConfig_; }
+    // Occlusion plan S5b: the cascade HZB cull's counters for the Render tab (read-only).
+    const ShadowGpuData& ShadowGpu() const { return shadowGpu_; }
 
     void InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);

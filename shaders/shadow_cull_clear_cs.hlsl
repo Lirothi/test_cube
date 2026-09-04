@@ -4,7 +4,7 @@
 #define SHADOW_CULL_CLEAR_RS \
     "CBV(b0), " \
     "DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer CullParams : register(b0)
 {
@@ -20,6 +20,11 @@ StructuredBuffer<uint4> PerGroup : register(t0);
 
 RWByteAddressBuffer      Args   : register(u0); // D3D12_DRAW_INDEXED_ARGUMENTS[view*numGroups + group]
 RWStructuredBuffer<uint> Counts : register(u1); // per-view ExecuteIndirect command count
+// Occlusion plan S5b: the cascade HZB cull's counters -- [0..4) casters deferred by the main
+// cull, [4..8) casters the post cull drew. Zeroed here so the cull's InterlockedAdds start from
+// nothing; the first 8 threads of the view axis each clear one entry.
+RWStructuredBuffer<uint> DeferredCount : register(u2);
+static const uint kDeferredCounters = 8u;
 
 // D3D12_DRAW_INDEXED_ARGUMENTS is 5 x uint = 20 bytes:
 //   0:IndexCountPerInstance 4:InstanceCount 8:StartIndexLocation 12:BaseVertexLocation 16:StartInstanceLocation
@@ -52,4 +57,5 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     Args.Store(base + 16u, v * gNumCasters + pg.x);      // StartInstanceLocation -> visible-list slice
 
     if (g == 0u) { Counts[v] = gNumGroups; }
+    if (g == 0u && v < kDeferredCounters) { DeferredCount[v] = 0u; }
 }

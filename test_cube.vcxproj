@@ -370,6 +370,7 @@
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp" />
     <ClCompile Include="sources/rendering/renderables/RenderableObjectBase.cpp" />
     <ClCompile Include="sources/rendering/shadows/ShadowGpuData.cpp" />
+    <ClCompile Include="sources/rendering/shadows/CascadeHzb.cpp" />
     <ClCompile Include="sources/rendering/shadows/VirtualShadowMap.cpp" />
     <ClCompile Include="sources/text/FontAtlas.cpp" />
     <ClCompile Include="sources/text/FontGenerator.cpp" />
@@ -578,6 +579,7 @@
     <ClInclude Include="sources/rendering/renderables/RenderableObject.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h" />
     <ClInclude Include="sources/rendering/shadows/ShadowGpuData.h" />
+    <ClInclude Include="sources/rendering/shadows/CascadeHzb.h" />
     <ClInclude Include="sources/rendering/shadows/ShadowSettings.h" />
     <ClInclude Include="sources/rendering/core/GBufferBindingGuard.h" />
     <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h" />
@@ -687,6 +689,7 @@
     <None Include="shaders\rt_resolve_cs.hlsl" />
     <None Include="shaders\shadow_cull_clear_cs.hlsl" />
     <None Include="shaders\shadow_cull_cs.hlsl" />
+    <None Include="shaders\shadow_cull_post_cs.hlsl" />
     <None Include="shaders\shadow_gi_scatter_cs.hlsl" />
     <None Include="shaders\shadow_indirect_csm.hlsl" />
     <None Include="shaders\vsm_addressing.hlsli" />

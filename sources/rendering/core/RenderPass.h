@@ -30,6 +30,11 @@ enum class RenderPass : uint16_t {
     Main_TerrainDepth,
     Main_ShadowCull,
     Main_CSM,
+    // Occlusion plan S5b: the cascades' light-space two-pass HZB cull -- the tile pyramids from
+    // pass A, the deferred casters retested, pass B into the same tiles.
+    Main_CsmHzb,
+    Main_ShadowCullPost,
+    Main_CSMPost,
     Main_SpotShadows,
     Main_PointShadows,
     Main_GBuffer,
@@ -99,6 +104,9 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_TerrainDepth: return L"TerrainDepth";
     case RenderPass::Main_ShadowCull: return L"ShadowCull";
     case RenderPass::Main_CSM: return L"CSM";
+    case RenderPass::Main_CsmHzb: return L"CsmHzb";
+    case RenderPass::Main_ShadowCullPost: return L"ShadowCullPost";
+    case RenderPass::Main_CSMPost: return L"CSMPost";
     case RenderPass::Main_SpotShadows: return L"SpotShadows";
     case RenderPass::Main_PointShadows: return L"PointShadows";
     case RenderPass::Main_GBuffer: return L"GBuffer";

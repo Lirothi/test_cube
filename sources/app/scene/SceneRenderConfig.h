@@ -145,6 +145,21 @@ struct CascadeShadowConfig
     // cvar); the same glass caveat as S11 applies, and UE ship with it.
     bool accurateCasterCull = true;
 
+    // --- Occlusion plan S5b: light-space HZB occlusion of the cascades' casters ---------------
+    // UE's r.Shadow.Virtual.UseHZB / NonNanite.UseHZB moved onto a cascade tile: after the frustum
+    // cull, a caster that LAST frame's pyramid of the tile hides (a wall between it and the sun)
+    // is deferred; pass A draws the rest, the tile's pyramid is rebuilt, the deferred are retested
+    // against it with THIS frame's matrices and the bad guesses drawn in pass B -- conservative
+    // by construction, no latency. Pure caster-count saving; the sampled shadow is identical.
+    // GPU (indirect) path only: the CPU tail draws as before. Off on validation-readback frames.
+    // OFF by default, by measurement (2026-09-04, occlusion_test with a 26 m wall, K=4): the four
+    // tile pyramids cost 0.11-0.13 ms GPU per frame -- reading the 32 MB atlas once, whatever the
+    // pyramid's resolution -- plus 0.015 ms for the retest and pass B, while the 160-200 casters
+    // per cascade they removed saved 0.02 ms of Pass_CSM. It pays when the HIDDEN casters are
+    // expensive (a city, an interior, a forest behind cliffs): watch `hzbDef` in csm_readout with
+    // the knob on, and turn it on for such content.
+    bool hzbCull = false;
+
     // --- S10: cascade cross-fade + distance fade ------------------------------------------------
     // [UDirectionalLightComponent::CascadeTransitionFraction = 0.1, clamped to 0.3] Fraction of a
     // cascade's OWN SLICE LENGTH over which it cross-fades into the next one. Was a hardcoded

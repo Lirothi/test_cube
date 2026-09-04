@@ -1018,19 +1018,24 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             // rather than infer it from a neutral image; `applied` says which.
             // S14: `cullPl` = planes of the caster-cull volume (6 = ortho box, more = the accurate
             // volume), `casters` = objects the CPU cull passed for that cascade LAST frame.
-            f.Printf("cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)  scissor%%  rect(atlas)  cullPl  casters  leak  applied=%d accurateCull=%d\n",
-                     cascadeConfig_.scissorOptim ? 1 : 0, cascadeConfig_.accurateCasterCull ? 1 : 0);
+            // S5b: `hzbDef` = casters the GPU cull deferred for that cascade (hidden from the sun
+            // in last frame's tile), `hzbB` = how many of them pass B drew after the retest; the
+            // cut is the difference. GPU counters of frame N - 3, 0 with the knob off.
+            f.Printf("cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)  scissor%%  rect(atlas)  cullPl  casters  leak  hzbDef  hzbB  applied=%d accurateCull=%d hzbCull=%d\n",
+                     cascadeConfig_.scissorOptim ? 1 : 0, cascadeConfig_.accurateCasterCull ? 1 : 0,
+                     cascadeConfig_.hzbCull ? 1 : 0);
             for (int i = 0; i < kCascades; ++i)
             {
                 const float zRange = cascades.farLsDbg[i] - cascades.nearLsDbg[i];
                 const auto& sr = cascades.scissor[i];
-                f.Printf("%d  %8.2f..%-8.2f %5u  %8.3f  %9.2f  %7.2f %7.2f  %9.2f  %11.4f  %7.1f  %d,%d-%d,%d  %6u  %7u  %4u\n",
+                f.Printf("%d  %8.2f..%-8.2f %5u  %8.3f  %9.2f  %7.2f %7.2f  %9.2f  %11.4f  %7.1f  %d,%d-%d,%d  %6u  %7u  %4u  %6u  %4u\n",
                          i, cascades.splitsVS[i], cascades.splitsVS[i + 1],
                          cascades.tileSizeDbg[i], cascades.unitsPerTexelDbg[i] * 1000.0f,
                          cascades.radiusDbg[i], cascades.nearLsDbg[i], cascades.farLsDbg[i],
                          zRange, (zRange / 65535.0f) * 1000.0f,
                          cascades.scissorAreaDbg[i] * 100.0f, sr.x0, sr.y0, sr.x1, sr.y1,
-                         cascades.cullPlanesDbg[i], cascades.cullCastersDbg[i], cascades.cullLeakDbg[i]);
+                         cascades.cullPlanesDbg[i], cascades.cullCastersDbg[i], cascades.cullLeakDbg[i],
+                         shadowGpu_.HzbDeferred(static_cast<unsigned>(i)), shadowGpu_.HzbDrawnB(static_cast<unsigned>(i)));
             }
             if (!c0Survivors.empty()) { f.Printf("cascade 0 survivors (last frame), box/acc verdicts:\n%s", c0Survivors.c_str()); }
         }
@@ -2205,6 +2210,7 @@ void Scene::Render(Renderer* renderer) {
     // mapped upload memory; no consumer yet.
     shadowGpu_.UpdateForFrame(renderer, objects_);
     shadowGpu_.PollValidation(renderer); // Step 4: one-shot GPU-vs-CPU cull-count check when ready
+    shadowGpu_.PollHzbStats(renderer);   // S5b: the cascade HZB cull's counters of frame N - 3
     vsm_.PollPageRequestDebug(renderer);  // Step 19: one-shot page-request count log when ready
 
     PrepareViews(renderer);
@@ -2278,6 +2284,24 @@ void Scene::Render(Renderer* renderer) {
                 render::VsmActive() ? &clipmapViews_[i].frustum : nullptr;
         }
         shadowGpu_.UpdateViewFrustums(renderer, frustums.data(), frustums.size());
+
+        // Occlusion plan S5b: this frame's cascade light matrices for the light-space HZB cull
+        // (last frame's become `prev`), and whether the cull should test at all: the knob, the
+        // Legacy atlas (VSM never takes it: its pages have their own S5b.2), and a sun to cast.
+        {
+            std::array<Math::mat4, kCascades> lightViewProj{};
+            for (int c = 0; c < kCascades; ++c)
+            {
+                lightViewProj[c] = frameData_.cascades.lightView[c] * frameData_.cascades.lightProj[c];
+            }
+            const auto& D = renderer->GetDeferredForFrame();
+            const UINT tile = D.shadowRes / 2u;
+            const UINT border = render::kCascadeAtlasBorder;
+            const UINT content = (tile > 2u * border) ? (tile - 2u * border) : tile;
+            const bool wantOn = cascadeConfig_.hzbCull && !render::VsmActive() && render::g_indirectShadowsEnabled &&
+                                cascadeViews_[0].frustum.IsValid();
+            shadowGpu_.SetCascadeHzbViews(renderer, lightViewProj.data(), renderer->GetTotalFrameNumber(), wantOn, content);
+        }
     }
 
     sceneRenderer_.Render(renderer, frameData_);

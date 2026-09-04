@@ -341,6 +341,63 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
                     Pass_CSM(renderer, c, *frame_->cascadeViews, atlasPoint, indirect);
                 };
             });
+
+        // Occlusion plan S5b: the cascades' light-space two-pass HZB cull, three passes chained
+        // off Main_CSM (pass A). Every one of them is empty on a frame the main cull did not test
+        // (PrepareCullPass's decision, read here), and gb.pShadow moves to the last one so the
+        // local-light passes and the lighting (which samples the atlas) order after pass B.
+        //   Main_CsmHzb        the four tile pyramids from the atlas after pass A (atlas readable,
+        //                      pyramids UAV -> readable);
+        //   Main_ShadowCullPost the deferred casters against them -> pass-B args + list;
+        //   Main_CSMPost       ExecuteIndirect of pass B into the same tiles, no clear.
+        auto pCsmHzb = rg.AddPass2(RenderPass::Main_CsmHzb, { gb.pShadow },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                ShadowGpuData* sg = frame_->shadowGpu;
+                if (!sg || !sg->CascadeHzbCullThisFrame()) { return {}; }
+                render::CascadeHzb& hzb = sg->CascadeHzbRef();
+                const auto& DF = ctx.renderer->GetDeferredForFrame();
+                if (!hzb.Ready() || DF.shadow == nullptr || DF.shadowSRV.ptr == 0) { return {}; }
+                const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(DF.shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c)
+                {
+                    ctx.Use(hzb.Pyramid(c), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                }
+                ctx.NextPoint();
+                for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c)
+                {
+                    ctx.Use(hzb.Pyramid(c), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                }
+                // Cross-frame state, committed with the decision: after this frame the pyramids
+                // hold this frame's tiles, which is what next frame's main cull tests against.
+                hzb.MarkBuilt(ctx.renderer->GetTotalFrameNumber());
+                return [this, renderer, point](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassCsmHzb);
+                    Pass_CsmHzb(renderer, c, point);
+                };
+            });
+        auto pCullPost = rg.AddPass2(RenderPass::Main_ShadowCullPost, { pCsmHzb },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                if (!frame_->shadowGpu) { return {}; }
+                const ShadowGpuData::CullPostDecisions dec = frame_->shadowGpu->PrepareCullPostPass(ctx);
+                if (!dec.active) { return {}; }
+                return [this, renderer, dec](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassShadowCullPost);
+                    Pass_ShadowCullPost(renderer, c, dec);
+                };
+            });
+        gb.pShadow = rg.AddPass2(RenderPass::Main_CSMPost, { pCullPost }, /*mtDeps=*/{},
+            { { D.shadow, D3D12_RESOURCE_STATE_DEPTH_WRITE } },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                if (!frame_->cascadeViews || !frame_->shadowGpu || !frame_->shadowGpu->CascadeHzbCullThisFrame()) { return {}; }
+                ctx.UseDeclared(); // the CSM atlas -> DEPTH_WRITE, back from the pyramid build's read
+                const std::uint32_t atlasPoint = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.NextPoint();
+                return [this, renderer, atlasPoint](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassCSMPost);
+                    Pass_CSMPost(renderer, c, *frame_->cascadeViews, atlasPoint);
+                };
+            });
     }
 
     // No declarations: the per-light command lists are recorded in parallel with

@@ -54,8 +54,9 @@ struct SelfTestConstants
     std::uint32_t hzbSize[2];
     std::uint32_t boxCount;
     std::uint32_t footprint;
+    Math::mat4 orthoWorldToClip; // S5b: the ortho cases' projection (reverse-Z), own pyramid in t2
 };
-static_assert(sizeof(SelfTestConstants) == 224, "SelfTestCB layout drifted from the shader");
+static_assert(sizeof(SelfTestConstants) == 288, "SelfTestCB layout drifted from the shader");
 
 struct TestBox
 {
@@ -110,6 +111,19 @@ float DeviceDepth(float viewZ)
     return a + b / viewZ;
 }
 
+// S5b: the ORTHO cases' projection -- reverse-Z (near -> 1, far -> 0) over the same view rect and
+// the same occluder plane, but a device depth means something else under it, so the ortho cases
+// test against a second pyramid built with this mapping. The window is 40 m wide at the view's
+// aspect; XMMatrixOrthographicOffCenterLH with near/far SWAPPED is the reverse-Z ortho.
+constexpr float kOrthoNear = 1.0f;
+constexpr float kOrthoFar = 100.0f;
+constexpr float kOrthoHalfW = 20.0f;
+constexpr float kOrthoHalfH = kOrthoHalfW * static_cast<float>(kViewH) / static_cast<float>(kViewW);
+float OrthoDepth(float viewZ)
+{
+    return (kOrthoFar - viewZ) / (kOrthoFar - kOrthoNear);
+}
+
 struct Pyramid
 {
     int levels = 0;
@@ -146,9 +160,8 @@ std::vector<float> ReduceLevel(LoadFn&& load, int srcW, int srcH, int dstW, int 
     return out;
 }
 
-Pyramid BuildPyramid()
+Pyramid BuildPyramid(float plane)
 {
-    const float plane = DeviceDepth(kPlaneViewZ);
     const auto fullRes = [&](int x, int y)
     {
         const bool inHole = x >= kHoleX0 && x < kHoleX1 && y >= kHoleY0 && y < kHoleY1;
@@ -187,6 +200,7 @@ struct TestCase
     Math::float3 extent;
     bool expectVisible;
     const char* why;
+    bool ortho = false; // S5b: HzbBoxCullFrustumOrtho against the ortho pyramid (t2)
 };
 
 // Hand-set verdicts. Positions keep a margin from every pixel-centre and depth boundary on
@@ -206,16 +220,28 @@ const TestCase kCases[] = {
     { "corner_fold",        { 33.5f, -19.5f, 20.0f },   { 0.3f, 0.3f, 0.3f },    false, "bottom-right corner: level coords clamp to the folded texel" },
     { "thin_just_in_front", { 0.0f, 0.0f, 9.99f },      { 0.5f, 0.5f, 0.005f },  true,  "5 mm in front of the plane" },
     { "thin_just_behind",   { 0.0f, 0.0f, 10.02f },     { 0.5f, 0.5f, 0.005f },  false, "15 mm behind the plane" },
+    // S5b: the orthographic cull (a cascade's light view). Same plane and hole; the hole in the
+    // ortho window is view x in [2.69, 5.93], y in [-1.35, 1.90].
+    { "ortho_front",          { 0.0f, 0.0f, 5.0f },     { 0.5f, 0.5f, 0.5f },    true,  "ortho: in front of the plane", true },
+    { "ortho_behind_covered", { -5.0f, 0.0f, 20.0f },   { 1.0f, 1.0f, 1.0f },    false, "ortho: behind the plane, away from the hole", true },
+    { "ortho_behind_in_hole", { 4.3f, 0.3f, 20.0f },    { 0.5f, 0.5f, 0.5f },    true,  "ortho: behind the plane, inside the hole", true },
+    { "ortho_near_crossing",  { 0.0f, 0.0f, 1.0f },     { 0.5f, 0.5f, 0.5f },    true,  "ortho: crosses the near plane (pancaked caster): visible without the HZB", true },
+    { "ortho_off_left",       { -100.0f, 0.0f, 20.0f }, { 1.0f, 1.0f, 1.0f },    false, "ortho: entirely left of the window", true },
+    { "ortho_beyond_far",     { 0.0f, 0.0f, 150.0f },   { 1.0f, 1.0f, 1.0f },    false, "ortho: beyond the far plane", true },
+    { "ortho_big_behind",     { -12.0f, 0.0f, 50.0f },  { 6.0f, 6.0f, 6.0f },    false, "ortho: large rect -> coarse level, still covered", true },
+    { "ortho_thin_front",     { 0.0f, 0.0f, 9.99f },    { 0.5f, 0.5f, 0.005f },  true,  "ortho: 5 mm in front of the plane", true },
 };
 constexpr std::uint32_t kCaseCount = static_cast<std::uint32_t>(sizeof(kCases) / sizeof(kCases[0]));
 
 // The CPU mirror, applying the same consumer rules as the shader's CSMain.
-TestResult Mirror(const TestCase& c, const SelfTestConstants& k, const Pyramid& pyr)
+TestResult Mirror(const TestCase& c, const SelfTestConstants& k, const Pyramid& pyrPersp, const Pyramid& pyrOrtho)
 {
     TestResult r{};
     r.level = -1;
-    const hzb::FrustumCull cull = hzb::BoxCullFrustumPerspective(c.center, c.extent, k.localToWorld,
-                                                                 k.worldToClip, k.viewToClip, false);
+    const Pyramid& pyr = c.ortho ? pyrOrtho : pyrPersp;
+    const hzb::FrustumCull cull = c.ortho
+        ? hzb::BoxCullFrustumOrtho(c.center, c.extent, k.localToWorld, k.orthoWorldToClip, false, false)
+        : hzb::BoxCullFrustumPerspective(c.center, c.extent, k.localToWorld, k.worldToClip, k.viewToClip, false);
     r.flags |= cull.crossesNearPlane ? kFlagCrossesNear : 0u;
     r.flags |= cull.crossesFarPlane ? kFlagCrossesFar : 0u;
     r.flags |= cull.frustumSideCulled ? kFlagSideCulled : 0u;
@@ -249,6 +275,94 @@ TestResult Mirror(const TestCase& c, const SelfTestConstants& k, const Pyramid& 
 }
 
 // ---- D3D12 plumbing ------------------------------------------------------------------------------
+
+ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, D3D12_HEAP_TYPE heap, UINT64 bytes,
+                                    D3D12_RESOURCE_STATES state, D3D12_RESOURCE_FLAGS flags);
+
+// A synthetic pyramid on the GPU: the R32 mip chain, its staging copy and the upload. Two of
+// them since S5b (perspective and ortho), so the plumbing lives here once.
+struct GpuPyramid
+{
+    D3D12_RESOURCE_DESC desc{};
+    ComPtr<ID3D12Resource> tex;
+    ComPtr<ID3D12Resource> staging;
+    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints;
+    int levels = 0;
+
+    bool Create(ID3D12Device* device, const Pyramid& pyr)
+    {
+        levels = pyr.levels;
+        desc = {};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = static_cast<UINT64>(pyr.w[0]);
+        desc.Height = static_cast<UINT>(pyr.h[0]);
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = static_cast<UINT16>(pyr.levels);
+        desc.Format = DXGI_FORMAT_R32_FLOAT;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        {
+            D3D12_HEAP_PROPERTIES hp{};
+            hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+            device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex));
+        }
+        footprints.assign(static_cast<size_t>(pyr.levels), {});
+        std::vector<UINT> rowCounts(static_cast<size_t>(pyr.levels));
+        std::vector<UINT64> rowBytes(static_cast<size_t>(pyr.levels));
+        UINT64 stagingBytes = 0;
+        device->GetCopyableFootprints(&desc, 0, static_cast<UINT>(pyr.levels), 0, footprints.data(), rowCounts.data(), rowBytes.data(), &stagingBytes);
+        staging = CreateBuffer(device, D3D12_HEAP_TYPE_UPLOAD, stagingBytes, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
+        if (!tex || !staging) { return false; }
+        void* mapped = nullptr;
+        const D3D12_RANGE noRead{ 0, 0 };
+        if (FAILED(staging->Map(0, &noRead, &mapped)) || !mapped) { return false; }
+        for (int l = 0; l < pyr.levels; ++l)
+        {
+            std::uint8_t* dst = static_cast<std::uint8_t*>(mapped) + footprints[l].Offset;
+            for (UINT row = 0; row < rowCounts[l]; ++row)
+            {
+                std::memcpy(dst + static_cast<size_t>(row) * footprints[l].Footprint.RowPitch,
+                            pyr.mip[l].data() + static_cast<size_t>(row) * pyr.w[l],
+                            static_cast<size_t>(pyr.w[l]) * sizeof(float));
+            }
+        }
+        staging->Unmap(0, nullptr);
+        return true;
+    }
+
+    void RecordUpload(ID3D12GraphicsCommandList* cl) const
+    {
+        for (int l = 0; l < levels; ++l)
+        {
+            D3D12_TEXTURE_COPY_LOCATION dst{};
+            dst.pResource = tex.Get();
+            dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            dst.SubresourceIndex = static_cast<UINT>(l);
+            D3D12_TEXTURE_COPY_LOCATION src{};
+            src.pResource = staging.Get();
+            src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            src.PlacedFootprint = footprints[l];
+            cl->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        }
+        D3D12_RESOURCE_BARRIER b{};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = tex.Get();
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        cl->ResourceBarrier(1, &b);
+    }
+
+    void CreateSrv(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE cpu) const
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC ts{};
+        ts.Format = DXGI_FORMAT_R32_FLOAT;
+        ts.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        ts.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        ts.Texture2D.MipLevels = static_cast<UINT>(levels);
+        device->CreateShaderResourceView(tex.Get(), &ts, cpu);
+    }
+};
 
 ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, D3D12_HEAP_TYPE heap, UINT64 bytes,
                                     D3D12_RESOURCE_STATES state, D3D12_RESOURCE_FLAGS flags)
@@ -407,13 +521,18 @@ int RunHzbCullSelfTest()
     const Math::mat4 proj = Math::mat4::PerspectiveFovLHReverseZ(DirectX::XM_PIDIV2,
                                                                  static_cast<float>(kViewW) / static_cast<float>(kViewH),
                                                                  kNear, kFar);
-    const Pyramid pyr = BuildPyramid();
-    Log("pyramid: mip 0 %dx%d, %d levels", pyr.w[0], pyr.h[0], pyr.levels);
+    const Pyramid pyr = BuildPyramid(DeviceDepth(kPlaneViewZ));
+    const Pyramid pyrOrtho = BuildPyramid(OrthoDepth(kPlaneViewZ));
+    Log("pyramid: mip 0 %dx%d, %d levels (perspective plane %.7g, ortho plane %.7g)", pyr.w[0], pyr.h[0], pyr.levels,
+        static_cast<double>(DeviceDepth(kPlaneViewZ)), static_cast<double>(OrthoDepth(kPlaneViewZ)));
 
     SelfTestConstants k{};
     k.localToWorld = Math::mat4::Translation(eye); // local == view exactly: +eye then -eye
     k.worldToClip = view * proj;
     k.viewToClip = proj;
+    // Near/far swapped on purpose: reverse-Z ortho (see kOrthoNear).
+    k.orthoWorldToClip = view * Math::mat4::OrthoOffCenterLH(-kOrthoHalfW, kOrthoHalfW, -kOrthoHalfH, kOrthoHalfH,
+                                                             kOrthoFar, kOrthoNear);
     k.viewRect[0] = 0; k.viewRect[1] = 0; k.viewRect[2] = kViewW; k.viewRect[3] = kViewH;
     k.hzbSize[0] = static_cast<std::uint32_t>(pyr.w[0]);
     k.hzbSize[1] = static_cast<std::uint32_t>(pyr.h[0]);
@@ -424,7 +543,7 @@ int RunHzbCullSelfTest()
     for (std::uint32_t i = 0; i < kCaseCount; ++i)
     {
         const TestCase& c = kCases[i];
-        boxes[i] = TestBox{ { c.center.x, c.center.y, c.center.z, 0.0f }, { c.extent.x, c.extent.y, c.extent.z, 0.0f } };
+        boxes[i] = TestBox{ { c.center.x, c.center.y, c.center.z, c.ortho ? 1.0f : 0.0f }, { c.extent.x, c.extent.y, c.extent.z, 0.0f } };
     }
 
     // --- Resources ---
@@ -433,37 +552,18 @@ int RunHzbCullSelfTest()
     ComPtr<ID3D12Resource> resultBuf = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_DEFAULT, sizeof(TestResult) * kCaseCount, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     ComPtr<ID3D12Resource> readback = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_READBACK, sizeof(TestResult) * kCaseCount, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_NONE);
 
-    D3D12_RESOURCE_DESC td{};
-    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    td.Width = static_cast<UINT64>(pyr.w[0]);
-    td.Height = static_cast<UINT>(pyr.h[0]);
-    td.DepthOrArraySize = 1;
-    td.MipLevels = static_cast<UINT16>(pyr.levels);
-    td.Format = DXGI_FORMAT_R32_FLOAT;
-    td.SampleDesc.Count = 1;
-    td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    ComPtr<ID3D12Resource> hzbTex;
-    {
-        D3D12_HEAP_PROPERTIES hp{};
-        hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-        device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&hzbTex));
-    }
-    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(pyr.levels);
-    std::vector<UINT> rowCounts(pyr.levels);
-    std::vector<UINT64> rowBytes(pyr.levels);
-    UINT64 stagingBytes = 0;
-    device->GetCopyableFootprints(&td, 0, static_cast<UINT>(pyr.levels), 0, footprints.data(), rowCounts.data(), rowBytes.data(), &stagingBytes);
-    ComPtr<ID3D12Resource> staging = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_UPLOAD, stagingBytes, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
+    GpuPyramid gpuPyr, gpuPyrOrtho;
+    const bool pyramidsOk = gpuPyr.Create(device.Get(), pyr) && gpuPyrOrtho.Create(device.Get(), pyrOrtho);
 
     ComPtr<ID3D12DescriptorHeap> heap;
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors = 3;
+        hd.NumDescriptors = 4; // t0 boxes, t1 pyramid, t2 ortho pyramid, u0 results
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap));
     }
-    if (!cbBuf || !boxBuf || !resultBuf || !readback || !hzbTex || !staging || !heap)
+    if (!cbBuf || !boxBuf || !resultBuf || !readback || !pyramidsOk || !heap)
     {
         CloseHandle(evt);
         return Verdict("FAIL resources", 1);
@@ -471,24 +571,6 @@ int RunHzbCullSelfTest()
 
     WriteUpload(cbBuf.Get(), &k, sizeof(k));
     WriteUpload(boxBuf.Get(), boxes.data(), sizeof(TestBox) * kCaseCount);
-    {
-        void* mapped = nullptr;
-        const D3D12_RANGE noRead{ 0, 0 };
-        if (SUCCEEDED(staging->Map(0, &noRead, &mapped)) && mapped)
-        {
-            for (int l = 0; l < pyr.levels; ++l)
-            {
-                std::uint8_t* dst = static_cast<std::uint8_t*>(mapped) + footprints[l].Offset;
-                for (UINT row = 0; row < rowCounts[l]; ++row)
-                {
-                    std::memcpy(dst + static_cast<size_t>(row) * footprints[l].Footprint.RowPitch,
-                                pyr.mip[l].data() + static_cast<size_t>(row) * pyr.w[l],
-                                static_cast<size_t>(pyr.w[l]) * sizeof(float));
-                }
-            }
-            staging->Unmap(0, nullptr);
-        }
-    }
 
     const UINT inc = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_CPU_DESCRIPTOR_HANDLE cpu = heap->GetCPUDescriptorHandleForHeapStart();
@@ -501,12 +583,9 @@ int RunHzbCullSelfTest()
         sd.Buffer.StructureByteStride = sizeof(TestBox);
         device->CreateShaderResourceView(boxBuf.Get(), &sd, cpu);            // t0
         cpu.ptr += inc;
-        D3D12_SHADER_RESOURCE_VIEW_DESC ts{};
-        ts.Format = DXGI_FORMAT_R32_FLOAT;
-        ts.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        ts.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        ts.Texture2D.MipLevels = static_cast<UINT>(pyr.levels);
-        device->CreateShaderResourceView(hzbTex.Get(), &ts, cpu);            // t1
+        gpuPyr.CreateSrv(device.Get(), cpu);                                  // t1
+        cpu.ptr += inc;
+        gpuPyrOrtho.CreateSrv(device.Get(), cpu);                             // t2
         cpu.ptr += inc;
         D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
         ud.Format = DXGI_FORMAT_UNKNOWN;
@@ -516,20 +595,9 @@ int RunHzbCullSelfTest()
         device->CreateUnorderedAccessView(resultBuf.Get(), nullptr, &ud, cpu); // u0
     }
 
-    // --- Record: upload the pyramid, dispatch, copy the results out ---
-    for (int l = 0; l < pyr.levels; ++l)
-    {
-        D3D12_TEXTURE_COPY_LOCATION dst{};
-        dst.pResource = hzbTex.Get();
-        dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        dst.SubresourceIndex = static_cast<UINT>(l);
-        D3D12_TEXTURE_COPY_LOCATION src{};
-        src.pResource = staging.Get();
-        src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        src.PlacedFootprint = footprints[l];
-        cl->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-    }
-    Transition(cl.Get(), hzbTex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // --- Record: upload the pyramids, dispatch, copy the results out ---
+    gpuPyr.RecordUpload(cl.Get());
+    gpuPyrOrtho.RecordUpload(cl.Get());
 
     ID3D12DescriptorHeap* heaps[] = { heap.Get() };
     cl->SetDescriptorHeaps(1, heaps);
@@ -538,7 +606,7 @@ int RunHzbCullSelfTest()
     cl->SetComputeRootConstantBufferView(0, cbBuf->GetGPUVirtualAddress());
     D3D12_GPU_DESCRIPTOR_HANDLE gpu = heap->GetGPUDescriptorHandleForHeapStart();
     cl->SetComputeRootDescriptorTable(1, gpu);
-    gpu.ptr += 2ull * inc;
+    gpu.ptr += 3ull * inc;
     cl->SetComputeRootDescriptorTable(2, gpu);
     cl->Dispatch((kCaseCount + 63u) / 64u, 1, 1);
 
@@ -584,7 +652,7 @@ int RunHzbCullSelfTest()
     {
         const TestCase& c = kCases[i];
         const TestResult& g = gpuResults[i];
-        const TestResult m = Mirror(c, k, pyr);
+        const TestResult m = Mirror(c, k, pyr, pyrOrtho);
         const bool sameRect = std::memcmp(&g.pixels, &m.pixels, sizeof(g.pixels)) == 0 &&
                               std::memcmp(&g.hzbTexels, &m.hzbTexels, sizeof(g.hzbTexels)) == 0;
         const bool sameDepth = std::memcmp(&g.minDepth, &m.minDepth, sizeof(float)) == 0;

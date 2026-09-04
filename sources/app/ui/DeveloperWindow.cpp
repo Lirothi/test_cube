@@ -1265,6 +1265,28 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "'casters' = objects the CPU cull passed last frame. Same glass caveat as the\n"
                                       "scissor -- UE ship with it anyway. OFF = the old box, for the A/B.");
 
+                // Occlusion plan S5b [UE r.Shadow.Virtual.UseHZB, on a cascade tile]. OFF by default,
+                // by measurement (see CascadeShadowConfig::hzbCull): conservative by construction
+                // (two passes), the sampled shadow is identical, but the pyramids cost more than
+                // today's casters save.
+                graphicsEdit(ImGui::Checkbox("HZB occlusion of casters (UE VSM UseHZB, per cascade)", &csmCfg.hzbCull));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A caster hidden from the SUN by a nearer caster (a wall) writes nothing into the\n"
+                                      "shadow map. Test each cascade's casters against last frame's depth pyramid of\n"
+                                      "its tile, draw the rest (pass A), rebuild the pyramid, retest the deferred ones\n"
+                                      "against it with THIS frame's matrices and draw the bad guesses (pass B) -- no\n"
+                                      "latency, no popping, identical shadow. GPU (indirect) path only.\n"
+                                      "OFF by default: the four tile pyramids cost 0.11-0.13 ms GPU (one read of the\n"
+                                      "atlas), which today's palms behind a wall do not pay back. Turn on for content\n"
+                                      "whose HIDDEN casters are expensive; hzbDef below says how many there are.\n"
+                                      "--set=csm.hzbCull:0|1; readout columns hzbDef / hzbB.");
+                {
+                    const ShadowGpuData& sg = scene.ShadowGpu();
+                    ImGui::Text("hzb cull: deferred %u / %u / %u / %u, pass B drew %u / %u / %u / %u",
+                                sg.HzbDeferred(0), sg.HzbDeferred(1), sg.HzbDeferred(2), sg.HzbDeferred(3),
+                                sg.HzbDrawnB(0), sg.HzbDrawnB(1), sg.HzbDrawnB(2), sg.HzbDrawnB(3));
+                }
+
                 // UE's three legacy-CSM bias cvars first, then the one knob that is OURS. Split in
                 // two on purpose: the user could not tell which of the four numbers were a
                 // transcription and which were invented here.

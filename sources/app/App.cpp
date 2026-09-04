@@ -466,6 +466,7 @@ namespace
         if (setting == "csm.scissorPad")   { scene.CascadeConfig().scissorPadTexels = std::clamp(value, 0.0f, 64.0f); return true; }
         // S14 [UE ShadowBoundsAccurate]: cull cascade casters against the slice extruded toward the sun.
         if (setting == "csm.accurateCull") { scene.CascadeConfig().accurateCasterCull = value != 0.0f; return true; }
+        if (setting == "csm.hzbCull") { scene.CascadeConfig().hzbCull = value != 0.0f; return true; } // occlusion plan S5b
         // Occlusion plan S1: per-chunk / per-GI-instance frustum mask below the object cull. 0 = rollback.
         if (setting == "vis.chunkMask") { render::g_visChunkMask = value != 0.0f; return true; }
         // Occlusion plan S3a: hardware occlusion queries with history. method 0 off / 1 queries /

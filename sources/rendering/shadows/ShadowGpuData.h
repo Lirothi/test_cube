@@ -12,6 +12,7 @@
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/renderables/InstanceTypes.h"
+#include "rendering/shadows/CascadeHzb.h"       // occlusion plan S5b: the cascade light-space pyramids
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kMaxMeshGroups (the per-group override table)
 
 class Renderer;
@@ -82,6 +83,10 @@ public:
         bool useUnified = false;  // the DEFAULT-heap instance/bounds mirror is usable this frame
         bool giOn = false;        // GI folding runs, so the scatter fills the GI region
         bool readback = false;    // the one-shot validation readback runs on this frame
+        // Occlusion plan S5b: the cascade views' casters are tested against last frame's light
+        // pyramids and the hidden ones deferred (never on a validation-readback frame: the CPU
+        // reference is the frustum alone). Also what the three S5b passes gate on this frame.
+        bool hzb = false;
         std::uint32_t base = 0;         // cull outputs -> UAV
         std::uint32_t unifiedCopy = 0;  // unified instance/bounds -> COPY_DEST
         std::uint32_t giWrite = 0;      // ...-> UAV for the scatter
@@ -97,6 +102,35 @@ public:
     // the record body where an inner allocation failure could skip a point that was declared.
     CullDecisions PrepareCullPass(RenderGraphPassContext& ctx);
     void RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullDecisions& dec);
+
+    // Occlusion plan S5b: the POST cull (Main_ShadowCullPost, after Main_CsmHzb rebuilt the
+    // cascade pyramids from pass A's tiles): the deferred casters against THIS frame's pyramids
+    // -> pass-B args + visible list, consumed by Main_CSMPost. Same builder/record contract as
+    // the main cull. `stats` = this frame's counters are copied out for the readout.
+    struct CullPostDecisions
+    {
+        bool active = false;
+        bool stats = false;
+        std::uint32_t base = 0;     // pass-B args/list + deferred -> UAV (already, from the main cull)
+        std::uint32_t consume = 0;  // args -> INDIRECT_ARGUMENT, list -> vertex stream, counters -> COPY_SOURCE
+        std::uint32_t restore = 0;  // counters -> UAV (their canonical)
+    };
+    CullPostDecisions PrepareCullPostPass(RenderGraphPassContext& ctx);
+    void RecordCullPost(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullPostDecisions& dec);
+    // Decided by PrepareCullPass; the S5b passes' builders read it (builders run serially, in
+    // schedule order, so the cull's decision is final by the time they ask).
+    bool CascadeHzbCullThisFrame() const { return hzbCullThisFrame_; }
+    render::CascadeHzb& CascadeHzbRef() { return cascadeHzb_; }
+    // Once per frame from Scene, after UpdateCascades and UpdateViewFrustums: this frame's
+    // cascade light view-projections (forward-Z), whether the knob + mode want the test, and
+    // the tile content size the pyramids are built over. Creates the pyramids on first use.
+    void SetCascadeHzbViews(Renderer* renderer, const Math::mat4* lightViewProj, std::uint64_t frameNumber,
+                            bool wantOn, UINT contentRes);
+    // The counters of frame N - kFrameCount, mapped when its fence has passed: per cascade,
+    // casters the main cull deferred and casters pass B drew (the cut = the difference).
+    void PollHzbStats(Renderer* renderer);
+    std::uint32_t HzbDeferred(unsigned c) const { return c < render::CascadeHzb::kCascades ? hzbStats_[c] : 0u; }
+    std::uint32_t HzbDrawnB(unsigned c) const { return c < render::CascadeHzb::kCascades ? hzbStats_[render::CascadeHzb::kCascades + c] : 0u; }
 
     // Step 4 (temporary): once, a few frames after the cull first runs, read back the GPU
     // InstanceCounts and compare per-view totals against a CPU frustum cull of the same
@@ -114,8 +148,10 @@ public:
     // b1 viewCB, then one ExecuteIndirect per mesh-group (empty groups draw 0 instances).
     // `viewSlot` indexes the args/frustum layout (cascade i | 4+spot | 12+point-face). Returns
     // false (drew nothing) if not ready. Thread-safe for the parallel per-view shadow CLs.
+    // S5b: `passB` draws the post cull's args/list (cascade rows only) instead of the main cull's.
     bool RecordIndirectShadowDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                                   std::uint32_t viewSlot, D3D12_GPU_VIRTUAL_ADDRESS viewCB);
+                                   std::uint32_t viewSlot, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
+                                   bool passB = false);
 
     // Drop CPU-side state on level unload; RETAINS the GPU buffers + SRVs (the LightManager
     // lesson: a pass may reference an SRV while frames are in flight). Next Rebuild reuses them.
@@ -393,6 +429,33 @@ private:
     UavRing visibleList_;    // per (view, mesh-group) visible caster ids (uint32)
     UavRing indirectCounts_; // per view draw count (uint32)
 
+    // Occlusion plan S5b (cascade light-space HZB cull). Per cascade: the casters the main cull
+    // deferred (last frame's pyramid hid them), the 8 counters ([c] deferred, [4 + c] drawn by
+    // pass B), and pass B's own args + visible list -- cascade rows only, the same per-row layout
+    // as the main pair so RecordIndirectShadowDraws draws either.
+    UavRing deferredList_;
+    UavRing deferredCount_;
+    UavRing indirectArgsB_;
+    UavRing visibleListB_;
+    render::CascadeHzb cascadeHzb_;
+    std::shared_ptr<Material> cullPostMat_;      // shadow_cull_post_cs.hlsl
+    bool hzbCullThisFrame_ = false;              // PrepareCullPass's decision, for the S5b builders
+    // The cull shaders' b1, filled by PrepareCullPass -- at BUILDER time, before the Main_CsmHzb
+    // builder marks this frame's pyramids built. Filling it at record time read the mark of the
+    // same frame and never saw a valid previous pyramid (measured: hzbDef 0 on every frame).
+    render::CascadeHzb::GpuParams hzbParams_{};
+    std::uint32_t hzbPrevValidMask_ = ~0u;       // last logged mask (a state-change event)
+    std::uint32_t cullCastersThisFrame_ = 0;     // the visible/deferred lists' per-view stride this frame
+    Microsoft::WRL::ComPtr<ID3D12Resource> hzbStatsReadback_; // READBACK, kFrameCount x 8 uints
+    std::array<std::uint64_t, render::kFrameCount> hzbStatsFrame_{};
+    std::array<std::uint32_t, 8> hzbStats_{};   // last polled counters
+    static constexpr UINT kHzbStatsBytes = 8 * sizeof(std::uint32_t);
+    void EnsureHzbStatsReadback(Renderer* renderer);
+    bool HzbRingsValid() const
+    {
+        return deferredList_.Valid() && deferredCount_.Valid() && indirectArgsB_.Valid() && visibleListB_.Valid();
+    }
+
     // GI→VSM (Step 2/4): DEFAULT-heap mirrors of instances_/bounds_ (kFrameCount regions x count_).
     // RecordCull copies the upload ring's static region into these each frame and (Step 4) scatters
     // the GI casters' region via a compute UAV write, so the cull + indirect VS read GPU-local copies
@@ -404,9 +467,11 @@ private:
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4 * render::kFrameCount> unifiedDescr_{};
 
     // Non-shader-visible UAVs for the cull outputs, one per ring region:
-    // [0..kFrameCount)=args (RAW), [kFrameCount..2k)=visibleList, [2k..3k)=counts.
+    // [0..kFrameCount)=args (RAW), [kFrameCount..2k)=visibleList, [2k..3k)=counts,
+    // S5b: [3k..4k)=deferredList, [4k..5k)=deferredCount, [5k..6k)=argsB (RAW), [6k..7k)=visibleListB.
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cullUavHeap_;
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3 * render::kFrameCount> cullUav_{};
+    static constexpr std::size_t kCullUavSets = 7;
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCullUavSets * render::kFrameCount> cullUav_{};
 
     std::shared_ptr<Material> cullClearMat_;     // shadow_cull_clear_cs.hlsl
     std::shared_ptr<Material> cullMat_;          // shadow_cull_cs.hlsl
