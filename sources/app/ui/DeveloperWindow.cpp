@@ -24,6 +24,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderStats.h"
 #include "rendering/core/VisibilityStats.h" // S0 occlusion plan: per-view visibility table
+#include "rendering/visibility/OcclusionHistory.h" // S3a: vis::g_occlusion
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/debug/LodDebugView.h"
 #include "rendering/renderables/InstanceTypes.h"
@@ -379,6 +380,25 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("Frustum test below the object level: terrain chunks (camera + Legacy CSM\n"
                                       "CPU loop) and GPU-instanced cloud instances (camera). Off = pre-S1: an\n"
                                       "object that passes draws all of its chunks. --set=vis.chunkMask:0");
+                // S3a: the occlusion method, live, and what last frame asked and learned.
+                {
+                    static const char* kMethods[] = { "off", "hardware queries", "hzb (S3b, not built)" };
+                    int method = std::clamp(vis::g_occlusion.method, 0, 2);
+                    ImGui::SetNextItemWidth(180.0f);
+                    if (ImGui::Combo("Occlusion (S3a)", &method, kMethods, 3)) { vis::g_occlusion.method = method; }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Camera-only occlusion culling against the G-buffer depth, UE's default desktop\n"
+                                          "path: one query per box after the base pass, history with a one-frame-or-more\n"
+                                          "latency. Shadows never consult it. --set=vis.method:0|1, vis.queryLatency:1..3");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(80.0f);
+                    ImGui::SliderInt("latency", &vis::g_occlusion.queryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames));
+                    const render::OcclusionFrameStats& os = render::g_visibilityStats.occlusionLast;
+                    ImGui::Text("queries: %u individual, %u grouped (x16), %u dropped; %u results read, latency %u, %u entries, %u lights occluded%s",
+                                os.queriesIndividual, os.queriesGrouped, os.queriesDropped, os.queriesTested,
+                                os.latencyFrames, os.historyEntries, os.lightsOccluded,
+                                os.ignoredResults ? " [results ignored: cut]" : "");
+                }
 
                 ImGui::Checkbox("Trace capture window", &traceWindowOpen_);
 

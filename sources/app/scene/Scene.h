@@ -20,6 +20,8 @@
 #include "app/scene/SceneView.h"
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderer.h"
+#include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a
+#include "rendering/visibility/OcclusionQueries.h"
 #include "vfx/WindState.h"
 
 class Renderer;
@@ -197,6 +199,16 @@ private:
     // Occlusion plan S0: which render::VisibilityStats slot a view writes (camera 0, cascades
     // 1..4), or -1 for the views that have none (local lights, clipmap levels).
     int VisibilitySlotFor(const SceneView& view) const;
+    // Occlusion plan S3a: on the CAMERA view's prepare task, after the frustum cull and the chunk
+    // masks -- consults the history for every surviving opaque object (per chunk for terrain),
+    // drops the occluded ones from the visible buckets, ANDs occluded chunks out of the mask and
+    // queues this frame's queries. Never for a shadow view (asserted).
+    void ApplyOcclusion(SceneView& view, std::uint32_t& objectsOccluded, std::uint32_t& chunksOccluded);
+    // S3a.6: one query per local light's influence volume (UE SOQ_LightInfluenceSphere). Main
+    // thread, before the camera task -- the history is single-threaded and the camera task only
+    // starts afterwards. Fills spotLightOccluded_ / pointLightOccluded_ (1 = its shadow pass draws
+    // nothing and its lighting entry is zeroed this frame). Its casters are NOT culled.
+    void ConsiderLightOcclusion(const Frustum& cameraFrustum);
     void UpdateClipmap(const Camera& camera); // Step 24d: camera-centered directional clipmap views (VSM)
 
     void PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask);
@@ -250,6 +262,14 @@ private:
     // Rung 0 / Steps 1-2: GPU-side shadow data (per-caster instance + bounds, per-view
     // frustum planes). Built at level load, maintained per frame; not yet consumed by any pass.
     ShadowGpuData shadowGpu_{};
+    // Occlusion plan S3a: the camera's occlusion history (per primitive / per chunk), the query
+    // heap that records this frame's plan and the CPU copy of the results frame N - latency read
+    // at the top of PrepareViews (kept alive for the camera task's Consider calls).
+    vis::OcclusionHistory occlusionHistory_{};
+    vis::OcclusionQueryHeap occlusionQueries_{};
+    std::vector<std::uint64_t> occlusionResults_;
+    std::vector<std::uint8_t> spotLightOccluded_;  // S3a.6, per LightManager spot index
+    std::vector<std::uint8_t> pointLightOccluded_; // per point index
     // Rung 2 (Step 18): persistent virtual-shadow-map page pool + page table. Allocated once at
     // level load; not yet consumed by any pass.
     VirtualShadowMap vsm_{};

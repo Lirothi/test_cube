@@ -20,8 +20,25 @@ struct VisibilityViewCounters
     std::uint32_t objectsOccluded = 0;   // cut by an occlusion test (S3a/S3b/S5); 0 until then
     std::uint32_t chunksIn = 0;          // terrain chunks of the surviving chunked objects
     std::uint32_t chunksDrawn = 0;       // chunks the view will draw (S1 mask); == chunksIn until S1
+    std::uint32_t chunksOccluded = 0;    // chunks the occlusion history cut (S3a); camera only
     std::uint32_t instancesDrawn = 0;    // GI instances + batch members + plain objects submitted
     std::uint64_t trianglesSubmitted = 0; // index count / 3 at the selected LOD -- CPU-path estimate
+};
+
+// S3a: what the occlusion pass asked and learned this frame (camera only). `latencyFrames` is
+// the distance between a query's frame and the frame that read it; `ignoredResults` marks a
+// frame whose verdicts were all forced visible (camera cut / big move / scene change).
+struct OcclusionFrameStats
+{
+    std::uint32_t method = 0;            // vis::OcclusionMethod
+    std::uint32_t queriesIndividual = 0;
+    std::uint32_t queriesGrouped = 0;    // one query = up to 16 boxes
+    std::uint32_t queriesDropped = 0;    // wanted past the per-frame ceiling
+    std::uint32_t queriesTested = 0;     // results actually read this frame
+    std::uint32_t latencyFrames = 0;
+    std::uint32_t historyEntries = 0;
+    std::uint32_t ignoredResults = 0;
+    std::uint32_t lightsOccluded = 0;    // S3a.6: spot + point lights whose influence volume was occluded
 };
 
 // Slot layout: 0 = camera, 1..4 = directional cascades c0..c3. Local-light and clipmap views have
@@ -35,11 +52,15 @@ struct VisibilityStats
 {
     std::array<VisibilityViewCounters, kVisibilityViews> current{}; // this frame, being written
     std::array<VisibilityViewCounters, kVisibilityViews> last{};    // completed frame, read by HUD/readout
+    OcclusionFrameStats occlusionCurrent{};                          // S3a, written by the camera prepare
+    OcclusionFrameStats occlusionLast{};
 
     void NextFrame()
     {
         last = current;
+        occlusionLast = occlusionCurrent;
         for (VisibilityViewCounters& c : current) { c = VisibilityViewCounters{}; }
+        occlusionCurrent = OcclusionFrameStats{};
     }
 };
 

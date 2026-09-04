@@ -446,6 +446,16 @@ CascadeCullVolume BuildCascadeCullVolume(const std::array<float3, 8>& cornersWor
     return overflow ? CascadeCullVolume{} : v;
 }
 
+// Occlusion plan S3a.6: a frustum that rejects every finite box -- one unit plane a float-max
+// away. Given to the shadow views of a light whose influence volume was occluded: the CPU cull
+// keeps nothing, the GPU cull (which takes the same planes) keeps nothing, the pass still clears
+// its atlas region so the barrier flow is untouched, and the lighting entry is zeroed beside it.
+Frustum RejectAllFrustum()
+{
+    const float4 plane(0.0f, 1.0f, 0.0f, -1e30f);
+    return Frustum::FromPlanes(&plane, 1);
+}
+
 // Occlusion plan S0: fill one view's visibility counters from its culled queue (before batching).
 // Triangles are the CPU-path estimate: index count / 3 at the object's camera LOD (chunked meshes:
 // per chunk at the chunk's tier), times the GI instance count where there is one.
@@ -456,10 +466,15 @@ CascadeCullVolume BuildCascadeCullVolume(const std::array<float3, 8>& cornersWor
 // mask, and not only because a chunk behind the camera still casts: this runs on the cascade's
 // prepare task, concurrently with the camera task that is writing that mask.
 void AccumulateVisibility(render::VisibilityViewCounters& c, const SceneRenderQueue& queue, size_t sourceCount,
-                          const Frustum& frustum, bool cameraView)
+                          const Frustum& frustum, bool cameraView, std::uint32_t objectsOccluded,
+                          std::uint32_t chunksOccluded)
 {
     c.objectsIn = static_cast<std::uint32_t>(sourceCount);
-    c.objectsFrustum = static_cast<std::uint32_t>(queue.VisibleObjectCount());
+    // S3a: the queue has already lost its occluded objects; `frustum` still means "kept by the
+    // frustum test", so they are added back here and reported under `occluded`.
+    c.objectsFrustum = static_cast<std::uint32_t>(queue.VisibleObjectCount()) + objectsOccluded;
+    c.objectsOccluded = objectsOccluded;
+    c.chunksOccluded = chunksOccluded;
     for (const auto& bucket : queue.VisibleBuckets())
     {
         for (const RenderableObjectBase* obj : bucket)
@@ -1618,6 +1633,28 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
         // object cull above used, so "object in, chunk out" is the same test at a finer grain.
         view.queue.SelectLods(camera_, view.frustum);
     }
+    // Occlusion plan S3a: after the frustum cull and the chunk masks, before batching (a batch is
+    // built from what survives) and before the counters (which report what it removed).
+    std::uint32_t objectsOccluded = 0, chunksOccluded = 0;
+    if (view.type == SceneView::Type::Camera && occlusionHistory_.Enabled())
+    {
+        ApplyOcclusion(view, objectsOccluded, chunksOccluded);
+        occlusionHistory_.EndConsider();
+        const vis::OcclusionQueryPlan& plan = occlusionHistory_.Plan();
+        render::OcclusionFrameStats& os = render::g_visibilityStats.occlusionCurrent;
+        os.method = static_cast<std::uint32_t>(vis::g_occlusion.method);
+        os.queriesIndividual = plan.individualQueries;
+        os.queriesGrouped = plan.groupedQueries;
+        os.queriesDropped = plan.droppedQueries;
+        os.queriesTested = occlusionHistory_.TestedQueries();
+        os.latencyFrames = occlusionHistory_.LatencyFrames();
+        os.historyEntries = static_cast<std::uint32_t>(occlusionHistory_.EntryCount());
+        os.ignoredResults = occlusionHistory_.IgnoredExistingQueries() ? 1u : 0u;
+        std::uint32_t lights = 0;
+        for (std::uint8_t o : spotLightOccluded_) { lights += o; }
+        for (std::uint8_t o : pointLightOccluded_) { lights += o; }
+        os.lightsOccluded = lights;
+    }
     if (!usesSharedShadowSource && !usesSharedCameraSource)
     {
         view.queue.SortOpaque();
@@ -1631,9 +1668,92 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
                                  : usesSharedCameraSource ? cameraObjectSource_.SourceObjectCount()
                                  : view.queue.SourceObjectCount();
         AccumulateVisibility(render::g_visibilityStats.current[static_cast<size_t>(slot)], view.queue, sourceCount,
-                             view.frustum, view.type == SceneView::Type::Camera);
+                             view.frustum, view.type == SceneView::Type::Camera, objectsOccluded, chunksOccluded);
     }
     view.queue.BuildInstancedBatches(view.type == SceneView::Type::Camera);
+}
+
+void Scene::ApplyOcclusion(SceneView& view, std::uint32_t& objectsOccluded, std::uint32_t& chunksOccluded)
+{
+    CPU_SCOPE(ProfilerScopes::kPrepareQueue);
+    // The camera and only the camera: shadow views take no occlusion verdicts (UE rule, plan §2.5).
+    assert(view.type == SceneView::Type::Camera && "occlusion history consulted by a non-camera view");
+    objectsOccluded = 0;
+    chunksOccluded = 0;
+    // Opaque buckets only in S3a: the transparent buckets are mirrored in the queue's sorted
+    // transparent entries, and pulling an object from one but not the other would draw it anyway.
+    for (const SceneRenderQueue::BucketType type : { SceneRenderQueue::BucketType::OpaqueSimple,
+                                                      SceneRenderQueue::BucketType::OpaqueComplex })
+    {
+        SceneRenderQueue::ObjectBucket& bucket = view.queue.GetVisibleBucket(type);
+        const auto occluded = [&](RenderableObjectBase* obj) -> bool
+        {
+            if (!obj) { return false; }
+            RenderableObject* ro = obj->AsRenderableObject();
+            const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
+            if (mesh && mesh->IsChunkedSubmeshes() && !ro->ChunkCameraVisible().empty())
+            {
+                // Sub-primitives (UE :2679, :2968-2980): every chunk the frustum kept has its own
+                // history and its own, never grouped, query; the object goes only when all of them
+                // are occluded. Chunks the frustum dropped are not considered -- their history is
+                // left to age, as UE leaves an off-screen primitive's.
+                std::vector<std::uint8_t>& mask = ro->ChunkCameraVisibleRef();
+                const std::vector<AABB>& boxes = mesh->GetSubmeshBounds();
+                const Math::mat4& model = ro->GetModelMatrix();
+                bool anyVisible = false;
+                for (size_t s = 0; s < mask.size(); ++s)
+                {
+                    if (mask[s] == 0u) { continue; }
+                    if (s >= boxes.size() || !boxes[s].IsValid()) { anyVisible = true; continue; }
+                    bool definite = false;
+                    const bool occ = occlusionHistory_.Consider(
+                        vis::OcclusionKey{ obj, static_cast<std::uint32_t>(1 + s) }, boxes[s].Transform(model),
+                        /*allowGrouped=*/false, definite);
+                    if (occ) { mask[s] = 0u; ++chunksOccluded; }
+                    else { anyVisible = true; }
+                }
+                if (!anyVisible) { ++objectsOccluded; return true; }
+                return false;
+            }
+            const AABB& b = obj->GetWorldBounds();
+            if (!b.IsValid()) { return false; }
+            bool definite = false;
+            const bool occ = occlusionHistory_.Consider(vis::OcclusionKey{ obj, 0u }, b, /*allowGrouped=*/true, definite);
+            if (occ) { ++objectsOccluded; }
+            return occ;
+        };
+        bucket.erase(std::remove_if(bucket.begin(), bucket.end(), occluded), bucket.end());
+    }
+}
+
+void Scene::ConsiderLightOcclusion(const Frustum& cameraFrustum)
+{
+    const std::vector<SpotLight>& spots = lightManager_.SpotLights();
+    const std::vector<PointLight>& points = lightManager_.PointLights();
+    spotLightOccluded_.assign(spots.size(), 0u);
+    pointLightOccluded_.assign(points.size(), 0u);
+    if (!occlusionHistory_.Enabled()) { return; }
+    // A volume outside the frustum is neither considered nor occluded: like an off-screen
+    // primitive, its history just ages. One individual query per volume (UE allocates a
+    // dedicated shadow query, never grouped); the verdict is last frame's, "no result" = lit.
+    for (size_t i = 0; i < spots.size(); ++i)
+    {
+        const AABB& bounds = spots[i].GetConeBounds(); // encloses the finite outer cone
+        if (!bounds.IsValid() || !cameraFrustum.Intersects(bounds)) { continue; }
+        bool definite = false;
+        spotLightOccluded_[i] = occlusionHistory_.Consider(vis::OcclusionKey{ &spots[i], 0u }, bounds,
+                                                          /*allowGrouped=*/false, definite) ? 1u : 0u;
+    }
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        const PointLightDesc& desc = points[i].GetDesc();
+        const Math::float3 r(desc.radius, desc.radius, desc.radius);
+        const AABB bounds(desc.position - r, desc.position + r);
+        if (!cameraFrustum.Intersects(bounds)) { continue; }
+        bool definite = false;
+        pointLightOccluded_[i] = occlusionHistory_.Consider(vis::OcclusionKey{ &points[i], 0u }, bounds,
+                                                           /*allowGrouped=*/false, definite) ? 1u : 0u;
+    }
 }
 
 int Scene::VisibilitySlotFor(const SceneView& view) const
@@ -1737,6 +1857,46 @@ void Scene::PrepareViews(Renderer* renderer)
         renderQueueSourcesValid_ = true;
     }
 
+    // Occlusion plan S3a: read the query results that can be read, open this frame's plan. On the
+    // main thread BEFORE the camera task, which consults and extends the history; after
+    // CalcMatrices, because the plan carries this frame's jittered view-projection.
+    {
+        const bool queriesOn = vis::g_occlusion.method == static_cast<int>(vis::OcclusionMethod::Queries) &&
+                               occlusionQueries_.EnsureResources(renderer);
+        vis::OcclusionHistory::FrameResults results{};
+        const std::uint64_t frameNo = renderer->GetTotalFrameNumber();
+        if (queriesOn)
+        {
+            const std::uint32_t latency = static_cast<std::uint32_t>(
+                std::clamp(vis::g_occlusion.queryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames)));
+            if (frameNo >= latency)
+            {
+                const std::uint64_t readFrame = frameNo - latency;
+                const UINT slot = occlusionQueries_.SlotOfFrame(readFrame);
+                if (slot != vis::OcclusionQueryHeap::kNoSlot)
+                {
+                    // Latency below the frame count: that frame's fence has not been waited on by
+                    // BeginFrame yet -- wait here, as UE's blocking Map does (r.NumBufferedOcclusionQueries=1).
+                    if (latency < vis::kOcclusionBufferedFrames) { renderer->WaitForFrameSlot(slot); }
+                    if (occlusionQueries_.ReadResults(readFrame, occlusionResults_))
+                    {
+                        results.samples = occlusionResults_.data();
+                        results.count = static_cast<std::uint32_t>(occlusionResults_.size());
+                        results.frameNumber = readFrame;
+                    }
+                }
+            }
+        }
+        occlusionHistory_.BeginFrame(frameNo, GetTimeSeconds(), camera_, renderer->GetRenderWidth(),
+                                     renderer->GetRenderHeight(), staticSetVersion_, results, queriesOn);
+        frameData_.occlusionPlan = &occlusionHistory_.Plan();
+        frameData_.occlusionQueries = &occlusionQueries_;
+        // S3a.6: the local lights' influence volumes, on this thread, before the camera task.
+        ConsiderLightOcclusion(mainView.frustum);
+        frameData_.spotLightOccluded = &spotLightOccluded_;
+        frameData_.pointLightOccluded = &pointLightOccluded_;
+    }
+
     TaskSystem& tasks = TaskSystem::Get();
     TaskSystem::TaskHandle mainViewTask = nullptr;
     {
@@ -1814,6 +1974,12 @@ void Scene::PrepareViews(Renderer* renderer)
         const float nearPlane = std::max(desc.nearPlane, 0.01f);
         const float farPlane = std::max(desc.range, nearPlane + 0.1f);
         view.frustum = Frustum::FromInvViewProj(view.invView, view.proj, nearPlane, farPlane);
+        // S3a.6: an occluded influence volume draws no shadow this frame (Legacy atlas only --
+        // VSM never takes occlusion verdicts, UE rule).
+        if (!render::VsmActive() && lightIndex < spotLightOccluded_.size() && spotLightOccluded_[lightIndex])
+        {
+            view.frustum = RejectAllFrustum();
+        }
         view.renderLayerMask = camera_.GetRenderLayerMask();
         view.position = desc.position;
         view.zNear = nearPlane;
@@ -1856,6 +2022,14 @@ void Scene::PrepareViews(Renderer* renderer)
             view.invView = mat4::Inverse(view.view);
             view.invProj = mat4::Inverse(view.proj);
             view.frustum = Frustum::FromInvViewProj(view.invView, view.proj, nearPlane, farPlane);
+            // S3a.6: see the spot loop.
+            {
+                const size_t pointLightIndex = lightManager_.GetShadowedPointLightIndex(s);
+                if (!render::VsmActive() && pointLightIndex < pointLightOccluded_.size() && pointLightOccluded_[pointLightIndex])
+                {
+                    view.frustum = RejectAllFrustum();
+                }
+            }
             view.renderLayerMask = camera_.GetRenderLayerMask();
             view.position = P;
             view.zNear = nearPlane;
@@ -1972,17 +2146,22 @@ void Scene::Render(Renderer* renderer) {
         if (f)
         {
             static const char* const kNames[render::kVisibilityViews] = { "camera", "c0", "c1", "c2", "c3" };
-            f.Printf("view     objectsIn  frustum  occluded  chunksIn  chunksDrawn  instances   triangles    frame=%llu drawCalls=%u primitives=%llu\n",
+            f.Printf("view     objectsIn  frustum  occluded  chunksIn  chunksDrawn  chunksOcc  instances   triangles    frame=%llu drawCalls=%u primitives=%llu\n",
                      static_cast<unsigned long long>(renderer->GetTotalFrameNumber()),
                      render::g_renderStats.lastDrawCalls,
                      static_cast<unsigned long long>(render::g_renderStats.lastPrimitives));
             for (unsigned v = 0; v < render::kVisibilityViews; ++v)
             {
                 const render::VisibilityViewCounters& c = render::g_visibilityStats.last[v];
-                f.Printf("%-8s %9u  %7u  %8u  %8u  %11u  %9u  %10llu\n", kNames[v], c.objectsIn, c.objectsFrustum,
-                         c.objectsOccluded, c.chunksIn, c.chunksDrawn, c.instancesDrawn,
+                f.Printf("%-8s %9u  %7u  %8u  %8u  %11u  %9u  %9u  %10llu\n", kNames[v], c.objectsIn, c.objectsFrustum,
+                         c.objectsOccluded, c.chunksIn, c.chunksDrawn, c.chunksOccluded, c.instancesDrawn,
                          static_cast<unsigned long long>(c.trianglesSubmitted));
             }
+            // S3a: what the camera asked the GPU last frame and what came back.
+            const render::OcclusionFrameStats& os = render::g_visibilityStats.occlusionLast;
+            f.Printf("occlusion method=%u individual=%u grouped=%u dropped=%u tested=%u latency=%u entries=%u ignored=%u lightsOccluded=%u\n",
+                     os.method, os.queriesIndividual, os.queriesGrouped, os.queriesDropped, os.queriesTested,
+                     os.latencyFrames, os.historyEntries, os.ignoredResults, os.lightsOccluded);
         }
     }
     if (!renderer) {
@@ -2105,5 +2284,6 @@ void Scene::Clear()
     {
         view.queue.Clear();
     }
+    occlusionHistory_.Reset(); // S3a: the keys are object pointers of the level being dropped
     skyBox_.reset();
 }

@@ -141,6 +141,7 @@ private:
         size_t pShadow = kNone;    // shadows  -> lighting (mtDep)
         size_t pSpotShadow = kNone;// shadows  -> spot lights (mtDep)
         size_t pPointShadow = kNone;
+        size_t pOcclusion = kNone; // S3a: gbuffer -> hzb (depth read-only before its SRV consumers)
         size_t pGbuf = kNone;      // gbuffer  -> lighting, AO
         size_t pVsmPageRender = kNone;
         size_t pHzb = kNone;       // gbuffer  -> SSR
@@ -233,6 +234,9 @@ private:
     // dispatches exactly the levels that were declared.
     void Pass_SsrTemporal(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
     void Pass_Hzb(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
+    // Occlusion plan S3a: the box queries against the G-buffer depth (read-only), right after
+    // Main_GBuffer, before anything reads depth as a texture.
+    void Pass_OcclusionQueries(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
     // pass-flow S8: the tonemap's decisions and the barrier points they were declared under.
     // Declared HERE, above the bloom helpers, because they take it: the bloom records into the
     // tonemap's command list and therefore emits the tonemap's points.

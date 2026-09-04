@@ -98,6 +98,36 @@ void ApplyGbvModeArg(const char* cmd)
     else if (mode == "guarded")   { GraphicsDevice::SetGbvShaderPatchMode(3); }
 }
 
+// "--set=<name>:<value>[;<name>:<value>...]": hold settings at fixed values for the run, from the
+// same name table --sweep uses (App::ApplyFixedSettings). EVERY occurrence, not just the first:
+// this used to be a single strstr, so a command line with two `--set=` flags silently applied one
+// and dropped the other -- and a measurement taken that way reports the settings you TYPED, not
+// the ones that ran. Cost me an A/B. The documented `--set=a:1;b:2` form still works; the loop
+// just also accepts the other one. Parsed ABOVE the scene-stress branch (occlusion plan S3a): a
+// GBV gate has to be able to switch the pass under test on.
+void ParseFixedSettingsArg(const char* lpCmdLine)
+{
+    if (!lpCmdLine) { return; }
+    for (const char* flag = std::strstr(lpCmdLine, "--set="); flag != nullptr;
+         flag = std::strstr(flag, "--set=")) {
+        const char* p = flag + std::strlen("--set=");
+        const char* end = p;
+        while (*end && *end != ' ' && *end != '\t') { ++end; }
+        flag = end; // resume scanning after this flag's value
+        while (p < end) {
+            const char* semi = std::strchr(p, ';');
+            const char* itemEnd = (semi && semi < end) ? semi : end;
+            const char* colon = std::strchr(p, ':');
+            if (colon && colon < itemEnd) {
+                g_fixedSettings.emplace_back(std::string(p, colon),
+                                             static_cast<float>(std::atof(colon + 1)));
+            }
+            if (itemEnd >= end) { break; }
+            p = itemEnd + 1;
+        }
+    }
+}
+
 void EnableDpiAwareness()
 {
 #ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
@@ -281,6 +311,9 @@ int WINAPI WinMain(
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-cmp")) {
         render::g_barrierComparator = true;
     }
+    // "--set=...": above the scene-stress branch too, so the harness can pin the setting a gate
+    // is about (App::ApplyFixedSettings runs after its bootstrap).
+    ParseFixedSettingsArg(lpCmdLine);
 
     // Barrier plan step 6: "--canonical-check" logs every resource that did not END the frame in
     // its declared canonical state (DBWIN "[canonical]" lines). Parsed above the scene-stress
@@ -696,30 +729,7 @@ int WINAPI WinMain(
                 g_shotCount = static_cast<int>(g_sweepValues.size());
             }
         }
-        // "--set=<name>:<value>[;<name>:<value>...]": hold settings at fixed values for the run,
-        // from the same name table --sweep uses. See App.h.
-        // EVERY occurrence, not just the first. This used to be a single strstr, so a command line
-        // with two `--set=` flags silently applied one and dropped the other -- and a measurement
-        // taken that way reports the settings you TYPED, not the ones that ran. Cost me an A/B.
-        // The documented `--set=a:1;b:2` form still works; the loop just also accepts the other one.
-        for (const char* flag = std::strstr(lpCmdLine, "--set="); flag != nullptr;
-             flag = std::strstr(flag, "--set=")) {
-            const char* p = flag + std::strlen("--set=");
-            const char* end = p;
-            while (*end && *end != ' ' && *end != '\t') { ++end; }
-            flag = end; // resume scanning after this flag's value
-            while (p < end) {
-                const char* semi = std::strchr(p, ';');
-                const char* itemEnd = (semi && semi < end) ? semi : end;
-                const char* colon = std::strchr(p, ':');
-                if (colon && colon < itemEnd) {
-                    g_fixedSettings.emplace_back(std::string(p, colon),
-                                                 static_cast<float>(std::atof(colon + 1)));
-                }
-                if (itemEnd >= end) { break; }
-                p = itemEnd + 1;
-            }
-        }
+        // "--set=...": parsed once, above the scene-stress branch (ParseFixedSettingsArg).
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-extent=")) {
             vsm::g_clipmapBaseExtent = (float)std::atof(flag + std::strlen("--vsm-extent="));
         }

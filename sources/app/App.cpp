@@ -1,6 +1,7 @@
 #include "app/App.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposureEnabled
 #include "rendering/core/MemoryReport.h"    // the memory line in the session log
+#include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: --set=vis.*
 #include "core/math/Math.h"
 #include "core/diagnostics/BootProfile.h"
 #include "core/profiling/Profiler.h"
@@ -467,6 +468,16 @@ namespace
         if (setting == "csm.accurateCull") { scene.CascadeConfig().accurateCasterCull = value != 0.0f; return true; }
         // Occlusion plan S1: per-chunk / per-GI-instance frustum mask below the object cull. 0 = rollback.
         if (setting == "vis.chunkMask") { render::g_visChunkMask = value != 0.0f; return true; }
+        // Occlusion plan S3a: hardware occlusion queries with history. method 0 off / 1 queries /
+        // 2 hzb (S3b); latency in frames (1 = UE desktop, a fence wait per frame); the UEngine
+        // config values the plan documents as unverified.
+        if (setting == "vis.method") { vis::g_occlusion.method = std::clamp((int)value, 0, 2); return true; }
+        if (setting == "vis.queryLatency") { vis::g_occlusion.queryLatency = std::clamp((int)value, 1, (int)vis::kOcclusionBufferedFrames); return true; }
+        if (setting == "vis.probablyVisibleTime") { vis::g_occlusion.probablyVisibleTime = std::max(0.0f, value); return true; }
+        if (setting == "vis.maxPixelsFraction") { vis::g_occlusion.maxPixelsFraction = std::clamp(value, 0.001f, 1.0f); return true; }
+        if (setting == "vis.cutAngle") { vis::g_occlusion.cutAngleDeg = std::max(0.0f, value); return true; }
+        if (setting == "vis.cutDistance") { vis::g_occlusion.cutDistance = std::max(0.0f, value); return true; }
+        if (setting == "vis.neverTestDistance") { vis::g_occlusion.neverTestDistance = std::max(0.0f, value); return true; }
         // The Ctrl-key toggle, headless. Two draw paths write the SAME atlas (GPU-driven indirect
         // vs the CPU object walk) and S6 has to bias both identically -- that is only checkable
         // if a capture can select the path.
@@ -1118,6 +1129,23 @@ void App::ReleaseLoadingScreen()
     loadingBitmapInfo_ = {};
 }
 
+void App::ApplyFixedSettings(Scene& scene)
+{
+    for (const auto& kv : g_fixedSettings)
+    {
+        const bool known = ApplySweepValue(scene, appController_.SettingsRef(), kv.first, kv.second);
+        if (known)
+        {
+            LOG_INFO(logging::LogCategory::App, "--set {} = {}", kv.first, kv.second);
+        }
+        else
+        {
+            LOG_WARNING(logging::LogCategory::App, "--set {} = {}: UNKNOWN SETTING (ignored)",
+                        kv.first, kv.second);
+        }
+    }
+}
+
 void App::HideLoadingScreen()
 {
     loadingScreenVisible_ = false;
@@ -1380,20 +1408,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 if (!fixedApplied)
                 {
                     fixedApplied = true;
-                    for (const auto& kv : g_fixedSettings)
-                    {
-                        const bool known = ApplySweepValue(scene, appController_.SettingsRef(),
-                                                           kv.first, kv.second);
-                        if (known)
-                        {
-                            LOG_INFO(logging::LogCategory::App, "--set {} = {}", kv.first, kv.second);
-                        }
-                        else
-                        {
-                            LOG_WARNING(logging::LogCategory::App, "--set {} = {}: UNKNOWN SETTING (ignored)",
-                                        kv.first, kv.second);
-                        }
-                    }
+                    ApplyFixedSettings(scene);
                     // Occlusion plan S0: the stress grid, once the level is in and every --set is applied.
                     if (g_sceneReplicateRequest > 1u)
                     {

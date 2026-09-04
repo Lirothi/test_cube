@@ -50,6 +50,7 @@
 // INTERNAL header, verbatim, so the bodies can be split across translation units. The
 // using-directive keeps every call site spelled exactly as it was.
 #include "app/scene/SceneRenderInternal.h"
+#include "rendering/visibility/OcclusionQueries.h" // occlusion plan S3a: Pass_OcclusionQueries
 using namespace scene_internal;
 
 // ---- RenderObjectBatch ----
@@ -527,3 +528,31 @@ void SceneRenderer::Pass_SelectionOutline(Renderer* renderer, RenderGraphPassCon
     ctx.EndCL(t);
 }
 #endif
+
+// ---- Pass_OcclusionQueries (occlusion plan S3a) ----
+// The camera prepare's box queries against the G-buffer depth: depth bound read-only (the
+// binding the skybox uses under DEPTH_READ), no colour target, render-resolution viewport. The
+// heap records the batches and resolves the counts into this frame slot's readback region.
+void SceneRenderer::Pass_OcclusionQueries(Renderer* renderer, RenderGraphPassContext ctx, uint32_t point)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassOcclusionQueries);
+        const auto& D = renderer->GetDeferredForFrame();
+        renderer->EmitPoint(t.cl, point);
+
+        t.cl->OMSetRenderTargets(0, nullptr, FALSE, &D.dsv);
+        const D3D12_VIEWPORT vp{ 0.0f, 0.0f, static_cast<float>(renderer->GetRenderWidth()),
+                                 static_cast<float>(renderer->GetRenderHeight()), 0.0f, 1.0f };
+        const D3D12_RECT sr{ 0, 0, static_cast<LONG>(renderer->GetRenderWidth()), static_cast<LONG>(renderer->GetRenderHeight()) };
+        t.cl->RSSetViewports(1, &vp);
+        t.cl->RSSetScissorRects(1, &sr);
+
+        if (frame_->occlusionPlan && frame_->occlusionQueries)
+        {
+            frame_->occlusionQueries->Record(renderer, t.cl, *frame_->occlusionPlan, renderer->GetCurrentFrameIndex());
+        }
+    }
+    ctx.EndCL(t);
+}

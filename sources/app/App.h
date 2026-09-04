@@ -123,6 +123,10 @@ private:
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     void InitWindow(HINSTANCE hInstance, int nCmdShow);
     void InitScene();
+    // "--set=<name>:<value>;..." applied to a live scene. Run() calls it on the first frame; the
+    // stress harness after its bootstrap -- a gate that cannot pin the setting under test
+    // validates the default, not the change.
+    void ApplyFixedSettings(Scene& scene);
     void LoadLoadingScreen();
     void ReleaseLoadingScreen();
     void HideLoadingScreen();

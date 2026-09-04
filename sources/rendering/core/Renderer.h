@@ -324,6 +324,9 @@ public:
 
     // Utility functions
     void WaitForPreviousFrame();       // full synchronization (used during resize/destruction)
+    // Occlusion plan S3a: block until one frame SLOT's fence has passed -- the wait a query
+    // latency below kFrameCount costs (UE's Map blocks the same way). Not the full idle above.
+    void WaitForFrameSlot(UINT frameIndex) { WaitForFrame(frameIndex); }
     void OnResize(UINT width, UINT height);
 
     ThreadCL BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* initialPSO = nullptr);

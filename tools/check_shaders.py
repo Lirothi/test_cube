@@ -103,6 +103,9 @@ GRAPHICS_ENTRIES = [
     # P8C-2: the lens-flare bokeh scatter.
     ("lens_flare.hlsl", "vs_6_0", "VSMain", [], ""),
     ("lens_flare.hlsl", "ps_6_0", "PSMain", [], ""),
+    # Occlusion plan S3a: the box draw of the hardware occlusion queries (no permutations).
+    ("occlusion_query.hlsl", "vs_6_0", "VSMain", [], ""),
+    ("occlusion_query.hlsl", "ps_6_0", "PSMain", [], ""),
 ]
 
 

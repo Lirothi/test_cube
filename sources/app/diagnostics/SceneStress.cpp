@@ -1150,6 +1150,9 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         Profiler::Get().SetThreadName("MainThread");
 
         InitScene();
+        // The harness honours --set like the app does (occlusion plan S3a: a GBV gate that could
+        // not switch the occlusion pass on was validating the default, not the pass).
+        ApplyFixedSettings(systems_->scene);
         Log("boot: window + device + scene ready (initial level loaded) at %.1f s\n",
             boot::ElapsedMs() / 1000.0);
         // The whole point of the split: this run's headline number is minutes, and until

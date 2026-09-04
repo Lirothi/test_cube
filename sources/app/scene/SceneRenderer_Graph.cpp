@@ -40,6 +40,7 @@
 #include "vfx/WindState.h"
 
 #include "app/scene/SceneRenderInternal.h"
+#include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: the query plan the pass draws
 using namespace scene_internal;
 
 namespace
@@ -432,6 +433,25 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         };
     });
 
+    // Occlusion plan S3a: the camera prepare's box queries, drawn against the G-buffer depth
+    // (read-only, no colour) right after the G-buffer -- UE's RenderOcclusion sits after the base
+    // pass, before translucency, so glass and water never occlude. The builder declares nothing
+    // on frames without a plan (method off, nothing to ask); Main_Hzb lists this pass as a
+    // prerequisite so the depth's DEPTH_READ use is ordered before its NON_PIXEL consumers.
+    gb.pOcclusion = rg.AddPass2(RenderPass::Main_OcclusionQueries, { gb.pGbuf },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const vis::OcclusionQueryPlan* plan = frame_->occlusionPlan;
+            const auto& D = renderer->GetDeferredForFrame();
+            if (!plan || plan->batches.empty() || !frame_->occlusionQueries || D.dsv.ptr == 0) { return {}; }
+            ctx.NextPoint();
+            const uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ);
+            return [this, renderer, point](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassOcclusionQueries);
+                Pass_OcclusionQueries(renderer, c, point);
+            };
+        });
+
     // Rung 2 / Step 19: VSM page-request pass — reads the camera depth (after GBuffer), marks the
     // virtual pages the frame needs. Independent consumer of depth (its output is unused for now),
     // so it doesn't gate lighting. Manages the request-buffer UAV state itself.
@@ -499,7 +519,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
     // whole point of the form.
     // P6C: the depth pyramid. Ordered after the G-buffer (it reduces the depth buffer) and before
     // anything that would consume it -- GTAO's horizon search (step 5) and SSR's HiZ march (step 6).
-    gb.pHzb = rg.AddPass2(RenderPass::Main_Hzb, { gb.pGbuf },
+    gb.pHzb = rg.AddPass2(RenderPass::Main_Hzb, { gb.pGbuf, gb.pOcclusion },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto& D = renderer->GetDeferredForFrame();
             if (!resources_.GetHzbMaterial() || resources_.GetHzbCBSizeBytes() == 0u ||

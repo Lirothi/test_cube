@@ -337,6 +337,8 @@
     <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp" />
     <ClCompile Include="sources/rendering/diagnostics/RendererSubmissionStress.cpp" />
     <ClCompile Include="sources/rendering/visibility/HzbCullSelfTest.cpp" />
+    <ClCompile Include="sources/rendering/visibility/OcclusionHistory.cpp" />
+    <ClCompile Include="sources/rendering/visibility/OcclusionQueries.cpp" />
     <ClCompile Include="sources/rendering/core/MemoryReport.cpp" />
     <ClCompile Include="sources/rendering/core/RenderTargetManager.cpp" />
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp" />
@@ -535,6 +537,8 @@
     <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h" />
     <ClInclude Include="sources/rendering/visibility/HzbCull.h" />
     <ClInclude Include="sources/rendering/visibility/HzbCullSelfTest.h" />
+    <ClInclude Include="sources/rendering/visibility/OcclusionHistory.h" />
+    <ClInclude Include="sources/rendering/visibility/OcclusionQueries.h" />
     <ClInclude Include="sources/rendering/core/RenderTargetManager.h" />
     <ClInclude Include="sources/rendering/core/ResourceDeclarations.h" />
     <ClInclude Include="sources/rendering/core/SubmitTimeline.h" />
@@ -650,6 +654,7 @@
     <None Include="shaders\hzb_build_cs.hlsl" />
     <None Include="shaders\hzb_cull.hlsli" />
     <None Include="shaders\hzb_cull_selftest_cs.hlsl" />
+    <None Include="shaders\occlusion_query.hlsl" />
     <None Include="shaders\bloom_cs.hlsl" />
     <None Include="shaders\bloom_fft_cs.hlsl" />
     <None Include="shaders\bloom_conv_cs.hlsl" />

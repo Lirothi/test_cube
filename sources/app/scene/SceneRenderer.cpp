@@ -163,6 +163,13 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                     light.GetShadowDepthBias());
                 spotCPU[i].shadowParams2 = Math::float4(light.GetShadowNormalBias(), 0.0f, 0.0f, 0.0f);
                 spotCPU[i].viewProj = light.GetViewProjMatrix();
+                // S3a.6: an occluded influence volume can light no visible pixel -- zero range and
+                // intensity, keep the entry in place (the shadow slot mapping is by index).
+                if (frame_->spotLightOccluded && i < frame_->spotLightOccluded->size() && (*frame_->spotLightOccluded)[i])
+                {
+                    spotCPU[i].positionRange.w = 0.0f;
+                    spotCPU[i].colorIntensity.w = 0.0f;
+                }
             }
         }
         if (auto* pointCPU = lm.GetPointLightBufferCPU(frameIdx); pointCPU && points > 0)
@@ -183,6 +190,11 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 pointCPU[i].shadowParams = Math::float4(
                     static_cast<float>(lm.GetPointShadowSlot(i)),
                     kPointShadowBias, pointShadowNear, desc.radius);
+                if (frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i])
+                {
+                    pointCPU[i].radius = 0.0f;
+                    pointCPU[i].intensity = 0.0f; // S3a.6, see the spot loop
+                }
             }
         }
     }

@@ -178,6 +178,9 @@ public:
     // selected because the shadow paths above still cast that chunk at that tier. Shadow views do
     // not read this -- they test their own frustum on the spot (RenderShadow / ChunkInFrustum).
     const std::vector<std::uint8_t>& ChunkCameraVisible() const { return chunkVisCamera_; }
+    // S3a: the camera prepare ANDs the occlusion verdict of each chunk into the mask, on the
+    // same task that wrote it. Nobody else writes it.
+    std::vector<std::uint8_t>& ChunkCameraVisibleRef() { return chunkVisCamera_; }
     // THE chunk-vs-view predicate, shared by the camera mask, the cascade loop and the counters so
     // a number in the readout is the draw's decision and not a look-alike. Conservative like the
     // object cull (AABB positive vertex); honours the `vis.chunkMask` rollback (off = always true).

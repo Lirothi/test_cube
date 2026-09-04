@@ -85,6 +85,7 @@ extern const Profiler::ScopeNameKey kPassShoreDepth;
 extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassGtao;
 extern const Profiler::ScopeNameKey kPassHzb;
+extern const Profiler::ScopeNameKey kPassOcclusionQueries; // occlusion plan S3a
 extern const Profiler::ScopeNameKey kPassBloom;
 extern const Profiler::ScopeNameKey kPassBloomConv;
 extern const Profiler::ScopeNameKey kPassLighting;
