@@ -340,7 +340,7 @@ namespace
         s.chunkLodDistance = render::g_chunkLodDist0;
         s.chunkLodFactor = render::g_chunkLodDistFactor;
 
-        s.shadowMode = render::g_shadowMode;
+        s.shadowMode = render::g_shadowModeFromCli ? render::g_shadowModePersisted : render::g_shadowMode;
         s.giIndirectShadows = render::g_giIndirectShadowsEnabled;
         s.csm = scene.CascadeConfig();
 
@@ -447,7 +447,10 @@ namespace
 
     void ApplyVsm(const GraphicsSettingsSnapshot& s)
     {
-        render::g_shadowMode = s.shadowMode;
+        // A `--shadow-mode=` boot override keeps the mode it set; the file's value is remembered
+        // so a save in that session writes the file's own mode back, not the override.
+        render::g_shadowModePersisted = s.shadowMode;
+        if (!render::g_shadowModeFromCli) { render::g_shadowMode = s.shadowMode; }
         render::g_giIndirectShadowsEnabled = s.giIndirectShadows;
         render::g_shadowLodBias = s.shadowLodBias;
         render::g_shadowLodBiasNearTier = s.shadowLodBiasNearTier;

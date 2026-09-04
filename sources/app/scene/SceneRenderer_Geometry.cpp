@@ -612,3 +612,40 @@ void SceneRenderer::Pass_VisTest(Renderer* renderer, RenderGraphPassContext ctx,
     }
     ctx.EndCL(t);
 }
+
+// ---- Occlusion plan S5: the camera's HZB post cull and pass B ----
+void SceneRenderer::Pass_CamCullPost(Renderer* renderer, RenderGraphPassContext ctx,
+    const ShadowGpuData::CamCullPostDecisions& dec)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassCamCullPost);
+        if (frame_->shadowGpu) { frame_->shadowGpu->RecordCamCullPost(renderer, t.cl, dec); }
+    }
+    ctx.EndCL(t);
+}
+
+// One list: pass B is the main cull's bad guesses, a handful of casters on a settled frame, and
+// the mostly-empty ExecuteIndirect per candidate group is the measured, accepted cost. The view
+// CB is rebuilt (the same constants as pass A's, from the same camera and wind), the targets bound
+// without a clear -- pass B adds pixels to the G-buffer pass A left.
+void SceneRenderer::Pass_GBufferB(Renderer* renderer, RenderGraphPassContext ctx, const Camera& camera,
+    std::uint32_t bindPoint)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassGBufferB);
+        renderer->EmitPoint(t.cl, bindPoint);
+        renderer->BindGBuffer(t.cl, Renderer::ClearMode::None);
+        ShadowGpuData* const shadowGpu = frame_->shadowGpu;
+        if (shadowGpu)
+        {
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGBufferViewCB(renderer, camera, frame_->wind);
+            shadowGpu->RecordIndirectGBufferDraws(renderer, t.cl, viewCB, renderer->GetWireframeMode(),
+                                                  0u, shadowGpu->VirtualGroupCount(), /*passB=*/true);
+        }
+    }
+    ctx.EndCL(t);
+}

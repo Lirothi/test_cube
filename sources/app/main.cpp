@@ -491,6 +491,7 @@ int WINAPI WinMain(
             const char* p = flag + std::strlen("--shadow-mode=");
             render::g_shadowMode = (std::strncmp(p, "legacy", 6) == 0) ? render::ShadowMode::Legacy
                                                                        : render::ShadowMode::VSM;
+            render::g_shadowModeFromCli = true; // wins over graphics_settings.json (see ShadowSettings.h)
         }
     }
 

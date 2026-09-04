@@ -676,6 +676,16 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     // camera row is validated against its own snapshot (see below).
     dec.gbuffer = gbufferIndirectFrame_ && camArgs_.Valid() && camVisibleList_.Valid() && perGroupVgCam_.Valid() &&
                   casterCam_.Valid() && casterFade_.Valid() && numVirtualGroups_ > 0 && camListCount_ > 0;
+    // S5: the camera candidates are also tested against last frame's pyramid when SceneRenderer
+    // said the pyramids are live (SetCameraHzb), the post-cull PSO and the rings exist. A frame
+    // with an invalid previous pyramid (cut, resize, first frame) still runs the three passes --
+    // the main cull defers nothing then (prevValid = 0), pass B is empty, and the frame's shape
+    // does not depend on history. The validation readback is NOT skipped: the camera row's CPU
+    // reference adds the deferred counters back (see PollValidation).
+    dec.camHzb = dec.gbuffer && camHzbParams_.on != 0u && camCullPostMat_ != nullptr &&
+                 camDeferred_.Valid() && camArgsB_.Valid() && camVisibleListB_.Valid() && deferredCount_.Valid() &&
+                 camHzbPrev_ != nullptr && camHzbCur_ != nullptr && camHzbPrevSrv_.ptr != 0 && camHzbCurSrv_.ptr != 0;
+    camHzbThisFrame_ = dec.camHzb;
     // The matrices and the prev-valid bits as they stand NOW: the Main_CsmHzb builder, which runs
     // after this one and before any record, marks this frame's pyramids built, and a record-time
     // read would take that mark for last frame's.
@@ -715,6 +725,16 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         // S4: the camera's pair, written here, consumed by Main_GBuffer's indirect pass.
         ctx.Use(camArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ctx.Use(camVisibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    if (dec.camHzb)
+    {
+        // S5: the deferred list (written here), pass B's pair (seeded here, filled by the post
+        // cull), last frame's pyramid (read). The previous frame slot's pyramid rests NON_PIXEL
+        // (Main_Hzb's restore), so this is a no-op transition on a steady frame.
+        ctx.Use(camDeferred_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(camArgsB_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(camVisibleListB_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(camHzbPrev_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
     // Unified instance/bounds: uploaded, then scattered into, then read by the cull. The NESTING
@@ -802,8 +822,9 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
                    ctx.renderer->GetTotalFrameNumber() > render::kFrameCount;
     if (dec.readback)
     {
-        // S4: the camera row rides behind the shadow rows in the same readback.
-        EnsureReadback(ctx.renderer, indirectArgs_.regionBytes + camArgs_.regionBytes);
+        // S4: the camera row rides behind the shadow rows in the same readback; S5: the counters
+        // behind that (the deferred entries the camera row is short by).
+        EnsureReadback(ctx.renderer, indirectArgs_.regionBytes + camArgs_.regionBytes + kHzbStatsBytes);
         dec.readback = valReadback_ != nullptr;
     }
     if (dec.readback)
@@ -814,6 +835,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         // the crossfade (a fading caster counts twice), so the CPU reference reproduces the
         // camera branch of shadow_cull_cs.hlsl exactly.
         valCamOn_ = dec.gbuffer;
+        valCamHzbOn_ = dec.camHzb;
         valCam_ = casterCamCpu_;
         valFade_ = casterFadeCpu_;
         valCamGroups_ = numVirtualGroups_;
@@ -830,6 +852,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         dec.valCopy = ctx.usePoint ? *ctx.usePoint : 0u;
         ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
         if (dec.gbuffer) { ctx.Use(camArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE); }
+        if (dec.camHzb) { ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE); }
     }
     ctx.NextPoint();
     dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
@@ -840,7 +863,106 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         ctx.Use(camArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
         ctx.Use(camVisibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     }
+    // S5: the counters back to UAV after the validation copy (the post cull adds to them); the
+    // deferred list and pass B's pair stay UAV for the post cull, which consumes them.
+    if (dec.readback && dec.camHzb) { ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
     return dec;
+}
+
+// ---- S5: the camera's two-pass HZB occlusion ---------------------------------------------------
+
+void ShadowGpuData::SetCameraHzb(const CameraHzbParams& params, ID3D12Resource* prevHzb, D3D12_CPU_DESCRIPTOR_HANDLE prevHzbSrv,
+                                 ID3D12Resource* curHzb, D3D12_CPU_DESCRIPTOR_HANDLE curHzbSrv)
+{
+    camHzbParams_ = params;
+    camHzbPrev_ = prevHzb;
+    camHzbPrevSrv_ = prevHzbSrv;
+    camHzbCur_ = curHzb;
+    camHzbCurSrv_ = curHzbSrv;
+}
+
+ShadowGpuData::CamCullPostDecisions ShadowGpuData::PrepareCamCullPostPass(RenderGraphPassContext& ctx)
+{
+    CamCullPostDecisions dec{};
+    if (!camHzbThisFrame_ || !camCullPostMat_ || !camHzbCur_) { return dec; }
+    if (ctx.renderer == nullptr || ctx.renderer->GetCurrentFrameIndex() >= render::kFrameCount) { return dec; }
+    const UINT f = ctx.renderer->GetCurrentFrameIndex();
+    dec.active = true;
+
+    // Where the main cull left them (declared again so the point is complete on its own), plus
+    // this frame's pyramid, rebuilt by Main_HzbA from pass A's depth.
+    dec.base = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(camArgsB_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(camVisibleListB_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(camDeferred_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(camHzbCur_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    // Pass B consumes the pair exactly as pass A's; the counters go out to the readout and back
+    // to their resting state. The cascade post cull owns the same readback ring on frames it
+    // runs; the two never run in one frame with different stamps because both copy the whole
+    // 48 bytes of the same frame -- the later copy simply wins with identical content for the
+    // cascade slots and this pass's for the camera slots.
+    ctx.NextPoint();
+    dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(camArgsB_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    ctx.Use(camVisibleListB_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    EnsureHzbStatsReadback(ctx.renderer);
+    dec.stats = hzbStatsReadback_ != nullptr;
+    if (dec.stats)
+    {
+        ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        hzbStatsFrame_[f] = ctx.renderer->GetTotalFrameNumber(); // cross-frame state: the builder's
+    }
+    ctx.NextPoint();
+    dec.restore = ctx.usePoint ? *ctx.usePoint : 0u;
+    if (dec.stats) { ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+    return dec;
+}
+
+void ShadowGpuData::RecordCamCullPost(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CamCullPostDecisions& dec)
+{
+    if (!renderer || !cl || !dec.active) { return; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    const std::uint32_t numCasters = cullCastersThisFrame_;
+    const std::uint32_t numGroups = numVirtualGroups_;
+
+    renderer->EmitPoint(cl, dec.base);
+    if (numCasters > 0 && numGroups > 0)
+    {
+        struct CullCB { std::uint32_t numCasters, numViews, numGroups, camView; };
+        auto cb0 = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(CullCB)), render::kConstantBufferAlignment);
+        auto cb1 = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(CameraHzbParams)), render::kConstantBufferAlignment);
+        if (cb0.cpu && cb1.cpu)
+        {
+            const CullCB c{ numCasters, 1u, numGroups, render::kMaxShadowViews };
+            std::memcpy(cb0.cpu, &c, sizeof(c));
+            std::memcpy(cb1.cpu, &camHzbParams_, sizeof(camHzbParams_));
+
+            auto h = renderer->GetRenderContextPool()->Acquire();
+            RenderContext& rc = h.ref();
+            rc.cbv[0] = cb0.gpu;
+            rc.cbv[1] = cb1.gpu;
+            rc.srvTable[0] = renderer->StageSrvUavTable({ BoundsReadSrv(f), casterGroup_.Srv(0), perGroupVgCam_.Srv(f), CasterLodSrv(f),
+                                                          casterFade_.Srv(f), camHzbCurSrv_ }).gpu;
+            rc.uavTable[0] = renderer->StageSrvUavTable({ cullUav_[10 * render::kFrameCount + f], cullUav_[11 * render::kFrameCount + f],
+                                                          cullUav_[9 * render::kFrameCount + f], cullUav_[4 * render::kFrameCount + f] }).gpu;
+            rc.samplerTable[0] = D3D12_GPU_DESCRIPTOR_HANDLE{};
+            camCullPostMat_->Bind(cl, rc);
+            // numthreads(8, 8, 1), x walks the deferred list: at most one entry per caster, and the
+            // shader reads the list's length from the counters.
+            const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
+            if (groupsX > 0) { cl->Dispatch(groupsX, 1, 1); }
+            renderer->UAVBarrier(cl, camArgsB_.buffer.Get());
+        }
+    }
+    renderer->EmitPoint(cl, dec.consume);
+    if (dec.stats)
+    {
+        cl->CopyBufferRegion(hzbStatsReadback_.Get(), static_cast<UINT64>(f) * kHzbStatsBytes,
+                             deferredCount_.buffer.Get(), static_cast<UINT64>(f) * deferredCount_.regionBytes, kHzbStatsBytes);
+    }
+    renderer->EmitPoint(cl, dec.restore);
 }
 
 // ---- S4: the camera's indirect G-buffer -------------------------------------------------------
@@ -853,10 +975,16 @@ bool ShadowGpuData::GBufferIndirectReady() const
 
 bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                                D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool wireframe,
-                                               std::uint32_t vgBegin, std::uint32_t vgEnd)
+                                               std::uint32_t vgBegin, std::uint32_t vgEnd, bool passB)
 {
     if (!renderer || !cl || !gbufferIndirectFrame_ || !camArgs_.Valid() || !camVisibleList_.Valid()) { return false; }
     if (numVirtualGroups_ == 0 || camListCount_ == 0) { return false; }
+    // S5: pass B draws the post cull's pair -- the same virtual groups, the same materials, only
+    // the args + the instance stream differ. Mostly empty draws on a settled frame (measured; the
+    // per-group ExecuteIndirect with InstanceCount 0 is the accepted cost of one list).
+    if (passB && (!camHzbThisFrame_ || !camArgsB_.Valid() || !camVisibleListB_.Valid())) { return false; }
+    const UavRing& args = passB ? camArgsB_ : camArgs_;
+    const UavRing& list = passB ? camVisibleListB_ : camVisibleList_;
     vgEnd = std::min(vgEnd, numVirtualGroups_);
     if (vgBegin >= vgEnd) { return false; }
     const UINT f = renderer->GetCurrentFrameIndex();
@@ -884,12 +1012,12 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
     // Slot 1 = the camera visible list as a per-instance stream; each draw's StartInstanceLocation
     // (seeded by the cull-clear from the camera bases) offsets into it.
     D3D12_VERTEX_BUFFER_VIEW visVBV{};
-    visVBV.BufferLocation = camVisibleList_.buffer->GetGPUVirtualAddress() + static_cast<UINT64>(f) * camVisibleList_.regionBytes;
-    visVBV.SizeInBytes = static_cast<UINT>(camVisibleList_.regionBytes);
+    visVBV.BufferLocation = list.buffer->GetGPUVirtualAddress() + static_cast<UINT64>(f) * list.regionBytes;
+    visVBV.SizeInBytes = static_cast<UINT>(list.regionBytes);
     visVBV.StrideInBytes = sizeof(std::uint32_t);
     cl->IASetVertexBuffers(1, 1, &visVBV);
 
-    const UINT64 argRegionBase = static_cast<UINT64>(f) * camArgs_.regionBytes;
+    const UINT64 argRegionBase = static_cast<UINT64>(f) * args.regionBytes;
     const Mesh* boundMesh = nullptr;
     UINT boundLod = 0xFFFFFFFFu;
     bool drew = false;
@@ -944,7 +1072,7 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
         if (!gg.mat->Bind(cl, ctx, wireframe)) { continue; }
 
         const UINT64 argOffset = argRegionBase + static_cast<UINT64>(vg) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
-        renderer->ExecuteIndirect(cl, sig, 1, camArgs_.buffer.Get(), argOffset, nullptr, 0);
+        renderer->ExecuteIndirect(cl, sig, 1, args.buffer.Get(), argOffset, nullptr, 0);
         drew = true;
     }
     return drew;
@@ -1593,6 +1721,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // caster, since a crossfading caster sits in two LOD buckets.
     EnsureUavRing(renderer, camArgs_, groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.CamArgs");
     EnsureUavRing(renderer, camVisibleList_, 2u * casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.CamVisibleList");
+    // S5: the camera's deferred list (one entry per caster at most) and pass B's own pair, the
+    // layout of the S4 pair above.
+    EnsureUavRing(renderer, camDeferred_, casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"ShadowGpuData.CamDeferred");
+    EnsureUavRing(renderer, camArgsB_, groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.CamArgsB");
+    EnsureUavRing(renderer, camVisibleListB_, 2u * casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.CamVisibleListB");
     // Step 2 (GI→VSM): DEFAULT-heap mirrors of instances_/bounds_, sized to `casters` per region.
     // RecordCull copies the ring's region into these each frame (verbatim at this step; Step 4 also
     // scatters GI casters into them). Their per-region SRVs feed the cull (bounds) + indirect VS (t0).
@@ -1861,6 +1994,19 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
             cullPostMat_.reset();
         }
     }
+    // S5: the camera's HZB post cull. Optional the same way -- without it the main cull never
+    // defers a camera candidate and the indirect G-buffer stays single-pass.
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/cam_cull_post_cs.hlsl";
+        cd.csEntry = "CSMain";
+        camCullPostMat_ = mm->GetOrCreateCompute(renderer, cd);
+        if (!camCullPostMat_ || !camCullPostMat_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::RenderShadow, "cam_cull_post_cs.hlsl did not build a PSO; camera HZB cull off");
+            camCullPostMat_.reset();
+        }
+    }
     // Step 4 (GI→VSM): the GI-scatter compute that folds each GPU-instanced object's per-instance
     // transforms into the unified caster buffers. Optional — a failure just leaves GI on the CPU tail.
     {
@@ -2109,6 +2255,27 @@ void ShadowGpuData::RebuildCullDescriptors(Renderer* renderer)
             }
         }
         structuredUint(camVisibleList_, 8);
+        // S5: the camera's deferred list, pass B's args (RAW) + visible list.
+        structuredUint(camDeferred_, 9);
+        {
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(10 * render::kFrameCount + f);
+            if (camArgsB_.Valid())
+            {
+                D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+                ud.Format = DXGI_FORMAT_R32_TYPELESS;
+                ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+                ud.Buffer.FirstElement = static_cast<UINT64>(f) * (camArgsB_.regionBytes / 4);
+                ud.Buffer.NumElements = static_cast<UINT>(camArgsB_.regionBytes / 4);
+                ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+                dev->CreateUnorderedAccessView(camArgsB_.buffer.Get(), nullptr, &ud, h);
+                cullUav_[10 * render::kFrameCount + f] = h;
+            }
+            else
+            {
+                cullUav_[10 * render::kFrameCount + f] = cullUav_[f];
+            }
+        }
+        structuredUint(camVisibleListB_, 11);
     }
 }
 
@@ -2407,7 +2574,23 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             noSampler,
             numGroups, 1,
             camArgs_.buffer.Get());
+        // S5: pass B's args, the same seed (the post cull bumps their InstanceCount).
+        if (dec.camHzb)
+        {
+            RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCBCam,
+                { perGroupVgCam_.Srv(f) },
+                { cullUav_[10 * render::kFrameCount + f], cullUav_[2 * render::kFrameCount + f], deferredCountUav() },
+                noSampler,
+                numGroups, 1,
+                camArgsB_.buffer.Get());
+        }
     }
+    // S5: last frame's camera pyramid (t12) and the deferred list (u6); placeholders when off.
+    // The CB says `on = 0` then, and the shader never reads either.
+    const D3D12_CPU_DESCRIPTOR_HANDLE camHzbPrevSrv = (dec.camHzb && camHzbPrevSrv_.ptr != 0) ? camHzbPrevSrv_ : renderer->GetDeferredForFrame().shadowSRV;
+    const D3D12_CPU_DESCRIPTOR_HANDLE camDeferredUav = cullUav_[9 * render::kFrameCount + f];
+    CameraHzbParams camHzb = camHzbParams_;
+    camHzb.on = dec.camHzb ? 1u : 0u;
     // S4: the camera tables of the cull (t9..t11, u4/u5); placeholders on a frame without the
     // camera row (the shader never reads them then, the table just may not have holes).
     const D3D12_CPU_DESCRIPTOR_HANDLE camGroupSrv = (dec.gbuffer && perGroupVgCam_.Valid()) ? perGroupVgCam_.Srv(f) : perGroupVg_.Srv(f);
@@ -2421,21 +2604,25 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     {
         auto cb0 = renderer->GetFrameResource()->AllocDynamic(cbSize, render::kConstantBufferAlignment);
         auto cb1 = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(render::CascadeHzb::GpuParams)), render::kConstantBufferAlignment);
-        if (cb0.cpu && cb1.cpu)
+        auto cb2 = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(CameraHzbParams)), render::kConstantBufferAlignment);
+        if (cb0.cpu && cb1.cpu && cb2.cpu)
         {
             writeCB(static_cast<std::uint8_t*>(cb0.cpu));
             std::memcpy(cb1.cpu, &hzbParams_, sizeof(hzbParams_)); // the builder's snapshot (see PrepareCullPass)
+            std::memcpy(cb2.cpu, &camHzb, sizeof(camHzb));         // S5: SceneRenderer's, this frame's decision applied
 
             auto h = renderer->GetRenderContextPool()->Acquire();
             RenderContext& rc = h.ref();
             rc.cbv[0] = cb0.gpu;
             rc.cbv[1] = cb1.gpu;
+            rc.cbv[2] = cb2.gpu;
             rc.srvTable[0] = renderer->StageSrvUavTable({ BoundsReadSrv(f), viewFrustums_.Srv(f), casterGroup_.Srv(0), perGroupVg_.Srv(f),
                                                           CasterLodSrv(f), hzbSrv[0], hzbSrv[1], hzbSrv[2], hzbSrv[3],
-                                                          camGroupSrv, camFlagSrv, camFadeSrv }).gpu;
+                                                          camGroupSrv, camFlagSrv, camFadeSrv, camHzbPrevSrv }).gpu;
             rc.uavTable[0] = renderer->StageSrvUavTable({ cullUav_[f], cullUav_[render::kFrameCount + f],
                                                           deferredListUav(), deferredCountUav(),
-                                                          cullUav_[7 * render::kFrameCount + f], cullUav_[8 * render::kFrameCount + f] }).gpu;
+                                                          cullUav_[7 * render::kFrameCount + f], cullUav_[8 * render::kFrameCount + f],
+                                                          camDeferredUav }).gpu;
             rc.samplerTable[0] = noSampler;
             cullMat_->Bind(cl, rc);
             const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
@@ -2457,6 +2644,12 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         {
             cl->CopyBufferRegion(valReadback_.Get(), indirectArgs_.regionBytes, camArgs_.buffer.Get(),
                                  static_cast<UINT64>(f) * camArgs_.regionBytes, camArgs_.regionBytes);
+        }
+        // S5: the counters as the main cull left them -- [9] is what the camera row is short by.
+        if (dec.camHzb)
+        {
+            cl->CopyBufferRegion(valReadback_.Get(), indirectArgs_.regionBytes + camArgs_.regionBytes, deferredCount_.buffer.Get(),
+                                 static_cast<UINT64>(f) * deferredCount_.regionBytes, kHzbStatsBytes);
         }
     }
 
@@ -2777,7 +2970,7 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
 
     const size_t argBytes = static_cast<size_t>(valViews_) * valGroups_ * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
     const size_t camBytes = valCamOn_ ? static_cast<size_t>(valCamGroups_) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) : 0u;
-    D3D12_RANGE readRange{ 0, indirectArgs_.regionBytes + camBytes };
+    D3D12_RANGE readRange{ 0, indirectArgs_.regionBytes + (valCamHzbOn_ ? camArgs_.regionBytes + kHzbStatsBytes : camBytes) };
     void* mapped = nullptr;
     if (FAILED(valReadback_->Map(0, &readRange, &mapped)) || !mapped)
     {
@@ -2801,6 +2994,15 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
         const auto* camArgs = reinterpret_cast<const D3D12_DRAW_INDEXED_ARGUMENTS*>(
             static_cast<const std::uint8_t*>(mapped) + indirectArgs_.regionBytes);
         for (std::uint32_t g = 0; g < valCamGroups_; ++g) { gpuCam += camArgs[g].InstanceCount; }
+    }
+    // S5: the entries the main cull deferred instead of emitting, with pass A's weight -- the
+    // camera row is EXACTLY those short of the frustum reference (the post pass's verdicts are
+    // not part of the check: they depend on this frame's depth, which the CPU cannot mirror).
+    std::uint32_t gpuCamDeferred = 0;
+    if (valCamHzbOn_)
+    {
+        std::memcpy(valCounters_.data(), static_cast<const std::uint8_t*>(mapped) + indirectArgs_.regionBytes + camArgs_.regionBytes, kHzbStatsBytes);
+        gpuCamDeferred = valCounters_[9];
     }
     const D3D12_RANGE noWrite{ 0, 0 };
     valReadback_->Unmap(0, &noWrite);
@@ -2866,7 +3068,7 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
             ++cpuCam;
             if (c < valFade_.size() && valFade_[c] > 0.0f) { ++cpuCam; }
         }
-        camMismatch = cpuCam != gpuCam;
+        camMismatch = cpuCam != gpuCam + gpuCamDeferred;
     }
 
     char buf[512];
@@ -2875,8 +3077,8 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
         if (valCamOn_)
         {
             std::snprintf(buf, sizeof(buf),
-                "[ShadowGpuData] cull validation PASS: %u views + camera match CPU (%u casters, %u groups; camera %u).\n",
-                valViews_, valCasters_, valGroups_, gpuCam);
+                "[ShadowGpuData] cull validation PASS: %u views + camera match CPU (%u casters, %u groups; camera %u + %u deferred).\n",
+                valViews_, valCasters_, valGroups_, gpuCam, gpuCamDeferred);
         }
         else
         {
@@ -2888,9 +3090,9 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
     else
     {
         std::snprintf(buf, sizeof(buf),
-            "[ShadowGpuData] cull validation MISMATCH: %u/%u views differ (first view %u: cpu=%u gpu=%u).%s%s cam cpu=%u/gpu=%u\n",
+            "[ShadowGpuData] cull validation MISMATCH: %u/%u views differ (first view %u: cpu=%u gpu=%u).%s%s cam cpu=%u/gpu=%u+%u deferred\n",
             mismatchViews, valViews_, firstView, firstCpu, firstGpu, mismatchList.c_str(),
-            camMismatch ? " CAMERA row differs:" : "", cpuCam, gpuCam);
+            camMismatch ? " CAMERA row differs:" : "", cpuCam, gpuCam, gpuCamDeferred);
         mismatchViews = std::max(mismatchViews, camMismatch ? 1u : 0u);
     }
     // The verdict this validation exists to produce, readable (session log) by the gate runs that
@@ -2941,4 +3143,7 @@ void ShadowGpuData::Reset()
     camListCount_ = 0;
     gbufferIndirectFrame_ = false;
     valCamOn_ = false;
+    // S5: the pyramids are the renderer's and survive; the decision does not.
+    camHzbThisFrame_ = false;
+    valCamHzbOn_ = false;
 }

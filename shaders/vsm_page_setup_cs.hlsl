@@ -13,9 +13,14 @@
 
 static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm_page_alloc_common.hlsli)
 
+// Occlusion plan S5b.2: a second invocation per frame in PASS-B mode (gPassB) turns the post
+// cull's counts (PageGroupCountB, t11) into pass B's args (u0 = the B args buffer, u4 = its
+// compaction counter): StartInstance = bucket base + pass A's count, so pass B draws only the
+// entries the post cull appended after pass A's. Nothing else is written in that mode -- the
+// page projections, the dirty bits and the brute-force lists are pass A's.
 #define VSM_PAGE_SETUP_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
@@ -65,7 +70,7 @@ cbuffer SetupCB : register(b0)
     // cache contract is: a view that moved re-renders wholesale. Static camera + static
     // lights = everything caches; a dolly re-renders exactly what it invalidates.
     uint2 gViewDirtyMask;
-    uint _pad6;
+    uint gPassB; // S5b.2: 1 = pass-B args from PageGroupCountB (see the header comment)
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -100,6 +105,7 @@ StructuredBuffer<uint>         PageScatterDyn : register(t8); // per page: a dyn
 // stages, in this order.
 StructuredBuffer<uint4>        GroupLodMega     : register(t9);  // per (group,lod): {megaStart, lodRel, count, baseVertex}
 StructuredBuffer<int>          GroupLodOverride : register(t10); // per group: see ResolveGroupLod
+StructuredBuffer<uint>         PageGroupCountB  : register(t11); // S5b.2: pass B's per (page, group) counts (placeholder in pass A)
 
 // Per-INSTANCE LOD note: the SCATTERED path no longer resolves a LOD here at all. The scatter pass
 // buckets every caster instance into a VIRTUAL group (group * gNumLods + lod) chosen from that
@@ -164,7 +170,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // With compacted args there is nothing to write at all — a record that is never appended
         // cannot be reached, since the count buffer stops the draw short of it. That skip IS the
         // compaction: free pages are ~45% of the pool.
-        if (lane == 0u) { PerPageDirty[p] = 0u; }
+        if (lane == 0u && gPassB == 0u) { PerPageDirty[p] = 0u; }
         if (gCompactArgs == 0u)
         {
             for (uint g = lane; g < numVg; g += VSM_SETUP_LANES)
@@ -190,6 +196,21 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // thread's registers), so only lane 0 walks it.
     const bool scattered = (gScatterActive != 0u) &&
                            (view >= VSM_NUM_LOCAL_VIEWS || gScatterLocals != 0u);
+    // S5b.2, pass B: only scattered pages can carry pass-B entries; a brute-force page's B args
+    // are zero (or absent, compacted), and nothing below is pass B's to write.
+    if (gPassB != 0u && !scattered)
+    {
+        if (gCompactArgs == 0u)
+        {
+            for (uint gb = lane; gb < numVg; gb += VSM_SETUP_LANES)
+            {
+                uint off = (p * numVg + gb) * 20u;
+                PageDrawArgs.Store4(off, uint4(0u, 0u, 0u, 0u));
+                PageDrawArgs.Store(off + 16u, 0u);
+            }
+        }
+        return;
+    }
     if (!scattered && lane != 0u) { return; }
 
     // Off-center projection: the page (px,py) at this level covers the NDC sub-rect centered at
@@ -203,7 +224,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint clipLevel = isLocalView ? 0u : (view - VSM_NUM_LOCAL_VIEWS);
     const bool windHere = (gWindDirtyMaxLevel != 0u) &&
                           (isLocalView || clipLevel < gWindDirtyMaxLevel);
-    if (lane == 0u)
+    if (lane == 0u && gPassB == 0u)
     {
         const float a = (float)(VSM_L0_AXIS >> level);
         const float cx = -1.0f + (2.0f * px + 1.0f) / a;
@@ -317,8 +338,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // (near clipmap levels + locals). Everything past the range renders rigid and caches.
     const bool viewDirty = (view < 32u) ? (((gViewDirtyMask.x >> view) & 1u) != 0u)
                                         : (((gViewDirtyMask.y >> (view - 32u)) & 1u) != 0u);
-    const bool dirty = isNew || dynamicOverlap || (gForceAll != 0u) || windHere || viewDirty;
-    if (lane == 0u) { PerPageDirty[p] = dirty ? 1u : 0u; }
+    // S5b.2, pass B: the verdict pass A wrote, read back through the same UAV (never rewritten).
+    const bool dirty = (gPassB != 0u) ? (PerPageDirty[p] != 0u)
+                                      : (isNew || dynamicOverlap || (gForceAll != 0u) || windHere || viewDirty);
+    if (lane == 0u && gPassB == 0u) { PerPageDirty[p] = dirty ? 1u : 0u; }
     if (!dirty)
     {
         if (gCompactArgs == 0u) // compacted: append nothing (see the free-page branch above)
@@ -362,7 +385,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // always laid out (group, lod)-major with the same stride.
         for (uint vg = gStart; vg < numVg; vg += gStep)
         {
-            const uint groupCount = PageGroupCount[p * numVg + vg];
+            // S5b.2: pass B's entries sit right after pass A's in the same bucket run, so its
+            // count comes from the post cull and its start is offset by pass A's count.
+            const uint countA = PageGroupCount[p * numVg + vg];
+            const uint groupCount = (gPassB != 0u) ? PageGroupCountB[p * numVg + vg] : countA;
+            const uint startOffset = (gPassB != 0u) ? countA : 0u;
             // Compacted args: an empty bucket would only ever be a zero-instance no-op, so don't
             // append it. This is where the bulk of the worst case disappears — even a RESIDENT
             // page usually touches one or two buckets out of all of them.
@@ -391,7 +418,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                 dst = (p * numVg + vg) * 20u;
             }
             PageDrawArgs.Store4(dst, a0);
-            PageDrawArgs.Store(dst + 16u, pageBase + bucketBase);
+            PageDrawArgs.Store(dst + 16u, pageBase + bucketBase + startOffset);
         }
     }
     else

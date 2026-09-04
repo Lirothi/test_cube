@@ -491,12 +491,85 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         };
     });
 
+    // Occlusion plan S5: the camera's two-pass HZB occlusion. The main cull (Main_ShadowCull)
+    // deferred every indirect G-buffer candidate LAST frame's pyramid hid; pass A (the indirect
+    // half of Main_GBuffer) drew the rest. Now: the pyramid of pass A's depth (Main_HzbA), the
+    // deferred candidates retested against it with this frame's matrices (Main_CamCullPost), and
+    // pass B into the same G-buffer (Main_GBufferB). Everything that used to chain off
+    // Main_GBuffer chains off `pGbufDone` -- pass B when it exists -- so no consumer reads a
+    // G-buffer still missing pass B's pixels. Registered only on frames DecideFrame turned the
+    // feature on; the registry can still decline in its own builder (CamHzbThisFrame), in which
+    // case the three are empty and the frame equals an off frame.
+    gb.pHzbA = GraphBuild::kNone;
+    gb.pCamCullPost = GraphBuild::kNone;
+    gb.pGbufB = GraphBuild::kNone;
+    if (decisions_.camHzb)
+    {
+        gb.pHzbA = rg.AddPass2(RenderPass::Main_HzbA, { gb.pGbuf },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                const auto& D = renderer->GetDeferredForFrame();
+                if (!frame_->shadowGpu || !frame_->shadowGpu->CamHzbThisFrame()) { return {}; }
+                if (!resources_.GetHzbMaterial() || resources_.GetHzbCBSizeBytes() == 0u ||
+                    D.depthSRV.ptr == 0 || D.hzb.Get() == nullptr || D.hzbClosest.Get() == nullptr ||
+                    D.hzbMips == 0)
+                {
+                    return {};
+                }
+                ctx.NextPoint();
+                const uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+                // The shape of Main_Hzb below, minus the gb1 hand-over: that belongs to the FINAL
+                // pyramid's pass, which is the one Main_RTTrace depends on.
+                ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(D.hzb.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                ctx.Use(D.hzbClosest.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                ctx.NextPoint();
+                ctx.Use(D.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(D.hzbClosest.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                return [this, renderer, point](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassHzbA);
+                    Pass_Hzb(renderer, c, point, /*passA=*/true);
+                };
+            });
+        gb.pCamCullPost = rg.AddPass2(RenderPass::Main_CamCullPost, { gb.pHzbA },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                if (!frame_->shadowGpu) { return {}; }
+                const ShadowGpuData::CamCullPostDecisions dec = frame_->shadowGpu->PrepareCamCullPostPass(ctx);
+                if (!dec.active) { return {}; }
+                return [this, renderer, dec](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassCamCullPost);
+                    Pass_CamCullPost(renderer, c, dec);
+                };
+            });
+        gb.pGbufB = rg.AddPass2(RenderPass::Main_GBufferB, { gb.pCamCullPost },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                if (!frame_->shadowGpu || !frame_->shadowGpu->CamHzbThisFrame()) { return {}; }
+                const std::uint32_t bindPoint = ctx.usePoint ? *ctx.usePoint : 0u;
+                // Main_GBuffer's target list, verbatim: pass B draws with the same PSOs into the
+                // same targets (Main_HzbA read depth in between).
+                const auto& DG = ctx.renderer->GetDeferredForFrame();
+                ctx.Use(DG.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                ctx.Use(DG.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                ctx.Use(DG.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                ctx.Use(DG.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#if WITH_EDITOR
+                ctx.Use(DG.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#endif
+                ctx.Use(DG.gbAux.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                ctx.Use(DG.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                return [this, renderer, bindPoint](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassGBufferB);
+                    Pass_GBufferB(renderer, c, *frame_->camera, bindPoint);
+                };
+            });
+    }
+    gb.pGbufDone = (gb.pGbufB != GraphBuild::kNone) ? gb.pGbufB : gb.pGbuf;
+
     // Occlusion plan S3a: the camera prepare's box queries, drawn against the G-buffer depth
     // (read-only, no colour) right after the G-buffer -- UE's RenderOcclusion sits after the base
     // pass, before translucency, so glass and water never occlude. The builder declares nothing
     // on frames without a plan (method off, nothing to ask); Main_Hzb lists this pass as a
     // prerequisite so the depth's DEPTH_READ use is ordered before its NON_PIXEL consumers.
-    gb.pOcclusion = rg.AddPass2(RenderPass::Main_OcclusionQueries, { gb.pGbuf },
+    gb.pOcclusion = rg.AddPass2(RenderPass::Main_OcclusionQueries, { gb.pGbufDone },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const vis::OcclusionQueryPlan* plan = frame_->occlusionPlan;
             const auto& D = renderer->GetDeferredForFrame();
@@ -522,7 +595,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
     // builder itself (NOT via the declare list): this pass runs right after the G-buffer, which
     // leaves depth in DEPTH_WRITE, and reading it without the graph transitioning it was GBV
     // id=1358 on all three Deferred[N].Depth.
-    auto pVsmPageRequest = rg.AddPass2(RenderPass::Main_VsmPageRequest, { gb.pGbuf },
+    auto pVsmPageRequest = rg.AddPass2(RenderPass::Main_VsmPageRequest, { gb.pGbufDone },
         [this, renderer](RenderGraphPassContext& ctx)
             -> std::function<void(RenderGraphPassContext)> {
             // `decisions_.vsmSkipUpdate` is decided before the graph is built and does not change during
@@ -581,7 +654,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
     // whole point of the form.
     // P6C: the depth pyramid. Ordered after the G-buffer (it reduces the depth buffer) and before
     // anything that would consume it -- GTAO's horizon search (step 5) and SSR's HiZ march (step 6).
-    gb.pHzb = rg.AddPass2(RenderPass::Main_Hzb, { gb.pGbuf, gb.pOcclusion },
+    gb.pHzb = rg.AddPass2(RenderPass::Main_Hzb, { gb.pGbufDone, gb.pOcclusion },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto& D = renderer->GetDeferredForFrame();
             if (!resources_.GetHzbMaterial() || resources_.GetHzbCBSizeBytes() == 0u ||
@@ -590,6 +663,11 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             {
                 return {};
             }
+            // Occlusion plan S5: the stamp next frame's DecideFrame reads to trust this pyramid
+            // as "last frame's" -- cross-frame state, committed in the (serial) builder.
+            camHzbBuilt_[renderer->GetCurrentFrameIndex()] = CamHzbBuilt{
+                renderer->GetTotalFrameNumber(), renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+                frame_->camera ? frame_->camera->GetHistoryRevision() : 0ull };
             ctx.NextPoint();
             const uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             // Async-compute step 8 (D7): NON_PIXEL for the same reason as Main_VsmPageRequest —
@@ -661,7 +739,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         });
 
     // P6C: the horizon search reads the pyramid, so GTAO orders after the build.
-    gb.pGtao = rg.AddPass2(RenderPass::Main_Gtao, { gb.pGbuf, gb.pHzb },
+    gb.pGtao = rg.AddPass2(RenderPass::Main_Gtao, { gb.pGbufDone, gb.pHzb },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const GtaoSettings& s = frame_->settings.gtao;
             const auto& D = renderer->GetDeferredForFrame();
@@ -805,7 +883,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         // relied on being scheduled after the G-buffer's other readers — incidental ordering that
         // the compile now rejects by name rather than tolerating.
         gb.pRtTrace = rg.AddPass2(RenderPass::Main_RTTrace, RenderQueue::AsyncCompute,
-            { gb.pGbuf, gb.pBuildAS, gb.pHzb }, { gb.pBuildAS },
+            { gb.pGbufDone, gb.pBuildAS, gb.pHzb }, { gb.pBuildAS },
             { { DT.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { DT.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { DT.rtPayload.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
@@ -869,7 +947,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     {
         ID3D12Resource* vpool = frame_->vsm->PagePool();
         ID3D12Resource* vpt = frame_->vsm->PageTable();
-        pLight = rg.AddPass2(RenderPass::Main_Lighting, { gb.pGbuf, gb.pVsmPageRender, gb.pGtao }, { gb.pShadow },
+        pLight = rg.AddPass2(RenderPass::Main_Lighting, { gb.pGbufDone, gb.pVsmPageRender, gb.pGtao }, { gb.pShadow },
             { { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
               { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
               { D.shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -881,7 +959,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     }
     else
     {
-        pLight = rg.AddPass2(RenderPass::Main_Lighting, { gb.pGbuf, gb.pGtao }, { gb.pShadow },
+        pLight = rg.AddPass2(RenderPass::Main_Lighting, { gb.pGbufDone, gb.pGtao }, { gb.pShadow },
             { { D.gb0.Get(), kSrvAll },
               { D.gb1.Get(), kSrvAll },
               { D.gb2.Get(), kSrvAll },

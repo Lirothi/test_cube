@@ -55,7 +55,7 @@
 using namespace scene_internal;
 
 // ---- Pass_Hzb + Pass_Gtao ----
-void SceneRenderer::Pass_Hzb(Renderer* renderer, RenderGraphPassContext ctx, uint32_t point)
+void SceneRenderer::Pass_Hzb(Renderer* renderer, RenderGraphPassContext ctx, uint32_t point, bool passA)
 {
     auto material = resources_.GetHzbMaterial();
     const UINT cbSize = resources_.GetHzbCBSizeBytes();
@@ -64,7 +64,11 @@ void SceneRenderer::Pass_Hzb(Renderer* renderer, RenderGraphPassContext ctx, uin
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
     {
-        GPU_SCOPE(t.cl, ProfilerScopes::kPassHzb);
+        // Occlusion plan S5: the same build twice a frame -- pass A's depth (Main_HzbA, for the
+        // deferred retest) and the final depth (Main_Hzb, for everything else and next frame's
+        // main cull) -- under their own scopes, so the profdump shows the second build's cost.
+        const Profiler::ScopeNameKey gpuScope = passA ? ProfilerScopes::kPassHzbA : ProfilerScopes::kPassHzb;
+        GPU_SCOPE(t.cl, gpuScope);
         renderer->EmitPoint(t.cl, point);
 
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp() };

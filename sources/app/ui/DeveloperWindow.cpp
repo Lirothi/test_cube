@@ -1708,6 +1708,18 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 sg.GBufferIndirectThisFrame() ? "ON this frame" : "off",
                                 sg.GBufferIndirectEligibleCasters());
                 }
+                // Occlusion plan S5: the camera's two-pass HZB occlusion inside that G-buffer.
+                graphicsEdit(ImGui::Checkbox("HZB occlusion in the GPU-driven G-buffer (two-pass)", &render::g_gbufferHzbCullEnabled));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Nanite's main/post split on the indirect G-buffer: candidates last frame's depth\n"
+                                      "pyramid hid are deferred, pass A draws the rest, the pyramid of pass A's depth\n"
+                                      "retests the deferred with this frame's camera, pass B draws the survivors.\n"
+                                      "Zero latency, no holes by construction. --set=gbuffer.hzb:0|1");
+                {
+                    const ShadowGpuData& sg = scene.ShadowGpu();
+                    ImGui::Text("camera hzb cull: %s; deferred %u, drawn in pass B %u (fading casters twice, frame N-3)",
+                                sg.CamHzbThisFrame() ? "ON this frame" : "off", sg.CamHzbDeferred(), sg.CamHzbDrawnB());
+                }
 
                 // (Chunked-terrain LOD selection moved to the "LOD" tab — it is a camera-LOD
                 // control, not a shadow one; the caster follows the drawn LOD by construction.)
@@ -1972,6 +1984,20 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "already free, the atomic it adds lands in the setup CS. Kept for group-heavy\n"
                                       "scenes (records = pages x groups). No effect while single-draw is off.");
 
+                // Occlusion plan S5b.2: the light-space two-pass HZB occlusion of the clipmap pages.
+                graphicsEdit(ImGui::Checkbox("Light-space HZB occlusion (two-pass, clipmap pages)", &vsm::g_hzbCull));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A (caster, page) pair that LAST frame's pool pyramid hid is deferred; pass A\n"
+                                      "draws the rest; the pyramid is rebuilt from the pages pass A drew; the deferred\n"
+                                      "pairs are retested and pass B draws the survivors into the same pages. Zero\n"
+                                      "latency, no holes by construction (Unreal's NonNanite.UseHZB). Needs the\n"
+                                      "scatter + single-draw page render. OFF by measurement (2026-09-04): cost-neutral\n"
+                                      "on the wall level, +0.11 ms in the palm grove. --set=vsm.hzbCull:0|1");
+                {
+                    const auto& hs = scene.Vsm().HzbStats();
+                    ImGui::Text("light hzb cull: %s; pairs deferred %u, drawn in pass B %u, past the list %u (frame N-3)",
+                                scene.Vsm().HzbCullThisFrame() ? "ON this frame" : "off", hs[0], hs[1], hs[2]);
+                }
                 graphicsEdit(ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching));
                 {
                     int windLvl = static_cast<int>(vsm::g_windAnimateMaxLevel);

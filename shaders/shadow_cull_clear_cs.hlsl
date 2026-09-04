@@ -21,10 +21,11 @@ StructuredBuffer<uint4> PerGroup : register(t0);
 RWByteAddressBuffer      Args   : register(u0); // D3D12_DRAW_INDEXED_ARGUMENTS[view*numGroups + group]
 RWStructuredBuffer<uint> Counts : register(u1); // per-view ExecuteIndirect command count
 // Occlusion plan S5b: the cascade HZB cull's counters -- [0..4) casters deferred by the main
-// cull, [4..8) casters the post cull drew. Zeroed here so the cull's InterlockedAdds start from
-// nothing; the first 8 threads of the view axis each clear one entry.
+// cull, [4..8) casters the post cull drew; S5: [8] the camera's deferred list length, [9] the
+// same weighted (a fading caster twice), [10] pass-B entries, [11] spare. Zeroed here so the
+// cull's InterlockedAdds start from nothing; the first 12 threads of the view axis each clear one.
 RWStructuredBuffer<uint> DeferredCount : register(u2);
-static const uint kDeferredCounters = 8u;
+static const uint kDeferredCounters = 12u;
 
 // D3D12_DRAW_INDEXED_ARGUMENTS is 5 x uint = 20 bytes:
 //   0:IndexCountPerInstance 4:InstanceCount 8:StartIndexLocation 12:BaseVertexLocation 16:StartInstanceLocation

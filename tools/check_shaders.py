@@ -59,6 +59,9 @@ COMPUTE_ENTRIES = [
     ("vsm_page_setup_cs.hlsl", "CSMain"),
     ("vsm_page_scatter_cs.hlsl", "CSMain"),
     ("vsm_page_scatter_clear_cs.hlsl", "CSMain"),
+    # Occlusion plan S5b.2: the VSM pool pyramid + the deferred-pair post cull (hzb_cull.hlsli).
+    ("vsm_hzb_build_cs.hlsl", "CSMain"),
+    ("vsm_hzb_post_cs.hlsl", "CSMain"),
     ("vsm_page_request_cs.hlsl", "CSMain"),
     ("vsm_page_request_clear_cs.hlsl", "CSMain"),
     ("vsm_page_alloc_init_cs.hlsl", "CSMain"),
@@ -70,6 +73,8 @@ COMPUTE_ENTRIES = [
     ("shadow_gi_scatter_cs.hlsl", "CSMain"),
     # Occlusion plan S5b: the cascade HZB post cull (includes hzb_cull.hlsli, like the two above it).
     ("shadow_cull_post_cs.hlsl", "CSMain"),
+    # Occlusion plan S5: the camera's HZB post cull (the same include).
+    ("cam_cull_post_cs.hlsl", "CSMain"),
 ]
 
 # Shaders needing a target above the 6_0 default. Kept separate rather than widening every entry to

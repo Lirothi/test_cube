@@ -416,6 +416,7 @@ namespace
         if (setting == "vsm.pageCaching")  { vsm::g_pageCaching = value != 0.0f; return true; }
         if (setting == "vsm.windMaxLevel") { vsm::g_windAnimateMaxLevel = (std::uint32_t)std::max(0.0f, value); return true; }
         if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod = value != 0.0f; return true; }
+        if (setting == "vsm.hzbCull")      { vsm::g_hzbCull = value != 0.0f; return true; } // occlusion plan S5b.2
         if (setting == "vsm.shadowLodBiasNearTier") { render::g_shadowLodBiasNearTier = value != 0.0f; return true; }
         if (setting == "vsm.shadowLodTierStride")
         {
@@ -488,6 +489,7 @@ namespace
         // a headless gate can read its PASS/MISMATCH verdict from the session log.
         if (setting == "shadow.giIndirect") { render::g_giIndirectShadowsEnabled = value != 0.0f; return true; }
         if (setting == "gbuffer.indirect") { render::g_indirectGBufferEnabled = value != 0.0f; return true; } // occlusion plan S4
+        if (setting == "gbuffer.hzb") { render::g_gbufferHzbCullEnabled = value != 0.0f; return true; }       // occlusion plan S5
         if (setting == "lod.enabled") { render::g_lodEnabled = value != 0.0f; return true; }
         if (setting == "lod.forced")  { render::g_forcedLod = std::clamp((int)value, -1, 3); return true; }
         // LOD selection debug view (dev "LOD" tab). 0 off, 1 tier colours, 2 apparent-triangle-size

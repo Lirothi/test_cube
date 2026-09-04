@@ -80,10 +80,16 @@ extern const Profiler::ScopeNameKey kVsmPageSetup;
 extern const Profiler::ScopeNameKey kShadowCastersRebuild;
 // Sub-scope: the spatial scatter cull (clear + scatter) that feeds the clipmap pages.
 extern const Profiler::ScopeNameKey kVsmPageScatter;
+extern const Profiler::ScopeNameKey kVsmHzbBuild;   // occlusion plan S5b.2: the pool pyramid after pass A
+extern const Profiler::ScopeNameKey kVsmHzbPost;    // occlusion plan S5b.2: the deferred-pair retest + setup B
+extern const Profiler::ScopeNameKey kVsmPageDrawB;  // occlusion plan S5b.2: pass B into the pages
 extern const Profiler::ScopeNameKey kPassCSM;
 extern const Profiler::ScopeNameKey kPassCsmHzb;         // occlusion plan S5b
 extern const Profiler::ScopeNameKey kPassShadowCullPost; // occlusion plan S5b
 extern const Profiler::ScopeNameKey kPassCSMPost;        // occlusion plan S5b
+extern const Profiler::ScopeNameKey kPassHzbA;           // occlusion plan S5: the pyramid of pass A's depth
+extern const Profiler::ScopeNameKey kPassCamCullPost;    // occlusion plan S5: the deferred retest
+extern const Profiler::ScopeNameKey kPassGBufferB;       // occlusion plan S5: pass B into the G-buffer
 extern const Profiler::ScopeNameKey kPassShoreDepth;
 extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassGtao;

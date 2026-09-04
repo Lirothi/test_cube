@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 #include <d3d12.h>
@@ -19,6 +20,7 @@ class Material;
 class Camera;
 class ShadowGpuData;
 struct RenderGraphPassContext;
+struct RenderContext;
 namespace vfx { struct WindState; } // W5: global wind, folded into the per-page shadow view CB
 
 // Rung 2 (VSM-lite) addressing constants. A virtual shadow map is a conceptually huge
@@ -430,6 +432,21 @@ namespace vsm
 inline bool g_perInstanceCasterLod = true;
 inline bool g_scatterLocalViews = true;
 
+    // Occlusion plan S5b.2: light-space two-pass HZB occlusion of the clipmap pages (Unreal's
+    // r.Shadow.Virtual.NonNanite.UseHZB). A (caster, page) pair that last frame's pool pyramid
+    // hid is deferred; pass A draws the rest; the pyramid is rebuilt from the pages pass A drew;
+    // the deferred pairs are retested against it and pass B draws the survivors into the same
+    // pages. Zero latency and no holes by construction. Needs the scatter and the single-draw
+    // page render. `--set=vsm.hzbCull:0|1` is the A/B.
+    // DEFAULT OFF BY MEASUREMENT (2026-09-04, Release, one binary): on the wall level under a
+    // camera drift (728 pairs hidden from the sun per frame) Pass_VsmPageRender is 0.586 vs
+    // 0.594 ms -- the raster it saves pays exactly for the pyramid (0.034), the retest (0.028)
+    // and the scatter's prev test (+0.03); in the palm grove with wind (19 pairs hidden) it is
+    // pure cost, 0.19 -> 0.31 ms, +0.11 ms on a 2.0 ms frame. Same verdict as the S5b.1 cascade
+    // cull: the mechanism is correct (parity at the floor, GBV CLEAN) and waits for content whose
+    // hidden casters are expensive -- a town, walls with interiors -- not palms under a high sun.
+    inline bool g_hzbCull = false;
+
     // Page cache (Rung 1): skip re-rendering pages whose content didn't change (cached depth kept;
     // only new / dynamic-caster-overlapping / forced pages re-render). DEFAULT OFF: measured a net
     // loss on the current scene — VsmPageRender is dominated by the per-page CULL (which caching
@@ -499,6 +516,11 @@ public:
     // by the AddPass2 builder — the record bodies emit EmitPoint markers and name no states.
     struct PageRequestPoints {
         std::uint32_t base = 0;            // camera depth SRV + request buffer UAV
+        // S5b.2: the page table as it stood during last frame's render is copied aside BEFORE
+        // this frame's allocation rewrites it -- the scatter finds last frame's physical page
+        // of a virtual page there (Unreal's PrevBuffers.PageTable).
+        bool hzbSnapshot = false;
+        std::uint32_t snapshotCopy = 0;    // pageTable -> COPY_SOURCE, prevPageTable -> COPY_DEST
         std::uint32_t alloc = 0;           // the six alloc buffers -> UAV
         bool readback = false;             // this frame runs the one-shot debug readback
         std::uint32_t readbackCopy = 0;    // request/counters/physOwner -> COPY_SOURCE
@@ -534,6 +556,18 @@ public:
         std::uint32_t pointCacheCopy = 0; // physOwnerPrev -> COPY_DEST, BEFORE the snapshot copy
         std::uint32_t pointCacheRead = 0; // physOwnerPrev/perPageDirty -> NPS, AFTER the copy
         std::uint32_t pointConsume = 0;
+        // S5b.2: the two-pass light occlusion runs this frame (scatter + single draw + PSOs +
+        // buffers); `hzbPrevValid` = last frame's pyramid may be tested against (a render with a
+        // build happened last frame, same allocation epoch); `hzbFull` = rebuild every resident
+        // page and zero the free ones (first build / after a level switch).
+        bool hzb = false;
+        bool hzbPrevValid = false;
+        bool hzbFull = false;
+        std::uint32_t pointHzbBuild = 0;   // pool -> NPS, pyramid -> UAV, dirty bits -> NPS
+        std::uint32_t pointHzbPost = 0;    // pyramid -> NPS, list/countsB/counters -> UAV, pairs -> NPS
+        std::uint32_t pointSetupB = 0;     // countsB -> NPS, argsB/argCountB/dirty -> UAV
+        std::uint32_t pointDrawB = 0;      // pool -> DEPTH_WRITE, argsB -> INDIRECT, list -> vertex, counters -> COPY_SOURCE
+        std::uint32_t pointHzbRestore = 0; // counters -> UAV
     };
 
     // Registers this frame's exact resource uses AND returns the decisions they were derived
@@ -551,7 +585,13 @@ public:
     // init (page table zeroed, all physical pages freed). Cross-level pool content is garbage:
     // the new level's views reuse the same view slots, so its virtual page ids collide with
     // resident entries whose depths were rendered under the OLD level's viewProj/casters.
-    void InvalidateAllPages() { allocInitialized_ = false; }
+    void InvalidateAllPages() { allocInitialized_ = false; hzbInvalidate_ = true; }
+
+    // S5b.2: the counters of frame N - kFrameCount -- [0] (caster, page) pairs the scatter
+    // deferred, [1] pairs pass B drew, [2] pairs past the deferred-list capacity (drawn in A).
+    const std::array<std::uint32_t, 4>& HzbStats() const { return hzbStats_; }
+    void PollHzbStats(Renderer* renderer); // once per frame, main thread
+    bool HzbCullThisFrame() const { return hzbThisFrame_; }
 
     D3D12_CPU_DESCRIPTOR_HANDLE PagePoolDsv() const { return poolDsv_; }     // render pages (Step 22)
     D3D12_CPU_DESCRIPTOR_HANDLE PagePoolSrv() const { return poolSrv_; }     // sample (Step 21)
@@ -707,6 +747,52 @@ private:
     // aligned — only element 0 is used.
     GpuResource pageArgCount_;
     D3D12_CPU_DESCRIPTOR_HANDLE pageArgCountUav_{};
+    // ---- Occlusion plan S5b.2: the light-space two-pass HZB occlusion of the clipmap pages ----
+    // The pool pyramid: R32_FLOAT at half the pool, 7 mips (2048 -> 32), i.e. a self-contained
+    // 64 -> 1 chain per 128-texel page, storing 1 - z with a min reduction (vsm_hzb_build_cs.hlsl).
+    // Persistent like the pool: a cached page's region still describes its cached depth.
+    static constexpr std::uint32_t kHzbMips = 7;
+    GpuResource vsmHzb_;
+    GpuResource prevPageTable_;   // the page table during last frame's render (snapshot before alloc)
+    GpuResource deferredPairs_;   // uint2[deferredCap_]: (leading caster slot, virtual page id)
+    GpuResource hzbCounters_;     // uint[4]: deferred, drawn in B, overflow, pad
+    GpuResource pageGroupCountB_; // pass B's per (page, virtual group) counts (shape of pageGroupCount_)
+    GpuResource pageDrawArgsB_;   // pass B's args (shape of pageDrawArgs_)
+    GpuResource pageArgCountB_;   // pass B's compaction counter
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> hzbHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE hzbSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE hzbMipUav_[kHzbMips]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE prevPageTableSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE deferredPairsUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE deferredPairsSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE hzbCountersUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageGroupCountBUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageGroupCountBSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageDrawArgsBUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageArgCountBUav_{};
+    std::uint32_t deferredCap_ = 0;         // entries deferredPairs_ holds
+    std::uint32_t scatterGroupsB_ = 0;      // group count pageGroupCountB_/pageDrawArgsB_ are sized for
+    std::shared_ptr<Material> hzbBuildMat_; // vsm_hzb_build_cs.hlsl
+    std::shared_ptr<Material> hzbPostMat_;  // vsm_hzb_post_cs.hlsl
+    // Cross-frame validity (the builder's): the pyramid describes the pool iff every render since
+    // its build also built it; a level switch (InvalidateAllPages) voids it and asks for a full build.
+    std::uint64_t lastRenderFrame_ = 0;
+    std::uint64_t hzbLastBuildFrame_ = 0;
+    bool hzbInvalidate_ = true;
+    bool hzbThisFrame_ = false;
+    int hzbLogged_ = 0x7fffffff;   // last logged (on, prevValid | off-reason) state
+    Microsoft::WRL::ComPtr<ID3D12Resource> hzbReadback_[render::kFrameCount];
+    const std::uint32_t* hzbReadbackPtr_[render::kFrameCount] = {};
+    std::uint64_t hzbReadbackFrame_[render::kFrameCount] = {};
+    std::array<std::uint32_t, 4> hzbStats_{};
+    void EnsureHzbResources(Renderer* renderer, std::uint32_t groups, std::uint32_t casters);
+    bool groupsBSized_(ShadowGpuData* shadowGpu) const;
+    // The pass-B chain after pass A's single draw (see the definition). `writeSetupCB` fills the
+    // setup CB exactly as pass A did, with the pass-B flag.
+    void RecordHzbPassB(Renderer* renderer, ID3D12GraphicsCommandList* cl, ShadowGpuData* shadowGpu,
+                        const vsm::ViewProjEntry* views, std::uint32_t viewCount, const PageRenderDecisions& dec,
+                        ID3D12CommandSignature* sig, Material* pageMat, RenderContext& ctx, UINT setupCbSize,
+                        const std::function<void(std::uint8_t*, std::uint32_t)>& writeSetupCB);
     std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
     std::uint32_t   scatterGroups_ = 0;          // mesh-group count pageGroupCount_ is sized for
     std::uint32_t   renderCasters_ = 0;          // caster count pageVisibleList_ is sized for

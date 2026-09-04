@@ -38,6 +38,11 @@ enum class RenderPass : uint16_t {
     Main_SpotShadows,
     Main_PointShadows,
     Main_GBuffer,
+    // Occlusion plan S5: the camera's two-pass HZB occlusion -- pass A's pyramid, the deferred
+    // candidates retested, pass B into the same G-buffer.
+    Main_HzbA,
+    Main_CamCullPost,
+    Main_GBufferB,
     Main_ObjectIdReadback,
     Main_VsmPageRequest,
     Main_VsmPageRender,
@@ -111,6 +116,9 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_SpotShadows: return L"SpotShadows";
     case RenderPass::Main_PointShadows: return L"PointShadows";
     case RenderPass::Main_GBuffer: return L"GBuffer";
+    case RenderPass::Main_HzbA: return L"HzbA";
+    case RenderPass::Main_CamCullPost: return L"CamCullPost";
+    case RenderPass::Main_GBufferB: return L"GBufferB";
     case RenderPass::Main_ObjectIdReadback: return L"ObjectIdReadback";
     case RenderPass::Main_VsmPageRequest: return L"VsmPageRequest";
     case RenderPass::Main_VsmPageRender: return L"VsmPageRender";

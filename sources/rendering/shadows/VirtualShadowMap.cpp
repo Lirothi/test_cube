@@ -252,6 +252,31 @@ void VirtualShadowMap::ReleaseResources()
     renderHeap_.Reset();
     renderGroups_ = 0;
     cachedRung0Args_ = nullptr;
+    // S5b.2: the pool pyramid and the pass-B set go with the pool.
+    vsmHzb_.Reset();
+    prevPageTable_.Reset();
+    deferredPairs_.Reset();
+    hzbCounters_.Reset();
+    pageGroupCountB_.Reset();
+    pageDrawArgsB_.Reset();
+    pageArgCountB_.Reset();
+    hzbHeap_.Reset();
+    hzbSrv_ = prevPageTableSrv_ = deferredPairsUav_ = deferredPairsSrv_ = hzbCountersUav_ = {};
+    pageGroupCountBUav_ = pageGroupCountBSrv_ = pageDrawArgsBUav_ = pageArgCountBUav_ = {};
+    for (UINT m = 0; m < kHzbMips; ++m) { hzbMipUav_[m] = {}; }
+    deferredCap_ = 0;
+    scatterGroupsB_ = 0;
+    hzbInvalidate_ = true;
+    hzbThisFrame_ = false;
+    lastRenderFrame_ = 0;
+    hzbLastBuildFrame_ = 0;
+    for (UINT i = 0; i < render::kFrameCount; ++i)
+    {
+        hzbReadback_[i].Reset();
+        hzbReadbackPtr_[i] = nullptr;
+        hzbReadbackFrame_[i] = 0;
+    }
+    hzbStats_.fill(0);
 
     for (UINT i = 0; i < render::kFrameCount; ++i)
     {
@@ -363,6 +388,10 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     // shader still culls those pages the brute-force way, so shadows stay correct (just slower).
     pageScatterClearMat_ = makeCompute(L"shaders/vsm_page_scatter_clear_cs.hlsl");
     pageScatterMat_      = makeCompute(L"shaders/vsm_page_scatter_cs.hlsl");
+    // Occlusion plan S5b.2: the pool pyramid + the deferred-pair post cull. Optional -- without
+    // them the scatter defers nothing and every page draws single-pass as before.
+    hzbBuildMat_ = makeCompute(L"shaders/vsm_hzb_build_cs.hlsl");
+    hzbPostMat_  = makeCompute(L"shaders/vsm_hzb_post_cs.hlsl");
 
     // Page cache: the gated depth-clear graphics PSO (depth-only, ALWAYS-write z=1.0, no vertex input;
     // VS drives from SV_VertexID/SV_InstanceID). Optional — a failure just falls back to whole-pool clear.
@@ -404,6 +433,12 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
         LOG_ERROR(logging::LogCategory::RenderShadow, "VSM page-clear PSO creation FAILED (page cache off -> whole-pool clear)");
         pageClearMat_.reset();
     }
+    if (!ok(hzbBuildMat_) || !ok(hzbPostMat_))
+    {
+        LOG_ERROR(logging::LogCategory::RenderShadow, "VSM HZB build/post PSO creation FAILED (light-space two-pass occlusion off)");
+        hzbBuildMat_.reset();
+        hzbPostMat_.reset();
+    }
 }
 
 VirtualShadowMap::PageRequestPoints VirtualShadowMap::PrepareRequestPass(
@@ -416,8 +451,20 @@ VirtualShadowMap::PageRequestPoints VirtualShadowMap::PrepareRequestPass(
     PageRequestPoints pts;
     pts.base = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(requestBuffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // S5b.2: last frame's mapping, copied aside before the allocation rewrites the table. Only
+    // the knob and the buffer gate it -- whether the pyramid may be tested against is decided
+    // by the render pass; a snapshot nobody reads is 55 KB.
+    pts.hzbSnapshot = vsm::g_hzbCull && prevPageTable_ && pageTable_;
+    if (pts.hzbSnapshot)
+    {
+        ctx.NextPoint();
+        pts.snapshotCopy = ctx.usePoint ? *ctx.usePoint : 0u;
+        ctx.Use(pageTable_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        ctx.Use(prevPageTable_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+    }
     ctx.NextPoint();
     pts.alloc = ctx.usePoint ? *ctx.usePoint : 0u;
+    if (pts.hzbSnapshot) { ctx.Use(prevPageTable_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
     ctx.Use(pageTable_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(physLastFrame_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -493,7 +540,31 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
                       shadowGpu->PerGroupSrv().ptr != 0;
     d.scatterLocals = d.scatterActive && vsm::g_scatterLocalViews;
 
+    // S5b.2: the two-pass light occlusion needs the scatter (the test lives in it), the single
+    // draw (pass B is one more ExecuteIndirect over the B args), both PSOs and the whole B set.
+    d.hzb = vsm::g_hzbCull && d.scatterActive && d.singleDraw &&
+            hzbBuildMat_ && hzbBuildMat_->GetPipelineState() && hzbPostMat_ && hzbPostMat_->GetPipelineState() &&
+            vsmHzb_ && prevPageTable_ && deferredPairs_ && hzbCounters_ && pageGroupCountB_ && pageDrawArgsB_ &&
+            (!d.compactArgs || pageArgCountB_) && hzbSrv_.ptr != 0 && hzbMipUav_[kHzbMips - 1].ptr != 0 &&
+            prevPageTableSrv_.ptr != 0 && deferredPairsUav_.ptr != 0 && deferredPairsSrv_.ptr != 0 &&
+            hzbCountersUav_.ptr != 0 && pageGroupCountBUav_.ptr != 0 && pageGroupCountBSrv_.ptr != 0 &&
+            pageDrawArgsBUav_.ptr != 0 && (!d.compactArgs || pageArgCountBUav_.ptr != 0) &&
+            groupsBSized_(shadowGpu) && deferredCap_ > 0 && poolSrv_.ptr != 0 &&
+            perPageDirtySrv_.ptr != 0 && physOwnerSrv_.ptr != 0;
+    // The pyramid describes the pool iff the last render also built it (no render slipped
+    // through without a build) and no level switch voided it. The prev matrices are the ones
+    // that render used (prevViewVp_), and the prev page table its mapping (the snapshot).
+    d.hzbPrevValid = d.hzb && !hzbInvalidate_ && prevViewVpValid_ && lastRenderFrame_ != 0 &&
+                     hzbLastBuildFrame_ == lastRenderFrame_;
+    d.hzbFull = d.hzb && (hzbInvalidate_ || hzbLastBuildFrame_ == 0);
+
     return d;
+}
+
+// S5b.2: the pass-B buffers are sized by the group count exactly like pageGroupCount_.
+bool VirtualShadowMap::groupsBSized_(ShadowGpuData* shadowGpu) const
+{
+    return shadowGpu && shadowGpu->MeshGroupCount() > 0 && shadowGpu->MeshGroupCount() <= scatterGroupsB_;
 }
 
 VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
@@ -504,8 +575,53 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     // record lambda, so the record reads the same values by construction.
     if (!IsAllocated() || !shadowGpu) { return PageRenderDecisions{}; }
     PageRenderDecisions d = ComputePageRenderDecisions(shadowGpu, wind);
+    // S5b.2 cross-frame state, committed in the (serial) builder: this frame renders; if it also
+    // builds the pyramid, next frame may test against it.
+    hzbThisFrame_ = d.hzb;
+    // Logged on change only: a headless run reads from the session log whether the stage ran,
+    // and if not, which gate said no.
+    {
+        int reason = 0;
+        if (vsm::g_hzbCull && !d.hzb)
+        {
+            reason = !d.scatterActive ? 1 : !d.singleDraw ? 2 : (!hzbBuildMat_ || !hzbPostMat_) ? 3
+                   : !vsmHzb_ ? 4 : (!deferredPairs_ || !hzbCounters_ || !prevPageTable_) ? 5
+                   : (!pageGroupCountB_ || !pageDrawArgsB_) ? 6 : !groupsBSized_(shadowGpu) ? 7
+                   : (hzbSrv_.ptr == 0 || deferredPairsUav_.ptr == 0 || pageGroupCountBUav_.ptr == 0) ? 8 : 9;
+        }
+        const int state = d.hzb ? (1 + (d.hzbPrevValid ? 1 : 0)) : -reason;
+        if (state != hzbLogged_ && ctx.renderer)
+        {
+            LOG_INFO(logging::LogCategory::RenderShadow, "vsm hzb cull: on={} prev-valid={} full={} off-reason={} (frame {})",
+                     d.hzb ? 1 : 0, d.hzbPrevValid ? 1 : 0, d.hzbFull ? 1 : 0, reason, ctx.renderer->GetTotalFrameNumber());
+            hzbLogged_ = state;
+        }
+    }
+    if (ctx.renderer)
+    {
+        lastRenderFrame_ = ctx.renderer->GetTotalFrameNumber();
+        if (d.hzb)
+        {
+            hzbLastBuildFrame_ = lastRenderFrame_;
+            hzbInvalidate_ = false;
+            // The counters' readback stamp (cross-frame state, the builder's): PollHzbStats reads
+            // this slot kFrameCount frames from now.
+            const UINT f = ctx.renderer->GetCurrentFrameIndex();
+            if (f < render::kFrameCount && hzbReadback_[f]) { hzbReadbackFrame_[f] = lastRenderFrame_; }
+        }
+    }
 
     d.pointBase = ctx.usePoint ? *ctx.usePoint : 0u;
+    if (d.hzb)
+    {
+        // The scatter reads last frame's pyramid + mapping and writes the deferred list, the
+        // counters and (via the clear) pass B's counts; the pyramid's canonical is NPS already.
+        ctx.Use(vsmHzb_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.Use(prevPageTable_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.Use(deferredPairs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(hzbCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(pageGroupCountB_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
     ctx.Use(shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
     ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -565,6 +681,40 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
                              D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     ctx.Use(pagePool_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    if (!d.hzb) { return d; }
+
+    // ---- S5b.2, after pass A's draw: the pyramid of the pages pass A rendered ----
+    ctx.NextPoint();
+    d.pointHzbBuild = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(pagePool_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(vsmHzb_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // ---- the deferred pairs against it, survivors appended after pass A's list entries ----
+    ctx.NextPoint();
+    d.pointHzbPost = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(vsmHzb_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(deferredPairs_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(pageGroupCountB_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(hzbCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // ---- pass B's args from its counts (the setup CS in pass-B mode) ----
+    ctx.NextPoint();
+    d.pointSetupB = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(pageGroupCountB_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(pageDrawArgsB_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (d.compactArgs) { ctx.Use(pageArgCountB_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+    ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); // read through its UAV
+    // ---- pass B into the same pages; the counters out to the readout ----
+    ctx.NextPoint();
+    d.pointDrawB = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(pagePool_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    ctx.Use(pageDrawArgsB_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    if (d.compactArgs) { ctx.Use(pageArgCountB_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT); }
+    ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    ctx.Use(hzbCounters_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+    ctx.NextPoint();
+    d.pointHzbRestore = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(hzbCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     return d;
 }
 
@@ -631,6 +781,14 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
     const std::uint32_t numPages = vsm::kPoolPageCount;
     const std::uint32_t curFrame = static_cast<std::uint32_t>(renderer->GetTotalFrameNumber());
 
+    // S5b.2: the page table as it stood during last frame's render, before this frame's
+    // allocation touches it (declared by PrepareRequestPass under the same gate).
+    if (pts.hzbSnapshot && prevPageTable_)
+    {
+        renderer->EmitPoint(cl, pts.snapshotCopy);
+        cl->CopyBufferRegion(prevPageTable_.Get(), 0, pageTable_.Get(), 0,
+                             static_cast<UINT64>(vsm::kPageTableEntries) * sizeof(std::uint32_t));
+    }
     // pass-flow S3c: the six alloc buffers' barriers (whatever this frame actually needs) come
     // from the compiled alloc point, emitted wholesale.
     renderer->EmitPoint(cl, pts.alloc);
@@ -847,6 +1005,8 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     }
     if (!pageDrawArgs_ || !pageProj_ || !physOwnerPrev_ || !perPageDirty_ ||
         !pageGroupCount_ || !pageScatterDyn_) { return; }
+    // S5b.2: the pool pyramid + the pass-B set (its own heap; failure just keeps the feature off).
+    EnsureHzbResources(renderer, groups, casters);
 
     // Resident-set readback ring (physOwner snapshots), persistently mapped.
     if (!residentReadback_[0])
@@ -1006,6 +1166,201 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     cachedRung0Args_ = rung0Args;
 }
 
+// Occlusion plan S5b.2: the pool pyramid (R32_FLOAT, half the pool, 7 mips), last frame's page
+// table, the deferred (caster, page) pairs, the counters and pass B's counts/args/count buffer.
+// One non-shader-visible heap of 16 descriptors, staged per dispatch like everything else here.
+// Sized like their pass-A twins (groups, casters); the pairs list caps at 8 per caster -- past
+// that the scatter draws the pair in pass A (conservative) and counts the overflow.
+void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t groups, std::uint32_t casters)
+{
+    if (!renderer || !renderer->GetDevice()) { return; }
+    ID3D12Device* dev = renderer->GetDevice();
+    constexpr std::uint32_t kLods = render::kMaxShadowLods;
+    constexpr std::uint32_t argUints = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) / 4;
+    const std::uint32_t hzbMip0 = vsm::kPoolTexels / 2u;
+
+    bool rebuildHeap = !hzbHeap_;
+    if (!vsmHzb_)
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rd.Width = hzbMip0;
+        rd.Height = hzbMip0;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = static_cast<UINT16>(kHzbMips);
+        rd.Format = DXGI_FORMAT_R32_FLOAT;
+        rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (FAILED(render::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, rd,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, vsmHzb_.GetAddressOfForCreate())) || !vsmHzb_)
+        {
+            vsmHzb_.Reset();
+            return;
+        }
+        vsmHzb_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"VSM.Hzb");
+        hzbInvalidate_ = true; // fresh texture: full build before anything trusts it
+        rebuildHeap = true;
+    }
+    if (!prevPageTable_)
+    {
+        prevPageTable_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPageTableEntries, L"VSM.PrevPageTable"),
+                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+        rebuildHeap = true;
+    }
+    const std::uint32_t wantCap = std::max<std::uint32_t>(1024u, 8u * (casters > 0u ? casters : 1u));
+    if (!deferredPairs_ || wantCap > deferredCap_)
+    {
+        deferredPairs_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, wantCap * 2u, L"VSM.DeferredPairs"),
+                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+        deferredCap_ = deferredPairs_ ? wantCap : 0u;
+        rebuildHeap = true;
+    }
+    if (!hzbCounters_)
+    {
+        hzbCounters_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.HzbCounters"),
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+        rebuildHeap = true;
+    }
+    if (!pageGroupCountB_ || groups > scatterGroupsB_)
+    {
+        pageGroupCountB_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups * kLods, L"VSM.PageGroupCountB"),
+                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+        pageDrawArgsB_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * groups * kLods * argUints, L"VSM.PageDrawArgsB"),
+                              D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, nullptr);
+        scatterGroupsB_ = (pageGroupCountB_ && pageDrawArgsB_) ? groups : 0u;
+        rebuildHeap = true;
+    }
+    if (!pageArgCountB_)
+    {
+        pageArgCountB_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.PageArgCountB"),
+                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+        rebuildHeap = true;
+    }
+    if (!vsmHzb_ || !prevPageTable_ || !deferredPairs_ || !hzbCounters_ || !pageGroupCountB_ || !pageDrawArgsB_ || !pageArgCountB_) { return; }
+
+    if (!hzbReadback_[0])
+    {
+        D3D12_HEAP_PROPERTIES rb{}; rb.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = 4u * sizeof(std::uint32_t);
+        rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
+        for (UINT i = 0; i < render::kFrameCount; ++i)
+        {
+            if (SUCCEEDED(dev->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &rd,
+                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(hzbReadback_[i].GetAddressOf()))))
+            {
+                hzbReadback_[i]->SetName(L"VSM.HzbReadback");
+                void* p = nullptr;
+                if (SUCCEEDED(hzbReadback_[i]->Map(0, nullptr, &p))) { hzbReadbackPtr_[i] = static_cast<const std::uint32_t*>(p); }
+            }
+            hzbReadbackFrame_[i] = 0;
+        }
+    }
+
+    if (!rebuildHeap) { return; }
+    if (!hzbHeap_)
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};
+        hd.NumDescriptors = 16; // hzb SRV + 7 mip UAVs + prevPageTable SRV + pairs UAV/SRV + counters UAV + countsB UAV/SRV + argsB UAV + argCountB UAV
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(hzbHeap_.GetAddressOf()))) || !hzbHeap_)
+        {
+            hzbHeap_.Reset();
+            return;
+        }
+    }
+    const UINT incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const D3D12_CPU_DESCRIPTOR_HANDLE base = hzbHeap_->GetCPUDescriptorHandleForHeapStart();
+    auto slot = [&](UINT i) { return D3D12_CPU_DESCRIPTOR_HANDLE{ base.ptr + static_cast<SIZE_T>(i) * incr }; };
+    hzbSrv_ = slot(0);
+    for (UINT m = 0; m < kHzbMips; ++m) { hzbMipUav_[m] = slot(1 + m); }
+    prevPageTableSrv_ = slot(8);
+    deferredPairsUav_ = slot(9);
+    deferredPairsSrv_ = slot(10);
+    hzbCountersUav_ = slot(11);
+    pageGroupCountBUav_ = slot(12);
+    pageGroupCountBSrv_ = slot(13);
+    pageDrawArgsBUav_ = slot(14);
+    pageArgCountBUav_ = slot(15);
+
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_R32_FLOAT;
+        sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels = kHzbMips;
+        dev->CreateShaderResourceView(vsmHzb_.Get(), &sd, hzbSrv_);
+        for (UINT m = 0; m < kHzbMips; ++m)
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = DXGI_FORMAT_R32_FLOAT;
+            ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+            ud.Texture2D.MipSlice = m;
+            dev->CreateUnorderedAccessView(vsmHzb_.Get(), nullptr, &ud, hzbMipUav_[m]);
+        }
+    }
+    auto structuredSrv = [&](ID3D12Resource* res, UINT elems, UINT stride, D3D12_CPU_DESCRIPTOR_HANDLE h)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_UNKNOWN;
+        sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Buffer.NumElements = elems;
+        sd.Buffer.StructureByteStride = stride;
+        dev->CreateShaderResourceView(res, &sd, h);
+    };
+    auto structuredUav = [&](ID3D12Resource* res, UINT elems, UINT stride, D3D12_CPU_DESCRIPTOR_HANDLE h)
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = DXGI_FORMAT_UNKNOWN;
+        ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        ud.Buffer.NumElements = elems;
+        ud.Buffer.StructureByteStride = stride;
+        dev->CreateUnorderedAccessView(res, nullptr, &ud, h);
+    };
+    auto rawUav = [&](ID3D12Resource* res, D3D12_CPU_DESCRIPTOR_HANDLE h)
+    {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = DXGI_FORMAT_R32_TYPELESS;
+        ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        ud.Buffer.NumElements = static_cast<UINT>(res->GetDesc().Width / 4);
+        ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+        dev->CreateUnorderedAccessView(res, nullptr, &ud, h);
+    };
+    structuredSrv(prevPageTable_.Get(), vsm::kPageTableEntries, sizeof(std::uint32_t), prevPageTableSrv_);
+    structuredUav(deferredPairs_.Get(), deferredCap_, 2u * sizeof(std::uint32_t), deferredPairsUav_);
+    structuredSrv(deferredPairs_.Get(), deferredCap_, 2u * sizeof(std::uint32_t), deferredPairsSrv_);
+    structuredUav(hzbCounters_.Get(), 4u, sizeof(std::uint32_t), hzbCountersUav_);
+    const UINT cntElems = static_cast<UINT>(pageGroupCountB_->GetDesc().Width / sizeof(std::uint32_t));
+    structuredUav(pageGroupCountB_.Get(), cntElems, sizeof(std::uint32_t), pageGroupCountBUav_);
+    structuredSrv(pageGroupCountB_.Get(), cntElems, sizeof(std::uint32_t), pageGroupCountBSrv_);
+    rawUav(pageDrawArgsB_.Get(), pageDrawArgsBUav_);
+    rawUav(pageArgCountB_.Get(), pageArgCountBUav_);
+}
+
+void VirtualShadowMap::PollHzbStats(Renderer* renderer)
+{
+    // The slot of frame N - kFrameCount: its fence passed in this frame's BeginFrame.
+    if (!renderer) { return; }
+    const std::uint64_t now = renderer->GetTotalFrameNumber();
+    if (now < render::kFrameCount) { return; }
+    const std::uint64_t want = now - render::kFrameCount;
+    for (UINT s = 0; s < render::kFrameCount; ++s)
+    {
+        if (hzbReadbackFrame_[s] != want || want == 0 || !hzbReadbackPtr_[s]) { continue; }
+        std::memcpy(hzbStats_.data(), hzbReadbackPtr_[s], 4u * sizeof(std::uint32_t));
+        hzbReadbackFrame_[s] = 0;
+        return;
+    }
+}
+
 void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     ShadowGpuData* shadowGpu, const vsm::ViewProjEntry* views, std::uint32_t viewCount,
     const vfx::WindState* wind, const PageRenderDecisions& dec)
@@ -1044,6 +1399,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // answer until pages scroll is to re-render that whole view. Bit-exact compare on purpose:
     // a static camera rebuilds bit-identical matrices, so a parked frame caches fully.
     std::uint32_t viewDirtyMask[2] = { 0u, 0u };
+    // S5b.2: last frame's matrices, kept for the scatter's prev-pyramid test before the compare
+    // below replaces them with this frame's.
+    DirectX::XMFLOAT4X4 prevVp[vsm::kMaxVirtualViews];
+    std::memcpy(prevVp, prevViewVp_, sizeof(prevVp));
     {
         const std::uint32_t nv = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
         for (std::uint32_t v = 0; v < nv; ++v)
@@ -1147,12 +1506,22 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         renderer->EmitPoint(cl, dec.pointScatterWrite);
 
         const std::uint32_t countElems = vsm::kPoolPageCount * groups * render::kMaxShadowLods;
-        struct ClearCB { std::uint32_t countElems, numPages, p0, p1; };
+        // S5b.2: pass B's counts + the counters are zeroed by the same clear (placeholders bound
+        // and `clearB = 0` when the two-pass occlusion is off this frame).
+        const bool hzb = dec.hzb;
+        struct ClearCB { std::uint32_t countElems, numPages, clearB, p1; };
         RecordComputeDispatch(renderer, cl, pageScatterClearMat_.get(), sizeof(ClearCB),
-            [&](std::uint8_t* dst) { ClearCB c{ countElems, vsm::kPoolPageCount, 0u, 0u }; std::memcpy(dst, &c, sizeof(c)); },
-            {}, { pageGroupCountUav_, pageScatterDynUav_ }, D3D12_GPU_DESCRIPTOR_HANDLE{},
+            [&](std::uint8_t* dst) { ClearCB c{ countElems, vsm::kPoolPageCount, hzb ? 1u : 0u, 0u }; std::memcpy(dst, &c, sizeof(c)); },
+            {}, { pageGroupCountUav_, pageScatterDynUav_,
+                  hzb ? pageGroupCountBUav_ : pageGroupCountUav_, hzb ? hzbCountersUav_ : pageScatterDynUav_ },
+            D3D12_GPU_DESCRIPTOR_HANDLE{},
             countElems, 1, pageGroupCount_.Get());
         renderer->UAVBarrier(cl, pageScatterDyn_.Get());
+        if (hzb)
+        {
+            renderer->UAVBarrier(cl, pageGroupCountB_.Get());
+            renderer->UAVBarrier(cl, hzbCounters_.Get());
+        }
 
         struct ScatterCB
         {
@@ -1168,6 +1537,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             // Only a lower bound -- each caster's own receiver LOD can push past it COARSER,
             // never finer (LodSelect.h's per-instance contract).  Mirrors gTargetLod.
             DirectX::XMUINT4 targetLod[(vsm::kMaxVirtualViews + 3) / 4];
+            // S5b.2: (on, prevValid, deferred capacity, 0) + LAST frame's matrices. Mirrors
+            // gHzbParams / gPrevViewProj.
+            DirectX::XMUINT4 hzbParams{ 0u, 0u, 0u, 0u };
+            DirectX::XMFLOAT4X4 prevViewProj[vsm::kMaxVirtualViews];
         };
         RecordComputeDispatch(renderer, cl, pageScatterMat_.get(), static_cast<UINT>(sizeof(ScatterCB)),
             [&](std::uint8_t* dst)
@@ -1200,11 +1573,17 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                     const std::uint32_t lod = shadowGpu->ViewLodAt(vsmView + 4u);
                     reinterpret_cast<std::uint32_t*>(&c.targetLod[0])[t] = lod;
                 }
+                // S5b.2: the pyramid's pages were drawn with LAST frame's matrices -- the ones
+                // prevViewVp_ held before the view-dirty compare above overwrote it (prevVp).
+                c.hzbParams = DirectX::XMUINT4(dec.hzb ? 1u : 0u, dec.hzbPrevValid ? 1u : 0u, deferredCap_, 0u);
+                for (std::uint32_t v = 0; v < vsm::kMaxVirtualViews; ++v) { c.prevViewProj[v] = prevVp[v]; }
                 std::memcpy(dst, &c, sizeof(c));
             },
             { boundsSrv, casterGroupSrv, casterMetaSrv, pageTableSrv_, perGroupSrv,
-              shadowGpu->CasterLodSrv(f) },
-            { pageGroupCountUav_, pageVisibleListUav_, pageScatterDynUav_ },
+              shadowGpu->CasterLodSrv(f),
+              dec.hzb ? prevPageTableSrv_ : pageTableSrv_, dec.hzb ? hzbSrv_ : poolSrv_ },
+            { pageGroupCountUav_, pageVisibleListUav_, pageScatterDynUav_,
+              dec.hzb ? deferredPairsUav_ : pageScatterDynUav_, dec.hzb ? hzbCountersUav_ : pageScatterDynUav_ },
             D3D12_GPU_DESCRIPTOR_HANDLE{},
             // y now spans clipmap levels AND local views: RecordComputeDispatch rounds up to its
             // 8-thread groups, so 8 + 32 = 40 becomes 5 groups.
@@ -1227,7 +1606,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         std::uint32_t scatterLocals; // S5: 1 = LOCAL views were scattered too (was _pad5)
         std::uint32_t windDirtyMaxLevel = 0; // mirrors gWindDirtyMaxLevel (wind page-cache range)
         std::uint32_t viewDirtyMask[2]{};    // mirrors gViewDirtyMask (view matrix changed bits)
-        std::uint32_t _pad6{};               // keep wind0 on the 16-byte row HLSL puts gWind0 on
+        std::uint32_t passB{};               // S5b.2: mirrors gPassB (took the pad that kept wind0 on its row)
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -1250,11 +1629,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         shadowGpu->IndirectArgsRegionBytes() / sizeof(D3D12_DRAW_INDEXED_ARGUMENTS));
     // Sub-scope: this dispatch is the per-page instance cull (O(pages x casters)), which scales with the
     // CASTER COUNT, while the draws below scale with triangles/fill. Split so a regression is attributable.
-    { GPU_SCOPE(cl, ProfilerScopes::kVsmPageSetup);
-    RecordComputeDispatch(renderer, cl, pageSetupMat_.get(), static_cast<UINT>(sizeof(SetupCB)),
-        [&](std::uint8_t* dst)
+    // S5b.2: the same constants serve the pass-B invocation of the setup (only `passB` differs),
+    // so the filler is a lambda both dispatches share.
+    const auto writeSetupCB = [&](std::uint8_t* dst, std::uint32_t passB)
         {
             SetupCB cb{};
+            cb.passB = passB;
             cb.numGroups = groups; cb.argBaseElems = argBaseElems; cb.numPages = vsm::kPoolPageCount;
             cb.numCasters = activeCasters; // static + GI when GI folding is active, else static only
             cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
@@ -1297,12 +1677,16 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 reinterpret_cast<std::uint32_t*>(cb.viewLod)[v] = vl[v];
             }
             std::memcpy(dst, &cb, sizeof(cb));
-        },
-        // POSITIONAL: this list IS t0..t10 in order. groupLodMega (t9) is static region 0;
+        };
+    { GPU_SCOPE(cl, ProfilerScopes::kVsmPageSetup);
+    RecordComputeDispatch(renderer, cl, pageSetupMat_.get(), static_cast<UINT>(sizeof(SetupCB)),
+        [&](std::uint8_t* dst) { writeSetupCB(dst, 0u); },
+        // POSITIONAL: this list IS t0..t11 in order. groupLodMega (t9) is static region 0;
         // groupLodOverride (t10) is per-frame -- it is rewritten every frame by RefreshChunkGroupLods.
+        // t11 (S5b.2, pass B's counts) is a placeholder in pass A: the shader reads it only under gPassB.
         { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv, physOwnerPrevSrv_, casterMetaSrv,
           pageGroupCountSrv_, perGroupSrv, pageScatterDynSrv_,
-          shadowGpu->GroupLodMegaSrv(), shadowGpu->GroupLodOverrideSrv(f) },
+          shadowGpu->GroupLodMegaSrv(), shadowGpu->GroupLodOverrideSrv(f), pageGroupCountSrv_ },
         // u4 = the compacted-args counter. Its descriptor must be valid even when compaction is off
         // (the root signature declares the range); the shader only touches it when gCompactArgs != 0,
         // so a stand-in on the OOM path is never read.
@@ -1487,6 +1871,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         renderer->ExecuteIndirect(cl, sig, vsm::kPoolPageCount * groups * render::kMaxShadowLods,
                                   pageDrawArgs_.Get(), 0,
                                   compactArgs ? pageArgCount_.Get() : nullptr, 0);
+        if (dec.hzb)
+        {
+            RecordHzbPassB(renderer, cl, shadowGpu, views, viewCount, dec, sig, pageMat, ctx,
+                           static_cast<UINT>(sizeof(SetupCB)), writeSetupCB);
+        }
         return;
     }
 
@@ -1547,6 +1936,129 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 renderer->ExecuteIndirect(cl, sig, 1, pageDrawArgs_.Get(), argOff, nullptr, 0);
             }
         }
+    }
+}
+
+// Occlusion plan S5b.2, after pass A's single draw: the pool pyramid from the pages pass A
+// rendered, the deferred pairs retested against it (survivors appended after pass A's list
+// entries), pass B's args from the post cull's counts, pass B into the same pages, the counters
+// out to the readout. Same command list, same viewport/targets/streams as pass A -- only the
+// graphics PSO has to be re-bound after the compute dispatches in between. Every point the
+// builder declared is emitted whatever the data says.
+void VirtualShadowMap::RecordHzbPassB(Renderer* renderer, ID3D12GraphicsCommandList* cl, ShadowGpuData* shadowGpu,
+    const vsm::ViewProjEntry* views, std::uint32_t viewCount, const PageRenderDecisions& dec,
+    ID3D12CommandSignature* sig, Material* pageMat, RenderContext& ctx, UINT setupCbSize,
+    const std::function<void(std::uint8_t*, std::uint32_t)>& writeSetupCB)
+{
+    const UINT f = renderer->GetCurrentFrameIndex();
+    const std::uint32_t groups = shadowGpu->MeshGroupCount();
+    const std::uint32_t activeCasters = shadowGpu->ActiveCasterCount();
+    const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
+    constexpr std::uint32_t kLods = render::kMaxShadowLods;
+
+    // 1. The pyramid: one 16x16 group per physical page, dirty pages only (all resident + the
+    //    free ones zeroed on a full build).
+    {
+        GPU_SCOPE(cl, ProfilerScopes::kVsmHzbBuild);
+        renderer->EmitPoint(cl, dec.pointHzbBuild);
+        struct BuildCB { std::uint32_t full, p0, p1, p2; };
+        auto cb = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(BuildCB)), render::kConstantBufferAlignment);
+        if (cb.cpu)
+        {
+            const BuildCB c{ dec.hzbFull ? 1u : 0u, 0u, 0u, 0u };
+            std::memcpy(cb.cpu, &c, sizeof(c));
+            auto h = renderer->GetRenderContextPool()->Acquire();
+            RenderContext& rc = h.ref();
+            rc.cbv[0] = cb.gpu;
+            rc.srvTable[0] = renderer->StageSrvUavTable({ poolSrv_, physOwnerSrv_, perPageDirtySrv_ }).gpu;
+            rc.uavTable[0] = renderer->StageSrvUavTable({ hzbMipUav_[0], hzbMipUav_[1], hzbMipUav_[2], hzbMipUav_[3],
+                                                          hzbMipUav_[4], hzbMipUav_[5], hzbMipUav_[6] }).gpu;
+            rc.samplerTable[0] = noSampler;
+            hzbBuildMat_->Bind(cl, rc);
+            cl->Dispatch(vsm::kPoolPagesPerAxis, vsm::kPoolPagesPerAxis, 1); // numthreads(16,16,1) = one page
+            renderer->UAVBarrier(cl, vsmHzb_.Get());
+        }
+    }
+
+    // 2. The deferred pairs against it, then pass B's args from the counts they produced.
+    {
+        GPU_SCOPE(cl, ProfilerScopes::kVsmHzbPost);
+        renderer->EmitPoint(cl, dec.pointHzbPost);
+        struct PostCB
+        {
+            std::uint32_t numCasters, numGroups, numLevels, pageIdShift;
+            std::uint32_t perInstanceLod, deferredCap, pad0, pad1;
+            DirectX::XMFLOAT4X4 viewProj[vsm::kMaxVirtualViews];
+            DirectX::XMUINT4 targetLod[(vsm::kMaxVirtualViews + 3) / 4];
+        };
+        const D3D12_CPU_DESCRIPTOR_HANDLE boundsSrv = shadowGpu->UnifiedBoundsSrv(f);
+        RecordComputeDispatch(renderer, cl, hzbPostMat_.get(), static_cast<UINT>(sizeof(PostCB)),
+            [&](std::uint8_t* dst)
+            {
+                PostCB c{};
+                c.numCasters = activeCasters;
+                c.numGroups = groups;
+                c.numLevels = vsm::kNumClipmapLevels;
+                c.pageIdShift = vsm::kPageIdShift; // single draw is a precondition of dec.hzb
+                c.perInstanceLod = vsm::g_perInstanceCasterLod ? 1u : 0u;
+                c.deferredCap = deferredCap_;
+                const std::uint32_t nv = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
+                for (std::uint32_t v = 0; v < nv; ++v) { c.viewProj[v] = views[v].viewProj; }
+                // Clipmap targets only (the scatter defers no local pair): target t = level t.
+                for (std::uint32_t t = 0; t < vsm::kNumClipmapLevels; ++t)
+                {
+                    reinterpret_cast<std::uint32_t*>(&c.targetLod[0])[t] = shadowGpu->ViewLodAt(vsm::kNumLocalVirtualViews + t + 4u);
+                }
+                std::memcpy(dst, &c, sizeof(c));
+            },
+            { boundsSrv, shadowGpu->CasterGroupSrv(), shadowGpu->CasterMetaSrv(f), pageTableSrv_, shadowGpu->PerGroupSrv(),
+              shadowGpu->CasterLodSrv(f), deferredPairsSrv_, pageGroupCountSrv_, perPageDirtySrv_, hzbSrv_ },
+            { pageGroupCountBUav_, pageVisibleListUav_, hzbCountersUav_ },
+            noSampler,
+            deferredCap_, 1,
+            pageVisibleList_.Get());
+        renderer->UAVBarrier(cl, pageGroupCountB_.Get());
+        renderer->UAVBarrier(cl, hzbCounters_.Get());
+
+        renderer->EmitPoint(cl, dec.pointSetupB);
+        if (dec.compactArgs)
+        {
+            const UINT zero[4] = { 0u, 0u, 0u, 0u };
+            cl->ClearUnorderedAccessViewUint(renderer->StageSrvUavTable({ pageArgCountBUav_ }).gpu,
+                                             pageArgCountBUav_, pageArgCountB_.Get(), zero, 0, nullptr);
+            renderer->UAVBarrier(cl, pageArgCountB_.Get());
+        }
+        // The setup in pass-B mode: the same constants but `passB`, t11 = pass B's counts, u0/u4 =
+        // pass B's args + counter. t1 (Rung 0 args, never read by this shader) and u1/u2 (the
+        // projections and the list, written by pass A only) get placeholders: those resources are
+        // in their draw states now, and a table may not hold a hole.
+        RecordComputeDispatch(renderer, cl, pageSetupMat_.get(), setupCbSize,
+            [&](std::uint8_t* dst) { writeSetupCB(dst, 1u); },
+            { physOwnerSrv_, physOwnerSrv_, boundsSrv, shadowGpu->CasterGroupSrv(), physOwnerPrevSrv_, shadowGpu->CasterMetaSrv(f),
+              pageGroupCountSrv_, shadowGpu->PerGroupSrv(), pageScatterDynSrv_,
+              shadowGpu->GroupLodMegaSrv(), shadowGpu->GroupLodOverrideSrv(f), pageGroupCountBSrv_ },
+            { pageDrawArgsBUav_, perPageDirtyUav_, perPageDirtyUav_, perPageDirtyUav_,
+              dec.compactArgs ? pageArgCountBUav_ : perPageDirtyUav_ },
+            noSampler,
+            vsm::kPoolPageCount, 1,
+            pageDrawArgsB_.Get());
+    }
+
+    // 3. Pass B: the survivors into the same pages. Viewport, scissor, targets and both vertex
+    //    streams are still pass A's; only the PSO (replaced by the compute dispatches) is re-bound.
+    {
+        GPU_SCOPE(cl, ProfilerScopes::kVsmPageDrawB);
+        renderer->EmitPoint(cl, dec.pointDrawB);
+        pageMat->Bind(cl, ctx, false);
+        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        renderer->ExecuteIndirect(cl, sig, vsm::kPoolPageCount * groups * kLods,
+                                  pageDrawArgsB_.Get(), 0,
+                                  dec.compactArgs ? pageArgCountB_.Get() : nullptr, 0);
+        if (hzbReadback_[f])
+        {
+            cl->CopyBufferRegion(hzbReadback_[f].Get(), 0, hzbCounters_.Get(), 0, 4u * sizeof(std::uint32_t));
+        }
+        renderer->EmitPoint(cl, dec.pointHzbRestore);
     }
 }
 

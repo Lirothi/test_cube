@@ -691,6 +691,7 @@
     <None Include="shaders\shadow_cull_clear_cs.hlsl" />
     <None Include="shaders\shadow_cull_cs.hlsl" />
     <None Include="shaders\shadow_cull_post_cs.hlsl" />
+    <None Include="shaders\cam_cull_post_cs.hlsl" />
     <None Include="shaders\shadow_gi_scatter_cs.hlsl" />
     <None Include="shaders\shadow_indirect_csm.hlsl" />
     <None Include="shaders\vsm_addressing.hlsli" />
@@ -703,6 +704,8 @@
     <None Include="shaders\vsm_page_clear.hlsl" />
     <None Include="shaders\vsm_page_request_clear_cs.hlsl" />
     <None Include="shaders\vsm_page_request_cs.hlsl" />
+    <None Include="shaders\vsm_hzb_build_cs.hlsl" />
+    <None Include="shaders\vsm_hzb_post_cs.hlsl" />
     <None Include="shaders\vsm_page_scatter_clear_cs.hlsl" />
     <None Include="shaders\vsm_page_scatter_cs.hlsl" />
     <None Include="shaders\vsm_page_setup_cs.hlsl" />

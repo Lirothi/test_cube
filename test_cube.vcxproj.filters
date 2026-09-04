@@ -1499,6 +1499,9 @@
     <None Include="shaders\shadow_cull_post_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\cam_cull_post_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\shadow_gi_scatter_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
@@ -1533,6 +1536,12 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\vsm_page_request_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_hzb_build_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_hzb_post_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\vsm_page_scatter_clear_cs.hlsl">

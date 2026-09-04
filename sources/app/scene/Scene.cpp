@@ -2214,9 +2214,15 @@ void Scene::Render(Renderer* renderer) {
             }
             // S3a: what the camera asked the GPU last frame and what came back.
             const render::OcclusionFrameStats& os = render::g_visibilityStats.occlusionLast;
-            f.Printf("occlusion method=%u individual=%u grouped=%u dropped=%u tested=%u latency=%u entries=%u ignored=%u lightsOccluded=%u\n",
+            // S5: the GPU side -- indirect G-buffer candidates the main cull deferred against last
+            // frame's pyramid and how many of those pass B drew (a fading caster twice), frame N-3.
+            // S5b.2: the VSM light-space two-pass -- (caster, clipmap page) pairs the scatter
+            // deferred against last frame's pool pyramid, pairs pass B drew, pairs past the list.
+            const auto& vh = vsm_.HzbStats();
+            f.Printf("occlusion method=%u individual=%u grouped=%u dropped=%u tested=%u latency=%u entries=%u ignored=%u lightsOccluded=%u gpuHzbDeferred=%u gpuHzbDrawnB=%u vsmHzbDeferred=%u vsmHzbDrawnB=%u vsmHzbOverflow=%u\n",
                      os.method, os.queriesIndividual, os.queriesGrouped, os.queriesDropped, os.queriesTested,
-                     os.latencyFrames, os.historyEntries, os.ignoredResults, os.lightsOccluded);
+                     os.latencyFrames, os.historyEntries, os.ignoredResults, os.lightsOccluded,
+                     shadowGpu_.CamHzbDeferred(), shadowGpu_.CamHzbDrawnB(), vh[0], vh[1], vh[2]);
         }
     }
     if (!renderer) {
@@ -2242,6 +2248,7 @@ void Scene::Render(Renderer* renderer) {
     shadowGpu_.PollValidation(renderer); // Step 4: one-shot GPU-vs-CPU cull-count check when ready
     shadowGpu_.PollHzbStats(renderer);   // S5b: the cascade HZB cull's counters of frame N - 3
     vsm_.PollPageRequestDebug(renderer);  // Step 19: one-shot page-request count log when ready
+    vsm_.PollHzbStats(renderer);          // S5b.2: the light-space two-pass counters of frame N - 3
 
     // Occlusion plan S4: does the indirect G-buffer run this frame? Decided here, BEFORE the
     // camera prepare (which drops eligible objects from its CPU buckets on such frames) and the

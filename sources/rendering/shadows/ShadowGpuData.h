@@ -90,6 +90,9 @@ public:
         bool hzb = false;
         // Occlusion plan S4: the cull also fills the camera's args + visible list this frame.
         bool gbuffer = false;
+        // Occlusion plan S5: ...and tests them against last frame's camera pyramid, deferring
+        // the hidden ones (the previous pyramid was valid; the three S5 passes run).
+        bool camHzb = false;
         std::uint32_t base = 0;         // cull outputs -> UAV
         std::uint32_t unifiedCopy = 0;  // unified instance/bounds -> COPY_DEST
         std::uint32_t giWrite = 0;      // ...-> UAV for the scatter
@@ -145,13 +148,50 @@ public:
     // ExecuteIndirect per virtual group in [vgBegin, vgEnd) with camera candidates, the group's
     // PSO/textures/surface params bound here. The pass fans the range out over worker lists.
     // Returns false when nothing could be recorded.
+    // S5: `passB` draws the post cull's pair (the bad guesses of the main cull) instead of pass A's.
     bool RecordIndirectGBufferDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                     D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool wireframe,
-                                    std::uint32_t vgBegin, std::uint32_t vgEnd);
+                                    std::uint32_t vgBegin, std::uint32_t vgEnd, bool passB = false);
     std::uint32_t VirtualGroupCount() const { return numVirtualGroups_; }
     // A material hot reload may have rebuilt the PSOs the groups cached: rebuild the registry on
     // the next frame (the caster count alone would not notice).
     void InvalidateGroupMaterials() { rebuildPending_ = true; }
+
+    // ---- Occlusion plan S5: the camera's two-pass HZB occlusion ---------------------------------
+    // Mirrors CameraHzbCB (b2 of shadow_cull_cs.hlsl, b1 of cam_cull_post_cs.hlsl).
+    struct CameraHzbParams
+    {
+        Math::mat4 prevViewProj;    // last frame's camera, no jitter
+        Math::mat4 prevViewToClip;
+        Math::mat4 viewProj;        // this frame's, jittered (the pyramid is the jittered depth)
+        Math::mat4 viewToClip;
+        std::int32_t viewRect[4];   // (0, 0, renderWidth, renderHeight)
+        std::uint32_t hzbSize[2];   // mip 0
+        std::uint32_t prevValid;    // last frame's pyramid: this camera's, same size, built last frame
+        std::uint32_t on;
+    };
+    static_assert(sizeof(CameraHzbParams) == 288, "CameraHzbCB layout");
+    // Once per frame from SceneRenderer::DecideFrame, before the graph is built: the matrices,
+    // the validity of the previous pyramid and the two pyramids' resources (prev = the previous
+    // frame slot's, current = this frame's, rebuilt after pass A by Main_HzbA).
+    void SetCameraHzb(const CameraHzbParams& params, ID3D12Resource* prevHzb, D3D12_CPU_DESCRIPTOR_HANDLE prevHzbSrv,
+                      ID3D12Resource* curHzb, D3D12_CPU_DESCRIPTOR_HANDLE curHzbSrv);
+    // Decided by PrepareCullPass: the main cull deferred against the previous pyramid this frame,
+    // so Main_HzbA / Main_CamCullPost / Main_GBufferB run.
+    bool CamHzbThisFrame() const { return camHzbThisFrame_; }
+    struct CamCullPostDecisions
+    {
+        bool active = false;
+        bool stats = false;
+        std::uint32_t base = 0;     // pyramid readable, the pair + deferred list UAV
+        std::uint32_t consume = 0;  // args -> INDIRECT_ARGUMENT, list -> vertex stream, counters -> COPY_SOURCE
+        std::uint32_t restore = 0;  // counters -> UAV
+    };
+    CamCullPostDecisions PrepareCamCullPostPass(RenderGraphPassContext& ctx);
+    void RecordCamCullPost(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CamCullPostDecisions& dec);
+    // The readout: this frame's deferred (weighted) and pass-B entries of frame N - kFrameCount.
+    std::uint32_t CamHzbDeferred() const { return hzbStats_[9]; }
+    std::uint32_t CamHzbDrawnB() const { return hzbStats_[10]; }
     render::CascadeHzb& CascadeHzbRef() { return cascadeHzb_; }
     // Once per frame from Scene, after UpdateCascades and UpdateViewFrustums: this frame's
     // cascade light view-projections (forward-Z), whether the knob + mode want the test, and
@@ -500,6 +540,17 @@ private:
     Ring perGroupVgCam_;                          // per frame uint4 {base, indexCount, lodRelStart, count}
     UavRing camArgs_;                             // per virtual group D3D12_DRAW_INDEXED_ARGUMENTS
     UavRing camVisibleList_;                      // 2 x casters (a fading caster occupies two slots)
+    // S5: the camera's deferred list (casters last frame's pyramid hid) and pass B's own pair.
+    UavRing camDeferred_;
+    UavRing camArgsB_;
+    UavRing camVisibleListB_;
+    CameraHzbParams camHzbParams_{};
+    ID3D12Resource* camHzbPrev_ = nullptr;        // the previous frame slot's pyramid (NON_PIXEL at rest)
+    ID3D12Resource* camHzbCur_ = nullptr;         // this frame slot's pyramid
+    D3D12_CPU_DESCRIPTOR_HANDLE camHzbPrevSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE camHzbCurSrv_{};
+    bool camHzbThisFrame_ = false;
+    std::shared_ptr<Material> camCullPostMat_;    // cam_cull_post_cs.hlsl
     bool gbufferIndirectFrame_ = false;           // Scene's decision for this frame
     bool rebuildPending_ = false;                 // InvalidateGroupMaterials
     std::uint32_t eligibleCasterCount_ = 0;
@@ -518,8 +569,12 @@ private:
     std::uint32_t cullCastersThisFrame_ = 0;     // the visible/deferred lists' per-view stride this frame
     Microsoft::WRL::ComPtr<ID3D12Resource> hzbStatsReadback_; // READBACK, kFrameCount x 8 uints
     std::array<std::uint64_t, render::kFrameCount> hzbStatsFrame_{};
-    std::array<std::uint32_t, 8> hzbStats_{};   // last polled counters
-    static constexpr UINT kHzbStatsBytes = 8 * sizeof(std::uint32_t);
+    // [0..4) cascade deferred, [4..8) cascade pass B, [8] camera deferred entries, [9] the same
+    // weighted (a fading caster twice), [10] camera pass-B entries, [11] spare.
+    std::array<std::uint32_t, 12> hzbStats_{};  // last polled counters
+    static constexpr UINT kHzbStatsBytes = 12 * sizeof(std::uint32_t);
+    std::array<std::uint32_t, 12> valCounters_{}; // the counters at the validation frame's readback
+    bool valCamHzbOn_ = false;                    // S5: the validation frame deferred camera candidates
     void EnsureHzbStatsReadback(Renderer* renderer);
     bool HzbRingsValid() const
     {
@@ -539,9 +594,10 @@ private:
     // Non-shader-visible UAVs for the cull outputs, one per ring region:
     // [0..kFrameCount)=args (RAW), [kFrameCount..2k)=visibleList, [2k..3k)=counts,
     // S5b: [3k..4k)=deferredList, [4k..5k)=deferredCount, [5k..6k)=argsB (RAW), [6k..7k)=visibleListB,
-    // S4: [7k..8k)=camArgs (RAW), [8k..9k)=camVisibleList.
+    // S4: [7k..8k)=camArgs (RAW), [8k..9k)=camVisibleList,
+    // S5: [9k..10k)=camDeferred, [10k..11k)=camArgsB (RAW), [11k..12k)=camVisibleListB.
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cullUavHeap_;
-    static constexpr std::size_t kCullUavSets = 9;
+    static constexpr std::size_t kCullUavSets = 12;
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCullUavSets * render::kFrameCount> cullUav_{};
 
     std::shared_ptr<Material> cullClearMat_;     // shadow_cull_clear_cs.hlsl

@@ -55,6 +55,14 @@ inline bool g_giIndirectShadowsEnabled = true;
 // a 0.08 ms serial record. `--set=gbuffer.indirect:0` is the A/B (both paths in one binary).
 inline bool g_indirectGBufferEnabled = true;
 
+// Occlusion plan S5: the camera's two-pass HZB occlusion INSIDE that indirect G-buffer (Nanite's
+// main/post split): the cull defers every candidate last frame's depth pyramid hid, pass A draws
+// the rest, the pyramid of pass A's depth retests the deferred with this frame's matrices, and
+// pass B draws the survivors into the same G-buffer. Zero latency, no holes by construction; the
+// price is a second pyramid build + the mostly-empty pass-B ExecuteIndirects. Needs
+// `g_indirectGBufferEnabled`. `--set=gbuffer.hzb:0|1` is the A/B.
+inline bool g_gbufferHzbCullEnabled = true;
+
 // Rung 2 / Step 24a — active shadow method. Legacy = the CSM directional + spot/point/glass ATLAS
 // path; VSM = the virtual page pool (spot/point/glass today; directional after Step 24). Drives both
 // whether the VSM pipeline passes run AND which sampler the light/glass shaders use (VsmActive() →
@@ -63,6 +71,12 @@ inline bool g_indirectGBufferEnabled = true;
 enum class ShadowMode : std::uint32_t { Legacy = 0, VSM = 1 };
 inline ShadowMode g_shadowMode = ShadowMode::VSM;
 inline bool VsmActive() { return g_shadowMode == ShadowMode::VSM; }
+// `--shadow-mode=` on the command line is a BOOT OVERRIDE: it wins over graphics_settings.json
+// for the session and is never written back into it. Before 2026-09-04 the settings file was
+// applied after the flag and silently replaced it, so a headless `--shadow-mode=vsm` run
+// measured Legacy whenever the saved mode was Legacy -- a control that lied.
+inline bool g_shadowModeFromCli = false;
+inline ShadowMode g_shadowModePersisted = ShadowMode::VSM; // what the settings file holds (saved back unchanged under the override)
 
 // S0.3 — Legacy CSM debug visualization, forwarded to lighting_cs.hlsl as `csmDebugMode`.
 // 0 = off (the shader's only cost is one uint compare). 1 = tint each pixel by the cascade the

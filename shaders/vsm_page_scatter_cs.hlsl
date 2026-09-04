@@ -24,13 +24,21 @@
 // safe here (a page may draw a caster it turns out not to touch; the rasterizer discards it).
 // Locals also use the whole mip PYRAMID (a pixel marks one page at its own level), unlike clipmap
 // views where the level IS the LOD and only mip 0 exists — so a local view walks all 5 levels.
+//
+// Occlusion plan S5b.2 (light-space two-pass HZB occlusion, Unreal's r.Shadow.Virtual.NonNanite
+// .UseHZB): a clipmap (caster, page) pair is also tested against LAST frame's pool pyramid at the
+// physical page the same virtual page had then (PrevPageTable), with last frame's view matrices
+// -- Nanite's main-pass rule, exactly as the S5b.1 cascades: frustum side test skipped, near
+// crossing = visible. Hidden -> the pair goes to DeferredPairs instead of the page's list, and
+// vsm_hzb_post_cs.hlsl retests it after pass A against the pyramid rebuilt from pass A's pages.
 #pragma pack_matrix(row_major)
 #include "vsm_addressing.hlsli"
+#include "hzb_cull.hlsli"
 
 #define VSM_SCATTER_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define KMAX_SHADOW_LODS 4 // matches render::kMaxShadowLods; the per-group LOD bucket count
 
@@ -53,6 +61,11 @@ cbuffer ScatterCB : register(b0)
     // view's own shadow LOD from the tier curve. It is only the lower bound for FLOOR casters —
     // the per-caster LOD below can only push COARSER past it, never finer.
     uint4 gTargetLod[(VSM_MAX_VIEWS + 3) / 4];
+    // S5b.2: x = the HZB test is on, y = last frame's pyramid + PrevPageTable are valid (a render
+    // with a build happened last frame, same level), z = DeferredPairs capacity, w unused.
+    uint4 gHzbParams;
+    // LAST frame's matrices of every view (the pyramid's pages were drawn with these).
+    float4x4 gPrevViewProj[VSM_MAX_VIEWS];
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; };
@@ -71,10 +84,50 @@ StructuredBuffer<uint4>        PerGroup    : register(t4);
 // max(receiverLod, view LOD): never FINER than its receiver, coarser only where the view already
 // coarsens. Written per frame by ShadowGpuData::RefreshCasterLods.
 StructuredBuffer<uint>         CasterLod   : register(t5);
+// S5b.2: the page table as it stood during LAST frame's render (snapshot before this frame's
+// allocation) and the pool pyramid built then. Placeholders when the test is off (never read).
+StructuredBuffer<uint>         PrevPageTable : register(t6);
+Texture2D<float>               VsmHzbPrev    : register(t7);
 
 RWStructuredBuffer<uint> PageGroupCount  : register(u0); // per (page, group) count, doubles as the cursor
 RWStructuredBuffer<uint> PageVisibleList : register(u1); // per (page, slot) caster id
 RWStructuredBuffer<uint> PageScatterDyn  : register(u2); // per page: a dynamic caster landed here
+RWStructuredBuffer<uint2> DeferredPairs  : register(u3); // S5b.2: (leading caster slot, virtual page id)
+RWStructuredBuffer<uint>  HzbCounters    : register(u4); // S5b.2: [0] pairs deferred, [2] past the capacity
+
+static const uint kHzbMip0 = VSM_POOL_PAGES_AXIS * VSM_PAGE_SIZE / 2u; // 2048: the pyramid is half the pool
+static const float4x4 kIdentity = float4x4(1, 0, 0, 0,
+                                           0, 1, 0, 0,
+                                           0, 0, 1, 0,
+                                           0, 0, 0, 1);
+// Forward-Z page projection -> the reverse-Z the library expects: z' = w - z (w == 1, ortho).
+static const float4x4 kFlipZ = float4x4(1, 0, 0, 0,
+                                        0, 1, 0, 0,
+                                        0, 0, -1, 0,
+                                        0, 0, 1, 1);
+
+// S5b.2: was this caster hidden from the light, in this virtual page, last frame? Tested against
+// the pyramid region of the physical page the virtual page occupied then (NaniteCullingCommon
+// .ush:463-482 rule: side frustum skipped, near crossing = visible; the post pass corrects the
+// bad guesses). `prev` is the caster's clip rect in the LEVEL's clip space with last frame's view
+// matrix (one ortho cull per (caster, level), outside the page loop): the page's off-center
+// projection only scales and offsets xy, so its rect is that one remapped, not a second cull.
+bool HiddenInPageLastFrame(uint pPrev, uint level, uint px, uint py, HzbFrustumCull prev)
+{
+    const float a = (float)(VSM_L0_AXIS >> level);
+    const float2 centre = float2(-1.0f + (2.0f * px + 1.0f) / a, 1.0f - (2.0f * py + 1.0f) / a);
+    const float3 mn = float3((prev.rectMin.xy - centre) * a, prev.rectMin.z);
+    const float3 mx = float3((prev.rectMax.xy - centre) * a, prev.rectMax.z);
+    const int ox = (int)((pPrev % VSM_POOL_PAGES_AXIS) * VSM_PAGE_SIZE);
+    const int oy = (int)((pPrev / VSM_POOL_PAGES_AXIS) * VSM_PAGE_SIZE);
+    const HzbScreenRect rect = HzbGetScreenRect(int4(ox, oy, ox + (int)VSM_PAGE_SIZE, oy + (int)VSM_PAGE_SIZE), mn, mx, 4);
+    // A caster whose footprint in this page is under 8x8 pool texels is not worth the 16 loads:
+    // hiding it saves a draw that rasterises almost nothing, and at the coarse clipmap levels --
+    // where most resident pairs live -- every caster is that small. Conservative: drawn in A.
+    const int2 span = rect.pixels.zw - rect.pixels.xy + 1;
+    if (span.x * span.y < 64) { return false; }
+    return !HzbIsVisible(VsmHzbPrev, uint2(kHzbMip0, kHzbMip0), rect);
+}
 
 // Project an AABB to an NDC rect. Ortho (clipmap) views map the 8 corners AFFINELY, so the min/max
 // over them is exact. Perspective (local) views need the divide, and the box can straddle w=0 where
@@ -178,6 +231,16 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const bool isDynamic = (meta & 1u) != 0u;
     const uint targetLod = gTargetLod[target >> 2u][target & 3u]; // this view's own tier-curve LOD
 
+    // S5b.2: last frame's clip rect of this caster in the level, once; the page loop remaps it.
+    // Not for local views (perspective pages; the post pass would need their view/proj split).
+    bool prevTest = false;
+    HzbFrustumCull prevCull = (HzbFrustumCull)0;
+    if (!isLocal && gHzbParams.x != 0u && gHzbParams.y != 0u)
+    {
+        prevCull = HzbBoxCullFrustumOrtho(ctr, ext, kIdentity, mul(gPrevViewProj[view], kFlipZ), false, true);
+        prevTest = prevCull.isVisible && !prevCull.crossesNearPlane;
+    }
+
     for (uint L = 0u; L < mipCount; ++L)
     {
         // NDC -> this level's page grid. y flips (NDC +y is up, page rows run down).
@@ -196,11 +259,35 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         {
             for (uint pxi = px0; pxi <= px1; ++pxi)
             {
-                const uint entry = PageTable[VsmPageId(view, L, pxi, py)];
+                const uint pageId = VsmPageId(view, L, pxi, py);
+                const uint entry = PageTable[pageId];
                 if ((entry & 0x80000000u) == 0u) { continue; }   // not resident -> nothing to draw into
                 // Residency first: the exact test is only worth building for a page that exists.
                 if (isLocal && !BoxInPagePlanes(gViewProj[view], L, pxi, py, ctr, ext)) { continue; }
                 const uint p = entry & 0x0000FFFFu;              // physical page index
+
+                // S5b.2: clipmap pairs last frame's pyramid hid go to the deferred list instead
+                // (once per object -- the post pass re-expands the slots). A dynamic caster still
+                // dirties the page: whether its shadow moved is exactly what pass B decides.
+                if (prevTest)
+                {
+                    const uint prevEntry = PrevPageTable[pageId];
+                    if ((prevEntry & 0x80000000u) != 0u &&
+                        HiddenInPageLastFrame(prevEntry & 0x0000FFFFu, L, pxi, py, prevCull))
+                    {
+                        uint idx;
+                        InterlockedAdd(HzbCounters[0], 1u, idx);
+                        if (idx < gHzbParams.z)
+                        {
+                            DeferredPairs[idx] = uint2(c, pageId);
+                            if (isDynamic) { PageScatterDyn[p] = 1u; }
+                            continue;
+                        }
+                        // Past the capacity: drawn in pass A as if visible (conservative).
+                        uint over;
+                        InterlockedAdd(HzbCounters[2], 1u, over);
+                    }
+                }
 
                 for (uint s = 0u; s < slots; ++s)
                 {

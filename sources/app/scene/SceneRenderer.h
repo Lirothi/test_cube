@@ -103,6 +103,10 @@ private:
         bool vsmActive = false;
         bool vsmSkipUpdate = false;    // nothing moved: keep last frame's pages (was vsmSkipUpdate_)
         bool willDlss = false;         // the DLSS evaluate is predicted to run (was a local)
+        // Occlusion plan S5: the camera's two-pass HZB occlusion inside the indirect G-buffer --
+        // Main_HzbA, Main_CamCullPost and Main_GBufferB exist, and the G-buffer's consumers chain
+        // off pass B. The registry's own builder may still decline (empty passes then).
+        bool camHzb = false;
     };
     void DecideFrame(Renderer* renderer, const SceneFrameData& frame);
     FrameDecisions decisions_{};
@@ -144,6 +148,13 @@ private:
         size_t pOcclusion = kNone; // S3a: gbuffer -> hzb (depth read-only before its SRV consumers)
         size_t pVisTest = kNone;   // S3b: hzb -> (nothing downstream; its readback is next frame's)
         size_t pGbuf = kNone;      // gbuffer  -> lighting, AO
+        // Occlusion plan S5: pass A's pyramid, the deferred retest, pass B into the same G-buffer.
+        size_t pHzbA = kNone;
+        size_t pCamCullPost = kNone;
+        size_t pGbufB = kNone;
+        // The pass after which the G-buffer is COMPLETE: pass B when it exists, else Main_GBuffer.
+        // Every consumer of the G-buffer chains off this, never off pGbuf directly.
+        size_t pGbufDone = kNone;
         size_t pVsmPageRender = kNone;
         size_t pHzb = kNone;       // gbuffer  -> SSR
         size_t pGtao = kNone;      // gbuffer  -> lighting
@@ -241,9 +252,16 @@ private:
     // P6C: the hierarchical depth pyramid. `mipCount` is decided in the builder so the record body
     // dispatches exactly the levels that were declared.
     void Pass_SsrTemporal(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
-    void Pass_Hzb(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
+    // Occlusion plan S5: `passA` = the SAME build from pass A's depth (Main_HzbA), under its own
+    // profiler scope; the final pyramid (Main_Hzb) is the one the next frame's main cull reads.
+    void Pass_Hzb(Renderer* r, RenderGraphPassContext ctx, uint32_t point, bool passA = false);
     // Occlusion plan S3b: the plan's boxes against the pyramid, one dispatch + readback copy.
     void Pass_VisTest(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
+    // Occlusion plan S5: the deferred camera candidates against pass A's pyramid, and pass B --
+    // the survivors drawn into the same G-buffer, one list, `bindPoint` the builder's target
+    // declarations (the same list as Main_GBuffer's).
+    void Pass_CamCullPost(Renderer* r, RenderGraphPassContext ctx, const ShadowGpuData::CamCullPostDecisions& dec);
+    void Pass_GBufferB(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, std::uint32_t bindPoint);
     // Occlusion plan S3a: the box queries against the G-buffer depth (read-only), right after
     // Main_GBuffer, before anything reads depth as a texture.
     void Pass_OcclusionQueries(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
@@ -532,6 +550,17 @@ private:
     mat4 vsmLastView_{};
     bool vsmHasRendered_ = false;
     std::uint32_t vsmStillFrames_ = 0;
+    // Occlusion plan S5: per deferred slot, which frame built its camera pyramid, at what render
+    // size, under which camera history -- the Main_Hzb builder (serial) stamps it, DecideFrame
+    // reads the PREVIOUS slot's to decide whether last frame's pyramid may be tested against.
+    struct CamHzbBuilt
+    {
+        std::uint64_t frame = ~0ull; // never built
+        UINT width = 0, height = 0;
+        std::uint64_t revision = 0;
+    };
+    std::array<CamHzbBuilt, render::kFrameCount> camHzbBuilt_{};
+    int camHzbLogged_ = -1;          // last logged (on, prevValid) state, so the session log gets the flips only
 
     // ---- PER-LEVEL / ONE-SHOT: survives frames, cleared by Reset(). ----
     bool rtFailureLogged_ = false; // S13: one "AS alloc failed -> SSR fallback" line per scene

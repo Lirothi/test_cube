@@ -22,10 +22,16 @@
 // whether the CPU-side verdicts skip it this frame (bit 1: the S3a occlusion history for the
 // object, the S1 chunk mask for a chunk); the fade (t11) puts a crossfading caster in its LOD
 // bucket AND the next one, which is the CPU path's two draws.
+//
+// Occlusion plan S5 (the camera's two-pass HZB occlusion): a camera candidate is also tested
+// against LAST frame's depth pyramid (t12, the previous frame slot's HZB) with last frame's
+// matrices -- Nanite's CULLING_PASS_OCCLUSION_MAIN, exactly as the cascades do it (S5b): frustum
+// side test skipped, near crossing = visible. Hidden -> the camera DEFERRED list (u6) instead of
+// pass A; cam_cull_post_cs.hlsl retests it after pass A against this frame's pyramid.
 #define SHADOW_CULL_RS \
-    "CBV(b0), CBV(b1), " \
-    "DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "CBV(b0), CBV(b1), CBV(b2), " \
+    "DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(UAV(u0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer CullParams : register(b0)
 {
@@ -47,6 +53,20 @@ cbuffer CascadeHzbCB : register(b1)
     uint2 gHzbSize;        // mip 0 of the pyramids
     uint  gHzbOn;          // 0 = no test this frame (placeholders bound in t5..t8)
     uint  gHzbPad;
+};
+
+// S5: mirrors ShadowGpuData::CameraHzbParams. The prev pair is last frame's camera (no jitter),
+// the current pair this frame's (jittered, like the pyramid it is tested against).
+cbuffer CameraHzbCB : register(b2)
+{
+    row_major float4x4 gCamPrevViewProj;
+    row_major float4x4 gCamPrevViewToClip;
+    row_major float4x4 gCamViewProj;
+    row_major float4x4 gCamViewToClip;
+    int4  gCamViewRect;      // (0, 0, renderWidth, renderHeight)
+    uint2 gCamHzbSize;       // mip 0 of the camera pyramid
+    uint  gCamHzbPrevValid;  // last frame's pyramid is this camera's, same size, built last frame
+    uint  gCamHzbOn;
 };
 
 struct CasterBounds
@@ -79,6 +99,7 @@ Texture2D<float>               CsmHzb[4]   : register(t5);
 StructuredBuffer<uint4>        PerGroupCam : register(t9);
 StructuredBuffer<uint>         CasterCam   : register(t10);
 StructuredBuffer<float>        CasterFade  : register(t11);
+Texture2D<float>               CamHzbPrev  : register(t12); // S5: last frame's camera pyramid (placeholder when off)
 
 static const uint kMaxShadowLods = 4u;   // must match render::kMaxShadowLods
 static const uint kCasterLodMask = 0x0Fu;
@@ -90,6 +111,9 @@ RWStructuredBuffer<uint> DeferredList  : register(u2); // S5b: per cascade, cast
 RWStructuredBuffer<uint> DeferredCount : register(u3); // S5b: [v] deferred this frame (cleared by the cull-clear)
 RWByteAddressBuffer      CamArgs       : register(u4); // S4: the camera's args (one row of virtual groups)
 RWStructuredBuffer<uint> CamVisibleList : register(u5); // S4: the camera's visible caster ids
+RWStructuredBuffer<uint> CamDeferred   : register(u6); // S5: candidates last frame's pyramid hid
+static const uint kCamDeferredCount = 8u;   // DeferredCount[] slots: [8] list length, [9] weighted (fade x2)
+static const uint kCamDeferredWeighted = 9u;
 
 static const uint kArgStride = 20u;
 
@@ -102,10 +126,23 @@ void EmitCamera(uint vg, uint caster)
     CamVisibleList[base + slot] = caster;
 }
 
+// The bounds are world-space boxes already: the library's local-to-world is the identity.
 static const float4x4 kIdentity = float4x4(1, 0, 0, 0,
                                            0, 1, 0, 0,
                                            0, 0, 1, 0,
                                            0, 0, 0, 1);
+
+// S5: was this candidate hidden in last frame's camera view? (NaniteCullingCommon.ush:463-482:
+// frustum side test skipped -- the clamped rect is a better guess than assuming either way, the
+// post pass cleans up; a box crossing the near plane is visible.)
+bool CamHiddenLastFrame(float3 c, float3 e)
+{
+    if (gCamHzbOn == 0u || gCamHzbPrevValid == 0u) { return false; }
+    const HzbFrustumCull prev = HzbBoxCullFrustumPerspective(c, e, kIdentity, gCamPrevViewProj, gCamPrevViewToClip, true);
+    if (!prev.isVisible || prev.crossesNearPlane) { return false; }
+    const HzbScreenRect rect = HzbGetScreenRect(gCamViewRect, prev.rectMin, prev.rectMax, 4);
+    return !HzbIsVisible(CamHzbPrev, gCamHzbSize, rect);
+}
 
 // S5b: was this caster hidden from the light in the previous frame's tile of cascade v?
 bool HiddenLastFrame(uint v, float3 c, float3 e)
@@ -174,10 +211,21 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         const uint cam = CasterCam[caster];
         if ((cam & 3u) == 1u && Intersects(gCamView, c, e))
         {
-            EmitCamera(g, caster);
-            if (CasterFade[caster] > 0.0f && (lod + 1u) < kMaxShadowLods)
+            const bool fading = CasterFade[caster] > 0.0f && (lod + 1u) < kMaxShadowLods;
+            if (CamHiddenLastFrame(c, e))
             {
-                EmitCamera(g + 1u, caster);
+                // S5: deferred once (the post pass re-derives the buckets), counted with the
+                // weight pass A would have used so A + deferred == the CPU reference.
+                uint d;
+                InterlockedAdd(DeferredCount[kCamDeferredCount], 1u, d);
+                CamDeferred[d] = caster;
+                uint w;
+                InterlockedAdd(DeferredCount[kCamDeferredWeighted], fading ? 2u : 1u, w);
+            }
+            else
+            {
+                EmitCamera(g, caster);
+                if (fading) { EmitCamera(g + 1u, caster); }
             }
         }
     }

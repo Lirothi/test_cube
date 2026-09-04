@@ -384,6 +384,70 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     // record (and tells the handler so, which backs the prediction off for the next frames); what
     // this decides is which image the tonemap is built to read.
     decisions_.willDlss = renderer->WillEvaluateDlss();
+
+    // Occlusion plan S5: the camera's two-pass HZB occlusion inside the indirect G-buffer. ONE
+    // decision, here, because three passes exist or not by it and every consumer of the G-buffer
+    // chains off whichever pass finishes it. The PREVIOUS pyramid may be tested against when the
+    // slot before this one built it LAST frame, at this render size, under the same camera
+    // history (an explicit cut makes last frame's matrices meaningless) -- otherwise the main
+    // cull defers nothing this frame and the three passes cost one pyramid build: the frame's
+    // SHAPE does not depend on history, only its work does. The registry gets the matrices and
+    // the two pyramids now, before any builder runs (its own builder applies the final gate).
+    decisions_.camHzb = false;
+    if (frame.shadowGpu)
+    {
+        ShadowGpuData::CameraHzbParams p{};
+        ID3D12Resource* prevHzb = nullptr;
+        ID3D12Resource* curHzb = nullptr;
+        D3D12_CPU_DESCRIPTOR_HANDLE prevSrv{};
+        D3D12_CPU_DESCRIPTOR_HANDLE curSrv{};
+        const auto& D = renderer->GetDeferredForFrame();
+        const auto& P = renderer->GetDeferredForPrevFrame();
+        // The same gates as the Main_Hzb builder's: a frame this passes is a frame Main_HzbA
+        // cannot decline, so the post cull never retests against a pyramid nobody rebuilt.
+        const bool hzbReady = resources_.GetHzbMaterial() && resources_.GetHzbCBSizeBytes() != 0u &&
+                              D.depthSRV.ptr != 0 && D.hzb.Get() != nullptr && D.hzbClosest.Get() != nullptr &&
+                              D.hzbMips != 0 && D.hzbSRV.ptr != 0 && P.hzb.Get() != nullptr && P.hzbSRV.ptr != 0;
+        if (render::g_gbufferHzbCullEnabled && frame.gbufferIndirect && frame.camera && hzbReady)
+        {
+            const Camera& cam = *frame.camera;
+            const UINT w = renderer->GetRenderWidth();
+            const UINT h = renderer->GetRenderHeight();
+            const UINT prevSlot = (renderer->GetCurrentFrameIndex() + render::kFrameCount - 1u) % render::kFrameCount;
+            const std::uint64_t frameNo = renderer->GetTotalFrameNumber();
+            const CamHzbBuilt& b = camHzbBuilt_[prevSlot];
+            const bool prevValid = frameNo > 0 && b.frame == frameNo - 1u && b.width == w && b.height == h &&
+                                   b.revision == cam.GetHistoryRevision() &&
+                                   P.hzbWidth == D.hzbWidth && P.hzbHeight == D.hzbHeight;
+            // The previous pyramid was reduced from last frame's JITTERED depth, so it is tested
+            // with last frame's jittered pair (the plan text says no-jitter; exact beats close).
+            p.prevViewProj = cam.GetPrevViewProjMatrix();
+            p.prevViewToClip = cam.GetPrevProjMatrix();
+            p.viewProj = cam.GetViewProjMatrix();
+            p.viewToClip = cam.GetProjMatrix();
+            p.viewRect[0] = 0;
+            p.viewRect[1] = 0;
+            p.viewRect[2] = static_cast<std::int32_t>(w);
+            p.viewRect[3] = static_cast<std::int32_t>(h);
+            p.hzbSize[0] = D.hzbWidth;
+            p.hzbSize[1] = D.hzbHeight;
+            p.prevValid = prevValid ? 1u : 0u;
+            p.on = 1u;
+            prevHzb = P.hzb.Get();
+            prevSrv = P.hzbSRV;
+            curHzb = D.hzb.Get();
+            curSrv = D.hzbSRV;
+            decisions_.camHzb = true;
+        }
+        frame.shadowGpu->SetCameraHzb(p, prevHzb, prevSrv, curHzb, curSrv);
+        const int state = decisions_.camHzb ? (1 + static_cast<int>(p.prevValid)) : 0;
+        if (state != camHzbLogged_)
+        {
+            LOG_INFO(logging::LogCategory::RenderShadow, "camera hzb cull: on={} prev-valid={} (frame {})",
+                     decisions_.camHzb ? 1 : 0, p.prevValid, renderer->GetTotalFrameNumber());
+            camHzbLogged_ = state;
+        }
+    }
 }
 
 void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
