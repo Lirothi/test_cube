@@ -20,6 +20,7 @@ struct RenderGraphPassContext;
 class RenderableObjectBase;
 class Frustum;
 class Material;
+class MaterialData;
 class Mesh;
 
 // Rung 0 (Steps 1-2): the GPU-side data the future GPU-driven shadow pipeline consumes.
@@ -87,6 +88,8 @@ public:
         // pyramids and the hidden ones deferred (never on a validation-readback frame: the CPU
         // reference is the frustum alone). Also what the three S5b passes gate on this frame.
         bool hzb = false;
+        // Occlusion plan S4: the cull also fills the camera's args + visible list this frame.
+        bool gbuffer = false;
         std::uint32_t base = 0;         // cull outputs -> UAV
         std::uint32_t unifiedCopy = 0;  // unified instance/bounds -> COPY_DEST
         std::uint32_t giWrite = 0;      // ...-> UAV for the scatter
@@ -120,6 +123,35 @@ public:
     // Decided by PrepareCullPass; the S5b passes' builders read it (builders run serially, in
     // schedule order, so the cull's decision is final by the time they ask).
     bool CascadeHzbCullThisFrame() const { return hzbCullThisFrame_; }
+
+    // ---- Occlusion plan S4: the camera's indirect G-buffer -------------------------------------
+    // The registry already holds every shadow caster's record (world, material params per submesh
+    // slot since S4, wind) and bounds; the same cull tests them against the CAMERA frustum (slot
+    // kMaxShadowViews of the frustum ring) into the camera's own args + visible list, and
+    // Main_GBuffer's indirect pass draws one ExecuteIndirect per (group, camera LOD) with the
+    // group's material bound by the CPU. An object is ELIGIBLE when every one of its submesh
+    // slots has the indirect PSO and the same MaterialData as its group's first object (decided
+    // at Rebuild, stamped on the object); the camera prepare drops eligible objects from the CPU
+    // buckets on the frames this runs, so nothing draws twice. Per frame the cull also honours
+    // the camera occlusion verdict (S3a) and the chunk mask (S1) through per-caster flags, and
+    // draws a crossfading caster in BOTH LOD buckets (the CPU path's two draws).
+    // Once per frame from Scene, BEFORE PrepareViews: run the indirect G-buffer this frame?
+    void SetGBufferIndirect(bool on) { gbufferIndirectFrame_ = on; }
+    bool GBufferIndirectThisFrame() const { return gbufferIndirectFrame_; }
+    // The registry has eligible objects and the camera rings: what Scene asks before switching on.
+    bool GBufferIndirectReady() const;
+    std::uint32_t GBufferIndirectEligibleCasters() const { return eligibleCasterCount_; }
+    // The Main_GBuffer indirect pass body: the render targets are bound by the caller; one
+    // ExecuteIndirect per virtual group in [vgBegin, vgEnd) with camera candidates, the group's
+    // PSO/textures/surface params bound here. The pass fans the range out over worker lists.
+    // Returns false when nothing could be recorded.
+    bool RecordIndirectGBufferDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                    D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool wireframe,
+                                    std::uint32_t vgBegin, std::uint32_t vgEnd);
+    std::uint32_t VirtualGroupCount() const { return numVirtualGroups_; }
+    // A material hot reload may have rebuilt the PSOs the groups cached: rebuild the registry on
+    // the next frame (the caster count alone would not notice).
+    void InvalidateGroupMaterials() { rebuildPending_ = true; }
     render::CascadeHzb& CascadeHzbRef() { return cascadeHzb_; }
     // Once per frame from Scene, after UpdateCascades and UpdateViewFrustums: this frame's
     // cascade light view-projections (forward-Z), whether the knob + mode want the test, and
@@ -365,6 +397,12 @@ private:
     // which excludes GPU-instanced casters.
     static bool IsGiFoldable(const RenderableObjectBase* obj);
     static void FillInstance(const RenderableObjectBase* obj, render::InstancePerObject& out);
+    // S4: the record of caster slot `ordinal` (a submesh) with THAT submesh's material slot params
+    // (GBufferRenderable::FillInstanceDataForSlot); other objects fall back to FillInstance.
+    static void FillInstanceSlot(const RenderableObjectBase* obj, size_t ordinal, render::InstancePerObject& out);
+    // The material slot a mesh's submesh `ordinal` draws with, clamped to the object's slot count
+    // (the CPU per-submesh loop's rule).
+    static std::uint32_t MaterialSlotOf(const Mesh* mesh, size_t ordinal, size_t slotCount);
     // The caster's world AABB, verbatim — deliberately NOT padded for the wind sway (see the
     // definition for the rationale and the measured cost of padding).
     static void FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out);
@@ -379,9 +417,13 @@ public:
     // per-frame hook to defer to.
     // S3.6: per-frame virtual-group bucketing + visible-list bases (see the .cpp).
     void RefreshVirtualGroups(Renderer* renderer);
+    // S4: `cameraOcclusionValid` = Scene::ApplyOcclusion ran this frame, so each object's
+    // CameraOccluded() is this frame's verdict (false = the history is off; the flag is stale).
+    // `frameNumber` = the stamp the camera prepare put on the objects its frustum kept.
     void RefreshCasterLods(Renderer* renderer,
                            const std::vector<std::unique_ptr<RenderableObjectBase>>& objects,
-                           const Math::float3& cameraPos);
+                           const Math::float3& cameraPos, bool cameraOcclusionValid,
+                           std::uint64_t frameNumber);
     // TRUE exactly once after a frame in which any caster's LOD changed (receiver LOD moved, or
     // a chunk crossed a tier). The page cache must flush then: a cached page holds geometry at
     // the OLD LOD, and the scatter will bucket the caster into a different virtual group, so
@@ -439,6 +481,34 @@ private:
     UavRing visibleListB_;
     render::CascadeHzb cascadeHzb_;
     std::shared_ptr<Material> cullPostMat_;      // shadow_cull_post_cs.hlsl
+
+    // Occlusion plan S4 (the camera's indirect G-buffer). Per static group: the MaterialData
+    // (textures + surface params) and the indirect PSO of the FIRST object that defined the group;
+    // an object whose slots all match is eligible (casterEligible_, and stamped on the object).
+    struct GroupGbuf
+    {
+        MaterialData* md = nullptr;
+        Material* mat = nullptr;
+    };
+    std::vector<GroupGbuf> groupGbuf_;
+    std::vector<std::uint8_t> casterEligible_;    // per caster id (static after Rebuild)
+    std::vector<std::uint32_t> casterCamCpu_;     // per caster per frame: bit0 eligible, bit1 skip (occluded / chunk masked)
+    std::vector<float> casterFadeCpu_;            // per caster per frame: crossfade weight (> 0: two buckets)
+    std::vector<std::uint32_t> vgCamCount_;       // per virtual group: camera candidates this frame (fading counted twice)
+    Ring casterCam_;                              // per frame uint, region f
+    Ring casterFade_;                             // per frame float, region f
+    Ring perGroupVgCam_;                          // per frame uint4 {base, indexCount, lodRelStart, count}
+    UavRing camArgs_;                             // per virtual group D3D12_DRAW_INDEXED_ARGUMENTS
+    UavRing camVisibleList_;                      // 2 x casters (a fading caster occupies two slots)
+    bool gbufferIndirectFrame_ = false;           // Scene's decision for this frame
+    bool rebuildPending_ = false;                 // InvalidateGroupMaterials
+    std::uint32_t eligibleCasterCount_ = 0;
+    std::uint32_t camListCount_ = 0;              // this frame's camera candidates (sum of vgCamCount_)
+    // Validation snapshot of the camera row (see PollValidation).
+    std::vector<std::uint32_t> valCam_;
+    std::vector<float> valFade_;
+    bool valCamOn_ = false;
+    std::uint32_t valCamGroups_ = 0;
     bool hzbCullThisFrame_ = false;              // PrepareCullPass's decision, for the S5b builders
     // The cull shaders' b1, filled by PrepareCullPass -- at BUILDER time, before the Main_CsmHzb
     // builder marks this frame's pyramids built. Filling it at record time read the mark of the
@@ -468,9 +538,10 @@ private:
 
     // Non-shader-visible UAVs for the cull outputs, one per ring region:
     // [0..kFrameCount)=args (RAW), [kFrameCount..2k)=visibleList, [2k..3k)=counts,
-    // S5b: [3k..4k)=deferredList, [4k..5k)=deferredCount, [5k..6k)=argsB (RAW), [6k..7k)=visibleListB.
+    // S5b: [3k..4k)=deferredList, [4k..5k)=deferredCount, [5k..6k)=argsB (RAW), [6k..7k)=visibleListB,
+    // S4: [7k..8k)=camArgs (RAW), [8k..9k)=camVisibleList.
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cullUavHeap_;
-    static constexpr std::size_t kCullUavSets = 7;
+    static constexpr std::size_t kCullUavSets = 9;
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCullUavSets * render::kFrameCount> cullUav_{};
 
     std::shared_ptr<Material> cullClearMat_;     // shadow_cull_clear_cs.hlsl

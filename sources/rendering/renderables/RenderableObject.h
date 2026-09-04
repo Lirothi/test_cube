@@ -256,6 +256,7 @@ protected:
     }
 
     const std::wstring& GetGraphicsShaderPath() const { return graphicsShader_; }
+    const std::string& GetInputLayoutKey() const { return inputLayoutKey_; }
 
 protected:
     Material::GraphicsDesc BuildGraphicsDesc(Renderer* renderer) const;

@@ -898,7 +898,7 @@ HZB-тест консервативнее растра бокса (footprint 4×
 
 ---
 
-## S4. G-buffer на `ExecuteIndirect` (GPU-driven камерный путь)
+## S4. G-buffer на `ExecuteIndirect` (GPU-driven камерный путь) — ✅ СДЕЛАН 2026-09-04 (uncommitted, **дефолт ON**, ручка `gbuffer.indirect`)
 
 **Зависит от:** S0 (стресс-сцена — иначе не измерить), S1. **Эффект:** CPU-сабмишн opaque-геометрии
 исчезает как класс; предпосылка S5. **Риск:** высокий — материалы, PSO-варианты, object-id, паритет
@@ -964,13 +964,108 @@ GPU-теста видимости на CPU-пути потребить нель�
 * **Что остаётся на CPU-пути** в S4: `OpaqueComplex` (multi-slot, `InstanceSlotCount() > 1`,
   `IInstanceable.h:37`), transparent/glass/ocean, GI-листва (до S7), чужой вершинный формат.
 
+### Что сделано (как построено, с отличиями от текста выше)
+* **Реестр — тот же `ShadowGpuData`**, не сестринский класс: у него уже есть записи всех кастеров,
+  боксы (по чанкам), группы (mesh × submesh), виртуальные группы (× LOD-тир приёмника =
+  камерный LOD), mega-таблицы. Что добавлено: (1) **запись per-slot** — `GBufferRenderable::
+  FillInstanceDataForSlot(out, slot)`; `Rebuild`/`UpdateForFrame` заполняют каждый caster-id
+  (сабмеш) параметрами ЕГО материального слота (`MaterialSlotOf` = `subs[s].materialSlot` с
+  клампом, как в CPU-цикле); теневой VS читает только world/wind — тени не тронуты;
+  (2) **`groupGbuf_`** — на статическую группу `MaterialData*` + indirect-PSO ПЕРВОГО объекта
+  группы; (3) **eligibility** — объект идёт indirect, только если у КАЖДОГО его слота PSO и
+  `MaterialData` совпадают с групповыми (переопределённая текстура на общем меше → CPU-путь целиком,
+  без разрыва объекта пополам); штамп `RenderableObjectBase::GBufferIndirect()`.
+* **Камерный ряд cull'а** (`shadow_cull_cs.hlsl`): фрустум камеры — слот `kMaxShadowViews` кольца
+  фрустумов (Scene передаёт 47), четвёртое слово `CullParams` = `gCamView` (~0 = выкл). Камерные
+  выходы ОТДЕЛЬНЫЕ: `camArgs_` (одна строка виртуальных групп) + `camVisibleList_` (2 слота на
+  кастер) + `perGroupVgCam_` (свои базы) — теневые строки и VSM-scatter (который читает базы
+  `perGroupVg_`) ничего не узнают о втором слоте фейда. Per-frame таблицы `casterCam_` (bit0 =
+  eligible ∧ **прошёл CPU-фрустум в этом кадре** (штамп `MarkCameraVisible(frame)`), bit1 = skip:
+  вердикт S3a для объекта / маска S1+S3a для чанка) и `casterFade_` (вес кроссфейда; > 0 ⇒ кастер
+  эмитится в СВОЙ тир и в следующий — два draw'а CPU-пути). Cull-clear засевает camArgs из
+  камерных баз (numViews = 1).
+* **Шейдер `gbuffer_indirect.hlsl`**: `GBUFFER_SKIP_PEROBJECT` + тот же `BaseVS`/`FetchShadingValuesP`/
+  `FinalizeGBuffer`; запись читается по `CASTERID` из slot 1 (layout `PosNormTanUV_InstCasterId` =
+  полный вершинный формат + per-instance uint), материальные значения уходят в PS плоскими
+  `nointerpolation`-атрибутами (5 float4) — PS буфер записей не читает, тот остаётся в NON_PIXEL;
+  `lodFade = (f > 0) ? (groupLod == tier ? −f : +f) : 0` (b0 = LOD виртуальной группы, четыре CB на
+  кадр). PSO на слот — `GBufferRenderable::BuildIndirectMaterials`: тот же desc, что у CPU-PSO слота
+  (RT, stencil, sampling-дефайны, ALPHA_TEST, cull mode, EDITOR_OBJECT_ID), сменены шейдер и layout.
+* **Draw** — `ShadowGpuData::RecordIndirectGBufferDraws`: один список (см. Ловушки), по виртуальным
+  группам с кандидатами: VB/IB меша (LOD-IB группы), `md->StageGBufferBindings` (t0..t2, s0) +
+  `StageGBufferSurfaceParams` (b2) — то же, что CPU-draw сабмеша, — t3..t5 = записи/фейды/LOD'ы
+  (одна таблица на пасс), `Bind` с wireframe, `ExecuteIndirect` по args группы; непривязанный
+  root-параметр (материал без текстур) → draw пропущен, как в CPU-пути (`GBufferBindingGuard`).
+  Внутренний пасс `GBuffer_Indirect` параллельно CPU-хвосту; `gb.pShadow`-цепочка не тронута.
+* **CPU-хвост**: `Scene::PrepareViewQueue` (камера) после счётчиков S0 и ДО батчинга выкидывает
+  eligible-объекты из opaque-бакетов; `ApplyOcclusion` пишет вердикт на объект
+  (`SetCameraOccluded`), `RefreshCasterLods` (после PrepareViews) собирает таблицы. Не-кастеры,
+  GI-облака, шейдерные override'ы, чужой layout, объекты с per-object текстурой — CPU-путь как был.
+* **Валидатор** расширен камерным рядом: readback camArgs за теневыми, CPU-эталон = фрустум камеры
+  ∧ флаги ∧ фейд ×2 → `cull validation PASS: 46 views + camera match CPU (…; camera N)` в каждом
+  прогоне (N = 946 стена, 1530 камера теней, 2484 с широкой полосой фейда, 16375/16655 на K=4).
+* Ручки: `--set=gbuffer.indirect:0|1`, галка в табе Render со счётчиком eligible-слотов;
+  hot-reload материалов → `InvalidateGroupMaterials` → Rebuild реестра.
+
+**Отличия от текста плана.** (1) Не «GBufferGpuData», а расширение реестра теней (объекты без
+тени остаются на CPU — на текущих уровнях их нет). (2) Материальные значения per-instance едут
+VS→PS атрибутами, не чтением из буфера в PS. (3) Bindless не начат (второй этап, как и записано).
+(4) `Main_ObjectIdReadback` и стенсил выделения не тронуты: objectId пишет тот же PS из записи;
+клик по объекту в Release_Editor руками не проверялся.
+
+### Ловушки
+* **Веер по воркерам вредит.** Запись по 7 спискам (по 64 виртуальные группы, как `RenderObjectBatch`)
+  на K=4: CPU суммарно 0.16 → 0.43 мс, GPU 0.19 → 0.28 мс — накладные на список (аллокатор, бинд
+  таргетов, холодный PSO/VB) дороже ~1000 `ExecuteIndirect`, которые один поток пишет за 0.16.
+  Оставлен один список.
+* **Кандидаты только из CPU-фрустума.** Без штампа `MarkCameraVisible` объекты вне фрустума несли
+  устаревшие вердикты и давали пустой `ExecuteIndirect` почти на каждую из 448 групп: стена K=4 — 7
+  видимых объектов, 0.10 мс записи. Со штампом — 0.03.
+* Константа локального порядка списка сидела внутри `#if WITH_EDITOR` — Debug собрался, Release нет.
+* `readout primitives` считает только CPU-draw'ы: с indirect `primitives=559132` — это хвост
+  (скайбокс и т. п.), не сцена.
+
+### Замер 2026-09-04 (Release, `--shadow-mode=legacy --dlss=off --wind-freeze --set=exposure.autoExposure:0
+--set=ocean.visible:0`, `gbuffer.indirect:0 → 1` в одном бинаре)
+
+| ракурс | drawCalls off → on | камерный ряд валидатора | картинка off→on |
+|---|---|---|---|
+| стена (occlusion_test) | 5 → 1 | 946, PASS | 0.038 % (пол 0.03–0.04 %) |
+| камера теней (wind_test) | 54 → 1 | 1530, PASS | 0.031 % |
+| камера теней, `lod.fadeBand:0.35` (≈950 кастеров в двух бакетах) | 62 → 1 | 2484, PASS | **0.024 %** |
+
+Кроссфейд, masked-листва (ALPHA_TEST-PSO на слот), террейн по чанкам (SHADING_MODEL 2, EXACT-LOD
+на чанк), occluded-объекты/чанки S3a — всё в этих трёх парах, и всё на полу.
+
+### Стоимость на K=4 (`--profdump`, 30 с прогрева, Legacy, DLSS по умолчанию; ОДИН бинарь; остров по два прогона)
+
+| | остров **off** (×2) | остров **on** (×2) | стена **off** | стена **on** |
+|---|---|---|---|---|
+| CPU `RenderObjectBatch.Async` (воркеры) | 0.508 / 0.509 | **0.038 / 0.041** | 0.102 | 0.040 |
+| CPU `GBuffer_Indirect` (один поток) | — | 0.073 / 0.093 | — | 0.033 |
+| CPU `Pass_GBuffer` (поток пасса) | 0.056 / 0.056 | 0.142 / 0.163 | 0.053 | 0.108 |
+| CPU.Frame, мс | 2.719 / 2.844 | 2.802 / 2.726 | 2.690 | 2.916 |
+| Whole Cycle, мс | 2.640 / 2.740 | 2.754 / 2.672 (шум ±0.1) | 2.566 | 2.865 (хитчи, max 6.0) |
+| GPU opaque: `ExecuteBundles` → `GBuffer_Indirect` | 0.222 / 0.230 | **0.222 / 0.196** | 0.037 | 0.072 |
+| GPU.Frame, мс | 2.720 / 2.775 | 2.891 / 2.722 (шум ±0.1) | 2.679 | 2.897 |
+
+Читается так: CPU-сабмишн opaque-геометрии как класс исчез (0.51 мс воркерного времени → 0.04, на
+их место 0.08 мс последовательной записи ~600 `ExecuteIndirect`), GPU той же геометрии ровно
+(бандлы 0.22 → indirect 0.20–0.22), кадр в шуме ±0.1 на обеих шкалах; стена — 30 мелких
+`ExecuteIndirect` вместо трёх бандлов (+0.035 GPU). На K=4-репликации выигрыша по wall-clock и
+не ожидалось (инстансинг сворачивал копии — F1); ценность S4 — в S5, где вердикт GPU-cull'а
+потребляется в том же кадре, и в сценах из РАЗНЫХ мешей.
+
 ### Критерий приёмки
-* Камера теней и «стена», `--dlss=off`, океан выкл: G-buffer **попиксельно идентичен** CPU-пути
-  (дифф = пол) — включая masked-материалы и LOD-crossfade; `objectId` readback совпадает (клик по
-  объекту в редакторе — Release_Editor).
-* K=4: `RenderObjectBatch.Async` и `Pass_GBuffer` CPU ↓ кратно; `GPU.Frame` не хуже; `cull validation
-  PASS` расширен на камерные args (тот же валидатор, слот «камера»).
-* `--scene-stress-gbv=20` CLEAN (новые ресурсы/пассы/дескрипторы — полный набор гейтов).
+* ✅ Камера теней и «стена», `--dlss=off`, океан выкл: G-buffer **попиксельно идентичен** CPU-пути
+  (дифф = пол) — включая masked-материалы и LOD-crossfade (пара с полосой 0.35). ⏳ `objectId`
+  readback: тот же PS из той же записи, клик в Release_Editor — руками (не гонялся).
+* ✅ K=4: `RenderObjectBatch.Async` ↓ 12×; `Pass_GBuffer` теперь СОДЕРЖИТ запись (0.08 мс) — суммарный
+  CPU G-buffer'а 0.56 → 0.13 мс; `GPU.Frame` не хуже (шум); `cull validation PASS` с камерным рядом.
+* ✅ `--scene-stress-gbv=20 --shadow-mode=legacy --level=…/occlusion_test.json` (Debug, дефолт ON) →
+  `scene-stress verdict: CLEAN after 20 iterations`; реестр перестраивался на каждой смене уровня
+  (GI-облака, чанкованный остров, 6…92 групп), камерный ряд валидатора PASS на каждом.
+* **Дефолт ON** — оба пути в одном бинаре, `gbuffer.indirect:0` = откат. Три конфигурации собраны.
 
 ### Откат
 `gbuffer.indirect:0`.
@@ -1280,7 +1375,7 @@ S3a  hardware queries + история + сферы локалов           [�
 S2   hzb_cull.hlsli + self-test                           [✅ 2026-09-03: 13/13, gpu == cpu]
 S3b  HZB-тестер на истории S3a                            [✅ 2026-09-04: стена = queries (167/24), остров консервативнее (5 vs 26 чанков); ручка `vis.method:2`]
 S5b  two-pass HZB для теневых вью (CSM по каскаду, VSM по странице) [S5b.1 CSM ✅ 2026-09-04: срезает 160–200 кастеров/каскад, картинка = пол, но −0.13 мс GPU на сегодняшнем контенте → дефолт OFF, ручка `csm.hzbCull`; S5b.2 VSM ⏳]
-S4   G-buffer на ExecuteIndirect                          [крупная работа, паритет картинки]
+S4   G-buffer на ExecuteIndirect                          [✅ 2026-09-04: паритет = пол (стена, камера теней, кроссфейд 0.35), камерный ряд валидатора PASS, GPU ровно, воркеры 0.51→0.04 мс; дефолт ON, `gbuffer.indirect:0` откат]
 S5   two-pass HZB внутри S4                               [цель документа]
 S6   правила границ + гейты                               [закрывает]
 S7   GI-листва                                            [когда появится в уровнях]

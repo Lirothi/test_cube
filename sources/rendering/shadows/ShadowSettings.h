@@ -46,6 +46,15 @@ inline bool g_indirectShadowsEnabled = true;
 // the group cap, GI keeps drawing through the retained CPU tail. Requires g_indirectShadowsEnabled.
 inline bool g_giIndirectShadowsEnabled = true;
 
+// Occlusion plan S4: the camera's opaque G-buffer through the same registry -- the cull's camera
+// row, one ExecuteIndirect per (mesh submesh, LOD) with the group's material bound by the CPU.
+// Objects the registry does not take (non-casters, GI clouds, material overrides, a non-PNTUV
+// layout, a per-object texture override on a shared mesh) keep the CPU path. ON since
+// 2026-09-04: pixel-identical to the CPU path on the wall / shadow-camera / widest-crossfade
+// shots, camera row of the cull validator PASS, K=4 GPU flat, worker record 0.51 -> 0.04 ms for
+// a 0.08 ms serial record. `--set=gbuffer.indirect:0` is the A/B (both paths in one binary).
+inline bool g_indirectGBufferEnabled = true;
+
 // Rung 2 / Step 24a — active shadow method. Legacy = the CSM directional + spot/point/glass ATLAS
 // path; VSM = the virtual page pool (spot/point/glass today; directional after Step 24). Drives both
 // whether the VSM pipeline passes run AND which sampler the light/glass shaders use (VsmActive() →

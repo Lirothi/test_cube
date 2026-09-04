@@ -614,6 +614,7 @@
     <None Include="shaders\wind.hlsli" />
     <None Include="shaders\gbuffer_csm.hlsl" />
     <None Include="shaders\gbuffer_inst.hlsl" />
+    <None Include="shaders\gbuffer_indirect.hlsl" />
     <None Include="shaders\gbuffer_inst_csm.hlsl" />
     <None Include="shaders\glass.hlsl" />
     <None Include="shaders\glass_csm.hlsl" />

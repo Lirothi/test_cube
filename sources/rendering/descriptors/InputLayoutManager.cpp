@@ -119,6 +119,18 @@ void InputLayoutManager::InitBuiltins() {
              D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1)
         .Build(*this, "PosNrmUV_InstCasterId");
 
+    // Occlusion plan S4: the FULL gbuffer vertex (PosNormTanUV above, offsets of VertexPNTUV) plus
+    // the per-instance caster id in slot 1 -- gbuffer_indirect.hlsl's input.
+    Builder()
+        .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0)
+        .Add("NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12)
+        .Add("TANGENT",  0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24)
+        .Add("TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40)
+        .Add("COLOR",    0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 48)
+        .Add("CASTERID", 0, DXGI_FORMAT_R32_UINT, 1, D3D12_APPEND_ALIGNED_ELEMENT,
+             D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1)
+        .Build(*this, "PosNormTanUV_InstCasterId");
+
     // pos+color (slot 0) + instance matrix 4x4 in slot 1 (TEXCOORD4..7)
     Builder()
         .Add("POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,     0, 0)

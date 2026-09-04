@@ -79,6 +79,7 @@ enum class RenderPass : uint16_t {
     GBuffer_Driver = Epilogue_Count,
     GBuffer_OpaqueSimple,
     GBuffer_OpaqueComplex,
+    GBuffer_Indirect, // occlusion plan S4: the registry's camera args, ExecuteIndirect per group
     GBuffer_Selected,
     GBuffer_Count,
 
@@ -142,6 +143,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::GBuffer_Driver: return L"GBuffer.Driver";
     case RenderPass::GBuffer_OpaqueSimple: return L"GBuffer.OpaqueSimple";
     case RenderPass::GBuffer_OpaqueComplex: return L"GBuffer.OpaqueComplex";
+    case RenderPass::GBuffer_Indirect: return L"GBuffer.Indirect";
     case RenderPass::GBuffer_Selected: return L"GBuffer.Selected";
     case RenderPass::Transparent_Driver: return L"Transparent.Driver";
     case RenderPass::Transparent_Simple: return L"Transparent.Simple";

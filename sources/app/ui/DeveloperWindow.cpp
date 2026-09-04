@@ -1694,6 +1694,21 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("ON: GPU-instanced objects cast shadows in VSM (and via the indirect path in\n"
                                       "Legacy), dropping their CPU RenderShadow tail. OFF: Legacy CPU tail only (no VSM).");
 
+                // Occlusion plan S4: the camera's G-buffer through the same registry.
+                graphicsEdit(ImGui::Checkbox("GPU-driven G-buffer (ExecuteIndirect per group)", &render::g_indirectGBufferEnabled));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The opaque G-buffer drawn from the shadow registry's camera cull: one\n"
+                                      "ExecuteIndirect per (mesh submesh, LOD), the group's material bound by the CPU.\n"
+                                      "Objects the registry did not take (non-casters, GI clouds, shader overrides,\n"
+                                      "per-object texture overrides on a shared mesh) keep the CPU path. Pixel parity\n"
+                                      "with the CPU path is the contract (measured 2026-09-04). --set=gbuffer.indirect:0|1");
+                {
+                    const ShadowGpuData& sg = scene.ShadowGpu();
+                    ImGui::Text("indirect gbuffer: %s, %u eligible caster slots",
+                                sg.GBufferIndirectThisFrame() ? "ON this frame" : "off",
+                                sg.GBufferIndirectEligibleCasters());
+                }
+
                 // (Chunked-terrain LOD selection moved to the "LOD" tab — it is a camera-LOD
                 // control, not a shadow one; the caster follows the drawn LOD by construction.)
 

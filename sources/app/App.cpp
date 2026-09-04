@@ -487,6 +487,7 @@ namespace
         // one-shot GPU-vs-CPU cull validator run (its CPU reference covers static casters only), so
         // a headless gate can read its PASS/MISMATCH verdict from the session log.
         if (setting == "shadow.giIndirect") { render::g_giIndirectShadowsEnabled = value != 0.0f; return true; }
+        if (setting == "gbuffer.indirect") { render::g_indirectGBufferEnabled = value != 0.0f; return true; } // occlusion plan S4
         if (setting == "lod.enabled") { render::g_lodEnabled = value != 0.0f; return true; }
         if (setting == "lod.forced")  { render::g_forcedLod = std::clamp((int)value, -1, 3); return true; }
         // LOD selection debug view (dev "LOD" tab). 0 off, 1 tier colours, 2 apparent-triangle-size

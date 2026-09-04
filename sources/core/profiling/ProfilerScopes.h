@@ -90,6 +90,7 @@ extern const Profiler::ScopeNameKey kPassGtao;
 extern const Profiler::ScopeNameKey kPassHzb;
 extern const Profiler::ScopeNameKey kPassOcclusionQueries; // occlusion plan S3a
 extern const Profiler::ScopeNameKey kPassVisTest;          // occlusion plan S3b
+extern const Profiler::ScopeNameKey kGBufferIndirect;      // occlusion plan S4 (CPU record + GPU)
 extern const Profiler::ScopeNameKey kPassBloom;
 extern const Profiler::ScopeNameKey kPassBloomConv;
 extern const Profiler::ScopeNameKey kPassLighting;

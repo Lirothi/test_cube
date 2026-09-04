@@ -109,6 +109,10 @@ GRAPHICS_ENTRIES = [
     # Occlusion plan S3a: the box draw of the hardware occlusion queries (no permutations).
     ("occlusion_query.hlsl", "vs_6_0", "VSMain", [], ""),
     ("occlusion_query.hlsl", "ps_6_0", "PSMain", [], ""),
+    # Occlusion plan S4: the indirect G-buffer (plus the editor object-id permutation Debug builds).
+    ("gbuffer_indirect.hlsl", "vs_6_0", "VSMain", [], ""),
+    ("gbuffer_indirect.hlsl", "ps_6_0", "PSMain", [], ""),
+    ("gbuffer_indirect.hlsl", "ps_6_0", "PSMain", ["EDITOR_OBJECT_ID=1"], "editor-id"),
     # Occlusion plan S5b: the cascade-tile permutation of the depth pyramid build (one define
     # selects it -- the atlas rect source and the 1 - z store). A compute shader in this list
     # because only this list carries defines.

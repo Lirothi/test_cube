@@ -268,6 +268,7 @@ private:
     // Occlusion plan S3a: the camera's occlusion history (per primitive / per chunk), the query
     // heap that records this frame's plan and the CPU copy of the results frame N - latency read
     // at the top of PrepareViews (kept alive for the camera task's Consider calls).
+    std::uint64_t frameNumber_ = 0; // S4: this frame's number, the camera-visible stamp (see PrepareViewQueue)
     vis::OcclusionHistory occlusionHistory_{};
     vis::OcclusionQueryHeap occlusionQueries_{};
     std::vector<std::uint64_t> occlusionResults_;

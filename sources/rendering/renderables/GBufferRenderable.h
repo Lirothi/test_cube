@@ -176,6 +176,21 @@ public:
         return InstancedGraphicsMaterial();
     }
     void FillInstanceData(render::InstancePerObject& out) const override;
+    // Occlusion plan S4: the same record with SLOT `slot`'s material params (baseColor, metalRough,
+    // alphaCutoff, mrMultiply, texOffsScale, texFlags, emissive, windFoliage). The GPU registry
+    // fills one record per (object, submesh) with the submesh's slot, so the indirect G-buffer
+    // draws every submesh with its own material values -- what the CPU per-submesh loop does.
+    void FillInstanceDataForSlot(render::InstancePerObject& out, size_t slot) const;
+
+    // Occlusion plan S4: the indirect G-buffer PSO of a material slot (gbuffer_indirect.hlsl with
+    // the slot's defines and cull mode), or null when this object cannot draw indirect -- a
+    // material shader override, a non-PNTUV vertex layout, or a PSO that failed to build.
+    Material* IndirectGraphicsMaterialForSlot(size_t slot) const
+    {
+        if (slotIndirectGraphicsMaterials_.empty()) { return nullptr; }
+        const size_t i = slot < slotIndirectGraphicsMaterials_.size() ? slot : slotIndirectGraphicsMaterials_.size() - 1;
+        return slotIndirectGraphicsMaterials_[i].get();
+    }
 
     // B2b: slot identity consumed by the queue's batch-compat check and by the multi-slot
     // instanced draw (per-slot SRV staging + per-slot CB fills).
@@ -221,6 +236,7 @@ protected:
 
 private:
     void BuildInstancedMaterials(Renderer* renderer);
+    void BuildIndirectMaterials(Renderer* renderer); // S4
     void ResolveMaterialSlots(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
@@ -255,4 +271,6 @@ private:
     // across objects, so all palms share the same opaque + masked pipelines.
     std::vector<std::shared_ptr<Material>> slotGraphicsMaterials_;
     std::vector<std::shared_ptr<Material>> slotInstancedGraphicsMaterials_;
+    // S4: per-slot indirect G-buffer PSOs (one entry for single-slot objects); empty = CPU path.
+    std::vector<std::shared_ptr<Material>> slotIndirectGraphicsMaterials_;
 };

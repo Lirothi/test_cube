@@ -262,12 +262,40 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         }
         });
 
+    // 1.4 Occlusion plan S4: the GPU-driven half of the opaque G-buffer -- the registry's camera
+    // args, one ExecuteIndirect per (group, LOD), on its own list in parallel with the CPU tail
+    // (the objects the registry did not take). Depth-tested opaque draws, so the order among the
+    // three is free; the position only has to be past the driver's clear.
+    size_t pIndirect = static_cast<size_t>(-1);
+    if (frame_->gbufferIndirect && frame_->shadowGpu)
+    {
+        pIndirect = rgGB.AddPass(RenderPass::GBuffer_Indirect, { pDriver }, [this, renderer, viewCB](RenderGraphPassContext sub) {
+            // ONE list, deliberately. A fan-out over 7 worker lists by virtual-group range (the
+            // RenderObjectBatch shape) was measured at K=4: the per-list cost (allocator, target
+            // binds, cold PSO/VB state on every chunk) took the CPU record from 0.16 to 0.43 ms
+            // total and the GPU from 0.19 to 0.28 ms, for ~1000 ExecuteIndirect that record in
+            // 0.16 ms on one thread anyway.
+            ShadowGpuData* const shadowGpu = frame_->shadowGpu;
+            auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+            SetCommandListName(t.cl, sub.pass);
+            {
+                GPU_SCOPE(t.cl, ProfilerScopes::kGBufferIndirect);
+                CPU_SCOPE(ProfilerScopes::kGBufferIndirect);
+                renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // the driver cleared
+                shadowGpu->RecordIndirectGBufferDraws(renderer, t.cl, viewCB, renderer->GetWireframeMode(),
+                                                      0u, shadowGpu->VirtualGroupCount());
+            }
+            renderer->EndThreadCommandList(t, sub.batchIndex, kGBufferIndirectLocalOrder);
+            });
+    }
+
 #if WITH_EDITOR
     if (frame_->selectedEditorObjectCount != 0)
     {
         RenderGraph<kGBufferRenderGraphPassCount>::DependencyList selectedDeps;
         selectedDeps.push_back(pOpaqueSimple);
         selectedDeps.push_back(pOpaqueComplex);
+        if (pIndirect != static_cast<size_t>(-1)) { selectedDeps.push_back(pIndirect); }
         rgGB.AddPass(RenderPass::GBuffer_Selected, selectedDeps, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
             auto material = resources_.GetSelectionStencilMaterial();
             if (!frame_->objects || !material)

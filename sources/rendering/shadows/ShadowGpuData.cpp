@@ -269,6 +269,28 @@ void ShadowGpuData::FillInstance(const RenderableObjectBase* obj, render::Instan
     }
 }
 
+std::uint32_t ShadowGpuData::MaterialSlotOf(const Mesh* mesh, size_t ordinal, size_t slotCount)
+{
+    // GBufferRenderable::Render's clamp: submesh -> its materialSlot, the last slot past the end.
+    const std::vector<Mesh::Submesh>* subs = mesh ? &mesh->GetSubmeshes() : nullptr;
+    std::uint32_t slot = (subs && ordinal < subs->size()) ? (*subs)[ordinal].materialSlot : 0u;
+    if (slotCount > 0 && slot >= slotCount) { slot = static_cast<std::uint32_t>(slotCount - 1); }
+    return slot;
+}
+
+void ShadowGpuData::FillInstanceSlot(const RenderableObjectBase* obj, size_t ordinal, render::InstancePerObject& out)
+{
+    const GBufferRenderable* gb = obj ? obj->AsGBufferRenderable() : nullptr;
+    const RenderableObject* ro = obj ? obj->AsRenderableObject() : nullptr;
+    if (gb && ro)
+    {
+        std::memset(&out, 0, sizeof(out));
+        gb->FillInstanceDataForSlot(out, MaterialSlotOf(ro->GetMesh(), ordinal, gb->SlotCount()));
+        return;
+    }
+    FillInstance(obj, out);
+}
+
 void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out)
 {
     std::memset(&out, 0, sizeof(out));
@@ -377,7 +399,7 @@ Material* ShadowGpuData::IndirectShadowPoolMaterial() const
 // per-GROUP answer was poisoned for the near tent. Fresh per-instance math has no such state.
 void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
     const std::vector<std::unique_ptr<RenderableObjectBase>>& objects,
-    const Math::float3& cameraPos)
+    const Math::float3& cameraPos, bool cameraOcclusionValid, std::uint64_t frameNumber)
 {
     lastCameraPos_ = DirectX::XMFLOAT3(cameraPos.x, cameraPos.y, cameraPos.z);
     groupLodOverride_.assign(std::max<size_t>(numMeshGroups_, 1), -1);
@@ -423,6 +445,48 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
             for (std::uint32_t s = 0; s < slots; ++s) { casterLod_[idx + s] = lod; }
         }
         idx += slots;
+    }
+    // S4: this frame's camera flags + crossfade per caster -- zero on a frame the indirect
+    // G-buffer does not run, so the cull emits nothing for the camera. Same object walk, same
+    // cursor as the LOD table above.
+    casterCamCpu_.assign(casterLod_.size(), 0u);
+    casterFadeCpu_.assign(casterLod_.size(), 0.0f);
+    if (gbufferIndirectFrame_)
+    {
+        std::uint32_t c = 0;
+        for (const auto& objPtr : objects)
+        {
+            const RenderableObjectBase* obj = objPtr.get();
+            if (!IsCaster(obj)) { continue; }
+            const std::uint32_t slots = static_cast<std::uint32_t>(CasterSlots(obj));
+            if (c + slots > casterCamCpu_.size()) { break; }
+            const RenderableObject* ro = obj->AsRenderableObject();
+            const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
+            // Candidates: eligible AND kept by the camera's CPU frustum cull this frame. The
+            // rest carry stale verdicts and would only cost an empty ExecuteIndirect per group
+            // (measured: the wall camera at K=4 issued ~all 448 groups for 7 visible objects).
+            if (obj->GBufferIndirect() && mesh && obj->CameraVisibleAt(frameNumber))
+            {
+                const bool chunked = mesh->IsChunkedSubmeshes();
+                const bool occluded = cameraOcclusionValid && obj->CameraOccluded();
+                const std::vector<std::uint8_t>& mask = ro->ChunkCameraVisible();
+                // The CPU path's crossfade rule (RenderableObject::Render): never for a chunked
+                // mesh, only when a next tier exists. Buckets stop at kMaxShadowLods.
+                const unsigned int lod = casterLod_[c] & render::kCasterLodMask;
+                const float fadeWeight = ro->GetCameraLodFade();
+                const bool fading = !chunked && fadeWeight > 0.0f && (lod + 1u) < mesh->GetLodCount() &&
+                                    (lod + 1u) < render::kMaxShadowLods;
+                for (std::uint32_t s = 0; s < slots; ++s)
+                {
+                    // A chunk's mask is its frustum AND occlusion verdict (S1 + S3a); a whole
+                    // object takes the history's verdict.
+                    const bool skip = chunked ? (s < mask.size() && mask[s] == 0u) : occluded;
+                    casterCamCpu_[c + s] = 1u | (skip ? 2u : 0u);
+                    casterFadeCpu_[c + s] = fading ? fadeWeight : 0.0f;
+                }
+            }
+            c += slots;
+        }
     }
     // Change detection for the page cache: any LOD move invalidates cached pages (they hold
     // the old geometry). Rebuild resizes the table, which reads as a change — correct, a new
@@ -481,6 +545,46 @@ void ShadowGpuData::RefreshVirtualGroups(Renderer* renderer)
         dst[vg * 4 + 3] = vgCasterCount_[vg];
         base += vgCasterCount_[vg];
     }
+
+    // S4: the camera's buckets -- eligible, unskipped casters; a crossfading one in its own tier
+    // AND the next (two visible-list slots). Its own base table, so the shadow views' slices
+    // (which the VSM per-page cull also reads) never learn about the second slot.
+    vgCamCount_.assign(numVirtualGroups_, 0u);
+    camListCount_ = 0;
+    if (!gbufferIndirectFrame_) { return; }
+    const std::uint32_t nc = std::min<std::uint32_t>(n, static_cast<std::uint32_t>(std::min(casterCamCpu_.size(), casterFadeCpu_.size())));
+    for (std::uint32_t c = 0; c < nc; ++c)
+    {
+        if ((casterCamCpu_[c] & 3u) != 1u) { continue; }
+        const std::uint32_t g = casterGroupCpu_[c];
+        if (g >= numMeshGroups_) { continue; }
+        const std::uint32_t lod = casterLod_[c] & render::kCasterLodMask;
+        const std::uint32_t vg = g * render::kMaxShadowLods +
+            (lod < render::kMaxShadowLods ? lod : render::kMaxShadowLods - 1u);
+        ++vgCamCount_[vg];
+        ++camListCount_;
+        if (casterFadeCpu_[c] > 0.0f && (lod + 1u) < render::kMaxShadowLods)
+        {
+            ++vgCamCount_[vg + 1u];
+            ++camListCount_;
+        }
+    }
+    if (!EnsureRing(renderer, perGroupVgCam_, numVirtualGroups_, 4 * sizeof(std::uint32_t),
+                    L"ShadowGpuData.PerGroupVgCam"))
+    {
+        return;
+    }
+    auto* cam = reinterpret_cast<std::uint32_t*>(perGroupVgCam_.Region(f));
+    if (!cam) { return; }
+    std::uint32_t camBase = 0;
+    for (std::uint32_t vg = 0; vg < numVirtualGroups_; ++vg)
+    {
+        cam[vg * 4 + 0] = camBase;
+        cam[vg * 4 + 1] = dst[vg * 4 + 1];
+        cam[vg * 4 + 2] = dst[vg * 4 + 2];
+        cam[vg * 4 + 3] = vgCamCount_[vg];
+        camBase += vgCamCount_[vg];
+    }
 }
 
 // The override table's home is a PER-FRAME ring region: it is rewritten every frame, so writing it
@@ -510,6 +614,23 @@ void ShadowGpuData::UploadCasterLods(Renderer* renderer)
     if (std::uint8_t* dst = casterLodBuf_.Region(f))
     {
         std::memcpy(dst, casterLod_.data(), casterLod_.size() * sizeof(std::uint32_t));
+    }
+    // S4: the camera flags + crossfade tables, same ring discipline (rewritten every frame).
+    if (!casterCamCpu_.empty() &&
+        EnsureRing(renderer, casterCam_, casterCamCpu_.size(), sizeof(std::uint32_t), L"ShadowGpuData.CasterCam"))
+    {
+        if (std::uint8_t* dst = casterCam_.Region(f))
+        {
+            std::memcpy(dst, casterCamCpu_.data(), casterCamCpu_.size() * sizeof(std::uint32_t));
+        }
+    }
+    if (!casterFadeCpu_.empty() &&
+        EnsureRing(renderer, casterFade_, casterFadeCpu_.size(), sizeof(float), L"ShadowGpuData.CasterFade"))
+    {
+        if (std::uint8_t* dst = casterFade_.Region(f))
+        {
+            std::memcpy(dst, casterFadeCpu_.data(), casterFadeCpu_.size() * sizeof(float));
+        }
     }
 }
 
@@ -550,6 +671,11 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         dec.hzb = cascadeHzb_.Active() && HzbRingsValid() && cullPostMat_ != nullptr && !readbackWanted;
     }
     hzbCullThisFrame_ = dec.hzb;
+    // S4: the camera row -- Scene's decision for the frame, provided the camera rings exist and
+    // this frame's tables put something in a bucket. Independent of the validation frame: the
+    // camera row is validated against its own snapshot (see below).
+    dec.gbuffer = gbufferIndirectFrame_ && camArgs_.Valid() && camVisibleList_.Valid() && perGroupVgCam_.Valid() &&
+                  casterCam_.Valid() && casterFade_.Valid() && numVirtualGroups_ > 0 && camListCount_ > 0;
     // The matrices and the prev-valid bits as they stand NOW: the Main_CsmHzb builder, which runs
     // after this one and before any record, marks this frame's pyramids built, and a record-time
     // read would take that mark for last frame's.
@@ -583,6 +709,12 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         {
             ctx.Use(cascadeHzb_.Pyramid(c), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
+    }
+    if (dec.gbuffer)
+    {
+        // S4: the camera's pair, written here, consumed by Main_GBuffer's indirect pass.
+        ctx.Use(camArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(camVisibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
     // Unified instance/bounds: uploaded, then scattered into, then read by the cull. The NESTING
@@ -670,13 +802,21 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
                    ctx.renderer->GetTotalFrameNumber() > render::kFrameCount;
     if (dec.readback)
     {
-        EnsureReadback(ctx.renderer, indirectArgs_.regionBytes);
+        // S4: the camera row rides behind the shadow rows in the same readback.
+        EnsureReadback(ctx.renderer, indirectArgs_.regionBytes + camArgs_.regionBytes);
         dec.readback = valReadback_ != nullptr;
     }
     if (dec.readback)
     {
         valBounds_ = cpuBounds_;
         valFrustums_ = cpuViewFrustums_;
+        // S4: the camera row's inputs of THIS frame -- eligibility, the occlusion/chunk skip and
+        // the crossfade (a fading caster counts twice), so the CPU reference reproduces the
+        // camera branch of shadow_cull_cs.hlsl exactly.
+        valCamOn_ = dec.gbuffer;
+        valCam_ = casterCamCpu_;
+        valFade_ = casterFadeCpu_;
+        valCamGroups_ = numVirtualGroups_;
         valCasters_ = dec.giOn ? count_ : staticCount_;
         valViews_ = render::kMaxShadowViews;
         // The args are laid out per VIRTUAL group (S3.6: real group * kMaxShadowLods + receiver
@@ -689,12 +829,125 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         ctx.NextPoint();
         dec.valCopy = ctx.usePoint ? *ctx.usePoint : 0u;
         ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        if (dec.gbuffer) { ctx.Use(camArgs_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE); }
     }
     ctx.NextPoint();
     dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    if (dec.gbuffer)
+    {
+        ctx.Use(camArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        ctx.Use(camVisibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    }
     return dec;
+}
+
+// ---- S4: the camera's indirect G-buffer -------------------------------------------------------
+
+bool ShadowGpuData::GBufferIndirectReady() const
+{
+    return eligibleCasterCount_ > 0 && camArgs_.Valid() && camVisibleList_.Valid() &&
+           cullMat_ && cullClearMat_ && numVirtualGroups_ > 0 && IndirectDrawReady();
+}
+
+bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                               D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool wireframe,
+                                               std::uint32_t vgBegin, std::uint32_t vgEnd)
+{
+    if (!renderer || !cl || !gbufferIndirectFrame_ || !camArgs_.Valid() || !camVisibleList_.Valid()) { return false; }
+    if (numVirtualGroups_ == 0 || camListCount_ == 0) { return false; }
+    vgEnd = std::min(vgEnd, numVirtualGroups_);
+    if (vgBegin >= vgEnd) { return false; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return false; }
+    ID3D12CommandSignature* sig = renderer->GetDrawIndexedCommandSignature();
+    if (!sig) { return false; }
+
+    // b0 per LOD value: the virtual group's LOD is the only per-draw constant, and there are four
+    // of them -- four allocations for the whole pass, not one per draw.
+    struct IndirectDrawCB { std::uint32_t groupLod; std::uint32_t pad[3]; };
+    D3D12_GPU_VIRTUAL_ADDRESS lodCb[render::kMaxShadowLods] = {};
+    for (std::uint32_t L = 0; L < render::kMaxShadowLods; ++L)
+    {
+        auto cb = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(IndirectDrawCB)), render::kConstantBufferAlignment);
+        if (!cb.cpu) { return false; }
+        const IndirectDrawCB c{ L, { 0u, 0u, 0u } };
+        std::memcpy(cb.cpu, &c, sizeof(c));
+        lodCb[L] = cb.gpu;
+    }
+    // t3..t5 for every draw: the records (the unified copy the shadow VS reads too), the fades,
+    // the camera LODs. Staged once.
+    const D3D12_GPU_DESCRIPTOR_HANDLE tail = renderer->StageSrvUavTable({ InstanceReadSrv(f), casterFade_.Srv(f), CasterLodSrv(f) }).gpu;
+
+    cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    // Slot 1 = the camera visible list as a per-instance stream; each draw's StartInstanceLocation
+    // (seeded by the cull-clear from the camera bases) offsets into it.
+    D3D12_VERTEX_BUFFER_VIEW visVBV{};
+    visVBV.BufferLocation = camVisibleList_.buffer->GetGPUVirtualAddress() + static_cast<UINT64>(f) * camVisibleList_.regionBytes;
+    visVBV.SizeInBytes = static_cast<UINT>(camVisibleList_.regionBytes);
+    visVBV.StrideInBytes = sizeof(std::uint32_t);
+    cl->IASetVertexBuffers(1, 1, &visVBV);
+
+    const UINT64 argRegionBase = static_cast<UINT64>(f) * camArgs_.regionBytes;
+    const Mesh* boundMesh = nullptr;
+    UINT boundLod = 0xFFFFFFFFu;
+    bool drew = false;
+    for (std::uint32_t vg = vgBegin; vg < vgEnd; ++vg)
+    {
+        if (vg >= vgCamCount_.size() || vgCamCount_[vg] == 0u) { continue; }
+        const std::uint32_t g = vg / render::kMaxShadowLods;
+        const std::uint32_t vgLod = vg % render::kMaxShadowLods;
+        if (g >= numStaticGroups_ || g >= groupGbuf_.size()) { continue; } // GI groups draw their own way
+        const GroupGbuf& gg = groupGbuf_[g];
+        const Mesh* mesh = (g < groupMesh_.size()) ? groupMesh_[g] : nullptr;
+        if (!gg.mat || !mesh) { continue; }
+        ID3D12Resource* vb = mesh->GetVertexBufferResource();
+        const UINT groupLod = mesh->ClampExplicitLod(vgLod);
+        ID3D12Resource* ib = mesh->GetLodIndexBufferResource(groupLod);
+        if (!vb || !ib) { continue; }
+
+        if (mesh != boundMesh || groupLod != boundLod)
+        {
+            D3D12_VERTEX_BUFFER_VIEW vbv{};
+            vbv.BufferLocation = vb->GetGPUVirtualAddress();
+            vbv.SizeInBytes = static_cast<UINT>(vb->GetDesc().Width);
+            vbv.StrideInBytes = mesh->GetVertexStride();
+            cl->IASetVertexBuffers(0, 1, &vbv);
+            D3D12_INDEX_BUFFER_VIEW ibv{};
+            ibv.BufferLocation = ib->GetGPUVirtualAddress();
+            ibv.SizeInBytes = static_cast<UINT>(ib->GetDesc().Width);
+            ibv.Format = mesh->GetIndexFormat();
+            cl->IASetIndexBuffer(&ibv);
+            boundMesh = mesh;
+            boundLod = groupLod;
+        }
+
+        // The group's material exactly as the CPU per-submesh draw binds it: textures + sampler
+        // (t0..t2, s0), surface params (b2); plus the view CB and the LOD constant.
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        RenderContext& ctx = h.ref();
+        ctx.cbv[0] = lodCb[vgLod];
+        ctx.cbv[1] = viewCB;
+        if (gg.md)
+        {
+            gg.md->StageGBufferBindings(renderer, ctx, 0, 0);
+            gg.md->StageGBufferSurfaceParams(renderer, ctx, 2);
+        }
+        else
+        {
+            MaterialData::StageNeutralGBufferSurfaceParams(renderer, ctx, 2);
+        }
+        ctx.srvTable[3] = tail;
+        // GBufferBindingGuard.h: a root parameter left unbound (a textureless material) is not a
+        // draw to issue -- the CPU path skips that submesh the same way.
+        if (!gg.mat->Bind(cl, ctx, wireframe)) { continue; }
+
+        const UINT64 argOffset = argRegionBase + static_cast<UINT64>(vg) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+        renderer->ExecuteIndirect(cl, sig, 1, camArgs_.buffer.Get(), argOffset, nullptr, 0);
+        drew = true;
+    }
+    return drew;
 }
 
 Material* ShadowGpuData::IndirectShadowPageMaterial() const
@@ -765,6 +1018,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     cpuInstances_.assign(casterCount, render::InstancePerObject{});
     cpuBounds_.assign(casterCount, render::CasterBounds{});
     pending_.assign(casterCount, 0);
+    // S4: eligibility is re-decided below for every object in the registry; everything else (a
+    // non-caster, a GI object, an object that just stopped casting) must read as CPU-drawn.
+    casterEligible_.assign(casterCount, 0u);
+    std::vector<GroupGbuf> groupGbufCpu; // per static group, pushed as groups are allocated
+    for (const auto& o : objects) { if (o) { o->SetGBufferIndirect(false); } }
 
     // (1) STATIC casters: fill per-caster data + assign mesh-groups (the cull groups draws by mesh,
     // so the indirect arg/count buffers are sized per (view, mesh-group)). B3: one caster SLOT per
@@ -800,6 +1058,18 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             GBufferRenderable* gb = obj->AsGBufferRenderable();
             for (size_t s = 0; s < slots; ++s)
             {
+                // S4: the group's G-buffer identity = this FIRST object's material slot for the
+                // submesh (textures + surface params) and its indirect PSO.
+                {
+                    GroupGbuf gg{};
+                    if (gb)
+                    {
+                        const std::uint32_t slot = MaterialSlotOf(mesh, s, gb->SlotCount());
+                        gg.md = gb->GetMaterialDataForSlot(slot);
+                        gg.mat = gb->IndirectGraphicsMaterialForSlot(slot);
+                    }
+                    groupGbufCpu.push_back(gg);
+                }
                 DirectX::XMUINT2 gm{ 0xFFFFFFFFu, 0u };
                 const MaterialData* md = gb ? gb->GetMaterialDataForSlot(s) : nullptr;
                 if (md && md->alphaMask && md->hasAlbedo)
@@ -830,18 +1100,36 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         if (inst.windStrength > 0.0f) { hasWindCasters_ = true; }
         const std::uint32_t dyn = obj->IsDynamicCaster() ? 1u : 0u;
         const bool chunked = mesh && mesh->IsChunkedSubmeshes();
+        // S4: the object draws through the indirect G-buffer when EVERY submesh's slot has the
+        // indirect PSO and the same MaterialData as the group's first object -- otherwise a
+        // second object overriding a shared mesh's material would draw with the first one's
+        // textures. All-or-nothing per object, so the CPU tail and the indirect pass never split
+        // one object between them.
+        bool eligible = gbFoliage != nullptr && mesh != nullptr;
+        if (eligible)
+        {
+            const std::uint32_t g0 = meshToGroup[mesh];
+            for (size_t s = 0; s < slots && eligible; ++s)
+            {
+                const std::uint32_t slot = MaterialSlotOf(mesh, s, gbFoliage->SlotCount());
+                const GroupGbuf& gg = groupGbufCpu[g0 + s];
+                Material* mat = gbFoliage->IndirectGraphicsMaterialForSlot(slot);
+                eligible = mat != nullptr && mat == gg.mat && gbFoliage->GetMaterialDataForSlot(slot) == gg.md;
+            }
+        }
+        obj->SetGBufferIndirect(eligible);
         for (size_t s = 0; s < slots; ++s)
         {
-            cpuInstances_[idx] = inst;
-            // Caster ids are already one per slot, so the PER-SLOT foliage weight rides here for
-            // free — this is what lets the shadow VS treat fronds and trunk differently without any
-            // extra buffer. FillInstance only knows slot 0, so patch each slot's own value in.
-            if (gbFoliage) { cpuInstances_[idx].windFoliage = gbFoliage->FoliageForSlot(s); }
+            // S4: each caster id is one submesh, and since S4 its record carries THAT submesh's
+            // slot params (the shadow VS reads world/wind only, so the shadow path is unchanged;
+            // the per-slot foliage weight the shadow VS does read is the slot's, as before).
+            FillInstanceSlot(obj, s, cpuInstances_[idx]);
             cpuBounds_[idx] = bnd;
             if (chunked) { FillChunkBounds(ro, s, bnd, cpuBounds_[idx]); }
             casterMesh[idx] = mesh;
             casterSub[idx] = static_cast<std::uint32_t>(s);
             staticDynamic[idx] = dyn;
+            casterEligible_[idx] = eligible ? 1u : 0u;
             ++idx;
         }
     }
@@ -902,6 +1190,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     numMeshGroups_ = numGroups;
     numVirtualGroups_ = numMeshGroups_ * render::kMaxShadowLods; // S3.6: one bucket per (group, receiver LOD)
     numStaticGroups_ = staticGroups; // groups below this are static (LOD-biased); the rest are GI (LOD0)
+    // S4: per-group G-buffer identity (static groups; GI groups draw through their own path).
+    groupGbuf_ = std::move(groupGbufCpu);
+    groupGbuf_.resize(numMeshGroups_);
+    eligibleCasterCount_ = 0;
+    for (std::uint8_t e : casterEligible_) { eligibleCasterCount_ += e; }
 
     // (3) group id -> Mesh*: static groups from the first-seen map (B3: a mesh's submesh groups
     // are contiguous and all map to it), then one per folded GI object.
@@ -1296,6 +1589,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         EnsureUavRing(renderer, indirectArgsB_, hzbViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.IndirectArgsB");
         EnsureUavRing(renderer, visibleListB_, hzbViews * casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.VisibleListB");
     }
+    // S4: the camera's own args (one row of virtual groups) and visible list -- two slots per
+    // caster, since a crossfading caster sits in two LOD buckets.
+    EnsureUavRing(renderer, camArgs_, groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.CamArgs");
+    EnsureUavRing(renderer, camVisibleList_, 2u * casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.CamVisibleList");
     // Step 2 (GI→VSM): DEFAULT-heap mirrors of instances_/bounds_, sized to `casters` per region.
     // RecordCull copies the ring's region into these each frame (verbatim at this step; Step 4 also
     // scatters GI casters into them). Their per-region SRVs feed the cull (bounds) + indirect VS (t0).
@@ -1307,6 +1604,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     RebuildCullDescriptors(renderer);
     RebuildUnifiedDescriptors(renderer); // Step 2: per-region SRVs onto the unified buffers
     valState_ = 0; // re-validate after a caster-set change
+    rebuildPending_ = false;
 
     char buf[352];
     std::snprintf(buf, sizeof(buf),
@@ -1345,7 +1643,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
     // the static count unchanged but must re-run Rebuild (else groupMesh_/giCasters_ dangle). The
     // instances_/bounds_ rings are sized to the static count only (GI lives in the unified buffers).
     if (!instances_.Valid() || !bounds_.Valid() || newStatic != staticCount_ ||
-        newGiInstances != giFoldableInstances_ ||
+        newGiInstances != giFoldableInstances_ || rebuildPending_ ||
         newStatic > instances_.capacity || newStatic > bounds_.capacity)
     {
         Rebuild(renderer, objects);
@@ -1394,23 +1692,17 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         }
         if ((ro && ro->MovedThisFrame()) || windFadeChanged)
         {
-            FillInstance(obj, cpuInstances_[idx]);
             render::CasterBounds objectBounds{};
             FillBounds(obj, objectBounds);
-            cpuBounds_[idx] = objectBounds;
             // Terrain today is static, so this branch never runs for a chunked mesh — but leaving
             // the object box here would silently un-chunk a mesh the moment one ever moved, and the
             // bug would look like a pure performance regression with a correct image.
             const Mesh* movedMesh = ro ? ro->GetMesh() : nullptr;
             const bool chunkedMover = movedMesh && movedMesh->IsChunkedSubmeshes();
-            if (chunkedMover) { FillChunkBounds(ro, 0, objectBounds, cpuBounds_[idx]); }
-            const GBufferRenderable* gbF = obj->AsGBufferRenderable();
-            if (gbF) { cpuInstances_[idx].windFoliage = gbF->FoliageForSlot(0); }
-            for (size_t s = 1; s < slots; ++s) // duplicate across the object's submesh slots
+            for (size_t s = 0; s < slots; ++s) // S4: each submesh slot's own record (see Rebuild)
             {
-                cpuInstances_[idx + s] = cpuInstances_[idx];
-                if (gbF) { cpuInstances_[idx + s].windFoliage = gbF->FoliageForSlot(s); }
-                cpuBounds_[idx + s] = cpuBounds_[idx];
+                FillInstanceSlot(obj, s, cpuInstances_[idx + s]);
+                cpuBounds_[idx + s] = objectBounds;
                 if (chunkedMover) { FillChunkBounds(ro, s, objectBounds, cpuBounds_[idx + s]); }
             }
             for (size_t s = 0; s < slots; ++s)
@@ -1797,6 +2089,26 @@ void ShadowGpuData::RebuildCullDescriptors(Renderer* renderer)
             }
         }
         structuredUint(visibleListB_, 6);
+        // S4: the camera's args (RAW) + visible list.
+        {
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(7 * render::kFrameCount + f);
+            if (camArgs_.Valid())
+            {
+                D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+                ud.Format = DXGI_FORMAT_R32_TYPELESS;
+                ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+                ud.Buffer.FirstElement = static_cast<UINT64>(f) * (camArgs_.regionBytes / 4);
+                ud.Buffer.NumElements = static_cast<UINT>(camArgs_.regionBytes / 4);
+                ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+                dev->CreateUnorderedAccessView(camArgs_.buffer.Get(), nullptr, &ud, h);
+                cullUav_[7 * render::kFrameCount + f] = h;
+            }
+            else
+            {
+                cullUav_[7 * render::kFrameCount + f] = cullUav_[f];
+            }
+        }
+        structuredUint(camVisibleList_, 8);
     }
 }
 
@@ -2042,8 +2354,11 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         renderer->EmitPoint(cl, dec.unifiedRead);
     }
 
-    struct CullCB { std::uint32_t numCasters, numViews, numGroups, pad; };
-    auto writeCB = [&](std::uint8_t* dst) { CullCB c{ numCasters, numViews, numGroups, 0u }; std::memcpy(dst, &c, sizeof(c)); };
+    // S4: the fourth word is the camera's slot in the frustum ring (the last one, past the
+    // shadow views), or ~0 when the camera row is off this frame.
+    struct CullCB { std::uint32_t numCasters, numViews, numGroups, camView; };
+    const std::uint32_t camView = dec.gbuffer ? render::kMaxShadowViews : 0xFFFFFFFFu;
+    auto writeCB = [&](std::uint8_t* dst) { CullCB c{ numCasters, numViews, numGroups, camView }; std::memcpy(dst, &c, sizeof(c)); };
     const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
     cullCastersThisFrame_ = numCasters;
@@ -2082,6 +2397,23 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             indirectArgsB_.buffer.Get());
     }
 
+    // S4: the camera's args, seeded from the camera's own bases (one view row).
+    if (dec.gbuffer)
+    {
+        auto writeCBCam = [&](std::uint8_t* dst) { CullCB c{ numCasters, 1u, numGroups, camView }; std::memcpy(dst, &c, sizeof(c)); };
+        RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCBCam,
+            { perGroupVgCam_.Srv(f) },
+            { cullUav_[7 * render::kFrameCount + f], cullUav_[2 * render::kFrameCount + f], deferredCountUav() },
+            noSampler,
+            numGroups, 1,
+            camArgs_.buffer.Get());
+    }
+    // S4: the camera tables of the cull (t9..t11, u4/u5); placeholders on a frame without the
+    // camera row (the shader never reads them then, the table just may not have holes).
+    const D3D12_CPU_DESCRIPTOR_HANDLE camGroupSrv = (dec.gbuffer && perGroupVgCam_.Valid()) ? perGroupVgCam_.Srv(f) : perGroupVg_.Srv(f);
+    const D3D12_CPU_DESCRIPTOR_HANDLE camFlagSrv = (dec.gbuffer && casterCam_.Valid()) ? casterCam_.Srv(f) : casterGroup_.Srv(0);
+    const D3D12_CPU_DESCRIPTOR_HANDLE camFadeSrv = (dec.gbuffer && casterFade_.Valid()) ? casterFade_.Srv(f) : casterGroup_.Srv(0);
+
     // Cull: frustum-test every caster into the visible list + InstanceCounts. Reads bounds from the
     // unified buffer (Step 2) when built, else the upload ring (fallback). S5b: two constant
     // buffers (b1 = the cascade HZB matrices), so the single-CBV helper does not fit -- the same
@@ -2099,9 +2431,11 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             rc.cbv[0] = cb0.gpu;
             rc.cbv[1] = cb1.gpu;
             rc.srvTable[0] = renderer->StageSrvUavTable({ BoundsReadSrv(f), viewFrustums_.Srv(f), casterGroup_.Srv(0), perGroupVg_.Srv(f),
-                                                          CasterLodSrv(f), hzbSrv[0], hzbSrv[1], hzbSrv[2], hzbSrv[3] }).gpu;
+                                                          CasterLodSrv(f), hzbSrv[0], hzbSrv[1], hzbSrv[2], hzbSrv[3],
+                                                          camGroupSrv, camFlagSrv, camFadeSrv }).gpu;
             rc.uavTable[0] = renderer->StageSrvUavTable({ cullUav_[f], cullUav_[render::kFrameCount + f],
-                                                          deferredListUav(), deferredCountUav() }).gpu;
+                                                          deferredListUav(), deferredCountUav(),
+                                                          cullUav_[7 * render::kFrameCount + f], cullUav_[8 * render::kFrameCount + f] }).gpu;
             rc.samplerTable[0] = noSampler;
             cullMat_->Bind(cl, rc);
             const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
@@ -2119,6 +2453,11 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         renderer->EmitPoint(cl, dec.valCopy);
         cl->CopyBufferRegion(valReadback_.Get(), 0, indirectArgs_.buffer.Get(),
                              static_cast<UINT64>(f) * indirectArgs_.regionBytes, indirectArgs_.regionBytes);
+        if (dec.gbuffer)
+        {
+            cl->CopyBufferRegion(valReadback_.Get(), indirectArgs_.regionBytes, camArgs_.buffer.Get(),
+                                 static_cast<UINT64>(f) * camArgs_.regionBytes, camArgs_.regionBytes);
+        }
     }
 
     // Step 6: leave the args in INDIRECT_ARGUMENT and the visible list as a vertex buffer so the
@@ -2437,7 +2776,8 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
     if (renderer->GetTotalFrameNumber() < valFrame_ + render::kFrameCount) { return; }
 
     const size_t argBytes = static_cast<size_t>(valViews_) * valGroups_ * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
-    D3D12_RANGE readRange{ 0, argBytes };
+    const size_t camBytes = valCamOn_ ? static_cast<size_t>(valCamGroups_) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) : 0u;
+    D3D12_RANGE readRange{ 0, indirectArgs_.regionBytes + camBytes };
     void* mapped = nullptr;
     if (FAILED(valReadback_->Map(0, &readRange, &mapped)) || !mapped)
     {
@@ -2454,8 +2794,17 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
             gpuTotal[v] += args[v * valGroups_ + g].InstanceCount;
         }
     }
+    // S4: the camera row sits behind the shadow rows (its own region, copied at that offset).
+    std::uint32_t gpuCam = 0;
+    if (valCamOn_)
+    {
+        const auto* camArgs = reinterpret_cast<const D3D12_DRAW_INDEXED_ARGUMENTS*>(
+            static_cast<const std::uint8_t*>(mapped) + indirectArgs_.regionBytes);
+        for (std::uint32_t g = 0; g < valCamGroups_; ++g) { gpuCam += camArgs[g].InstanceCount; }
+    }
     const D3D12_RANGE noWrite{ 0, 0 };
     valReadback_->Unmap(0, &noWrite);
+    (void)argBytes;
 
     // CPU per-view totals from the snapshot (same positive-vertex test as shadow_cull_cs.hlsl).
     std::uint32_t mismatchViews = 0, firstView = 0, firstCpu = 0, firstGpu = 0;
@@ -2493,18 +2842,56 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
         }
     }
 
-    char buf[512];
-    if (mismatchViews == 0)
+    // S4: the camera row -- the same frustum test with the camera's planes (the slot past the
+    // shadow views), gated by this frame's eligibility + skip flags, a fading caster twice: the
+    // CPU twin of the camera branch in shadow_cull_cs.hlsl.
+    std::uint32_t cpuCam = 0;
+    bool camMismatch = false;
+    if (valCamOn_ && valFrustums_.size() > render::kMaxShadowViews)
     {
-        std::snprintf(buf, sizeof(buf),
-            "[ShadowGpuData] cull validation PASS: %u views match CPU (%u casters, %u groups).\n",
-            valViews_, valCasters_, valGroups_);
+        const render::ShadowViewFrustum& vf = valFrustums_[render::kMaxShadowViews];
+        for (std::uint32_t c = 0; c < valCasters_ && c < valCam_.size(); ++c)
+        {
+            if ((valCam_[c] & 3u) != 1u) { continue; }
+            const render::CasterBounds& b = valBounds_[c];
+            bool visible = true;
+            for (int i = 0; i < static_cast<int>(render::kShadowViewPlanes); ++i)
+            {
+                const DirectX::XMFLOAT4& p = vf.planes[i];
+                const float signedDist = p.x * b.center.x + p.y * b.center.y + p.z * b.center.z + p.w;
+                const float projRadius = std::abs(p.x) * b.halfExtents.x + std::abs(p.y) * b.halfExtents.y + std::abs(p.z) * b.halfExtents.z;
+                if (signedDist + projRadius < 0.0f) { visible = false; break; }
+            }
+            if (!visible) { continue; }
+            ++cpuCam;
+            if (c < valFade_.size() && valFade_[c] > 0.0f) { ++cpuCam; }
+        }
+        camMismatch = cpuCam != gpuCam;
+    }
+
+    char buf[512];
+    if (mismatchViews == 0 && !camMismatch)
+    {
+        if (valCamOn_)
+        {
+            std::snprintf(buf, sizeof(buf),
+                "[ShadowGpuData] cull validation PASS: %u views + camera match CPU (%u casters, %u groups; camera %u).\n",
+                valViews_, valCasters_, valGroups_, gpuCam);
+        }
+        else
+        {
+            std::snprintf(buf, sizeof(buf),
+                "[ShadowGpuData] cull validation PASS: %u views match CPU (%u casters, %u groups).\n",
+                valViews_, valCasters_, valGroups_);
+        }
     }
     else
     {
         std::snprintf(buf, sizeof(buf),
-            "[ShadowGpuData] cull validation MISMATCH: %u/%u views differ (first view %u: cpu=%u gpu=%u).%s\n",
-            mismatchViews, valViews_, firstView, firstCpu, firstGpu, mismatchList.c_str());
+            "[ShadowGpuData] cull validation MISMATCH: %u/%u views differ (first view %u: cpu=%u gpu=%u).%s%s cam cpu=%u/gpu=%u\n",
+            mismatchViews, valViews_, firstView, firstCpu, firstGpu, mismatchList.c_str(),
+            camMismatch ? " CAMERA row differs:" : "", cpuCam, gpuCam);
+        mismatchViews = std::max(mismatchViews, camMismatch ? 1u : 0u);
     }
     // The verdict this validation exists to produce, readable (session log) by the gate runs that
     // trust it.
@@ -2544,4 +2931,14 @@ void ShadowGpuData::Reset()
     cascadeHzb_.Invalidate();
     hzbCullThisFrame_ = false;
     hzbStats_.fill(0);
+    // S4: the group materials point into the objects being dropped.
+    groupGbuf_.clear();
+    casterEligible_.clear();
+    casterCamCpu_.clear();
+    casterFadeCpu_.clear();
+    vgCamCount_.clear();
+    eligibleCasterCount_ = 0;
+    camListCount_ = 0;
+    gbufferIndirectFrame_ = false;
+    valCamOn_ = false;
 }

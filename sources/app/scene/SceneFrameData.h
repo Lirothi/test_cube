@@ -609,6 +609,9 @@ struct SceneFrameData
     // the developer window edits, so a slider move reaches the shader the very next frame.
     const CascadeShadowConfig* cascadeConfig = nullptr;
     ShadowGpuData* shadowGpu = nullptr; // Rung 0: GPU-driven shadow cull inputs/outputs
+    // Occlusion plan S4: this frame draws the registry's eligible objects through the indirect
+    // G-buffer pass (Scene decided before the camera prepare; the CPU buckets hold the rest).
+    bool gbufferIndirect = false;
     VirtualShadowMap* vsm = nullptr;    // Rung 2: page pool + page table (Step 18; unused yet)
     const vfx::WindState* wind = nullptr; // W3: global wind, folded into the gbuffer per-view CB
     // Water in the level, or null. The deferred lighting pass reads its caustics settings, clock

@@ -1637,6 +1637,18 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
         // S1: the view's own frustum rides along -- the chunk/instance masks use the planes the
         // object cull above used, so "object in, chunk out" is the same test at a finer grain.
         view.queue.SelectLods(camera_, view.frustum);
+        // S4: stamp what the camera's frustum kept -- the registry offers the GPU camera cull
+        // only these (an object outside carries stale verdicts, and this frame's counters below
+        // count exactly this set as "in the frustum").
+        if (shadowGpu_.GBufferIndirectThisFrame())
+        {
+            const std::uint64_t frame = frameNumber_;
+            for (const SceneRenderQueue::BucketType type : { SceneRenderQueue::BucketType::OpaqueSimple,
+                                                              SceneRenderQueue::BucketType::OpaqueComplex })
+            {
+                for (RenderableObjectBase* o : view.queue.GetVisibleBucket(type)) { if (o) { o->MarkCameraVisible(frame); } }
+            }
+        }
     }
     // Occlusion plan S3a: after the frustum cull and the chunk masks, before batching (a batch is
     // built from what survives) and before the counters (which report what it removed).
@@ -1674,6 +1686,21 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
                                  : view.queue.SourceObjectCount();
         AccumulateVisibility(render::g_visibilityStats.current[static_cast<size_t>(slot)], view.queue, sourceCount,
                              view.frustum, view.type == SceneView::Type::Camera, objectsOccluded, chunksOccluded);
+    }
+    // Occlusion plan S4: the objects the GPU registry draws through the indirect G-buffer leave the
+    // CPU buckets here -- after the counters (they ARE in the frustum), before the batching (a
+    // batch must not re-collect them). Only on frames the indirect path runs; the registry's
+    // camera cull then draws exactly these, with this frame's occlusion verdicts and chunk masks.
+    if (view.type == SceneView::Type::Camera && shadowGpu_.GBufferIndirectThisFrame())
+    {
+        for (const SceneRenderQueue::BucketType type : { SceneRenderQueue::BucketType::OpaqueSimple,
+                                                          SceneRenderQueue::BucketType::OpaqueComplex })
+        {
+            SceneRenderQueue::ObjectBucket& bucket = view.queue.GetVisibleBucket(type);
+            bucket.erase(std::remove_if(bucket.begin(), bucket.end(),
+                                        [](RenderableObjectBase* o) { return o && o->GBufferIndirect(); }),
+                         bucket.end());
+        }
     }
     view.queue.BuildInstancedBatches(view.type == SceneView::Type::Camera);
 }
@@ -1717,13 +1744,15 @@ void Scene::ApplyOcclusion(SceneView& view, std::uint32_t& objectsOccluded, std:
                     if (occ) { mask[s] = 0u; ++chunksOccluded; }
                     else { anyVisible = true; }
                 }
+                obj->SetCameraOccluded(!anyVisible); // S4: the GPU path reads the chunk mask + this
                 if (!anyVisible) { ++objectsOccluded; return true; }
                 return false;
             }
             const AABB& b = obj->GetWorldBounds();
-            if (!b.IsValid()) { return false; }
+            if (!b.IsValid()) { obj->SetCameraOccluded(false); return false; }
             bool definite = false;
             const bool occ = occlusionHistory_.Consider(vis::OcclusionKey{ obj, 0u }, b, /*allowGrouped=*/true, definite);
+            obj->SetCameraOccluded(occ); // S4: this frame's verdict for the indirect G-buffer's cull
             if (occ) { ++objectsOccluded; }
             return occ;
         };
@@ -2201,6 +2230,7 @@ void Scene::Render(Renderer* renderer) {
     if (renderer->ConsumeMaterialHotReloadFlag())
     {
         sceneRenderer_.RefreshMaterialHandles(renderer, objects_, skyBox_.get());
+        shadowGpu_.InvalidateGroupMaterials(); // S4: the registry caches per-group PSOs
     }
 
     lightManager_.UpdateSpotLightCache();
@@ -2213,12 +2243,23 @@ void Scene::Render(Renderer* renderer) {
     shadowGpu_.PollHzbStats(renderer);   // S5b: the cascade HZB cull's counters of frame N - 3
     vsm_.PollPageRequestDebug(renderer);  // Step 19: one-shot page-request count log when ready
 
+    // Occlusion plan S4: does the indirect G-buffer run this frame? Decided here, BEFORE the
+    // camera prepare (which drops eligible objects from its CPU buckets on such frames) and the
+    // registry's per-frame tables (which fill the camera flags only then). The registry was
+    // refreshed above, so its eligibility is this frame's.
+    const bool gbufferIndirect = render::g_indirectGBufferEnabled && shadowGpu_.GBufferIndirectReady();
+    shadowGpu_.SetGBufferIndirect(gbufferIndirect);
+    frameData_.gbufferIndirect = gbufferIndirect;
+    frameNumber_ = renderer->GetTotalFrameNumber(); // the stamp the camera prepare puts on visible objects
+
     PrepareViews(renderer);
 
     // Per-caster shadow LOD: publish THIS frame's receiver LODs (per chunk / per instance, inside
     // PrepareViews above) as the shadow caster overrides — after PrepareViews on purpose, so the
-    // caster can never lag the receiver by a frame at a LOD transition.
-    shadowGpu_.RefreshCasterLods(renderer, objects_, camera_.GetPosition());
+    // caster can never lag the receiver by a frame at a LOD transition. S4: the same walk fills
+    // the camera flags + crossfade tables from the verdicts PrepareViews just produced.
+    shadowGpu_.RefreshCasterLods(renderer, objects_, camera_.GetPosition(), occlusionHistory_.Enabled(),
+                                 renderer->GetTotalFrameNumber());
 
     // LOD selection debug view (dev window "LOD" tab, or --set=lod.debug). Emitted HERE because
     // this is the one point where both halves of what it shows are valid: this frame's tiers are
@@ -2261,7 +2302,10 @@ void Scene::Render(Renderer* renderer) {
         // Direct constant base offsets (not a running index) so the array writes are provably
         // in-bounds — [cascades | spots | point faces | clipmap]. The VSM setup's rung0View =
         // view + kNumCascades relies on this exact ordering.
-        std::array<const Frustum*, kCascadeSlots + kSpotSlots + kPointFaceSlots + kClipmapSlots> frustums{};
+        // Occlusion plan S4: one more slot past the shadow views -- the CAMERA frustum, for the
+        // registry's camera row (the indirect G-buffer). Never a shadow view: the shadow cull
+        // loops kMaxShadowViews and the camera branch addresses its slot by index.
+        std::array<const Frustum*, kCascadeSlots + kSpotSlots + kPointFaceSlots + kClipmapSlots + 1> frustums{};
         for (size_t i = 0; i < kCascadeSlots; ++i)
         {
             frustums[i] = &cascadeViews_[i].frustum;
@@ -2283,6 +2327,8 @@ void Scene::Render(Renderer* renderer) {
             frustums[kCascadeSlots + kSpotSlots + kPointFaceSlots + i] =
                 render::VsmActive() ? &clipmapViews_[i].frustum : nullptr;
         }
+        // S4: the camera, this frame's (PrepareViews above built it).
+        frustums[render::kMaxShadowViews] = &camera_.GetView().frustum;
         shadowGpu_.UpdateViewFrustums(renderer, frustums.data(), frustums.size());
 
         // Occlusion plan S5b: this frame's cascade light matrices for the light-space HZB cull

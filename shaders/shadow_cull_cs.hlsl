@@ -14,17 +14,25 @@
 // frame's pyramid after pass A and draws it in pass B if it was a bad guess.
 #include "hzb_cull.hlsli"
 
+//
+// Occlusion plan S4 (the camera's indirect G-buffer): the same casters, tested once more against
+// the CAMERA frustum (slot gCamView of the frustum buffer, past the shadow views), into the
+// camera's OWN args + visible list (u4/u5, bases from t9) -- the shadow rows stay untouched.
+// Per caster the camera flags (t10) say whether the object draws indirect at all (bit 0) and
+// whether the CPU-side verdicts skip it this frame (bit 1: the S3a occlusion history for the
+// object, the S1 chunk mask for a chunk); the fade (t11) puts a crossfading caster in its LOD
+// bucket AND the next one, which is the CPU path's two draws.
 #define SHADOW_CULL_RS \
     "CBV(b0), CBV(b1), " \
-    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(UAV(u0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer CullParams : register(b0)
 {
     uint gNumCasters;
     uint gNumViews;
     uint gNumGroups;
-    uint gPad;
+    uint gCamView;      // S4: the camera's frustum slot, or 0xFFFFFFFF when the camera row is off
 };
 
 // Mirrors render::CascadeHzb::GpuParams. Both matrices are the cascade's light view-projection
@@ -67,16 +75,32 @@ StructuredBuffer<uint4>        PerGroup    : register(t3); // per VIRTUAL group;
 StructuredBuffer<uint>         CasterLod   : register(t4);
 // S5b: the four cascade pyramids (R32, 1 - z, all mips). Placeholders when gHzbOn == 0.
 Texture2D<float>               CsmHzb[4]   : register(t5);
+// S4: the camera's per-virtual-group bases, per-caster flags and crossfade (placeholders when off).
+StructuredBuffer<uint4>        PerGroupCam : register(t9);
+StructuredBuffer<uint>         CasterCam   : register(t10);
+StructuredBuffer<float>        CasterFade  : register(t11);
 
 static const uint kMaxShadowLods = 4u;   // must match render::kMaxShadowLods
 static const uint kCasterLodMask = 0x0Fu;
+static const uint kNoCamView = 0xFFFFFFFFu;
 
 RWByteAddressBuffer      Args          : register(u0); // InterlockedAdd on InstanceCount
 RWStructuredBuffer<uint> VisibleList   : register(u1); // appended caster ids
 RWStructuredBuffer<uint> DeferredList  : register(u2); // S5b: per cascade, caster ids the prev pyramid hid
 RWStructuredBuffer<uint> DeferredCount : register(u3); // S5b: [v] deferred this frame (cleared by the cull-clear)
+RWByteAddressBuffer      CamArgs       : register(u4); // S4: the camera's args (one row of virtual groups)
+RWStructuredBuffer<uint> CamVisibleList : register(u5); // S4: the camera's visible caster ids
 
 static const uint kArgStride = 20u;
+
+// S4: one camera candidate into virtual group `vg` (bucket base from the camera's own table).
+void EmitCamera(uint vg, uint caster)
+{
+    const uint base = PerGroupCam[vg].x;
+    uint slot;
+    CamArgs.InterlockedAdd(vg * kArgStride + 4u, 1u, slot);
+    CamVisibleList[base + slot] = caster;
+}
 
 static const float4x4 kIdentity = float4x4(1, 0, 0, 0,
                                            0, 1, 0, 0,
@@ -140,6 +164,21 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             uint slot;
             Args.InterlockedAdd((v * gNumGroups + g) * kArgStride + 4u, 1u, slot);
             VisibleList[v * gNumCasters + base + slot] = caster;
+        }
+    }
+
+    // S4: the camera row. Eligible (bit 0), not skipped by the CPU verdicts (bit 1), inside the
+    // camera frustum; a crossfading caster goes to its tier and the next one.
+    if (gCamView != kNoCamView)
+    {
+        const uint cam = CasterCam[caster];
+        if ((cam & 3u) == 1u && Intersects(gCamView, c, e))
+        {
+            EmitCamera(g, caster);
+            if (CasterFade[caster] > 0.0f && (lod + 1u) < kMaxShadowLods)
+            {
+                EmitCamera(g + 1u, caster);
+            }
         }
     }
 }

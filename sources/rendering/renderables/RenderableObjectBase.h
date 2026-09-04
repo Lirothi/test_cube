@@ -270,10 +270,29 @@ public:
     bool IsVisible() const { return visible_; }
     void SetVisible(bool visible) { visible_ = visible; }
 
+    // Occlusion plan S4: this object's G-buffer draws come out of the GPU registry's indirect
+    // path (ShadowGpuData decides at Rebuild: every submesh slot's material matches its group's).
+    // The camera prepare drops such objects from the CPU buckets on frames the indirect path runs.
+    bool GBufferIndirect() const { return gbufferIndirect_; }
+    void SetGBufferIndirect(bool on) { gbufferIndirect_ = on; }
+    // S4: last verdict of the camera occlusion history (S3a) for the WHOLE object, written by
+    // Scene::ApplyOcclusion on the frames it runs; the registry copies it into the GPU cull's
+    // per-caster camera flags so the indirect path culls what the CPU path culled.
+    bool CameraOccluded() const { return cameraOccluded_; }
+    void SetCameraOccluded(bool occluded) { cameraOccluded_ = occluded; }
+    // S4: the camera's CPU frustum cull kept this object in frame `frame` (stamped by the camera
+    // prepare). The registry offers the GPU camera cull only these -- an object outside the CPU
+    // frustum carries stale verdicts and would only cost an empty ExecuteIndirect per group.
+    void MarkCameraVisible(std::uint64_t frame) { cameraVisibleFrame_ = frame; }
+    bool CameraVisibleAt(std::uint64_t frame) const { return cameraVisibleFrame_ == frame; }
+
 protected:
     uint32_t renderLayerMask_ = RenderLayerMask(RenderLayer::Default);
 #if WITH_EDITOR
     std::uint64_t editorObjectId_ = 0;
 #endif
+    std::uint64_t cameraVisibleFrame_ = ~0ull;
     bool visible_ = true;
+    bool gbufferIndirect_ = false;
+    bool cameraOccluded_ = false;
 };

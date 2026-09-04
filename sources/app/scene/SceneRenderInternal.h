@@ -33,6 +33,10 @@ namespace scene_internal
     constexpr uint32_t kSelectionStencilGBufferLocalOrder = 0xfffffffeu;
     constexpr uint32_t kSelectionStencilTransparentLocalOrder = 0xfffffffeu;
 #endif
+    // Occlusion plan S4: the indirect G-buffer list, after every CPU opaque list and before the
+    // editor's selection stencil (depth-tested opaque draws: the position only has to be past
+    // the driver). Every configuration, not just the editor's.
+    constexpr uint32_t kGBufferIndirectLocalOrder = 0xfffff000u;
 
     constexpr size_t BucketIndex(SceneRenderQueue::BucketType type)
     {

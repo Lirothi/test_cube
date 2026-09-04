@@ -242,6 +242,7 @@ void GBufferRenderable::Init(Renderer* renderer,
 
     BuildSlotMaterials(renderer);
     BuildInstancedMaterials(renderer);
+    BuildIndirectMaterials(renderer); // S4
 }
 
 void GBufferRenderable::ApplySlotPipelineOverrides(Material::GraphicsDesc& desc, size_t slot) const
@@ -573,14 +574,52 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
     }
 }
 
+void GBufferRenderable::BuildIndirectMaterials(Renderer* renderer)
+{
+    // Occlusion plan S4: one gbuffer_indirect.hlsl PSO per material slot, built from the SAME
+    // desc as the slot's own PSO (RTs, stencil, sampling defines, ALPHA_TEST, cull mode,
+    // EDITOR_OBJECT_ID) with the shader and the input layout swapped -- so an indirect draw and
+    // the CPU draw of one submesh compile the same pixel shader permutation. The same two
+    // exclusions as instancing: a material shader override has no indirect counterpart, and the
+    // layout assumes the PNTUV vertex the MeshManager produces. Any failure leaves the list empty,
+    // which keeps the object on the CPU path (no half-indirect object).
+    slotIndirectGraphicsMaterials_.clear();
+    if (!renderer || !GetGraphicsMaterial()) { return; }
+    if (GetGraphicsShaderPath() != L"shaders/gbuffer.hlsl") { return; }
+    if (GetInputLayoutKey() != "PosNormTanUV") { return; }
+    for (const auto& md : matDatas_)
+    {
+        if (md && !md->shaderOverride.empty()) { return; }
+    }
+    const size_t slots = std::max<size_t>(matDatas_.size(), 1);
+    std::vector<std::shared_ptr<Material>> built(slots);
+    for (size_t i = 0; i < slots; ++i)
+    {
+        Material::GraphicsDesc gd = BuildGraphicsDesc(renderer); // slot-0 configured desc
+        ApplySlotPipelineOverrides(gd, i);
+        gd.shaderFile = L"shaders/gbuffer_indirect.hlsl";
+        gd.inputLayoutKey = "PosNormTanUV_InstCasterId";
+        auto m = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+        if (!m || !m->GetPipelineState()) { return; }
+        built[i] = std::move(m);
+    }
+    slotIndirectGraphicsMaterials_ = std::move(built);
+}
+
 void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
+{
+    FillInstanceDataForSlot(out, 0);
+}
+
+void GBufferRenderable::FillInstanceDataForSlot(render::InstancePerObject& out, size_t slot) const
 {
     out.world = GetModelMatrix().m;
     out.prevWorld = GetPreviousModelMatrix().m;
 
-    // Slot 0 params. Multi-slot instanced draws (B2b) ignore these material fields — the PS
-    // reads the per-slot CB (b2) instead — but world/prevWorld/objectId stay per-instance.
-    const MaterialParams& p = matParamses_[0];
+    // Slot `slot`'s params (slot 0 for the instanced CB array, whose multi-slot draws (B2b) ignore
+    // these material fields anyway -- the PS reads the per-slot CB (b2) -- but world/prevWorld/
+    // objectId stay per-instance). S4: the GPU registry asks for each submesh's own slot.
+    const MaterialParams& p = matParamses_[slot < matParamses_.size() ? slot : 0];
     out.baseColor = DirectX::XMFLOAT4(p.baseColor.x, p.baseColor.y, p.baseColor.z, p.baseColor.w);
     out.metalRough = DirectX::XMFLOAT2(p.metalRough.x, p.metalRough.y);
     out.alphaCutoff = p.alphaCutoff; // C1 (single-slot instanced; multi-slot uses b2)
@@ -592,8 +631,8 @@ void GBufferRenderable::FillInstanceData(render::InstancePerObject& out) const
     out.emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
     out.windStrength = EffectiveWindStrength(p.windStrength); // W3 uniform per object; W8 distance fade
     out.windLeafScale = GetWindLeafScaleWorld();
-    // Slot 0's foliage weight. ShadowGpuData overwrites this PER SLOT (its caster ids are already
-    // one per slot) and the multi-slot instanced gbuffer reads its own from the slot CB.
+    // The slot's foliage weight (ShadowGpuData's caster ids are one per submesh, so each carries
+    // its own; the multi-slot instanced gbuffer reads its own from the slot CB).
     out.windFoliage = p.windFoliage;
     out.windTrunkStiff = windTrunkStiffness_;
 }
