@@ -1054,6 +1054,10 @@ void FogHandles::Populate(Material* material, UINT cbRegister)
     medium0 = material->ComputeCBFieldHandle(cbRegister, "fogMedium0");
     medium1 = material->ComputeCBFieldHandle(cbRegister, "fogMedium1");
     medium2 = material->ComputeCBFieldHandle(cbRegister, "fogMedium2");
+    misc = material->ComputeCBFieldHandle(cbRegister, "fogMisc");
+    local = material->ComputeCBFieldHandle(cbRegister, "fogLocal");
+    localParams = material->ComputeCBFieldHandle(cbRegister, "fogLocalParams");
+    localParams2 = material->ComputeCBFieldHandle(cbRegister, "fogLocalParams2");
 }
 
 namespace
@@ -1072,6 +1076,10 @@ namespace
         material->UpdateCBField(h.medium0, d.medium0, dest);
         material->UpdateCBField(h.medium1, d.medium1, dest);
         material->UpdateCBField(h.medium2, d.medium2, dest);
+        material->UpdateCBField(h.misc, d.misc, dest);
+        material->UpdateCBField(h.local, d.local, dest);
+        material->UpdateCBField(h.localParams, d.localParams, dest);
+        material->UpdateCBField(h.localParams2, d.localParams2, dest);
     }
 }
 

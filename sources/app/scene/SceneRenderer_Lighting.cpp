@@ -454,25 +454,7 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
 // ---- Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A) ----
 namespace
 {
-// UE RenderUtils.h CalculateGridZParams, verbatim: slice = log2(z * B + O) * S with the first
-// slice at `near` and the last at `far`; NearOffset is their 0.095 m (they write it in cm).
-float3 FogGridZParams(float nearPlane, float farPlane, float depthDistributionScale, uint32_t gridSizeZ)
-{
-    const double nearOffset = 0.095;
-    const double S = depthDistributionScale;
-    const double N = static_cast<double>(nearPlane) + nearOffset;
-    const double F = std::max(static_cast<double>(farPlane), N + 1.0);
-    const double O = (F - N * std::exp2(static_cast<double>(gridSizeZ) / S)) / (F - N);
-    const double B = (1.0 - O) / N;
-    return float3(static_cast<float>(B), static_cast<float>(O), static_cast<float>(S));
-}
-
-// The volume's near plane: UE take max(view near, VolumetricFogStartDistance)
-// (VolumetricFog.cpp:1204-1209); the analytic model's fog-free band is that start distance here.
-float FogVolumeNear(const AtmosphereSettings& a, const Camera& camera)
-{
-    return std::max(camera.GetZNear(), std::max(a.startDistance, 0.0f));
-}
+// FogGridZParams / FogVolumeNear live in SceneRenderInternal.h (plan A5: every consumer shares them).
 
 // UE's Halton (VolumetricFog.cpp:196-207 uses it with bases 2, 3, 5 over FrameNumber & 1023).
 float FogHalton(uint32_t index, uint32_t base)
@@ -522,8 +504,7 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
 
         // b1: the fog's own constants.
         FogPassConstants fc{};
-        fc.gridZParams = FogGridZParams(FogVolumeNear(a, camera), a.volumetricDistance,
-                                        render::kFogDepthDistributionScale, D.fogGridDepth);
+        fc.gridZParams = float3(decisions_.fogVolumeZParams.x, decisions_.fogVolumeZParams.y, decisions_.fogVolumeZParams.z);
         // UE: 1 / max(VolumetricFogNearFadeInDistance, tiny); the component's default distance is 0,
         // so the fade is over before the first slice ends. Kept as their default (a hard start at
         // the volume's near, which is what the analytic model's start distance is too).
@@ -531,7 +512,33 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         fc.gridSize[0] = D.fogGridWidth;
         fc.gridSize[1] = D.fogGridHeight;
         fc.gridSize[2] = D.fogGridDepth;
-        fc.flags = decisions_.fogHistoryValid ? 1u : 0u;
+        fc.flags = (decisions_.fogHistoryValid ? 1u : 0u) | (decisions_.fogConservativeDepth ? 4u : 0u) | (a.temporal ? 8u : 0u);
+        fc.misc[0] = decisions_.fogHzbMip; // furthest HZB mip whose texel is one cell (base = half res)
+        fc.misc[1] = 4u; // UE HistoryMissSupersampleCount
+        fc.misc[2] = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 1023ull);
+        // A4: the local lights, from the light passes' own buffers (filled in EnsureFrameResources).
+        const bool localVsm = render::VsmActive() && frame_->vsm && frame_->vsm->IsAllocated() &&
+                              frame_->vsm->PageTableSrv().ptr != 0 && frame_->vsm->PagePoolSrv().ptr != 0;
+        const UINT frameIdx = renderer->GetCurrentFrameIndex();
+        D3D12_CPU_DESCRIPTOR_HANDLE spotBufferSrv = renderer->VsmDummyBufferSrv();
+        D3D12_CPU_DESCRIPTOR_HANDLE pointBufferSrv = renderer->VsmDummyBufferSrv();
+        if (decisions_.fogLocalLights && frame_->lightManager)
+        {
+            LightManager& lm = *frame_->lightManager;
+            const size_t spots = lm.GetSpotLightCount();
+            const size_t points = lm.PointLights().size();
+            const D3D12_CPU_DESCRIPTOR_HANDLE sSrv = spots > 0 ? lm.GetSpotLightSrv(frameIdx) : D3D12_CPU_DESCRIPTOR_HANDLE{};
+            const D3D12_CPU_DESCRIPTOR_HANDLE pSrv = points > 0 ? lm.GetPointLightSrv(frameIdx) : D3D12_CPU_DESCRIPTOR_HANDLE{};
+            fc.local[0] = (spots > 0 && sSrv.ptr != 0) ? static_cast<uint32_t>(spots) : 0u;
+            fc.local[1] = (points > 0 && pSrv.ptr != 0) ? static_cast<uint32_t>(points) : 0u;
+            fc.local[2] = localVsm ? 1u : 0u;
+            if (fc.local[0]) { spotBufferSrv = sSrv; }
+            if (fc.local[1]) { pointBufferSrv = pSrv; }
+        }
+        fc.localParams = float4(std::max(a.localLightScatter, 0.0f),
+                                1.0f / static_cast<float>(std::max(D.spotShadowRes, 1u)),
+                                1.0f / static_cast<float>(std::max(D.pointShadowRes, 1u)), vsm::g_refDist);
+        fc.localParams2 = float4(std::max(a.localSoftFading, 0.0f), std::max(a.localDistanceBias, 0.0f), 0.0f, 0.0f);
         // Row-vector convention (mul(v, M)): clip.z = z * _33 + _43, clip.w = z * _34 + _44.
         const mat4& projNoJitter = camera.GetProjMatrixNoJitter();
         fc.projZ = float4(projNoJitter.m._33, projNoJitter.m._43, projNoJitter.m._34, projNoJitter.m._44);
@@ -542,9 +549,11 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         if (a.temporal && decisions_.fogHistoryValid)
         {
             const uint32_t f = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 1023ull);
-            fc.jitter = float4(FogHalton(f, 2u), FogHalton(f, 3u), FogHalton(f, 5u),
-                               std::clamp(a.historyWeight, 0.0f, 0.99f));
-            fc.flags |= 2u;
+            // The jitter knob only removes the offset; the history weight stays (UE Jitter cvar).
+            fc.jitter = a.jitter
+                ? float4(FogHalton(f, 2u), FogHalton(f, 3u), FogHalton(f, 5u), std::clamp(a.historyWeight, 0.0f, 0.99f))
+                : float4(0.5f, 0.5f, 0.5f, std::clamp(a.historyWeight, 0.0f, 0.99f));
+            if (a.jitter) { fc.flags |= 2u; }
         }
         else
         {
@@ -581,7 +590,16 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
                 vsmDir ? frame_->vsm->PagePoolSrv() : renderer->VsmDummyTexSrv(),
                 (frame_->skybox && frame_->skybox->HasIbl()) ? frame_->skybox->GetIrradianceTex()->GetSRVCPU()
                                                              : renderer->VsmDummyTexSrv(),
-                P.fogScatterSRV }).gpu;
+                P.fogScatterSRV,
+                // t5/t6: the furthest pyramids (A3 conservative depth); dummies when the flag is off.
+                decisions_.fogConservativeDepth ? D.hzbSRV : renderer->VsmDummyTexSrv(),
+                decisions_.fogConservativeDepth ? P.hzbSRV : renderer->VsmDummyTexSrv(),
+                // t7..t10 (A4): the light buffers and the Legacy atlases; dummies keep the VOLATILE
+                // range populated when there are none / in VSM mode (never sampled then).
+                spotBufferSrv,
+                pointBufferSrv,
+                (fc.local[0] && !localVsm && D.spotShadowSRV.ptr != 0) ? D.spotShadowSRV : renderer->VsmDummyTexSrv(),
+                (fc.local[1] && !localVsm && D.pointShadowSRV.ptr != 0) ? D.pointShadowSRV : renderer->VsmDummyTexSrv() }).gpu;
             rc.uavTable[0] = renderer->StageSrvUavTable({ D.fogScatterUAV }).gpu;
             const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
                                                   *SamplerManager::ComparisonLinearClamp(),
@@ -916,16 +934,8 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             // placeholder then). The grid's (B, O, S) are the SAME numbers the fog pass wrote
             // with, computed by the same function -- a slice looked up by other parameters would
             // read the wrong depth silently.
-            {
-                const AtmosphereSettings& a = frame_->settings.atmosphere;
-                const bool volumeOn = decisions_.volumetricFog;
-                constants.fogVolumeParams = float4(volumeOn ? 1.0f : 0.0f, a.volumetricDistance,
-                                                   preExposure_ > 0.0f ? 1.0f / preExposure_ : 1.0f,
-                                                   static_cast<float>(D.fogGridDepth));
-                const float3 zp = FogGridZParams(FogVolumeNear(a, camera), a.volumetricDistance,
-                                                 render::kFogDepthDistributionScale, D.fogGridDepth);
-                constants.fogVolumeZParams = float4(zp.x, zp.y, zp.z, 0.0f);
-            }
+            constants.fogVolumeParams = decisions_.fogVolumeParams;
+            constants.fogVolumeZParams = decisions_.fogVolumeZParams;
             if (frame_->dirLight)
             {
                 // GetDirection() is the direction the light TRAVELS; the scattering lobe is keyed

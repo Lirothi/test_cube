@@ -33,6 +33,7 @@ namespace
         bool occlusionIndirectQueries = false;
         bool indirectGBuffer = true;
         bool gbufferHzbCull = true;
+        int fogGridPixels = static_cast<int>(render::kFogGridPixels); // volumetric fog cell size, 8 / 16 / 32
 
         bool dlssEnabled = false;
         sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
@@ -330,6 +331,7 @@ namespace
         s.occlusionIndirectQueries = vis::g_occlusion.indirectQueries;
         s.indirectGBuffer = render::g_indirectGBufferEnabled;
         s.gbufferHzbCull = render::g_gbufferHzbCullEnabled;
+        s.fogGridPixels = static_cast<int>(render::g_fogGridPixels);
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
@@ -478,6 +480,7 @@ namespace
         render::g_giIndirectShadowsEnabled = s.giIndirectShadows;
         render::g_indirectGBufferEnabled = s.indirectGBuffer;
         render::g_gbufferHzbCullEnabled = s.gbufferHzbCull;
+        render::g_fogGridPixels = s.fogGridPixels <= 8 ? 8u : (s.fogGridPixels >= 32 ? 32u : 16u);
         render::g_shadowLodBias = s.shadowLodBias;
         render::g_shadowLodBiasNearTier = s.shadowLodBiasNearTier;
         render::g_shadowLodTierStride = s.shadowLodTierStride;
@@ -526,7 +529,8 @@ namespace
             { "performance", {
                 { "asyncCompute", s.asyncCompute },
                 { "gpuDrivenGBuffer", s.indirectGBuffer },
-                { "gbufferHzbCull", s.gbufferHzbCull }
+                { "gbufferHzbCull", s.gbufferHzbCull },
+                { "fogGridPixels", s.fogGridPixels }
             } },
             { "visibility", {
                 { "chunkMask", s.visibilityChunkMask },
@@ -667,6 +671,7 @@ namespace
         Read(performance, "asyncCompute", s.asyncCompute);
         Read(performance, "gpuDrivenGBuffer", s.indirectGBuffer);
         Read(performance, "gbufferHzbCull", s.gbufferHzbCull);
+        Read(performance, "fogGridPixels", s.fogGridPixels);
         Read(visibility, "chunkMask", s.visibilityChunkMask);
         Read(visibility, "occlusionMethod", s.occlusionMethod);
         Read(visibility, "queryLatency", s.occlusionQueryLatency);
@@ -1062,6 +1067,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::GiIndirectShadows:              current.giIndirectShadows = defaults.giIndirectShadows; break;
     case GraphicsControl::IndirectGBuffer:                 current.indirectGBuffer = defaults.indirectGBuffer; break;
     case GraphicsControl::GbufferHzb:                     current.gbufferHzbCull = defaults.gbufferHzbCull; break;
+    case GraphicsControl::FogGridPixels:                  current.fogGridPixels = defaults.fogGridPixels; break;
     case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
     case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
     case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;

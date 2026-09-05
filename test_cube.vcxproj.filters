@@ -1541,6 +1541,9 @@
     <None Include="shaders\fog_common.hlsli">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\glass_view_cb.hlsli">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\fog_integrate_cs.hlsl">
       <Filter>shaders</Filter>
     </None>

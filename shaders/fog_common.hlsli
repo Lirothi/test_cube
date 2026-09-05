@@ -19,7 +19,7 @@ cbuffer FogCB : register(reg) \
     float3 fogGridZParams;      /* (B, O, S) */ \
     float  fogNearFadeInInv;    /* 1 / near fade-in distance (UE VolumetricFogNearFadeInDistanceInv) */ \
     uint3  fogGridSize;         /* cells: (W, H, Z) */ \
-    uint   fogFlags;            /* bit 0 history valid, bit 1 jitter on */ \
+    uint   fogFlags;            /* bit 0 history valid, bit 1 jitter on, bit 2 conservative depth, bit 3 temporal on */ \
     float4x4 fogInvViewProjNoJitter;   /* clip -> world, this frame's UNJITTERED camera */ \
     float4x4 fogPrevViewProjNoJitter;  /* world -> clip, last frame's unjittered camera (history UV) */ \
     float4 fogProjZ;            /* (proj._33, proj._43, proj._34, proj._44): view z -> device z */ \
@@ -27,6 +27,10 @@ cbuffer FogCB : register(reg) \
     float4 fogMedium0;          /* density (per m, base-2 as the analytic model), height falloff, reference height, start distance */ \
     float4 fogMedium1;          /* albedo, extinction scale, phase g, sun scatter intensity */ \
     float4 fogMedium2;          /* sky scatter intensity, preExposure, 1 / previous preExposure, volumetric distance */ \
+    uint4  fogMisc;             /* x: HZB mip whose texel is one cell, y: supersample count on a history miss, z: frame index, w: 0 */ \
+    uint4  fogLocal;            /* x: spot count, y: point count, z: local shadows from the VSM pages (else the Legacy atlases), w: 0 */ \
+    float4 fogLocalParams;      /* x: local light scatter intensity, y: 1/spot atlas size, z: 1/point cube face size, w: VSM refDist */ \
+    float4 fogLocalParams2;     /* x: cone soft fading (froxels), y: inverse-square distance bias scale (cell radii), zw: 0 */ \
 };
 
 // UE ComputeZSliceFromDepth / ComputeDepthFromZSlice.
@@ -78,6 +82,27 @@ float3 FogCellWorldPosition(uint3 coord, float3 cellOffset, uint3 gridSize, floa
 {
     float unused;
     return FogCellWorldPosition(coord, cellOffset, gridSize, zParams, projZ, invViewProjNoJitter, unused);
+}
+
+// The integrated volume at a fragment, ready to combine: rgb = the in-scattered light re-exposed
+// to the scene's raw units, a = transmittance; the identity (0, 0, 0, 1) while the volume is off.
+// `params` = (on, far plane in view depth, 1 / preExposure, slice count), `zp` = (B, O, S). The
+// lookup depth is clamped to the far plane -- the sky and anything beyond read the last slice --
+// exactly as compose does for the opaque scene, so a shoreline sees the SAME air on both sides.
+float4 FogVolumeSampleAt(Texture3D<float4> volume, SamplerState smp, float2 screenUv, float viewDepth,
+                         float4 params, float4 zp)
+{
+    if (params.x < 0.5f) { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
+    float4 v = volume.SampleLevel(smp, FogVolumeUV(screenUv, min(viewDepth, params.y), zp.xyz, (uint)params.w), 0);
+    v.rgb *= params.z;
+    return v;
+}
+
+// Where the analytic model takes over along a ray the volume already covers: the ray length at
+// the volume's far view depth (UE CombineVolumetricFog: ExcludeDistance = MaxDistance * InvCosAngle).
+float FogAnalyticExclude(float4 params, float rayLength, float viewDepth)
+{
+    return params.x < 0.5f ? 0.0f : params.y * (rayLength / max(viewDepth, 1.0e-4f));
 }
 
 // Henyey-Greenstein in the textbook form (1 + g^2 - 2g cos)^-1.5: forward peak at cosTheta = +1,

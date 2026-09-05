@@ -941,6 +941,18 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             }
             ctx.Use(DF.fogScatter.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             ctx.Use(PF.fogScatter.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); // the history (its rest)
+            if (decisions_.fogLocalLights && !vsmShadows)
+            {
+                // A4: the Legacy local atlases, the state Main_SpotLights / Main_PointLights declare.
+                if (DF.spotShadow.Get()) { ctx.Use(DF.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
+                if (DF.pointShadow.Get()) { ctx.Use(DF.pointShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
+            }
+            if (decisions_.fogConservativeDepth)
+            {
+                // A3: both furthest pyramids, already at rest; declared so the reads are named.
+                ctx.Use(DF.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(PF.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
             ctx.NextPoint();
             pts.integrate = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(DF.fogScatter.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -958,7 +970,15 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         RenderGraph<kMainRenderGraphPassCount>::DependencyList fogPrereqs;
         fogPrereqs.push_back(gb.pGbufDone);
         if (vsmShadows) { fogPrereqs.push_back(gb.pVsmPageRender); }
-        gb.pFog = rg.AddPass2(RenderPass::Main_VolumetricFog, fogPrereqs, /*mtDeps=*/{ gb.pShadow }, {}, fogBuilder);
+        // A3: the conservative depth reads this frame's FINAL furthest pyramid.
+        if (decisions_.fogConservativeDepth && gb.pHzb != GraphBuild::kNone) { fogPrereqs.push_back(gb.pHzb); }
+        // A4: the local lights' shadows -- the point cube pass is a prereq (as Main_PointLights
+        // takes it), the spot atlas an mtDep (as Main_SpotLights takes it).
+        if (decisions_.fogLocalLights && gb.pPointShadow != GraphBuild::kNone && fogPrereqs.size() < fogPrereqs.capacity())
+        {
+            fogPrereqs.push_back(gb.pPointShadow);
+        }
+        gb.pFog = rg.AddPass2(RenderPass::Main_VolumetricFog, fogPrereqs, /*mtDeps=*/{ gb.pShadow, gb.pSpotShadow }, {}, fogBuilder);
     }
 
     auto lightBuilder = [this, renderer](RenderGraphPassContext& ctx)
@@ -1544,6 +1564,14 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // Volumetric fog (plan A5): the ocean, glass and particles bind the integrated volume EVERY
+        // frame (their tables must stay populated; the shaders gate on fogVolumeParams.x), so it is
+        // declared PS-readable every frame too -- a descriptor over a NON_PIXEL resource is what GBV
+        // flags on the ocean's fallback slots. On fog frames this is the UAV -> NPS -> PIXEL tail.
+        if (DT.fogIntegrated.Get())
+        {
+            p.Use(DT.fogIntegrated.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
         // 4. Rebind the forward targets. The fan-out chunks re-apply the velocity/objectID
         // pair per chunk; same states, so one registration covers them.
         p.NextPoint();

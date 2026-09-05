@@ -496,7 +496,10 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
     ctx.srvTable[0] = renderer->StageSrvUavTable(
         { particlesSrv_, hasSprite_ ? sprite_.GetSRVCPU() : particlesSrv_,
           haveDepth ? D.depthCopySRV : particlesSrv_,
-          (sortEnabled_ && sorted_) ? sortedSrv_ : particlesSrv_ }).gpu;
+          (sortEnabled_ && sorted_) ? sortedSrv_ : particlesSrv_,
+          // t4: the volumetric fog's integrated volume (plan A5), PS-readable every frame by the
+          // transparent pass's declaration; the shader gates on fogVolumeParams.x.
+          D.fogIntegratedSRV.ptr != 0 ? D.fogIntegratedSRV : particlesSrv_ }).gpu;
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 
     drawMaterial_->Bind(cl, ctx, false);

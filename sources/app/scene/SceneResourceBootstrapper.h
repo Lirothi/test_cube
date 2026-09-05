@@ -433,11 +433,15 @@ struct FogPassConstants
     float4 medium0{};                // density, height falloff, reference height, start distance
     float4 medium1{};                // albedo, extinction scale, phase g, sun scatter
     float4 medium2{};                // sky scatter, preExposure, 1 / previous preExposure, volume far
+    uint32_t misc[4] = { 3u, 4u, 0u, 0u }; // HZB mip whose texel is one cell, supersample count on a history miss, frame index, 0
+    uint32_t local[4] = { 0u, 0u, 0u, 0u }; // spot count, point count, local shadows from the VSM pages, 0 (plan A4)
+    float4 localParams{};            // local light scatter, 1/spot atlas size, 1/point cube face size, VSM refDist
+    float4 localParams2{};           // cone soft fading (froxels), distance bias scale, 0, 0
 };
 struct FogHandles
 {
     Material::CBFieldHandle gridZParams, nearFadeInInv, gridSize, flags, invViewProjNoJitter, prevViewProjNoJitter,
-                            projZ, jitter, medium0, medium1, medium2;
+                            projZ, jitter, medium0, medium1, medium2, misc, local, localParams, localParams2;
     void Populate(Material* material, UINT cbRegister);
 };
 

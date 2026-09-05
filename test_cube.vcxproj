@@ -705,6 +705,7 @@
     <None Include="shaders\vsm_page_request_clear_cs.hlsl" />
     <None Include="shaders\vsm_page_request_cs.hlsl" />
     <None Include="shaders\fog_common.hlsli" />
+    <None Include="shaders\glass_view_cb.hlsli" />
     <None Include="shaders\fog_integrate_cs.hlsl" />
     <None Include="shaders\fog_scatter_cs.hlsl" />
     <None Include="shaders\lighting_cb.hlsli" />

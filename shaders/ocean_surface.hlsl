@@ -14,12 +14,13 @@
 #include "ocean_surface_legacy.hlsli"
 #else
 
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=20, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=21, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
-#include "atmosphere.hlsli" // P7: the same medium compose applies to opaque geometry
+#include "atmosphere.hlsli"
+#include "fog_common.hlsli" // volumetric fog plan A5: the froxel volume on the water // P7: the same medium compose applies to opaque geometry
 
 cbuffer OceanCB : register(b0)
 {
@@ -80,6 +81,10 @@ cbuffer OceanCB : register(b0)
     float4 fogParams2;                 // x: sky blur (roughness at the lightly-fogged end), yzw reserved
     uint fogDebugView;                 // P7 item 8: 0 normal, 1 transmittance, 2 in-scattering
     uint3 _fogDebugPad;
+    // Volumetric fog (plan A5): (on, far view depth, 1/preExposure, slice count) and the grid's
+    // (B, O, S) -- the SAME numbers compose samples the volume with (SceneRenderer decides once).
+    float4 fogVolumeParams;
+    float4 fogVolumeZParams;
     float4 deepScatterColor;           // xyz: deep scatter tint, w: unused
     float4 sssColor;                   // xyz: subsurface scattering tint, w: unused
     float4 diffuseColor;               // xyz: diffuse tint, w: unused
@@ -106,6 +111,7 @@ TextureCube SkyboxTexture : register(t4);
 // guessing a mip off the display cube and reads the same environment every other surface does.
 TextureCube SkySpecular : register(t18);
 TextureCube SkyIrradiance : register(t19);
+Texture3D<float4> FogVolume : register(t20); // volumetric fog plan A5: the integrated froxel volume
 Texture2D DistantRoughnessMap : register(t5);
 Texture2D FoamDetailMap : register(t6);
 Texture2D FoamAlbedoTex : register(t7);
@@ -2215,6 +2221,17 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
         fog.sunScatterStartDistance = fogParams1.w;
         fog.skyBackScatter = fogParams2.y;
 
+        // Volumetric fog (plan A5): the froxel volume covers this ray to its far plane and the
+        // analytic model continues from there -- the same split compose applies to the sand, so
+        // the shoreline sees one medium. Screen UV and view depth from the UNJITTERED clip position.
+        const float4 fogClip = mul(float4(macroLi.positionWS, 1.0f), viewProjNoJitter);
+        const float2 fogUv = (fogClip.xy / max(fogClip.w, 1.0e-4f)) * float2(0.5f, -0.5f) + 0.5f;
+        const float4 vol = FogVolumeSampleAt(FogVolume, LinearClampSampler, fogUv, fogClip.w,
+                                             fogVolumeParams, fogVolumeZParams);
+        const float fogExclude = FogAnalyticExclude(fogVolumeParams, macroLi.viewDist, fogClip.w);
+        fog.startDistance = max(fog.startDistance, fogExclude);
+        fog.sunScatterStartDistance = max(fog.sunScatterStartDistance, fogExclude);
+
         // `viewDir` here points FROM the camera towards the surface, which is the direction the
         // sky must be sampled along for the fog to agree with the pixel behind it.
         const float3 viewRay = normalize(macroLi.positionWS - macroLi.cameraPos);
@@ -2237,9 +2254,9 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
                                                      sunColorExposure.xyz * sunColorExposure.w,
                                                      dot(viewRay, toSun), fogShared,
                                                      macroLi.viewDist, headroom, fog);
-        if (fogDebugView == 1u)      { color = transmittance.xxx; }
-        else if (fogDebugView == 2u) { color = inscatter * (1.0f - transmittance); }
-        else { color = color * transmittance + inscatter * (1.0f - transmittance); }
+        if (fogDebugView == 1u)      { color = (transmittance * vol.a).xxx; }
+        else if (fogDebugView == 2u) { color = inscatter * (1.0f - transmittance) * vol.a + vol.rgb; }
+        else { color = (color * transmittance + inscatter * (1.0f - transmittance)) * vol.a + vol.rgb; }
     }
     else
     {

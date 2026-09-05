@@ -343,7 +343,7 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
     const Camera& camera, const SceneView& mainView, const TransparentPoints& pts)
 {
     // Shared per-view/per-frame CB (b1) for every transparent object in this pass.
-    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_, decisions_.glassRefl);
+    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_, decisions_.fogVolumeParams, decisions_.fogVolumeZParams, decisions_.glassRefl);
 
     // Step 21: publish the VSM page-table + pool SRVs (t9/t10) for the glass draws, which lack frame
     // access. Valid once a level is loaded; the pool/page-table are already SRV here (the light

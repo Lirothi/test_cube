@@ -112,6 +112,15 @@ private:
         // volume was written last frame at this grid size under this camera history (temporal).
         bool volumetricFog = false;
         bool fogHistoryValid = false;
+        // A3: the furthest HZB (this and the previous slot) exists at the mip whose texel is a cell.
+        bool fogConservativeDepth = false;
+        std::uint32_t fogHzbMip = 3u; // furthest-HZB mip whose texel is one cell: log2(cell px) - 1 (base = half res)
+        // A4: spots / points light the volume this frame (the knob, and there are any).
+        bool fogLocalLights = false;
+        // The volume's lookup parameters, decided ONCE for every consumer (fog pass, compose,
+        // ocean, glass, particles): (on, far view depth, 1/preExposure, slice count) and (B, O, S).
+        Math::float4 fogVolumeParams{};
+        Math::float4 fogVolumeZParams{};
     };
     void DecideFrame(Renderer* renderer, const SceneFrameData& frame);
     FrameDecisions decisions_{};

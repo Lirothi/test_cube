@@ -240,7 +240,7 @@ bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
             ? sky->GetSpecTex()->GetSRVCPU()
             : skyDisplaySrv;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 12> srvs{
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 13> srvs{
         sceneColorSrv,
         deferred.shadowSRV,
         deferred.spotShadowSRV,
@@ -252,7 +252,10 @@ bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
         deferred.pointShadowSRV,          // t8: omnidirectional point shadow cube (B3)
         renderer->GetVsmPageTableSrv(),   // t9: VSM page table
         renderer->GetVsmPoolSrv(),        // t10: VSM pool
-        skySpecSrv                        // t11: P5 prefiltered sky
+        skySpecSrv,                       // t11: P5 prefiltered sky
+        // t12: the volumetric fog's integrated volume (plan A5); Main_Transparent declares it
+        // PS-readable every frame, the shader gates on fogVolumeParams.x.
+        deferred.fogIntegratedSRV.ptr != 0 ? deferred.fogIntegratedSRV : sceneColorSrv
     };
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs).gpu;
 

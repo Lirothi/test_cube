@@ -28,6 +28,29 @@
 
 namespace scene_internal
 {
+    // ---- Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A) ----
+    // UE RenderUtils.h CalculateGridZParams, verbatim: slice = log2(z * B + O) * S with the first
+    // slice at `near` and the last at `far`; NearOffset is their 0.095 m (they write it in cm).
+    // ONE function for every consumer (the fog pass, compose, the ocean, glass, particles): a slice
+    // looked up with other numbers would read the wrong depth silently.
+    inline float3 FogGridZParams(float nearPlane, float farPlane, float depthDistributionScale, std::uint32_t gridSizeZ)
+    {
+        const double nearOffset = 0.095;
+        const double S = depthDistributionScale;
+        const double N = static_cast<double>(nearPlane) + nearOffset;
+        const double F = std::max(static_cast<double>(farPlane), N + 1.0);
+        const double O = (F - N * std::exp2(static_cast<double>(gridSizeZ) / S)) / (F - N);
+        const double B = (1.0 - O) / N;
+        return float3(static_cast<float>(B), static_cast<float>(O), static_cast<float>(S));
+    }
+
+    // The volume's near plane: UE take max(view near, VolumetricFogStartDistance)
+    // (VolumetricFog.cpp:1204-1209); the analytic model's fog-free band is that start distance here.
+    inline float FogVolumeNear(const AtmosphereSettings& a, const Camera& camera)
+    {
+        return std::max(camera.GetZNear(), std::max(a.startDistance, 0.0f));
+    }
+
 #if WITH_EDITOR
     constexpr UINT kSelectionStencilBit = 0x80u;
     constexpr uint32_t kSelectionStencilGBufferLocalOrder = 0xfffffffeu;
@@ -171,6 +194,13 @@ namespace scene_internal
         float4 csmFilterParams;       // w = receiver normal bias in texels
         float4 smrtParams;            // SMRT: x = rayCount, y = samplesPerRay, z = lengthScale, w = maxSlope
         float4 smrtParams2;           // x = source radius (sin), y = texel dither scale
+        // Volumetric fog plan A5 (APPENDED at the tail, same rule as above): the volume's lookup
+        // parameters and the analytic medium, so glass and particles sit in the air the sand is in.
+        float4 fogVolumeParams;       // (on, far view depth, 1/preExposure, slice count)
+        float4 fogVolumeZParams;      // (B, O, S, 0)
+        float4 fogParams0;            // PackAtmosphere: density, height falloff, reference height, start distance
+        float4 fogParams1;            // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
+        float4 fogParams2;            // sky blur, sky back-scatter, zw reserved
     };
 
     // MIRRORS the OceanReflectionCB in shaders/ocean_reflection_cs.hlsl. This one is uploaded by
@@ -270,6 +300,7 @@ namespace scene_internal
     }
 
     inline D3D12_GPU_VIRTUAL_ADDRESS BuildGlassViewCB(Renderer* renderer, const Camera& camera, const SceneFrameData& frame,
+                                                     const float4& fogVolumeParams, const float4& fogVolumeZParams,
                                                       bool glassReflActive)
     {
         GlassViewCB vc{};
@@ -371,6 +402,16 @@ namespace scene_internal
         // reaches it and it applies the factor itself -- and its refraction tap reads the opaque
         // scene copy, which already has the factor on it. Both halves live in glass.hlsl.
         vc.preExposureParams = float4(render::g_preExposure, 0.0f, 0.0f, 0.0f);
+        // Volumetric fog plan A5: the volume the opaque compose samples, and the analytic medium
+        // packed by the SAME function compose uses -- glass and particles sit in the sand's air.
+        vc.fogVolumeParams = fogVolumeParams;
+        vc.fogVolumeZParams = fogVolumeZParams;
+        {
+            const AtmospherePacked fog = PackAtmosphere(frame.settings.atmosphere, frame.dirLight != nullptr);
+            vc.fogParams0 = fog.params0;
+            vc.fogParams1 = fog.params1;
+            vc.fogParams2 = fog.params2;
+        }
         // S8: glass must filter cascades exactly like the geometry beside it (that is what S3 was for).
         const CascadeShadowConfig* csmCfg = frame.cascadeConfig;
         vc.csmFilterMode = float4(static_cast<float>(csmCfg ? csmCfg->filterMode : 1u),

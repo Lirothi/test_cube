@@ -16,17 +16,11 @@ struct Particle
 // Mirror of the Pass_Transparent per-view CB (BuildGlassViewCB / GlassView in glass.hlsl) —
 // declared up to the last field this shader consumes; trailing fields are irrelevant to a
 // root-CBV bind.
-cbuffer ParticlesView : register(b1)
-{
-    float4x4 view;
-    float4x4 proj;
-    float4x4 viewProj;
-    float4x4 viewProjNoJitter;
-    float4x4 prevViewProjNoJitter;
-    float4x4 invView;
-    float4x4 invProj;
-    float4 camPosSky;
-};
+// b1 = the transparent pass's shared per-view CB (GlassView layout); the full layout comes from
+// the include so the fog fields at its tail are reachable (plan A5). Needs the VSM level count.
+#include "vsm_addressing.hlsli"
+#include "glass_view_cb.hlsli"
+#include "fog_common.hlsli"
 
 // Mirror of vfx::GpuEmitterDrawParams (ParticleTypes.h).
 cbuffer DrawParams : register(b2)
@@ -48,12 +42,13 @@ StructuredBuffer<Particle> gParticles : register(t0);
 Texture2D gSprite : register(t1);
 Texture2D gSceneDepth : register(t2); // E2b: depthCopy (reversed-Z NDC), soft-particle fade
 StructuredBuffer<uint> gSorted : register(t3); // E2c: back-to-front slot order (alpha emitters)
+Texture3D<float4> gFogVolume : register(t4);   // plan A5: the integrated froxel volume (gated by fogVolumeParams.x)
 SamplerState gSmp : register(s0);
 
 #define PARTICLES_RS \
     "CBV(b1)," \
     "CBV(b2)," \
-    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 #ifndef PARTICLE_SORTED
@@ -194,5 +189,16 @@ float4 PSMain(VSOut i) : SV_Target0
     // P16.7: the authored colour is a HUE; `luminanceCdM2` is what it is worth in the units
     // scene colour is actually in. Without it an authored 1.0 is a thousandth of a lit scene
     // and an alpha-blended particle SUBTRACTS from the frame instead of adding to it.
-    return float4(c.rgb * c.a * luminanceCdM2 * preExposure, c.a); // premultiplied
+    // Volumetric fog (plan A5): the volume's transmittance dims the particle and its in-scatter is
+    // added in proportion to the particle's coverage (the output is premultiplied). Only the volume:
+    // the analytic medium beyond its far plane is not applied here (particles live near the camera,
+    // and the sky lookup it needs is not bound to this pass).
+    float3 fogged = c.rgb * luminanceCdM2;
+    {
+        const float viewDepth = max(ViewZFromNdc(i.H.z), 1.0e-4f);
+        const float2 fogUv = i.H.xy * screenSizeInv.zw;
+        const float4 vol = FogVolumeSampleAt(gFogVolume, gSmp, fogUv, viewDepth, fogVolumeParams, fogVolumeZParams);
+        fogged = fogged * vol.a + vol.rgb;
+    }
+    return float4(fogged * c.a * preExposure, c.a); // premultiplied
 }

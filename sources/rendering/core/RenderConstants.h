@@ -105,6 +105,10 @@ inline constexpr DXGI_FORMAT kHzbFormat                     = DXGI_FORMAT_R32_FL
 // textures are sized from them (a knob would need a re-create, so there is no knob).
 inline constexpr unsigned    kFogGridPixels                 = 16;
 inline constexpr unsigned    kFogGridZ                      = 64;
+// The LIVE cell size (8 / 16 / 32): a quality knob (--set=fog.gridPixels, graphics_settings.json
+// performance/fogGridPixels, the Render tab). Renderer::SetFogGridPixels recreates the deferred
+// ring when it changes, the way a DLSS mode change does; kFogGridPixels stays the default.
+inline unsigned              g_fogGridPixels                = kFogGridPixels;
 inline constexpr float       kFogDepthDistributionScale     = 32.0f;
 inline constexpr DXGI_FORMAT kFogFormat                     = DXGI_FORMAT_R16G16B16A16_FLOAT;
 // P8 bloom pyramid. HDR and half-float: the chain carries scene-referred radiance ABOVE the

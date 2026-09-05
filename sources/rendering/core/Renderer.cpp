@@ -647,6 +647,16 @@ void Renderer::DumpDredBreadcrumbs(diag::ArtifactFile& f)
 void Renderer::BeginFrame() {
     CPU_SCOPE(ProfilerScopes::kRendererBeginFrame);
 
+    // Volumetric fog cell size: the knob (render::g_fogGridPixels, set by --set / the Render tab /
+    // graphics_settings.json) is applied HERE, at the frame boundary, before anything of this frame
+    // touches the GPU -- a ring recreate at GPU idle. Here and not in the app loop, because every
+    // loop passes through BeginFrame (the scene-stress harness has its own loop and a knob applied
+    // in App::Run never reached it: the GBV run with gridPixels 8 silently validated 16).
+    if (fogGridPixels_ != render::g_fogGridPixels)
+    {
+        SetFogGridPixels(render::g_fogGridPixels);
+    }
+
     // A device removal can surface anywhere — a failed Present, a fence wait that never completes,
     // a TDR that kills the queue between frames — and until now it surfaced as a bare throw with
     // nothing written to disk, which is exactly why the one real report of the async toggle removing
@@ -1020,6 +1030,7 @@ void Renderer::ReleaseImGuiTextureDescriptors(ID3D12Resource* resource)
     imguiLayer_.ReleasePreviewDescriptorsForResource(resource);
     canonicalStates_.Forget(resource);
 }
+#endif
 
 void Renderer::MarkImGuiTextureShaderReadable(ID3D12Resource* resource)
 {
@@ -1038,7 +1049,6 @@ void Renderer::MarkImGuiTextureShaderReadable(ID3D12Resource* resource)
         SetResourceState(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 }
-#endif
 
 void Renderer::ShutdownImGui()
 {
@@ -2226,8 +2236,8 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     sizes.hzbHeight = sizes.gtaoHeight;
     // Volumetric fog: the froxel grid over the RENDER resolution (UE size theirs from the scene
     // textures for the same reason: the volume describes the rendered image, not the display).
-    sizes.fogGridWidth = std::max(1u, (rtWidth + render::kFogGridPixels - 1u) / render::kFogGridPixels);
-    sizes.fogGridHeight = std::max(1u, (rtHeight + render::kFogGridPixels - 1u) / render::kFogGridPixels);
+    sizes.fogGridWidth = std::max(1u, (rtWidth + fogGridPixels_ - 1u) / fogGridPixels_);
+    sizes.fogGridHeight = std::max(1u, (rtHeight + fogGridPixels_ - 1u) / fogGridPixels_);
     sizes.fogGridDepth = render::kFogGridZ;
     // P8: half the DISPLAY resolution, not the render one. Bloom runs after the upscaler, on the
     // same image the tonemap reads -- sizing it off `rtWidth` would make the pyramid change shape
@@ -2335,6 +2345,17 @@ void Renderer::SetReflectionTextureScale(Math::float2 scale)
 
     reflectionTextureScale_ = sanitized;
 
+    if (rtManager_.IsCreated())
+    {
+        RecreateDeferredTargets();
+    }
+}
+
+void Renderer::SetFogGridPixels(UINT pixels)
+{
+    const UINT sanitized = pixels <= 8u ? 8u : (pixels >= 32u ? 32u : 16u); // the three sizes the knob offers
+    if (sanitized == fogGridPixels_) { return; }
+    fogGridPixels_ = sanitized;
     if (rtManager_.IsCreated())
     {
         RecreateDeferredTargets();

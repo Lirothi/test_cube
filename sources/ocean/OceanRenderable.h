@@ -153,6 +153,15 @@ public:
     Math::float4 GetAtmosphereParams1() const { return atmosphereParams1_; }
     Math::float4 GetAtmosphereParams2() const { return atmosphereParams2_; }
     // P7 item 8. A debug view, so it rides the global rather than the level-saved settings.
+    // Volumetric fog (plan A5): the volume's lookup parameters, decided by SceneRenderer with
+    // compose's; x = 0 means "no volume this frame" and the shader takes the identity.
+    void SetFogVolumeParams(const Math::float4& params, const Math::float4& zParams)
+    {
+        fogVolumeParams_ = params;
+        fogVolumeZParams_ = zParams;
+    }
+    Math::float4 GetFogVolumeParams() const { return fogVolumeParams_; }
+    Math::float4 GetFogVolumeZParams() const { return fogVolumeZParams_; }
     void SetAtmosphereDebugView(std::uint32_t v) { atmosphereDebugView_ = v; }
     std::uint32_t GetAtmosphereDebugView() const { return atmosphereDebugView_; }
 
@@ -248,6 +257,8 @@ private:
     Math::float4 atmosphereParams1_{};
     Math::float4 atmosphereParams2_{};
     std::uint32_t atmosphereDebugView_ = 0u;
+    Math::float4 fogVolumeParams_{};    // x = 0: no volume (default)
+    Math::float4 fogVolumeZParams_{};
     float elapsedTime_ = 0.0f;
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);
     float viewerHeight_ = 0.0f;

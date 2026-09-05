@@ -39,6 +39,12 @@ inline void ApplyOverrides(const nlohmann::json& j, AtmosphereSettings& s)
     s.skyScatter = j.value("skyScatter", s.skyScatter);
     s.historyWeight = j.value("historyWeight", s.historyWeight);
     s.temporal = j.value("temporal", s.temporal);
+    s.jitter = j.value("jitter", s.jitter);
+    s.conservativeDepth = j.value("conservativeDepth", s.conservativeDepth);
+    s.localLights = j.value("localLights", s.localLights);
+    s.localLightScatter = j.value("localLightScatter", s.localLightScatter);
+    s.localSoftFading = j.value("localSoftFading", s.localSoftFading);
+    s.localDistanceBias = j.value("localDistanceBias", s.localDistanceBias);
 }
 
 inline nlohmann::json ToJson(const AtmosphereSettings& s)
@@ -64,6 +70,12 @@ inline nlohmann::json ToJson(const AtmosphereSettings& s)
     j["skyScatter"] = s.skyScatter;
     j["historyWeight"] = s.historyWeight;
     j["temporal"] = s.temporal;
+    j["jitter"] = s.jitter;
+    j["conservativeDepth"] = s.conservativeDepth;
+    j["localLights"] = s.localLights;
+    j["localLightScatter"] = s.localLightScatter;
+    j["localSoftFading"] = s.localSoftFading;
+    j["localDistanceBias"] = s.localDistanceBias;
     return j;
 }
 

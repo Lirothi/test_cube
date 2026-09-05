@@ -1,0 +1,69 @@
+{
+  "camera": { "hfovDeg": 90.0, "zFar": 10000.0, "zNear": 0.01 },
+  "directionalLight": {
+    "ambient": 0.0456,
+    "color": [1.0, 0.85, 0.7],
+    "direction": [-0.9284146428108215, -0.23331937193870544, -0.2891509234905243],
+    "enabled": true,
+    "sunIlluminanceLux": 400.0
+  },
+  "skybox": { "illuminanceLux": 1200.0, "texture": "textures/citrus_orchard_puresky_4k/citrus_orchard_puresky_4k.dds" },
+  "ocean": { "enabled": false, "preset": "data/ocean/default.json" },
+  "wind": { "directionDeg": 0.0, "foliageSwayMeters": 1.0, "gust": { "amplitude": 0.5, "frequencyHz": 0.15, "seed": 3.0 }, "strength": 1.0 },
+  "postProcess": {
+    "atmosphere": {
+      "enabled": true,
+      "density": 0.03,
+      "heightFalloff": 0.0,
+      "referenceHeight": 0.0,
+      "startDistance": 0.5,
+      "maxOpacity": 0.95,
+      "sunScatterStrength": 0.0,
+      "sunScatterExponent": 8.0,
+      "volumetric": true,
+      "volumetricDistance": 150.0,
+      "albedo": 1.0,
+      "extinctionScale": 1.0,
+      "phaseG": 0.3,
+      "sunScatter": 1.0,
+      "skyScatter": 1.0,
+      "historyWeight": 0.9,
+      "temporal": true,
+      "jitter": true,
+      "conservativeDepth": true,
+      "localLights": true,
+      "localLightScatter": 1.0,
+      "localSoftFading": 1.0,
+      "localDistanceBias": 1.0
+    },
+    "cameraExposure": { "enabled": true, "autoExposure": true, "compensationEv": 0.0, "apertureFStop": 16.0, "isoSensitivity": 100.0 }
+  },
+  "spotLights": [
+    {
+      "color": [1.0, 0.9, 0.75],
+      "direction": [0.2, -0.94, 0.2],
+      "enabled": true,
+      "innerAngleDeg": 22.0,
+      "outerAngleDeg": 32.0,
+      "luminousFluxLm": 12000000,
+      "position": [0.0, 8.0, 0.0],
+      "range": 30.0,
+      "shadowDepthBias": 0.0001,
+      "shadowNormalBias": 0.05,
+      "shadowsEnabled": true
+    }
+  ],
+  "pointLights": [],
+  "objects": [
+    { "enabled": true, "id": 1, "name": "ground", "type": "staticMesh", "mesh": "models/box.mesh.json", "material": "sandstone_cracks",
+      "position": [0.0, -0.5, 0.0], "rotationDeg": [0.0, 0.0, 0.0], "scale": [60.0, 1.0, 60.0], "normalStrength": 1.0 },
+    { "enabled": true, "id": 2, "name": "pillar a", "type": "staticMesh", "mesh": "models/box.mesh.json", "material": "damaged_plaster",
+      "position": [1.2, 1.5, 0.8], "rotationDeg": [0.0, 15.0, 0.0], "scale": [0.6, 3.0, 0.6], "normalStrength": 1.0 },
+    { "enabled": true, "id": 3, "name": "pillar b", "type": "staticMesh", "mesh": "models/box.mesh.json", "material": "damaged_plaster",
+      "position": [-1.5, 1.0, 1.6], "rotationDeg": [0.0, -30.0, 0.0], "scale": [0.5, 2.0, 0.5], "normalStrength": 1.0 },
+    { "enabled": true, "id": 4, "name": "slab", "type": "staticMesh", "mesh": "models/box.mesh.json", "material": "damaged_plaster",
+      "position": [2.6, 2.4, 1.9], "rotationDeg": [0.0, 25.0, 0.0], "scale": [1.6, 0.2, 1.0], "normalStrength": 1.0 },
+    { "enabled": true, "id": 5, "name": "FreeCameraStart", "type": "freeCameraStart",
+      "position": [10.0, 3.0, 10.0], "rotationDeg": [6.0, -135.0, 0.0], "scale": [1.0, 1.0, 1.0] }
+  ]
+}

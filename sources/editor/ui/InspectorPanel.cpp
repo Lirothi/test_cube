@@ -1215,7 +1215,15 @@ namespace
             dragF("Volume Sun Intensity", "sunScatter", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f"); // the sun INSIDE the volume; "Sun Scatter" above is the analytic lobe beyond it
             dragF("Volume Sky Intensity", "skyScatter", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
             dragF("History Weight", "historyWeight", 0.9f, 0.01f, 0.0f, 0.99f, "%.2f");
-            checkB("Temporal reprojection + jitter", "temporal", true);
+            checkB("Temporal reprojection", "temporal", true);
+            checkB("Jitter (with the history)", "jitter", true);
+            checkB("Conservative depth (skip cells behind geometry)", "conservativeDepth", true);
+            checkB("Local lights in the volume", "localLights", true);
+            dragF("Local Light Intensity", "localLightScatter", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            dragF("Local Cone Soft Fading", "localSoftFading", 1.0f, 0.05f, 0.0f, 4.0f, "%.2f froxels");
+            InspectorHelp("UE r.VolumetricFog.LightSoftFading: a spot cone edge fades over this many froxels, "
+                          "which is what removes the stepped, flickering edge. 0 = hard edge (UE default).");
+            dragF("Local Distance Bias", "localDistanceBias", 1.0f, 0.05f, 0.0f, 4.0f, "%.2f");
 
             ImGui::SeparatorText("Sky sampling");
             dragF("Back Scatter", "skyBackScatter", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");

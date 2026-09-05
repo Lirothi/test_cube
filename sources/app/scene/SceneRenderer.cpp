@@ -397,6 +397,35 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             D.fogIntegratedSRV.ptr != 0 && P.fogScatterSRV.ptr != 0 && D.shadowSRV.ptr != 0;
         const UINT w = D.fogGridWidth;
         const UINT h = D.fogGridHeight;
+        // A3 conservative depth: the furthest pyramid's base is half the render size, so the mip whose
+        // texel covers one 16-pixel cell is log2(16) - 1 = 3; both slots must hold it (the history
+        // check reads last frame's).
+        {
+            UINT hzbMip = 0u;
+            for (UINT px = std::max(renderer->GetFogGridPixels(), 2u) / 2u; px > 1u; px >>= 1u) { ++hzbMip; }
+            decisions_.fogHzbMip = hzbMip;
+            decisions_.fogConservativeDepth = decisions_.volumetricFog && a.conservativeDepth &&
+                D.hzb.Get() != nullptr && D.hzbSRV.ptr != 0 && D.hzbMips > hzbMip &&
+                P.hzb.Get() != nullptr && P.hzbSRV.ptr != 0 && P.hzbMips > hzbMip;
+        }
+        // A4: local lights, when the level has any (their buffers are filled in EnsureFrameResources).
+        decisions_.fogLocalLights = decisions_.volumetricFog && a.localLights && a.localLightScatter > 0.0f &&
+            frame.lightManager != nullptr &&
+            (frame.lightManager->GetSpotLightCount() > 0 || !frame.lightManager->PointLights().empty());
+        // The lookup parameters every consumer shares (A5). Off = x 0: the shaders take the identity.
+        {
+            const float3 zp = frame.camera
+                ? FogGridZParams(FogVolumeNear(a, *frame.camera), a.volumetricDistance, render::kFogDepthDistributionScale, D.fogGridDepth)
+                : float3(1.0f, 0.0f, 1.0f);
+            decisions_.fogVolumeZParams = Math::float4(zp.x, zp.y, zp.z, 0.0f);
+            decisions_.fogVolumeParams = Math::float4(decisions_.volumetricFog ? 1.0f : 0.0f, a.volumetricDistance,
+                                                      preExposure_ > 0.0f ? 1.0f / preExposure_ : 1.0f,
+                                                      static_cast<float>(D.fogGridDepth));
+            if (frame.ocean)
+            {
+                frame.ocean->SetFogVolumeParams(decisions_.fogVolumeParams, decisions_.fogVolumeZParams);
+            }
+        }
         const std::uint64_t rev = frame.camera ? frame.camera->GetHistoryRevision() : 0ull;
         const bool sameHistory = fogHistoryWidth_ == w && fogHistoryHeight_ == h && fogHistoryRevision_ == rev;
         decisions_.fogHistoryValid = decisions_.volumetricFog && a.temporal && fogHistoryFrames_ > 0u && sameHistory;
@@ -404,12 +433,14 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         fogHistoryWidth_ = w;
         fogHistoryHeight_ = h;
         fogHistoryRevision_ = rev;
-        const int state = decisions_.volumetricFog ? (1 + (decisions_.fogHistoryValid ? 1 : 0)) : 0;
+        const int state = decisions_.volumetricFog
+            ? (1 + (decisions_.fogHistoryValid ? 1 : 0) + (decisions_.fogConservativeDepth ? 2 : 0) + (decisions_.fogLocalLights ? 4 : 0))
+            : 0;
         if (state != fogLogged_)
         {
-            LOG_INFO(logging::LogCategory::Render, "volumetric fog: on={} history={} grid={}x{}x{} (frame {})",
-                     decisions_.volumetricFog ? 1 : 0, decisions_.fogHistoryValid ? 1 : 0, w, h, D.fogGridDepth,
-                     renderer->GetTotalFrameNumber());
+            LOG_INFO(logging::LogCategory::Render, "volumetric fog: on={} history={} conservative={} local={} grid={}x{}x{} (frame {})",
+                     decisions_.volumetricFog ? 1 : 0, decisions_.fogHistoryValid ? 1 : 0, decisions_.fogConservativeDepth ? 1 : 0,
+                     decisions_.fogLocalLights ? 1 : 0, w, h, D.fogGridDepth, renderer->GetTotalFrameNumber());
             fogLogged_ = state;
         }
     }

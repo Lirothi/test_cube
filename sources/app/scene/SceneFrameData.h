@@ -197,6 +197,16 @@ struct AtmosphereSettings
     float skyScatter = 1.0f;            // UE SkyLight VolumetricScatteringIntensity
     float historyWeight = 0.9f;         // UE r.VolumetricFog.HistoryWeight
     bool temporal = true;               // UE r.VolumetricFog.TemporalReprojection (+ jitter)
+    bool jitter = true;                 // UE r.VolumetricFog.Jitter (only with the history, else the cell centre)
+    bool conservativeDepth = true;      // UE r.VolumetricFog.ConservativeDepth: cells behind the tile's farthest surface are skipped
+    bool localLights = true;            // spots and points light the volume (UE: every local light with VolumetricScatteringIntensity > 0)
+    float localLightScatter = 1.0f;     // UE per-light VolumetricScatteringIntensity, one value for all local lights here
+    // UE r.VolumetricFog.LightSoftFading: a spot cone edge fades over this many froxels (their default 0 = hard;
+    // 1 is their own good starting point and the cure for a stepped, flickering cone edge -- ours ships at 1).
+    float localSoftFading = 1.0f;
+    // UE r.VolumetricFog.InverseSquaredLightDistanceBiasScale: the inverse-square falloff is biased by the cell
+    // radius times this, so a cell that contains the source does not blow up (aliasing at the light).
+    float localDistanceBias = 1.0f;
 };
 
 // P8 -- exposure-aware HDR bloom. SHIPS DISABLED, same rule the rest of this plan follows: a real

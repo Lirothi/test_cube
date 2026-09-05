@@ -296,6 +296,8 @@ public:
             atmosphereParams1Handle_ = material->ComputeCBFieldHandle(0, "fogParams1");
             atmosphereParams2Handle_ = material->ComputeCBFieldHandle(0, "fogParams2");
             atmosphereDebugViewHandle_ = material->ComputeCBFieldHandle(0, "fogDebugView");
+            fogVolumeParamsHandle_ = material->ComputeCBFieldHandle(0, "fogVolumeParams");
+            fogVolumeZParamsHandle_ = material->ComputeCBFieldHandle(0, "fogVolumeZParams");
             skyParamsHandle_ = material->ComputeCBFieldHandle(0, "skyParams");
             deepScatterColorHandle_ = material->ComputeCBFieldHandle(0, "deepScatterColor");
             sssColorHandle_ = material->ComputeCBFieldHandle(0, "sssColor");
@@ -368,6 +370,8 @@ public:
             atmosphereParams1Handle_ = {};
             atmosphereParams2Handle_ = {};
             atmosphereDebugViewHandle_ = {};
+            fogVolumeParamsHandle_ = {};
+            fogVolumeZParamsHandle_ = {};
             skyParamsHandle_ = {};
             deepScatterColorHandle_ = {};
             sssColorHandle_ = {};
@@ -454,6 +458,8 @@ public:
         UpdateUniform(owner, atmosphereParams1Handle_, material, owner_.GetAtmosphereParams1(), cbData);
         UpdateUniform(owner, atmosphereParams2Handle_, material, owner_.GetAtmosphereParams2(), cbData);
         UpdateUniform(owner, atmosphereDebugViewHandle_, material, owner_.GetAtmosphereDebugView(), cbData);
+        UpdateUniform(owner, fogVolumeParamsHandle_, material, owner_.GetFogVolumeParams(), cbData);
+        UpdateUniform(owner, fogVolumeZParamsHandle_, material, owner_.GetFogVolumeZParams(), cbData);
         UpdateUniform(owner, skyParamsHandle_, material, owner_.GetSkyParams(), cbData);
         UpdateUniform(owner, deepScatterColorHandle_, material, owner_.GetDeepScatterColor(), cbData);
         UpdateUniform(owner, sssColorHandle_, material, owner_.GetSssColor(), cbData);
@@ -513,6 +519,7 @@ private:
     Material::CBFieldHandle atmosphereParams0Handle_{}, atmosphereParams1Handle_{};
     Material::CBFieldHandle atmosphereParams2Handle_{};
     Material::CBFieldHandle atmosphereDebugViewHandle_{};
+    Material::CBFieldHandle fogVolumeParamsHandle_{}, fogVolumeZParamsHandle_{};
     Material::CBFieldHandle normalSamplingParamsHandle_{};
     Material::CBFieldHandle shoreBehaviorParams0Handle_{};
     Material::CBFieldHandle shoreBehaviorParams1Handle_{};
@@ -815,7 +822,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
     // Slots 17/18 = the surf sim height and foam fields (surf sim injection): declared by the
     // LEGACY RS only; the modern RS still says 16 and simply never addresses the extras.
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 20> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 21> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -937,6 +944,9 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
     pushSrv(specSrv);
     pushSrv(irrSrv);
+    // t20: the volumetric fog's integrated volume (plan A5). Bound every frame -- Main_Transparent
+    // declares it PIXEL-readable every frame -- and gated in the shader by fogVolumeParams.x.
+    pushSrv(deferred.fogIntegratedSRV.ptr != 0 ? deferred.fogIntegratedSRV : fallbackSrv);
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;

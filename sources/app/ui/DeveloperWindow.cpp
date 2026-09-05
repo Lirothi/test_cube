@@ -1976,6 +1976,20 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "pyramid hid are deferred, pass A draws the rest, the pyramid of pass A's depth\n"
                                       "retests the deferred with this frame's camera, pass B draws the survivors.\n"
                                       "Zero latency, no holes by construction. --set=gbuffer.hzb:0|1");
+                // Volumetric fog: the froxel cell size (UE r.VolumetricFog.GridPixelSize, their 16). The
+                // renderer recreates the ring at the next frame boundary when this changes.
+                GRAPHICS_CONTROL(FogGridPixels, "fogGridPixels",
+                    ([&]() {
+                        static const char* kFogCells[] = { "8 px (4x the cost, crisper)", "16 px (UE default)", "32 px (cheap, blocky)" };
+                        int idx = render::g_fogGridPixels <= 8u ? 0 : (render::g_fogGridPixels >= 32u ? 2 : 1);
+                        const bool changed = ImGui::Combo("Volumetric fog cell", &idx, kFogCells, 3);
+                        if (changed) { render::g_fogGridPixels = idx == 0 ? 8u : (idx == 2 ? 32u : 16u); }
+                        return changed;
+                    })());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Froxel size in RENDER pixels: under DLSS the cells are correspondingly larger on\n"
+                                      "screen. Cone edges also soften by the level's fog 'Local Cone Soft Fading'.\n"
+                                      "--set=fog.gridPixels:8|16|32");
                 {
                     const ShadowGpuData& sg = scene.ShadowGpu();
                     ImGui::Text("camera hzb cull: %s; deferred %u, drawn in pass B %u (fading casters twice, frame N-3)",

@@ -1,12 +1,14 @@
 // t7 = GlassReflection: the off-screen RT glass reflection (S15b), computed by the
 // GlassReflGbuffer + GlassReflections passes and sampled here. It's a normal texture
 // (no RayQuery in this shader), so the glass PSO is identical on RT and non-RT HW.
-#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
 #include "vsm_sample.hlsli"
 #include "csm_sample.hlsli"
+#include "atmosphere.hlsli" // plan A5: the analytic medium beyond the fog volume
+#include "fog_common.hlsli"  // plan A5: the froxel volume
 
 struct PointLightData
 {
@@ -39,47 +41,7 @@ cbuffer GlassParams : register(b0)
     uint3 _objectIdPad;
 };
 
-// Per-view/per-frame data shared by every glass object in the pass. Filled once.
-cbuffer GlassView : register(b1)
-{
-    float4x4 view;
-    float4x4 proj;
-    float4x4 viewProj;
-    float4x4 viewProjNoJitter;
-    float4x4 prevViewProjNoJitter;
-    float4x4 invView;
-    float4x4 invProj;
-    float4 camPosSky;             // xyz = camera position, w = sky intensity
-    float4 sunDirAmbient;         // xyz = sun direction, w = ambient intensity
-    float4 sunColorExposure;      // xyz = sun color, w = sun exposure
-    float4 camDirWS;              // xyz = camera forward, w = P5 prefiltered sky mip count (0 = none)
-    float4 screenSizeInv;         // xy = screen size, zw = inverse screen size
-    float4 shadowAtlasSizeInv;    // xy = atlas size, zw = inverse atlas size
-    float4 shadowBiasNDC;         // cascade depth bias
-    float4 cascadeTexelWS;        // world size of one cascade texel
-    float4 cascadeSplitsVS;       // cascade splits in view space
-    float4 cascadeScaleBias[4];   // xy = scale, zw = bias per cascade
-    float4 spotShadowInfo;        // xy = spot shadow size, zw = inverse size
-    float4 lightCounts;           // x = point lights, y = spot lights, z = traced reflections, w = sky reflection enabled
-    float4x4 lightViewProj[4];
-    float4 vsmParams;             // x = useVsm, y = refDist, z = depth-bias floor, w = clip blend width
-    float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (UE units), z = depthBias (NDC), w = depth-bias decay/level
-    float4x4 clipmapViewProj[VSM_NUM_CLIPMAP_LEVELS]; // Step 24f: directional clipmap level viewProjs
-    float4x4 clipmapUvNormal;     // P16.16: receiver-plane transform, must match lighting_cs
-    // P16.1: x = the pre-exposure every writer of scene colour applies. Glass writes in the
-    // transparent pass, which runs AFTER compose, so compose's own scaling never reaches it.
-    float4 preExposureParams;
-    // S8: x = 0 legacy 3x3 SampleCmp box, 1 = soft-occlusion ramp + 4x4 Gather tent. APPENDED at the
-    // tail on purpose -- inserting anywhere else shifts every offset after it.
-    float4 csmFilterMode;         // x = kernel mode, y = receiver bias, z = sharpen, w = over-blur
-    float4 csmFilterParams;       // S10 x = far split, y = blend, z = distance fade; w = normal bias
-    // SMRT (docs/vsm_smrt_plan.md). x = ray count (0 = single-tap path), y = samples per ray,
-    // z = ray length scale, w = extrapolate max slope. APPENDED at the tail, same rule as above.
-    // Glass samples the SAME clipmap lighting_cs does, so it has to get the same numbers or a
-    // window shades against a differently-sampled shadow than the ground under it.
-    float4 smrtParams;
-    float4 smrtParams2;           // x = source radius (sin), y = texel dither, z = margin, w = frame
-};
+#include "glass_view_cb.hlsli" // b1: the transparent pass's shared per-view CB (also particles)
 
 Texture2D SceneOpaque : register(t0);
 Texture2D ShadowAtlas : register(t1);
@@ -95,6 +57,7 @@ Texture2D VsmPool : register(t10);
 // P5: GGX-prefiltered sky. Inert unless skySpecMipCount says this level's sky has it, in which case
 // glass stops guessing `rough * 5` on the display cube and reads the shared environment.
 TextureCube SkySpecular : register(t11);
+Texture3D<float4> FogVolume : register(t12); // plan A5: the integrated froxel volume
 
 SamplerState LinearSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
@@ -543,6 +506,47 @@ PSOut PSMain(VSOut i)
     //alpha = 1.0f;
     //color = envRefl;
     //color = diffuseAccum;
+
+    // Volumetric fog (plan A5): the air between the camera and this glass, the same split compose
+    // applies to the opaque scene -- the froxel volume to its far plane, the analytic medium beyond
+    // (its start pushed out along the ray, UE CombineVolumetricFog). Applied to the FINAL colour
+    // (refraction included: what is seen through the glass is behind the same air as the glass).
+    {
+        const float3 toPoint = i.posWS - camPos;
+        const float dist = length(toPoint);
+        const float3 viewDir = dist > 1.0e-4f ? toPoint / dist : float3(0.0f, 0.0f, 1.0f);
+        const float viewDepth = max(i.clipPos.w, 1.0e-4f);
+        const float2 fogUv = i.posH.xy * screenSizeInv.zw;
+        const float4 vol = FogVolumeSampleAt(FogVolume, LinearSampler, fogUv, viewDepth, fogVolumeParams, fogVolumeZParams);
+        float fogT = 1.0f;
+        float3 fogIn = 0.0f.xxx;
+        if (fogParams0.x > 0.0f)
+        {
+            AtmosphereParams fog;
+            fog.density = fogParams0.x;
+            fog.heightFalloff = fogParams0.y;
+            fog.referenceHeight = fogParams0.z;
+            fog.startDistance = max(fogParams0.w, FogAnalyticExclude(fogVolumeParams, dist, viewDepth));
+            fog.maxOpacity = fogParams1.x;
+            fog.sunScatterStrength = fogParams1.y;
+            fog.sunScatterExponent = fogParams1.z;
+            fog.sunScatterStartDistance = max(fogParams1.w, FogAnalyticExclude(fogVolumeParams, dist, viewDepth));
+            fog.skyBackScatter = fogParams2.y;
+            const float fogShared = AtmosphereSharedIntegral(dist, camPos.y, i.posWS.y, fog);
+            const float tau = AtmosphereOpticalDepth(fogShared, dist, fog);
+            const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
+            fogT = AtmosphereTransmittance(tau, minT);
+            const float headroom = AtmosphereHeadroom(fogT, minT);
+            const float3 skyAlongView = AtmosphereClampSkySample(
+                IblSkyRadiance(SkySpecular, SkyboxTex, EnvSampler, viewDir,
+                               AtmosphereSkyRoughness(headroom, fogParams2.x), skySpecMipCount, skyIntensity),
+                IblSkyRadiance(SkySpecular, SkyboxTex, EnvSampler, viewDir, 0.0f, skySpecMipCount, skyIntensity));
+            const float3 toSun = -normalize(sunDirAmbient.xyz);
+            fogIn = AtmosphereInscatter(skyAlongView, sunColorExposure.xyz * sunColorExposure.w,
+                                        dot(viewDir, toSun), fogShared, dist, headroom, fog);
+        }
+        color = (color * fogT + fogIn * (1.0f - fogT)) * vol.a + vol.rgb;
+    }
 
     float2 currUv = ClipToUV(i.clipPos);
     float2 prevUv = ClipToUV(i.prevPosH);

@@ -227,11 +227,12 @@ public:
     // Drop the cached ImGui preview descriptors for a resource (editor thumbnail
     // cache eviction). The caller idles the GPU before freeing the resource.
     void ReleaseImGuiTextureDescriptors(ID3D12Resource* resource);
-    // Register an editor-owned ImGui texture as pixel-shader-readable so
-    // RenderImGui does not emit a bogus COMMON->PSR barrier. Call each frame the
-    // resource is displayed, before RenderImGui.
-    void MarkImGuiTextureShaderReadable(ID3D12Resource* resource);
 #endif
+    // Register an ImGui texture as pixel-shader-readable so RenderImGui does not emit a bogus
+    // COMMON->PSR barrier. Call each frame the resource is displayed, before RenderImGui. Not
+    // editor-only: the DeveloperWindow's reset-icon atlas (every config) uses it too, and the
+    // Release build failed on the guard.
+    void MarkImGuiTextureShaderReadable(ID3D12Resource* resource);
     void ShutdownImGui();
     bool HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     bool ImGuiWantsMouse() const;
@@ -605,6 +606,10 @@ public:
                          ID3D12Resource* countBuffer = nullptr, UINT64 countOffset = 0);
 
     void SetReflectionTextureScale(Math::float2 scale);
+    // Volumetric fog: the froxel cell size in render pixels (8 / 16 / 32). A change recreates the
+    // deferred ring (GPU idle), exactly as a reflection-scale or DLSS-mode change does.
+    void SetFogGridPixels(UINT pixels);
+    UINT GetFogGridPixels() const { return fogGridPixels_; }
     void SetReflectionTextureScale(float scale) { SetReflectionTextureScale(Math::float2(scale, scale)); }
     Math::float2 GetReflectionTextureScale() const { return reflectionTextureScale_; }
     UINT GetReflectionTextureWidth() const;
@@ -780,6 +785,7 @@ private:
 #endif
 
     Math::float2 reflectionTextureScale_ = Math::float2(0.5f, 0.5f);
+    UINT fogGridPixels_ = render::kFogGridPixels; // volumetric fog cell size the CURRENT ring was built with
     UINT reflectionTextureWidth_ = 1;
     UINT reflectionTextureHeight_ = 1;
     Math::float2 oceanReflectionTextureScale_ = Math::float2(0.5f, 0.5f);
