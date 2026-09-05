@@ -108,7 +108,8 @@ inline constexpr unsigned    kFogGridZ                      = 64;
 // The LIVE cell size (8 / 16 / 32): a quality knob (--set=fog.gridPixels, graphics_settings.json
 // performance/fogGridPixels, the Render tab). Renderer::SetFogGridPixels recreates the deferred
 // ring when it changes, the way a DLSS mode change does; kFogGridPixels stays the default.
-inline unsigned              g_fogGridPixels                = kFogGridPixels;
+inline unsigned              g_fogGridPixels                = kFogGridPixels; // powers of two 4..64 (the conservative depth reads HZB mips)
+inline unsigned              g_fogGridZ                     = kFogGridZ;      // 16..128 slices (UE r.VolumetricFog.GridSizeZ; the integrate loop's literal is 128)
 inline constexpr float       kFogDepthDistributionScale     = 32.0f;
 inline constexpr DXGI_FORMAT kFogFormat                     = DXGI_FORMAT_R16G16B16A16_FLOAT;
 // P8 bloom pyramid. HDR and half-float: the chain carries scene-referred radiance ABOVE the

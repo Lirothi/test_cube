@@ -27,7 +27,7 @@ cbuffer FogCB : register(reg) \
     float4 fogMedium0;          /* density (per m, base-2 as the analytic model), height falloff, reference height, start distance */ \
     float4 fogMedium1;          /* albedo, extinction scale, phase g, sun scatter intensity */ \
     float4 fogMedium2;          /* sky scatter intensity, preExposure, 1 / previous preExposure, volumetric distance */ \
-    uint4  fogMisc;             /* x: HZB mip whose texel is one cell, y: supersample count on a history miss, z: frame index, w: 0 */ \
+    uint4  fogMisc;             /* x: HZB mip whose texel is one cell, y: supersample count on a history miss, z: frame index, w: samples per cell every frame */ \
     uint4  fogLocal;            /* x: spot count, y: point count, z: local shadows from the VSM pages (else the Legacy atlases), w: 0 */ \
     float4 fogLocalParams;      /* x: local light scatter intensity, y: 1/spot atlas size, z: 1/point cube face size, w: VSM refDist */ \
     float4 fogLocalParams2;     /* x: cone soft fading (froxels), y: inverse-square distance bias scale (cell radii), zw: 0 */ \

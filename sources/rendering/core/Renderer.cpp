@@ -656,6 +656,10 @@ void Renderer::BeginFrame() {
     {
         SetFogGridPixels(render::g_fogGridPixels);
     }
+    if (fogGridZ_ != render::g_fogGridZ)
+    {
+        SetFogGridZ(render::g_fogGridZ);
+    }
 
     // A device removal can surface anywhere — a failed Present, a fence wait that never completes,
     // a TDR that kills the queue between frames — and until now it surfaced as a bare throw with
@@ -2238,7 +2242,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     // textures for the same reason: the volume describes the rendered image, not the display).
     sizes.fogGridWidth = std::max(1u, (rtWidth + fogGridPixels_ - 1u) / fogGridPixels_);
     sizes.fogGridHeight = std::max(1u, (rtHeight + fogGridPixels_ - 1u) / fogGridPixels_);
-    sizes.fogGridDepth = render::kFogGridZ;
+    sizes.fogGridDepth = fogGridZ_;
     // P8: half the DISPLAY resolution, not the render one. Bloom runs after the upscaler, on the
     // same image the tonemap reads -- sizing it off `rtWidth` would make the pyramid change shape
     // with the DLSS quality mode while the image it describes did not.
@@ -2353,9 +2357,24 @@ void Renderer::SetReflectionTextureScale(Math::float2 scale)
 
 void Renderer::SetFogGridPixels(UINT pixels)
 {
-    const UINT sanitized = pixels <= 8u ? 8u : (pixels >= 32u ? 32u : 16u); // the three sizes the knob offers
+    // Powers of two 4..64: the conservative depth reads the furthest HZB at the mip whose texel is one
+    // cell, so the cell must be a power-of-two multiple of the HZB's 2-pixel base.
+    UINT sanitized = 4u;
+    while (sanitized < 64u && sanitized * 2u <= std::max(pixels, 4u)) { sanitized *= 2u; }
     if (sanitized == fogGridPixels_) { return; }
     fogGridPixels_ = sanitized;
+    if (rtManager_.IsCreated())
+    {
+        RecreateDeferredTargets();
+    }
+}
+
+void Renderer::SetFogGridZ(UINT slices)
+{
+    // 16..128: the integrate shader's loop is a literal 128 and breaks at the grid's count.
+    const UINT sanitized = std::clamp(slices, 16u, 128u);
+    if (sanitized == fogGridZ_) { return; }
+    fogGridZ_ = sanitized;
     if (rtManager_.IsCreated())
     {
         RecreateDeferredTargets();

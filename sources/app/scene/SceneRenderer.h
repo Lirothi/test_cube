@@ -597,6 +597,7 @@ private:
     uint32_t fogHistoryFrames_ = 0u;
     UINT fogHistoryWidth_ = 0u;
     UINT fogHistoryHeight_ = 0u;
+    UINT fogHistoryDepth_ = 0u;
     std::uint64_t fogHistoryRevision_ = 0u;
     int fogLogged_ = -1;             // last logged (on, historyValid) state
 

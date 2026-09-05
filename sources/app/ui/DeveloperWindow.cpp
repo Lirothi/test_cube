@@ -680,6 +680,39 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(Fxaa, "fxaa", ImGui::Checkbox("FXAA", &settings.doFxaa));
 
+                ImGui::Separator();
+                // Volumetric fog grid (UE r.VolumetricFog.GridPixelSize 16 / GridSizeZ 64, global cvars). The
+                // renderer recreates the ring at the next frame boundary when this changes.
+                GRAPHICS_CONTROL(FogGridPixels, "fogGridPixels",
+                    ([&]() {
+                        static const char* kFogCells[] = { "4 px", "8 px", "16 px (UE default)", "32 px", "64 px" };
+                        static const unsigned kFogCellPx[] = { 4u, 8u, 16u, 32u, 64u };
+                        int idx = 2;
+                        for (int i = 0; i < 5; ++i) { if (render::g_fogGridPixels == kFogCellPx[i]) { idx = i; } }
+                        const bool changed = ImGui::Combo("Volumetric fog cell", &idx, kFogCells, 5);
+                        if (changed) { render::g_fogGridPixels = kFogCellPx[idx]; }
+                        return changed;
+                    })());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Froxel size in RENDER pixels (UE r.VolumetricFog.GridPixelSize, their 16): under DLSS\n"
+                                      "the cells are correspondingly larger on screen. Cost scales with the cell count.\n"
+                                      "--set=fog.gridPixels:4|8|16|32|64");
+                GRAPHICS_CONTROL(FogGridZ, "fogGridZ",
+                    ([&]() {
+                        static const char* kFogSlices[] = { "16", "32", "48", "64 (UE default)", "96", "128" };
+                        static const unsigned kFogSliceN[] = { 16u, 32u, 48u, 64u, 96u, 128u };
+                        int idx = 3;
+                        for (int i = 0; i < 6; ++i) { if (render::g_fogGridZ == kFogSliceN[i]) { idx = i; } }
+                        const bool changed = ImGui::Combo("Volumetric fog slices", &idx, kFogSlices, 6);
+                        if (changed) { render::g_fogGridZ = kFogSliceN[idx]; }
+                        return changed;
+                    })());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Depth slices of the froxel volume (UE r.VolumetricFog.GridSizeZ, their 64), spread by the\n"
+                                      "log distribution from the volume's near to its far plane. --set=fog.gridZ:16..128");
+
+                ImGui::Separator();
+
                 int ssrTechnique = static_cast<int>(settings.ssrTechnique);
                 const int ssrTechniqueCount = static_cast<int>(SsrTechnique::Count);
                 if (ssrTechnique < 0 || ssrTechnique >= ssrTechniqueCount)
@@ -1976,20 +2009,6 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "pyramid hid are deferred, pass A draws the rest, the pyramid of pass A's depth\n"
                                       "retests the deferred with this frame's camera, pass B draws the survivors.\n"
                                       "Zero latency, no holes by construction. --set=gbuffer.hzb:0|1");
-                // Volumetric fog: the froxel cell size (UE r.VolumetricFog.GridPixelSize, their 16). The
-                // renderer recreates the ring at the next frame boundary when this changes.
-                GRAPHICS_CONTROL(FogGridPixels, "fogGridPixels",
-                    ([&]() {
-                        static const char* kFogCells[] = { "8 px (4x the cost, crisper)", "16 px (UE default)", "32 px (cheap, blocky)" };
-                        int idx = render::g_fogGridPixels <= 8u ? 0 : (render::g_fogGridPixels >= 32u ? 2 : 1);
-                        const bool changed = ImGui::Combo("Volumetric fog cell", &idx, kFogCells, 3);
-                        if (changed) { render::g_fogGridPixels = idx == 0 ? 8u : (idx == 2 ? 32u : 16u); }
-                        return changed;
-                    })());
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Froxel size in RENDER pixels: under DLSS the cells are correspondingly larger on\n"
-                                      "screen. Cone edges also soften by the level's fog 'Local Cone Soft Fading'.\n"
-                                      "--set=fog.gridPixels:8|16|32");
                 {
                     const ShadowGpuData& sg = scene.ShadowGpu();
                     ImGui::Text("camera hzb cull: %s; deferred %u, drawn in pass B %u (fading casters twice, frame N-3)",

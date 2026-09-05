@@ -1217,6 +1217,9 @@ namespace
             dragF("History Weight", "historyWeight", 0.9f, 0.01f, 0.0f, 0.99f, "%.2f");
             checkB("Temporal reprojection", "temporal", true);
             checkB("Jitter (with the history)", "jitter", true);
+            dragF("Samples Per Cell", "samplesPerCell", 2.0f, 0.05f, 1.0f, 4.0f, "%.0f");
+            InspectorHelp("Jittered samples per froxel every frame. 1 = UE (one sample + TAA); 2 = antithetic pair, "
+                          "removes the flicker at a spot tip; 3-4 = more, at the pass cost.");
             checkB("Conservative depth (skip cells behind geometry)", "conservativeDepth", true);
             checkB("Local lights in the volume", "localLights", true);
             dragF("Local Light Intensity", "localLightScatter", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
@@ -1608,6 +1611,9 @@ namespace
             colorEdit();
             dragF("Luminous Flux (lm)", "luminousFluxLm", 1000.0f, 1.0f, 0.0f, 200000.0f,
                   "%.0f", ImGuiSliderFlags_Logarithmic);
+            dragF("Volumetric Intensity", "volumetricIntensity", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("This light's weight in the volumetric fog (UE VolumetricScatteringIntensity): 0 = lights "
+                          "surfaces only, no cone / halo in the air. Multiplied by the fog's Local Light Intensity.");
             InspectorHelp(
                 "Luminous flux, in LUMENS -- the number on a light bulb's box. 800 = a 60 W "
                 "incandescent, 1600 = 100 W, 3000-5000 a shop fitting, 10000-50000 a "
@@ -1673,6 +1679,9 @@ namespace
             colorEdit();
             dragF("Luminous Flux (lm)", "luminousFluxLm", 1000.0f, 1.0f, 0.0f, 200000.0f,
                   "%.0f", ImGuiSliderFlags_Logarithmic);
+            dragF("Volumetric Intensity", "volumetricIntensity", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("This light's weight in the volumetric fog (UE VolumetricScatteringIntensity): 0 = lights "
+                          "surfaces only, no cone / halo in the air. Multiplied by the fog's Local Light Intensity.");
             InspectorHelp(
                 "Luminous flux, in LUMENS -- the number on a light bulb's box. 800 = a 60 W "
                 "incandescent, 1600 = 100 W, 3000-5000 a shop fitting, 10000-50000 a "

@@ -278,6 +278,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
                 ? sl.value("luminousFluxLm", desc.luminousFluxLm)
                 : render::LumensFromLegacyIntensity(sl.value("intensity", 5.0f), desc.range);
             desc.shadowNormalBias = sl.value("shadowNormalBias", desc.shadowNormalBias);
+            desc.volumetricIntensity = sl.value("volumetricIntensity", desc.volumetricIntensity); // plan A4d
             desc.shadowDepthBias = sl.value("shadowDepthBias", desc.shadowDepthBias);
             desc.shadowsEnabled = sl.value("shadowsEnabled", desc.shadowsEnabled);
             lightManager.SpotLights().push_back({});
@@ -302,6 +303,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
                 ? pl.value("luminousFluxLm", desc.luminousFluxLm)
                 : render::LumensFromLegacyIntensity(pl.value("intensity", 1.0f), desc.radius);
             desc.shadowsEnabled = pl.value("shadowsEnabled", desc.shadowsEnabled);
+            desc.volumetricIntensity = pl.value("volumetricIntensity", desc.volumetricIntensity); // plan A4d
             ParsePointLightFlicker(pl, desc);
             lightManager.PointLights().push_back({});
             lightManager.PointLights().back().SetDesc(desc);

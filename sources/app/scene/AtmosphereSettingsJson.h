@@ -40,6 +40,7 @@ inline void ApplyOverrides(const nlohmann::json& j, AtmosphereSettings& s)
     s.historyWeight = j.value("historyWeight", s.historyWeight);
     s.temporal = j.value("temporal", s.temporal);
     s.jitter = j.value("jitter", s.jitter);
+    s.samplesPerCell = j.value("samplesPerCell", s.samplesPerCell);
     s.conservativeDepth = j.value("conservativeDepth", s.conservativeDepth);
     s.localLights = j.value("localLights", s.localLights);
     s.localLightScatter = j.value("localLightScatter", s.localLightScatter);
@@ -71,6 +72,7 @@ inline nlohmann::json ToJson(const AtmosphereSettings& s)
     j["historyWeight"] = s.historyWeight;
     j["temporal"] = s.temporal;
     j["jitter"] = s.jitter;
+    j["samplesPerCell"] = s.samplesPerCell;
     j["conservativeDepth"] = s.conservativeDepth;
     j["localLights"] = s.localLights;
     j["localLightScatter"] = s.localLightScatter;

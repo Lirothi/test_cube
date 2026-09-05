@@ -135,6 +135,27 @@ float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLig
     return PointShadowCube.SampleCmpLevelZero(gSmpLinear, float4(d, light.shadowParams.x), zc);
 }
 
+// The tile's farthest depth (min reverse-Z) over the 3x3 tile neighbourhood: the integrated volume is
+// read with a trilinear filter, so a screen ray in column c blends columns c-1..c+1 -- a column culled
+// against ITS OWN tile alone stops accumulating at its floor and the sky pixels next to it read a
+// dark, flickering halo (docs/bug_fog_spot_flicker.md, defect 1). Culling only against the farthest
+// surface of the whole footprint keeps every column a filtered read can touch fully lit. Beyond the
+// pyramid Load returns 0 = the far plane, which never culls.
+float FogTileFarthest(Texture2D<float> pyramid, int2 tile, uint mip)
+{
+    float farthest = 1.0f;
+    [unroll]
+    for (int dy = -1; dy <= 1; ++dy)
+    {
+        [unroll]
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            farthest = min(farthest, pyramid.Load(int3(tile + int2(dx, dy), (int)mip)).r);
+        }
+    }
+    return farthest;
+}
+
 // One lighting sample of a cell at `cellOffset` inside it: (preExposure * L * scattering, sigma).
 float4 FogSampleCell(uint3 coord, float3 cellOffset)
 {
@@ -182,10 +203,13 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset)
         // cone soft edge (LightSoftFading * the 2D radius) and the inverse-square bias
         // (max(radius * scale, 1)^2 added to d^2), so a cell straddling the cone edge or containing
         // the source is a blend, not a coin flip -- the stepped, flickering edge the user saw.
-        const float3 Pn3 = FogCellWorldPosition(coord + uint3(1u, 1u, 1u), cellOffset, fogGridSize, fogGridZParams, fogProjZ, fogInvViewProjNoJitter);
-        const float3 Pn2 = FogCellWorldPosition(coord + uint3(1u, 1u, 0u), cellOffset, fogGridSize, fogGridZParams, fogProjZ, fogInvViewProjNoJitter);
-        const float cellRadius = length(P - Pn3);
-        const float softFadeDistance = fogLocalParams2.x * length(P - Pn2);
+        // From the UNJITTERED cell centre: a per-frame jitter in the bias / soft-fade sizes was one more
+        // thing making a cell's light differ frame to frame (docs/bug_fog_spot_flicker.md, defect 2).
+        const float3 Pc0 = FogCellWorldPosition(coord, 0.5f.xxx, fogGridSize, fogGridZParams, fogProjZ, fogInvViewProjNoJitter);
+        const float3 Pn3 = FogCellWorldPosition(coord + uint3(1u, 1u, 1u), 0.5f.xxx, fogGridSize, fogGridZParams, fogProjZ, fogInvViewProjNoJitter);
+        const float3 Pn2 = FogCellWorldPosition(coord + uint3(1u, 1u, 0u), 0.5f.xxx, fogGridSize, fogGridZParams, fogProjZ, fogInvViewProjNoJitter);
+        const float cellRadius = length(Pc0 - Pn3);
+        const float softFadeDistance = fogLocalParams2.x * length(Pc0 - Pn2);
         float distanceBiasSqr = max(cellRadius * fogLocalParams2.y, 1.0f);
         distanceBiasSqr *= distanceBiasSqr;
         [loop]
@@ -216,7 +240,8 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset)
             }
             const float atten = FogLocalDistanceAttenuation(d, light.positionRange.w, distanceBiasSqr) * angleAtten * softFade;
             const float shadow = FogSpotShadow(light, P, Ldir, d);
-            L += light.colorIntensity.xyz * light.colorIntensity.w * atten * shadow * fogLocalParams.x
+            // shadowParams2.y = this light's VolumetricScatteringIntensity (plan A4d), times the global knob.
+            L += light.colorIntensity.xyz * light.colorIntensity.w * atten * shadow * fogLocalParams.x * light.shadowParams2.y
                  * FogPhaseHG(g, dot(Ldir, V));
         }
         [loop]
@@ -230,7 +255,7 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset)
             const float3 Ldir = Lvec / max(d, 1e-6f);
             const float atten = FogLocalDistanceAttenuation(d, light.radius, distanceBiasSqr);
             const float shadow = FogPointShadow(light, P, Ldir, d);
-            L += light.color * light.intensity * atten * shadow * fogLocalParams.x * FogPhaseHG(g, dot(Ldir, V));
+            L += light.color * light.intensity * atten * shadow * fogLocalParams.x * light.volumetric.x * FogPhaseHG(g, dot(Ldir, V));
         }
     }
     return float4(fogMedium2.y * L * scattering, sigma); // pre-exposed, UE :1024
@@ -251,7 +276,7 @@ void CSMain(uint3 coord : SV_DispatchThreadID)
     const bool conservative = (fogFlags & kFogConservativeDepth) != 0u;
     if (conservative)
     {
-        const float tileFar = HzbFurthest.Load(int3(coord.xy, fogMisc.x)).r;
+        const float tileFar = FogTileFarthest(HzbFurthest, (int2)coord.xy, fogMisc.x);
         const float nearFaceDepth = FogDepthFromSlice(fogGridZParams, max((float)coord.z - 0.5f, 0.0f));
         const float cellNearZ = FogDeviceZFromViewDepth(fogProjZ, nearFaceDepth);
         if (tileFar > cellNearZ)
@@ -285,7 +310,7 @@ void CSMain(uint3 coord : SV_DispatchThreadID)
                     const float3 Pn = FogCellWorldPosition(coord, float3(0.5f, 0.5f, -0.5f), fogGridSize,
                                                            fogGridZParams, fogProjZ, fogInvViewProjNoJitter);
                     const float4 prevNearClip = mul(float4(Pn, 1.0f), fogPrevViewProjNoJitter);
-                    const float prevFar = PrevHzbFurthest.Load(int3((int2)(historyUv.xy * (float2)fogGridSize.xy), fogMisc.x)).r;
+                    const float prevFar = FogTileFarthest(PrevHzbFurthest, (int2)(historyUv.xy * (float2)fogGridSize.xy), fogMisc.x);
                     if (prevNearClip.w > 1.0e-4f && prevFar > prevNearClip.z / prevNearClip.w)
                     {
                         historyWeight = 0.0f;
@@ -299,14 +324,22 @@ void CSMain(uint3 coord : SV_DispatchThreadID)
     // to accumulate into takes several jittered samples at once, so the first frame after a cut or
     // the frame's newly uncovered edge is not a single noisy sample. Literal loop bound, the count
     // from the CB only shortens it (engine rule).
+    // ... and the EVERY-frame sample count (fogMisc.w, knob `samplesPerCell`): a single jittered
+    // sample per frame leaves a residual flicker after the 0.9 history wherever the light changes a
+    // lot inside one cell (a spot's tip, docs/bug_fog_spot_flicker.md defect 2). Two samples are the
+    // antithetic pair (offset, 1 - offset): a linear gradient across the cell cancels exactly. Three
+    // and four continue with the R3 sequence.
     const bool temporalOn = (fogFlags & kFogTemporalOn) != 0u;
-    const uint superCount = (temporalOn && historyWeight <= 0.001f) ? max(fogMisc.y, 1u) : 1u;
+    const uint perFrame = clamp(fogMisc.w, 1u, 4u);
+    const uint superCount = (temporalOn && historyWeight <= 0.001f) ? max(max(fogMisc.y, 1u), perFrame) : perFrame;
     float4 result = 0.0f.xxxx;
     [loop]
     for (uint si = 0u; si < 4u; ++si)
     {
         if (si >= superCount) { break; }
-        const float3 cellOffset = (si == 0u) ? fogJitter.xyz : frac(fogJitter.xyz + kFogR3 * (float)si);
+        const float3 cellOffset = (si == 0u) ? fogJitter.xyz
+                                : (si == 1u) ? (1.0f.xxx - fogJitter.xyz)
+                                : frac(fogJitter.xyz + kFogR3 * (float)si);
         result += FogSampleCell(coord, cellOffset);
     }
     result /= (float)superCount;

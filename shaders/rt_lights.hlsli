@@ -23,6 +23,7 @@ struct PointLightData
     float3 color;
     float  intensity;
     float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
+    float4 volumetric;   // x = volumetric scattering intensity (plan A4d), yzw reserved -- mirrors LightManager::PointLightGpu
 };
 
 // Returns the spot light's radiance (color*intensity*distAtten*coneAtten) and the

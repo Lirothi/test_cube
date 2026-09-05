@@ -91,6 +91,7 @@ enum class GraphicsControl
     IndirectGBuffer,
     GbufferHzb,
     FogGridPixels,
+    FogGridZ,
     ShadowLodBias,
     ShadowLodBiasNearTier,
     ShadowLodTierStride,

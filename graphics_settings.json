@@ -19,6 +19,7 @@
   "performance": {
     "asyncCompute": true,
     "fogGridPixels": 16,
+    "fogGridZ": 64,
     "gbufferHzbCull": true,
     "gpuDrivenGBuffer": true
   },

@@ -37,6 +37,7 @@ public:
         Math::float3 color;
         float intensity;
         Math::float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
+        Math::float4 volumetric;   // x = volumetric scattering intensity (plan A4d), yzw reserved
     };
 
     struct alignas(16) SpotLightGpu
@@ -45,7 +46,7 @@ public:
         Math::float4 directionCosOuter;  // xyz = direction (normalized), w = cos(outer)
         Math::float4 colorIntensity;     // xyz = color, w = intensity
         Math::float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
-        Math::float4 shadowParams2;      // x = normal bias (WS)
+        Math::float4 shadowParams2;      // x = normal bias (WS), y = volumetric scattering intensity (plan A4d)
         Math::mat4   viewProj;
     };
 

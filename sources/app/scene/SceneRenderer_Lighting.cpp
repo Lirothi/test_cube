@@ -516,6 +516,7 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         fc.misc[0] = decisions_.fogHzbMip; // furthest HZB mip whose texel is one cell (base = half res)
         fc.misc[1] = 4u; // UE HistoryMissSupersampleCount
         fc.misc[2] = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 1023ull);
+        fc.misc[3] = static_cast<uint32_t>(std::clamp(a.samplesPerCell, 1, 4)); // every-frame samples per cell
         // A4: the local lights, from the light passes' own buffers (filled in EnsureFrameResources).
         const bool localVsm = render::VsmActive() && frame_->vsm && frame_->vsm->IsAllocated() &&
                               frame_->vsm->PageTableSrv().ptr != 0 && frame_->vsm->PagePoolSrv().ptr != 0;

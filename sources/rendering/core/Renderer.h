@@ -610,6 +610,8 @@ public:
     // deferred ring (GPU idle), exactly as a reflection-scale or DLSS-mode change does.
     void SetFogGridPixels(UINT pixels);
     UINT GetFogGridPixels() const { return fogGridPixels_; }
+    void SetFogGridZ(UINT slices);
+    UINT GetFogGridZ() const { return fogGridZ_; }
     void SetReflectionTextureScale(float scale) { SetReflectionTextureScale(Math::float2(scale, scale)); }
     Math::float2 GetReflectionTextureScale() const { return reflectionTextureScale_; }
     UINT GetReflectionTextureWidth() const;
@@ -786,6 +788,7 @@ private:
 
     Math::float2 reflectionTextureScale_ = Math::float2(0.5f, 0.5f);
     UINT fogGridPixels_ = render::kFogGridPixels; // volumetric fog cell size the CURRENT ring was built with
+    UINT fogGridZ_ = render::kFogGridZ;           // ... and its slice count
     UINT reflectionTextureWidth_ = 1;
     UINT reflectionTextureHeight_ = 1;
     Math::float2 oceanReflectionTextureScale_ = Math::float2(0.5f, 0.5f);

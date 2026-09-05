@@ -161,7 +161,7 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 spotCPU[i].shadowParams = Math::float4(light.GetCosInner(),
                     static_cast<float>(lm.GetSpotShadowSlot(i)), light.GetInvAngleRange(),
                     light.GetShadowDepthBias());
-                spotCPU[i].shadowParams2 = Math::float4(light.GetShadowNormalBias(), 0.0f, 0.0f, 0.0f);
+                spotCPU[i].shadowParams2 = Math::float4(light.GetShadowNormalBias(), std::max(desc.volumetricIntensity, 0.0f), 0.0f, 0.0f);
                 spotCPU[i].viewProj = light.GetViewProjMatrix();
                 // S3a.6: an occluded influence volume can light no visible pixel -- zero range and
                 // intensity, keep the entry in place (the shadow slot mapping is by index).
@@ -182,6 +182,7 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 pointCPU[i].radius = desc.radius;
                 pointCPU[i].color = desc.color;
                 pointCPU[i].intensity = render::CandelaFromLumens(desc.luminousFluxLm); // P16.5
+                pointCPU[i].volumetric = Math::float4(std::max(desc.volumetricIntensity, 0.0f), 0.0f, 0.0f, 0.0f); // plan A4d
                 // Per-light cube-shadow params = (slot/-1, worldDepthBias, near, far=radius).
                 // near MUST match Scene.cpp's cube-face projection EXACTLY — PointShadowFactor
                 // reconstructs the compare depth from it. Bias is WORLD-space (B4 tuning).
@@ -427,11 +428,12 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             }
         }
         const std::uint64_t rev = frame.camera ? frame.camera->GetHistoryRevision() : 0ull;
-        const bool sameHistory = fogHistoryWidth_ == w && fogHistoryHeight_ == h && fogHistoryRevision_ == rev;
+        const bool sameHistory = fogHistoryWidth_ == w && fogHistoryHeight_ == h && fogHistoryDepth_ == D.fogGridDepth && fogHistoryRevision_ == rev;
         decisions_.fogHistoryValid = decisions_.volumetricFog && a.temporal && fogHistoryFrames_ > 0u && sameHistory;
         fogHistoryFrames_ = decisions_.volumetricFog ? (sameHistory ? fogHistoryFrames_ + 1u : 1u) : 0u;
         fogHistoryWidth_ = w;
         fogHistoryHeight_ = h;
+        fogHistoryDepth_ = D.fogGridDepth;
         fogHistoryRevision_ = rev;
         const int state = decisions_.volumetricFog
             ? (1 + (decisions_.fogHistoryValid ? 1 : 0) + (decisions_.fogConservativeDepth ? 2 : 0) + (decisions_.fogLocalLights ? 4 : 0))

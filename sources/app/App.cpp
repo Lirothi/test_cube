@@ -492,7 +492,8 @@ namespace
         if (setting == "gbuffer.indirect") { render::g_indirectGBufferEnabled = value != 0.0f; return true; } // occlusion plan S4
         if (setting == "gbuffer.hzb") { render::g_gbufferHzbCullEnabled = value != 0.0f; return true; }       // occlusion plan S5
         // Volumetric fog cell size (8 / 16 / 32 render pixels); the renderer picks the change up at the next frame.
-        if (setting == "fog.gridPixels") { render::g_fogGridPixels = value <= 8.0f ? 8u : (value >= 32.0f ? 32u : 16u); return true; }
+        if (setting == "fog.gridPixels") { render::g_fogGridPixels = static_cast<unsigned>(std::clamp(value, 4.0f, 64.0f)); return true; } // the renderer rounds to a power of two
+        if (setting == "fog.gridZ") { render::g_fogGridZ = static_cast<unsigned>(std::clamp(value, 16.0f, 128.0f)); return true; }
         if (setting == "lod.enabled") { render::g_lodEnabled = value != 0.0f; return true; }
         if (setting == "lod.forced")  { render::g_forcedLod = std::clamp((int)value, -1, 3); return true; }
         // LOD selection debug view (dev "LOD" tab). 0 off, 1 tier colours, 2 apparent-triangle-size
@@ -639,6 +640,7 @@ namespace
         if (setting == "atmosphere.historyWeight") { scene.AtmosphereRef().historyWeight = std::clamp(value, 0.0f, 0.99f); return true; }
         if (setting == "atmosphere.temporal") { scene.AtmosphereRef().temporal = value != 0.0f; return true; }
         if (setting == "atmosphere.jitter") { scene.AtmosphereRef().jitter = value != 0.0f; return true; }
+        if (setting == "atmosphere.samplesPerCell") { scene.AtmosphereRef().samplesPerCell = std::clamp(static_cast<int>(value), 1, 4); return true; }
         if (setting == "atmosphere.conservativeDepth") { scene.AtmosphereRef().conservativeDepth = value != 0.0f; return true; }
         if (setting == "atmosphere.localLights") { scene.AtmosphereRef().localLights = value != 0.0f; return true; }
         if (setting == "atmosphere.localLightScatter") { scene.AtmosphereRef().localLightScatter = std::max(value, 0.0f); return true; }

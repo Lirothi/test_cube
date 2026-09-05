@@ -21,6 +21,7 @@ struct PointLightDesc {
     // P16.5: LUMINOUS FLUX, in lumens. 800 = a 60 W incandescent, 1600 = 100 W, 10000-50000 a
     // floodlight. Converted to candela with CandelaFromLumens; see PhotographicSettings.h.
     float        luminousFluxLm = 1000.0f;
+    float        volumetricIntensity = 1.0f; // plan A4d: UE VolumetricScatteringIntensity -- this light's weight in the fog volume
     bool         shadowsEnabled = false; // if false, the point lights the scene but never casts a shadow (honored once Part B point shadows land)
     PointLightFlickerDesc flicker{};
 };

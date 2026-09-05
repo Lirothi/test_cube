@@ -198,6 +198,9 @@ struct AtmosphereSettings
     float historyWeight = 0.9f;         // UE r.VolumetricFog.HistoryWeight
     bool temporal = true;               // UE r.VolumetricFog.TemporalReprojection (+ jitter)
     bool jitter = true;                 // UE r.VolumetricFog.Jitter (only with the history, else the cell centre)
+    // Jittered samples per cell EVERY frame (1-4; UE take one and lean on TAA). 2 = the antithetic pair, which
+    // cancels a linear gradient across the cell and stops a spot's tip flickering after the 0.9 history.
+    int samplesPerCell = 2;
     bool conservativeDepth = true;      // UE r.VolumetricFog.ConservativeDepth: cells behind the tile's farthest surface are skipped
     bool localLights = true;            // spots and points light the volume (UE: every local light with VolumetricScatteringIntensity > 0)
     float localLightScatter = 1.0f;     // UE per-light VolumetricScatteringIntensity, one value for all local lights here

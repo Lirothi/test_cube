@@ -15,6 +15,7 @@ struct SpotLightDesc {
     float        outerAngle = DirectX::XMConvertToRadians(25.0f);
     float        luminousFluxLm = 1000.0f; // P16.5: lumens, see PhotographicSettings.h
     float        shadowNormalBias = 0.01f;
+    float        volumetricIntensity = 1.0f; // plan A4d: UE VolumetricScatteringIntensity -- this light's weight in the fog volume
     float        shadowDepthBias = 0.001f;
     float        nearPlane = 0.1f;
     bool         shadowsEnabled = false; // if false, the spot lights the scene but never casts a shadow

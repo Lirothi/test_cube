@@ -31,7 +31,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // The slice count is the buffer's, a literal at the top of the dispatch: the loop bound is
     // never read from the constant buffer (engine rule).
     [loop]
-    for (uint layer = 0u; layer < 64u; ++layer)
+    for (uint layer = 0u; layer < 128u; ++layer) // literal = the knob's ceiling (fog.gridZ <= 128); the CB count only shortens it
     {
         if (layer >= fogGridSize.z) { break; }
         const uint3 cell = uint3(dtid.xy, layer);

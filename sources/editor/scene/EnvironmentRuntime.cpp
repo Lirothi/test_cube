@@ -180,6 +180,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
             ? JF(p, "luminousFluxLm", d.luminousFluxLm)
             : render::LumensFromLegacyIntensity(JF(p, "intensity", 1.0f), d.radius);
         d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
+        d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
         ParsePointLightFlicker(p, d);
         points[i].SetDesc(d);
     }
@@ -200,6 +201,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
             : render::LumensFromLegacyIntensity(JF(p, "intensity", 5.0f), d.range);
         d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
         d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
+        d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
         d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
         spots[i].SetDesc(d);
     }
@@ -525,6 +527,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
                 : render::LumensFromLegacyIntensity(JF(p, "intensity", 5.0f), d.range);
             d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
             d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
+            d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
             d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
             lm.SpotLights().push_back({});
             lm.SpotLights().back().SetDesc(d);
@@ -539,6 +542,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
                 ? JF(p, "luminousFluxLm", d.luminousFluxLm)
                 : render::LumensFromLegacyIntensity(JF(p, "intensity", 1.0f), d.radius);
             d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
+            d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
             ParsePointLightFlicker(p, d);
             lm.PointLights().push_back({});
             lm.PointLights().back().SetDesc(d);
