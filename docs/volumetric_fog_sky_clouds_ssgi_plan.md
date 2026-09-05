@@ -393,7 +393,7 @@ A2 по камере теней (≤ 0.5 %) в принципе недостиж
 * **InverseSquaredLightDistanceBiasScale**: `1/(d² + max(radius·scale, 1)²)` вместо `+1` — ячейка, содержащая
   источник, не взрывается. Ручка `localDistanceBias` (дефолт 1, как UE).
 * **Размер ячейки** `fog.gridPixels` 8 / 16 / 32 (с A4d: степени двойки 4..64 + `fog.gridZ`) (`render::g_fogGridPixels`, `graphics_settings.json`
-  performance/fogGridPixels, комбо в Render-табе, `--set=fog.gridPixels`): смена = пересоздание deferred-кольца на
+  performance/fogGridPixels, комбо во вкладке Fog окна Developer Controls, `--set=fog.gridPixels`): смена = пересоздание deferred-кольца на
   границе кадра (`Renderer::SetFogGridPixels`, как смена режима DLSS). Mip conservative depth следует за размером
   (log2(px) − 1). 8 px = ×4 ячеек. Синхронизация ручки — в `Renderer::BeginFrame` (первый GBV-прогон с
   `fog.gridPixels:8` молча валидировал 16: синк стоял в цикле App::Run, а у стресс-харнесса свой цикл).
@@ -451,8 +451,8 @@ A2 по камере теней (≤ 0.5 %) в принципе недостиж
 * **Сетка**: `fog.gridPixels` расширен до степеней двойки **4..64** (`Renderer::SetFogGridPixels` округляет вниз до
   степени двойки — conservative depth читает HZB-mip «ячейка = тексель»), добавлен **`fog.gridZ` 16..128**
   (`render::g_fogGridZ`, `Renderer::SetFogGridZ`, `graphics_settings.json` performance/fogGridZ, комбо
-  «Volumetric fog slices» в Render-табе рядом с FXAA — до 2026-09-06 оба комбо по ошибке лежали во вкладке VSM и
-  сбрасывались её Reset'ом, перенесены вместе с `ApplyRender`; `--set=fog.gridZ`). Литерал цикла `fog_integrate_cs.hlsl` поднят до 128 (граница
+  «Volumetric fog slices» в собственной вкладке **Fog** окна Developer Controls (с readout сетки) — до 2026-09-06 оба
+  комбо по ошибке лежали во вкладке VSM и сбрасывались её Reset'ом; у вкладки свои `ApplyFog`/`ResetFog`; `--set=fog.gridZ`). Литерал цикла `fog_integrate_cs.hlsl` поднят до 128 (граница
   ТОЛЬКО литералом, счётчик из CB укорачивает). Смена глубины пересоздаёт кольцо и сбрасывает историю
   (`fogHistoryDepth_` в `sameHistory`). Обе ручки глобальные, как у UE.
   Замеры (`fog_spot_test`, натив 1440p, Legacy):

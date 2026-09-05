@@ -1358,7 +1358,8 @@ order. That is a correctness fix, not the flag failing.
 ## Follow-on: the runtime toggle (developer window)
 
 Step 8 shipped `--no-async-compute` as a boot flag. It is now **also a checkbox** on the developer
-window's Render tab, next to the trace controls — because that is where its effect is read.
+window's Frame tab (the old Render tab was split into Frame / AA / Scale / Visibility / Reflections /
+Fog on 2026-09-06), next to the trace controls — because that is where its effect is read.
 
 Flipping it at runtime is sound for three reasons, and would be a landmine without any one of them:
 

@@ -12,15 +12,19 @@ struct SceneRenderSettings;
 // GraphicsSettingsManager so they use the same canonical defaults as ResetAll and the JSON file.
 enum class GraphicsControl
 {
-    AsyncCompute,
-    VisibilityChunkMask,
+    // Contiguous per tab: ResetControl dispatches its Apply group by range (GraphicsSettings.cpp).
+    AsyncCompute,                 // Frame
+    VisibilityChunkMask,          // Visibility ...
     OcclusionMethod,
     OcclusionQueryLatency,
     OcclusionIndirectQueries,
-    DlssEnabled,
+    IndirectGBuffer,
+    GbufferHzb,
+    DlssEnabled,                  // AA / Scale ...
     DlssMode,
     Fxaa,
-    SsrTechnique,
+    RenderScale,
+    SsrTechnique,                 // Reflections ...
     UeSsrQuality,
     UeSsrSteps,
     UeSsrRays,
@@ -42,8 +46,9 @@ enum class GraphicsControl
     RtAlphaMissKeep,
     RtWindBlas,
     RtWindBlasRadius,
-    RenderScale,
-    LodEnabled,
+    FogGridPixels,                // Fog
+    FogGridZ,
+    LodEnabled,                   // LOD ...
     LodBound0,
     LodBound1,
     LodBound2,
@@ -88,10 +93,6 @@ enum class GraphicsControl
     ContactMaxDistance,
     ContactFadeBand,
     GiIndirectShadows,
-    IndirectGBuffer,
-    GbufferHzb,
-    FogGridPixels,
-    FogGridZ,
     ShadowLodBias,
     ShadowLodBiasNearTier,
     ShadowLodTierStride,
@@ -143,7 +144,10 @@ public:
     bool SaveCurrent(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings);
     bool Reload(Renderer& renderer, Scene& scene, SceneRenderSettings& settings);
     bool ResetAll(Renderer& renderer, Scene& scene, SceneRenderSettings& settings);
-    bool ResetRender(Renderer& renderer, const Scene& scene, SceneRenderSettings& settings);
+    bool ResetUpscale(Renderer& renderer, const Scene& scene, SceneRenderSettings& settings);
+    bool ResetVisibility(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings);
+    bool ResetReflections(Renderer& renderer, const Scene& scene, SceneRenderSettings& settings);
+    bool ResetFog(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings);
     bool ResetLod(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings);
     bool ResetCsm(Renderer& renderer, Scene& scene, const SceneRenderSettings& settings);
     bool ResetContactShadows(Renderer& renderer, const Scene& scene,

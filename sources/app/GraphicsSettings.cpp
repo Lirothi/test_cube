@@ -413,16 +413,41 @@ namespace
         return s;
     }
 
-    void ApplyRender(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
+    // One Apply per Developer Controls tab, so a tab's Reset touches only its own knobs.
+    void ApplyFrame(const GraphicsSettingsSnapshot& s)
     {
         render::g_noAsyncCompute = !s.asyncCompute;
+    }
+
+    void ApplyVisibility(const GraphicsSettingsSnapshot& s)
+    {
         render::g_visChunkMask = s.visibilityChunkMask;
         vis::g_occlusion.method = s.occlusionMethod;
         vis::g_occlusion.queryLatency = s.occlusionQueryLatency;
         vis::g_occlusion.indirectQueries = s.occlusionIndirectQueries;
+        render::g_indirectGBufferEnabled = s.indirectGBuffer;
+        render::g_gbufferHzbCullEnabled = s.gbufferHzbCull;
+    }
+
+    void ApplyUpscale(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
+    {
         settings.doFxaa = s.fxaa;
+        renderer.SetDlssMode(s.dlssMode);
+        renderer.SetDlssActive(s.dlssEnabled && s.dlssMode != sl::DLSSMode::eOff);
+        if (!s.dlssEnabled || s.dlssMode == sl::DLSSMode::eOff)
+        {
+            renderer.SetRenderResolutionScale(s.renderScale);
+        }
+    }
+
+    void ApplyFog(const GraphicsSettingsSnapshot& s)
+    {
         render::g_fogGridPixels = static_cast<unsigned>(std::clamp(s.fogGridPixels, 4, 64)); // the renderer rounds to a power of two
         render::g_fogGridZ = static_cast<unsigned>(std::clamp(s.fogGridZ, 16, 128));
+    }
+
+    void ApplyReflections(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
+    {
         settings.ssrTechnique = s.ssrTechnique;
         settings.ssrUe = s.ssrUe;
         settings.ssrTemporal = s.reflectionTemporal;
@@ -439,12 +464,6 @@ namespace
 
         renderer.SetReflectionTextureScale(s.reflectionResolution);
         renderer.SetOceanReflectionTextureScale(s.oceanReflectionResolution);
-        renderer.SetDlssMode(s.dlssMode);
-        renderer.SetDlssActive(s.dlssEnabled && s.dlssMode != sl::DLSSMode::eOff);
-        if (!s.dlssEnabled || s.dlssMode == sl::DLSSMode::eOff)
-        {
-            renderer.SetRenderResolutionScale(s.renderScale);
-        }
     }
 
     void ApplyLod(const GraphicsSettingsSnapshot& s)
@@ -482,8 +501,6 @@ namespace
         render::g_shadowModePersisted = s.shadowMode;
         if (!render::g_shadowModeFromCli) { render::g_shadowMode = s.shadowMode; }
         render::g_giIndirectShadowsEnabled = s.giIndirectShadows;
-        render::g_indirectGBufferEnabled = s.indirectGBuffer;
-        render::g_gbufferHzbCullEnabled = s.gbufferHzbCull;
         render::g_shadowLodBias = s.shadowLodBias;
         render::g_shadowLodBiasNearTier = s.shadowLodBiasNearTier;
         render::g_shadowLodTierStride = s.shadowLodTierStride;
@@ -517,7 +534,11 @@ namespace
     void ApplyAll(const GraphicsSettingsSnapshot& s, Renderer& renderer, Scene& scene,
                   SceneRenderSettings& settings)
     {
-        ApplyRender(s, renderer, settings);
+        ApplyFrame(s);
+        ApplyVisibility(s);
+        ApplyUpscale(s, renderer, settings);
+        ApplyReflections(s, renderer, settings);
+        ApplyFog(s);
         ApplyLod(s);
         ApplyContact(s);
         ApplyVsm(s);
@@ -1107,9 +1128,25 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
 
     Sanitize(current);
     const auto value = static_cast<unsigned>(control);
-    if (value <= static_cast<unsigned>(GraphicsControl::RenderScale))
+    if (value <= static_cast<unsigned>(GraphicsControl::AsyncCompute))
     {
-        ApplyRender(current, renderer, settings);
+        ApplyFrame(current);
+    }
+    else if (value <= static_cast<unsigned>(GraphicsControl::GbufferHzb))
+    {
+        ApplyVisibility(current);
+    }
+    else if (value <= static_cast<unsigned>(GraphicsControl::RenderScale))
+    {
+        ApplyUpscale(current, renderer, settings);
+    }
+    else if (value <= static_cast<unsigned>(GraphicsControl::RtWindBlasRadius))
+    {
+        ApplyReflections(current, renderer, settings);
+    }
+    else if (value <= static_cast<unsigned>(GraphicsControl::FogGridZ))
+    {
+        ApplyFog(current);
     }
     else if (value <= static_cast<unsigned>(GraphicsControl::ChunkLodFactor))
     {
@@ -1132,10 +1169,31 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     return SaveCurrent(renderer, scene, settings);
 }
 
-bool GraphicsSettingsManager::ResetRender(Renderer& renderer, const Scene& scene,
-                                          SceneRenderSettings& settings)
+bool GraphicsSettingsManager::ResetUpscale(Renderer& renderer, const Scene& scene,
+                                           SceneRenderSettings& settings)
 {
-    ApplyRender(GraphicsSettingsSnapshot{}, renderer, settings);
+    ApplyUpscale(GraphicsSettingsSnapshot{}, renderer, settings);
+    return SaveCurrent(renderer, scene, settings);
+}
+
+bool GraphicsSettingsManager::ResetVisibility(Renderer& renderer, const Scene& scene,
+                                              const SceneRenderSettings& settings)
+{
+    ApplyVisibility(GraphicsSettingsSnapshot{});
+    return SaveCurrent(renderer, scene, settings);
+}
+
+bool GraphicsSettingsManager::ResetReflections(Renderer& renderer, const Scene& scene,
+                                               SceneRenderSettings& settings)
+{
+    ApplyReflections(GraphicsSettingsSnapshot{}, renderer, settings);
+    return SaveCurrent(renderer, scene, settings);
+}
+
+bool GraphicsSettingsManager::ResetFog(Renderer& renderer, const Scene& scene,
+                                       const SceneRenderSettings& settings)
+{
+    ApplyFog(GraphicsSettingsSnapshot{});
     return SaveCurrent(renderer, scene, settings);
 }
 

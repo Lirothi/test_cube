@@ -494,9 +494,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         }
         ImGui::TextDisabled("Global quality autosaves after an edit; level look stays in the level file.");
 
-        if (ImGui::BeginTabBar("DeveloperControlsTabs"))
+        if (ImGui::BeginTabBar("DeveloperControlsTabs", ImGuiTabBarFlags_FittingPolicyScroll))
         {
-            if (ImGui::BeginTabItem("Render"))
+            if (ImGui::BeginTabItem("Frame"))
             {
                 const float fps = renderer.GetFPS();
                 const float frameMs = fps > 0.0f ? 1000.0f / fps : 0.0f;
@@ -507,6 +507,127 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     render::g_renderStats.lastDrawCalls,
                     static_cast<double>(render::g_renderStats.lastPrimitives) / 1.0e6);
 
+                ImGui::Separator();
+                // Async compute (plan step 8's `--no-async-compute`, made live). Sits next to the
+                // trace controls because that is where its effect is READ: the passes it moves
+                // change GPU track, and the counters below say whether they actually did.
+                //
+                // Stored inverted, because the command-line switch is a DISABLE and the checkbox
+                // has to read the way the feature is thought about. On a device where the second
+                // queue failed to create there is no toggle at all, only the state: a control that
+                // cannot change anything is worse than no control.
+                if (renderer.GetComputeQueue() == nullptr)
+                {
+                    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
+                        "Async compute: no second queue on this device - graphics queue only.");
+                }
+                else
+                {
+                    bool asyncCompute = !render::g_noAsyncCompute;
+                    if (GRAPHICS_CONTROL(AsyncCompute, "asyncCompute",
+                                         ImGui::Checkbox("Async compute", &asyncCompute)))
+                    {
+                        render::g_noAsyncCompute = !asyncCompute;
+                    }
+                    DevHelp("Runs Pass_BuildAS and Pass_RTTrace on the second (compute) queue, "
+                            "overlapped with shadow rasterisation. Worth about -3% frame time on "
+                            "this scene; the passes themselves get SLOWER (BuildAS +17%, RTTrace "
+                            "+88%) and win by hiding behind raster. Takes effect next frame - the "
+                            "graph is rebuilt every frame. Turn it off to bisect a suspected async "
+                            "regression without a rebuild.");
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%u list%s, %u cross-queue wait%s last frame)",
+                        render::g_asyncComputeLists, render::g_asyncComputeLists == 1u ? "" : "s",
+                        render::g_crossQueueWaits, render::g_crossQueueWaits == 1u ? "" : "s");
+                }
+                ImGui::Checkbox("Trace capture window", &traceWindowOpen_);
+
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("AA / Scale"))
+            {
+                const bool dlssAvailable = renderer.IsDlssAvailable();
+                ImGui::Text("DLSS status: %s", renderer.IsDlssActive() ? "Active" : (dlssAvailable ? "Inactive" : "Unavailable"));
+
+                ImGui::BeginDisabled(!dlssAvailable);
+                bool dlssEnabled = renderer.IsDlssActive();
+                if (GRAPHICS_CONTROL(DlssEnabled, "dlssEnabled",
+                                     ImGui::Checkbox("DLSS enabled", &dlssEnabled)))
+                {
+                    if (dlssEnabled)
+                    {
+                        if (renderer.GetDlssMode() == sl::DLSSMode::eOff)
+                        {
+                            renderer.SetDlssMode(sl::DLSSMode::eBalanced);
+                        }
+                        renderer.SetDlssActive(true);
+                    }
+                    else
+                    {
+                        renderer.SetDlssActive(false);
+                    }
+                }
+
+                const sl::DLSSMode currentDlssMode = renderer.GetDlssMode();
+                GRAPHICS_CONTROL(DlssMode, "dlssMode", [&]()
+                {
+                    bool changed = false;
+                    if (ImGui::BeginCombo("DLSS quality", DlssModeLabel(currentDlssMode)))
+                    {
+                        for (const DlssModeOption& option : kDlssModes)
+                        {
+                            const bool selected = option.mode == currentDlssMode;
+                            if (ImGui::Selectable(option.label, selected))
+                            {
+                                renderer.SetDlssMode(option.mode);
+                                renderer.SetDlssActive(option.mode != sl::DLSSMode::eOff);
+                                changed = true;
+                            }
+                            if (selected)
+                            {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    return changed;
+                }());
+                ImGui::EndDisabled();
+
+                if (!dlssAvailable)
+                {
+                    ImGui::TextDisabled("Streamline DLSS is not available for this run.");
+                }
+
+                GRAPHICS_CONTROL(Fxaa, "fxaa", ImGui::Checkbox("FXAA", &settings.doFxaa));
+
+                ImGui::Separator();
+                const bool dlssControlsRenderScale = renderer.IsDlssActive();
+                ImGui::BeginDisabled(dlssControlsRenderScale);
+                float renderScale = renderer.GetRenderResolutionScale();
+                if (GRAPHICS_CONTROL(RenderScale, "renderScale",
+                    ImGui::SliderFloat("Render scale", &renderScale,
+                                       0.1f, 1.0f, "%.2f")))
+                {
+                    renderer.SetRenderResolutionScale(renderScale);
+                }
+                ImGui::EndDisabled();
+                if (dlssControlsRenderScale)
+                {
+                    ImGui::TextDisabled("DLSS quality controls the render scale while active.");
+                }
+
+                ImGui::Separator();
+                if (ImGui::Button("Reset AA / scale to defaults"))
+                {
+                    graphicsSettings.ResetUpscale(renderer, scene, settings);
+                }
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Visibility"))
+            {
                 // S0 (docs/occlusion_culling_plan.md): per-view visibility. Same numbers a headless
                 // run gets from --vis-readout, so a HUD reading and a log reading never disagree.
                 if (ImGui::BeginTable("VisibilityStats", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
@@ -586,133 +707,140 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 os.ignoredResults ? " [results ignored: cut]" : "");
                 }
 
-                ImGui::Checkbox("Trace capture window", &traceWindowOpen_);
-
-                // Async compute (plan step 8's `--no-async-compute`, made live). Sits next to the
-                // trace controls because that is where its effect is READ: the passes it moves
-                // change GPU track, and the counters below say whether they actually did.
-                //
-                // Stored inverted, because the command-line switch is a DISABLE and the checkbox
-                // has to read the way the feature is thought about. On a device where the second
-                // queue failed to create there is no toggle at all, only the state: a control that
-                // cannot change anything is worse than no control.
-                if (renderer.GetComputeQueue() == nullptr)
+                ImGui::SeparatorText("GPU-driven G-buffer");
+                // Occlusion plan S4: the camera's G-buffer through the same registry.
+                GRAPHICS_CONTROL(IndirectGBuffer, "indirectGBuffer",
+                    ImGui::Checkbox("GPU-driven G-buffer (ExecuteIndirect per group)",
+                                    &render::g_indirectGBufferEnabled));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The opaque G-buffer drawn from the shadow registry's camera cull: one\n"
+                                      "ExecuteIndirect per (mesh submesh, LOD), the group's material bound by the CPU.\n"
+                                      "Objects the registry did not take (non-casters, GI clouds, shader overrides,\n"
+                                      "per-object texture overrides on a shared mesh) keep the CPU path. Pixel parity\n"
+                                      "with the CPU path is the contract (measured 2026-09-04). --set=gbuffer.indirect:0|1");
                 {
-                    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
-                        "Async compute: no second queue on this device - graphics queue only.");
+                    const ShadowGpuData& sg = scene.ShadowGpu();
+                    ImGui::Text("indirect gbuffer: %s, %u eligible caster slots",
+                                sg.GBufferIndirectThisFrame() ? "ON this frame" : "off",
+                                sg.GBufferIndirectEligibleCasters());
                 }
-                else
+                // Occlusion plan S5: the camera's two-pass HZB occlusion inside that G-buffer.
+                GRAPHICS_CONTROL(GbufferHzb, "gbufferHzb",
+                    ImGui::Checkbox("HZB occlusion in the GPU-driven G-buffer (two-pass)",
+                                    &render::g_gbufferHzbCullEnabled));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Nanite's main/post split on the indirect G-buffer: candidates last frame's depth\n"
+                                      "pyramid hid are deferred, pass A draws the rest, the pyramid of pass A's depth\n"
+                                      "retests the deferred with this frame's camera, pass B draws the survivors.\n"
+                                      "Zero latency, no holes by construction. --set=gbuffer.hzb:0|1");
                 {
-                    bool asyncCompute = !render::g_noAsyncCompute;
-                    if (GRAPHICS_CONTROL(AsyncCompute, "asyncCompute",
-                                         ImGui::Checkbox("Async compute", &asyncCompute)))
-                    {
-                        render::g_noAsyncCompute = !asyncCompute;
-                    }
-                    DevHelp("Runs Pass_BuildAS and Pass_RTTrace on the second (compute) queue, "
-                            "overlapped with shadow rasterisation. Worth about -3% frame time on "
-                            "this scene; the passes themselves get SLOWER (BuildAS +17%, RTTrace "
-                            "+88%) and win by hiding behind raster. Takes effect next frame - the "
-                            "graph is rebuilt every frame. Turn it off to bisect a suspected async "
-                            "regression without a rebuild.");
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(%u list%s, %u cross-queue wait%s last frame)",
-                        render::g_asyncComputeLists, render::g_asyncComputeLists == 1u ? "" : "s",
-                        render::g_crossQueueWaits, render::g_crossQueueWaits == 1u ? "" : "s");
+                    const ShadowGpuData& sg = scene.ShadowGpu();
+                    ImGui::Text("camera hzb cull: %s; deferred %u, drawn in pass B %u (fading casters twice, frame N-3)",
+                                sg.CamHzbThisFrame() ? "ON this frame" : "off", sg.CamHzbDeferred(), sg.CamHzbDrawnB());
                 }
 
                 ImGui::Separator();
-
-                const bool dlssAvailable = renderer.IsDlssAvailable();
-                ImGui::Text("DLSS status: %s", renderer.IsDlssActive() ? "Active" : (dlssAvailable ? "Inactive" : "Unavailable"));
-
-                ImGui::BeginDisabled(!dlssAvailable);
-                bool dlssEnabled = renderer.IsDlssActive();
-                if (GRAPHICS_CONTROL(DlssEnabled, "dlssEnabled",
-                                     ImGui::Checkbox("DLSS enabled", &dlssEnabled)))
+                if (ImGui::Button("Reset visibility to defaults"))
                 {
-                    if (dlssEnabled)
-                    {
-                        if (renderer.GetDlssMode() == sl::DLSSMode::eOff)
-                        {
-                            renderer.SetDlssMode(sl::DLSSMode::eBalanced);
-                        }
-                        renderer.SetDlssActive(true);
-                    }
-                    else
-                    {
-                        renderer.SetDlssActive(false);
-                    }
+                    graphicsSettings.ResetVisibility(renderer, scene, settings);
                 }
+                ImGui::EndTabItem();
+            }
 
-                const sl::DLSSMode currentDlssMode = renderer.GetDlssMode();
-                GRAPHICS_CONTROL(DlssMode, "dlssMode", [&]()
+            if (ImGui::BeginTabItem("Reflections"))
+            {
+                ImGui::SeparatorText("Source");
+                // Reflection source (S8): None / Sky only / SSR / RT. RT is greyed out on
+                // non-RT hardware (and the renderer falls back to SSR anyway).
+                const bool rtSupported = renderer.IsRaytracingSupported();
+                const char* srcLabels[] = { "None", "Sky only", "SSR", "RT" };
+                constexpr int srcCount = static_cast<int>(ReflectionSource::Count);
+                int curSrc = static_cast<int>(settings.reflectionSource);
+                if (curSrc < 0 || curSrc >= srcCount) { curSrc = static_cast<int>(ReflectionSource::SSR); }
+                GRAPHICS_CONTROL(ReflectionSource, "reflectionSource", [&]()
                 {
                     bool changed = false;
-                    if (ImGui::BeginCombo("DLSS quality", DlssModeLabel(currentDlssMode)))
+                    if (ImGui::BeginCombo("Reflections [F5]", srcLabels[curSrc]))
                     {
-                        for (const DlssModeOption& option : kDlssModes)
+                        for (int i = 0; i < srcCount; ++i)
                         {
-                            const bool selected = option.mode == currentDlssMode;
-                            if (ImGui::Selectable(option.label, selected))
+                            const bool isRT = (i == static_cast<int>(ReflectionSource::RT));
+                            ImGui::BeginDisabled(isRT && !rtSupported);
+                            if (ImGui::Selectable(srcLabels[i], curSrc == i))
                             {
-                                renderer.SetDlssMode(option.mode);
-                                renderer.SetDlssActive(option.mode != sl::DLSSMode::eOff);
+                                settings.reflectionSource = static_cast<ReflectionSource>(i);
                                 changed = true;
                             }
-                            if (selected)
-                            {
-                                ImGui::SetItemDefaultFocus();
-                            }
+                            ImGui::EndDisabled();
                         }
                         ImGui::EndCombo();
                     }
                     return changed;
                 }());
-                ImGui::EndDisabled();
-
-                if (!dlssAvailable)
+                if (!rtSupported)
                 {
-                    ImGui::TextDisabled("Streamline DLSS is not available for this run.");
+                    ImGui::TextDisabled("RT requires hardware ray tracing (unavailable).");
                 }
 
-                ImGui::Separator();
+                float ssrScale = renderer.GetReflectionTextureScale().x;
+                if (GRAPHICS_CONTROL(ReflectionResolution, "reflectionResolution",
+                    ImGui::SliderFloat("Reflection resolution", &ssrScale,
+                                       0.25f, 1.0f, "%.2f")))
+                {
+                    renderer.SetReflectionTextureScale(ssrScale);
+                }
+                ImGui::Text("Reflection target: %ux%u", renderer.GetReflectionTextureWidth(), renderer.GetReflectionTextureHeight());
+                // S15b: glass off-screen reflections render into a glass G-buffer + glassReflection at
+                // this same reflection resolution and follow the reflection source below.
+                // Inspect them via Texture inspector [F4] -> "Glass Refl Normal/Depth" + "Glass Reflection".
+                ImGui::TextDisabled("Glass: traced in SSR/RT, cubemap in Sky only, disabled in None.");
+                float oceanReflectionScale = renderer.GetOceanReflectionTextureScale().x;
+                if (GRAPHICS_CONTROL(OceanReflectionResolution, "oceanReflectionResolution",
+                    ImGui::SliderFloat("Ocean reflection resolution",
+                        &oceanReflectionScale, 0.25f, 1.0f, "%.2f")))
+                {
+                    renderer.SetOceanReflectionTextureScale(oceanReflectionScale);
+                }
+                ImGui::Text("Ocean reflection target: %ux%u", renderer.GetOceanReflectionTextureWidth(), renderer.GetOceanReflectionTextureHeight());
 
-                GRAPHICS_CONTROL(Fxaa, "fxaa", ImGui::Checkbox("FXAA", &settings.doFxaa));
+                ImGui::SeparatorText("Filtering");
+                GRAPHICS_CONTROL(ReflectionTemporal, "reflectionTemporal",
+                    ImGui::Checkbox("Reflection temporal resolve", &settings.ssrTemporal));
+                DevHelp("Accumulates the reflection over time instead of showing each frame raw. "
+                        "Applies to BOTH sources: an SSR march is violently sensitive to its "
+                        "jittered start (measured 7.9x less frame-to-frame movement), and RT at "
+                        "half reflection res boils the same way once reflected foliage is "
+                        "subpixel -- 1 sharp ray/px under DLSS jitter. Unreal never display "
+                        "either unfiltered. Perf: ~0.014 ms. Off = the tracer's raw output, "
+                        "which is what you want when judging a tracer rather than the picture.");
+                ImGui::BeginDisabled(!settings.ssrTemporal);
+                {
+                    GRAPHICS_CONTROL_WIDTH(ReflectionTemporalBlend, "reflectionTemporalBlend", 98.0f,
+                        ImGui::SliderFloat("Temporal blend", &settings.ssrTemporalBlendWeight,
+                                           0.02f, 1.0f, "%.3f"));
+                    DevHelp("Weight of the CURRENT frame. UE use 1/8 = 0.125 for their SSR TAA "
+                            "config. Lower = longer history, steadier but slower to react; 1 = no "
+                            "accumulation at all.");
+                    GRAPHICS_CONTROL_WIDTH(ReflectionTemporalStillInertia,
+                        "reflectionTemporalStillInertia", 98.0f,
+                        ImGui::SliderFloat("Temporal still inertia",
+                                           &settings.ssrTemporalClampExpand, 0.0f, 2.0f, "%.2f"));
+                    DevHelp("Extra inertia for STILL pixels, on top of the blend above. At zero "
+                            "motion this knob both RELAXES the neighbourhood clamp (the measured "
+                            "limiter of still-camera boil) and divides the frame weight by up to "
+                            "(1 + 4x this). Measured on the bronze bench: 0 = baseline 0.46, "
+                            "0.5 = 0.37, 2.0 = 0.20 frame-to-frame boil. Any motion restores the "
+                            "hard clamp and full blend, so response while moving is unchanged. "
+                            "Cost at high values: the reflection of something moving in a STILL "
+                            "mirror (a swaying palm) can trail slightly. 0 = off.");
+                }
+                ImGui::EndDisabled();
+                // S16: glossy reflections — blur radius scales with surface roughness (0 = sharp mirror).
+                GRAPHICS_CONTROL(ReflectionGlossyScale, "reflectionGlossyScale",
+                    ImGui::SliderFloat("Glossy blur", &settings.reflectionGlossyScale,
+                                       0.0f, 24.0f, "%.1f"));
 
-                ImGui::Separator();
-                // Volumetric fog grid (UE r.VolumetricFog.GridPixelSize 16 / GridSizeZ 64, global cvars). The
-                // renderer recreates the ring at the next frame boundary when this changes.
-                GRAPHICS_CONTROL(FogGridPixels, "fogGridPixels",
-                    ([&]() {
-                        static const char* kFogCells[] = { "4 px", "8 px", "16 px (UE default)", "32 px", "64 px" };
-                        static const unsigned kFogCellPx[] = { 4u, 8u, 16u, 32u, 64u };
-                        int idx = 2;
-                        for (int i = 0; i < 5; ++i) { if (render::g_fogGridPixels == kFogCellPx[i]) { idx = i; } }
-                        const bool changed = ImGui::Combo("Volumetric fog cell", &idx, kFogCells, 5);
-                        if (changed) { render::g_fogGridPixels = kFogCellPx[idx]; }
-                        return changed;
-                    })());
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Froxel size in RENDER pixels (UE r.VolumetricFog.GridPixelSize, their 16): under DLSS\n"
-                                      "the cells are correspondingly larger on screen. Cost scales with the cell count.\n"
-                                      "--set=fog.gridPixels:4|8|16|32|64");
-                GRAPHICS_CONTROL(FogGridZ, "fogGridZ",
-                    ([&]() {
-                        static const char* kFogSlices[] = { "16", "32", "48", "64 (UE default)", "96", "128" };
-                        static const unsigned kFogSliceN[] = { 16u, 32u, 48u, 64u, 96u, 128u };
-                        int idx = 3;
-                        for (int i = 0; i < 6; ++i) { if (render::g_fogGridZ == kFogSliceN[i]) { idx = i; } }
-                        const bool changed = ImGui::Combo("Volumetric fog slices", &idx, kFogSlices, 6);
-                        if (changed) { render::g_fogGridZ = kFogSliceN[idx]; }
-                        return changed;
-                    })());
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Depth slices of the froxel volume (UE r.VolumetricFog.GridSizeZ, their 64), spread by the\n"
-                                      "log distribution from the volume's near to its far plane. --set=fog.gridZ:16..128");
-
-                ImGui::Separator();
-
+                ImGui::SeparatorText("SSR");
                 int ssrTechnique = static_cast<int>(settings.ssrTechnique);
                 const int ssrTechniqueCount = static_cast<int>(SsrTechnique::Count);
                 if (ssrTechnique < 0 || ssrTechnique >= ssrTechniqueCount)
@@ -808,110 +936,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     }
                 }
 
-                GRAPHICS_CONTROL(ReflectionTemporal, "reflectionTemporal",
-                    ImGui::Checkbox("Reflection temporal resolve", &settings.ssrTemporal));
-                DevHelp("Accumulates the reflection over time instead of showing each frame raw. "
-                        "Applies to BOTH sources: an SSR march is violently sensitive to its "
-                        "jittered start (measured 7.9x less frame-to-frame movement), and RT at "
-                        "half reflection res boils the same way once reflected foliage is "
-                        "subpixel -- 1 sharp ray/px under DLSS jitter. Unreal never display "
-                        "either unfiltered. Perf: ~0.014 ms. Off = the tracer's raw output, "
-                        "which is what you want when judging a tracer rather than the picture.");
-                ImGui::BeginDisabled(!settings.ssrTemporal);
-                {
-                    GRAPHICS_CONTROL_WIDTH(ReflectionTemporalBlend, "reflectionTemporalBlend", 98.0f,
-                        ImGui::SliderFloat("Temporal blend", &settings.ssrTemporalBlendWeight,
-                                           0.02f, 1.0f, "%.3f"));
-                    DevHelp("Weight of the CURRENT frame. UE use 1/8 = 0.125 for their SSR TAA "
-                            "config. Lower = longer history, steadier but slower to react; 1 = no "
-                            "accumulation at all.");
-                    GRAPHICS_CONTROL_WIDTH(ReflectionTemporalStillInertia,
-                        "reflectionTemporalStillInertia", 98.0f,
-                        ImGui::SliderFloat("Temporal still inertia",
-                                           &settings.ssrTemporalClampExpand, 0.0f, 2.0f, "%.2f"));
-                    DevHelp("Extra inertia for STILL pixels, on top of the blend above. At zero "
-                            "motion this knob both RELAXES the neighbourhood clamp (the measured "
-                            "limiter of still-camera boil) and divides the frame weight by up to "
-                            "(1 + 4x this). Measured on the bronze bench: 0 = baseline 0.46, "
-                            "0.5 = 0.37, 2.0 = 0.20 frame-to-frame boil. Any motion restores the "
-                            "hard clamp and full blend, so response while moving is unchanged. "
-                            "Cost at high values: the reflection of something moving in a STILL "
-                            "mirror (a swaying palm) can trail slightly. 0 = off.");
-                }
-                ImGui::EndDisabled();
-
-                float ssrScale = renderer.GetReflectionTextureScale().x;
-                if (GRAPHICS_CONTROL(ReflectionResolution, "reflectionResolution",
-                    ImGui::SliderFloat("Reflection resolution", &ssrScale,
-                                       0.25f, 1.0f, "%.2f")))
-                {
-                    renderer.SetReflectionTextureScale(ssrScale);
-                }
-                ImGui::Text("Reflection target: %ux%u", renderer.GetReflectionTextureWidth(), renderer.GetReflectionTextureHeight());
-                // S15b: glass off-screen reflections render into a glass G-buffer + glassReflection at
-                // this same reflection resolution and follow the reflection source below.
-                // Inspect them via Texture inspector [F4] -> "Glass Refl Normal/Depth" + "Glass Reflection".
-                ImGui::TextDisabled("Glass: traced in SSR/RT, cubemap in Sky only, disabled in None.");
-
-                // S16: glossy reflections — blur radius scales with surface roughness (0 = sharp mirror).
-                GRAPHICS_CONTROL(ReflectionGlossyScale, "reflectionGlossyScale",
-                    ImGui::SliderFloat("Glossy blur", &settings.reflectionGlossyScale,
-                                       0.0f, 24.0f, "%.1f"));
-
-                // Analytic sun specular boost on metals: spec lobe *= (1 + metal*coef). 0 = physical.
-                GRAPHICS_CONTROL(SunMetalSpecInfluence, "sunMetalSpecInfluence",
-                    ImGui::SliderFloat("Sun spec on metal", &settings.sunMetalSpecInfluence,
-                                       0.0f, 16.0f, "%.1f"));
-
-                // Sun angular size: floors the analytic specular lobe width so smooth surfaces show
-                // a bright, sample-able sun glint instead of a sub-pixel spike. 0 = punctual.
-                GRAPHICS_CONTROL(SunAngularSize, "sunAngularSize",
-                    ImGui::SliderFloat("Sun angular size", &settings.sunAngularSize,
-                                       0.0f, 0.25f, "%.3f"));
-
-                float oceanReflectionScale = renderer.GetOceanReflectionTextureScale().x;
-                if (GRAPHICS_CONTROL(OceanReflectionResolution, "oceanReflectionResolution",
-                    ImGui::SliderFloat("Ocean reflection resolution",
-                        &oceanReflectionScale, 0.25f, 1.0f, "%.2f")))
-                {
-                    renderer.SetOceanReflectionTextureScale(oceanReflectionScale);
-                }
-                ImGui::Text("Ocean reflection target: %ux%u", renderer.GetOceanReflectionTextureWidth(), renderer.GetOceanReflectionTextureHeight());
-
-                ImGui::Separator();
-
-                // Reflection source (S8): None / Sky only / SSR / RT. RT is greyed out on
-                // non-RT hardware (and the renderer falls back to SSR anyway).
-                const bool rtSupported = renderer.IsRaytracingSupported();
-                const char* srcLabels[] = { "None", "Sky only", "SSR", "RT" };
-                constexpr int srcCount = static_cast<int>(ReflectionSource::Count);
-                int curSrc = static_cast<int>(settings.reflectionSource);
-                if (curSrc < 0 || curSrc >= srcCount) { curSrc = static_cast<int>(ReflectionSource::SSR); }
-                GRAPHICS_CONTROL(ReflectionSource, "reflectionSource", [&]()
-                {
-                    bool changed = false;
-                    if (ImGui::BeginCombo("Reflections [F5]", srcLabels[curSrc]))
-                    {
-                        for (int i = 0; i < srcCount; ++i)
-                        {
-                            const bool isRT = (i == static_cast<int>(ReflectionSource::RT));
-                            ImGui::BeginDisabled(isRT && !rtSupported);
-                            if (ImGui::Selectable(srcLabels[i], curSrc == i))
-                            {
-                                settings.reflectionSource = static_cast<ReflectionSource>(i);
-                                changed = true;
-                            }
-                            ImGui::EndDisabled();
-                        }
-                        ImGui::EndCombo();
-                    }
-                    return changed;
-                }());
-                if (!rtSupported)
-                {
-                    ImGui::TextDisabled("RT requires hardware ray tracing (unavailable).");
-                }
-
+                ImGui::SeparatorText("RT");
                 ImGui::BeginDisabled(!rtSupported);
                 {
                     static const char* kAlphaModes[] = { "Off (solid cards)",
@@ -966,29 +991,73 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::TextDisabled("Open the texture inspector [F4] and select 'Reflection'.");
                 }
 
-                ImGui::Separator();
+                ImGui::SeparatorText("Sun specular");
+                // Analytic sun specular boost on metals: spec lobe *= (1 + metal*coef). 0 = physical.
+                GRAPHICS_CONTROL(SunMetalSpecInfluence, "sunMetalSpecInfluence",
+                    ImGui::SliderFloat("Sun spec on metal", &settings.sunMetalSpecInfluence,
+                                       0.0f, 16.0f, "%.1f"));
 
-                const bool dlssControlsRenderScale = renderer.IsDlssActive();
-                ImGui::BeginDisabled(dlssControlsRenderScale);
-                float renderScale = renderer.GetRenderResolutionScale();
-                if (GRAPHICS_CONTROL(RenderScale, "renderScale",
-                    ImGui::SliderFloat("Render scale", &renderScale,
-                                       0.1f, 1.0f, "%.2f")))
-                {
-                    renderer.SetRenderResolutionScale(renderScale);
-                }
-                ImGui::EndDisabled();
-                if (dlssControlsRenderScale)
-                {
-                    ImGui::TextDisabled("DLSS quality controls the render scale while active.");
-                }
+                // Sun angular size: floors the analytic specular lobe width so smooth surfaces show
+                // a bright, sample-able sun glint instead of a sub-pixel spike. 0 = punctual.
+                GRAPHICS_CONTROL(SunAngularSize, "sunAngularSize",
+                    ImGui::SliderFloat("Sun angular size", &settings.sunAngularSize,
+                                       0.0f, 0.25f, "%.3f"));
 
                 ImGui::Separator();
-                if (ImGui::Button("Reset Render quality to defaults"))
+                if (ImGui::Button("Reset reflections to defaults"))
                 {
-                    graphicsSettings.ResetRender(renderer, scene, settings);
+                    graphicsSettings.ResetReflections(renderer, scene, settings);
                 }
+                ImGui::EndTabItem();
+            }
 
+            if (ImGui::BeginTabItem("Fog"))
+            {
+                ImGui::TextWrapped("Volumetric fog GRID: project-wide quality, like UE's r.VolumetricFog.* cvars. The fog's "
+                    "look (density, scattering, history, local lights) is level data: Inspector > Environment > Volumetric fog.");
+                {
+                    const UINT px = renderer.GetFogGridPixels();
+                    const UINT gw = (renderer.GetRenderWidth() + px - 1u) / px;
+                    const UINT gh = (renderer.GetRenderHeight() + px - 1u) / px;
+                    const UINT gz = renderer.GetFogGridZ();
+                    ImGui::Text("Froxel grid: %ux%ux%u (%.2f M cells)", gw, gh, gz,
+                                static_cast<double>(gw) * gh * gz / 1.0e6);
+                }
+                // Volumetric fog grid (UE r.VolumetricFog.GridPixelSize 16 / GridSizeZ 64, global cvars). The
+                // renderer recreates the ring at the next frame boundary when this changes.
+                GRAPHICS_CONTROL(FogGridPixels, "fogGridPixels",
+                    ([&]() {
+                        static const char* kFogCells[] = { "4 px", "8 px", "16 px (UE default)", "32 px", "64 px" };
+                        static const unsigned kFogCellPx[] = { 4u, 8u, 16u, 32u, 64u };
+                        int idx = 2;
+                        for (int i = 0; i < 5; ++i) { if (render::g_fogGridPixels == kFogCellPx[i]) { idx = i; } }
+                        const bool changed = ImGui::Combo("Volumetric fog cell", &idx, kFogCells, 5);
+                        if (changed) { render::g_fogGridPixels = kFogCellPx[idx]; }
+                        return changed;
+                    })());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Froxel size in RENDER pixels (UE r.VolumetricFog.GridPixelSize, their 16): under DLSS\n"
+                                      "the cells are correspondingly larger on screen. Cost scales with the cell count.\n"
+                                      "--set=fog.gridPixels:4|8|16|32|64");
+                GRAPHICS_CONTROL(FogGridZ, "fogGridZ",
+                    ([&]() {
+                        static const char* kFogSlices[] = { "16", "32", "48", "64 (UE default)", "96", "128" };
+                        static const unsigned kFogSliceN[] = { 16u, 32u, 48u, 64u, 96u, 128u };
+                        int idx = 3;
+                        for (int i = 0; i < 6; ++i) { if (render::g_fogGridZ == kFogSliceN[i]) { idx = i; } }
+                        const bool changed = ImGui::Combo("Volumetric fog slices", &idx, kFogSlices, 6);
+                        if (changed) { render::g_fogGridZ = kFogSliceN[idx]; }
+                        return changed;
+                    })());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Depth slices of the froxel volume (UE r.VolumetricFog.GridSizeZ, their 64), spread by the\n"
+                                      "log distribution from the volume's near to its far plane. --set=fog.gridZ:16..128");
+
+                ImGui::Separator();
+                if (ImGui::Button("Reset fog grid to defaults"))
+                {
+                    graphicsSettings.ResetFog(renderer, scene, settings);
+                }
                 ImGui::EndTabItem();
             }
 
@@ -1984,36 +2053,6 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("ON: GPU-instanced objects cast shadows in VSM (and via the indirect path in\n"
                                       "Legacy), dropping their CPU RenderShadow tail. OFF: Legacy CPU tail only (no VSM).");
 
-                // Occlusion plan S4: the camera's G-buffer through the same registry.
-                GRAPHICS_CONTROL(IndirectGBuffer, "indirectGBuffer",
-                    ImGui::Checkbox("GPU-driven G-buffer (ExecuteIndirect per group)",
-                                    &render::g_indirectGBufferEnabled));
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("The opaque G-buffer drawn from the shadow registry's camera cull: one\n"
-                                      "ExecuteIndirect per (mesh submesh, LOD), the group's material bound by the CPU.\n"
-                                      "Objects the registry did not take (non-casters, GI clouds, shader overrides,\n"
-                                      "per-object texture overrides on a shared mesh) keep the CPU path. Pixel parity\n"
-                                      "with the CPU path is the contract (measured 2026-09-04). --set=gbuffer.indirect:0|1");
-                {
-                    const ShadowGpuData& sg = scene.ShadowGpu();
-                    ImGui::Text("indirect gbuffer: %s, %u eligible caster slots",
-                                sg.GBufferIndirectThisFrame() ? "ON this frame" : "off",
-                                sg.GBufferIndirectEligibleCasters());
-                }
-                // Occlusion plan S5: the camera's two-pass HZB occlusion inside that G-buffer.
-                GRAPHICS_CONTROL(GbufferHzb, "gbufferHzb",
-                    ImGui::Checkbox("HZB occlusion in the GPU-driven G-buffer (two-pass)",
-                                    &render::g_gbufferHzbCullEnabled));
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Nanite's main/post split on the indirect G-buffer: candidates last frame's depth\n"
-                                      "pyramid hid are deferred, pass A draws the rest, the pyramid of pass A's depth\n"
-                                      "retests the deferred with this frame's camera, pass B draws the survivors.\n"
-                                      "Zero latency, no holes by construction. --set=gbuffer.hzb:0|1");
-                {
-                    const ShadowGpuData& sg = scene.ShadowGpu();
-                    ImGui::Text("camera hzb cull: %s; deferred %u, drawn in pass B %u (fading casters twice, frame N-3)",
-                                sg.CamHzbThisFrame() ? "ON this frame" : "off", sg.CamHzbDeferred(), sg.CamHzbDrawnB());
-                }
 
                 // (Chunked-terrain LOD selection moved to the "LOD" tab — it is a camera-LOD
                 // control, not a shadow one; the caster follows the drawn LOD by construction.)
