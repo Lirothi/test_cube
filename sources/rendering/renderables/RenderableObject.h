@@ -177,10 +177,18 @@ public:
     // A MASK beside chunkLods_, not a filter of it: the tier of a camera-invisible chunk stays
     // selected because the shadow paths above still cast that chunk at that tier. Shadow views do
     // not read this -- they test their own frustum on the spot (RenderShadow / ChunkInFrustum).
-    const std::vector<std::uint8_t>& ChunkCameraVisible() const { return chunkVisCamera_; }
+    const std::vector<std::uint8_t>& ChunkCameraVisible() const
+    {
+        assert(!render::g_preparingShadowView && "S6: a shadow view read the camera's chunk mask");
+        return chunkVisCamera_;
+    }
     // S3a: the camera prepare ANDs the occlusion verdict of each chunk into the mask, on the
     // same task that wrote it. Nobody else writes it.
-    std::vector<std::uint8_t>& ChunkCameraVisibleRef() { return chunkVisCamera_; }
+    std::vector<std::uint8_t>& ChunkCameraVisibleRef()
+    {
+        assert(!render::g_preparingShadowView && "S6: a shadow view touched the camera's chunk mask");
+        return chunkVisCamera_;
+    }
     // THE chunk-vs-view predicate, shared by the camera mask, the cascade loop and the counters so
     // a number in the readout is the draw's decision and not a look-alike. Conservative like the
     // object cull (AABB positive vertex); honours the `vis.chunkMask` rollback (off = always true).

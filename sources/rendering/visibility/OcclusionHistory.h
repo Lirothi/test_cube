@@ -85,6 +85,11 @@ struct OcclusionSettings
     int   framesToExpandNewlyTested = 2; // r.FramesToExpandNewlyOcclusionTestedBBoxes
     float expandNewlyTested = 0.0f;     // m, r.ExpandNewlyOcclusionTestedBBoxesAmount
     float expandAllTested = 0.0f;       // m, r.ExpandAllOcclusionTestedBBoxesAmount
+    // Occlusion plan S6 (ownership): an object the GPU-driven G-buffer draws is occluded by the
+    // camera's two-pass HZB (S5, zero latency) and is NOT considered by this history while that
+    // stage runs -- its query would only feed the verdict bit the GPU test already supersedes.
+    // true = the pre-S6 behaviour (both systems test it), the A/B lever: --set=vis.indirectQueries:1
+    bool  indirectQueries = false;
 };
 inline OcclusionSettings g_occlusion;
 

@@ -39,6 +39,7 @@ struct OcclusionFrameStats
     std::uint32_t historyEntries = 0;
     std::uint32_t ignoredResults = 0;
     std::uint32_t lightsOccluded = 0;    // S3a.6: spot + point lights whose influence volume was occluded
+    std::uint32_t gpuOwnedObjects = 0;   // S6: objects left to the GPU two-pass (not considered by the history)
 };
 
 // Slot layout: 0 = camera, 1..4 = directional cascades c0..c3. Local-light and clipmap views have

@@ -89,7 +89,7 @@
       ],
       "zPadding": 25.0
     },
-    "mode": "legacy",
+    "mode": "vsm",
     "vsm": {
       "biasNearestTier": false,
       "clipmapBaseExtent": 8.0,
@@ -114,7 +114,7 @@
       "smrtRayCount": 7,
       "smrtRayLengthScale": 1.5,
       "smrtSamplesPerRay": 8,
-      "smrtSunAngleDeg": 0.5357000231742859,
+      "smrtSunAngleDeg": 0.30000001192092896,
       "smrtTemporalDither": true,
       "smrtTexelDither": 2.0,
       "windAnimateBelowLevel": 4

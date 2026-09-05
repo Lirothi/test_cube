@@ -395,6 +395,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(80.0f);
                     ImGui::SliderInt("latency", &vis::g_occlusion.queryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames));
+                    // S6: ownership -- objects the GPU-driven G-buffer draws are occluded by its own
+                    // two-pass (S5) and leave this history; the checkbox restores the pre-S6 overlap.
+                    ImGui::SameLine();
+                    ImGui::Checkbox("also query GPU-driven objects", &vis::g_occlusion.indirectQueries);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("OFF (S6 rule): an object the GPU-driven G-buffer draws is occluded by the camera's\n"
+                                          "two-pass HZB (zero latency) and is not queried here at all -- the CPU path and the\n"
+                                          "lights keep their queries. ON = both systems test it (pre-S6). --set=vis.indirectQueries:0|1");
                     const render::OcclusionFrameStats& os = render::g_visibilityStats.occlusionLast;
                     ImGui::Text("queries/tests: %u individual, %u grouped (x16), %u dropped; %u results read, latency %u, %u entries, %u lights occluded%s",
                                 os.queriesIndividual, os.queriesGrouped, os.queriesDropped, os.queriesTested,

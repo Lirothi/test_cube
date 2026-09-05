@@ -490,7 +490,10 @@ void AccumulateVisibility(render::VisibilityViewCounters& c, const SceneRenderQu
             if (mesh->IsChunkedSubmeshes())
             {
                 const std::vector<std::uint8_t>& lods = ro->ChunkCameraLods();
-                const std::vector<std::uint8_t>& camMask = ro->ChunkCameraVisible();
+                // S6: the camera mask is the camera's -- a cascade's counter tests the frustum on
+                // the spot, like its draw, and never touches the mask (the accessor asserts).
+                static const std::vector<std::uint8_t> kNoMask;
+                const std::vector<std::uint8_t>& camMask = cameraView ? ro->ChunkCameraVisible() : kNoMask;
                 const std::vector<AABB>& boxes = mesh->GetSubmeshBounds();
                 const Math::mat4& model = ro->GetModelMatrix();
                 const size_t n = std::min(lods.size(), mesh->SubmeshesForLod(0).size());
@@ -1612,6 +1615,15 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
         view.type == SceneView::Type::Shadow && view.renderLayerMask == cameraLayerMask;
     const bool usesSharedCameraSource =
         view.type == SceneView::Type::Camera && view.renderLayerMask == cameraLayerMask;
+    // Occlusion plan S6: for the rest of this prepare (a task thread of its own, parallel to the
+    // camera's) the camera verdict accessors assert -- a shadow view that consulted them would
+    // be the silent leak the UE rule (§2.5) forbids.
+    struct ShadowPrepareGuard
+    {
+        explicit ShadowPrepareGuard(bool on) : on_(on) { if (on_) { render::g_preparingShadowView = true; } }
+        ~ShadowPrepareGuard() { if (on_) { render::g_preparingShadowView = false; } }
+        bool on_;
+    } shadowPrepareGuard(view.type == SceneView::Type::Shadow);
     if (usesSharedShadowSource)
     {
         view.queue.Cull(view.frustum, shadowCasterSource_);
@@ -1712,6 +1724,16 @@ void Scene::ApplyOcclusion(SceneView& view, std::uint32_t& objectsOccluded, std:
     assert(view.type == SceneView::Type::Camera && "occlusion history consulted by a non-camera view");
     objectsOccluded = 0;
     chunksOccluded = 0;
+    // Occlusion plan S6 (ownership): while the camera's two-pass HZB runs inside the indirect
+    // G-buffer (S5), the objects that path draws belong to it -- tested on the GPU against this
+    // frame's own depth, with no latency. Their CPU query would only feed the verdict bit the GPU
+    // test supersedes (measured at the wall, K=4: 540 individual + 228 grouped queries a frame for
+    // nothing). So they are not considered here: verdict cleared, chunk masks left as the frustum
+    // made them, the GPU decides. Everything the CPU still draws -- and the lights -- stays with
+    // the history. The knob is the S5 knob; `indirectQueries` is the pre-S6 A/B arm.
+    const bool gpuOwnsIndirect = shadowGpu_.GBufferIndirectThisFrame() && render::g_gbufferHzbCullEnabled &&
+                                 !vis::g_occlusion.indirectQueries;
+    std::uint32_t gpuOwned = 0;
     // Opaque buckets only in S3a: the transparent buckets are mirrored in the queue's sorted
     // transparent entries, and pulling an object from one but not the other would draw it anyway.
     for (const SceneRenderQueue::BucketType type : { SceneRenderQueue::BucketType::OpaqueSimple,
@@ -1721,6 +1743,12 @@ void Scene::ApplyOcclusion(SceneView& view, std::uint32_t& objectsOccluded, std:
         const auto occluded = [&](RenderableObjectBase* obj) -> bool
         {
             if (!obj) { return false; }
+            if (gpuOwnsIndirect && obj->GBufferIndirect())
+            {
+                obj->SetCameraOccluded(false);
+                ++gpuOwned;
+                return false;
+            }
             RenderableObject* ro = obj->AsRenderableObject();
             const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
             if (mesh && mesh->IsChunkedSubmeshes() && !ro->ChunkCameraVisible().empty())
@@ -1758,6 +1786,7 @@ void Scene::ApplyOcclusion(SceneView& view, std::uint32_t& objectsOccluded, std:
         };
         bucket.erase(std::remove_if(bucket.begin(), bucket.end(), occluded), bucket.end());
     }
+    render::g_visibilityStats.occlusionCurrent.gpuOwnedObjects = gpuOwned;
 }
 
 void Scene::ConsiderLightOcclusion(const Frustum& cameraFrustum)
@@ -2219,9 +2248,9 @@ void Scene::Render(Renderer* renderer) {
             // S5b.2: the VSM light-space two-pass -- (caster, clipmap page) pairs the scatter
             // deferred against last frame's pool pyramid, pairs pass B drew, pairs past the list.
             const auto& vh = vsm_.HzbStats();
-            f.Printf("occlusion method=%u individual=%u grouped=%u dropped=%u tested=%u latency=%u entries=%u ignored=%u lightsOccluded=%u gpuHzbDeferred=%u gpuHzbDrawnB=%u vsmHzbDeferred=%u vsmHzbDrawnB=%u vsmHzbOverflow=%u\n",
+            f.Printf("occlusion method=%u individual=%u grouped=%u dropped=%u tested=%u latency=%u entries=%u ignored=%u lightsOccluded=%u gpuOwned=%u gpuHzbDeferred=%u gpuHzbDrawnB=%u vsmHzbDeferred=%u vsmHzbDrawnB=%u vsmHzbOverflow=%u\n",
                      os.method, os.queriesIndividual, os.queriesGrouped, os.queriesDropped, os.queriesTested,
-                     os.latencyFrames, os.historyEntries, os.ignoredResults, os.lightsOccluded,
+                     os.latencyFrames, os.historyEntries, os.ignoredResults, os.lightsOccluded, os.gpuOwnedObjects,
                      shadowGpu_.CamHzbDeferred(), shadowGpu_.CamHzbDrawnB(), vh[0], vh[1], vh[2]);
         }
     }

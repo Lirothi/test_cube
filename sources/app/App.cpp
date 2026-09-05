@@ -480,6 +480,7 @@ namespace
         if (setting == "vis.cutAngle") { vis::g_occlusion.cutAngleDeg = std::max(0.0f, value); return true; }
         if (setting == "vis.cutDistance") { vis::g_occlusion.cutDistance = std::max(0.0f, value); return true; }
         if (setting == "vis.neverTestDistance") { vis::g_occlusion.neverTestDistance = std::max(0.0f, value); return true; }
+        if (setting == "vis.indirectQueries") { vis::g_occlusion.indirectQueries = value != 0.0f; return true; } // occlusion plan S6
         // The Ctrl-key toggle, headless. Two draw paths write the SAME atlas (GPU-driven indirect
         // vs the CPU object walk) and S6 has to bias both identically -- that is only checkable
         // if a capture can select the path.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <vector>
 #include <d3d12.h>
@@ -11,6 +12,14 @@
 
 class Renderer;
 class Frustum;
+
+namespace render
+{
+    // Occlusion plan S6: true, on the calling thread, while a SHADOW view's queue is being
+    // prepared (Scene::PrepareViewQueue). The camera-verdict accessors (CameraOccluded, the chunk
+    // camera mask) assert on it in Debug: shadows never consult camera occlusion (plan §2.5).
+    inline thread_local bool g_preparingShadowView = false;
+}
 
 // One ray-traced instance's geometry + material, gathered for the TLAS/bindless
 // table (S9/S10). albedoTex is null when the renderable has no albedo texture
@@ -278,7 +287,14 @@ public:
     // S4: last verdict of the camera occlusion history (S3a) for the WHOLE object, written by
     // Scene::ApplyOcclusion on the frames it runs; the registry copies it into the GPU cull's
     // per-caster camera flags so the indirect path culls what the CPU path culled.
-    bool CameraOccluded() const { return cameraOccluded_; }
+    // Occlusion plan S6: the camera's verdict is the CAMERA's. A shadow view's prepare runs under
+    // render::g_preparingShadowView (per thread; Scene::PrepareViewQueue), and reading the verdict
+    // there asserts in Debug -- the UE rule (plan §2.5): no shadow view consults camera occlusion.
+    bool CameraOccluded() const
+    {
+        assert(!render::g_preparingShadowView && "S6: a shadow view read the camera's occlusion verdict");
+        return cameraOccluded_;
+    }
     void SetCameraOccluded(bool occluded) { cameraOccluded_ = occluded; }
     // S4: the camera's CPU frustum cull kept this object in frame `frame` (stamped by the camera
     // prepare). The registry offers the GPU camera cull only these -- an object outside the CPU
