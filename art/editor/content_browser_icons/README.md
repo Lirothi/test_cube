@@ -9,6 +9,7 @@ Atlas cell order:
 3. `shader`
 4. `unknown`
 5. `preview_failed`
+6. `reset`
 
 Each source is rasterized to a transparent 64x64 cell. Rebuild the committed
 runtime atlas from the repository root:

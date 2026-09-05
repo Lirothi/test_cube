@@ -336,7 +336,7 @@ namespace
 
     void IconUvs(BrowserIcon icon, ImVec2& uv0, ImVec2& uv1)
     {
-        constexpr float kAtlasWidth = 320.0f;
+        constexpr float kAtlasWidth = 384.0f;
         constexpr float kCellSize = 64.0f;
         const float cell = static_cast<float>(static_cast<int>(icon));
         uv0 = ImVec2((cell * kCellSize + 0.5f) / kAtlasWidth, 0.5f / kCellSize);

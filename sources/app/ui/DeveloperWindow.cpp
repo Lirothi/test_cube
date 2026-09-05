@@ -20,9 +20,11 @@
 #include "editor/EditorController.h"
 #endif
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderStats.h"
+#include "rendering/core/UploadBatch.h"
 #include "rendering/core/VisibilityStats.h" // S0 occlusion plan: per-view visibility table
 #include "rendering/visibility/OcclusionHistory.h" // S3a: vis::g_occlusion
 #include "rendering/meshes/LodSelect.h"
@@ -113,6 +115,76 @@ namespace
     {
         OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
         return oceanSimulation ? oceanSimulation->GetShoreDepthResource() : nullptr;
+    }
+
+    bool IsGraphicsToggle(GraphicsControl control)
+    {
+        switch (control)
+        {
+        case GraphicsControl::AsyncCompute:
+        case GraphicsControl::VisibilityChunkMask:
+        case GraphicsControl::OcclusionIndirectQueries:
+        case GraphicsControl::DlssEnabled:
+        case GraphicsControl::Fxaa:
+        case GraphicsControl::UeSsrGlossyRays:
+        case GraphicsControl::UeSsrUseSurfaceRoughness:
+        case GraphicsControl::ReflectionTemporal:
+        case GraphicsControl::RtWindBlas:
+        case GraphicsControl::LodEnabled:
+        case GraphicsControl::ShadowMode:
+        case GraphicsControl::CsmAutoSplits:
+        case GraphicsControl::CsmScissorOptim:
+        case GraphicsControl::CsmAccurateCasterCull:
+        case GraphicsControl::CsmHzbCull:
+        case GraphicsControl::CsmPancake:
+        case GraphicsControl::CsmOverBlur:
+        case GraphicsControl::ContactEnabled:
+        case GraphicsControl::ContactTemporal:
+        case GraphicsControl::ContactLengthWorldSpace:
+        case GraphicsControl::GiIndirectShadows:
+        case GraphicsControl::IndirectGBuffer:
+        case GraphicsControl::GbufferHzb:
+        case GraphicsControl::ShadowLodBiasNearTier:
+        case GraphicsControl::VsmClipmapBlend:
+        case GraphicsControl::VsmSmrtEnabled:
+        case GraphicsControl::VsmSmrtTemporal:
+        case GraphicsControl::VsmResidentOnly:
+        case GraphicsControl::VsmSingleDraw:
+        case GraphicsControl::VsmHzbCull:
+        case GraphicsControl::VsmPageCaching:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool ResetIconButton(ImTextureID texture)
+    {
+        const float size = ImGui::GetFrameHeight();
+        if (texture == ImTextureID_Invalid)
+        {
+            return ImGui::Button("##reset", ImVec2(size, size));
+        }
+
+        constexpr float kAtlasWidth = 384.0f;
+        constexpr float kCellSize = 64.0f;
+        constexpr float kCell = 5.0f;
+        const ImVec2 uv0((kCell * kCellSize + 0.5f) / kAtlasWidth, 0.5f / kCellSize);
+        const ImVec2 uv1(((kCell + 1.0f) * kCellSize - 0.5f) / kAtlasWidth,
+                         (kCellSize - 0.5f) / kCellSize);
+        const float padding = std::max(1.0f, size * 0.18f);
+        const float imageSize = std::max(1.0f, size - padding * 2.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(padding, padding));
+        const bool pressed = ImGui::ImageButton(
+            "##reset",
+            texture,
+            ImVec2(imageSize, imageSize),
+            uv0,
+            uv1,
+            ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
+            ImGui::GetStyleColorVec4(ImGuiCol_Text));
+        ImGui::PopStyleVar();
+        return pressed;
     }
 
 }
@@ -268,10 +340,45 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 {
     CPU_SCOPE(ProfilerScopes::kBuildDeveloperWindow);
     bool graphicsSettingsDirty = false;
-    const auto graphicsControl = [&](GraphicsControl control, const char* id, const auto& draw)
+    ImTextureID resetIconTexture = ImTextureID_Invalid;
+    const auto graphicsControl = [&](GraphicsControl control, const char* id,
+                                     float explicitWidth, const auto& draw)
     {
+        const float buttonSize = ImGui::GetFrameHeight();
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const ImVec2 itemStart = ImGui::GetCursorScreenPos();
+        const float controlWidth = IsGraphicsToggle(control)
+            ? buttonSize
+            : (explicitWidth > 0.0f ? explicitWidth : ImGui::CalcItemWidth());
+
+        // Reserve a button-sized hole between the widget frame and its visible label. The reset
+        // item is submitted into that hole after the widget, so the label still belongs to the
+        // native ImGui control and keeps its normal id/hover behaviour.
+        ImGui::SetNextItemAllowOverlap();
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,
+            ImVec2(style.ItemInnerSpacing.x + buttonSize + style.ItemSpacing.x,
+                   style.ItemInnerSpacing.y));
+        const bool changed = draw();
+        ImGui::PopStyleVar();
+        ImGuiContext& context = *ImGui::GetCurrentContext();
+        const ImGuiLastItemData controlItem = context.LastItemData;
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        const ImVec2 cursorPos = window->DC.CursorPos;
+        const ImVec2 cursorPosPrevLine = window->DC.CursorPosPrevLine;
+        const ImVec2 cursorMaxPos = window->DC.CursorMaxPos;
+        const ImVec2 idealMaxPos = window->DC.IdealMaxPos;
+        const ImVec2 currLineSize = window->DC.CurrLineSize;
+        const ImVec2 prevLineSize = window->DC.PrevLineSize;
+        const float currLineTextBaseOffset = window->DC.CurrLineTextBaseOffset;
+        const float prevLineTextBaseOffset = window->DC.PrevLineTextBaseOffset;
+        const bool isSameLine = window->DC.IsSameLine;
+        const bool isSetPos = window->DC.IsSetPos;
+
+        window->DC.CursorPos = ImVec2(
+            itemStart.x + controlWidth + style.ItemInnerSpacing.x,
+            itemStart.y);
         ImGui::PushID(id);
-        if (ImGui::SmallButton("Reset"))
+        if (ResetIconButton(resetIconTexture))
         {
             graphicsSettings.ResetControl(control, renderer, scene, settings);
         }
@@ -280,15 +387,31 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             ImGui::SetTooltip("Reset this control to the project default.");
         }
         ImGui::PopID();
-        ImGui::SameLine();
-        const bool changed = draw();
+
+        // The reset overlaps a hole already included in the control's item rect. Restore the
+        // control's layout state so SameLine(), groups and following rows behave exactly as if the
+        // button had been part of the native widget.
+        window->DC.CursorPos = cursorPos;
+        window->DC.CursorPosPrevLine = cursorPosPrevLine;
+        window->DC.CursorMaxPos = cursorMaxPos;
+        window->DC.IdealMaxPos = idealMaxPos;
+        window->DC.CurrLineSize = currLineSize;
+        window->DC.PrevLineSize = prevLineSize;
+        window->DC.CurrLineTextBaseOffset = currLineTextBaseOffset;
+        window->DC.PrevLineTextBaseOffset = prevLineTextBaseOffset;
+        window->DC.IsSameLine = isSameLine;
+        window->DC.IsSetPos = isSetPos;
+
+        // Keep callers' immediately-following DevHelp()/IsItemHovered() attached to the setting,
+        // not to the reset button inserted between its frame and label.
+        context.LastItemData = controlItem;
         graphicsSettingsDirty |= changed;
         return changed;
     };
 #define GRAPHICS_CONTROL(setting, id, expression) \
-    graphicsControl(GraphicsControl::setting, id, [&]() { return (expression); })
+    graphicsControl(GraphicsControl::setting, id, -1.0f, [&]() { return (expression); })
 #define GRAPHICS_CONTROL_WIDTH(setting, id, width, expression) \
-    graphicsControl(GraphicsControl::setting, id, [&]() \
+    graphicsControl(GraphicsControl::setting, id, width, [&]() \
     { \
         ImGui::SetNextItemWidth(width); \
         return (expression); \
@@ -321,6 +444,32 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
     {
         ui::HandleWindowTitleDoubleClickMaximize(windowMaximize_);
         ImGui::PushItemWidth(ImGui::CalcItemWidth() * 0.70f);
+
+        if (!resetIconAtlasTried_)
+        {
+            resetIconAtlasTried_ = true;
+            renderer.WaitForPreviousFrame();
+            UploadBatch uploads;
+            if (uploads.Begin(&renderer))
+            {
+                Texture2D::CreateDesc desc;
+                desc.path = L"textures/editor/content_browser_icons.png";
+                desc.usage = Texture2D::Usage::AlbedoSRGB;
+                resetIconAtlasReady_ = resetIconAtlas_.CreateFromFile(
+                    &renderer, uploads.CommandList(), desc, uploads.KeepAlive());
+                uploads.SubmitAndWait(&renderer);
+            }
+        }
+        if (resetIconAtlasReady_)
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+            srvDesc.Format = resetIconAtlas_.GetSrvFormat();
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2D.MipLevels = 1;
+            renderer.MarkImGuiTextureShaderReadable(resetIconAtlas_.GetResource());
+            resetIconTexture = renderer.CreateImGuiTextureId(resetIconAtlas_.GetResource(), srvDesc);
+        }
 
         ImGui::SeparatorText("Project graphics settings");
         ImGui::TextUnformatted(GraphicsSettingsManager::kPath);

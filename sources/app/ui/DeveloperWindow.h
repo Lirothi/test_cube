@@ -5,6 +5,7 @@
 
 #include "app/scene/SceneFrameData.h"
 #include "app/ui/LogWindow.h"
+#include "materials/Texture2D.h"
 #include "ocean/OceanControlsWindow.h"
 #include "rendering/debug/TextureDebugViewer.h"
 #include "ui/ImGuiWindowUtils.h"
@@ -47,6 +48,7 @@ private:
     void DrawTraceControls();
 
     TextureDebugViewer textureDebugViewer_;
+    Texture2D resetIconAtlas_;
     OceanControlsWindow oceanControlsWindow_;
     LogWindow logWindow_;
     ui::ImGuiWindowMaximizeState windowMaximize_;
@@ -56,5 +58,7 @@ private:
     bool levelListScanned_ = false;
     bool preserveCameraOnLevelChange_ = false;
     bool traceWindowOpen_ = false;
+    bool resetIconAtlasTried_ = false;
+    bool resetIconAtlasReady_ = false;
     bool open_ = false;
 };

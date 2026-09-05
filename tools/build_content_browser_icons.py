@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIR = ROOT / "art" / "editor" / "content_browser_icons"
 OUTPUT_PATH = ROOT / "textures" / "editor" / "content_browser_icons.png"
 CELL_SIZE = 64
-ICONS = ("folder", "level", "shader", "unknown", "preview_failed")
+ICONS = ("folder", "level", "shader", "unknown", "preview_failed", "reset")
 
 
 def find_browser() -> Path:
