@@ -57,7 +57,7 @@
       "intensity": 1.0,
       "length": 0.05000000074505806,
       "lengthInWorldSpace": false,
-      "localLightMode": 1,
+      "localLightMode": 0,
       "maxDistance": 0.0,
       "maxThickness": 0.25,
       "minDistance": 200.0,
@@ -96,7 +96,7 @@
       ],
       "zPadding": 25.0
     },
-    "mode": "vsm",
+    "mode": "legacy",
     "vsm": {
       "biasNearestTier": false,
       "clipmapBaseExtent": 8.0,
