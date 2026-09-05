@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <utility>
 #include "app/scene/SceneResourceBootstrapper.h"
+#include "core/logging/Log.h" // volumetric fog PSO failures go to the session log
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 
 #include "rendering/core/Renderer.h"
@@ -273,6 +274,8 @@ void SceneComposeCBHandles::Populate(Material* material)
     fogSunColor = material->ComputeCB0FieldHandle("fogSunColor");
     fogDebugView = material->ComputeCB0FieldHandle("fogDebugView");
     preExposure = material->ComputeCB0FieldHandle("preExposure");
+    fogVolumeParams = material->ComputeCB0FieldHandle("fogVolumeParams");
+    fogVolumeZParams = material->ComputeCB0FieldHandle("fogVolumeZParams");
 }
 
 void SceneFxaaCBHandles::Populate(Material* material)
@@ -569,6 +572,33 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matHzbCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
+    // Volumetric fog (plan part A). Optional like the rest: a failed PSO leaves the pass
+    // unregistered (DecideFrame gates on both) and the analytic fog alone, as before the plan.
+    if (!matFogScatterCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/fog_scatter_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matFogScatterCS_ = mm->GetOrCreateCompute(renderer, cd);
+        if (!matFogScatterCS_ || !matFogScatterCS_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::Render, "fog_scatter_cs.hlsl did not build a PSO; volumetric fog off");
+            matFogScatterCS_.reset();
+        }
+    }
+    if (!matFogIntegrateCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/fog_integrate_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matFogIntegrateCS_ = mm->GetOrCreateCompute(renderer, cd);
+        if (!matFogIntegrateCS_ || !matFogIntegrateCS_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::Render, "fog_integrate_cs.hlsl did not build a PSO; volumetric fog off");
+            matFogIntegrateCS_.reset();
+        }
+    }
+
     if (!matBloomCS_)
     {
         Material::ComputeDesc cd{};
@@ -811,6 +841,8 @@ void SceneResourceBootstrapper::RefreshHandles()
     ssrTemporalHandles_.Populate(matSsrTemporalCS_.get());
     gtaoUpsampleHandles_.Populate(matGtaoUpsampleCS_.get());
     hzbHandles_.Populate(matHzbCS_.get());
+    fogScatterHandles_.Populate(matFogScatterCS_.get(), 1u);   // FogCB at b1 (b0 = lighting)
+    fogIntegrateHandles_.Populate(matFogIntegrateCS_.get(), 0u);
     bloomHandles_.Populate(matBloomCS_.get());
     bloomFftHandles_.Populate(matBloomFftCS_.get());
     bloomConvHandles_.Populate(matBloomConvCS_.get());
@@ -1006,6 +1038,61 @@ void HzbHandles::Populate(Material* material)
     srcSize = material->ComputeCB0FieldHandle("srcSize");
     fromDepth = material->ComputeCB0FieldHandle("fromDepth");
     writeClosest = material->ComputeCB0FieldHandle("writeClosest");
+}
+
+void FogHandles::Populate(Material* material, UINT cbRegister)
+{
+    if (!material) { return; }
+    gridZParams = material->ComputeCBFieldHandle(cbRegister, "fogGridZParams");
+    nearFadeInInv = material->ComputeCBFieldHandle(cbRegister, "fogNearFadeInInv");
+    gridSize = material->ComputeCBFieldHandle(cbRegister, "fogGridSize");
+    flags = material->ComputeCBFieldHandle(cbRegister, "fogFlags");
+    invViewProjNoJitter = material->ComputeCBFieldHandle(cbRegister, "fogInvViewProjNoJitter");
+    prevViewProjNoJitter = material->ComputeCBFieldHandle(cbRegister, "fogPrevViewProjNoJitter");
+    projZ = material->ComputeCBFieldHandle(cbRegister, "fogProjZ");
+    jitter = material->ComputeCBFieldHandle(cbRegister, "fogJitter");
+    medium0 = material->ComputeCBFieldHandle(cbRegister, "fogMedium0");
+    medium1 = material->ComputeCBFieldHandle(cbRegister, "fogMedium1");
+    medium2 = material->ComputeCBFieldHandle(cbRegister, "fogMedium2");
+}
+
+namespace
+{
+    void WriteFogConstantsTo(Material* material, const FogHandles& h, const FogPassConstants& d, uint8_t* dest)
+    {
+        if (!material || !dest) { return; }
+        material->UpdateCBField(h.gridZParams, d.gridZParams, dest);
+        material->UpdateCBField(h.nearFadeInInv, d.nearFadeInInv, dest);
+        material->UpdateCBField(h.gridSize, d.gridSize, dest);
+        material->UpdateCBField(h.flags, d.flags, dest);
+        material->UpdateCBField(h.invViewProjNoJitter, d.invViewProjNoJitter, dest);
+        material->UpdateCBField(h.prevViewProjNoJitter, d.prevViewProjNoJitter, dest);
+        material->UpdateCBField(h.projZ, d.projZ, dest);
+        material->UpdateCBField(h.jitter, d.jitter, dest);
+        material->UpdateCBField(h.medium0, d.medium0, dest);
+        material->UpdateCBField(h.medium1, d.medium1, dest);
+        material->UpdateCBField(h.medium2, d.medium2, dest);
+    }
+}
+
+UINT SceneResourceBootstrapper::GetFogScatterCBSizeBytes() const
+{
+    return matFogScatterCS_ ? matFogScatterCS_->GetCBSizeBytesAligned(1, render::kConstantBufferAlignment) : 0u;
+}
+
+UINT SceneResourceBootstrapper::GetFogIntegrateCBSizeBytes() const
+{
+    return matFogIntegrateCS_ ? matFogIntegrateCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void SceneResourceBootstrapper::WriteFogScatterConstants(const FogPassConstants& d, uint8_t* dest) const
+{
+    WriteFogConstantsTo(matFogScatterCS_.get(), fogScatterHandles_, d, dest);
+}
+
+void SceneResourceBootstrapper::WriteFogIntegrateConstants(const FogPassConstants& d, uint8_t* dest) const
+{
+    WriteFogConstantsTo(matFogIntegrateCS_.get(), fogIntegrateHandles_, d, dest);
 }
 
 UINT SceneResourceBootstrapper::GetHzbCBSizeBytes() const
@@ -1599,6 +1686,8 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.fogSunDir, data.fogSunDir, dest);
     matComposeCS_->UpdateCBField(handles.fogSunColor, data.fogSunColor, dest);
     matComposeCS_->UpdateCBField(handles.fogDebugView, data.fogDebugView, dest);
+    matComposeCS_->UpdateCBField(handles.fogVolumeParams, data.fogVolumeParams, dest);
+    matComposeCS_->UpdateCBField(handles.fogVolumeZParams, data.fogVolumeZParams, dest);
     matComposeCS_->UpdateCBField(handles.preExposure, data.preExposure, dest);
 }
 

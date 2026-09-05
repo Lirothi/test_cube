@@ -626,6 +626,16 @@ namespace
             return true;
         }
         if (setting == "atmosphere.skyBlur") { scene.AtmosphereRef().skyBlur = value; return true; }
+        // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A).
+        if (setting == "atmosphere.volumetric") { scene.AtmosphereRef().volumetric = value != 0.0f; return true; }
+        if (setting == "atmosphere.volumetricDistance") { scene.AtmosphereRef().volumetricDistance = std::max(1.0f, value); return true; }
+        if (setting == "atmosphere.albedo") { scene.AtmosphereRef().albedo = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "atmosphere.extinctionScale") { scene.AtmosphereRef().extinctionScale = std::max(0.0f, value); return true; }
+        if (setting == "atmosphere.phaseG") { scene.AtmosphereRef().phaseG = std::clamp(value, -0.99f, 0.99f); return true; }
+        if (setting == "atmosphere.sunVolScatter") { scene.AtmosphereRef().sunScatter = std::max(0.0f, value); return true; }
+        if (setting == "atmosphere.skyVolScatter") { scene.AtmosphereRef().skyScatter = std::max(0.0f, value); return true; }
+        if (setting == "atmosphere.historyWeight") { scene.AtmosphereRef().historyWeight = std::clamp(value, 0.0f, 0.99f); return true; }
+        if (setting == "atmosphere.temporal") { scene.AtmosphereRef().temporal = value != 0.0f; return true; }
         // P8 bloom. `bloom.enabled` is the gate; the rest are the extraction and the pyramid, so
         // a sweep can find defaults without a rebuild.
         if (setting == "bloom.enabled")

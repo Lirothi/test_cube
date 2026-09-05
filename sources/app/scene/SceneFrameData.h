@@ -183,6 +183,20 @@ struct AtmosphereSettings
     // because a directional DENSITY would change extinction and make distant shapes fade in and out
     // as the camera pans.
     float skyBackScatter = 1.0f;
+
+    // ---- Volumetric (froxel) fog, docs/volumetric_fog_sky_clouds_ssgi_plan.md part A. UE's
+    // VolumetricFog on top of the analytic model above: inside `volumetricDistance` the air is a
+    // lit, shadowed volume (light shafts through the palms); beyond it the analytic fog continues.
+    // Off = the pre-plan image exactly (no pass, no volume). Defaults are UE's where dimensionless.
+    bool volumetric = false;
+    float volumetricDistance = 300.0f;  // m: the froxel volume's far plane (UE VolumetricFogDistance)
+    float albedo = 1.0f;                // UE VolumetricFogAlbedo: scattering / extinction (white)
+    float extinctionScale = 1.0f;       // UE VolumetricFogExtinctionScale
+    float phaseG = 0.2f;                // UE VolumetricFogScatteringDistribution (Henyey-Greenstein g)
+    float sunScatter = 1.0f;            // UE DirectionalLight VolumetricScatteringIntensity
+    float skyScatter = 1.0f;            // UE SkyLight VolumetricScatteringIntensity
+    float historyWeight = 0.9f;         // UE r.VolumetricFog.HistoryWeight
+    bool temporal = true;               // UE r.VolumetricFog.TemporalReprojection (+ jitter)
 };
 
 // P8 -- exposure-aware HDR bloom. SHIPS DISABLED, same rule the rest of this plan follows: a real

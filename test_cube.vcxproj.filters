@@ -1538,6 +1538,18 @@
     <None Include="shaders\vsm_page_request_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\fog_common.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\fog_integrate_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\fog_scatter_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\lighting_cb.hlsli">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\vsm_hzb_build_cs.hlsl">
       <Filter>shaders</Filter>
     </None>

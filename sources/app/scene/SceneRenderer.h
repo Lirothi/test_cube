@@ -107,6 +107,11 @@ private:
         // Main_HzbA, Main_CamCullPost and Main_GBufferB exist, and the G-buffer's consumers chain
         // off pass B. The registry's own builder may still decline (empty passes then).
         bool camHzb = false;
+        // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A): the froxel pass
+        // runs and compose reads the volume; `fogHistoryValid` = the previous slot's scatter
+        // volume was written last frame at this grid size under this camera history (temporal).
+        bool volumetricFog = false;
+        bool fogHistoryValid = false;
     };
     void DecideFrame(Renderer* renderer, const SceneFrameData& frame);
     FrameDecisions decisions_{};
@@ -158,6 +163,7 @@ private:
         size_t pVsmPageRender = kNone;
         size_t pHzb = kNone;       // gbuffer  -> SSR
         size_t pGtao = kNone;      // gbuffer  -> lighting
+        size_t pFog = kNone;       // volumetric fog -> compose (plan part A)
         size_t pRtTrace = kNone;   // gbuffer/AS -> RT resolve (gather phase of the RT split)
         size_t pSky = kNone;       // lighting -> reflection source
         size_t pCompose = kNone;   // reflections -> transparent
@@ -255,6 +261,21 @@ private:
     // Occlusion plan S5: `passA` = the SAME build from pass A's depth (Main_HzbA), under its own
     // profiler scope; the final pyramid (Main_Hzb) is the one the next frame's main cull reads.
     void Pass_Hzb(Renderer* r, RenderGraphPassContext ctx, uint32_t point, bool passA = false);
+    // Volumetric fog (plan part A): the froxel scatter (sun shadow + sky per cell, history) and
+    // the front-to-back integration, two dispatches under three declared points.
+    struct FogPoints
+    {
+        uint32_t scatter = 0;   // shadow source NPS, scatter volume UAV, history volume NPS
+        uint32_t integrate = 0; // scatter NPS, integrated UAV
+        uint32_t restore = 0;   // integrated NPS (its resting state, what compose samples)
+    };
+    void Pass_VolumetricFog(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const FogPoints& pts);
+    // The lighting pass's per-frame constants, filled ONCE per consumer: the lighting pass and the
+    // fog scatter (its b0 is the same cbuffer, lighting_cb.hlsli) both call this, so the sun's
+    // shadow is sampled from identical constants. `causticsSrv` / `vsmDir` are what the lighting
+    // pass's descriptor table needs from the same decision.
+    void FillLightingConstants(Renderer* renderer, const Camera& camera, LightingPassConstants& constants,
+                               D3D12_CPU_DESCRIPTOR_HANDLE& causticsSrv, bool& vsmDir) const;
     // Occlusion plan S3b: the plan's boxes against the pyramid, one dispatch + readback copy.
     void Pass_VisTest(Renderer* r, RenderGraphPassContext ctx, uint32_t point);
     // Occlusion plan S5: the deferred camera candidates against pass A's pyramid, and pass B --
@@ -561,6 +582,14 @@ private:
     };
     std::array<CamHzbBuilt, render::kFrameCount> camHzbBuilt_{};
     int camHzbLogged_ = -1;          // last logged (on, prevValid) state, so the session log gets the flips only
+    // Volumetric fog temporal history (plan part A): like the GTAO history -- frames written in a
+    // row at this grid size under this camera history; 0 means the previous slot holds nothing
+    // this frame may blend with.
+    uint32_t fogHistoryFrames_ = 0u;
+    UINT fogHistoryWidth_ = 0u;
+    UINT fogHistoryHeight_ = 0u;
+    std::uint64_t fogHistoryRevision_ = 0u;
+    int fogLogged_ = -1;             // last logged (on, historyValid) state
 
     // ---- PER-LEVEL / ONE-SHOT: survives frames, cleared by Reset(). ----
     bool rtFailureLogged_ = false; // S13: one "AS alloc failed -> SSR fallback" line per scene

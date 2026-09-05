@@ -91,9 +91,21 @@ float AtmosphereLineIntegral(float heightFalloff, float rayDirectionY, float ray
     return rayOriginTerms * (abs(falloff) > 1.0e-6f ? lineIntegral : taylor);
 }
 
-// Optical depth along the segment from the camera to the shaded point. `rayOriginTerms` is UE's
-// collapsed origin factor: the density re-based to the CAMERA's height, which is what stops an
-// elevated view getting a uniform screen-space wash -- from altitude most of the ray is in thin air.
+// The per-unit line integral of the exponential profile along the view ray -- UE's
+// GetExponentialHeightFog (HeightFogCommon.ush:213-299), two things of which matter here:
+//
+// (1) RayDirectionZ IS THE RAY'S FULL HEIGHT DELTA (:251, :283), not a slope. The line integral
+//     is per unit of the [0,1] parameter along the segment and the segment's length multiplies
+//     back in (AtmosphereOpticalDepth). The first port divided the delta by the length, which
+//     collapsed the height term to its Taylor limit for every ray: the whole descent from a high
+//     camera integrated at the camera's own thin density. The froxel volume (plan part A), which
+//     integrates the same profile numerically, exposed it as a step at the volume's far plane.
+// (2) THE RAY IS RE-BASED AT THE START DISTANCE (:270-289). The fog-free band (and the volume's
+//     exclude distance, which rides the same field) is not "the same average over a shorter
+//     length": the origin term becomes the density at the height where the fog begins, and the
+//     delta and the length are the remaining ones. That is what makes the seam between the volume
+//     and the analytic continuation exact rather than an average.
+//
 // UE compute the shared per-unit integral ONCE and multiply it by two different lengths -- the
 // view ray's, and the sun lobe's own shorter one. Splitting it the same way here is not tidiness:
 // recomputing it per term would let the two drift apart under edits.
@@ -105,15 +117,18 @@ float AtmosphereSharedIntegral(float distance, float cameraHeight, float pointHe
         return 0.0f;
     }
 
-    // UE's PreComputeFogOriginFactor, with their IEEE exponent clamp.
-    const float originPower = clamp(-p.heightFalloff * (cameraHeight - p.referenceHeight),
+    const float rayLength = max(distance, 1.0e-4f);
+    const float heightDelta = pointHeight - cameraHeight;
+    // The exclusion point along the ray, in [0, 1] of its length (UE ExcludeIntersectionTime).
+    const float excludeTime = saturate(max(p.startDistance, 0.0f) / rayLength);
+    const float originHeight = cameraHeight + excludeTime * heightDelta;
+    const float remainingDelta = (1.0f - excludeTime) * heightDelta;
+
+    // UE's PreComputeFogOriginFactor at the re-based origin, with their IEEE exponent clamp.
+    const float originPower = clamp(-p.heightFalloff * (originHeight - p.referenceHeight),
                                     -125.0f, 126.0f);
     const float rayOriginTerms = p.density * exp2(originPower);
-
-    // Their RayDirectionZ is the ray's height delta over its LENGTH, not a normalised direction:
-    // the integral is per unit of travel, and the length multiplies back in below.
-    const float rayDirectionY = (pointHeight - cameraHeight) / max(distance, 1.0e-4f);
-    return AtmosphereLineIntegral(p.heightFalloff, rayDirectionY, rayOriginTerms);
+    return AtmosphereLineIntegral(p.heightFalloff, remainingDelta, rayOriginTerms);
 }
 
 // The view ray's own optical depth: the shared term over the fog-free start distance.

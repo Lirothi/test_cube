@@ -12,10 +12,12 @@
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/Scene.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/VisibilityStats.h"
 #include "rendering/debug/LodDebugView.h"
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/shadows/VirtualShadowMap.h"
+#include "rendering/visibility/OcclusionHistory.h"
 #include "third_party/json/json.hpp"
 
 namespace
@@ -25,6 +27,12 @@ namespace
     struct GraphicsSettingsSnapshot
     {
         bool asyncCompute = true;
+        bool visibilityChunkMask = true;
+        int occlusionMethod = static_cast<int>(vis::OcclusionMethod::Queries);
+        int occlusionQueryLatency = static_cast<int>(vis::kOcclusionBufferedFrames);
+        bool occlusionIndirectQueries = false;
+        bool indirectGBuffer = true;
+        bool gbufferHzbCull = true;
 
         bool dlssEnabled = false;
         sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
@@ -98,6 +106,7 @@ namespace
         float vsmLocalDepthPushTexels = 0.5f;
         bool vsmResidentOnly = true;
         bool vsmSingleDraw = true;
+        bool vsmHzbCull = false;
         bool vsmPageCaching = true;
         std::uint32_t vsmWindAnimateMaxLevel = 4u;
     };
@@ -224,6 +233,9 @@ namespace
             s.dlssMode = sl::DLSSMode::eBalanced;
         }
         s.renderScale = std::clamp(finite(s.renderScale, 1.0f), 0.1f, 1.0f);
+        s.occlusionMethod = std::clamp(s.occlusionMethod, 0, 2);
+        s.occlusionQueryLatency = std::clamp(
+            s.occlusionQueryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames));
 
         s.ssrUe.numSteps = std::clamp(s.ssrUe.numSteps, 4u, 64u);
         s.ssrUe.numSteps = std::min(64u, (s.ssrUe.numSteps + 3u) & ~3u);
@@ -292,6 +304,7 @@ namespace
         s.csm.overlapInTexels = std::clamp(finite(s.csm.overlapInTexels, 2.0f), 0.0f, 8.0f);
         s.csm.zPadding = std::clamp(finite(s.csm.zPadding, 25.0f), 0.0f, 100.0f);
         s.csm.casterReachWS = std::clamp(finite(s.csm.casterReachWS, 150.0f), 0.0f, 400.0f);
+        s.csm.scissorPadTexels = std::clamp(finite(s.csm.scissorPadTexels, 4.0f), 0.0f, 16.0f);
         s.csm.pancakeSlackWS = std::clamp(finite(s.csm.pancakeSlackWS, 40.0f), 0.0f, 160.0f);
         s.csm.depthBiasInTexels = std::clamp(finite(s.csm.depthBiasInTexels, 1.0f), 0.0f, 12.0f);
         s.csm.slopeScale = std::clamp(finite(s.csm.slopeScale, 2.0f), 0.0f, 8.0f);
@@ -311,6 +324,12 @@ namespace
     {
         GraphicsSettingsSnapshot s{};
         s.asyncCompute = !render::g_noAsyncCompute;
+        s.visibilityChunkMask = render::g_visChunkMask;
+        s.occlusionMethod = vis::g_occlusion.method;
+        s.occlusionQueryLatency = vis::g_occlusion.queryLatency;
+        s.occlusionIndirectQueries = vis::g_occlusion.indirectQueries;
+        s.indirectGBuffer = render::g_indirectGBufferEnabled;
+        s.gbufferHzbCull = render::g_gbufferHzbCullEnabled;
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
@@ -383,6 +402,7 @@ namespace
         s.vsmLocalDepthPushTexels = vsm::g_localDepthPushTexels;
         s.vsmResidentOnly = vsm::g_residentIterOnly;
         s.vsmSingleDraw = vsm::g_pageDrawSingle;
+        s.vsmHzbCull = vsm::g_hzbCull;
         s.vsmPageCaching = vsm::g_pageCaching;
         s.vsmWindAnimateMaxLevel = vsm::g_windAnimateMaxLevel;
         Sanitize(s);
@@ -392,6 +412,10 @@ namespace
     void ApplyRender(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
     {
         render::g_noAsyncCompute = !s.asyncCompute;
+        render::g_visChunkMask = s.visibilityChunkMask;
+        vis::g_occlusion.method = s.occlusionMethod;
+        vis::g_occlusion.queryLatency = s.occlusionQueryLatency;
+        vis::g_occlusion.indirectQueries = s.occlusionIndirectQueries;
         settings.doFxaa = s.fxaa;
         settings.ssrTechnique = s.ssrTechnique;
         settings.ssrUe = s.ssrUe;
@@ -452,6 +476,8 @@ namespace
         render::g_shadowModePersisted = s.shadowMode;
         if (!render::g_shadowModeFromCli) { render::g_shadowMode = s.shadowMode; }
         render::g_giIndirectShadowsEnabled = s.giIndirectShadows;
+        render::g_indirectGBufferEnabled = s.indirectGBuffer;
+        render::g_gbufferHzbCullEnabled = s.gbufferHzbCull;
         render::g_shadowLodBias = s.shadowLodBias;
         render::g_shadowLodBiasNearTier = s.shadowLodBiasNearTier;
         render::g_shadowLodTierStride = s.shadowLodTierStride;
@@ -477,6 +503,7 @@ namespace
         vsm::g_localDepthPushTexels = s.vsmLocalDepthPushTexels;
         vsm::g_residentIterOnly = s.vsmResidentOnly;
         vsm::g_pageDrawSingle = s.vsmSingleDraw;
+        vsm::g_hzbCull = s.vsmHzbCull;
         vsm::g_pageCaching = s.vsmPageCaching;
         vsm::g_windAnimateMaxLevel = s.vsmWindAnimateMaxLevel;
     }
@@ -497,7 +524,15 @@ namespace
             { "version", 1 },
             { "scope", "Global runtime graphics quality. Scene look stays in level environment data." },
             { "performance", {
-                { "asyncCompute", s.asyncCompute }
+                { "asyncCompute", s.asyncCompute },
+                { "gpuDrivenGBuffer", s.indirectGBuffer },
+                { "gbufferHzbCull", s.gbufferHzbCull }
+            } },
+            { "visibility", {
+                { "chunkMask", s.visibilityChunkMask },
+                { "occlusionMethod", s.occlusionMethod },
+                { "queryLatency", s.occlusionQueryLatency },
+                { "queryGpuDrivenObjects", s.occlusionIndirectQueries }
             } },
             { "antiAliasing", {
                 { "dlssEnabled", s.dlssEnabled },
@@ -564,6 +599,10 @@ namespace
                     { "overlapTexels", s.csm.overlapInTexels },
                     { "zPadding", s.csm.zPadding },
                     { "casterReach", s.csm.casterReachWS },
+                    { "scissorOptim", s.csm.scissorOptim },
+                    { "scissorPadTexels", s.csm.scissorPadTexels },
+                    { "accurateCasterCull", s.csm.accurateCasterCull },
+                    { "hzbCull", s.csm.hzbCull },
                     { "pancakeCasters", s.csm.pancakeCasters },
                     { "pancakeSlack", s.csm.pancakeSlackWS },
                     { "depthBiasTexels", s.csm.depthBiasInTexels },
@@ -603,6 +642,7 @@ namespace
                     { "localDepthPushTexels", s.vsmLocalDepthPushTexels },
                     { "residentOnly", s.vsmResidentOnly },
                     { "singleDraw", s.vsmSingleDraw },
+                    { "hzbCull", s.vsmHzbCull },
                     { "pageCaching", s.vsmPageCaching },
                     { "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel }
                 } }
@@ -614,6 +654,7 @@ namespace
     {
         GraphicsSettingsSnapshot s{};
         const json& performance = Section(root, "performance");
+        const json& visibility = Section(root, "visibility");
         const json& aa = Section(root, "antiAliasing");
         const json& reflections = Section(root, "reflections");
         const json& ue = Section(reflections, "ueSsr");
@@ -624,6 +665,12 @@ namespace
         const json& vsmSettings = Section(shadows, "vsm");
 
         Read(performance, "asyncCompute", s.asyncCompute);
+        Read(performance, "gpuDrivenGBuffer", s.indirectGBuffer);
+        Read(performance, "gbufferHzbCull", s.gbufferHzbCull);
+        Read(visibility, "chunkMask", s.visibilityChunkMask);
+        Read(visibility, "occlusionMethod", s.occlusionMethod);
+        Read(visibility, "queryLatency", s.occlusionQueryLatency);
+        Read(visibility, "queryGpuDrivenObjects", s.occlusionIndirectQueries);
         Read(aa, "dlssEnabled", s.dlssEnabled);
         if (const auto it = aa.find("dlssMode"); it != aa.end())
         {
@@ -714,6 +761,10 @@ namespace
         Read(csm, "overlapTexels", s.csm.overlapInTexels);
         Read(csm, "zPadding", s.csm.zPadding);
         Read(csm, "casterReach", s.csm.casterReachWS);
+        Read(csm, "scissorOptim", s.csm.scissorOptim);
+        Read(csm, "scissorPadTexels", s.csm.scissorPadTexels);
+        Read(csm, "accurateCasterCull", s.csm.accurateCasterCull);
+        Read(csm, "hzbCull", s.csm.hzbCull);
         Read(csm, "pancakeCasters", s.csm.pancakeCasters);
         Read(csm, "pancakeSlack", s.csm.pancakeSlackWS);
         Read(csm, "depthBiasTexels", s.csm.depthBiasInTexels);
@@ -752,6 +803,7 @@ namespace
         Read(vsmSettings, "localDepthPushTexels", s.vsmLocalDepthPushTexels);
         Read(vsmSettings, "residentOnly", s.vsmResidentOnly);
         Read(vsmSettings, "singleDraw", s.vsmSingleDraw);
+        Read(vsmSettings, "hzbCull", s.vsmHzbCull);
         Read(vsmSettings, "pageCaching", s.vsmPageCaching);
         Read(vsmSettings, "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel);
 
@@ -912,6 +964,159 @@ bool GraphicsSettingsManager::ResetAll(Renderer& renderer, Scene& scene,
 {
     GraphicsSettingsSnapshot defaults{};
     ApplyAll(defaults, renderer, scene, settings);
+    return SaveCurrent(renderer, scene, settings);
+}
+
+bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& renderer,
+                                           Scene& scene, SceneRenderSettings& settings)
+{
+    GraphicsSettingsSnapshot current = Capture(renderer, scene, settings);
+    const GraphicsSettingsSnapshot defaults{};
+
+    switch (control)
+    {
+    case GraphicsControl::AsyncCompute:                   current.asyncCompute = defaults.asyncCompute; break;
+    case GraphicsControl::VisibilityChunkMask:             current.visibilityChunkMask = defaults.visibilityChunkMask; break;
+    case GraphicsControl::OcclusionMethod:                 current.occlusionMethod = defaults.occlusionMethod; break;
+    case GraphicsControl::OcclusionQueryLatency:           current.occlusionQueryLatency = defaults.occlusionQueryLatency; break;
+    case GraphicsControl::OcclusionIndirectQueries:        current.occlusionIndirectQueries = defaults.occlusionIndirectQueries; break;
+    case GraphicsControl::DlssEnabled:                    current.dlssEnabled = defaults.dlssEnabled; break;
+    case GraphicsControl::DlssMode:                       current.dlssMode = defaults.dlssMode; break;
+    case GraphicsControl::Fxaa:                           current.fxaa = defaults.fxaa; break;
+    case GraphicsControl::SsrTechnique:                   current.ssrTechnique = defaults.ssrTechnique; break;
+    case GraphicsControl::UeSsrQuality:                   current.ssrUe = defaults.ssrUe; break;
+    case GraphicsControl::UeSsrSteps:
+        current.ssrUe.numSteps = defaults.ssrUe.numSteps;
+        current.ssrUe.preset = UeSsrQualityPreset::Custom;
+        break;
+    case GraphicsControl::UeSsrRays:
+        current.ssrUe.numRays = defaults.ssrUe.numRays;
+        current.ssrUe.preset = UeSsrQualityPreset::Custom;
+        break;
+    case GraphicsControl::UeSsrGlossyRays:
+        current.ssrUe.glossyRays = defaults.ssrUe.glossyRays;
+        current.ssrUe.preset = UeSsrQualityPreset::Custom;
+        break;
+    case GraphicsControl::UeSsrUseSurfaceRoughness:       current.ssrUe.useSurfaceRoughness = defaults.ssrUe.useSurfaceRoughness; break;
+    case GraphicsControl::UeSsrRoughnessOverride:         current.ssrUe.roughnessOverride = defaults.ssrUe.roughnessOverride; break;
+    case GraphicsControl::UeSsrIntensity:                 current.ssrUe.intensity = defaults.ssrUe.intensity; break;
+    case GraphicsControl::UeSsrMaxRoughness:              current.ssrUe.maxRoughness = defaults.ssrUe.maxRoughness; break;
+    case GraphicsControl::ReflectionTemporal:             current.reflectionTemporal = defaults.reflectionTemporal; break;
+    case GraphicsControl::ReflectionTemporalBlend:        current.reflectionTemporalBlend = defaults.reflectionTemporalBlend; break;
+    case GraphicsControl::ReflectionTemporalStillInertia: current.reflectionTemporalStillInertia = defaults.reflectionTemporalStillInertia; break;
+    case GraphicsControl::ReflectionResolution:           current.reflectionResolution = defaults.reflectionResolution; break;
+    case GraphicsControl::ReflectionGlossyScale:          current.reflectionGlossyScale = defaults.reflectionGlossyScale; break;
+    case GraphicsControl::SunMetalSpecInfluence:          current.sunMetalSpecInfluence = defaults.sunMetalSpecInfluence; break;
+    case GraphicsControl::SunAngularSize:                 current.sunAngularSize = defaults.sunAngularSize; break;
+    case GraphicsControl::OceanReflectionResolution:      current.oceanReflectionResolution = defaults.oceanReflectionResolution; break;
+    case GraphicsControl::ReflectionSource:               current.reflectionSource = defaults.reflectionSource; break;
+    case GraphicsControl::RtAlphaMode:                    current.rtAlphaMode = defaults.rtAlphaMode; break;
+    case GraphicsControl::RtAlphaMissKeep:                current.rtAlphaMissKeep = defaults.rtAlphaMissKeep; break;
+    case GraphicsControl::RtWindBlas:                     current.rtWindBlas = defaults.rtWindBlas; break;
+    case GraphicsControl::RtWindBlasRadius:               current.rtWindBlasRadius = defaults.rtWindBlasRadius; break;
+    case GraphicsControl::RenderScale:                    current.renderScale = defaults.renderScale; break;
+    case GraphicsControl::LodEnabled:                     current.lodEnabled = defaults.lodEnabled; break;
+    case GraphicsControl::LodBound0:                      current.lodBound0 = defaults.lodBound0; break;
+    case GraphicsControl::LodBound1:                      current.lodBound1 = defaults.lodBound1; break;
+    case GraphicsControl::LodBound2:                      current.lodBound2 = defaults.lodBound2; break;
+    case GraphicsControl::LodFadeBand:                    current.lodFadeBand = defaults.lodFadeBand; break;
+    case GraphicsControl::ChunkLodDistance:               current.chunkLodDistance = defaults.chunkLodDistance; break;
+    case GraphicsControl::ChunkLodFactor:                 current.chunkLodFactor = defaults.chunkLodFactor; break;
+    case GraphicsControl::ShadowMode:                     current.shadowMode = defaults.shadowMode; break;
+    case GraphicsControl::CsmMaxDistance:                 current.csm.maxDistance = defaults.csm.maxDistance; break;
+    case GraphicsControl::CsmAutoSplits:                  current.csm.useUeSplitDistribution = defaults.csm.useUeSplitDistribution; break;
+    case GraphicsControl::CsmDistributionExponent:        current.csm.cascadeDistributionExponent = defaults.csm.cascadeDistributionExponent; break;
+    case GraphicsControl::CsmSplitDistances:              current.csm.sliceDistances = defaults.csm.sliceDistances; break;
+    case GraphicsControl::CsmOverlap:                     current.csm.overlapInTexels = defaults.csm.overlapInTexels; break;
+    case GraphicsControl::CsmZPadding:                    current.csm.zPadding = defaults.csm.zPadding; break;
+    case GraphicsControl::CsmCasterReach:                 current.csm.casterReachWS = defaults.csm.casterReachWS; break;
+    case GraphicsControl::CsmScissorOptim:                current.csm.scissorOptim = defaults.csm.scissorOptim; break;
+    case GraphicsControl::CsmScissorPad:                  current.csm.scissorPadTexels = defaults.csm.scissorPadTexels; break;
+    case GraphicsControl::CsmAccurateCasterCull:          current.csm.accurateCasterCull = defaults.csm.accurateCasterCull; break;
+    case GraphicsControl::CsmHzbCull:                     current.csm.hzbCull = defaults.csm.hzbCull; break;
+    case GraphicsControl::CsmPancake:                     current.csm.pancakeCasters = defaults.csm.pancakeCasters; break;
+    case GraphicsControl::CsmPancakeSlack:                current.csm.pancakeSlackWS = defaults.csm.pancakeSlackWS; break;
+    case GraphicsControl::CsmDepthBias:                   current.csm.depthBiasInTexels = defaults.csm.depthBiasInTexels; break;
+    case GraphicsControl::CsmSlopeScale:                  current.csm.slopeScale = defaults.csm.slopeScale; break;
+    case GraphicsControl::CsmMaxSlope:                    current.csm.maxSlope = defaults.csm.maxSlope; break;
+    case GraphicsControl::CsmNormalBias:                  current.csm.normalBiasInTexels = defaults.csm.normalBiasInTexels; break;
+    case GraphicsControl::CsmBlendFraction:               current.csm.blendFraction = defaults.csm.blendFraction; break;
+    case GraphicsControl::CsmDistanceFade:                current.csm.distanceFadeFraction = defaults.csm.distanceFadeFraction; break;
+    case GraphicsControl::CsmFilter:                      current.csm.filterMode = defaults.csm.filterMode; break;
+    case GraphicsControl::CsmSharpen:                     current.csm.shadowFilterSharpen = defaults.csm.shadowFilterSharpen; break;
+    case GraphicsControl::CsmReceiverBias:                current.csm.csmReceiverBias = defaults.csm.csmReceiverBias; break;
+    case GraphicsControl::CsmOverBlur:                    current.csm.pcfOverBlurCorrection = defaults.csm.pcfOverBlurCorrection; break;
+    case GraphicsControl::ContactEnabled:                 current.contactEnabled = defaults.contactEnabled; break;
+    case GraphicsControl::ContactLocalMode:               current.contactLocalMode = defaults.contactLocalMode; break;
+    case GraphicsControl::ContactTemporal:                current.contactTemporalDither = defaults.contactTemporalDither; break;
+    case GraphicsControl::ContactLengthWorldSpace:        current.contactLengthInWorldSpace = defaults.contactLengthInWorldSpace; break;
+    case GraphicsControl::ContactLength:                  current.contactLength = defaults.contactLength; break;
+    case GraphicsControl::ContactIntensity:               current.contactIntensity = defaults.contactIntensity; break;
+    case GraphicsControl::ContactSteps:                   current.contactSteps = defaults.contactSteps; break;
+    case GraphicsControl::ContactThickness:               current.contactMaxThickness = defaults.contactMaxThickness; break;
+    case GraphicsControl::ContactNormalOffset:            current.contactNormalOffset = defaults.contactNormalOffset; break;
+    case GraphicsControl::ContactGrazingFade:              current.contactGrazingFade = defaults.contactGrazingFade; break;
+    case GraphicsControl::ContactMinDistance:             current.contactMinDistance = defaults.contactMinDistance; break;
+    case GraphicsControl::ContactMaxDistance:             current.contactMaxDistance = defaults.contactMaxDistance; break;
+    case GraphicsControl::ContactFadeBand:                current.contactFadeBand = defaults.contactFadeBand; break;
+    case GraphicsControl::GiIndirectShadows:              current.giIndirectShadows = defaults.giIndirectShadows; break;
+    case GraphicsControl::IndirectGBuffer:                 current.indirectGBuffer = defaults.indirectGBuffer; break;
+    case GraphicsControl::GbufferHzb:                     current.gbufferHzbCull = defaults.gbufferHzbCull; break;
+    case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
+    case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
+    case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;
+    case GraphicsControl::VsmRefDistance:                 current.vsmLodRefDistance = defaults.vsmLodRefDistance; break;
+    case GraphicsControl::VsmRequestDownscale:            current.vsmRequestDownscale = defaults.vsmRequestDownscale; break;
+    case GraphicsControl::VsmLru:                         current.vsmLruFrames = defaults.vsmLruFrames; break;
+    case GraphicsControl::VsmClipmapBaseExtent:           current.vsmClipmapBaseExtent = defaults.vsmClipmapBaseExtent; break;
+    case GraphicsControl::VsmClipmapBlend:                current.vsmClipmapBlend = defaults.vsmClipmapBlend; break;
+    case GraphicsControl::VsmClipmapBlendWidth:           current.vsmClipmapBlendWidth = defaults.vsmClipmapBlendWidth; break;
+    case GraphicsControl::VsmSmrtEnabled:
+    case GraphicsControl::VsmSmrtRays:                    current.smrtRayCount = defaults.smrtRayCount; break;
+    case GraphicsControl::VsmSmrtSamples:                 current.smrtSamplesPerRay = defaults.smrtSamplesPerRay; break;
+    case GraphicsControl::VsmSmrtTemporal:                current.smrtTemporalDither = defaults.smrtTemporalDither; break;
+    case GraphicsControl::VsmSmrtAdaptive:                current.smrtAdaptiveRayCount = defaults.smrtAdaptiveRayCount; break;
+    case GraphicsControl::VsmSmrtMargin:                  current.smrtLevelMargin = defaults.smrtLevelMargin; break;
+    case GraphicsControl::VsmSmrtSunAngle:                current.smrtSunAngleDeg = defaults.smrtSunAngleDeg; break;
+    case GraphicsControl::VsmSmrtTexelDither:             current.smrtTexelDitherScale = defaults.smrtTexelDitherScale; break;
+    case GraphicsControl::VsmSmrtRayLength:               current.smrtRayLengthScale = defaults.smrtRayLengthScale; break;
+    case GraphicsControl::VsmDepthBias:                   current.vsmClipmapDepthBias = defaults.vsmClipmapDepthBias; break;
+    case GraphicsControl::VsmDepthBiasDecay:              current.vsmClipmapDepthBiasDecay = defaults.vsmClipmapDepthBiasDecay; break;
+    case GraphicsControl::VsmDepthBiasFloor:              current.vsmClipmapDepthBiasFloorTexels = defaults.vsmClipmapDepthBiasFloorTexels; break;
+    case GraphicsControl::VsmNormalBias:                  current.vsmClipmapNormalBias = defaults.vsmClipmapNormalBias; break;
+    case GraphicsControl::VsmLocalLateralBias:            current.vsmLocalLateralTexels = defaults.vsmLocalLateralTexels; break;
+    case GraphicsControl::VsmLocalDepthPush:              current.vsmLocalDepthPushTexels = defaults.vsmLocalDepthPushTexels; break;
+    case GraphicsControl::VsmResidentOnly:                current.vsmResidentOnly = defaults.vsmResidentOnly; break;
+    case GraphicsControl::VsmSingleDraw:                  current.vsmSingleDraw = defaults.vsmSingleDraw; break;
+    case GraphicsControl::VsmHzbCull:                     current.vsmHzbCull = defaults.vsmHzbCull; break;
+    case GraphicsControl::VsmPageCaching:                 current.vsmPageCaching = defaults.vsmPageCaching; break;
+    case GraphicsControl::VsmWindAnimateMaxLevel:         current.vsmWindAnimateMaxLevel = defaults.vsmWindAnimateMaxLevel; break;
+    }
+
+    Sanitize(current);
+    const auto value = static_cast<unsigned>(control);
+    if (value <= static_cast<unsigned>(GraphicsControl::RenderScale))
+    {
+        ApplyRender(current, renderer, settings);
+    }
+    else if (value <= static_cast<unsigned>(GraphicsControl::ChunkLodFactor))
+    {
+        ApplyLod(current);
+    }
+    else if (value >= static_cast<unsigned>(GraphicsControl::CsmMaxDistance) &&
+             value <= static_cast<unsigned>(GraphicsControl::CsmOverBlur))
+    {
+        scene.CascadeConfig() = current.csm;
+    }
+    else if (value >= static_cast<unsigned>(GraphicsControl::ContactEnabled) &&
+             value <= static_cast<unsigned>(GraphicsControl::ContactFadeBand))
+    {
+        ApplyContact(current);
+    }
+    else
+    {
+        ApplyVsm(current);
+    }
     return SaveCurrent(renderer, scene, settings);
 }
 

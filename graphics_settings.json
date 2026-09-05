@@ -17,7 +17,9 @@
     ]
   },
   "performance": {
-    "asyncCompute": true
+    "asyncCompute": true,
+    "gbufferHzbCull": true,
+    "gpuDrivenGBuffer": true
   },
   "reflections": {
     "glossyBlur": 1.0,
@@ -64,6 +66,7 @@
     },
     "gpuInstancedCasters": true,
     "legacyCsm": {
+      "accurateCasterCull": true,
       "autoSplits": false,
       "blendFraction": 0.10000000149011612,
       "casterReach": 150.0,
@@ -72,6 +75,7 @@
       "distributionExponent": 3.0,
       "filterMode": 1,
       "filterSharpen": 0.0,
+      "hzbCull": false,
       "maxDistance": 300.0,
       "maxSlope": 1.0,
       "normalBiasTexels": 0.5,
@@ -80,6 +84,8 @@
       "pancakeSlack": 40.0,
       "pcfOverBlurCorrection": true,
       "receiverBias": 0.8999999761581421,
+      "scissorOptim": false,
+      "scissorPadTexels": 4.0,
       "slopeScale": 2.0,
       "splitDistances": [
         10.0,
@@ -99,6 +105,7 @@
       "clipmapNormalBias": 1.0,
       "depthBiasDecay": 1.0,
       "depthBiasFloorTexels": 0.0,
+      "hzbCull": false,
       "localDepthPushTexels": 0.5,
       "localLateralBiasTexels": 1.0,
       "lodRefDistance": 5.0,
@@ -120,5 +127,11 @@
       "windAnimateBelowLevel": 4
     }
   },
-  "version": 1
+  "version": 1,
+  "visibility": {
+    "chunkMask": true,
+    "occlusionMethod": 1,
+    "queryGpuDrivenObjects": false,
+    "queryLatency": 3
+  }
 }

@@ -561,6 +561,57 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D.hzbHeight = h;
         }
 
+        // Volumetric fog (plan part A): the two froxel volumes, RGBA16F 3D, one SRV + one UAV each,
+        // resting NON_PIXEL (both are written and read by compute; compose reads the integrated one).
+        // Sized from the render resolution over kFogGridPixels, like everything else in this set.
+        {
+            const UINT w = std::max(1u, sizes.fogGridWidth);
+            const UINT h = std::max(1u, sizes.fogGridHeight);
+            const UINT d = std::max(1u, sizes.fogGridDepth);
+            D3D12_RESOURCE_DESC rd{};
+            rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+            rd.Width = w;
+            rd.Height = h;
+            rd.DepthOrArraySize = static_cast<UINT16>(d);
+            rd.MipLevels = 1;
+            rd.Format = formats.fog;
+            rd.SampleDesc.Count = 1;
+            rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            auto createVolume = [&](GpuResource& res, D3D12_CPU_DESCRIPTOR_HANDLE& srv, D3D12_CPU_DESCRIPTOR_HANDLE& uav,
+                                    DeferredSrvSlot srvSlot, DeferredSrvSlot uavSlot)
+            {
+                ThrowIfFailed(render::CreateCommittedTexture(dev,
+                    heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+                    res.GetAddressOfForCreate()));
+                res.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+                D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+                sd.Format = formats.fog;
+                sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+                sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                sd.Texture3D.MipLevels = 1;
+                srv = DeferredSrvCPU(f, srvSlot);
+                dev->CreateShaderResourceView(res.Get(), &sd, srv);
+                D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+                ud.Format = formats.fog;
+                ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+                ud.Texture3D.MipSlice = 0;
+                ud.Texture3D.FirstWSlice = 0;
+                ud.Texture3D.WSize = d;
+                uav = DeferredSrvCPU(f, uavSlot);
+                dev->CreateUnorderedAccessView(res.Get(), nullptr, &ud, uav);
+            };
+            createVolume(D.fogScatter, D.fogScatterSRV, D.fogScatterUAV,
+                         DeferredSrvSlot::FogScatter, DeferredSrvSlot::FogScatterUAV);
+            createVolume(D.fogIntegrated, D.fogIntegratedSRV, D.fogIntegratedUAV,
+                         DeferredSrvSlot::FogIntegrated, DeferredSrvSlot::FogIntegratedUAV);
+            D.fogGridWidth = w;
+            D.fogGridHeight = h;
+            D.fogGridDepth = d;
+        }
+
         // P8: the bloom pyramid. Same construction as the HZB chain above -- one SRV over the whole
         // thing, one UAV per mip, built entirely in UNORDERED_ACCESS -- but sized off the DISPLAY
         // resolution, because bloom runs after the upscaler on the image the tonemap reads.
@@ -769,6 +820,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.bloomUp.Get(), L"BloomUp", kNps);
         nameRes(D.hzb.Get(), L"Hzb", kNps);
         nameRes(D.hzbClosest.Get(), L"HzbClosest", kNps);
+        nameRes(D.fogScatter.Get(), L"FogScatter", kNps);
+        nameRes(D.fogIntegrated.Get(), L"FogIntegrated", kNps);
         nameRes(D.debugPreview.Get(), L"DebugPreview", kNps);
         // Tonemap/FXAA end as the compute outputs they are — the resolve flips them back.
         nameRes(D.tonemap.Get(), L"Tonemap", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1037,6 +1090,8 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         collect(D.lensFlare);
         collect(D.streakA);
         collect(D.streakB);
+        collect(D.fogScatter);
+        collect(D.fogIntegrated);
     }
 
     shadowAtlas_.Reset(); // S3.5: the single cascade atlas; Reset unregisters it

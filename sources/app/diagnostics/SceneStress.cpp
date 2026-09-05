@@ -19,6 +19,7 @@
 #include "third_party/json/json.hpp"
 #endif
 
+#include <functional>
 #include <windows.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h> // ID3D12InfoQueue
@@ -217,6 +218,12 @@ public:
         , roughnessEdits_(roughnessEdits)
     {
     }
+
+    // Volumetric fog plan A (GBV gate): what to run after EVERY level load -- the App re-applies
+    // its --set values here. Applied once at boot they are gone at the first reload/switch (the
+    // level's own atmosphere block overwrites the scene's), so a gate about a knob the levels do
+    // not carry was validating the default, exactly the S3a mistake in a new coat.
+    void SetOnLevelLoaded(std::function<void()> fn) { onLevelLoaded_ = std::move(fn); }
 
     // Returns process exit code: 0 clean, nonzero fault.
     int Run()
@@ -932,6 +939,7 @@ private:
             if (levelLoaded)
             {
                 levelBatch.SubmitAndWait(&renderer_);
+                if (onLevelLoaded_) { onLevelLoaded_(); }
             }
         }
     }
@@ -1082,6 +1090,7 @@ private:
     Renderer& renderer_;
     Scene& scene_;
     LevelManager& levelManager_;
+    std::function<void()> onLevelLoaded_; // re-applies --set after each level load (see SetOnLevelLoaded)
     int iterations_ = 0;
     bool gbvContinue_ = false;
     bool roughnessEdits_ = false;
@@ -1164,6 +1173,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         {
             (void)input;
             SceneStressDriver driver(hWnd_, renderer, scene, levelManager, iterations, gbvContinue, roughnessEdits);
+            driver.SetOnLevelLoaded([this]() { ApplyFixedSettings(systems_->scene); });
             exitCode = driver.Run();
             faultCaught = driver.FaultCaught();
         }

@@ -321,13 +321,14 @@ public:
         static_assert(MaxPasses > 0, "RenderGraph must allow at least one pass");
     }
 
-    static constexpr size_t kMinAdjacencyBucketSize = 4;
-    static constexpr size_t kAdjacencyCapacity =
-        (MaxPasses <= kMinAdjacencyBucketSize)
-            ? MaxPasses
-            : ((MaxPasses / kMinAdjacencyBucketSize) < kMinAdjacencyBucketSize
-                    ? size_t{kMinAdjacencyBucketSize}
-                    : MaxPasses / kMinAdjacencyBucketSize);
+    // A pass can have every other pass as a successor, so the list is sized for that. The old
+    // heuristic (MaxPasses / 4 = 11 for the main graph) was a budget, not a bound: the G-buffer
+    // pass is a hub -- lighting, GTAO, HZB, reflections, RT, the two light passes, the sky, glass
+    // ... -- and the volumetric fog pass (plan A) was its twelfth consumer. Debug caught it as
+    // `inl_vector capacity exceeded` in the first fog frame; Release has no check and wrote past
+    // the inline storage, i.e. it "worked". Graphs live on the heap (unique_ptr), so the extra
+    // ~40 KB for the main graph costs nothing that matters.
+    static constexpr size_t kAdjacencyCapacity = MaxPasses;
 
     using SuccessorList = tc::inl_vector<size_t, kAdjacencyCapacity>;
 
@@ -543,6 +544,20 @@ public:
 
     size_t AddPass2(RenderPass name,
         std::initializer_list<size_t> prereqs,
+        std::initializer_list<size_t> mtDeps,
+        std::initializer_list<ResourceStateDecl> declares,
+        BuildFn builder)
+    {
+        return AddPass2Internal(name, prereqs, mtDeps, declares, std::move(builder),
+            RenderQueue::Graphics);
+    }
+
+    // A prerequisite list built at run time -- for an edge that exists only on some frames (the
+    // volumetric fog -> compose edge, plan part A). A braced list still picks the overload above
+    // (list-initialising an initializer_list outranks the vector's converting constructor), so
+    // every existing call site is unchanged; only a DependencyList lvalue lands here.
+    size_t AddPass2(RenderPass name,
+        const DependencyList& prereqs,
         std::initializer_list<size_t> mtDeps,
         std::initializer_list<ResourceStateDecl> declares,
         BuildFn builder)

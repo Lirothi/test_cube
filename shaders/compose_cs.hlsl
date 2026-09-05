@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -18,6 +18,7 @@
 #include "utils.hlsli"
 #include "ibl_common.hlsli"
 #include "atmosphere.hlsli"
+#include "fog_common.hlsli"
 
 Texture2D LightTarget : register(t0);
 Texture2D GB2 : register(t1);
@@ -33,6 +34,9 @@ TextureCube SkyIrradiance : register(t10);
 Texture2D BrdfLut : register(t11);
 // P6B item 7: dynamic screen-space AO at RENDER resolution, gated by `gtaoEnabled`.
 Texture2D GtaoTex : register(t12);
+// Volumetric fog: the integrated froxel volume (light, transmittance) per slice, sampled by view
+// depth. A placeholder on frames without the volume (never read then: fogVolumeParams.x == 0).
+Texture3D<float4> FogVolume : register(t13);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -68,7 +72,15 @@ cbuffer PerFrame : register(b0)
     float4 fogSunColor;  // rgb: the sun's effective colour
     // P7 item 8. 0 = normal, 1 = transmittance, 2 = in-scattering. Rides the fog block so a view
     // costs nothing when the fog is off -- and shows nothing either, which is the honest answer.
+    // Volumetric fog (plan part A) adds 3 = the froxel slice grid, 4 = the volume's own
+    // in-scatter, 5 = the volume's own transmittance.
     uint fogDebugView;
+    // Volumetric fog: x = 1 when the froxel volume was built this frame (0 = the analytic model
+    // alone, exactly the pre-plan image), y = the volume's far plane in view depth (metres),
+    // z = 1 / preExposure (the volume is stored pre-exposed, UE HeightFogCommon.ush:448),
+    // w = the grid's slice count. `fogVolumeZParams` = (B, O, S) of fog_common.hlsli.
+    float4 fogVolumeParams;
+    float4 fogVolumeZParams;
     // P16.1: everything this pass writes is scaled by the exposure the tonemap is about to apply,
     // so the FP16 target holds numbers near 1 instead of raw radiance. 1.0 = not pre-exposed.
     float preExposure;
@@ -352,11 +364,46 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // and water are not opaque at compose time and so never enter the block below, and left as the
     // normal scene they read as "no fog here" instead of "not measured here". Black says the
     // second one.
-    if (fogDebugView != 0u && !(z > kEps && fogParams0.x > 0.0f))
+    // Volumetric fog (plan part A): the froxel volume covers the view ray from the camera to
+    // `fogVolumeParams.y` metres of view depth; the analytic model below continues from there to
+    // the surface. UE's CombineVolumetricFog (HeightFogCommon.ush:430-460): the volume's own
+    // (light, transmittance) sampled by view depth, the analytic fog evaluated with its start
+    // pushed out to the volume's far plane along the ray (their ExcludeDistance = MaxDistance *
+    // InvCosAngle), composed as `rgb = Vol.rgb + Analytic.rgb * Vol.a; a = Vol.a * Analytic.a`.
+    // The SKY is inside the volume too (rays over the horizon) -- it samples the last slice -- and
+    // stays free of the analytic term, which is already the sky itself.
+    const bool volumeOn = fogVolumeParams.x > 0.5f;
+    float4 vol = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    float excludeDistance = 0.0f;
+    float surfaceViewDepth = 0.0f;
+    if (volumeOn)
     {
-        color = 0.0.xxx;
+        const float2 ndc = (uv * 2.0f - 1.0f) * float2(1.0f, -1.0f);
+        float viewDepth = fogVolumeParams.y;
+        if (z > kEps)
+        {
+            const float4 Pv = mul(float4(ndc, z, 1.0f), invProj);
+            surfaceViewDepth = Pv.z / Pv.w;
+            viewDepth = min(surfaceViewDepth, fogVolumeParams.y);
+        }
+        vol = FogVolume.SampleLevel(gSmp, FogVolumeUV(uv, viewDepth, fogVolumeZParams.xyz, (uint)fogVolumeParams.w), 0);
+        vol.rgb *= fogVolumeParams.z; // stored pre-exposed
+        if (fogDebugView == 3u)
+        {
+            // The slice grid: a stripe per slice, so the depth distribution can be read off the image.
+            const float slice = FogSliceFromDepth(fogVolumeZParams.xyz, viewDepth);
+            color = (0.25f + 0.5f * frac(slice)).xxx;
+            SceneColor[dispatchThreadId.xy] = float4(color, 1.0); // debug: display-linear, see below
+            return;
+        }
+        // 4 = the volume's in-scattered light as radiance (exposed like the scene), 5 = its
+        // transmittance as a gray level (display-linear, see the debug note below).
+        if (fogDebugView == 4u) { color = vol.rgb; SceneColor[dispatchThreadId.xy] = float4(color * preExposure, 1.0); return; }
+        if (fogDebugView == 5u) { color = vol.aaa; SceneColor[dispatchThreadId.xy] = float4(color, 1.0); return; }
     }
 
+    float transmittance = 1.0f;
+    float3 inscatter = 0.0f.xxx;
     if (z > kEps && fogParams0.x > 0.0f)
     {
         AtmosphereParams fog;
@@ -375,10 +422,19 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         const float dist = length(toPoint);
         const float3 viewDir = dist > kEps ? toPoint / dist : float3(0.0, 0.0, 1.0);
 
+        if (volumeOn)
+        {
+            // The volume already holds this ray up to its far plane: the analytic integral runs
+            // from there (along the ray, so a slanted ray excludes the right length).
+            excludeDistance = fogVolumeParams.y * (dist / max(surfaceViewDepth, kEps));
+            fog.startDistance = max(fog.startDistance, excludeDistance);
+            fog.sunScatterStartDistance = max(fog.sunScatterStartDistance, excludeDistance);
+        }
+
         const float fogShared = AtmosphereSharedIntegral(dist, camPosWS.y, Pw.y, fog);
         const float tau = AtmosphereOpticalDepth(fogShared, dist, fog);
         const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
-        const float transmittance = AtmosphereTransmittance(tau, minT);
+        transmittance = AtmosphereTransmittance(tau, minT);
 
         // The sky sampled ALONG THE VIEW RAY: this is the fog's own colour, so a distant surface
         // converges on the sky it sits against instead of on an authored constant as in UE. Both
@@ -390,27 +446,45 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                            skySpecMipCount, skyboxIntensity),
             IblSkyRadiance(SkySpecular, SkyboxTex, gSmp, viewDir,
                            0.0f, skySpecMipCount, skyboxIntensity));
-        const float3 inscatter = AtmosphereInscatter(skyAlongView, fogSunColor.rgb,
-                                                     dot(viewDir, fogSunDir.xyz), fogShared, dist,
-                                                     headroom, fog);
-
-        if (fogDebugView == 1u)
-        {
-            // What the SURFACE keeps. White = the air is doing nothing here, black = fully hidden.
-            color = transmittance.xxx;
-        }
-        else if (fogDebugView == 2u)
-        {
-            // What the AIR adds, already weighted by coverage -- i.e. the term actually summed
-            // into the image, not the raw scattering colour. Reading the unweighted one would say
-            // the fog is bright everywhere including where it contributes nothing.
-            color = inscatter * (1.0 - transmittance);
-        }
-        else
-        {
-            color = color * transmittance + inscatter * (1.0 - transmittance);
-        }
+        inscatter = AtmosphereInscatter(skyAlongView, fogSunColor.rgb,
+                                        dot(viewDir, fogSunDir.xyz), fogShared, dist,
+                                        headroom, fog);
     }
 
-    SceneColor[dispatchThreadId.xy] = float4(color * preExposure, 1.0);
+    // A debug view must not leave the pixels it does NOT describe showing "no fog": the sky is
+    // never in the analytic model, so without the volume it is black ("not measured"); with the
+    // volume it IS measured (the ray to the volume's far plane) and shows like everything else.
+    // This used to be assigned BEFORE the two branches below and was overwritten by them, so the
+    // sky read as T = 1 in the transmittance view -- and against the volume's honest value it
+    // looked like a 40 % disagreement in the palm crowns.
+    const bool debugUnmeasured = !(z > kEps && fogParams0.x > 0.0f) && !volumeOn;
+    if (fogDebugView == 1u)
+    {
+        // What the SURFACE keeps. White = the air is doing nothing here, black = fully hidden.
+        color = debugUnmeasured ? 0.0.xxx : (transmittance * vol.a).xxx;
+    }
+    else if (fogDebugView == 2u)
+    {
+        // What the AIR adds, already weighted by coverage -- i.e. the term actually summed
+        // into the image, not the raw scattering colour. Reading the unweighted one would say
+        // the fog is bright everywhere including where it contributes nothing.
+        color = debugUnmeasured ? 0.0.xxx : inscatter * (1.0 - transmittance) * vol.a + vol.rgb;
+    }
+    else if (z > kEps && fogParams0.x > 0.0f)
+    {
+        color = (color * transmittance + inscatter * (1.0 - transmittance)) * vol.a + vol.rgb;
+    }
+    else if (volumeOn)
+    {
+        color = color * vol.a + vol.rgb; // the sky and anything the analytic model leaves alone
+    }
+
+    // The debug views 1 / 3 / 5 are GRAY LEVELS in [0, 1], not radiance: written without the
+    // pre-exposure they land in the tonemap as display-linear values (its multiplier is 1.0 while
+    // pre-exposure is active) and read as the number they are. Multiplied by the pre-exposure they
+    // were exposed like sunlight -- a transmittance of 1.0 came out BLACK under a daylight EV --
+    // which is how the volumetric fog's parity check first "passed" on two black images. Views 2
+    // and 4 are radiance (what the air adds) and stay exposed like the scene.
+    const bool debugGray = fogDebugView == 1u;
+    SceneColor[dispatchThreadId.xy] = float4(debugGray ? color : color * preExposure, 1.0);
 }

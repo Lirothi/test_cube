@@ -1201,6 +1201,22 @@ namespace
                           "geometry, never to the sky pixel beside it, which reads as a hard warm "
                           "band stopping dead at the horizon line.");
 
+            ImGui::SeparatorText("Volumetric fog");
+            checkB("Volumetric (froxel) fog", "volumetric", false);
+            InspectorHelp("UE's VolumetricFog on top of the analytic model: inside the volume distance the "
+                          "air is a lit, sun-shadowed volume (light shafts through the palms), beyond it the "
+                          "analytic fog continues. --set=atmosphere.volumetric:1");
+            dragF("Volume Distance", "volumetricDistance", 300.0f, 1.0f, 10.0f, 2000.0f, "%.0f m");
+            dragF("Albedo", "albedo", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+            dragF("Extinction Scale", "extinctionScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            dragF("Phase G", "phaseG", 0.2f, 0.01f, -0.99f, 0.99f, "%.2f");
+            InspectorHelp("Henyey-Greenstein anisotropy (UE VolumetricFogScatteringDistribution, their "
+                          "default 0.2): towards 1 the shafts brighten when looking into the sun.");
+            dragF("Volume Sun Intensity", "sunScatter", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f"); // the sun INSIDE the volume; "Sun Scatter" above is the analytic lobe beyond it
+            dragF("Volume Sky Intensity", "skyScatter", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            dragF("History Weight", "historyWeight", 0.9f, 0.01f, 0.0f, 0.99f, "%.2f");
+            checkB("Temporal reprojection + jitter", "temporal", true);
+
             ImGui::SeparatorText("Sky sampling");
             dragF("Back Scatter", "skyBackScatter", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("The phase function, as how bright the haze is with the sun BEHIND you "

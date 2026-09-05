@@ -2203,6 +2203,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.backbufferResource = render::kBackbufferResourceFormat;
     formats.gtao = render::kGtaoFormat;
     formats.hzb = render::kHzbFormat;
+    formats.fog = render::kFogFormat;
     formats.bloom = render::kBloomFormat;
     formats.bloomFft = render::kBloomFftFormat;
     formats.debugPreview = render::kDebugPreviewFormat;
@@ -2223,6 +2224,11 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     // between "the depth I sampled" and "the tile that contains it" without a second mapping.
     sizes.hzbWidth = sizes.gtaoWidth;
     sizes.hzbHeight = sizes.gtaoHeight;
+    // Volumetric fog: the froxel grid over the RENDER resolution (UE size theirs from the scene
+    // textures for the same reason: the volume describes the rendered image, not the display).
+    sizes.fogGridWidth = std::max(1u, (rtWidth + render::kFogGridPixels - 1u) / render::kFogGridPixels);
+    sizes.fogGridHeight = std::max(1u, (rtHeight + render::kFogGridPixels - 1u) / render::kFogGridPixels);
+    sizes.fogGridDepth = render::kFogGridZ;
     // P8: half the DISPLAY resolution, not the render one. Bloom runs after the upscaler, on the
     // same image the tonemap reads -- sizing it off `rtWidth` would make the pyramid change shape
     // with the DLSS quality mode while the image it describes did not.

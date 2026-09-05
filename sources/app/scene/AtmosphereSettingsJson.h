@@ -30,6 +30,15 @@ inline void ApplyOverrides(const nlohmann::json& j, AtmosphereSettings& s)
     s.sunScatterStartDistance = j.value("sunScatterStartDistance", s.sunScatterStartDistance);
     s.skyBlur = j.value("skyBlur", s.skyBlur);
     s.skyBackScatter = j.value("skyBackScatter", s.skyBackScatter);
+    s.volumetric = j.value("volumetric", s.volumetric);
+    s.volumetricDistance = j.value("volumetricDistance", s.volumetricDistance);
+    s.albedo = j.value("albedo", s.albedo);
+    s.extinctionScale = j.value("extinctionScale", s.extinctionScale);
+    s.phaseG = j.value("phaseG", s.phaseG);
+    s.sunScatter = j.value("sunScatter", s.sunScatter);
+    s.skyScatter = j.value("skyScatter", s.skyScatter);
+    s.historyWeight = j.value("historyWeight", s.historyWeight);
+    s.temporal = j.value("temporal", s.temporal);
 }
 
 inline nlohmann::json ToJson(const AtmosphereSettings& s)
@@ -46,6 +55,15 @@ inline nlohmann::json ToJson(const AtmosphereSettings& s)
     j["sunScatterStartDistance"] = s.sunScatterStartDistance;
     j["skyBlur"] = s.skyBlur;
     j["skyBackScatter"] = s.skyBackScatter;
+    j["volumetric"] = s.volumetric;
+    j["volumetricDistance"] = s.volumetricDistance;
+    j["albedo"] = s.albedo;
+    j["extinctionScale"] = s.extinctionScale;
+    j["phaseG"] = s.phaseG;
+    j["sunScatter"] = s.sunScatter;
+    j["skyScatter"] = s.skyScatter;
+    j["historyWeight"] = s.historyWeight;
+    j["temporal"] = s.temporal;
     return j;
 }
 

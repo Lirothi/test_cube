@@ -93,6 +93,9 @@ extern const Profiler::ScopeNameKey kPassGBufferB;       // occlusion plan S5: p
 extern const Profiler::ScopeNameKey kPassShoreDepth;
 extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassGtao;
+extern const Profiler::ScopeNameKey kPassVolumetricFog; // plan part A: the froxel volume
+extern const Profiler::ScopeNameKey kFogScatter;        // ... its per-cell lighting dispatch
+extern const Profiler::ScopeNameKey kFogIntegrate;      // ... and the front-to-back integration
 extern const Profiler::ScopeNameKey kPassHzb;
 extern const Profiler::ScopeNameKey kPassOcclusionQueries; // occlusion plan S3a
 extern const Profiler::ScopeNameKey kPassVisTest;          // occlusion plan S3b

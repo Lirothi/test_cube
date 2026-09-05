@@ -917,6 +917,50 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     // null staged SRV made the body return without emitting a single one of the eleven barriers
     // it had already declared, which under compiled barriers leaves every later reader of the
     // G-buffer with a wrong before-state.
+    // Volumetric fog (plan part A): the froxel volume, after the shadows it samples (the CSM
+    // atlas or the VSM pool + table -- the mtDep on pShadow and the prereq on the page render
+    // order it) and before compose reads it. Registered only on frames DecideFrame said so;
+    // the shadow source is declared here the way Main_Lighting declares its own.
+    gb.pFog = GraphBuild::kNone;
+    if (decisions_.volumetricFog)
+    {
+        const bool vsmShadows = decisions_.vsmActive && gb.pVsmPageRender != GraphBuild::kNone;
+        auto fogBuilder = [this, renderer, vsmShadows](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const auto& DF = renderer->GetDeferredForFrame();
+            const auto& PF = renderer->GetDeferredForPrevFrame();
+            FogPoints pts{};
+            pts.scatter = ctx.usePoint ? *ctx.usePoint : 0u;
+            if (vsmShadows && frame_->vsm && frame_->vsm->IsAllocated())
+            {
+                ctx.Use(frame_->vsm->PagePool(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(frame_->vsm->PageTable(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+            else
+            {
+                ctx.Use(DF.shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+            ctx.Use(DF.fogScatter.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.Use(PF.fogScatter.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); // the history (its rest)
+            ctx.NextPoint();
+            pts.integrate = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(DF.fogScatter.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            ctx.Use(DF.fogIntegrated.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint();
+            pts.restore = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(DF.fogIntegrated.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            return [this, renderer, pts](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassVolumetricFog);
+                Pass_VolumetricFog(renderer, c, *frame_->camera, pts);
+            };
+        };
+        // The VSM edge exists only in VSM mode: a run-time list, not a conditional braced one (a
+        // temporary initializer_list's array dies with the full expression).
+        RenderGraph<kMainRenderGraphPassCount>::DependencyList fogPrereqs;
+        fogPrereqs.push_back(gb.pGbufDone);
+        if (vsmShadows) { fogPrereqs.push_back(gb.pVsmPageRender); }
+        gb.pFog = rg.AddPass2(RenderPass::Main_VolumetricFog, fogPrereqs, /*mtDeps=*/{ gb.pShadow }, {}, fogBuilder);
+    }
+
     auto lightBuilder = [this, renderer](RenderGraphPassContext& ctx)
         -> std::function<void(RenderGraphPassContext)> {
         if (!resources_.GetLightingMaterial() || resources_.GetLightingCBSizeBytes() == 0)
@@ -1157,13 +1201,23 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
         // barrier -- declaring it is what makes that a fact the compile knows.
         { D.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
         { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } };
+    // Volumetric fog (plan A): compose samples the integrated volume, and compose is a NON-FIRST
+    // member of this group too -- so the fog edge rides the first member exactly like the wetness
+    // one above (RenderGraph.h:623 asserts on anything else). A run-time list: the pass exists
+    // only on the frames DecideFrame registered it.
+    const auto withFog = [&gb](std::initializer_list<size_t> base) {
+        RenderGraph<kMainRenderGraphPassCount>::DependencyList deps;
+        for (size_t d : base) { deps.push_back(d); }
+        if (gb.pFog != GraphBuild::kNone) { deps.push_back(gb.pFog); }
+        return deps;
+    };
     size_t pReflectionSource; // node the blur depends on (reflection chain end)
     if (useRtReflections)
     {
         // The SHADE phase of the split: payload + lit HDR -> reflection. The only RT dispatch
         // that waits for the lighting output; the expensive trace ran long before, upstream.
         pReflectionSource = rg.AddPass2(RenderPass::Main_RTResolve,
-            { gb.pSky, gb.pWetness, gb.pRtTrace }, { gb.pSky, gb.pBuildAS },
+            withFog({ gb.pSky, gb.pWetness, gb.pRtTrace }), { gb.pSky, gb.pBuildAS },
             { { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.rtPayload.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.rtPayloadUv.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -1179,7 +1233,7 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
     }
     else if (decisions_.clearReflections)
     {
-        pReflectionSource = rg.AddPass2(RenderPass::Main_ReflectionSource, { gb.pSky, gb.pWetness }, /*mtDeps=*/{},
+        pReflectionSource = rg.AddPass2(RenderPass::Main_ReflectionSource, withFog({ gb.pSky, gb.pWetness }), /*mtDeps=*/{},
             { { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 ctx.UseDeclared();
@@ -1195,7 +1249,7 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
         // P6C step 6: the HiZ technique marches the depth pyramid, so this orders after the build.
         // The GLASS SSR pass needs the same guarantee and gets it transitively -- it hangs off
         // Compose, which hangs off the blur, which hangs off this node.
-        pReflectionSource = rg.AddPass2(RenderPass::Main_ReflectionSource, { gb.pSky, gb.pWetness, gb.pHzb }, /*mtDeps=*/{},
+        pReflectionSource = rg.AddPass2(RenderPass::Main_ReflectionSource, withFog({ gb.pSky, gb.pWetness, gb.pHzb }), /*mtDeps=*/{},
             reflectDecls,
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 ctx.UseDeclared();
@@ -1269,6 +1323,8 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
     // for the transparent pass at the end of its body.
     // gb.pWetness is deliberately NOT listed here: see the CL-group note above the reflection source.
     // It is carried by the group's first member, which orders this whole list after it.
+    // Volumetric fog: compose samples the integrated volume; the ordering edge rides the group's
+    // FIRST member (withFog above), because a non-first member cannot take an outside prereq.
     gb.pCompose = rg.AddPass2(RenderPass::Main_Compose, { pBlur }, /*mtDeps=*/{},
         { { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -1292,6 +1348,12 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             {
                 ctx.Use(frame_->ocean->GetWetnessResource(),
                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+            // Volumetric fog: the integrated volume (its resting state; declared so the read is
+            // named on the frames it happens).
+            if (decisions_.volumetricFog && DC.fogIntegrated.Get())
+            {
+                ctx.Use(DC.fogIntegrated.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             }
             ctx.NextPoint();
             const std::uint32_t handBack = ctx.usePoint ? *ctx.usePoint : 0u;

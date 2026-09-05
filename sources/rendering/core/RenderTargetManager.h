@@ -41,9 +41,9 @@ public:
         // lens-flare target and P8C-2l the streak pyramid's two halves.
         static constexpr size_t kResourceCount =
 #if WITH_EDITOR
-            29; // Runtime targets plus the editor-only objectID target.
+            31; // Runtime targets plus the editor-only objectID target (+2 fog volumes).
 #else
-            28;
+            30;
 #endif
         // Resources
         GpuResource gb0;   // albedo+metal
@@ -110,6 +110,13 @@ public:
         // skip past a surface the tile really contains, an AO search must never invent one. Same
         // dimensions, same mip count, built by the same dispatch.
         GpuResource hzbClosest;
+        // Volumetric fog (plan part A): the froxel volumes, UE's LightScattering + IntegratedLight
+        // Scattering. `fogScatter` = per-cell (pre-exposed in-scattered light, extinction), this
+        // frame's AND next frame's temporal history (the previous frame's copy lives in the previous
+        // Deferred set, like gtaoHistory); `fogIntegrated` = front-to-back accumulation per slice
+        // (light, transmittance) that compose / the ocean / glass sample by view depth.
+        GpuResource fogScatter;
+        GpuResource fogIntegrated;
         // P8: the bloom pyramid's two chains. `bloomDown` holds the thresholded image reduced level
         // by level, `bloomUp` the tent reconstruction on the way back; the upsample of level N reads
         // BOTH up[N+1] and down[N], which is why one ping-ponged chain would not do. Mip 0 of
@@ -180,6 +187,10 @@ public:
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kHzbMaxMips> hzbClosestMipUAV{};
         UINT hzbMips = 0;                 // levels actually created for the current size
         UINT hzbWidth = 1, hzbHeight = 1; // mip 0 dimensions
+        // Volumetric fog volumes (3D): SRV over the whole volume + one UAV, and the grid they hold.
+        D3D12_CPU_DESCRIPTOR_HANDLE fogScatterSRV{}, fogScatterUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE fogIntegratedSRV{}, fogIntegratedUAV{};
+        UINT fogGridWidth = 1, fogGridHeight = 1, fogGridDepth = 1;
 
         // P8 bloom pyramid, at DISPLAY resolution: it runs after the upscaler, on the same image
         // the tonemap reads.
@@ -224,6 +235,7 @@ public:
         DXGI_FORMAT backbufferResource; // tonemap/FXAA targets
         DXGI_FORMAT gtao;               // P6B ambient occlusion
         DXGI_FORMAT hzb;                // P6C hierarchical depth
+        DXGI_FORMAT fog;                // volumetric fog froxel volumes (RGBA16F)
         DXGI_FORMAT bloom;              // P8 bloom pyramid (HDR)
         DXGI_FORMAT bloomFft;           // P8C convolution grid (complex, 32-bit)
         DXGI_FORMAT debugPreview;       // texture-inspector preview (RGBA8)
@@ -236,6 +248,8 @@ public:
         UINT oceanReflectionWidth = 1, oceanReflectionHeight = 1;
         UINT gtaoWidth = 1, gtaoHeight = 1;
         UINT hzbWidth = 1, hzbHeight = 1;   // P6C mip 0 (half the render resolution)
+        // Volumetric fog froxel grid: ceil(render / kFogGridPixels) x kFogGridZ slices.
+        UINT fogGridWidth = 1, fogGridHeight = 1, fogGridDepth = 1;
         // P8 mip 0, half the DISPLAY resolution: bloom runs after the upscaler, so it is sized off
         // the image the tonemap actually reads, not off the internal render target.
         UINT bloomWidth = 1, bloomHeight = 1;
@@ -303,6 +317,8 @@ private:
     StreakA, StreakAUAV, StreakB, StreakBUAV,
     // RT gather-then-shade payload (async prep).
     RtPayload, RtPayloadUAV, RtPayloadUv, RtPayloadUvUAV,
+    // Volumetric fog froxel volumes (3D).
+    FogScatter, FogScatterUAV, FogIntegrated, FogIntegratedUAV,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

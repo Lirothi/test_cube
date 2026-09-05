@@ -268,6 +268,352 @@ void SceneRenderer::Pass_Gtao(Renderer* renderer, RenderGraphPassContext ctx, co
 }
 
 // ---- Pass_Lighting + Pass_SpotLights + Pass_PointLights + Pass_Skybox ----
+// The lighting pass's per-frame constants, shared with the volumetric fog's scatter pass (its b0
+// is the same cbuffer, lighting_cb.hlsli): filled here once per consumer so the sun's shadow is
+// sampled from identical values in both. Moved out of Pass_Lighting verbatim.
+void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& camera, LightingPassConstants& constants,
+                                          D3D12_CPU_DESCRIPTOR_HANDLE& causticsSrv, bool& vsmDir) const
+{
+    const DirectionalLight& dirLight = *frame_->dirLight;
+    constants = LightingPassConstants{};
+    const mat4& view = camera.GetViewMatrix();
+    const mat4& invView = camera.GetInvViewMatrix();
+    const mat4& invProj = camera.GetInvProjMatrix();
+    const float3 camDir = camera.GetDirection();
+    constants.sunDir = dirLight.GetDirection();
+    constants.ambient = dirLight.GetAmbient();
+    // P4: the sun intensity rides in the colour. lighting_cs multiplies BOTH its fill term
+    // (`ambient * lightRgb`) and its direct term by this, which is exactly how the legacy
+    // trailing `* exposure` behaved -- hence the migration leaves `ambient` untouched.
+    constants.lightRgb = dirLight.GetEffectiveColor();
+    constants.ambientRgb = dirLight.GetEffectiveAmbientColor();
+    // F8: a real sky fill whenever this level's sky brought prefiltered derivatives with it.
+    const Skybox* iblSky = frame_->skybox;
+    constants.skyIrradianceEnabled = (iblSky && iblSky->HasIbl()) ? 1u : 0u;
+    // Sky intensity (how bright this sky is) times the fill strength (how much of it the
+    // diffuse response takes). Two different questions, so two fields.
+    // P6B items 6-7. The pass writes gtaoUpsampled only when it runs, so `enabled` gates the
+    // read rather than relying on the target holding 1.
+    constants.gtaoEnabled = frame_->settings.gtao.enabled ? 1u : 0u;
+    constants.gtaoStrength = std::clamp(frame_->settings.gtao.strength, 0.0f, 1.0f);
+    constants.skyIrradianceScale =
+        (iblSky ? iblSky->GetExposure() : 1.0f) * dirLight.GetSkyFillIntensity();
+    // P16.12: the other half of the fill -- what comes back UP off the ground. The shader
+    // treats a zero here as "term off", so a level that wants none writes zero rather than
+    // needing a second boolean.
+    constants.groundAlbedoRgb = dirLight.GetGroundAlbedo();
+    // The sky's indirect SPECULAR, moved out of compose so the screen-space reflection pass
+    // (which samples this target) sees a metal with its environment on it. These three MUST
+    // match compose's own values exactly -- one pass adds the term, the other subtracts the
+    // part a reflection replaced, and they only cancel while both agree.
+    constants.enableSkySpecular =
+        frame_->settings.reflectionSource != ReflectionSource::None ? 1u : 0u;
+    constants.skySpecMipCount = (iblSky && iblSky->HasIbl()) ? iblSky->GetSpecMips() : 0u;
+    constants.skyboxIntensity = iblSky ? iblSky->GetExposure() : 1.0f;
+    constants.exposure = dirLight.GetExposure();
+    constants.camPos = camera.GetPosition();
+    constants.camDir = camDir;
+    constants.invView = invView;
+    constants.invProj = invProj;
+    const SceneFrameData::CascadeData& cascades = frame_->cascades;
+    for (size_t i = 0; i < constants.lightViewProj.size(); ++i)
+    {
+        constants.lightViewProj[i] = cascades.lightView[i] * cascades.lightProj[i];
+        constants.cascadeScaleBias[i] = float4(cascades.atlasScale[i].x, cascades.atlasScale[i].y, cascades.atlasBias[i].x, cascades.atlasBias[i].y);
+    }
+    constants.cascadeSplits = float4(cascades.splitsVS[0], cascades.splitsVS[1], cascades.splitsVS[2], cascades.splitsVS[3]);
+    const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().shadowRes);
+    constants.shadowAtlasSize = float2(shadowRes, shadowRes);
+    constants.shadowBiasNDC = float4(cascades.depthBiasNDC[0], cascades.depthBiasNDC[1], cascades.depthBiasNDC[2], cascades.depthBiasNDC[3]);
+    constants.cascadeTexelWS = float4(cascades.cascadeTexelWS[0], cascades.cascadeTexelWS[1], cascades.cascadeTexelWS[2], cascades.cascadeTexelWS[3]);
+    const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
+    const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
+    constants.screenSize = float2(width, height);
+    constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
+    constants.sunMetalSpec = frame_->settings.sunMetalSpecInfluence;
+    constants.sunAngularSize = frame_->settings.sunAngularSize;
+
+    // Underwater caustics. Everything comes from the ocean: no water in the level means the
+    // whole block stays zeroed and the shader skips it (causticsTint.w == 0).
+    causticsSrv = {};
+    if (frame_->ocean)
+    {
+        if (const OceanSimulation* oceanSim = frame_->ocean->GetSimulation())
+        {
+            const OceanRenderConfig& oc = oceanSim->GetRenderConfig();
+            causticsSrv = frame_->ocean->GetCausticsSrvCPU();
+            if (oc.causticsEnabled && oc.causticsIntensity > 0.0f && causticsSrv.ptr != 0)
+            {
+                // World metres covered by one screen pixel at one metre of view depth; the
+                // shader turns it into a mip level so distant caustics stop aliasing. Pixels
+                // are square, so the horizontal FOV over the render width gives both axes.
+                const float pixelWorldScale = width > 0.0f
+                    ? (2.0f * std::tan(0.5f * camera.GetHFov()) / width)
+                    : 0.0f;
+                constants.causticsTint =
+                    float4(oc.causticsTint.x, oc.causticsTint.y, oc.causticsTint.z, 1.0f);
+                constants.causticsParams0 = float4(oc.causticsIntensity, oc.causticsScale,
+                    oc.causticsSpeed, frame_->ocean->GetWaterLevel());
+                constants.causticsParams1 = float4(oc.causticsDepthFade, oc.causticsSurfaceFade,
+                    oc.causticsUpFacing, oc.causticsBias);
+                constants.causticsParams2 = float4(oc.causticsDispersion, oc.causticsLayerBlend,
+                    frame_->ocean->GetElapsedTime(), pixelWorldScale);
+            }
+        }
+    }
+
+    // Step 24f: sample directional shadows from the VSM clipmap in VSM mode (else CSM cascades).
+    // t6/t7 bind valid dummy SRVs when VSM isn't resident (Legacy) — useVsm=0 never samples them.
+    vsmDir = render::VsmActive() && frame_->vsm && frame_->vsm->IsAllocated() &&
+                        frame_->vsm->PageTableSrv().ptr != 0 && frame_->vsm->PagePoolSrv().ptr != 0;
+    constants.useVsm = vsmDir ? 1u : 0u;
+    // S0.3: cascade-tint debug. Forced off whenever the clipmap is the shadow source — the
+    // tint visualizes CSM cascades, which that path does not sample.
+    constants.csmDebugMode = vsmDir ? 0u : static_cast<uint32_t>(render::g_csmDebugMode);
+    {
+        // UE maps the artist's 0..1 Shadow Filter Sharpen to shader units as x*7+1 (see
+        // ShadowRendering.h:1299). Done on the CPU, once, exactly as they do it.
+        const CascadeShadowConfig* cfg = frame_->cascadeConfig;
+        constants.csmFilterMode = cfg ? cfg->filterMode : 1u; // 0 box, 1 = 4x4 tent, 2 = 6x6 tent
+        // S10: splitsVS[4] cannot ride cascadeSplits (that float4 is splits 0..3), so the last
+        // cascade's far plane travels here -- without it c3 has no slice length to fade over.
+        constants.csmFadeParams = float4(cascades.splitsVS[kCascades],
+                                         cfg ? cfg->blendFraction : 0.1f,
+                                         cfg ? cfg->distanceFadeFraction : 0.1f, 0.0f);
+        constants.csmFilterParams = cfg
+            ? float4(cfg->csmReceiverBias, cfg->shadowFilterSharpen * 7.0f + 1.0f,
+                     cfg->pcfOverBlurCorrection ? 1.0f : 0.0f, cfg->normalBiasInTexels)
+            : float4(0.9f, 1.0f, 1.0f, 1.0f);
+    }
+    // Both of these are NDC values that mean a WORLD distance, so both must be divided by the
+    // level's depth range -- see vsm::ClipmapRangeMultiple(). `vsmDepthBias` is authored against
+    // the historical range (6x the extent), so it is rescaled to keep that meaning when
+    // ZRangeScale moves; the floor is authored in TEXELS and converted with the same multiple.
+    // Leaving a hardcoded 6 here is what made ZRangeScale 10 -> 50 detach shadows from casters.
+    const float clipRangeMul = vsm::ClipmapRangeMultiple();
+    constants.vsmDepthBias =
+        vsm::g_clipmapDepthBias * (vsm::kClipmapRangeMultipleRef / clipRangeMul);
+    constants.clipmapDepthBiasDecay = vsm::g_clipmapDepthBiasDecay;
+    constants.clipmapDepthBiasFloorNdc =
+        vsm::g_clipmapDepthBiasFloorTexels / (clipRangeMul * (float)vsm::kVirtualRes);
+    constants.clipmapBlendWidth = vsm::ClipmapBlendWidth();
+    constants.clipmapBaseExtent = vsm::g_clipmapBaseExtent;
+    // P16.16: UE divide their CVar by 1000 before it reaches the shader
+    // (GetNormalBiasForShader, VirtualShadowMapArray.cpp:561). Same here, so the authored
+    // number stays directly comparable to `r.Shadow.Virtual.NormalBias`.
+    constants.clipmapNormalBias = vsm::g_clipmapNormalBias * 0.001f;
+    // SMRT (docs/vsm_smrt_plan.md). rayCount 0 = the single-tap path, bit-for-bit unchanged.
+    constants.smrtRayCount = vsm::g_smrtRayCount;
+    constants.smrtSamplesPerRay = vsm::g_smrtSamplesPerRay;
+    constants.smrtRayLengthScale = vsm::g_smrtRayLengthScale;
+    constants.smrtExtrapolateMaxSlope = vsm::g_smrtExtrapolateMaxSlope;
+    // Degrees of full ANGLE -> sin of the angular RADIUS, which is what the shader jitters by.
+    constants.smrtSourceRadius =
+        std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f);
+    constants.smrtTexelDitherScale = vsm::g_smrtTexelDitherScale;
+    constants.smrtLevelMargin = vsm::g_smrtLevelMargin;
+    // 0 is the reserved "no temporal rotation" value, so the phase runs 1..64.
+    constants.smrtFrameIndex = frame_->smrtFrameIndex;
+    constants.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount;
+    constants.smrtScreenRayLength = vsm::g_smrtScreenRayLength;
+    constants.smrtScreenRaySamples = vsm::g_smrtScreenRaySamples;
+    // World -> clip for the screen-space ray. The CB carries only the inverses today, and
+    // inverting them back in the shader would cost a matrix inverse per pixel.
+    constants.viewProj = camera.GetViewMatrix() * camera.GetProjMatrix();
+    constants.projMatrix = camera.GetProjMatrix();
+    // The master switch folds into the length: 0 means the shader takes no samples at all,
+    // so "off" costs literally nothing rather than costing a branch per pixel.
+    constants.contactShadowLength = render::contact::g_enabled ? render::contact::g_length : 0.0f;
+    constants.contactShadowLengthInWS = render::contact::g_lengthInWorldSpace ? 1u : 0u;
+    constants.contactShadowNormalOffset = render::contact::g_normalOffsetFrac;
+    constants.contactShadowGrazingFade = render::contact::g_grazingFadeNdotL;
+    constants.contactShadowMinDist = render::contact::g_minDistanceM;
+    constants.contactShadowMaxDist = render::contact::g_maxDistanceM;
+    constants.contactShadowFadeBand = render::contact::g_fadeBandM;
+    constants.contactShadowThickness = render::contact::g_maxThicknessFrac;
+    // UE's StateFrameIndexMod8, +1 so that 0 stays the "static dither" sentinel.
+    constants.contactShadowFrameId = render::contact::g_temporalDither
+        ? static_cast<std::uint32_t>((renderer->GetTotalFrameNumber() & 7ull) + 1ull)
+        : 0u;
+    constants.contactShadowIntensity = render::contact::g_intensity;
+    constants.contactShadowSteps = render::contact::g_steps;
+    if (frame_->clipmapViews)
+    {
+        for (size_t i = 0; i < constants.clipmapViewProj.size() && i < frame_->clipmapViews->size(); ++i)
+        {
+            const SceneView& cv = (*frame_->clipmapViews)[i];
+            constants.clipmapViewProj[i] = cv.view * cv.proj;
+        }
+        // P16.16: the receiver-plane transform, built from level 0. The gradient the shader
+        // takes from it is a ratio in which the level's extent cancels, so one matrix serves
+        // every level -- same construction as UE's CalcTranslatedWorldToShadowUVNormalMatrix.
+        constants.clipmapUvNormal = vsm::CalcClipmapUvNormalMatrix(constants.clipmapViewProj[0]);
+    }
+}
+
+// ---- Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A) ----
+namespace
+{
+// UE RenderUtils.h CalculateGridZParams, verbatim: slice = log2(z * B + O) * S with the first
+// slice at `near` and the last at `far`; NearOffset is their 0.095 m (they write it in cm).
+float3 FogGridZParams(float nearPlane, float farPlane, float depthDistributionScale, uint32_t gridSizeZ)
+{
+    const double nearOffset = 0.095;
+    const double S = depthDistributionScale;
+    const double N = static_cast<double>(nearPlane) + nearOffset;
+    const double F = std::max(static_cast<double>(farPlane), N + 1.0);
+    const double O = (F - N * std::exp2(static_cast<double>(gridSizeZ) / S)) / (F - N);
+    const double B = (1.0 - O) / N;
+    return float3(static_cast<float>(B), static_cast<float>(O), static_cast<float>(S));
+}
+
+// The volume's near plane: UE take max(view near, VolumetricFogStartDistance)
+// (VolumetricFog.cpp:1204-1209); the analytic model's fog-free band is that start distance here.
+float FogVolumeNear(const AtmosphereSettings& a, const Camera& camera)
+{
+    return std::max(camera.GetZNear(), std::max(a.startDistance, 0.0f));
+}
+
+// UE's Halton (VolumetricFog.cpp:196-207 uses it with bases 2, 3, 5 over FrameNumber & 1023).
+float FogHalton(uint32_t index, uint32_t base)
+{
+    float result = 0.0f;
+    float f = 1.0f;
+    while (index > 0u)
+    {
+        f /= static_cast<float>(base);
+        result += f * static_cast<float>(index % base);
+        index /= base;
+    }
+    return result;
+}
+} // namespace
+
+// Two dispatches under three declared points (see the Main_VolumetricFog builder): the per-cell
+// lighting (sun through its shadow map, the sky's irradiance, HG phase; blended with the previous
+// slot's volume when the history is valid) into `fogScatter`, then the front-to-back integration
+// into `fogIntegrated`, which compose samples by view depth.
+//
+// NO EARLY RETURN AFTER BeginCL: every gate ran in DecideFrame, which is what registered the pass.
+void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContext ctx, const Camera& camera,
+                                       const FogPoints& pts)
+{
+    auto scatterMaterial = resources_.GetFogScatterMaterial();
+    auto integrateMaterial = resources_.GetFogIntegrateMaterial();
+    const UINT lightingCbSize = resources_.GetLightingCBSizeBytes();
+    const UINT scatterCbSize = resources_.GetFogScatterCBSizeBytes();
+    const UINT integrateCbSize = resources_.GetFogIntegrateCBSizeBytes();
+    const auto& D = renderer->GetDeferredForFrame();
+    const auto& P = renderer->GetDeferredForPrevFrame();
+    const AtmosphereSettings& a = frame_->settings.atmosphere;
+
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassVolumetricFog);
+        renderer->EmitPoint(t.cl, pts.scatter);
+
+        // b0: the lighting cbuffer, from the SAME fill the lighting pass uses, so the sun's shadow
+        // is sampled from identical constants (clipmap matrices, biases, cascade splits).
+        LightingPassConstants lighting{};
+        D3D12_CPU_DESCRIPTOR_HANDLE causticsSrv{};
+        bool vsmDir = false;
+        FillLightingConstants(renderer, camera, lighting, causticsSrv, vsmDir);
+
+        // b1: the fog's own constants.
+        FogPassConstants fc{};
+        fc.gridZParams = FogGridZParams(FogVolumeNear(a, camera), a.volumetricDistance,
+                                        render::kFogDepthDistributionScale, D.fogGridDepth);
+        // UE: 1 / max(VolumetricFogNearFadeInDistance, tiny); the component's default distance is 0,
+        // so the fade is over before the first slice ends. Kept as their default (a hard start at
+        // the volume's near, which is what the analytic model's start distance is too).
+        fc.nearFadeInInv = 1.0f / 0.00001f;
+        fc.gridSize[0] = D.fogGridWidth;
+        fc.gridSize[1] = D.fogGridHeight;
+        fc.gridSize[2] = D.fogGridDepth;
+        fc.flags = decisions_.fogHistoryValid ? 1u : 0u;
+        // Row-vector convention (mul(v, M)): clip.z = z * _33 + _43, clip.w = z * _34 + _44.
+        const mat4& projNoJitter = camera.GetProjMatrixNoJitter();
+        fc.projZ = float4(projNoJitter.m._33, projNoJitter.m._43, projNoJitter.m._34, projNoJitter.m._44);
+        fc.invViewProjNoJitter = camera.GetInvProjMatrixNoJitter() * camera.GetInvViewMatrix();
+        fc.prevViewProjNoJitter = camera.GetPrevViewProjMatrixNoJitter();
+        // UE VolumetricFogTemporalRandom: the cell centre unless jitter AND reprojection are on --
+        // a jittered sample with nothing to accumulate into is just noise.
+        if (a.temporal && decisions_.fogHistoryValid)
+        {
+            const uint32_t f = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 1023ull);
+            fc.jitter = float4(FogHalton(f, 2u), FogHalton(f, 3u), FogHalton(f, 5u),
+                               std::clamp(a.historyWeight, 0.0f, 0.99f));
+            fc.flags |= 2u;
+        }
+        else
+        {
+            fc.jitter = float4(0.5f, 0.5f, 0.5f, 0.0f);
+        }
+        const AtmospherePacked packed = PackAtmosphere(a, frame_->dirLight != nullptr);
+        fc.medium0 = packed.params0; // density, height falloff, reference height, start distance
+        fc.medium1 = float4(std::clamp(a.albedo, 0.0f, 1.0f), std::max(a.extinctionScale, 0.0f),
+                            std::clamp(a.phaseG, -0.99f, 0.99f), std::max(a.sunScatter, 0.0f));
+        fc.medium2 = float4(std::max(a.skyScatter, 0.0f), preExposure_,
+                            prevPreExposure_ > 0.0f ? 1.0f / prevPreExposure_ : 1.0f, a.volumetricDistance);
+
+        {
+            GPU_SCOPE(t.cl, ProfilerScopes::kFogScatter);
+            // Manual bind + dispatch: the scatter runs 4x4x4 groups over a 3D grid, a shape
+            // RecordComputeDispatch (8x8x1) cannot express.
+            auto h = renderer->GetRenderContextPool()->Acquire();
+            RenderContext& rc = h.ref();
+            {
+                auto cb = renderer->GetFrameResource()->AllocDynamic(lightingCbSize, render::kConstantBufferAlignment);
+                resources_.WriteLightingConstants(lighting, static_cast<uint8_t*>(cb.cpu));
+                rc.cbv[0] = cb.gpu;
+            }
+            {
+                auto cb = renderer->GetFrameResource()->AllocDynamic(scatterCbSize, render::kConstantBufferAlignment);
+                resources_.WriteFogScatterConstants(fc, static_cast<uint8_t*>(cb.cpu));
+                rc.cbv[1] = cb.gpu;
+            }
+            // t0 atlas, t1/t2 VSM table + pool (dummies in Legacy: useVsm = 0 never samples them),
+            // t3 sky irradiance (dummy without IBL: skyIrradianceEnabled = 0), t4 the history.
+            rc.srvTable[0] = renderer->StageSrvUavTable({
+                D.shadowSRV,
+                vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),
+                vsmDir ? frame_->vsm->PagePoolSrv() : renderer->VsmDummyTexSrv(),
+                (frame_->skybox && frame_->skybox->HasIbl()) ? frame_->skybox->GetIrradianceTex()->GetSRVCPU()
+                                                             : renderer->VsmDummyTexSrv(),
+                P.fogScatterSRV }).gpu;
+            rc.uavTable[0] = renderer->StageSrvUavTable({ D.fogScatterUAV }).gpu;
+            const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
+                                                  *SamplerManager::ComparisonLinearClamp(),
+                                                  *SamplerManager::LinearWrap(),
+                                                  *SamplerManager::LinearClamp() };
+            rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+            scatterMaterial->Bind(t.cl, rc);
+            const UINT gx = (D.fogGridWidth + 3u) / 4u;
+            const UINT gy = (D.fogGridHeight + 3u) / 4u;
+            const UINT gz = (D.fogGridDepth + 3u) / 4u;
+            if (gx > 0u && gy > 0u && gz > 0u)
+            {
+                t.cl->Dispatch(gx, gy, gz);
+            }
+        }
+
+        renderer->EmitPoint(t.cl, pts.integrate); // scatter UAV -> NPS, integrated -> UAV
+        {
+            GPU_SCOPE(t.cl, ProfilerScopes::kFogIntegrate);
+            const auto samplerDescs = std::array{ *SamplerManager::PointClamp() };
+            RecordComputeDispatch(renderer, t.cl, integrateMaterial.get(), integrateCbSize,
+                [&](uint8_t* dest) { resources_.WriteFogIntegrateConstants(fc, dest); },
+                { D.fogScatterSRV },
+                { D.fogIntegratedUAV },
+                renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+                D.fogGridWidth, D.fogGridHeight);
+        }
+        renderer->EmitPoint(t.cl, pts.restore); // integrated -> NPS for compose
+    }
+    ctx.EndCL(t);
+}
+
 void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, std::uint32_t point)
 {
@@ -285,181 +631,10 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         const auto& D = renderer->GetDeferredForFrame();
         renderer->EmitPoint(t.cl, point);
 
-        const DirectionalLight& dirLight = *frame_->dirLight;
         LightingPassConstants constants{};
-        const mat4& view = camera.GetViewMatrix();
-        const mat4& invView = camera.GetInvViewMatrix();
-        const mat4& invProj = camera.GetInvProjMatrix();
-        const float3 camDir = camera.GetDirection();
-        constants.sunDir = dirLight.GetDirection();
-        constants.ambient = dirLight.GetAmbient();
-        // P4: the sun intensity rides in the colour. lighting_cs multiplies BOTH its fill term
-        // (`ambient * lightRgb`) and its direct term by this, which is exactly how the legacy
-        // trailing `* exposure` behaved -- hence the migration leaves `ambient` untouched.
-        constants.lightRgb = dirLight.GetEffectiveColor();
-        constants.ambientRgb = dirLight.GetEffectiveAmbientColor();
-        // F8: a real sky fill whenever this level's sky brought prefiltered derivatives with it.
-        const Skybox* iblSky = frame_->skybox;
-        constants.skyIrradianceEnabled = (iblSky && iblSky->HasIbl()) ? 1u : 0u;
-        // Sky intensity (how bright this sky is) times the fill strength (how much of it the
-        // diffuse response takes). Two different questions, so two fields.
-        // P6B items 6-7. The pass writes gtaoUpsampled only when it runs, so `enabled` gates the
-        // read rather than relying on the target holding 1.
-        constants.gtaoEnabled = frame_->settings.gtao.enabled ? 1u : 0u;
-        constants.gtaoStrength = std::clamp(frame_->settings.gtao.strength, 0.0f, 1.0f);
-        constants.skyIrradianceScale =
-            (iblSky ? iblSky->GetExposure() : 1.0f) * dirLight.GetSkyFillIntensity();
-        // P16.12: the other half of the fill -- what comes back UP off the ground. The shader
-        // treats a zero here as "term off", so a level that wants none writes zero rather than
-        // needing a second boolean.
-        constants.groundAlbedoRgb = dirLight.GetGroundAlbedo();
-        // The sky's indirect SPECULAR, moved out of compose so the screen-space reflection pass
-        // (which samples this target) sees a metal with its environment on it. These three MUST
-        // match compose's own values exactly -- one pass adds the term, the other subtracts the
-        // part a reflection replaced, and they only cancel while both agree.
-        constants.enableSkySpecular =
-            frame_->settings.reflectionSource != ReflectionSource::None ? 1u : 0u;
-        constants.skySpecMipCount = (iblSky && iblSky->HasIbl()) ? iblSky->GetSpecMips() : 0u;
-        constants.skyboxIntensity = iblSky ? iblSky->GetExposure() : 1.0f;
-        constants.exposure = dirLight.GetExposure();
-        constants.camPos = camera.GetPosition();
-        constants.camDir = camDir;
-        constants.invView = invView;
-        constants.invProj = invProj;
-        const SceneFrameData::CascadeData& cascades = frame_->cascades;
-        for (size_t i = 0; i < constants.lightViewProj.size(); ++i)
-        {
-            constants.lightViewProj[i] = cascades.lightView[i] * cascades.lightProj[i];
-            constants.cascadeScaleBias[i] = float4(cascades.atlasScale[i].x, cascades.atlasScale[i].y, cascades.atlasBias[i].x, cascades.atlasBias[i].y);
-        }
-        constants.cascadeSplits = float4(cascades.splitsVS[0], cascades.splitsVS[1], cascades.splitsVS[2], cascades.splitsVS[3]);
-        const float shadowRes = static_cast<float>(renderer->GetDeferredForFrame().shadowRes);
-        constants.shadowAtlasSize = float2(shadowRes, shadowRes);
-        constants.shadowBiasNDC = float4(cascades.depthBiasNDC[0], cascades.depthBiasNDC[1], cascades.depthBiasNDC[2], cascades.depthBiasNDC[3]);
-        constants.cascadeTexelWS = float4(cascades.cascadeTexelWS[0], cascades.cascadeTexelWS[1], cascades.cascadeTexelWS[2], cascades.cascadeTexelWS[3]);
-        const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
-        const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
-        constants.screenSize = float2(width, height);
-        constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
-        constants.sunMetalSpec = frame_->settings.sunMetalSpecInfluence;
-        constants.sunAngularSize = frame_->settings.sunAngularSize;
-
-        // Underwater caustics. Everything comes from the ocean: no water in the level means the
-        // whole block stays zeroed and the shader skips it (causticsTint.w == 0).
         D3D12_CPU_DESCRIPTOR_HANDLE causticsSrv{};
-        if (frame_->ocean)
-        {
-            if (const OceanSimulation* oceanSim = frame_->ocean->GetSimulation())
-            {
-                const OceanRenderConfig& oc = oceanSim->GetRenderConfig();
-                causticsSrv = frame_->ocean->GetCausticsSrvCPU();
-                if (oc.causticsEnabled && oc.causticsIntensity > 0.0f && causticsSrv.ptr != 0)
-                {
-                    // World metres covered by one screen pixel at one metre of view depth; the
-                    // shader turns it into a mip level so distant caustics stop aliasing. Pixels
-                    // are square, so the horizontal FOV over the render width gives both axes.
-                    const float pixelWorldScale = width > 0.0f
-                        ? (2.0f * std::tan(0.5f * camera.GetHFov()) / width)
-                        : 0.0f;
-                    constants.causticsTint =
-                        float4(oc.causticsTint.x, oc.causticsTint.y, oc.causticsTint.z, 1.0f);
-                    constants.causticsParams0 = float4(oc.causticsIntensity, oc.causticsScale,
-                        oc.causticsSpeed, frame_->ocean->GetWaterLevel());
-                    constants.causticsParams1 = float4(oc.causticsDepthFade, oc.causticsSurfaceFade,
-                        oc.causticsUpFacing, oc.causticsBias);
-                    constants.causticsParams2 = float4(oc.causticsDispersion, oc.causticsLayerBlend,
-                        frame_->ocean->GetElapsedTime(), pixelWorldScale);
-                }
-            }
-        }
-
-        // Step 24f: sample directional shadows from the VSM clipmap in VSM mode (else CSM cascades).
-        // t6/t7 bind valid dummy SRVs when VSM isn't resident (Legacy) — useVsm=0 never samples them.
-        const bool vsmDir = render::VsmActive() && frame_->vsm && frame_->vsm->IsAllocated() &&
-                            frame_->vsm->PageTableSrv().ptr != 0 && frame_->vsm->PagePoolSrv().ptr != 0;
-        constants.useVsm = vsmDir ? 1u : 0u;
-        // S0.3: cascade-tint debug. Forced off whenever the clipmap is the shadow source — the
-        // tint visualizes CSM cascades, which that path does not sample.
-        constants.csmDebugMode = vsmDir ? 0u : static_cast<uint32_t>(render::g_csmDebugMode);
-        {
-            // UE maps the artist's 0..1 Shadow Filter Sharpen to shader units as x*7+1 (see
-            // ShadowRendering.h:1299). Done on the CPU, once, exactly as they do it.
-            const CascadeShadowConfig* cfg = frame_->cascadeConfig;
-            constants.csmFilterMode = cfg ? cfg->filterMode : 1u; // 0 box, 1 = 4x4 tent, 2 = 6x6 tent
-            // S10: splitsVS[4] cannot ride cascadeSplits (that float4 is splits 0..3), so the last
-            // cascade's far plane travels here -- without it c3 has no slice length to fade over.
-            constants.csmFadeParams = float4(cascades.splitsVS[kCascades],
-                                             cfg ? cfg->blendFraction : 0.1f,
-                                             cfg ? cfg->distanceFadeFraction : 0.1f, 0.0f);
-            constants.csmFilterParams = cfg
-                ? float4(cfg->csmReceiverBias, cfg->shadowFilterSharpen * 7.0f + 1.0f,
-                         cfg->pcfOverBlurCorrection ? 1.0f : 0.0f, cfg->normalBiasInTexels)
-                : float4(0.9f, 1.0f, 1.0f, 1.0f);
-        }
-        // Both of these are NDC values that mean a WORLD distance, so both must be divided by the
-        // level's depth range -- see vsm::ClipmapRangeMultiple(). `vsmDepthBias` is authored against
-        // the historical range (6x the extent), so it is rescaled to keep that meaning when
-        // ZRangeScale moves; the floor is authored in TEXELS and converted with the same multiple.
-        // Leaving a hardcoded 6 here is what made ZRangeScale 10 -> 50 detach shadows from casters.
-        const float clipRangeMul = vsm::ClipmapRangeMultiple();
-        constants.vsmDepthBias =
-            vsm::g_clipmapDepthBias * (vsm::kClipmapRangeMultipleRef / clipRangeMul);
-        constants.clipmapDepthBiasDecay = vsm::g_clipmapDepthBiasDecay;
-        constants.clipmapDepthBiasFloorNdc =
-            vsm::g_clipmapDepthBiasFloorTexels / (clipRangeMul * (float)vsm::kVirtualRes);
-        constants.clipmapBlendWidth = vsm::ClipmapBlendWidth();
-        constants.clipmapBaseExtent = vsm::g_clipmapBaseExtent;
-        // P16.16: UE divide their CVar by 1000 before it reaches the shader
-        // (GetNormalBiasForShader, VirtualShadowMapArray.cpp:561). Same here, so the authored
-        // number stays directly comparable to `r.Shadow.Virtual.NormalBias`.
-        constants.clipmapNormalBias = vsm::g_clipmapNormalBias * 0.001f;
-        // SMRT (docs/vsm_smrt_plan.md). rayCount 0 = the single-tap path, bit-for-bit unchanged.
-        constants.smrtRayCount = vsm::g_smrtRayCount;
-        constants.smrtSamplesPerRay = vsm::g_smrtSamplesPerRay;
-        constants.smrtRayLengthScale = vsm::g_smrtRayLengthScale;
-        constants.smrtExtrapolateMaxSlope = vsm::g_smrtExtrapolateMaxSlope;
-        // Degrees of full ANGLE -> sin of the angular RADIUS, which is what the shader jitters by.
-        constants.smrtSourceRadius =
-            std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f);
-        constants.smrtTexelDitherScale = vsm::g_smrtTexelDitherScale;
-        constants.smrtLevelMargin = vsm::g_smrtLevelMargin;
-        // 0 is the reserved "no temporal rotation" value, so the phase runs 1..64.
-        constants.smrtFrameIndex = frame_->smrtFrameIndex;
-        constants.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount;
-        constants.smrtScreenRayLength = vsm::g_smrtScreenRayLength;
-        constants.smrtScreenRaySamples = vsm::g_smrtScreenRaySamples;
-        // World -> clip for the screen-space ray. The CB carries only the inverses today, and
-        // inverting them back in the shader would cost a matrix inverse per pixel.
-        constants.viewProj = camera.GetViewMatrix() * camera.GetProjMatrix();
-        constants.projMatrix = camera.GetProjMatrix();
-        // The master switch folds into the length: 0 means the shader takes no samples at all,
-        // so "off" costs literally nothing rather than costing a branch per pixel.
-        constants.contactShadowLength = render::contact::g_enabled ? render::contact::g_length : 0.0f;
-        constants.contactShadowLengthInWS = render::contact::g_lengthInWorldSpace ? 1u : 0u;
-        constants.contactShadowNormalOffset = render::contact::g_normalOffsetFrac;
-        constants.contactShadowGrazingFade = render::contact::g_grazingFadeNdotL;
-        constants.contactShadowMinDist = render::contact::g_minDistanceM;
-        constants.contactShadowMaxDist = render::contact::g_maxDistanceM;
-        constants.contactShadowFadeBand = render::contact::g_fadeBandM;
-        constants.contactShadowThickness = render::contact::g_maxThicknessFrac;
-        // UE's StateFrameIndexMod8, +1 so that 0 stays the "static dither" sentinel.
-        constants.contactShadowFrameId = render::contact::g_temporalDither
-            ? static_cast<std::uint32_t>((renderer->GetTotalFrameNumber() & 7ull) + 1ull)
-            : 0u;
-        constants.contactShadowIntensity = render::contact::g_intensity;
-        constants.contactShadowSteps = render::contact::g_steps;
-        if (frame_->clipmapViews)
-        {
-            for (size_t i = 0; i < constants.clipmapViewProj.size() && i < frame_->clipmapViews->size(); ++i)
-            {
-                const SceneView& cv = (*frame_->clipmapViews)[i];
-                constants.clipmapViewProj[i] = cv.view * cv.proj;
-            }
-            // P16.16: the receiver-plane transform, built from level 0. The gradient the shader
-            // takes from it is a ratio in which the level's extent cancels, so one matrix serves
-            // every level -- same construction as UE's CalcTranslatedWorldToShadowUVNormalMatrix.
-            constants.clipmapUvNormal = vsm::CalcClipmapUvNormalMatrix(constants.clipmapViewProj[0]);
-        }
+        bool vsmDir = false;
+        FillLightingConstants(renderer, camera, constants, causticsSrv, vsmDir);
 
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
                                               *SamplerManager::ComparisonLinearClamp(),
@@ -736,6 +911,21 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             constants.fogParams2 = fog.params2;
             constants.fogDebugView = g_atmosphereDebugView;
             constants.preExposure = preExposure_;   // P16.1
+            // Volumetric fog (plan part A): the froxel volume inside `volumetricDistance`, the
+            // analytic model beyond it. x = 0 is the pre-plan compose exactly (the volume is a
+            // placeholder then). The grid's (B, O, S) are the SAME numbers the fog pass wrote
+            // with, computed by the same function -- a slice looked up by other parameters would
+            // read the wrong depth silently.
+            {
+                const AtmosphereSettings& a = frame_->settings.atmosphere;
+                const bool volumeOn = decisions_.volumetricFog;
+                constants.fogVolumeParams = float4(volumeOn ? 1.0f : 0.0f, a.volumetricDistance,
+                                                   preExposure_ > 0.0f ? 1.0f / preExposure_ : 1.0f,
+                                                   static_cast<float>(D.fogGridDepth));
+                const float3 zp = FogGridZParams(FogVolumeNear(a, camera), a.volumetricDistance,
+                                                 render::kFogDepthDistributionScale, D.fogGridDepth);
+                constants.fogVolumeZParams = float4(zp.x, zp.y, zp.z, 0.0f);
+            }
             if (frame_->dirLight)
             {
                 // GetDirection() is the direction the light TRAVELS; the scattering lobe is keyed
@@ -772,7 +962,10 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
               skybox->HasIbl() ? skybox->GetSpecTex()->GetSRVCPU() : skybox->GetTex()->GetSRVCPU(),
               skybox->HasIbl() ? skybox->GetIrradianceTex()->GetSRVCPU() : skybox->GetTex()->GetSRVCPU(),
               skybox->HasIbl() ? skybox->GetBrdfLut()->GetSRVCPU() : D.depthSRV,
-              D.gtaoUpsampledSRV }, // t12: P6B dynamic AO, gated by `gtaoEnabled`
+              D.gtaoUpsampledSRV, // t12: P6B dynamic AO, gated by `gtaoEnabled`
+              // t13: the integrated fog volume, gated by `fogVolumeParams.x`; the dummy keeps
+              // the VOLATILE range populated on frames without the pass.
+              decisions_.volumetricFog ? D.fogIntegratedSRV : renderer->VsmDummyTexSrv() },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

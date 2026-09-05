@@ -268,11 +268,31 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 {
     CPU_SCOPE(ProfilerScopes::kBuildDeveloperWindow);
     bool graphicsSettingsDirty = false;
-    const auto graphicsEdit = [&graphicsSettingsDirty](bool changed)
+    const auto graphicsControl = [&](GraphicsControl control, const char* id, const auto& draw)
     {
+        ImGui::PushID(id);
+        if (ImGui::SmallButton("Reset"))
+        {
+            graphicsSettings.ResetControl(control, renderer, scene, settings);
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("Reset this control to the project default.");
+        }
+        ImGui::PopID();
+        ImGui::SameLine();
+        const bool changed = draw();
         graphicsSettingsDirty |= changed;
         return changed;
     };
+#define GRAPHICS_CONTROL(setting, id, expression) \
+    graphicsControl(GraphicsControl::setting, id, [&]() { return (expression); })
+#define GRAPHICS_CONTROL_WIDTH(setting, id, width, expression) \
+    graphicsControl(GraphicsControl::setting, id, [&]() \
+    { \
+        ImGui::SetNextItemWidth(width); \
+        return (expression); \
+    })
 
     if (!open_)
     {
@@ -300,6 +320,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
     if (ImGui::Begin("Developer Controls [F1]###DeveloperControls", &open, windowFlags))
     {
         ui::HandleWindowTitleDoubleClickMaximize(windowMaximize_);
+        ImGui::PushItemWidth(ImGui::CalcItemWidth() * 0.70f);
 
         ImGui::SeparatorText("Project graphics settings");
         ImGui::TextUnformatted(GraphicsSettingsManager::kPath);
@@ -375,7 +396,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "tris = CPU-path estimate at the selected LOD.\n"
                                       "Headless: --vis-readout -> logs/visibility_readout.log.");
                 // S1 rollback, live: with it off every chunk/instance of a passed object draws again.
-                ImGui::Checkbox("Chunk / instance frustum mask (S1)", &render::g_visChunkMask);
+                GRAPHICS_CONTROL(VisibilityChunkMask, "visibilityChunkMask",
+                    ImGui::Checkbox("Chunk / instance frustum mask (S1)", &render::g_visChunkMask));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Frustum test below the object level: terrain chunks (camera + Legacy CSM\n"
                                       "CPU loop) and GPU-instanced cloud instances (camera). Off = pre-S1: an\n"
@@ -384,8 +406,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     static const char* kMethods[] = { "off", "hardware queries", "hzb tester" };
                     int method = std::clamp(vis::g_occlusion.method, 0, 2);
-                    ImGui::SetNextItemWidth(180.0f);
-                    if (ImGui::Combo("Occlusion", &method, kMethods, 3)) { vis::g_occlusion.method = method; }
+                    if (GRAPHICS_CONTROL_WIDTH(OcclusionMethod, "occlusionMethod", 126.0f,
+                        ImGui::Combo("Occlusion", &method, kMethods, 3)))
+                    {
+                        vis::g_occlusion.method = method;
+                    }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Camera-only occlusion culling against the G-buffer depth, with a history and a\n"
                                           "one-frame-or-more latency. Hardware queries (S3a) = UE's default desktop path,\n"
@@ -393,12 +418,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                           "one compute dispatch of every box against the depth pyramid, binary verdicts.\n"
                                           "Shadows never consult either. --set=vis.method:0|1|2, vis.queryLatency:1..3");
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(80.0f);
-                    ImGui::SliderInt("latency", &vis::g_occlusion.queryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames));
+                    GRAPHICS_CONTROL_WIDTH(OcclusionQueryLatency, "occlusionQueryLatency", 56.0f,
+                        ImGui::SliderInt("latency", &vis::g_occlusion.queryLatency, 1,
+                                         static_cast<int>(vis::kOcclusionBufferedFrames)));
                     // S6: ownership -- objects the GPU-driven G-buffer draws are occluded by its own
                     // two-pass (S5) and leave this history; the checkbox restores the pre-S6 overlap.
                     ImGui::SameLine();
-                    ImGui::Checkbox("also query GPU-driven objects", &vis::g_occlusion.indirectQueries);
+                    GRAPHICS_CONTROL(OcclusionIndirectQueries, "occlusionIndirectQueries",
+                        ImGui::Checkbox("also query GPU-driven objects", &vis::g_occlusion.indirectQueries));
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("OFF (S6 rule): an object the GPU-driven G-buffer draws is occluded by the camera's\n"
                                           "two-pass HZB (zero latency) and is not queried here at all -- the CPU path and the\n"
@@ -428,7 +455,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 else
                 {
                     bool asyncCompute = !render::g_noAsyncCompute;
-                    if (graphicsEdit(ImGui::Checkbox("Async compute", &asyncCompute)))
+                    if (GRAPHICS_CONTROL(AsyncCompute, "asyncCompute",
+                                         ImGui::Checkbox("Async compute", &asyncCompute)))
                     {
                         render::g_noAsyncCompute = !asyncCompute;
                     }
@@ -451,7 +479,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::BeginDisabled(!dlssAvailable);
                 bool dlssEnabled = renderer.IsDlssActive();
-                if (graphicsEdit(ImGui::Checkbox("DLSS enabled", &dlssEnabled)))
+                if (GRAPHICS_CONTROL(DlssEnabled, "dlssEnabled",
+                                     ImGui::Checkbox("DLSS enabled", &dlssEnabled)))
                 {
                     if (dlssEnabled)
                     {
@@ -468,23 +497,29 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 
                 const sl::DLSSMode currentDlssMode = renderer.GetDlssMode();
-                if (ImGui::BeginCombo("DLSS quality", DlssModeLabel(currentDlssMode)))
+                GRAPHICS_CONTROL(DlssMode, "dlssMode", [&]()
                 {
-                    for (const DlssModeOption& option : kDlssModes)
+                    bool changed = false;
+                    if (ImGui::BeginCombo("DLSS quality", DlssModeLabel(currentDlssMode)))
                     {
-                        const bool selected = option.mode == currentDlssMode;
-                        if (graphicsEdit(ImGui::Selectable(option.label, selected)))
+                        for (const DlssModeOption& option : kDlssModes)
                         {
-                            renderer.SetDlssMode(option.mode);
-                            renderer.SetDlssActive(option.mode != sl::DLSSMode::eOff);
+                            const bool selected = option.mode == currentDlssMode;
+                            if (ImGui::Selectable(option.label, selected))
+                            {
+                                renderer.SetDlssMode(option.mode);
+                                renderer.SetDlssActive(option.mode != sl::DLSSMode::eOff);
+                                changed = true;
+                            }
+                            if (selected)
+                            {
+                                ImGui::SetItemDefaultFocus();
+                            }
                         }
-                        if (selected)
-                        {
-                            ImGui::SetItemDefaultFocus();
-                        }
+                        ImGui::EndCombo();
                     }
-                    ImGui::EndCombo();
-                }
+                    return changed;
+                }());
                 ImGui::EndDisabled();
 
                 if (!dlssAvailable)
@@ -494,7 +529,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::Separator();
 
-                graphicsEdit(ImGui::Checkbox("FXAA", &settings.doFxaa));
+                GRAPHICS_CONTROL(Fxaa, "fxaa", ImGui::Checkbox("FXAA", &settings.doFxaa));
 
                 int ssrTechnique = static_cast<int>(settings.ssrTechnique);
                 const int ssrTechniqueCount = static_cast<int>(SsrTechnique::Count);
@@ -502,8 +537,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     ssrTechnique = 0;
                 }
-                if (graphicsEdit(ImGui::Combo("SSR technique", &ssrTechnique,
-                                               kSsrTechniqueLabels, ssrTechniqueCount)))
+                if (GRAPHICS_CONTROL(SsrTechnique, "ssrTechnique",
+                    ImGui::Combo("SSR technique", &ssrTechnique,
+                                 kSsrTechniqueLabels, ssrTechniqueCount)))
                 {
                     settings.ssrTechnique = static_cast<SsrTechnique>(ssrTechnique);
                 }
@@ -521,7 +557,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     {
                         preset = 0;
                     }
-                    if (graphicsEdit(ImGui::Combo("UE SSR quality", &preset, kUeSsrQualityLabels,
+                    if (GRAPHICS_CONTROL(UeSsrQuality, "ueSsrQuality",
+                        ImGui::Combo("UE SSR quality", &preset, kUeSsrQualityLabels,
                                      static_cast<int>(UeSsrQualityPreset::Count))))
                     {
                         ApplyUeSsrQualityPreset(ue, static_cast<UeSsrQualityPreset>(preset));
@@ -533,7 +570,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     if (ImGui::TreeNode("UE SSR advanced"))
                     {
                         int steps = static_cast<int>(ue.numSteps);
-                        if (graphicsEdit(ImGui::SliderInt("UE steps / ray", &steps, 4, 64)))
+                        if (GRAPHICS_CONTROL(UeSsrSteps, "ueSsrSteps",
+                                             ImGui::SliderInt("UE steps / ray", &steps, 4, 64)))
                         {
                             ue.numSteps = static_cast<uint32_t>(std::min(64, (steps + 3) & ~3));
                             ue.preset = UeSsrQualityPreset::Custom;
@@ -543,7 +581,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 "per-step depth interval; cost is linear per ray.");
 
                         int rays = static_cast<int>(ue.numRays);
-                        if (graphicsEdit(ImGui::SliderInt("UE rays / pixel", &rays, 1, 12)))
+                        if (GRAPHICS_CONTROL(UeSsrRays, "ueSsrRays",
+                                             ImGui::SliderInt("UE rays / pixel", &rays, 1, 12)))
                         {
                             ue.numRays = static_cast<uint32_t>(rays);
                             ue.preset = UeSsrQualityPreset::Custom;
@@ -551,7 +590,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         DevHelp("Used only with glossy rays. Cost is rays x steps; 12x12 is UE Epic "
                                 "and is intentionally expensive on rough reflectors.");
 
-                        if (graphicsEdit(ImGui::Checkbox("UE roughness GGX rays", &ue.glossyRays)))
+                        if (GRAPHICS_CONTROL(UeSsrGlossyRays, "ueSsrGlossyRays",
+                            ImGui::Checkbox("UE roughness GGX rays", &ue.glossyRays)))
                         {
                             ue.preset = UeSsrQualityPreset::Custom;
                         }
@@ -559,22 +599,26 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 "reflector roughness when Rays > 1; roughness < 0.1 still collapses "
                                 "to UE's one 24-step mirror ray.");
 
-                        graphicsEdit(ImGui::Checkbox("UE use surface roughness", &ue.useSurfaceRoughness));
+                        GRAPHICS_CONTROL(UeSsrUseSurfaceRoughness, "ueSsrUseSurfaceRoughness",
+                            ImGui::Checkbox("UE use surface roughness", &ue.useSurfaceRoughness));
                         DevHelp("Normally reads packed roughness from GB0, matching UE. Disable to "
                                 "force one value below -- useful for proving which quality branch "
                                 "is active without editing a material.");
                         ImGui::BeginDisabled(ue.useSurfaceRoughness);
-                        graphicsEdit(ImGui::SliderFloat("UE roughness override", &ue.roughnessOverride,
-                                           0.0f, 1.0f, "%.2f"));
+                        GRAPHICS_CONTROL(UeSsrRoughnessOverride, "ueSsrRoughnessOverride",
+                            ImGui::SliderFloat("UE roughness override", &ue.roughnessOverride,
+                                               0.0f, 1.0f, "%.2f"));
                         ImGui::EndDisabled();
 
-                        graphicsEdit(ImGui::SliderFloat("UE intensity", &ue.intensity,
-                                                        0.0f, 1.0f, "%.2f"));
+                        GRAPHICS_CONTROL(UeSsrIntensity, "ueSsrIntensity",
+                            ImGui::SliderFloat("UE intensity", &ue.intensity,
+                                               0.0f, 1.0f, "%.2f"));
                         DevHelp("SSRParams.r: ScreenSpaceReflectionIntensity / 100. UE stock 1.0. "
                                 "Multiplies the whole SSR output after the roughness fade.");
 
-                        graphicsEdit(ImGui::SliderFloat("UE max roughness", &ue.maxRoughness,
-                                                        0.01f, 1.0f, "%.2f"));
+                        GRAPHICS_CONTROL(UeSsrMaxRoughness, "ueSsrMaxRoughness",
+                            ImGui::SliderFloat("UE max roughness", &ue.maxRoughness,
+                                               0.01f, 1.0f, "%.2f"));
                         DevHelp("ScreenSpaceReflectionMaxRoughness, UE stock 0.6: full SSR up to "
                                 "half this roughness, faded to nothing at it. Below the High tier "
                                 "UE double the fade slope, and so does this port.");
@@ -582,7 +626,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     }
                 }
 
-                graphicsEdit(ImGui::Checkbox("Reflection temporal resolve", &settings.ssrTemporal));
+                GRAPHICS_CONTROL(ReflectionTemporal, "reflectionTemporal",
+                    ImGui::Checkbox("Reflection temporal resolve", &settings.ssrTemporal));
                 DevHelp("Accumulates the reflection over time instead of showing each frame raw. "
                         "Applies to BOTH sources: an SSR march is violently sensitive to its "
                         "jittered start (measured 7.9x less frame-to-frame movement), and RT at "
@@ -592,15 +637,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "which is what you want when judging a tracer rather than the picture.");
                 ImGui::BeginDisabled(!settings.ssrTemporal);
                 {
-                    ImGui::SetNextItemWidth(140.0f);
-                    graphicsEdit(ImGui::SliderFloat("Temporal blend", &settings.ssrTemporalBlendWeight,
-                                       0.02f, 1.0f, "%.3f"));
+                    GRAPHICS_CONTROL_WIDTH(ReflectionTemporalBlend, "reflectionTemporalBlend", 98.0f,
+                        ImGui::SliderFloat("Temporal blend", &settings.ssrTemporalBlendWeight,
+                                           0.02f, 1.0f, "%.3f"));
                     DevHelp("Weight of the CURRENT frame. UE use 1/8 = 0.125 for their SSR TAA "
                             "config. Lower = longer history, steadier but slower to react; 1 = no "
                             "accumulation at all.");
-                    ImGui::SetNextItemWidth(140.0f);
-                    graphicsEdit(ImGui::SliderFloat("Temporal still inertia",
-                                       &settings.ssrTemporalClampExpand, 0.0f, 2.0f, "%.2f"));
+                    GRAPHICS_CONTROL_WIDTH(ReflectionTemporalStillInertia,
+                        "reflectionTemporalStillInertia", 98.0f,
+                        ImGui::SliderFloat("Temporal still inertia",
+                                           &settings.ssrTemporalClampExpand, 0.0f, 2.0f, "%.2f"));
                     DevHelp("Extra inertia for STILL pixels, on top of the blend above. At zero "
                             "motion this knob both RELAXES the neighbourhood clamp (the measured "
                             "limiter of still-camera boil) and divides the frame weight by up to "
@@ -613,8 +659,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::EndDisabled();
 
                 float ssrScale = renderer.GetReflectionTextureScale().x;
-                if (graphicsEdit(ImGui::SliderFloat("Reflection resolution", &ssrScale,
-                                                     0.25f, 1.0f, "%.2f")))
+                if (GRAPHICS_CONTROL(ReflectionResolution, "reflectionResolution",
+                    ImGui::SliderFloat("Reflection resolution", &ssrScale,
+                                       0.25f, 1.0f, "%.2f")))
                 {
                     renderer.SetReflectionTextureScale(ssrScale);
                 }
@@ -625,21 +672,25 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::TextDisabled("Glass: traced in SSR/RT, cubemap in Sky only, disabled in None.");
 
                 // S16: glossy reflections — blur radius scales with surface roughness (0 = sharp mirror).
-                graphicsEdit(ImGui::SliderFloat("Glossy blur", &settings.reflectionGlossyScale,
-                                                 0.0f, 24.0f, "%.1f"));
+                GRAPHICS_CONTROL(ReflectionGlossyScale, "reflectionGlossyScale",
+                    ImGui::SliderFloat("Glossy blur", &settings.reflectionGlossyScale,
+                                       0.0f, 24.0f, "%.1f"));
 
                 // Analytic sun specular boost on metals: spec lobe *= (1 + metal*coef). 0 = physical.
-                graphicsEdit(ImGui::SliderFloat("Sun spec on metal", &settings.sunMetalSpecInfluence,
-                                                 0.0f, 16.0f, "%.1f"));
+                GRAPHICS_CONTROL(SunMetalSpecInfluence, "sunMetalSpecInfluence",
+                    ImGui::SliderFloat("Sun spec on metal", &settings.sunMetalSpecInfluence,
+                                       0.0f, 16.0f, "%.1f"));
 
                 // Sun angular size: floors the analytic specular lobe width so smooth surfaces show
                 // a bright, sample-able sun glint instead of a sub-pixel spike. 0 = punctual.
-                graphicsEdit(ImGui::SliderFloat("Sun angular size", &settings.sunAngularSize,
-                                                 0.0f, 0.25f, "%.3f"));
+                GRAPHICS_CONTROL(SunAngularSize, "sunAngularSize",
+                    ImGui::SliderFloat("Sun angular size", &settings.sunAngularSize,
+                                       0.0f, 0.25f, "%.3f"));
 
                 float oceanReflectionScale = renderer.GetOceanReflectionTextureScale().x;
-                if (graphicsEdit(ImGui::SliderFloat("Ocean reflection resolution",
-                    &oceanReflectionScale, 0.25f, 1.0f, "%.2f")))
+                if (GRAPHICS_CONTROL(OceanReflectionResolution, "oceanReflectionResolution",
+                    ImGui::SliderFloat("Ocean reflection resolution",
+                        &oceanReflectionScale, 0.25f, 1.0f, "%.2f")))
                 {
                     renderer.SetOceanReflectionTextureScale(oceanReflectionScale);
                 }
@@ -654,20 +705,26 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 constexpr int srcCount = static_cast<int>(ReflectionSource::Count);
                 int curSrc = static_cast<int>(settings.reflectionSource);
                 if (curSrc < 0 || curSrc >= srcCount) { curSrc = static_cast<int>(ReflectionSource::SSR); }
-                if (ImGui::BeginCombo("Reflections [F5]", srcLabels[curSrc]))
+                GRAPHICS_CONTROL(ReflectionSource, "reflectionSource", [&]()
                 {
-                    for (int i = 0; i < srcCount; ++i)
+                    bool changed = false;
+                    if (ImGui::BeginCombo("Reflections [F5]", srcLabels[curSrc]))
                     {
-                        const bool isRT = (i == static_cast<int>(ReflectionSource::RT));
-                        ImGui::BeginDisabled(isRT && !rtSupported);
-                        if (graphicsEdit(ImGui::Selectable(srcLabels[i], curSrc == i)))
+                        for (int i = 0; i < srcCount; ++i)
                         {
-                            settings.reflectionSource = static_cast<ReflectionSource>(i);
+                            const bool isRT = (i == static_cast<int>(ReflectionSource::RT));
+                            ImGui::BeginDisabled(isRT && !rtSupported);
+                            if (ImGui::Selectable(srcLabels[i], curSrc == i))
+                            {
+                                settings.reflectionSource = static_cast<ReflectionSource>(i);
+                                changed = true;
+                            }
+                            ImGui::EndDisabled();
                         }
-                        ImGui::EndDisabled();
+                        ImGui::EndCombo();
                     }
-                    ImGui::EndCombo();
-                }
+                    return changed;
+                }());
                 if (!rtSupported)
                 {
                     ImGui::TextDisabled("RT requires hardware ray tracing (unavailable).");
@@ -679,8 +736,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                                          "First hit (holes)",
                                                          "Full (exact)" };
                     int alphaMode = static_cast<int>(std::min(settings.rtAlphaMode, 2u));
-                    ImGui::SetNextItemWidth(180.0f);
-                    if (graphicsEdit(ImGui::Combo("RT foliage alpha", &alphaMode, kAlphaModes, 3)))
+                    if (GRAPHICS_CONTROL_WIDTH(RtAlphaMode, "rtAlphaMode", 126.0f,
+                                         ImGui::Combo("RT foliage alpha", &alphaMode, kAlphaModes, 3)))
                     {
                         settings.rtAlphaMode = static_cast<uint32_t>(alphaMode);
                     }
@@ -694,9 +751,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                             "Headless: --set=rt.alphaMode:0/1/2.");
                 }
                 ImGui::BeginDisabled(settings.rtAlphaMode == 0u);
-                ImGui::SetNextItemWidth(140.0f);
-                graphicsEdit(ImGui::SliderFloat("RT foliage fill", &settings.rtAlphaMissKeep,
-                                                 0.0f, 1.0f, "%.2f"));
+                GRAPHICS_CONTROL_WIDTH(RtAlphaMissKeep, "rtAlphaMissKeep", 98.0f,
+                    ImGui::SliderFloat("RT foliage fill", &settings.rtAlphaMissKeep,
+                                       0.0f, 1.0f, "%.2f"));
                 DevHelp("Stochastic coverage inflation for the RT alpha test. One sharp ray per "
                         "pixel at reflection res undersamples thin fronds, so the reflected crown "
                         "reads smaller than the real one. On a failed alpha test the hit is still "
@@ -706,15 +763,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "single-layer test discards the crown's own depth, so raise it (0.3-0.5) "
                         "to buy the density back. Headless: --set=rt.alphaMissKeep:<v>.");
                 ImGui::EndDisabled();
-                graphicsEdit(ImGui::Checkbox("RT wind sway", &settings.rtWindBlas));
+                GRAPHICS_CONTROL(RtWindBlas, "rtWindBlas",
+                    ImGui::Checkbox("RT wind sway", &settings.rtWindBlas));
                 DevHelp("Wind-deform the nearest casters' BLASes every frame so foliage sway "
                         "reaches RT reflections. Off = reflections show the rest pose. "
                         "Cost scales with the animated set (~0.3 ms for 24 palms). Headless: "
                         "--set=rt.windBlas.");
                 ImGui::BeginDisabled(!settings.rtWindBlas);
-                ImGui::SetNextItemWidth(140.0f);
-                graphicsEdit(ImGui::SliderFloat("RT wind radius", &settings.rtWindBlasRadius,
-                                                 0.0f, 100.0f, "%.0f m"));
+                GRAPHICS_CONTROL_WIDTH(RtWindBlasRadius, "rtWindBlasRadius", 98.0f,
+                    ImGui::SliderFloat("RT wind radius", &settings.rtWindBlasRadius,
+                                       0.0f, 100.0f, "%.0f m"));
                 DevHelp("Casters inside this radius sway in RT (nearest-first, 24-slot cap); "
                         "beyond it the shared rest-pose BLAS stands. Headless: "
                         "--set=rt.windRadius.");
@@ -731,15 +789,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 const bool dlssControlsRenderScale = renderer.IsDlssActive();
                 ImGui::BeginDisabled(dlssControlsRenderScale);
                 float renderScale = renderer.GetRenderResolutionScale();
-                if (graphicsEdit(ImGui::SliderFloat("Render scale", &renderScale,
-                                                     0.1f, 1.0f, "%.2f")))
+                if (GRAPHICS_CONTROL(RenderScale, "renderScale",
+                    ImGui::SliderFloat("Render scale", &renderScale,
+                                       0.1f, 1.0f, "%.2f")))
                 {
                     renderer.SetRenderResolutionScale(renderScale);
-                }
-                if (ImGui::Button("Native render scale"))
-                {
-                    renderer.SetRenderResolutionScale(1.0f);
-                    graphicsSettingsDirty = true;
                 }
                 ImGui::EndDisabled();
                 if (dlssControlsRenderScale)
@@ -1031,9 +1085,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 
 #if WITH_EDITOR
-                graphicsEdit(ImGui::Checkbox("Mesh LOD [F10]", &render::g_lodEnabled));
+                GRAPHICS_CONTROL(LodEnabled, "lodEnabled",
+                    ImGui::Checkbox("Mesh LOD [F10]", &render::g_lodEnabled));
 #else
-                graphicsEdit(ImGui::Checkbox("Mesh LOD", &render::g_lodEnabled));
+                GRAPHICS_CONTROL(LodEnabled, "lodEnabled",
+                    ImGui::Checkbox("Mesh LOD", &render::g_lodEnabled));
 #endif
                 ImGui::BeginDisabled(!render::g_lodEnabled);
                 // -1 = automatic (screen-size / cascade); 0..3 force that level on every mesh.
@@ -1045,18 +1101,22 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 
                 ImGui::SeparatorText("Regular meshes (distance / radius)");
-                graphicsEdit(ImGui::SliderFloat("LOD1 at ratio", &render::g_lodBound0,
-                                                 2.0f, 60.0f, "%.0f"));
+                GRAPHICS_CONTROL(LodBound0, "lodBound0",
+                    ImGui::SliderFloat("LOD1 at ratio", &render::g_lodBound0,
+                                       2.0f, 60.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("distance / instance radius where LOD0 steps to LOD1. A 2 m-radius palm\n"
                                       "at ratio 15 switches at 30 m. +/-15%% hysteresis on every boundary; each\n"
                                       "boundary is forced at least 5%% past the previous one.");
-                graphicsEdit(ImGui::SliderFloat("LOD2 at ratio", &render::g_lodBound1,
-                                                 4.0f, 120.0f, "%.0f"));
-                graphicsEdit(ImGui::SliderFloat("LOD3 at ratio", &render::g_lodBound2,
-                                                 8.0f, 240.0f, "%.0f"));
-                graphicsEdit(ImGui::SliderFloat("Crossfade band", &render::g_lodFadeBand,
-                                                 0.0f, 0.35f, "%.2f"));
+                GRAPHICS_CONTROL(LodBound1, "lodBound1",
+                    ImGui::SliderFloat("LOD2 at ratio", &render::g_lodBound1,
+                                       4.0f, 120.0f, "%.0f"));
+                GRAPHICS_CONTROL(LodBound2, "lodBound2",
+                    ImGui::SliderFloat("LOD3 at ratio", &render::g_lodBound2,
+                                       8.0f, 240.0f, "%.0f"));
+                GRAPHICS_CONTROL(LodFadeBand, "lodFadeBand",
+                    ImGui::SliderFloat("Crossfade band", &render::g_lodFadeBand,
+                                       0.0f, 0.35f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Dithered LOD crossfade: half-width of the transition band around each\n"
                                       "boundary (fraction of the boundary ratio). Inside it BOTH tiers draw with\n"
@@ -1065,17 +1125,19 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "0 = off (hard switches with the classic +/-15%% hysteresis).");
 
                 ImGui::SeparatorText("Chunked terrain (metres, per chunk)");
-                graphicsEdit(ImGui::SliderFloat("Chunk LOD distance (m)",
-                                                 &render::g_chunkLodDist0,
-                                                 24.0f, 400.0f, "%.0f"));
+                GRAPHICS_CONTROL(ChunkLodDistance, "chunkLodDistance",
+                    ImGui::SliderFloat("Chunk LOD distance (m)",
+                                       &render::g_chunkLodDist0,
+                                       24.0f, 400.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("A terrain chunk closer than this (closest point of its box) draws AND\n"
                                       "casts LOD0; each 'factor' further steps one LOD coarser. The caster always\n"
                                       "matches the drawn LOD per chunk, so no setting here can cause the terrain\n"
                                       "self-shadow banding/phantom family -- this knob trades triangles for pop-in\n"
                                       "distance only.");
-                graphicsEdit(ImGui::SliderFloat("Chunk LOD factor", &render::g_chunkLodDistFactor,
-                                                 1.2f, 4.0f, "%.2f"));
+                GRAPHICS_CONTROL(ChunkLodFactor, "chunkLodFactor",
+                    ImGui::SliderFloat("Chunk LOD factor", &render::g_chunkLodDistFactor,
+                                       1.2f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Distance multiplier between LOD steps: LOD2 starts at distance*factor,\n"
                                       "LOD3 at distance*factor^2. +/-15%% hysteresis keeps a boundary chunk from\n"
@@ -1157,7 +1219,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Separator();
 
                 bool legacyMode = !render::VsmActive();
-                if (graphicsEdit(ImGui::Checkbox("Legacy CSM active [Ctrl+V]", &legacyMode)))
+                if (GRAPHICS_CONTROL(ShadowMode, "legacyShadowMode",
+                    ImGui::Checkbox("Legacy CSM active [Ctrl+V]", &legacyMode)))
                     render::g_shadowMode = legacyMode ? render::ShadowMode::Legacy : render::ShadowMode::VSM;
                 if (!legacyMode)
                     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
@@ -1168,14 +1231,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 CascadeShadowConfig& csmCfg = scene.CascadeConfig();
 
                 ImGui::SeparatorText("Coverage");
-                graphicsEdit(ImGui::SliderFloat("Max distance (m)", &csmCfg.maxDistance,
-                                                 20.0f, 1000.0f, "%.0f"));
+                GRAPHICS_CONTROL(CsmMaxDistance, "csmMaxDistance",
+                    ImGui::SliderFloat("Max distance (m)", &csmCfg.maxDistance,
+                                       20.0f, 1000.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Far edge of cascade 3 \xE2\x80\x94 the hard shadow terminator.\n"
                                       "Shrinking it is the cheapest way to buy texel density everywhere\n"
                                       "(no extra memory, no extra rasterization).");
-                graphicsEdit(ImGui::Checkbox("Auto splits (UE distribution)",
-                                              &csmCfg.useUeSplitDistribution));
+                GRAPHICS_CONTROL(CsmAutoSplits, "csmAutoSplits",
+                    ImGui::Checkbox("Auto splits (UE distribution)",
+                                    &csmCfg.useUeSplitDistribution));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: author ONLY the max distance above; the three intermediate splits come from\n"
                                       "UE's exponential distribution (ComputeAccumulatedScale, exponent below).\n"
@@ -1184,8 +1249,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "custom distances, so the toggle is reversible and both are shown here.\n");
 
                 ImGui::BeginDisabled(!csmCfg.useUeSplitDistribution);
-                graphicsEdit(ImGui::SliderFloat("Distribution exponent",
-                    &csmCfg.cascadeDistributionExponent, 0.1f, 10.0f, "%.2f"));
+                GRAPHICS_CONTROL(CsmDistributionExponent, "csmDistributionExponent",
+                    ImGui::SliderFloat("Distribution exponent",
+                        &csmCfg.cascadeDistributionExponent, 0.1f, 10.0f, "%.2f"));
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE's CascadeDistributionExponent (default 3, clamp 0.1..10). Cascade weights are\n"
@@ -1197,8 +1263,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // Both schemes side by side. The row that is NOT driving is greyed rather than hidden,
                 // so the toggle never conceals the numbers it is not using -- nor destroys them.
                 ImGui::BeginDisabled(csmCfg.useUeSplitDistribution);
-                graphicsEdit(ImGui::DragFloat4("Split distances (m)",
-                    csmCfg.sliceDistances.data(), 0.25f, 0.5f, 1000.0f, "%.1f"));
+                GRAPHICS_CONTROL(CsmSplitDistances, "csmSplitDistances",
+                    ImGui::DragFloat4("Split distances (m)",
+                        csmCfg.sliceDistances.data(), 0.25f, 0.5f, 1000.0f, "%.1f"));
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Hand-authored far plane of cascades 0..3 in view space. BuildSplitScheme clamps them\n"
@@ -1216,8 +1283,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
 
                 ImGui::SeparatorText("Fit");
-                graphicsEdit(ImGui::SliderFloat("Overlap (texels)", &csmCfg.overlapInTexels,
-                                                 0.0f, 8.0f, "%.2f"));
+                GRAPHICS_CONTROL(CsmOverlap, "csmOverlap",
+                    ImGui::SliderFloat("Overlap (texels)", &csmCfg.overlapInTexels,
+                                       0.0f, 8.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Padding added to the fitted sphere radius to absorb the texel-snap shift,\n"
                                       "in CASCADE TEXELS. The snap moves the centre by at most one texel per axis,\n"
@@ -1226,12 +1294,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "still positive but thin, and by 0.5 the ortho no longer covers the snapped\n"
                                       "slice \xE2\x80\x94 the UpdateCascades assert fires in Debug, shadows clip at the\n"
                                       "cascade edge in Release. Watch 'R fit/pad': the two should nearly coincide.");
-                graphicsEdit(ImGui::SliderFloat("Z padding (m)", &csmCfg.zPadding,
-                                                 0.0f, 100.0f, "%.1f"));
+                GRAPHICS_CONTROL(CsmZPadding, "csmZPadding",
+                    ImGui::SliderFloat("Z padding (m)", &csmCfg.zPadding,
+                                       0.0f, 100.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Slack added past the far side of the light-space depth range.");
-                graphicsEdit(ImGui::SliderFloat("Caster reach (m)", &csmCfg.casterReachWS,
-                                                 0.0f, 400.0f, "%.0f"));
+                GRAPHICS_CONTROL(CsmCasterReach, "csmCasterReach",
+                    ImGui::SliderFloat("Caster reach (m)", &csmCfg.casterReachWS,
+                                       0.0f, 400.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("How far TOWARD the light the ortho near plane is pulled back so casters\n"
                                       "between the sun and the slice still render. This is what inflates zRange\n"
@@ -1240,7 +1310,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 // S11 [r.Shadow.CSMScissorOptim]. Off by default like UE's, and the readout column
                 // shows the rect it WOULD apply, so the saving is visible before the risk is taken.
-                graphicsEdit(ImGui::Checkbox("Scissor to view cone (UE CSMScissorOptim)", &csmCfg.scissorOptim));
+                GRAPHICS_CONTROL(CsmScissorOptim, "csmScissorOptim",
+                    ImGui::Checkbox("Scissor to view cone (UE CSMScissorOptim)", &csmCfg.scissorOptim));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The cascade tile is a square around the slice's bounding sphere; the camera\n"
                                       "sees only a cone inside it. UE scissor the depth pass to that cone's projection\n"
@@ -1251,8 +1322,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "OFF by default, as in UE, and for a reason: GLASS shades reflected/refracted\n"
                                       "receivers that can lie outside the camera cone, and those read the undrawn\n"
                                       "part of the tile as LIT. Check water and glass before shipping it on.");
-                graphicsEdit(ImGui::SliderFloat("Scissor pad (texels)", &csmCfg.scissorPadTexels,
-                                                 0.0f, 16.0f, "%.0f"));
+                GRAPHICS_CONTROL(CsmScissorPad, "csmScissorPad",
+                    ImGui::SliderFloat("Scissor pad (texels)", &csmCfg.scissorPadTexels,
+                                       0.0f, 16.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("OURS -- UE pad nothing. The filter's taps (6x6 tent = 3 texels) plus the\n"
                                       "receiver normal offset can reach past the cone's edge at the screen border;\n"
@@ -1261,7 +1333,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 // S14 [UE ShadowBoundsAccurate]. ON by default: it is what UE always do for a
                 // directional cascade, and it is the cut the scissor cannot make -- before the VS.
-                graphicsEdit(ImGui::Checkbox("Accurate caster cull (UE ShadowBoundsAccurate)", &csmCfg.accurateCasterCull));
+                GRAPHICS_CONTROL(CsmAccurateCasterCull, "csmAccurateCasterCull",
+                    ImGui::Checkbox("Accurate caster cull (UE ShadowBoundsAccurate)", &csmCfg.accurateCasterCull));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Cull a cascade's casters against the camera SLICE EXTRUDED TOWARD THE SUN\n"
                                       "(UE ComputeShadowCullingVolume) instead of the cascade's full ortho box.\n"
@@ -1277,7 +1350,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // by measurement (see CascadeShadowConfig::hzbCull): conservative by construction
                 // (two passes), the sampled shadow is identical, but the pyramids cost more than
                 // today's casters save.
-                graphicsEdit(ImGui::Checkbox("HZB occlusion of casters (UE VSM UseHZB, per cascade)", &csmCfg.hzbCull));
+                GRAPHICS_CONTROL(CsmHzbCull, "csmHzbCull",
+                    ImGui::Checkbox("HZB occlusion of casters (UE VSM UseHZB, per cascade)", &csmCfg.hzbCull));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("A caster hidden from the SUN by a nearer caster (a wall) writes nothing into the\n"
                                       "shadow map. Test each cascade's casters against last frame's depth pyramid of\n"
@@ -1303,7 +1377,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // existed to cover a depth-bias budget that was a quarter of theirs.
                 // The three that decide ACNE vs PETER-PANNING. Everything here is measured on
                 // wind_test at the user camera; see docs/csm_improvement_plan.md S6.
-                graphicsEdit(ImGui::Checkbox("Pancake casters", &csmCfg.pancakeCasters));
+                GRAPHICS_CONTROL(CsmPancake, "csmPancake",
+                    ImGui::Checkbox("Pancake casters", &csmCfg.pancakeCasters));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("WHAT IT DOES: a caster in front of the cascade's near plane is pressed ONTO it\n"
                                       "instead of being clipped away. That is what lets the near plane be fitted TIGHT to\n"
@@ -1320,8 +1395,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Turn OFF and tall casters should visibly lose their tops. If nothing changes, they are\n"
                                       "being CULLED instead and pancaking is not doing anything.");
 
-                graphicsEdit(ImGui::SliderFloat("Pancake slack (m)", &csmCfg.pancakeSlackWS,
-                                                 0.0f, 160.0f, "%.1f"));
+                GRAPHICS_CONTROL(CsmPancakeSlack, "csmPancakeSlack",
+                    ImGui::SliderFloat("Pancake slack (m)", &csmCfg.pancakeSlackWS,
+                                       0.0f, 160.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Metres of room between the slice and the near plane casters are clamped to.\n"
                                       "0 = fitted tight: maximum D16 precision, and everything in front of the\n"
@@ -1335,8 +1411,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Watch zRange / D16 step in the readout table pay for it.");
 
                 ImGui::SeparatorText("Bias \xE2\x80\x94 depth pass");
-                graphicsEdit(ImGui::SliderFloat("Depth bias (texels)", &csmCfg.depthBiasInTexels,
-                                                 0.0f, 12.0f, "%.2f"));
+                GRAPHICS_CONTROL(CsmDepthBias, "csmDepthBias",
+                    ImGui::SliderFloat("Depth bias (texels)", &csmCfg.depthBiasInTexels,
+                                       0.0f, 12.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("WHAT IT DOES: pushes every caster AWAY from the sun when its depth is written,\n"
                                       "by this many cascade texels. Uniform - it does not care how the surface is angled.\n"
@@ -1352,8 +1429,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "1.50 because we measured this scene; they ship 10 to cover every scene.\n"
                                       "SIDE EFFECT: this number also sets the penumbra WIDTH (UE derive TransitionSize from\n"
                                       "the same expression), so raising it softens shadow edges as well.");
-                graphicsEdit(ImGui::SliderFloat("Slope scale", &csmCfg.slopeScale,
-                                                 0.0f, 8.0f, "%.2f"));
+                GRAPHICS_CONTROL(CsmSlopeScale, "csmSlopeScale",
+                    ImGui::SliderFloat("Slope scale", &csmCfg.slopeScale,
+                                       0.0f, 8.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("WHAT IT DOES: adds EXTRA depth push, proportional to tan(angle between the surface\n"
                                       "and the sun) - so a wall raking the light gets more, a surface facing it gets none.\n"
@@ -1366,8 +1444,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "do this at all.\n"
                                       "\n"
                                       "0 = flat bias everywhere. [r.Shadow.CSMSlopeScaleDepthBias = 3]");
-                graphicsEdit(ImGui::SliderFloat("Max slope", &csmCfg.maxSlope,
-                                                 0.0f, 4.0f, "%.2f"));
+                GRAPHICS_CONTROL(CsmMaxSlope, "csmMaxSlope",
+                    ImGui::SliderFloat("Max slope", &csmCfg.maxSlope,
+                                       0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("WHAT IT DOES: caps the tan() above. Mandatory: at exactly 90 degrees to the light the\n"
                                       "required bias is infinite.\n"
@@ -1383,8 +1462,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                             csmCfg.depthBiasInTexels * (1.0f + csmCfg.slopeScale * csmCfg.maxSlope));
 
                 ImGui::SeparatorText("Bias \xE2\x80\x94 sample time (not in UE)");
-                graphicsEdit(ImGui::SliderFloat("Normal bias (texels)",
-                    &csmCfg.normalBiasInTexels, 0.0f, 4.0f, "%.2f"));
+                GRAPHICS_CONTROL(CsmNormalBias, "csmNormalBias",
+                    ImGui::SliderFloat("Normal bias (texels)",
+                        &csmCfg.normalBiasInTexels, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("WHAT IT DOES: before looking the shadow up, slides the RECEIVER's sample point out\n"
                                       "along its own normal by this many cascade texels. It moves WHERE we look, not what\n"
@@ -1400,8 +1480,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "UE has no equivalent - their legacy CSM relies on the depth pass alone, and their\n"
                                       "stock defaults acne and peter-pan visibly. This is deliberately not a transcription.");
                 ImGui::SeparatorText("Cascade transition");
-                graphicsEdit(ImGui::SliderFloat("Blend fraction", &csmCfg.blendFraction,
-                                                 0.0f, 0.3f, "%.3f"));
+                GRAPHICS_CONTROL(CsmBlendFraction, "csmBlendFraction",
+                    ImGui::SliderFloat("Blend fraction", &csmCfg.blendFraction,
+                                       0.0f, 0.3f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("WHAT IT DOES: over the last this-much of a cascade's OWN SLICE LENGTH, cross-fade\n"
                                       "into the next cascade instead of switching at the split. Hides the jump in texel\n"
@@ -1412,8 +1493,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Fraction of the SLICE, not of the absolute distance - that was the bug this fixes:\n"
                                       "measured off the distance, c2 (35..100 m) faded over 10 m where UE fade over 6.5.\n"
                                       "[CascadeTransitionFraction = 0.1, UE clamp it to 0.3 and so does this slider]");
-                graphicsEdit(ImGui::SliderFloat("Distance fade", &csmCfg.distanceFadeFraction,
-                                                 0.0f, 0.3f, "%.3f"));
+                GRAPHICS_CONTROL(CsmDistanceFade, "csmDistanceFade",
+                    ImGui::SliderFloat("Distance fade", &csmCfg.distanceFadeFraction,
+                                       0.0f, 0.3f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("WHAT IT DOES: the LAST cascade has no coarser neighbour to hand over to, so instead\n"
                                       "of blending it fades the shadow out to fully lit over the last this-much of its slice.\n"
@@ -1436,7 +1518,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::SeparatorText("Filtering");
                 int csmFilter = static_cast<int>(csmCfg.filterMode);
-                if (graphicsEdit(ImGui::SliderInt("Filter kernel", &csmFilter, 0, 2,
+                if (GRAPHICS_CONTROL(CsmFilter, "csmFilter",
+                    ImGui::SliderInt("Filter kernel", &csmFilter, 0, 2,
                     csmFilter == 0 ? "3x3 box" : (csmFilter == 1 ? "4x4 tent (UE q3)" :
                                                                   "6x6 tent (UE q5, default)"))))
                     csmCfg.filterMode = static_cast<uint32_t>(csmFilter);
@@ -1449,8 +1532,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "resolution drop by the SAME factor at a boundary; the kernel WIDTH is what sets the\n"
                                       "absolute softness. A stock UE reads softer than a 4x4 tent for exactly that reason.\n");
 
-                graphicsEdit(ImGui::SliderFloat("Shadow filter sharpen",
-                    &csmCfg.shadowFilterSharpen, 0.0f, 1.0f, "%.2f"));
+                GRAPHICS_CONTROL(CsmSharpen, "csmSharpen",
+                    ImGui::SliderFloat("Shadow filter sharpen",
+                        &csmCfg.shadowFilterSharpen, 0.0f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE's per-light Shadow Filter Sharpen, same 0..1 artist range and same\n"
                                       "default of 0 (= off). The shader receives x*7+1 and multiplies the raw\n"
@@ -1459,8 +1543,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "kernel roughly as hard as no filtering at all.\n"
                                       "Only affects the two tent kernels -- the 3x3 box arm never had it.");
 
-                graphicsEdit(ImGui::SliderFloat("Receiver bias", &csmCfg.csmReceiverBias,
-                                                 0.0f, 1.0f, "%.2f"));
+                GRAPHICS_CONTROL(CsmReceiverBias, "csmReceiverBias",
+                    ImGui::SliderFloat("Receiver bias", &csmCfg.csmReceiverBias,
+                                       0.0f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE r.Shadow.CSMReceiverBias, default 0.9. Scales the soft-occlusion ramp\n"
                                       "by how edge-on the receiver is to the light: at grazing angles a texel\n"
@@ -1469,8 +1554,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "1 is the widest ramp (peter-panning on those same slopes).\n"
                                       "Only affects the two tent kernels.");
 
-                graphicsEdit(ImGui::Checkbox("PCF over-blur correction",
-                                              &csmCfg.pcfOverBlurCorrection));
+                GRAPHICS_CONTROL(CsmOverBlur, "csmOverBlur",
+                    ImGui::Checkbox("PCF over-blur correction",
+                                    &csmCfg.pcfOverBlurCorrection));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE's ApplyPCFOverBlurCorrection: square the resulting visibility.\n"
                                       "A wide tent leaks light INTO the umbra, because every tap inside the\n"
@@ -1550,8 +1636,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     graphicsSettings.ResetContactShadows(renderer, scene, settings);
                 }
-                graphicsEdit(ImGui::Checkbox("Contact shadows ENABLED",
-                                              &render::contact::g_enabled));
+                GRAPHICS_CONTROL(ContactEnabled, "contactEnabled",
+                    ImGui::Checkbox("Contact shadows ENABLED",
+                                    &render::contact::g_enabled));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Master switch, and OFF is the default -- which matches UE, whose per-light\n"
                                       "ContactShadowLength defaults to 0. Off takes not a single depth sample.\n\n"
@@ -1568,8 +1655,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                                          "Contacts INSTEAD of the shadow map",
                                                          "Auto: contacts only where no shadow slot" };
                     int mode = (int)std::min<std::uint32_t>(render::contact::g_localMode, 2u);
-                    if (graphicsEdit(ImGui::Combo("Local lights (spot/point)",
-                                                   &mode, kLocalModes, 3)))
+                    if (GRAPHICS_CONTROL(ContactLocalMode, "contactLocalMode",
+                        ImGui::Combo("Local lights (spot/point)", &mode, kLocalModes, 3)))
                         render::contact::g_localMode = (std::uint32_t)mode;
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("A local light uses ONE shadow source, never both. Stacking a contact trace\n"
@@ -1587,8 +1674,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Separator();
                 ImGui::TextDisabled("As in UE (CastScreenSpaceShadowRay)");
 
-                graphicsEdit(ImGui::Checkbox("Temporal dither (TAA/DLSS averages it)",
-                                              &render::contact::g_temporalDither));
+                GRAPHICS_CONTROL(ContactTemporal, "contactTemporal",
+                    ImGui::Checkbox("Temporal dither (TAA/DLSS averages it)",
+                                    &render::contact::g_temporalDither));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE: InterleavedGradientNoise(PixelPos, StateFrameIndexMod8). The dither\n"
                                       "pattern shifts every frame over an 8-frame cycle, so the temporal pass\n"
@@ -1597,8 +1685,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "It makes a SINGLE frame noisier and only pays off through DLSS/TAA; turn\n"
                                       "it off to judge a still or when running --dlss=off.");
 
-                graphicsEdit(ImGui::Checkbox("Length in METRES",
-                                              &render::contact::g_lengthInWorldSpace));
+                GRAPHICS_CONTROL(ContactLengthWorldSpace, "contactLengthWorldSpace",
+                    ImGui::Checkbox("Length in METRES",
+                                    &render::contact::g_lengthInWorldSpace));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE support both readings and pick between them by the SIGN of the value.\n\n"
                                       "OFF (their default): length is a MULTIPLE OF VIEW DEPTH, so the trace covers\n"
@@ -1607,17 +1696,20 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "doing anything there.");
 
                 const float lenMax = render::contact::g_lengthInWorldSpace ? 2.0f : 0.3f;
-                graphicsEdit(ImGui::SliderFloat(
-                    render::contact::g_lengthInWorldSpace ? "Length (m)" : "Length (x view depth)",
-                    &render::contact::g_length, 0.0f, lenMax, "%.4f"));
+                GRAPHICS_CONTROL(ContactLength, "contactLength",
+                    ImGui::SliderFloat(
+                        render::contact::g_lengthInWorldSpace ? "Length (m)" : "Length (x view depth)",
+                        &render::contact::g_length, 0.0f, lenMax, "%.4f"));
 
-                graphicsEdit(ImGui::SliderFloat("Intensity", &render::contact::g_intensity,
-                                                 0.0f, 1.0f, "%.2f"));
+                GRAPHICS_CONTROL(ContactIntensity, "contactIntensity",
+                    ImGui::SliderFloat("Intensity", &render::contact::g_intensity,
+                                       0.0f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("How dark a hit makes the pixel (UE ContactShadowCastingIntensity).");
 
                 int csSteps = static_cast<int>(render::contact::g_steps);
-                if (graphicsEdit(ImGui::SliderInt("Steps", &csSteps, 1, 16)))
+                if (GRAPHICS_CONTROL(ContactSteps, "contactSteps",
+                                     ImGui::SliderInt("Steps", &csSteps, 1, 16)))
                     render::contact::g_steps = static_cast<std::uint32_t>(csSteps);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Depth samples along the ray. UE hardcode 8, and that is not laziness: their\n"
@@ -1631,8 +1723,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Separator();
                 ImGui::TextDisabled("OURS -- Epic ship no denoiser and no distance fade");
 
-                graphicsEdit(ImGui::SliderFloat("Max thickness (x ray length)",
-                    &render::contact::g_maxThicknessFrac, 0.0f, 3.0f, "%.2f"));
+                GRAPHICS_CONTROL(ContactThickness, "contactThickness",
+                    ImGui::SliderFloat("Max thickness (x ray length)",
+                        &render::contact::g_maxThicknessFrac, 0.0f, 3.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("THE knob for far-field speckle. A hit whose occluder sits further BEHIND\n"
                                       "the ray point than this fraction of the ray length is rejected -- it is not\n"
@@ -1643,8 +1736,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "to the ray it stays meaningful at 10 m and at 3 km alike.\n\n"
                                       "0 = no test, which is UE behaviour and is only safe at close range.");
 
-                graphicsEdit(ImGui::SliderFloat("Normal offset (x ray length)",
-                    &render::contact::g_normalOffsetFrac, 0.0f, 0.5f, "%.3f"));
+                GRAPHICS_CONTROL(ContactNormalOffset, "contactNormalOffset",
+                    ImGui::SliderFloat("Normal offset (x ray length)",
+                        &render::contact::g_normalOffsetFrac, 0.0f, 0.5f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Starts the ray this far off the surface along the normal. A ray that begins\n"
                                       "ON the surface is ambiguous at its very first step. UE do not do this --\n"
@@ -1654,24 +1748,28 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "distance. 0.02 m is meaningful at 10 m and far below a pixel at 350 m,\n"
                                       "where it would quietly stop doing anything.");
 
-                graphicsEdit(ImGui::SliderFloat("Grazing fade (NdotL)",
-                    &render::contact::g_grazingFadeNdotL, 0.0f, 0.5f, "%.3f"));
+                GRAPHICS_CONTROL(ContactGrazingFade, "contactGrazingFade",
+                    ImGui::SliderFloat("Grazing fade (NdotL)",
+                        &render::contact::g_grazingFadeNdotL, 0.0f, 0.5f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Fades the term out below this NdotL. As the sun grazes a surface the ray\n"
                                       "runs nearly PARALLEL to it and the march measures depth-buffer quantisation\n"
                                       "rather than geometry -- that is the speckle field on flat distant ground.\n"
                                       "0 = no guard (UE behaviour).");
 
-                graphicsEdit(ImGui::SliderFloat("Min distance (m)",
-                    &render::contact::g_minDistanceM, 0.0f, 200.0f, "%.1f"));
-                graphicsEdit(ImGui::SliderFloat("Max distance (m)",
-                    &render::contact::g_maxDistanceM, 0.0f, 2000.0f, "%.0f"));
+                GRAPHICS_CONTROL(ContactMinDistance, "contactMinDistance",
+                    ImGui::SliderFloat("Min distance (m)",
+                        &render::contact::g_minDistanceM, 0.0f, 200.0f, "%.1f"));
+                GRAPHICS_CONTROL(ContactMaxDistance, "contactMaxDistance",
+                    ImGui::SliderFloat("Max distance (m)",
+                        &render::contact::g_maxDistanceM, 0.0f, 2000.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Metres from the camera. 0 max = no far limit. Outside the window the term\n"
                                       "is off entirely -- which is the blunt way to kill artifacts in the far field\n"
                                       "where contacts buy the least anyway.");
-                graphicsEdit(ImGui::SliderFloat("Far fade band (m)",
-                    &render::contact::g_fadeBandM, 0.1f, 200.0f, "%.1f"));
+                GRAPHICS_CONTROL(ContactFadeBand, "contactFadeBand",
+                    ImGui::SliderFloat("Far fade band (m)",
+                        &render::contact::g_fadeBandM, 0.1f, 200.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The last N metres before Max fade out instead of cutting, or the boundary\n"
                                       "itself reads as a line across the ground.");
@@ -1691,19 +1789,23 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "quality vs. cost live (no reallocation). Directional still uses CSM until Step 24.");
                 ImGui::Separator();
                 bool vsmMode = render::VsmActive();
-                if (graphicsEdit(ImGui::Checkbox("VSM shadows enabled [Ctrl+V]", &vsmMode)))
+                if (GRAPHICS_CONTROL(ShadowMode, "vsmShadowMode",
+                    ImGui::Checkbox("VSM shadows enabled [Ctrl+V]", &vsmMode)))
                     render::g_shadowMode = vsmMode ? render::ShadowMode::VSM : render::ShadowMode::Legacy;
 
                 // Applies to BOTH modes (folds GPU-instanced casters into the indirect cull): ON =
                 // GI casts in VSM + via indirect in Legacy; OFF = GI reverts to the Legacy CPU tail.
-                graphicsEdit(ImGui::Checkbox("GPU-instanced casters -> indirect/VSM [Ctrl+G]",
-                                              &render::g_giIndirectShadowsEnabled));
+                GRAPHICS_CONTROL(GiIndirectShadows, "giIndirectShadows",
+                    ImGui::Checkbox("GPU-instanced casters -> indirect/VSM [Ctrl+G]",
+                                    &render::g_giIndirectShadowsEnabled));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: GPU-instanced objects cast shadows in VSM (and via the indirect path in\n"
                                       "Legacy), dropping their CPU RenderShadow tail. OFF: Legacy CPU tail only (no VSM).");
 
                 // Occlusion plan S4: the camera's G-buffer through the same registry.
-                graphicsEdit(ImGui::Checkbox("GPU-driven G-buffer (ExecuteIndirect per group)", &render::g_indirectGBufferEnabled));
+                GRAPHICS_CONTROL(IndirectGBuffer, "indirectGBuffer",
+                    ImGui::Checkbox("GPU-driven G-buffer (ExecuteIndirect per group)",
+                                    &render::g_indirectGBufferEnabled));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The opaque G-buffer drawn from the shadow registry's camera cull: one\n"
                                       "ExecuteIndirect per (mesh submesh, LOD), the group's material bound by the CPU.\n"
@@ -1717,7 +1819,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 sg.GBufferIndirectEligibleCasters());
                 }
                 // Occlusion plan S5: the camera's two-pass HZB occlusion inside that G-buffer.
-                graphicsEdit(ImGui::Checkbox("HZB occlusion in the GPU-driven G-buffer (two-pass)", &render::g_gbufferHzbCullEnabled));
+                GRAPHICS_CONTROL(GbufferHzb, "gbufferHzb",
+                    ImGui::Checkbox("HZB occlusion in the GPU-driven G-buffer (two-pass)",
+                                    &render::g_gbufferHzbCullEnabled));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Nanite's main/post split on the indirect G-buffer: candidates last frame's depth\n"
                                       "pyramid hid are deferred, pass A draws the rest, the pyramid of pass A's depth\n"
@@ -1739,8 +1843,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // RECEIVER (UE's rule), so viewLod_ -- the only thing these knobs feed -- is zeroed for
                 // cascades and is not read by the Legacy draw at all. A control that claims a scope it
                 // does not have is worse than no control, hence the move and the renames.
-                graphicsEdit(ImGui::SliderInt("Shadow LOD bias (VSM only)",
-                                               &render::g_shadowLodBias, -2, 3));
+                GRAPHICS_CONTROL(ShadowLodBias, "shadowLodBias",
+                    ImGui::SliderInt("Shadow LOD bias (VSM only)",
+                                     &render::g_shadowLodBias, -2, 3));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ADDITIVE offset on the per-view shadow LOD, VSM ONLY (clipmap levels plus\n"
                                       "the local lights, which are pinned at tier 0). Each view picks a base LOD by\n"
@@ -1749,8 +1854,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Legacy CSM ignores it: its casters draw at their RECEIVER's LOD.\n"
                                       "Changing it rebuilds the caster tables at GPU idle (a hitch).\n");
 
-                graphicsEdit(ImGui::Checkbox("Bias the NEAREST tier too (VSM only)",
-                                              &render::g_shadowLodBiasNearTier));
+                GRAPHICS_CONTROL(ShadowLodBiasNearTier, "shadowLodBiasNearTier",
+                    ImGui::Checkbox("Bias the NEAREST tier too (VSM only)",
+                                    &render::g_shadowLodBiasNearTier));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Default OFF. The bias shifts the TIER curve, but clipmap level 0 and the local\n"
                                       "lights (pinned at tier 0) have no distance to hide a coarser caster behind, so\n"
@@ -1758,8 +1864,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "tent, 5 interleaved samples: dark canvas pixels 2698 OFF vs 3996 ON, ~+0.2 ms.\n"
                                       "A change rebuilds the caster tables at GPU idle.\n");
 
-                graphicsEdit(ImGui::SliderInt("Shadow tiers per LOD (VSM only)",
-                                               &render::g_shadowLodTierStride, 1, 8));
+                GRAPHICS_CONTROL(ShadowLodTierStride, "shadowLodTierStride",
+                    ImGui::SliderInt("Shadow tiers per LOD (VSM only)",
+                                     &render::g_shadowLodTierStride, 1, 8));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("How many consecutive shadow-view tiers share one caster mesh LOD.\n"
                                       "1 = the aggressive 0,1,2,3 curve; 2 = 0,0,1,1,2,2, which avoids changing caster\n"
@@ -1767,38 +1874,44 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "VSM only -- Legacy CSM has no per-view LOD curve at all.\n"
                                       "Changing it rebuilds the caster tables (a hitch).\n");
 
-                graphicsEdit(ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist,
-                                                 1.0f, 40.0f, "%.1f"));
+                GRAPHICS_CONTROL(VsmRefDistance, "vsmRefDistance",
+                    ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist,
+                                       1.0f, 40.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Smaller = coarser pages: fewer/faster + more stable, softer near.\n"
                                       "Larger = sharper near but more resident pages + higher render cost.");
 
                 int ds = static_cast<int>(vsm::g_requestDownscale);
-                if (graphicsEdit(ImGui::SliderInt("Request downscale", &ds, 1, 8)))
+                if (GRAPHICS_CONTROL(VsmRequestDownscale, "vsmRequestDownscale",
+                                     ImGui::SliderInt("Request downscale", &ds, 1, 8)))
                     vsm::g_requestDownscale = static_cast<std::uint32_t>(ds < 1 ? 1 : ds);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Screen sub-sampling for page discovery.\n"
                                       "1 = full res (best coverage, costliest); higher = cheaper, may miss pages.");
 
                 int lru = static_cast<int>(vsm::g_lruThreshold);
-                if (graphicsEdit(ImGui::SliderInt("LRU eviction frames", &lru, 1, 120)))
+                if (GRAPHICS_CONTROL(VsmLru, "vsmLru",
+                                     ImGui::SliderInt("LRU eviction frames", &lru, 1, 120)))
                     vsm::g_lruThreshold = static_cast<std::uint32_t>(lru < 1 ? 1 : lru);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Frames a resident page survives unrequested before it is freed.");
 
-                graphicsEdit(ImGui::SliderFloat("Clipmap base extent", &vsm::g_clipmapBaseExtent,
-                                                 4.0f, 200.0f, "%.1f"));
+                GRAPHICS_CONTROL(VsmClipmapBaseExtent, "vsmClipmapBaseExtent",
+                    ImGui::SliderFloat("Clipmap base extent", &vsm::g_clipmapBaseExtent,
+                                       4.0f, 200.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Step 24f directional clipmap: finest level's world extent (level i = base*2^i).\n"
                                       "Smaller = sharper near shadows but less far coverage; larger = the reverse.");
-                graphicsEdit(ImGui::Checkbox("Clipmap level blend", &vsm::g_clipmapBlendEnabled));
+                GRAPHICS_CONTROL(VsmClipmapBlend, "vsmClipmapBlend",
+                    ImGui::Checkbox("Clipmap level blend", &vsm::g_clipmapBlendEnabled));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Hard performance A/B switch. OFF sends width 0 to both the page requester\n"
                                       "and samplers: no new parent requests and no second PCF sample. Parent pages\n"
                                       "requested before the switch age out after the configured LRU frame count.");
                 ImGui::BeginDisabled(!vsm::g_clipmapBlendEnabled);
-                graphicsEdit(ImGui::SliderFloat("Clipmap blend width", &vsm::g_clipmapBlendWidth,
-                                                 0.0f, 0.30f, "%.3f"));
+                GRAPHICS_CONTROL(VsmClipmapBlendWidth, "vsmClipmapBlendWidth",
+                    ImGui::SliderFloat("Clipmap blend width", &vsm::g_clipmapBlendWidth,
+                                       0.0f, 0.30f, "%.3f"));
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Outer fraction of each fine clip level blended into the next coarser level.\n"
@@ -1818,7 +1931,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // per step with no filter, so a single ray measures twice the reference's
                 // salt-and-pepper (10.09 vs 5.37; 7 rays 6.06, 16 rays 5.29).
                 static int smrtLastRays = 7;
-                if (graphicsEdit(ImGui::Checkbox("SMRT ray-marched clipmap", &smrtOn)))
+                if (smrtOn)
+                {
+                    smrtLastRays = static_cast<int>(vsm::g_smrtRayCount);
+                }
+                if (GRAPHICS_CONTROL(VsmSmrtEnabled, "vsmSmrtEnabled",
+                    ImGui::Checkbox("SMRT ray-marched clipmap", &smrtOn)))
                 {
                     vsm::g_smrtRayCount = smrtOn
                         ? static_cast<std::uint32_t>(smrtLastRays)
@@ -1835,8 +1953,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 ImGui::BeginDisabled(!smrtOn);
                 int smrtRays = static_cast<int>(vsm::g_smrtRayCount);
-                if (graphicsEdit(ImGui::SliderInt("SMRT rays", &smrtRays, 1,
-                                                  static_cast<int>(vsm::kSmrtMaxRays))))
+                if (GRAPHICS_CONTROL(VsmSmrtRays, "vsmSmrtRays",
+                    ImGui::SliderInt("SMRT rays", &smrtRays, 1,
+                                     static_cast<int>(vsm::kSmrtMaxRays))))
                 {
                     vsm::g_smrtRayCount = static_cast<std::uint32_t>(smrtRays);
                     smrtLastRays = smrtRays;
@@ -1848,14 +1967,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "above 1 buy nothing yet and only cost.");
 
                 int smrtSteps = static_cast<int>(vsm::g_smrtSamplesPerRay);
-                if (graphicsEdit(ImGui::SliderInt("SMRT samples/ray", &smrtSteps, 1,
+                if (GRAPHICS_CONTROL(VsmSmrtSamples, "vsmSmrtSamples",
+                    ImGui::SliderInt("SMRT samples/ray", &smrtSteps, 1,
                                      static_cast<int>(vsm::kSmrtMaxSamplesPerRay))))
                     vsm::g_smrtSamplesPerRay = static_cast<std::uint32_t>(smrtSteps);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Steps along each ray (UE default 8). Too few and a thin occluder is\n"
                                       "stepped over, so its shadow disappears rather than softening.");
 
-                graphicsEdit(ImGui::Checkbox("SMRT temporal dither", &vsm::g_smrtTemporalDither));
+                GRAPHICS_CONTROL(VsmSmrtTemporal, "vsmSmrtTemporal",
+                    ImGui::Checkbox("SMRT temporal dither", &vsm::g_smrtTemporalDither));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Rotates the sample set once per frame, so the temporal pass sees a\n"
                                       "different set each frame and averages them (UE feed StateFrameIndex\n"
@@ -1865,7 +1986,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "at 1 ray, -2.6%% at 7 -- it matters most where quality is worst.");
 
                 int adaptive = static_cast<int>(vsm::g_smrtAdaptiveRayCount);
-                if (graphicsEdit(ImGui::SliderInt("SMRT adaptive after N rays", &adaptive, 0, 8)))
+                if (GRAPHICS_CONTROL(VsmSmrtAdaptive, "vsmSmrtAdaptive",
+                    ImGui::SliderInt("SMRT adaptive after N rays", &adaptive, 0, 8)))
                     vsm::g_smrtAdaptiveRayCount = static_cast<std::uint32_t>(adaptive);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("After N rays, a wave whose lanes ALL agree stops early (UE default 1).\n"
@@ -1874,8 +1996,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Measured at 7 rays: Pass_Lighting 0.861 -> 0.425 ms, a 2.0x saving for\n"
                                       "0.23%% of pixels changed. Compute only -- glass always shoots them all.");
 
-                graphicsEdit(ImGui::SliderFloat("SMRT level margin", &vsm::g_smrtLevelMargin,
-                                                 0.25f, 1.0f, "%.2f"));
+                GRAPHICS_CONTROL(VsmSmrtMargin, "vsmSmrtMargin",
+                    ImGui::SliderFloat("SMRT level margin", &vsm::g_smrtLevelMargin,
+                                       0.25f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Fraction of a clipmap level square within which a receiver is accepted.\n"
                                       "1.0 = the finest level that contains it at all -- the sharpest data there is.\n"
@@ -1885,8 +2008,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "level pages show through as rectangular slabs and palm fronds lose their\n"
                                       "leaflets. Measured as unnecessary here, hence the 1.0 default.");
 
-                graphicsEdit(ImGui::SliderFloat("SMRT sun angle (deg)",
-                    &vsm::g_smrtSourceAngleDeg, 0.0f, 8.0f, "%.3f"));
+                GRAPHICS_CONTROL(VsmSmrtSunAngle, "vsmSmrtSunAngle",
+                    ImGui::SliderFloat("SMRT sun angle (deg)",
+                        &vsm::g_smrtSourceAngleDeg, 0.0f, 8.0f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The light angular SIZE -- what a penumbra is actually made of.\n"
                                       "UE default is 0.5357 deg, the real sun disc. At 0 every ray collapses\n"
@@ -1894,16 +2018,18 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Raise it for visibly soft shadows: the penumbra then WIDENS with\n"
                                       "distance from the contact point, which no single-tap filter can do.");
 
-                graphicsEdit(ImGui::SliderFloat("SMRT texel dither",
-                    &vsm::g_smrtTexelDitherScale, 0.0f, 4.0f, "%.2f"));
+                GRAPHICS_CONTROL(VsmSmrtTexelDither, "vsmSmrtTexelDither",
+                    ImGui::SliderFloat("SMRT texel dither",
+                        &vsm::g_smrtTexelDitherScale, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Jitters each ray start by up to this many shadow texels (UE default 2.0),\n"
                                       "trading the resolution staircase for noise the temporal pass absorbs.\n"
                                       "0 is a clean off switch. Each offset carries its own receiver-plane\n"
                                       "bias; without that the jitter is simply acne.");
 
-                graphicsEdit(ImGui::SliderFloat("SMRT ray length scale",
-                    &vsm::g_smrtRayLengthScale, 0.0f, 4.0f, "%.2f"));
+                GRAPHICS_CONTROL(VsmSmrtRayLength, "vsmSmrtRayLength",
+                    ImGui::SliderFloat("SMRT ray length scale",
+                        &vsm::g_smrtRayLengthScale, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Ray length as a multiple of distance-to-camera (UE default 1.5). This is\n"
                                       "the knob that REPLACES the depth bias as the thing to tune, and UE's own\n"
@@ -1916,20 +2042,23 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // the march before levelDepthBias is even computed. Greyed rather than left live,
                 // because a slider that visibly does nothing is worse than an absent one.
                 ImGui::BeginDisabled(smrtOn);
-                graphicsEdit(ImGui::SliderFloat("Clipmap depth bias", &vsm::g_clipmapDepthBias,
-                                                 0.0f, 0.01f, "%.4f"));
+                GRAPHICS_CONTROL(VsmDepthBias, "vsmDepthBias",
+                    ImGui::SliderFloat("Clipmap depth bias", &vsm::g_clipmapDepthBias,
+                                       0.0f, 0.01f, "%.4f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Directional clipmap NDC depth bias at LEVEL 0 (0.0001 = 1.23 shadow texels).\n"
                                       "Constant in texels across levels when decay = 1, so its world size doubles per\n"
                                       "level -- raise it with decay < 1 or far thin shadows detach.");
-                graphicsEdit(ImGui::SliderFloat("Depth bias decay /level",
-                    &vsm::g_clipmapDepthBiasDecay, 0.25f, 1.0f, "%.2f"));
+                GRAPHICS_CONTROL(VsmDepthBiasDecay, "vsmDepthBiasDecay",
+                    ImGui::SliderFloat("Depth bias decay /level",
+                        &vsm::g_clipmapDepthBiasDecay, 0.25f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("bias(L) = max(depthBias * decay^L, floor). 1.0 = legacy constant-in-texels;\n"
                                       "0.5 = constant WORLD-size bias (the near value everywhere). Lets the near bias\n"
                                       "rise against acne without peter-panning the far levels.");
-                graphicsEdit(ImGui::SliderFloat("Depth bias floor (texels)",
-                    &vsm::g_clipmapDepthBiasFloorTexels, 0.0f, 1.5f, "%.2f"));
+                GRAPHICS_CONTROL(VsmDepthBiasFloor, "vsmDepthBiasFloor",
+                    ImGui::SliderFloat("Depth bias floor (texels)",
+                        &vsm::g_clipmapDepthBiasFloorTexels, 0.0f, 1.5f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Lower bound of the decayed bias, in texels of the level actually sampled.\n"
                                       "The D32 pool has effectively no quantization floor, so 0 is legal -- the\n"
@@ -1939,35 +2068,40 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // NOT in the disabled group: the normal offset is applied on BOTH paths (SMRT keeps
                 // it -- it is already UE's formula and it is what stops the ray starting inside the
                 // receiver).
-                graphicsEdit(ImGui::SliderFloat("Clipmap normal bias (UE units)",
-                    &vsm::g_clipmapNormalBias, 0.0f, 4.0f, "%.3f"));
+                GRAPHICS_CONTROL(VsmNormalBias, "vsmNormalBias",
+                    ImGui::SliderFloat("Clipmap normal bias (UE units)",
+                        &vsm::g_clipmapNormalBias, 0.0f, 4.0f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Receiver offset along the normal, UE's r.Shadow.Virtual.NormalBias units\n"
                                       "(their default 0.5): scaled by distance-to-camera and the FOV, /1000 on the CPU.\n"
                                       "Values well above 0.5 are masking a caster/receiver geometry mismatch\n"
                                       "(terrain shadow LOD) -- see docs/terrain_shadow_chunking_plan.md.");
 
-                graphicsEdit(ImGui::SliderFloat("Local lateral bias (texels)",
-                    &vsm::g_localLateralTexels, 0.0f, 4.0f, "%.2f"));
+                GRAPHICS_CONTROL(VsmLocalLateralBias, "vsmLocalLateralBias",
+                    ImGui::SliderFloat("Local lateral bias (texels)",
+                        &vsm::g_localLateralTexels, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Spot + point VSM: surface-normal offset in shadow texels. ~1 texel.\n"
                                       "Higher = less acne but the shadow Peter-pans (lifts off the base).");
-                graphicsEdit(ImGui::SliderFloat("Local depth push (texels)",
-                    &vsm::g_localDepthPushTexels, 0.0f, 4.0f, "%.2f"));
+                GRAPHICS_CONTROL(VsmLocalDepthPush, "vsmLocalDepthPush",
+                    ImGui::SliderFloat("Local depth push (texels)",
+                        &vsm::g_localDepthPushTexels, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Spot + point VSM: along-the-light-ray depth push in shadow texels,\n"
                                       "slope-scaled by 1/N.L. The main acne knob; barely Peter-pans (depth-only).");
 
-                graphicsEdit(ImGui::Checkbox("Resident-only render (faster, may flicker)",
-                                              &vsm::g_residentIterOnly));
+                GRAPHICS_CONTROL(VsmResidentOnly, "vsmResidentOnly",
+                    ImGui::Checkbox("Resident-only render (faster, may flicker)",
+                                    &vsm::g_residentIterOnly));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: render only pages a 3-frame-old snapshot says are resident (fewer CPU\n"
                                       "draws), but shadows blink for ~3 frames when the set changes (motion/churn).\n"
                                       "OFF: render the whole pool every frame (correct, ~4x the render CPU).\n"
                                       "Ignored while 'Single-draw page render' is on (that path skips nothing).");
 
-                graphicsEdit(ImGui::Checkbox("Single-draw page render (dormant)",
-                                              &vsm::g_pageDrawSingle));
+                GRAPHICS_CONTROL(VsmSingleDraw, "vsmSingleDraw",
+                    ImGui::Checkbox("Single-draw page render (dormant)",
+                                    &vsm::g_pageDrawSingle));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: one ExecuteIndirect over every (page, group) arg instead of the 1024-page\n"
                                       "CPU loop; the per-page viewport becomes a VS clip remap + SV_ClipDistance page\n"
@@ -1993,7 +2127,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "scenes (records = pages x groups). No effect while single-draw is off.");
 
                 // Occlusion plan S5b.2: the light-space two-pass HZB occlusion of the clipmap pages.
-                graphicsEdit(ImGui::Checkbox("Light-space HZB occlusion (two-pass, clipmap pages)", &vsm::g_hzbCull));
+                GRAPHICS_CONTROL(VsmHzbCull, "vsmHzbCull",
+                    ImGui::Checkbox("Light-space HZB occlusion (two-pass, clipmap pages)",
+                                    &vsm::g_hzbCull));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("A (caster, page) pair that LAST frame's pool pyramid hid is deferred; pass A\n"
                                       "draws the rest; the pyramid is rebuilt from the pages pass A drew; the deferred\n"
@@ -2006,11 +2142,13 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::Text("light hzb cull: %s; pairs deferred %u, drawn in pass B %u, past the list %u (frame N-3)",
                                 scene.Vsm().HzbCullThisFrame() ? "ON this frame" : "off", hs[0], hs[1], hs[2]);
                 }
-                graphicsEdit(ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching));
+                GRAPHICS_CONTROL(VsmPageCaching, "vsmPageCaching",
+                    ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching));
                 {
                     int windLvl = static_cast<int>(vsm::g_windAnimateMaxLevel);
-                    ImGui::SetNextItemWidth(150.0f);
-                    if (graphicsEdit(ImGui::SliderInt("Wind animate below level", &windLvl, 0,
+                    if (GRAPHICS_CONTROL_WIDTH(VsmWindAnimateMaxLevel,
+                        "vsmWindAnimateMaxLevel", 105.0f,
+                        ImGui::SliderInt("Wind animate below level", &windLvl, 0,
                                          static_cast<int>(vsm::kNumClipmapLevels))))
                     {
                         vsm::g_windAnimateMaxLevel = static_cast<std::uint32_t>(windLvl);
@@ -2177,6 +2315,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
             ImGui::EndTabBar();
         }
+        ImGui::PopItemWidth();
     }
     ImGui::End();
     open_ = open;
@@ -2187,3 +2326,5 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
     DrawTraceControls();
     return graphicsSettingsDirty;
 }
+#undef GRAPHICS_CONTROL
+#undef GRAPHICS_CONTROL_WIDTH

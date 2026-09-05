@@ -98,6 +98,15 @@ inline constexpr DXGI_FORMAT kGtaoFormat                    = DXGI_FORMAT_R8G8_U
 // their coarsest spacing exactly there. The extra bandwidth is a half-res chain; correctness
 // first, and the format is a one-line change if it ever measures as a bottleneck.
 inline constexpr DXGI_FORMAT kHzbFormat                     = DXGI_FORMAT_R32_FLOAT;
+// Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A): the froxel grid is the
+// render resolution over kFogGridPixels per axis, kFogGridZ slices distributed by UE's
+// r.VolumetricFog.DepthDistributionScale (32, dimensionless), RGBA16F pre-exposed scattering +
+// extinction, as UE's. 16 px / 64 slices are UE's defaults; both are compile-time because the
+// textures are sized from them (a knob would need a re-create, so there is no knob).
+inline constexpr unsigned    kFogGridPixels                 = 16;
+inline constexpr unsigned    kFogGridZ                      = 64;
+inline constexpr float       kFogDepthDistributionScale     = 32.0f;
+inline constexpr DXGI_FORMAT kFogFormat                     = DXGI_FORMAT_R16G16B16A16_FLOAT;
 // P8 bloom pyramid. HDR and half-float: the chain carries scene-referred radiance ABOVE the
 // threshold, which is exactly the range an 8-bit or UNORM format cannot hold. Same format as the
 // scene colour it is extracted from, so nothing is quantised on the way in. It is also read through

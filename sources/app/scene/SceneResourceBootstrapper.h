@@ -190,6 +190,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle shoreWetnessBreakup;
     // P7 aerial perspective.
     Material::CBFieldHandle fogParams0, fogParams1, fogParams2, fogSunDir, fogSunColor, fogDebugView;
+    Material::CBFieldHandle fogVolumeParams, fogVolumeZParams;
     Material::CBFieldHandle preExposure;
 
     void Populate(Material* material);
@@ -413,6 +414,31 @@ struct HzbHandles
 {
     Material::CBFieldHandle dstSize, srcSize, fromDepth, writeClosest;
     void Populate(Material* material);
+};
+
+// Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A). Mirrors `FogCB` in
+// shaders/fog_common.hlsli: the froxel grid, the unjittered camera pair, this frame's cell jitter
+// + history weight, and the medium. ONE struct for both dispatches -- the scatter binds it at b1
+// (b0 is the lighting cbuffer), the integration at b0 -- so the two cannot disagree on the grid.
+struct FogPassConstants
+{
+    float3 gridZParams{};            // (B, O, S): slice = log2(depth * B + O) * S
+    float nearFadeInInv = 0.0f;      // 1 / near fade-in distance
+    uint32_t gridSize[3] = { 1u, 1u, 1u };
+    uint32_t flags = 0u;             // bit 0 history valid, bit 1 jitter on
+    mat4 invViewProjNoJitter{};
+    mat4 prevViewProjNoJitter{};
+    float4 projZ{};                  // (proj._33, proj._43, proj._34, proj._44)
+    float4 jitter{ 0.5f, 0.5f, 0.5f, 0.0f }; // xyz: cell offset, w: history weight
+    float4 medium0{};                // density, height falloff, reference height, start distance
+    float4 medium1{};                // albedo, extinction scale, phase g, sun scatter
+    float4 medium2{};                // sky scatter, preExposure, 1 / previous preExposure, volume far
+};
+struct FogHandles
+{
+    Material::CBFieldHandle gridZParams, nearFadeInInv, gridSize, flags, invViewProjNoJitter, prevViewProjNoJitter,
+                            projZ, jitter, medium0, medium1, medium2;
+    void Populate(Material* material, UINT cbRegister);
 };
 
 // P8 bloom. Mirrors `BloomCB` in shaders/bloom_cs.hlsl -- one struct for all three stages, because
@@ -750,6 +776,10 @@ struct ComposePassConstants
     float4 fogSunColor{};
     uint32_t fogDebugView = 0u;
     float preExposure = 1.0f;
+    // Volumetric fog: x = volume built this frame, y = its far plane (view depth, m),
+    // z = 1 / preExposure, w = slice count; zParams = fog_common.hlsli's (B, O, S).
+    float4 fogVolumeParams{};
+    float4 fogVolumeZParams{};
 };
 
 struct FxaaPassConstants
@@ -849,6 +879,15 @@ public:
     std::shared_ptr<Material> GetSsrTemporalMaterial() const { return matSsrTemporalCS_; }
     std::shared_ptr<Material> GetGtaoUpsampleMaterial() const { return matGtaoUpsampleCS_; }
     std::shared_ptr<Material> GetHzbMaterial() const { return matHzbCS_; }
+    // Volumetric fog (plan part A): both dispatches, their FogCB sizes and one writer for the
+    // shared constants (the scatter's b0 is the LIGHTING cbuffer, written by WriteLightingConstants
+    // into the scatter's own allocation -- same layout, lighting_cb.hlsli).
+    std::shared_ptr<Material> GetFogScatterMaterial() const { return matFogScatterCS_; }
+    std::shared_ptr<Material> GetFogIntegrateMaterial() const { return matFogIntegrateCS_; }
+    UINT GetFogScatterCBSizeBytes() const;   // b1 of the scatter
+    UINT GetFogIntegrateCBSizeBytes() const; // b0 of the integration
+    void WriteFogScatterConstants(const FogPassConstants& data, uint8_t* dest) const;
+    void WriteFogIntegrateConstants(const FogPassConstants& data, uint8_t* dest) const;
     std::shared_ptr<Material> GetBloomMaterial() const { return matBloomCS_; }
     std::shared_ptr<Material> GetBloomFftMaterial() const { return matBloomFftCS_; }
     std::shared_ptr<Material> GetBloomConvMaterial() const { return matBloomConvCS_; }
@@ -963,6 +1002,10 @@ private:
     std::shared_ptr<Material> matSsrTemporalCS_;
     std::shared_ptr<Material> matGtaoUpsampleCS_;
     std::shared_ptr<Material> matHzbCS_;
+    std::shared_ptr<Material> matFogScatterCS_;   // shaders/fog_scatter_cs.hlsl
+    std::shared_ptr<Material> matFogIntegrateCS_; // shaders/fog_integrate_cs.hlsl
+    FogHandles fogScatterHandles_{};
+    FogHandles fogIntegrateHandles_{};
     std::shared_ptr<Material> matBloomCS_;
     std::shared_ptr<Material> matBloomFftCS_;
     std::shared_ptr<Material> matBloomConvCS_;

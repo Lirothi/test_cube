@@ -380,6 +380,40 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         vsmStillFrames_ = 0;
     }
 
+    // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A). ONE decision: the
+    // pass exists and compose reads the volume, or neither -- a compose that read a volume nobody
+    // wrote would be the silent failure this rule exists for. History validity is the GTAO shape:
+    // frames written in a row at this grid size under this camera history (a cut voids it).
+    {
+        const auto& D = renderer->GetDeferredForFrame();
+        const auto& P = renderer->GetDeferredForPrevFrame();
+        const AtmosphereSettings& a = frame.settings.atmosphere;
+        decisions_.volumetricFog = a.enabled && a.volumetric && a.density > 0.0f && frame.dirLight && frame.camera &&
+            resources_.GetFogScatterMaterial() && resources_.GetFogIntegrateMaterial() &&
+            resources_.GetFogScatterCBSizeBytes() != 0u && resources_.GetFogIntegrateCBSizeBytes() != 0u &&
+            resources_.GetLightingCBSizeBytes() != 0u &&
+            D.fogScatter.Get() != nullptr && D.fogIntegrated.Get() != nullptr && P.fogScatter.Get() != nullptr &&
+            D.fogScatterUAV.ptr != 0 && D.fogIntegratedUAV.ptr != 0 && D.fogScatterSRV.ptr != 0 &&
+            D.fogIntegratedSRV.ptr != 0 && P.fogScatterSRV.ptr != 0 && D.shadowSRV.ptr != 0;
+        const UINT w = D.fogGridWidth;
+        const UINT h = D.fogGridHeight;
+        const std::uint64_t rev = frame.camera ? frame.camera->GetHistoryRevision() : 0ull;
+        const bool sameHistory = fogHistoryWidth_ == w && fogHistoryHeight_ == h && fogHistoryRevision_ == rev;
+        decisions_.fogHistoryValid = decisions_.volumetricFog && a.temporal && fogHistoryFrames_ > 0u && sameHistory;
+        fogHistoryFrames_ = decisions_.volumetricFog ? (sameHistory ? fogHistoryFrames_ + 1u : 1u) : 0u;
+        fogHistoryWidth_ = w;
+        fogHistoryHeight_ = h;
+        fogHistoryRevision_ = rev;
+        const int state = decisions_.volumetricFog ? (1 + (decisions_.fogHistoryValid ? 1 : 0)) : 0;
+        if (state != fogLogged_)
+        {
+            LOG_INFO(logging::LogCategory::Render, "volumetric fog: on={} history={} grid={}x{}x{} (frame {})",
+                     decisions_.volumetricFog ? 1 : 0, decisions_.fogHistoryValid ? 1 : 0, w, h, D.fogGridDepth,
+                     renderer->GetTotalFrameNumber());
+            fogLogged_ = state;
+        }
+    }
+
     // DLSS-split: the PREDICTION, not the outcome. The evaluate itself can still decline in the
     // record (and tells the handler so, which backs the prediction off for the next frames); what
     // this decides is which image the tonemap is built to read.

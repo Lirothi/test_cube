@@ -1888,6 +1888,12 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.wind = &windState_; // W3: gbuffer per-view CB reads this
     frameData_.ocean = FindOceanRenderable(); // caustics source for the deferred lighting pass
     frameData_.settings = renderSettings_;
+    // The atmosphere's authoritative copy is `atmosphere_` (AtmosphereRef: level load, Inspector,
+    // --set). SetRenderSettings mirrors it into renderSettings_, but nothing guarantees a caller
+    // between an AtmosphereRef edit and this frame -- the scene-stress harness has none, and its
+    // GBV gate ran with `volumetric` applied yet never rendered (volumetric fog plan A). The frame
+    // takes the source directly.
+    frameData_.settings.atmosphere = atmosphere_;
     frameData_.cameraExposure = cameraExposure_;
     frameData_.colorPipeline = colorPipeline_;
 #if WITH_EDITOR
