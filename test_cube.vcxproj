@@ -708,6 +708,7 @@
     <None Include="shaders\glass_view_cb.hlsli" />
     <None Include="shaders\fog_integrate_cs.hlsl" />
     <None Include="shaders\fog_scatter_cs.hlsl" />
+    <None Include="shaders\light_shafts_cs.hlsl" />
     <None Include="shaders\lighting_cb.hlsli" />
     <None Include="shaders\vsm_hzb_build_cs.hlsl" />
     <None Include="shaders\vsm_hzb_post_cs.hlsl" />

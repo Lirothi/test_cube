@@ -155,6 +155,28 @@ public:
     // what it is doing rather than a bare assignment that hides a change of meaning.
     void MigrateLegacySunIntensity(float legacyIntensity);
 
+    // Plan A7 light shafts -- UE's per-light bloom properties (ULightComponent: bEnableLightShaftBloom,
+    // BloomScale .2, BloomThreshold 0, BloomMaxBrightness 100, BloomTint white -- LightComponent.cpp:483-487;
+    // LightShaftOcclusionDepthRange 100000 cm on the directional light). The threshold and the cap are in
+    // the PRE-EXPOSED scene units, as UE's are. Two defaults differ from UE's, both measured (plan A7):
+    //   * enabled = true (UE off): the pass costs nothing with the sun behind the camera, and the shafts
+    //     are the whole point of the plan;
+    //   * threshold = 2 (UE 0): at 0 EVERY sky pixel seeds the blur, and with the sun disc on screen the
+    //     whole sky lifts x1.2 (wind_test, palm-ring camera) -- a wash, not rays. At 2 (twice display
+    //     white) only the disc and its glow seed, the sky stays x1.00 and the rays through the crowns keep.
+    bool GetLightShaftsEnabled() const { return lightShaftsEnabled_; }
+    void SetLightShaftsEnabled(bool on) { lightShaftsEnabled_ = on; }
+    float GetLightShaftBloomScale() const { return lightShaftBloomScale_; }
+    void SetLightShaftBloomScale(float v) { lightShaftBloomScale_ = v; }
+    float GetLightShaftBloomThreshold() const { return lightShaftBloomThreshold_; }
+    void SetLightShaftBloomThreshold(float v) { lightShaftBloomThreshold_ = v; }
+    float GetLightShaftBloomMaxBrightness() const { return lightShaftBloomMaxBrightness_; }
+    void SetLightShaftBloomMaxBrightness(float v) { lightShaftBloomMaxBrightness_ = v; }
+    const Math::float3& GetLightShaftBloomTint() const { return lightShaftBloomTint_; }
+    void SetLightShaftBloomTint(const Math::float3& v) { lightShaftBloomTint_ = v; }
+    float GetLightShaftOcclusionDepthRange() const { return lightShaftOcclusionDepthRange_; }
+    void SetLightShaftOcclusionDepthRange(float metres) { lightShaftOcclusionDepthRange_ = metres; }
+
 private:
     Math::float3 direction_;
     Math::float3 color_;
@@ -169,5 +191,12 @@ private:
     bool  useSunTemperature_ = false; // off = the authored colour is used as-is
     float sunTemperatureK_ = 6500.0f; // ~D65, i.e. a no-op hue once normalised
     std::uint32_t transformVersion_ = 0; // Step 11: bumped on SetDirection
+    // Plan A7 light shafts (UE defaults, see the accessors).
+    bool  lightShaftsEnabled_ = true;
+    float lightShaftBloomScale_ = 0.2f;
+    float lightShaftBloomThreshold_ = 2.0f; // UE 0, see the accessors
+    float lightShaftBloomMaxBrightness_ = 100.0f;
+    Math::float3 lightShaftBloomTint_{ 1.0f, 1.0f, 1.0f };
+    float lightShaftOcclusionDepthRange_ = 1000.0f; // metres (UE 100000 cm)
 };
 

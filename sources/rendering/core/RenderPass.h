@@ -69,6 +69,7 @@ enum class RenderPass : uint16_t {
     Main_GlassReflGbuffer,
     Main_GlassReflections,
     Main_Transparent,
+    Main_LightShafts,     // plan A7: UE LightShaftBloom added into scene colour after the transparents
     Main_DebugDraw,
     Main_SelectionOutline,
     Main_ExposureMetering, // P2: histogram + percentile solve, feeds the tonemap's exposure
@@ -143,6 +144,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_GlassReflections: return L"GlassReflections";
     case RenderPass::Main_RTDebug: return L"RTDebug";
     case RenderPass::Main_Transparent: return L"Transparent";
+    case RenderPass::Main_LightShafts: return L"LightShafts";
     case RenderPass::Main_DebugDraw: return L"DebugDraw";
     case RenderPass::Main_SelectionOutline: return L"SelectionOutline";
     case RenderPass::Main_ExposureMetering: return L"ExposureMetering";

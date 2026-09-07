@@ -1599,14 +1599,54 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         };
     });
 
+    // Plan A7: UE's LightShaftBloom, added into scene colour right after the transparents (UE: after
+    // translucency, before post-processing -- RenderLightShaftBloom with RenderAfterDOF 0) and BEFORE the
+    // debug draw, so debug geometry never blooms. DecideFrame registers it only with the sun in front of
+    // the camera and everything it needs ready; five points, five dispatches, no gates in the body.
+    size_t pLightShafts = pTransp;
+    if (decisions_.lightShafts)
+    {
+        pLightShafts = rg.AddPass2(RenderPass::Main_LightShafts, { pTransp },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                constexpr D3D12_RESOURCE_STATES kUav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                const auto& DL = renderer->GetDeferredForFrame();
+                LightShaftPoints pts{};
+                // 1. Downsample + mask: scene colour and depth read, A written.
+                pts.downsample = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(DL.scene.Get(), kNps);
+                ctx.Use(DL.depth.Get(), kNps);
+                ctx.Use(DL.lightShaftA.Get(), kUav);
+                // 2-4. Three radial blurs, A -> B -> A -> B (r.LightShaftBlurPasses 3).
+                for (uint32_t pass = 0u; pass < 3u; ++pass)
+                {
+                    ctx.NextPoint();
+                    pts.blur[pass] = ctx.usePoint ? *ctx.usePoint : 0u;
+                    const bool fromA = (pass % 2u) == 0u;
+                    ctx.Use(fromA ? DL.lightShaftA.Get() : DL.lightShaftB.Get(), kNps);
+                    ctx.Use(fromA ? DL.lightShaftB.Get() : DL.lightShaftA.Get(), kUav);
+                }
+                // 5. Additive apply: B read, scene colour read-modify-written in place. Both targets end at
+                // their rest (NPS); the scene's next consumer declares its own state, as after the outline.
+                ctx.NextPoint();
+                pts.apply = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(DL.lightShaftB.Get(), kNps);
+                ctx.Use(DL.scene.Get(), kUav);
+                return [this, renderer, pts](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassLightShafts);
+                    Pass_LightShafts(renderer, c, *frame_->camera, pts);
+                };
+            });
+    }
+
 #if WITH_EDITOR
-    size_t pObjectIdReadback = pTransp;
+    size_t pObjectIdReadback = pLightShafts;
     if (renderer->HasPendingObjectIdPick())
     {
         // pass-flow S5: with AddPass2 the builder is attached at Add time, so the old trap this
         // `if` guarded against (a Prepare set on an index that ALIASES pTransp when there is no
         // pending pick) cannot happen — there is no second call to misplace.
-        pObjectIdReadback = rg.AddPass2(RenderPass::Main_ObjectIdReadback, { pTransp }, /*mtDeps=*/{},
+        pObjectIdReadback = rg.AddPass2(RenderPass::Main_ObjectIdReadback, { pLightShafts }, /*mtDeps=*/{},
             { { D.objectID.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE } },
             [renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 ctx.UseDeclared();
@@ -1621,7 +1661,7 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             });
     }
 #else
-    const size_t pObjectIdReadback = pTransp;
+    const size_t pObjectIdReadback = pLightShafts;
 #endif
 
     auto pDebugDraw = rg.AddPass2(RenderPass::Main_DebugDraw, { pObjectIdReadback }, /*mtDeps=*/{},

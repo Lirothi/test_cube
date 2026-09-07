@@ -27,6 +27,14 @@
       0.25,
       0.25
     ],
+    "lightShaftBloomScale": 0.10000000149011612,
+    "lightShaftBloomThreshold": 2.0,
+    "lightShaftBloomTint": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "lightShaftsEnabled": false,
     "skyFillIntensity": 1.0,
     "sunIlluminanceLux": 85000.0
   },
@@ -13844,7 +13852,7 @@
       "shoreWetnessReflectionStrength": 0.3499999940395355,
       "shoreWetnessWetTime": 0.75,
       "skyScatterStrength": 0.3499999940395355,
-      "specularStrength": 1.0,
+      "specularStrength": 1.100000023841858,
       "sssColor": [
         0.13333334028720856,
         0.9411764740943909,
@@ -13890,16 +13898,18 @@
   "pointLights": [],
   "postProcess": {
     "atmosphere": {
-      "density": 0.0010000000474974513,
+      "density": 0.0020000000949949026,
       "enabled": true,
       "heightFalloff": 0.05999999865889549,
       "maxOpacity": 0.8999999761581421,
       "skyBackScatter": 0.4000000059604645,
       "skyBlur": 0.30000001192092896,
       "startDistance": 10.0,
+      "sunScatter": 1.0,
       "sunScatterExponent": 8.0,
       "sunScatterStartDistance": 100.0,
-      "sunScatterStrength": 0.5
+      "sunScatterStrength": 0.5,
+      "volumetric": true
     },
     "bloom": {
       "convAnamorphic": 0.30000001192092896,
@@ -13939,7 +13949,7 @@
       "convSpokeWidth": 4.0,
       "enabled": true,
       "fireflyClamp": true,
-      "intensity": 3.0,
+      "intensity": 1.0,
       "method": 1,
       "radius": 1.0,
       "softKnee": 0.5,

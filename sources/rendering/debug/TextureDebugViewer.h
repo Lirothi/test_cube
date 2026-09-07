@@ -50,6 +50,8 @@ public:
         GtaoUpsampled,
         Hzb,
         HzbClosest,
+        LightShaftA,
+        LightShaftB,
         Count
     };
 

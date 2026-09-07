@@ -370,6 +370,13 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
                                           dirLight.GetGroundAlbedo()));
         dirLight.SetUseSunTemperature(dl.value("useSunTemperature", false));
         dirLight.SetSunTemperatureK(dl.value("sunTemperatureK", 6500.0f));
+        // Plan A7 light shafts: the sun's own bloom properties (UE ULightComponent fields), all optional.
+        dirLight.SetLightShaftsEnabled(dl.value("lightShaftsEnabled", dirLight.GetLightShaftsEnabled()));
+        dirLight.SetLightShaftBloomScale(dl.value("lightShaftBloomScale", dirLight.GetLightShaftBloomScale()));
+        dirLight.SetLightShaftBloomThreshold(dl.value("lightShaftBloomThreshold", dirLight.GetLightShaftBloomThreshold()));
+        dirLight.SetLightShaftBloomMaxBrightness(dl.value("lightShaftBloomMaxBrightness", dirLight.GetLightShaftBloomMaxBrightness()));
+        dirLight.SetLightShaftBloomTint(ToFloat3(dl.value("lightShaftBloomTint", json::array()), dirLight.GetLightShaftBloomTint()));
+        dirLight.SetLightShaftOcclusionDepthRange(dl.value("lightShaftOcclusionDepthRange", dirLight.GetLightShaftOcclusionDepthRange()));
         scene.SetDirectionalLight(dirLight);
     }
 

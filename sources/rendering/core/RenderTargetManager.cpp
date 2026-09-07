@@ -612,6 +612,17 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D.fogGridDepth = d;
         }
 
+        // Plan A7 light shafts: UE CreateLightShaftTexture x2 (LightShaftRendering.cpp), half the
+        // render resolution, compute-written and compute-read, resting NON_PIXEL like the AO chain.
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.lightShaft,
+            DeferredSrvSlot::LightShaftA, DeferredSrvSlot::LightShaftAUAV, f,
+            D.lightShaftA, D.lightShaftASRV, D.lightShaftAUAV, sizes.lightShaftWidth, sizes.lightShaftHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.lightShaft,
+            DeferredSrvSlot::LightShaftB, DeferredSrvSlot::LightShaftBUAV, f,
+            D.lightShaftB, D.lightShaftBSRV, D.lightShaftBUAV, sizes.lightShaftWidth, sizes.lightShaftHeight);
+        D.lightShaftWidth = std::max(1u, sizes.lightShaftWidth);
+        D.lightShaftHeight = std::max(1u, sizes.lightShaftHeight);
+
         // P8: the bloom pyramid. Same construction as the HZB chain above -- one SRV over the whole
         // thing, one UAV per mip, built entirely in UNORDERED_ACCESS -- but sized off the DISPLAY
         // resolution, because bloom runs after the upscaler on the image the tonemap reads.
@@ -822,6 +833,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.hzbClosest.Get(), L"HzbClosest", kNps);
         nameRes(D.fogScatter.Get(), L"FogScatter", kNps);
         nameRes(D.fogIntegrated.Get(), L"FogIntegrated", kNps);
+        nameRes(D.lightShaftA.Get(), L"LightShaftA", kNps);
+        nameRes(D.lightShaftB.Get(), L"LightShaftB", kNps);
         nameRes(D.debugPreview.Get(), L"DebugPreview", kNps);
         // Tonemap/FXAA end as the compute outputs they are — the resolve flips them back.
         nameRes(D.tonemap.Get(), L"Tonemap", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);

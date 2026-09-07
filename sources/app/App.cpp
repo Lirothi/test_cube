@@ -591,6 +591,12 @@ namespace
             scene.AtmosphereRef().enabled = value != 0.0f;
             return true;
         }
+        // Plan A7 light shafts: the sun's own bloom properties (UE ULightComponent fields), headless.
+        if (setting == "lightShafts.enabled") { scene.DirectionalLightRef().SetLightShaftsEnabled(value != 0.0f); return true; }
+        if (setting == "lightShafts.bloomScale") { scene.DirectionalLightRef().SetLightShaftBloomScale(value); return true; }
+        if (setting == "lightShafts.bloomThreshold") { scene.DirectionalLightRef().SetLightShaftBloomThreshold(value); return true; }
+        if (setting == "lightShafts.bloomMaxBrightness") { scene.DirectionalLightRef().SetLightShaftBloomMaxBrightness(value); return true; }
+        if (setting == "lightShafts.occlusionDepthRange") { scene.DirectionalLightRef().SetLightShaftOcclusionDepthRange(value); return true; }
         if (setting == "atmosphere.density") { scene.AtmosphereRef().density = value; return true; }
         if (setting == "atmosphere.debugView")
         {

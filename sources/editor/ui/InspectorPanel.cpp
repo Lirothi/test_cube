@@ -1793,6 +1793,40 @@ namespace
                 "Applies to indirect DIFFUSE only, and it is occluded by the same AO the sky fill "
                 "is, so it does not light the inside of a closed room. FREE in GPU cost.");
 
+            // Plan A7 light shafts: UE's per-light bloom properties.
+            ImGui::SeparatorText("Light Shafts");
+            checkB("Light Shafts", "lightShaftsEnabled", true);
+            InspectorHelp(
+                "Unreal's Light Shaft Bloom on this sun (plan A7): the bright sky and far pixels are radially "
+                "blurred towards the sun's screen position and added into the scene after the transparents -- the "
+                "god rays through the crowns on a clear day, which a volumetric fog cannot show at a clear-weather "
+                "density. Screen-space: runs only while the sun is in front of the camera, and needs a bright sky or "
+                "sun disc on screen to seed from. About 0.1 ms at 1440p. --set=lightShafts.enabled:0|1");
+            dragF("Bloom Scale", "lightShaftBloomScale", 0.2f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("UE BloomScale (their 0.2): the strength of the shafts. 0 switches them off.");
+            dragF("Bloom Threshold", "lightShaftBloomThreshold", 2.0f, 0.05f, 0.0f, 50.0f, "%.2f");
+            InspectorHelp("UE BloomThreshold: only pixels brighter than this seed the shafts, measured in the "
+                          "pre-exposed scene (after the camera's exposure), exactly as Unreal measure it. 1 = display "
+                          "white. UE default 0 -- then EVERY sky pixel seeds the blur and with the sun disc on screen the "
+                          "whole sky lifts about 20 % (a wash). Default 2 here: only the disc and its glow seed, so the "
+                          "rays through the crowns stay and the sky does not.");
+            dragF("Bloom Max Brightness", "lightShaftBloomMaxBrightness", 100.0f, 1.0f, 0.0f, 1000.0f, "%.0f");
+            InspectorHelp("UE BloomMaxBrightness (their 100): caps one pixel's contribution so a blown-out sun disc "
+                          "does not saturate the shafts into a white fan.");
+            {
+                const Math::float3 tint = JsonFloat3(tgt(), "lightShaftBloomTint", Math::float3(1.0f, 1.0f, 1.0f));
+                float tv[3] = { tint.x, tint.y, tint.z };
+                const bool changed = ImGui::ColorEdit3("Bloom Tint", tv);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["lightShaftBloomTint"] = { tv[0], tv[1], tv[2] }; }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("UE BloomTint: multiplies the shaft colour. White = the sky's own colour.");
+            dragF("Occlusion Depth Range (m)", "lightShaftOcclusionDepthRange", 1000.0f, 10.0f, 1.0f, 20000.0f, "%.0f");
+            InspectorHelp("UE LightShaftOcclusionDepthRange (their 1000 m): only pixels in the FAR half of this range "
+                          "seed the shafts -- the sky and distant ground -- so nearby lit surfaces do not streak. Anything "
+                          "nearer stands in front of the rays and cuts them, which is what makes the crowns read.");
+
             if (tgt().contains("sunIlluminanceLux") &&
                 (tgt().contains("sunIntensity") || tgt().contains("exposure")))
             {

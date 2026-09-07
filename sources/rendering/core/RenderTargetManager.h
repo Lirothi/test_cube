@@ -117,6 +117,10 @@ public:
         // (light, transmittance) that compose / the ocean / glass sample by view depth.
         GpuResource fogScatter;
         GpuResource fogIntegrated;
+        // Plan A7 light shafts: UE LightShaftBloom's two half-res ping-pong targets (downsample+mask
+        // into A, three radial blurs A->B->A->B, B added into scene colour). Compute-only, rest NPS.
+        GpuResource lightShaftA;
+        GpuResource lightShaftB;
         // P8: the bloom pyramid's two chains. `bloomDown` holds the thresholded image reduced level
         // by level, `bloomUp` the tent reconstruction on the way back; the upsample of level N reads
         // BOTH up[N+1] and down[N], which is why one ping-ponged chain would not do. Mip 0 of
@@ -191,6 +195,10 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE fogScatterSRV{}, fogScatterUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE fogIntegratedSRV{}, fogIntegratedUAV{};
         UINT fogGridWidth = 1, fogGridHeight = 1, fogGridDepth = 1;
+        // Plan A7 light shafts (half the render resolution).
+        D3D12_CPU_DESCRIPTOR_HANDLE lightShaftASRV{}, lightShaftAUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE lightShaftBSRV{}, lightShaftBUAV{};
+        UINT lightShaftWidth = 1, lightShaftHeight = 1;
 
         // P8 bloom pyramid, at DISPLAY resolution: it runs after the upscaler, on the same image
         // the tonemap reads.
@@ -236,6 +244,7 @@ public:
         DXGI_FORMAT gtao;               // P6B ambient occlusion
         DXGI_FORMAT hzb;                // P6C hierarchical depth
         DXGI_FORMAT fog;                // volumetric fog froxel volumes (RGBA16F)
+        DXGI_FORMAT lightShaft;         // plan A7 light shaft targets (UE PF_FloatRGB)
         DXGI_FORMAT bloom;              // P8 bloom pyramid (HDR)
         DXGI_FORMAT bloomFft;           // P8C convolution grid (complex, 32-bit)
         DXGI_FORMAT debugPreview;       // texture-inspector preview (RGBA8)
@@ -250,6 +259,8 @@ public:
         UINT hzbWidth = 1, hzbHeight = 1;   // P6C mip 0 (half the render resolution)
         // Volumetric fog froxel grid: ceil(render / kFogGridPixels) x kFogGridZ slices.
         UINT fogGridWidth = 1, fogGridHeight = 1, fogGridDepth = 1;
+        // Plan A7 light shafts: half the render resolution (UE r.LightShaftDownSampleFactor 2).
+        UINT lightShaftWidth = 1, lightShaftHeight = 1;
         // P8 mip 0, half the DISPLAY resolution: bloom runs after the upscaler, so it is sized off
         // the image the tonemap actually reads, not off the internal render target.
         UINT bloomWidth = 1, bloomHeight = 1;
@@ -319,6 +330,8 @@ private:
     RtPayload, RtPayloadUAV, RtPayloadUv, RtPayloadUvUAV,
     // Volumetric fog froxel volumes (3D).
     FogScatter, FogScatterUAV, FogIntegrated, FogIntegratedUAV,
+    // Plan A7 light shafts: the half-res ping-pong pair.
+    LightShaftA, LightShaftAUAV, LightShaftB, LightShaftBUAV,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

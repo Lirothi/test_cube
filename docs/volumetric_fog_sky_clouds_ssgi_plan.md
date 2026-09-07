@@ -540,6 +540,42 @@ LightShaftRendering.cpp` (691). Транскрипция:
 ≤ 0.1 мс @1440p (профдамп ×2); GBV CLEAN (новые ресурсы/пасс); три конфига.
 **Откат:** `lightShafts.enabled:0`.
 
+#### Что сделано (2026-09-06, A7)
+Транскрипция целиком: `shaders/light_shafts_cs.hlsl` — три ядра одного файла над одним cbuffer: `CSDownsample`
+(`LightShaftShader.usf:39-85`, ветка bloom: полуразмер, luminance/threshold/MaxBrightness, маски дальней половины
+OcclusionDepthRange, краёв экрана и расстояния до солнца), `CSBlur` (`:93-121`, 12 сэмплов, `PassScale =
+pow(4.8, pass)`, `FirstPassDistance 0.1`), `CSApply` (`:141-149` + blend BF_One/BF_One `LightShaftRendering.cpp:530`).
+Параметры — `GetLightShaftParameters` (`:143-190`): aspect-corrected uv, `TextureSpaceBlurOrigin` из направления на
+солнце через unjittered view-projection как гомогенного направления (UE `ViewOrigin − Direction·WORLD_MAX`,
+`DirectionalLightComponent.cpp:449-453`); пасс регистрируется только при `clip.w > 0` (`:107-116`), вне кадра, но
+спереди — работает (лучи входят с края). TAA-пасс UE (`:345-363`) не переносился.
+* Пасс `Main_LightShafts` между `Main_Transparent` и `Main_DebugDraw` (UE: после translucency, до постпроцесса;
+  debug-геометрия не блумится): пять точек и пять диспатчей — downsample+маска → A, блюры A→B→A→B, apply в scene UAV
+  (read-modify-write, RGBA16F). Таргеты `lightShaftA/B` R11G11B10 (UE PF_FloatRGB) полуразмера (UE DownsampleFactor
+  2), в Texture inspector [F4] → Lighting → «Light shafts A (mask) / B (final)». Решение в `DecideFrame`
+  (`decisions_.lightShafts`, `lightShaftOrigin`), строка лога `light shafts: on=… origin=…`.
+* Ручки — свойства СОЛНЦА (у UE это поля ULightComponent), в блоке `directionalLight` уровня: `lightShaftsEnabled`,
+  `lightShaftBloomScale`, `lightShaftBloomThreshold`, `lightShaftBloomMaxBrightness`, `lightShaftBloomTint`,
+  `lightShaftOcclusionDepthRange` (м); читаются `JsonLevel` и `EnvironmentRuntime`, Inspector → Directional Light →
+  секция «Light Shafts»; headless `--set=lightShafts.enabled|bloomScale|bloomThreshold|bloomMaxBrightness|occlusionDepthRange`.
+  Порог и потолок — в PRE-EXPOSED единицах сцены, как у UE («post exposure brightness», `usf:70`).
+* **Два дефолта отличаются от UE, оба измерены**: `enabled` 1 (UE off — пасс бесплатен при солнце за камерой),
+  **`bloomThreshold` 2** (UE 0). При 0 сеет КАЖДЫЙ пиксель неба: камера palm-ring (диск солнца в кадре) — небо вдали от
+  солнца ×1.20–1.22 по всем строкам (row 100/300), т.е. равномерная дымка на всё небо, а не лучи. При 2 (дважды
+  «display white») сеют только диск и его гало: небо ×1.00, лучи сквозь кроны на юзерской камере остаются (off→on
+  23.4 % px, mean +2.5; при пороге 0 — 76 % px, mean +6 за счёт сдвига авто-экспозиции).
+* Замеры (wind_test, натив 1440p, VSM, `--wind-freeze`): камера юзера `-22.07,2.27,-94.31 / -0.0826,0.2498,0.0214,0.9645`
+  — веер лучей от солнца сквозь кроны, стволы режут лучи (маска глубины) — `a7_user_off/on/thr2.png`; стоимость
+  **Pass_LightShafts 0.080 мс** (5 диспатчей, 1280×720 + apply 2560×1440; профдамп 30 с, off-арм не регистрирует пасс).
+  Солнце уходит за край (`--cam-fly-yaw=12 --cam-fly-delay=8`, 10 кадров через 0.5 с): гало у угла гаснет плавно,
+  скачка при пересечении границы нет (Δ яркости верхней-левой четверти по кадрам ≤ 0.03 линейно, знак меняется
+  только с уходом диска и адаптацией экспозиции).
+* Гейты: три конфига, `check_shaders` 64/64, `--log-stress` 0/0 Debug + Release, GBV `--scene-stress-gbv=20` VSM
+  **CLEAN (313.9 с)** — пасс отработал в харнессе (лог `on=1 origin=(0.270, −0.551)`: солнце над кадром, спереди).
+* Не сделано (как и планировалось): TAA-история пасса (под DLSS сглаживает апскейлер; в нативе на статике не мерцает —
+  два одинаковых кадра различаются на уровне шума листвы), occlusion-вариант (`FinishOcclusionMain`), тюнинг
+  уровней — за юзером (`Bloom Scale`, `Bloom Threshold` в Inspector).
+
 #### Что сделано (2026-09-05, A6)
 Роща, ветер вкл, 30 с: нативные 2560×1440 (сетка 160×90×64) — Pass_VolumetricFog **0.107 мс** VSM / 0.062 Legacy;
 DLSS Performance (рендер 1280×720, сетка 80×45×64) — **0.087 мс**: в 4 раза меньше ячеек дают лишь −19 % времени, т.е.

@@ -2218,6 +2218,7 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     formats.gtao = render::kGtaoFormat;
     formats.hzb = render::kHzbFormat;
     formats.fog = render::kFogFormat;
+    formats.lightShaft = render::kLightShaftFormat;
     formats.bloom = render::kBloomFormat;
     formats.bloomFft = render::kBloomFftFormat;
     formats.debugPreview = render::kDebugPreviewFormat;
@@ -2238,6 +2239,10 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     // between "the depth I sampled" and "the tile that contains it" without a second mapping.
     sizes.hzbWidth = sizes.gtaoWidth;
     sizes.hzbHeight = sizes.gtaoHeight;
+    // Plan A7 light shafts: half the RENDER resolution (UE r.LightShaftDownSampleFactor 2), the same
+    // grid as the AO -- the shafts describe the rendered image, not the display.
+    sizes.lightShaftWidth = sizes.gtaoWidth;
+    sizes.lightShaftHeight = sizes.gtaoHeight;
     // Volumetric fog: the froxel grid over the RENDER resolution (UE size theirs from the scene
     // textures for the same reason: the volume describes the rendered image, not the display).
     sizes.fogGridWidth = std::max(1u, (rtWidth + fogGridPixels_ - 1u) / fogGridPixels_);

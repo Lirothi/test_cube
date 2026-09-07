@@ -112,6 +112,8 @@ inline unsigned              g_fogGridPixels                = kFogGridPixels; //
 inline unsigned              g_fogGridZ                     = kFogGridZ;      // 16..128 slices (UE r.VolumetricFog.GridSizeZ; the integrate loop's literal is 128)
 inline constexpr float       kFogDepthDistributionScale     = 32.0f;
 inline constexpr DXGI_FORMAT kFogFormat                     = DXGI_FORMAT_R16G16B16A16_FLOAT;
+// Plan A7 light shafts: UE's PF_FloatRGB (CreateLightShaftTexture) -- an HDR triple, no alpha.
+inline constexpr DXGI_FORMAT kLightShaftFormat              = DXGI_FORMAT_R11G11B10_FLOAT;
 // P8 bloom pyramid. HDR and half-float: the chain carries scene-referred radiance ABOVE the
 // threshold, which is exactly the range an 8-bit or UNORM format cannot hold. Same format as the
 // scene colour it is extracted from, so nothing is quantised on the way in. It is also read through

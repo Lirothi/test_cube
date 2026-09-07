@@ -633,6 +633,82 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
     ctx.EndCL(t);
 }
 
+// Plan A7 -- UE's RenderLightShaftBloom / AddLightShaftSetupPass (LightShaftRendering.cpp): the masked
+// downsample into A, three radial blurs A -> B -> A -> B, the additive apply into scene colour. Five
+// dispatches under the five points the Main_LightShafts builder declared; the constants are UE's
+// GetLightShaftParameters (:143-190) with the blur pass index rewritten per dispatch.
+//
+// NO EARLY RETURN AFTER BeginCL: every gate ran in DecideFrame, which is what registered the pass.
+void SceneRenderer::Pass_LightShafts(Renderer* renderer, RenderGraphPassContext ctx, const Camera& camera,
+                                     const LightShaftPoints& pts)
+{
+    const auto& D = renderer->GetDeferredForFrame();
+    const DirectionalLight& sun = *frame_->dirLight;
+    const UINT halfW = std::max(1u, D.lightShaftWidth);
+    const UINT halfH = std::max(1u, D.lightShaftHeight);
+    const UINT fullW = std::max(1u, renderer->GetRenderWidth());
+    const UINT fullH = std::max(1u, renderer->GetRenderHeight());
+
+    LightShaftConstants c{};
+    const float aspect = static_cast<float>(fullW) / static_cast<float>(fullH);
+    c.origin = float4(decisions_.lightShaftOrigin.x, decisions_.lightShaftOrigin.y, aspect, 1.0f / aspect);
+    c.bloom = float4(1.0f / std::max(sun.GetLightShaftOcclusionDepthRange(), 1e-3f),
+                     std::max(sun.GetLightShaftBloomScale(), 0.0f),
+                     std::max(sun.GetLightShaftBloomMaxBrightness(), 0.0f),
+                     std::max(sun.GetLightShaftBloomThreshold(), 0.0f));
+    const float3 tint = sun.GetLightShaftBloomTint();
+    c.tint = float4(std::max(tint.x, 0.0f), std::max(tint.y, 0.0f), std::max(tint.z, 0.0f), 0.1f); // GLightShaftFirstPassDistance
+    // The engine's linearisation pair (the GTAO's), device Z -> view depth in metres.
+    const float zNear = camera.GetZNear();
+    const float zFar = camera.GetZFar();
+    c.depth = float4(zNear / (zNear - zFar), (zNear * zFar) / (zFar - zNear), 0.0f, 0.0f);
+    auto setSize = [&c](UINT w, UINT h, UINT srcW, UINT srcH, UINT pass)
+    {
+        c.size[0] = w; c.size[1] = h; c.size[2] = pass; c.size[3] = 0u;
+        c.invSize = float4(1.0f / static_cast<float>(w), 1.0f / static_cast<float>(h),
+                           0.5f / static_cast<float>(srcW), 0.5f / static_cast<float>(srcH));
+    };
+    auto dispatch = [&](UINT kernel, std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> srvs,
+                        std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> uavs, D3D12_GPU_DESCRIPTOR_HANDLE samplers,
+                        ID3D12GraphicsCommandList* cl, UINT w, UINT h)
+    {
+        RecordComputeDispatch(renderer, cl, resources_.GetLightShaftMaterial(kernel).get(),
+            resources_.GetLightShaftCBSizeBytes(kernel),
+            [&](uint8_t* dest) { resources_.WriteLightShaftConstants(kernel, c, dest); },
+            srvs, uavs, samplers, w, h);
+    };
+
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassLightShafts);
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+        const D3D12_GPU_DESCRIPTOR_HANDLE samplers = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+        const D3D12_CPU_DESCRIPTOR_HANDLE dummy = renderer->VsmDummyTexSrv(); // keeps t1 populated where unused
+
+        // 1. Downsample + mask (usf:39-85), half res, from scene colour and depth.
+        renderer->EmitPoint(t.cl, pts.downsample);
+        setSize(halfW, halfH, fullW, fullH, 0u);
+        dispatch(0u, { D.sceneSRV, D.depthSRV }, { D.lightShaftAUAV }, samplers, t.cl, halfW, halfH);
+
+        // 2-4. Radial blurs (usf:93-121), A -> B -> A -> B, the distance growing per pass.
+        for (UINT pass = 0u; pass < 3u; ++pass)
+        {
+            renderer->EmitPoint(t.cl, pts.blur[pass]);
+            const bool fromA = (pass % 2u) == 0u;
+            setSize(halfW, halfH, halfW, halfH, pass);
+            dispatch(1u, { fromA ? D.lightShaftASRV : D.lightShaftBSRV, dummy },
+                     { fromA ? D.lightShaftBUAV : D.lightShaftAUAV }, samplers, t.cl, halfW, halfH);
+        }
+
+        // 5. Apply (usf:141-149, BF_One/BF_One): scene colour += bilinear B, at render resolution.
+        renderer->EmitPoint(t.cl, pts.apply);
+        setSize(fullW, fullH, halfW, halfH, 0u);
+        dispatch(2u, { D.lightShaftBSRV, dummy }, { D.sceneUAV }, samplers, t.cl, fullW, fullH);
+    }
+    ctx.EndCL(t);
+}
+
 void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, std::uint32_t point)
 {

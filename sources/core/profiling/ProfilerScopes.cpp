@@ -82,6 +82,7 @@ const Profiler::ScopeNameKey kPassShoreDepth = Profiler::RegisterTraceLiteral(L"
 const Profiler::ScopeNameKey kPassGBuffer = Profiler::RegisterTraceLiteral(L"Pass_GBuffer");
 const Profiler::ScopeNameKey kPassGtao = Profiler::RegisterTraceLiteral(L"Pass_Gtao");
 const Profiler::ScopeNameKey kPassVolumetricFog = Profiler::RegisterTraceLiteral(L"Pass_VolumetricFog");
+const Profiler::ScopeNameKey kPassLightShafts = Profiler::RegisterTraceLiteral(L"Pass_LightShafts");
 const Profiler::ScopeNameKey kFogScatter = Profiler::RegisterTraceLiteral(L"VolumetricFog.Scatter");
 const Profiler::ScopeNameKey kFogIntegrate = Profiler::RegisterTraceLiteral(L"VolumetricFog.Integrate");
 const Profiler::ScopeNameKey kPassHzb = Profiler::RegisterTraceLiteral(L"Pass_Hzb");

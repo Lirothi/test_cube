@@ -234,6 +234,13 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         dl.SetGroundAlbedo(JF3(p, "groundAlbedo", dl.GetGroundAlbedo())); // P16.12
         dl.SetUseSunTemperature(p.value("useSunTemperature", false));
         dl.SetSunTemperatureK(JF(p, "sunTemperatureK", 6500.0f));
+        // Plan A7 light shafts (mirrors JsonLevel).
+        dl.SetLightShaftsEnabled(p.value("lightShaftsEnabled", dl.GetLightShaftsEnabled()));
+        dl.SetLightShaftBloomScale(JF(p, "lightShaftBloomScale", dl.GetLightShaftBloomScale()));
+        dl.SetLightShaftBloomThreshold(JF(p, "lightShaftBloomThreshold", dl.GetLightShaftBloomThreshold()));
+        dl.SetLightShaftBloomMaxBrightness(JF(p, "lightShaftBloomMaxBrightness", dl.GetLightShaftBloomMaxBrightness()));
+        dl.SetLightShaftBloomTint(JF3(p, "lightShaftBloomTint", dl.GetLightShaftBloomTint()));
+        dl.SetLightShaftOcclusionDepthRange(JF(p, "lightShaftOcclusionDepthRange", dl.GetLightShaftOcclusionDepthRange()));
         ctx.scene.SetDirectionalLight(dl);
     }
     else if (env.type == "cameraExposure")

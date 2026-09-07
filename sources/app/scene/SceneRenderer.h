@@ -121,6 +121,11 @@ private:
         // ocean, glass, particles): (on, far view depth, 1/preExposure, slice count) and (B, O, S).
         Math::float4 fogVolumeParams{};
         Math::float4 fogVolumeZParams{};
+        // Plan A7 light shafts (UE LightShaftBloom): the pass exists this frame (sun in front of the
+        // camera, bloom non-zero, materials + targets ready) and where the sun is on screen --
+        // TextureSpaceBlurOrigin, aspect-corrected uv (v * H/W), decided once for the five dispatches.
+        bool lightShafts = false;
+        Math::float2 lightShaftOrigin{};
     };
     void DecideFrame(Renderer* renderer, const SceneFrameData& frame);
     FrameDecisions decisions_{};
@@ -279,6 +284,15 @@ private:
         uint32_t restore = 0;   // integrated NPS (its resting state, what compose samples)
     };
     void Pass_VolumetricFog(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const FogPoints& pts);
+    // Plan A7 light shafts: five dispatches under five declared points (downsample + mask, three
+    // radial blurs ping-ponging the two half-res targets, the additive apply into scene colour).
+    struct LightShaftPoints
+    {
+        uint32_t downsample = 0; // scene + depth NPS, A UAV
+        uint32_t blur[3] = { 0u, 0u, 0u }; // A->B, B->A, A->B
+        uint32_t apply = 0;      // B NPS, scene UAV
+    };
+    void Pass_LightShafts(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const LightShaftPoints& pts);
     // The lighting pass's per-frame constants, filled ONCE per consumer: the lighting pass and the
     // fog scatter (its b0 is the same cbuffer, lighting_cb.hlsli) both call this, so the sun's
     // shadow is sampled from identical constants. `causticsSrv` / `vsmDir` are what the lighting
@@ -600,6 +614,7 @@ private:
     UINT fogHistoryDepth_ = 0u;
     std::uint64_t fogHistoryRevision_ = 0u;
     int fogLogged_ = -1;             // last logged (on, historyValid) state
+    int lightShaftsLogged_ = -1;     // plan A7: last logged on/off, so the log gets the flips only
 
     // ---- PER-LEVEL / ONE-SHOT: survives frames, cleared by Reset(). ----
     bool rtFailureLogged_ = false; // S13: one "AS alloc failed -> SSR fallback" line per scene

@@ -447,6 +447,52 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         }
     }
 
+    // Plan A7 light shafts (UE LightShaftBloom). Registered only when the sun is in FRONT of the camera
+    // (ShouldRenderLightShaftsForLight: the light's screen position has W > 0 -- LightShaftRendering.cpp:107-116)
+    // and the bloom would be non-zero; off-screen but in front is fine, the shafts enter from the edge.
+    {
+        decisions_.lightShafts = false;
+        const DirectionalLight* sun = frame.dirLight;
+        const auto& D = renderer->GetDeferredForFrame();
+        const bool ready = sun != nullptr && frame.camera != nullptr && g_atmosphereDebugView == 0u &&
+            sun->GetLightShaftsEnabled() && sun->GetLightShaftBloomScale() > 0.0f &&
+            (sun->GetColor().x > 0.0f || sun->GetColor().y > 0.0f || sun->GetColor().z > 0.0f) &&
+            resources_.GetLightShaftMaterial(0u) && resources_.GetLightShaftMaterial(1u) && resources_.GetLightShaftMaterial(2u) &&
+            resources_.GetLightShaftCBSizeBytes(0u) != 0u && resources_.GetLightShaftCBSizeBytes(1u) != 0u &&
+            resources_.GetLightShaftCBSizeBytes(2u) != 0u &&
+            D.lightShaftA.Get() != nullptr && D.lightShaftB.Get() != nullptr &&
+            D.lightShaftASRV.ptr != 0 && D.lightShaftAUAV.ptr != 0 && D.lightShaftBSRV.ptr != 0 && D.lightShaftBUAV.ptr != 0 &&
+            D.sceneSRV.ptr != 0 && D.sceneUAV.ptr != 0 && D.depthSRV.ptr != 0;
+        if (ready)
+        {
+            // UE GetLightPositionForLightShafts for a directional light = ViewOrigin - Direction * WORLD_MAX
+            // (DirectionalLightComponent.cpp:449-453): the point at infinity towards the sun, i.e. a homogeneous
+            // DIRECTION (w = 0) through the unjittered view-projection. Row-vector convention, like the shaders.
+            const float3 toSun = (-sun->GetDirection()).Normalized();
+            const float4 clip = frame.camera->GetViewProjMatrixNoJitter().Transform(float4(toSun.x, toSun.y, toSun.z, 0.0f));
+            if (clip.w > 1e-6f)
+            {
+                // LightShaftRendering.cpp:166-176: screen position -> uv -> aspect-corrected (v * H/W), so the blur
+                // is the same pixel distance in x and y.
+                const float invW = 1.0f / clip.w;
+                const float u = 0.5f + 0.5f * clip.x * invW;
+                const float v = 0.5f - 0.5f * clip.y * invW;
+                const float invAspect = static_cast<float>(renderer->GetRenderHeight()) /
+                                        static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
+                decisions_.lightShaftOrigin = Math::float2(u, v * invAspect);
+                decisions_.lightShafts = true;
+            }
+        }
+        const int state = decisions_.lightShafts ? 1 : 0;
+        if (state != lightShaftsLogged_)
+        {
+            LOG_INFO(logging::LogCategory::Render, "light shafts: on={} origin=({:.3f}, {:.3f}) half-res {}x{} (frame {})",
+                     state, decisions_.lightShaftOrigin.x, decisions_.lightShaftOrigin.y,
+                     D.lightShaftWidth, D.lightShaftHeight, renderer->GetTotalFrameNumber());
+            lightShaftsLogged_ = state;
+        }
+    }
+
     // DLSS-split: the PREDICTION, not the outcome. The evaluate itself can still decline in the
     // record (and tells the handler so, which backs the prediction off for the next frames); what
     // this decides is which image the tonemap is built to read.
