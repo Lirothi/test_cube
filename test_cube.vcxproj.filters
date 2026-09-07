@@ -564,6 +564,9 @@
     <ClCompile Include="sources/rendering/lighting/SpotLight.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/lighting/SkyAtmosphere.cpp">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/lighting/Skybox.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
@@ -1097,6 +1100,12 @@
     <ClInclude Include="sources/rendering/lighting/PointLight.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/SkyAtmosphere.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/SkyAtmosphereSettings.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/lighting/Skybox.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
@@ -1338,6 +1347,18 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\shader_PNTUV.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\sky_atmosphere.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\sky_lut_transmittance_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\sky_lut_multiscatter_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\sky_lut_debug_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\skybox.hlsl">

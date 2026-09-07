@@ -19,6 +19,8 @@ enum class RenderQueue : uint8_t {
 };
 
 enum class RenderPass : uint16_t {
+    Main_SkyAtmosphereDebug, // B1: LUT inspection after forward composition
+    Main_SkyAtmosphereLuts, // B1: parameter-dirty, view-independent LUTs
     Main_BuildAS,
     Main_PrologueClear,
     // Async-compute step 9: the GI rotation compute, split out of Main_ObjectCompute because
@@ -103,6 +105,8 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
 {
     switch (pass)
     {
+    case RenderPass::Main_SkyAtmosphereDebug: return L"SkyAtmosphereDebug";
+    case RenderPass::Main_SkyAtmosphereLuts: return L"SkyAtmosphereLuts";
     case RenderPass::Main_BuildAS: return L"BuildAS";
     case RenderPass::Main_PrologueClear: return L"PrologueClear";
     case RenderPass::Main_GpuInstanceCompute: return L"GpuInstanceCompute";

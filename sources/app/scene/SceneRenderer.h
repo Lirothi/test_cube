@@ -18,6 +18,7 @@
 #include "rendering/core/UploadBatch.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneResourceBootstrapper.h"
+#include "rendering/lighting/SkyAtmosphere.h"
 #include "rendering/post/BloomRenderer.h" // R3: the bloom subsystem, a member below
 
 class Renderer;
@@ -177,6 +178,7 @@ private:
         size_t pVsmPageRender = kNone;
         size_t pHzb = kNone;       // gbuffer  -> SSR
         size_t pGtao = kNone;      // gbuffer  -> lighting
+        size_t pSkyLuts = kNone; // B1 -> compose debug (later SkyView)
         size_t pFog = kNone;       // volumetric fog -> compose (plan part A)
         size_t pRtTrace = kNone;   // gbuffer/AS -> RT resolve (gather phase of the RT split)
         size_t pSky = kNone;       // lighting -> reflection source
@@ -536,6 +538,7 @@ private:
     // decision, its declarations and the nineteen members only it ever read. Talked to through
     // Decide / Declare / Record. Deliberately has no Reset: its kernel and sprite are assets.
     BloomRenderer bloom_;
+    SkyAtmosphere skyAtmosphere_;
     // R4: the RT acceleration structures (S5), the bindless table (S9) and the two caches that keep
     // their rebuild incremental, together with the build body that was Pass_BuildAS. The RT passes
     // reach them through rtAs_.Manager() / rtAs_.Bindless().

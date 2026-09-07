@@ -1894,6 +1894,7 @@ void Scene::PrepareViews(Renderer* renderer)
     // GBV gate ran with `volumetric` applied yet never rendered (volumetric fog plan A). The frame
     // takes the source directly.
     frameData_.settings.atmosphere = atmosphere_;
+    frameData_.settings.skyAtmosphere = skyAtmosphere_;
     frameData_.cameraExposure = cameraExposure_;
     frameData_.colorPipeline = colorPipeline_;
 #if WITH_EDITOR
@@ -2398,6 +2399,7 @@ void Scene::Render(Renderer* renderer) {
 void Scene::Clear()
 {
     sceneRenderer_.Reset();
+    skyAtmosphere_ = {};
     frameData_ = SceneFrameData{}; // drop pointers into objects we are about to destroy
     lightManager_.Reset();
     shadowGpu_.Reset(); // drop CPU caster state; GPU buffers retained

@@ -65,6 +65,9 @@ COMPUTE_ENTRIES = [
     # Volumetric fog (plan part A): the froxel scatter (shares lighting_cb.hlsli) + integration.
     ("fog_scatter_cs.hlsl", "CSMain"),
     ("fog_integrate_cs.hlsl", "CSMain"),
+    ("sky_lut_transmittance_cs.hlsl", "CSMain"),
+    ("sky_lut_multiscatter_cs.hlsl", "CSMain"),
+    ("sky_lut_debug_cs.hlsl", "CSMain"),
     # Plan A7 light shafts: three kernels of one file.
     ("light_shafts_cs.hlsl", "CSDownsample"),
     ("light_shafts_cs.hlsl", "CSBlur"),

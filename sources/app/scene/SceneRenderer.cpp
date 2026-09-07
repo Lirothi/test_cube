@@ -76,6 +76,7 @@ void SceneRenderer::Reset()
 {
     resources_ = SceneResourceBootstrapper{};
     rtAs_.Reset();
+    skyAtmosphere_.Reset();
     decisions_.reflectionTemporal = false;
     ssrHistoryValid_ = false;
     ssrHistoryFrames_ = 0u;
@@ -111,6 +112,7 @@ void SceneRenderer::InvalidateRaytracing()
 void SceneRenderer::EnsureFrameResources(Renderer* renderer)
 {
     if (!renderer || !frame_) { return; }
+    skyAtmosphere_.Prepare(renderer, frame_->settings.skyAtmosphere);
 
     if (frame_->shadowGpu)
     {
@@ -624,6 +626,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     BuildLighting(renderer, gb);
     BuildReflections(renderer, gb);
     BuildForwardAndEditor(renderer, gb);
+    gb.pSelectionOutline = skyAtmosphere_.BuildDebug(renderer, rg, frame_->settings.skyAtmosphere, gb.pSelectionOutline, gb.pSkyLuts);
     BuildPost(renderer, gb);
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION

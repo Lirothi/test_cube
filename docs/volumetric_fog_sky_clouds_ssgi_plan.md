@@ -595,7 +595,7 @@ VSM с `atmosphere.volumetric:1 enabled:1 density:0.004` (объём, conservati
 
 ## B. Процедурное небо (Hillaire / UE SkyAtmosphere)
 
-### B1. LUT: transmittance + multi-scattering — [день]
+### B1. LUT: transmittance + multi-scattering — DONE (2026-09-07)
 Транскрипция `RenderTransmittanceLutCS` (`SkyAtmosphere.usf:1100`, 256×64, 10 сэмплов) и
 `RenderMultiScatteredLuminanceLutCS` (`:1156`, 32×32, 15 сэмплов) с параметрами Земли из UE
 (`FAtmosphereSetup`: 6360/6420 км, Rayleigh β, Mie β/g, озон), `SkyAtmosphereCommon.ush` целиком
@@ -603,6 +603,86 @@ VSM с `atmosphere.volumetric:1 enabled:1 density:0.004` (объём, conservati
 `sky_lut_transmittance_cs.hlsl`, `sky_lut_multiscatter_cs.hlsl`. Пересчёт только при смене параметров
 атмосферы (не солнца). Проверка: transmittance к солнцу при зените ≈ 0.9 (визуально бело-жёлтое),
 у горизонта — оранжевое (числа против UE-таблицы в комментарии).
+
+**Реализация B1 (2026-09-07):** `SkyAtmosphere` владеет двумя фиксированными RGBA16F LUT,
+SRV/UAV и readback-кольцом по frame slot. `Main_SkyAtmosphereLuts` выполняется при первом
+включении и изменении `SkyAtmosphereParameters`; солнце, камера, экспозиция и размер экрана
+в ключ не входят. Ключ и pending readback коммитятся в serial builder, запись CL их не меняет.
+Ресурсы не входят в resize-зависимый Deferred ring; учёт выделений — `mem: ... sky.luts`.
+При Clear уровня GPU уже осушен, LUT сбрасываются вместе со сценой.
+
+Дельты и уточнения относительно UE-дропа:
+* Единицы атмосферы и коэффициентов сохранены: км и км⁻¹, `kMetresPerKm=1000`. В LUT локальный
+  Z-up планеты; камера Y-up и reverse-Z в B1 не участвуют. Earth defaults взяты из
+  `SkyAtmosphereComponent.cpp:94-128`, ground albedo = linear sRGB(170) = 0.40197778.
+* Транскрибированы mapping/medium и общая часть интегратора из `SkyAtmosphereCommon.ush` и
+  `SkyAtmosphere.usf`; зависящие от UE View/AP/skylight обёртки не подключены — их потребители
+  относятся к B2/B3/B5. Нет зависимости от нынешнего HDRI или аналитического тумана.
+* Дроп использует **два вертикальных направления** для MS (не 64 sphere samples), isotropic
+  phase, `DEFAULT_SAMPLE_OFFSET=0.3`, 15 шагов. `MULTI_SCATTERING_POWER_SERIE=0` в `usf:733`:
+  `MultiScatAs1 += throughput * scattering * dt`, затем **пять членов** `1+r+r²+r³+r⁴` (`:1251`).
+  Это не бесконечный ряд `1/(1-r)`. Ground bounce не входит в `MultiScatAs1`.
+* RGBA16F вместо desktop R11G11B10F, alpha=0. LUT — transfer при unit-white illuminance,
+  без pre-exposure; солнце применяется будущим потребителем. `Mie.g=0.8` хранится в параметрах,
+  но B1 интегрирует изотропно, как UE.
+* Диагностический просмотр выполняется отдельной композицией **после** forward/океана, перед
+  tonemap: иначе океан перекрывал LUT. На нормальном кадре этого пасса нет.
+
+Управление B1 (session overrides через `--set`/`--sweep`, по умолчанию выключено):
+`sky.lutEnabled`, `sky.lutDebugView` (0 normal, 1 T, 2 MS×10), `sky.lutValidate`;
+`sky.rayleighScale`, `sky.mieScale` (scattering+absorption), `sky.ozoneScale`,
+`sky.groundAlbedo` (linear), `sky.multiScatteringFactor`. Debug-view сам запрашивает LUT.
+`sky.mode`, SkyView, диск солнца и замена HDRI по-прежнему относятся к B2.
+Источник настроек — `Scene::SkyAtmosphereRef()`, frame берёт его напрямую, как height fog:
+иначе `--set` в scene-stress меняет AppController settings, которые harness не передаёт в Scene.
+
+Численный эталон: scalar double-транскрипция формул UE; проверяются **все 17408 RGB-текселей**,
+диапазон T [0,1], конечность/неотрицательность MS и максимальная абсолютная ошибка.
+MS сверяется отдельно с использованием проверенной GPU T-таблицы (linear clamp), чтобы
+локализовать ошибку стадии. Readback/CPU-эталон работают только с `sky.lutValidate:1`, после
+fence текущего слота; диагностика и verdict — исключительно session log.
+
+| Центр текселя T, высота 3.679 м | Double-эталон RGB | GPU RGBA16F RGB |
+|---|---|---|
+| (0,0), μ=0.9736727, около зенита | 0.932043 / 0.850490 / 0.729200 | 0.931641 / 0.850098 / 0.729004 |
+| (255,0), μ=−0.0008248, около горизонта | 0.084015 / 0.006338 / 0.000022 | 0.083984 / 0.006332 / 0.000022 |
+
+Проверка invalidation на одном Release-бинаре: `--sweep=sky.rayleighScale:1,1,2,2,0,1`
+дала ровно **4 rebuild**, все четыре CPU/GPU PASS. `--sweep=light.exposure:0,1,2,0`
+дала **1 rebuild**. Переключение debug 1→2 также не перестраивает LUT.
+
+Паритет normal-view (VSM, камера теней из F4, 2560×1440, native, SMRT=0, wind frozen,
+manual exposure, no HUD), один процесс `--sweep=sky.lutEnabled:0,0,0,0,1,1,1,1`:
+три off/off пола по доле пикселей с max RGB delta > 1/255 = **0 / 0 / 0.027045 %**;
+три on/on = **0 / 0.006293 / 0.014323 %**; off→on = **0.016412 %** (внутри пола).
+MAE off→on = 0.003899 в 8-битных кодах. Обычные шейдеры неба/освещения/композа не менялись.
+Просмотрены `logs/b1_lut_final_00.png` (T) и `_01.png` (MS×10): полные непрерывные таблицы.
+
+На Earth defaults max abs CPU/GPU: **T 0.0005222, MS 0.0000422**; max MS 0.060974.
+Фраза «≈0.9» выше относится к красному каналу около зенита, не ко всем трём каналам.
+Таблица — центры текселей, не математически точный луч с поверхности (у UE интегратор
+возвращает пустой результат на/внутри планеты). Числа эталона также стоят в шапке T-шейдера.
+
+**Гейты B1 пройдены:** Debug / Release / Release_Editor; `check_shaders` **67/67**;
+`check_logging` **0 findings**; `--log-stress` Debug + Release **0 failed checks**, exit 0.
+`--scene-stress-gbv=20 --gbv-mode=unguarded --no-streamline` с
+`--set=sky.lutEnabled:1 --set=sky.lutValidate:1` и debug T (Legacy) / MS (VSM):
+**CLEAN**, exit 0, пустой GBV error-list, CPU/GPU PASS, clean-shutdown footer в обоих режимах.
+Unguarded оставляет shader validation (out-of-bounds/uninitialized), убирая guard branches;
+это не режим state-only. Проверены reload, resize/render scale, shadow mode и editor churn.
+Session: `session_20260907_174726_35876_debug.log` (Legacy),
+`session_20260907_175115_51184_debug.log` (VSM). Первый пробный GBV до исправления источника
+настроек не запускал LUT и **не засчитывался**. Первый обычный Debug-shot завис в shutdown
+NGX; все зачтённые headless-прогоны выполнены с `--no-streamline` и завершились чисто.
+
+GPU цена: три Release trace по 40 кадров с `--shot-delay=0 --set=sky.lutEnabled:1`,
+validation/debug off: **0.015 / 0.018 / 0.015 мс** (медиана 0.015), по **одному**
+`Pass_SkyAtmosphereLuts` в каждой трассе, на неизменных кадрах dispatch отсутствует.
+Размер LUT фиксированный, не зависит от 2560×1440 вывода; бюджет 0.10 мс соблюдён.
+Трассы `trace_20260907_175148_release_000.json`, `_175551_...`, `_175553_...`.
+Дополнительно все три коэффициента extinction=0: T **точно 1**, CPU/GPU PASS без NaN;
+MS содержит положенный ground bounce (его будущий потребитель умножит на scattering=0).
+Все затронутые текстовые файлы — CRLF без смешанных окончаний. Коммит — за пользователем.
 
 ### B2. SkyView LUT + skybox из LUT + диск солнца — [день]
 `RenderSkyViewLutCS` (192×104, сэмплы 4..32), `skybox.hlsl` второй режим `sky.mode 1`: направление →

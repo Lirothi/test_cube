@@ -584,6 +584,38 @@ namespace
         }
         if (setting == "ssr.ueIntensity") { renderSettings.ssrUe.intensity = value; return true; }
         if (setting == "ssr.ueMaxRoughness") { renderSettings.ssrUe.maxRoughness = value; return true; }
+        // B1 LUT-only controls; no sky.mode until SkyView exists (B2).
+        if (setting == "sky.lutValidate") { scene.SkyAtmosphereRef().lutValidate = value != 0.0f; return true; }
+        if (setting == "sky.lutEnabled") { scene.SkyAtmosphereRef().lutEnabled = value != 0.0f; return true; }
+        if (setting == "sky.lutDebugView") { scene.SkyAtmosphereRef().lutDebugView = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }
+        if (setting == "sky.rayleighScale")
+        {
+            const SkyAtmosphereParameters earth{};
+            for (unsigned i = 0; i < 3; ++i) scene.SkyAtmosphereRef().parameters.rayleigh[i] = earth.rayleigh[i] * std::clamp(value, 0.0f, 10.0f);
+            return true;
+        }
+        if (setting == "sky.mieScale")
+        {
+            const SkyAtmosphereParameters earth{};
+            for (unsigned i = 0; i < 3; ++i)
+            {
+                scene.SkyAtmosphereRef().parameters.mieScattering[i] = earth.mieScattering[i] * std::clamp(value, 0.0f, 10.0f);
+                scene.SkyAtmosphereRef().parameters.mieAbsorption[i] = earth.mieAbsorption[i] * std::clamp(value, 0.0f, 10.0f);
+            }
+            return true;
+        }
+        if (setting == "sky.ozoneScale")
+        {
+            const SkyAtmosphereParameters earth{};
+            for (unsigned i = 0; i < 3; ++i) scene.SkyAtmosphereRef().parameters.ozone[i] = earth.ozone[i] * std::clamp(value, 0.0f, 10.0f);
+            return true;
+        }
+        if (setting == "sky.multiScatteringFactor") { scene.SkyAtmosphereRef().parameters.groundAlbedo[3] = std::clamp(value, 0.0f, 10.0f); return true; }
+        if (setting == "sky.groundAlbedo")
+        {
+            for (unsigned i = 0; i < 3; ++i) scene.SkyAtmosphereRef().parameters.groundAlbedo[i] = std::clamp(value, 0.0f, 1.0f);
+            return true;
+        }
         // P7 aerial perspective. `atmosphere.enabled` is the gate; the rest are the model's own
         // parameters, so a sweep can find defaults without a rebuild.
         if (setting == "atmosphere.enabled")

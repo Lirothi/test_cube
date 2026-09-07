@@ -438,12 +438,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
     bool open = open_;
     const ImGuiWindowFlags windowFlags =
-        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
         (windowMaximize_.maximized ? ImGuiWindowFlags_NoMove : 0);
     if (ImGui::Begin("Developer Controls [F1]###DeveloperControls", &open, windowFlags))
     {
         ui::HandleWindowTitleDoubleClickMaximize(windowMaximize_);
-        ImGui::PushItemWidth(ImGui::CalcItemWidth() * 0.70f);
 
         if (!resetIconAtlasTried_)
         {
@@ -494,9 +493,32 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         }
         ImGui::TextDisabled("Global quality autosaves after an edit; level look stays in the level file.");
 
-        if (ImGui::BeginTabBar("DeveloperControlsTabs", ImGuiTabBarFlags_FittingPolicyScroll))
+        struct TabEntry { Tab tab; const char* label; };
+        static constexpr TabEntry tabs[] = {
+            { Tab::Frame, "Frame" }, { Tab::AntiAliasing, "AA / Scale" },
+            { Tab::Visibility, "Visibility" }, { Tab::Reflections, "Reflections" },
+            { Tab::Fog, "Fog" }, { Tab::Sky, "Sky" }, { Tab::Debug, "Debug" },
+            { Tab::Lod, "LOD" }, { Tab::Csm, "CSM" }, { Tab::Contact, "Contact" },
+            { Tab::Vsm, "VSM" }, { Tab::Bindings, "Bindings" }
+        };
+        const float navigationWidth = ImGui::GetFontSize() * 8.0f;
+        if (ImGui::BeginChild("DeveloperControlsNavigation", ImVec2(navigationWidth, 0), true))
         {
-            if (ImGui::BeginTabItem("Frame"))
+            for (const auto& entry : tabs)
+            {
+                if (ImGui::Selectable(entry.label, activeTab_ == entry.tab))
+                    activeTab_ = entry.tab;
+            }
+        }
+        ImGui::EndChild();
+        ImGui::SameLine();
+        // A separate child per tab preserves its scroll position; navigation stays visible.
+        ImGui::PushID(static_cast<int>(activeTab_));
+        if (ImGui::BeginChild("DeveloperControlsContent", ImVec2(0, 0), false,
+            ImGuiWindowFlags_HorizontalScrollbar))
+        {
+            ImGui::PushItemWidth(ImGui::CalcItemWidth() * 0.70f);
+            if (activeTab_ == Tab::Frame)
             {
                 const float fps = renderer.GetFPS();
                 const float frameMs = fps > 0.0f ? 1000.0f / fps : 0.0f;
@@ -542,10 +564,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 ImGui::Checkbox("Trace capture window", &traceWindowOpen_);
 
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("AA / Scale"))
+            if (activeTab_ == Tab::AntiAliasing)
             {
                 const bool dlssAvailable = renderer.IsDlssAvailable();
                 ImGui::Text("DLSS status: %s", renderer.IsDlssActive() ? "Active" : (dlssAvailable ? "Inactive" : "Unavailable"));
@@ -623,10 +644,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     graphicsSettings.ResetUpscale(renderer, scene, settings);
                 }
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("Visibility"))
+            if (activeTab_ == Tab::Visibility)
             {
                 // S0 (docs/occlusion_culling_plan.md): per-view visibility. Same numbers a headless
                 // run gets from --vis-readout, so a HUD reading and a log reading never disagree.
@@ -744,10 +764,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     graphicsSettings.ResetVisibility(renderer, scene, settings);
                 }
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("Reflections"))
+            if (activeTab_ == Tab::Reflections)
             {
                 ImGui::SeparatorText("Source");
                 // Reflection source (S8): None / Sky only / SSR / RT. RT is greyed out on
@@ -1008,10 +1027,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     graphicsSettings.ResetReflections(renderer, scene, settings);
                 }
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("Fog"))
+            if (activeTab_ == Tab::Fog)
             {
                 ImGui::TextWrapped("Volumetric fog GRID: project-wide quality, like UE's r.VolumetricFog.* cvars. The fog's "
                     "look (density, scattering, history, local lights) is level data: Inspector > Environment > Volumetric fog.");
@@ -1058,10 +1076,26 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     graphicsSettings.ResetFog(renderer, scene, settings);
                 }
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("Debug"))
+            if (activeTab_ == Tab::Sky)
+            {
+                auto& sky = scene.SkyAtmosphereRef();
+                ImGui::SeparatorText("Atmosphere LUTs");
+                ImGui::TextWrapped("B1 computes atmospheric transmittance and multiple scattering. "
+                    "The scene still uses its HDRI sky; procedural sky rendering comes in B2.");
+                ImGui::Checkbox("Build atmosphere LUTs", &sky.lutEnabled);
+                int view = static_cast<int>(sky.lutDebugView);
+                const char* views[] = { "Scene", "Transmittance", "Multi-scattering (x10)" };
+                if (ImGui::Combo("View", &view, views, IM_ARRAYSIZE(views)))
+                    sky.lutDebugView = static_cast<unsigned>(view);
+                ImGui::TextWrapped("A LUT view fills the viewport and builds the tables automatically. "
+                    "Choose Scene to return to normal rendering.");
+                ImGui::TextDisabled("Transmittance: 256 x 64; multi-scattering: 32 x 32.");
+                ImGui::TextWrapped("Preview settings apply for this session.");
+            }
+
+            if (activeTab_ == Tab::Debug)
             {
                 const std::string_view activeLevelName = levelManager.GetActiveLevelName();
                 ImGui::Text("Active level: %.*s", static_cast<int>(activeLevelName.size()), activeLevelName.data());
@@ -1317,10 +1351,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::TreePop();
                 }
 
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("LOD"))
+            if (activeTab_ == Tab::Lod)
             {
                 // Every mesh-LOD SELECTION control in one place (shadow-specific LOD lives with the
                 // shadows: the per-view curve bias stays on the VSM tab). All of these apply live.
@@ -1456,10 +1489,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "geometry, never numbers. 0 = no limit.");
                 ImGui::EndDisabled();
 
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("CSM"))
+            if (activeTab_ == Tab::Csm)
             {
                 // S0: the enabler for the whole CSM improvement plan (docs/csm_improvement_plan.md).
                 // Without a live readout there is nothing to judge the fit/density steps on, and
@@ -1875,13 +1907,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                     "atlas over zRange.  bias = depth bias in world mm (= peter-panning).\n"
                                     "scissor %% = share of the tile the view-cone scissor would rasterise (S11).");
 
-                ImGui::EndTabItem();
             }
 
             // Its own tab because it belongs to NEITHER shadow mode: the trace reads the camera
             // depth buffer, so Legacy CSM and VSM get the identical term. Putting it under either
             // one would say it is a property of that mode, which it is not.
-            if (ImGui::BeginTabItem("Contact"))
+            if (activeTab_ == Tab::Contact)
             {
                 if (ImGui::Button("Reset contact shadows to defaults"))
                 {
@@ -2026,10 +2057,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "itself reads as a line across the ground.");
 
                 ImGui::EndDisabled();
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("VSM"))
+            if (activeTab_ == Tab::Vsm)
             {
                 if (ImGui::Button("Reset VSM quality to defaults"))
                 {
@@ -2494,10 +2524,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         }
                     }
                 }
-                ImGui::EndTabItem();
             }
 
-            if (ImGui::BeginTabItem("Bindings"))
+            if (activeTab_ == Tab::Bindings)
             {
                 const auto& descs = input.GetBindingDescs();
                 if (descs.empty())
@@ -2531,12 +2560,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     }
                 }
 
-                ImGui::EndTabItem();
             }
 
-            ImGui::EndTabBar();
+            ImGui::PopItemWidth();
         }
-        ImGui::PopItemWidth();
+        ImGui::EndChild();
+        ImGui::PopID();
     }
     ImGui::End();
     open_ = open;

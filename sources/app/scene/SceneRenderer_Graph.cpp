@@ -57,6 +57,7 @@ namespace
 void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
 {
     auto& rg = gb.rg;
+    gb.pSkyLuts = skyAtmosphere_.Build(renderer, rg, frame_->settings.skyAtmosphere);
 
     // RT acceleration-structure build (S5): the first pass when RT is enabled.
     // No consumer yet, so it's an independent node (no prereqs/dependents); a

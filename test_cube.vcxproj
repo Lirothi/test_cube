@@ -359,6 +359,7 @@
     <ClCompile Include="sources/rendering/lighting/PointLight.cpp" />
     <ClCompile Include="sources/rendering/lighting/SpotLight.cpp" />
     <ClCompile Include="sources/rendering/lighting/Skybox.cpp" />
+    <ClCompile Include="sources/rendering/lighting/SkyAtmosphere.cpp" />
     <ClCompile Include="sources/rendering/meshes/GpuInstancedModels.cpp" />
     <ClCompile Include="sources/rendering/meshes/InstanceBuffer.cpp" />
     <ClCompile Include="sources/rendering/meshes/Mesh.cpp" />
@@ -563,6 +564,8 @@
     <ClInclude Include="sources/rendering/lighting/SpotLight.h" />
     <ClInclude Include="sources/rendering/lighting/PointLight.h" />
     <ClInclude Include="sources/rendering/lighting/Skybox.h" />
+    <ClInclude Include="sources/rendering/lighting/SkyAtmosphere.h" />
+    <ClInclude Include="sources/rendering/lighting/SkyAtmosphereSettings.h" />
     <ClInclude Include="sources/core/math/AABB.h" />
     <ClInclude Include="sources/core/math/OBB.h" />
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />
@@ -638,6 +641,10 @@
     <None Include="shaders\shader.hlsl" />
     <None Include="shaders\shader_PNTUV.hlsl" />
     <None Include="shaders\shader_comp.hlsl" />
+    <None Include="shaders\sky_atmosphere.hlsli" />
+    <None Include="shaders\sky_lut_transmittance_cs.hlsl" />
+    <None Include="shaders\sky_lut_multiscatter_cs.hlsl" />
+    <None Include="shaders\sky_lut_debug_cs.hlsl" />
     <None Include="shaders\skybox.hlsl" />
     <None Include="shaders\ssr_cs.hlsl" />
     <None Include="shaders\ssr_temporal_cs.hlsl" />

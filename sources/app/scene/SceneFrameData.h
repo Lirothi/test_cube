@@ -12,6 +12,7 @@
 #include "app/scene/SceneRenderConfig.h" // S8: CascadeShadowConfig, read by the lighting/glass CBs
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/lighting/LightManager.h"
+#include "rendering/lighting/SkyAtmosphereSettings.h"
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumClipmapLevels (Step 24d)
 
 class Camera;
@@ -477,6 +478,7 @@ struct SceneRenderSettings
 {
     GtaoSettings gtao{};
     AtmosphereSettings atmosphere{};
+    SkyAtmosphereSettings skyAtmosphere{};
     BloomSettings bloom{};
     // STAYS LogMarch. The UE march is finished and correct after P13, and it is the cheaper search,
     // but on WATER the log march's dense mask is markedly the better picture -- and water is the

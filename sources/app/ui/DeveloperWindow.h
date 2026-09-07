@@ -31,8 +31,7 @@ public:
     bool IsLogWindowOpen() const { return logWindow_.IsOpen(); }
     void ToggleLogWindow() { logWindow_.ToggleOpen(); }
 
-    // Scene is non-const because the CSM tab edits CascadeShadowConfig live (S0.2); everything
-    // else here still reads through const accessors.
+    // Tabs edit scene settings live, including shadows and atmosphere previews.
     bool Draw(Renderer& renderer, Scene& scene, const InputManager& input, LevelManager& levelManager,
         SceneRenderSettings& settings, GraphicsSettingsManager& graphicsSettings
 #if WITH_EDITOR
@@ -41,6 +40,13 @@ public:
     );
 
 private:
+    enum class Tab
+    {
+        Frame, AntiAliasing, Visibility, Reflections, Fog, Sky,
+        Debug, Lod, Csm, Contact, Vsm, Bindings
+    };
+    Tab activeTab_ = Tab::Frame;
+
     void RefreshLevelList();
     // Start/Stop trace capture. Its own window rather than a tab, so it stays reachable while the
     // ocean/other windows have focus — the stalls worth capturing happen WHILE dragging something

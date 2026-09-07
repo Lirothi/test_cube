@@ -93,6 +93,7 @@ extern const Profiler::ScopeNameKey kPassGBufferB;       // occlusion plan S5: p
 extern const Profiler::ScopeNameKey kPassShoreDepth;
 extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassGtao;
+extern const Profiler::ScopeNameKey kPassSkyAtmosphereLuts;
 extern const Profiler::ScopeNameKey kPassVolumetricFog; // plan part A: the froxel volume
 extern const Profiler::ScopeNameKey kPassLightShafts;   // plan A7: UE LightShaftBloom (5 dispatches)
 extern const Profiler::ScopeNameKey kFogScatter;        // ... its per-cell lighting dispatch
