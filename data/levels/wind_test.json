@@ -27,14 +27,15 @@
       0.25,
       0.25
     ],
-    "lightShaftBloomScale": 0.10000000149011612,
+    "lightShaftBloomMaxBrightness": 100.0,
+    "lightShaftBloomScale": 0.05000000074505806,
     "lightShaftBloomThreshold": 2.0,
     "lightShaftBloomTint": [
       1.0,
       1.0,
       1.0
     ],
-    "lightShaftsEnabled": false,
+    "lightShaftsEnabled": true,
     "skyFillIntensity": 1.0,
     "sunIlluminanceLux": 85000.0
   },
@@ -13898,7 +13899,7 @@
   "pointLights": [],
   "postProcess": {
     "atmosphere": {
-      "density": 0.0020000000949949026,
+      "density": 0.0010000000474974513,
       "enabled": true,
       "heightFalloff": 0.05999999865889549,
       "maxOpacity": 0.8999999761581421,
@@ -13909,7 +13910,7 @@
       "sunScatterExponent": 8.0,
       "sunScatterStartDistance": 100.0,
       "sunScatterStrength": 0.5,
-      "volumetric": true
+      "volumetric": false
     },
     "bloom": {
       "convAnamorphic": 0.30000001192092896,
@@ -13935,9 +13936,9 @@
       "convKernel": "textures/DefaultBloomKernelAnamorphic.dds",
       "convKernelRadius": 0.0015999999595806003,
       "convKernelTint": [
-        0.4407457113265991,
-        0.546588659286499,
-        0.9900332093238831
+        0.27906978130340576,
+        0.3173918128013611,
+        1.0
       ],
       "convPercent": 25.0,
       "convPreFilterMax": 12.0,
@@ -13953,7 +13954,7 @@
       "method": 1,
       "radius": 1.0,
       "softKnee": 0.5,
-      "threshold": 5.0
+      "threshold": 4.0
     },
     "cameraExposure": {
       "apertureFStop": 16.0,

@@ -1708,6 +1708,53 @@ namespace
         }
         else if (env.type == "directionalLight")
         {
+            Math::float3 rayDirection = EditorLightDirection::NormalizedRay(
+                JsonFloat3(tgt(), "direction", Math::float3(-1.0f, -1.0f, -1.0f)));
+            float sourceAzimuth = 0.0f;
+            float sourceElevation = 0.0f;
+            EditorLightDirection::SourceAngles(
+                rayDirection, sourceAzimuth, sourceElevation);
+
+            {
+                const bool changed = ImGui::DragFloat("Source azimuth (Y)",
+                    &sourceAzimuth, 0.5f, -180.0f, 180.0f, "%.1f deg",
+                    ImGuiSliderFlags_AlwaysClamp);
+                beginContinuousEdit(changed);
+                if (changed)
+                {
+                    rayDirection = EditorLightDirection::RayFromSourceAngles(
+                        sourceAzimuth, sourceElevation);
+                    tgt()["direction"] = {
+                        rayDirection.x, rayDirection.y, rayDirection.z };
+                }
+                trackContinuousEdit(changed);
+            }
+            {
+                const bool changed = ImGui::DragFloat("Source elevation",
+                    &sourceElevation, 0.5f, -89.0f, 89.0f, "%.1f deg",
+                    ImGuiSliderFlags_AlwaysClamp);
+                beginContinuousEdit(changed);
+                if (changed)
+                {
+                    rayDirection = EditorLightDirection::RayFromSourceAngles(
+                        sourceAzimuth, sourceElevation);
+                    tgt()["direction"] = {
+                        rayDirection.x, rayDirection.y, rayDirection.z };
+                }
+                trackContinuousEdit(changed);
+            }
+
+            rayDirection = EditorLightDirection::NormalizedRay(rayDirection);
+            ImGui::PushStyleColor(
+                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::InputFloat3("Normalized ray", &rayDirection.x, "%.3f",
+                ImGuiInputTextFlags_ReadOnly);
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("World-space direction in which the light rays travel.");
+            }
+
             colorEdit();
             // P4. The default handed to the drag is the level's LEGACY `exposure`, which is exactly
             // the value the migration folded in -- so the row opens showing what is on screen, and
@@ -1835,53 +1882,6 @@ namespace
                               "`sunIntensity` and whole-scene `exposure` fields no longer do "
                               "anything. Delete them from the level JSON whenever you next "
                               "hand-edit the file.");
-            }
-
-            Math::float3 rayDirection = EditorLightDirection::NormalizedRay(
-                JsonFloat3(tgt(), "direction", Math::float3(-1.0f, -1.0f, -1.0f)));
-            float sourceAzimuth = 0.0f;
-            float sourceElevation = 0.0f;
-            EditorLightDirection::SourceAngles(
-                rayDirection, sourceAzimuth, sourceElevation);
-
-            {
-                const bool changed = ImGui::DragFloat("Source azimuth (Y)",
-                    &sourceAzimuth, 0.5f, -180.0f, 180.0f, "%.1f deg",
-                    ImGuiSliderFlags_AlwaysClamp);
-                beginContinuousEdit(changed);
-                if (changed)
-                {
-                    rayDirection = EditorLightDirection::RayFromSourceAngles(
-                        sourceAzimuth, sourceElevation);
-                    tgt()["direction"] = {
-                        rayDirection.x, rayDirection.y, rayDirection.z };
-                }
-                trackContinuousEdit(changed);
-            }
-            {
-                const bool changed = ImGui::DragFloat("Source elevation",
-                    &sourceElevation, 0.5f, -89.0f, 89.0f, "%.1f deg",
-                    ImGuiSliderFlags_AlwaysClamp);
-                beginContinuousEdit(changed);
-                if (changed)
-                {
-                    rayDirection = EditorLightDirection::RayFromSourceAngles(
-                        sourceAzimuth, sourceElevation);
-                    tgt()["direction"] = {
-                        rayDirection.x, rayDirection.y, rayDirection.z };
-                }
-                trackContinuousEdit(changed);
-            }
-
-            rayDirection = EditorLightDirection::NormalizedRay(rayDirection);
-            ImGui::PushStyleColor(
-                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::InputFloat3("Normalized ray", &rayDirection.x, "%.3f",
-                ImGuiInputTextFlags_ReadOnly);
-            ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("World-space direction in which the light rays travel.");
             }
         }
         else if (env.type == "camera")
