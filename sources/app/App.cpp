@@ -584,7 +584,23 @@ namespace
         }
         if (setting == "ssr.ueIntensity") { renderSettings.ssrUe.intensity = value; return true; }
         if (setting == "ssr.ueMaxRoughness") { renderSettings.ssrUe.maxRoughness = value; return true; }
-        // B1 LUT-only controls; no sky.mode until SkyView exists (B2).
+        if (setting == "sun.elevation" || setting == "sun.azimuth")
+        {
+            auto& sun = scene.DirectionalLightRef();
+            const auto d = -sun.GetDirection();
+            const float len = std::sqrt(std::max(1.e-12f, d.x*d.x + d.y*d.y + d.z*d.z));
+            float elevation = std::asin(std::clamp(d.y / len, -1.0f, 1.0f));
+            float azimuth = std::atan2(d.x, d.z);
+            constexpr float rad = 3.14159265358979323846f / 180.0f;
+            if (setting == "sun.elevation") elevation = std::clamp(value, -90.0f, 90.0f) * rad;
+            else azimuth = value * rad;
+            sun.SetDirection(-Math::float3(std::cos(elevation)*std::sin(azimuth), std::sin(elevation), std::cos(elevation)*std::cos(azimuth)));
+            return true;
+        }
+        if (setting == "sky.mode") { scene.SkyAtmosphereRef().mode = value >= 1.0f ? 1u : 0u; return true; }
+        if (setting == "sky.luminanceScale") { scene.SkyAtmosphereRef().luminanceScale = std::clamp(value, 0.0f, 10.0f); return true; }
+        if (setting == "sun.angularSize") { renderSettings.sunAngularSize = std::clamp(value, 0.0f, 0.25f); return true; }
+        // B1 transfer LUT controls.
         if (setting == "sky.lutValidate") { scene.SkyAtmosphereRef().lutValidate = value != 0.0f; return true; }
         if (setting == "sky.lutEnabled") { scene.SkyAtmosphereRef().lutEnabled = value != 0.0f; return true; }
         if (setting == "sky.lutDebugView") { scene.SkyAtmosphereRef().lutDebugView = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }

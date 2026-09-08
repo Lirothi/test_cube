@@ -684,7 +684,7 @@ validation/debug off: **0.015 / 0.018 / 0.015 мс** (медиана 0.015), п�
 MS содержит положенный ground bounce (его будущий потребитель умножит на scattering=0).
 Все затронутые текстовые файлы — CRLF без смешанных окончаний. Коммит — за пользователем.
 
-### B2. SkyView LUT + skybox из LUT + диск солнца — [день]
+### B2. SkyView LUT + skybox из LUT + диск солнца — DONE (2026-09-07)
 `RenderSkyViewLutCS` (192×104, сэмплы 4..32), `skybox.hlsl` второй режим `sky.mode 1`: направление →
 `SkyViewLutParamsToUv` (`:972`) → luminance; `GetLightDiskLuminance` (`:313`) с `sunAngularSize`
 (уже есть в настройках); экспозиция та же. Каждый кадр (дёшево: 192×104). Небо ниже горизонта —
@@ -692,6 +692,126 @@ MS содержит положенный ground bounce (его будущий п
 источник правды — уровень, слайдер — override сессии как `--shadow-mode`).
 **Критерий приёмки:** закат/полдень/сумерки глазами; переключение mode 0↔1 без изменения
 экспозиции сцены (яркость неба калибруется на HDRI: измерить среднюю яркость зенита обеих).
+
+**Реализация B2 (2026-09-07):** `Main_SkyView` строит RGBA16F 192×104 каждый активный кадр,
+после lighting и до skybox. `SkyAtmosphere` владеет ресурсом, SRV/UAV и PSO; fixed-size,
+resize не переаллоцирует, Clear сбрасывает после drain, память входит в `sky.luts`.
+T/MS по-прежнему пересчитываются только по ключу атмосферы. Зависимости и состояния объявлены
+в serial builder; skybox читает SkyView и T в pixel-readable state. В режиме HDRI для новых
+слотов используются type-correct null Texture2D SRV, включая editor preview.
+
+Транскрипция и дельты относительно UE:
+* `SkyAtmosphere.usf:228-267,1282-1338`, `SkyAtmosphereCommon.ush:194-225`: полный longitude,
+  нелинейная вертикаль с концентрацией у горизонта и исходные unit/sub-UV remap. Вместо
+  `acosFast4/atan2Fast` — HLSL `acos/atan2` с ограничением домена от округлений.
+* `usf:519-595`: 4..32 шага, максимум после 150 км, квадратичное распределение и дробный
+  последний интервал, sample offset 0.3. `ParticipatingMediaCommon.ush:91-104`: Rayleigh и HG
+  с правильным знаком `HG(g,-dot(toSun,viewDir))`. MS lookup и аналитический segment integral —
+  `usf:342-350,653-758`, тень планеты — `:669-671`.
+* Наш мир Y-up в метрах → локальный Z-up `(x,z,y)`, высота = bottom + max(1 м, camera.y)/1000.
+  Планета закреплена под локальным уровнем моря, горизонтальное перемещение не меняет её up;
+  yaw/roll камеры не вращают LUT. Для камеры выше оболочки выполняется MoveToTopAtmosphere.
+* У UE SkyView вызывает интегратор с `Ground=false`. По требованию B2 включён его Lambert
+  ground term (`usf:771-783`) при IntersectGround. Opaque/cloud shadows и второе солнце не входят в B2.
+* Диск — `Common.ush:256-279`, `Rendering.cpp:445-446`: L = RGB lux / solid angle, T вдоль
+  луча и soft edge, диск закрывается планетой. Существующий `sunAngularSize` интерпретируется
+  здесь как **угловой радиус в радианах** (для прежнего BRDF он остаётся прежним расширением alpha).
+  0 отключает диск. Поток света берётся из `DirectionalLight::GetEffectiveColor()`; как вход
+  атмосферы он трактуется как outer-space illuminance, без изменения освещения геометрии в B2.
+* SkyView LUT хранит pre-exposed luminance. Skybox декодирует её перед записью в raw FP16
+  LightTarget, общий для HDRI и освещения геометрии. Диск ограничивается 65504 до экспозиции
+  и soft-edge coverage, итоговый raw sky также ограничен 65504. Compose применяет одну общую
+  экспозицию; отдельного `skyPreExposed` пути нет. Это совместимость с текущим диапазоном
+  HDRI/геометрии, не полная физическая HDR-цепочка. Velocity/depth skybox сохранены.
+* IBL, отражения, дальний ambient и атмосферное ослабление прямого света по-прежнему используют
+  прежний путь. Особенно заметно в сумерках: окружение/вода ещё освещаются HDRI. Это граница B4/B5.
+
+Управление: **F1 → Sky → Sky mode → Procedural atmosphere**; `Sun elevation`, `Sun azimuth`,
+`Sun angular radius (rad)`, `Sky luminance scale`. CLI: `--set=sky.mode:0|1`,
+`sun.elevation` (−90..90°), `sun.azimuth` (0° = +Z, +90° = +X), `sun.angularSize` (0..0.25 rad),
+`sky.luminanceScale` (0..10). Положение солнца пишет `DirectionalLight::SetDirection`, поэтому
+инвалидация теней работает; исходник направления — уровень, новые ручки являются session override.
+Режим по умолчанию **0**, до визуальной приёмки владельцем. Камерные параметры не меняются.
+
+Калибровка `wind_test`, солнце уровня, zenith camera `(0,50,0)`, quaternion
+`(-0.7071068,0,0,0.7071068)`, один Release-бинарь, native 2560×1440, frozen wind,
+manual EV100=12, bloom/light shafts/froxel off, neutral grade/local exposure, toneCurve=0.
+Среднее central 128×128: raw luminance восстановлена обратной Narkowicz-кривой из PNG
+(pow 2.2, решение квадратного уравнения, деление на 1.44/2^12); это оценка с 8-bit квантизацией,
+не прямой HDR-readback. Ни один канал не clipped. HDRI ≈ **1276.08 cd/m²**, SkyView scale=1
+≈ **599.19**, отношение **2.1297**. Default sky-only scale **2.13** даёт ≈ **1276.27 cd/m²**
+(разница 0.014%, ниже точности PNG-оценки), без изменения EV. Артефакты
+`logs/b2_calibrated_00.png`, `_01.png`. Предварительная оценка с localContrast=0 не засчитывается:
+0 выравнивает base luminance; нейтральное значение — 1.
+
+Паритет mode 0 после включения/выключения, камера теней F4, VSM SMRT=0, wind frozen,
+manual exposure, native 2560×1440, один процесс `--sweep=sky.mode:0,0,0,0,1,1,0,0,0,0`:
+три пола до переключения **0.02216 / 0.02661 / 0.01736 %** пикселей с max RGB delta >1/255;
+возврат 0→1→0 — **0.00000 %**, MAE 0.0000633 кода. Три пола после возврата
+**0.01997 / 0.01270 / 0.02043 %**. Артефакты `logs/b2_parity_00..09.png`.
+
+Проверены кадры солнца +60° / +2° / −6°, в том числе `logs/b2_final_00..02.png` при общем
+EV100=12, и `logs/b2_time_00..02.png` при исходной дневной экспозиции. Диск в `b2_disk_00..02.png`:
+радиусы 0 / 0.00465 / 0.01 rad дают 0 / 116 / 525 ярких пикселей, диаметр 0 / 12 / 26 px.
+При радиусе 0 остаётся рассеянный ореол, диск исчезает. Визуальный вердикт — за пользователем.
+
+**Гейты B2 пройдены:** Debug / Release / Release_Editor, shader matrix **70/70**,
+`check_logging` **0 findings**, `--log-stress` Debug / Release — **0 failed checks**, exit 0.
+`--scene-stress-gbv=20 --gbv-mode=unguarded --no-streamline --set=sky.mode:1 --set=sky.lutValidate:1`
+в Legacy и VSM: **CLEAN**, exit 0, clean-shutdown footer, без validation errors.
+Сессии `session_20260907_233806_44376_debug.log` (20 итераций / 279.3 с) и
+`session_20260907_234323_58836_debug.log` (20 / 307.9 с). Проверены reload, resize,
+render/reflection scale, переключение теней и editor churn. T/MS CPU/GPU reference PASS
+после reload; SkyView и skybox действительно выполнялись. После этих прогонов изменён только
+default calibration scale 1→2.13 и комментарии; финальные три бинаря пересобраны.
+
+Стоимость на одном финальном Release-бинаре, камера теней F4, 2560×1440, native, SMRT=0,
+manual exposure, wind frozen, warm-up 2 с, `--trace=40`: три медианы **Pass_SkyView
+0.010 / 0.010 / 0.010 мс** (43/42/42 GPU events с учётом хвоста timestamp readback).
+В трёх HDRI-контролях SkyView отсутствует; T/MS не перестраивались на неизменных кадрах.
+Skybox: procedural 0.005 мс, HDRI 0.006 мс; compose соответственно 0.116–0.117 / 0.117–0.118 мс,
+различия этого порядка не интерпретируются как ускорение. Бюджет LUT 0.10 мс соблюдён.
+Трассы `traces/trace_20260907_234928_release_000.json`, `_234932_...`, `_234935_...` (on),
+`_235031_...`, `_235035_...`, `_235038_...` (off). GBV-процессы к моменту замера завершились.
+Все 23 затронутых текстовых файла — CRLF, без смешанных окончаний. Коммит — за пользователем.
+
+**Исправление диапазона солнца B2 (2026-09-08, повторный отчёт владельца):**
+Предыдущая попытка ослабляла общие LightShaftBloom / convolution bloom / ghosts и меняла
+local exposure. Владелец отклонил её: она портила настройку HDRI и убирала bloom с блика
+на сфере, не устраняя разрыв яркости источников. Все три настройки `wind_test.json`
+(100 / 1 / 0.5), `exposure_baselum_cs`, `tonemap_cs` и `local_exposure.hlsli` восстановлены
+из HEAD. `skyfix_*` — исторические кадры отклонённого решения, не актуальный результат.
+
+Причина: B2 обходил raw FP16 LightTarget посредством отдельной pre-exposure ветки только
+для procedural sky. HDRI и surface lighting оставались в прежнем ограниченном диапазоне.
+Процедурный диск получал на несколько порядков больше доступной яркости. Декодирование
+BC6H исходного rustig DDS показало пик 65504 в cube units; после physical scale 10985.2468
+это 7.196e8. Но в рендере HDRI уже ограничен raw FP16 диапазоном 65504, как и блик на сфере.
+Калибровка зенита сама по себе этот разрыв не обнаруживает.
+
+Исправлено в `skybox.hlsl`: SkyView декодируется перед LightTarget, диск ограничивается
+тем же raw диапазоном до exposure, soft edge применяется после ограничения радианса.
+Исключение `skyPreExposed` из compose и его CPU binding удалено. Удаление ошибочного
+sky-only luminance scale 2.13 из диска сохранено. Авторские bloom, shafts, экспозиция,
+освещение поверхностей и HDRI shader path не перенастраиваются. Полный перенос ВСЕГО
+освещения в pre-exposed HDR требует отдельной согласованной миграции; снимать ограничение
+только с процедурного неба повторно нельзя.
+
+Проверки, точная камера нового HUD:
+`--cam-pos=-54.81,3.00,63.71 --cam-rot=-0.0571,0.4842,0.0317,0.8725`, wind frozen.
+* `energy_range_00/01.png`: mode 0/1, EV100=16, manual compensation=0, neutral grade/local
+  exposure, bloom/shafts/volumetric off. Солнце и блик сферы в ОБОИХ режимах имеют пик
+  RGB 239/239/239. Инверсия 8-bit ACES даёт около 6.41e4 (квантованный замер, не прямой
+  HDR readback). Исправный ключ: `atmosphere.volumetric`; `fog.volumetric` не существует.
+* `energy_fixed_00/01/02.png`: mode 0→1→0 с исходной auto exposure и восстановленными
+  авторскими эффектами. HDRI против кадра до правки raw пути: MAE 0.00984/255,
+  0.0874% пикселей отличаются больше 1 code value; round trip 0.0635% >1 code value.
+* `energy_old_view_00/01.png`: первая камера владельца
+  `--cam-pos=-88.57,5.11,-37.55 --cam-rot=-0.1980,0.3683,0.0806,0.9048`, bloom off/on.
+  Слабая полоса сохраняется, прежний гигантский пересвет ядра/ghosts отсутствует.
+* Debug / Release / Release_Editor собраны; 70/70 shader entries; check_logging 0.
+  Кадры native 2560×1440 без DLSS (`--no-streamline --dlss=off`). Новых ресурсов/пассов нет;
+  GBV для этой коррекции не повторялся.
 
 ### B3. Aerial perspective volume — [день]
 `CameraAerialPerspectiveVolume` 32×32×16 на 96 км (`:1002-1009`, `SkyAtmosphereRendering.cpp:121-137`);

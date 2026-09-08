@@ -174,6 +174,7 @@ struct SceneBlurCBHandles
 
 struct SceneComposeCBHandles
 {
+    Material::CBFieldHandle skyPreExposed;
     Material::CBFieldHandle invView;
     Material::CBFieldHandle invProj;
     Material::CBFieldHandle skyboxIntensity;
@@ -773,6 +774,7 @@ struct BlurPassConstants
 
 struct ComposePassConstants
 {
+    uint32_t skyPreExposed = 0u;
     mat4 invView{};
     mat4 invProj{};
     float skyboxIntensity = 1.0f;

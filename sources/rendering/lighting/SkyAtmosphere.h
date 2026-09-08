@@ -12,7 +12,7 @@ class Renderer;
 template <size_t MaxPasses> class RenderGraph;
 struct RenderGraphPassContext;
 
-// B1: fixed-size, view-independent LUTs. One GPU copy, ordered on the graphics queue.
+// Fixed-size transfer LUTs (parameter-dirty) and SkyView (per frame). Graphics queue only.
 // Changes overwrite in place only after previous graphics readers; resize never reallocates.
 class SkyAtmosphere
 {
@@ -23,6 +23,11 @@ public:
     size_t Build(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph, const SkyAtmosphereSettings& settings);
     size_t BuildDebug(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                       const SkyAtmosphereSettings& settings, size_t after, size_t luts);
+    size_t BuildView(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
+                     const SkyAtmosphereSettings& settings, const SkyViewFrameData& view, size_t after, size_t luts);
+    ID3D12Resource* ViewResource() const { return skyView_.Get(); }
+    ID3D12Resource* TransmittanceResource() const { return lut_[0].Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE ViewSrv() const { return viewSrv_; }
     bool Ready() const { return initialized_ && !failed_; }
     D3D12_CPU_DESCRIPTOR_HANDLE TransmittanceSrv() const { return srv_[0]; }
     D3D12_CPU_DESCRIPTOR_HANDLE MultiScatterSrv() const { return srv_[1]; }
@@ -31,6 +36,9 @@ public:
 private:
     void ValidateReadback(UINT slot);
     std::array<GpuResource, 2> lut_;
+    GpuResource skyView_;
+    D3D12_CPU_DESCRIPTOR_HANDLE viewSrv_{}, viewUav_{};
+    std::shared_ptr<Material> viewMaterial_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_;
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 2> srv_{}, uav_{};
     std::array<std::shared_ptr<Material>, 2> material_;

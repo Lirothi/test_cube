@@ -17,10 +17,22 @@ static_assert(sizeof(SkyAtmosphereParameters) == 112, "SkyAtmosphereCB layout");
 
 struct SkyAtmosphereSettings
 {
+    unsigned mode = 0; // 0 HDRI, 1 procedural atmosphere; session override.
+    float luminanceScale = 2.13f; // sky-only HDRI calibration, never camera exposure
     bool lutValidate = false; // GPU readback + double-precision UE reference on parameter changes
-    bool lutEnabled = false; // B1 has no visible sky consumer yet; opt-in calculation/debugging.
+    bool lutEnabled = false; // Explicit LUT calculation even in HDRI mode.
     unsigned lutDebugView = 0; // compose: 1 transmittance, 2 multi-scattering (display gain 10).
     SkyAtmosphereParameters parameters{};
 };
+
+// Shared CPU/HLSL layout; LUT uses local Z-up, world Y is altitude above sea level.
+struct SkyViewFrameData
+{
+    float sunDirection[4]{}; // local XYZ to sun; w angular radius in radians
+    float illuminance[4]{}; // outer-space RGB lux; w sky-only luminance scale
+    float exposure[4] = {1, 0, 0, 0}; // pre-exposure before FP16 storage
+    float planet[4]{}; // view height, bottom radius, top radius (km), enabled
+};
+static_assert(sizeof(SkyViewFrameData) == 64, "SkyView frame CB layout");
 
 inline constexpr float kMetresPerKm = 1000.0f;

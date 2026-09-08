@@ -19,6 +19,9 @@
 #include "app/scene/SceneRenderer.h"
 
 #include <algorithm>
+#include <cmath>
+#include "rendering/lighting/Skybox.h"
+#include "rendering/lighting/DirectionalLight.h"
 #include <cstdint>
 #include <initializer_list>
 
@@ -1168,13 +1171,39 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
 
     // pass-flow S5: the builder owns the `frame_->skybox` gate the body used to repeat after the
     // declarations were already made.
-    gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, { pPointLights }, /*mtDeps=*/{},
+    const auto& skySettings = frame_->settings.skyAtmosphere;
+    SkyViewFrameData skyView{};
+    const auto& a = skySettings.parameters;
+    skyView.planet[0] = a.radii[0] + std::max(0.001f, frame_->camera->GetPosition().y / kMetresPerKm);
+    skyView.planet[1] = a.radii[0]; skyView.planet[2] = a.radii[1];
+    skyView.illuminance[3] = skySettings.luminanceScale;
+    skyView.exposure[0] = preExposure_;
+    skyView.sunDirection[3] = frame_->settings.sunAngularSize;
+    if (frame_->dirLight)
+    {
+        const auto d = -frame_->dirLight->GetDirection();
+        const float invLength = 1.0f / std::sqrt(std::max(1.e-12f, d.x*d.x + d.y*d.y + d.z*d.z));
+        skyView.sunDirection[0] = d.x * invLength;
+        skyView.sunDirection[1] = d.z * invLength;
+        skyView.sunDirection[2] = d.y * invLength;
+        const auto color = frame_->dirLight->GetEffectiveColor();
+        skyView.illuminance[0] = color.x; skyView.illuminance[1] = color.y; skyView.illuminance[2] = color.z;
+    }
+    const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
+    skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
+    gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, { pSkyView }, /*mtDeps=*/{},
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ } },
-        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, skyView](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->skybox) { return {}; }
             ctx.UseDeclared();
+            if (skyView.planet[3] != 0)
+            {
+                ctx.Use(skyAtmosphere_.ViewResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                ctx.Use(skyAtmosphere_.TransmittanceResource(), kSrvAll);
+            }
+            frame_->skybox->SetAtmosphere(skyView, skyAtmosphere_.ViewSrv(), skyAtmosphere_.TransmittanceSrv());
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkybox);

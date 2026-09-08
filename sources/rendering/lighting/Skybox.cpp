@@ -107,6 +107,10 @@ public:
             projNoJitterHandle_ = material->ComputeCBFieldHandle(0, "projNoJitter");
             prevProjNoJitterHandle_ = material->ComputeCBFieldHandle(0, "prevProjNoJitter");
             exposureHandle_ = material->ComputeCBFieldHandle(0, "exposure");
+            sunHandle_ = material->ComputeCBFieldHandle(0, "skySunDirection");
+            illuminanceHandle_ = material->ComputeCBFieldHandle(0, "skyIlluminance");
+            planetHandle_ = material->ComputeCBFieldHandle(0, "skyPlanet");
+            skyExposureHandle_ = material->ComputeCBFieldHandle(0, "skyExposure");
         }
     }
 
@@ -121,12 +125,18 @@ public:
         UpdateUniform(owner, prevProjHandle_, material, camera.GetPrevProjMatrix(), cbData);
         UpdateUniform(owner, projNoJitterHandle_, material, camera.GetProjMatrixNoJitter(), cbData);
         UpdateUniform(owner, prevProjNoJitterHandle_, material, camera.GetPrevProjMatrixNoJitter(), cbData);
-        // P16.1: NOT pre-exposed here. The sky is drawn before compose, and compose scales
+        // P16.1: the HDRI path is NOT pre-exposed here. The sky is drawn before compose, and compose scales
         // everything it writes -- including the sky pixels it passes through -- so applying the
         // factor here too squared it, and the sky came out 2.8x too dark while the ground was
         // right. THE RULE: compose applies it to everything it writes; only writers that run AFTER
-        // compose apply it themselves.
+        // compose apply it themselves. B2 decodes its pre-exposed LUT in the skybox shader,
+        // then uses the same raw FP16 range as HDRI and surface lighting.
         UpdateUniform(owner, exposureHandle_, material, owner_.GetExposure(), cbData);
+        const auto& v = owner_.AtmosphereView();
+        UpdateUniform(owner, sunHandle_, material, v.sunDirection, cbData);
+        UpdateUniform(owner, illuminanceHandle_, material, v.illuminance, cbData);
+        UpdateUniform(owner, planetHandle_, material, v.planet, cbData);
+        UpdateUniform(owner, skyExposureHandle_, material, v.exposure, cbData);
     }
 
 private:
@@ -138,6 +148,7 @@ private:
     Material::CBFieldHandle projNoJitterHandle_{};
     Material::CBFieldHandle prevProjNoJitterHandle_{};
     Material::CBFieldHandle exposureHandle_{};
+    Material::CBFieldHandle sunHandle_{}, illuminanceHandle_{}, planetHandle_{}, skyExposureHandle_{};
 };
 } // namespace
 
@@ -211,6 +222,20 @@ void Skybox::Init(Renderer* renderer,
         }
     }
 
+    // Type-correct null descriptors keep the HDRI/editor path valid without atmosphere resources.
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1;
+    if (FAILED(renderer->GetDevice()->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&nullAtmosphereHeap_))))
+    {
+        LOG_ERROR(logging::LogCategory::Render, "skybox null atmosphere descriptor allocation failed");
+        return;
+    }
+    nullAtmosphereSrv_ = nullAtmosphereHeap_->GetCPUDescriptorHandleForHeapStart();
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+    sd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels = 1;
+    renderer->GetDevice()->CreateShaderResourceView(nullptr, &sd, nullAtmosphereSrv_);
+
     // Build the cube geometry
     BuildCubeMesh_(renderer, uploadCmdList, uploadKeepAlive);
 
@@ -224,7 +249,9 @@ void Skybox::Init(Renderer* renderer,
 
 bool Skybox::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
-    ctx.srvTable[0] = cube_.GetSRVForFrame(renderer);
+    ctx.srvTable[0] = renderer->StageSrvUavTable({cube_.GetSRVCPU(),
+        atmosphereView_.planet[3] != 0 ? atmosphereSrv_ : nullAtmosphereSrv_,
+        atmosphereView_.planet[3] != 0 ? transmittanceSrv_ : nullAtmosphereSrv_}).gpu;
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);

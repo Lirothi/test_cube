@@ -17,6 +17,12 @@ cbuffer SkyAtmosphereCB : register(b0)
     float4 AbsorptionExtinction; // w: ozone layer split altitude
     float4 AbsorptionDensity; // ascending linear/constant, descending linear/constant
     float4 GroundAlbedo; // w: multi-scattering factor
+#ifdef SKY_VIEW
+    float4 SkySunDirection;
+    float4 SkyIlluminance;
+    float4 SkyExposure;
+    float4 SkyPlanet;
+#endif
 };
 
 // SkyAtmosphereCommon.ush:169-212, Bruneton transmittance mapping. No sub-UV remap.

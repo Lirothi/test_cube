@@ -68,6 +68,7 @@ COMPUTE_ENTRIES = [
     ("sky_lut_transmittance_cs.hlsl", "CSMain"),
     ("sky_lut_multiscatter_cs.hlsl", "CSMain"),
     ("sky_lut_debug_cs.hlsl", "CSMain"),
+    ("sky_lut_view_cs.hlsl", "CSMain"),
     # Plan A7 light shafts: three kernels of one file.
     ("light_shafts_cs.hlsl", "CSDownsample"),
     ("light_shafts_cs.hlsl", "CSBlur"),
@@ -106,6 +107,8 @@ COMPUTE_ENTRIES_SM66 = [
 # runtime material state still cannot be checked this way, and listing it would make this tool lie
 # about its own coverage.
 GRAPHICS_ENTRIES = [
+    ("skybox.hlsl", "vs_6_0", "VSMain", [], ""),
+    ("skybox.hlsl", "ps_6_0", "PSMain", [], ""),
     ("ocean_surface.hlsl", "vs_6_0", "VSMain", [], "runup"),
     ("ocean_surface.hlsl", "ps_6_0", "PSMain", [], "runup"),
     ("ocean_surface.hlsl", "vs_6_0", "VSMain", ["OCEAN_SHORE_RUNUP=0"], "legacy"),

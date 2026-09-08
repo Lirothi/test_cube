@@ -42,6 +42,7 @@ SkyAtmosphere::~SkyAtmosphere()
 void SkyAtmosphere::Reset()
 {
     for (auto& resource : lut_) resource.Reset();
+    skyView_.Reset(); viewMaterial_.reset(); viewSrv_ = {}; viewUav_ = {};
     for (auto& resource : readback_) resource.Reset();
     for (auto& material : material_) material.reset();
     heap_.Reset();
@@ -55,7 +56,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
 {
     // BeginFrame already waited for THIS slot. Never map a different in-flight slot.
     ValidateReadback(renderer->GetCurrentFrameIndex());
-    if ((!settings.lutEnabled && !settings.lutDebugView) || failed_ || heap_) return;
+    if ((!settings.mode && !settings.lutEnabled && !settings.lutDebugView) || failed_ || heap_) return;
     auto* device = renderer->GetDevice();
     const auto fail = [this](const char* what) {
         LOG_ERROR(logging::LogCategory::Render, "sky atmosphere LUT: {} failed", what);
@@ -63,7 +64,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
     };
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    hd.NumDescriptors = 4;
+    hd.NumDescriptors = 6;
     if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
     const auto base = heap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
@@ -101,6 +102,30 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
         material_[i] = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
         if (!material_[i] || !material_[i]->GetPipelineState()) { fail("compute PSO"); return; }
     }
+    {
+        D3D12_RESOURCE_DESC vd{};
+        vd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        vd.Width = 192; vd.Height = 104; vd.DepthOrArraySize = 1; vd.MipLevels = 1;
+        vd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; vd.SampleDesc.Count = 1;
+        vd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+        if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, vd, kRest, nullptr, &resource)))
+        { fail("SkyView texture"); return; }
+        ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &vd).SizeInBytes;
+        skyView_.Attach(renderer->Declarations(), resource, kRest, L"SkyAtmosphere.SkyView");
+        viewSrv_ = {base.ptr + 4u * step}; viewUav_ = {base.ptr + 5u * step};
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = vd.Format; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(resource.Get(), &sd, viewSrv_);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = vd.Format; ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, viewUav_);
+        Material::ComputeDesc cd{}; cd.shaderFile = L"shaders/sky_lut_view_cs.hlsl"; cd.csEntry = "CSMain";
+        viewMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+        if (!viewMaterial_ || !viewMaterial_->GetPipelineState()) { fail("SkyView PSO"); return; }
+    }
     Material::ComputeDesc debugDesc{};
     debugDesc.shaderFile = L"shaders/sky_lut_debug_cs.hlsl"; debugDesc.csEntry = "CSMain";
     debugMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, debugDesc);
@@ -121,7 +146,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
 size_t SkyAtmosphere::Build(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph, const SkyAtmosphereSettings& settings)
 {
     constexpr size_t none = static_cast<size_t>(-1);
-    if ((!settings.lutEnabled && !settings.lutDebugView) || failed_ || !heap_) return none;
+    if ((!settings.mode && !settings.lutEnabled && !settings.lutDebugView) || failed_ || !heap_) return none;
     const auto params = settings.parameters;
     const bool validate = settings.lutValidate;
     if (initialized_ && std::memcmp(&cached_, &params, sizeof(params)) == 0) return none;
@@ -166,6 +191,41 @@ size_t SkyAtmosphere::Build(Renderer* renderer, RenderGraph<static_cast<size_t>(
                     t.cl->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
                 }
                 renderer->EmitPoint(t.cl, points[3]);
+                c.EndCL(t);
+            };
+        });
+}
+
+size_t SkyAtmosphere::BuildView(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
+    const SkyAtmosphereSettings& settings, const SkyViewFrameData& view, size_t after, size_t luts)
+{
+    if (!settings.mode || failed_ || !viewMaterial_) return after;
+    RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps{after};
+    if (luts != static_cast<size_t>(-1)) deps.push_back(luts);
+    const auto params = settings.parameters;
+    return graph.AddPass2(RenderPass::Main_SkyView, deps, {}, {},
+        [this, renderer, params, view](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const auto point = ctx.usePoint ? *ctx.usePoint : 0u;
+            for (auto& resource : lut_) ctx.Use(resource.Get(), kRest);
+            ctx.Use(skyView_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint();
+            const auto restore = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(skyView_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            ctx.Use(lut_[0].Get(), kRest | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            return [this, renderer, params, view, point, restore](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassSkyView);
+                auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
+                {
+                    GPU_SCOPE(t.cl, ProfilerScopes::kPassSkyView);
+                    renderer->EmitPoint(t.cl, point);
+                    const auto samplers = std::array{*SamplerManager::LinearClamp()};
+                    RecordComputeDispatch(renderer, t.cl, viewMaterial_.get(), render::kConstantBufferAlignment,
+                        [&params, &view](uint8_t* dst) {
+                            std::memcpy(dst, &params, sizeof(params));
+                            std::memcpy(dst + sizeof(params), &view, sizeof(view));
+                        }, {srv_[0], srv_[1]}, {viewUav_}, renderer->GetSamplerManager()->GetTable(renderer, samplers), 192, 104);
+                    renderer->EmitPoint(t.cl, restore);
+                }
                 c.EndCL(t);
             };
         });

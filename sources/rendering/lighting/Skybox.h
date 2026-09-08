@@ -5,6 +5,7 @@
 #include "rendering/renderables/RenderableObject.h"
 #include "materials/TextureCube.h"
 #include "materials/Texture2D.h"
+#include "rendering/lighting/SkyAtmosphereSettings.h"
 #include "rendering/descriptors/SamplerManager.h"
 
 class Skybox : public RenderableObject {
@@ -75,6 +76,10 @@ public:
             : 1.0f;
     }
 
+    void SetAtmosphere(const SkyViewFrameData& view, D3D12_CPU_DESCRIPTOR_HANDLE skyView, D3D12_CPU_DESCRIPTOR_HANDLE transmittance)
+    { atmosphereView_ = view; atmosphereSrv_ = skyView; transmittanceSrv_ = transmittance; }
+    const SkyViewFrameData& AtmosphereView() const { return atmosphereView_; }
+
     bool IsSimpleRender() const { return true; }
     bool CastsShadow() const { return false; }
 
@@ -88,6 +93,9 @@ private:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 
 private:
+    SkyViewFrameData atmosphereView_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE atmosphereSrv_{}, transmittanceSrv_{}, nullAtmosphereSrv_{};
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nullAtmosphereHeap_;
     TextureCube cube_;
     TextureCube specCube_;
     TextureCube irradianceCube_;

@@ -1358,6 +1358,8 @@
     <None Include="shaders\sky_lut_multiscatter_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\sky_lut_view_cs.hlsl"><Filter>shaders</Filter></None>
+    <None Include="shaders\sky_view_mapping.hlsli"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_lut_debug_cs.hlsl">
       <Filter>shaders</Filter>
     </None>

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -1082,8 +1083,26 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             {
                 auto& sky = scene.SkyAtmosphereRef();
                 ImGui::SeparatorText("Atmosphere LUTs");
-                ImGui::TextWrapped("B1 computes atmospheric transmittance and multiple scattering. "
-                    "The scene still uses its HDRI sky; procedural sky rendering comes in B2.");
+                int skyMode = static_cast<int>(sky.mode);
+                const char* modes[] = { "HDRI", "Procedural atmosphere" };
+                if (ImGui::Combo("Sky mode", &skyMode, modes, IM_ARRAYSIZE(modes))) sky.mode = static_cast<unsigned>(skyMode);
+                ImGui::SliderFloat("Sky luminance scale", &sky.luminanceScale, 0.0f, 10.0f, "%.3f");
+                auto& sun = scene.DirectionalLightRef();
+                const auto d = -sun.GetDirection();
+                constexpr float degrees = 180.0f / 3.14159265358979323846f;
+                const float len = std::sqrt(std::max(1.e-12f, d.x*d.x + d.y*d.y + d.z*d.z));
+                float elevation = std::asin(std::clamp(d.y / len, -1.0f, 1.0f)) * degrees;
+                float azimuth = std::atan2(d.x, d.z) * degrees;
+                bool sunChanged = ImGui::SliderFloat("Sun elevation", &elevation, -90.0f, 90.0f, "%.1f deg");
+                sunChanged |= ImGui::SliderFloat("Sun azimuth", &azimuth, -180.0f, 180.0f, "%.1f deg");
+                if (sunChanged)
+                {
+                    const float e = elevation / degrees, a = azimuth / degrees;
+                    sun.SetDirection(-Math::float3(std::cos(e)*std::sin(a), std::sin(e), std::cos(e)*std::cos(a)));
+                }
+                GRAPHICS_CONTROL(SunAngularSize, "sunAngularSize",
+                    ImGui::SliderFloat("Sun angular radius (rad)", &settings.sunAngularSize, 0.0f, 0.25f, "%.4f"));
+                ImGui::TextWrapped("Sky mode and sun angles apply for this session. Reflections and sky lighting still use the HDRI until B4.");
                 ImGui::Checkbox("Build atmosphere LUTs", &sky.lutEnabled);
                 int view = static_cast<int>(sky.lutDebugView);
                 const char* views[] = { "Scene", "Transmittance", "Multi-scattering (x10)" };

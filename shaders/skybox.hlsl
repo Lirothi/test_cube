@@ -1,6 +1,7 @@
-#define SKYBOX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define SKYBOX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
+#include "sky_view_mapping.hlsli"
 
 cbuffer PerFrame : register(b0)
 {
@@ -11,6 +12,10 @@ cbuffer PerFrame : register(b0)
     float4x4 projNoJitter;
     float4x4 prevProjNoJitter;
     float exposure;
+    float4 skySunDirection;
+    float4 skyIlluminance;
+    float4 skyExposure;
+    float4 skyPlanet;
 }
 
 struct VSIn {
@@ -56,6 +61,8 @@ VSOut VSMain(VSIn i)
 }
 
 TextureCube sky : register(t0);
+Texture2D<float4> skyViewLut : register(t1);
+Texture2D<float4> transmittanceLut : register(t2);
 SamplerState samLinear : register(s0);
 
 struct PSOut
@@ -68,7 +75,41 @@ struct PSOut
 PSOut PSMain(VSOut i)
 {
     float3 c = sky.Sample(samLinear, i.dir).rgb * exposure;
-    //c = SRGBToLinear(c);
+    if (skyPlanet.w != 0.0f)
+    {
+        float3 dir = normalize(i.dir.xzy);
+        float height = skyPlanet.x, bottom = skyPlanet.y, top = skyPlanet.z;
+        bool ground = SkyViewIntersectsGround(dir, height, bottom);
+        // The LUT is pre-exposed for storage; LightTarget is RAW radiance for HDRI
+        // and surface lighting alike. Decode here so compose uses one exposure path.
+        c = skyViewLut.SampleLevel(samLinear, SkyViewDirToUv(dir, height, bottom, ground), 0).rgb
+            / max(skyExposure.x, 1.e-8f);
+        // UE SkyAtmosphereCommon.ush:256-279, Rendering.cpp:445-446.
+        // sunAngularSize is interpreted as angular RADIUS in radians for the disk.
+        float radius = skySunDirection.w;
+        float cosHalf = cos(radius);
+        float viewDotLight = dot(dir, skySunDirection.xyz);
+        if (!ground && radius > 0.0f && viewDotLight > cosHalf)
+        {
+            float H = sqrt(top * top - bottom * bottom);
+            float h = min(height, top);
+            float rho = sqrt(max(0.0f, h * h - bottom * bottom));
+            float d = max(0.0f, -h * dir.z + sqrt(max(0.0f, h*h*(dir.z*dir.z-1.0f)+top*top)));
+            float2 uv = float2((d - (top-h)) / max(1.e-6f, rho+H-(top-h)), rho/H);
+            float3 tr = height >= top ? 1.0f : transmittanceLut.SampleLevel(samLinear, uv, 0).rgb;
+            // 2*sin(radius/2)^2 avoids cancellation for very small disks.
+            float oneMinusCos = 2.0f * pow(sin(0.5f * radius), 2.0f);
+            float softEdge = saturate(2.0f * (viewDotLight - cosHalf) / max(oneMinusCos, 1.e-12f));
+            // UE applies SkyAndAerialPerspectiveLuminanceFactor to scattering, not the disk.
+            float3 disk = tr * skyIlluminance.rgb / max(2.0f * SkyViewPi * oneMinusCos, 1.e-12f);
+            // Match the current HDRI/surface-lighting FP16 radiance range BEFORE exposure.
+            // A procedural-only pre-exposure bypass gave bloom thousands of times more
+            // energy than an equally bright HDRI sun or specular highlight. Keep coverage
+            // outside the radiance limit, so the soft disk edge remains antialiased.
+            c += min(disk, 65504.0f) * softEdge;
+        }
+        c = min(c, 65504.0f);
+    }
     float2 currUv = ClipToUV(i.clipPos);
     float2 prevUv = ClipToUV(i.prevPos);
     float2 motion = currUv - prevUv;
