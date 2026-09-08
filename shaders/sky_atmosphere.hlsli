@@ -23,6 +23,11 @@ cbuffer SkyAtmosphereCB : register(b0)
     float4 SkyExposure;
     float4 SkyPlanet;
 #endif
+#ifdef SKY_AERIAL
+    float4x4 AerialInvView;
+    float4x4 AerialInvProj;
+    float4 AerialStart; // x: froxel far-plane view depth in km
+#endif
 };
 
 // SkyAtmosphereCommon.ush:169-212, Bruneton transmittance mapping. No sub-UV remap.

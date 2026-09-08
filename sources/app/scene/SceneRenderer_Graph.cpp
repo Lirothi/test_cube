@@ -1191,7 +1191,9 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     }
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
-    gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, { pSkyView }, /*mtDeps=*/{},
+    const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, skyView,
+        *frame_->camera, frame_->settings.atmosphere.volumetricDistance, pSkyView);
+    gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, { pAerial }, /*mtDeps=*/{},
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ } },
@@ -1401,6 +1403,7 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             }
             // Volumetric fog: the integrated volume (its resting state; declared so the read is
             // named on the frames it happens).
+            if (skyAtmosphere_.AerialBuilt()) ctx.Use(skyAtmosphere_.AerialResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             if (decisions_.volumetricFog && DC.fogIntegrated.Get())
             {
                 ctx.Use(DC.fogIntegrated.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);

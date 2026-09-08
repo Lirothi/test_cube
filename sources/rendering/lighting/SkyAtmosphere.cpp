@@ -1,5 +1,6 @@
 #include "rendering/lighting/SkyAtmosphere.h"
 
+#include "app/camera/Camera.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -42,6 +43,7 @@ SkyAtmosphere::~SkyAtmosphere()
 void SkyAtmosphere::Reset()
 {
     for (auto& resource : lut_) resource.Reset();
+    aerial_.Reset(); aerialMaterial_.reset(); aerialSrv_ = {}; aerialUav_ = {}; aerialBuilt_ = false;
     skyView_.Reset(); viewMaterial_.reset(); viewSrv_ = {}; viewUav_ = {};
     for (auto& resource : readback_) resource.Reset();
     for (auto& material : material_) material.reset();
@@ -64,7 +66,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
     };
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    hd.NumDescriptors = 6;
+    hd.NumDescriptors = 8;
     if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
     const auto base = heap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
@@ -125,6 +127,30 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
         Material::ComputeDesc cd{}; cd.shaderFile = L"shaders/sky_lut_view_cs.hlsl"; cd.csEntry = "CSMain";
         viewMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
         if (!viewMaterial_ || !viewMaterial_->GetPipelineState()) { fail("SkyView PSO"); return; }
+    }
+    {
+        D3D12_RESOURCE_DESC vd{};
+        vd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+        vd.Width = 32; vd.Height = 32; vd.DepthOrArraySize = 16; vd.MipLevels = 1;
+        vd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; vd.SampleDesc.Count = 1;
+        vd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+        if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, vd, kRest, nullptr, &resource)))
+        { fail("AerialPerspective texture"); return; }
+        ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &vd).SizeInBytes;
+        aerial_.Attach(renderer->Declarations(), resource, kRest, L"SkyAtmosphere.AerialPerspective");
+        aerialSrv_ = {base.ptr + 6u * step}; aerialUav_ = {base.ptr + 7u * step};
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = vd.Format; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture3D.MipLevels = 1;
+        device->CreateShaderResourceView(resource.Get(), &sd, aerialSrv_);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = vd.Format; ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D; ud.Texture3D.WSize = 16;
+        device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, aerialUav_);
+        Material::ComputeDesc cd{}; cd.shaderFile = L"shaders/sky_lut_aerial_cs.hlsl"; cd.csEntry = "CSMain";
+        aerialMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+        if (!aerialMaterial_ || !aerialMaterial_->GetPipelineState()) { fail("AerialPerspective PSO"); return; }
     }
     Material::ComputeDesc debugDesc{};
     debugDesc.shaderFile = L"shaders/sky_lut_debug_cs.hlsl"; debugDesc.csEntry = "CSMain";
@@ -231,32 +257,84 @@ size_t SkyAtmosphere::BuildView(Renderer* renderer, RenderGraph<static_cast<size
         });
 }
 
-size_t SkyAtmosphere::BuildDebug(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
-                                const SkyAtmosphereSettings& settings, size_t after, size_t luts)
+size_t SkyAtmosphere::BuildAerial(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
+    const SkyAtmosphereSettings& settings, const SkyViewFrameData& view, const Camera& camera,
+    float startDepthMetres, size_t after)
 {
-    if (!settings.lutDebugView || failed_ || !heap_) return after;
+    aerialBuilt_ = false;
+    if (!settings.mode || !settings.aerialPerspective || failed_ || !aerialMaterial_) return after;
+    struct Constants
+    {
+        SkyAtmosphereParameters atmosphere;
+        SkyViewFrameData sky;
+        Math::mat4 invView, invProj;
+        Math::float4 start;
+    };
+    static_assert(sizeof(Constants) == 320);
+    const Constants data{settings.parameters, view, camera.GetInvViewMatrix(), camera.GetInvProjMatrixNoJitter(),
+        Math::float4(std::max(0.0f, startDepthMetres) / kMetresPerKm, 0, 0, 0)};
+    aerialBuilt_ = true;
+    return graph.AddPass2(RenderPass::Main_SkyAerial, {after}, {}, {},
+        [this, renderer, data](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const auto point = ctx.usePoint ? *ctx.usePoint : 0u;
+            for (auto& resource : lut_) ctx.Use(resource.Get(), kRest);
+            ctx.Use(aerial_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint();
+            const auto restore = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(aerial_.Get(), kRest);
+            return [this, renderer, data, point, restore](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassSkyAerial);
+                auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
+                {
+                    GPU_SCOPE(t.cl, ProfilerScopes::kPassSkyAerial);
+                    renderer->EmitPoint(t.cl, point);
+                    const auto samplers = std::array{*SamplerManager::LinearClamp()};
+                    RecordComputeDispatch(renderer, t.cl, aerialMaterial_.get(), 2u * render::kConstantBufferAlignment,
+                        [&data](uint8_t* dst) { std::memcpy(dst, &data, sizeof(data)); },
+                        {srv_[0], srv_[1]}, {aerialUav_}, renderer->GetSamplerManager()->GetTable(renderer, samplers), 32, 32 * 16);
+                    renderer->EmitPoint(t.cl, restore);
+                }
+                c.EndCL(t);
+            };
+        });
+}
+
+size_t SkyAtmosphere::BuildDebug(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
+                                const SkyAtmosphereSettings& settings, const Camera& camera, float startDepthMetres, size_t after, size_t luts)
+{
+    const bool showAerial = aerialBuilt_ && settings.aerialDebugView != 0 && settings.lutDebugView == 0;
+    if ((!settings.lutDebugView && !showAerial) || failed_ || !heap_) return after;
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
     deps.push_back(after);
     if (luts != static_cast<size_t>(-1)) deps.push_back(luts);
-    const unsigned view = settings.lutDebugView;
+    struct Constants { UINT width, height, view; float start; Math::mat4 invProj, projNoJitter; };
+    static_assert(sizeof(Constants) == 144);
+    const Constants data{renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+        showAerial ? settings.aerialDebugView + 2u : settings.lutDebugView, std::max(0.0f, startDepthMetres),
+        camera.GetInvProjMatrix(), camera.GetProjMatrixNoJitter()};
     return graph.AddPass2(RenderPass::Main_SkyAtmosphereDebug, deps, {}, {},
-        [this, renderer, view](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, data, showAerial](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto& D = renderer->GetDeferredForFrame();
             const auto point = ctx.usePoint ? *ctx.usePoint : 0u;
-            for (const auto& resource : lut_) ctx.Use(resource.Get(), kRest);
+            if (showAerial)
+            {
+                ctx.Use(aerial_.Get(), kRest);
+                // Opaque depth snapshot: forward ocean writes the live depth after compose.
+                ctx.Use(D.depthCopy.Get(), kRest);
+            }
+            else for (const auto& resource : lut_) ctx.Use(resource.Get(), kRest);
             ctx.Use(D.scene.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             ctx.NextPoint();
             const auto restore = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
-            return [this, renderer, view, point, restore](RenderGraphPassContext c) {
+            return [this, renderer, data, point, restore](RenderGraphPassContext c) {
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 renderer->EmitPoint(t.cl, point);
-                const std::array<UINT,4> constants{renderer->GetRenderWidth(), renderer->GetRenderHeight(), view, 0};
                 const auto samplers = std::array{*SamplerManager::LinearClamp()};
                 RecordComputeDispatch(renderer, t.cl, debugMaterial_.get(), render::kConstantBufferAlignment,
-                    [&constants](uint8_t* dst) { std::memcpy(dst, constants.data(), sizeof(constants)); },
-                    {srv_[0], srv_[1]}, {renderer->GetDeferredForFrame().sceneUAV},
-                    renderer->GetSamplerManager()->GetTable(renderer, samplers), constants[0], constants[1]);
+                    [&data](uint8_t* dst) { std::memcpy(dst, &data, sizeof(data)); },
+                    {srv_[0], srv_[1], aerialSrv_, renderer->GetDeferredForFrame().depthCopySRV}, {renderer->GetDeferredForFrame().sceneUAV},
+                    renderer->GetSamplerManager()->GetTable(renderer, samplers), data.width, data.height);
                 renderer->EmitPoint(t.cl, restore);
                 c.EndCL(t);
             };

@@ -93,6 +93,7 @@ extern const Profiler::ScopeNameKey kPassGBufferB;       // occlusion plan S5: p
 extern const Profiler::ScopeNameKey kPassShoreDepth;
 extern const Profiler::ScopeNameKey kPassGBuffer;
 extern const Profiler::ScopeNameKey kPassGtao;
+extern const Profiler::ScopeNameKey kPassSkyAerial;
 extern const Profiler::ScopeNameKey kPassSkyView;
 extern const Profiler::ScopeNameKey kPassSkyAtmosphereLuts;
 extern const Profiler::ScopeNameKey kPassVolumetricFog; // plan part A: the froxel volume

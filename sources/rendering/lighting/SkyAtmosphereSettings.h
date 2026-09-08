@@ -19,6 +19,8 @@ struct SkyAtmosphereSettings
 {
     unsigned mode = 0; // 0 HDRI, 1 procedural atmosphere; session override.
     float luminanceScale = 2.13f; // sky-only HDRI calibration, never camera exposure
+    bool aerialPerspective = false; // B3: procedural mode only; enable after visual acceptance
+    unsigned aerialDebugView = 0; // 0 scene, 1 transmittance, 2 luminance, 3 depth slices
     bool lutValidate = false; // GPU readback + double-precision UE reference on parameter changes
     bool lutEnabled = false; // Explicit LUT calculation even in HDRI mode.
     unsigned lutDebugView = 0; // compose: 1 transmittance, 2 multi-scattering (display gain 10).

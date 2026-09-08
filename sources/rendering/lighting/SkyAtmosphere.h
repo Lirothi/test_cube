@@ -7,6 +7,7 @@
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/lighting/SkyAtmosphereSettings.h"
 
+class Camera;
 class Material;
 class Renderer;
 template <size_t MaxPasses> class RenderGraph;
@@ -22,9 +23,15 @@ public:
     void Prepare(Renderer* renderer, const SkyAtmosphereSettings& settings);
     size_t Build(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph, const SkyAtmosphereSettings& settings);
     size_t BuildDebug(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
-                      const SkyAtmosphereSettings& settings, size_t after, size_t luts);
+                      const SkyAtmosphereSettings& settings, const Camera& camera, float startDepthMetres, size_t after, size_t luts);
     size_t BuildView(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                      const SkyAtmosphereSettings& settings, const SkyViewFrameData& view, size_t after, size_t luts);
+    size_t BuildAerial(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
+                       const SkyAtmosphereSettings& settings, const SkyViewFrameData& view,
+                       const Camera& camera, float startDepthMetres, size_t after);
+    bool AerialBuilt() const { return aerialBuilt_; }
+    ID3D12Resource* AerialResource() const { return aerial_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE AerialSrv() const { return aerialSrv_; }
     ID3D12Resource* ViewResource() const { return skyView_.Get(); }
     ID3D12Resource* TransmittanceResource() const { return lut_[0].Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE ViewSrv() const { return viewSrv_; }
@@ -36,6 +43,10 @@ public:
 private:
     void ValidateReadback(UINT slot);
     std::array<GpuResource, 2> lut_;
+    GpuResource aerial_;
+    D3D12_CPU_DESCRIPTOR_HANDLE aerialSrv_{}, aerialUav_{};
+    std::shared_ptr<Material> aerialMaterial_;
+    bool aerialBuilt_ = false; // reset/committed by each frame's serial builder
     GpuResource skyView_;
     D3D12_CPU_DESCRIPTOR_HANDLE viewSrv_{}, viewUav_{};
     std::shared_ptr<Material> viewMaterial_;

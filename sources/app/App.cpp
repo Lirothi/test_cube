@@ -598,6 +598,8 @@ namespace
             return true;
         }
         if (setting == "sky.mode") { scene.SkyAtmosphereRef().mode = value >= 1.0f ? 1u : 0u; return true; }
+        if (setting == "sky.aerialPerspective") { scene.SkyAtmosphereRef().aerialPerspective = value != 0.0f; return true; }
+        if (setting == "sky.aerialDebugView") { scene.SkyAtmosphereRef().aerialDebugView = static_cast<unsigned>(std::clamp(value, 0.0f, 3.0f)); return true; }
         if (setting == "sky.luminanceScale") { scene.SkyAtmosphereRef().luminanceScale = std::clamp(value, 0.0f, 10.0f); return true; }
         if (setting == "sun.angularSize") { renderSettings.sunAngularSize = std::clamp(value, 0.0f, 0.25f); return true; }
         // B1 transfer LUT controls.

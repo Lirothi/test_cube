@@ -1024,6 +1024,11 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             }
         }
 
+        constants.aerialParams = float4(skyAtmosphere_.AerialBuilt() ? 1.0f : 0.0f,
+            std::max(0.0f, frame_->settings.atmosphere.volumetricDistance),
+            1.0f / std::max(preExposure_, 1.e-8f),
+            0.0f);
+        constants.aerialViewProj = camera.GetViewProjMatrixNoJitter();
         D3D12_CPU_DESCRIPTOR_HANDLE wetnessSrv = D.depthSRV;
         if (frame_->ocean)
         {
@@ -1052,7 +1057,9 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
               D.gtaoUpsampledSRV, // t12: P6B dynamic AO, gated by `gtaoEnabled`
               // t13: the integrated fog volume, gated by `fogVolumeParams.x`; the dummy keeps
               // the VOLATILE range populated on frames without the pass.
-              decisions_.volumetricFog ? D.fogIntegratedSRV : renderer->VsmDummyTexSrv() },
+              decisions_.volumetricFog ? D.fogIntegratedSRV : renderer->VsmDummyTexSrv(),
+              // t14: B3 finite-distance atmosphere; never sampled when the pass was skipped.
+              skyAtmosphere_.AerialBuilt() ? skyAtmosphere_.AerialSrv() : renderer->VsmDummyTexSrv() },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -19,6 +19,7 @@
 #include "ibl_common.hlsli"
 #include "atmosphere.hlsli"
 #include "fog_common.hlsli"
+#include "sky_aerial_common.hlsli"
 
 Texture2D LightTarget : register(t0);
 Texture2D GB2 : register(t1);
@@ -37,6 +38,7 @@ Texture2D GtaoTex : register(t12);
 // Volumetric fog: the integrated froxel volume (light, transmittance) per slice, sampled by view
 // depth. A placeholder on frames without the volume (never read then: fogVolumeParams.x == 0).
 Texture3D<float4> FogVolume : register(t13);
+Texture3D<float4> SkyAerialVolume : register(t14);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -84,6 +86,8 @@ cbuffer PerFrame : register(b0)
     // P16.1: everything this pass writes is scaled by the exposure the tonemap is about to apply,
     // so the FP16 target holds numbers near 1 instead of raw radiance. 1.0 = not pre-exposed.
     float preExposure;
+    float4 aerialParams; // enabled, start view depth in metres, 1/preExposure, reserved
+    float4x4 aerialViewProj; // non-jittered world-to-clip
 }
 
 static const float kEps = 1e-6;
@@ -477,6 +481,29 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     else if (volumeOn)
     {
         color = color * vol.a + vol.rgb; // the sky and anything the analytic model leaves alone
+    }
+
+    // B3: apply finite-distance atmosphere OVER the existing analytic/froxel fog.
+    // Start on the froxel far PLANE (view Z), not a radial sphere; near geometry and
+    // sky pixels remain untouched. UE SkyAtmosphereCommon.ush:45-117 lookup/near fade.
+    if (aerialParams.x > 0.0f && fogDebugView == 0u)
+    {
+        float4 ap = float4(0, 0, 0, 1);
+        float distanceKm = 0.0f, startKm = 0.0f;
+        if (z > kEps)
+        {
+            float3 worldPos = ReconstructPosWS(uv, z, invProj, invView);
+            float4 clip = mul(float4(worldPos, 1), aerialViewProj);
+            float viewDepth = clip.w; // perspective w = view Z
+            if (viewDepth > aerialParams.y)
+            {
+                distanceKm = length(worldPos - camPosWS) / 1000.0f;
+                startKm = aerialParams.y * distanceKm / max(viewDepth, 1.e-4f);
+                float2 apUv = (clip.xy / clip.w) * float2(0.5f, -0.5f) + 0.5f;
+                ap = SampleSkyAerial(SkyAerialVolume, gSmp, apUv, distanceKm, startKm, aerialParams.z);
+            }
+        }
+        color = color * ap.a + ap.rgb;
     }
 
     // The debug views 1 / 3 / 5 are GRAY LEVELS in [0, 1], not radiance: written without the

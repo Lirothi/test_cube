@@ -33,7 +33,7 @@
     "rtWindSway": true,
     "source": "rt",
     "ssrTechnique": "logMarch",
-    "sunAngularSize": 0.009999999776482582,
+    "sunAngularSize": 0.019200000911951065,
     "sunMetalSpec": 0.0,
     "temporal": true,
     "temporalBlend": 0.125,

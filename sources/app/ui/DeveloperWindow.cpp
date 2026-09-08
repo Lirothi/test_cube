@@ -1103,6 +1103,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 GRAPHICS_CONTROL(SunAngularSize, "sunAngularSize",
                     ImGui::SliderFloat("Sun angular radius (rad)", &settings.sunAngularSize, 0.0f, 0.25f, "%.4f"));
                 ImGui::TextWrapped("Sky mode and sun angles apply for this session. Reflections and sky lighting still use the HDRI until B4.");
+                ImGui::BeginDisabled(sky.mode == 0);
+                ImGui::Checkbox("Aerial perspective", &sky.aerialPerspective);
+                ImGui::BeginDisabled(!sky.aerialPerspective);
+                int aerialView = static_cast<int>(sky.aerialDebugView);
+                const char* aerialViews[] = { "Scene", "Transmittance", "In-scattered light", "Depth slices" };
+                if (ImGui::Combo("Aerial view", &aerialView, aerialViews, IM_ARRAYSIZE(aerialViews)))
+                    sky.aerialDebugView = static_cast<unsigned>(aerialView);
+                ImGui::EndDisabled();
+                ImGui::TextWrapped("Distant opaque geometry beyond the volumetric fog range. 32 x 32 x 16, 96 km.");
+                ImGui::EndDisabled();
                 ImGui::Checkbox("Build atmosphere LUTs", &sky.lutEnabled);
                 int view = static_cast<int>(sky.lutDebugView);
                 const char* views[] = { "Scene", "Transmittance", "Multi-scattering (x10)" };

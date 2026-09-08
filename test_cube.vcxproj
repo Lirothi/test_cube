@@ -646,6 +646,8 @@
     <None Include="shaders\sky_lut_multiscatter_cs.hlsl" />
     <None Include="shaders\sky_lut_debug_cs.hlsl" />
     <None Include="shaders\sky_lut_view_cs.hlsl" />
+    <None Include="shaders\sky_lut_aerial_cs.hlsl" />
+    <None Include="shaders\sky_aerial_common.hlsli" />
     <None Include="shaders\sky_view_mapping.hlsli" />
     <None Include="shaders\skybox.hlsl" />
     <None Include="shaders\ssr_cs.hlsl" />

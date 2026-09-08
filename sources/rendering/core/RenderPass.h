@@ -19,6 +19,7 @@ enum class RenderQueue : uint8_t {
 };
 
 enum class RenderPass : uint16_t {
+    Main_SkyAerial, // B3: per-view finite-distance atmosphere
     Main_SkyView, // B2: per-view atmosphere radiance
     Main_SkyAtmosphereDebug, // B1: LUT inspection after forward composition
     Main_SkyAtmosphereLuts, // B1: parameter-dirty, view-independent LUTs
@@ -106,6 +107,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
 {
     switch (pass)
     {
+    case RenderPass::Main_SkyAerial: return L"SkyAerial";
     case RenderPass::Main_SkyView: return L"SkyView";
     case RenderPass::Main_SkyAtmosphereDebug: return L"SkyAtmosphereDebug";
     case RenderPass::Main_SkyAtmosphereLuts: return L"SkyAtmosphereLuts";

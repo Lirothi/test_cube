@@ -69,6 +69,7 @@ COMPUTE_ENTRIES = [
     ("sky_lut_multiscatter_cs.hlsl", "CSMain"),
     ("sky_lut_debug_cs.hlsl", "CSMain"),
     ("sky_lut_view_cs.hlsl", "CSMain"),
+    ("sky_lut_aerial_cs.hlsl", "CSMain"),
     # Plan A7 light shafts: three kernels of one file.
     ("light_shafts_cs.hlsl", "CSDownsample"),
     ("light_shafts_cs.hlsl", "CSBlur"),

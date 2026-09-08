@@ -626,7 +626,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     BuildLighting(renderer, gb);
     BuildReflections(renderer, gb);
     BuildForwardAndEditor(renderer, gb);
-    gb.pSelectionOutline = skyAtmosphere_.BuildDebug(renderer, rg, frame_->settings.skyAtmosphere, gb.pSelectionOutline, gb.pSkyLuts);
+    gb.pSelectionOutline = skyAtmosphere_.BuildDebug(renderer, rg, frame_->settings.skyAtmosphere, *frame_->camera, frame_->settings.atmosphere.volumetricDistance, gb.pSelectionOutline, gb.pSkyLuts);
     BuildPost(renderer, gb);
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION

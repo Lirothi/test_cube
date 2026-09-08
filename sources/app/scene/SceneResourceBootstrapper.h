@@ -174,7 +174,7 @@ struct SceneBlurCBHandles
 
 struct SceneComposeCBHandles
 {
-    Material::CBFieldHandle skyPreExposed;
+    Material::CBFieldHandle aerialParams, aerialViewProj;
     Material::CBFieldHandle invView;
     Material::CBFieldHandle invProj;
     Material::CBFieldHandle skyboxIntensity;
@@ -774,7 +774,8 @@ struct BlurPassConstants
 
 struct ComposePassConstants
 {
-    uint32_t skyPreExposed = 0u;
+    float4 aerialParams{}; // enabled, start view depth (m), 1/preExposure, reserved
+    mat4 aerialViewProj{}; // non-jittered world-to-clip, matches AP generation
     mat4 invView{};
     mat4 invProj{};
     float skyboxIntensity = 1.0f;
