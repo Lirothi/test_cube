@@ -440,16 +440,13 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
         transmittance = AtmosphereTransmittance(tau, minT);
 
-        // The sky sampled ALONG THE VIEW RAY: this is the fog's own colour, so a distant surface
-        // converges on the sky it sits against instead of on an authored constant as in UE. Both
-        // the blur and the sun lobe fade out as the fog saturates -- see AtmosphereHeadroom.
+        // The sky sampled ALONG THE VIEW RAY, out of the whole-sphere PICTURE of the sky and never
+        // out of a lighting probe -- FogSkyAlongView carries the reasoning and UE's distance fade.
+        // Same shape as UE's InscatteringColorCubemap, generated rather than authored. Both the blur
+        // and the sun lobe fade out as the fog saturates -- see AtmosphereHeadroom.
         const float headroom = AtmosphereHeadroom(transmittance, minT);
-        const float3 skyAlongView = AtmosphereClampSkySample(
-            IblSkyRadiance(SkySpecular, SkyboxTex, gSmp, viewDir,
-                           AtmosphereSkyRoughness(headroom, fogParams2.x),
-                           skySpecMipCount, skyboxIntensity),
-            IblSkyRadiance(SkySpecular, SkyboxTex, gSmp, viewDir,
-                           0.0f, skySpecMipCount, skyboxIntensity));
+        const float3 skyAlongView = FogSkyAlongView(SkyboxTex, gSmp, viewDir, dist,
+            AtmosphereSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyboxIntensity);
         inscatter = AtmosphereInscatter(skyAlongView, fogSunColor.rgb,
                                         dot(viewDir, fogSunDir.xyz), fogShared, dist,
                                         headroom, fog);

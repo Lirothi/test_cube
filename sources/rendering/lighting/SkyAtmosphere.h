@@ -65,11 +65,12 @@ private:
     void PrepareEnvironment(Renderer* renderer);
     void ValidateReadback(UINT slot);
     GpuResource environmentView_;
-    std::array<GpuResource, 3> environment_; // sharp radiance 128, specular 128/8 mips, E/PI 32
+    std::array<GpuResource, 3> environment_; // radiance 128/8 mips, specular 128/8 mips, E/PI 32
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> environmentHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE environmentViewSrv_{}, environmentViewUav_{};
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> environmentSrv_{};
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 10> environmentUav_{};
+    // 8 radiance mips (the sky PICTURE the fog samples), 8 specular mips, 1 irradiance.
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 17> environmentUav_{};
     std::shared_ptr<Material> captureMaterial_, filterMaterial_;
     SkyAtmosphereParameters environmentParameters_{};
     SkyViewFrameData environmentKey_{};

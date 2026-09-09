@@ -2244,12 +2244,9 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
         // Blur and sun lobe both fade as the fog saturates, through the SAME helpers compose uses --
         // water and land must agree here or they meet at the shoreline in different weather.
         const float headroom = AtmosphereHeadroom(transmittance, minT);
-        const float3 skyAlongView = AtmosphereClampSkySample(
-            IblSkyRadiance(SkySpecular, SkyboxTexture, LinearClampSampler, viewRay,
-                           AtmosphereSkyRoughness(headroom, fogParams2.x),
-                           (uint)skyParams.y, skyParams.x),
-            IblSkyRadiance(SkySpecular, SkyboxTexture, LinearClampSampler, viewRay,
-                           0.0f, (uint)skyParams.y, skyParams.x));
+        const float3 skyAlongView = FogSkyAlongView(SkyboxTexture, LinearClampSampler, viewRay,
+            macroLi.viewDist, AtmosphereSkyRoughness(headroom, fogParams2.x),
+            fogParams2.zw, skyParams.x);
         const float3 toSun = -normalize(sunDirAmbient.xyz);
         const float3 inscatter = AtmosphereInscatter(skyAlongView,
                                                      sunColorExposure.xyz * sunColorExposure.w,

@@ -1,13 +1,36 @@
 #include "sky_ibl_common.hlsli"
 #include "ibl_common.hlsli"
 #define SKY_IBL_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
-cbuffer Filter : register(b0) { uint size; uint mip; uint mipCount; uint diffuse; }
+cbuffer Filter : register(b0)
+{
+    uint size; uint mip; uint mipCount; uint diffuse;
+    float4 lowerHemisphere; // rgb: colour below the horizon, a: how much of it replaces the sky
+};
 TextureCube<float4> Source : register(t0);
 RWTexture2DArray<float4> Output : register(u0);
 SamplerState LinearClamp : register(s0);
 // UE ReflectionEnvironmentShaders.usf:537-647, MonteCarlo.ush:58-63,248-261,347-363.
 // Delta: source is a smooth, disk-free SkyView capture; sample mip 0, no source mip pyramid.
 // Diffuse is E/PI in a cube (our existing consumers), rather than UE's SH coefficients.
+//
+// THESE ARE THE LIGHTING PROBES, and the lower-hemisphere policy is theirs. UE apply it to the
+// captured cube (ReflectionEnvironmentShaders.usf:78-81 for the sky light capture, :205-211 for the
+// downsample, :429-434 for the real-time one) with their own reason attached: "Assuming we're on a
+// planet and no sky lighting is coming from below the horizon. This is important to avoid leaking
+// from below since we are integrating incoming lighting and shadowing separately." It is a rule
+// about an INTEGRAL OF INCOMING LIGHT, not about what the sky looks like from below.
+//
+// Our delta is only WHERE it is applied. UE have a single skylight cube and blacken it in place;
+// we keep the captured radiance whole (the fog reads it as a picture -- see sky_ibl_capture_cs)
+// and apply the same `lerp(sky, LowerHemisphereColor.rgb, LowerHemisphereColor.a)` here, per
+// sample of the convolution and on the sharp mip-0 copy. The probes are bit-identical to a
+// blackened capture; the difference is that the picture survives for the consumer that needs one.
+float3 SkyProbeSample(float3 dir)
+{
+    const float3 sky = Source.SampleLevel(LinearClamp, dir, 0).rgb;
+    // World Y-up here: `dir` comes from SkyCubeDirection / the basis built on it, unswizzled.
+    return dir.y < 0.0f ? lerp(sky, lowerHemisphere.rgb, saturate(lowerHemisphere.a)) : sky;
+}
 [numthreads(8, 8, 1)]
 [RootSignature(SKY_IBL_RS)]
 void CSMain(uint3 id : SV_DispatchThreadID)
@@ -19,7 +42,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float roughness = saturate(IblRoughnessFromMip(mip, mipCount));
     if (!diffuse && mip == 0)
     {
-        Output[uint3(pixel, face)] = float4(Source.SampleLevel(LinearClamp, N, 0).rgb, 1);
+        Output[uint3(pixel, face)] = float4(SkyProbeSample(N), 1);
         return;
     }
     // Orthonormal basis in our world axes; isotropic integral is independent of its rotation.
@@ -42,7 +65,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         if (L.z > 0 || cosine)
         {
             float w = cosine ? 1.0f : L.z;
-            sum += Source.SampleLevel(LinearClamp, L.x*T + L.y*B + L.z*N, 0).rgb * w;
+            sum += SkyProbeSample(L.x*T + L.y*B + L.z*N) * w;
             weight += w;
         }
     }

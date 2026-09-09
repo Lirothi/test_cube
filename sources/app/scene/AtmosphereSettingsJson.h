@@ -29,6 +29,8 @@ inline void ApplyOverrides(const nlohmann::json& j, AtmosphereSettings& s)
     s.sunScatterExponent = j.value("sunScatterExponent", s.sunScatterExponent);
     s.sunScatterStartDistance = j.value("sunScatterStartDistance", s.sunScatterStartDistance);
     s.skyBlur = j.value("skyBlur", s.skyBlur);
+    s.nonDirectionalDistance = j.value("nonDirectionalDistance", s.nonDirectionalDistance);
+    s.fullyDirectionalDistance = j.value("fullyDirectionalDistance", s.fullyDirectionalDistance);
     s.skyBackScatter = j.value("skyBackScatter", s.skyBackScatter);
     s.volumetric = j.value("volumetric", s.volumetric);
     s.volumetricDistance = j.value("volumetricDistance", s.volumetricDistance);
@@ -61,6 +63,8 @@ inline nlohmann::json ToJson(const AtmosphereSettings& s)
     j["sunScatterExponent"] = s.sunScatterExponent;
     j["sunScatterStartDistance"] = s.sunScatterStartDistance;
     j["skyBlur"] = s.skyBlur;
+    j["nonDirectionalDistance"] = s.nonDirectionalDistance;
+    j["fullyDirectionalDistance"] = s.fullyDirectionalDistance;
     j["skyBackScatter"] = s.skyBackScatter;
     j["volumetric"] = s.volumetric;
     j["volumetricDistance"] = s.volumetricDistance;

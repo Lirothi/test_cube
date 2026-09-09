@@ -465,6 +465,12 @@ void SkyAtmosphere::ValidateReadback(UINT slot)
     const D3D12_RANGE noWrite{0, 0}; readback_[slot]->Unmap(0, &noWrite);
 }
 
+// The skylight probes' lower hemisphere. UE's SkyLightComponent defaults (SkyLightComponent.cpp
+// :304,312): bLowerHemisphereIsBlack = true, LowerHemisphereColor = Black, and the shader form is
+// lerp(sky, rgb, a) -- so an opaque black replacement. RGBA, and the alpha IS the coverage.
+// Applies to the diffuse and specular probes only; the captured radiance keeps the whole sphere.
+static constexpr float kLowerHemisphereColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+
 // B4: fixed-size persistent resources, allocated before graph registration. No per-frame uploads.
 void SkyAtmosphere::PrepareEnvironment(Renderer* renderer)
 {
@@ -475,7 +481,9 @@ void SkyAtmosphere::PrepareEnvironment(Renderer* renderer)
         LOG_ERROR(logging::LogCategory::Render, "sky environment: {} failed; retaining HDRI", what);
     };
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
-    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 15;
+    // 1+1 view, 1+8 radiance (the sky picture, mipped for the fog's distance fade),
+    // 1+8 specular, 1+1 irradiance.
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 22;
     if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&environmentHeap_)))) { fail("heap"); return; }
     const auto base = environmentHeap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
@@ -487,7 +495,7 @@ void SkyAtmosphere::PrepareEnvironment(Renderer* renderer)
         desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         desc.Width = view ? 192 : (i == 3 ? 32 : 128);
         desc.Height = view ? 104 : static_cast<UINT>(desc.Width);
-        desc.DepthOrArraySize = view ? 1 : 6; desc.MipLevels = i == 2 ? 8 : 1;
+        desc.DepthOrArraySize = view ? 1 : 6; desc.MipLevels = (i == 1 || i == 2) ? 8 : 1;
         desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; desc.SampleDesc.Count = 1;
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -561,7 +569,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             ctx.NextPoint(); points[3] = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& r : environment_) ctx.Use(r.Get(), kRest);
             environmentReady_ = true; environmentParameters_ = params; environmentKey_ = view;
-            LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube, 8 GGX mips, 32 E/PI", ++environmentBuilds_);
+            LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI", ++environmentBuilds_);
             return [this, renderer, params, view, points](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyEnvironment);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
@@ -573,19 +581,35 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
                         [&params, &view](uint8_t* dst) { std::memcpy(dst, &params, sizeof(params)); std::memcpy(dst + sizeof(params), &view, sizeof(view)); },
                         {srv_[0], srv_[1]}, {environmentViewUav_}, sampler, 192, 104);
                     renderer->EmitPoint(t.cl, points[1]);
-                    const std::array<float, 4> capture{view.planet[0], view.planet[1], 1024.0f, 128.0f};
-                    RecordComputeDispatch(renderer, t.cl, captureMaterial_.get(), render::kConstantBufferAlignment,
-                        [&capture](uint8_t* dst) { std::memcpy(dst, capture.data(), sizeof(capture)); },
-                        {environmentViewSrv_}, {environmentUav_[0]}, sampler, 128, 128*6);
+                    // The sky PICTURE: whole sphere, mips 0..7. Every mip is captured straight from
+                    // the SkyView LUT with (128 / size) supersamples per axis, capped at 8 -- no mip
+                    // reads another, so the chain is one barrier-free run. The top mip is the
+                    // sphere average the fog fades to at short range (UE's NonDirectionalColor).
+                    for (UINT mip = 0; mip < 8; ++mip)
+                    {
+                        const UINT size = 128u >> mip;
+                        const UINT taps = (128u / size) < 8u ? (128u / size) : 8u;
+                        const std::array<float, 8> capture{view.planet[0], view.planet[1], 1024.0f,
+                            static_cast<float>(size), static_cast<float>(taps), 0.0f, 0.0f, 0.0f};
+                        RecordComputeDispatch(renderer, t.cl, captureMaterial_.get(), render::kConstantBufferAlignment,
+                            [&capture](uint8_t* dst) { std::memcpy(dst, capture.data(), sizeof(capture)); },
+                            {environmentViewSrv_}, {environmentUav_[mip]}, sampler, size, size*6);
+                    }
                     renderer->EmitPoint(t.cl, points[2]);
+                    // The LIGHTING PROBES, built from that picture with the lower-hemisphere policy
+                    // applied per sample of the convolution (sky_ibl_filter_cs.hlsl). UE's default
+                    // is an opaque black replacement (SkyLightComponent.cpp:304,312).
                     for (UINT mip = 0; mip < 9; ++mip)
                     {
                         const bool diffuse = mip == 8;
                         const UINT size = diffuse ? 32u : 128u >> mip;
-                        const std::array<UINT, 4> filter{size, diffuse ? 0u : mip, 8u, diffuse ? 1u : 0u};
+                        struct FilterCB { UINT size, mip, mipCount, diffuse; float lower[4]; };
+                        const FilterCB filter{size, diffuse ? 0u : mip, 8u, diffuse ? 1u : 0u,
+                            {kLowerHemisphereColor[0], kLowerHemisphereColor[1],
+                             kLowerHemisphereColor[2], kLowerHemisphereColor[3]}};
                         RecordComputeDispatch(renderer, t.cl, filterMaterial_.get(), render::kConstantBufferAlignment,
-                            [&filter](uint8_t* dst) { std::memcpy(dst, filter.data(), sizeof(filter)); },
-                            {environmentSrv_[0]}, {environmentUav_[1 + mip]}, sampler, size, size*6);
+                            [&filter](uint8_t* dst) { std::memcpy(dst, &filter, sizeof(filter)); },
+                            {environmentSrv_[0]}, {environmentUav_[8 + mip]}, sampler, size, size*6);
                     }
                     renderer->EmitPoint(t.cl, points[3]);
                 }

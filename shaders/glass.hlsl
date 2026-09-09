@@ -538,10 +538,8 @@ PSOut PSMain(VSOut i)
             const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
             fogT = AtmosphereTransmittance(tau, minT);
             const float headroom = AtmosphereHeadroom(fogT, minT);
-            const float3 skyAlongView = AtmosphereClampSkySample(
-                IblSkyRadiance(SkySpecular, SkyboxTex, EnvSampler, viewDir,
-                               AtmosphereSkyRoughness(headroom, fogParams2.x), skySpecMipCount, skyIntensity),
-                IblSkyRadiance(SkySpecular, SkyboxTex, EnvSampler, viewDir, 0.0f, skySpecMipCount, skyIntensity));
+            const float3 skyAlongView = FogSkyAlongView(SkyboxTex, EnvSampler, viewDir, dist,
+                AtmosphereSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyIntensity);
             const float3 toSun = -normalize(sunDirAmbient.xyz);
             fogIn = AtmosphereInscatter(skyAlongView, sunColorExposure.xyz * sunColorExposure.w,
                                         dot(viewDir, toSun), fogShared, dist, headroom, fog);

@@ -11,6 +11,8 @@
 #ifndef FOG_COMMON_HLSLI
 #define FOG_COMMON_HLSLI
 
+#include "ibl_common.hlsli" // IblClampToSharp, kSkyRoughMaxMip
+
 // Mirrors SceneResourceBootstrapper's FogPassConstants. The scatter pass binds it at b1 (b0 is the
 // lighting cbuffer, lighting_cb.hlsli); the integration pass at b0.
 #define FOG_CB(reg) \
@@ -128,6 +130,54 @@ float FogExtinctionAt(float worldY, float4 medium0, float extinctionScale)
     // plane carries no step.
     const float density = medium0.x * exp2(-medium0.y * (worldY - medium0.z));
     return max(density * 0.48045301f * extinctionScale, 0.0f);
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// THE SKY THE FOG IS COLOURED BY, ALONG THE VIEW RAY. UE HeightFogCommon.ush:144-181.
+//
+// THE CUBE PASSED HERE IS THE PICTURE OF THE SKY, NEVER A LIGHTING PROBE. Sampling the prefiltered
+// probe here was a real bug and cost a black band along the horizon: a probe's lower hemisphere
+// holds a POLICY value (UE's LowerHemisphereColor, black by default -- see sky_ibl_filter_cs.hlsl),
+// and this ray points from the camera TO THE SURFACE, so on ground and water it points DOWN at
+// essentially every pixel the analytic fog runs on. The fog then read the policy as if it were sky.
+// UE never make that mistake because the cube they sample here is `InscatteringColorCubemap` on the
+// fog component -- a separate, whole-sphere asset with no horizon policy on it at all.
+//
+// Two ends, blended by distance exactly as UE (FogRendering.cpp:273,284 build the fade):
+//  * NEAR -> the top mip: the sphere average. A short ray is steeply downward and a direction is
+//    meaningless for it; light scattered towards the eye over a short column arrives from the whole
+//    sphere. This is also what structurally keeps a steep ray from ever resolving a direction.
+//  * FAR  -> `directionalMip`, the headroom-driven blur (AtmosphereSkyRoughness). By then the ray
+//    is within a degree or two of the horizon and the surface must converge on the sky it sits
+//    against, which is the seam this whole feature exists to remove.
+//
+// `fade` is params2.zw from PackAtmosphere: fadeAlpha = saturate(rayLength * fade.x + fade.y), and
+// it SHIPS OFF (both distances 0 => alpha 1 => always directional). See AtmosphereSettings for why:
+// UE multiply this cube into an authored fog colour, we use it AS the colour, so their near-field
+// sphere average turns into milk-white water here.
+//
+// `roughness` maps to a mip through the SAME IblMipFromRoughness every other consumer uses, against
+// this cube's own level count -- so the amount of blur is identical to what the fog had when it was
+// (wrongly) reading the prefiltered probe, and the only thing that changed is WHICH cube answers.
+// The count is read off the cube so no consumer carries it, and the HDRI skybox and the procedural
+// capture each answer for themselves.
+float3 FogSkyAlongView(TextureCube skyCube, SamplerState smp, float3 viewRay, float rayLength,
+                       float roughness, float2 fade, float intensity)
+{
+    uint width, height, levels;
+    skyCube.GetDimensions(0, width, height, levels);
+    const float top = max((float)levels - 1.0f, 0.0f);
+    const float directionalMip = IblMipFromRoughness(roughness, (float)levels);
+    const float3 nonDirectional = skyCube.SampleLevel(smp, viewRay, top).rgb;
+    // The directional arm keeps the bound it always had: a blurred sample may not run away from the
+    // sharp sky in the same direction (ibl_common.hlsli), or the sun smears into a flat bright wash.
+    // The DISTANCE fade is deliberately NOT bounded by it -- near the camera the sphere average
+    // legitimately exceeds mip 0 anywhere but straight into the sun, and that is the whole point.
+    const float3 directional = IblClampToSharp(
+        skyCube.SampleLevel(smp, viewRay, min(directionalMip, top)).rgb,
+        skyCube.SampleLevel(smp, viewRay, 0.0f).rgb);
+    return lerp(nonDirectional, directional, saturate(rayLength * fade.x + fade.y)) * intensity;
 }
 
 #endif // FOG_COMMON_HLSLI

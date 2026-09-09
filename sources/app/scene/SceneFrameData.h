@@ -184,6 +184,27 @@ struct AtmosphereSettings
     // because a directional DENSITY would change extinction and make distant shapes fade in and out
     // as the camera pans.
     float skyBackScatter = 1.0f;
+    // WHERE the sky sample stops being directional. UE blend their fog cubemap from the top mip
+    // (NonDirectionalColor, the sphere average) into mip 0 (DirectionalColor) across
+    // [NonDirectionalInscatteringColorDistance, FullyDirectionalInscatteringColorDistance]
+    // (HeightFogCommon.ush:148-171, FogRendering.cpp:273,284). Their defaults are 1000 and 100000
+    // in a centimetre world = 10 m and 1000 m, which transfer unchanged because they are lengths.
+    //
+    // SHIPS OFF (both 0 => the fade is a no-op and the sample is always directional), and it has to,
+    // because their structure is not ours. UE MULTIPLY the cubemap into an authored fog colour
+    // (Inscattering = FogColor * lerp(NonDir, Dir, t)); we feed the sample straight into
+    // AtmosphereInscatter as the base. So their safe near-field average -- the whole sphere,
+    // sun included -- becomes an injection of energy here, and with UE's own 10 m / 1000 m the open
+    // water inside a kilometre went milk-white. Measured on the owner's HDRI camera, 2026-09-09.
+    //
+    // The knob stays because the reasoning behind it is sound: the fog's ray points at the SURFACE,
+    // so up close it points steeply DOWN, where "the sky in that direction" means little. But the
+    // near-field blur we already had (AtmosphereSkyRoughness, bounded by AtmosphereClampSkySample)
+    // covers that, and turning this on is a look change that has to earn its default with an A/B --
+    // the same rule skyBackScatter ships under. It is NOT what removed the horizon band: a control
+    // run with the fade off showed the band gone either way. That was the cube, not this.
+    float nonDirectionalDistance = 0.0f;
+    float fullyDirectionalDistance = 0.0f;
 
     // ---- Volumetric (froxel) fog, docs/volumetric_fog_sky_clouds_ssgi_plan.md part A. UE's
     // VolumetricFog on top of the analytic model above: inside `volumetricDistance` the air is a
@@ -361,7 +382,7 @@ struct AtmospherePacked
 {
     float4 params0{}; // density, height falloff, reference height, start distance
     float4 params1{}; // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
-    float4 params2{}; // sky blur, sky back-scatter, zw reserved
+    float4 params2{}; // sky blur, sky back-scatter, directional-fade inverse range, its bias
 };
 
 inline AtmospherePacked PackAtmosphere(const AtmosphereSettings& a, bool hasSun)
@@ -372,8 +393,12 @@ inline AtmospherePacked PackAtmosphere(const AtmosphereSettings& a, bool hasSun)
                        a.referenceHeight, std::max(a.startDistance, 0.0f));
     p.params1 = float4(std::clamp(a.maxOpacity, 0.0f, 1.0f), std::max(a.sunScatterStrength, 0.0f),
                        std::max(a.sunScatterExponent, 1.0f), std::max(a.sunScatterStartDistance, 0.0f));
+    // UE FogRendering.cpp:273,284: InvRange over the gap, and the bias that makes
+    // saturate(rayLength * zw.x + zw.y) reach 0 at nonDirectional and 1 at fullyDirectional.
+    const float nonDir = std::max(a.nonDirectionalDistance, 0.0f);
+    const float invRange = 1.0f / std::max(a.fullyDirectionalDistance - nonDir, 1.0e-5f);
     p.params2 = float4(std::clamp(a.skyBlur, 0.0f, 1.0f),
-                       std::clamp(a.skyBackScatter, 0.0f, 1.0f), 0.0f, 0.0f);
+                       std::clamp(a.skyBackScatter, 0.0f, 1.0f), invRange, -nonDir * invRange);
     return p;
 }
 

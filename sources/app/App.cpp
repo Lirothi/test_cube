@@ -687,6 +687,8 @@ namespace
             return true;
         }
         if (setting == "atmosphere.skyBlur") { scene.AtmosphereRef().skyBlur = value; return true; }
+        if (setting == "atmosphere.nonDirectionalDistance") { scene.AtmosphereRef().nonDirectionalDistance = value; return true; }
+        if (setting == "atmosphere.fullyDirectionalDistance") { scene.AtmosphereRef().fullyDirectionalDistance = value; return true; }
         // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A).
         if (setting == "atmosphere.volumetric") { scene.AtmosphereRef().volumetric = value != 0.0f; return true; }
         if (setting == "atmosphere.volumetricDistance") { scene.AtmosphereRef().volumetricDistance = std::max(1.0f, value); return true; }

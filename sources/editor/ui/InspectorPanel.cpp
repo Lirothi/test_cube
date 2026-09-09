@@ -1248,10 +1248,20 @@ namespace
                           "is blurred: a fully fogged pixel always converges on the sharp sky, "
                           "because the sky IS fog of infinite depth and anything else seams at the "
                           "horizon. FREE - it is a mip choice, not an extra sample.");
+            dragF("Non-Directional Dist", "nonDirectionalDistance", 0.0f, 0.5f, 0.0f, 10000.0f, "%.0f m");
+            dragF("Fully Directional Dist", "fullyDirectionalDistance", 0.0f, 5.0f, 0.0f, 100000.0f, "%.0f m");
+            InspectorHelp("Where the sky sample stops being a direction and becomes an average. "
+                          "Nearer than the first distance the fog is coloured by the WHOLE SPHERE; "
+                          "past the second it is the sky in the direction you are looking, and "
+                          "between them it crossfades. BOTH ZERO = off, which is how this ships. "
+                          "UE run it at 10 m / 1000 m, but they MULTIPLY the cubemap into an "
+                          "authored fog colour while we use the sample as the colour itself, so "
+                          "their safe near-field average turns into milk-white water here. Raise "
+                          "them only with a before/after in hand.");
 
-            ImGui::TextDisabled("Fog colour comes from the SKY along the view ray, not an authored");
-            ImGui::TextDisabled("colour as in UE - that is what removes the horizon seam by");
-            ImGui::TextDisabled("construction instead of by tuning.");
+            ImGui::TextDisabled("Fog colour comes from the SKY along the view ray - the same shape as");
+            ImGui::TextDisabled("UE's InscatteringColorCubemap, generated from the atmosphere instead");
+            ImGui::TextDisabled("of authored. That is what removes the horizon seam by construction.");
             // The debug views deliberately live only in the dev window: they are a viewing mode,
             // not level data, and putting them on the object would invite them into the save.
             ImGui::TextDisabled("Debug views (transmittance / in-scattering) are in the F1 window,");
