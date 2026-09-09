@@ -81,6 +81,7 @@ const Profiler::ScopeNameKey kPassGBufferB = Profiler::RegisterTraceLiteral(L"Pa
 const Profiler::ScopeNameKey kPassShoreDepth = Profiler::RegisterTraceLiteral(L"Pass_ShoreDepth");
 const Profiler::ScopeNameKey kPassGBuffer = Profiler::RegisterTraceLiteral(L"Pass_GBuffer");
 const Profiler::ScopeNameKey kPassGtao = Profiler::RegisterTraceLiteral(L"Pass_Gtao");
+const Profiler::ScopeNameKey kPassSkyEnvironment = Profiler::RegisterTraceLiteral(L"Pass_SkyEnvironment");
 const Profiler::ScopeNameKey kPassSkyAerial = Profiler::RegisterTraceLiteral(L"Pass_SkyAerial");
 const Profiler::ScopeNameKey kPassSkyView = Profiler::RegisterTraceLiteral(L"Pass_SkyView");
 const Profiler::ScopeNameKey kPassSkyAtmosphereLuts = Profiler::RegisterTraceLiteral(L"Pass_SkyAtmosphereLuts");

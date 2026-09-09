@@ -234,10 +234,10 @@ bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
     // P5 (t11): the GGX-prefiltered sky. Falls back to the display cube so the table is never
     // half-populated; the shader gates on camDirWS.w (the mip count), which is 0 without it.
     const D3D12_CPU_DESCRIPTOR_HANDLE skyDisplaySrv =
-        sky ? sky->GetTex()->GetSRVCPU() : deferred.sceneSRV;
+        sky ? sky->EnvironmentSrv() : deferred.sceneSRV;
     const D3D12_CPU_DESCRIPTOR_HANDLE skySpecSrv =
-        (sky && sky->HasIbl() && sky->GetSpecTex()->GetSRVCPU().ptr != 0)
-            ? sky->GetSpecTex()->GetSRVCPU()
+        (sky && sky->HasIbl() && sky->SpecularSrv().ptr != 0)
+            ? sky->SpecularSrv()
             : skyDisplaySrv;
 
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 13> srvs{

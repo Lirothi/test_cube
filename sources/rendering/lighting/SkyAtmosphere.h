@@ -8,6 +8,7 @@
 #include "rendering/lighting/SkyAtmosphereSettings.h"
 
 class Camera;
+class Skybox;
 class Material;
 class Renderer;
 template <size_t MaxPasses> class RenderGraph;
@@ -29,6 +30,8 @@ public:
     size_t BuildAerial(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                        const SkyAtmosphereSettings& settings, const SkyViewFrameData& view,
                        const Camera& camera, float startDepthMetres, size_t after);
+    size_t BuildEnvironment(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
+                            const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts);
     bool AerialBuilt() const { return aerialBuilt_; }
     ID3D12Resource* AerialResource() const { return aerial_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE AerialSrv() const { return aerialSrv_; }
@@ -41,7 +44,19 @@ public:
     void Reset(); // caller has drained the GPU on level/device teardown
 
 private:
+    void PrepareEnvironment(Renderer* renderer);
     void ValidateReadback(UINT slot);
+    GpuResource environmentView_;
+    std::array<GpuResource, 3> environment_; // sharp radiance 128, specular 128/8 mips, E/PI 32
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> environmentHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE environmentViewSrv_{}, environmentViewUav_{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> environmentSrv_{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 10> environmentUav_{};
+    std::shared_ptr<Material> captureMaterial_, filterMaterial_;
+    SkyAtmosphereParameters environmentParameters_{};
+    SkyViewFrameData environmentKey_{};
+    bool environmentReady_ = false, environmentFailed_ = false;
+    unsigned environmentBuilds_ = 0;
     std::array<GpuResource, 2> lut_;
     GpuResource aerial_;
     D3D12_CPU_DESCRIPTOR_HANDLE aerialSrv_{}, aerialUav_{};

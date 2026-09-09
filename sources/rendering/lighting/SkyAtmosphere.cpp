@@ -1,6 +1,7 @@
 #include "rendering/lighting/SkyAtmosphere.h"
 
 #include "app/camera/Camera.h"
+#include "rendering/lighting/Skybox.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -42,6 +43,10 @@ SkyAtmosphere::~SkyAtmosphere()
 
 void SkyAtmosphere::Reset()
 {
+    for (auto& resource : environment_) resource.Reset();
+    environmentView_.Reset(); environmentHeap_.Reset(); captureMaterial_.reset(); filterMaterial_.reset();
+    environmentSrv_ = {}; environmentUav_ = {}; environmentViewSrv_ = {}; environmentViewUav_ = {};
+    environmentReady_ = environmentFailed_ = false; environmentBuilds_ = 0;
     for (auto& resource : lut_) resource.Reset();
     aerial_.Reset(); aerialMaterial_.reset(); aerialSrv_ = {}; aerialUav_ = {}; aerialBuilt_ = false;
     skyView_.Reset(); viewMaterial_.reset(); viewSrv_ = {}; viewUav_ = {};
@@ -58,6 +63,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
 {
     // BeginFrame already waited for THIS slot. Never map a different in-flight slot.
     ValidateReadback(renderer->GetCurrentFrameIndex());
+    if (settings.mode && settings.environmentLighting && !failed_) PrepareEnvironment(renderer);
     if ((!settings.mode && !settings.lutEnabled && !settings.lutDebugView) || failed_ || heap_) return;
     auto* device = renderer->GetDevice();
     const auto fail = [this](const char* what) {
@@ -451,4 +457,133 @@ void SkyAtmosphere::ValidateReadback(UINT slot)
     if (bad) LOG_ERROR(logging::LogCategory::Render, "sky atmosphere LUT validation: FAIL ({} invalid components/reference checks)", bad);
     else LOG_INFO(logging::LogCategory::Render, "sky atmosphere LUT validation: PASS ({} finite nonnegative RGB texels)", 256*64+32*32);
     const D3D12_RANGE noWrite{0, 0}; readback_[slot]->Unmap(0, &noWrite);
+}
+
+// B4: fixed-size persistent resources, allocated before graph registration. No per-frame uploads.
+void SkyAtmosphere::PrepareEnvironment(Renderer* renderer)
+{
+    if (environmentHeap_ || environmentFailed_) return;
+    auto* device = renderer->GetDevice();
+    const auto fail = [this](const char* what) {
+        environmentFailed_ = true;
+        LOG_ERROR(logging::LogCategory::Render, "sky environment: {} failed; retaining HDRI", what);
+    };
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 15;
+    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&environmentHeap_)))) { fail("heap"); return; }
+    const auto base = environmentHeap_->GetCPUDescriptorHandleForHeapStart();
+    const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
+    UINT descriptor = 0, output = 0;
+    for (UINT i = 0; i < 4; ++i)
+    {
+        const bool view = i == 0;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = view ? 192 : (i == 3 ? 32 : 128);
+        desc.Height = view ? 104 : static_cast<UINT>(desc.Width);
+        desc.DepthOrArraySize = view ? 1 : 6; desc.MipLevels = i == 2 ? 8 : 1;
+        desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; desc.SampleDesc.Count = 1;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+        if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource)))
+        { fail("texture"); return; }
+        ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+        const wchar_t* names[] = {L"SkyEnvironment.View", L"SkyEnvironment.Radiance", L"SkyEnvironment.Specular", L"SkyEnvironment.Irradiance"};
+        (view ? environmentView_ : environment_[i-1]).Attach(renderer->Declarations(), resource, kRest, names[i]);
+        D3D12_CPU_DESCRIPTOR_HANDLE srv{base.ptr + descriptor++ * step};
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = desc.Format; sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.ViewDimension = view ? D3D12_SRV_DIMENSION_TEXTURE2D : D3D12_SRV_DIMENSION_TEXTURECUBE;
+        if (view) sd.Texture2D.MipLevels = 1; else sd.TextureCube.MipLevels = desc.MipLevels;
+        device->CreateShaderResourceView(resource.Get(), &sd, srv);
+        if (view) environmentViewSrv_ = srv; else environmentSrv_[i-1] = srv;
+        for (UINT mip = 0; mip < desc.MipLevels; ++mip)
+        {
+            D3D12_CPU_DESCRIPTOR_HANDLE uav{base.ptr + descriptor++ * step};
+            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = desc.Format;
+            ud.ViewDimension = view ? D3D12_UAV_DIMENSION_TEXTURE2D : D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+            if (!view) { ud.Texture2DArray.MipSlice = mip; ud.Texture2DArray.ArraySize = 6; }
+            device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, uav);
+            if (view) environmentViewUav_ = uav; else environmentUav_[output++] = uav;
+        }
+    }
+    Material::ComputeDesc cd{}; cd.csEntry = "CSMain";
+    cd.shaderFile = L"shaders/sky_ibl_capture_cs.hlsl";
+    captureMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+    cd.shaderFile = L"shaders/sky_ibl_filter_cs.hlsl";
+    filterMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+    if (!captureMaterial_ || !captureMaterial_->GetPipelineState() || !filterMaterial_ || !filterMaterial_->GetPipelineState())
+        fail("compute PSO");
+}
+
+size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
+    const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts)
+{
+    constexpr size_t none = static_cast<size_t>(-1);
+    if (sky) sky->SetEnvironment({}, {});
+    if (!settings.mode || !settings.environmentLighting || failed_ || environmentFailed_ || !environmentHeap_ || !sky)
+        return luts;
+    // One global probe at sea level, independent of viewer position/yaw and auto exposure.
+    // SkyView storage uses a fixed exposure; the capture decodes it into absolute radiance.
+    view.planet[0] = settings.parameters.radii[0] + 0.001f;
+    view.planet[3] = 1;
+    view.sunDirection[3] = 0; // no solar disk in reflection captures (UE usf:314-317)
+    view.exposure[0] = 1.0f / 1024.0f;
+    const auto params = settings.parameters;
+    const bool dirty = !environmentReady_ || std::memcmp(&params, &environmentParameters_, sizeof(params)) != 0
+        || std::memcmp(&view, &environmentKey_, sizeof(view)) != 0;
+    // Select descriptors before any serial pass builder/worker consumes the frame's environment.
+    sky->SetEnvironment(environmentSrv_, {environment_[0].Get(), environment_[1].Get(), environment_[2].Get()});
+    if (!dirty) return luts;
+    RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
+    if (luts != none) deps.push_back(luts);
+    return graph.AddPass2(RenderPass::Main_SkyEnvironment, deps, {}, {},
+        [this, renderer, params, view](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            std::array<std::uint32_t, 4> points{};
+            points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
+            for (auto& r : lut_) ctx.Use(r.Get(), kRest);
+            ctx.Use(environmentView_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint(); points[1] = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(environmentView_.Get(), kRest);
+            ctx.Use(environment_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint(); points[2] = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(environment_[0].Get(), kRest);
+            ctx.Use(environment_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.Use(environment_[2].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint(); points[3] = ctx.usePoint ? *ctx.usePoint : 0u;
+            for (auto& r : environment_) ctx.Use(r.Get(), kRest);
+            environmentReady_ = true; environmentParameters_ = params; environmentKey_ = view;
+            LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube, 8 GGX mips, 32 E/PI", ++environmentBuilds_);
+            return [this, renderer, params, view, points](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassSkyEnvironment);
+                auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
+                {
+                    GPU_SCOPE(t.cl, ProfilerScopes::kPassSkyEnvironment);
+                    const auto sampler = renderer->GetSamplerManager()->GetTable(renderer, std::array{*SamplerManager::LinearClamp()});
+                    renderer->EmitPoint(t.cl, points[0]);
+                    RecordComputeDispatch(renderer, t.cl, viewMaterial_.get(), render::kConstantBufferAlignment,
+                        [&params, &view](uint8_t* dst) { std::memcpy(dst, &params, sizeof(params)); std::memcpy(dst + sizeof(params), &view, sizeof(view)); },
+                        {srv_[0], srv_[1]}, {environmentViewUav_}, sampler, 192, 104);
+                    renderer->EmitPoint(t.cl, points[1]);
+                    const std::array<float, 4> capture{view.planet[0], view.planet[1], 1024.0f, 128.0f};
+                    RecordComputeDispatch(renderer, t.cl, captureMaterial_.get(), render::kConstantBufferAlignment,
+                        [&capture](uint8_t* dst) { std::memcpy(dst, capture.data(), sizeof(capture)); },
+                        {environmentViewSrv_}, {environmentUav_[0]}, sampler, 128, 128*6);
+                    renderer->EmitPoint(t.cl, points[2]);
+                    for (UINT mip = 0; mip < 9; ++mip)
+                    {
+                        const bool diffuse = mip == 8;
+                        const UINT size = diffuse ? 32u : 128u >> mip;
+                        const std::array<UINT, 4> filter{size, diffuse ? 0u : mip, 8u, diffuse ? 1u : 0u};
+                        RecordComputeDispatch(renderer, t.cl, filterMaterial_.get(), render::kConstantBufferAlignment,
+                            [&filter](uint8_t* dst) { std::memcpy(dst, filter.data(), sizeof(filter)); },
+                            {environmentSrv_[0]}, {environmentUav_[1 + mip]}, sampler, size, size*6);
+                    }
+                    renderer->EmitPoint(t.cl, points[3]);
+                }
+                c.EndCL(t);
+            };
+        });
 }

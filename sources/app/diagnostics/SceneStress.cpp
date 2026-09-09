@@ -8,6 +8,9 @@
 #include "app/levels/JsonLevel.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
+#include "rendering/lighting/DirectionalLight.h"
+#include "vfx/WindState.h"
+#include <cmath>
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
@@ -208,7 +211,7 @@ class SceneStressDriver
 {
 public:
     SceneStressDriver(HWND hWnd, Renderer& renderer, Scene& scene,
-                      LevelManager& levelManager, int iterations, bool gbvContinue, bool roughnessEdits)
+                      LevelManager& levelManager, int iterations, bool gbvContinue, bool roughnessEdits, bool skyEdits)
         : hWnd_(hWnd)
         , renderer_(renderer)
         , scene_(scene)
@@ -216,6 +219,7 @@ public:
         , iterations_(iterations)
         , gbvContinue_(gbvContinue)
         , roughnessEdits_(roughnessEdits)
+        , skyEdits_(skyEdits)
     {
     }
 
@@ -229,6 +233,21 @@ public:
     int Run()
     {
         SetupInfoQueue_();
+        if (skyEdits_)
+        {
+            // This harness branches before the ordinary app's --dlss/--wind-freeze parser.
+            // Set its measurement conditions explicitly, without changing authored settings.
+            renderer_.SetDlssMode(sl::DLSSMode::eOff);
+            renderer_.SetRenderResolutionScale(1.0f);
+            vfx::g_windFreeze = true; vfx::g_windFrozenTime = 0.0f;
+            scene_.SkyAtmosphereRef().mode = 1;
+            scene_.SkyAtmosphereRef().environmentLighting = true;
+            auto settings = scene_.GetRenderSettings();
+            settings.reflectionSource = ReflectionSource::RT;
+            scene_.SetRenderSettings(settings);
+            LOG_INFO(logging::LogCategory::Render, "sky environment stress: native {}x{}, frozen wind; sun edits, hold, exposure, IBL/mode toggles; no idle waits",
+                     renderer_.GetRenderWidth(), renderer_.GetRenderHeight());
+        }
         if (roughnessEdits_)
         {
             if (!renderer_.IsRaytracingSupported())
@@ -244,7 +263,7 @@ public:
         // Pump a few warm-up frames so the pipeline is fully primed before churn.
         {
         BOOT_SCOPE("stress warmup frames");
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < (skyEdits_ ? 32 : 4); ++i)
         {
             if (!RenderFrames_(1, "warmup"))
             {
@@ -257,6 +276,7 @@ public:
             return FinishFault_(-1, "warmup", early);
         }
 
+        if (skyEdits_) Profiler::Get().RequestTraceCapture(iterations_);
         std::uint32_t asEnhancedStart = 0, asLegacyStart = 0;
         barriers::AsEmitStats(asEnhancedStart, asLegacyStart);
         for (int iter = 0; iter < iterations_ && !faultCaught_; ++iter)
@@ -266,7 +286,7 @@ public:
             const int opCount = static_cast<int>(Op::Count);
             const Op op = static_cast<Op>((iter + iter / opCount) % opCount);
 
-            const char* opName = roughnessEdits_ ? "RoughnessEdit" : OpName(op);
+            const char* opName = skyEdits_ ? "SkyEdit" : (roughnessEdits_ ? "RoughnessEdit" : OpName(op));
             Log("[iter %d] op=%s begin\n", iter, opName);
 
             // Do the churn op + frames under an SEH guard so a hard fault
@@ -297,6 +317,8 @@ public:
             Log("[iter %d] op=%s ok\n", iter, opName);
         }
 
+        if (skyEdits_ && !RenderFrames_(30, "sky-trace-drain"))
+            return FinishFault_(iterations_, "sky-trace-drain", "render-frame threw");
         // Drain the final in-flight frames before declaring success, too.
         renderer_.WaitForPreviousFrame();
         if (const char* reason = CheckFault_()) { return FinishFault_(iterations_, "drain", reason); }
@@ -352,6 +374,21 @@ private:
     StepStatus RunStepBody_(Op op, int iter)
     {
         faultDetail_[0] = '\0';
+        if (skyEdits_)
+        {
+            auto& sky = scene_.SkyAtmosphereRef();
+            const int phase = iter % 64;
+            sky.mode = phase >= 56 ? unsigned(phase & 1) : 1u;
+            sky.environmentLighting = phase >= 48 && phase < 56 ? (phase & 1) != 0 : true;
+            if (phase < 32)
+            {
+                const float angle = (5.0f + float(phase)) * 3.14159265358979323846f / 180.0f;
+                scene_.DirectionalLightRef().SetDirection(-Math::float3(std::cos(angle)*0.6f, std::sin(angle), std::cos(angle)*0.8f));
+            }
+            if (phase >= 40 && phase < 48)
+                scene_.CameraExposureRef().compensationEv = float(phase - 44) * 0.125f;
+            return RenderFrames_(1, "sky-edit") ? StepStatus::Ok : StepStatus::FrameThrew;
+        }
         if (roughnessEdits_)
         {
 #if WITH_EDITOR
@@ -869,6 +906,11 @@ private:
                                 label);
             }
 
+            // Match App::Run: consume completed timestamp batches before the readback ring wraps.
+            // Without this the sky stress trace retained old batches until capture end and read
+            // overwritten slots; it could not measure dirty passes reliably.
+            Profiler::Get().CollectGpuResults();
+
             // Service window messages (WM_SIZE from our resizes, paint, etc.).
             MSG msg = {};
             while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
@@ -1093,6 +1135,7 @@ private:
     std::function<void()> onLevelLoaded_; // re-applies --set after each level load (see SetOnLevelLoaded)
     int iterations_ = 0;
     bool gbvContinue_ = false;
+    bool skyEdits_ = false;
     bool roughnessEdits_ = false;
 
     ComPtr<ID3D12InfoQueue> infoQueue_;
@@ -1117,7 +1160,7 @@ constexpr const char* SceneStressDriver::kLevels_[3];
 
 } // namespace
 
-int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool gbvContinue, bool roughnessEdits)
+int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool gbvContinue, bool roughnessEdits, bool skyEdits)
 {
     if (iterations <= 0)
     {
@@ -1172,7 +1215,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         try
         {
             (void)input;
-            SceneStressDriver driver(hWnd_, renderer, scene, levelManager, iterations, gbvContinue, roughnessEdits);
+            SceneStressDriver driver(hWnd_, renderer, scene, levelManager, iterations, gbvContinue, roughnessEdits, skyEdits);
             driver.SetOnLevelLoaded([this]() { ApplyFixedSettings(systems_->scene); });
             exitCode = driver.Run();
             faultCaught = driver.FaultCaught();
@@ -1254,8 +1297,8 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
     return exitCode; // not reached (TerminateProcess doesn't return)
 }
 
-int RunSceneStress(HINSTANCE__* hInstance, int nCmdShow, int iterations, bool gbvContinue, bool roughnessEdits)
+int RunSceneStress(HINSTANCE__* hInstance, int nCmdShow, int iterations, bool gbvContinue, bool roughnessEdits, bool skyEdits)
 {
     App app;
-    return app.RunSceneStress(reinterpret_cast<HINSTANCE>(hInstance), nCmdShow, iterations, gbvContinue, roughnessEdits);
+    return app.RunSceneStress(reinterpret_cast<HINSTANCE>(hInstance), nCmdShow, iterations, gbvContinue, roughnessEdits, skyEdits);
 }

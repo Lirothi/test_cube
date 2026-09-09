@@ -872,7 +872,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     D3D12_CPU_DESCRIPTOR_HANDLE skySrv{};
     if (sky && sky->GetTex())
     {
-        skySrv = sky->GetTex()->GetSRVCPU();
+        skySrv = sky->EnvironmentSrv();
     }
     if (skySrv.ptr == 0)
     {
@@ -939,8 +939,8 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     D3D12_CPU_DESCRIPTOR_HANDLE irrSrv = skySrv;
     if (sky && sky->HasIbl())
     {
-        if (sky->GetSpecTex()->GetSRVCPU().ptr != 0) { specSrv = sky->GetSpecTex()->GetSRVCPU(); }
-        if (sky->GetIrradianceTex()->GetSRVCPU().ptr != 0) { irrSrv = sky->GetIrradianceTex()->GetSRVCPU(); }
+        if (sky->SpecularSrv().ptr != 0) { specSrv = sky->SpecularSrv(); }
+        if (sky->IrradianceSrv().ptr != 0) { irrSrv = sky->IrradianceSrv(); }
     }
     pushSrv(specSrv);
     pushSrv(irrSrv);

@@ -54,6 +54,29 @@ namespace
     // one combined state is one barrier instead of a flip between them.
     constexpr D3D12_RESOURCE_STATES kSrvAll =
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
+    SkyViewFrameData MakeSkyView(const SkyAtmosphereSettings& skySettings, float heightMetres,
+                                 float preExposure, float sunRadius, const DirectionalLight* light)
+    {
+        SkyViewFrameData skyView{};
+        const auto& a = skySettings.parameters;
+        skyView.planet[0] = a.radii[0] + std::max(0.001f, heightMetres / kMetresPerKm);
+        skyView.planet[1] = a.radii[0]; skyView.planet[2] = a.radii[1];
+        skyView.illuminance[3] = skySettings.luminanceScale;
+        skyView.exposure[0] = preExposure;
+        skyView.sunDirection[3] = sunRadius;
+        if (light)
+        {
+            const auto d = -light->GetDirection();
+            const float invLength = 1.0f / std::sqrt(std::max(1.e-12f, d.x*d.x + d.y*d.y + d.z*d.z));
+            skyView.sunDirection[0] = d.x * invLength;
+            skyView.sunDirection[1] = d.z * invLength;
+            skyView.sunDirection[2] = d.y * invLength;
+            const auto color = light->GetEffectiveColor();
+            skyView.illuminance[0] = color.x; skyView.illuminance[1] = color.y; skyView.illuminance[2] = color.z;
+        }
+        return skyView;
+    }
 }
 
 // AS build, prologue clear, object compute, surf sim, shore wetness, terrain depth.
@@ -61,6 +84,12 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
 {
     auto& rg = gb.rg;
     gb.pSkyLuts = skyAtmosphere_.Build(renderer, rg, frame_->settings.skyAtmosphere);
+    const auto environmentView = MakeSkyView(frame_->settings.skyAtmosphere, 1.0f, 1.0f, 0.0f, frame_->dirLight);
+    const auto pEnvironment = skyAtmosphere_.BuildEnvironment(renderer, rg, frame_->settings.skyAtmosphere,
+        environmentView, frame_->skybox, gb.pSkyLuts);
+    RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
+    if (pEnvironment != GraphBuild::kNone) environmentDeps.push_back(pEnvironment);
+
 
     // RT acceleration-structure build (S5): the first pass when RT is enabled.
     // No consumer yet, so it's an independent node (no prereqs/dependents); a
@@ -112,7 +141,7 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     // It rides one HERE instead. This pass is the frame's first, it is on the graphics queue, and
     // Main_ObjectCompute depends on it directly — which is exactly the shape Main_Hzb has for
     // Main_RTTrace. One transition per map, in a pass that was already being recorded.
-    auto pClear = rg.AddPass2(RenderPass::Main_PrologueClear, {},
+    auto pClear = rg.AddPass2(RenderPass::Main_PrologueClear, environmentDeps, {}, {},
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             // The point is taken UNCONDITIONALLY, so the pass has one shape whether or not the
             // level has an ocean; with no maps to hand over the point is empty and the emit is a
@@ -120,6 +149,8 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
             // that works everywhere except the one scene nobody captures.
             ctx.NextPoint();
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+            // Release the previous forward frame's PIXEL bit before async RT consumes IBL.
+            if (frame_->skybox) frame_->skybox->DeclareEnvironment(ctx, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             if (OceanSimulation* oceanSim = Systems::GetOceanSimulation())
             {
                 // Guarded per resource exactly as the sim's own Prepare guards them: registering a
@@ -900,6 +931,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                     return {};
                 }
                 ctx.UseDeclared();
+                if (frame_->skybox) frame_->skybox->DeclareEnvironment(ctx, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
                 return [this, renderer, point](RenderGraphPassContext c) {
                     CPU_SCOPE(ProfilerScopes::kPassRTTrace);
@@ -934,6 +966,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             const auto& PF = renderer->GetDeferredForPrevFrame();
             FogPoints pts{};
             pts.scatter = ctx.usePoint ? *ctx.usePoint : 0u;
+            if (frame_->skybox) frame_->skybox->DeclareEnvironment(ctx, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             if (vsmShadows && frame_->vsm && frame_->vsm->IsAllocated())
             {
                 ctx.Use(frame_->vsm->PagePool(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -999,6 +1032,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             return {};
         }
         ctx.UseDeclared();
+        if (frame_->skybox) frame_->skybox->DeclareEnvironment(ctx, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
         return [this, renderer, point](RenderGraphPassContext c) {
             CPU_SCOPE(ProfilerScopes::kPassLighting);
@@ -1172,23 +1206,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     // pass-flow S5: the builder owns the `frame_->skybox` gate the body used to repeat after the
     // declarations were already made.
     const auto& skySettings = frame_->settings.skyAtmosphere;
-    SkyViewFrameData skyView{};
-    const auto& a = skySettings.parameters;
-    skyView.planet[0] = a.radii[0] + std::max(0.001f, frame_->camera->GetPosition().y / kMetresPerKm);
-    skyView.planet[1] = a.radii[0]; skyView.planet[2] = a.radii[1];
-    skyView.illuminance[3] = skySettings.luminanceScale;
-    skyView.exposure[0] = preExposure_;
-    skyView.sunDirection[3] = frame_->settings.sunAngularSize;
-    if (frame_->dirLight)
-    {
-        const auto d = -frame_->dirLight->GetDirection();
-        const float invLength = 1.0f / std::sqrt(std::max(1.e-12f, d.x*d.x + d.y*d.y + d.z*d.z));
-        skyView.sunDirection[0] = d.x * invLength;
-        skyView.sunDirection[1] = d.z * invLength;
-        skyView.sunDirection[2] = d.y * invLength;
-        const auto color = frame_->dirLight->GetEffectiveColor();
-        skyView.illuminance[0] = color.x; skyView.illuminance[1] = color.y; skyView.illuminance[2] = color.z;
-    }
+    auto skyView = MakeSkyView(skySettings, frame_->camera->GetPosition().y, preExposure_,
+                               frame_->settings.sunAngularSize, frame_->dirLight);
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
     const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, skyView,
@@ -1396,6 +1415,7 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             const auto& DC = renderer->GetDeferredForFrame();
             ctx.UseDeclared();
             const std::uint32_t apply = ctx.usePoint ? *ctx.usePoint : 0u;
+            if (frame_->skybox) frame_->skybox->DeclareEnvironment(ctx, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             if (frame_->ocean && frame_->ocean->IsWetnessReady())
             {
                 ctx.Use(frame_->ocean->GetWetnessResource(),
@@ -1594,6 +1614,7 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         // 3. All three become PS-readable for the forward draws, on every path.
         p.NextPoint();
         pts.pixel = p.usePoint ? *p.usePoint : 0u;
+        if (frame_->skybox) frame_->skybox->DeclareEnvironment(p, kSrvAll);
         p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

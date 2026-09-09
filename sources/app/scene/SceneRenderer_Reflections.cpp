@@ -239,11 +239,11 @@ void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 0, tlasSrv);     // TLAS
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 2, D.gbSRV[1]);  // GB1 (normal)
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 3, D.depthSRV);  // Depth
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 5, skybox->GetTex()->GetSRVCPU()); // skybox cube
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 5, skybox->EnvironmentSrv()); // skybox cube
         const bool haveSkyIrradiance = skybox->HasIbl();
         if (haveSkyIrradiance)
         {
-            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 8, skybox->GetIrradianceTex()->GetSRVCPU());
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 8, skybox->IrradianceSrv());
         }
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 9, D.rtPayloadUAV);    // payload radiance+mode
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 10, D.rtPayloadUvUAV); // payload reuse uv
@@ -485,7 +485,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, B + 2, D.glassReflNormalSRV);              // glass normal (gb1)
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, B + 3, D.glassReflDepthSRV);               // glass depth (primary)
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, B + 4, D.glassReflectionUAV);              // output
-        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, B + 5, skybox->GetTex()->GetSRVCPU());     // skybox
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, B + 5, skybox->EnvironmentSrv());     // skybox
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, B + 8, D.depthSRV);                        // screen (opaque) depth for the match
 
         LightManager* lm = frame_->lightManager;

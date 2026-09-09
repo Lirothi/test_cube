@@ -32,5 +32,7 @@
 // up to the hang. Device-removed and exceptions remain fatal.
 // --scene-stress-roughness: instead of lifecycle churn, edit wind_test sphere #722 every frame
 // with RT enabled. No GPU-idle waits between edits; exercises in-flight material-table updates.
+// --scene-stress-sky: continuous sun edits, unchanged frames, exposure and sky-mode toggles.
+// Captures a profiler trace; GPU/driver failures use the existing stress verdict and session log.
 int RunSceneStress(struct HINSTANCE__* hInstance, int nCmdShow, int iterations, bool gbvContinue,
-                   bool roughnessEdits = false);
+                   bool roughnessEdits = false, bool skyEdits = false);

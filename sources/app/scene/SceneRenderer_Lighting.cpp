@@ -589,7 +589,7 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
                 D.shadowSRV,
                 vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),
                 vsmDir ? frame_->vsm->PagePoolSrv() : renderer->VsmDummyTexSrv(),
-                (frame_->skybox && frame_->skybox->HasIbl()) ? frame_->skybox->GetIrradianceTex()->GetSRVCPU()
+                (frame_->skybox && frame_->skybox->HasIbl()) ? frame_->skybox->IrradianceSrv()
                                                              : renderer->VsmDummyTexSrv(),
                 P.fogScatterSRV,
                 // t5/t6: the furthest pyramids (A3 conservative depth); dummies when the flag is off.
@@ -748,7 +748,7 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
               // level whose sky has no derivatives; `skyIrradianceEnabled` is 0 there, so it is
               // never sampled.
               (frame_->skybox && frame_->skybox->HasIbl())
-                  ? frame_->skybox->GetIrradianceTex()->GetSRVCPU()
+                  ? frame_->skybox->IrradianceSrv()
                   : renderer->VsmDummyTexSrv(),
               // t11: P6B dynamic AO at render resolution. Bound unconditionally to keep the
               // VOLATILE range fully populated; `gtaoEnabled` is 0 when the pass did not run, and
@@ -759,12 +759,12 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
               // unconditionally to keep the VOLATILE range populated; `enableSkySpecular` and
               // `skySpecMipCount` decide whether any of them is sampled, exactly as in compose.
               (frame_->skybox && frame_->skybox->HasIbl())
-                  ? frame_->skybox->GetSpecTex()->GetSRVCPU()
+                  ? frame_->skybox->SpecularSrv()
                   : renderer->VsmDummyTexSrv(),
               (frame_->skybox && frame_->skybox->HasIbl())
                   ? frame_->skybox->GetBrdfLut()->GetSRVCPU()
                   : renderer->VsmDummyTexSrv(),
-              frame_->skybox ? frame_->skybox->GetTex()->GetSRVCPU() : renderer->VsmDummyTexSrv() },
+              frame_->skybox ? frame_->skybox->EnvironmentSrv() : renderer->VsmDummyTexSrv() },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -1050,9 +1050,9 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             // VOLATILE range is undefined), and the shader never reads them because
             // `skySpecMipCount` is 0.
             { D.lightSRV, D.gbSRV[2], D.gbSRV[0], D.gbSRV[1], D.depthSRV,
-              skybox->GetTex()->GetSRVCPU(), D.reflectionSRV, D.gbAuxSRV, wetnessSrv,
-              skybox->HasIbl() ? skybox->GetSpecTex()->GetSRVCPU() : skybox->GetTex()->GetSRVCPU(),
-              skybox->HasIbl() ? skybox->GetIrradianceTex()->GetSRVCPU() : skybox->GetTex()->GetSRVCPU(),
+              skybox->EnvironmentSrv(), D.reflectionSRV, D.gbAuxSRV, wetnessSrv,
+              skybox->HasIbl() ? skybox->SpecularSrv() : skybox->EnvironmentSrv(),
+              skybox->HasIbl() ? skybox->IrradianceSrv() : skybox->EnvironmentSrv(),
               skybox->HasIbl() ? skybox->GetBrdfLut()->GetSRVCPU() : D.depthSRV,
               D.gtaoUpsampledSRV, // t12: P6B dynamic AO, gated by `gtaoEnabled`
               // t13: the integrated fog volume, gated by `fogVolumeParams.x`; the dummy keeps

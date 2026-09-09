@@ -2019,6 +2019,7 @@ float3 Reflection(const LightingInput li, float roughness)
     float reflectionNormalStrength = saturate(heightFogParams.w);
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
     float3 reflectDir = OceanSkyReflectDir(reflect(-li.viewDir, adjustedNormal));
+    reflectDir.y = abs(reflectDir.y);
 
     // P5: the prefiltered cube indexed by the shared mapping, so water and land broaden their
     // reflections identically. Without derivatives this falls back to the old guess.

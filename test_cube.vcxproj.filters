@@ -1360,6 +1360,9 @@
     </None>
     <None Include="shaders\sky_lut_view_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_lut_aerial_cs.hlsl"><Filter>shaders</Filter></None>
+    <None Include="shaders\sky_ibl_common.hlsli"><Filter>shaders</Filter></None>
+    <None Include="shaders\sky_ibl_capture_cs.hlsl"><Filter>shaders</Filter></None>
+    <None Include="shaders\sky_ibl_filter_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_aerial_common.hlsli"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_view_mapping.hlsli"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_lut_debug_cs.hlsl">

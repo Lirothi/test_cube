@@ -555,11 +555,12 @@ int WINAPI WinMain(
                 ApplyGbvSelfTestArg(lpCmdLine);
             }
             const bool roughnessEdits = std::strstr(lpCmdLine, "--scene-stress-roughness") != nullptr;
-            if (roughnessEdits) { g_bootLevelPath = "data/levels/wind_test.json"; }
+            const bool skyEdits = std::strstr(lpCmdLine, "--scene-stress-sky") != nullptr;
+            if (roughnessEdits || skyEdits) { g_bootLevelPath = "data/levels/wind_test.json"; }
             // The stress harness is a diagnostic run by definition, so the per-frame buckets are
             // wanted here without a separate flag.
             boot::SetFrameProfiling(true);
-            return RunSceneStress(hInstance, nShowCmd, iterations, /*gbvContinue=*/gbv, roughnessEdits);
+            return RunSceneStress(hInstance, nShowCmd, iterations, /*gbvContinue=*/gbv, roughnessEdits, skyEdits);
         }
 
         // "--gbv" on an ORDINARY run. GBV was reachable only through the stress harness, and the

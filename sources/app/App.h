@@ -109,7 +109,7 @@ public:
     // the autonomous scene-lifecycle stress driver instead of the interactive
     // loop. Returns the process exit code (0 = clean, nonzero = fault caught).
     int RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool gbvContinue,
-                       bool roughnessEdits);
+                       bool roughnessEdits, bool skyEdits);
 
 private:
     std::unique_ptr<Systems::AppSystems> systems_;

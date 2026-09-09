@@ -1102,8 +1102,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 GRAPHICS_CONTROL(SunAngularSize, "sunAngularSize",
                     ImGui::SliderFloat("Sun angular radius (rad)", &settings.sunAngularSize, 0.0f, 0.25f, "%.4f"));
-                ImGui::TextWrapped("Sky mode and sun angles apply for this session. Reflections and sky lighting still use the HDRI until B4.");
+                ImGui::TextWrapped("Sky mode and sun angles apply for this session.");
                 ImGui::BeginDisabled(sky.mode == 0);
+                ImGui::Checkbox("Procedural environment lighting", &sky.environmentLighting);
+                ImGui::TextWrapped("Updates reflections and sky lighting when the sun or atmosphere changes.");
                 ImGui::Checkbox("Aerial perspective", &sky.aerialPerspective);
                 ImGui::BeginDisabled(!sky.aerialPerspective);
                 int aerialView = static_cast<int>(sky.aerialDebugView);

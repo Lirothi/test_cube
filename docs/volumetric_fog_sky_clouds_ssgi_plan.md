@@ -889,7 +889,7 @@ VSM SMRT=0. Кватернион острова из §F4, дальняя кам
   `--dlss=off` выставляет render scale 1.0: проверено HUD `b3_resolution.png`.
   Сохранённый пользовательский renderScale 0.580078 не изменялся.
 
-### B4. IBL из процедурного неба — [день]
+### B4. IBL из процедурного неба — DONE (2026-09-09)
 При изменении солнца/атмосферы: захват кубмапы 128² из SkyView LUT (6 дисп.) → irradiance (наш
 существующий свёрточник, если он GPU; если CPU-бейк при загрузке — перенести в compute) → префильтр
 specular по мипам. Заменяет `SkySpecular`/`SkyboxTex` в режиме 1; `skyboxIntensity` = 1 (единицы
@@ -897,6 +897,74 @@ specular по мипам. Заменяет `SkySpecular`/`SkyboxTex` в режи
 (вода, IBL, туман).
 **Критерий приёмки:** камера теней при mode 1 и солнце уровня ≈ HDRI-картинка по экспозиции;
 слайдер `sun.elevation` — непрерывно без скачков; стоимость перезахвата ≤ 0.3 мс и ТОЛЬКО при смене.
+
+**Реализация и дельты UE:**
+* GPU capture 128² × 6 из отдельного SkyView 192×104; фиксированный глобальный probe на
+  1 м над уровнем моря. Камера и автоэкспозиция не входят в dirty key. Ключ: параметры
+  атмосферы, нормализованное направление и RGB illuminance солнца, sky luminance scale.
+  SkyView probe хранится с фиксированной preExposure 1/1024; кубы содержат raw radiance,
+  skyboxIntensity=1. Авторский HDRI trim и lux calibration сохраняются для mode 0.
+* `SkyAtmosphere.usf:956-974` — выборка SkyView; `:314-317` — БЕЗ солнечного диска в
+  отражениях, чтобы не удваивать аналитический specular солнца. Нижняя полусфера сохраняет
+  ground term B2. World Y-up → local Z-up только при выборке SkyView.
+* `ReflectionEnvironmentShaders.usf:99-129` — ориентация шести D3D-граней; `:537-647`,
+  `MonteCarlo.ush:58-63,248-261,347-363` — Hammersley, cosine hemisphere и GGX importance
+  sampling. 64 samples; specular 128² / 8 mips, diffuse 32² с E/PI (наш формат вместо UE SH).
+  Roughness/mip mapping — общий `IblRoughnessFromMip`, как у существующих потребителей.
+  Mip 0 — sharp copy. Дельта: disk-free источник гладкий, свёртка читает source mip 0,
+  без отдельной source mip pyramid и PDF-based LOD. Все шесть граней развёрнуты в dispatch Y,
+  один dispatch на целевой mip вместо шести по граням.
+* Постоянные GPU-ресурсы принадлежат SkyAtmosphere, память включена в `sky.luts`.
+  Пересборка идёт на graphics queue до lighting и RT; dirty state коммитится serial builder.
+  На статичных кадрах capture/filter не планируются. Prologue снимает PIXEL bit перед async RT,
+  forward снова объявляет pixel reads; новые ресурсы проходят обычный render graph.
+* Общий выбранный environment SRV используется в deferred lighting/compose, RT hit shading,
+  обоих океанских путях и стекле. Asset/editor previews продолжают показывать исходный HDRI.
+  BRDF LUT остаётся существующим, загружается также при отсутствии запечённых F7 derivatives.
+  B4 переключает источник окружения океана; собственная AP воды и приёмка горизонта остаются B6.
+
+**Управление:** F1 → Sky → Procedural atmosphere → Procedural environment lighting,
+`--set=sky.environmentLighting:1`. По §0.5 выключено по умолчанию до визуальной приёмки.
+HDRI mode всегда использует исходное окружение независимо от этой галочки.
+
+**Проверки:**
+* `b4_before_00..02`: три пары пола на камере теней, native 2560×1440, no Streamline/DLSS,
+  wind-freeze, SMRT=0, manual EV12: 0.05084–0.06388% пикселей >1 code value.
+  До/после в HDRI: 0.02214%; в одном новом бинаре HDRI с environment off/on: 0.05122%,
+  в пределах пола. `b4_shadow_review.jpg` — HDRI / procedural+B3 lighting / procedural+B4.
+* `b4_near_00..03`, точный пользовательский ракурс из B3, authored auto exposure: солнце 28°,
+  environment off/on, затем 5° и 29°. `b4_near_review.jpg` просмотрен: цвет воды и заполнение
+  теней следуют процедурному небу, энергия солнца/bloom не перенастраивалась.
+* `--scene-stress-sky=64`: непрерывные sun edits, hold, exposure changes, environment/mode
+  toggles при RT без GPU-idle между кадрами; существующий stress verdict/session log и trace.
+  Первые 32 кадра меняют солнце, следующие 32 проверяют удержание/переключение cache.
+* GPU timing: три Release-прогона `--scene-stress-sky=64`, native 2560×1440 (размер
+  подтверждён session log), wind frozen, RT, SMRT=0, без параллельного GBV. В каждом trace
+  ровно 32 capture/filter dispatch на кадрах смены солнца; на следующих 32 кадрах (hold,
+  exposure, master/mode toggles) пересборок нет. Median 0.038 / 0.039 / 0.038 ms,
+  mean 0.03881 / 0.03919 / 0.05859 ms; maxima 0.044 / 0.042 / 0.674 ms. Типичная стоимость
+  ниже бюджета 0.3 ms; в третьем прогоне был единичный выброс, поэтому это не гарантия
+  верхней границы каждого кадра. Traces: `trace_20260909_114220_release_000.json`,
+  `trace_20260909_114223_release_000.json`, `trace_20260909_114225_release_000.json`.
+* В SceneStress добавлен пропущенный `CollectGpuResults()` после BeginFrame, как в App:
+  без него старые timestamp batches доживали до перезаписи readback ring. Ранние стресс-трейсы
+  `013909..013913` для GPU timing непригодны и в итоговый замер не входят. Sky stress явно
+  выставляет native scale / DLSS off / frozen wind: обычные CLI-парсеры этих ручек идут
+  ПОСЛЕ раннего входа в stress. Прогрев sky stress — 32 кадра, без idle между sun edits.
+* GBV Legacy 20: CLEAN, exit 0 (PID 65444); VSM 20: CLEAN, exit 0 (PID 10904).
+  Дополнительно continuous sun/cache/mode stress с RT + unguarded GBV, 64 шага: CLEAN,
+  exit 0 (PID 20676), без ERROR/FATAL, clean shutdown. Debug-лог: 1 начальная пересборка
+  + 32 sun edits, затем cache не пересчитывается. Проверки GBV проводились до последней
+  правки только условий замера/сбора profiler results в harness; рендер-путь не менялся.
+* Debug / Release / Release_Editor собраны; shader check 73/73, check_logging 0;
+  log-stress Debug/Release 0/0. Final Debug sky-stress, Release_Editor и classic ocean
+  smoke — exit 0; `b4_final_editor.png` просмотрен.
+* После возобновления работы сохранены параллельные пользовательские правки океана
+  (`reflectDir.y = abs(reflectDir.y)` в обоих шейдерах и reflectionSkyHorizonPull=1 в уровне).
+  Повторный HDRI off/on на текущих файлах, пользовательская камера, manual EV14:
+  три пары пола 0.29910–0.36160%, environment toggle 0.25130%, в пределах пола
+  (`b4_final_hdri_00..03`). Эти правки не входят в реализацию B4; исходный before/after
+  выше снят до них. HDRI/bloom/экспозиция в рамках B4 не перенастраивались.
 
 ### B5. Distant sky light LUT → туман и облака — [полдня]
 `:200-206`: ambient на высоте 6 км как у UE — кормит `fog.skyScatter` (A2 читает его вместо

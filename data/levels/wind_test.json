@@ -13783,7 +13783,7 @@
       "macroNormalMipBiasNative": 1.0,
       "minMeshScale": 15.0,
       "reflectionNormalStrength": 0.10000000149011612,
-      "reflectionSkyHorizonPull": 0.5,
+      "reflectionSkyHorizonPull": 1.0,
       "roughnessDistance": 150.0,
       "roughnessScale": 0.20000000298023224,
       "scatterSpread": 0.20000000298023224,

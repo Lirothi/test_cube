@@ -1,3 +1,4 @@
+#include "rendering/core/RenderGraph.h"
 #include "rendering/lighting/Skybox.h"
 #include "core/logging/Log.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
@@ -222,6 +223,14 @@ void Skybox::Init(Renderer* renderer,
         }
     }
 
+    // B4 can supply derivatives even for skies without F7 siblings. The BRDF is scene independent.
+    if (!brdfLut_.GetResource())
+    {
+        Texture2D::CreateDesc desc;
+        desc.path = L"textures/brdf_lut.dds"; desc.usage = Texture2D::Usage::LinearData;
+        brdfLut_.CreateFromFile(renderer, uploadCmdList, desc, uploadKeepAlive);
+    }
+
     // Type-correct null descriptors keep the HDRI/editor path valid without atmosphere resources.
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1;
@@ -287,4 +296,9 @@ void Skybox::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDes
     desc.blend.RenderTarget[0].BlendEnable = FALSE;
     desc.blend.RenderTarget[1].BlendEnable = FALSE;
     desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+}
+
+void Skybox::DeclareEnvironment(RenderGraphPassContext& ctx, D3D12_RESOURCE_STATES state) const
+{
+    for (auto* resource : environmentResource_) if (resource) ctx.Use(resource, state);
 }

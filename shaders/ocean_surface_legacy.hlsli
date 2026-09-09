@@ -1147,6 +1147,8 @@ float3 Reflection(const LightingInput li, float roughness)
     float reflectionNormalStrength = heightFogParams.w;
     float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
     float3 reflectDir = OceanSkyReflectDir(reflect(-li.viewDir, adjustedNormal));
+    //reflectDir.y = max(reflectDir.y, 0.001f);
+    reflectDir.y = abs(reflectDir.y);
 
     // P5: see the modern variant. The `3` here was a fixed blur with no relation to roughness.
     float3 skySample;

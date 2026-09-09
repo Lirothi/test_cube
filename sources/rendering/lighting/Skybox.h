@@ -33,20 +33,28 @@ public:
     // All three are OPTIONAL: a sky imported before F7 simply has none, `HasIbl()` stays false and
     // every consumer keeps the pre-F8 behaviour. That fallback is the compatibility story, so it
     // must stay cheap to check and impossible to half-enter -- hence one flag for all three.
-    bool HasIbl() const { return hasIbl_; }
+    bool HasIbl() const { return hasIbl_ || (HasEnvironment() && brdfLut_.GetResource()); }
+    bool HasEnvironment() const { return environmentSrv_[0].ptr != 0; }
+    void SetEnvironment(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& srvs,
+                        const std::array<ID3D12Resource*, 3>& resources)
+    { environmentSrv_ = srvs; environmentResource_ = resources; }
+    D3D12_CPU_DESCRIPTOR_HANDLE EnvironmentSrv() const { return HasEnvironment() ? environmentSrv_[0] : cube_.GetSRVCPU(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE SpecularSrv() const { return HasEnvironment() ? environmentSrv_[1] : specCube_.GetSRVCPU(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE IrradianceSrv() const { return HasEnvironment() ? environmentSrv_[2] : irradianceCube_.GetSRVCPU(); }
+    void DeclareEnvironment(RenderGraphPassContext& ctx, D3D12_RESOURCE_STATES state) const;
     const TextureCube* GetSpecTex() const { return &specCube_; }
     const TextureCube* GetIrradianceTex() const { return &irradianceCube_; }
     const Texture2D* GetBrdfLut() const { return &brdfLut_; }
     // Real mip count of the prefiltered cube. This is what retires the hardcoded
     // `kSkyRoughMaxMip = 5` that both compose and the ocean used to guess with.
-    UINT GetSpecMips() const { return specCube_.GetMips(); }
+    UINT GetSpecMips() const { return HasEnvironment() ? 8u : specCube_.GetMips(); }
     const std::wstring& GetPath() const { return path_; }
 
     // The multiplier every consumer of this sky applies -- the authored appearance trim TIMES the
     // physical calibration below. Folded together on purpose: compose, the lighting pass, the ocean
     // and glass all already multiply by this, so the calibration reaches every one of them without
     // a single new constant-buffer field.
-    float GetExposure() const { return exposure_ * PhysicalScale(); }
+    float GetExposure() const { return HasEnvironment() ? 1.0f : exposure_ * PhysicalScale(); }
     // The authored trim alone -- for the editor to round-trip, AND for every consumer that is not
     // on the physical path. The editor's preview pass (thumbnails, the Mesh Editor viewport) writes
     // linear light straight into an sRGB target with no tonemapper, so handing it GetExposure()
@@ -93,6 +101,8 @@ private:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 
 private:
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> environmentSrv_{};
+    std::array<ID3D12Resource*, 3> environmentResource_{}; // owned by SkyAtmosphere; GPU-drained teardown
     SkyViewFrameData atmosphereView_{};
     D3D12_CPU_DESCRIPTOR_HANDLE atmosphereSrv_{}, transmittanceSrv_{}, nullAtmosphereSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nullAtmosphereHeap_;
