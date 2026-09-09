@@ -145,6 +145,12 @@ public:
     // cascade loops pass one (their `view.frustum`, the S14 accurate volume).
     virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0, bool chunkCameraLods = false, const Frustum* chunkCullFrustum = nullptr) = 0;
     virtual bool IsTransparent() const = 0;
+    // B6.1. UE split their forward surfaces by exactly this: SingleLayerWater writes depth, is in the
+    // depth buffer when the screen-space fog pass runs, and is fogged BY that pass -- there is no fog
+    // code in SingleLayerWaterShading.ush at all. Translucency does not write depth, draws AFTER the
+    // fog, and fogs itself per material. A transparent object that writes depth and does not blend is
+    // our water, and it must draw in Main_Transparent; everything else draws in Main_Translucent.
+    virtual bool IsDepthWritingTransparent() const { return false; }
     virtual bool IsSimpleRender() const = 0;
     // Editor: does the viewport ray-vs-bounds pick consider this object? False for helpers that
     // have no solid surface (e.g. particle emitters, whose swept culling AABB is huge and would

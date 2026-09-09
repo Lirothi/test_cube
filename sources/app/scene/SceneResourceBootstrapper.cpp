@@ -646,6 +646,33 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
     // P8C-2 step 5a: the bokeh scatter. One quad per tile of the thresholded scene, additive into
     // the flare accumulation target; the VS collapses dark tiles to zero-size quads. No vertex
     // buffer -- SV_VertexID/SV_InstanceID only, like the debug blit.
+    // B6.1: the screen-space fog for the depth-writing transparents. Blend ONE / SRC_ALPHA so the
+    // shader can output (in-scattered light, transmittance) and the hardware computes
+    // dst * T + inscatter -- UE's own fog blend state (RenderViewFog). No depth: the pass reads the
+    // depth buffer as an SRV, so nothing may be bound as a DSV while it draws.
+    if (!matFogApply_)
+    {
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/fog_apply.hlsl";
+        gd.vsEntry = "VSMain";
+        gd.psEntry = "PSMain";
+        gd.inputLayoutKey = "";
+        gd.numRT = 1;
+        gd.rtvFormats[0] = render::kSceneColorFormat;
+        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
+        gd.depth.DepthEnable = FALSE;
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        auto& rt = gd.blend.RenderTarget[0];
+        rt.BlendEnable = TRUE;
+        rt.SrcBlend = D3D12_BLEND_ONE;
+        rt.DestBlend = D3D12_BLEND_SRC_ALPHA;
+        rt.BlendOp = D3D12_BLEND_OP_ADD;
+        rt.SrcBlendAlpha = D3D12_BLEND_ZERO;
+        rt.DestBlendAlpha = D3D12_BLEND_ONE;
+        rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        matFogApply_ = mm->GetOrCreateGraphics(renderer, gd);
+    }
+
     if (!matLensFlare_)
     {
         Material::GraphicsDesc gd{};
@@ -1321,6 +1348,11 @@ void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants
     matBloomConvCS_->UpdateCBField(h.streakOffsets, d.streakOffsets, dest);
     matBloomConvCS_->UpdateCBField(h.ghostCount, d.ghostCount, dest);
     matBloomConvCS_->UpdateCBField(h.ghostIntensity, d.ghostIntensity, dest);
+}
+
+UINT SceneResourceBootstrapper::GetFogApplyCBSizeBytes() const
+{
+    return matFogApply_ ? matFogApply_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 UINT SceneResourceBootstrapper::GetLensFlareCBSizeBytes() const

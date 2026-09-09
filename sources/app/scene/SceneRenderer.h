@@ -41,6 +41,8 @@ public:
         - static_cast<size_t>(RenderPass::GBuffer_Driver);
     static constexpr size_t kTransparentRenderGraphPassCount = static_cast<size_t>(RenderPass::Transparent_Count)
         - static_cast<size_t>(RenderPass::Transparent_Driver);
+    static constexpr size_t kTranslucentRenderGraphPassCount = static_cast<size_t>(RenderPass::Translucent_Count)
+        - static_cast<size_t>(RenderPass::Translucent_Driver);
 
     void InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
@@ -477,6 +479,10 @@ private:
         const Camera& camera, const TransparentPoints& pts);
     void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const SceneView& mainView, const TransparentPoints& pts);
+    void Pass_Translucent(Renderer* r, RenderGraphPassContext ctx,
+        const Camera& camera, const SceneView& mainView, std::uint32_t rebindPoint);
+    void Pass_TransparentFog(Renderer* r, RenderGraphPassContext ctx,
+        const Camera& camera, std::uint32_t point);
     void Pass_DebugDraw(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, std::uint32_t point);
 #if WITH_EDITOR

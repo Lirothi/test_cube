@@ -1645,6 +1645,18 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
     if (view.type == SceneView::Type::Camera)
     {
         view.queue.SortTransparent(view.view);
+        // B6.1: split the sorted complex bucket into the depth-writing half (the ocean, drawn before
+        // the screen-space fog) and the alpha-blended half (glass, drawn after it). Done here, right
+        // after the sort, so both halves inherit the blend order the sort just established.
+        view.transparentWater.clear();
+        view.translucentComplex.clear();
+        for (RenderableObjectBase* obj :
+             view.queue.GetVisibleBucket(SceneRenderQueue::BucketType::TransparentComplex))
+        {
+            if (obj == nullptr) { continue; }
+            (obj->IsDepthWritingTransparent() ? view.transparentWater : view.translucentComplex)
+                .push_back(obj);
+        }
         // Camera LOD must be selected before camera batches build their per-tier member lists.
         // S1: the view's own frustum rides along -- the chunk/instance masks use the planes the
         // object cull above used, so "object in, chunk out" is the same test at a finer grain.

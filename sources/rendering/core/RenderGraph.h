@@ -1234,16 +1234,31 @@ private:
     // rides alongside in the PrepareState so the flags reset with the compile, not per body.
     //
     // Pass-flow S1: the view keeps EMPTY points (count = 0, the compile ate every barrier of a
-    // declared point) up to the LAST point the pass declared uses for — EmitPoint markers carry
-    // absolute declaration indices, so the correspondence must be 1:1. The Transition matcher
-    // steps over empty points transparently, which reproduces exactly what omitting them used
-    // to do.
+    // declared point) up to the last point the pass DECLARED — EmitPoint markers carry absolute
+    // declaration indices, so the correspondence must be 1:1. The Transition matcher steps over
+    // empty points transparently, which reproduces exactly what omitting them used to do.
+    //
+    // "Declared" means NextPoint() calls, which is what `slice.points` counts — NOT the highest
+    // point that happens to carry a resource use. Deriving the count from the uses alone made the
+    // correspondence 1:1 only by luck, whenever the last point happened to have one. A pass that
+    // takes a point unconditionally and then registers nothing on it reported pointCount 0 and
+    // killed the process on its own marker: Main_PrologueClear on any level with no ocean
+    // simulation, whose builder says in as many words that the empty case must still have one
+    // shape. Both configs, reproduced on a clean tree.
+    //
+    // Taking the max of the two keeps this monotone: it can only ADD trailing points, and a point
+    // past the last use is empty by construction, because barriers only ever come from uses. So no
+    // barrier can be lost by it, and the loud check for a body that marks past what the builder
+    // declared stays loud.
     void BuildPassBarrierView(size_t passIdx, Renderer::CompiledBarriers& out)
     {
         out.unmatched.store(0, std::memory_order_relaxed);
         out.markerUsed.store(false, std::memory_order_relaxed);
         const auto& slice = prepare_->slices[passIdx];
-        std::uint32_t declaredPoints = 0;
+        // Clamped for the same reason Use() drops out-of-range points: the per-pass point tables
+        // are kResourceUsesPerPassBudget wide.
+        std::uint32_t declaredPoints = std::min<std::uint32_t>(
+            slice.points, static_cast<std::uint32_t>(kResourceUsesPerPassBudget));
         for (std::uint32_t i = 0; i < slice.count; ++i) {
             const ResourceUse& use = prepare_->arena[slice.begin + i];
             if (use.point < kResourceUsesPerPassBudget) {

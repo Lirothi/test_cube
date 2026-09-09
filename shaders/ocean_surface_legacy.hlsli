@@ -1325,48 +1325,15 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
     // unchanged, byte for byte.
     if (fogParams0.x > 0.0f)
     {
-        AtmosphereParams fog;
-        fog.density = fogParams0.x;
-        fog.heightFalloff = fogParams0.y;
-        fog.referenceHeight = fogParams0.z;
-        fog.startDistance = fogParams0.w;
-        fog.maxOpacity = fogParams1.x;
-        fog.sunScatterStrength = fogParams1.y;
-        fog.sunScatterExponent = fogParams1.z;
-        fog.sunScatterStartDistance = fogParams1.w;
-        fog.skyBackScatter = fogParams2.y;
-
-        // Volumetric fog (plan A5): the froxel volume covers this ray to its far plane and the
-        // analytic model continues from there -- the same split compose applies to the sand, so
-        // the shoreline sees one medium. Screen UV and view depth from the UNJITTERED clip position.
-        const float4 fogClip = mul(float4(li.positionWS, 1.0f), viewProjNoJitter);
-        const float2 fogUv = (fogClip.xy / max(fogClip.w, 1.0e-4f)) * float2(0.5f, -0.5f) + 0.5f;
-        const float4 vol = FogVolumeSampleAt(FogVolume, LinearClampSampler, fogUv, fogClip.w,
-                                             fogVolumeParams, fogVolumeZParams);
-        const float fogExclude = FogAnalyticExclude(fogVolumeParams, li.viewDist, fogClip.w);
-        fog.startDistance = max(fog.startDistance, fogExclude);
-        fog.sunScatterStartDistance = max(fog.sunScatterStartDistance, fogExclude);
-
-        const float3 viewRay = normalize(li.positionWS - li.cameraPos);
-        const float fogShared = AtmosphereSharedIntegral(li.viewDist, li.cameraPos.y,
-                                                      li.positionWS.y, fog);
-        const float tau = AtmosphereOpticalDepth(fogShared, li.viewDist, fog);
-        const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
-        const float transmittance = AtmosphereTransmittance(tau, minT);
-        // Blur and sun lobe both fade as the fog saturates, through the SAME helpers compose uses --
-        // water and land must agree here or they meet at the shoreline in different weather.
-        const float headroom = AtmosphereHeadroom(transmittance, minT);
-        const float3 skyAlongView = FogSkyAlongView(SkyboxTexture, LinearClampSampler, viewRay,
-            li.viewDist, AtmosphereSkyRoughness(headroom, fogParams2.x),
-            fogParams2.zw, skyParams.x);
-        const float3 toSun = -normalize(sunDirAmbient.xyz);
-        const float3 inscatter = AtmosphereInscatter(skyAlongView,
-                                                     sunColorExposure.xyz * sunColorExposure.w,
-                                                     dot(viewRay, toSun), fogShared,
-                                                     li.viewDist, headroom, fog);
-        if (fogDebugView == 1u)      { color = (transmittance * vol.a).xxx; }
-        else if (fogDebugView == 2u) { color = inscatter * (1.0f - transmittance) * vol.a + vol.rgb; }
-        else { color = (color * transmittance + inscatter * (1.0f - transmittance)) * vol.a + vol.rgb; }
+        // B6.1: the fog for this surface is applied by Main_TransparentFog (fog_apply.hlsl), in the
+        // SAME code that fogs the opaque scene, after the water has written depth and before
+        // anything alpha-blended is drawn over it. That is UE's arrangement -- their water surface
+        // is fogged by the screen-space passes and SingleLayerWaterShading.ush carries no fog code
+        // at all. What stays here is only the decision this branch always encoded: with fog on, the
+        // ocean's OWN horizon fade does not run. P7's rule that exactly one of the two applies is
+        // unchanged, it is just no longer this shader's job to perform the one that wins.
+        //
+        // Debug views need nothing either: the fog pass writes them over the water itself.
     }
     else
     {

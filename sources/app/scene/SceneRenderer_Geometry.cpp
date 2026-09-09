@@ -5,6 +5,7 @@
 // deliberately NOT part of this step, because an unused include is not a defect and a
 // trimmed one is a second thing to review.
 
+#include "core/logging/Log.h"
 #include "app/scene/SceneRenderer.h"
 
 #include <algorithm>
@@ -338,6 +339,10 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
 // The inspector preview. See shaders/debug_preview_cs.hlsl for why this pass exists at all:
 // ImGui can only multiply an image by an 8-bit tint, so brightening has to happen before ImGui.
 
+// Shared by Pass_Transparent and Pass_Translucent, which used to be one pass: the two halves fan
+// out with the same chunk size so their submission-order arithmetic stays comparable.
+static constexpr size_t kTransparentChunkSize = 32;
+
 // ---- Pass_Transparent (+ its inner graph) ----
 void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, const SceneView& mainView, const TransparentPoints& pts)
@@ -390,33 +395,86 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
 
-    // Draw the COMPLEX bucket (ocean, glass) BEFORE the SIMPLE bucket (particles). Both buckets
-    // must use direct lists here: bundles are executed inside the pass driver before every direct
-    // list, regardless of render-graph dependencies, which made the direct-list ocean composite
-    // over particle bundles. Reserve the first local-order range for complex chunks and place the
-    // simple chunks immediately after it so SubmitTimeline preserves this order on the GPU.
-    constexpr size_t kTransparentChunkSize = 32;
+    // B6.1: THIS PASS DRAWS ONLY THE DEPTH-WRITING TRANSPARENTS -- the ocean. Everything that blends
+    // without writing depth (glass, particles) moved to Main_Translucent, which runs AFTER
+    // Main_TransparentFog. That is UE ordering (DeferredShadingRenderer.cpp:3230 water, 3262 sky and
+    // fog, then translucency), and it is what lets ONE screen-space pass fog the water and the opaque
+    // scene with the same code: by the time it runs the water is in the depth buffer, and nothing
+    // alpha-blended has been laid on top of it yet.
+    //
+    // Direct lists, not bundles: bundles execute inside the pass driver before every direct list
+    // regardless of render-graph dependencies, which once made the direct-list ocean composite over
+    // particle bundles.
+    const auto& waterObjects = mainView.transparentWater;
+    rgTr.AddPass(RenderPass::Transparent_Water, {}, [this, renderer, &camera, &waterObjects, viewCB](RenderGraphPassContext sub) {
+        if (!waterObjects.empty())
+        {
+            RenderObjectBatch(renderer, waterObjects, sub.batchIndex, camera, /*useBundles=*/false,
+                false, true, kTransparentChunkSize, viewCB);
+        }
+        });
+
+    rgTr.Execute(renderer);
+}
+
+// ---- Pass_Translucent (+ its inner graph) ----
+// The alpha-blended half of the old transparent pass: glass and particles, drawn AFTER
+// Main_TransparentFog. Neither writes depth, so a screen-space fog pass cannot reach them; they
+// carry fog in their own shaders, exactly as UE translucency does, and drawing them after the fog is
+// what keeps that fog from being applied to them twice.
+void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext ctx,
+    const Camera& camera, const SceneView& mainView, std::uint32_t rebindPoint)
+{
+    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_, decisions_.fogVolumeParams, decisions_.fogVolumeZParams, decisions_.glassRefl);
+
+    // Step 21: publish the VSM page-table + pool SRVs (t9/t10) for the glass draws, which lack frame
+    // access. Valid once a level is loaded; the pool/page-table are already SRV here (the light
+    // passes declared them). glass.hlsl only reads them when vsmParams.x != 0.
+    if (frame_->vsm && frame_->vsm->IsAllocated())
+    {
+        renderer->SetVsmShadowSrvs(frame_->vsm->PageTableSrv(), frame_->vsm->PagePoolSrv());
+    }
+    else
+    {
+        renderer->SetVsmShadowSrvs({}, {});
+    }
+
+    RenderGraph<kTranslucentRenderGraphPassCount> rgTl(ctx.batchIndex);
+
+    // The driver owns this pass single barrier point and re-binds the forward targets; the fan-out
+    // chunks re-apply the same states per chunk, so one registration covers them.
+    rgTl.AddPass(RenderPass::Translucent_Driver, {}, [renderer, rebindPoint](RenderGraphPassContext sub) {
+        auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        SetCommandListName(driver.cl, sub.pass);
+        {
+            GPU_SCOPE(driver.cl, ProfilerScopes::kTransparentDriver);
+            renderer->EmitPoint(driver.cl, rebindPoint);
+            renderer->BindSceneColorWithVelocity(driver.cl, Renderer::ClearMode::None, true);
+        }
+        renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
+        });
+
+    // COMPLEX (glass) before SIMPLE (particles); the local-order ranges keep that order on the GPU
+    // through SubmitTimeline.
+    const auto& translucentComplex = mainView.translucentComplex;
     const auto& visibleBuckets = mainView.queue.VisibleBuckets();
-    const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
     const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
     const size_t complexChunkCount =
-        (transparentComplex.size() + kTransparentChunkSize - 1) / kTransparentChunkSize;
+        (translucentComplex.size() + kTransparentChunkSize - 1) / kTransparentChunkSize;
     const size_t simpleChunkCount =
         (transparentSimple.size() + kTransparentChunkSize - 1) / kTransparentChunkSize;
     assert(complexChunkCount + simpleChunkCount <= UINT32_MAX);
     const uint32_t simpleLocalOrderBase = static_cast<uint32_t>(complexChunkCount);
 
-    [[maybe_unused]] const size_t pTransparentComplex = rgTr.AddPass(RenderPass::Transparent_Complex, {}, [this, renderer, &camera, &mainView, viewCB](RenderGraphPassContext sub) {
-        const auto& visibleBuckets = mainView.queue.VisibleBuckets();
-        const auto& transparentComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentComplex)];
-        if (!transparentComplex.empty())
+    [[maybe_unused]] const size_t pTranslucentComplex = rgTl.AddPass(RenderPass::Translucent_Complex, {}, [this, renderer, &camera, &translucentComplex, viewCB](RenderGraphPassContext sub) {
+        if (!translucentComplex.empty())
         {
-            RenderObjectBatch(renderer, transparentComplex, sub.batchIndex, camera, /*useBundles=*/false,
+            RenderObjectBatch(renderer, translucentComplex, sub.batchIndex, camera, /*useBundles=*/false,
                 false, true, kTransparentChunkSize, viewCB);
         }
         });
 
-    [[maybe_unused]] const size_t pTransparentSimple = rgTr.AddPass(RenderPass::Transparent_Simple, { pTransparentComplex }, [this, renderer, &camera, &mainView, viewCB, simpleLocalOrderBase](RenderGraphPassContext sub) {
+    [[maybe_unused]] const size_t pTranslucentSimple = rgTl.AddPass(RenderPass::Translucent_Simple, { pTranslucentComplex }, [this, renderer, &camera, &mainView, viewCB, simpleLocalOrderBase](RenderGraphPassContext sub) {
         const auto& visibleBuckets = mainView.queue.VisibleBuckets();
         const auto& transparentSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::TransparentSimple)];
         if (!transparentSimple.empty())
@@ -429,10 +487,10 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
 #if WITH_EDITOR
     if (frame_ && frame_->selectedEditorObjectCount != 0)
     {
-        RenderGraph<kTransparentRenderGraphPassCount>::DependencyList selectedDeps;
-        selectedDeps.push_back(pTransparentSimple);
-        selectedDeps.push_back(pTransparentComplex);
-        rgTr.AddPass(RenderPass::Transparent_Selected, selectedDeps, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
+        RenderGraph<kTranslucentRenderGraphPassCount>::DependencyList selectedDeps;
+        selectedDeps.push_back(pTranslucentSimple);
+        selectedDeps.push_back(pTranslucentComplex);
+        rgTl.AddPass(RenderPass::Translucent_Selected, selectedDeps, [this, renderer, &camera, &mainView](RenderGraphPassContext sub) {
             auto material = resources_.GetSelectionStencilMaterial();
             if (!frame_->objects || !material)
             {
@@ -469,7 +527,88 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
     }
 #endif
 
-    rgTr.Execute(renderer);
+    rgTl.Execute(renderer);
+}
+
+// ---- Pass_TransparentFog ----
+// B6.1: ONE fog application for the opaque scene and the water, in one piece of code.
+//
+// UE's order, which this reproduces: water (DeferredShadingRenderer.cpp:3230), then the screen-space
+// sky + fog over the depth buffer that now contains it (:3262), then translucency. Compose already
+// fogged the opaque half before the forward pass, so this pass masks itself to the pixels a
+// depth-writing transparent won -- see the mask note in fog_apply.hlsl. Everything it computes comes
+// from the same helpers compose and the ocean used, so moving the work here is a change of PLACE and
+// not of maths.
+void SceneRenderer::Pass_TransparentFog(Renderer* renderer, RenderGraphPassContext ctx,
+    const Camera& camera, std::uint32_t point)
+{
+    const auto& D = renderer->GetDeferredForFrame();
+    auto material = resources_.GetFogApplyMaterial();
+    const UINT cbBytes = resources_.GetFogApplyCBSizeBytes();
+
+    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassTransparent);
+        renderer->EmitPoint(t.cl, point);
+        // The hand-over point is unconditional even when the draw below is skipped: the states it
+        // names are what Main_Translucent expects to find, and a barrier set that appears and
+        // disappears with a material load is the kind of thing that works in every scene but one.
+        const AtmospherePacked fog =
+            PackAtmosphere(frame_->settings.atmosphere, frame_->dirLight != nullptr);
+        const bool fogOn = fog.params0.x > 0.0f;
+        // `cbBytes` is load-bearing and not defensive noise: the constant buffer only appears in
+        // reflection while the PIXEL shader actually READS it. Any edit that returns early enough to
+        // let dxc strip those reads takes the whole cbuffer out of reflection, this reports 0, and
+        // the pass silently stops drawing -- which is exactly how two rounds of shader probes ended
+        // up measuring an empty frame and blaming the depth buffer.
+        if (material && material->GetPipelineState() && cbBytes != 0 && fogOn &&
+            D.depthSRV.ptr != 0 && D.depthCopySRV.ptr != 0)
+        {
+            const Skybox* iblSky = frame_->skybox;
+            FogApplyConstants c{};
+            c.invView = camera.GetInvViewMatrix();
+            c.invProj = camera.GetInvProjMatrix();
+            c.viewProjNoJitter = camera.GetViewProjMatrixNoJitter();
+            c.camPosWS = float4(camera.GetPosition(), 0.0f);
+            c.fogParams0 = fog.params0;
+            c.fogParams1 = fog.params1;
+            c.fogParams2 = fog.params2;
+            if (frame_->dirLight)
+            {
+                // Negated HERE, exactly as compose receives it: the shader is handed the direction
+                // TO the sun, not the one the light travels.
+                c.fogSunDir = float4(-frame_->dirLight->GetDirection(), 0.0f);
+                c.fogSunColor = float4(frame_->dirLight->GetEffectiveColor(), 0.0f);
+            }
+            c.fogVolumeParams = decisions_.fogVolumeParams;
+            c.fogVolumeZParams = decisions_.fogVolumeZParams;
+            c.fogApplyMisc = float4(iblSky ? iblSky->GetExposure() : 1.0f,
+                                    static_cast<float>(g_atmosphereDebugView), preExposure_, 0.0f);
+
+            auto cbAlloc = renderer->GetFrameResource()->AllocDynamic(
+                cbBytes, render::kConstantBufferAlignment);
+            static_assert(sizeof(FogApplyConstants) <= 512,
+                          "FogApplyConstants outgrew the fog_apply.hlsl cbuffer it mirrors");
+            std::memcpy(cbAlloc.cpu, &c, sizeof(c));
+
+            RenderContext rc{};
+            rc.cbv[0] = cbAlloc.gpu;
+            rc.srvTable[0] = renderer->StageSrvUavTable(
+                { D.depthSRV, D.depthCopySRV,
+                  iblSky ? iblSky->EnvironmentSrv() : renderer->VsmDummyTexSrv(),
+                  D.fogIntegratedSRV.ptr != 0 ? D.fogIntegratedSRV : renderer->VsmDummyTexSrv() }).gpu;
+            const auto samplers = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+            rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
+
+            // Colour only: the depth buffer is an SRV here, so nothing may hold it as a DSV.
+            renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, /*withDepth=*/false);
+            material->Bind(t.cl, rc);
+            t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            t.cl->DrawInstanced(3, 1, 0, 0);
+        }
+    }
+    renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
 
 // ---- Pass_DebugDraw + Pass_SelectionOutline ----

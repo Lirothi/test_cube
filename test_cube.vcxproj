@@ -679,6 +679,7 @@
     <None Include="shaders\bloom_cs.hlsl" />
     <None Include="shaders\bloom_fft_cs.hlsl" />
     <None Include="shaders\bloom_conv_cs.hlsl" />
+    <None Include="shaders\fog_apply.hlsl" />
     <None Include="shaders\lens_flare.hlsl" />
     <None Include="shaders\debug_preview_cs.hlsl" />
     <None Include="shaders\exposure_histogram_cs.hlsl" />

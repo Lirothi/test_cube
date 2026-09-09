@@ -806,6 +806,25 @@ struct ComposePassConstants
     float4 fogVolumeZParams{};
 };
 
+// B6.1. MIRROR of fog_apply.hlsl's `FogApply` cbuffer, field for field and in order: it is uploaded
+// as one blob rather than through per-field handles, so the two must not drift. All members are
+// float4 or float4x4, so HLSL packing and C++ layout agree with no padding to reason about.
+struct FogApplyConstants
+{
+    mat4 invView{};
+    mat4 invProj{};
+    mat4 viewProjNoJitter{};
+    float4 camPosWS{};
+    float4 fogParams0{};
+    float4 fogParams1{};
+    float4 fogParams2{};
+    float4 fogSunDir{};    // direction TO the sun, as compose receives it
+    float4 fogSunColor{};
+    float4 fogVolumeParams{};
+    float4 fogVolumeZParams{};
+    float4 fogApplyMisc{}; // x: sky intensity, y: debug view, z: preExposure, w: unused
+};
+
 struct FxaaPassConstants
 {
     float2 invResolution{};
@@ -932,6 +951,8 @@ public:
     UINT GetBloomConvCBSizeBytes() const;
     void WriteBloomConvConstants(const BloomConvConstants& data, uint8_t* dest) const;
     // P8C-2 step 5a: the lens-flare bokeh scatter (graphics: instanced quads, additive).
+    std::shared_ptr<Material> GetFogApplyMaterial() const { return matFogApply_; }
+    UINT GetFogApplyCBSizeBytes() const;
     std::shared_ptr<Material> GetLensFlareMaterial() const { return matLensFlare_; }
     UINT GetLensFlareCBSizeBytes() const;
     void WriteLensFlareConstants(const LensFlareConstants& data, uint8_t* dest) const;
@@ -1040,6 +1061,7 @@ private:
     std::shared_ptr<Material> matBloomCS_;
     std::shared_ptr<Material> matBloomFftCS_;
     std::shared_ptr<Material> matBloomConvCS_;
+    std::shared_ptr<Material> matFogApply_;   // B6.1: the one fog application (fog_apply.hlsl)
     std::shared_ptr<Material> matLensFlare_;
     std::shared_ptr<Material> matDebugPreviewCS_;
     std::shared_ptr<Material> matSSR_;

@@ -103,6 +103,10 @@ public:
         D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
 
     bool IsTransparent() const override { return true; }
+    // The water surface writes depth and does not blend (see BuildGraphicsDesc: DepthWriteMask ALL,
+    // RT0 blending left off), so it is UE's SingleLayerWater: it draws before the screen-space fog
+    // and is fogged BY it, rather than carrying fog in its own shader.
+    bool IsDepthWritingTransparent() const override { return true; }
     bool IsSimpleRender() const override { return false; }
     bool CastsShadow() const override { return false; }
     // Rung 1 (Step 10): the surface is compute-simulated every frame — dynamic (moot while it

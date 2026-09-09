@@ -74,7 +74,15 @@ enum class RenderPass : uint16_t {
     Main_RTDebug,
     Main_GlassReflGbuffer,
     Main_GlassReflections,
+    // B6.1, UE's order (DeferredShadingRenderer.cpp:3230 water, then 3262 sky+fog, then translucency):
+    // Main_Transparent draws only the transparents that WRITE DEPTH -- the ocean, our SingleLayerWater
+    // -- so that by the time the screen-space fog runs, the water is in the depth buffer and is fogged
+    // by the same pass as everything else. Main_Translucent then draws what does NOT write depth
+    // (glass, particles), after the fog, each fogging itself in its own shader exactly as UE's
+    // translucency does. Splitting them is what makes ONE fog application possible at all.
     Main_Transparent,
+    Main_TransparentFog,
+    Main_Translucent,
     Main_LightShafts,     // plan A7: UE LightShaftBloom added into scene colour after the transparents
     Main_DebugDraw,
     Main_SelectionOutline,
@@ -97,12 +105,16 @@ enum class RenderPass : uint16_t {
     GBuffer_Count,
 
     Transparent_Driver = GBuffer_Count,
-    Transparent_Simple,
-    Transparent_Complex,
-    Transparent_Selected,
+    Transparent_Water,
     Transparent_Count,
 
-    Count = Transparent_Count
+    Translucent_Driver = Transparent_Count,
+    Translucent_Simple,
+    Translucent_Complex,
+    Translucent_Selected,
+    Translucent_Count,
+
+    Count = Translucent_Count
 };
 
 inline std::wstring_view RenderPassToWString(RenderPass pass)
@@ -156,6 +168,8 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_GlassReflections: return L"GlassReflections";
     case RenderPass::Main_RTDebug: return L"RTDebug";
     case RenderPass::Main_Transparent: return L"Transparent";
+    case RenderPass::Main_TransparentFog: return L"TransparentFog";
+    case RenderPass::Main_Translucent: return L"Translucent";
     case RenderPass::Main_LightShafts: return L"LightShafts";
     case RenderPass::Main_DebugDraw: return L"DebugDraw";
     case RenderPass::Main_SelectionOutline: return L"SelectionOutline";
@@ -170,9 +184,11 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::GBuffer_Indirect: return L"GBuffer.Indirect";
     case RenderPass::GBuffer_Selected: return L"GBuffer.Selected";
     case RenderPass::Transparent_Driver: return L"Transparent.Driver";
-    case RenderPass::Transparent_Simple: return L"Transparent.Simple";
-    case RenderPass::Transparent_Complex: return L"Transparent.Complex";
-    case RenderPass::Transparent_Selected: return L"Transparent.Selected";
+    case RenderPass::Transparent_Water: return L"Transparent.Water";
+    case RenderPass::Translucent_Driver: return L"Translucent.Driver";
+    case RenderPass::Translucent_Simple: return L"Translucent.Simple";
+    case RenderPass::Translucent_Complex: return L"Translucent.Complex";
+    case RenderPass::Translucent_Selected: return L"Translucent.Selected";
     default: return {};
     }
 }

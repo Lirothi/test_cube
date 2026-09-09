@@ -1648,7 +1648,8 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             p.NextPoint();
             for (const auto& obj : *frame_->objects)
             {
-                if (!obj || !obj->IsTransparent()) { continue; }
+                // B6.1: only the depth-writing half draws here. The rest is Main_Translucent's.
+                if (!obj || !obj->IsTransparent() || !obj->IsDepthWritingTransparent()) { continue; }
                 obj->PrepareRender(p);
             }
         }
@@ -1658,14 +1659,82 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         };
     });
 
+    // B6.1: the alpha-blended forward draws, split out of Main_Transparent so that a screen-space fog
+    // pass can sit between the two. Glass and particles neither write depth nor sit in the depth buffer,
+    // so that pass cannot reach them -- they carry fog in their own shaders, as UE's translucency does,
+    // and drawing them after it is what keeps the fog from reaching them twice. No copies and no ocean
+    // reflection here: those belong to the water half and already ran.
+    // B6.1: the fog, between the depth-writing transparents and the alpha-blended ones. Its own
+    // OUTER pass and not a sub-pass of either, because it flips `depth` from DEPTH_WRITE to a shader
+    // read and back -- a real state change, which the barrier compile expresses between passes but
+    // not between two groups of fan-out chunks inside one (those resolve against a single current
+    // point and can only ask for states already canonical there).
+    auto pFog = rg.AddPass2(RenderPass::Main_TransparentFog, { pTransp }, /*mtDeps=*/{},
+        { { D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE },
+          { D.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE },
+          { D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET } },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            ctx.UseDeclared();
+            if (frame_->skybox) { frame_->skybox->DeclareEnvironment(ctx, kSrvAll); }
+            const auto& DF = ctx.renderer->GetDeferredForFrame();
+            if (DF.fogIntegrated.Get())
+            {
+                ctx.Use(DF.fogIntegrated.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            }
+            const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+            return [this, renderer, point](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassTransparent);
+                Pass_TransparentFog(renderer, c, *frame_->camera, point);
+            };
+        });
+
+    auto pTranslucent = rg.AddPass2(RenderPass::Main_Translucent, { pFog },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        RenderGraphPassContext& p = ctx;
+        const auto& DT = p.renderer->GetDeferredForFrame();
+        // 1. Everything the alpha-blended draws read, plus the forward targets. Nothing flips state
+        // inside this pass, so it is one point; the fan-out chunks re-apply the same states per chunk.
+        const std::uint32_t rebind = p.usePoint ? *p.usePoint : 0u;
+        if (frame_->skybox) { frame_->skybox->DeclareEnvironment(p, kSrvAll); }
+        p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        if (DT.fogIntegrated.Get())
+        {
+            p.Use(DT.fogIntegrated.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        p.Use(DT.glassReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        p.Use(DT.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        p.Use(DT.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        p.Use(DT.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#if WITH_EDITOR
+        p.Use(DT.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+#endif
+        // 2. Per-object reads (particle sim buffers), on fan-out workers -- the same shape the
+        // undivided pass had, and the point the workers' own Transition calls resolve against.
+        if (frame_->objects)
+        {
+            p.NextPoint();
+            for (const auto& obj : *frame_->objects)
+            {
+                if (!obj || !obj->IsTransparent() || obj->IsDepthWritingTransparent()) { continue; }
+                obj->PrepareRender(p);
+            }
+        }
+        return [this, renderer, rebind](RenderGraphPassContext c) {
+            CPU_SCOPE(ProfilerScopes::kPassTransparent);
+            Pass_Translucent(renderer, c, *frame_->camera, *frame_->mainView, rebind);
+        };
+    });
+
     // Plan A7: UE's LightShaftBloom, added into scene colour right after the transparents (UE: after
     // translucency, before post-processing -- RenderLightShaftBloom with RenderAfterDOF 0) and BEFORE the
     // debug draw, so debug geometry never blooms. DecideFrame registers it only with the sun in front of
     // the camera and everything it needs ready; five points, five dispatches, no gates in the body.
-    size_t pLightShafts = pTransp;
+    size_t pLightShafts = pTranslucent;
     if (decisions_.lightShafts)
     {
-        pLightShafts = rg.AddPass2(RenderPass::Main_LightShafts, { pTransp },
+        pLightShafts = rg.AddPass2(RenderPass::Main_LightShafts, { pTranslucent },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 constexpr D3D12_RESOURCE_STATES kUav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
