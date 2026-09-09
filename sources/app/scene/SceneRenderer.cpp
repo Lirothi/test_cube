@@ -77,6 +77,7 @@ void SceneRenderer::Reset()
     resources_ = SceneResourceBootstrapper{};
     rtAs_.Reset();
     skyAtmosphere_.Reset();
+    fogDistantRevision_ = 0u;
     decisions_.reflectionTemporal = false;
     ssrHistoryValid_ = false;
     ssrHistoryFrames_ = 0u;

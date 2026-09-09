@@ -611,6 +611,7 @@ private:
     // Volumetric fog temporal history (plan part A): like the GTAO history -- frames written in a
     // row at this grid size under this camera history; 0 means the previous slot holds nothing
     // this frame may blend with.
+    unsigned fogDistantRevision_ = 0u;
     uint32_t fogHistoryFrames_ = 0u;
     UINT fogHistoryWidth_ = 0u;
     UINT fogHistoryHeight_ = 0u;

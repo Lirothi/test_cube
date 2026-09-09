@@ -597,6 +597,7 @@ namespace
             sun.SetDirection(-Math::float3(std::cos(elevation)*std::sin(azimuth), std::sin(elevation), std::cos(elevation)*std::cos(azimuth)));
             return true;
         }
+        if (setting == "sky.distantSkyLight") { scene.SkyAtmosphereRef().distantSkyLight = value != 0.0f; return true; }
         if (setting == "sky.environmentLighting") { scene.SkyAtmosphereRef().environmentLighting = value != 0.0f; return true; }
         if (setting == "sky.mode") { scene.SkyAtmosphereRef().mode = value >= 1.0f ? 1u : 0u; return true; }
         if (setting == "sky.aerialPerspective") { scene.SkyAtmosphereRef().aerialPerspective = value != 0.0f; return true; }

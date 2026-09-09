@@ -19,7 +19,7 @@ cbuffer FogCB : register(reg) \
     float3 fogGridZParams;      /* (B, O, S) */ \
     float  fogNearFadeInInv;    /* 1 / near fade-in distance (UE VolumetricFogNearFadeInDistanceInv) */ \
     uint3  fogGridSize;         /* cells: (W, H, Z) */ \
-    uint   fogFlags;            /* bit 0 history valid, bit 1 jitter on, bit 2 conservative depth, bit 3 temporal on */ \
+    uint   fogFlags;            /* bit 0 history valid, bit 1 jitter on, bit 2 conservative depth, bit 3 temporal on, bit 4 distant sky ambient */ \
     float4x4 fogInvViewProjNoJitter;   /* clip -> world, this frame's UNJITTERED camera */ \
     float4x4 fogPrevViewProjNoJitter;  /* world -> clip, last frame's unjittered camera (history UV) */ \
     float4 fogProjZ;            /* (proj._33, proj._43, proj._34, proj._44): view z -> device z */ \

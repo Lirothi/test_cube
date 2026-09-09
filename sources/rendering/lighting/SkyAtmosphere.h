@@ -32,6 +32,12 @@ public:
                        const Camera& camera, float startDepthMetres, size_t after);
     size_t BuildEnvironment(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                             const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts);
+    size_t BuildDistant(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
+                        const SkyAtmosphereSettings& settings, SkyViewFrameData view, size_t after);
+    bool DistantActive() const { return distantActive_; }
+    unsigned DistantRevision() const { return distantBuilds_; }
+    ID3D12Resource* DistantResource() const { return distant_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE DistantSrv() const { return distantSrv_; }
     bool AerialBuilt() const { return aerialBuilt_; }
     ID3D12Resource* AerialResource() const { return aerial_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE AerialSrv() const { return aerialSrv_; }
@@ -44,6 +50,18 @@ public:
     void Reset(); // caller has drained the GPU on level/device teardown
 
 private:
+    void PrepareDistant(Renderer* renderer);
+    void ValidateDistant(UINT slot);
+    GpuResource distant_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> distantHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE distantSrv_{}, distantUav_{};
+    std::shared_ptr<Material> distantMaterial_;
+    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, render::kFrameCount> distantReadback_;
+    std::array<bool, render::kFrameCount> distantPending_{};
+    SkyAtmosphereParameters distantParameters_{};
+    SkyViewFrameData distantKey_{};
+    bool distantActive_ = false, distantReady_ = false, distantFailed_ = false;
+    unsigned distantBuilds_ = 0;
     void PrepareEnvironment(Renderer* renderer);
     void ValidateReadback(UINT slot);
     GpuResource environmentView_;

@@ -1106,6 +1106,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::BeginDisabled(sky.mode == 0);
                 ImGui::Checkbox("Procedural environment lighting", &sky.environmentLighting);
                 ImGui::TextWrapped("Updates reflections and sky lighting when the sun or atmosphere changes.");
+                ImGui::Checkbox("Distant sky light (fog)", &sky.distantSkyLight);
+                ImGui::TextWrapped("Sky ambient at 6 km; used by volumetric fog sky scattering.");
                 ImGui::Checkbox("Aerial perspective", &sky.aerialPerspective);
                 ImGui::BeginDisabled(!sky.aerialPerspective);
                 int aerialView = static_cast<int>(sky.aerialDebugView);

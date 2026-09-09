@@ -29,7 +29,7 @@
 
 #define FOG_SCATTER_RS \
     "CBV(b0), CBV(b1), " \
-    "DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
@@ -46,6 +46,7 @@ StructuredBuffer<SpotLightData>  SpotLights      : register(t7);  // plan A4: th
 StructuredBuffer<PointLightData> PointLights     : register(t8);
 Texture2DArray                   SpotShadowAtlas : register(t9);  // Legacy local shadows
 TextureCubeArray                 PointShadowCube : register(t10);
+Texture2D<float4>       DistantSkyLight : register(t11); // B5 raw isotropic luminance at 6 km
 RWTexture3D<float4>     FogScatter    : register(u0);
 
 SamplerState            gSmpPoint       : register(s0);
@@ -157,7 +158,7 @@ float FogTileFarthest(Texture2D<float> pyramid, int2 tile, uint mip)
 }
 
 // One lighting sample of a cell at `cellOffset` inside it: (preExposure * L * scattering, sigma).
-float4 FogSampleCell(uint3 coord, float3 cellOffset)
+float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
 {
     float viewDepth;
     const float3 P = FogCellWorldPosition(coord, cellOffset, fogGridSize, fogGridZParams,
@@ -185,8 +186,13 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset)
         L += lightRgb * fogMedium1.w * shadow * FogPhaseHG(g, dot(toSun, V));
     }
     // Sky: UE evaluate the skylight SH at -V * g; the irradiance cube in the direction the air
-    // is looked THROUGH is the same term without the SH's directional damping (delta, plan §3).
-    if (fogMedium2.x > 0.0f && skyIrradianceEnabled != 0u)
+    // is looked THROUGH is the same term without the SH's directional damping (delta, plan Â§3).
+    if (fogMedium2.x > 0.0f && (fogFlags & 16u) != 0u)
+    {
+        // B5 already integrates the full sphere with uniform phase: no extra PI/HG or HDRI scale.
+        L += distantAmbient;
+    }
+    else if (fogMedium2.x > 0.0f && skyIrradianceEnabled != 0u)
     {
         L += SkyIrradiance.SampleLevel(gSmpLinearClamp, -V, 0).rgb * skyIrradianceScale * fogMedium2.x;
     }
@@ -332,6 +338,11 @@ void CSMain(uint3 coord : SV_DispatchThreadID)
     const bool temporalOn = (fogFlags & kFogTemporalOn) != 0u;
     const uint perFrame = clamp(fogMisc.w, 1u, 4u);
     const uint superCount = (temporalOn && historyWeight <= 0.001f) ? max(max(fogMisc.y, 1u), perFrame) : perFrame;
+    // B5 is isotropic and constant across this cell's supersamples. Load once, outside
+    // the history-miss loop (also avoids multiplying descriptor checks under GPU validation).
+    float3 distantAmbient = 0.0f.xxx;
+    if (fogMedium2.x > 0.0f && (fogFlags & 16u) != 0u)
+        distantAmbient = DistantSkyLight.Load(int3(0,0,0)).rgb * fogMedium2.x;
     float4 result = 0.0f.xxxx;
     [loop]
     for (uint si = 0u; si < 4u; ++si)
@@ -340,7 +351,7 @@ void CSMain(uint3 coord : SV_DispatchThreadID)
         const float3 cellOffset = (si == 0u) ? fogJitter.xyz
                                 : (si == 1u) ? (1.0f.xxx - fogJitter.xyz)
                                 : frac(fogJitter.xyz + kFogR3 * (float)si);
-        result += FogSampleCell(coord, cellOffset);
+        result += FogSampleCell(coord, cellOffset, distantAmbient);
     }
     result /= (float)superCount;
 

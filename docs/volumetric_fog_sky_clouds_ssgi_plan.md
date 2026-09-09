@@ -966,9 +966,83 @@ HDRI mode всегда использует исходное окружение 
   (`b4_final_hdri_00..03`). Эти правки не входят в реализацию B4; исходный before/after
   выше снят до них. HDRI/bloom/экспозиция в рамках B4 не перенастраивались.
 
-### B5. Distant sky light LUT → туман и облака — [полдня]
-`:200-206`: ambient на высоте 6 км как у UE — кормит `fog.skyScatter` (A2 читает его вместо
-irradiance-куба в mode 1) и облака (C3).
+### B5. Distant sky light LUT → туман и облака — DONE (2026-09-09)
+
+* Источник прочитан первым: `SkyAtmosphere.usf:1360-1449` (`RenderDistantSkyLightLutCS`),
+  интегратор `:590-604,628-633,738-758`; высота 6 км — `SkyAtmosphereRendering.cpp:200-206`.
+  64 направления по сфере, 10 равномерных шагов с offset 0.3, isotropic phase, T + MS,
+  тень планеты, без солнечного диска и отражения от земли. Солнечный RGB и B2 luminanceScale
+  применяются один раз. Результат — raw RGB, без pre-exposure; усреднение уже включает
+  `4π / 64 × 1 / (4π)`, поэтому потребитель не умножает его повторно на фазу или `1/π`.
+* Дельты: один источник солнца, без cloud/opaque shadows, отдельный UE
+  SkyAndAerialPerspectiveLuminanceFactor белый (1), как в B2. Вместо structured buffer —
+  одна RGBA32F-текстура 1×1; alpha=0. Направления из `SkyAtmosphereRendering.cpp:1102-1120`
+  и `RandomStream.h:115-123,342` (seed `0xDE4DC0DE`) записаны константами вместо GPU-буфера.
+  Все уровни shared reduction имеют полный group barrier, без предположения о lockstep последних lanes.
+* `Main_SkyDistant` идёт после T/MS и B4, перед потребителями. Пересчёт только при смене
+  параметров атмосферы, направления/цвета/энергии солнца или luminanceScale; камера, экспозиция
+  и радиус диска не входят в ключ. Ресурс объявлен в render graph, между кадрами находится
+  в NON_PIXEL_SHADER_RESOURCE; lifetime и память принадлежат `SkyAtmosphere` / `sky.luts`.
+  `sky.lutValidate` копирует один texel в readback-кольцо по frame slot и пишет RGB/PASS
+  в session log после fence. При ошибке создания сохраняется прежний IBL ambient.
+* `fog_scatter_cs.hlsl` при `sky.mode=1 && sky.distantSkyLight` использует LUT × `skyScatter`
+  вместо irradiance-куба. Это дельта проекта по плану: UE fog сам использует SH; UE clouds
+  читают distant sky LUT (`VolumetricCloud.usf:729-743`). SRV открыт для будущего C3, самих
+  облаков B5 не добавляет. Нет HDRI exposure/skyFill поверх LUT; fog применяет pre-exposure
+  ровно один раз. При смене LUT или включении/выключении источника история fog сбрасывается;
+  пересоздание сцены также сбрасывает её ключ.
+* Master по умолчанию **off**: F1 → Sky → **Distant sky light (fog)**,
+  CLI `--set=sky.distantSkyLight:1`. Для видимого эффекта нужны mode 1, объёмный туман
+  и `atmosphere.skyVolScatter > 0`. Независим от B4 `environmentLighting`.
+  HDRI, bloom, калибровка солнца и аналитический height fog не менялись.
+  Собственная AP океана и приёмка горизонта остаются обязательным B6.
+
+Проверки B5 (2026-09-09):
+
+* Readback, wind_test, sun azimuth 30°, 85000 lux, luminanceScale 2.13:
+  raw RGB `[1477.431274, 2026.848877, 3039.851807]`.
+  При 42500 lux — `[738.715637, 1013.424438, 1519.925903]` (ровно половина в точности FP32).
+  Ноль lux и отдельно ноль luminanceScale дают `[0,0,0]`, alpha=0.
+  Azimuth 120° при той же высоте: `[1476.675415,2025.824219,3039.086426]`;
+  отклонение <0.052% соответствует фиксированному набору 64 направлений, а не зависимости от камеры.
+* Debug / Release / Release_Editor собраны; 74/74 шейдеров; `--log-stress` Debug/Release 0/0;
+  `check_logging.py` 0 findings. Изменённые текстовые файлы — CRLF без смешанных окончаний.
+
+* Первоначальный Legacy+B5 на сетке 16 px дважды получил TDR при первом ReloadLevel
+  (PID 68584, 69384), без page fault в DRED. Контроль B5 off — CLEAN (PID 69404),
+  B5 on / 32 px — CLEAN (PID 60660), по 20 циклов. Чтение distant texel вынесено
+  из `FogSampleCell` за цикл supersampling: один Load на ячейку вместо до четырёх,
+  то же значение ambient и меньше descriptor checks в инструментированном шейдере.
+  После правки **Legacy+B5 unguarded GBV / 16 px / 20 циклов — CLEAN**, exit 0,
+  PID 65800, ERROR/FATAL=0, clean shutdown. **Повторный VSM / 16 px / 20 циклов также
+  CLEAN**, exit 0, PID 62272, ERROR/FATAL=0, clean shutdown.
+* После паузы сохранены пользовательские изменения `graphics_settings.json`:
+  legacyCsm maxSlope=3, normalBiasTexels=1.5. Они не входят в B5.
+* HDRI, native 2560×1440, frozen wind, SMRT=0, manual EV14, камера
+  `-37.61,2.50,-98.03 / -0.0997,0.2987,0.0314,0.9486`, volumetric fog on:
+  три пары пола до B5 — 0.06779–0.15112% пикселей >1 code value;
+  три пары нового бинаря — 0.11136–0.14950%. HDRI distant off/on в одном бинаре —
+  0.09551%, внутри пола. До/после: 0.15465%, MAE 0.00731% против MAE пола нового
+  бинаря 0.00528–0.00775%; сопоставимо с шумом, но не заявляется побитовым паритетом.
+  Снимки `b5_before_00..02`, `b5_after_00..02`, `b5_hdri_on`.
+  Для старого before временно задано CLI csm.maxSlope=1 / csm.normalBias=0.7, файл настроек сохранён.
+* `b5_fog_review.jpg` просмотрен: солнце 28°/EV14 и 5°/EV12, B4 включён в обеих сторонах,
+  fog density=0.005, skyVolScatter=1, sunVolScatter=0, bloom off только в тесте.
+  B5 off/on меняет именно ambient: дневная дымка холоднее, при низком солнце цвет и
+  энергия следуют атмосфере. MAE 1.729% / 0.673%, существенно выше пола повторных кадров.
+  Виды не являются приёмкой границы океана (B6).
+* Три Release `--scene-stress-sky=64`, native 2560×1440, RT, frozen wind, SMRT=0,
+  volumetric fog on: в каждом trace 32 `Pass_SkyDistant`, затем 32 кадра без пересчёта
+  (hold/exposure/environment/mode toggles). Median 0.007 / 0.007 / 0.007 ms,
+  mean 0.007156 / 0.006969 / 0.006906 ms, maxima 0.009 / 0.008 / 0.009 ms.
+  Traces `trace_20260909_170302_release_000.json`, `_170305_...`, `_170307_...`.
+  Это стоимость пересчёта LUT, не всего тумана; при смене освещения сброс history
+  также запускает существующий history-miss supersampling в fog scatter.
+
+* Финальный Debug `--scene-stress-sky=64` с B5, T/MS validation и объёмным туманом:
+  CLEAN, exit 0, PID 54020. 33 пересчёта (начальный + 32 изменения солнца), 33 readback
+  PASS, ERROR/FATAL=0, clean shutdown. Проверены обновление при непрерывных sun edits,
+  кольцо readback и повторное использование cache при hold/exposure/mode toggles.
 
 ### B6. Согласование океана с небом и aerial perspective — обязательно до завершения части B
 Требование владельца (2026-09-09): океан, туман и видимое небо должны давать согласованный,

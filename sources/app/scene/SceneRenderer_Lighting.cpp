@@ -513,6 +513,7 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         fc.gridSize[1] = D.fogGridHeight;
         fc.gridSize[2] = D.fogGridDepth;
         fc.flags = (decisions_.fogHistoryValid ? 1u : 0u) | (decisions_.fogConservativeDepth ? 4u : 0u) | (a.temporal ? 8u : 0u);
+        if (skyAtmosphere_.DistantActive()) fc.flags |= 16u;
         fc.misc[0] = decisions_.fogHzbMip; // furthest HZB mip whose texel is one cell (base = half res)
         fc.misc[1] = 4u; // UE HistoryMissSupersampleCount
         fc.misc[2] = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 1023ull);
@@ -600,7 +601,8 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
                 spotBufferSrv,
                 pointBufferSrv,
                 (fc.local[0] && !localVsm && D.spotShadowSRV.ptr != 0) ? D.spotShadowSRV : renderer->VsmDummyTexSrv(),
-                (fc.local[1] && !localVsm && D.pointShadowSRV.ptr != 0) ? D.pointShadowSRV : renderer->VsmDummyTexSrv() }).gpu;
+                (fc.local[1] && !localVsm && D.pointShadowSRV.ptr != 0) ? D.pointShadowSRV : renderer->VsmDummyTexSrv(),
+                skyAtmosphere_.DistantActive() ? skyAtmosphere_.DistantSrv() : renderer->VsmDummyTexSrv() }).gpu;
             rc.uavTable[0] = renderer->StageSrvUavTable({ D.fogScatterUAV }).gpu;
             const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
                                                   *SamplerManager::ComparisonLinearClamp(),

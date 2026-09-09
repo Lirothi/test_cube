@@ -650,6 +650,7 @@
     <None Include="shaders\sky_ibl_common.hlsli" />
     <None Include="shaders\sky_ibl_capture_cs.hlsl" />
     <None Include="shaders\sky_ibl_filter_cs.hlsl" />
+    <None Include="shaders\sky_lut_distant_cs.hlsl" />
     <None Include="shaders\sky_aerial_common.hlsli" />
     <None Include="shaders\sky_view_mapping.hlsli" />
     <None Include="shaders\skybox.hlsl" />

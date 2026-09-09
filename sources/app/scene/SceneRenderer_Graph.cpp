@@ -88,7 +88,8 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     const auto pEnvironment = skyAtmosphere_.BuildEnvironment(renderer, rg, frame_->settings.skyAtmosphere,
         environmentView, frame_->skybox, gb.pSkyLuts);
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
-    if (pEnvironment != GraphBuild::kNone) environmentDeps.push_back(pEnvironment);
+    const auto pDistant = skyAtmosphere_.BuildDistant(renderer, rg, frame_->settings.skyAtmosphere, environmentView, pEnvironment);
+    if (pDistant != GraphBuild::kNone) environmentDeps.push_back(pDistant);
 
 
     // RT acceleration-structure build (S5): the first pass when RT is enabled.
@@ -964,6 +965,10 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         auto fogBuilder = [this, renderer, vsmShadows](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto& DF = renderer->GetDeferredForFrame();
             const auto& PF = renderer->GetDeferredForPrevFrame();
+            const unsigned distantRevision = skyAtmosphere_.DistantActive() ? skyAtmosphere_.DistantRevision() : 0u;
+            if (fogDistantRevision_ != distantRevision) decisions_.fogHistoryValid = false;
+            fogDistantRevision_ = distantRevision;
+            if (skyAtmosphere_.DistantActive()) ctx.Use(skyAtmosphere_.DistantResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             FogPoints pts{};
             pts.scatter = ctx.usePoint ? *ctx.usePoint : 0u;
             if (frame_->skybox) frame_->skybox->DeclareEnvironment(ctx, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
