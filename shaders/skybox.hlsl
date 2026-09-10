@@ -146,8 +146,30 @@ PSOut PSMain(VSOut i)
             //
             // So the amount is chosen, and named. The proper fix is to pre-expose this path as UE do,
             // at which point this constant goes away and the clipping decides again.
-            const float kSunDiscTint = 0.35f;
-            const float3 discTransmittance = lerp(1.0f.xxx, tr, kSunDiscTint);
+            //
+            // WHAT THIS CONSTANT MAY AND MAY NOT DECIDE. Only the HUE, because the peak clamp two
+            // lines down erases everything else: the disc arrives about a thousand times over the
+            // ceiling, so `disk * (65504 / diskPeak)` renormalises it and any scale applied here
+            // cancels exactly. Writing the knob as if it also controlled brightness would be a
+            // control that lies.
+            //
+            // IT IS NOT `lerp(1, tr, k)` ANY MORE, and that shape was backwards. A lerp towards
+            // white leaves a floor of (1 - k) white under every channel, so the redder the true sun
+            // gets the more that floor dominates -- the coloured part shrinks towards zero while the
+            // white part stays put. Measured on this level's parameters (rayleigh x0.70), the hue it
+            // produced ran 1.00 : 0.90 : 0.82 at 7.8 deg of elevation and 1.00 : 0.93 : 0.91 at the
+            // horizon: the disc went WHITER as it set, while the physical transmittance went
+            // 1.00 : 0.63 : 0.31 -> 1.00 : 0.16 : 0.00 the other way.
+            //
+            // An exponent on the peak-normalised transmittance keeps the hue's DIRECTION and only
+            // shortens how far it travels, which is monotone in elevation the way the physics is.
+            // k = 1 is UE exactly (SkyAtmosphereCommon.ush:271 applies the full transmittance and
+            // clamps nowhere); k = 0 is a white disc. At 0.25 the sun above reads as it did before
+            // -- 1.00 : 0.89 : 0.74 -- and the same sun on the horizon reaches 1.00 : 0.63 : 0.16
+            // instead of staying white.
+            const float kSunDiscTint = 0.25f;
+            const float trPeak = max(max(max(tr.r, tr.g), tr.b), 1.e-6f);
+            const float3 discTransmittance = pow(saturate(tr / trPeak), kSunDiscTint);
             float3 disk = discTransmittance * skyIlluminance.rgb / max(2.0f * SkyViewPi * oneMinusCos, 1.e-12f);
             const float diskPeak = max(max(disk.r, disk.g), disk.b);
             const float3 diskInRange = diskPeak > 65504.0f ? disk * (65504.0f / diskPeak) : disk;
