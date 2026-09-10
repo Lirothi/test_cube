@@ -1216,7 +1216,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
     const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, skyView,
-        *frame_->camera, frame_->settings.atmosphere.volumetricDistance, pSkyView);
+        *frame_->camera, frame_->settings.heightFog.volumetricDistance, pSkyView);
     gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, { pAerial }, /*mtDeps=*/{},
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
@@ -1229,7 +1229,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
                 ctx.Use(skyAtmosphere_.ViewResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 ctx.Use(skyAtmosphere_.TransmittanceResource(), kSrvAll);
             }
-            frame_->skybox->SetAtmosphere(skyView, skyAtmosphere_.ViewSrv(), skyAtmosphere_.TransmittanceSrv());
+            frame_->skybox->SetSkyAtmosphere(skyView, skyAtmosphere_.ViewSrv(), skyAtmosphere_.TransmittanceSrv());
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkybox);
@@ -1429,6 +1429,13 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             // Volumetric fog: the integrated volume (its resting state; declared so the read is
             // named on the frames it happens).
             if (skyAtmosphere_.AerialBuilt()) ctx.Use(skyAtmosphere_.AerialResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            // B6.2: compose reads the SkyView LUT for the fog's sky colour. Declared on every frame
+            // the resource exists, not only when the shader reads it -- GBV flags a descriptor over
+            // a NON_PIXEL resource even unread, the same rule the volume's binding follows (A5).
+            if (skyAtmosphere_.ViewResource() != nullptr)
+            {
+                ctx.Use(skyAtmosphere_.ViewResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
             if (decisions_.volumetricFog && DC.fogIntegrated.Get())
             {
                 ctx.Use(DC.fogIntegrated.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);

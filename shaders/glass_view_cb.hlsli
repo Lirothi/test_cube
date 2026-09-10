@@ -47,7 +47,7 @@ cbuffer GlassView : register(b1)
     float4 smrtParams;
     float4 smrtParams2;           // x = source radius (sin), y = texel dither, z = margin, w = frame
     // Volumetric fog plan A5 (APPENDED at the tail, same rule as above): the volume's lookup
-    // parameters and the analytic medium (PackAtmosphere), so glass and particles sit in the
+    // parameters and the analytic medium (PackHeightFog), so glass and particles sit in the
     // air the sand is in.
     float4 fogVolumeParams;       // (on, far view depth, 1/preExposure, slice count)
     float4 fogVolumeZParams;      // (B, O, S, 0)

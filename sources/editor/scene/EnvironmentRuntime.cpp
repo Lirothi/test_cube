@@ -1,8 +1,9 @@
 #include "editor/scene/EnvironmentRuntime.h"
 #include "rendering/core/PhotographicSettings.h" // P16.5 lumens migration
 #include "app/scene/GtaoSettingsJson.h"
-#include "app/scene/AtmosphereSettingsJson.h"
+#include "app/scene/HeightFogSettingsJson.h"
 #include "app/scene/BloomSettingsJson.h"
+#include "app/scene/SkyAtmosphereSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -271,14 +272,14 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         GtaoSettingsJson::ApplyOverrides(p, gtao);
         ctx.scene.SetGtao(gtao);
     }
-    else if (env.type == "atmosphere")
+    else if (env.type == "heightFog")
     {
         // P7: rebuilt from defaults on every edit, same reasoning as the blocks around it -- a
         // field the document does not carry must land on the struct default, not on whatever the
         // previous edit left behind.
-        AtmosphereSettings atmosphere{};
-        AtmosphereSettingsJson::ApplyOverrides(p, atmosphere);
-        ctx.scene.SetAtmosphere(atmosphere);
+        HeightFogSettings heightFog{};
+        HeightFogSettingsJson::ApplyOverrides(p, heightFog);
+        ctx.scene.SetHeightFog(heightFog);
     }
     else if (env.type == "postProcess")
     {
@@ -306,9 +307,9 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
             ctx.scene.SetGtao(gtao);
         }
         {
-            AtmosphereSettings atmosphere{};
-            AtmosphereSettingsJson::ApplyOverrides(sub("atmosphere"), atmosphere);
-            ctx.scene.SetAtmosphere(atmosphere);
+            HeightFogSettings heightFog{};
+            HeightFogSettingsJson::ApplyOverrides(sub("heightFog"), heightFog);
+            ctx.scene.SetHeightFog(heightFog);
         }
         {
             BloomSettings bloom{};
@@ -378,6 +379,12 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
                 ocean->SetSceneVariables(&ctx.renderer, windDir, swellDir, windForce);
             }
         }
+    }
+    else if (env.type == "skyAtmosphere")
+    {
+        SkyAtmosphereSettings sky{};
+        SkyAtmosphereSettingsJson::ApplyOverrides(p, sky);
+        ctx.scene.SetSkyAtmosphere(sky);
     }
     else if (env.type == "wind")
     {
@@ -484,9 +491,9 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
     {
         ctx.scene.SetBloom(BloomSettings{});
     }
-    else if (env.type == "atmosphere")
+    else if (env.type == "heightFog")
     {
-        ctx.scene.SetAtmosphere(AtmosphereSettings{});
+        ctx.scene.SetHeightFog(HeightFogSettings{});
     }
     else if (env.type == "colorPipeline")
     {
@@ -495,6 +502,12 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
     else if (env.type == "wind")
     {
         ctx.scene.GetWindState() = vfx::WindState{};
+    }
+    else if (env.type == "skyAtmosphere")
+    {
+        // Removing the atmosphere returns the level to its cubemap -- the state a level without
+        // the section loads with.
+        ctx.scene.SetSkyAtmosphere(SkyAtmosphereSettings{});
     }
 }
 

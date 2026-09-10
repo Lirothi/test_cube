@@ -19,8 +19,8 @@
     ],
     "direction": [
       -0.5046603679656982,
-      -0.47365298867225647,
-      -0.7217830419540405
+      -0.04900629073381424,
+      -0.8619259595870972
     ],
     "groundAlbedo": [
       0.25,
@@ -13898,20 +13898,6 @@
   },
   "pointLights": [],
   "postProcess": {
-    "atmosphere": {
-      "density": 0.0010000000474974513,
-      "enabled": true,
-      "heightFalloff": 0.05999999865889549,
-      "maxOpacity": 0.8999999761581421,
-      "skyBackScatter": 0.4000000059604645,
-      "skyBlur": 0.30000001192092896,
-      "startDistance": 10.0,
-      "sunScatter": 1.0,
-      "sunScatterExponent": 8.0,
-      "sunScatterStartDistance": 100.0,
-      "sunScatterStrength": 0.5,
-      "volumetric": false
-    },
     "bloom": {
       "convAnamorphic": 0.30000001192092896,
       "convAnamorphicChroma": 1.0,
@@ -14008,7 +13994,33 @@
       "temporalBlendWeight": 0.10000000149011612,
       "thickness": 0.800000011920929,
       "worldRadius": 1.0
+    },
+    "heightFog": {
+      "density": 0.0010000000474974513,
+      "enabled": true,
+      "heightFalloff": 0.05999999865889549,
+      "maxOpacity": 0.8999999761581421,
+      "skyBackScatter": 0.4000000059604645,
+      "skyBlur": 0.30000001192092896,
+      "startDistance": 10.0,
+      "sunScatter": 1.0,
+      "sunScatterExponent": 32.0,
+      "sunScatterStartDistance": 100.0,
+      "sunScatterStrength": 0.10000000149011612,
+      "volumetric": false
     }
+  },
+  "skyAtmosphere": {
+    "aerialPerspective": true,
+    "distantSkyLight": true,
+    "enabled": true,
+    "environmentLighting": true,
+    "groundAlbedo": 0.4019777774810791,
+    "luminanceScale": 2.130000114440918,
+    "mieScale": 1.0,
+    "multiScatteringFactor": 1.0,
+    "ozoneScale": 1.0,
+    "rayleighScale": 1.0
   },
   "skybox": {
     "illuminanceLux": 12000.0,

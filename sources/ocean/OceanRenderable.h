@@ -144,18 +144,18 @@ public:
 
     // P7. Pushed per frame from SceneRenderer rather than read from the scene, because aerial
     // perspective is an APP-layer render setting and the ocean layer should not learn about
-    // SceneRenderSettings to get at it. Pre-packed by PackAtmosphere so the water and the opaque
+    // SceneRenderSettings to get at it. Pre-packed by PackHeightFog so the water and the opaque
     // compose pass cannot disagree about the medium they are both sitting in.
-    void SetAtmosphereParams(const Math::float4& params0, const Math::float4& params1,
+    void SetFogParams(const Math::float4& params0, const Math::float4& params1,
                              const Math::float4& params2)
     {
-        atmosphereParams0_ = params0;
-        atmosphereParams1_ = params1;
-        atmosphereParams2_ = params2;
+        fogParams0_ = params0;
+        fogParams1_ = params1;
+        fogParams2_ = params2;
     }
-    Math::float4 GetAtmosphereParams0() const { return atmosphereParams0_; }
-    Math::float4 GetAtmosphereParams1() const { return atmosphereParams1_; }
-    Math::float4 GetAtmosphereParams2() const { return atmosphereParams2_; }
+    Math::float4 GetFogParams0() const { return fogParams0_; }
+    Math::float4 GetFogParams1() const { return fogParams1_; }
+    Math::float4 GetFogParams2() const { return fogParams2_; }
     // P7 item 8. A debug view, so it rides the global rather than the level-saved settings.
     // Volumetric fog (plan A5): the volume's lookup parameters, decided by SceneRenderer with
     // compose's; x = 0 means "no volume this frame" and the shader takes the identity.
@@ -166,8 +166,8 @@ public:
     }
     Math::float4 GetFogVolumeParams() const { return fogVolumeParams_; }
     Math::float4 GetFogVolumeZParams() const { return fogVolumeZParams_; }
-    void SetAtmosphereDebugView(std::uint32_t v) { atmosphereDebugView_ = v; }
-    std::uint32_t GetAtmosphereDebugView() const { return atmosphereDebugView_; }
+    void SetFogDebugView(std::uint32_t v) { fogDebugView_ = v; }
+    std::uint32_t GetFogDebugView() const { return fogDebugView_; }
 
 private:
     struct ClipLevel
@@ -257,10 +257,10 @@ private:
     std::unique_ptr<OceanSurfSim> surfSim_; // surf sim injection
     std::unique_ptr<OceanWetness> wetness_;
 
-    Math::float4 atmosphereParams0_{}; // density 0 = disabled, which is the default
-    Math::float4 atmosphereParams1_{};
-    Math::float4 atmosphereParams2_{};
-    std::uint32_t atmosphereDebugView_ = 0u;
+    Math::float4 fogParams0_{}; // density 0 = disabled, which is the default
+    Math::float4 fogParams1_{};
+    Math::float4 fogParams2_{};
+    std::uint32_t fogDebugView_ = 0u;
     Math::float4 fogVolumeParams_{};    // x = 0: no volume (default)
     Math::float4 fogVolumeZParams_{};
     float elapsedTime_ = 0.0f;

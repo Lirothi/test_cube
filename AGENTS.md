@@ -1,5 +1,30 @@
 # Repository Instructions
 
+## Atmosphere Terminology — Say Which One
+
+Three different things used to share the word "atmosphere", and the overlap cost a full day of
+chasing the wrong subsystem: an Inspector group holding the height fog's knobs was labelled "Aerial
+Perspective", so "turn AP off and it goes away" and "AP measures innocent" were both true, about two
+different switches. The names below are UE's and are now the only ones used in code, UI, settings
+and levels.
+
+| Thing | UE name | Ours |
+|---|---|---|
+| Analytic distance/height fog + its froxel volume | `ExponentialHeightFog` | `HeightFogSettings`, `--set=fog.*`, level `postProcess.heightFog`, `shaders/height_fog.hlsli` (`HeightFog*`), Inspector "Exponential Height Fog" |
+| Hillaire sky: transmittance / multi-scatter / SkyView / distant-light LUTs | `SkyAtmosphere` | `SkyAtmosphereSettings`, `--set=sky.*`, `shaders/sky_atmosphere.hlsli` (`SkyAtmosphereCB`, `AtmosphereRadii`) |
+| The sky's camera froxel volume applied to GEOMETRY only | aerial perspective | `sky.aerialPerspective`, `Main_SkyAerial`, `shaders/sky_lut_aerial_cs.hlsl`, compose's `aerialParams` |
+
+Rules. **"Atmosphere" alone names the SKY, never the fog** — a bare `Atmosphere*` symbol belongs to
+`sky_atmosphere.hlsli`. **"Aerial perspective" is only the sky's volume**, never the height fog, and
+it is applied only where `z > kEps`; the sky already contains that integral (`SkyAtmosphere.usf:953-988`
+returns before the AP branch). The height fog, by contrast, IS applied to the sky, which is UE's own
+behaviour (`bOnlyOnRenderedOpaque` is false — `SceneRendering.cpp:909`).
+
+Levels written before 2026-09-10 carry the fog under the old key `atmosphere`. Exactly two places
+know that: `JsonLevel::HeightFogSection` and `EditorSceneDocument`'s section table. Do not spread the
+alias any further; a level takes the new key the next time it is saved. An old `--set=atmosphere.*`
+is not silently dropped — it logs `UNKNOWN SETTING (ignored)`.
+
 ## Line Endings
 
 - Preserve the existing line ending style of every edited file.

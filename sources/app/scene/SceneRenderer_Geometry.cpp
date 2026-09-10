@@ -554,8 +554,8 @@ void SceneRenderer::Pass_TransparentFog(Renderer* renderer, RenderGraphPassConte
         // The hand-over point is unconditional even when the draw below is skipped: the states it
         // names are what Main_Translucent expects to find, and a barrier set that appears and
         // disappears with a material load is the kind of thing that works in every scene but one.
-        const AtmospherePacked fog =
-            PackAtmosphere(frame_->settings.atmosphere, frame_->dirLight != nullptr);
+        const HeightFogPacked fog =
+            PackHeightFog(frame_->settings.heightFog, frame_->dirLight != nullptr);
         const bool fogOn = fog.params0.x > 0.0f;
         // `cbBytes` is load-bearing and not defensive noise: the constant buffer only appears in
         // reflection while the PIXEL shader actually READS it. Any edit that returns early enough to
@@ -584,7 +584,7 @@ void SceneRenderer::Pass_TransparentFog(Renderer* renderer, RenderGraphPassConte
             c.fogVolumeParams = decisions_.fogVolumeParams;
             c.fogVolumeZParams = decisions_.fogVolumeZParams;
             c.fogApplyMisc = float4(iblSky ? iblSky->GetExposure() : 1.0f,
-                                    static_cast<float>(g_atmosphereDebugView), preExposure_, 0.0f);
+                                    static_cast<float>(g_fogDebugView), preExposure_, 0.0f);
 
             auto cbAlloc = renderer->GetFrameResource()->AllocDynamic(
                 cbBytes, render::kConstantBufferAlignment);

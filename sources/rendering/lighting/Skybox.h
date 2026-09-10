@@ -84,9 +84,10 @@ public:
             : 1.0f;
     }
 
-    void SetAtmosphere(const SkyViewFrameData& view, D3D12_CPU_DESCRIPTOR_HANDLE skyView, D3D12_CPU_DESCRIPTOR_HANDLE transmittance)
-    { atmosphereView_ = view; atmosphereSrv_ = skyView; transmittanceSrv_ = transmittance; }
-    const SkyViewFrameData& AtmosphereView() const { return atmosphereView_; }
+    // The SKY atmosphere's per-view data and its two LUTs -- nothing to do with the height fog.
+    void SetSkyAtmosphere(const SkyViewFrameData& view, D3D12_CPU_DESCRIPTOR_HANDLE skyView, D3D12_CPU_DESCRIPTOR_HANDLE transmittance)
+    { skyViewFrame_ = view; skyViewSrv_ = skyView; transmittanceSrv_ = transmittance; }
+    const SkyViewFrameData& SkyViewFrame() const { return skyViewFrame_; }
 
     bool IsSimpleRender() const { return true; }
     bool CastsShadow() const { return false; }
@@ -103,9 +104,9 @@ private:
 private:
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> environmentSrv_{};
     std::array<ID3D12Resource*, 3> environmentResource_{}; // owned by SkyAtmosphere; GPU-drained teardown
-    SkyViewFrameData atmosphereView_{};
-    D3D12_CPU_DESCRIPTOR_HANDLE atmosphereSrv_{}, transmittanceSrv_{}, nullAtmosphereSrv_{};
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nullAtmosphereHeap_;
+    SkyViewFrameData skyViewFrame_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE skyViewSrv_{}, transmittanceSrv_{}, nullSkyViewSrv_{};
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nullSkyViewHeap_;
     TextureCube cube_;
     TextureCube specCube_;
     TextureCube irradianceCube_;

@@ -193,6 +193,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle fogParams0, fogParams1, fogParams2, fogSunDir, fogSunColor, fogDebugView;
     Material::CBFieldHandle fogVolumeParams, fogVolumeZParams;
     Material::CBFieldHandle preExposure;
+    Material::CBFieldHandle skyViewPlanet; // B6.2: the sky's own LUT, for the fog's sky colour
 
     void Populate(Material* material);
 };
@@ -804,6 +805,9 @@ struct ComposePassConstants
     // z = 1 / preExposure, w = slice count; zParams = fog_common.hlsli's (B, O, S).
     float4 fogVolumeParams{};
     float4 fogVolumeZParams{};
+    // B6.2: x view height (km), y planet bottom radius (km), z procedural sky on,
+    // w 1 / the SkyView LUT's storage pre-exposure.
+    float4 skyViewPlanet{};
 };
 
 // B6.1. MIRROR of fog_apply.hlsl's `FogApply` cbuffer, field for field and in order: it is uploaded

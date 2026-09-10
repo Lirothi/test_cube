@@ -487,7 +487,7 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
     const UINT integrateCbSize = resources_.GetFogIntegrateCBSizeBytes();
     const auto& D = renderer->GetDeferredForFrame();
     const auto& P = renderer->GetDeferredForPrevFrame();
-    const AtmosphereSettings& a = frame_->settings.atmosphere;
+    const HeightFogSettings& a = frame_->settings.heightFog;
 
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
@@ -561,7 +561,7 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         {
             fc.jitter = float4(0.5f, 0.5f, 0.5f, 0.0f);
         }
-        const AtmospherePacked packed = PackAtmosphere(a, frame_->dirLight != nullptr);
+        const HeightFogPacked packed = PackHeightFog(a, frame_->dirLight != nullptr);
         fc.medium0 = packed.params0; // density, height falloff, reference height, start distance
         fc.medium1 = float4(std::clamp(a.albedo, 0.0f, 1.0f), std::max(a.extinctionScale, 0.0f),
                             std::clamp(a.phaseG, -0.99f, 0.99f), std::max(a.sunScatter, 0.0f));
@@ -1001,12 +1001,12 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         // the density goes to zero and compose skips the block entirely -- the whole feature is
         // gated on that one number, so "off" is genuinely the pre-P7 image and not a near-miss.
         {
-            const AtmospherePacked fog =
-                PackAtmosphere(frame_->settings.atmosphere, frame_->dirLight != nullptr);
+            const HeightFogPacked fog =
+                PackHeightFog(frame_->settings.heightFog, frame_->dirLight != nullptr);
             constants.fogParams0 = fog.params0;
             constants.fogParams1 = fog.params1;
             constants.fogParams2 = fog.params2;
-            constants.fogDebugView = g_atmosphereDebugView;
+            constants.fogDebugView = g_fogDebugView;
             constants.preExposure = preExposure_;   // P16.1
             // Volumetric fog (plan part A): the froxel volume inside `volumetricDistance`, the
             // analytic model beyond it. x = 0 is the pre-plan compose exactly (the volume is a
@@ -1027,10 +1027,20 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         }
 
         constants.aerialParams = float4(skyAtmosphere_.AerialBuilt() ? 1.0f : 0.0f,
-            std::max(0.0f, frame_->settings.atmosphere.volumetricDistance),
+            std::max(0.0f, frame_->settings.heightFog.volumetricDistance),
             1.0f / std::max(preExposure_, 1.e-8f),
             0.0f);
         constants.aerialViewProj = camera.GetViewProjMatrixNoJitter();
+        // B6.2: the sky's own LUT, so the fog's in-scattering colour over a SKY pixel is the value
+        // the skybox drew rather than the captured cube's 0.70-degree average of it. The same data
+        // the sky pass was handed (Skybox::SetSkyAtmosphere), read back here so there is one source.
+        {
+            const bool lutReady = frame_->skybox != nullptr && skyAtmosphere_.ViewSrv().ptr != 0;
+            const SkyViewFrameData& sv = lutReady ? frame_->skybox->SkyViewFrame() : SkyViewFrameData{};
+            constants.skyViewPlanet = float4(sv.planet[0], sv.planet[1],
+                (lutReady && sv.planet[3] != 0.0f) ? 1.0f : 0.0f,
+                sv.exposure[0] > 0.0f ? 1.0f / sv.exposure[0] : 1.0f);
+        }
         D3D12_CPU_DESCRIPTOR_HANDLE wetnessSrv = D.depthSRV;
         if (frame_->ocean)
         {
@@ -1060,8 +1070,11 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
               // t13: the integrated fog volume, gated by `fogVolumeParams.x`; the dummy keeps
               // the VOLATILE range populated on frames without the pass.
               decisions_.volumetricFog ? D.fogIntegratedSRV : renderer->VsmDummyTexSrv(),
-              // t14: B3 finite-distance atmosphere; never sampled when the pass was skipped.
-              skyAtmosphere_.AerialBuilt() ? skyAtmosphere_.AerialSrv() : renderer->VsmDummyTexSrv() },
+              // t14: B3 aerial perspective volume; never sampled when the pass was skipped.
+              skyAtmosphere_.AerialBuilt() ? skyAtmosphere_.AerialSrv() : renderer->VsmDummyTexSrv(),
+              // t15: B6.2 SkyView LUT, gated by `skyViewPlanet.z`; the dummy keeps the VOLATILE
+              // range populated in HDRI mode, where the shader never reads it.
+              skyAtmosphere_.ViewSrv().ptr != 0 ? skyAtmosphere_.ViewSrv() : renderer->VsmDummyTexSrv() },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

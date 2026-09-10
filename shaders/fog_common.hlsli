@@ -120,7 +120,7 @@ float FogPhaseHG(float g, float cosTheta)
 // (base e), derived from the analytic model's density (base 2 twice -- see inside).
 float FogExtinctionAt(float worldY, float4 medium0, float extinctionScale)
 {
-    // The analytic model (atmosphere.hlsli, UE's CalculateLineIntegralShared) integrates the
+    // The analytic model (height_fog.hlsli, UE's CalculateLineIntegralShared) integrates the
     // density profile in BASE 2 and transmits in base 2 again: for a uniform medium its line
     // integral is density * ln2 per metre and T = exp2(-integral), i.e. e^(-(ln2)^2 * density * l).
     // The froxel integration is base e (exp(-sigma * step)), so parity with the analytic model --
@@ -148,12 +148,12 @@ float FogExtinctionAt(float worldY, float4 medium0, float extinctionScale)
 //  * NEAR -> the top mip: the sphere average. A short ray is steeply downward and a direction is
 //    meaningless for it; light scattered towards the eye over a short column arrives from the whole
 //    sphere. This is also what structurally keeps a steep ray from ever resolving a direction.
-//  * FAR  -> `directionalMip`, the headroom-driven blur (AtmosphereSkyRoughness). By then the ray
+//  * FAR  -> `directionalMip`, the headroom-driven blur (HeightFogSkyRoughness). By then the ray
 //    is within a degree or two of the horizon and the surface must converge on the sky it sits
 //    against, which is the seam this whole feature exists to remove.
 //
-// `fade` is params2.zw from PackAtmosphere: fadeAlpha = saturate(rayLength * fade.x + fade.y), and
-// it SHIPS OFF (both distances 0 => alpha 1 => always directional). See AtmosphereSettings for why:
+// `fade` is params2.zw from PackHeightFog: fadeAlpha = saturate(rayLength * fade.x + fade.y), and
+// it SHIPS OFF (both distances 0 => alpha 1 => always directional). See HeightFogSettings for why:
 // UE multiply this cube into an authored fog colour, we use it AS the colour, so their near-field
 // sphere average turns into milk-white water here.
 //
@@ -165,6 +165,24 @@ float FogExtinctionAt(float worldY, float4 medium0, float extinctionScale)
 float3 FogSkyAlongView(TextureCube skyCube, SamplerState smp, float3 viewRay, float rayLength,
                        float roughness, float2 fade, float intensity)
 {
+    // THE RAY IS USED AS IT IS. It points from the camera TO THE SURFACE, so on ground and water it
+    // points DOWN, below the cube's equator -- and that half of the cube is now a real, continuously
+    // varying sky (sky_view_mapping.hlsli mirrors the LUT across the horizon instead of freezing it
+    // on one row), so there is nothing left to protect against.
+    //
+    // Clamping it, which is what this did, was worse than the problem it was written for. Every
+    // downward ray -- the whole lower half of an open view -- collapsed onto the SAME horizon ring of
+    // the cube, so the fog it produced varied with azimuth and with nothing else: a flat plate ruled
+    // with vertical streaks, cut off by a straight line at the horizon. Measured on wind_test with
+    // the fog on, the mirrored cube changed that region by nothing at all until this clamp went, and
+    // the streak amplitude did not move by a thousandth. It was this line holding it, not the sky.
+    //
+    // A ray pointing exactly straight down is still fine: it is a unit vector like any other and the
+    // cube has content there. The old epsilon existed only because clamping .y to zero would have
+    // made a straight-down ray the zero vector, and normalize() would have handed back a NaN.
+    const float rayLen2 = dot(viewRay, viewRay);
+    viewRay = rayLen2 > 1.0e-12f ? viewRay * rsqrt(rayLen2) : float3(0.0f, 1.0f, 0.0f);
+
     uint width, height, levels;
     skyCube.GetDimensions(0, width, height, levels);
     const float top = max((float)levels - 1.0f, 0.0f);

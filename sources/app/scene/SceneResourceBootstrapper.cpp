@@ -276,6 +276,7 @@ void SceneComposeCBHandles::Populate(Material* material)
     preExposure = material->ComputeCB0FieldHandle("preExposure");
     fogVolumeParams = material->ComputeCB0FieldHandle("fogVolumeParams");
     fogVolumeZParams = material->ComputeCB0FieldHandle("fogVolumeZParams");
+    skyViewPlanet = material->ComputeCB0FieldHandle("skyViewPlanet");
     aerialParams = material->ComputeCB0FieldHandle("aerialParams");
     aerialViewProj = material->ComputeCB0FieldHandle("aerialViewProj");
 }
@@ -1779,6 +1780,7 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.fogDebugView, data.fogDebugView, dest);
     matComposeCS_->UpdateCBField(handles.fogVolumeParams, data.fogVolumeParams, dest);
     matComposeCS_->UpdateCBField(handles.fogVolumeZParams, data.fogVolumeZParams, dest);
+    matComposeCS_->UpdateCBField(handles.skyViewPlanet, data.skyViewPlanet, dest);
     matComposeCS_->UpdateCBField(handles.preExposure, data.preExposure, dest);
     matComposeCS_->UpdateCBField(handles.aerialParams, data.aerialParams, dest);
     matComposeCS_->UpdateCBField(handles.aerialViewProj, data.aerialViewProj, dest);

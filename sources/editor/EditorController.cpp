@@ -2,6 +2,7 @@
 
 #include "core/diagnostics/BootProfile.h"
 #include "app/scene/GtaoSettingsJson.h"
+#include "app/scene/SkyAtmosphereSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -360,6 +361,19 @@ namespace
     // EnvironmentRuntime for the exact keys it reads) with a gentle breeze rather than dead calm, so
     // creating it from the menu produces something visibly moving instead of a no-op entity. The
     // "gust" sub-object must be present or ApplyWind leaves the gust fields at their previous values.
+    EditorObject BuildSkyAtmosphereObject()
+    {
+        EditorObject sky;
+        sky.name = "Sky Atmosphere";
+        sky.type = "skyAtmosphere";
+        // The struct defaults, written out so the level states what it uses rather than inheriting
+        // whatever the code default happens to be next year. SkyAtmosphereSettingsJson is the one
+        // mapping; this is the same set it reads.
+        sky.properties = SkyAtmosphereSettingsJson::ToJson(SkyAtmosphereSettings{});
+        sky.properties["enabled"] = true;
+        return sky;
+    }
+
     EditorObject BuildWindObject()
     {
         EditorObject wind;
@@ -647,7 +661,7 @@ namespace
         return gtao;
     }
 
-    // P7 has no BuildAtmosphereObject on purpose: EditorSceneDocument materialises the "atmosphere"
+    // P7 has no BuildHeightFogObject on purpose: EditorSceneDocument materialises the "heightFog"
     // entity with addSingletonAlways, so every level already carries one and an "Add" menu item for
     // it could only ever render disabled.
 
@@ -3688,6 +3702,15 @@ void EditorController::Draw(
                 }
                 // One wind per level: it is a global singleton driving BOTH the foliage sway and the
                 // ocean's wave direction/force, so a second one would just fight the first.
+                // B6.2: the procedural atmosphere is an OBJECT, as it is in UE -- adding it is
+                // what makes the level procedural, removing it returns to the cubemap.
+                const bool hasSkyAtmosphere = HasEnvironmentObject(document_, "skyAtmosphere");
+                if (MenuItemWithDisabledReason("Sky Atmosphere", !hasSkyAtmosphere,
+                        "This level already has a sky atmosphere."))
+                {
+                    commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                        BuildSkyAtmosphereObject()));
+                }
                 const bool hasWind = HasEnvironmentObject(document_, "wind");
                 if (MenuItemWithDisabledReason("Wind", !hasWind,
                         "This level already has a wind entity."))

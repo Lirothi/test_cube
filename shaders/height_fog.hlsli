@@ -38,7 +38,7 @@
 // Shared by compose and both ocean surfaces on purpose: the water and the land must not read the
 // sky at different blurs or they meet at the shoreline in different weather. `skyBlur` 0 restores
 // the original mip-0 read exactly, which is what the A/B for this was built on.
-float AtmosphereSkyRoughness(float headroom, float skyBlur)
+float HeightFogSkyRoughness(float headroom, float skyBlur)
 {
     return max(skyBlur, 0.0f) * saturate(headroom);
 }
@@ -46,18 +46,18 @@ float AtmosphereSkyRoughness(float headroom, float skyBlur)
 // How far this pixel still is from the fog's own ceiling: 1 where the air has done nothing at all,
 // 0 where it has taken over as completely as the ceiling allows. NOT the same as transmittance --
 // it is measured against the floor currently in force, so it reaches 0 exactly where the fog stops
-// growing. Takes the EFFECTIVE floor (AtmosphereMinTransmittance), not the authored maxOpacity: the
+// growing. Takes the EFFECTIVE floor (HeightFogMinTransmittance), not the authored maxOpacity: the
 // floor is released with depth, and a headroom computed against the authored value would never
 // reach 0 for a released pixel -- leaving the sky blur and the sun lobe alive at the horizon, which
 // is the seam this pair exists to prevent.
 //
 // Three things ride on it and all need the SAME zero: the sky blur, the sun lobe, and the phase.
-float AtmosphereHeadroom(float transmittance, float minTransmittance)
+float HeightFogHeadroom(float transmittance, float minTransmittance)
 {
     return saturate((transmittance - minTransmittance) / max(1.0f - minTransmittance, 1.0e-4f));
 }
 
-struct AtmosphereParams
+struct HeightFogParams
 {
     float density;            // extinction per world unit AT the reference height
     float heightFalloff;      // base-2 e-folding rate of density with world height
@@ -67,7 +67,6 @@ struct AtmosphereParams
     float sunScatterStrength; // weight of the forward-scattered sun lobe
     float sunScatterExponent; // UE's DirectionalInscatteringExponent; their default is 4
     float sunScatterStartDistance; // UE keep the sun lobe off the near field with its own distance
-    float skyBackScatter;     // phase function: haze brightness with the sun BEHIND you (1 = flat)
 };
 
 // UE's CalculateLineIntegralShared, including the two things a from-scratch version gets wrong.
@@ -82,7 +81,7 @@ struct AtmosphereParams
 // (3) The Falloff clamp is theirs too, and it is not decoration: without it exp2 of a large
 //     negative number is what they describe as going "crazy", and a horizon line of NaNs is
 //     exactly where an unclamped version lands.
-float AtmosphereLineIntegral(float heightFalloff, float rayDirectionY, float rayOriginTerms)
+float HeightFogLineIntegral(float heightFalloff, float rayDirectionY, float rayOriginTerms)
 {
     const float falloff = max(-127.0f, heightFalloff * rayDirectionY);
     const float lineIntegral = (1.0f - exp2(-falloff)) / falloff;
@@ -96,7 +95,7 @@ float AtmosphereLineIntegral(float heightFalloff, float rayDirectionY, float ray
 //
 // (1) RayDirectionZ IS THE RAY'S FULL HEIGHT DELTA (:251, :283), not a slope. The line integral
 //     is per unit of the [0,1] parameter along the segment and the segment's length multiplies
-//     back in (AtmosphereOpticalDepth). The first port divided the delta by the length, which
+//     back in (HeightFogOpticalDepth). The first port divided the delta by the length, which
 //     collapsed the height term to its Taylor limit for every ray: the whole descent from a high
 //     camera integrated at the camera's own thin density. The froxel volume (plan part A), which
 //     integrates the same profile numerically, exposed it as a step at the volume's far plane.
@@ -109,8 +108,8 @@ float AtmosphereLineIntegral(float heightFalloff, float rayDirectionY, float ray
 // UE compute the shared per-unit integral ONCE and multiply it by two different lengths -- the
 // view ray's, and the sun lobe's own shorter one. Splitting it the same way here is not tidiness:
 // recomputing it per term would let the two drift apart under edits.
-float AtmosphereSharedIntegral(float distance, float cameraHeight, float pointHeight,
-                               AtmosphereParams p)
+float HeightFogSharedIntegral(float distance, float cameraHeight, float pointHeight,
+                               HeightFogParams p)
 {
     if (p.density <= 0.0f)
     {
@@ -128,11 +127,11 @@ float AtmosphereSharedIntegral(float distance, float cameraHeight, float pointHe
     const float originPower = clamp(-p.heightFalloff * (originHeight - p.referenceHeight),
                                     -125.0f, 126.0f);
     const float rayOriginTerms = p.density * exp2(originPower);
-    return AtmosphereLineIntegral(p.heightFalloff, remainingDelta, rayOriginTerms);
+    return HeightFogLineIntegral(p.heightFalloff, remainingDelta, rayOriginTerms);
 }
 
 // The view ray's own optical depth: the shared term over the fog-free start distance.
-float AtmosphereOpticalDepth(float sharedIntegral, float distance, AtmosphereParams p)
+float HeightFogOpticalDepth(float sharedIntegral, float distance, HeightFogParams p)
 {
     return sharedIntegral * max(distance - p.startDistance, 0.0f);
 }
@@ -156,17 +155,31 @@ float AtmosphereOpticalDepth(float sharedIntegral, float distance, AtmospherePar
 // the ceiling ever described and the only honest answer is the sky. No new knob: the release is
 // measured in multiples of the ceiling's OWN clip depth, so it scales with whatever the ceiling is
 // set to.
-float AtmosphereMinTransmittance(float opticalDepth, float maxOpacity)
+float HeightFogMinTransmittance(float opticalDepth, float maxOpacity)
 {
     const float floorT = 1.0f - saturate(maxOpacity);
     // -log2(floorT) is the optical depth at which the ceiling first bites; below it the exponential
     // is above the floor anyway and this whole term is inert.
     const float clipDepth = -log2(max(floorT, 1.0e-6f));
-    const float release = saturate((opticalDepth / max(clipDepth, 1.0e-4f) - 1.0f) / 3.0f);
+    // Released by HOW FAR THE FLOOR HAS OUTLIVED THE TRUTH, not by a multiple of clipDepth. The
+    // difference matters at the horizon and only there. Measured on wind_test, camera 22.8 m, HDRI,
+    // density 0.001, maxOpacity 0.9: clipDepth is 3.32, the optical depth at the water's last row is
+    // about 6.6, so the old form (full release at 4x clipDepth = 13.3) had let go of barely a third.
+    // The floor was still holding 6.7% of the water's own colour while its HONEST transmittance was
+    // exp2(-6.6) = 1% -- propping a surface six times higher than it had any claim to. Against a sky
+    // that is not fogged at all, that left a 32-level step along the horizon row, and it ran right
+    // through the distant clouds.
+    //
+    // `opticalDepth - clipDepth` is that overshoot in stops: 0 where the ceiling first bites, 2 where
+    // the surface is four times deeper into the fog than the ceiling ever described. Two stops is the
+    // whole release. Still no new knob, and still scaled by the authored ceiling through clipDepth --
+    // what changes is that the scale is now ABSOLUTE stops past the clip rather than a multiple of a
+    // number that itself grows as the ceiling tightens.
+    const float release = saturate((opticalDepth - clipDepth) * 0.5f);
     return floorT * (1.0f - release);
 }
 
-float AtmosphereTransmittance(float opticalDepth, float minTransmittance)
+float HeightFogTransmittance(float opticalDepth, float minTransmittance)
 {
     return max(saturate(exp2(-opticalDepth)), minTransmittance);
 }
@@ -194,48 +207,26 @@ float AtmosphereTransmittance(float opticalDepth, float minTransmittance)
 //
 // Copying the multiplier without copying what cancels it is the same trap as
 // [[transcription-half-a-pair]]: half a pair transcribed out of UE is not a transcription.
-// `skyBackScatter` IS THE PHASE FUNCTION, AND IT IS WHY THERE IS NO SECOND DENSITY.
+// THE PHASE FUNCTION IS GONE, and `skyBackScatter` with it. It was `lerp(b, 1, forward*forward)`
+// multiplying the base haze, sold as "how bright the haze is with the sun behind you". That is
+// not a phase function: a phase function redistributes energy and integrates to 1 over the
+// sphere, while this one is <= 1 in EVERY direction whenever b < 1, so it could only ever
+// destroy light -- (1 + 2b)/3 of it on average, 40% at the value the atoll level shipped.
 //
-// A medium's density cannot depend on which way you look -- it is a property of the air, not of the
-// camera. What IS directional is how much of the sun that air throws back at you: Mie scattering off
-// haze is strongly forward-peaked, so looking into the sun the same air glows and looking away from
-// it the same air is dim. That is why a backlit shore reads as thick haze and a front-lit one stays
-// crisp, at identical density.
+// It destroyed most where the fog was thickest, which is the horizon, so it drew a dark bar
+// along the waterline: the sky fell to 117 there against 175 with the fog off, and the worst
+// row-to-row step was 7.3 against a 0.28 no-fog control. Gating it by `headroom` (its first
+// form) only moved the artifact -- the haze then went sky, darker, sky again as the gate
+// released it, which is the same bar with a bright strip under it.
 //
-// Making density directional instead would break the thing density controls: EXTINCTION. Turn the
-// camera and the far island would fade in and out of visibility -- not just change colour, actually
-// change how much of itself survives -- which reads as the world breathing as you pan. Modulating
-// the scattered colour leaves the island's contrast alone and only changes what the air adds.
+// UE carry no phase on their fog colour either. The directional part of scattering lives in
+// the additive sun lobe below -- their DirectionalInscatteringColor -- which is the correct
+// decomposition and not a concession: in-scattered radiance is the phase integrated against
+// light from the whole sphere, and `L_sky(view) * phase(view . sun)` is not that integral.
+// With the base isotropic and the lobe directional, the sky at the horizon matches the no-fog
+// control to 0.31 of a level per row.
 //
-// The near end is where this matters and the far end is where it must not exist: over a SHORT
-// column what you see is mostly single-scattered sun, which is what the phase function describes;
-// over an infinite one you are looking at the sky, whose own anisotropy is already baked into the
-// sample. Hence `headroom` again -- the same fade the sun lobe and the sky blur use, and the same
-// reason. 1.0 is the neutral value and reproduces the pre-phase image exactly.
-// THE FOG'S SKY SAMPLE MAY NOT CARRY THE SUN.
-//
-// `skyBlur` makes the fog read the sky at a coarse mip, and a coarse mip of a sky whose sun is
-// hundreds of thousands of times the median sky IS the sun: its energy is spread flat across the
-// whole texel. One such texel covers a large solid angle, so it lands as a solid achromatic slab
-// painted over whatever the fog sits in front of. It appeared the moment the level moved to an HDRI
-// with a physically intense sun (measured: sun/median 337,000x, against 16x for the previous one),
-// and pinning the roughness to zero restores the water EXACTLY to its fog-off value, which is what
-// identifies the sample rather than anything else in the fog.
-//
-// The blur cannot simply be turned off: it is what stopped the sky printing its own detail onto the
-// foliage through the fog. So the sample is blurred AND bounded, by the invariant this file already
-// commits to -- the fog CONVERGES ON THE SKY IT SITS AGAINST. The unblurred sample in the same
-// direction IS that sky. Looking at plain sky, blurring must not make the fog several times
-// brighter than the sky behind it; that excess is the sun leaking in. Looking INTO the sun the
-// unblurred sample is enormous too, the bound does nothing, and the fog stays bright -- which is
-// correct, because there the air really is that bright.
-//
-// It is the same double-count the sun lobe had to be faded for: the base colour is the sky, the sky
-// already contains the sun's glow, and anything that smears the sun further into it adds the sun a
-// second time.
-static const float kFogSkySunHeadroom = 2.0f;
-
-float3 AtmosphereClampSkySample(float3 blurred, float3 unblurred)
+float3 HeightFogClampSkySample(float3 blurred, float3 unblurred)
 {
     // One implementation, in ibl_common.hlsli. The fog and the water hit the same wall and must not
     // drift apart: if they disagreed, the sea and the air above it would answer to the same sky
@@ -243,22 +234,55 @@ float3 AtmosphereClampSkySample(float3 blurred, float3 unblurred)
     return IblClampToSharp(blurred, unblurred);
 }
 
-float3 AtmosphereInscatter(float3 skyAlongView, float3 sunColor, float viewDotSun,
+float3 HeightFogInscatter(float3 skyAlongView, float3 sunColor, float viewDotSun,
                            float opticalDepthShared, float distance, float headroom,
-                           AtmosphereParams p)
+                           HeightFogParams p)
 {
     // 1 looking into the sun, 0 looking away. Squared because Mie is forward-PEAKED rather than
     // linear across the sphere: a view 90 degrees off the sun already sits much nearer the backward
     // figure than the forward one, which a straight lerp would not say.
-    const float forward = saturate(0.5f + 0.5f * viewDotSun);
-    const float phase = lerp(saturate(p.skyBackScatter), 1.0f, forward * forward);
-    const float3 base = skyAlongView * lerp(1.0f, phase, saturate(headroom));
+    // THE PHASE IS NOT GATED BY HEADROOM. It used to be `lerp(1, phase, headroom)`, on the argument
+    // that multiple scattering isotropises a thick medium -- true in itself, but it made the haze
+    // NON-MONOTONIC in optical depth: sky where there is no fog, darkened by the phase where the fog
+    // is thin, and back to sky again where it saturates and the gate released the phase. On an open
+    // view that last stretch is the degree above the horizon, and it read as a bright strip pinned
+    // to the horizon with a darker sky above it. Measured on wind_test, procedural sky, the level's
+    // skyBackScatter of 0.4: the fog's contribution ran -2.0, -3.2, -5.3, -8.0, -6.0, -0.9 down to
+    // the waterline, and the worst row-to-row step was 2.56 against a 0.29 no-fog control.
+    //
+    // ...and applying it flat was no better, only differently wrong: `lerp(b, 1, f*f)` is <= 1 in
+    // EVERY direction whenever b < 1, so it is not a phase function at all -- it is a dimmer. Its
+    // average over the sphere is (1 + 2b)/3, which at the level's b = 0.4 means the model quietly
+    // destroys 40% of the in-scattered energy, hardest where the fog is thickest. Measured on
+    // wind_test looking away from the sun: the sky fell to 117 at the horizon against 158 with the
+    // fog off -- a dark bar pinned to the waterline.
+    //
+    // So the base carries NO phase, which is UE's structure and the correct decomposition rather
+    // than a concession. In-scattered radiance is the integral of the phase against the light
+    // arriving from the whole sphere; `L_sky(view) * phase(view . sun)` is not that integral -- it
+    // uses the sky along the VIEW as though it were light arriving from the SUN. UE split the two
+    // instead: an isotropic base (their FogInscatteringColor / InscatteringColorCubemap, which
+    // carries no directional term) plus the additive directional lobe below, which is where a phase
+    // legitimately belongs. `skyBackScatter` therefore has no consumer any more.
+    const float3 base = skyAlongView;
 
     const float lobe = pow(saturate(viewDotSun), max(p.sunScatterExponent, 1.0f));
     const float sunTravel = max(distance - p.sunScatterStartDistance, 0.0f);
     const float sunIntegral = opticalDepthShared * sunTravel;
     const float sunFactor = 1.0f - saturate(exp2(-sunIntegral));
-    const float sun = lobe * max(p.sunScatterStrength, 0.0f) * sunFactor * saturate(headroom);
+    // NO `headroom` GATE ON THE LOBE EITHER, and the reason it had one has expired. It was added
+    // when the SKY WAS NOT FOGGED: the lobe then reached only geometry, never the sky pixel next to
+    // it, so at the horizon a warm band on the water stopped dead against an untouched sky. Fading
+    // the lobe out as the fog saturated hid that seam -- and bought a worse one, because a term that
+    // grows with distance and then vanishes is not monotonic. At a 2.8 degree sun it drew a dark
+    // line along the horizon: the fog's contribution ran +0.2, +1.7, +2.4, -1.1, -2.2 over the last
+    // dozen rows, worst step 1.92 against a 0.36 no-fog control.
+    //
+    // Compose fogs the sky now (its analytic branch lost the `z > kEps` gate, as UE's does not have
+    // one either), so BOTH sides of that horizon get the lobe and the seam it was hiding cannot
+    // form. What is left is UE's own term, unmodified: DirectionalInscatteringColor weighted by
+    // DirectionalInscatteringExponent and held off the near field by its own start distance.
+    const float sun = lobe * max(p.sunScatterStrength, 0.0f) * sunFactor;
     return base + sunColor * sun;
 }
 

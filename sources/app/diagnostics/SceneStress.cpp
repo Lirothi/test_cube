@@ -225,7 +225,7 @@ public:
 
     // Volumetric fog plan A (GBV gate): what to run after EVERY level load -- the App re-applies
     // its --set values here. Applied once at boot they are gone at the first reload/switch (the
-    // level's own atmosphere block overwrites the scene's), so a gate about a knob the levels do
+    // level's own height fog block overwrites the scene's), so a gate about a knob the levels do
     // not carry was validating the default, exactly the S3a mistake in a new coat.
     void SetOnLevelLoaded(std::function<void()> fn) { onLevelLoaded_ = std::move(fn); }
 

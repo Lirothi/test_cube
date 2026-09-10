@@ -62,14 +62,24 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         L += throughput * (S - S * tr) / max(m.Extinction, 1.e-9f);
         throughput *= tr;
     }
-    // Plan B2 wants a ground hemisphere. Delta from UE SkyView Ground=false:
-    // retain the integrator's Lambert ground term (usf:771-783).
-    if (SkyViewIntersectsGround(dir, SkyPlanet.x, AtmosphereRadii.x))
-    {
-        float3 groundP = p + bottom * dir;
-        float h = length(groundP);
-        float lightMu = dot(SkySunDirection.xyz, groundP / h);
-        L += throughput * ViewTransmittance(h, lightMu) * saturate(lightMu) * GroundAlbedo.rgb / SkyPi;
-    }
+    // NO GROUND TERM HERE. UE render this LUT with `const bool Ground = false`
+    // (SkyAtmosphere.usf:1325, RenderSkyViewLutCS), and that is not an optimisation -- it is what
+    // keeps the LUT CONTINUOUS across its own horizon.
+    //
+    // The LUT's V axis is split AT the horizon: v < 0.5 is the sky, v > 0.5 is below it
+    // (SkyViewLutParamsToUv, transcribed in sky_view_mapping.hlsli). The two halves are separate
+    // parameterisations that meet at v = 0.5, so whatever the integral returns there has to agree
+    // from both sides or the seam becomes a LINE ACROSS THE SKY. Pure scattering agrees: a ray
+    // grazing the horizon and one just below it travel almost the same air. A Lambert-lit planet
+    // surface does not -- it appears at full brightness the instant the ray intersects, and B2 put
+    // it here deliberately ("Plan B2 wants a ground hemisphere"). The owner found the line by
+    // climbing to 377 m, where it is unmistakable; it was always there, and it shows on any
+    // near-horizontal direction with or without the ocean in front of it.
+    //
+    // Nothing is lost by removing it. The ground's contribution to LIGHTING is owned elsewhere and
+    // was already separated in B6.0: `light.groundAlbedo` drives GroundBounceOverPi in deferred and
+    // RT hit shading, and the multi-scattering LUT keeps its own ground term exactly as UE do
+    // (they pass Ground=true there). What disappears is only a painted plate in the camera's sky --
+    // the thing UE expect real geometry to cover.
     SkyView[id.xy] = float4(min(L * SkyIlluminance.rgb * SkyIlluminance.w * SkyExposure.x, 64000.0f), dot(throughput, 1.0f / 3.0f));
 }

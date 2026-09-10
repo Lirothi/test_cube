@@ -1083,10 +1083,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             {
                 auto& sky = scene.SkyAtmosphereRef();
                 ImGui::SeparatorText("Atmosphere LUTs");
-                int skyMode = static_cast<int>(sky.mode);
-                const char* modes[] = { "HDRI", "Procedural atmosphere" };
-                if (ImGui::Combo("Sky mode", &skyMode, modes, IM_ARRAYSIZE(modes))) sky.mode = static_cast<unsigned>(skyMode);
-                ImGui::SliderFloat("Sky luminance scale", &sky.luminanceScale, 0.0f, 10.0f, "%.3f");
+                // No "Sky mode" here any more: which sky a level uses is authored in the level
+                // (Inspector > Skybox > Procedural atmosphere, JSON `skybox.procedural`). A copy of
+                // it in this window would be a second answer to the same question, and the one that
+                // vanished on reload.
+                // The atmosphere's LOOK settings -- is it procedural, how bright, what it feeds,
+                // the medium's parameters -- are the level's, and live on the Sky Atmosphere object
+                // in the outliner. What is left here is the debug views and the LUT preview, which
+                // are session state and have no business in a level file.
+                ImGui::TextDisabled("Sky: %s (level object: outliner > Sky Atmosphere)",
+                                    sky.mode != 0u ? "procedural atmosphere" : "HDRI cubemap");
                 auto& sun = scene.DirectionalLightRef();
                 const auto d = -sun.GetDirection();
                 constexpr float degrees = 180.0f / 3.14159265358979323846f;
@@ -1102,13 +1108,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 GRAPHICS_CONTROL(SunAngularSize, "sunAngularSize",
                     ImGui::SliderFloat("Sun angular radius (rad)", &settings.sunAngularSize, 0.0f, 0.25f, "%.4f"));
-                ImGui::TextWrapped("Sky mode and sun angles apply for this session.");
+                ImGui::TextWrapped("Sun angles apply for this session.");
                 ImGui::BeginDisabled(sky.mode == 0);
-                ImGui::Checkbox("Procedural environment lighting", &sky.environmentLighting);
-                ImGui::TextWrapped("Updates reflections and sky lighting when the sun or atmosphere changes.");
-                ImGui::Checkbox("Distant sky light (fog)", &sky.distantSkyLight);
-                ImGui::TextWrapped("Sky ambient at 6 km; used by volumetric fog sky scattering.");
-                ImGui::Checkbox("Aerial perspective", &sky.aerialPerspective);
                 ImGui::BeginDisabled(!sky.aerialPerspective);
                 int aerialView = static_cast<int>(sky.aerialDebugView);
                 const char* aerialViews[] = { "Scene", "Transmittance", "In-scattered light", "Depth slices" };

@@ -46,7 +46,7 @@ namespace scene_internal
 
     // The volume's near plane: UE take max(view near, VolumetricFogStartDistance)
     // (VolumetricFog.cpp:1204-1209); the analytic model's fog-free band is that start distance here.
-    inline float FogVolumeNear(const AtmosphereSettings& a, const Camera& camera)
+    inline float FogVolumeNear(const HeightFogSettings& a, const Camera& camera)
     {
         return std::max(camera.GetZNear(), std::max(a.startDistance, 0.0f));
     }
@@ -198,7 +198,7 @@ namespace scene_internal
         // parameters and the analytic medium, so glass and particles sit in the air the sand is in.
         float4 fogVolumeParams;       // (on, far view depth, 1/preExposure, slice count)
         float4 fogVolumeZParams;      // (B, O, S, 0)
-        float4 fogParams0;            // PackAtmosphere: density, height falloff, reference height, start distance
+        float4 fogParams0;            // PackHeightFog: density, height falloff, reference height, start distance
         float4 fogParams1;            // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
         float4 fogParams2;            // sky blur, sky back-scatter, zw reserved
     };
@@ -407,7 +407,7 @@ namespace scene_internal
         vc.fogVolumeParams = fogVolumeParams;
         vc.fogVolumeZParams = fogVolumeZParams;
         {
-            const AtmospherePacked fog = PackAtmosphere(frame.settings.atmosphere, frame.dirLight != nullptr);
+            const HeightFogPacked fog = PackHeightFog(frame.settings.heightFog, frame.dirLight != nullptr);
             vc.fogParams0 = fog.params0;
             vc.fogParams1 = fog.params1;
             vc.fogParams2 = fog.params2;

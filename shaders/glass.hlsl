@@ -7,7 +7,7 @@
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
 #include "vsm_sample.hlsli"
 #include "csm_sample.hlsli"
-#include "atmosphere.hlsli" // plan A5: the analytic medium beyond the fog volume
+#include "height_fog.hlsli" // plan A5: the analytic medium beyond the fog volume
 #include "fog_common.hlsli"  // plan A5: the froxel volume
 
 struct PointLightData
@@ -523,7 +523,7 @@ PSOut PSMain(VSOut i)
         float3 fogIn = 0.0f.xxx;
         if (fogParams0.x > 0.0f)
         {
-            AtmosphereParams fog;
+            HeightFogParams fog;
             fog.density = fogParams0.x;
             fog.heightFalloff = fogParams0.y;
             fog.referenceHeight = fogParams0.z;
@@ -532,16 +532,15 @@ PSOut PSMain(VSOut i)
             fog.sunScatterStrength = fogParams1.y;
             fog.sunScatterExponent = fogParams1.z;
             fog.sunScatterStartDistance = max(fogParams1.w, FogAnalyticExclude(fogVolumeParams, dist, viewDepth));
-            fog.skyBackScatter = fogParams2.y;
-            const float fogShared = AtmosphereSharedIntegral(dist, camPos.y, i.posWS.y, fog);
-            const float tau = AtmosphereOpticalDepth(fogShared, dist, fog);
-            const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
-            fogT = AtmosphereTransmittance(tau, minT);
-            const float headroom = AtmosphereHeadroom(fogT, minT);
+                const float fogShared = HeightFogSharedIntegral(dist, camPos.y, i.posWS.y, fog);
+            const float tau = HeightFogOpticalDepth(fogShared, dist, fog);
+            const float minT = HeightFogMinTransmittance(tau, fog.maxOpacity);
+            fogT = HeightFogTransmittance(tau, minT);
+            const float headroom = HeightFogHeadroom(fogT, minT);
             const float3 skyAlongView = FogSkyAlongView(SkyboxTex, EnvSampler, viewDir, dist,
-                AtmosphereSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyIntensity);
+                HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyIntensity);
             const float3 toSun = -normalize(sunDirAmbient.xyz);
-            fogIn = AtmosphereInscatter(skyAlongView, sunColorExposure.xyz * sunColorExposure.w,
+            fogIn = HeightFogInscatter(skyAlongView, sunColorExposure.xyz * sunColorExposure.w,
                                         dot(viewDir, toSun), fogShared, dist, headroom, fog);
         }
         color = (color * fogT + fogIn * (1.0f - fogT)) * vol.a + vol.rgb;

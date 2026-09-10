@@ -10,7 +10,7 @@
 1. Верхушка светового конуса: яркость и форма небольшого участка дрожат при неподвижной камере.
 2. Дальний край пола слева от конуса: над границей геометрии появляется тёмное размытое пятно, которое мерцает.
 
-Это два разных проявления объёмного тумана. Отключение `atmosphere.jitter` резко снижает колебания верхушки, но оставляет дефект у пола. Отключение `atmosphere.conservativeDepth` убирает тёмное пятно, но сохраняет колебания верхушки. Комбинация убирает пятно и сильно снижает мерцание конуса. Это диагностический обход, не готовое исправление.
+Это два разных проявления объёмного тумана. Отключение `fog.jitter` резко снижает колебания верхушки, но оставляет дефект у пола. Отключение `fog.conservativeDepth` убирает тёмное пятно, но сохраняет колебания верхушки. Комбинация убирает пятно и сильно снижает мерцание конуса. Это диагностический обход, не готовое исправление.
 
 ## Точное воспроизведение
 
@@ -40,12 +40,12 @@ New-Item -ItemType Directory -Force traces/fog_flicker | Out-Null
 Для отдельных A/B-прогонов добавить один из аргументов и сменить имя `--shot`:
 
 ```text
---set=atmosphere.conservativeDepth:0
---set=atmosphere.jitter:0
-"--set=atmosphere.jitter:0;atmosphere.conservativeDepth:0"
+--set=fog.conservativeDepth:0
+--set=fog.jitter:0
+"--set=fog.jitter:0;fog.conservativeDepth:0"
 ```
 
-Названия CLI здесь именно `atmosphere.*`; размер сетки задаётся отдельно через `fog.gridPixels`.
+Названия CLI здесь `fog.*` (до 2026-09-10 были `atmosphere.*`); размер сетки — `fog.gridPixels`.
 
 ## Измерения и сохранённые кадры
 
@@ -138,7 +138,7 @@ New-Item -ItemType Directory -Force traces/fog_flicker | Out-Null
    `GenerateConservativeDepth.usf`, `ComputeFroxelCullRect(…, FootprintMargin 0.5)`. Край пола вышел на уровень
    «отсечение выключено», пятно исчезло визуально (`scratchpad/flk_edge_before_after.png`).
 2. Верхушка: радиусы ячейки для distance bias / soft fading считаются от неджиттерного центра; новая ручка
-   `samplesPerCell` (JSON уровня, `--set=atmosphere.samplesPerCell`, Inspector «Samples Per Cell»), дефолт 2 =
+   `samplesPerCell` (JSON уровня, `--set=fog.samplesPerCell`, Inspector «Samples Per Cell»), дефолт 2 =
    антитетическая пара (offset, 1−offset). Стоимость fog-пасса на этой сцене 0.099 → 0.103 мс (4 выборки: 0.115).
 3. Остаток верхушки (0.28 против 0.09 без джиттера) — одиночный тап тени спота в джиттерной точке; не трогал.
 4. Зависание процессов после последнего снимка не воспроизвелось: все серии завершились `session end: clean shutdown`

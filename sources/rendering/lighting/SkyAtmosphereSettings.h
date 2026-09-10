@@ -17,7 +17,10 @@ static_assert(sizeof(SkyAtmosphereParameters) == 112, "SkyAtmosphereCB layout");
 
 struct SkyAtmosphereSettings
 {
-    unsigned mode = 0; // 0 HDRI, 1 procedural atmosphere; session override.
+    // 0 HDRI cubemap, 1 procedural atmosphere. AUTHORED BY THE LEVEL (`skybox.procedural`), not a
+    // session override: which sky a level uses is part of the level, the same as which cubemap it
+    // names. `--set=sky.mode` still overrides it for a headless run.
+    unsigned mode = 0;
     float luminanceScale = 2.13f; // sky-only HDRI calibration, never camera exposure
     bool distantSkyLight = false; // B5: isotropic ambient at 6km, session opt-in
     bool environmentLighting = false; // B4: session opt-in until visual acceptance

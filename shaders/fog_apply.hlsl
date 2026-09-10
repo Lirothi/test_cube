@@ -27,7 +27,7 @@
 
 #include "utils.hlsli"
 #include "ibl_common.hlsli"
-#include "atmosphere.hlsli"
+#include "height_fog.hlsli"
 #include "fog_common.hlsli"
 
 Texture2D           DepthTex     : register(t0); // reverse-Z, AFTER the depth-writing transparents
@@ -47,7 +47,7 @@ cbuffer FogApply : register(b0)
     float4   camPosWS;          // xyz; w unused
     float4   fogParams0;        // density, height falloff, reference height, start distance
     float4   fogParams1;        // max opacity, sun scatter strength, exponent, sun scatter start
-    float4   fogParams2;        // sky blur, sky back-scatter, directional-fade inv range, its bias
+    float4   fogParams2;        // sky blur, RESERVED (was back-scatter), directional-fade inv range, its bias
     float4   fogSunDir;         // xyz: direction TO the sun, already negated on the CPU as compose
                                 //      receives it (SceneRenderer_Lighting.cpp) -- NOT the travel
                                 //      direction the ocean shader used to be handed
@@ -81,11 +81,29 @@ float4 PSMain(VSOut i) : SV_Target
     const float z = DepthTex.Load(px).r;
     const float zPrev = DepthPrevTex.Load(px).r;
 
-    // Not a depth-writing transparent: compose already answered for this pixel. The sky (z == 0 in
-    // reverse-Z) never reaches here either, because nothing wrote depth over it.
+    // ONLY the depth-writing transparents. `DepthPrevTex` is the depth as it stood BEFORE the
+    // transparent pass, so a pixel whose depth CHANGED is exactly one the ocean (or another
+    // depth-writing transparent) has just drawn. Opaque geometry and the sky were both answered by
+    // compose; running the model over them here fogs them a SECOND time.
+    //
+    // This test was missing from b6.1 and the pass ran over the whole screen. On an open view that
+    // is a full-screen second helping of height fog laid on top of compose's, and the sky gets it
+    // computed from `z == 0` -- a reconstruction at the far plane, which does not follow elevation
+    // the way compose's own sky ray does. The result was a haze band near the horizon that did not
+    // line up with the horizon, which is exactly what the owner kept pointing at. It also silently
+    // hijacked the transmittance and in-scattering debug views: their branches below return with
+    // alpha 0, which REPLACES the pixel, so views 1 and 2 were showing this pass's numbers for the
+    // whole frame while looking like compose's.
+    // `z == zPrev` is the WHOLE test, and it must not be helped along with a "is this the sky"
+    // epsilon. The sky is already excluded by it -- nothing wrote depth there, so the two values are
+    // bit-identical -- while `z <= kEpsilon` is not a sky test at all: under reverse-Z, `z` is
+    // near/distance, so with this project's 0.01 m near plane every surface past TEN KILOMETRES
+    // falls under 1e-6. The ocean reaches well past that, and its far rows were dropped out of the
+    // fog entirely: a three-row dark notch at the waterline with a step back to full fog where the
+    // water crossed 10 km, measured at 19 levels of luminance.
+    if (z == zPrev) { discard; }
 
-
-    AtmosphereParams fog;
+    HeightFogParams fog;
     fog.density = fogParams0.x;
     fog.heightFalloff = fogParams0.y;
     fog.referenceHeight = fogParams0.z;
@@ -94,7 +112,6 @@ float4 PSMain(VSOut i) : SV_Target
     fog.sunScatterStrength = fogParams1.y;
     fog.sunScatterExponent = fogParams1.z;
     fog.sunScatterStartDistance = fogParams1.w;
-    fog.skyBackScatter = fogParams2.y;
 
     const float3 Pw = ReconstructPosWS(uv, z, invProj, invView);
     const float3 toPoint = Pw - camPosWS.xyz;
@@ -111,15 +128,15 @@ float4 PSMain(VSOut i) : SV_Target
     fog.startDistance = max(fog.startDistance, fogExclude);
     fog.sunScatterStartDistance = max(fog.sunScatterStartDistance, fogExclude);
 
-    const float fogShared = AtmosphereSharedIntegral(dist, camPosWS.y, Pw.y, fog);
-    const float tau = AtmosphereOpticalDepth(fogShared, dist, fog);
-    const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
-    const float transmittance = AtmosphereTransmittance(tau, minT);
-    const float headroom = AtmosphereHeadroom(transmittance, minT);
+    const float fogShared = HeightFogSharedIntegral(dist, camPosWS.y, Pw.y, fog);
+    const float tau = HeightFogOpticalDepth(fogShared, dist, fog);
+    const float minT = HeightFogMinTransmittance(tau, fog.maxOpacity);
+    const float transmittance = HeightFogTransmittance(tau, minT);
+    const float headroom = HeightFogHeadroom(transmittance, minT);
     const float3 skyAlongView = FogSkyAlongView(SkyboxTex, LinearClampSmp, viewRay, dist,
-        AtmosphereSkyRoughness(headroom, fogParams2.x), fogParams2.zw, fogApplyMisc.x);
+        HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, fogApplyMisc.x);
     const float3 toSun = normalize(fogSunDir.xyz);
-    const float3 inscatter = AtmosphereInscatter(skyAlongView, fogSunColor.rgb,
+    const float3 inscatter = HeightFogInscatter(skyAlongView, fogSunColor.rgb,
                                                  dot(viewRay, toSun), fogShared, dist,
                                                  headroom, fog);
 
@@ -134,8 +151,6 @@ float4 PSMain(VSOut i) : SV_Target
     {
         return float4(inscatter * (1.0f - transmittance) * vol.a + vol.rgb, 0.0f);
     }
-    // TEMP: report both predicates brightly. + inscatter*1e-8 keeps the constant buffer USED,
-    // so dxc cannot strip it from reflection - which is what silently zeroed cbBytes before.
     // PRE-EXPOSURE. compose computes this in RAW radiance and scales on the way out; this pass
     // writes straight into the scene colour target, which is already pre-exposed. Without the same
     // scale the in-scattered light arrives in raw units - hundreds of times too bright - and the

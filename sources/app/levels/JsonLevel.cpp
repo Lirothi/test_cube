@@ -21,8 +21,9 @@
 #pragma warning(disable: 26819)
 #include "third_party/json/json.hpp"
 #include "app/scene/GtaoSettingsJson.h"
-#include "app/scene/AtmosphereSettingsJson.h"
+#include "app/scene/HeightFogSettingsJson.h"
 #include "app/scene/BloomSettingsJson.h"
+#include "app/scene/SkyAtmosphereSettingsJson.h"
 
 // P8B: the level-wide look settings live under one "postProcess" section now. A level written
 // before that carries them as top-level sections, and must keep loading unchanged -- so this
@@ -43,6 +44,18 @@ namespace
         }
         const auto legacy = level.find(key);
         return (legacy != level.end() && legacy->is_object()) ? &(*legacy) : nullptr;
+    }
+
+    // The height fog's section used to be called "atmosphere", which read as the SKY atmosphere and
+    // cost a working day of chasing the wrong subsystem: the Inspector group carrying these very
+    // fields was even labelled "Aerial Perspective". The canonical name is "heightFog" (UE's
+    // ExponentialHeightFogComponent); every level written before the rename is still read here, and
+    // takes the new name the next time it is saved. Nothing else in the codebase looks at the old
+    // spelling -- this is the ONE place that knows about it, deliberately.
+    const nlohmann::json* HeightFogSection(const nlohmann::json& level)
+    {
+        if (const nlohmann::json* section = PostProcessSection(level, "heightFog")) { return section; }
+        return PostProcessSection(level, "atmosphere");
     }
 }
 #pragma warning(pop)
@@ -231,6 +244,20 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     }
 #endif
 
+    // WHICH SKY, read before the cubemap and independently of it: a procedural level does not need a
+    // texture at all, so this must not sit behind the `texture` gate below. The section's PRESENCE is
+    // what makes a level procedural -- the same shape as adding a SkyAtmosphere actor in UE -- and a
+    // level without it keeps its cubemap. It used to be a Developer-window combo that lived only for
+    // the session, so a level could not state what it was and every reload came back HDRI.
+    {
+        SkyAtmosphereSettings sky{};
+        if (const auto it = j.find("skyAtmosphere"); it != j.end() && it->is_object())
+        {
+            SkyAtmosphereSettingsJson::ApplyOverrides(*it, sky);
+        }
+        scene.SetSkyAtmosphere(sky);
+    }
+
     if (j.contains("skybox") && j["skybox"].contains("texture"))
     {
         BOOT_SCOPE("Skybox + IBL");
@@ -418,12 +445,12 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         }
         scene.SetGtao(gtao);
 
-        AtmosphereSettings atmosphere{};
-        if (const nlohmann::json* section = PostProcessSection(j, "atmosphere"))
+        HeightFogSettings heightFog{};
+        if (const nlohmann::json* section = HeightFogSection(j))
         {
-            AtmosphereSettingsJson::ApplyOverrides(*section, atmosphere);
+            HeightFogSettingsJson::ApplyOverrides(*section, heightFog);
         }
-        scene.SetAtmosphere(atmosphere);
+        scene.SetHeightFog(heightFog);
 
         // P8: a level without the section gets the struct defaults, i.e. bloom OFF.
         BloomSettings bloom{};

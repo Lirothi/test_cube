@@ -307,10 +307,10 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     // render settings, so the water and the opaque compose pass are always given the same numbers.
     if (frame.ocean)
     {
-        const AtmospherePacked fog =
-            PackAtmosphere(frame.settings.atmosphere, frame.dirLight != nullptr);
-        frame.ocean->SetAtmosphereParams(fog.params0, fog.params1, fog.params2);
-        frame.ocean->SetAtmosphereDebugView(g_atmosphereDebugView);
+        const HeightFogPacked fog =
+            PackHeightFog(frame.settings.heightFog, frame.dirLight != nullptr);
+        frame.ocean->SetFogParams(fog.params0, fog.params1, fog.params2);
+        frame.ocean->SetFogDebugView(g_fogDebugView);
     }
     // UE's SSRT color resolve is a separate temporal consumer: after finding a hit in CURRENT
     // depth it reprojects that hit into the PREVIOUS temporal SceneColor. Our Deferred.scene is
@@ -391,7 +391,7 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     {
         const auto& D = renderer->GetDeferredForFrame();
         const auto& P = renderer->GetDeferredForPrevFrame();
-        const AtmosphereSettings& a = frame.settings.atmosphere;
+        const HeightFogSettings& a = frame.settings.heightFog;
         decisions_.volumetricFog = a.enabled && a.volumetric && a.density > 0.0f && frame.dirLight && frame.camera &&
             resources_.GetFogScatterMaterial() && resources_.GetFogIntegrateMaterial() &&
             resources_.GetFogScatterCBSizeBytes() != 0u && resources_.GetFogIntegrateCBSizeBytes() != 0u &&
@@ -457,7 +457,7 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         decisions_.lightShafts = false;
         const DirectionalLight* sun = frame.dirLight;
         const auto& D = renderer->GetDeferredForFrame();
-        const bool ready = sun != nullptr && frame.camera != nullptr && g_atmosphereDebugView == 0u &&
+        const bool ready = sun != nullptr && frame.camera != nullptr && g_fogDebugView == 0u &&
             sun->GetLightShaftsEnabled() && sun->GetLightShaftBloomScale() > 0.0f &&
             (sun->GetColor().x > 0.0f || sun->GetColor().y > 0.0f || sun->GetColor().z > 0.0f) &&
             resources_.GetLightShaftMaterial(0u) && resources_.GetLightShaftMaterial(1u) && resources_.GetLightShaftMaterial(2u) &&
@@ -627,7 +627,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     BuildLighting(renderer, gb);
     BuildReflections(renderer, gb);
     BuildForwardAndEditor(renderer, gb);
-    gb.pSelectionOutline = skyAtmosphere_.BuildDebug(renderer, rg, frame_->settings.skyAtmosphere, *frame_->camera, frame_->settings.atmosphere.volumetricDistance, gb.pSelectionOutline, gb.pSkyLuts);
+    gb.pSelectionOutline = skyAtmosphere_.BuildDebug(renderer, rg, frame_->settings.skyAtmosphere, *frame_->camera, frame_->settings.heightFog.volumetricDistance, gb.pSelectionOutline, gb.pSkyLuts);
     BuildPost(renderer, gb);
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION

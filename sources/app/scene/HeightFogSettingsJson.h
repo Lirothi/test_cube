@@ -4,16 +4,16 @@
 
 #include "app/scene/SceneFrameData.h"
 
-// P7: the ONE mapping between AtmosphereSettings and JSON. The level reader, the editor's
+// P7: the ONE mapping between HeightFogSettings and JSON. The level reader, the editor's
 // environment object and the editor's runtime-apply path all go through these, so a field added to
 // the struct cannot end up silently missing from one of the three. Same shape and same reasoning as
 // GtaoSettingsJson next door -- including living in its own header rather than in SceneFrameData.h,
 // which most of the renderer includes and which should not drag the single-header JSON parser in
 // front of every one of those translation units.
-namespace AtmosphereSettingsJson
+namespace HeightFogSettingsJson
 {
 
-inline void ApplyOverrides(const nlohmann::json& j, AtmosphereSettings& s)
+inline void ApplyOverrides(const nlohmann::json& j, HeightFogSettings& s)
 {
     if (!j.is_object())
     {
@@ -31,7 +31,6 @@ inline void ApplyOverrides(const nlohmann::json& j, AtmosphereSettings& s)
     s.skyBlur = j.value("skyBlur", s.skyBlur);
     s.nonDirectionalDistance = j.value("nonDirectionalDistance", s.nonDirectionalDistance);
     s.fullyDirectionalDistance = j.value("fullyDirectionalDistance", s.fullyDirectionalDistance);
-    s.skyBackScatter = j.value("skyBackScatter", s.skyBackScatter);
     s.volumetric = j.value("volumetric", s.volumetric);
     s.volumetricDistance = j.value("volumetricDistance", s.volumetricDistance);
     s.albedo = j.value("albedo", s.albedo);
@@ -50,7 +49,7 @@ inline void ApplyOverrides(const nlohmann::json& j, AtmosphereSettings& s)
     s.localDistanceBias = j.value("localDistanceBias", s.localDistanceBias);
 }
 
-inline nlohmann::json ToJson(const AtmosphereSettings& s)
+inline nlohmann::json ToJson(const HeightFogSettings& s)
 {
     nlohmann::json j;
     j["enabled"] = s.enabled;
@@ -65,7 +64,6 @@ inline nlohmann::json ToJson(const AtmosphereSettings& s)
     j["skyBlur"] = s.skyBlur;
     j["nonDirectionalDistance"] = s.nonDirectionalDistance;
     j["fullyDirectionalDistance"] = s.fullyDirectionalDistance;
-    j["skyBackScatter"] = s.skyBackScatter;
     j["volumetric"] = s.volumetric;
     j["volumetricDistance"] = s.volumetricDistance;
     j["albedo"] = s.albedo;
@@ -85,4 +83,4 @@ inline nlohmann::json ToJson(const AtmosphereSettings& s)
     return j;
 }
 
-} // namespace AtmosphereSettingsJson
+} // namespace HeightFogSettingsJson

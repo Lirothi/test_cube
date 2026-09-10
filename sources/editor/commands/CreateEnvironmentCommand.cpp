@@ -19,11 +19,12 @@ namespace
     {
         return object.type == "directionalLight" ||
             object.type == "skybox" ||
+            object.type == "skyAtmosphere" || // B6.2: one atmosphere per level, as UE allow one actor
             object.type == "camera" ||
             object.type == "cameraExposure" || // P1
             object.type == "colorPipeline" ||  // P3C
             object.type == "gtao" ||           // P6B
-            object.type == "atmosphere" ||     // P7
+            object.type == "heightFog" ||      // P7
             object.type == "bloom" ||          // P8
             object.type == "postProcess";      // P8B
     }

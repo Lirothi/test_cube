@@ -10,7 +10,7 @@
 1. **Читать UE-дроп первым, транскрибировать, не выводить.** Все четыре фичи у Epic есть в
    `D:/Programming/ue_strip/Shaders/Private/` и `Source/Runtime/Renderer/Private/`; файлы и строки
    ниже. Каждая формула, взятая из UE, помечается `file:line`; каждая ДЕЛЬТА (единицы, reverse-Z,
-   наш IBL вместо их skylight) записывается в разделе шага явно. Урок `atmosphere.hlsli`: первая
+   наш IBL вместо их skylight) записывается в разделе шага явно. Урок `height_fog.hlsli`: первая
    версия, выведенная «с нуля», расходилась с UE в четырёх местах, и все четыре были видны.
 2. **Единицы.** UE — сантиметры, мы — метры. Их `FogDensity 0.02` не переносится; их безразмерные
    константы (`DirectionalInscatteringExponent 4`, `HistoryWeight 0.9`, `PhaseG 0.2`,
@@ -32,7 +32,7 @@
 ## 1. Текущее состояние (baseline, 2026-09-05, HEAD c04616b + S6 uncommitted)
 
 ### F1. Что есть и что мы переиспользуем
-* **Туман:** `shaders/atmosphere.hlsli` — аналитический exponential height fog, транскрипция
+* **Туман:** `shaders/height_fog.hlsli` — аналитический exponential height fog, транскрипция
   `HeightFogCommon.ush` (`CalculateLineIntegralShared`, exp2, Taylor у нуля, floor maxOpacity с
   освобождением), сэмплится в `compose_cs.hlsl:349-410` (только геометрия; небо = «туман бесконечной
   глубины», не туманится) и в обоих океанских шейдерах. Параметры — `AtmosphereSettings`
@@ -261,7 +261,7 @@ exclude distance для аналитики, debug 3/4/5), `RenderTargetManager` 
 вынесен из Pass_Lighting и заполняет b0 ОБОИХ потребителей), `RenderGraph::AddPass2(DependencyList)` — перегрузка для
 рёбер, существующих не каждый кадр (ребро туман→композ). Ручки: `AtmosphereSettings.volumetric/volumetricDistance/albedo/
 extinctionScale/phaseG/sunScatter/skyScatter/historyWeight/temporal` (JSON уровня, Inspector «Volumetric fog»,
-`--set=atmosphere.*`, для солнца/неба в объёме — `sunVolScatter`/`skyVolScatter`). Лог: `volumetric fog: on= history= grid=`
+`--set=fog.*`, для солнца/неба в объёме — `sunVolScatter`/`skyVolScatter`). Лог: `volumetric fog: on= history= grid=`
 по смене состояния.
 
 **Что решено иначе, чем в плане.** (1) σ_e = density·(ln 2)², не ln 2 — см. §3 (паритет A1 ловил разницу 10 % T на
@@ -313,7 +313,7 @@ extinctionScale/phaseG/sunScatter/skyScatter/historyWeight/temporal` (JSON ур�
   потребителями, бюджет был на грани (переполнение inl_vector в Release молчит). Debug-ассерты теперь пишутся в
   session-лог как `[FATAL] CRT assert: файл(строка): выражение`, окна нет, без отладчика процесс сам завершается с
   кодом 3 (`_CrtSetReportHookW2` + `_CrtSetReportMode(FILE)`, main.cpp) — headless-гейты читают лог.
-* GBV с объёмом (`--set=atmosphere.volumetric:1 atmosphere.enabled:1 atmosphere.density:0.004`, после починки ребра
+* GBV с объёмом (`--set=fog.volumetric:1 fog.enabled:1 fog.density:0.004`, после починки ребра
   и харнесса): **Legacy CLEAN (169.7 с), VSM CLEAN (162.6 с)**, `volumetric fog: on=1` во ВСЕХ трёх уровнях и на каждом
   ресайзе (сетки 93×53 … 29×22 … 107×60, история сбрасывается на ресайз — `history=0` → `1`).
 * Стоимость повторно на починенном бинаре (тег 2): Pass_VolumetricFog 0.107 мс VSM / 0.062 мс Legacy, GPU.Frame
@@ -468,7 +468,7 @@ A2 по камере теней (≤ 0.5 %) в принципе недостиж
 
 ### A5. Туман на прозрачном: океан, стекло, частицы — [полдня]
 **Зависит от:** A1. **Эффект:** вода и стекло в тумане согласны с сушей (шов на береговой линии —
-известная ловушка `atmosphere.hlsli`).
+известная ловушка `height_fog.hlsli`).
 `ocean_surface.hlsl` / `ocean_surface_legacy.hlsli`: `CombineVolumetricFog` по глубине поверхности
 (та же формула, тот же lookup); `glass.hlsl`, `particles.hlsl`: lookup по глубине фрагмента.
 **Критерий приёмки:** береговая линия при тумане без шва (zoom side-by-side), паритет off при
@@ -584,7 +584,7 @@ DLSS Performance (рендер 1280×720, сетка 80×45×64) — **0.087 м�
 
 #### Гейты части A — итог 2026-09-05
 Три конфига собраны; `check_shaders` 61/61; `--log-stress` 0/0 Debug + Release; GBV `--scene-stress-gbv=20` Legacy и
-VSM с `atmosphere.volumetric:1 enabled:1 density:0.004` (объём, conservative depth и локальные источники в трёх уровнях
+VSM с `fog.volumetric:1 enabled:1 density:0.004` (объём, conservative depth и локальные источники в трёх уровнях
 и на ресайзах): **Legacy CLEAN (191.5 с), VSM CLEAN (192.0 с)** — в логах 25 кадров `on=1 conservative=1`, 8 кадров `local=1` на каждый прогон. Регресс-контроль: объём выкл = закоммиченный бинарь с точностью до пола (0.014 %).
 
 ### Гейты части A
@@ -599,7 +599,7 @@ VSM с `atmosphere.volumetric:1 enabled:1 density:0.004` (объём, conservati
 Транскрипция `RenderTransmittanceLutCS` (`SkyAtmosphere.usf:1100`, 256×64, 10 сэмплов) и
 `RenderMultiScatteredLuminanceLutCS` (`:1156`, 32×32, 15 сэмплов) с параметрами Земли из UE
 (`FAtmosphereSetup`: 6360/6420 км, Rayleigh β, Mie β/g, озон), `SkyAtmosphereCommon.ush` целиком
-(`fromTransmittanceLutUVs`, `getTransmittanceLutUvs :213-221`). `shaders/sky_atmosphere.hlsli` +
+(`fromTransmittanceLutUVs`, `getTransmittanceLutUvs :213-221`). `shaders/sky_height_fog.hlsli` +
 `sky_lut_transmittance_cs.hlsl`, `sky_lut_multiscatter_cs.hlsl`. Пересчёт только при смене параметров
 атмосферы (не солнца). Проверка: transmittance к солнцу при зените ≈ 0.9 (визуально бело-жёлтое),
 у горизонта — оранжевое (числа против UE-таблицы в комментарии).
@@ -802,7 +802,7 @@ sky-only luminance scale 2.13 из диска сохранено. Авторск
 * `energy_range_00/01.png`: mode 0/1, EV100=16, manual compensation=0, neutral grade/local
   exposure, bloom/shafts/volumetric off. Солнце и блик сферы в ОБОИХ режимах имеют пик
   RGB 239/239/239. Инверсия 8-bit ACES даёт около 6.41e4 (квантованный замер, не прямой
-  HDR readback). Исправный ключ: `atmosphere.volumetric`; `fog.volumetric` не существует.
+  HDR readback). Исправный ключ: `fog.volumetric`; `fog.volumetric` не существует.
 * `energy_fixed_00/01/02.png`: mode 0→1→0 с исходной auto exposure и восстановленными
   авторскими эффектами. HDRI против кадра до правки raw пути: MAE 0.00984/255,
   0.0874% пикселей отличаются больше 1 code value; round trip 0.0635% >1 code value.
@@ -815,10 +815,10 @@ sky-only luminance scale 2.13 из диска сохранено. Авторск
 
 ### B3. Aerial perspective volume — DONE (2026-09-09)
 `CameraAerialPerspectiveVolume` 32×32×16 на 96 км (`:1002-1009`, `SkyAtmosphereRendering.cpp:121-137`);
-в композе для геометрии дальше `atmosphere.volumetricDistance`: `color = color·T_ap + L_ap` ПОВЕРХ нашего
+в композе для геометрии дальше `fog.volumetricDistance`: `color = color·T_ap + L_ap` ПОВЕРХ нашего
 аналитического тумана (разные масштабы: км против м). На малых сценах почти невидимо — принимать по
 острову с дальних камер. Старое имя `fog.volumetricDistance` в тексте было неточным: CLI использует
-`atmosphere.volumetricDistance`.
+`fog.volumetricDistance`.
 
 **Реализация и дельты UE:**
 * `sky_lut_aerial_cs.hlsl`: транскрипция `SkyAtmosphere.usf:1466-1636`, без ground bounce,
@@ -1027,7 +1027,7 @@ HDRI mode всегда использует исходное окружение 
   пересоздание сцены также сбрасывает её ключ.
 * Master по умолчанию **off**: F1 → Sky → **Distant sky light (fog)**,
   CLI `--set=sky.distantSkyLight:1`. Для видимого эффекта нужны mode 1, объёмный туман
-  и `atmosphere.skyVolScatter > 0`. Независим от B4 `environmentLighting`.
+  и `fog.skyVolScatter > 0`. Независим от B4 `environmentLighting`.
   HDRI, bloom, калибровка солнца и аналитический height fog не менялись.
   Собственная AP океана и приёмка горизонта остаются обязательным B6.
 
@@ -1132,7 +1132,7 @@ UE такой ошибки не делает, потому что тычет в�
   headroom-блюром. Направленная ветка сохраняет прежний `IblClampToSharp`; дистанционный фейд им
   НЕ ограничивается — вблизи среднее законно ярче mip 0 везде, кроме взгляда в солнце.
   Число мипов читается с самого куба (`GetDimensions`), поэтому ни один потребитель его не носит.
-* Ручки: `atmosphere.nonDirectionalDistance` и `fullyDirectionalDistance`, в уровне, в `--set`, и в
+* Ручки: `fog.nonDirectionalDistance` и `fullyDirectionalDistance`, в уровне, в `--set`, и в
   Inspector → Fog → Sky sampling. Упаковка одна, в `PackAtmosphere` → `params2.zw` = (invRange, bias),
   как `FogRendering.cpp:273,284`. **Дефолт 0/0 = фейд ВЫКЛЮЧЕН**, см. ниже.
 * Мип берётся тем же `IblMipFromRoughness(roughness, levels)`, что и раньше, против собственного
@@ -1168,7 +1168,7 @@ Dir, t)`), а у нас сэмпл идёт прямо базой в `Atmosphere
   4.91 / 9.85 / 9.43 % пикселей >1 cv, MAE 0.24-0.37, max 38-44. A/B before/after: 13.62 %,
   MAE 0.445, max 47 — чуть выше пола, того же порядка. Не look change.
 
-### B6.1. Один пасс тумана на непрозрачную геометрию и воду — НЕ НАЧАТО
+### B6.1. Один пасс тумана на непрозрачную геометрию и воду — СДЕЛАНО (2026-09-09, коммит `20e242f`)
 Требование владельца (2026-09-09): «тумань воду и транспаренты общим кодом».
 
 Порядок UE (`DeferredShadingRenderer.cpp`): `RenderSingleLayerWater` (3230) рисует воду, подменяет
@@ -1199,6 +1199,50 @@ Dir, t)`), а у нас сэмпл идёт прямо базой в `Atmosphere
   нельзя.
 * Гейт по §0.6: правка пассов/барьеров/ресурсов → полный набор, GBV guarded (Legacy + VSM),
   `--scene-stress`, три конфига, log-stress.
+
+### B6.2. Горизонт: линия и вертикальные штрихи — СДЕЛАНО (2026-09-09), не закоммичено
+Владелец: «я вижу что на небо ложится какая-то туманная линия», «голубая херня что тянется вниз это
+AP такое дает». **AP оправдан замером**, глубина поверх неба не пишется.
+
+Замер на `wind_test`, процедурное небо, камера `-88.55,22.79,-51.37` rot `0.0395,0.9219,-0.0975,0.3730`:
+AP вкл/выкл над этой областью — `max|d| = 1` код, `mean 0.000` (в compose ветка AP стоит под
+`z > kEps`, а там ноль); световые шахты вкл/выкл — амплитуда штрихов 7.247 → 7.247; туман вкл/выкл —
+`(120,131,162) → (186,168,139)`, то есть туман её КРАСИЛ, но не создавал.
+
+Причина — **два независимых клампа**, каждый схлопывал всю нижнюю полусферу в ОДНУ строку: по высоте
+не менялось ничего, менялись только 192 азимутальных текселя LUT — отсюда плоское плато с
+вертикальными штрихами и бритвенная граница там, где начинался кламп.
+1. `sky_view_mapping.hlsli` зажимал UV на строке горизонта;
+2. `fog_common.hlsli` зажимал `viewRay.y` в `+1e-4` — **держащий кламп**: зеркалирование неба само по
+   себе не меняло область ни на единицу (7.247 → 7.247), пока он стоял.
+
+Правка: `SkyViewDirToUvHorizonClamped` → `SkyViewDirToUvNoPlanet`, зеркало через **горизонт** (не
+через уровень глаз: между ними 0.15° на 22 м и 0.62° на 377 м, и там лежат самые сжатые строки LUT;
+зеркало по уровню глаз не достаёт до последних 3 % и возвращает прежнюю ступеньку 4.3/18.3 уровня).
+`FogSkyAlongView` берёт луч как есть, с гардом на нулевую длину. Строки 444→700:
+`118,133,163 → 117,131,163` (плоско) стало `124,139,168 → 50,100,165`.
+
+Сознательное отличие от UE: их нижние строки LUT честные — луч упирается в планету
+(`SkyAtmosphere.usf:451-470` ограничивают `tMax` нижней сферой) — и на высоте 22 м честно = **чёрный**
+(замерено: `23,34,53` под горизонтом → `0,1,1` ниже). UE этого не видит, потому что у них там
+ландшафт; у нас на уровне без океана это половина кадра.
+
+Заодно приведено к UE:
+* **Небо туманится.** `HeightFogPixelShader.usf` читает буфер глубины, и единственное, что щадит
+  нерисованный пиксель, — `bOnlyOnRenderedOpaque`, инициализированный `false` в
+  `SceneRendering.cpp:909` и включаемый только scene capture'ом (`SceneCaptureRendering.cpp:1397`).
+  У аналитической ветки compose убран гейт `z > kEps`; пиксель неба шейдится на `kSkyFogDistance`
+  (100 км), укорачиваемых по лучу так, чтобы перепад высоты не выходил за собственный кламп UE `-127`.
+* **Порядок композиции**: AP первым, туман ПОВЕРХ него (`SkyAtmosphereCommon.ush:148-151`).
+* `sky_lut_aerial_cs.hlsl`: убран early-out `groundHit <= startKm`, которого у UE нет.
+
+Отладка: `--set=fog.debugView:6` — маска геометрии, `:7` — `log2(z)`. Оба **строго серые**, с
+калибровочной полосой известного градиента в верхних 8 строках: дисплейная цепочка нелинейна
+(png 0.5 = записанные 0.154), а цветной зонд ещё и мешает каналы — числа с него врут.
+
+Осталось: комментарий у `HeightFogMinTransmittance` в `height_fog.hlsli` обосновывает «отпускание»
+потолка тем, что «НЕБО НИКОГДА НЕ ТУМАНИТСЯ» — это перестало быть правдой; у UE потолок жёсткий
+(`max(saturate(exp2(-integral)), MinFogOpacity)`), вернуть их форму и посмотреть.
 
 ### Гейты части B
 Паритет `sky.mode 0` = сегодняшняя картинка (0.03 %); mode 1 — глаза; GBV; три конфига.
@@ -1305,7 +1349,7 @@ C1 → C2 → C3 → C4                         [облака: C2 нужна B2/
 * Froxel и DLSS: размер рендера меньше вывода — сетка от размера РЕНДЕРА (как у UE от scene textures).
 * Reverse-Z камеры: `ComputeDepthFromZSlice` даёт линейную глубину; device z через нашу
   `projMatrix` (не UE `ConvertToDeviceZ`).
-* Exp2 против exp: наш аналитический туман — база 2 (`atmosphere.hlsli`), интегратор — база e;
+* Exp2 против exp: наш аналитический туман — база 2 (`height_fog.hlsli`), интегратор — база e;
   ln 2 в σ, иначе паритет A1 не сойдётся на 30 %.
 * Pre-exposure: froxel-текстуры хранят pre-exposed, история реэкспонируется (`:1031`); забыть — лучи
   мигают при автоэкспозиции.

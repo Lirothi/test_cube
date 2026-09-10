@@ -43,6 +43,7 @@ namespace LevelDocumentSerializer
                 else if (env.type == "directionalLight") { out["directionalLight"] = env.properties; }
                 else if (env.type == "skybox") { out["skybox"] = env.properties; }
                 else if (env.type == "wind") { out["wind"] = env.properties; } // W2: round-trip the wind entity
+                else if (env.type == "skyAtmosphere") { out["skyAtmosphere"] = env.properties; } // B6.2
                 // P8B: the five look groups are one section now. The legacy top-level keys are
                 // ERASED rather than left beside it, because two copies of the same setting is a
                 // question about which one wins that nobody should have to answer -- the loader
@@ -51,8 +52,11 @@ namespace LevelDocumentSerializer
                 else if (env.type == "postProcess")
                 {
                     out["postProcess"] = env.properties;
+                    // "atmosphere" is the height fog's old name and is erased with the rest: the
+                    // loader accepts it, so a stale sibling would be a second copy of the same
+                    // settings with no rule about which wins.
                     for (const char* legacy : { "cameraExposure", "colorPipeline", "gtao",
-                                                "atmosphere", "bloom" })
+                                                "atmosphere", "heightFog", "bloom" })
                     {
                         out.erase(legacy);
                     }
@@ -62,7 +66,7 @@ namespace LevelDocumentSerializer
                 else if (env.type == "cameraExposure") { out["cameraExposure"] = env.properties; } // P1
                 else if (env.type == "colorPipeline") { out["colorPipeline"] = env.properties; } // P3C
                 else if (env.type == "gtao") { out["gtao"] = env.properties; } // P6B
-                else if (env.type == "atmosphere") { out["atmosphere"] = env.properties; } // P7
+                else if (env.type == "heightFog") { out["heightFog"] = env.properties; } // P7
                 else if (env.type == "bloom") { out["bloom"] = env.properties; } // P8
                 else if (env.type == "ocean")
                 {

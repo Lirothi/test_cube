@@ -2202,7 +2202,7 @@ before/after; GPU cost of the build pass on its own.
 
 **OUTCOME. Transcribed from UE, not derived.** The first version here was written from first
 principles and differed from `HeightFogCommon.ush` in four ways that all mattered, every one of them
-now corrected in `shaders/atmosphere.hlsli`:
+now corrected in `shaders/height_fog.hlsli`:
 
 1. **Base 2, not e.** UE integrate and transmit in `exp2`. That rescales what `density` MEANS by
    ln2, so a model written in `exp` cannot be compared against their numbers at all.
@@ -3579,7 +3579,7 @@ barrier gate applies, unlike P7's shader-only edits).
   run — the volume's `PhaseG` is the honest parameter and `skyBackScatter` stays as the far field's
   approximation of it. Give them one authored control if the numbers can be made to agree.
 * **`maxOpacity` has no business in the volume.** Its floor exists to keep distant shapes from
-  vanishing in the analytic model, and P7's `AtmosphereMinTransmittance` already has to release it
+  vanishing in the analytic model, and P7's `HeightFogMinTransmittance` already has to release it
   with depth to stop the horizon seaming. The volume's transmittance is a real integral; do not clip
   it.
 * **The sky is never fogged, and that is still true.** The volume covers a near range and background

@@ -19,7 +19,7 @@
 
 #include "utils.hlsli"
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
-#include "atmosphere.hlsli"
+#include "height_fog.hlsli"
 #include "fog_common.hlsli" // volumetric fog plan A5: the froxel volume on the water // P7: the same medium compose applies to opaque geometry
 
 cbuffer OceanCB : register(b0)
@@ -75,7 +75,7 @@ cbuffer OceanCB : register(b0)
                                        // w: reserved
     float4 sunDirAmbient;              // xyz: sun direction, w: ambient intensity
     float4 sunColorExposure;           // xyz: sun color, w: exposure multiplier
-    // P7 aerial perspective, packed by PackAtmosphere -- the SAME numbers compose gets.
+    // P7 height fog, packed by PackHeightFog -- the SAME numbers compose gets.
     float4 fogParams0;                 // x: density, y: height falloff, z: reference height, w: start distance
     float4 fogParams1;                 // x: max opacity, y: sun scatter strength, z: sun scatter exponent, w: sun scatter start
     float4 fogParams2;                 // x: sky blur (roughness at the lightly-fogged end), yzw reserved

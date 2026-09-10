@@ -154,7 +154,7 @@ inline uint32_t UeSsrMirrorRaySteps(const ResolvedUeSsrSettings& r)
 // earns its default with an explicit A/B rather than arriving switched on. With `enabled` false the
 // density reaching the shader is 0 and compose skips the whole block, which is the interface
 // contract's "screenshot-equivalent to M2".
-struct AtmosphereSettings
+struct HeightFogSettings
 {
     bool enabled = false;
     // Extinction per world unit AT `referenceHeight`. The defaults below are a starting point for
@@ -167,14 +167,14 @@ struct AtmosphereSettings
     float maxOpacity = 0.9f;        // distance never fully flattens shape
     float sunScatterStrength = 0.35f;
     // UE's DirectionalInscatteringExponent default, which is dimensionless and so transfers
-    // unchanged (their density/falloff do not -- see the units note in atmosphere.hlsli).
+    // unchanged (their density/falloff do not -- see the units note in height_fog.hlsli).
     float sunScatterExponent = 4.0f;
     // UE keep the sun lobe out of the near field with a distance of its own
     // (DirectionalInscatteringStartDistance). Theirs is 10000 in a centimetre world.
     float sunScatterStartDistance = 100.0f;
     // How blurred the sky is when it is read as the FOG'S COLOUR, as a roughness fed to the same
     // IblSkyRadiance everything else uses. Only the LIGHTLY fogged end is blurred by it -- see
-    // AtmosphereSkyRoughness in atmosphere.hlsli. 0 restores the original mip-0 read, which prints
+    // HeightFogSkyRoughness in height_fog.hlsli. 0 restores the original mip-0 read, which prints
     // the clouds onto whatever stands in front of them.
     float skyBlur = 0.5f;
     // The phase function, as "how bright the haze is with the sun BEHIND you" relative to looking
@@ -183,7 +183,6 @@ struct AtmosphereSettings
     // and stays dim front-lit, which is what real haze does -- and it is the RIGHT knob for that,
     // because a directional DENSITY would change extinction and make distant shapes fade in and out
     // as the camera pans.
-    float skyBackScatter = 1.0f;
     // WHERE the sky sample stops being directional. UE blend their fog cubemap from the top mip
     // (NonDirectionalColor, the sphere average) into mip 0 (DirectionalColor) across
     // [NonDirectionalInscatteringColorDistance, FullyDirectionalInscatteringColorDistance]
@@ -193,15 +192,15 @@ struct AtmosphereSettings
     // SHIPS OFF (both 0 => the fade is a no-op and the sample is always directional), and it has to,
     // because their structure is not ours. UE MULTIPLY the cubemap into an authored fog colour
     // (Inscattering = FogColor * lerp(NonDir, Dir, t)); we feed the sample straight into
-    // AtmosphereInscatter as the base. So their safe near-field average -- the whole sphere,
+    // HeightFogInscatter as the base. So their safe near-field average -- the whole sphere,
     // sun included -- becomes an injection of energy here, and with UE's own 10 m / 1000 m the open
     // water inside a kilometre went milk-white. Measured on the owner's HDRI camera, 2026-09-09.
     //
     // The knob stays because the reasoning behind it is sound: the fog's ray points at the SURFACE,
     // so up close it points steeply DOWN, where "the sky in that direction" means little. But the
-    // near-field blur we already had (AtmosphereSkyRoughness, bounded by AtmosphereClampSkySample)
+    // near-field blur we already had (HeightFogSkyRoughness, bounded by HeightFogClampSkySample)
     // covers that, and turning this on is a look change that has to earn its default with an A/B --
-    // the same rule skyBackScatter ships under. It is NOT what removed the horizon band: a control
+    // the same rule every look change here ships under. It is NOT what removed the horizon band: a control
     // run with the fade off showed the band gone either way. That was the cube, not this.
     float nonDirectionalDistance = 0.0f;
     float fullyDirectionalDistance = 0.0f;
@@ -368,27 +367,27 @@ struct BloomSettings
     float convGhostThreshold = 10.0f;
 };
 
-// P7 item 8. Deliberately NOT part of AtmosphereSettings: that struct is serialized into the level,
+// P7 item 8. Deliberately NOT part of HeightFogSettings: that struct is serialized into the level,
 // and a debug view saved into a level is a trap -- the same reasoning that keeps
 // ocean::g_foamDebugView out of OceanRenderConfig. 0 = normal, 1 = transmittance, 2 = in-scattering.
-inline uint32_t g_atmosphereDebugView = 0u;
+inline uint32_t g_fogDebugView = 0u;
 
 // The exact numbers the shaders receive. TWO passes apply aerial perspective -- compose, for opaque
 // geometry, and the ocean's forward surface -- and the plan's own warning about this feature is that
 // duplicated fog terms drift apart. So the packing lives here, once, and both callers use it.
 // `hasSun` false zeroes the density: with no directional light there is nothing to colour the
 // in-scattering with, and a fog that ignores that would tint the world with a stale sun.
-struct AtmospherePacked
+struct HeightFogPacked
 {
     float4 params0{}; // density, height falloff, reference height, start distance
     float4 params1{}; // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
     float4 params2{}; // sky blur, sky back-scatter, directional-fade inverse range, its bias
 };
 
-inline AtmospherePacked PackAtmosphere(const AtmosphereSettings& a, bool hasSun)
+inline HeightFogPacked PackHeightFog(const HeightFogSettings& a, bool hasSun)
 {
     const bool on = a.enabled && hasSun && a.density > 0.0f;
-    AtmospherePacked p{};
+    HeightFogPacked p{};
     p.params0 = float4(on ? std::max(a.density, 0.0f) : 0.0f, std::max(a.heightFalloff, 0.0f),
                        a.referenceHeight, std::max(a.startDistance, 0.0f));
     p.params1 = float4(std::clamp(a.maxOpacity, 0.0f, 1.0f), std::max(a.sunScatterStrength, 0.0f),
@@ -397,8 +396,10 @@ inline AtmospherePacked PackAtmosphere(const AtmosphereSettings& a, bool hasSun)
     // saturate(rayLength * zw.x + zw.y) reach 0 at nonDirectional and 1 at fullyDirectional.
     const float nonDir = std::max(a.nonDirectionalDistance, 0.0f);
     const float invRange = 1.0f / std::max(a.fullyDirectionalDistance - nonDir, 1.0e-5f);
-    p.params2 = float4(std::clamp(a.skyBlur, 0.0f, 1.0f),
-                       std::clamp(a.skyBackScatter, 0.0f, 1.0f), invRange, -nonDir * invRange);
+    // params2.y is RESERVED: it carried `skyBackScatter` until the phase was found to be a dimmer
+    // rather than a phase (height_fog.hlsli). Left as 0 rather than repacked, so every consumer's
+    // swizzle keeps meaning what it means.
+    p.params2 = float4(std::clamp(a.skyBlur, 0.0f, 1.0f), 0.0f, invRange, -nonDir * invRange);
     return p;
 }
 
@@ -502,7 +503,7 @@ struct GtaoSettings
 struct SceneRenderSettings
 {
     GtaoSettings gtao{};
-    AtmosphereSettings atmosphere{};
+    HeightFogSettings heightFog{};
     SkyAtmosphereSettings skyAtmosphere{};
     BloomSettings bloom{};
     // STAYS LogMarch. The UE march is finished and correct after P13, and it is the cheaper search,

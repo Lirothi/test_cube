@@ -124,7 +124,7 @@ enum class GraphicsControl
     VsmWindAnimateMaxLevel,
 };
 
-// Persists project-wide graphics quality. Scene-authored look settings (GTAO, atmosphere, bloom,
+// Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,
 // exposure and colour grading) stay in the level. The CSM fit has no level-serialization path, so
 // it is a project default here and is re-applied whenever a level is loaded.
 class GraphicsSettingsManager

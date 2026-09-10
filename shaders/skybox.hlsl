@@ -79,10 +79,34 @@ PSOut PSMain(VSOut i)
     {
         float3 dir = normalize(i.dir.xzy);
         float height = skyPlanet.x, bottom = skyPlanet.y, top = skyPlanet.z;
-        bool ground = SkyViewIntersectsGround(dir, height, bottom);
+        // CUBEMAP-LIKE LOWER HEMISPHERE. Everything at or below the horizon reads the HORIZON, and
+        // the planet's curvature stops being visible in the drawn sky.
+        //
+        // The LUT is physical and stays that way: its V axis splits at the horizon, whose angle
+        // comes from the view height, so the split DIPS as the camera climbs (0.03 deg at 1 m,
+        // 0.62 deg at 377 m) and everything below it darkens as the ray meets the planet sooner.
+        // Both are correct for a planet and both are visible as soon as real geometry stops short
+        // of the horizon -- which the ocean always does. A plain HDRI cube has neither: its equator
+        // sits at eye level at any altitude and below it is simply more sky.
+        //
+        // So clamp the DRAWN sky to the upper half. `ground` is forced false and the direction is
+        // flattened onto the horizon, which makes the sample continuous by construction: the last
+        // value above the horizon is also every value below it. Delta from UE, deliberately: they
+        // let the planet show because their worlds fill the lower hemisphere with terrain.
+        //
+        // The LUT itself is untouched, so the aerial-perspective volume, the IBL capture and the
+        // distant sky-light LUT keep the real atmosphere. This is a DRAW-side choice only.
+        // Whether the ray actually meets the planet. This is NOT used to pick a LUT branch any more
+        // -- the sky is mirrored across the horizon by SkyViewDirToUvNoPlanet -- but the SUN DISC
+        // still needs it, and it is the disc's only planet test. Folding it away into a constant
+        // `false` (which the first version of this clamp did) left the disc drawn below the horizon
+        // at saturated radiance, with its transmittance pinned to the LUT's clamped edge texel so it
+        // never dimmed at any negative sun elevation. UE guard it twice, SkyAtmosphere.usf:315-317
+        // and SkyAtmosphereCommon.ush:241-245.
+        const bool ground = SkyViewIntersectsGround(dir, height, bottom);
         // The LUT is pre-exposed for storage; LightTarget is RAW radiance for HDRI
         // and surface lighting alike. Decode here so compose uses one exposure path.
-        c = skyViewLut.SampleLevel(samLinear, SkyViewDirToUv(dir, height, bottom, ground), 0).rgb
+        c = skyViewLut.SampleLevel(samLinear, SkyViewDirToUvNoPlanet(dir, height, bottom), 0).rgb
             / max(skyExposure.x, 1.e-8f);
         // UE SkyAtmosphereCommon.ush:256-279, Rendering.cpp:445-446.
         // sunAngularSize is interpreted as angular RADIUS in radians for the disk.
@@ -101,14 +125,38 @@ PSOut PSMain(VSOut i)
             float oneMinusCos = 2.0f * pow(sin(0.5f * radius), 2.0f);
             float softEdge = saturate(2.0f * (viewDotLight - cosHalf) / max(oneMinusCos, 1.e-12f));
             // UE applies SkyAndAerialPerspectiveLuminanceFactor to scattering, not the disk.
-            float3 disk = tr * skyIlluminance.rgb / max(2.0f * SkyViewPi * oneMinusCos, 1.e-12f);
-            // Match the current HDRI/surface-lighting FP16 radiance range BEFORE exposure.
-            // A procedural-only pre-exposure bypass gave bloom thousands of times more
-            // energy than an equally bright HDRI sun or specular highlight. Keep coverage
-            // outside the radiance limit, so the soft disk edge remains antialiased.
-            c += min(disk, 65504.0f) * softEdge;
+            // The FP16 radiance range is matched BEFORE exposure: a procedural-only pre-exposure
+            // bypass gave bloom thousands of times more energy than an equally bright HDRI sun or
+            // specular highlight. Coverage stays outside the limit so the soft edge is antialiased.
+            // HOW MUCH OF THE TRANSMITTANCE THE DISC SHOWS IS A LOOK CONSTANT, and it is one only
+            // because the FP16 ceiling took the physics away. UE clamp the disc nowhere -- not in
+            // the shader (`SkyAtmosphereCommon.ush:271` returns transmittance * luminance * softEdge
+            // raw) and not on the CPU (`SkyAtmosphereRendering.cpp:444-446`) -- because they
+            // pre-expose, so the value lands near the display's white point and per-channel clipping
+            // does the rest: white core, coloured falloff. We store RAW radiance in FP16, and at this
+            // project's illuminance the disc is about 7e7 against a ceiling of 65504.
+            //
+            // A thousand times over the ceiling leaves no middle ground. Clamping per channel pins
+            // all three and the disc is pure white at every sun angle -- which is what it did, and is
+            // why it never reddened at sunset. Clamping by the peak keeps the hue but applies it to
+            // the WHOLE disc at once, since the peak scale is uniform, so it reads as a coloured
+            // plate rather than an over-exposed highlight -- far too yellow. Moving the clamp after
+            // `softEdge` does not help either: the core is still a thousand times over, so it clips
+            // to white and the tinted rim is a sliver a fraction of a pixel wide.
+            //
+            // So the amount is chosen, and named. The proper fix is to pre-expose this path as UE do,
+            // at which point this constant goes away and the clipping decides again.
+            const float kSunDiscTint = 0.35f;
+            const float3 discTransmittance = lerp(1.0f.xxx, tr, kSunDiscTint);
+            float3 disk = discTransmittance * skyIlluminance.rgb / max(2.0f * SkyViewPi * oneMinusCos, 1.e-12f);
+            const float diskPeak = max(max(disk.r, disk.g), disk.b);
+            const float3 diskInRange = diskPeak > 65504.0f ? disk * (65504.0f / diskPeak) : disk;
+            c += diskInRange * softEdge;
         }
-        c = min(c, 65504.0f);
+        // The whole sky, clamped the same way: a per-channel min here would undo the disc's
+        // hue again the moment any one channel touched the ceiling.
+        const float cPeak = max(max(c.r, c.g), c.b);
+        c = cPeak > 65504.0f ? c * (65504.0f / cPeak) : c;
     }
     float2 currUv = ClipToUV(i.clipPos);
     float2 prevUv = ClipToUV(i.prevPos);

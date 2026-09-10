@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -17,9 +17,10 @@
 
 #include "utils.hlsli"
 #include "ibl_common.hlsli"
-#include "atmosphere.hlsli"
+#include "height_fog.hlsli"
 #include "fog_common.hlsli"
 #include "sky_aerial_common.hlsli"
+#include "sky_view_mapping.hlsli"
 
 Texture2D LightTarget : register(t0);
 Texture2D GB2 : register(t1);
@@ -39,6 +40,9 @@ Texture2D GtaoTex : register(t12);
 // depth. A placeholder on frames without the volume (never read then: fogVolumeParams.x == 0).
 Texture3D<float4> FogVolume : register(t13);
 Texture3D<float4> SkyAerialVolume : register(t14);
+// t15: the SkyView LUT, read ONLY for sky pixels and ONLY to make the fog's in-scattering colour
+// the same value the skybox drew. Empty in HDRI mode -- `skyViewPlanet.z` gates it.
+Texture2D<float4> SkyViewLut : register(t15);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -65,7 +69,8 @@ cbuffer PerFrame : register(b0)
     float4 shoreWetnessAppearance; // x: water-film reflection, yz: slope cutoff/full-wet normal Y, w: water level
     float4 shoreWetnessFallback;   // xy: height above/below water, z: normalized fade start
     float4 shoreWetnessBreakup;    // x: upper-edge strength, y: broad XZ scale in metres
-    // P7 aerial perspective. `fogParams0.x` = 0 disables it, and the whole block below is then
+    // P7 EXPONENTIAL HEIGHT FOG -- not aerial perspective, which is the sky's own volume and lives
+    // in `aerialParams` below. `fogParams0.x` = 0 disables the fog, and the whole block is then
     // skipped -- which is the interface contract's "screenshot-equivalent to M2".
     float4 fogParams0;   // x: density, y: height falloff, z: reference height, w: start distance
     float4 fogParams1;   // x: max opacity, y: sun scatter strength, z: sun scatter exponent, w: sun scatter start
@@ -88,9 +93,17 @@ cbuffer PerFrame : register(b0)
     float preExposure;
     float4 aerialParams; // enabled, start view depth in metres, 1/preExposure, reserved
     float4x4 aerialViewProj; // non-jittered world-to-clip
+    // B6.2: x = view height (km), y = planet bottom radius (km), z = procedural sky on,
+    // w = 1 / the LUT's storage pre-exposure. Mirrors what Skybox.cpp hands the sky pass.
+    float4 skyViewPlanet;
 }
 
 static const float kEps = 1e-6;
+// How far a SKY pixel is shaded at, standing in for UE's ConvertFromDeviceZ(0) -- the far plane the
+// depth buffer's 0 decodes to. Only near-horizontal rays get anywhere near it: the height falloff
+// makes every other direction reach its asymptote long before, and the clamp beside its use keeps a
+// steeply-angled ray from feeding a huge height delta into an exponential.
+static const float kSkyFogDistance = 1.0e5f;
 
 // Roughness->mip scale for the skybox fallback. The cube has an 11-mip chain; this
 // matches glass.hlsl (rough*5) so opaque and glass sky reflections blur identically.
@@ -361,7 +374,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         }
     }
 
-    // P7: aerial perspective, applied LAST and only to real geometry. Background pixels already
+    // P7: the height fog. Aerial perspective is a separate layer further down. Background pixels
     // hold the skybox, which IS the horizon colour -- fogging them would blend the sky towards
     // itself and, with the sun lobe added, quietly brighten the whole sky (plan item 6).
     // A debug view must not leave the pixels it does NOT describe showing the ordinary image: sky
@@ -408,9 +421,27 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     float transmittance = 1.0f;
     float3 inscatter = 0.0f.xxx;
-    if (z > kEps && fogParams0.x > 0.0f)
+    // THE SKY IS FOGGED TOO, and that is UE's behaviour rather than an embellishment.
+    // HeightFogPixelShader.usf reads the depth buffer, notes `bIsRendered = (DeviceZ != 0.0)`, and
+    // the only thing that spares an unrendered pixel is `bOnlyOnRenderedOpaque` -- initialised to
+    // false in SceneRendering.cpp:909 and set true nowhere but a scene capture asking for alpha
+    // hold-out (SceneCaptureRendering.cpp:1397). Every ordinary view runs the same CalculateHeightFog
+    // over the sky, at the distance ConvertFromDeviceZ(0) reports for the far plane.
+    //
+    // Skipping the sky is what drew a line across it. A distant silhouette has fogged geometry on one
+    // side and untouched sky on the other, and the fog does not stop at the silhouette in the world,
+    // so stopping there in the shader draws the seam. Fogging both sides does not merely soften it:
+    // a ray that grazes the far edge of the terrain and one that just misses it share almost the same
+    // height profile, so their line integrals agree to the grazing angle -- the two sides meet because
+    // they are the same integral, not because a blend was tuned.
+    //
+    // The comment that used to sit here argued the opposite: that the sky IS the horizon colour, so
+    // fogging it would only blend it towards itself. That would hold if the inscattering colour were
+    // the sky in this exact direction. It is the sky BLURRED, with a sun lobe added -- and the
+    // difference between those two is exactly the step that was showing.
+    if (fogParams0.x > 0.0f)
     {
-        AtmosphereParams fog;
+        HeightFogParams fog;
         fog.density = fogParams0.x;
         fog.heightFalloff = fogParams0.y;
         fog.referenceHeight = fogParams0.z;
@@ -419,35 +450,87 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         fog.sunScatterStrength = fogParams1.y;
         fog.sunScatterExponent = fogParams1.z;
         fog.sunScatterStartDistance = fogParams1.w;
-        fog.skyBackScatter = fogParams2.y;
 
-        const float3 Pw = ReconstructPosWS(uv, z, invProj, invView);
-        const float3 toPoint = Pw - camPosWS;
-        const float dist = length(toPoint);
-        const float3 viewDir = dist > kEps ? toPoint / dist : float3(0.0, 0.0, 1.0);
+        // The pixel's ray. A sky pixel has no surface, so reconstruct at an arbitrary interior depth
+        // -- the direction and the angle to the view axis are the same at every depth -- and carry
+        // the distance separately.
+        const bool isSky = !(z > kEps);
+        const float probeZ = isSky ? 0.5f : z;
+        const float3 Pref = ReconstructPosWS(uv, probeZ, invProj, invView);
+        const float3 toRef = Pref - camPosWS;
+        const float refDist = max(length(toRef), kEps);
+        const float3 viewDir = toRef / refDist;
+        // Past a height delta of 127 / heightFalloff the model's own exp2 argument has reached UE's
+        // clamp (HeightFogLineIntegral) and another metre changes nothing, so stopping the sky ray
+        // there costs no accuracy and keeps a steeply-angled ray from carrying tens of kilometres of
+        // delta into an exponential. A near-horizontal ray is unaffected and runs the full distance.
+        const float skyReach = min(kSkyFogDistance,
+                                   127.0f / (max(fog.heightFalloff, 1.0e-4f) * max(abs(viewDir.y), 1.0e-6f)));
+        const float dist = isSky ? skyReach : refDist;
+        const float3 Pw = camPosWS + viewDir * dist;
 
         if (volumeOn)
         {
             // The volume already holds this ray up to its far plane: the analytic integral runs
-            // from there (along the ray, so a slanted ray excludes the right length).
-            excludeDistance = fogVolumeParams.y * (dist / max(surfaceViewDepth, kEps));
+            // from there (along the ray, so a slanted ray excludes the right length). UE's
+            // InvCosAngle, taken off the reconstructed ray so the sky has one too.
+            const float2 ndcRay = (uv * 2.0f - 1.0f) * float2(1.0f, -1.0f);
+            const float4 PvRef = mul(float4(ndcRay, probeZ, 1.0f), invProj);
+            const float invCosAngle = refDist / max(PvRef.z / PvRef.w, kEps);
+            excludeDistance = fogVolumeParams.y * invCosAngle;
             fog.startDistance = max(fog.startDistance, excludeDistance);
             fog.sunScatterStartDistance = max(fog.sunScatterStartDistance, excludeDistance);
         }
 
-        const float fogShared = AtmosphereSharedIntegral(dist, camPosWS.y, Pw.y, fog);
-        const float tau = AtmosphereOpticalDepth(fogShared, dist, fog);
-        const float minT = AtmosphereMinTransmittance(tau, fog.maxOpacity);
-        transmittance = AtmosphereTransmittance(tau, minT);
+        const float fogShared = HeightFogSharedIntegral(dist, camPosWS.y, Pw.y, fog);
+        const float tau = HeightFogOpticalDepth(fogShared, dist, fog);
+        const float minT = HeightFogMinTransmittance(tau, fog.maxOpacity);
+        transmittance = HeightFogTransmittance(tau, minT);
 
         // The sky sampled ALONG THE VIEW RAY, out of the whole-sphere PICTURE of the sky and never
         // out of a lighting probe -- FogSkyAlongView carries the reasoning and UE's distance fade.
         // Same shape as UE's InscatteringColorCubemap, generated rather than authored. Both the blur
-        // and the sun lobe fade out as the fog saturates -- see AtmosphereHeadroom.
-        const float headroom = AtmosphereHeadroom(transmittance, minT);
-        const float3 skyAlongView = FogSkyAlongView(SkyboxTex, gSmp, viewDir, dist,
-            AtmosphereSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyboxIntensity);
-        inscatter = AtmosphereInscatter(skyAlongView, fogSunColor.rgb,
+        // and the sun lobe fade out as the fog saturates -- see HeightFogHeadroom.
+        const float headroom = HeightFogHeadroom(transmittance, minT);
+        // A SKY pixel takes its in-scattering colour from the sky EXACTLY AS DRAWN, not from the
+        // captured cube. The cube is 128x128 per face -- 0.70 degrees of sky per texel -- while the
+        // SkyView LUT compresses its last rows into hundredths of a degree, so the cube cannot
+        // represent the final degree above the horizon at all: it averages the darker sky from above
+        // into it. That put the fog's colour up to 9.3 levels BELOW the drawn sky a fraction of a
+        // degree up, and dead level with it at the horizon where the gradient flattens -- so the
+        // fog darkened the sky everywhere except the last dozen rows, and those rows stood out as a
+        // bright strip along the horizon. Measured on wind_test, procedural sky, sun 28.3 deg: the
+        // fog's contribution ran -1.9, -4.6, -9.3, -6.1, 0.0 down the last degree, and the worst
+        // row-to-row step went from 0.29 (no fog) to 2.66.
+        //
+        // Reading the same source removes the disagreement by construction rather than by tuning,
+        // and it is the honest answer physically: the sky already IS the light scattered along that
+        // ray to infinity, so height fog over it can only be the same light again. What survives is
+        // the sun lobe, which is what UE's directional in-scattering term does too. Geometry keeps
+        // the cube, where a blurred, whole-sphere fog colour is exactly right.
+        const bool skyFromLut = isSky && skyViewPlanet.z != 0.0f;
+        float3 skyAlongView;
+        if (skyFromLut)
+        {
+            // The LUT's referential is world (x, z, y) and its values are stored pre-exposed --
+            // both as skybox.hlsl reads them.
+            const float3 lutDir = normalize(viewDir.xzy);
+            skyAlongView = SkyViewLut.SampleLevel(gSmp,
+                SkyViewDirToUvNoPlanet(lutDir, skyViewPlanet.x, skyViewPlanet.y), 0).rgb * skyViewPlanet.w;
+        }
+        else if (isSky)
+        {
+            // HDRI: the drawn sky is this cube at mip 0, so read it at mip 0 -- no roughness blur
+            // and no sphere-average fade, which is where the same disagreement came from, milder
+            // only because an HDRI's horizon gradient is gentler than the atmosphere's.
+            skyAlongView = SkyboxTex.SampleLevel(gSmp, viewDir, 0).rgb * skyboxIntensity;
+        }
+        else
+        {
+            skyAlongView = FogSkyAlongView(SkyboxTex, gSmp, viewDir, dist,
+                HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyboxIntensity);
+        }
+        inscatter = HeightFogInscatter(skyAlongView, fogSunColor.rgb,
                                         dot(viewDir, fogSunDir.xyz), fogShared, dist,
                                         headroom, fog);
     }
@@ -458,7 +541,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // This used to be assigned BEFORE the two branches below and was overwritten by them, so the
     // sky read as T = 1 in the transmittance view -- and against the volume's honest value it
     // looked like a 40 % disagreement in the palm crowns.
-    const bool debugUnmeasured = !(z > kEps && fogParams0.x > 0.0f) && !volumeOn;
+    // Now that the analytic model covers the sky as well, "not measured" means only that neither
+    // model is running at all -- it is no longer a statement about this pixel's depth.
+    const bool debugUnmeasured = !(fogParams0.x > 0.0f) && !volumeOn;
     if (fogDebugView == 1u)
     {
         // What the SURFACE keeps. White = the air is doing nothing here, black = fully hidden.
@@ -471,36 +556,65 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // the fog is bright everywhere including where it contributes nothing.
         color = debugUnmeasured ? 0.0.xxx : inscatter * (1.0 - transmittance) * vol.a + vol.rgb;
     }
-    else if (z > kEps && fogParams0.x > 0.0f)
+    else if (fogDebugView == 6u || fogDebugView == 7u)
     {
-        color = (color * transmittance + inscatter * (1.0 - transmittance)) * vol.a + vol.rgb;
+        // What compose actually reads out of the depth buffer. STRICTLY GRAY, one quantity per
+        // view: the first version of this packed three numbers into R, G and B and the display
+        // chain -- which is not a per-channel curve -- mixed them, so the mask read as "sky" on
+        // pixels that carry depth. A colour is not a number here; a gray level is.
+        //   6 = where compose calls the pixel geometry (`z > kEps`): white yes, black no.
+        //   7 = log2(z) over 24 stops, which resolves the tiny reverse-Z values a linear scale
+        //       would flatten to zero (20 km at a 0.1 m near plane is z = 5e-6).
+        color = fogDebugView == 6u
+            ? (z > kEps ? 1.0f : 0.0f).xxx
+            : (z > 0.0f ? saturate((log2(z) + 24.0f) / 24.0f) : 0.0f).xxx;
     }
-    else if (volumeOn)
+    else
     {
-        color = color * vol.a + vol.rgb; // the sky and anything the analytic model leaves alone
-    }
-
-    // B3: apply finite-distance atmosphere OVER the existing analytic/froxel fog.
-    // Start on the froxel far PLANE (view Z), not a radial sphere; near geometry and
-    // sky pixels remain untouched. UE SkyAtmosphereCommon.ush:45-117 lookup/near fade.
-    if (aerialParams.x > 0.0f && fogDebugView == 0u)
-    {
+        // B3 + P7, composed in UE's ORDER. Theirs runs RenderSkyAtmosphere (aerial perspective)
+        // first and RenderFog second, both blending One/SourceAlpha, and the single-pass form spells
+        // out why (SkyAtmosphereCommon.ush:148-151):
+        //     "Apply any other fog OVER aerial perspective because AP is usually optically thiner."
+        //     FinalFog.rgb = FogToApplyOver.rgb + AP.rgb * FogToApplyOver.a;
+        //     FinalFog.a   = FogToApplyOver.a * AP.a;
+        //
+        // We had it inverted -- aerial perspective laid on top of the already-fogged colour -- which
+        // throws away the one safeguard the ordering provides: where the other fog is dense (alpha
+        // -> 0) UE multiply the aerial term away, while we added it at full strength. At a distant
+        // silhouette that is the second half of the line the sky was being cut with: below it,
+        // saturated fog PLUS a full-strength aerial term; above it, sky with neither. With the order
+        // right the aerial term fades out exactly as the fog closes, so both sides land together.
+        //
+        // It matters more here than it does for UE, because THEIR height fog is an authored colour
+        // and OURS is the sky sampled along the view ray -- already a cheap aerial perspective.
+        // Stacking the two the wrong way round counts the same air twice.
+        //
+        // Aerial perspective first, so it is the layer everything else sits on top of. It stays off
+        // the sky: our SkyView LUT, like UE's, is already the atmosphere integrated to infinity.
         float4 ap = float4(0, 0, 0, 1);
-        float distanceKm = 0.0f, startKm = 0.0f;
-        if (z > kEps)
+        if (aerialParams.x > 0.0f && z > kEps)
         {
-            float3 worldPos = ReconstructPosWS(uv, z, invProj, invView);
-            float4 clip = mul(float4(worldPos, 1), aerialViewProj);
-            float viewDepth = clip.w; // perspective w = view Z
+            const float3 worldPos = ReconstructPosWS(uv, z, invProj, invView);
+            const float4 clip = mul(float4(worldPos, 1), aerialViewProj);
+            const float viewDepth = clip.w; // perspective w = view Z
             if (viewDepth > aerialParams.y)
             {
-                distanceKm = length(worldPos - camPosWS) / 1000.0f;
-                startKm = aerialParams.y * distanceKm / max(viewDepth, 1.e-4f);
-                float2 apUv = (clip.xy / clip.w) * float2(0.5f, -0.5f) + 0.5f;
+                const float distanceKm = length(worldPos - camPosWS) / 1000.0f;
+                const float startKm = aerialParams.y * distanceKm / max(viewDepth, 1.e-4f);
+                const float2 apUv = (clip.xy / clip.w) * float2(0.5f, -0.5f) + 0.5f;
                 ap = SampleSkyAerial(SkyAerialVolume, gSmp, apUv, distanceKm, startKm, aerialParams.z);
             }
         }
-        color = color * ap.a + ap.rgb;
+
+        // The analytic model and the froxel volume, gathered into ONE "fog to apply over" pair. With
+        // the analytic model off this is the volume alone; with both off it is the identity.
+        float3 overRgb = inscatter * (1.0f - transmittance);
+        float overA = transmittance;
+        overRgb = vol.rgb + overRgb * vol.a; // the volume sits over the analytic model, as before
+        overA *= vol.a;
+
+        // ...and the pair sits over aerial perspective, which is UE's line above.
+        color = color * (overA * ap.a) + (overRgb + ap.rgb * overA);
     }
 
     // The debug views 1 / 3 / 5 are GRAY LEVELS in [0, 1], not radiance: written without the
@@ -509,6 +623,16 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // were exposed like sunlight -- a transmittance of 1.0 came out BLACK under a daylight EV --
     // which is how the volumetric fog's parity check first "passed" on two black images. Views 2
     // and 4 are radiance (what the air adds) and stay exposed like the scene.
-    const bool debugGray = fogDebugView == 1u;
+    const bool debugGray = fogDebugView == 1u || fogDebugView == 6u || fogDebugView == 7u;
+    // EVERY gray view carries the calibration ramp, not just the ones that were written with it.
+    // "Display-linear" is not the same as "readable": the tonemapper still runs, its shoulder
+    // compresses the top of the range, and its input scale moves with auto-exposure -- so a ramp
+    // measured in one shot cannot decode another. Reading a transmittance view without the ramp
+    // beside it turned a smooth gradient into a flat plateau and sent me looking for a bug in the
+    // fog that the display had invented. The ramp costs eight rows and makes the shot self-decoding.
+    if (debugGray && dispatchThreadId.y < 96u)
+    {
+        color = (((float)dispatchThreadId.x + 0.5f) / max(screenSize.x, 1.0f)).xxx;
+    }
     SceneColor[dispatchThreadId.xy] = float4(debugGray ? color : color * preExposure, 1.0);
 }

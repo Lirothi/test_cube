@@ -45,9 +45,22 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         for (uint sx = 0; sx < taps; ++sx)
         {
             const float2 uv = (pixel + (float2(sx, sy) + 0.5f) * invTaps) / size;
-            const float3 dir = SkyCubeDirection(uv, face).xzy; // local Z-up for the SkyView mapping
-            const bool ground = SkyViewIntersectsGround(dir, planet.x, planet.y);
-            sum += SkyView.SampleLevel(LinearClamp, SkyViewDirToUv(dir, planet.x, planet.y, ground), 0).rgb;
+            float3 dir = SkyCubeDirection(uv, face).xzy; // local Z-up for the SkyView mapping
+            // SAME LOWER HEMISPHERE AS THE DRAWN SKY. skybox.hlsl clamps everything at or below the
+            // horizon to the horizon so the planet's curvature never shows in the sky; this cube is
+            // a PICTURE of that same sky -- the fog samples it along the view ray, which points DOWN
+            // on every pixel of ground and water -- so it must be clamped identically, or the two
+            // disagree exactly where they meet.
+            //
+            // Without this the chain bites twice over: the SkyView LUT no longer paints a planet
+            // surface (UE's Ground=false), so its below-horizon half is only the shortened
+            // scattering integral, which is nearly black. Captured verbatim that darkness becomes
+            // the fog's sky colour for every downward ray and puts a black band back on the far
+            // water -- the very artefact B6.0 removed, arriving by a different road.
+            // The SAME clamp the drawn sky uses (sky_view_mapping.hlsli), not merely `ground=false`
+            // and not a clamp on the direction: all three readers have to land on one texel or they
+            // disagree at the only row where they meet.
+            sum += SkyView.SampleLevel(LinearClamp, SkyViewDirToUvNoPlanet(dir, planet.x, planet.y), 0).rgb;
         }
     }
     const float3 L = sum * (invTaps * invTaps);

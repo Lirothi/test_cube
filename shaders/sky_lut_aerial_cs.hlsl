@@ -28,9 +28,12 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float tMax = pow((cell.z + 0.5f) / SkyAerialSlices, 2.0f) * SkyAerialDepthKm;
     float3 voxel = p + tMax * dir;
     float groundHit = SkyRaySphereNearest(cam, dir, 0, AtmosphereRadii.x);
-    // No atmosphere segment beyond the start plane if the ground is already in front of it.
-    if (groundHit >= 0.0f && groundHit <= startKm)
-    { AerialVolume[cell] = float4(0, 0, 0, 1); return; }
+    // NO EARLY-OUT HERE. An earlier version zeroed the voxel when the ground was already in front of
+    // the start plane; UE have no such branch -- SkyAtmosphere.usf:1517-1571 handle a ray that is
+    // already through the ground purely by reprojection, so every voxel gets a value. Ours killed the
+    // ENTIRE depth column for the affected direction, and the volume is only 32 texels across, so the
+    // step against the neighbouring band that kept its aerial perspective was smeared over a wide
+    // vertical stripe -- the streaking that showed up wherever the far field went featureless.
     bool underGround = length(voxel) < AtmosphereRadii.x;
     bool belowHorizon = groundHit > 0.0f && startKm + tMax > groundHit;
     if (belowHorizon || underGround)

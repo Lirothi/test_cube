@@ -133,7 +133,7 @@ public:
         // compose apply it themselves. B2 decodes its pre-exposed LUT in the skybox shader,
         // then uses the same raw FP16 range as HDRI and surface lighting.
         UpdateUniform(owner, exposureHandle_, material, owner_.GetExposure(), cbData);
-        const auto& v = owner_.AtmosphereView();
+        const auto& v = owner_.SkyViewFrame();
         UpdateUniform(owner, sunHandle_, material, v.sunDirection, cbData);
         UpdateUniform(owner, illuminanceHandle_, material, v.illuminance, cbData);
         UpdateUniform(owner, planetHandle_, material, v.planet, cbData);
@@ -234,16 +234,16 @@ void Skybox::Init(Renderer* renderer,
     // Type-correct null descriptors keep the HDRI/editor path valid without atmosphere resources.
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1;
-    if (FAILED(renderer->GetDevice()->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&nullAtmosphereHeap_))))
+    if (FAILED(renderer->GetDevice()->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&nullSkyViewHeap_))))
     {
         LOG_ERROR(logging::LogCategory::Render, "skybox null atmosphere descriptor allocation failed");
         return;
     }
-    nullAtmosphereSrv_ = nullAtmosphereHeap_->GetCPUDescriptorHandleForHeapStart();
+    nullSkyViewSrv_ = nullSkyViewHeap_->GetCPUDescriptorHandleForHeapStart();
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels = 1;
-    renderer->GetDevice()->CreateShaderResourceView(nullptr, &sd, nullAtmosphereSrv_);
+    renderer->GetDevice()->CreateShaderResourceView(nullptr, &sd, nullSkyViewSrv_);
 
     // Build the cube geometry
     BuildCubeMesh_(renderer, uploadCmdList, uploadKeepAlive);
@@ -259,8 +259,8 @@ void Skybox::Init(Renderer* renderer,
 bool Skybox::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
     ctx.srvTable[0] = renderer->StageSrvUavTable({cube_.GetSRVCPU(),
-        atmosphereView_.planet[3] != 0 ? atmosphereSrv_ : nullAtmosphereSrv_,
-        atmosphereView_.planet[3] != 0 ? transmittanceSrv_ : nullAtmosphereSrv_}).gpu;
+        skyViewFrame_.planet[3] != 0 ? skyViewSrv_ : nullSkyViewSrv_,
+        skyViewFrame_.planet[3] != 0 ? transmittanceSrv_ : nullSkyViewSrv_}).gpu;
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);

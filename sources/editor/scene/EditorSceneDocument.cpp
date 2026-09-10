@@ -318,6 +318,9 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     addSingleton("skybox", "skybox", "Skybox");
     addSingleton("ocean", "ocean", "Ocean");
     addSingleton("wind", "wind", "Wind"); // W2: global wind entity (round-trips; inspector in W6)
+    // B6.2: present = this level uses the procedural atmosphere, absent = its cubemap. Same shape
+    // as UE, where the SkyAtmosphere is an actor you add rather than a flag on the sky.
+    addSingleton("skyAtmosphere", "skyAtmosphere", "Sky Atmosphere");
     // P1: photographic camera. addSingleton only materialises an entity when the section is
     // present, so a level that predates the plan gains nothing and saves back byte-identical.
     // Both of these are always in effect, so they are always listed -- see addSingletonAlways.
@@ -339,20 +342,31 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
 
         const auto folded = rootJson_.find("postProcess");
         const bool haveFolded = folded != rootJson_.end() && folded->is_object();
-        for (const char* key : { "cameraExposure", "colorPipeline", "gtao", "atmosphere", "bloom" })
+        // `heightFog` was called `atmosphere` until the name was found to be the reason people --
+        // and Claude -- kept reaching for the SKY atmosphere when they meant the height fog. The
+        // alias below is the editor's half of the migration (JsonLevel::HeightFogSection is the
+        // runtime's); a level keeps loading under either spelling and is written under the new one.
+        struct Section { const char* key; const char* legacyKey; };
+        const Section sections[] = {
+            { "cameraExposure", nullptr }, { "colorPipeline", nullptr }, { "gtao", nullptr },
+            { "heightFog", "atmosphere" }, { "bloom", nullptr },
+        };
+        for (const Section& s : sections)
         {
-            if (haveFolded)
+            const char* const names[] = { s.key, s.legacyKey };
+            bool found = false;
+            for (const char* name : names)
             {
-                const auto sub = folded->find(key);
-                if (sub != folded->end() && sub->is_object())
+                if (name == nullptr) { continue; }
+                if (haveFolded)
                 {
-                    e.properties[key] = *sub;
-                    continue;
+                    const auto sub = folded->find(name);
+                    if (sub != folded->end() && sub->is_object()) { e.properties[s.key] = *sub; found = true; break; }
                 }
+                const auto legacy = rootJson_.find(name);
+                if (legacy != rootJson_.end() && legacy->is_object()) { e.properties[s.key] = *legacy; found = true; break; }
             }
-            const auto legacy = rootJson_.find(key);
-            e.properties[key] = (legacy != rootJson_.end() && legacy->is_object())
-                ? *legacy : nlohmann::json::object();
+            if (!found) { e.properties[s.key] = nlohmann::json::object(); }
         }
         environment_.push_back(std::move(e));
     }

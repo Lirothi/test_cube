@@ -150,10 +150,25 @@ public:
 
     // P7: aerial perspective is level-scoped for exactly the reasons above -- it describes how this
     // scene should look, and a level has to be able to save it.
-    const AtmosphereSettings& GetAtmosphere() const { return atmosphere_; }
-    void SetAtmosphere(const AtmosphereSettings& s) { atmosphere_ = s; }
-    AtmosphereSettings& AtmosphereRef() { return atmosphere_; }
+    const HeightFogSettings& GetHeightFog() const { return heightFog_; }
+    void SetHeightFog(const HeightFogSettings& s) { heightFog_ = s; }
+    HeightFogSettings& HeightFogRef() { return heightFog_; }
     SkyAtmosphereSettings& SkyAtmosphereRef() { return skyAtmosphere_; }
+    // B6.2: the level-authored half, replaced wholesale so a field the level does not carry lands on
+    // the struct default rather than on whatever the previous level left behind -- the same rule the
+    // other look sections load under. The debug views are session state and are preserved.
+    void SetSkyAtmosphere(const SkyAtmosphereSettings& s)
+    {
+        const unsigned aerialView = skyAtmosphere_.aerialDebugView;
+        const unsigned lutView = skyAtmosphere_.lutDebugView;
+        const bool lutEnabled = skyAtmosphere_.lutEnabled;
+        const bool lutValidate = skyAtmosphere_.lutValidate;
+        skyAtmosphere_ = s;
+        skyAtmosphere_.aerialDebugView = aerialView;
+        skyAtmosphere_.lutDebugView = lutView;
+        skyAtmosphere_.lutEnabled = lutEnabled;
+        skyAtmosphere_.lutValidate = lutValidate;
+    }
 
     // P8 bloom. Same ownership rule as the two above: the SCENE copy is the source of truth and
     // SceneRenderSettings is only the per-frame transport, so the dev window, `--set` and the
@@ -166,7 +181,7 @@ public:
     {
         renderSettings_ = settings;
         renderSettings_.gtao = gtao_;
-        renderSettings_.atmosphere = atmosphere_;
+        renderSettings_.heightFog = heightFog_;
         renderSettings_.skyAtmosphere = skyAtmosphere_;
         renderSettings_.bloom = bloom_;
     }
@@ -295,7 +310,7 @@ private:
     render::ColorPipelineSettings colorPipeline_{};   // P3; see PhotographicSettings.h
     GtaoSettings gtao_{};                             // P6B; level-scoped, see GetGtao
     SkyAtmosphereSettings skyAtmosphere_{}; // B1 authoritative settings, including headless harnesses
-    AtmosphereSettings atmosphere_{};                 // P7; level-scoped, see GetAtmosphere
+    HeightFogSettings heightFog_{};                 // P7; level-scoped, see GetHeightFog
     BloomSettings bloom_{};                           // P8; level-scoped, see GetBloom
 
     std::unique_ptr<Skybox> skyBox_;

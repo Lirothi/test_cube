@@ -180,7 +180,7 @@ namespace
     bool IsKnownType(const std::string& type)
     {
         return IsMeshType(type) || IsLightType(type) || IsCameraType(type) ||
-            type == "skybox" || type == "ocean" || type == "wind";
+            type == "skybox" || type == "ocean" || type == "wind" || type == "skyAtmosphere";
     }
 
     OutlinerGroup GroupForObject(const EditorObject& object)
@@ -197,12 +197,13 @@ namespace
         {
             return OutlinerGroup::Cameras;
         }
-        if (object.type == "skybox" || object.type == "ocean" || object.type == "wind")
+        if (object.type == "skybox" || object.type == "ocean" || object.type == "wind" ||
+            object.type == "skyAtmosphere")
         {
             return OutlinerGroup::Environment;
         }
         if (object.type == "cameraExposure" || object.type == "colorPipeline" ||
-            object.type == "gtao" || object.type == "atmosphere" ||
+            object.type == "gtao" || object.type == "heightFog" ||
             object.type == "bloom" || object.type == "postProcess")
         {
             return OutlinerGroup::PostProcess;

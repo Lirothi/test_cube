@@ -636,11 +636,12 @@ namespace
             for (unsigned i = 0; i < 3; ++i) scene.SkyAtmosphereRef().parameters.groundAlbedo[i] = std::clamp(value, 0.0f, 1.0f);
             return true;
         }
-        // P7 aerial perspective. `atmosphere.enabled` is the gate; the rest are the model's own
+        // P7 exponential height fog -- NOT aerial perspective, which is `sky.aerialPerspective`
+        // and belongs to the sky atmosphere. `fog.enabled` is the gate; the rest are the model's own
         // parameters, so a sweep can find defaults without a rebuild.
-        if (setting == "atmosphere.enabled")
+        if (setting == "fog.enabled")
         {
-            scene.AtmosphereRef().enabled = value != 0.0f;
+            scene.HeightFogRef().enabled = value != 0.0f;
             return true;
         }
         // Plan A7 light shafts: the sun's own bloom properties (UE ULightComponent fields), headless.
@@ -649,63 +650,63 @@ namespace
         if (setting == "lightShafts.bloomThreshold") { scene.DirectionalLightRef().SetLightShaftBloomThreshold(value); return true; }
         if (setting == "lightShafts.bloomMaxBrightness") { scene.DirectionalLightRef().SetLightShaftBloomMaxBrightness(value); return true; }
         if (setting == "lightShafts.occlusionDepthRange") { scene.DirectionalLightRef().SetLightShaftOcclusionDepthRange(value); return true; }
-        if (setting == "atmosphere.density") { scene.AtmosphereRef().density = value; return true; }
-        if (setting == "atmosphere.debugView")
+        if (setting == "fog.density") { scene.HeightFogRef().density = value; return true; }
+        if (setting == "fog.debugView")
         {
-            g_atmosphereDebugView = static_cast<uint32_t>(std::max(0.0f, value));
+            g_fogDebugView = static_cast<uint32_t>(std::max(0.0f, value));
             return true;
         }
-        if (setting == "atmosphere.heightFalloff")
+        if (setting == "fog.heightFalloff")
         {
-            scene.AtmosphereRef().heightFalloff = value;
+            scene.HeightFogRef().heightFalloff = value;
             return true;
         }
-        if (setting == "atmosphere.referenceHeight")
+        if (setting == "fog.referenceHeight")
         {
-            scene.AtmosphereRef().referenceHeight = value;
+            scene.HeightFogRef().referenceHeight = value;
             return true;
         }
-        if (setting == "atmosphere.startDistance")
+        if (setting == "fog.startDistance")
         {
-            scene.AtmosphereRef().startDistance = value;
+            scene.HeightFogRef().startDistance = value;
             return true;
         }
-        if (setting == "atmosphere.maxOpacity") { scene.AtmosphereRef().maxOpacity = value; return true; }
-        if (setting == "atmosphere.sunScatter")
+        if (setting == "fog.maxOpacity") { scene.HeightFogRef().maxOpacity = value; return true; }
+        if (setting == "fog.sunScatter")
         {
-            scene.AtmosphereRef().sunScatterStrength = value;
+            scene.HeightFogRef().sunScatterStrength = value;
             return true;
         }
-        if (setting == "atmosphere.sunScatterExp")
+        if (setting == "fog.sunScatterExp")
         {
-            scene.AtmosphereRef().sunScatterExponent = value;
+            scene.HeightFogRef().sunScatterExponent = value;
             return true;
         }
-        if (setting == "atmosphere.sunScatterStart")
+        if (setting == "fog.sunScatterStart")
         {
-            scene.AtmosphereRef().sunScatterStartDistance = value;
+            scene.HeightFogRef().sunScatterStartDistance = value;
             return true;
         }
-        if (setting == "atmosphere.skyBlur") { scene.AtmosphereRef().skyBlur = value; return true; }
-        if (setting == "atmosphere.nonDirectionalDistance") { scene.AtmosphereRef().nonDirectionalDistance = value; return true; }
-        if (setting == "atmosphere.fullyDirectionalDistance") { scene.AtmosphereRef().fullyDirectionalDistance = value; return true; }
+        if (setting == "fog.skyBlur") { scene.HeightFogRef().skyBlur = value; return true; }
+        if (setting == "fog.nonDirectionalDistance") { scene.HeightFogRef().nonDirectionalDistance = value; return true; }
+        if (setting == "fog.fullyDirectionalDistance") { scene.HeightFogRef().fullyDirectionalDistance = value; return true; }
         // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A).
-        if (setting == "atmosphere.volumetric") { scene.AtmosphereRef().volumetric = value != 0.0f; return true; }
-        if (setting == "atmosphere.volumetricDistance") { scene.AtmosphereRef().volumetricDistance = std::max(1.0f, value); return true; }
-        if (setting == "atmosphere.albedo") { scene.AtmosphereRef().albedo = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "atmosphere.extinctionScale") { scene.AtmosphereRef().extinctionScale = std::max(0.0f, value); return true; }
-        if (setting == "atmosphere.phaseG") { scene.AtmosphereRef().phaseG = std::clamp(value, -0.99f, 0.99f); return true; }
-        if (setting == "atmosphere.sunVolScatter") { scene.AtmosphereRef().sunScatter = std::max(0.0f, value); return true; }
-        if (setting == "atmosphere.skyVolScatter") { scene.AtmosphereRef().skyScatter = std::max(0.0f, value); return true; }
-        if (setting == "atmosphere.historyWeight") { scene.AtmosphereRef().historyWeight = std::clamp(value, 0.0f, 0.99f); return true; }
-        if (setting == "atmosphere.temporal") { scene.AtmosphereRef().temporal = value != 0.0f; return true; }
-        if (setting == "atmosphere.jitter") { scene.AtmosphereRef().jitter = value != 0.0f; return true; }
-        if (setting == "atmosphere.samplesPerCell") { scene.AtmosphereRef().samplesPerCell = std::clamp(static_cast<int>(value), 1, 4); return true; }
-        if (setting == "atmosphere.conservativeDepth") { scene.AtmosphereRef().conservativeDepth = value != 0.0f; return true; }
-        if (setting == "atmosphere.localLights") { scene.AtmosphereRef().localLights = value != 0.0f; return true; }
-        if (setting == "atmosphere.localLightScatter") { scene.AtmosphereRef().localLightScatter = std::max(value, 0.0f); return true; }
-        if (setting == "atmosphere.localSoftFading") { scene.AtmosphereRef().localSoftFading = std::max(value, 0.0f); return true; }
-        if (setting == "atmosphere.localDistanceBias") { scene.AtmosphereRef().localDistanceBias = std::max(value, 0.0f); return true; }
+        if (setting == "fog.volumetric") { scene.HeightFogRef().volumetric = value != 0.0f; return true; }
+        if (setting == "fog.volumetricDistance") { scene.HeightFogRef().volumetricDistance = std::max(1.0f, value); return true; }
+        if (setting == "fog.albedo") { scene.HeightFogRef().albedo = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "fog.extinctionScale") { scene.HeightFogRef().extinctionScale = std::max(0.0f, value); return true; }
+        if (setting == "fog.phaseG") { scene.HeightFogRef().phaseG = std::clamp(value, -0.99f, 0.99f); return true; }
+        if (setting == "fog.sunVolScatter") { scene.HeightFogRef().sunScatter = std::max(0.0f, value); return true; }
+        if (setting == "fog.skyVolScatter") { scene.HeightFogRef().skyScatter = std::max(0.0f, value); return true; }
+        if (setting == "fog.historyWeight") { scene.HeightFogRef().historyWeight = std::clamp(value, 0.0f, 0.99f); return true; }
+        if (setting == "fog.temporal") { scene.HeightFogRef().temporal = value != 0.0f; return true; }
+        if (setting == "fog.jitter") { scene.HeightFogRef().jitter = value != 0.0f; return true; }
+        if (setting == "fog.samplesPerCell") { scene.HeightFogRef().samplesPerCell = std::clamp(static_cast<int>(value), 1, 4); return true; }
+        if (setting == "fog.conservativeDepth") { scene.HeightFogRef().conservativeDepth = value != 0.0f; return true; }
+        if (setting == "fog.localLights") { scene.HeightFogRef().localLights = value != 0.0f; return true; }
+        if (setting == "fog.localLightScatter") { scene.HeightFogRef().localLightScatter = std::max(value, 0.0f); return true; }
+        if (setting == "fog.localSoftFading") { scene.HeightFogRef().localSoftFading = std::max(value, 0.0f); return true; }
+        if (setting == "fog.localDistanceBias") { scene.HeightFogRef().localDistanceBias = std::max(value, 0.0f); return true; }
         // P8 bloom. `bloom.enabled` is the gate; the rest are the extraction and the pyramid, so
         // a sweep can find defaults without a rebuild.
         if (setting == "bloom.enabled")
@@ -780,11 +781,6 @@ namespace
         if (setting == "bloom.firefly")
         {
             scene.BloomRef().fireflyClamp = value != 0.0f;
-            return true;
-        }
-        if (setting == "atmosphere.backScatter")
-        {
-            scene.AtmosphereRef().skyBackScatter = value;
             return true;
         }
         if (setting == "ssr.technique")

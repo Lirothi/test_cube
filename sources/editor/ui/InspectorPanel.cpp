@@ -455,13 +455,14 @@ namespace
             env.type == "spotLight" ? "Edit Spot Light" :
             env.type == "directionalLight" ? "Edit Directional Light" :
             env.type == "camera" ? "Edit Camera" :
+            env.type == "skyAtmosphere" ? "Edit Sky Atmosphere" :
             env.type == "skybox" ? "Edit Skybox" :
             env.type == "ocean" ? "Edit Ocean" :
             env.type == "wind" ? "Edit Wind" :
             env.type == "cameraExposure" ? "Edit Camera Exposure" :
             env.type == "colorPipeline" ? "Edit Color Pipeline" :
             env.type == "gtao" ? "Edit Ambient Occlusion" :
-            env.type == "atmosphere" ? "Edit Aerial Perspective" :
+            env.type == "heightFog" ? "Edit Height Fog" :
             env.type == "bloom" ? "Edit Bloom" :
             env.type == "postProcess" ? "Edit Post Process" :
             "Edit Environment";
@@ -1122,7 +1123,7 @@ namespace
                           "which reads as occlusion wherever the two disagree - on detail-mapped sand "
                           "that measured AO 0.35 on a fully open dune. Kept only for comparison.");
         };
-        const auto drawAtmosphere = [&]()
+        const auto drawHeightFog = [&]()
         {
             // P7. The model is transcribed from UE's HeightFogCommon.ush, so each tooltip names the
             // UE parameter it corresponds to -- and, where a UE default does NOT carry over, says
@@ -1205,7 +1206,7 @@ namespace
             checkB("Volumetric (froxel) fog", "volumetric", false);
             InspectorHelp("UE's VolumetricFog on top of the analytic model: inside the volume distance the "
                           "air is a lit, sun-shadowed volume (light shafts through the palms), beyond it the "
-                          "analytic fog continues. --set=atmosphere.volumetric:1");
+                          "analytic fog continues. --set=fog.volumetric:1");
             dragF("Volume Distance", "volumetricDistance", 300.0f, 1.0f, 10.0f, 2000.0f, "%.0f m");
             dragF("Albedo", "albedo", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
             dragF("Extinction Scale", "extinctionScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
@@ -1229,17 +1230,6 @@ namespace
             dragF("Local Distance Bias", "localDistanceBias", 1.0f, 0.05f, 0.0f, 4.0f, "%.2f");
 
             ImGui::SeparatorText("Sky sampling");
-            dragF("Back Scatter", "skyBackScatter", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
-            InspectorHelp("The phase function, as how bright the haze is with the sun BEHIND you "
-                          "relative to looking into it. 1 = flat: identical haze whichever way you "
-                          "face, which is what this shipped with. Real haze is forward-peaked, so "
-                          "below 1 a backlit shore stays thick while flying away from the island "
-                          "with the sun behind you no longer sinks it into blue milk - at the SAME "
-                          "density. It is deliberately NOT a second density: density is extinction, "
-                          "and a directional one would change how much of the far island survives "
-                          "rather than only its colour, so shapes would fade in and out as you pan. "
-                          "0.4-0.6 is a normal haze; fades out with distance, where the sky sample "
-                          "already carries its own anisotropy.");
             dragF("Sky Blur", "skyBlur", 0.5f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("How blurred the sky is where it is read as the fog's COLOUR, expressed as "
                           "a roughness. 0 samples it sharp, and then the fog is literally a picture "
@@ -1260,7 +1250,7 @@ namespace
                           "them only with a before/after in hand.");
 
             ImGui::TextDisabled("Fog colour comes from the SKY along the view ray - the same shape as");
-            ImGui::TextDisabled("UE's InscatteringColorCubemap, generated from the atmosphere instead");
+            ImGui::TextDisabled("UE's InscatteringColorCubemap, generated from the sky instead");
             ImGui::TextDisabled("of authored. That is what removes the horizon seam by construction.");
             // The debug views deliberately live only in the dev window: they are a viewing mode,
             // not level data, and putting them on the object would invite them into the save.
@@ -1908,9 +1898,9 @@ namespace
         {
             drawGtao();
         }
-        else if (env.type == "atmosphere")
+        else if (env.type == "heightFog")
         {
-            drawAtmosphere();
+            drawHeightFog();
         }
         else if (env.type == "bloom")
         {
@@ -1930,7 +1920,7 @@ namespace
                 { "cameraExposure", "Camera Exposure" },
                 { "colorPipeline",  "Color Pipeline" },
                 { "gtao",           "Ambient Occlusion (GTAO)" },
-                { "atmosphere",     "Aerial Perspective" },
+                { "heightFog",      "Exponential Height Fog" },
                 { "bloom",          "Bloom" },
             };
             for (const Section& section : sections)
@@ -1944,12 +1934,67 @@ namespace
                     if (std::string_view(section.key) == "cameraExposure") { drawCameraExposure(); }
                     else if (std::string_view(section.key) == "colorPipeline") { drawColorPipeline(); }
                     else if (std::string_view(section.key) == "gtao") { drawGtao(); }
-                    else if (std::string_view(section.key) == "atmosphere") { drawAtmosphere(); }
+                    else if (std::string_view(section.key) == "heightFog") { drawHeightFog(); }
                     else { drawBloom(); }
                     groupKey.clear();
                     ImGui::PopID();
                 }
             }
+        }
+        else if (env.type == "skyAtmosphere")
+        {
+            // B6.2. Having this object AT ALL is what makes the level procedural -- the same shape
+            // as UE, where a SkyAtmosphere is an actor you add rather than a flag on the sky. Delete
+            // it and the level goes back to its cubemap. `enabled` is here so it can be switched off
+            // without losing the tuning, exactly as the other look sections have it.
+            checkB("Enabled", "enabled", true);
+            InspectorHelp(
+                "Runs the Hillaire atmosphere -- transmittance, multi-scattering, SkyView and "
+                "distant-light LUTs -- from the sun's direction and the parameters below, instead "
+                "of reading the level's cubemap.\n\n"
+                "The cubemap is still used while this is off, and remains the fallback the fog and "
+                "the water read before the procedural capture exists, so switching costs no reload. "
+                "A procedural-only level may leave the Skybox texture empty.\n\n"
+                "--set=sky.mode overrides this for a headless run.");
+
+            dragF("Sky Luminance Scale", "luminanceScale", 2.13f, 0.01f, 0.0f, 10.0f, "%.3f");
+            InspectorHelp(
+                "Calibration between the atmosphere's physical output and this project's linear "
+                "scale, the sky's half of what Skybox > Intensity does for a cubemap. It scales the "
+                "SKY only, never the camera's exposure.");
+
+            ImGui::SeparatorText("What the atmosphere feeds");
+            checkB("Environment lighting", "environmentLighting", false);
+            InspectorHelp("Rebuilds the reflection cube and the sky lighting from this atmosphere "
+                          "whenever the sun or the parameters change. OFF leaves both on the "
+                          "cubemap's, so a procedural sky would light the scene with a different "
+                          "sky than the one you can see.");
+            checkB("Distant sky light (fog)", "distantSkyLight", false);
+            InspectorHelp("Sky ambient sampled at 6 km, used by the volumetric fog's sky "
+                          "scattering.");
+            checkB("Aerial perspective", "aerialPerspective", false);
+            InspectorHelp(
+                "The atmosphere's own camera volume, 32 x 32 x 16 over 96 km, applied to distant "
+                "OPAQUE geometry. It is not the height fog: that is Post Process > Exponential "
+                "Height Fog, and it is a separate layer the fog is composed over "
+                "(SkyAtmosphereCommon.ush:148-151).");
+
+            ImGui::SeparatorText("Medium");
+            dragF("Rayleigh Scale", "rayleighScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("Multiplies Earth's Rayleigh coefficients, so 1.0 is Earth. It is what "
+                          "makes the sky blue and the horizon red; more of it deepens both.");
+            dragF("Mie Scale", "mieScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("Multiplies Earth's Mie scattering AND absorption together -- haze and "
+                          "aerosol. It is what puts the white glare around the sun.");
+            dragF("Ozone Scale", "ozoneScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("Multiplies Earth's ozone absorption, which is what keeps a twilight sky "
+                          "blue overhead instead of grey.");
+            dragF("Ground Albedo", "groundAlbedo", 0.402f, 0.01f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("The planet's reflectance, as it enters multi-scattering. UE's default is "
+                          "FColor(170) converted from sRGB, which is 0.402 linear -- not 170/255.");
+            dragF("Multi-scattering Factor", "multiScatteringFactor", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("Weight on the multi-scattering LUT's contribution. 0 leaves single "
+                          "scattering alone, which reads as a much darker sky away from the sun.");
         }
         else if (env.type == "skybox")
         {
