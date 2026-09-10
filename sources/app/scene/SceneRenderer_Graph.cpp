@@ -72,7 +72,9 @@ namespace
             skyView.sunDirection[0] = d.x * invLength;
             skyView.sunDirection[1] = d.z * invLength;
             skyView.sunDirection[2] = d.y * invLength;
-            const auto color = light->GetEffectiveColor();
+            // OUTER SPACE, not the attenuated colour: these LUTs integrate the extinction
+            // themselves, so the attenuated one would count the atmosphere twice.
+            const auto color = light->GetOuterSpaceIlluminance();
             skyView.illuminance[0] = color.x; skyView.illuminance[1] = color.y; skyView.illuminance[2] = color.z;
         }
         return skyView;

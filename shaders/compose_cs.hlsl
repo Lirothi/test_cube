@@ -441,20 +441,32 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // difference between those two is exactly the step that was showing.
     if (fogParams0.x > 0.0f)
     {
+        // Sky or surface: decided once, used by the sun lobe's gate and by the ray below.
+        const bool isSky = !(z > kEps);
+
         HeightFogParams fog;
         fog.density = fogParams0.x;
         fog.heightFalloff = fogParams0.y;
         fog.referenceHeight = fogParams0.z;
         fog.startDistance = fogParams0.w;
         fog.maxOpacity = fogParams1.x;
-        fog.sunScatterStrength = fogParams1.y;
+        // NO SUN LOBE ON THE SKY. UE's directional in-scattering exists because their fog colour
+        // is an authored constant with no sun in it; ours is the sky along the ray, which already
+        // contains the sun's glow, so on a SKY pixel the lobe adds it a second time -- and adds it
+        // raw: `sunColor * sunScatterStrength` is 85000 lux times 0.5 here, dumped in a halo around
+        // the sun. That is what started tearing the bloom apart. On GEOMETRY the base has no sun in
+        // it and the lobe is doing exactly UE's job, so it stays.
+        //
+        // This is the gate the lobe should have had all along. It used to ride `headroom`, which
+        // faded the lobe out as the fog saturated -- that hid the double count at the horizon but
+        // made the term non-monotonic in distance, which drew its own dark line along the water.
+        fog.sunScatterStrength = isSky ? 0.0f : fogParams1.y;
         fog.sunScatterExponent = fogParams1.z;
         fog.sunScatterStartDistance = fogParams1.w;
 
         // The pixel's ray. A sky pixel has no surface, so reconstruct at an arbitrary interior depth
         // -- the direction and the angle to the view axis are the same at every depth -- and carry
         // the distance separately.
-        const bool isSky = !(z > kEps);
         const float probeZ = isSky ? 0.5f : z;
         const float3 Pref = ReconstructPosWS(uv, probeZ, invProj, invView);
         const float3 toRef = Pref - camPosWS;
@@ -492,44 +504,21 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // Same shape as UE's InscatteringColorCubemap, generated rather than authored. Both the blur
         // and the sun lobe fade out as the fog saturates -- see HeightFogHeadroom.
         const float headroom = HeightFogHeadroom(transmittance, minT);
-        // A SKY pixel takes its in-scattering colour from the sky EXACTLY AS DRAWN, not from the
-        // captured cube. The cube is 128x128 per face -- 0.70 degrees of sky per texel -- while the
-        // SkyView LUT compresses its last rows into hundredths of a degree, so the cube cannot
-        // represent the final degree above the horizon at all: it averages the darker sky from above
-        // into it. That put the fog's colour up to 9.3 levels BELOW the drawn sky a fraction of a
-        // degree up, and dead level with it at the horizon where the gradient flattens -- so the
-        // fog darkened the sky everywhere except the last dozen rows, and those rows stood out as a
-        // bright strip along the horizon. Measured on wind_test, procedural sky, sun 28.3 deg: the
-        // fog's contribution ran -1.9, -4.6, -9.3, -6.1, 0.0 down the last degree, and the worst
-        // row-to-row step went from 0.29 (no fog) to 2.66.
+        // A SKY pixel's in-scattering colour IS THE PIXEL. Do not resample the sky for it: the
+        // fog over a background pixel is the same light the sky already carries along that exact
+        // ray, so taking `lit` -- what the sky pass wrote here -- makes the blend an identity by
+        // construction, `color*T + color*(1-T)`, in BOTH sky modes.
         //
-        // Reading the same source removes the disagreement by construction rather than by tuning,
-        // and it is the honest answer physically: the sky already IS the light scattered along that
-        // ray to infinity, so height fog over it can only be the same light again. What survives is
-        // the sun lobe, which is what UE's directional in-scattering term does too. Geometry keeps
-        // the cube, where a blurred, whole-sphere fog colour is exactly right.
-        const bool skyFromLut = isSky && skyViewPlanet.z != 0.0f;
-        float3 skyAlongView;
-        if (skyFromLut)
-        {
-            // The LUT's referential is world (x, z, y) and its values are stored pre-exposed --
-            // both as skybox.hlsl reads them.
-            const float3 lutDir = normalize(viewDir.xzy);
-            skyAlongView = SkyViewLut.SampleLevel(gSmp,
-                SkyViewDirToUvNoPlanet(lutDir, skyViewPlanet.x, skyViewPlanet.y), 0).rgb * skyViewPlanet.w;
-        }
-        else if (isSky)
-        {
-            // HDRI: the drawn sky is this cube at mip 0, so read it at mip 0 -- no roughness blur
-            // and no sphere-average fade, which is where the same disagreement came from, milder
-            // only because an HDRI's horizon gradient is gentler than the atmosphere's.
-            skyAlongView = SkyboxTex.SampleLevel(gSmp, viewDir, 0).rgb * skyboxIntensity;
-        }
-        else
-        {
-            skyAlongView = FogSkyAlongView(SkyboxTex, gSmp, viewDir, dist,
-                HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyboxIntensity);
-        }
+        // Resampling was the bug. Reading the cube (HDRI) or the LUT (procedural) at the
+        // reconstructed ray is ALMOST the same direction the sky pass used, and almost is fatal
+        // next to a sun of ~1e5: at the sun the fog lifted the sky by 11.9 levels against 2.7
+        // everywhere else, and the bloom turned that into a flare. Continuity at a distant
+        // silhouette does not need this -- it comes from the GEOMETRY side converging on the sky,
+        // and geometry still samples the cube below.
+        const float3 skyAlongView = isSky
+            ? lit
+            : FogSkyAlongView(SkyboxTex, gSmp, viewDir, dist,
+                              HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyboxIntensity);
         inscatter = HeightFogInscatter(skyAlongView, fogSunColor.rgb,
                                         dot(viewDir, fogSunDir.xyz), fogShared, dist,
                                         headroom, fog);

@@ -61,11 +61,34 @@ public:
     // The sun colour with its intensity already folded in -- what every shader should light with.
     // Kept as a derived accessor rather than baking it into color_ so the editor still round-trips
     // the authored colour and intensity separately.
-    Math::float3 GetEffectiveColor() const
+    // THE SUN BEFORE THE ATMOSPHERE. This is what the sky's own LUTs integrate -- they compute the
+    // extinction themselves, so handing them an already-attenuated sun would count the atmosphere
+    // twice and the sky would go black as the sun set. UE keep the same split:
+    // GetOuterSpaceIlluminance() is their GetColor(), and the transmittance is applied only where
+    // light reaches a SURFACE (LightGridInjection.cpp:1064, SceneRendering.cpp:1477).
+    Math::float3 GetOuterSpaceIlluminance() const
     {
         const Math::float3 t = GetTemperatureRgb();
         return Math::float3(color_.x * t.x, color_.y * t.y, color_.z * t.z) * sunIlluminanceLux_;
     }
+
+    // THE SUN AS IT ARRIVES, for everything that lights a surface. Without the transmittance the sun
+    // keeps its full outer-space illuminance at any elevation and only the N.L term dims it: at 2.8
+    // degrees that still puts 4166 lux on horizontal ground, a bright overcast day's worth, and it
+    // never reddens. That is what lit the ocean cyan under a sunset sky.
+    Math::float3 GetEffectiveColor() const
+    {
+        const Math::float3 o = GetOuterSpaceIlluminance();
+        return Math::float3(o.x * atmosphereTransmittance_.x,
+                            o.y * atmosphereTransmittance_.y,
+                            o.z * atmosphereTransmittance_.z);
+    }
+
+    // Set once per frame by the renderer: the atmosphere's transmittance from the ground toward this
+    // light, or WHITE when the level has no procedural atmosphere -- UE's own fallback
+    // (SkyAtmosphereRendering.cpp:610). Mirrors their SetAtmosphereRelatedProperties.
+    void SetAtmosphereTransmittance(const Math::float3& t) { atmosphereTransmittance_ = t; }
+    const Math::float3& GetAtmosphereTransmittance() const { return atmosphereTransmittance_; }
 
     // P16.2 -- THE SUN'S ILLUMINANCE, IN LUX, measured perpendicular to the beam. 100,000 is a
     // sunny midday (Unreal's own default; 125,000 for full bright sun, ~20,000 for a heavy
@@ -183,6 +206,8 @@ private:
     float exposure_;
     float ambient_;
     float sunIlluminanceLux_ = 100000.0f; // P16.2; a sunny midday
+    // White until a procedural atmosphere says otherwise, so an HDRI level is bit-identical.
+    Math::float3 atmosphereTransmittance_{1.0f, 1.0f, 1.0f};
     float skyFillIntensity_ = 1.0f;   // F8; 1 = the irradiance cube taken at face value
     // P16.12; a mid-neutral ground. Not zero: the term is physically present in every outdoor
     // scene and shipping it off would leave the defect it fixes as the default. Not sand-coloured

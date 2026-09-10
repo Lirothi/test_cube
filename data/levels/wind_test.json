@@ -18,9 +18,9 @@
       0.6279069781303406
     ],
     "direction": [
-      -0.5046603679656982,
-      -0.04900629073381424,
-      -0.8619259595870972
+      -0.5046612620353699,
+      -0.47340312600135803,
+      -0.7219463586807251
     ],
     "groundAlbedo": [
       0.25,
@@ -14013,7 +14013,7 @@
   "skyAtmosphere": {
     "aerialPerspective": true,
     "distantSkyLight": true,
-    "enabled": true,
+    "enabled": false,
     "environmentLighting": true,
     "groundAlbedo": 0.4019777774810791,
     "luminanceScale": 2.130000114440918,

@@ -1907,6 +1907,30 @@ void Scene::PrepareViews(Renderer* renderer)
     // takes the source directly.
     frameData_.settings.heightFog = heightFog_;
     frameData_.settings.skyAtmosphere = skyAtmosphere_;
+    // B6.2: THE SUN'S TRANSMITTANCE, here because this is where the frame's light is still mutable
+    // and because every consumer downstream reads it through GetEffectiveColor(). UE do the same
+    // thing in PrepareSunLightProxy and hand it to the light proxy, which each lighting path then
+    // multiplies in (LightGridInjection.cpp:1064, SceneRendering.cpp:1477); their fallback with no
+    // atmosphere is white (SkyAtmosphereRendering.cpp:610), which is our HDRI mode, so those levels
+    // do not move by a bit.
+    //
+    // Without it the sun keeps its full outer-space illuminance at any elevation and only N.L dims
+    // it -- 4166 lux on horizontal ground at a 2.8 degree sun, and never reddening. The sky's own
+    // LUTs must NOT get this: they integrate the extinction themselves, which is why the light
+    // exposes GetOuterSpaceIlluminance() separately and MakeSkyView takes that one.
+    {
+        Math::float3 transmittance{1.0f, 1.0f, 1.0f};
+        if (skyAtmosphere_.mode != 0u)
+        {
+            const auto d = -dirLight_.GetDirection();
+            const float len = std::sqrt(std::max(1.e-12f, d.x * d.x + d.y * d.y + d.z * d.z));
+            const float elevation = std::asin(std::clamp(d.y / len, -1.0f, 1.0f));
+            float t[3] = {1.0f, 1.0f, 1.0f};
+            SkyTransmittanceTowardSun(skyAtmosphere_.parameters, elevation, t);
+            transmittance = Math::float3(t[0], t[1], t[2]);
+        }
+        dirLight_.SetAtmosphereTransmittance(transmittance);
+    }
     frameData_.cameraExposure = cameraExposure_;
     frameData_.colorPipeline = colorPipeline_;
 #if WITH_EDITOR
