@@ -1986,6 +1986,14 @@ namespace
             dragF("Mie Scale", "mieScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
             InspectorHelp("Multiplies Earth's Mie scattering AND absorption together -- haze and "
                           "aerosol. It is what puts the white glare around the sun.");
+            dragF("Mie Anisotropy", "mieAnisotropy", 0.8f, 0.005f, 0.0f, 0.999f, "%.3f");
+            InspectorHelp("How forward-peaked the Mie phase is -- UE's MieAnisotropy, same range "
+                          "and default. 0 scatters uniformly; closer to 1 throws light forward and "
+                          "puts a HALO around the sun.\n\n"
+                          "This is the knob for the bright dome that sits over the horizon at a low "
+                          "sun, and it is not the same as Mie Scale: that one changes how much haze "
+                          "there is, which takes the sunset's warmth with it. This changes only how "
+                          "tightly that haze aims the light at you.");
             dragF("Ozone Scale", "ozoneScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
             InspectorHelp("Multiplies Earth's ozone absorption, which is what keeps a twilight sky "
                           "blue overhead instead of grey.");

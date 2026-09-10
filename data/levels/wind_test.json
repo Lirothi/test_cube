@@ -14,13 +14,13 @@
     "ambientTintedBySun": true,
     "color": [
       1.0,
-      0.7519378662109375,
-      0.6279069781303406
+      1.0,
+      1.0
     ],
     "direction": [
-      -0.5046612620353699,
-      -0.47340312600135803,
-      -0.7219463586807251
+      -0.5684413909912109,
+      -0.1357155740261078,
+      -0.8114528656005859
     ],
     "groundAlbedo": [
       0.25,
@@ -28,7 +28,7 @@
       0.25
     ],
     "lightShaftBloomMaxBrightness": 100.0,
-    "lightShaftBloomScale": 0.05000000074505806,
+    "lightShaftBloomScale": 0.10000000149011612,
     "lightShaftBloomThreshold": 2.0,
     "lightShaftBloomTint": [
       1.0,
@@ -37,7 +37,8 @@
     ],
     "lightShaftsEnabled": true,
     "skyFillIntensity": 1.0,
-    "sunIlluminanceLux": 85000.0
+    "sunIlluminanceLux": 120000.0,
+    "useSunTemperature": true
   },
   "objects": [
     {
@@ -13915,10 +13916,10 @@
       "convChroma": 0.10000000149011612,
       "convFalloff": 3.0,
       "convGhostBokeh": 2.0,
-      "convGhostIntensity": 0.5,
+      "convGhostIntensity": 0.6499999761581421,
       "convGhostSpacing": 0.44999998807907104,
-      "convGhostThreshold": 10.0,
-      "convGhosts": 6,
+      "convGhostThreshold": 9.0,
+      "convGhosts": 8,
       "convKernel": "textures/DefaultBloomKernelAnamorphic.dds",
       "convKernelRadius": 0.0015999999595806003,
       "convKernelTint": [
@@ -13936,11 +13937,11 @@
       "convSpokeWidth": 4.0,
       "enabled": true,
       "fireflyClamp": true,
-      "intensity": 1.0,
+      "intensity": 1.5,
       "method": 1,
       "radius": 1.0,
       "softKnee": 0.5,
-      "threshold": 4.0
+      "threshold": 3.5
     },
     "cameraExposure": {
       "apertureFStop": 16.0,
@@ -14013,14 +14014,15 @@
   "skyAtmosphere": {
     "aerialPerspective": true,
     "distantSkyLight": true,
-    "enabled": false,
+    "enabled": true,
     "environmentLighting": true,
     "groundAlbedo": 0.4019777774810791,
-    "luminanceScale": 2.130000114440918,
+    "luminanceScale": 2.5999999046325684,
+    "mieAnisotropy": 0.6000000238418579,
     "mieScale": 1.0,
     "multiScatteringFactor": 1.0,
     "ozoneScale": 1.0,
-    "rayleighScale": 1.0
+    "rayleighScale": 0.699999988079071
   },
   "skybox": {
     "illuminanceLux": 12000.0,

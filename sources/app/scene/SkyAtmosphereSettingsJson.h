@@ -53,6 +53,11 @@ inline void ApplyOverrides(const nlohmann::json& j, SkyAtmosphereSettings& s)
     }
     s.parameters.groundAlbedo[3] =
         std::clamp(j.value("multiScatteringFactor", earth.groundAlbedo[3]), 0.0f, 10.0f);
+    // UE's MieAnisotropy, their range and default: how forward-peaked the Mie phase is, which is
+    // what decides the size and hardness of the halo around the sun rather than how much haze
+    // there is. Lives in mieScattering.w, which `mieScale` deliberately does not touch.
+    s.parameters.mieScattering[3] =
+        std::clamp(j.value("mieAnisotropy", earth.mieScattering[3]), 0.0f, 0.999f);
 }
 
 inline nlohmann::json ToJson(const SkyAtmosphereSettings& s)
@@ -69,6 +74,7 @@ inline nlohmann::json ToJson(const SkyAtmosphereSettings& s)
     j["ozoneScale"] = ScaleOf(s.parameters.ozone, earth.ozone);
     j["groundAlbedo"] = s.parameters.groundAlbedo[0];
     j["multiScatteringFactor"] = s.parameters.groundAlbedo[3];
+    j["mieAnisotropy"] = s.parameters.mieScattering[3];
     return j;
 }
 

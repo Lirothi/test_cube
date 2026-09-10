@@ -630,6 +630,12 @@ namespace
             for (unsigned i = 0; i < 3; ++i) scene.SkyAtmosphereRef().parameters.ozone[i] = earth.ozone[i] * std::clamp(value, 0.0f, 10.0f);
             return true;
         }
+        if (setting == "sky.mieAnisotropy")
+        {
+            // UE MieAnisotropy: 0 scatters uniformly, near 1 scatters forward and haloes the sun.
+            scene.SkyAtmosphereRef().parameters.mieScattering[3] = std::clamp(value, 0.0f, 0.999f);
+            return true;
+        }
         if (setting == "sky.multiScatteringFactor") { scene.SkyAtmosphereRef().parameters.groundAlbedo[3] = std::clamp(value, 0.0f, 10.0f); return true; }
         if (setting == "sky.groundAlbedo")
         {
