@@ -917,7 +917,11 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
     pushSrv(shoreSdfSrv.ptr != 0 ? shoreSdfSrv : fallbackSrv);
 
-    D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSrv = deferred.oceanReflectionSRV.ptr != 0 ? deferred.oceanReflectionSRV : fallbackSrv;
+    // The temporally resolved reflection when this frame's resolve ran (render::g_oceanReflectionTemporal,
+    // set by the transparent pass's builder before any recording), else the raw buffer.
+    D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSrv =
+        (render::g_oceanReflectionTemporal && deferred.oceanReflectionHistorySRV.ptr != 0) ? deferred.oceanReflectionHistorySRV
+        : (deferred.oceanReflectionSRV.ptr != 0 ? deferred.oceanReflectionSRV : fallbackSrv);
     pushSrv(oceanReflectionSrv.ptr != 0 ? oceanReflectionSrv : fallbackSrv);
 
     // surf sim injection: t16 height + t17 foam. Fall back so the slots are never garbage; the

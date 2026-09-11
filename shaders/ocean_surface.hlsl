@@ -2004,7 +2004,7 @@ float2 OceanReflectionUvOffset(const LightingInput li, float3 adjustedNormal)
 
     float distanceFade = saturate(li.viewDist / max(specularParams.z, 1.0f));
     float grazing = saturate(1.0f - abs(waveReflectDir.y));
-    float strength = lerp(0.08f, 0.025f, distanceFade) * lerp(0.45f, 1.0f, grazing) * 2;
+    float strength = lerp(0.08f, 0.025f, distanceFade) * lerp(0.45f, 1.0f, grazing) * 20;
     return reflectionDelta * strength;
 }
 

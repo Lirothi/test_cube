@@ -21,7 +21,7 @@
 //     (color * T + inscatter * (1 - T)) * vol.a + vol.rgb
 // which is exactly dst * (T * vol.a) + (inscatter * (1 - T) * vol.a + vol.rgb).
 #define FOG_APPLY_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
@@ -29,11 +29,13 @@
 #include "ibl_common.hlsli"
 #include "height_fog.hlsli"
 #include "fog_common.hlsli"
+#include "sky_aerial_common.hlsli"
 
 Texture2D           DepthTex     : register(t0); // reverse-Z, AFTER the depth-writing transparents
 Texture2D           DepthPrevTex : register(t1); // the same buffer BEFORE them -- the mask
 TextureCube         SkyboxTex    : register(t2); // the whole-sphere sky picture (see FogSkyAlongView)
 Texture3D<float4>   FogVolume    : register(t3); // plan A5 integrated froxels
+Texture3D<float4>   SkyAerialVolume : register(t4); // the sky's camera volume (a dummy on frames without it)
 
 SamplerState LinearClampSmp : register(s0);
 SamplerState PointClampSmp  : register(s1);
@@ -55,6 +57,7 @@ cbuffer FogApply : register(b0)
     float4   fogVolumeParams;   // on, far view depth, 1/preExposure, slice count
     float4   fogVolumeZParams;  // (B, O, S)
     float4   fogApplyMisc;      // x: sky intensity, y: debug view, z: preExposure, w: unused
+    float4   aerialParams;      // enabled, start view depth (m), 1/preExposure, reserved -- compose's, byte for byte
 };
 
 struct VSOut
@@ -140,21 +143,39 @@ float4 PSMain(VSOut i) : SV_Target
                                                  dot(viewRay, toSun), fogShared, dist,
                                                  headroom, fog);
 
+    // Part-B review (2026-09-11): THE AERIAL PERSPECTIVE THE WATER NEVER HAD. UE's SingleLayerWater
+    // is fogged by the same screen passes as the opaque scene -- sky atmosphere first, height fog OVER
+    // it (SkyAtmosphereCommon.ush:148-151) -- and compose does exactly that for the opaque half, so
+    // this pass does it for the pixels the water won: same volume, same start depth, same units, the
+    // same rebased start along the ray. The froxel UV and the view depth are the unjittered clip's,
+    // which is what compose's `aerialViewProj` is.
+    float4 ap = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    if (aerialParams.x > 0.0f && fogClip.w > aerialParams.y)
+    {
+        const float distanceKm = dist / 1000.0f;
+        const float startKm = aerialParams.y * distanceKm / max(fogClip.w, 1.e-4f);
+        ap = SampleSkyAerial(SkyAerialVolume, LinearClampSmp, fogUv, distanceKm, startKm, aerialParams.z);
+    }
+    // The analytic model and the froxel volume as ONE "fog to apply over" pair, as compose has them...
+    const float3 overRgb = inscatter * (1.0f - transmittance) * vol.a + vol.rgb;
+    const float overA = transmittance * vol.a;
+
     const uint debugView = (uint)fogApplyMisc.y;
     if (debugView == 1u)
     {
         // Transmittance as a grey level. The blend still runs, so the surface has to be replaced
         // rather than modulated: alpha 0 drops what is underneath and rgb carries the value.
-        return float4((transmittance * vol.a).xxx, 0.0f);
+        return float4(overA.xxx, 0.0f);
     }
     if (debugView == 2u)
     {
-        return float4(inscatter * (1.0f - transmittance) * vol.a + vol.rgb, 0.0f);
+        return float4(overRgb, 0.0f);
     }
+    // ...and the pair sits over the aerial perspective: dst * (overA * ap.a) + (overRgb + ap.rgb * overA),
+    // which the ONE / SRC_ALPHA blend computes from this (rgb, alpha).
     // PRE-EXPOSURE. compose computes this in RAW radiance and scales on the way out; this pass
     // writes straight into the scene colour target, which is already pre-exposed. Without the same
     // scale the in-scattered light arrives in raw units - hundreds of times too bright - and the
     // frame blows to white. Transmittance is a ratio and is NOT scaled.
-    return float4((inscatter * (1.0f - transmittance) * vol.a + vol.rgb) * fogApplyMisc.z,
-                  transmittance * vol.a);
+    return float4((overRgb + ap.rgb * overA) * fogApplyMisc.z, overA * ap.a);
 }

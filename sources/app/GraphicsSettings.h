@@ -39,7 +39,6 @@ enum class GraphicsControl
     ReflectionResolution,
     ReflectionGlossyScale,
     SunMetalSpecInfluence,
-    SunAngularSize,
     OceanReflectionResolution,
     ReflectionSource,
     RtAlphaMode,

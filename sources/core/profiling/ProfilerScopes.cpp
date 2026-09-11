@@ -110,6 +110,7 @@ const Profiler::ScopeNameKey kPassReflectionSource = Profiler::RegisterTraceLite
 const Profiler::ScopeNameKey kPassRTTrace = Profiler::RegisterTraceLiteral(L"Pass_RTTrace");
 const Profiler::ScopeNameKey kPassRTResolve = Profiler::RegisterTraceLiteral(L"Pass_RTResolve");
 const Profiler::ScopeNameKey kPassReflectionTemporal = Profiler::RegisterTraceLiteral(L"Pass_Reflection.Temporal");
+const Profiler::ScopeNameKey kOceanReflectionTemporal = Profiler::RegisterTraceLiteral(L"Pass_OceanReflection.Temporal");
 const Profiler::ScopeNameKey kPassReflectionBlur = Profiler::RegisterTraceLiteral(L"Pass_Reflection.Blur");
 const Profiler::ScopeNameKey kPassCompose = Profiler::RegisterTraceLiteral(L"Pass_Compose");
 const Profiler::ScopeNameKey kPassRTDebug = Profiler::RegisterTraceLiteral(L"Pass_RTDebug");

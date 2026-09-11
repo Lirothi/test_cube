@@ -26,7 +26,7 @@ cbuffer SkyAtmosphereCB : register(b0)
 #ifdef SKY_AERIAL
     float4x4 AerialInvView;
     float4x4 AerialInvProj;
-    float4 AerialStart; // x: froxel far-plane view depth in km
+    float4 AerialStart; // x: froxel far-plane view depth in km, y: view-distance scale (UE AerialPespectiveViewDistanceScale)
 #endif
 };
 

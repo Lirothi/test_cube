@@ -120,6 +120,7 @@ extern const Profiler::ScopeNameKey kPassReflectionSource;
 extern const Profiler::ScopeNameKey kPassRTTrace;
 extern const Profiler::ScopeNameKey kPassRTResolve;
 extern const Profiler::ScopeNameKey kPassReflectionTemporal;
+extern const Profiler::ScopeNameKey kOceanReflectionTemporal; // the ocean reflection's own resolve (inside Main_Transparent)
 extern const Profiler::ScopeNameKey kPassReflectionBlur;
 extern const Profiler::ScopeNameKey kPassCompose;
 extern const Profiler::ScopeNameKey kPassRTDebug;

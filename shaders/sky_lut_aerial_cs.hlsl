@@ -79,7 +79,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         float height = length(q);
         float3 up = q / height;
         MediumSampleRGB medium = SampleAtmosphereMediumRGB(q);
-        float3 tr = exp(-medium.Extinction * dt);
+        // UE :601-606: the view-distance scale multiplies the optical depth per sample and nothing else
+        // (the in-scatter step below keeps the unscaled extinction in its denominator, as UE do).
+        float3 tr = exp(-medium.Extinction * dt * AerialStart.y);
         float lightMu = dot(SkySunDirection.xyz, up);
         float2 tUv;
         getTransmittanceLutUvs(height, lightMu, AtmosphereRadii.x, AtmosphereRadii.y, tUv);

@@ -1407,6 +1407,114 @@ outer * transmittance`. Наша пара — 1:1.
 на 1°) — это добавка неба сверху плюс тон-кривая, а не потерянный множитель; направление и порядок
 монотонны на всех трёх высотах.
 
+### Ревью части B и правки по нему — СДЕЛАНО (2026-09-11)
+Ревью на HEAD `d37ebd5`: два агента сверили транскрипцию функция за функцией с `SkyAtmosphere.usf`,
+`SkyAtmosphereCommon.ush`, `SkyAtmosphereRendering.cpp`, `SkyAtmosphereComponent.cpp`, `SkyAtmosphereCommonData.cpp`
+(LUT-цепочка: маппинги, медиум, MS два луча + 5 членов, SkyView, distant с численно сверенной таблицей 64 направлений,
+CPU-трансмиттанс солнца 500 м / 15 сэмплов; apply: диск, AP-объём, композиция AP-под-туманом, GGX-фильтр зондов,
+нижняя полусфера). **Багов нет.** Стоимость пассов за кадр @1440p: SkyView 0.011 / Skybox 0.010 / SkyAerial 0.009 мс;
+Environment 0.072 и LUT 0.016 только при перестройке. Гейты до правок: 76/76, `check_logging` 0, GBV churn 20 CLEAN
+(194.7 с, небесные LUT и окружение отработали в кадре 0), `--scene-stress-sky=64` + `lutValidate` PASS
+(T 0.0005145 / MS 0.0000411). Открытые дельты от UE и их правки, все применены:
+
+1. **Два luminance-фактора, как у UE.** `luminanceScale` шёл во ВСЕ LUT (SkyView, AP, distant, захват) — это
+   `SkyAndAerialPerspectiveLuminanceFactor`, а не «sky only», как утверждали комментарий и подсказка (в `wind_test`
+   стоит 2.6, т.е. дымка AP на геометрии и ambient от неба были в 2.6 раза ярче физики относительно солнца).
+   Добавлен `skyLuminanceFactor` (UE `SkyLuminanceFactor`, дефолт 1): `SkyExposure.y` умножает пиксель неба при
+   отрисовке (`skybox.hlsl`, `usf:919-922`), захват (`captureMip.y`, их захват рендерит sky-pass) и distant LUT
+   (`usf:1397`); диск и AP не трогает. Семантика и картинка `luminanceScale` не изменились, тексты честные;
+   Inspector → Sky Atmosphere → «Sky-only Luminance», `--set=sky.skyLuminanceFactor`. Перенос 2.6 в sky-only —
+   решение владельца (это меняет ambient).
+2. **Угловой размер солнца — свойство солнца.** Был проектной graphics-настройкой `sunAngularSize` 0.01 рад радиуса
+   (вкладки Reflections и Sky, дубль), т.е. в 2.1 раза шире реального солнца (4.4× по площади). Теперь
+   `directionalLight.lightSourceAngle` уровня в градусах (UE `LightSourceAngle` 0.5357, `DirectionalLightComponent.cpp:1024`),
+   `DirectionalLight::GetSunHalfApexRadians()` кормит и диск (`skybox.hlsl`), и пол спекуляра (`lighting_cb`), как у UE;
+   Inspector → Directional Light → «Sun Disc»; `--set=sun.angularSize` (радианы полу-апекса) переехал на солнце;
+   `GraphicsControl::SunAngularSize` и ключ `reflections.sunAngularSize` удалены (старый файл настроек читается,
+   ключ игнорируется). Замер: ядро диска на закатной камере 52×58 → 13×14 px (2345 → 130 px при lum ≥ 200).
+3. **Старт AP — своя ручка.** Был `heightFog.volumetricDistance` (300 м по умолчанию; выключенный туман его не
+   гейтил) в трёх местах. Теперь `skyAtmosphere.aerialStartDepthMetres` (UE `AerialPerspectiveStartDepth` 0.1 км),
+   compose / `BuildAerial` / debug-view читают одно значение; Inspector «Aerial Start Depth (m)», `--set=sky.aerialStartDepth`.
+4. **AP на воде.** `Main_TransparentFog` (`fog_apply.hlsl`) сэмплит `SkyAerialVolume` (t4) по тому же unjittered
+   clip, что compose, и складывает как compose: AP первым, туман поверх, `dst·(overA·ap.a) + (overRgb + ap.rgb·overA)`
+   в форме ONE/SRC_ALPHA; `FogApplyConstants::aerialParams` — те же значения, что у compose; объём объявляется
+   PIXEL_SHADER_RESOURCE на кадрах, где построен, иначе dummy в t4 (шейдер гейтит по `aerialParams.x`). Стекло и
+   частицы — по-прежнему без AP (у UE translucency делает это per-material; отдельная работа).
+5. **Пол тумана в форме UE.** `HeightFogMinTransmittance` = `1 − maxOpacity`, жёстко
+   (`max(saturate(exp2(-integral)), MinFogOpacity)`); «отпускание» на два стопа держалось на «небо никогда не
+   туманится», что перестало быть правдой с B6.2. Замер на камере горизонта `-87.28,32.17,80.98`: строки 590..636
+   монотонны, max step 0.0483 → 0.0465, ступеньки нет; небо 0.3402 → 0.3395, вода 0.1444 → 0.1377 (−4.6 %, это AP
+   на воде + пол); закатная камера: небо 0.2840 → 0.2823, вода 0.1401 → 0.1349.
+6. **Подсказка Inspector про пустой `skybox.texture` исправлена**: загрузчик создаёт Skybox только с текстурой
+   (`JsonLevel.cpp`), без неё небо чёрное — так теперь и написано.
+7. **Debug + свёрнутое окно = ассерт.** `SubmitEditorDockSpace` строил док из `viewport->WorkSize` 0×0 →
+   `IM_ASSERT` в `DockBuilderSetNodeSize`, модалка у владельца, гейт стоял 14 мин. Гард: при нулевой рабочей области
+   докспейс не сабмитится вовсе (иначе `DockSpaceOverViewport` создал бы узел сам и кастомный лейаут не построился бы).
+
+Не трогал (мелочь, зафиксировано): кламп `min(L, 64000)` на SkyView/AP после pre-exposure (у UE нет, кусается только
+при ручной EV), нет ручек `AerialPespectiveViewDistanceScale` / `SunDiskColorScale` (дефолт-эквивалент, `kSunDiscTint`
+константой), мёртвые ключи `wind_test.json` (`skyBackScatter`, `ambientColor`, `ambientTintedBySun`), строка
+`[ibl] physical scale` печатается и на процедурном уровне, где калибровка обходится (`Skybox::GetExposure()` = 1).
+
+**Гейты после правок (2026-09-11):** три конфига; `check_shaders` 76/76; `check_logging` 0; GBV churn 20 (Debug, VSM,
+обычное окно) **CLEAN, 177.0 с**; `--scene-stress-sky=64` + `lutValidate` PASS (T 0.0005145 / MS 0.0000411), exit 0.
+A/B одним бинарём до/после на двух камерах: `sky_sunset` / `sky_horizon` против `*_after` — сверху. Не закоммичено.
+
+**Дополнение (2026-09-11, вопросы владельца после ревью).** Замер на закате с зафиксированной экспозицией (база: обе
+luminance-ручки = 1) показал, что «Sky Luminance Scale» и «Sky-only» были ОДНОЙ ручкой: небо ×1.87 / ×1.87, песок
+×1.11 / ×1.11, кроны ×1.37 / ×1.37, разница только в AP на дальней воде (×1.371 / ×1.364) — потому что у UE
+`SkyLuminanceFactor` уходит и в захват скайлайта. Сделано три правки:
+1. **`skyLuminanceFactor` = только КАРТИНКА неба** (пиксель неба в `skybox.hlsl`); захват (`captureMip.y`) и distant LUT
+   его больше не получают, ключ перестройки окружения не включает (`view.exposure[1] = 1` в `BuildEnvironment`/`BuildDistant`).
+   Сознательное отклонение от UE, задокументировано в `SkyAtmosphereSettings.h` и подсказке. Перемер: Sky-only 2 → небо
+   ×1.87, песок ×0.998, кроны ×0.998, ближняя вода ×0.999.
+2. **`aerialViewDistanceScale`** (UE `AerialPespectiveViewDistanceScale`, `usf:601-606`: множитель оптической глубины
+   на сэмпл AP-объёма, `AerialStart.y`): дефолт 1 = Земля, невидимо на километре (AP выкл/вкл — 0.8 % на дальней воде,
+   0 на острове); при 10 — дальняя вода ×1.059, остров ×1.008. Inspector «Aerial View Distance Scale»,
+   `--set=sky.aerialViewDistanceScale`.
+3. **Галка «Distant sky light (fog)» удалена**: её единственный потребитель — небесный член объёмного тумана, и она
+   переключала два источника ОДНОГО света (distant LUT на 6 км против зонда того же неба на уровне моря): 0.5 % пикселей,
+   ±0.0002 по областям. Теперь distant LUT всегда активен в процедурном режиме (`SkyAtmosphere.cpp`); ключ `distantSkyLight`
+   в уровнях игнорируется, `--set=sky.distantSkyLight` пишет UNKNOWN SETTING.
+
+**Полоса под горизонтом при Sky-only ≠ 1 — ПРИЧИНА НАЙДЕНА (2026-09-11): локальное экспонирование P3B.** Симптом:
+при Sky-only 2 первые ~25 строк воды под горизонтом темнеют (×0.877 у горизонта → ×1.000 к строке 688 без тумана), при
+0.5 — светлеют (×1.12); гладкий градиент, нейтральный по каналам, одинаковый по ширине кадра. Исключены: блум, шахты, FXAA,
+туман, техника SSR, сам ocean-шейдер (все члены положительны по небу). Ключ — второй знак: в пробнике с ЧЁРНОЙ водой
+строки неба над горизонтом стали ярче (218/225 → 232/248), т.е. взаимное ОТРИЦАТЕЛЬНОЕ влияние через кромку на ~25 px —
+сигнатура оператора локального контраста. База `exposure_baselum_cs` — размытая лог-яркость 256×144 (10×10 px на тексель
+при 1440p) плюс широкий бокс; яркое небо поднимает базу под горизонтом, `LocalExposureMultiplier` сжимает эти пиксели воды
+вниз (уровень: localHighlightContrast 0.7, localShadowContrast 0.9). `local_exposure.hlsli:17-20` сам предупреждает: «a plain
+blur bleeds across a high-contrast edge, so a bright sky…», UE гасят это билатеральной сеткой (`BlurredLuminanceBlend`), у нас
+она «reserved». Доказательство: `--set=exposure.localHighlightContrast:1 localShadowContrast:1 localDetailStrength:1`
+(оператор нейтрален, блок пропускается) — Sky-only 2 даёт ×1.000 на КАЖДОЙ строке воды, небо ×1.27 как и было. Это не баг
+неба и не океана: гало blur-based локального тонмаппинга на самой контрастной кромке кадра; видно оно на любом изменении
+яркости неба (при `luminanceScale` его маскировало одновременное осветление воды через IBL). Лечение по UE — билатеральная
+база (отдельная работа); паллиатив — localHighlightContrast ближе к 1 в уровне.
+
+**Темпоральный резолв отражения океана (по просьбе владельца).** `oceanReflection` шёл в forward-пасс сырым. Добавлена
+история `oceanReflectionHistory` (размер и формат отражения океана, per-frame set, rest PIXEL), точка `oceanTemporal`
+в `Main_Transparent` (raw NPS, история UAV, прошлая история NPS, velocity NPS) и диспатч того же `ssr_temporal_cs` сразу
+после `RecordOceanReflection`, с теми же ручками `ssr.temporal*`. Репроекция — по ТОЧКЕ ПЛОСКОСТИ ВОДЫ (`planeReproject`,
+`planeParams`, `invViewProj`, `prevViewProj` в `SsrTemporalConstants`): резолв бежит до отрисовки воды, и `gbVelocity`
+в этот момент несёт движение непрозрачного фона (неба), не плоскости. Океан биндит историю вместо сырого буфера по
+`render::g_oceanReflectionTemporal`, который ставит serial-билдер. Стоимость **0.012 мс** (океан на весь кадр, 1280×720).
+Первый замер кипения (три кадра подряд под DLSS quality, `--wind-freeze` фризит и океанские часы) НЕ показал разницы
+(0.0035/0.0025 → 0.0031/0.0034 на дальней воде): в `ssr_temporal_cs.hlsl` не было `#pragma pack_matrix(row_major)`, матрицы
+репроекции читались транспонированными, prevUv улетал за экран и история сеялась каждый кадр. Прагма добавлена.
+Перемер: **контроль без джиттера** (`--dlss=off`, статичная камера) — резолв вкл/выкл совпадают на 0.00 % пикселей
+(история при неподвижной камере обязана равняться сырому буферу — репроекция зарегистрирована точно). Под DLSS quality на
+установившихся кадрах средние off/on совпадают (открытое море 0.3643 / 0.3651: там SSR-луч уходит в небо и отсекается,
+отражение — куб, резолву нечего усреднять; замеченный ранее «+6 %» был переходным процессом первого кадра арма off).
+Межкадровая разница f1→f2: открытое море 0.0060 → 0.0038, ближняя вода 0.0055 → 0.0025, **вода у берега под островом
+(где SSR отражает пальмы) 0.0030 → 0.0017**; оговорка — off-прогон был чуть менее сошедшимся (небо 0.0003 vs 0.0002).
+Окончательный вердикт — глазами. GBV не гонялся (по указанию).
+
+**Два SSR-пасса (геометрия и океан) — оверхед?** Разные отражатели: deferred-SSR трассирует G-buffer, океан — плоскость
+воды, которой в G-buffer нет (forward после compose); у UE SingleLayerWater тоже трассирует своё. Цена второго:
+`Pass_OceanReflection` 0.029 мс на камере уровня, 0.064 мс с океаном на весь кадр (1280×720), плюс резолв 0.012; для
+сравнения deferred-цепочка 0.074 (SSR) / 0.80 (RTTrace) + 0.03 + 0.03. Итого ≈ 2–3 % кадра в 2.8 мс.
+
 ### Гейты части B
 Паритет `sky.mode 0` = сегодняшняя картинка (0.03 %); mode 1 — глаза; GBV; три конфига.
 

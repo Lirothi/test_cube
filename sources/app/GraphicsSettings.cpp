@@ -50,7 +50,6 @@ namespace
         float oceanReflectionResolution = 0.5f;
         float reflectionGlossyScale = 1.0f;
         float sunMetalSpecInfluence = 0.0f;
-        float sunAngularSize = 0.01f;
         ReflectionSource reflectionSource = ReflectionSource::RT;
         std::uint32_t rtAlphaMode = 2u;
         float rtAlphaMissKeep = 0.15f;
@@ -251,7 +250,6 @@ namespace
         s.oceanReflectionResolution = std::clamp(finite(s.oceanReflectionResolution, 0.5f), 0.25f, 1.0f);
         s.reflectionGlossyScale = std::clamp(finite(s.reflectionGlossyScale, 1.0f), 0.0f, 24.0f);
         s.sunMetalSpecInfluence = std::clamp(finite(s.sunMetalSpecInfluence, 0.0f), 0.0f, 16.0f);
-        s.sunAngularSize = std::clamp(finite(s.sunAngularSize, 0.01f), 0.0f, 0.25f);
         s.rtAlphaMode = std::min(s.rtAlphaMode, 2u);
         s.rtAlphaMissKeep = std::clamp(finite(s.rtAlphaMissKeep, 0.15f), 0.0f, 1.0f);
         s.rtWindBlasRadius = std::clamp(finite(s.rtWindBlasRadius, 40.0f), 0.0f, 100.0f);
@@ -348,7 +346,6 @@ namespace
         s.oceanReflectionResolution = renderer.GetOceanReflectionTextureScale().x;
         s.reflectionGlossyScale = settings.reflectionGlossyScale;
         s.sunMetalSpecInfluence = settings.sunMetalSpecInfluence;
-        s.sunAngularSize = settings.sunAngularSize;
         s.reflectionSource = settings.reflectionSource;
         s.rtAlphaMode = settings.rtAlphaMode;
         s.rtAlphaMissKeep = settings.rtAlphaMissKeep;
@@ -455,7 +452,6 @@ namespace
         settings.ssrTemporalClampExpand = s.reflectionTemporalStillInertia;
         settings.reflectionGlossyScale = s.reflectionGlossyScale;
         settings.sunMetalSpecInfluence = s.sunMetalSpecInfluence;
-        settings.sunAngularSize = s.sunAngularSize;
         settings.reflectionSource = s.reflectionSource;
         settings.rtAlphaMode = s.rtAlphaMode;
         settings.rtAlphaMissKeep = s.rtAlphaMissKeep;
@@ -589,7 +585,6 @@ namespace
                 { "oceanResolution", s.oceanReflectionResolution },
                 { "glossyBlur", s.reflectionGlossyScale },
                 { "sunMetalSpec", s.sunMetalSpecInfluence },
-                { "sunAngularSize", s.sunAngularSize },
                 { "rtFoliageAlphaMode", s.rtAlphaMode },
                 { "rtFoliageFill", s.rtAlphaMissKeep },
                 { "rtWindSway", s.rtWindBlas },
@@ -738,7 +733,6 @@ namespace
         Read(reflections, "oceanResolution", s.oceanReflectionResolution);
         Read(reflections, "glossyBlur", s.reflectionGlossyScale);
         Read(reflections, "sunMetalSpec", s.sunMetalSpecInfluence);
-        Read(reflections, "sunAngularSize", s.sunAngularSize);
         Read(reflections, "rtFoliageAlphaMode", s.rtAlphaMode);
         Read(reflections, "rtFoliageFill", s.rtAlphaMissKeep);
         Read(reflections, "rtWindSway", s.rtWindBlas);
@@ -1038,7 +1032,6 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::ReflectionResolution:           current.reflectionResolution = defaults.reflectionResolution; break;
     case GraphicsControl::ReflectionGlossyScale:          current.reflectionGlossyScale = defaults.reflectionGlossyScale; break;
     case GraphicsControl::SunMetalSpecInfluence:          current.sunMetalSpecInfluence = defaults.sunMetalSpecInfluence; break;
-    case GraphicsControl::SunAngularSize:                 current.sunAngularSize = defaults.sunAngularSize; break;
     case GraphicsControl::OceanReflectionResolution:      current.oceanReflectionResolution = defaults.oceanReflectionResolution; break;
     case GraphicsControl::ReflectionSource:               current.reflectionSource = defaults.reflectionSource; break;
     case GraphicsControl::RtAlphaMode:                    current.rtAlphaMode = defaults.rtAlphaMode; break;

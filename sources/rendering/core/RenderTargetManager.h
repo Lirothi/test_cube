@@ -69,6 +69,9 @@ public:
         GpuResource rtPayload;
         GpuResource rtPayloadUv;
         GpuResource oceanReflection;   // premultiplied ocean SSR sampled by transparent ocean
+        // The ocean reflection's temporal history: this frame's resolved result (what the water
+        // samples when the resolve ran) AND next frame's history, per frame set like reflectionHistory.
+        GpuResource oceanReflectionHistory;
         // S3.5: NON-OWNING alias of RenderTargetManager::shadowAtlas_ — ONE atlas serves every
         // frame in flight. Per-frame copies exist for resources the CPU writes or that carry
         // history across frames; this one is written by Pass_CSM and consumed by Pass_Lighting
@@ -168,6 +171,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE rtPayloadSRV{}, rtPayloadUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE rtPayloadUvSRV{}, rtPayloadUvUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSRV{}, oceanReflectionUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionHistorySRV{}, oceanReflectionHistoryUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxShadowedSpotLights> spotShadowDSV{};
         D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
@@ -332,6 +336,8 @@ private:
     FogScatter, FogScatterUAV, FogIntegrated, FogIntegratedUAV,
     // Plan A7 light shafts: the half-res ping-pong pair.
     LightShaftA, LightShaftAUAV, LightShaftB, LightShaftBUAV,
+    // The ocean reflection's temporal history.
+    OceanReflectionHistory, OceanReflectionHistoryUAV,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

@@ -914,6 +914,38 @@ void SceneRenderer::RecordOceanReflection(Renderer* renderer, ID3D12GraphicsComm
         renderer->GetOceanReflectionTextureWidth(), renderer->GetOceanReflectionTextureHeight(),
         D.oceanReflection.Get());
 
+    // The temporal resolve, when the builder decided it (see the Main_Transparent builder): the same
+    // kernel and knobs as Main_ReflectionTemporal, reprojecting the water plane's own point.
+    if (pts.oceanTemporalRun)
+    {
+        GPU_SCOPE(cl, ProfilerScopes::kOceanReflectionTemporal);
+        renderer->EmitPoint(cl, pts.oceanTemporal);
+        const auto& P = renderer->GetDeferredForPrevFrame();
+        auto temporal = resources_.GetSsrTemporalMaterial();
+        const UINT temporalCb = resources_.GetSsrTemporalCBSizeBytes();
+        const UINT w = renderer->GetOceanReflectionTextureWidth();
+        const UINT h = renderer->GetOceanReflectionTextureHeight();
+        SsrTemporalConstants tc{};
+        tc.texSize = float2(static_cast<float>(w), static_cast<float>(h));
+        tc.invTexSize = float2(w > 0 ? 1.0f / static_cast<float>(w) : 0.0f, h > 0 ? 1.0f / static_cast<float>(h) : 0.0f);
+        tc.blendWeight = std::clamp(frame_->settings.ssrTemporalBlendWeight, 0.01f, 1.0f);
+        tc.clampExpand = std::max(0.0f, frame_->settings.ssrTemporalClampExpand);
+        tc.historyValid = oceanHistoryValid_ ? 1u : 0u;
+        tc.planeReproject = 1u;
+        const float3 camPos = camera.GetPosition();
+        tc.planeParams = float4(constants.waterHeight, camPos.x, camPos.y, camPos.z);
+        tc.invViewProj = camera.GetInvProjMatrixNoJitter() * camera.GetInvViewMatrix();
+        tc.prevViewProj = camera.GetPrevViewProjMatrixNoJitter();
+        const auto temporalSamplers = std::array{ *SamplerManager::PointClamp(), *SamplerManager::LinearClamp() };
+        RecordComputeDispatch(renderer, cl, temporal.get(), temporalCb,
+            [&](uint8_t* dest) { resources_.WriteSsrTemporalConstants(tc, dest); },
+            { D.oceanReflectionSRV, P.oceanReflectionHistorySRV, D.gbSRV[3] }, // t0 raw, t1 history, t2 velocity (unread: plane mode)
+            { D.oceanReflectionHistoryUAV },
+            renderer->GetSamplerManager()->GetTable(renderer, temporalSamplers),
+            w, h,
+            D.oceanReflectionHistory.Get());
+    }
+
     // All three become PS-readable for the forward draws — on every path out of this function.
     renderer->EmitPoint(cl, pts.pixel);
 }

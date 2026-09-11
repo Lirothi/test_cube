@@ -83,6 +83,11 @@ void SceneRenderer::Reset()
     ssrHistoryFrames_ = 0u;
     ssrHistoryWidth_ = 0u;
     ssrHistoryHeight_ = 0u;
+    oceanHistoryValid_ = false;
+    oceanHistoryFrames_ = 0u;
+    oceanHistoryWidth_ = 0u;
+    oceanHistoryHeight_ = 0u;
+    render::g_oceanReflectionTemporal = false;
     ssrSceneColorHistoryValid_ = false;
     ssrSceneColorHistoryFrames_ = 0u;
     ssrSceneColorHistoryWidth_ = 0u;
@@ -627,7 +632,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     BuildLighting(renderer, gb);
     BuildReflections(renderer, gb);
     BuildForwardAndEditor(renderer, gb);
-    gb.pSelectionOutline = skyAtmosphere_.BuildDebug(renderer, rg, frame_->settings.skyAtmosphere, *frame_->camera, frame_->settings.heightFog.volumetricDistance, gb.pSelectionOutline, gb.pSkyLuts);
+    gb.pSelectionOutline = skyAtmosphere_.BuildDebug(renderer, rg, frame_->settings.skyAtmosphere, *frame_->camera, frame_->settings.skyAtmosphere.aerialStartDepthMetres, gb.pSelectionOutline, gb.pSkyLuts);
     BuildPost(renderer, gb);
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION

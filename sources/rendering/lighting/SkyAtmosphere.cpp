@@ -68,7 +68,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
     // BeginFrame already waited for THIS slot. Never map a different in-flight slot.
     ValidateReadback(renderer->GetCurrentFrameIndex());
     ValidateDistant(renderer->GetCurrentFrameIndex());
-    if (settings.mode && settings.distantSkyLight && !failed_) PrepareDistant(renderer);
+    if (settings.mode && !failed_) PrepareDistant(renderer);
     if (settings.mode && settings.environmentLighting && !failed_) PrepareEnvironment(renderer);
     if ((!settings.mode && !settings.lutEnabled && !settings.lutDebugView) || failed_ || heap_) return;
     auto* device = renderer->GetDevice();
@@ -284,7 +284,8 @@ size_t SkyAtmosphere::BuildAerial(Renderer* renderer, RenderGraph<static_cast<si
     };
     static_assert(sizeof(Constants) == 320);
     const Constants data{settings.parameters, view, camera.GetInvViewMatrix(), camera.GetInvProjMatrixNoJitter(),
-        Math::float4(std::max(0.0f, startDepthMetres) / kMetresPerKm, 0, 0, 0)};
+        Math::float4(std::max(0.0f, startDepthMetres) / kMetresPerKm,
+                     std::clamp(settings.aerialViewDistanceScale, 0.01f, 100.0f), 0, 0)};
     aerialBuilt_ = true;
     return graph.AddPass2(RenderPass::Main_SkyAerial, {after}, {}, {},
         [this, renderer, data](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
@@ -545,6 +546,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     view.planet[3] = 1;
     view.sunDirection[3] = 0; // no solar disk in reflection captures (UE usf:314-317)
     view.exposure[0] = 1.0f / 1024.0f;
+    view.exposure[1] = 1.0f; // the sky-only PICTURE factor never reaches the probes (and must not rebuild them)
     const auto params = settings.parameters;
     const bool dirty = !environmentReady_ || std::memcmp(&params, &environmentParameters_, sizeof(params)) != 0
         || std::memcmp(&view, &environmentKey_, sizeof(view)) != 0;
@@ -666,10 +668,14 @@ void SkyAtmosphere::PrepareDistant(Renderer* renderer)
 size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
     const SkyAtmosphereSettings& settings, SkyViewFrameData view, size_t after)
 {
-    distantActive_ = settings.mode && settings.distantSkyLight && !failed_ && !distantFailed_ && distantMaterial_;
+    // Always on in procedural mode: it is the volumetric fog's sky term (UE's DistantSkyLightLut), and the
+    // checkbox that used to gate it switched between two sources of the SAME light (this LUT at 6 km vs
+    // the probe of the same sky at sea level) -- measured 2026-09-11 as 0.5 % of pixels, a control that lied.
+    distantActive_ = settings.mode && !failed_ && !distantFailed_ && distantMaterial_;
     if (!distantActive_) return after;
     view.planet[0] = settings.parameters.radii[0] + 6.0f;
     view.planet[3] = 1.0f; view.sunDirection[3] = 0.0f; view.exposure[0] = 1.0f;
+    view.exposure[1] = 1.0f; // picture-only factor: not the fog's light, not a rebuild key
     const auto params = settings.parameters;
     if (distantReady_ && std::memcmp(&params, &distantParameters_, sizeof(params)) == 0
         && std::memcmp(&view, &distantKey_, sizeof(view)) == 0) return after;

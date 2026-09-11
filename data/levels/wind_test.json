@@ -18,9 +18,9 @@
       1.0
     ],
     "direction": [
-      -0.5289188027381897,
-      -0.3875155746936798,
-      -0.7550341486930847
+      -0.5319715142250061,
+      -0.37460657954216003,
+      -0.7593920230865479
     ],
     "groundAlbedo": [
       0.25,
@@ -36,6 +36,7 @@
       1.0
     ],
     "lightShaftsEnabled": true,
+    "lightSourceAngle": 2.0,
     "skyFillIntensity": 1.0,
     "sunIlluminanceLux": 120000.0,
     "useSunTemperature": true
@@ -13854,7 +13855,7 @@
       "shoreWetnessReflectionStrength": 0.3499999940395355,
       "shoreWetnessWetTime": 0.75,
       "skyScatterStrength": 0.3499999940395355,
-      "specularStrength": 1.100000023841858,
+      "specularStrength": 1.0,
       "sssColor": [
         0.13333334028720856,
         0.9411764740943909,
@@ -13920,11 +13921,11 @@
       "convGhostSpacing": 0.44999998807907104,
       "convGhostThreshold": 9.0,
       "convGhosts": 8,
-      "convKernel": "textures/DefaultBloomKernelAnamorphic.dds",
+      "convKernel": "textures/BloomKernelStarAnamorphic.dds",
       "convKernelRadius": 0.0015999999595806003,
       "convKernelTint": [
-        0.27906978130340576,
-        0.3173918128013611,
+        0.4285714030265808,
+        0.4589465856552124,
         1.0
       ],
       "convPercent": 25.0,
@@ -13937,10 +13938,10 @@
       "convSpokeWidth": 4.0,
       "enabled": true,
       "fireflyClamp": true,
-      "intensity": 1.5,
+      "intensity": 1.0,
       "method": 1,
       "radius": 1.0,
-      "softKnee": 0.5,
+      "softKnee": 1.0,
       "threshold": 3.5
     },
     "cameraExposure": {
@@ -13958,7 +13959,7 @@
       "lowPercentile": 0.15000000596046448,
       "maxEv100": 18.0,
       "meterMaskStrength": 0.699999988079071,
-      "minEv100": 11.0,
+      "minEv100": 11.5,
       "shutterSpeedSec": 0.00798999983817339,
       "speedDown": 1.0,
       "speedUp": 3.0
@@ -14008,7 +14009,7 @@
       "sunScatterExponent": 32.0,
       "sunScatterStartDistance": 100.0,
       "sunScatterStrength": 0.10000000149011612,
-      "volumetric": false
+      "volumetric": true
     }
   },
   "skyAtmosphere": {
@@ -14017,12 +14018,13 @@
     "enabled": true,
     "environmentLighting": true,
     "groundAlbedo": 0.4019777774810791,
-    "luminanceScale": 2.5999999046325684,
+    "luminanceScale": 1.0,
     "mieAnisotropy": 0.6000000238418579,
     "mieScale": 1.0,
     "multiScatteringFactor": 1.0,
     "ozoneScale": 1.0,
-    "rayleighScale": 0.699999988079071
+    "rayleighScale": 0.699999988079071,
+    "skyLuminanceFactor": 1.0
   },
   "skybox": {
     "illuminanceLux": 12000.0,
@@ -14037,7 +14039,7 @@
       "frequencyHz": 0.10000000149011612,
       "seed": 3
     },
-    "strength": 0.6100000143051147,
+    "strength": 0.6000000238418579,
     "swayFrequency": 1.2000000476837158
   }
 }

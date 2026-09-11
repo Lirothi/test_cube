@@ -585,6 +585,10 @@ void SceneRenderer::Pass_TransparentFog(Renderer* renderer, RenderGraphPassConte
             c.fogVolumeZParams = decisions_.fogVolumeZParams;
             c.fogApplyMisc = float4(iblSky ? iblSky->GetExposure() : 1.0f,
                                     static_cast<float>(g_fogDebugView), preExposure_, 0.0f);
+            // The aerial perspective, exactly as compose is handed it (SceneRenderer_Lighting.cpp).
+            c.aerialParams = float4(skyAtmosphere_.AerialBuilt() ? 1.0f : 0.0f,
+                                    std::max(0.0f, frame_->settings.skyAtmosphere.aerialStartDepthMetres),
+                                    1.0f / std::max(preExposure_, 1.e-8f), 0.0f);
 
             auto cbAlloc = renderer->GetFrameResource()->AllocDynamic(
                 cbBytes, render::kConstantBufferAlignment);
@@ -597,7 +601,10 @@ void SceneRenderer::Pass_TransparentFog(Renderer* renderer, RenderGraphPassConte
             rc.srvTable[0] = renderer->StageSrvUavTable(
                 { D.depthSRV, D.depthCopySRV,
                   iblSky ? iblSky->EnvironmentSrv() : renderer->VsmDummyTexSrv(),
-                  D.fogIntegratedSRV.ptr != 0 ? D.fogIntegratedSRV : renderer->VsmDummyTexSrv() }).gpu;
+                  D.fogIntegratedSRV.ptr != 0 ? D.fogIntegratedSRV : renderer->VsmDummyTexSrv(),
+                  // t4: the sky's camera volume; a dummy keeps the VOLATILE range populated when it was
+                  // not built this frame (aerialParams.x = 0, never sampled then).
+                  skyAtmosphere_.AerialBuilt() ? skyAtmosphere_.AerialSrv() : renderer->VsmDummyTexSrv() }).gpu;
             const auto samplers = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
             rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
 

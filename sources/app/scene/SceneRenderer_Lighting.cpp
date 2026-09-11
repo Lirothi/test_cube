@@ -331,7 +331,7 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     constants.screenSize = float2(width, height);
     constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
     constants.sunMetalSpec = frame_->settings.sunMetalSpecInfluence;
-    constants.sunAngularSize = frame_->settings.sunAngularSize;
+    constants.sunAngularSize = frame_->dirLight ? frame_->dirLight->GetSunHalfApexRadians() : 0.0f;
 
     // Underwater caustics. Everything comes from the ocean: no water in the level means the
     // whole block stays zeroed and the shader skips it (causticsTint.w == 0).
@@ -1027,7 +1027,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         }
 
         constants.aerialParams = float4(skyAtmosphere_.AerialBuilt() ? 1.0f : 0.0f,
-            std::max(0.0f, frame_->settings.heightFog.volumetricDistance),
+            std::max(0.0f, frame_->settings.skyAtmosphere.aerialStartDepthMetres),
             1.0f / std::max(preExposure_, 1.e-8f),
             0.0f);
         constants.aerialViewProj = camera.GetViewProjMatrixNoJitter();

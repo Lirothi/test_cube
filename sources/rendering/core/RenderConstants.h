@@ -65,6 +65,10 @@ inline bool g_preExposureEnabled = true;
 // glass, particles) that have no path to the scene renderer, and they must all use the SAME number
 // or the frame comes out in pieces at different brightnesses. 1.0 while the gate is off.
 inline float g_preExposure = 1.0f;
+// Did this frame's ocean-reflection temporal resolve run? Set by the Main_Transparent builder (serial,
+// before any recording) and read by the ocean draw to bind the resolved history instead of the raw
+// buffer -- the two are decided in different files and this is the one bit they share.
+inline bool g_oceanReflectionTemporal = false;
 // P16.10 -- REFLECTIONS CARRY RADIANCE, SO THEY NEED A FLOAT TARGET.
 //
 // This was R8G8B8A8_UNORM, an LDR format, and it worked only while scene colour happened to sit

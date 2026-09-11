@@ -242,6 +242,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         dl.SetLightShaftBloomMaxBrightness(JF(p, "lightShaftBloomMaxBrightness", dl.GetLightShaftBloomMaxBrightness()));
         dl.SetLightShaftBloomTint(JF3(p, "lightShaftBloomTint", dl.GetLightShaftBloomTint()));
         dl.SetLightShaftOcclusionDepthRange(JF(p, "lightShaftOcclusionDepthRange", dl.GetLightShaftOcclusionDepthRange()));
+        dl.SetLightSourceAngleDegrees(JF(p, "lightSourceAngle", dl.GetLightSourceAngleDegrees()));
         ctx.scene.SetDirectionalLight(dl);
     }
     else if (env.type == "cameraExposure")

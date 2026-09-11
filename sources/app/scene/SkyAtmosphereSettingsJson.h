@@ -35,8 +35,10 @@ inline void ApplyOverrides(const nlohmann::json& j, SkyAtmosphereSettings& s)
     // never reaches here and stays on its cubemap.
     s.mode = j.value("enabled", true) ? 1u : 0u;
     s.luminanceScale = std::clamp(j.value("luminanceScale", s.luminanceScale), 0.0f, 10.0f);
+    s.skyLuminanceFactor = std::clamp(j.value("skyLuminanceFactor", s.skyLuminanceFactor), 0.0f, 10.0f);
+    s.aerialStartDepthMetres = std::clamp(j.value("aerialStartDepthMetres", s.aerialStartDepthMetres), 0.0f, 100000.0f);
+    s.aerialViewDistanceScale = std::clamp(j.value("aerialViewDistanceScale", s.aerialViewDistanceScale), 0.01f, 100.0f);
     s.environmentLighting = j.value("environmentLighting", s.environmentLighting);
-    s.distantSkyLight = j.value("distantSkyLight", s.distantSkyLight);
     s.aerialPerspective = j.value("aerialPerspective", s.aerialPerspective);
 
     const SkyAtmosphereParameters earth{};
@@ -66,8 +68,10 @@ inline nlohmann::json ToJson(const SkyAtmosphereSettings& s)
     nlohmann::json j = nlohmann::json::object();
     j["enabled"] = s.mode != 0u;
     j["luminanceScale"] = s.luminanceScale;
+    j["skyLuminanceFactor"] = s.skyLuminanceFactor;
+    j["aerialStartDepthMetres"] = s.aerialStartDepthMetres;
+    j["aerialViewDistanceScale"] = s.aerialViewDistanceScale;
     j["environmentLighting"] = s.environmentLighting;
-    j["distantSkyLight"] = s.distantSkyLight;
     j["aerialPerspective"] = s.aerialPerspective;
     j["rayleighScale"] = ScaleOf(s.parameters.rayleigh, earth.rayleigh);
     j["mieScale"] = ScaleOf(s.parameters.mieScattering, earth.mieScattering);

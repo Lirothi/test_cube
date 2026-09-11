@@ -378,12 +378,19 @@ struct SsrTemporalConstants
     float blendWeight = 0.125f;
     uint32_t historyValid = 0u;
     float clampExpand = 0.5f;
-    float pad0 = 0.0f;
+    // Ocean mode: reproject the WATER PLANE's point under the pixel through last frame's camera instead
+    // of reading gbVelocity (which, when the ocean resolve runs, still holds the opaque background's
+    // motion). 0 for the deferred reflection.
+    uint32_t planeReproject = 0u;
+    float4 planeParams{};    // x: plane height (world Y), yzw: camera position
+    mat4 invViewProj{};      // clip -> world, unjittered
+    mat4 prevViewProj{};     // world -> previous frame's clip, unjittered
 };
 
 struct SsrTemporalHandles
 {
     Material::CBFieldHandle texSize, invTexSize, blendWeight, historyValid, clampExpand;
+    Material::CBFieldHandle planeReproject, planeParams, invViewProj, prevViewProj;
     void Populate(Material* material);
 };
 
@@ -827,6 +834,7 @@ struct FogApplyConstants
     float4 fogVolumeParams{};
     float4 fogVolumeZParams{};
     float4 fogApplyMisc{}; // x: sky intensity, y: debug view, z: preExposure, w: unused
+    float4 aerialParams{}; // enabled, start view depth (m), 1/preExposure, reserved -- the same values compose gets
 };
 
 struct FxaaPassConstants

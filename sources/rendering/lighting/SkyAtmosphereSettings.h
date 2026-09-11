@@ -92,8 +92,26 @@ struct SkyAtmosphereSettings
     // session override: which sky a level uses is part of the level, the same as which cubemap it
     // names. `--set=sky.mode` still overrides it for a headless run.
     unsigned mode = 0;
-    float luminanceScale = 2.13f; // sky-only HDRI calibration, never camera exposure
-    bool distantSkyLight = false; // B5: isotropic ambient at 6km, session opt-in
+    // UE SkyAndAerialPerspectiveLuminanceFactor: multiplies the sun's illuminance on the way INTO every
+    // LUT (SkyView, the aerial-perspective volume, the distant sky light, the environment capture), so
+    // it brightens the sky, the AP haze on geometry AND the ambient the probes deliver -- all together,
+    // relative to the direct sun. NOT sky-only; that is `skyLuminanceFactor`. Never the camera exposure.
+    float luminanceScale = 2.13f;
+    // THE PICTURE OF THE SKY, and nothing the sky lights: applied at draw time to the sky pixel only
+    // (skybox.hlsl). Deliberate deviation from UE's SkyLuminanceFactor, which also reaches their sky-light
+    // capture and the distant sky light (usf:919-922, :1397): measured 2026-09-11, that made it
+    // indistinguishable from `luminanceScale` (lit sand x1.11, palm crowns x1.37 under both), and the
+    // owner wants a knob that brightens the sky he sees without touching the lighting. Not the disc either.
+    float skyLuminanceFactor = 1.0f;
+    // UE AerialPerspectiveStartDepth (SkyAtmosphereComponent.cpp:132, 0.1 km): view depth in METRES
+    // before which the aerial-perspective volume adds nothing. Its own knob (part-B review): it used to
+    // ride on the height fog's `volumetricDistance`, a subsystem that can be off while this is on.
+    float aerialStartDepthMetres = 100.0f;
+    // UE AerialPespectiveViewDistanceScale (SkyAtmosphereComponent.cpp:129, 1.0): multiplies the optical
+    // depth per sample of the aerial-perspective volume (SkyAtmosphere.usf:601-606) -- how many metres of
+    // Earth's air one metre of view distance counts as. 1 is Earth, which over a few hundred metres is
+    // invisible (measured 0.8 % on the far water); artists set 5-20 for a haze that reads at island scale.
+    float aerialViewDistanceScale = 1.0f;
     bool environmentLighting = false; // B4: session opt-in until visual acceptance
     bool aerialPerspective = false; // B3: procedural mode only; enable after visual acceptance
     unsigned aerialDebugView = 0; // 0 scene, 1 transmittance, 2 luminance, 3 depth slices
@@ -108,7 +126,7 @@ struct SkyViewFrameData
 {
     float sunDirection[4]{}; // local XYZ to sun; w angular radius in radians
     float illuminance[4]{}; // outer-space RGB lux; w sky-only luminance scale
-    float exposure[4] = {1, 0, 0, 0}; // pre-exposure before FP16 storage
+    float exposure[4] = {1, 1, 0, 0}; // x: pre-exposure before FP16 storage; y: UE SkyLuminanceFactor (sky pixel, capture, distant light)
     float planet[4]{}; // view height, bottom radius, top radius (km), enabled
 };
 static_assert(sizeof(SkyViewFrameData) == 64, "SkyView frame CB layout");

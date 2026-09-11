@@ -469,11 +469,13 @@ private:
     {
         std::uint32_t copy = 0;    // depth/scene -> COPY_SOURCE, their copies -> COPY_DEST
         std::uint32_t oceanRead = 0; // the copies -> NPS, HZB, ocean reflection -> UAV
+        std::uint32_t oceanTemporal = 0; // raw reflection NPS, its history UAV, last frame's history NPS, velocity NPS
         std::uint32_t pixel = 0;   // ...and all three PS-readable for the forward draws
         std::uint32_t rebind = 0;  // scene/depth/velocity (+objectID) back to their draw states
         bool copyDepth = false;
         bool copyScene = false;
         bool oceanReflect = false; // the reflection compute runs (targets + material + descriptors)
+        bool oceanTemporalRun = false; // ...and the temporal resolve after it (ssrTemporal + history ready)
     };
     void RecordOceanReflection(Renderer* r, ID3D12GraphicsCommandList* cl,
         const Camera& camera, const TransparentPoints& pts);
@@ -576,6 +578,11 @@ private:
     // SSR temporal resolve: whether the previous frame left a history worth reading, at what size.
     // (Whether the resolve RUNS is this frame's decision and lives in FrameDecisions::ssrTemporal.)
     bool ssrHistoryValid_ = false;
+    // The ocean reflection's own history bookkeeping (its buffer has its own size), same rules.
+    bool oceanHistoryValid_ = false;
+    uint32_t oceanHistoryFrames_ = 0u;
+    uint32_t oceanHistoryWidth_ = 0u;
+    uint32_t oceanHistoryHeight_ = 0u;
     uint32_t ssrHistoryFrames_ = 0u;
     uint32_t ssrHistoryWidth_ = 0u;
     uint32_t ssrHistoryHeight_ = 0u;

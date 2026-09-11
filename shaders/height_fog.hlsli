@@ -141,42 +141,17 @@ float HeightFogOpticalDepth(float sharedIntegral, float distance, HeightFogParam
 // (1 - t) instead, which bends the whole curve rather than clipping its far end -- a different
 // image everywhere, not just at distance.
 //
-// ...AND THE FLOOR IS RELEASED AGAIN ONCE THE FOG IS FAR PAST IT. UE can hold a hard floor because
-// their fog colour is authored: nothing else in their frame has to agree with it. Ours is the sky,
-// and THE SKY IS NEVER FOGGED -- it is already fog of infinite depth. A hard floor therefore leaves
-// the water at the horizon holding (1 - maxOpacity) of its own colour against a sky holding none of
-// it, and the two cannot meet: measured 9.9/255 of luminance step across the horizon row at 0.70.
-// That made the entire range below 1.0 unusable on any open view, which is worse than the ceiling
-// is useful.
-//
-// So the floor holds where it earns its keep -- distances around the depth at which it first bites,
-// which is where "do not let the far hills vanish entirely" means something -- and lets go over the
-// next factor of four, by which point the surface is thousands of times deeper into the fog than
-// the ceiling ever described and the only honest answer is the sky. No new knob: the release is
-// measured in multiples of the ceiling's OWN clip depth, so it scales with whatever the ceiling is
-// set to.
+// THE FLOOR IS HARD, AS UE HOLD IT. There used to be a "release" here that let the floor go over
+// the next two stops of optical depth, argued from "the sky is never fogged": a hard floor left the
+// far water holding (1 - maxOpacity) of its own colour against a sky holding none, and the two met
+// in a step along the horizon row. That premise died with B6.2: compose runs the same model over the
+// SKY pixels (at kSkyFogDistance, the way UE's HeightFogPixelShader does with bOnlyOnRenderedOpaque
+// false), so both sides of the silhouette now sit on the same floor and there is nothing left for a
+// release to reconcile. Part-B review, 2026-09-11: measured on the horizon camera, no step returned.
+// `opticalDepth` stays in the signature for the callers' sake and is deliberately unused.
 float HeightFogMinTransmittance(float opticalDepth, float maxOpacity)
 {
-    const float floorT = 1.0f - saturate(maxOpacity);
-    // -log2(floorT) is the optical depth at which the ceiling first bites; below it the exponential
-    // is above the floor anyway and this whole term is inert.
-    const float clipDepth = -log2(max(floorT, 1.0e-6f));
-    // Released by HOW FAR THE FLOOR HAS OUTLIVED THE TRUTH, not by a multiple of clipDepth. The
-    // difference matters at the horizon and only there. Measured on wind_test, camera 22.8 m, HDRI,
-    // density 0.001, maxOpacity 0.9: clipDepth is 3.32, the optical depth at the water's last row is
-    // about 6.6, so the old form (full release at 4x clipDepth = 13.3) had let go of barely a third.
-    // The floor was still holding 6.7% of the water's own colour while its HONEST transmittance was
-    // exp2(-6.6) = 1% -- propping a surface six times higher than it had any claim to. Against a sky
-    // that is not fogged at all, that left a 32-level step along the horizon row, and it ran right
-    // through the distant clouds.
-    //
-    // `opticalDepth - clipDepth` is that overshoot in stops: 0 where the ceiling first bites, 2 where
-    // the surface is four times deeper into the fog than the ceiling ever described. Two stops is the
-    // whole release. Still no new knob, and still scaled by the authored ceiling through clipDepth --
-    // what changes is that the scale is now ABSOLUTE stops past the clip rather than a multiple of a
-    // number that itself grows as the ceiling tightens.
-    const float release = saturate((opticalDepth - clipDepth) * 0.5f);
-    return floorT * (1.0f - release);
+    return 1.0f - saturate(maxOpacity);
 }
 
 float HeightFogTransmittance(float opticalDepth, float minTransmittance)

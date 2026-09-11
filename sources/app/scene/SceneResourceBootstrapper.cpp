@@ -1276,6 +1276,10 @@ void SsrTemporalHandles::Populate(Material* material)
     blendWeight = material->ComputeCB0FieldHandle("blendWeight");
     historyValid = material->ComputeCB0FieldHandle("historyValid");
     clampExpand = material->ComputeCB0FieldHandle("clampExpand");
+    planeReproject = material->ComputeCB0FieldHandle("planeReproject");
+    planeParams = material->ComputeCB0FieldHandle("planeParams");
+    invViewProj = material->ComputeCB0FieldHandle("invViewProj");
+    prevViewProj = material->ComputeCB0FieldHandle("prevViewProj");
 }
 
 UINT SceneResourceBootstrapper::GetSsrTemporalCBSizeBytes() const
@@ -1293,6 +1297,10 @@ void SceneResourceBootstrapper::WriteSsrTemporalConstants(const SsrTemporalConst
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.blendWeight, d.blendWeight, dest);
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.historyValid, d.historyValid, dest);
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.clampExpand, d.clampExpand, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.planeReproject, d.planeReproject, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.planeParams, d.planeParams, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.invViewProj, d.invViewProj, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.prevViewProj, d.prevViewProj, dest);
 }
 
 void SceneResourceBootstrapper::WriteHzbConstants(const HzbPassConstants& d, uint8_t* dest) const

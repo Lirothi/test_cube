@@ -64,6 +64,7 @@ namespace
         skyView.planet[1] = a.radii[0]; skyView.planet[2] = a.radii[1];
         skyView.illuminance[3] = skySettings.luminanceScale;
         skyView.exposure[0] = preExposure;
+        skyView.exposure[1] = skySettings.skyLuminanceFactor; // UE SkyLuminanceFactor: the sky pixel, its capture, the distant light
         skyView.sunDirection[3] = sunRadius;
         if (light)
         {
@@ -1214,11 +1215,11 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     // declarations were already made.
     const auto& skySettings = frame_->settings.skyAtmosphere;
     auto skyView = MakeSkyView(skySettings, frame_->camera->GetPosition().y, preExposure_,
-                               frame_->settings.sunAngularSize, frame_->dirLight);
+                               frame_->dirLight ? frame_->dirLight->GetSunHalfApexRadians() : 0.0f, frame_->dirLight);
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
     const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, skyView,
-        *frame_->camera, frame_->settings.heightFog.volumetricDistance, pSkyView);
+        *frame_->camera, skySettings.aerialStartDepthMetres, pSkyView);
     gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, { pAerial }, /*mtDeps=*/{},
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
@@ -1625,6 +1626,38 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             }
             p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         }
+        // 2b. THE OCEAN REFLECTION'S TEMPORAL RESOLVE (2026-09-11, owner's request). The water's SSR
+        // buffer went to the forward pass raw and boiled under DLSS jitter exactly as the deferred one
+        // did before Main_ReflectionTemporal. Same kernel, same toggle and knobs (ssrTemporal), its own
+        // history at the ocean reflection's size, reprojected by the WATER PLANE's point rather than
+        // gbVelocity: this runs before the water draws, so the velocity buffer still holds the opaque
+        // background's motion -- the wrong parallax for a plane. Decided HERE, in the serial builder,
+        // because the ocean draw (recorded later) binds the history or the raw buffer on the same bit.
+        {
+            const auto& PT = p.renderer->GetDeferredForPrevFrame();
+            const UINT ow = p.renderer->GetOceanReflectionTextureWidth();
+            const UINT oh = p.renderer->GetOceanReflectionTextureHeight();
+            pts.oceanTemporalRun = pts.oceanReflect && frame_->settings.ssrTemporal &&
+                resources_.GetSsrTemporalMaterial() && resources_.GetSsrTemporalCBSizeBytes() != 0u &&
+                DT.oceanReflectionHistory.Get() != nullptr && DT.oceanReflectionHistoryUAV.ptr != 0 &&
+                PT.oceanReflectionHistorySRV.ptr != 0 && DT.oceanReflectionSRV.ptr != 0 && DT.gbSRV[3].ptr != 0;
+            const bool sameSize = oceanHistoryWidth_ == ow && oceanHistoryHeight_ == oh;
+            oceanHistoryValid_ = pts.oceanTemporalRun && oceanHistoryFrames_ > 0u && sameSize;
+            oceanHistoryFrames_ = pts.oceanTemporalRun ? (sameSize ? oceanHistoryFrames_ + 1u : 1u) : 0u;
+            oceanHistoryWidth_ = ow;
+            oceanHistoryHeight_ = oh;
+            render::g_oceanReflectionTemporal = pts.oceanTemporalRun;
+        }
+        p.NextPoint();
+        pts.oceanTemporal = p.usePoint ? *p.usePoint : 0u;
+        if (pts.oceanTemporalRun)
+        {
+            const auto& PT = p.renderer->GetDeferredForPrevFrame();
+            p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(DT.oceanReflectionHistory.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            p.Use(PT.oceanReflectionHistory.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(DT.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); // bound, unread in plane mode
+        }
         // 3. All three become PS-readable for the forward draws, on every path.
         p.NextPoint();
         pts.pixel = p.usePoint ? *p.usePoint : 0u;
@@ -1632,6 +1665,10 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        if (pts.oceanTemporalRun)
+        {
+            p.Use(DT.oceanReflectionHistory.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
         // Volumetric fog (plan A5): the ocean, glass and particles bind the integrated volume EVERY
         // frame (their tables must stay populated; the shaders gate on fogVolumeParams.x), so it is
         // declared PS-readable every frame too -- a descriptor over a NON_PIXEL resource is what GBV
@@ -1689,6 +1726,12 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             if (DF.fogIntegrated.Get())
             {
                 ctx.Use(DF.fogIntegrated.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            }
+            // Part-B review: the water gets the aerial perspective the opaque scene got in compose.
+            // Declared only on the frames the volume was built (the shader gates on aerialParams.x).
+            if (skyAtmosphere_.AerialBuilt())
+            {
+                ctx.Use(skyAtmosphere_.AerialResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             }
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {

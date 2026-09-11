@@ -200,6 +200,20 @@ public:
     float GetLightShaftOcclusionDepthRange() const { return lightShaftOcclusionDepthRange_; }
     void SetLightShaftOcclusionDepthRange(float metres) { lightShaftOcclusionDepthRange_ = metres; }
 
+    // THE SUN'S ANGULAR SIZE -- UE's LightSourceAngle (DirectionalLightComponent.cpp:1024: 0.5357 deg,
+    // "Angle of earth's sun"), an APEX angle in degrees, i.e. the disc's angular diameter; the renderer
+    // takes half of it in radians (GetSunLightHalfApexAngleRadian, :630-633). One quantity with two
+    // consumers, exactly as in UE: the drawn sun disc (skybox.hlsl) and the floor on the analytic
+    // specular lobe (lighting_cs.hlsl, EvalBRDF), so the glint on smooth water is the disc's own size.
+    //
+    // It used to be a PROJECT graphics setting (`sunAngularSize` in graphics_settings.json, 0.01 rad of
+    // radius, i.e. a sun 2.1x wider than the real one and 4.4x its area): a look property of this
+    // level's sun sitting next to the DLSS mode. Review of part B, 2026-09-11.
+    float GetLightSourceAngleDegrees() const { return lightSourceAngleDeg_; }
+    void SetLightSourceAngleDegrees(float apexDegrees) { lightSourceAngleDeg_ = apexDegrees; }
+    float GetSunHalfApexRadians() const { return 0.5f * lightSourceAngleDeg_ * 3.14159265358979323846f / 180.0f; }
+    void SetSunHalfApexRadians(float radians) { lightSourceAngleDeg_ = 2.0f * radians * 180.0f / 3.14159265358979323846f; }
+
 private:
     Math::float3 direction_;
     Math::float3 color_;
@@ -223,5 +237,6 @@ private:
     float lightShaftBloomMaxBrightness_ = 100.0f;
     Math::float3 lightShaftBloomTint_{ 1.0f, 1.0f, 1.0f };
     float lightShaftOcclusionDepthRange_ = 1000.0f; // metres (UE 100000 cm)
+    float lightSourceAngleDeg_ = 0.5357f; // UE's LightSourceAngle: the real sun's angular diameter
 };
 

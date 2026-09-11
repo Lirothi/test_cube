@@ -1874,6 +1874,14 @@ namespace
                           "seed the shafts -- the sky and distant ground -- so nearby lit surfaces do not streak. Anything "
                           "nearer stands in front of the rays and cuts them, which is what makes the crowns read.");
 
+            ImGui::SeparatorText("Sun Disc");
+            dragF("Light Source Angle (deg)", "lightSourceAngle", 0.5357f, 0.005f, 0.0f, 10.0f, "%.4f");
+            InspectorHelp("UE LightSourceAngle: the sun's angular DIAMETER in degrees, 0.5357 for the real sun. "
+                          "It draws the disc in the procedural sky and floors the width of the analytic specular "
+                          "lobe, so a smooth surface shows a glint the size of the disc rather than a sub-pixel "
+                          "spike. Until the part-B review this was a project-wide graphics setting at 0.01 rad of "
+                          "RADIUS, a sun 2.1x wider than the real one; the level's sun owns it now, as in UE.");
+
             if (tgt().contains("sunIlluminanceLux") &&
                 (tgt().contains("sunIntensity") || tgt().contains("exposure")))
             {
@@ -1954,14 +1962,25 @@ namespace
                 "of reading the level's cubemap.\n\n"
                 "The cubemap is still used while this is off, and remains the fallback the fog and "
                 "the water read before the procedural capture exists, so switching costs no reload. "
-                "A procedural-only level may leave the Skybox texture empty.\n\n"
+                "A procedural level STILL NEEDS a Skybox texture: the atmosphere is drawn by the Skybox "
+                "object, which the level loader creates only when one is named -- without it the sky "
+                "renders black.\n\n"
                 "--set=sky.mode overrides this for a headless run.");
 
             dragF("Sky Luminance Scale", "luminanceScale", 2.13f, 0.01f, 0.0f, 10.0f, "%.3f");
             InspectorHelp(
-                "Calibration between the atmosphere's physical output and this project's linear "
-                "scale, the sky's half of what Skybox > Intensity does for a cubemap. It scales the "
-                "SKY only, never the camera's exposure.");
+                "UE SkyAndAerialPerspectiveLuminanceFactor: multiplies the sun's illuminance on the way "
+                "INTO every atmosphere table, so it brightens the sky, the aerial-perspective haze on "
+                "geometry AND the ambient the sky's probes deliver -- all of them together, relative to "
+                "the direct sun. It is NOT sky-only (the row below is), and it is never the camera's "
+                "exposure. 1 = physics.");
+            dragF("Sky-only Luminance", "skyLuminanceFactor", 1.0f, 0.01f, 0.0f, 10.0f, "%.3f");
+            InspectorHelp(
+                "The PICTURE of the sky only: the pixels of sky you see, multiplied when they are drawn. "
+                "Nothing the sky lights moves with it -- not the ambient on the sand, not the reflections, "
+                "not the haze on geometry, not the sun disc. (UE's SkyLuminanceFactor also feeds their "
+                "sky-light capture; measured here, that made this row and the one above the same knob, "
+                "so ours does not.)");
 
             ImGui::SeparatorText("What the atmosphere feeds");
             checkB("Environment lighting", "environmentLighting", false);
@@ -1969,15 +1988,23 @@ namespace
                           "whenever the sun or the parameters change. OFF leaves both on the "
                           "cubemap's, so a procedural sky would light the scene with a different "
                           "sky than the one you can see.");
-            checkB("Distant sky light (fog)", "distantSkyLight", false);
-            InspectorHelp("Sky ambient sampled at 6 km, used by the volumetric fog's sky "
-                          "scattering.");
             checkB("Aerial perspective", "aerialPerspective", false);
             InspectorHelp(
                 "The atmosphere's own camera volume, 32 x 32 x 16 over 96 km, applied to distant "
                 "OPAQUE geometry. It is not the height fog: that is Post Process > Exponential "
                 "Height Fog, and it is a separate layer the fog is composed over "
                 "(SkyAtmosphereCommon.ush:148-151).");
+            dragF("Aerial Start Depth (m)", "aerialStartDepthMetres", 100.0f, 1.0f, 0.0f, 5000.0f, "%.0f");
+            InspectorHelp(
+                "UE AerialPerspectiveStartDepth (their 0.1 km): view depth before which the volume adds "
+                "nothing. Its own knob since the part-B review -- it used to ride on the height fog's "
+                "volumetric distance, a subsystem that can be off while this is on.");
+            dragF("Aerial View Distance Scale", "aerialViewDistanceScale", 1.0f, 0.1f, 0.01f, 100.0f, "%.2f");
+            InspectorHelp(
+                "UE AerialPerspectiveViewDistanceScale: how many metres of Earth's air one metre of view "
+                "distance counts as. 1 = Earth, and Earth's air over a few hundred metres is invisible "
+                "(measured 0.8 % on the far water, nothing on the island). 5-20 gives an island the haze "
+                "of kilometres -- this is the knob that makes aerial perspective READ, not the start depth.");
 
             ImGui::SeparatorText("Medium");
             dragF("Rayleigh Scale", "rayleighScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");

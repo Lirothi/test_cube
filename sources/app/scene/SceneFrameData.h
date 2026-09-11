@@ -574,11 +574,9 @@ struct SceneRenderSettings
     // distinct sun highlight (which otherwise merges into the environment reflection,
     // since the sun disk is not painted into the skybox). 0 = pure physical. Dev-tunable.
     float sunMetalSpecInfluence = 0.0f;
-    // Analytic sun angular size (added to the GGX alpha for the sun only). Floors the
-    // specular lobe width so smooth surfaces show a finite, bright sun glint instead of a
-    // sub-pixel spike that never lands on a pixel. ~0.01 ≈ a few-pixel disk; 0 = punctual
-    // (vanishing highlight on mirrors). Dev-tunable.
-    float sunAngularSize = 0.01f;
+    // The sun's angular size is the SUN'S (DirectionalLight::GetSunHalfApexRadians, UE's
+    // LightSourceAngle): it floors the analytic specular lobe AND draws the procedural disc, so it
+    // lives on the level's light rather than here (part-B review, 2026-09-11).
 };
 
 // Per-frame inputs for the render passes. Scene::PrepareViews fills this once per

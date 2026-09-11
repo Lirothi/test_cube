@@ -597,13 +597,16 @@ namespace
             sun.SetDirection(-Math::float3(std::cos(elevation)*std::sin(azimuth), std::sin(elevation), std::cos(elevation)*std::cos(azimuth)));
             return true;
         }
-        if (setting == "sky.distantSkyLight") { scene.SkyAtmosphereRef().distantSkyLight = value != 0.0f; return true; }
         if (setting == "sky.environmentLighting") { scene.SkyAtmosphereRef().environmentLighting = value != 0.0f; return true; }
         if (setting == "sky.mode") { scene.SkyAtmosphereRef().mode = value >= 1.0f ? 1u : 0u; return true; }
         if (setting == "sky.aerialPerspective") { scene.SkyAtmosphereRef().aerialPerspective = value != 0.0f; return true; }
         if (setting == "sky.aerialDebugView") { scene.SkyAtmosphereRef().aerialDebugView = static_cast<unsigned>(std::clamp(value, 0.0f, 3.0f)); return true; }
         if (setting == "sky.luminanceScale") { scene.SkyAtmosphereRef().luminanceScale = std::clamp(value, 0.0f, 10.0f); return true; }
-        if (setting == "sun.angularSize") { renderSettings.sunAngularSize = std::clamp(value, 0.0f, 0.25f); return true; }
+        // The sun's half-apex angle in radians (the disc and the specular floor), the level sun's property.
+        if (setting == "sun.angularSize") { scene.DirectionalLightRef().SetSunHalfApexRadians(std::clamp(value, 0.0f, 0.25f)); return true; }
+        if (setting == "sky.skyLuminanceFactor") { scene.SkyAtmosphereRef().skyLuminanceFactor = std::clamp(value, 0.0f, 10.0f); return true; }
+        if (setting == "sky.aerialStartDepth") { scene.SkyAtmosphereRef().aerialStartDepthMetres = std::clamp(value, 0.0f, 100000.0f); return true; }
+        if (setting == "sky.aerialViewDistanceScale") { scene.SkyAtmosphereRef().aerialViewDistanceScale = std::clamp(value, 0.01f, 100.0f); return true; }
         // B1 transfer LUT controls.
         if (setting == "sky.lutValidate") { scene.SkyAtmosphereRef().lutValidate = value != 0.0f; return true; }
         if (setting == "sky.lutEnabled") { scene.SkyAtmosphereRef().lutEnabled = value != 0.0f; return true; }

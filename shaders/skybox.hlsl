@@ -106,10 +106,16 @@ PSOut PSMain(VSOut i)
         const bool ground = SkyViewIntersectsGround(dir, height, bottom);
         // The LUT is pre-exposed for storage; LightTarget is RAW radiance for HDRI
         // and surface lighting alike. Decode here so compose uses one exposure path.
+        // skyExposure.y = the sky PICTURE's own brightness, applied at draw time and NOWHERE else: not the
+        // capture the probes are built from, not the distant light, not the disc. UE's SkyLuminanceFactor
+        // (SkyAtmosphere.usf:919-922) also reaches their sky-light capture; ours deliberately does not,
+        // so this knob brightens the sky you see and leaves what the sky lights alone. The LUT already
+        // carries SkyAndAerialPerspectiveLuminanceFactor (`luminanceScale`), which is the one that lights.
         c = skyViewLut.SampleLevel(samLinear, SkyViewDirToUvNoPlanet(dir, height, bottom), 0).rgb
-            / max(skyExposure.x, 1.e-8f);
+            / max(skyExposure.x, 1.e-8f) * skyExposure.y;
         // UE SkyAtmosphereCommon.ush:256-279, Rendering.cpp:445-446.
-        // sunAngularSize is interpreted as angular RADIUS in radians for the disk.
+        // skySunDirection.w = the sun's HALF-APEX angle in radians (DirectionalLight::GetSunHalfApexRadians,
+        // UE GetSunLightHalfApexAngleRadian): the level sun's LightSourceAngle, 0.5357 deg apex by default.
         float radius = skySunDirection.w;
         float cosHalf = cos(radius);
         float viewDotLight = dot(dir, skySunDirection.xyz);

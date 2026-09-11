@@ -331,6 +331,18 @@ void DeveloperWindow::DrawTraceControls()
     traceWindowOpen_ = open;
 }
 
+void DeveloperWindow::ApplySunElevation(Scene& scene) const
+{
+    constexpr double radians = 3.14159265358979323846 / 180.0;
+    const double elevation = (sunElevationMin_ +
+        (sunElevationMax_ - sunElevationMin_) * sunElevationProgress_) * radians;
+    // Double precision keeps cos(+/-90 degrees) nonnegative and preserves azimuth at the poles.
+    scene.DirectionalLightRef().SetDirection(-Math::float3(
+        static_cast<float>(std::cos(elevation) * std::sin(sunElevationAzimuth_)),
+        static_cast<float>(std::sin(elevation)),
+        static_cast<float>(std::cos(elevation) * std::cos(sunElevationAzimuth_))));
+}
+
 bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager& input,
     LevelManager& levelManager, SceneRenderSettings& settings,
     GraphicsSettingsManager& graphicsSettings
@@ -340,6 +352,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 )
 {
     CPU_SCOPE(ProfilerScopes::kBuildDeveloperWindow);
+    // Run independently of the selected tab and the window's visibility.
+    if (sunElevationPlaying_)
+    {
+        sunElevationProgress_ = std::min(1.0, sunElevationProgress_ +
+            static_cast<double>(std::max(0.0f, ImGui::GetIO().DeltaTime)) / sunElevationSeconds_);
+        ApplySunElevation(scene);
+        if (sunElevationProgress_ >= 1.0) sunElevationPlaying_ = false;
+    }
     bool graphicsSettingsDirty = false;
     ImTextureID resetIconTexture = ImTextureID_Invalid;
     const auto graphicsControl = [&](GraphicsControl control, const char* id,
@@ -1017,11 +1037,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SliderFloat("Sun spec on metal", &settings.sunMetalSpecInfluence,
                                        0.0f, 16.0f, "%.1f"));
 
-                // Sun angular size: floors the analytic specular lobe width so smooth surfaces show
-                // a bright, sample-able sun glint instead of a sub-pixel spike. 0 = punctual.
-                GRAPHICS_CONTROL(SunAngularSize, "sunAngularSize",
-                    ImGui::SliderFloat("Sun angular size", &settings.sunAngularSize,
-                                       0.0f, 0.25f, "%.3f"));
+                // The sun's angular size (disc AND the specular lobe floor) is the level's sun's:
+                // Inspector > Directional Light > Sun Disc, UE's LightSourceAngle.
 
                 ImGui::Separator();
                 if (ImGui::Button("Reset reflections to defaults"))
@@ -1103,12 +1120,55 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 sunChanged |= ImGui::SliderFloat("Sun azimuth", &azimuth, -180.0f, 180.0f, "%.1f deg");
                 if (sunChanged)
                 {
+                    sunElevationPlaying_ = false;
+                    sunElevationProgress_ = 0.0;
                     const float e = elevation / degrees, a = azimuth / degrees;
                     sun.SetDirection(-Math::float3(std::cos(e)*std::sin(a), std::sin(e), std::cos(e)*std::cos(a)));
                 }
-                GRAPHICS_CONTROL(SunAngularSize, "sunAngularSize",
-                    ImGui::SliderFloat("Sun angular radius (rad)", &settings.sunAngularSize, 0.0f, 0.25f, "%.4f"));
-                ImGui::TextWrapped("Sun angles apply for this session.");
+                ImGui::SeparatorText("Sun elevation animation");
+                ImGui::BeginDisabled(sunElevationPlaying_);
+                bool animationChanged = ImGui::DragFloat("Min elevation", &sunElevationMin_, 0.1f,
+                    -90.0f, 90.0f, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
+                if (animationChanged) sunElevationMax_ = std::max(sunElevationMax_, sunElevationMin_);
+                if (ImGui::DragFloat("Max elevation", &sunElevationMax_, 0.1f,
+                    sunElevationMin_, 90.0f, "%.1f deg", ImGuiSliderFlags_AlwaysClamp))
+                {
+                    sunElevationMax_ = std::clamp(sunElevationMax_, sunElevationMin_, 90.0f);
+                    animationChanged = true;
+                }
+                animationChanged |= ImGui::DragFloat("Lerp time (seconds)", &sunElevationSeconds_, 0.1f,
+                    0.01f, 86400.0f, "%.2f s", ImGuiSliderFlags_AlwaysClamp);
+                if (animationChanged) sunElevationProgress_ = 0.0;
+                ImGui::EndDisabled();
+                if (ImGui::Button(sunElevationPlaying_ ? "Stop##SunElevation" : "Play##SunElevation"))
+                {
+                    if (sunElevationPlaying_) sunElevationPlaying_ = false;
+                    else
+                    {
+                        if (sunElevationProgress_ >= 1.0) sunElevationProgress_ = 0.0;
+                        const auto toSun = -sun.GetDirection();
+                        sunElevationAzimuth_ = std::atan2(static_cast<double>(toSun.x), static_cast<double>(toSun.z));
+                        sunElevationPlaying_ = true;
+                        ApplySunElevation(scene);
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Reset##SunElevation"))
+                {
+                    sunElevationPlaying_ = false;
+                    sunElevationProgress_ = 0.0;
+                    const auto toSun = -sun.GetDirection();
+                    sunElevationAzimuth_ = std::atan2(static_cast<double>(toSun.x), static_cast<double>(toSun.z));
+                    ApplySunElevation(scene);
+                }
+                char progressText[32];
+                std::snprintf(progressText, sizeof(progressText), "%.3f / 1.000", sunElevationProgress_);
+                ImGui::ProgressBar(static_cast<float>(sunElevationProgress_), ImVec2(-1.0f, 0.0f), progressText);
+                ImGui::TextWrapped("Linear min to max. Stop pauses; Play resumes. Reset stops at min. "
+                    "At 1, playback stops; Play starts a new pass. Runs while this window is hidden.");
+                ImGui::Separator();
+                ImGui::TextWrapped("Sun angles apply for this session. The disc's size is the level's "
+                                   "(Directional Light > Sun Disc > Light Source Angle).");
                 ImGui::BeginDisabled(sky.mode == 0);
                 ImGui::BeginDisabled(!sky.aerialPerspective);
                 int aerialView = static_cast<int>(sky.aerialDebugView);

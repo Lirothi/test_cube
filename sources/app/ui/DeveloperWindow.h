@@ -48,6 +48,13 @@ private:
     Tab activeTab_ = Tab::Frame;
 
     void RefreshLevelList();
+    void ApplySunElevation(Scene& scene) const;
+    float sunElevationMin_ = 0.0f;
+    float sunElevationMax_ = 90.0f;
+    float sunElevationSeconds_ = 10.0f;
+    double sunElevationProgress_ = 0.0;
+    double sunElevationAzimuth_ = 0.0;
+    bool sunElevationPlaying_ = false;
     // Start/Stop trace capture. Its own window rather than a tab, so it stays reachable while the
     // ocean/other windows have focus — the stalls worth capturing happen WHILE dragging something
     // else, and a fixed frame count forces you to guess the length in advance.

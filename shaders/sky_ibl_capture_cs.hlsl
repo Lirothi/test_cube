@@ -65,5 +65,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     }
     const float3 L = sum * (invTaps * invTaps);
     // Persistent RAW radiance: camera exposure must not dirty or rescale the environment.
+    // NOT scaled by the sky-only luminance factor, deliberately. UE's capture renders their sky pass
+    // and so carries SkyLuminanceFactor; ours is a PICTURE knob and must leave the lighting alone --
+    // measured 2026-09-11: with the capture scaled, "sky-only" 2 moved lit sand x1.11 and palm crowns
+    // x1.37, exactly what the all-LUT `luminanceScale` did, and the two knobs were one knob.
     Output[uint3(pixel, face)] = float4(min(max(L * planet.z, 0.0f), 65504.0f), 1);
 }

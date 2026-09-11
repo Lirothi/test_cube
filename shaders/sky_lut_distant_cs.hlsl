@@ -107,6 +107,8 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         L += throughput * (source - source * tr) / max(m.Extinction, 1.e-9f);
         throughput *= tr;
     }
+    // SkyIlluminance.w = SkyAndAerialPerspectiveLuminanceFactor (usf:1393). UE also multiply SkyLuminanceFactor
+    // in here (usf:1397); ours is a picture-only knob and stays out of the fog's light, deliberately.
     SphereLuminance[lane] = L * SkyIlluminance.rgb * SkyIlluminance.w;
     GroupMemoryBarrierWithGroupSync();
     // Full barriers at every level: do not assume UE's final lanes are implicitly lockstep.

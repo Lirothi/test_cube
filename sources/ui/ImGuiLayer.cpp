@@ -36,6 +36,16 @@ void SubmitEditorDockSpace()
     {
         return;
     }
+    // A MINIMIZED WINDOW REPORTS A 0 x 0 WORK AREA. The layout below is built ONCE, on the first
+    // frame the node is missing, and DockBuilderSetNodeSize asserts on a zero size in Debug
+    // (imgui.cpp: IM_ASSERT(size.x > 0 && size.y > 0)) -- a modal MessageBox on a headless gate
+    // launched with -WindowStyle Minimized. Skipping only the builder would not do: the dockspace
+    // submitted below creates the node itself, and the custom layout would then never be built. So
+    // the whole dockspace waits for a frame with a real client area; a minimized window shows nothing.
+    if (viewport->WorkSize.x <= 0.0f || viewport->WorkSize.y <= 0.0f)
+    {
+        return;
+    }
 
     // An explicit id lets us build the layout before DockSpaceOverViewport submits its host.
     const ImGuiID dockspaceId = ImHashStr("EditorDockSpace");
