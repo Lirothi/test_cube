@@ -1185,11 +1185,21 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     // forces a rebuild. ----
     const BloomKernelKey key{ grid.x, grid.y, image.x, image.y, convSizeFrac,
                               { conv.kernelTint[0], conv.kernelTint[1], conv.kernelTint[2] },
-                              D.bloomFftKernel.Get() };
-    BloomKernelKey& slotKey = bloomKernelKeys_[renderer->GetCurrentFrameIndex() % render::kFrameCount];
+                              renderer->GetDeferredTargetsGeneration() };
+    const UINT slot = renderer->GetCurrentFrameIndex() % render::kFrameCount;
+    BloomKernelKey& slotKey = bloomKernelKeys_[slot];
     if (!(key == slotKey))
     {
         CPU_SCOPE(ProfilerScopes::kBloomRecKernel);
+        // The audit trail for the recreation bug: every "deferred targets created" line in the
+        // session log must be followed by exactly one of these per frame slot. Logged only when
+        // the TARGETS moved, never for a control moving -- a slider drag rebuilds every frame.
+        if (slotKey.generation != key.generation)
+        {
+            LOG_INFO(logging::LogCategory::Render,
+                     "bloom kernel spectrum rebuilt: slot {}, grid {}x{}, targets generation {}",
+                     slot, grid.x, grid.y, key.generation);
+        }
         BloomConvConstants k = conv;
         BloomFftConstants f{};
         f.transformSize = grid;

@@ -414,6 +414,11 @@ public:
 
     UINT GetCurrentFrameIndex() const { return currentFrameIndex_; }
     uint64_t GetTotalFrameNumber() const { return totalFrameNumber_; }
+    // Bumped by every CreateDeferredTargets (boot, resize, DLSS/render-scale/fog-grid changes).
+    // Anything cached INSIDE a DeferredTargets resource must key on this rather than on the
+    // resource's address: the recreation frees and reallocates same-sized objects, so a new
+    // texture can come back on the old one's address with the old cache beside it.
+    uint64_t GetDeferredTargetsGeneration() const;
 
     void InitTextSystem(ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive, const std::wstring& folder);
 

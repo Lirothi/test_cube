@@ -117,7 +117,7 @@ private:
         // moves, so a tint left out of it would be a colour picker that does nothing until
         // something else happens to force a rebuild -- which is worse than no picker at all.
         float tint[3] = { -1.0f, -1.0f, -1.0f };
-        // THE TEXTURE'S IDENTITY IS PART OF THE KEY, and leaving it out is the bug behind
+        // THE TARGETS' GENERATION IS PART OF THE KEY, and leaving it out is the bug behind
         // "toggling DLSS breaks bloom". Every other field describes the kernel's CONTENT, and all
         // of them are derived from the DISPLAY resolution, which a DLSS toggle does not move. But
         // the toggle changes the RENDER resolution, `Renderer::RecreateDeferredTargets` destroys
@@ -126,15 +126,21 @@ private:
         // rebuild is then skipped and the convolution multiplies by zeros -- bloom disappears
         // completely, and only after a toggle, which is why a cold boot in either mode looks right.
         //
-        // A raw pointer is the right key here precisely because it is not dereferenced: it is asked
-        // only "are you the same object I built into", and a recycled address answers that question
-        // correctly too, since a recycled address means the old texture is gone.
-        const void* texture = nullptr;
+        // The first fix keyed on the texture's ADDRESS, and that is an ABA bug: the runtime frees
+        // three kernel objects and allocates three new ones of the same size, so a new texture
+        // lands on the address the old one had -- measured on wind_test, 17 of 40 recreations put
+        // one slot's new kernel exactly where its old one was (slot 2 nearly every time). The key
+        // then matches an EMPTY texture, that slot skips its rebuild, and bloom blinks at the
+        // frame-ring frequency: one frame in three with no kernel and no streak, which is what
+        // "toggle DLSS a few times and the bloom flickers" looks like. A generation counter cannot
+        // be recycled: `Renderer::CreateDeferredTargets` bumps it every time the targets are built,
+        // so every slot's key mismatches after every recreation.
+        uint64_t generation = 0u;
         bool operator==(const BloomKernelKey& o) const
         {
             return width == o.width && height == o.height &&
                    imageWidth == o.imageWidth && imageHeight == o.imageHeight &&
-                   convSize == o.convSize && texture == o.texture &&
+                   convSize == o.convSize && generation == o.generation &&
                    tint[0] == o.tint[0] && tint[1] == o.tint[1] && tint[2] == o.tint[2];
         }
     };

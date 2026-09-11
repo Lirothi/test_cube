@@ -422,6 +422,11 @@ void Renderer::RefreshCurrentFrameCaches() {
 // not notice and which then fails as "batch index outside the active range" (paid for in step 8).
 static bool s_asyncModeApplied = false;
 static bool s_deviceRemovalReported = false;
+// The DeferredTargets generation (see GetDeferredTargetsGeneration in the header). A file static for
+// the layout reason above; there is one renderer, and the counter only ever has to be unique.
+static uint64_t s_deferredTargetsGeneration = 0u;
+
+uint64_t Renderer::GetDeferredTargetsGeneration() const { return s_deferredTargetsGeneration; }
 
 // The renderer the terminate handler below reports through, and the one-shot install flag.
 //
@@ -2190,6 +2195,12 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     const UINT rtHeight = std::max(1u, renderHeight_);
     const UINT displayWidth = std::max(1u, width);
     const UINT displayHeight = std::max(1u, height);
+    // Every per-resource cache in the engine is invalidated by this line; the log pairs with the
+    // "rebuilt" lines those caches emit, so a skipped rebuild after a recreation is countable.
+    ++s_deferredTargetsGeneration;
+    LOG_INFO(logging::LogCategory::Render,
+             "deferred targets created: render {}x{}, display {}x{}, generation {}",
+             rtWidth, rtHeight, displayWidth, displayHeight, s_deferredTargetsGeneration);
 
     const auto reflectionSize = ComputeReflectionTextureSize(displayWidth, displayHeight);
     reflectionTextureWidth_ = reflectionSize.first > 0 ? reflectionSize.first : 1;
