@@ -54,6 +54,10 @@ cbuffer OceanReflectionCB : register(b0)
 
 static const float kEps = 1e-6f;
 static const float kUnderwaterSsrHitBias = -0.05f;
+// Metres above the water level before the opaque surface in front of the plane point counts as LAND
+// covering the water (the early-out below). Sand in the runup zone and wave crests over the flat
+// plane stay inside the margin and keep tracing.
+static const float kCoveredByLandMargin = 0.5f;
 
 float DepthToViewZ_Fast(float d)
 {
@@ -131,6 +135,23 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     {
         OceanReflectionOut[dispatchThreadId.xy] = float4(0.0f, 0.0f, 0.0f, 0.0f);
         return;
+    }
+
+    // NO WATER HERE, NOTHING TO TRACE (2026-09-11). The plane point under this pixel is hidden behind
+    // opaque geometry standing ABOVE the water level -- the island, the sand, a trunk -- so the ocean
+    // never draws this pixel and whatever this thread traced was never read. Geometry BELOW the level
+    // (the seabed) is in front of nothing: the plane is above it and the water is visible, so it keeps
+    // tracing. The sky's far-plane depth is behind everything and keeps tracing too. A skipped texel
+    // reads as "no hit" (alpha 0), which the surface shader turns into the cube fallback; the margin
+    // keeps the runup zone out of that, since a seam there would land on water that IS drawn.
+    {
+        const float opaqueDepth = ReadDepth(uv);
+        if (DepthToViewZ_Fast(opaqueDepth) < Pv.z &&
+            ReconstructPosWS(uv, opaqueDepth).y > waterHeight + kCoveredByLandMargin)
+        {
+            OceanReflectionOut[dispatchThreadId.xy] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+            return;
+        }
     }
 
     float3 Nv = normalize(mul(float3(0.0f, 1.0f, 0.0f), (float3x3)view));

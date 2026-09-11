@@ -18,9 +18,9 @@
       1.0
     ],
     "direction": [
-      -0.5319715142250061,
-      -0.37460657954216003,
-      -0.7593920230865479
+      -0.572963535785675,
+      -0.052335962653160095,
+      -0.8179082274436951
     ],
     "groundAlbedo": [
       0.25,
@@ -13932,7 +13932,7 @@
       "convPreFilterMax": 12.0,
       "convPreFilterMin": 2.0,
       "convPreFilterMult": 0.0,
-      "convSize": 1.0,
+      "convSize": 0.5,
       "convSpokeLength": 0.8999999761581421,
       "convSpokeStrength": 0.4000000059604645,
       "convSpokeWidth": 4.0,
@@ -13941,8 +13941,8 @@
       "intensity": 1.0,
       "method": 1,
       "radius": 1.0,
-      "softKnee": 1.0,
-      "threshold": 3.5
+      "softKnee": 0.5,
+      "threshold": 4.0
     },
     "cameraExposure": {
       "apertureFStop": 16.0,
