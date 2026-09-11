@@ -75,7 +75,21 @@ DlssHandler::DlssHandler(Renderer& renderer)
     constants_.orthographicProjection = sl::Boolean::eFalse;
     constants_.motionVectorsDilated = sl::Boolean::eFalse;
     constants_.motionVectorsJittered = sl::Boolean::eFalse;
-    constants_.mvecScale = sl::float2(1.0f, 1.0f);
+    // THE SIGN IS THE CONVENTION BRIDGE. Every velocity writer in the engine (gbuffer variants,
+    // ocean, glass, particles, sky) stores `currUv - prevUv` in y-down UV, and every in-engine
+    // reader (SSR/GTAO temporal) expects exactly that. NGX wants the opposite vector -- where the
+    // pixel WAS minus where it IS, `prev - curr`, in render-resolution pixels, y down -- and
+    // Streamline forwards our value as MV_Scale = mvecScale * input-colour extent, so the UV
+    // delta becomes render pixels and the sign lives here, not in the shaders.
+    //
+    // Measured 2026-09-11 on wind_test (docs: the sand smear under DLSS). With (+1,+1) the
+    // upscaler tolerates the wrong sign while the per-frame flow is small -- 12 m/s at ~320 FPS
+    // looked fine -- and collapses once it is not: strafing at 24 m/s (or 12 m/s at the editor's
+    // 160 FPS, which is what was reported) smeared the sand to a Laplacian variance of 7 against
+    // 126 with the sign flipped; 48 m/s forward gave 4 against 64-120. Flipping ONE axis fixed
+    // only the motion along that axis, so both are inverted. Do not "fix" this in the shaders:
+    // that would silently break the temporal passes that read the same buffer.
+    constants_.mvecScale = sl::float2(-1.0f, -1.0f);
     constants_.cameraPinholeOffset = sl::float2(0.0f, 0.0f);
     constants_.jitterOffset = sl::float2(0.0f, 0.0f);
     constants_.motionVectorsInvalidValue = sl::INVALID_FLOAT;
@@ -328,6 +342,27 @@ void DlssHandler::UpdateCameraData(const Camera& camera)
     constants_.clipToPrevClip = ToSlMatrix(clipToPrevClip);
     constants_.prevClipToClip = ToSlMatrix(prevClipToClip);
     constants_.jitterOffset = sl::float2(jitterPixels_.x, jitterPixels_.y);
+
+    // "--dlss-mvec=" (render::g_dlssMvecMode, Renderer.h): the A/B that found the sign bug, kept
+    // because it is the only way to re-check the convention after a Streamline/DLL update or a
+    // new velocity writer without a rebuild. `camera` hands the camera motion to Streamline
+    // (derived from depth and clipToPrevClip) and zeroes ours -- an MV correct by construction
+    // for static geometry; `legacy` is the pre-fix sign. See the constructor for the contract.
+    switch (render::g_dlssMvecMode)
+    {
+    case 1:
+        constants_.cameraMotionIncluded = sl::Boolean::eFalse;
+        constants_.mvecScale = sl::float2(0.0f, 0.0f);
+        break;
+    case 2:
+        constants_.cameraMotionIncluded = sl::Boolean::eTrue;
+        constants_.mvecScale = sl::float2(1.0f, 1.0f);
+        break;
+    default:
+        constants_.cameraMotionIncluded = sl::Boolean::eTrue;
+        constants_.mvecScale = sl::float2(-1.0f, -1.0f);
+        break;
+    }
 
     constants_.cameraPos = ToSlFloat3(camera.GetPosition());
 

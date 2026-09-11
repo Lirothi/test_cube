@@ -105,6 +105,14 @@ inline bool g_asyncEmptySubmit = false;
 // is the only switch that actually takes the SDK out of the picture.
 inline bool g_noStreamline = false;
 
+// "--dlss-mvec=engine|camera|legacy": what the upscaler is told about our motion vectors.
+// 0 = engine MVs with the NGX sign convention applied (the shipping path, see the DlssHandler
+// constructor); 1 = ignore ours and let Streamline derive camera motion from depth + the
+// clip-to-prev-clip matrices (an oracle for static geometry); 2 = the pre-fix sign, kept for
+// the A/B that found the "sand smears under DLSS in motion" bug (2026-09-11). Headless recipe:
+// --cam-fly at 24 m/s past a textured ground, --shot after a second of motion, compare.
+inline int g_dlssMvecMode = 0;
+
 inline bool g_asyncOrderProbe = false;
 
 // The last frame's per-queue submission TOPOLOGY, recorded so a fence stall can print the exact

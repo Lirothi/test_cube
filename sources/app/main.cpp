@@ -734,6 +734,15 @@ int WINAPI WinMain(
             else if (is("quality"))      { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eMaxQuality); }
             else if (is("dlaa"))         { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eDLAA); }
         }
+        // "--dlss-mvec=<engine|camera|legacy>": which motion vectors the upscaler is told about
+        // (Renderer.h). The A/B that found the inverted-sign bug; `legacy` is the pre-fix sign.
+        if (const char* flag = std::strstr(lpCmdLine, "--dlss-mvec=")) {
+            const char* p = flag + std::strlen("--dlss-mvec=");
+            const auto is = [p](const char* name) { return std::strncmp(p, name, std::strlen(name)) == 0; };
+            if      (is("engine")) { render::g_dlssMvecMode = 0; }
+            else if (is("camera")) { render::g_dlssMvecMode = 1; }
+            else if (is("legacy")) { render::g_dlssMvecMode = 2; }
+        }
         // "--log-window": open the session-log viewer at boot (see App.h).
         if (std::strstr(lpCmdLine, "--log-window")) {
             g_bootLogWindow = true;
