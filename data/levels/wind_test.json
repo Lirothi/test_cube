@@ -18,9 +18,9 @@
       1.0
     ],
     "direction": [
-      -0.572963535785675,
-      -0.052335962653160095,
-      -0.8179082274436951
+      -0.5199939012527466,
+      -0.4226182699203491,
+      -0.7422938346862793
     ],
     "groundAlbedo": [
       0.25,
@@ -13957,7 +13957,7 @@
       "localShadowContrast": 0.8999999761581421,
       "localShadowThreshold": 0.5,
       "lowPercentile": 0.15000000596046448,
-      "maxEv100": 18.0,
+      "maxEv100": 16.0,
       "meterMaskStrength": 0.699999988079071,
       "minEv100": 11.5,
       "shutterSpeedSec": 0.00798999983817339,
@@ -13988,7 +13988,7 @@
     "gtao": {
       "enabled": true,
       "fadeStart": 80.0,
-      "intensity": 1.5,
+      "intensity": 2.0,
       "skyIntensity": 0.0,
       "skyMipBias": 3,
       "skyRadius": 25.0,
@@ -14028,6 +14028,7 @@
   },
   "skybox": {
     "illuminanceLux": 12000.0,
+    "intensity": 1.0,
     "texture": "textures/rustig_koppie_puresky_4k/rustig_koppie_puresky_4k.dds"
   },
   "spotLights": [],
