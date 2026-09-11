@@ -78,10 +78,28 @@ struct CameraExposureSettings
     // already solved by hand. Defaults to 0 rather than -0.15 for exactly that reason -- a manual
     // EV is an absolute the author dialled in, and a hidden trim on top of it is a trap.
     float manualCompensationEv = 0.0f;
-    // Safety net for the adapted value, in EV100. NOTE the span below is 22 stops, which is wide
-    // enough that it clamps essentially nothing -- it is "off", not "tuned". Narrowing it is how a
-    // scene stops the camera from opening all the way up in a dark frame. It is deliberately NOT
-    // the mechanism for keeping different lighting conditions apart; see decision 5a of the plan.
+    // Safety net for the adapted value, in EV100. Narrowing it is how a scene stops the camera from
+    // opening all the way up in a dark frame. It is deliberately NOT the mechanism for keeping
+    // different lighting conditions apart; see decision 5a of the plan.
+    //
+    // "22 STOPS, SO IT CLAMPS ESSENTIALLY NOTHING" WAS WRONG, and it was wrong in one direction
+    // only. Measured on `wind_test` (2026-09-11), the meter's whole working range is about
+    // **EV 11.5 to 17**: 11.5 with the sun 3 degrees under the horizon, just under 18 at a 20-degree
+    // sun (maxEv100 18 and 21 render identically, 16 and 15 do not). So:
+    //   * `minEv100 = -6` never binds -- seventeen stops of headroom nothing ever reaches, which is
+    //     why a night frame still meters as bright as noon (both land on a median of 134/255);
+    //   * `maxEv100 = 16` binds EVERY DAYLIGHT FRAME, holding the image about 1.3 stops brighter
+    //     than the meter asked for (median 134.5 clamped vs 122.2 free).
+    // The window is in the right units and the arithmetic is standard; it is simply positioned in
+    // the wrong place for this level's brightness. Anything near 11..18 is the honest span here.
+    //
+    // DO NOT COPY UE'S NUMBERS INTO THESE FIELDS. Their defaults are -10 / 20
+    // (`Scene.cpp:467-468`) but their EV100 is a different anchor: `LuminanceToEV100` is
+    // `log2(L / LuminanceMax)` with `LuminanceMax = 0.78 / LensAttenuation` (RenderUtils.h:664-689,
+    // PostProcessEyeAdaptation.cpp:224-237), and LensAttenuation defaults to 0.78, so their
+    // LuminanceMax is 1 and 1.0 cd/m^2 sits at EV100 = 0. Ours is the reflected-light metering form
+    // `log2(L) + 3` (S/K = 8 above), so 1.0 puts us at EV100 = 3. **The same light reads three
+    // stops higher in our numbers than in theirs** -- their -10 / 20 is our -7 / 23.
     float minEv100 = -6.0f;
     float maxEv100 = 16.0f;
     // Histogram percentiles used to derive the metered luminance. Clipping the tails is what keeps

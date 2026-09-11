@@ -2564,16 +2564,52 @@ bool Renderer::IsJitterPaused() const
     return dlssHandler_ && dlssHandler_->IsJitterPaused();
 }
 
+// TURNING THE UPSCALER OFF IS A RESOLUTION CHANGE, NOT JUST A FLAG -- and this used to treat it as
+// just a flag, which is the bug behind "toggling DLSS breaks bloom".
+//
+// `active_` is what `DlssHandler::IsActive` reports, which is what `WillEvaluate` predicts, which is
+// `pts.ranDlss`, which is what picks the post chain's SOURCE:
+// `tonemapSrc = pts.ranDlss ? D.dlssOutputSRV : D.sceneSRV` (SceneRenderer_Post.cpp:380). Clearing
+// the flag therefore moves the tonemap and the bloom from the upscaler's DISPLAY-sized output onto
+// the RENDER-sized scene texture. But nothing else moved: `dlssMode_` was never lowered to eOff, so
+// `renderResolutionScale_` stayed where DLSS put it (0.58 on this machine's Balanced) and the
+// deferred targets kept that size. The frame then renders at 58 %, skips the upscaler, and the
+// bloom -- which is sized off the DISPLAY on purpose (Renderer.cpp:2252) -- reads a source that just
+// changed resolution underneath it.
+//
+// `SetDlssMode` already does the whole job: drop the scale to 1, refresh the render resolution,
+// recreate the deferred targets. This is the same sequence, so the "DLSS enabled" checkbox and the
+// quality combo can no longer disagree about what the renderer is doing.
 void Renderer::SetDlssActive(bool active)
 {
-    if (dlssHandler_)
+    if (!dlssHandler_)
     {
-        dlssHandler_->SetActive(active);
-        if (active && dlssMode_ != sl::DLSSMode::eOff)
-        {
-            UpdateDlssSettings();
-            AllocateDlssResourcesIfNeeded();
-        }
+        return;
+    }
+
+    const UINT previousRenderWidth = renderWidth_;
+    const UINT previousRenderHeight = renderHeight_;
+
+    dlssHandler_->SetActive(active);
+
+    if (active && dlssMode_ != sl::DLSSMode::eOff)
+    {
+        UpdateDlssSettings();
+        AllocateDlssResourcesIfNeeded();
+    }
+    else
+    {
+        // Full-resolution rendering again. Note this early-outs when the scale is already 1 (DLAA,
+        // or the upscaler was never on), and on the paths where it does act it recreates the
+        // targets itself through OnRenderResolutionScaleChanged -- hence the size check below
+        // rather than an unconditional recreate.
+        SetRenderResolutionScale(1.0f);
+    }
+
+    if (rtManager_.IsCreated() &&
+        (renderWidth_ != previousRenderWidth || renderHeight_ != previousRenderHeight))
+    {
+        RecreateDeferredTargets();
     }
 }
 

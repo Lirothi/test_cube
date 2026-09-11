@@ -492,13 +492,24 @@ void GraphicsDevice::InitQueue()
 void GraphicsDevice::ReportLiveObjects()
 {
 #if defined(_DEBUG)
-    // 1) Detailed report from the device
-    if (device_) {
-        Microsoft::WRL::ComPtr<ID3D12DebugDevice> ddev;
-        if (SUCCEEDED(device_.As(&ddev))) {
-            ddev->ReportLiveDeviceObjects(D3D12_RLDO_DETAIL);
-        }
+    // 1) Detailed report from the device.
+    //
+    // THIS RUNS AFTER THE DEVICE IS GONE, ON PURPOSE. The caller is `Renderer::~Renderer`, and by
+    // then `Shutdown()` has released the queue, the swap chain and the device; asking a live device
+    // what is still alive would list the whole running renderer and say nothing. So the report goes
+    // through the debug device captured in `ReleaseDevice()`, which outlives its device.
+    //
+    // The one entry this ADDS is the device itself: `ID3D12DebugDevice` is a QueryInterface on the
+    // device, so holding it holds a reference. Read the report with that one subtracted -- it is
+    // released on the next line and is the reason a completely clean shutdown still prints one.
+    Microsoft::WRL::ComPtr<ID3D12DebugDevice> ddev = reportDevice_;
+    if (!ddev && device_) {
+        device_.As(&ddev); // only reachable if someone calls this while the renderer is up
     }
+    if (ddev) {
+        ddev->ReportLiveDeviceObjects(D3D12_RLDO_DETAIL | D3D12_RLDO_IGNORE_INTERNAL);
+    }
+    reportDevice_.Reset();
     // 2) DXGI report (optional)
     {
         Microsoft::WRL::ComPtr<IDXGIDebug1> dxgiDbg;
@@ -524,6 +535,13 @@ void GraphicsDevice::ReleaseQueue()
 
 void GraphicsDevice::ReleaseDevice()
 {
+#if defined(_DEBUG)
+    // Grab the debug device BEFORE the release, while there is still a device to query. See the
+    // member's comment: without this the detailed live-object report never ran at all.
+    if (device_ && !reportDevice_) {
+        device_.As(&reportDevice_);
+    }
+#endif
     device5_.Reset();
     device10_.Reset();
     enhancedBarriers_ = false;

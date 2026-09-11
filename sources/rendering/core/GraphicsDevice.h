@@ -86,6 +86,14 @@ private:
     // gbv.log "fresh per run" and this can be written as its header. See InitDevice.
     char gbvModeLine_[256] = {};
     Microsoft::WRL::ComPtr<ID3D12Device> device_;
+#if defined(_DEBUG)
+    // Captured by ReleaseDevice so ReportLiveObjects still has something to ask. Without it the
+    // detailed report was DEAD CODE: `Renderer::~Renderer` calls it, but `Shutdown()` has already
+    // run `ReleaseDevice()` and nulled `device_`, so the `if (device_)` branch never executed and
+    // the only leak report anyone ever saw was the debug layer's own exit-time "simple reporting"
+    // dump -- which cannot name an object and lists every INTERNAL one at Refcount 0.
+    Microsoft::WRL::ComPtr<ID3D12DebugDevice> reportDevice_;
+#endif
     Microsoft::WRL::ComPtr<ID3D12Device5> device5_; // null if DXR unsupported
     Microsoft::WRL::ComPtr<ID3D12Device10> device10_; // null without the enhanced-barrier interfaces
     bool enhancedBarriers_ = false;

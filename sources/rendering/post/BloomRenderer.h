@@ -117,11 +117,24 @@ private:
         // moves, so a tint left out of it would be a colour picker that does nothing until
         // something else happens to force a rebuild -- which is worse than no picker at all.
         float tint[3] = { -1.0f, -1.0f, -1.0f };
+        // THE TEXTURE'S IDENTITY IS PART OF THE KEY, and leaving it out is the bug behind
+        // "toggling DLSS breaks bloom". Every other field describes the kernel's CONTENT, and all
+        // of them are derived from the DISPLAY resolution, which a DLSS toggle does not move. But
+        // the toggle changes the RENDER resolution, `Renderer::RecreateDeferredTargets` destroys
+        // and rebuilds every DeferredTargets resource, and `bloomFftKernel` comes back EMPTY while
+        // the key beside it still describes the spectrum that used to be in the old texture. The
+        // rebuild is then skipped and the convolution multiplies by zeros -- bloom disappears
+        // completely, and only after a toggle, which is why a cold boot in either mode looks right.
+        //
+        // A raw pointer is the right key here precisely because it is not dereferenced: it is asked
+        // only "are you the same object I built into", and a recycled address answers that question
+        // correctly too, since a recycled address means the old texture is gone.
+        const void* texture = nullptr;
         bool operator==(const BloomKernelKey& o) const
         {
             return width == o.width && height == o.height &&
                    imageWidth == o.imageWidth && imageHeight == o.imageHeight &&
-                   convSize == o.convSize &&
+                   convSize == o.convSize && texture == o.texture &&
                    tint[0] == o.tint[0] && tint[1] == o.tint[1] && tint[2] == o.tint[2];
         }
     };

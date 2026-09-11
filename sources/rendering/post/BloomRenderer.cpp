@@ -1184,7 +1184,8 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     // is cached and one left out is a control that appears to do nothing until something else
     // forces a rebuild. ----
     const BloomKernelKey key{ grid.x, grid.y, image.x, image.y, convSizeFrac,
-                              { conv.kernelTint[0], conv.kernelTint[1], conv.kernelTint[2] } };
+                              { conv.kernelTint[0], conv.kernelTint[1], conv.kernelTint[2] },
+                              D.bloomFftKernel.Get() };
     BloomKernelKey& slotKey = bloomKernelKeys_[renderer->GetCurrentFrameIndex() % render::kFrameCount];
     if (!(key == slotKey))
     {
