@@ -64,6 +64,7 @@ cbuffer SsrTemporalCB : register(b0)
     float4 planeParams;   // x: plane height (world Y), yzw: camera position
     float4x4 invViewProj;  // clip -> world, unjittered
     float4x4 prevViewProj; // world -> previous frame's clip, unjittered
+    float4x4 viewProj;     // world -> THIS frame's clip, unjittered (the motion is the difference of the two projections)
 };
 
 // UE's scale on both velocity tests: a UV motion of 0.01 in one frame is already "fast" for the
@@ -173,13 +174,27 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
             OutTex[px] = newC; // the ray never meets the plane: nothing to reproject
             return;
         }
-        const float4 prevClip = mul(float4(planeParams.yzw + dir * t, 1.0f), prevViewProj);
-        if (prevClip.w <= 1.0e-4f)
+        // THE MOTION IS THE DIFFERENCE OF THE SAME POINT'S TWO PROJECTIONS, NOT uv MINUS THE
+        // REPROJECTED POINT. The plane point was rebuilt from a texel centre through the inverse
+        // matrix (a spot 0.2 m in front of a camera ~100 m from the origin, minus the camera,
+        // normalised): projecting it back through the SAME matrix does not land on the texel centre
+        // but hundredths of a texel off, in a rounding pattern. A still camera then resampled its
+        // history bilinearly at that offset every frame, and a long history blurs where the offset
+        // is near half a texel and stays sharp where it is zero -- a lattice of straight-edged
+        // tiles (found on the clouds 2026-09-12, cloud_temporal_cs.hlsl, the identical round trip).
+        // Projecting the point through both matrices and taking the difference cancels the trip:
+        // a still camera's motion is zero bit for bit.
+        const float3 planePoint = planeParams.yzw + dir * t;
+        const float4 prevClip = mul(float4(planePoint, 1.0f), prevViewProj);
+        const float4 currentClip = mul(float4(planePoint, 1.0f), viewProj);
+        if (prevClip.w <= 1.0e-4f || currentClip.w <= 1.0e-4f)
         {
             OutTex[px] = newC; // behind last frame's camera
             return;
         }
-        motion = uv - ((prevClip.xy / prevClip.w) * float2(0.5f, -0.5f) + 0.5f);
+        const float2 prevProjectedUv = (prevClip.xy / prevClip.w) * float2(0.5f, -0.5f) + 0.5f;
+        const float2 currentProjectedUv = (currentClip.xy / currentClip.w) * float2(0.5f, -0.5f) + 0.5f;
+        motion = currentProjectedUv - prevProjectedUv;
     }
     else
     {

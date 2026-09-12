@@ -936,6 +936,7 @@ void SceneRenderer::RecordOceanReflection(Renderer* renderer, ID3D12GraphicsComm
         tc.planeParams = float4(constants.waterHeight, camPos.x, camPos.y, camPos.z);
         tc.invViewProj = camera.GetInvProjMatrixNoJitter() * camera.GetInvViewMatrix();
         tc.prevViewProj = camera.GetPrevViewProjMatrixNoJitter();
+        tc.viewProj = camera.GetViewProjMatrixNoJitter();
         const auto temporalSamplers = std::array{ *SamplerManager::PointClamp(), *SamplerManager::LinearClamp() };
         RecordComputeDispatch(renderer, cl, temporal.get(), temporalCb,
             [&](uint8_t* dest) { resources_.WriteSsrTemporalConstants(tc, dest); },

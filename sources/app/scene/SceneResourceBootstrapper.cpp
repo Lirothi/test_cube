@@ -1310,6 +1310,7 @@ void SsrTemporalHandles::Populate(Material* material)
     planeParams = material->ComputeCB0FieldHandle("planeParams");
     invViewProj = material->ComputeCB0FieldHandle("invViewProj");
     prevViewProj = material->ComputeCB0FieldHandle("prevViewProj");
+    viewProj = material->ComputeCB0FieldHandle("viewProj");
 }
 
 UINT SceneResourceBootstrapper::GetSsrTemporalCBSizeBytes() const
@@ -1331,6 +1332,7 @@ void SceneResourceBootstrapper::WriteSsrTemporalConstants(const SsrTemporalConst
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.planeParams, d.planeParams, dest);
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.invViewProj, d.invViewProj, dest);
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.prevViewProj, d.prevViewProj, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.viewProj, d.viewProj, dest);
 }
 
 void SceneResourceBootstrapper::WriteHzbConstants(const HzbPassConstants& d, uint8_t* dest) const

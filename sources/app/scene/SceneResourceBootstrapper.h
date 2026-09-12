@@ -407,12 +407,14 @@ struct SsrTemporalConstants
     float4 planeParams{};    // x: plane height (world Y), yzw: camera position
     mat4 invViewProj{};      // clip -> world, unjittered
     mat4 prevViewProj{};     // world -> previous frame's clip, unjittered
+    mat4 viewProj{};         // world -> THIS frame's clip, unjittered: the shader takes the motion as the
+                             // difference of the plane point's two projections (see ssr_temporal_cs.hlsl)
 };
 
 struct SsrTemporalHandles
 {
     Material::CBFieldHandle texSize, invTexSize, blendWeight, historyValid, clampExpand;
-    Material::CBFieldHandle planeReproject, planeParams, invViewProj, prevViewProj;
+    Material::CBFieldHandle planeReproject, planeParams, invViewProj, prevViewProj, viewProj;
     void Populate(Material* material);
 };
 
