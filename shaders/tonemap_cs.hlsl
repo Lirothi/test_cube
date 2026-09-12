@@ -1,4 +1,4 @@
-#define TONEMAP_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), UAV(u1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define TONEMAP_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), UAV(u1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 Texture2D HDRColor : register(t0);
 // P3B: blurred base log-luminance, sampled bilinearly. The metering pass writes it and owns both
@@ -8,6 +8,10 @@ Texture2D<float> BaseLogLumTex : register(t1);
 // bilinearly, which is the last upsample step and is why it is an SRV here rather than another UAV.
 // Bound to an inert 1x1 when bloom is off; a zero `bloomScatterApply` is what disables it.
 Texture2D BloomTex : register(t2);
+// P3B bilateral grid (tiles x tiles x 32 luminance bins) = (sum log-luminance, sum weight), written
+// by exposure_bilateral_cs in the same metering pass as t1 and resting in the same read state.
+// Sliced trilinearly at (uv, this pixel's luminance); see local_exposure.hlsli.
+Texture3D<float2> BilateralGridTex : register(t3);
 RWTexture2D<float4> LdrTarget : register(u0);
 // P2: the persistent exposure record, read-only here. Bound as a UAV rather than an SRV purely so
 // it never leaves its canonical UNORDERED_ACCESS state -- an SRV binding would cost a transition
@@ -55,6 +59,13 @@ cbuffer TonemapCB : register(b0)
     float localDetailStrength;
     float localHighlightThreshold;
     float localShadowThreshold;
+    // P3B bilateral base (2026-09-12). UE BlurredLuminanceBlend: 0 = pure grid, 1 = pure blur
+    // (the pre-grid base; also what the host writes when the grid was not built this frame). The
+    // two range numbers are the metering pass's own, so the slice lands on the bins it wrote.
+    float localBlurredBlend;
+    float bilateralMinLogLum;
+    float bilateralInvLogLumRange;
+    float tonemapPad6;
     // P8C-2o -- UE'S CENTRE/SCATTER SPLIT (BloomFinalizeApplyConstants.usf).
     //
     // The bloom is no longer light ADDED on top of a scene that already has it. A kernel is the
@@ -180,7 +191,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         local.highlightContrastScale = localHighlightContrast;
         local.shadowContrastScale = localShadowContrast;
         local.detailStrength = localDetailStrength;
-        local.blurredBlend = 1.0f;
+        local.blurredBlend = localBlurredBlend;
         local.highlightThreshold = localHighlightThreshold;
         local.shadowThreshold = localShadowThreshold;
 
@@ -200,9 +211,17 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 // local operator pulled the frame down by up to 10/255.
                 const float totalExposure =
                     exposureMultiplier * ((preExposureActive != 0) ? preExposure : 1.0f);
-                const float baseLog = BaseLogLumTex.SampleLevel(gSmp, uv, 0)
-                                    + log2(max(totalExposure, 1e-8f));
-                hdr *= LocalExposureMultiplier(log2(lum), baseLog, log2(0.18f), local);
+                const float logExposure = log2(max(totalExposure, 1e-8f));
+                const float logLum = log2(lum);
+                // The grid is sliced at the pixel's UNEXPOSED luminance, the space it was built
+                // in; the blend and the fallback to the blur are UE's CalculateBaseLogLuminance.
+                const float baseLog = LocalExposureBaseLogLum(BilateralGridTex, gSmp, uv,
+                                          logLum - logExposure,
+                                          bilateralMinLogLum, bilateralInvLogLumRange,
+                                          BaseLogLumTex.SampleLevel(gSmp, uv, 0),
+                                          local.blurredBlend)
+                                    + logExposure;
+                hdr *= LocalExposureMultiplier(logLum, baseLog, log2(0.18f), local);
             }
         }
     }

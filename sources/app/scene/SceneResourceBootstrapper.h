@@ -233,6 +233,11 @@ struct SceneTonemapCBHandles
     Material::CBFieldHandle localDetailStrength;
     Material::CBFieldHandle localHighlightThreshold;
     Material::CBFieldHandle localShadowThreshold;
+    // P3B bilateral base: UE's BlurredLuminanceBlend and the metering range the grid was
+    // binned over, so the tonemap's slice lands on the bins exposure_bilateral_cs wrote.
+    Material::CBFieldHandle localBlurredBlend;
+    Material::CBFieldHandle bilateralMinLogLum;
+    Material::CBFieldHandle bilateralInvLogLumRange;
     // P8C-2o: UE's split -- the scene's own factor and the flare's, which PARTITION the light
     // rather than adding to it. See the block comment in tonemap_cs.hlsl.
     Material::CBFieldHandle bloomSceneApply;
@@ -262,6 +267,21 @@ struct SceneExposureBaseLumCBHandles
     Material::CBFieldHandle baseWidth;
     Material::CBFieldHandle baseHeight;
     Material::CBFieldHandle invPreExposure;   // P16.1
+
+    void Populate(Material* material);
+};
+
+// P3B bilateral grid (exposure_bilateral_cs.hlsl). The range fields are the metering pass's own,
+// written to the tonemap as well so the slice and the build agree by construction.
+struct SceneExposureBilateralCBHandles
+{
+    Material::CBFieldHandle invPreExposure;
+    Material::CBFieldHandle minLogLum;
+    Material::CBFieldHandle invLogLumRange;
+    Material::CBFieldHandle inputWidth;
+    Material::CBFieldHandle inputHeight;
+    Material::CBFieldHandle tilesX;
+    Material::CBFieldHandle tilesY;
 
     void Populate(Material* material);
 };
@@ -926,6 +946,7 @@ public:
     std::shared_ptr<Material> GetExposureBuildMaterial() const { return matExposureBuildCS_; }
     std::shared_ptr<Material> GetExposureSolveMaterial() const { return matExposureSolveCS_; }
     std::shared_ptr<Material> GetExposureBaseLumMaterial() const { return matExposureBaseLumCS_; }
+    std::shared_ptr<Material> GetExposureBilateralMaterial() const { return matExposureBilateralCS_; }
     std::shared_ptr<Material> GetGtaoMaterial() const { return matGtaoCS_; }
     UINT GetGtaoCBSizeBytes() const;
     void WriteGtaoConstants(const GtaoPassConstants& data, uint8_t* dest) const;
@@ -1016,6 +1037,7 @@ public:
     UINT GetExposureHistogramCBSizeBytes() const;
     UINT GetExposureSolveCBSizeBytes() const;
     UINT GetExposureBaseLumCBSizeBytes() const;
+    UINT GetExposureBilateralCBSizeBytes() const;
 #if WITH_EDITOR
     UINT GetSelectionOutlineCBSizeBytes() const;
 #endif
@@ -1029,14 +1051,18 @@ public:
     void WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const;
     // P3B lives on the CAMERA now, so the tonemap needs both blocks: the colour pipeline for the
     // curve and grade, the camera for the local-exposure scales.
+    // `bilateralBuilt` is the metering builder's decision that the grid was written this frame;
+    // false writes a pure-blur blend so the tonemap never slices a stale or unwritten grid.
     void WriteTonemapConstants(bool exposureEnabled,
                                const render::ColorPipelineSettings& color,
                                const render::CameraExposureSettings& camera,
                                const BloomApplyConstants& bloomApply,
+                               bool bilateralBuilt,
                                uint8_t* dest) const;
     void WriteExposureHistogramConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
     void WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
     void WriteExposureBaseLumConstants(uint8_t* dest) const;
+    void WriteExposureBilateralConstants(uint8_t* dest) const;
 #if WITH_EDITOR
     void WriteSelectionOutlineConstants(const SelectionOutlinePassConstants& data, uint8_t* dest) const;
 #endif
@@ -1058,6 +1084,7 @@ private:
     std::shared_ptr<Material> matExposureBuildCS_;
     std::shared_ptr<Material> matExposureSolveCS_;
     std::shared_ptr<Material> matExposureBaseLumCS_;
+    std::shared_ptr<Material> matExposureBilateralCS_;
     std::shared_ptr<Material> matGtaoCS_;
     std::shared_ptr<Material> matGtaoFilterCS_;
     std::shared_ptr<Material> matGtaoTemporalCS_;
@@ -1115,6 +1142,7 @@ private:
     SceneExposureHistogramCBHandles exposureHistogramHandles_{};
     SceneExposureSolveCBHandles exposureSolveHandles_{};
     SceneExposureBaseLumCBHandles exposureBaseLumHandles_{};
+    SceneExposureBilateralCBHandles exposureBilateralHandles_{};
 #if WITH_EDITOR
     SceneSelectionOutlineCBHandles selectionOutlineHandles_{};
 #endif

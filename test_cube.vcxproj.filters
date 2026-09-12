@@ -1465,6 +1465,9 @@
     <None Include="shaders\exposure_baselum_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\exposure_bilateral_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\fxaa_cs.hlsl">
       <Filter>shaders</Filter>
     </None>

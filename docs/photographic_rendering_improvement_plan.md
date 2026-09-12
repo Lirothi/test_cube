@@ -1177,6 +1177,49 @@ parameters packed beside them. Cost **0.031 ms** for the whole metering pass aga
 budget for this step alone. Halo and orthogonality results are in the status block above.
 `--sweep=color.localContrast:...` was added for this and is the fastest way to re-measure.
 
+**Bilateral base — DONE 2026-09-12 (uncommitted).** The provenance caveat above is closed: both
+files ARE in the drop (13.0 was stale) and the base layer is now UE's. `shaders/exposure_bilateral_cs.hlsl`
+is the BILATERAL_GRID permutation of `PostProcessHistogram.usf` (8x8 threads x 8x8 loop = 64-texel
+tiles, 32 bins, per-thread histograms reduced to `(sum log-luminance, sum weight)` per bin);
+`LocalExposureBaseLogLum` in `local_exposure.hlsli` is `CalculateBaseLogLuminance`
+(`PostProcessHistogramCommon.ush`): trilinear slice at (uv, the pixel's own UNEXPOSED luminance),
+blur fallback below weight 0.001, `lerp(bilateral, blurred, BlurredLuminanceBlend)`. The grid is a
+`Texture3D` RG32F 16x9x32 on `ExposureMetering` (`Exposure.BilateralGrid`, rests NPS, rides the base
+layer's two points, dispatched right after it in the metering pass); the input is a FIXED virtual
+1024x576 (bilinear samples of the scene, resolution-independent like the histogram; the tiles divide
+it exactly, so UE's `BilateralGridUVScale` is 1 by construction). Deviations are listed in the
+shader header (fixed virtual input, float accumulators instead of packed-uint atomics, no gather
+quad). Knob: `cameraExposure.localBlurredBlend` (UE `LocalExposureBlurredLuminanceBlend`, default
+0.6; 1 = the previous blur-only base, the same branch bit for bit), Inspector "Local Blur Blend",
+`--set=exposure.localBlurredBlend`. A frame whose metering did not build the grid gets blend 1
+from the host and never slices it.
+
+Measured (wind_test beach view `--cam-pos=-54.81,3.00,63.71 --cam-rot=-0.0571,0.4842,0.0317,0.8725`,
+native 2560x1440, fixed exposure, wind frozen, the level's local contrast 0.7/0.9). The horizon
+band of the fog/sky plan (2026-09-11) = per-row ratio (sky picture x2) / (x1) over the open-water
+columns; the sky rows read x1.23 in every arm:
+
+| rows under the horizon | blend 1 (blur only) | blend 0.6 (default) | blend 0 (grid only) |
+|---|---:|---:|---:|
+| +2 | x0.932 | x0.944 | x0.962 |
+| +4..+12 | x0.93-0.95 | x0.96-0.98 | x1.00 |
+| +14..+22 | x0.96-1.00 | x0.98-0.99 | x1.00 |
+| +40..+80 | x1.000 | x0.995 | x0.989 |
+| band depth, +0..+24 against +40..+80 | 0.956 | 0.974 | 0.9997 |
+
+The grid alone removes the band; UE's default blend halves it, because 60 % of the base is still
+the blur. Two properties of the grid worth knowing before tuning: (1) the far water still moves
+x0.989 under a sky change with the pure grid -- luminance-domain locality: a 160-px tile shares
+its bins between bright water and sky, so a bin's mean includes both; (2) the grid base is
+essentially the pixel's own luminance quantised to a 0.77-stop bin, so the detail residual almost
+vanishes and the operator tends towards a global highlight curve (whole frame x0.982 at blend 0,
+x0.994 at 0.6) -- which is exactly why UE keep 60 % blur in the base. Row +0 (the anti-aliased
+horizon row itself) gets slightly MORE compression with the grid (x0.90): its luminance sits between
+the two sides and the Z slice mixes the sky's bins; not visible by eye. No tile blockiness by eye.
+Cost: `Pass_ExposureMetering` 0.031 -> 0.057 ms (144 groups x 64 threads x 64 bilinear samples).
+Gates: `check_shaders` 6/6, all three configurations build, Debug `--gbv` clean (only the
+exit-time live-device lines), five Release shots + one Debug run in total.
+
 **Risk:** halos and the flat "tone-mapped HDR" cliche. Mitigation: compress the base layer only,
 keep defaults conservative, and judge on the reference rather than on the metrics alone.
 

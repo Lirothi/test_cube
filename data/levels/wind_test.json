@@ -13951,8 +13951,9 @@
       "enabled": true,
       "highPercentile": 0.949999988079071,
       "isoSensitivity": 100.0,
+      "localBlurredBlend": 0.6000000238418579,
       "localDetailStrength": 1.0,
-      "localHighlightContrast": 0.7,
+      "localHighlightContrast": 0.6499999761581421,
       "localHighlightThreshold": 0.5,
       "localShadowContrast": 0.8999999761581421,
       "localShadowThreshold": 0.5,
@@ -14010,7 +14011,11 @@
       "sunScatterStartDistance": 100.0,
       "sunScatterStrength": 0.10000000149011612,
       "volumetric": true
-    }
+    },
+    "localDetailStrength": 1.100000023841858,
+    "localHighlightThreshold": 0.25,
+    "localShadowContrast": 0.75,
+    "localShadowThreshold": 0.25
   },
   "skyAtmosphere": {
     "aerialPerspective": true,

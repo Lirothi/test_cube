@@ -67,6 +67,25 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE BaseLumUav() const { return baseLumUav_; }
     D3D12_CPU_DESCRIPTOR_HANDLE BaseLumSrv() const { return baseLumSrv_; }
 
+    // P3B bilateral grid (2026-09-12), UE's LocalExposure texture: (tilesX, tilesY, 32 bins) of
+    // (sum log-luminance, sum weight), written by exposure_bilateral_cs and sliced by the tonemap.
+    // The tiles are laid over a FIXED virtual input (bilinear samples of the scene), 64 texels a
+    // tile as UE's 8x8 threads x 8x8 loop fix it; the virtual size is a multiple of the tile so
+    // the grid covers the frame exactly and UE's BilateralGridUVScale is 1 by construction.
+    // Resolution-independent for the same reasons as the base layer, so no resize handling.
+    static constexpr UINT kBilateralTileTexels = 64u;
+    static constexpr UINT kBilateralInputWidth = 1024u;
+    static constexpr UINT kBilateralInputHeight = 576u;
+    static constexpr UINT kBilateralTilesX = kBilateralInputWidth / kBilateralTileTexels;  // 16
+    static constexpr UINT kBilateralTilesY = kBilateralInputHeight / kBilateralTileTexels; // 9
+    static constexpr UINT kBilateralBins = 32u; // UE BILATERAL_GRID_DEPTH
+    static_assert(kBilateralInputWidth % kBilateralTileTexels == 0u &&
+                  kBilateralInputHeight % kBilateralTileTexels == 0u,
+        "the tonemap slices the grid with a UV scale of exactly 1: the tiles must divide the input");
+    ID3D12Resource* BilateralGridResource() const { return bilateralGrid_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE BilateralGridUav() const { return bilateralGridUav_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE BilateralGridSrv() const { return bilateralGridSrv_; }
+
     // What the solve last wrote, read back from the GPU. Section 6.5 of the plan requires the dev
     // UI to surface these, and without them the settings are being tuned blind.
     struct Readback
@@ -106,6 +125,10 @@ private:
     GpuResource baseLum_;
     D3D12_CPU_DESCRIPTOR_HANDLE baseLumUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE baseLumSrv_{};
+    // P3B bilateral grid, same lifecycle and resting state as the base layer.
+    GpuResource bilateralGrid_;
+    D3D12_CPU_DESCRIPTOR_HANDLE bilateralGridUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE bilateralGridSrv_{};
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE histogramSrv_{};

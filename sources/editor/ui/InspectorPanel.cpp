@@ -743,6 +743,13 @@ namespace
             dragF("Local SH Threshold", "localShadowThreshold", 0.0f, 0.05f, 0.0f, 8.0f, "%.2f");
             InspectorHelp("Stops away from middle grey before the effect starts, so mid-tones -- "
                           "usually the subject -- are left alone.");
+            dragF("Local Blur Blend", "localBlurredBlend", 0.6f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("What the operator judges a neighbourhood by (UE Blurred Luminance "
+                          "Blend, default 0.6). 0 = the bilateral grid only: each pixel's "
+                          "neighbourhood is the nearby pixels about AS BRIGHT as itself, so a "
+                          "bright sky does not lift the base of the water just under the horizon "
+                          "(the dark band). 1 = a plain blur only, which bleeds across every "
+                          "high-contrast edge -- what shipped before the grid.");
             {
                 // Mirrors the dev window's local-exposure presets exactly, including "Expand",
                 // which is the one measured against docs/ref/ref_wind_test.png.

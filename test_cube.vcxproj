@@ -685,6 +685,7 @@
     <None Include="shaders\exposure_histogram_cs.hlsl" />
     <None Include="shaders\exposure_solve_cs.hlsl" />
     <None Include="shaders\exposure_baselum_cs.hlsl" />
+    <None Include="shaders\exposure_bilateral_cs.hlsl" />
     <None Include="shaders\fxaa_cs.hlsl" />
     <None Include="shaders\ui_rect.hlsl" />
     <None Include="shaders\utils.hlsli" />

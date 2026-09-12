@@ -1923,6 +1923,9 @@ void SceneRenderer::BuildPost(Renderer* renderer, GraphBuild& gb)
                         resources_.GetExposureClearMaterial() &&
                         resources_.GetExposureBuildMaterial() &&
                         resources_.GetExposureSolveMaterial();
+            // A dormant camera builds no grid: the tonemap must not blend last frame's (or a
+            // never-written) grid in. Set again below once the real decision is made.
+            exposureBilateralRan_ = false;
             if (!pts.meter)
             {
                 return [this, renderer, pts](RenderGraphPassContext c) {
@@ -1937,15 +1940,30 @@ void SceneRenderer::BuildPost(Renderer* renderer, GraphBuild& gb)
             ctx.Use(metering.HistogramResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             ctx.Use(metering.ExposureResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             pts.baseLum = resources_.GetExposureBaseLumMaterial() != nullptr;
+            // The bilateral grid rides the base layer's two points: written right after it, back
+            // to its read state with it. Without the base layer there is no blend to feed.
+            pts.bilateral = pts.baseLum && resources_.GetExposureBilateralMaterial() != nullptr;
             if (pts.baseLum)
             {
                 // P3B: the base layer leaves its resting read state only for this pass...
                 ctx.Use(metering.BaseLumResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                if (pts.bilateral)
+                {
+                    ctx.Use(metering.BilateralGridResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                }
                 ctx.NextPoint();
                 pts.baseLumRead = ctx.usePoint ? *ctx.usePoint : 0u;
                 // ...and is back in it before the solve runs, which is why this is its OWN point.
                 ctx.Use(metering.BaseLumResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                if (pts.bilateral)
+                {
+                    ctx.Use(metering.BilateralGridResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                }
             }
+            // The tonemap's builder runs after this one in the same serial phase and reads this
+            // to decide whether the grid may be blended in (pass-flow S8: one conjunction, decided
+            // where it is declared from, not re-derived in the consumer).
+            exposureBilateralRan_ = pts.bilateral;
             // The dev-UI readback copies AFTER the solve, then straight back to canonical so the
             // tonemap's UAV binding needs no barrier of its own.
             ctx.NextPoint();
@@ -2031,6 +2049,8 @@ void SceneRenderer::BuildPost(Renderer* renderer, GraphBuild& gb)
                    resources_.GetFxaaCBSizeBytes() > 0 &&
                    renderer->GetWidth() > 0 && renderer->GetHeight() > 0;
         pts.resolve = haveTonemap && renderer->GetCurrentBackbuffer() != nullptr;
+        // P3B: decided by the metering builder, which ran earlier in this same serial phase.
+        pts.bilateral = exposureBilateralRan_;
 
         p.UseDeclared(); // tonemap + fxaa -> UAV
         pts.apply = p.usePoint ? *p.usePoint : 0u;

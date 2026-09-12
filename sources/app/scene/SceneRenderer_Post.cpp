@@ -240,7 +240,21 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
                 { D.sceneSRV }, { metering.BaseLumUav() }, samplerTable,
                 ExposureMetering::kBaseLumWidth, ExposureMetering::kBaseLumHeight,
                 metering.BaseLumResource());
+            // 2c) P3B bilateral grid, UE's LocalExposure texture: one 8x8 group per 64x64 tile of
+            // the fixed virtual input, so the dispatch is (tiles x 8) wide -- RecordComputeDispatch
+            // divides by 8 and lands on exactly one group per tile.
+            if (auto bilateralMat = pts.bilateral ? resources_.GetExposureBilateralMaterial() : nullptr)
+            {
+                RecordComputeDispatch(renderer, t.cl, bilateralMat.get(),
+                    resources_.GetExposureBilateralCBSizeBytes(),
+                    [this](uint8_t* dest) { resources_.WriteExposureBilateralConstants(dest); },
+                    { D.sceneSRV }, { metering.BilateralGridUav() }, samplerTable,
+                    ExposureMetering::kBilateralTilesX * kComputeDispatchGroupSize,
+                    ExposureMetering::kBilateralTilesY * kComputeDispatchGroupSize,
+                    metering.BilateralGridResource());
+            }
             // Straight back to its resting READ state, so the tonemap samples it with no barrier.
+            // The grid rides the same point.
             renderer->EmitPoint(t.cl, pts.baseLumRead);
         }
 
@@ -404,16 +418,17 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
         CPU_SCOPE(ProfilerScopes::kTonemapCurveRecord);
         GPU_SCOPE(t.cl, ProfilerScopes::kTonemapCurve);
         RecordComputeDispatch(renderer, t.cl, tonemapMaterial.get(), tonemapCb,
-            [this, applyExposure, bloomRan = pts.bloom](uint8_t* dest) {
+            [this, applyExposure, bloomRan = pts.bloom, bilateralRan = pts.bilateral](uint8_t* dest) {
                 // Taken from the GATE, not from the setting: if the chain did not run this frame
                 // the target holds the previous frame's image (or nothing at all), and a non-zero
                 // scatter here would composite it.
                 const BloomApplyConstants apply =
                     bloomRan ? bloom_.ApplyConstants() : BloomApplyConstants{};
+                // Same rule for the grid: not built this frame -> a pure-blur blend, never sliced.
                 resources_.WriteTonemapConstants(applyExposure, frame_->colorPipeline,
-                                                 frame_->cameraExposure, apply, dest);
+                                                 frame_->cameraExposure, apply, bilateralRan, dest);
             },
-            { tonemapSrc, metering.BaseLumSrv(), D.bloomUpSRV },
+            { tonemapSrc, metering.BaseLumSrv(), D.bloomUpSRV, metering.BilateralGridSrv() },
             { D.tonemapUAV, metering.ExposureUav() }, samplerTable,
             renderer->GetWidth(), renderer->GetHeight(),
             D.tonemap.Get());

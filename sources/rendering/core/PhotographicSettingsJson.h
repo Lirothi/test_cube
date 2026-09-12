@@ -76,6 +76,8 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     out.localDetailStrength     = j.value("localDetailStrength",     out.localDetailStrength);
     out.localHighlightThreshold = j.value("localHighlightThreshold", out.localHighlightThreshold);
     out.localShadowThreshold    = j.value("localShadowThreshold",    out.localShadowThreshold);
+    out.localBlurredBlend       = j.value("localBlurredBlend",       out.localBlurredBlend);
+    out.localBlurredBlend       = std::clamp(out.localBlurredBlend,       0.0f, 1.0f);
     out.localHighlightContrast  = std::clamp(out.localHighlightContrast,  0.1f, 2.0f);
     out.localShadowContrast     = std::clamp(out.localShadowContrast,     0.1f, 2.0f);
     out.localDetailStrength     = std::clamp(out.localDetailStrength,     0.0f, 3.0f);
@@ -204,6 +206,7 @@ inline nlohmann::json ToJson(const CameraExposureSettings& s)
         { "localDetailStrength",     s.localDetailStrength },
         { "localHighlightThreshold", s.localHighlightThreshold },
         { "localShadowThreshold",    s.localShadowThreshold },
+        { "localBlurredBlend",       s.localBlurredBlend },
         { "minEv100",       s.minEv100 },
         { "maxEv100",       s.maxEv100 },
         { "lowPercentile",  s.lowPercentile },

@@ -343,6 +343,9 @@ private:
         bool flares = false;
         bool fxaa = false;
         bool resolve = false;   // the tonemap material and a backbuffer both exist
+        // P3B: the metering builder built the bilateral grid this frame, so the tonemap may
+        // blend it in; otherwise the host writes a pure-blur blend and the grid is never sliced.
+        bool bilateral = false;
     };
     // P6C step 6: fills the HZB tracer's half of the SSR constants. ONE definition, called by the
     // opaque and the glass dispatch, so the two can never disagree about whether the furthest
@@ -509,6 +512,7 @@ private:
         std::uint32_t restore = 0;      // ...and back to UAV, which is where they rest
         bool meter = false;             // enabled + metering ready + all three materials
         bool baseLum = false;           // the P3B base-luminance dispatch runs this frame
+        bool bilateral = false;         // ...and the bilateral grid right after it (same points)
     };
     // P2: clear + build the luminance histogram and solve the adapted exposure. Runs before the
     // tonemap, which consumes the value it writes.
@@ -579,6 +583,9 @@ private:
     // (Whether the resolve RUNS is this frame's decision and lives in FrameDecisions::ssrTemporal.)
     bool ssrHistoryValid_ = false;
     // The ocean reflection's own history bookkeeping (its buffer has its own size), same rules.
+    // P3B: the metering builder's decision that the bilateral grid is built this frame, read by
+    // the tonemap builder later in the same serial phase (see SceneRenderer_Graph.cpp).
+    bool exposureBilateralRan_ = false;
     bool oceanHistoryValid_ = false;
     uint32_t oceanHistoryFrames_ = 0u;
     uint32_t oceanHistoryWidth_ = 0u;

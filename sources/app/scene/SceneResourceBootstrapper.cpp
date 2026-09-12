@@ -324,6 +324,9 @@ void SceneTonemapCBHandles::Populate(Material* material)
     localDetailStrength = material->ComputeCB0FieldHandle("localDetailStrength");
     localHighlightThreshold = material->ComputeCB0FieldHandle("localHighlightThreshold");
     localShadowThreshold = material->ComputeCB0FieldHandle("localShadowThreshold");
+    localBlurredBlend = material->ComputeCB0FieldHandle("localBlurredBlend");
+    bilateralMinLogLum = material->ComputeCB0FieldHandle("bilateralMinLogLum");
+    bilateralInvLogLumRange = material->ComputeCB0FieldHandle("bilateralInvLogLumRange");
     bloomSceneApply = material->ComputeCB0FieldHandle("bloomSceneApply");
     bloomScatterApply = material->ComputeCB0FieldHandle("bloomScatterApply");
 }
@@ -356,6 +359,22 @@ void SceneExposureBaseLumCBHandles::Populate(Material* material)
     baseWidth = material->ComputeCB0FieldHandle("baseWidth");
     invPreExposure = material->ComputeCB0FieldHandle("invPreExposure");
     baseHeight = material->ComputeCB0FieldHandle("baseHeight");
+}
+
+void SceneExposureBilateralCBHandles::Populate(Material* material)
+{
+    *this = {};
+    if (!material)
+    {
+        return;
+    }
+    invPreExposure = material->ComputeCB0FieldHandle("invPreExposure");
+    minLogLum = material->ComputeCB0FieldHandle("minLogLum");
+    invLogLumRange = material->ComputeCB0FieldHandle("invLogLumRange");
+    inputWidth = material->ComputeCB0FieldHandle("inputWidth");
+    inputHeight = material->ComputeCB0FieldHandle("inputHeight");
+    tilesX = material->ComputeCB0FieldHandle("tilesX");
+    tilesY = material->ComputeCB0FieldHandle("tilesY");
 }
 
 void SceneExposureSolveCBHandles::Populate(Material* material)
@@ -518,6 +537,13 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         cd.shaderFile = L"shaders/exposure_baselum_cs.hlsl";
         cd.csEntry = "CSMain";
         matExposureBaseLumCS_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    if (!matExposureBilateralCS_)
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/exposure_bilateral_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matExposureBilateralCS_ = mm->GetOrCreateCompute(renderer, cd);
     }
     if (!matExposureSolveCS_)
     {
@@ -883,6 +909,7 @@ void SceneResourceBootstrapper::RefreshHandles()
     exposureHistogramHandles_.Populate(matExposureBuildCS_.get());
     exposureSolveHandles_.Populate(matExposureSolveCS_.get());
     exposureBaseLumHandles_.Populate(matExposureBaseLumCS_.get());
+    exposureBilateralHandles_.Populate(matExposureBilateralCS_.get());
     gtaoHandles_.Populate(matGtaoCS_.get());
     gtaoFilterHandles_.Populate(matGtaoFilterCS_.get());
     gtaoTemporalHandles_.Populate(matGtaoTemporalCS_.get());
@@ -1444,6 +1471,31 @@ void SceneResourceBootstrapper::WriteExposureBaseLumConstants(uint8_t* dest) con
         1.0f / std::max(render::g_preExposure, 1.0e-8f), dest);
 }
 
+UINT SceneResourceBootstrapper::GetExposureBilateralCBSizeBytes() const
+{
+    return matExposureBilateralCS_ ? matExposureBilateralCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+}
+
+void SceneResourceBootstrapper::WriteExposureBilateralConstants(uint8_t* dest) const
+{
+    if (!matExposureBilateralCS_ || !dest)
+    {
+        return;
+    }
+    const auto& h = exposureBilateralHandles_;
+    // The metering range, verbatim: the tonemap receives the same two numbers, so the slice
+    // lands on the bins this build wrote.
+    const float range = ExposureMeteringConstants::kMaxLogLum - ExposureMeteringConstants::kMinLogLum;
+    matExposureBilateralCS_->UpdateCBField(h.invPreExposure,
+        1.0f / std::max(render::g_preExposure, 1.0e-8f), dest);
+    matExposureBilateralCS_->UpdateCBField(h.minLogLum, ExposureMeteringConstants::kMinLogLum, dest);
+    matExposureBilateralCS_->UpdateCBField(h.invLogLumRange, 1.0f / range, dest);
+    matExposureBilateralCS_->UpdateCBField(h.inputWidth, ExposureMetering::kBilateralInputWidth, dest);
+    matExposureBilateralCS_->UpdateCBField(h.inputHeight, ExposureMetering::kBilateralInputHeight, dest);
+    matExposureBilateralCS_->UpdateCBField(h.tilesX, ExposureMetering::kBilateralTilesX, dest);
+    matExposureBilateralCS_->UpdateCBField(h.tilesY, ExposureMetering::kBilateralTilesY, dest);
+}
+
 UINT SceneResourceBootstrapper::GetExposureSolveCBSizeBytes() const
 {
     return matExposureSolveCS_ ? matExposureSolveCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
@@ -1669,6 +1721,7 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
                                                       const render::ColorPipelineSettings& color,
                                                       const render::CameraExposureSettings& camera,
                                                       const BloomApplyConstants& bloomApply,
+                                                      bool bilateralBuilt,
                                                       uint8_t* dest) const
 {
     if (!matTonemapCS_ || !dest)
@@ -1702,6 +1755,13 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
     matTonemapCS_->UpdateCBField(h.localDetailStrength, camera.localDetailStrength, dest);
     matTonemapCS_->UpdateCBField(h.localHighlightThreshold, camera.localHighlightThreshold, dest);
     matTonemapCS_->UpdateCBField(h.localShadowThreshold, camera.localShadowThreshold, dest);
+    // P3B bilateral base. A grid that was not built this frame must not be sliced: a blend of 1
+    // is the shader's "blur only" branch and never reads the 3D texture.
+    matTonemapCS_->UpdateCBField(h.localBlurredBlend,
+        bilateralBuilt ? std::clamp(camera.localBlurredBlend, 0.0f, 1.0f) : 1.0f, dest);
+    matTonemapCS_->UpdateCBField(h.bilateralMinLogLum, ExposureMeteringConstants::kMinLogLum, dest);
+    matTonemapCS_->UpdateCBField(h.bilateralInvLogLumRange,
+        1.0f / (ExposureMeteringConstants::kMaxLogLum - ExposureMeteringConstants::kMinLogLum), dest);
     matTonemapCS_->UpdateCBField(h.bloomSceneApply, bloomApply.sceneApply, dest);
     matTonemapCS_->UpdateCBField(h.bloomScatterApply, bloomApply.scatterApply, dest);
 }

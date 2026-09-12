@@ -61,7 +61,7 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.Value");
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors = 6; // histogram SRV/UAV + exposure SRV/UAV + base-lum SRV/UAV
+    heapDesc.NumDescriptors = 8; // histogram, exposure, base-lum, bilateral grid: SRV/UAV each
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap_)));
@@ -142,6 +142,48 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         baseUav.Format = DXGI_FORMAT_R16_FLOAT;
         baseUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         device->CreateUnorderedAccessView(baseLum_.Get(), nullptr, &baseUav, baseLumUav_);
+    }
+
+    // P3B bilateral grid: UE's PF_G32R32F Texture3D (tiles x tiles x bins). RG32_FLOAT because
+    // the two channels are SUMS (log-luminance and weight, up to 4096 samples a cell) that the
+    // tonemap divides after trilinear filtering; a half float would quantise the ratio. Same
+    // resting state and the same two transitions as the base layer above.
+    {
+        D3D12_HEAP_PROPERTIES heapProps{};
+        heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+        desc.Width = kBilateralTilesX;
+        desc.Height = kBilateralTilesY;
+        desc.DepthOrArraySize = static_cast<UINT16>(kBilateralBins);
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R32G32_FLOAT;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        ComPtr<ID3D12Resource> resource;
+        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
+            desc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &resource));
+        bilateralGrid_.Attach(renderer->Declarations(), std::move(resource),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"Exposure.BilateralGrid");
+
+        bilateralGridSrv_ = next();
+        D3D12_SHADER_RESOURCE_VIEW_DESC gridSrv{};
+        gridSrv.Format = DXGI_FORMAT_R32G32_FLOAT;
+        gridSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+        gridSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        gridSrv.Texture3D.MipLevels = 1;
+        device->CreateShaderResourceView(bilateralGrid_.Get(), &gridSrv, bilateralGridSrv_);
+
+        bilateralGridUav_ = next();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC gridUav{};
+        gridUav.Format = DXGI_FORMAT_R32G32_FLOAT;
+        gridUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+        gridUav.Texture3D.MipSlice = 0;
+        gridUav.Texture3D.FirstWSlice = 0;
+        gridUav.Texture3D.WSize = kBilateralBins;
+        device->CreateUnorderedAccessView(bilateralGrid_.Get(), nullptr, &gridUav, bilateralGridUav_);
     }
 
     // Readback ring for the dev UI. Tiny and persistently mapped, in the same shape the particle
@@ -258,6 +300,9 @@ void ExposureMetering::Release()
     baseLum_.Reset();
     baseLumUav_ = {};
     baseLumSrv_ = {};
+    bilateralGrid_.Reset();
+    bilateralGridUav_ = {};
+    bilateralGridSrv_ = {};
     if (readback_ && readbackPtr_)
     {
         readback_->Unmap(0, nullptr);

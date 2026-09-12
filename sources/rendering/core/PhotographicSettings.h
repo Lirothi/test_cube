@@ -222,6 +222,10 @@ struct CameraExposureSettings
     // are left alone rather than churned.
     float localHighlightThreshold = 0.0f;
     float localShadowThreshold = 0.0f;
+    // UE LocalExposureBlurredLuminanceBlend (default 0.6): how much of the base layer is the
+    // blurred log-luminance against the bilateral grid. 1 = the pre-grid blur-only base, which
+    // halos at a high-contrast edge (the horizon band of 2026-09-11); 0 = pure grid.
+    float localBlurredBlend = 0.6f;
 };
 
 // Display transform (plan section 6.1 / step P3).

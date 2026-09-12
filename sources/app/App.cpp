@@ -946,6 +946,9 @@ namespace
         { e.localShadowContrast = value; return true; }
         if (setting == "exposure.localDetailStrength" || setting == "color.localDetailStrength")
         { e.localDetailStrength = value; return true; }
+        // P3B bilateral base: 1 = the pre-grid blur-only base (the A/B arm), UE's default 0.6.
+        if (setting == "exposure.localBlurredBlend")
+        { e.localBlurredBlend = value; return true; }
         // Composite: both local contrast scales at once. The two are independent branches of the
         // same function (base above / below middle grey), so sweeping them together is the only way
         // to measure the base EXPANSION the plan's P3B target needs -- one knob alone can move only
