@@ -3580,6 +3580,215 @@ cascades.needsRedraw[idx] = needsRedraw;   // новое поле в CascadeData
 
 ---
 
+## S15–S18. SDSM-режим: третий режим теней рядом с legacy-CSM и VSM — PLANNED 2026-09-12
+
+**Решение юзера (2026-09-12):** «адоптить по максимуму, плясания не боимся, можно сразу юзать
+подход с indirect draw; единственное — параллельно с текущим подходом и переключаемо».
+Отсюда три несущих правила этого трека:
+
+1. **Отдельный режим `render::ShadowMode::Sdsm`** рядом с `Legacy` и `VSM`: `--shadow-mode=sdsm`,
+   `graphics_settings.json` → `"mode": "sdsm"`, тумблер в dev-окне (как у legacy/VSM). Legacy и VSM
+   не трогаются; общий код только через явные варианты (define/режим), и любой шаг ниже
+   обязан оставлять legacy-картинку бит-в-бит (same-binary A/B переключением режима).
+2. **Всё, что решает подгонку, живёт на GPU и в ЭТОМ кадре** — путь Anno 1800, не «lite»:
+   анализ глубины → партиции → кулл кастеров → indirect-draw → семплер читают один буфер
+   партиций, который пишет compute. Никакого ридбэка в цепочке рендера (он только для ридаута
+   dev-окна). Лестницы/гистерезиса/снапа НЕТ: границы меняются каждый кадр, стабильность даёт
+   разрешение + EVSM (с. 29 заметок, подтверждено демкой).
+3. **Транскрипция сэмпла Intel** (`D:\Programming\sdsm\sdsm_dx11\`, лицензия Intel sample —
+   permissive с сохранением notice; транскрибированные файлы несут строку в шапке), а не
+   «по мотивам». Где мы отступаем — записывать в шапке файла, как везде.
+
+### Почему это работает (сверено: геометрия, заметки, Anno, демка)
+
+* **Радиус каскада у нас задаёт дальняя граница среза**, ближняя в него не входит: сфера S1 при
+  hfov 90°/16:9 клампится на дальнюю плоскость, r = k·far, k = √(tan²(hfov/2)+tan²(vfov/2)) =
+  1.147. Остров на 120 м в полёте сегодня шейдится каскадом [100, 300] с r = 344; подтяни конец
+  каскада 0 к 130 м — r = 149, тексель ×2.3 мельче (эксперимент юзера). Статические сплиты
+  10/35/100/300 в полёте тратят три тайла из четырёх на пустой воздух.
+* **Тесные XY-границы по семплам** режут ещё и поперёк: небо над горизонтом, землю ниже видимого,
+  всё загороженное. Пляжная виста, каскад 35–100 м: сфера 230 м → 0.115 м/тексель на 2K; бокс по
+  семплам ≈ 200×90 м light-space → 0.10×0.045 м анизотропно; пиксель камеры на 70 м ≈ 0.055 м —
+  уровень пикселя, на тайле 4K — субпиксель.
+* **Заметки к докладу** (`sampledistributionshadowmaps-siggraph2010-notes-181237.pdf`): с. 9/20 —
+  «near being tightened is actually the most important» (near ДИАПАЗОНА лог-разбиения, не
+  плоскость среза); с. 22–24 — сами авторы рекомендуют лог-схему + reduce-путь, k-means/adaptive
+  «introduce glass jaws», гистограмма на атомиках «impractically slow» на NVIDIA 2010 года;
+  с. 25–26 — SDSM БЫСТРЕЕ PSSM: тесные фрустумы = «effectively free occlusion culling»; с. 28–29 —
+  квантование по текселям и степеням двойки отвергнуто, ставка на субпиксельное разрешение.
+* **Anno 1800 — это SDSM** (Intel/Ubisoft «Bringing Anno 1800 to Laptop Gamers…», раздел
+  «Shadows Optimizations», текст в scratchpad `anno_intel.txt`): «a compute shader dynamically
+  adjusts the shadow cascades each frame by analyzing the depth buffer after the Z prepass …
+  much sharper shadows in almost all cases», тени «connected to their casters» (старые CSM с
+  биасами давали отрыв). Их грабли: ридбэк сплитов на CPU для раскладки кастеров «lags several
+  frames behind and is just too outdated» → партиционирование на GPU (structured buffer AABB → CS
+  против split-планов → `DrawIndexedInstancedIndirect`). Число каскадов по питчу камеры (1 в
+  top-down … 4 к горизонту), швы — blue-noise дизер. Frame analysis Thomas Poulet: атлас из двух
+  shadow-камер, тесная для близи + широкая для террейна, compute-cull → indirect.
+* **Демка Intel глазами юзера:** «с EVSM и 4x shadow AA выглядит офигенно, плясания текселей
+  фактически нет и с реально норм высоты тени оч чёткие даже с 1K каскадами, а с 2K вообще
+  огонь». Три множителя: тесные границы (тексель ≤ пикселя), shadow-MSAA, схлопнутый В МОМЕНТЫ
+  (суперсемплированная видимость — PCF так не умеет, он сравнивает до фильтра), и EVSM как
+  префильтруемое представление (аниз. семплер 16×, `SampleGrad`, мипы, блюр в light-space).
+
+### Порядок кадра в режиме SDSM
+
+Тени уходят с раннего слота кадра (legacy: `Main_CSM` до `Main_GBuffer`) на место, где стоит
+VSM-page-request — после `pGbufDone`/`pHzb`, потому что анализ нужен по глубине ЭТОГО кадра:
+
+```
+Main_GBuffer → Main_Hzb
+  → Main_SdsmAnalyze   (compute, 4 диспатча в одной CL: ClearZBounds → ReduceZBounds по depth
+                         → LogPartitionsFromZBounds → ReduceBoundsFromGBuffer (XYZ light-space
+                         per partition) → ComputePartitionData: scale/bias + матрицы + texelWS)
+  → Main_SdsmCull      (GPU-кулл ВСЕХ кастеров против боксов партиций из буфера → indirect args;
+                         существующий shadow_cull_cs с вариантом «планы из буфера, не из CB»)
+  → Main_SdsmShadow    (по каскадам: indirect-draw в MSAA-тайл D32 → EVSM-конверсия в тайл
+                         атласа моментов → 2 прохода блюра → мипы)
+  → Main_Lighting / glass / fog: csm_sample в режиме 3 читает партиции из SRV буфера
+```
+
+Ноль лага: те же семплы, что шейдятся, задают партиции. Цена — тени больше не перекрываются
+с G-buffer-ом на ранней части кадра; так уже живёт VSM, замерять `GPU.Frame`, а не пасс.
+
+### Контракт буфера партиций (единственный источник правды)
+
+`SdsmPartition` — зеркало HLSL/C++ (`struct` в `shaders/sdsm_partitions.hlsli` и
+`sources/rendering/shadows/SdsmPartitions.h`, static_assert на размер): `intervalBegin/End`
+(view-Z), `lightView` (общий для каскадов — одно направление солнца; матрица от CPU),
+`boundsMin/Max` (light-space XYZ по семплам, после бордера/дилатации/клампа), `lightProj`
+(ортобокс — АНИЗОТРОПНЫЙ), `atlasScaleBias`, `texelWS.xy`, `evsmExponents`, `sampleCount`.
+Один продюсер — `Main_SdsmAnalyze`. Потребители: cull CS, shadow-VS (индекс каскада из
+`SV_InstanceID`/root-константы, матрица из буфера — `Rendering.hlsl:125-142` сэмпла, у них
+scale/bias в NDC, у нас готовая матрица), `csm_sample.hlsli` (режим 3, буфер вместо CB
+`splitsVS`/`lightView`/`lightProj`/`atlasScale`/`cascadeTexelWS`), ридаут dev-окна через
+фенс-ринг (`PollHzbStats`-образец) — ТОЛЬКО для показа.
+
+### S15. Ядро: анализ + партиции на GPU + indirect-кулл/draw + семплер из буфера
+
+Транскрипция: `LogPartitions.hlsl:79` `ReduceZBoundsFromGBuffer` (16×16, тайл `mReduceTileDim`,
+groupshared-редукция, `InterlockedMin/Max` через `asuint`, семплы вне [near, far) — небо —
+отбрасываются), `:132` `ComputeLogPartitionsFromZBounds` + `:24` `LogPartitionFromRange`
+(первая партиция от near камеры, последняя до far — покрытие полное по построению),
+`CustomPartitions.hlsl:45` `ReduceBoundsFromGBuffer` (per-thread bounds по партициям без
+атомиков, редукция в shared, атомики в буфер), `SDSMPartitions.hlsl:141`
+`ComputePartitionDataFromBounds` (бордер `mLightSpaceBorder` под ядро фильтра, дилатация
+`mDilationFactor`, кламп зума `mMaxScale`, пустая партиция → крошечный регион / у нас пропуск).
+Наши отличия (в шапке файлов): матрицы вместо NDC scale/bias; `mMaxScale` = бокс сферы S1
+(границы никогда не шире него — сфера остаётся потолком и фолбэком при нуле семплов); один
+`Texture2D` depth вместо их G-buffer-декода; reverse-Z.
+
+Кулл и draw: **все кастеры на GPU-пути** (урок Anno). `shadow_cull_cs` получает вариант
+«планы из буфера партиций» (6 планов бокса — тесный бокс по семплам делает S14-призму
+ненужной); args/списки те же, что у Rung 0; `ExecuteIndirect` по каскадам. Инвентарь кастеров
+вне GPU-пути (CPU-история, editor-preview, динамика) — первый пункт шага: перевести в GPU-список
+или (только для остатка) куллить по партициям ПРОШЛОГО кадра с запасом — ровно тот путь,
+который у Anno не сработал для ВСЕХ кастеров; для горстки объектов с запасом допустим, и это
+надо написать в ридаут («CPU-кастеров: N»).
+
+Семплер: `csm_sample.hlsli` режим 3 — выбор каскада по `intervalEnd` из буфера
+(`Rendering.hlsl:220-235`: `positionView.z < partition.intervalEnd`), UV/производные через
+матрицу и `texelWS.xy` ПО ОСЯМ (рампа S8, `depthBiasInTexels`/`normalBiasInTexels`, gutter
+S5 — всё per-axis); фильтр на этом шаге — существующий PCF по D16-атласу (bring-up: подгонку
+проверять отдельно от фильтра), EVSM — S16. Потребители `csm_sample` (lighting, glass, fog Part A)
+получают режим автоматически — перечислить и проверить каждого.
+
+Что из legacy остаётся в режиме: панкейкинг S7 (кастеры к солнцу), контракт «кастер = LOD
+приёмника» S3.6, бленд S10 (или blue-noise дизер, S17), атлас 2×2 + gutter S5. Что вырождается:
+S1 сфера → потолок, S2 overlap → бордер партиции, S11 scissor → сам бокс, S14 призма → бокс,
+S5b HZB-кулл по тайлам каскадов → выкл (предполагал стабильные тайлы; вернуть отдельно, если
+понадобится).
+
+Ручки (`sdsm.*`): `partitions` (4; S17 меняет динамически), `borderTexels`, `dilation`,
+`maxScaleOverSphere`, `zMargin`, `analyzeFullRes` (полное разрешение, не сетка — min/max по
+сетке 256×144 теряет тонкие объекты; полный проход 3.7 Мпикс ≈ 0.02–0.04 мс).
+
+Приёмка: (1) legacy бит-в-бит при переключении режима туда-обратно; (2) камера юзера «полёт над
+островом» — тексель ближнего края (ридаут, большая ось) ≤ 0.4× legacy; пляжная виста и «кольцо
+пальм» — ≤ 0.5× на каскадах 1–3; (3) ридаут `outOfBounds` (пиксели без данных своего каскада)
+= 0; (4) `Pass_SdsmShadow` + `Analyze` + `Cull` ≤ legacy `Pass_CSM` + `ShadowCull` в полёте
+(с. 25–26); (5) серия облёта S1 — ползание ЗАПИСАТЬ, не гейтить (решение юзера: не боимся; число
+нужно, чтобы S16 было с чем сравнить); (6) полный набор гейтов: три конфига, Release
+`--scene-stress`, Debug `--gbv` (окно не свёрнуто), компаратор барьеров, VSM-паритет.
+Оценка: 3–4 дня.
+
+### S16. EVSM4 + shadow-MSAA + блюр + мипы — фильтр режима (транскрипция `RenderingEVSM.hlsl`)
+
+Дословно: `WarpDepth` — d → [−1, 1], pos = exp(c⁺·d), neg = −exp(−c⁻·d), моменты
+(pos, neg, pos², neg²); `GetEVSMExponents` — c⁺ = 800, c⁻ = 100 в light-space, делятся на
+`partition.scale.z`, кламп 42 (fp32); `ShadowDepthToEVSMPS` — `Texture2DMS` depth 4×, варп
+КАЖДОГО семпла, среднее; `BoxBlur.hlsl` — сепарабельный бокс в light-space
+(`edgeSofteningAmount` 0.02 партиции, кап `maxEdgeSofteningFilter` 16 текселей; бордер
+партиции резервирует место под ядро); `GenerateMips` на каскад; выборка `SampleGrad` с
+анизотропным clamp-семплером 16× (`App.cpp:266`) и `ChebyshevUpperBound` по обоим варпам,
+minVariance = (1e-4·c·w)², результат `min(pos, neg)`. Формат `R32G32B32A32_FLOAT`
+(`App.cpp:298`); fp16 с этими экспонентами не живёт.
+
+Наша сторона: атлас моментов режима SDSM (создаётся только в режиме): 4096² RGBA32F = 268 МБ,
+2048² = 67 МБ (legacy D16 4096² = 33.5 МБ); scratch MSAA D32 4× на один тайл (2K → 64 МБ),
+переиспользуется по каскадам последовательно, как в сэмпле; пассы на каскад: depth-draw в MSAA
+(≈1.3–2× нынешнего) + конверсия + 2 блюра + мипы, ожидание +0.3–0.6 мс на 4×2K — мерить.
+`csm_sample` режим 3 переключается на моменты; write-time bias S6 для режима ВЫКЛ (дисперсия
+делает работу bias'а), рампа S8 не нужна, `SampleGrad` требует производных UV — в compute
+lighting они у нас есть только аналитически (через `texelWS` и глубину) — сверить с тем, как
+`Rendering.hlsl:233-235` строит `texCoordDX/DY` из G-buffer (у них PS c ddx; у нас compute →
+производные из соседних пикселей или из нормали/глубины; записать выбор).
+Протечки (классика VSM): листва над стволами над песком — экспоненциальный варп давит,
+отрицательный ловит остаток; ручки `sdsm.evsmPos/Neg`, `sdsm.blur`, `sdsm.shadowAA` (1/2/4/8).
+
+Приёмка: та же камера и тайлы PCF (S15) vs EVSM — кромки без ступенек, нет шума тапов, дальние
+каскады без муара; роща — протечек нет или ручка гасит без отрыва тени от ствола; серия облёта —
+ползание ниже цифры S15; **ставка: тайлы 1K (атлас 2048², 67 МБ) против legacy 2K-PCF** — если
+бьют по глазам на камере юзера, память ниже нынешней; память и время в ридауте/профдампе; VSM и
+legacy паритет; полный набор гейтов (новые форматы/ресурсы). Оценка: 2 дня.
+
+### S17. Anno-надстройки: число каскадов по питчу, дизер швов, пустые партиции
+
+* Число активных партиций от отношения maxZ/minZ и питча камеры (Anno: 1 в top-down … 4 к
+  горизонту, макс 2 на low): свободные тайлы атласа не рисуются; при S4 — отдать их
+  оставшимся каскадам (тайл 2× крупнее).
+* Пустые партиции (`sampleCount == 0`) — пропуск draw/кулла (сэмпл: крошечный регион).
+* Blue-noise дизер на шве вместо кросс-фейда S10 (дешевле в шейдере; сравнить глазами).
+* Ридаут: активные партиции, семплов на партицию, площадь бокса / площадь сферы (фактический
+  выигрыш), `outOfBounds`, память атласа.
+Оценка: 1 день.
+
+### S18. (опционально) Другие схемы разбиения за тем же буфером
+
+Гистограмма (`SDSMPartitions.hlsl:69` `ScatterHistogram`, 1024 бинов с границами на бин),
+`AdaptiveLogPartitions.hlsl`, `KMeansPartitions.hlsl` — сменные точки входа анализа, пишущие тот
+же `SdsmPartition`; потребители не меняются. Предупреждение авторов (с. 22–24): situational,
+«glass jaws», атомики. Делать только если лог-схема где-то проваливается на наших сценах; 1–2 дня.
+
+### Что из сэмпла НЕ берём
+
+| Что | Почему |
+|---|---|
+| `App.cpp:883` `ReadbackPartitionMatrices` — блокирующий `Map` для CPU-кулла | у нас все кастеры на GPU; ридбэк только в dev-ридаут через фенс-ринг |
+| Per-partition deferred accumulate (одна EVSM-текстура на партицию) | наш lighting семплит все каскады за один проход → атлас моментов; отсюда цена памяти |
+| DX11-специфика (Texture2D-array слайсы, `GenerateMips` на SRV) | у нас атлас + свои мипы compute-ом или `GenerateMips`-эквивалент |
+
+### Риски, о которых знать заранее
+
+* **Память** — главный ценник S16; стартовать с атласа 2048² и ставки «1K бьёт 2K».
+* **Перестановка теней после G-buffer** — как VSM; проверить перекрытие/async и `GPU.Frame`.
+* **Кастеры вне GPU-пути** — Anno-грабли; инвентарь до кода.
+* **DLSS-джиттер** — границы по джиттернутой глубине дрожат на долю пикселя; при субпиксельном
+  текселе несущественно, но фит брать с non-jittered матриц, как S1.
+* **Контракт LOD S3.6** при партициях, меняющихся каждый кадр — кастер должен получать LOD
+  приёмника по НОВЫМ сплитам; проверить, что LOD-выбор читает буфер, а не CB.
+* **Потребители `csm_sample`** — fog Part A, glass, lighting, что ещё: перечислить при S15.
+
+### Порядок и оценка
+
+S15 (3–4 дня) → S16 (2) → S17 (1) → S18 (опц.). Каждый шаг: legacy/VSM бит-в-бит при
+переключении, скриншоты трёх камер (полёт над островом — камера юзера, пляжная виста
+`--cam-pos=-54.81,3.00,63.71`, «кольцо пальм`--cam-pos=-37.61,2.50,-98.03`), профдамп по два
+прогона, серия облёта S1 для цифры ползания.
+
+---
+
+
 ## 3. Сводка ожидаемого эффекта на каскад 0
 
 | Состояние | Радиус c0 | Тайл | Тексель | Δ | Цена |
@@ -3619,6 +3828,13 @@ S10                                 затухание дальней грани
 S11                                 перф (тумблер, off по умолчанию)
 S12                                 опционально, высокая отдача
 S13                                 опционально, крупная работа
+S15 ->  S16 ->  S17  (-> S18)       SDSM-РЕЖИМ, третий рядом с legacy/VSM   [PLANNED 2026-09-12]
+                                    S15 ядро: анализ глубины этого кадра на GPU → буфер партиций
+                                    (Z + XY, анизотропно) → GPU-кулл всех кастеров → indirect →
+                                    семплер из буфера; S16 EVSM4 + shadow-MSAA + блюр + мипы;
+                                    S17 Anno-надстройки; S18 опц. схемы разбиения.
+                                    Решение юзера: по максимуму, пляски не боимся, legacy
+                                    бит-в-бит и переключаемо.
 ```
 
 Жёсткие зависимости, нарушать которые нельзя:
@@ -3711,6 +3927,19 @@ S13                                 опционально, крупная ра�
 | `ShadowRendering.cpp` / `.h` | `Source/Runtime/Renderer/Private/` | S6, S8 (константы, `UpdateShaderDepthBias`, `ComputeTransitionSize`) |
 | `DirectionalLightComponent.cpp` | `Source/Runtime/Engine/Private/Components/` | S1, S10 |
 | `ShadowSetup.cpp` | `Source/Runtime/Renderer/Private/` | S4, S5, S11, S13 (ещё не сверялось) |
+
+Отдельное дерево — интеловский SDSM-сэмпл `D:\Programming\sdsm\sdsm_dx11\` (лицензия Intel sample, permissive с notice):
+
+| Файл сэмпла | Для шага |
+|---|---|
+| `LogPartitions.hlsl` (`ReduceZBoundsFromGBuffer`, `ComputeLogPartitionsFromZBounds`, `LogPartitionFromRange`) | S15 |
+| `CustomPartitions.hlsl` (`ReduceBoundsFromGBuffer` — per-partition light-space XYZ bounds) | S15 |
+| `SDSMPartitions.hlsl` (`ComputePartitionDataFromBounds`: border/dilation/max-scale, пустые партиции; `ScatterHistogram`) | S15, S17; гистограмма — S18 |
+| `Rendering.hlsl:125-142, 213-260` (shadow-VS с матрицей партиции из буфера; выбор партиции по `intervalEnd`, `texCoordDX/DY`) | S15 |
+| `RenderingEVSM.hlsl`, `BoxBlur.hlsl`, `BlurUtil.hlsl`, `App.cpp:255-310, 520-560, 700-760, 951` (EVSM-конверсия, семплер, форматы, MSAA, блюр, мипы) | S16 |
+| `AdaptiveLogPartitions.hlsl`, `KMeansPartitions.hlsl`, `Histogram.hlsl` | S18 (опц.) |
+| `SDSMPartitions.cpp`, `App.cpp:585-745` (порядок: G-buffer → партиции → тени; блокирующий readback `:873` — НЕ повторять) | S15 |
+| `sampledistributionshadowmaps-siggraph2010-notes-181237.pdf` (speaker notes; ключевые страницы 9, 20, 22–29) | теория |
 
 **Не сверено пока:** S9 (receiver-plane bias), S5 (`SHADOW_BORDER`), ~~S11 (`ComputeScissorRectOptim`)~~ — S11 сверена 2026-09-02, см. её раздел (у UE двойной оффсет X,Y),
 S13 (CSM caching). Перед их реализацией — читать оригинал, а не выводить заново.
