@@ -271,7 +271,11 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in)
     c.temporal[3] = static_cast<float>(in.frameIndex & 1023u);
     c.shadowMap[0] = static_cast<float>(kShadowSize); c.shadowMap[1] = 1.0f / static_cast<float>(kShadowSize);
     c.shadowMap[2] = farPlane / 1000.0f; c.shadowMap[3] = s.shadowStrength;
-    c.shadowMap2[0] = shadowSamples; c.shadowMap2[1] = s.shadowDepthBiasKm; c.shadowMap2[2] = 0.0f; c.shadowMap2[3] = 0.0f;
+    c.shadowMap2[0] = shadowSamples; c.shadowMap2[1] = s.shadowDepthBiasKm;
+    // The base noise's vertical compression: a tile may span at most `baseVerticalTiles` layer
+    // heights (never stretched the other way -- a thick layer keeps the isotropic noise).
+    c.shadowMap2[2] = std::max(1.0f, s.baseTileKm / std::max(s.layerHeightKm * s.baseVerticalTiles, 1.0e-3f));
+    c.shadowMap2[3] = 0.0f;
     return c;
 }
 

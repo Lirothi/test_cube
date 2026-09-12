@@ -5,9 +5,18 @@
 //
 // Three entry points, one file; the C++ side dispatches each over its own texture:
 //   CSBase    128 x 128 x 128  RGBA8  r: Perlin-Worley (freq 4), gba: Worley at 8 / 16 / 32
-//   CSDetail   32 x  32 x  32  RGBA8  rgb: Worley at 4 / 8 / 16, a: 0
+//   CSDetail  128 x 128 x 128  RGBA8  rgb: Worley at 4 / 8 / 16, a: 0
 //   CSWeather 512 x 512        RGBA8  r: coverage fbm, g: type fbm, b: 0, a: 0
 // All values are in [0, 1]; the density model remaps them (cloud_common.hlsli).
+//
+// THE SMALLEST CELL IS AT LEAST FOUR TEXELS WIDE, in every channel. The first version ran the
+// Worley octaves up to one texel per cell (a 32^3 detail with a frequency-16 octave, and its FBM
+// doubling twice more on top), which makes the texture texel noise, and trilinear filtering of
+// texel noise is a LATTICE: the trace read it back as long parallel streaks along the world axes,
+// foreshortened into radial bands across every thick cloud (owner, 2026-09-12; shrinking the
+// detail tile shrank the bands into a visible mesh, shrinking the base tile did nothing). So the
+// detail texture is 128^3 like the base, and each FBM stops before its cells get finer than four
+// texels -- the same rule any mip-mapped texture already obeys.
 #define CLOUD_NOISE_RS "CBV(b0), DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer NoiseCB : register(b0)
@@ -94,9 +103,21 @@ float CloudWorley(float3 p, uint period)
     return saturate(1.0f - sqrt(minDist));
 }
 
-float CloudWorleyFbm(float3 p, uint period)
+// Up to three octaves (0.625 / 0.25 / 0.125), renormalised when fewer fit under the texel limit.
+float CloudWorleyFbm(float3 p, uint period, uint octaves)
 {
-    return CloudWorley(p, period) * 0.625f + CloudWorley(p * 2.0f, period * 2u) * 0.25f + CloudWorley(p * 4.0f, period * 4u) * 0.125f;
+    float sum = CloudWorley(p, period) * 0.625f, norm = 0.625f;
+    if (octaves >= 2u) { sum += CloudWorley(p * 2.0f, period * 2u) * 0.25f; norm += 0.25f; }
+    if (octaves >= 3u) { sum += CloudWorley(p * 4.0f, period * 4u) * 0.125f; norm += 0.125f; }
+    return sum / norm;
+}
+
+// The octave count that keeps the finest cell at >= 4 texels: cells per axis double per octave.
+uint CloudOctavesFor(uint baseFrequency, uint size, uint wanted)
+{
+    uint octaves = 0u;
+    for (uint f = baseFrequency; octaves < wanted && f * 4u <= size; f *= 2u) { ++octaves; }
+    return max(octaves, 1u);
 }
 
 float CloudRemapNoise(float v, float lo, float hi, float newLo, float newHi)
@@ -112,13 +133,14 @@ void CSBase(uint3 id : SV_DispatchThreadID)
     const uint size = noiseParams.x;
     if (any(id >= size)) { return; }
     const float3 p = (float3(id) + 0.5f) / float(size); // [0, 1)
-    // Perlin-Worley: a 4-period fbm Perlin dilated by a Worley fbm of the same frequency.
-    const float perlin = CloudPerlinFbm(p * 4.0f, 4u, 7u);
-    const float worley4 = CloudWorleyFbm(p * 4.0f, 4u);
+    // Perlin-Worley: a 4-period fbm Perlin dilated by a Worley fbm of the same frequency. Octaves
+    // stop at four texels per cell (128^3: Perlin 4..32, Worley 4..16 / 8..32 / 16..32 / 32).
+    const float perlin = CloudPerlinFbm(p * 4.0f, 4u, CloudOctavesFor(4u, size, 7u));
+    const float worley4 = CloudWorleyFbm(p * 4.0f, 4u, CloudOctavesFor(4u, size, 3u));
     const float perlinWorley = saturate(CloudRemapNoise(perlin, 0.0f, 1.0f, worley4, 1.0f));
-    const float w8 = CloudWorleyFbm(p * 8.0f, 8u);
-    const float w16 = CloudWorleyFbm(p * 16.0f, 16u);
-    const float w32 = CloudWorleyFbm(p * 32.0f, 32u);
+    const float w8 = CloudWorleyFbm(p * 8.0f, 8u, CloudOctavesFor(8u, size, 3u));
+    const float w16 = CloudWorleyFbm(p * 16.0f, 16u, CloudOctavesFor(16u, size, 3u));
+    const float w32 = CloudWorleyFbm(p * 32.0f, 32u, CloudOctavesFor(32u, size, 3u));
     OutVolume[id] = float4(perlinWorley, w8, w16, w32);
 }
 
@@ -129,7 +151,10 @@ void CSDetail(uint3 id : SV_DispatchThreadID)
     const uint size = noiseParams.x;
     if (any(id >= size)) { return; }
     const float3 p = (float3(id) + 0.5f) / float(size);
-    OutVolume[id] = float4(CloudWorleyFbm(p * 4.0f, 4u), CloudWorleyFbm(p * 8.0f, 8u), CloudWorleyFbm(p * 16.0f, 16u), 0.0f);
+    // 128^3: 4..16 / 8..32 / 16..32 cells, never finer than four texels (see the header).
+    OutVolume[id] = float4(CloudWorleyFbm(p * 4.0f, 4u, CloudOctavesFor(4u, size, 3u)),
+                           CloudWorleyFbm(p * 8.0f, 8u, CloudOctavesFor(8u, size, 3u)),
+                           CloudWorleyFbm(p * 16.0f, 16u, CloudOctavesFor(16u, size, 3u)), 0.0f);
 }
 #else // CLOUD_NOISE_2D
 

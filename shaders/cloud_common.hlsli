@@ -42,7 +42,7 @@ cbuffer CloudCB : register(b0)
     float4 cloudAerial;      // x: aerial perspective on, y: aerial start depth (km), z: distant sky light on, w: debug view
     float4 cloudTemporal;    // x: history valid, y: history weight, z: preExposure / previous preExposure, w: frame index
     float4 cloudShadowMap;   // x: resolution, y: 1 / resolution, z: far depth (km), w: strength
-    float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), z: 0, w: 0
+    float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), z: base noise vertical compression (>= 1), w: 0
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -154,7 +154,7 @@ CloudMedia CloudSetupMedia(float albedo, float extinction, float basePhase)
 // DENSITY MODEL (ours; Schneider 2015 "The Real-time Volumetric Cloudscapes of Horizon: Zero Dawn").
 // Three textures built at load by cloud_noise_cs.hlsl:
 //   CloudBaseNoise   128^3 RGBA8  r: Perlin-Worley, gba: Worley at 2x / 4x / 8x
-//   CloudDetailNoise  32^3 RGBA8  rgb: Worley at 1x / 2x / 4x
+//   CloudDetailNoise 128^3 RGBA8  rgb: Worley at 1x / 2x / 4x (128^3, not Schneider's 32^3: see cloud_noise_cs.hlsl)
 //   CloudWeather     512^2 RGBA8  r: coverage field, g: cloud type field, b: unused
 #ifdef CLOUD_DENSITY
 Texture3D<float4> CloudBaseNoise : register(CLOUD_T_BASE);
@@ -165,6 +165,33 @@ SamplerState CloudLinearWrap : register(CLOUD_S_WRAP);
 float CloudRemap(float v, float lo, float hi, float newLo, float newHi)
 {
     return newLo + (v - lo) / max(hi - lo, 1.0e-5f) * (newHi - newLo);
+}
+
+// THE WEATHER MAP IS READ BICUBICALLY. Its texel is 78 m at the default 40 km tile, and bilinear
+// filtering is only C0: the coverage field's gradient breaks at every texel edge, the threshold
+// remap below turns those breaks into facets aligned with the world axes, and perspective draws
+// the along-view facets as long radial streaks across every distant cloud (owner, 2026-09-12;
+// the streak spacing scaled 4x with the weather tile and with nothing else). A cubic B-spline is
+// C2 -- no facets -- and costs four bilinear taps (GPU Gems 2, ch. 20). Mirror of
+// VolumetricCloud::kWeatherSize.
+static const float kCloudWeatherSize = 512.0f;
+float4 CloudSampleWeather(float2 uv)
+{
+    const float2 coord = uv * kCloudWeatherSize - 0.5f;
+    const float2 f = frac(coord);
+    const float2 cell = coord - f;
+    const float2 f2 = f * f, f3 = f2 * f;
+    const float2 w0 = (1.0f - 3.0f * f + 3.0f * f2 - f3) / 6.0f;
+    const float2 w1 = (4.0f - 6.0f * f2 + 3.0f * f3) / 6.0f;
+    const float2 w2 = (1.0f + 3.0f * f + 3.0f * f2 - 3.0f * f3) / 6.0f;
+    const float2 w3 = f3 / 6.0f;
+    const float2 g0 = w0 + w1, g1 = w2 + w3;
+    const float2 h0 = (cell + 0.5f - 1.0f + w1 / g0) / kCloudWeatherSize;
+    const float2 h1 = (cell + 0.5f + 1.0f + w3 / g1) / kCloudWeatherSize;
+    return CloudWeather.SampleLevel(CloudLinearWrap, float2(h0.x, h0.y), 0) * (g0.x * g0.y)
+         + CloudWeather.SampleLevel(CloudLinearWrap, float2(h1.x, h0.y), 0) * (g1.x * g0.y)
+         + CloudWeather.SampleLevel(CloudLinearWrap, float2(h0.x, h1.y), 0) * (g0.x * g1.y)
+         + CloudWeather.SampleLevel(CloudLinearWrap, float2(h1.x, h1.y), 0) * (g1.x * g1.y);
 }
 
 // Schneider's three height profiles, blended by the weather map's type channel: stratus hugs the
@@ -190,21 +217,35 @@ struct CloudSample
 float CloudBaseDensity(float3 worldMetres, float normAlt, out float coverageOut, out float typeOut)
 {
     const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm; // km, drifting
-    const float4 weather = CloudWeather.SampleLevel(CloudLinearWrap, p.xz * cloudShape.z, 0);
+    const float4 weather = CloudSampleWeather(p.xz * cloudShape.z);
     // The knob is a THRESHOLD on the weather field: coverage 0 clears the sky, 1 lets every part of
     // the field through in proportion.
     const float coverage = saturate(CloudRemap(weather.r, 1.0f - saturate(cloudMedium.z), 1.0f, 0.0f, 1.0f));
     const float type = saturate(weather.g + cloudMedium.w);
     coverageOut = coverage;
     typeOut = type;
-    const float4 base = CloudBaseNoise.SampleLevel(CloudLinearWrap, p * cloudShape.x, 0);
+    // The base noise is compressed VERTICALLY so one tile spans at most `baseVerticalTiles` layer
+    // heights (cloudShadowMap2.z, >= 1): a 6 km tile through a 0.5 km layer is otherwise constant
+    // with height, the density becomes the weather map extruded into columns, and a grazing ray
+    // integrates the columns along itself into radial streaks. Flat cells instead of columns.
+    const float4 base = CloudBaseNoise.SampleLevel(CloudLinearWrap, float3(p.x, p.y * cloudShadowMap2.z, p.z) * cloudShape.x, 0);
     const float lowFreqFbm = base.g * 0.625f + base.b * 0.25f + base.a * 0.125f;
     float baseCloud = saturate(CloudRemap(base.r, -(1.0f - lowFreqFbm), 1.0f, 0.0f, 1.0f));
     baseCloud *= CloudHeightGradient(normAlt, type);
     return saturate(CloudRemap(baseCloud, 1.0f - coverage, 1.0f, 0.0f, 1.0f)) * coverage;
 }
 
-CloudSample CloudSampleAt(float3 worldMetres, float normAlt)
+// The mean of the detail texture's Worley fBm (measured on the bit-exact numpy port of
+// cloud_noise_cs.hlsl: 0.480 / 0.479 / 0.479 for the three channels). A sample that must not
+// resolve the detail (see detailWeight below) erodes by this mean instead of by the point value.
+static const float kCloudDetailMean = 0.48f;
+
+// detailWeight: how much of the detail erosion this sample resolves, 1 = the point value, 0 = its
+// mean. The view march passes 1. The shadow march passes less for its far samples (see the march
+// in cloud_trace_cs.hlsl for why): UE hands the same distance to the material as
+// ShadowSampleDistance (VolumetricCloud.usf:1096, MaterialTemplate.ush:2568-2571) so that a far
+// shadow sample can drop its detail; we have no material graph, so the rule lives in the march.
+CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight)
 {
     CloudSample s;
     float coverage, type;
@@ -214,12 +255,18 @@ CloudSample CloudSampleAt(float3 worldMetres, float normAlt)
     if (base <= 0.0f) { return s; }
     const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm;
     const float4 detail = CloudDetailNoise.SampleLevel(CloudLinearWrap, p * cloudShape.y, 0);
-    const float highFreqFbm = detail.r * 0.625f + detail.g * 0.25f + detail.b * 0.125f;
+    const float pointFbm = detail.r * 0.625f + detail.g * 0.25f + detail.b * 0.125f;
+    const float highFreqFbm = lerp(kCloudDetailMean, pointFbm, saturate(detailWeight));
     // Wispy at the bottom of the cloud, billowy towards the top.
     const float modifier = lerp(highFreqFbm, 1.0f - highFreqFbm, saturate(normAlt * 10.0f));
     const float eroded = saturate(CloudRemap(base, modifier * saturate(cloudShape.w), 1.0f, 0.0f, 1.0f));
     s.extinction = eroded * max(cloudMedium.x, 0.0f);
     return s;
+}
+
+CloudSample CloudSampleAt(float3 worldMetres, float normAlt)
+{
+    return CloudSampleAt(worldMetres, normAlt, 1.0f);
 }
 #endif // CLOUD_DENSITY
 

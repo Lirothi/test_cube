@@ -83,13 +83,27 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float3 rayDir = normalize(onRay.xyz / onRay.w - cloudCamera.xyz);
     const float3 P = cloudCamera.xyz + rayDir * (reprojectDepth * CloudMetresPerKm);
     const float4 prevClip = mul(float4(P, 1.0f), cloudPrevViewProjNoJitter);
-    if (prevClip.w <= 1.0e-4f)
+    const float4 currentClip = mul(float4(P, 1.0f), cloudViewProjNoJitter);
+    if (prevClip.w <= 1.0e-4f || currentClip.w <= 1.0e-4f)
     {
         Resolved[px] = current;
         ResolvedDepth[px] = currentDepth;
         return;
     }
-    const float2 prevUv = (prevClip.xy / prevClip.w) * float2(0.5f, -0.5f) + 0.5f;
+    // THE HISTORY IS FETCHED AT uv PLUS THE MOTION, NOT AT THE REPROJECTED POINT. The point P is
+    // rebuilt from a texel centre through the inverse matrix (a spot 0.2 m in front of a camera
+    // 100 m from the origin, then normalised): projecting it back through the SAME matrix does not
+    // land on the texel centre but a few hundredths of a texel off, and the error is a rounding
+    // pattern, not noise. A still camera then resampled its history bilinearly every frame with
+    // that offset, and at historyWeight 0.9 thirty resamples blur where the offset is half a texel
+    // and keep sharp where it is zero: a lattice of tiles with straight edges across the whole sky
+    // (owner, 2026-09-12, pose -105.97,8.40,21.98 / -0.0053,0.1579,0.0009,0.9874; gone with the
+    // reprojection bypassed, gone at historyWeight 0.5, absent from the mean of raw frames). The
+    // motion vector formulation -- the same P through both matrices, the DIFFERENCE applied to uv --
+    // cancels the round trip: a still camera's history is fetched exactly at its own texel.
+    const float2 prevProjectedUv = (prevClip.xy / prevClip.w) * float2(0.5f, -0.5f) + 0.5f;
+    const float2 currentProjectedUv = (currentClip.xy / currentClip.w) * float2(0.5f, -0.5f) + 0.5f;
+    const float2 prevUv = uv + (prevProjectedUv - currentProjectedUv);
     if (any(prevUv < 0.0f) || any(prevUv > 1.0f))
     {
         Resolved[px] = current;

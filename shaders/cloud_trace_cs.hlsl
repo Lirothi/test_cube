@@ -167,6 +167,44 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
         // usf:1101-1131: the shadow march towards the sun, x^2 sample distribution, no jitter
         // ("this one cannot be hidden well by TAA"), stopping when the ray leaves the layer.
+        //
+        // THE MARCH IS BOUNDED BY THE LAYER'S EXIT ALONG THE SUN (ours). UE spread their 80 samples
+        // over ShadowTracingDistance (15 km) and let the loop break at the layer's edge; with the
+        // budget count (6) the same rule put the FIRST sample 208 m out, past every lump that could
+        // shadow this point, and weighted it as 417 m of medium: any lump 200 m sunward cast a black
+        // shadow a kilometre long, and a thin layer read as combed streaks converging on the sun's
+        // azimuth (owner, 2026-09-12). Bounding the length by the exit spends the x^2 budget inside
+        // the layer -- for a 0.5 km layer at a 25-degree sun the first sample lands 16 m out.
+        float shadowExitKm = shadowLengthKm;
+        {
+            const float3 planetP = CloudWorldToPlanetKm(P);
+            float2 tTopSun, tBottomSun;
+            if (CloudRaySphere(planetP, cloudSun.xyz, 0.0f.xxx, cloudLayer.y, tTopSun) && tTopSun.y > 0.0f)
+            {
+                shadowExitKm = min(shadowExitKm, tTopSun.y);
+            }
+            if (CloudRaySphere(planetP, cloudSun.xyz, 0.0f.xxx, cloudLayer.x, tBottomSun) && tBottomSun.x > 0.0f)
+            {
+                shadowExitKm = min(shadowExitKm, tBottomSun.x); // a sun below the layer's top: out through the bottom
+            }
+        }
+        const float shadowMarchKm = max(shadowExitKm, 1.0e-3f);
+        // A FAR SHADOW SAMPLE DOES NOT RESOLVE THE DETAIL. With a point sun and opaque detail lumps
+        // the single-scatter answer is a hard shadow column behind every lump, as long as the sun's
+        // path through the layer; a thin layer reads as a comb converging on the sun's image (owner,
+        // 2026-09-12: 24 shadow samples sharpened it, 2 softened it, the march off removed it; not
+        // the history, the start jitter, the step, the noise textures or the base tile). Nothing in
+        // the octaves fills an opaque column (every octave's transmittance is a power of the same
+        // zero); what fills it in a real cloud is light diffused from the lit lumps around it, and
+        // the mean of the detail over the neighbourhood is the density that light sees. So beyond
+        // two detail features (a feature = a Worley cell = a quarter of the detail tile) a shadow
+        // sample erodes by the detail's mean instead of by the point value (CloudSampleAt); inside
+        // that distance the full detail stays, so a lump still shadows its own flank. A modelling
+        // choice, ours: UE hands the distance to the material as ShadowSampleDistance (usf:1096,
+        // MaterialTemplate.ush:2568) and leaves the same decision to the material author. By
+        // distance, not by segment length, so that more samples refine the shadow instead of
+        // bringing the comb back.
+        const float detailFeatureKm = 0.25f / max(cloudShape.y, 1.0e-6f);
         float extinctionAcc[CLOUD_MS_COUNT];
         [unroll] for (int ms = 0; ms < CLOUD_MS_COUNT; ++ms) { extinctionAcc[ms] = 0.0f; }
         float previousNormT = 0.0f;
@@ -174,12 +212,13 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         {
             const float currentNormT = shadowT * shadowT;
             const float deltaNormT = currentNormT - previousNormT;
-            const float sampleDistanceKm = shadowLengthKm * (previousNormT + deltaNormT * 0.5f);
+            const float sampleDistanceKm = shadowMarchKm * (previousNormT + deltaNormT * 0.5f);
             previousNormT = currentNormT;
             const float3 Ps = P + cloudSun.xyz * (sampleDistanceKm * CloudMetresPerKm);
             const float shadowAlt = (length(CloudWorldToPlanetKm(Ps)) - cloudLayer.x) * invLayerHeight;
             if (shadowAlt <= 0.0f || shadowAlt >= 1.0f) { break; }
-            const CloudSample ss = CloudSampleAt(Ps, shadowAlt);
+            const float detailWeight = saturate(2.0f - sampleDistanceKm / detailFeatureKm);
+            const CloudSample ss = CloudSampleAt(Ps, shadowAlt, detailWeight);
             float octaveExtinction = ss.extinction;
             float msE = saturate(cloudPhase.z);
             [unroll] for (int ms2 = 0; ms2 < CLOUD_MS_COUNT; ++ms2)
@@ -190,7 +229,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         }
         [unroll] for (int ms3 = 0; ms3 < CLOUD_MS_COUNT; ++ms3)
         {
-            m.transmittanceToSun[ms3] = exp(-extinctionAcc[ms3] * shadowLengthKm * CloudMetresPerKm);
+            m.transmittanceToSun[ms3] = exp(-extinctionAcc[ms3] * shadowMarchKm * CloudMetresPerKm);
         }
 
         // usf:1223-1229: where the aerial perspective is evaluated -- the transmittance-weighted mean depth.

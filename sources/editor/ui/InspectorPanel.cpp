@@ -2078,6 +2078,12 @@ namespace
                           "primitives, higher carves wisps at the bottom and cauliflower at the top.");
             dragF("Base Tile (km)", "baseTileKm", 6.0f, 0.1f, 0.1f, 100.0f, "%.1f");
             InspectorHelp("World period of the base noise, i.e. the size of the largest lumps.");
+            dragF("Base Vertical Tiles", "baseVerticalTiles", 1.0f, 0.05f, 0.1f, 100.0f, "%.2f");
+            InspectorHelp("How many layer heights one base tile spans vertically, at most. Left at the "
+                          "horizontal scale, a 6 km tile through a thin layer barely changes with height, "
+                          "the cloud becomes the weather map extruded into columns, and a grazing view "
+                          "smears those columns into radial streaks. 1 makes a thin layer out of flat "
+                          "cells the size of the layer instead; larger values move back towards columns.");
             dragF("Detail Tile (km)", "detailTileKm", 0.5f, 0.01f, 0.01f, 10.0f, "%.2f");
             InspectorHelp("World period of the detail noise -- the size of the smallest features.");
             dragF("Weather Tile (km)", "weatherTileKm", 40.0f, 0.5f, 1.0f, 1000.0f, "%.0f");

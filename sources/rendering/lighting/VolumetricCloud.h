@@ -84,7 +84,10 @@ public:
     unsigned NoiseRevision() const { return noiseBuilds_; }
 
 private:
-    static constexpr UINT kBaseSize = 128, kDetailSize = 32, kWeatherSize = 512, kShadowSize = 512;
+    // The detail noise was 32^3 (Schneider's figure); at that size its finest Worley cells were one
+    // texel wide and trilinear filtering drew the texel lattice as streaks across the clouds. 128^3
+    // (8 MB) with the octaves capped at four texels per cell (cloud_noise_cs.hlsl) fixed it.
+    static constexpr UINT kBaseSize = 128, kDetailSize = 128, kWeatherSize = 512, kShadowSize = 512;
     GpuResource base_, detail_, weather_, shadowRaw_, shadowFiltered_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_;
     D3D12_CPU_DESCRIPTOR_HANDLE baseSrv_{}, baseUav_{}, detailSrv_{}, detailUav_{}, weatherSrv_{}, weatherUav_{};

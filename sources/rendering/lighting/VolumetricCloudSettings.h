@@ -26,7 +26,14 @@ struct VolumetricCloudSettings
     float extinctionScale = 0.05f;  // extinction at full density, 1/m (real cumulus 0.04-0.1)
     float albedo = 0.95f;           // single-scattering albedo of the droplets
     float detailStrength = 0.35f;   // how much the Worley detail erodes the base shape
-    float baseTileKm = 6.0f;        // world period of the 128^3 base noise
+    float baseTileKm = 6.0f;        // world period of the 128^3 base noise (horizontally)
+    // How many layer heights one base tile spans VERTICALLY, at most. A 6 km tile through a 0.5 km
+    // layer barely changes with height, so the density is the weather map extruded into columns,
+    // and a ray at a grazing angle integrates those columns along itself into radial streaks
+    // (measured 2026-09-12: the streaks scaled with the weather tile and vanished only with a 2.5 km
+    // layer). With this the base noise is compressed vertically until a tile spans this many layer
+    // heights, so a thin layer is made of flat cells the size of the layer rather than columns.
+    float baseVerticalTiles = 1.0f;
     float detailTileKm = 0.5f;      // world period of the 32^3 detail noise
     float weatherTileKm = 40.0f;    // world period of the 512^2 weather map
     float windKmH = 20.0f;          // drift speed along the level's wind heading (the shared wind clock)
