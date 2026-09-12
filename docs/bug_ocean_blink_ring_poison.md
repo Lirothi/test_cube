@@ -125,7 +125,7 @@ bug; it changed the poison.** (The user predicted "что-то переезжа�
   GPU (garbage-the-file test changes the frame; a "no visual change" judged by eye is NOT
   proof — the a0.x=0 sabotage DID apply at meanabs 2.588 while looking identical in a
   thumbnail). Metric over eyeballs, both directions.
-- The live water shader is the LEGACY path (`ocean_surface_legacy.hlsli` via
+- The live water shader is the LEGACY path (`ocean_surface_surf_sim.hlsli` via
   ocean_surface.hlsl); the modern PSMain there is dead code, and the water samples NO shadow
   itself (`shadowAttenuation = 1.0`) — the shadow band seen on water is the shadowed seabed
   refracted through it. `vsm_sample.hlsli` edits do not reach the water pass at all.

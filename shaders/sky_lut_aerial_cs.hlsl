@@ -65,35 +65,11 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     }
     float bottom;
     tMax = min(tMax, SkyRayLength(p, dir, bottom));
-    // UE :1608 and :590-604: fixed 2*(slice+1) samples, offset .3, uniform distance.
+    // UE :1608 and :590-604: fixed 2*(slice+1) samples, offset .3, uniform distance. The integral
+    // itself is SkyIntegrateSegment (sky_atmosphere.hlsli), shared with the cloud capture (C4).
     uint samples = 2u * (cell.z + 1u);
-    float dt = tMax / samples;
-    float mu = dot(SkySunDirection.xyz, dir), g = MieScattering.w;
-    float denom = max(1.e-6f, 1.0f + g*g - 2.0f*g*mu);
-    float phaseMie = (1.0f-g*g) / (4.0f*SkyPi*denom*sqrt(denom));
-    float phaseRay = 3.0f*(1.0f+mu*mu) / (16.0f*SkyPi);
-    float3 L = 0, throughput = 1;
-    [loop] for (uint i = 0; i < samples; ++i)
-    {
-        float3 q = p + dir * ((i + 0.3f) * dt);
-        float height = length(q);
-        float3 up = q / height;
-        MediumSampleRGB medium = SampleAtmosphereMediumRGB(q);
-        // UE :601-606: the view-distance scale multiplies the optical depth per sample and nothing else
-        // (the in-scatter step below keeps the unscaled extinction in its denominator, as UE do).
-        float3 tr = exp(-medium.Extinction * dt * AerialStart.y);
-        float lightMu = dot(SkySunDirection.xyz, up);
-        float2 tUv;
-        getTransmittanceLutUvs(height, lightMu, AtmosphereRadii.x, AtmosphereRadii.y, tUv);
-        float3 toLight = Transmittance.SampleLevel(LinearClamp, tUv, 0).rgb;
-        float planet = SkyRaySphereNearest(q, SkySunDirection.xyz, PlanetRadiusOffset * up, AtmosphereRadii.x);
-        float3 multi = MultiScatter.SampleLevel(LinearClamp,
-            saturate(float2(lightMu*.5f+.5f, (height-AtmosphereRadii.x)/(AtmosphereRadii.y-AtmosphereRadii.x))), 0).rgb;
-        float3 S = (planet >= 0 ? 0.0f : 1.0f) * toLight
-            * (medium.ScatteringMie*phaseMie + medium.ScatteringRay*phaseRay) + multi*medium.Scattering;
-        L += throughput * (S-S*tr) / max(medium.Extinction, 1.e-9f);
-        throughput *= tr;
-    }
+    float3 L, throughput;
+    SkyIntegrateSegment(p, dir, tMax, samples, AerialStart.y, Transmittance, MultiScatter, LinearClamp, L, throughput);
     // UE :1618,1635-1636: luminance factor, pre-exposed RGB, mean RGB transmittance.
     AerialVolume[cell] = float4(min(L*SkyIlluminance.rgb*SkyIlluminance.w*SkyExposure.x, 64000.0f),
         saturate(dot(throughput, 1.0f/3.0f)));

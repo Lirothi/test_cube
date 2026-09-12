@@ -1,9 +1,9 @@
 {
   "antiAliasing": {
-    "dlssEnabled": false,
-    "dlssMode": "off",
+    "dlssEnabled": true,
+    "dlssMode": "balanced",
     "fxaa": false,
-    "renderScale": 1.0
+    "renderScale": 0.5799478888511658
   },
   "lod": {
     "chunkDistance": 24.0,
@@ -96,7 +96,7 @@
       ],
       "zPadding": 25.0
     },
-    "mode": "legacy",
+    "mode": "vsm",
     "vsm": {
       "biasNearestTier": false,
       "clipmapBaseExtent": 8.0,

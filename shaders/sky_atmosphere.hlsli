@@ -8,6 +8,9 @@ static const float kMetresPerKm = 1000.0f;
 static const float SkyPi = 3.14159265358979323846f;
 static const float PlanetRadiusOffset = 0.001f; // SkyAtmosphereCommon.ush:24 (1 metre)
 
+// SKY_CB_EXTERNAL: the includer declares these fields itself, appended to its own cbuffer (the
+// cloud capture, cloud_common.hlsli CLOUD_WITH_SKY_CB); the names must match this block.
+#ifndef SKY_CB_EXTERNAL
 cbuffer SkyAtmosphereCB : register(b0)
 {
     float4 AtmosphereRadii; // bottom, top, Rayleigh/Mie density exponential scales
@@ -29,6 +32,7 @@ cbuffer SkyAtmosphereCB : register(b0)
     float4 AerialStart; // x: froxel far-plane view depth in km, y: view-distance scale (UE AerialPespectiveViewDistanceScale)
 #endif
 };
+#endif // SKY_CB_EXTERNAL
 
 // SkyAtmosphereCommon.ush:169-212, Bruneton transmittance mapping. No sub-UV remap.
 void fromTransmittanceLutUVs(out float viewHeight, out float mu, float bottom, float top, float2 uv)
@@ -161,6 +165,49 @@ void IntegrateSkyMulti(float3 p, float3 dir, float3 lightDir, out float3 L, out 
         float h = length(groundP);
         float mu = dot(lightDir, groundP / h);
         L += GetTransmittance(mu, h) * throughput * saturate(mu) * GroundAlbedo.rgb / SkyPi;
+    }
+}
+#endif
+
+#ifdef SKY_VIEW
+// UE SkyAtmosphere.usf:590-606 and :1608: the in-scatter integral over ONE finite segment, exactly
+// as the aerial perspective volume takes it -- `samples` uniform steps at offset .3, the sun's
+// transmittance and the multi-scattering LUTs at every step, the planet shadow on the sun. Shared
+// by the volume (sky_lut_aerial_cs.hlsl) and the cloud capture, which needs the air between a
+// sea-level probe and a cloud front without a camera volume to read it from. `distanceScale` is
+// UE's AerialPespectiveViewDistanceScale (1 when the caller has none): it multiplies the optical
+// depth per sample and nothing else. Returns the UNSCALED luminance (the caller applies the sun's
+// illuminance and its exposure) and the RGB throughput.
+void SkyIntegrateSegment(float3 p, float3 dir, float tMax, uint samples, float distanceScale,
+                         Texture2D<float4> transmittanceLut, Texture2D<float4> multiScatterLut, SamplerState linearClamp,
+                         out float3 L, out float3 throughput)
+{
+    float dt = tMax / samples;
+    float mu = dot(SkySunDirection.xyz, dir), g = MieScattering.w;
+    float denom = max(1.e-6f, 1.0f + g*g - 2.0f*g*mu);
+    float phaseMie = (1.0f-g*g) / (4.0f*SkyPi*denom*sqrt(denom));
+    float phaseRay = 3.0f*(1.0f+mu*mu) / (16.0f*SkyPi);
+    L = 0; throughput = 1;
+    [loop] for (uint i = 0; i < samples; ++i)
+    {
+        float3 q = p + dir * ((i + 0.3f) * dt);
+        float height = length(q);
+        float3 up = q / height;
+        MediumSampleRGB medium = SampleAtmosphereMediumRGB(q);
+        // UE :601-606: the view-distance scale multiplies the optical depth per sample and nothing else
+        // (the in-scatter step below keeps the unscaled extinction in its denominator, as UE do).
+        float3 tr = exp(-medium.Extinction * dt * distanceScale);
+        float lightMu = dot(SkySunDirection.xyz, up);
+        float2 tUv;
+        getTransmittanceLutUvs(height, lightMu, AtmosphereRadii.x, AtmosphereRadii.y, tUv);
+        float3 toLight = transmittanceLut.SampleLevel(linearClamp, tUv, 0).rgb;
+        float planet = SkyRaySphereNearest(q, SkySunDirection.xyz, PlanetRadiusOffset * up, AtmosphereRadii.x);
+        float3 multi = multiScatterLut.SampleLevel(linearClamp,
+            saturate(float2(lightMu*.5f+.5f, (height-AtmosphereRadii.x)/(AtmosphereRadii.y-AtmosphereRadii.x))), 0).rgb;
+        float3 S = (planet >= 0 ? 0.0f : 1.0f) * toLight
+            * (medium.ScatteringMie*phaseMie + medium.ScatteringRay*phaseRay) + multi*medium.Scattering;
+        L += throughput * (S-S*tr) / max(medium.Extinction, 1.e-9f);
+        throughput *= tr;
     }
 }
 #endif

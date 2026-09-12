@@ -29,11 +29,14 @@ namespace ocean
 // Boot-only for the same reason — flipping it rebuilds the material. Compare two runs.
 inline bool g_shoreSinkCut = true;
 
-// OCEAN_SHORE_RUNUP variant switch. true = the modern shore stack (run-up sheet with a travelling
-// front, anchored swash, contact foam with the torn dither edge, SDF, sink). false = the CLASSIC
-// surface, byte-faithful from commit 3e54d5d (2026-06-22, pre-rework) via
-// ocean_surface_legacy.hlsli — classic depth-map damping and the old contact foam. Toggle at boot
-// with "--ocean-runup-shore" / "--ocean-classic-shore" (variant = material rebuild, so boot-only).
+// OCEAN_SHORE_RUNUP variant switch. false (the default) = the SURF-SIM surface,
+// ocean_surface_surf_sim.hlsli -- classic depth-map damping, the surf sim's injected height and
+// foam fields, the contact foam; the surface in use. true = the RUN-UP shore stack,
+// ocean_surface_runup.hlsli -- run-up sheet with a travelling front, anchored swash, contact foam
+// with the torn dither edge, SDF, sink. Toggle at boot with "--ocean-runup-shore" /
+// "--ocean-surf-sim-shore" (the latter also answers to its old name "--ocean-classic-shore";
+// variant = material rebuild, so boot-only). Renamed from "legacy"/"classic" on 2026-09-12: the
+// surf-sim surface stopped being a byte-faithful baseline long ago and is the main surface.
 inline bool g_shoreRunup = false;
 
 // "--ocean-foam-debug": compile the contact-foam diagnostic views into the ocean surface shader.
@@ -166,6 +169,18 @@ public:
     }
     Math::float4 GetFogVolumeParams() const { return fogVolumeParams_; }
     Math::float4 GetFogVolumeZParams() const { return fogVolumeZParams_; }
+    // Plan C3: the cloud shadow map on the water -- the projection, (on, far depth km, 0, 0) and the
+    // SRV, set by SceneRenderer's Main_Transparent builder from the frame's VolumetricCloud (a null
+    // SRV means "no map this frame": the table gets the fallback and the shader's gate is 0).
+    void SetCloudShadow(const Math::mat4& viewProj, const Math::float4& params, D3D12_CPU_DESCRIPTOR_HANDLE srv)
+    {
+        cloudShadowViewProj_ = viewProj;
+        cloudShadowParams_ = params;
+        cloudShadowSrv_ = srv;
+    }
+    const Math::mat4& GetCloudShadowViewProj() const { return cloudShadowViewProj_; }
+    Math::float4 GetCloudShadowParams() const { return cloudShadowParams_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetCloudShadowSrv() const { return cloudShadowSrv_; }
     void SetFogDebugView(std::uint32_t v) { fogDebugView_ = v; }
     std::uint32_t GetFogDebugView() const { return fogDebugView_; }
 
@@ -263,6 +278,9 @@ private:
     std::uint32_t fogDebugView_ = 0u;
     Math::float4 fogVolumeParams_{};    // x = 0: no volume (default)
     Math::float4 fogVolumeZParams_{};
+    Math::mat4 cloudShadowViewProj_{};  // plan C3
+    Math::float4 cloudShadowParams_{};  // x = 0: no map (default)
+    D3D12_CPU_DESCRIPTOR_HANDLE cloudShadowSrv_{};
     float elapsedTime_ = 0.0f;
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);
     float viewerHeight_ = 0.0f;

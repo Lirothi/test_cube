@@ -90,6 +90,7 @@ const Profiler::ScopeNameKey kPassCloudNoise = Profiler::RegisterTraceLiteral(L"
 const Profiler::ScopeNameKey kPassCloudShadow = Profiler::RegisterTraceLiteral(L"Pass_CloudShadow");
 const Profiler::ScopeNameKey kPassCloudTrace = Profiler::RegisterTraceLiteral(L"Pass_CloudTrace");
 const Profiler::ScopeNameKey kCloudTraceMarch = Profiler::RegisterTraceLiteral(L"CloudTrace.March");
+const Profiler::ScopeNameKey kCloudCapture = Profiler::RegisterTraceLiteral(L"SkyEnvironment.CloudCapture");
 const Profiler::ScopeNameKey kCloudTraceTemporal = Profiler::RegisterTraceLiteral(L"CloudTrace.Temporal");
 const Profiler::ScopeNameKey kPassVolumetricFog = Profiler::RegisterTraceLiteral(L"Pass_VolumetricFog");
 const Profiler::ScopeNameKey kPassLightShafts = Profiler::RegisterTraceLiteral(L"Pass_LightShafts");

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <memory>
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderPass.h"
@@ -13,6 +14,26 @@ class Material;
 class Renderer;
 template <size_t MaxPasses> class RenderGraph;
 struct RenderGraphPassContext;
+
+// Plan C4: something composited INTO the sky's radiance cube between its capture and its probe
+// filter -- the volumetric clouds, in UE's real-time sky light capture role. Its owner fills this
+// per frame; the environment rebuilds when the sky's own key OR this says so, runs the material
+// once per radiance mip (dispatch size x size*6, the cube's six faces down the Y), with the owner's
+// four SRVs at t0..t3 and the sky's transmittance and multi-scatter LUTs appended at t4, t5, samplers
+// linear wrap + linear clamp, and a constant buffer of the owner's `ownBytes` (writeConstants) followed
+// by the sky's SkyAtmosphereParameters and SkyViewFrameData.
+struct SkyEnvironmentOverlay
+{
+    bool active = false;   // composite this frame
+    bool dirty = false;    // the overlay changed enough to rebuild even when the sky's key did not
+    Material* material = nullptr;
+    UINT cbBytes = 0;      // aligned size of the whole constant buffer
+    UINT ownBytes = 0;     // the owner's blob at its head; the sky's params + view follow
+    std::function<void(uint8_t* dst, unsigned mipSize)> writeConstants;
+    std::array<ID3D12Resource*, 4> reads{};            // declared at rest for the pass (null = none)
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4> srvs{}; // t0..t3
+    size_t dependency = static_cast<size_t>(-1);       // a pass the overlay's inputs come from
+};
 
 // Fixed-size transfer LUTs (parameter-dirty) and SkyView (per frame). Graphics queue only.
 // Changes overwrite in place only after previous graphics readers; resize never reallocates.
@@ -31,7 +52,9 @@ public:
                        const SkyAtmosphereSettings& settings, const SkyViewFrameData& view,
                        const Camera& camera, float startDepthMetres, size_t after);
     size_t BuildEnvironment(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
-                            const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts);
+                            const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts,
+                            const SkyEnvironmentOverlay* overlay = nullptr);
+    unsigned EnvironmentRevision() const { return environmentBuilds_; }
     size_t BuildDistant(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                         const SkyAtmosphereSettings& settings, SkyViewFrameData view, size_t after);
     bool DistantActive() const { return distantActive_; }
@@ -75,6 +98,7 @@ private:
     SkyAtmosphereParameters environmentParameters_{};
     SkyViewFrameData environmentKey_{};
     bool environmentReady_ = false, environmentFailed_ = false;
+    bool environmentOverlayActive_ = false; // what the last build composited: a switch either way rebuilds
     unsigned environmentBuilds_ = 0;
     std::array<GpuResource, 2> lut_;
     GpuResource aerial_;

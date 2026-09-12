@@ -20,6 +20,7 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.layerBottomKm = std::clamp(j.value("layerBottomKm", s.layerBottomKm), 0.1f, 20.0f);
     s.layerHeightKm = std::clamp(j.value("layerHeightKm", s.layerHeightKm), 0.1f, 20.0f);
     s.coverage = std::clamp(j.value("coverage", s.coverage), 0.0f, 1.0f);
+    s.overcast = std::clamp(j.value("overcast", s.overcast), 0.0f, 1.0f);
     s.cloudType = std::clamp(j.value("cloudType", s.cloudType), -1.0f, 1.0f);
     s.extinctionScale = std::clamp(j.value("extinctionScale", s.extinctionScale), 0.0f, 1.0f);
     s.albedo = std::clamp(j.value("albedo", s.albedo), 0.0f, 1.0f);
@@ -50,6 +51,7 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.shadowMap = j.value("shadowMap", s.shadowMap);
     s.shadowExtentKm = std::clamp(j.value("shadowExtentKm", s.shadowExtentKm), 1.0f, 500.0f);
     s.shadowStrength = std::clamp(j.value("shadowStrength", s.shadowStrength), 0.0f, 1.0f);
+    s.oceanBodyShadow = std::clamp(j.value("oceanBodyShadow", s.oceanBodyShadow), 0.0f, 1.0f);
     s.shadowSnapKm = std::clamp(j.value("shadowSnapKm", s.shadowSnapKm), 0.01f, 100.0f);
     s.shadowDepthBiasKm = std::clamp(j.value("shadowDepthBiasKm", s.shadowDepthBiasKm), -5.0f, 5.0f);
     s.shadowMapSampleCount = std::clamp(j.value("shadowMapSampleCount", s.shadowMapSampleCount), 4u, 128u);
@@ -62,6 +64,7 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["layerBottomKm"] = s.layerBottomKm;
     j["layerHeightKm"] = s.layerHeightKm;
     j["coverage"] = s.coverage;
+    j["overcast"] = s.overcast;
     j["cloudType"] = s.cloudType;
     j["extinctionScale"] = s.extinctionScale;
     j["albedo"] = s.albedo;
@@ -92,6 +95,7 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["shadowMap"] = s.shadowMap;
     j["shadowExtentKm"] = s.shadowExtentKm;
     j["shadowStrength"] = s.shadowStrength;
+    j["oceanBodyShadow"] = s.oceanBodyShadow;
     j["shadowSnapKm"] = s.shadowSnapKm;
     j["shadowDepthBiasKm"] = s.shadowDepthBiasKm;
     j["shadowMapSampleCount"] = s.shadowMapSampleCount;

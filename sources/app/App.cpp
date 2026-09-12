@@ -615,7 +615,7 @@ namespace
             struct FloatKnob { const char* name; float* field; float lo, hi; };
             const FloatKnob knobs[] = {
                 { "layerBottomKm", &c.layerBottomKm, 0.1f, 20.0f }, { "layerHeightKm", &c.layerHeightKm, 0.1f, 20.0f },
-                { "coverage", &c.coverage, 0.0f, 1.0f }, { "cloudType", &c.cloudType, -1.0f, 1.0f },
+                { "coverage", &c.coverage, 0.0f, 1.0f }, { "overcast", &c.overcast, 0.0f, 1.0f }, { "cloudType", &c.cloudType, -1.0f, 1.0f },
                 { "extinctionScale", &c.extinctionScale, 0.0f, 1.0f }, { "albedo", &c.albedo, 0.0f, 1.0f },
                 { "detailStrength", &c.detailStrength, 0.0f, 1.0f }, { "baseTileKm", &c.baseTileKm, 0.1f, 100.0f },
                 { "baseVerticalTiles", &c.baseVerticalTiles, 0.1f, 100.0f },
@@ -630,7 +630,7 @@ namespace
                 { "tracingStartMaxDistanceKm", &c.tracingStartMaxDistanceKm, 1.0f, 10000.0f },
                 { "tracingMaxDistanceKm", &c.tracingMaxDistanceKm, 1.0f, 1000.0f },
                 { "historyWeight", &c.historyWeight, 0.0f, 0.99f }, { "shadowExtentKm", &c.shadowExtentKm, 1.0f, 500.0f },
-                { "shadowStrength", &c.shadowStrength, 0.0f, 1.0f }, { "shadowSnapKm", &c.shadowSnapKm, 0.01f, 100.0f },
+                { "shadowStrength", &c.shadowStrength, 0.0f, 1.0f }, { "oceanBodyShadow", &c.oceanBodyShadow, 0.0f, 1.0f }, { "shadowSnapKm", &c.shadowSnapKm, 0.01f, 100.0f },
                 { "shadowDepthBiasKm", &c.shadowDepthBiasKm, -5.0f, 5.0f },
             };
             for (const FloatKnob& k : knobs)

@@ -1239,7 +1239,7 @@ so the retune this step's acceptance calls for is a deliberate act rather than a
 - `sources/rendering/lighting/Skybox.h/.cpp`;
 - environment runtime/editor/JSON migration;
 - `shaders/lighting_cs.hlsl`;
-- every other `exposure` consumer — census at the time of writing: `shaders/skybox.hlsl`, `shaders/glass.hlsl`, `shaders/rt_reflections_cs.hlsl`, `shaders/editor_preview.hlsl`, and all three ocean surface variants (`shaders/ocean_surface.hlsl`, `shaders/ocean_surface_legacy.hlsli`). Census RE-RUN 2026-08-16:
+- every other `exposure` consumer — census at the time of writing: `shaders/skybox.hlsl`, `shaders/glass.hlsl`, `shaders/rt_reflections_cs.hlsl`, `shaders/editor_preview.hlsl`, and all three ocean surface variants (`shaders/ocean_surface.hlsl`, `shaders/ocean_surface_surf_sim.hlsli`). Census RE-RUN 2026-08-16:
 `ocean_surface_pre_foam_rewrite.hlsl` was a dead pre-rewrite backup referenced by nothing and has
 been deleted (recoverable from commit `6322c18`), so the list above is now the whole set. Two more
 C++ owners the original list missed: `OceanRenderable::GetSunDirAmbient/GetSunColorExposure` build
@@ -1340,7 +1340,7 @@ magnitude. What changes is that the foam now *tracks* the sky at all — under a
 cubemap it used to stay lit by a daylight blue. Giving the water SURFACE real sky lighting is P5.
 
 Three things this cost, worth remembering:
-- **The compiled default is `g_shoreRunup = false`, i.e. the LEGACY ocean** — `ocean_surface_legacy.hlsli`
+- **The compiled default is `g_shoreRunup = false`, i.e. the LEGACY ocean** — `ocean_surface_surf_sim.hlsli`
   is what ships, despite being documented as a byte-faithful baseline of commit `3e54d5d`. Editing
   only the modern variant changes nothing on screen. Both are now edited; that file's "verbatim"
   contract is deliberately broken and the header says so.
@@ -2270,7 +2270,7 @@ tune away.
 
 **The ocean shares the medium, and exactly one horizon term runs.** The water's own `HorizonBlend`
 and the global fog are the same effect authored twice, so the fog branch replaces it rather than
-stacking on it. BOTH surfaces carry it -- `ocean_surface.hlsl` and `ocean_surface_legacy.hlsli` --
+stacking on it. BOTH surfaces carry it -- `ocean_surface.hlsl` and `ocean_surface_surf_sim.hlsli` --
 which matters because `ocean::g_shoreRunup` defaults FALSE and the legacy file is the one that
 actually runs; fogging only the modern one would have shipped a feature that never executes.
 `PackAtmosphere` produces the numbers once for both compose and the water, so they cannot disagree.

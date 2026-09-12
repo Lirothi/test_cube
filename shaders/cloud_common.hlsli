@@ -20,7 +20,10 @@ static const float CloudMetresPerKm = 1000.0f;
 
 // MIRROR of VolumetricCloudConstants (rendering/lighting/VolumetricCloud.h), field for field: it is
 // uploaded as one blob, so the two must not drift. All members are float4 / float4x4.
-cbuffer CloudCB : register(b0)
+#ifndef CLOUD_B_CB
+#define CLOUD_B_CB b0
+#endif
+cbuffer CloudCB : register(CLOUD_B_CB)
 {
     float4x4 cloudInvViewProjNoJitter;   // clip -> world, this frame's UNJITTERED camera
     float4x4 cloudViewProjNoJitter;      // world -> clip (w = view depth)
@@ -42,7 +45,25 @@ cbuffer CloudCB : register(b0)
     float4 cloudAerial;      // x: aerial perspective on, y: aerial start depth (km), z: distant sky light on, w: debug view
     float4 cloudTemporal;    // x: history valid, y: history weight, z: preExposure / previous preExposure, w: frame index
     float4 cloudShadowMap;   // x: resolution, y: 1 / resolution, z: far depth (km), w: strength
-    float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), z: base noise vertical compression (>= 1), w: 0
+    float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), z: base noise vertical compression (>= 1), w: overcast (0..1)
+#ifdef CLOUD_WITH_SKY_CB
+    // The sky's SkyAtmosphereCB (sky_atmosphere.hlsli, its SKY_VIEW layout), appended for the one
+    // pass that needs both -- the environment capture composites the cloud INTO the sky
+    // (cloud_capture_cs.hlsl). The names are the sky's own, so its functions read them unchanged;
+    // sky_atmosphere.hlsli is then included with SKY_CB_EXTERNAL and declares no cbuffer. The C++
+    // blob is VolumetricCloudConstants + SkyAtmosphereParameters + SkyViewFrameData, in that order.
+    float4 AtmosphereRadii;
+    float4 RayleighScattering;
+    float4 MieScattering;
+    float4 MieAbsorption;
+    float4 AbsorptionExtinction;
+    float4 AbsorptionDensity;
+    float4 GroundAlbedo;
+    float4 SkySunDirection;
+    float4 SkyIlluminance;
+    float4 SkyExposure;
+    float4 SkyPlanet;
+#endif
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -218,9 +239,19 @@ float CloudBaseDensity(float3 worldMetres, float normAlt, out float coverageOut,
 {
     const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm; // km, drifting
     const float4 weather = CloudSampleWeather(p.xz * cloudShape.z);
-    // The knob is a THRESHOLD on the weather field: coverage 0 clears the sky, 1 lets every part of
-    // the field through in proportion.
-    const float coverage = saturate(CloudRemap(weather.r, 1.0f - saturate(cloudMedium.z), 1.0f, 0.0f, 1.0f));
+    // The coverage knob is a THRESHOLD on the weather field: 0 clears the sky, 1 lets every part of
+    // the field through in proportion -- and no further: a third of the procedural map is zero after
+    // its contrast stretch, so coverage 1 is "the map as drawn", not a closed sky (owner,
+    // 2026-09-12). The gaps are the map's alone: the base shape below never reaches zero (its remap's
+    // low end is <= 0), it only thins. Schneider closes the sky by PAINTING the weather map; ours is
+    // procedural, so the OVERCAST knob does the painting: it lifts the weather field towards 1, and
+    // nothing else -- a first version also lifted the base towards 1 and got a deck with no texture
+    // at all (a constant density erodes nowhere, and an opaque slab's underside is one flat tone).
+    // With the field lifted the base keeps its own 0.1..1 modulation: a closed, mottled layer. At 0
+    // this is an exact identity (the field is already in 0..1).
+    const float overcast = saturate(cloudShadowMap2.w);
+    const float weatherCoverage = saturate(weather.r + overcast);
+    const float coverage = saturate(CloudRemap(weatherCoverage, 1.0f - saturate(cloudMedium.z), 1.0f, 0.0f, 1.0f));
     const float type = saturate(weather.g + cloudMedium.w);
     coverageOut = coverage;
     typeOut = type;

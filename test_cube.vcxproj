@@ -635,7 +635,9 @@
     <None Include="shaders\ocean_foam_simulation.hlsl" />
     <None Include="shaders\ocean_reflection_cs.hlsl" />
     <None Include="shaders\ocean_surface.hlsl" />
-    <None Include="shaders\ocean_surface_legacy.hlsli" />
+    <None Include="shaders\ocean_surface_surf_sim.hlsli" />
+    <None Include="shaders\ocean_surface_runup.hlsli" />
+    <None Include="shaders\ocean_surface_common.hlsli" />
     <None Include="shaders\ocean_wetness_update_cs.hlsl" />
     <None Include="shaders\ocean_shore_foam_dissipation.hlsli" />
     <None Include="shaders\ocean_time_spectrum.hlsl" />
@@ -656,8 +658,10 @@
     <None Include="shaders\sky_ibl_filter_cs.hlsl" />
     <None Include="shaders\sky_lut_distant_cs.hlsl" />
     <None Include="shaders\cloud_common.hlsli" />
+    <None Include="shaders\cloud_march.hlsli" />
     <None Include="shaders\cloud_noise_cs.hlsl" />
     <None Include="shaders\cloud_trace_cs.hlsl" />
+    <None Include="shaders\cloud_capture_cs.hlsl" />
     <None Include="shaders\cloud_temporal_cs.hlsl" />
     <None Include="shaders\cloud_shadow_cs.hlsl" />
     <None Include="shaders\cloud_shadow_common.hlsli" />

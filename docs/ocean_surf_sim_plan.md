@@ -245,7 +245,7 @@ touched shader at every step; feature stays default-OFF throughout)
 - **S4 DONE (2026-08-14, uncommitted): legacy consumption.** The sim's foam field renders as
   real shore foam. Injection is thin and tagged ("surf sim injection (S4)"): one cbuffer field
   (`surfSimParams2`, x = front breakup), one helper (`SurfSimFoamCoverage` in
-  ocean_surface_legacy.hlsli), one additive line in `GetFoamData` — the sim coverage joins the
+  ocean_surface_surf_sim.hlsli), one additive line in `GetFoamData` — the sim coverage joins the
   `contactCoverage` slot, so it automatically wears the shore foam albedo and its share of the
   blend. The per-pixel TEAR lives here (never in the sim — texel aliasing, see S3.1): the
   ContactFoam pattern (two rotated octaves, fixed 0.15 tiles/m) is a THRESHOLD the decaying
@@ -358,3 +358,16 @@ touched shader at every step; feature stays default-OFF throughout)
   planned. NOTE: `--scene-stress` returns before the rest of the cmdline parses, so the stress
   ran with the sim OFF (the shipping default).
 - A+C shader breakup shipped separately and stays regardless of this plan.
+
+### 2026-09-12: наименование поверхностей и общий инклуд
+Владелец: «с легаси завязывать». `ocean_surface_legacy.hlsli` → `ocean_surface_surf_sim.hlsli` (поверхность
+в работе, дефолт `g_shoreRunup = false`, флаг `--ocean-surf-sim-shore`, старый `--ocean-classic-shore`
+принимается); современное тело вынесено из `ocean_surface.hlsl` в `ocean_surface_runup.hlsli`
+(`--ocean-runup-shore`); `ocean_surface.hlsl` — только переключатель `OCEAN_SHORE_RUNUP`. Всё, что у двух
+поверхностей было текстуально одинаковым (50 функций + `ClipMapVertexInternal`, константы
+`kLodThreshold`/`kNormalScale`), живёт в `ocean_surface_common.hlsli` — включается после cbuffer/текстур/
+структур каждой поверхности; там же тень облаков (карта t21, `CloudSunVisibility`, plan C3). Приёмка:
+DXIL VS идентичен побитно, PS — то же мультимножество инструкций. Функции с одинаковым именем и разным
+телом (SampleSceneDepth, GetFoamData, Specular, Reflection, Refraction, GetOceanColor, …) остались в файлах.
+Тень облаков на воде: `light.color *= CloudSunVisibility(worldPos)` в обеих поверхностях
+(docs/volumetric_fog_sky_clouds_ssgi_plan.md, часть C).

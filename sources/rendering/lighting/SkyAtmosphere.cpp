@@ -534,7 +534,8 @@ void SkyAtmosphere::PrepareEnvironment(Renderer* renderer)
 }
 
 size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
-    const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts)
+    const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts,
+    const SkyEnvironmentOverlay* overlay)
 {
     constexpr size_t none = static_cast<size_t>(-1);
     if (sky) sky->SetEnvironment({}, {});
@@ -548,15 +549,21 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     view.exposure[0] = 1.0f / 1024.0f;
     view.exposure[1] = 1.0f; // the sky-only PICTURE factor never reaches the probes (and must not rebuild them)
     const auto params = settings.parameters;
+    // Plan C4: the overlay (the clouds) rebuilds the environment on its own schedule -- and once
+    // more when it appears or disappears, so no cube keeps clouds that are gone or lacks new ones.
+    const bool overlayActive = overlay && overlay->active && overlay->material && overlay->writeConstants;
     const bool dirty = !environmentReady_ || std::memcmp(&params, &environmentParameters_, sizeof(params)) != 0
-        || std::memcmp(&view, &environmentKey_, sizeof(view)) != 0;
+        || std::memcmp(&view, &environmentKey_, sizeof(view)) != 0
+        || (overlayActive && overlay->dirty) || overlayActive != environmentOverlayActive_;
     // Select descriptors before any serial pass builder/worker consumes the frame's environment.
     sky->SetEnvironment(environmentSrv_, {environment_[0].Get(), environment_[1].Get(), environment_[2].Get()});
     if (!dirty) return luts;
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
     if (luts != none) deps.push_back(luts);
+    if (overlayActive && overlay->dependency != none) deps.push_back(overlay->dependency);
+    const SkyEnvironmentOverlay ov = overlayActive ? *overlay : SkyEnvironmentOverlay{};
     return graph.AddPass2(RenderPass::Main_SkyEnvironment, deps, {}, {},
-        [this, renderer, params, view](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, params, view, ov](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             std::array<std::uint32_t, 4> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& r : lut_) ctx.Use(r.Get(), kRest);
@@ -564,6 +571,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             ctx.NextPoint(); points[1] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(environmentView_.Get(), kRest);
             ctx.Use(environment_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            for (auto* r : ov.reads) { if (r) ctx.Use(r, kRest); } // the overlay's inputs, read beside the capture
             ctx.NextPoint(); points[2] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(environment_[0].Get(), kRest);
             ctx.Use(environment_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -571,8 +579,10 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             ctx.NextPoint(); points[3] = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& r : environment_) ctx.Use(r.Get(), kRest);
             environmentReady_ = true; environmentParameters_ = params; environmentKey_ = view;
-            LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI", ++environmentBuilds_);
-            return [this, renderer, params, view, points](RenderGraphPassContext c) {
+            environmentOverlayActive_ = ov.material != nullptr;
+            LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI{}",
+                      ++environmentBuilds_, ov.material ? ", cloud overlay" : "");
+            return [this, renderer, params, view, points, ov](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyEnvironment);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
@@ -593,9 +603,32 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
                         const UINT taps = (128u / size) < 8u ? (128u / size) : 8u;
                         const std::array<float, 8> capture{view.planet[0], view.planet[1], 1024.0f,
                             static_cast<float>(size), static_cast<float>(taps), 0.0f, 0.0f, 0.0f};
+                        // The overlay below reads and rewrites the same mips: one UAV barrier after
+                        // the last capture orders the two.
                         RecordComputeDispatch(renderer, t.cl, captureMaterial_.get(), render::kConstantBufferAlignment,
                             [&capture](uint8_t* dst) { std::memcpy(dst, capture.data(), sizeof(capture)); },
-                            {environmentViewSrv_}, {environmentUav_[mip]}, sampler, size, size*6);
+                            {environmentViewSrv_}, {environmentUav_[mip]}, sampler, size, size*6,
+                            (ov.material && mip == 7u) ? environment_[0].Get() : nullptr);
+                    }
+                    // Plan C4: the overlay -- the clouds -- composited into every radiance mip in
+                    // place, so the probes filtered next and every reader of the picture see them.
+                    if (ov.material)
+                    {
+                        GPU_SCOPE(t.cl, ProfilerScopes::kCloudCapture);
+                        const auto overlaySamplers = renderer->GetSamplerManager()->GetTable(renderer,
+                            std::array{*SamplerManager::LinearWrap(), *SamplerManager::LinearClamp()});
+                        for (UINT mip = 0; mip < 8; ++mip)
+                        {
+                            const UINT size = 128u >> mip;
+                            RecordComputeDispatch(renderer, t.cl, ov.material, ov.cbBytes,
+                                [&ov, &params, &view, size](uint8_t* dst) {
+                                    ov.writeConstants(dst, size);
+                                    std::memcpy(dst + ov.ownBytes, &params, sizeof(params));
+                                    std::memcpy(dst + ov.ownBytes + sizeof(params), &view, sizeof(view));
+                                },
+                                {ov.srvs[0], ov.srvs[1], ov.srvs[2], ov.srvs[3], srv_[0], srv_[1]},
+                                {environmentUav_[mip]}, overlaySamplers, size, size*6);
+                        }
                     }
                     renderer->EmitPoint(t.cl, points[2]);
                     // The LIGHTING PROBES, built from that picture with the lower-hemisphere policy

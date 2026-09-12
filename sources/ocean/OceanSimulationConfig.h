@@ -39,7 +39,7 @@ struct OceanRenderConfig
     // the ray's Y so the water samples the band near the horizon instead of swinging into the
     // zenith. It exists because a clear-sky HDRI's dark zenith, sampled across a wave's facets,
     // reads as hard dark streaks along the crests — and IblClampToSharp's one-sided guard cancels
-    // the prefilter blur exactly there (full reasoning in ocean_surface_legacy.hlsli). ~0.4-0.6 is
+    // the prefilter blur exactly there (full reasoning in ocean_surface_surf_sim.hlsli). ~0.4-0.6 is
     // the useful range; the planar reflection and the land IBL are untouched.
     float reflectionSkyHorizonPull = 1.0f;
     float cascadeFadeScale = 20.0f;

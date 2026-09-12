@@ -682,9 +682,11 @@ int WINAPI WinMain(
             ocean::g_geometryFadeOverride =
                 (float)std::atof(flag + std::strlen("--ocean-geomfade="));
         }
-        // Ocean surface variant (see OceanRenderable.h): the modern run-up stack vs the classic
-        // pre-rework surface. Either flag overrides the compiled-in default.
-        if (std::strstr(lpCmdLine, "--ocean-classic-shore")) {
+        // Ocean surface variant (see OceanRenderable.h): the surf-sim surface (the default) vs the
+        // run-up shore stack. Either flag overrides the compiled-in default. "--ocean-classic-shore"
+        // is the surf-sim flag's old name (the surface was called "legacy"/"classic" until
+        // 2026-09-12) and keeps working.
+        if (std::strstr(lpCmdLine, "--ocean-surf-sim-shore") || std::strstr(lpCmdLine, "--ocean-classic-shore")) {
             ocean::g_shoreRunup = false;
         }
         if (std::strstr(lpCmdLine, "--ocean-runup-shore")) {

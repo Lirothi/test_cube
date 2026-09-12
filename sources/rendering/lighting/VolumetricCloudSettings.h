@@ -21,7 +21,8 @@ struct VolumetricCloudSettings
     float layerHeightKm = 2.5f;
 
     // --- The density model (ours, Schneider 2015 / Nubis; cloud_common.hlsli).
-    float coverage = 0.5f;          // threshold on the weather map's coverage field, 0 clear .. 1 overcast
+    float coverage = 0.5f;          // threshold on the weather map's coverage field: 0 clear .. 1 the whole field as drawn
+    float overcast = 0.0f;          // lifts the weather map's coverage field towards 1: 0 the map as drawn .. 1 no gaps (the base shape keeps its texture)
     float cloudType = 0.0f;         // bias on the weather map's type field: -1 all stratus .. +1 all cumulus
     float extinctionScale = 0.05f;  // extinction at full density, 1/m (real cumulus 0.04-0.1)
     float albedo = 0.95f;           // single-scattering albedo of the droplets
@@ -73,6 +74,11 @@ struct VolumetricCloudSettings
     bool shadowMap = true;
     float shadowExtentKm = 20.0f;      // half-width of the map on the ground
     float shadowStrength = 1.0f;       // UE CloudShadowStrength
+    // Ours: how much of the cloud shadow the WATER BODY takes (the glints and the foam always lose the
+    // sun). 0 = the water-leaving light ignores the cloud, 1 = it follows the sun as the land does.
+    // Stands in for the light the bright cloud sides/undersides add under broken cloud (Mobley: the
+    // diffuse part stays 30-60 % of the clear-sky total), which our environment cube does not carry.
+    float oceanBodyShadow = 0.35f;
     float shadowSnapKm = 2.0f;         // UE ShadowMap.SnapLength
     float shadowDepthBiasKm = 0.0f;    // UE CloudShadowDepthBias
     std::uint32_t shadowMapSampleCount = 16u; // UE CloudShadowRaySampleBaseCount 16 (x horizon factor)

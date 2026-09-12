@@ -130,25 +130,32 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
 {
     auto& rg = gb.rg;
     gb.pSkyLuts = skyAtmosphere_.Build(renderer, rg, frame_->settings.skyAtmosphere);
-    const auto environmentView = MakeSkyView(frame_->settings.skyAtmosphere, 1.0f, 1.0f, 0.0f, frame_->dirLight);
-    const auto pEnvironment = skyAtmosphere_.BuildEnvironment(renderer, rg, frame_->settings.skyAtmosphere,
-        environmentView, frame_->skybox, gb.pSkyLuts);
-    RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
-    const auto pDistant = skyAtmosphere_.BuildDistant(renderer, rg, frame_->settings.skyAtmosphere, environmentView, pEnvironment);
-    if (pDistant != GraphBuild::kNone) environmentDeps.push_back(pDistant);
-    // Plan part C: the noise set (seed-dirty) and the cloud shadow map, ahead of the lighting and
-    // the fog that multiply it into the sun. The view trace itself is registered in BuildLighting,
-    // after the aerial volume it reads.
+    // Plan part C: the noise set (seed-dirty) first -- the sky environment composites the clouds
+    // from it (C4) -- then the environment, the distant light, and the cloud shadow map ahead of the
+    // lighting and the fog that multiply it into the sun. The view trace itself is registered in
+    // BuildLighting, after the aerial volume it reads.
     gb.pCloudNoise = GraphBuild::kNone;
     gb.pCloudShadow = GraphBuild::kNone;
+    SkyEnvironmentOverlay cloudOverlay{};
     if (decisions_.volumetricCloud)
     {
         gb.pCloudNoise = volumetricCloud_.BuildNoise(renderer, rg, frame_->settings.volumetricCloud);
-        gb.pCloudShadow = volumetricCloud_.BuildShadow(renderer, rg, MakeCloudInputs(renderer), gb.pCloudNoise);
+        cloudOverlay = volumetricCloud_.MakeEnvironmentOverlay(renderer, MakeCloudInputs(renderer), gb.pCloudNoise,
+                                                               skyAtmosphere_.DistantRevision());
     }
     else
     {
         volumetricCloud_.ClearFrameState();
+    }
+    const auto environmentView = MakeSkyView(frame_->settings.skyAtmosphere, 1.0f, 1.0f, 0.0f, frame_->dirLight);
+    const auto pEnvironment = skyAtmosphere_.BuildEnvironment(renderer, rg, frame_->settings.skyAtmosphere,
+        environmentView, frame_->skybox, gb.pSkyLuts, &cloudOverlay);
+    RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
+    const auto pDistant = skyAtmosphere_.BuildDistant(renderer, rg, frame_->settings.skyAtmosphere, environmentView, pEnvironment);
+    if (pDistant != GraphBuild::kNone) environmentDeps.push_back(pDistant);
+    if (decisions_.volumetricCloud)
+    {
+        gb.pCloudShadow = volumetricCloud_.BuildShadow(renderer, rg, MakeCloudInputs(renderer), gb.pCloudNoise);
     }
 
 
@@ -1766,6 +1773,25 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         if (DT.fogIntegrated.Get())
         {
             p.Use(DT.fogIntegrated.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        // Plan C3 on the water: the cloud shadow map, PIXEL-readable for the ocean's forward draw
+        // (its rest is NON_PIXEL, the lighting's and the fog's state). "Built this frame" was
+        // committed by the cloud shadow builder earlier in this phase; the ocean gets the SRV and
+        // the projection together, or nothing (its gate is then 0 and the table holds a dummy).
+        if (frame_->ocean)
+        {
+            if (volumetricCloud_.ShadowBuilt())
+            {
+                p.Use(volumetricCloud_.ShadowResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                frame_->ocean->SetCloudShadow(volumetricCloud_.ShadowViewProj(),
+                    float4(1.0f, volumetricCloud_.ShadowFarDepthKm(),
+                           std::clamp(frame_->settings.volumetricCloud.oceanBodyShadow, 0.0f, 1.0f), 0.0f),
+                    volumetricCloud_.ShadowSrv());
+            }
+            else
+            {
+                frame_->ocean->SetCloudShadow(mat4{}, float4(0.0f, 0.0f, 0.0f, 0.0f), {});
+            }
         }
         // 4. Rebind the forward targets. The fan-out chunks re-apply the velocity/objectID
         // pair per chunk; same states, so one registration covers them.

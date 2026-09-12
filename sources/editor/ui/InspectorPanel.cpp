@@ -2062,7 +2062,12 @@ namespace
             ImGui::SeparatorText("Shape");
             dragF("Coverage", "coverage", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("A threshold on the weather map's coverage field: 0 is a clear sky, 1 lets "
-                          "every part of the field through in proportion. The single most visible knob.");
+                          "every part of the field through in proportion -- gaps the map has stay gaps. "
+                          "The single most visible knob.");
+            dragF("Overcast", "overcast", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("Closes the gaps Coverage cannot: lifts the weather map's coverage field towards 1, "
+                          "as if the map were painted fuller. 0 leaves the map as drawn, 1 is a layer with no "
+                          "gaps; the base shape keeps its own thick-and-thin texture, so the deck stays mottled.");
             dragF("Cloud Type", "cloudType", 0.0f, 0.01f, -1.0f, 1.0f, "%.2f");
             InspectorHelp("Bias on the weather map's type field: towards -1 everything is flat stratus, "
                           "towards +1 towering cumulus; 0 lets the map decide per formation.");
@@ -2177,6 +2182,11 @@ namespace
             dragF("Shadow Strength", "shadowStrength", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("UE CloudShadowStrength: scales the optical depth the map reports. 1 = the "
                           "cloud's own density.");
+            dragF("Ocean Body Shadow", "oceanBodyShadow", 0.35f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("How much of the cloud shadow the WATER BODY takes; the sun glints and the foam "
+                          "always lose the sun. 0 = the water's own light ignores the cloud, 1 = it darkens "
+                          "with the sun like the land. Under broken cloud the bright cloud sides keep the "
+                          "sea lit far more than the shadow map alone says.");
             dragF("Shadow Snap (km)", "shadowSnapKm", 2.0f, 0.1f, 0.01f, 100.0f, "%.2f");
             InspectorHelp("UE ShadowMap.SnapLength: the map's centre moves in steps of this, so the "
                           "shadow does not shimmer as the camera walks.");

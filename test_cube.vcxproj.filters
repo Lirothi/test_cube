@@ -1331,7 +1331,13 @@
     <None Include="shaders\ocean_surface.hlsl">
       <Filter>shaders</Filter>
     </None>
-    <None Include="shaders\ocean_surface_legacy.hlsli">
+    <None Include="shaders\ocean_surface_surf_sim.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\ocean_surface_runup.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\ocean_surface_common.hlsli">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\ocean_wetness_update_cs.hlsl">
@@ -1377,8 +1383,10 @@
     <None Include="shaders\sky_ibl_filter_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_lut_distant_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\cloud_common.hlsli"><Filter>shaders</Filter></None>
+    <None Include="shaders\cloud_march.hlsli"><Filter>shaders</Filter></None>
     <None Include="shaders\cloud_noise_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\cloud_trace_cs.hlsl"><Filter>shaders</Filter></None>
+    <None Include="shaders\cloud_capture_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\cloud_temporal_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\cloud_shadow_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\cloud_shadow_common.hlsli"><Filter>shaders</Filter></None>

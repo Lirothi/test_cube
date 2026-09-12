@@ -7,7 +7,7 @@
 // from theirs in four ways that all mattered; they are called out at each site below.
 //
 // Its own header rather than a block inside compose_cs, because three passes consume it now:
-// compose (opaque), and both ocean surfaces (ocean_surface.hlsl and ocean_surface_legacy.hlsli).
+// compose (opaque), and both ocean surfaces (ocean_surface_surf_sim.hlsli and ocean_surface_runup.hlsli).
 //
 // NO FROXEL VOLUME -- the interface contract keeps the first implementation analytic, which also
 // means it costs a handful of ALU in passes that already have depth and the sky bound.

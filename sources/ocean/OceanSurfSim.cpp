@@ -288,7 +288,7 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
         // surface samples them every frame regardless. Their canonical state is UNORDERED_ACCESS
         // (they are written by compute), so simply returning here left the surface sampling a
         // resource in the wrong layout: GPU-based validation reports it as id=1358 against
-        // `ocean_surface_legacy.hlsli`, and `--wind-freeze` makes it the normal case rather than a
+        // `ocean_surface_surf_sim.hlsli`, and `--wind-freeze` makes it the normal case rather than a
         // rare one, because a frozen clock is exactly when there are no substeps.
         //
         // So the dispatches are still skipped and only the hand-over is declared. `current_` is

@@ -63,8 +63,8 @@ void VolumetricCloud::Reset()
     baseSrv_ = baseUav_ = detailSrv_ = detailUav_ = weatherSrv_ = weatherUav_ = {};
     shadowRawSrv_ = shadowRawUav_ = shadowFilteredSrv_ = shadowFilteredUav_ = {};
     noiseBase_.reset(); noiseDetail_.reset(); noiseWeather_.reset(); trace_.reset(); temporal_.reset();
-    shadowTrace_.reset(); shadowFilter_.reset();
-    cbBytes_ = 0;
+    shadowTrace_.reset(); shadowFilter_.reset(); capture_.reset();
+    cbBytes_ = 0; captureCbBytes_ = 0; captureValid_ = false;
     initialized_ = failed_ = false;
     noiseReady_ = false; noiseSeed_ = 0; noiseBuilds_ = 0;
     shadowBuilt_ = false; shadowViewProj_ = {}; shadowFarKm_ = 1.0f;
@@ -142,7 +142,8 @@ void VolumetricCloud::Prepare(Renderer* renderer, const VolumetricCloudSettings&
     temporal_ = compute(L"shaders/cloud_temporal_cs.hlsl", "CSMain");
     shadowTrace_ = compute(L"shaders/cloud_shadow_cs.hlsl", "CSTrace");
     shadowFilter_ = compute(L"shaders/cloud_shadow_cs.hlsl", "CSFilter");
-    if (!noiseBase_ || !noiseDetail_ || !noiseWeather_ || !trace_ || !temporal_ || !shadowTrace_ || !shadowFilter_)
+    capture_ = compute(L"shaders/cloud_capture_cs.hlsl", "CSMain");
+    if (!noiseBase_ || !noiseDetail_ || !noiseWeather_ || !trace_ || !temporal_ || !shadowTrace_ || !shadowFilter_ || !capture_)
     { fail("compute PSO"); return; }
     // The constant buffer is uploaded as one blob: the shader's layout must be the mirror's.
     const UINT cbBytes = trace_->GetCBSizeBytes(0);
@@ -153,6 +154,17 @@ void VolumetricCloud::Prepare(Renderer* renderer, const VolumetricCloudSettings&
         fail("constant buffer mirror"); return;
     }
     cbBytes_ = trace_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment);
+    // C4: the capture's buffer is the cloud blob with the sky's parameters and view appended
+    // (cloud_common.hlsli CLOUD_WITH_SKY_CB); the reflection must agree with the three structs.
+    const UINT captureBytes = capture_->GetCBSizeBytes(0);
+    const UINT captureExpected = static_cast<UINT>(sizeof(VolumetricCloudConstants) + sizeof(SkyAtmosphereParameters) + sizeof(SkyViewFrameData));
+    if (captureBytes != captureExpected)
+    {
+        LOG_ERROR(logging::LogCategory::Render, "volumetric clouds: the capture's CB is {} bytes in the shader, {} expected (cloud + sky params + sky view)",
+                  captureBytes, captureExpected);
+        fail("capture constant buffer mirror"); return;
+    }
+    captureCbBytes_ = capture_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment);
     initialized_ = true;
     LOG_INFO(logging::LogCategory::Render, "volumetric clouds: resources ready (base {}^3, detail {}^3, weather {}^2, shadow {}^2)",
              kBaseSize, kDetailSize, kWeatherSize, kShadowSize);
@@ -275,8 +287,57 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in)
     // The base noise's vertical compression: a tile may span at most `baseVerticalTiles` layer
     // heights (never stretched the other way -- a thick layer keeps the isotropic noise).
     c.shadowMap2[2] = std::max(1.0f, s.baseTileKm / std::max(s.layerHeightKm * s.baseVerticalTiles, 1.0e-3f));
-    c.shadowMap2[3] = 0.0f;
+    c.shadowMap2[3] = std::clamp(s.overcast, 0.0f, 1.0f);
     return c;
+}
+
+// C4: UE's real-time sky light capture with clouds (VolumetricCloudRendering.cpp:2257,
+// :2266-2280), in the shape of an overlay on the B4 environment (SkyAtmosphere::BuildEnvironment).
+// The probe is sea level under the camera; the blob is the frame's, re-based on that probe with
+// the exposure at 1 (the cube stores raw radiance) and the aerial perspective forced on (the
+// capture integrates the LUTs itself, it has no camera volume to wait for).
+SkyEnvironmentOverlay VolumetricCloud::MakeEnvironmentOverlay(Renderer* renderer, const FrameInputs& in,
+                                                              size_t noisePass, unsigned distantRevision)
+{
+    SkyEnvironmentOverlay overlay{};
+    if (!Ready() || !in.settings || !noiseReady_ || !capture_) { return overlay; }
+    const VolumetricCloudSettings& s = *in.settings;
+    const Math::float2 probeXZ(in.cameraPos.x, in.cameraPos.z);
+    const unsigned long long frame = renderer->GetTotalFrameNumber();
+    bool dirty = !captureValid_ || std::memcmp(&s, &captureSettings_, sizeof(s)) != 0
+        || noiseBuilds_ != captureNoiseRevision_ || distantRevision != captureDistantRevision_;
+    if (!dirty && frame >= captureFrame_ + kCaptureIntervalFrames)
+    {
+        const float dx = probeXZ.x - captureProbeXZ_.x, dz = probeXZ.y - captureProbeXZ_.y;
+        dirty = (dx * dx + dz * dz) > kCaptureMoveMetres * kCaptureMoveMetres || in.windTime != captureWindTime_;
+    }
+    if (dirty)
+    {
+        captureValid_ = true; captureSettings_ = s; captureNoiseRevision_ = noiseBuilds_;
+        captureDistantRevision_ = distantRevision; captureFrame_ = frame;
+        captureProbeXZ_ = probeXZ; captureWindTime_ = in.windTime;
+    }
+
+    FrameInputs probe = in;
+    probe.cameraPos = Math::float3(in.cameraPos.x, 1.0f, in.cameraPos.z);
+    probe.preExposure = 1.0f; probe.prevPreExposure = 1.0f;
+    VolumetricCloudConstants constants = MakeConstants(probe);
+    constants.aerial[0] = 1.0f;
+    const bool distant = in.distantActive && in.distantResource && in.distantSrv.ptr != 0;
+
+    overlay.active = true;
+    overlay.dirty = dirty;
+    overlay.material = capture_.get();
+    overlay.cbBytes = captureCbBytes_;
+    overlay.ownBytes = static_cast<UINT>(sizeof(VolumetricCloudConstants));
+    overlay.writeConstants = [constants](uint8_t* dst, unsigned mipSize) mutable {
+        constants.output[0] = constants.output[1] = static_cast<float>(mipSize);
+        std::memcpy(dst, &constants, sizeof(constants));
+    };
+    overlay.reads = {base_.Get(), detail_.Get(), weather_.Get(), distant ? in.distantResource : nullptr};
+    overlay.srvs = {baseSrv_, detailSrv_, weatherSrv_, distant ? in.distantSrv : renderer->VsmDummyTexSrv()};
+    overlay.dependency = noisePass;
+    return overlay;
 }
 
 size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,

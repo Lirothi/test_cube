@@ -83,6 +83,7 @@ COMPUTE_ENTRIES = [
     ("cloud_temporal_cs.hlsl", "CSMain"),
     ("cloud_shadow_cs.hlsl", "CSTrace"),
     ("cloud_shadow_cs.hlsl", "CSFilter"),
+    ("cloud_capture_cs.hlsl", "CSMain"),
     # Plan A7 light shafts: three kernels of one file.
     ("light_shafts_cs.hlsl", "CSDownsample"),
     ("light_shafts_cs.hlsl", "CSBlur"),
@@ -128,8 +129,8 @@ GRAPHICS_ENTRIES = [
     ("skybox.hlsl", "ps_6_0", "PSMain", [], ""),
     ("ocean_surface.hlsl", "vs_6_0", "VSMain", [], "runup"),
     ("ocean_surface.hlsl", "ps_6_0", "PSMain", [], "runup"),
-    ("ocean_surface.hlsl", "vs_6_0", "VSMain", ["OCEAN_SHORE_RUNUP=0"], "legacy"),
-    ("ocean_surface.hlsl", "ps_6_0", "PSMain", ["OCEAN_SHORE_RUNUP=0"], "legacy"),
+    ("ocean_surface.hlsl", "vs_6_0", "VSMain", ["OCEAN_SHORE_RUNUP=0"], "surf_sim"),
+    ("ocean_surface.hlsl", "ps_6_0", "PSMain", ["OCEAN_SHORE_RUNUP=0"], "surf_sim"),
     # The other two transparent surfaces. Both were absent while their per-view constant buffer was
     # being extended, and both meet the rule above: one define picks each permutation.
     ("glass.hlsl", "vs_6_0", "VSMain", [], ""),

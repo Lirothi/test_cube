@@ -6,6 +6,7 @@
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderPass.h"
 #include "rendering/core/ResourceDeclarations.h"
+#include "rendering/lighting/SkyAtmosphere.h" // SkyEnvironmentOverlay (C4)
 #include "rendering/lighting/VolumetricCloudSettings.h"
 
 class Renderer;
@@ -73,6 +74,14 @@ public:
     size_t BuildTrace(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                       const FrameInputs& in, const std::array<size_t, 4>& deps, size_t depCount);
 
+    // C4: the clouds in the sky environment capture (UE's real-time sky light capture role). The
+    // overlay the SkyAtmosphere composites between its capture and its probe filter; `dirty` when
+    // the clouds changed or drifted enough since the last capture (the key is committed here, in the
+    // serial builder). `noisePass` orders the capture after a noise rebuild; `distantRevision` is the
+    // B5 light's rebuild count (the capture reads last frame's, and re-captures once it has changed).
+    SkyEnvironmentOverlay MakeEnvironmentOverlay(Renderer* renderer, const FrameInputs& in, size_t noisePass,
+                                                 unsigned distantRevision);
+
     // A frame that registers no cloud passes at all (clouds off, cubemap sky) clears the per-frame
     // flags the consumers read, so a stale "built" never outlives the frame that built it.
     void ClearFrameState() { shadowBuilt_ = false; }
@@ -94,6 +103,20 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE shadowRawSrv_{}, shadowRawUav_{}, shadowFilteredSrv_{}, shadowFilteredUav_{};
     std::shared_ptr<Material> noiseBase_, noiseDetail_, noiseWeather_, trace_, temporal_, shadowTrace_, shadowFilter_;
     UINT cbBytes_ = 0;
+    // C4: the environment capture material and the key of the last capture. The cube refreshes when
+    // the settings, the noise or the distant light changed, and otherwise at most every
+    // kCaptureIntervalFrames while the clouds drift (wind) or the probe moves (the camera): a still
+    // scene with frozen wind never recaptures (B4's rule).
+    static constexpr unsigned kCaptureIntervalFrames = 4;
+    static constexpr float kCaptureMoveMetres = 10.0f;
+    std::shared_ptr<Material> capture_;
+    UINT captureCbBytes_ = 0;
+    bool captureValid_ = false;
+    VolumetricCloudSettings captureSettings_{};
+    unsigned captureNoiseRevision_ = 0, captureDistantRevision_ = 0;
+    unsigned long long captureFrame_ = 0;
+    Math::float2 captureProbeXZ_{};
+    float captureWindTime_ = 0.0f;
     bool initialized_ = false, failed_ = false;
     bool noiseReady_ = false;
     std::uint32_t noiseSeed_ = 0;

@@ -1,17 +1,17 @@
-// THE CLASSIC OCEAN SURFACE, verbatim from commit 3e54d5d (2026-06-22) - the last state
-// before the shore/run-up rework. Compiled when OCEAN_SHORE_RUNUP=0 ("--ocean-classic-shore");
-// see ocean_surface.hlsl, which dispatches between this file and the modern stack.
+// THE SURF-SIM OCEAN SURFACE -- the one in use (OCEAN_SHORE_RUNUP=0, the default; see
+// ocean_surface.hlsl, which dispatches between this file and ocean_surface_runup.hlsli).
 //
-// The ONLY edits against the original are binding plumbing for today's C++ SRV table:
-// RS numDescriptors 14->16, SceneDepth t11->t12, ShoreDepth t12->t13, Reflection t13->t15.
-// ContactFoamTex stays at t10: today's slot 10 carries the same ContactFoam.dds (loaded linear
-// rather than sRGB, the one known deviation). One FUNCTIONAL edit is sanctioned on top: the
-// nearshore attenuation is authored (shoreLegacyDampParams) instead of the original hardcoded
-// saturate(depth * 0.15); its defaults reproduce the original curve. Do not otherwise touch.
-// numDescriptors 18: t16/t17 are the surf sim height and foam fields (surf sim injection) -
-// the C++ table always stages 18 entries, the modern RS keeps saying 16 and never addresses
-// the extras.
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=21, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+// History: this began as the classic surface, verbatim from commit 3e54d5d (2026-06-22, the last
+// state before the shore/run-up rework), kept as a baseline while the run-up stack was built. It
+// has since grown into the main surface -- the surf sim injection (t16/t17 height and foam fields,
+// docs/ocean_surf_sim_plan.md), the authored nearshore attenuation (shoreLegacyDampParams, defaults
+// reproduce the original curve), the shared environment (t18/t19), the volumetric fog volume (t20)
+// and the cloud shadow map (t21) -- so "byte-faithful" stopped being true, and on 2026-09-12 the
+// owner renamed it from "legacy" to what it is. The binding plumbing against the original: RS
+// numDescriptors 14->22, SceneDepth t11->t12, ShoreDepth t12->t13, Reflection t13->t15;
+// ContactFoamTex stays at t10 (today's slot 10 carries the same ContactFoam.dds, loaded linear
+// rather than sRGB). The C++ table stages the same 22 entries for both surfaces.
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=22, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -95,6 +95,10 @@ cbuffer OceanCB : register(b0)
     float4 shoreSlopeParams;           // z: edge soft depth = the contact foam's edge fade (shared with the modern surface)
     float4 depthTextureSize;           // xy: texel size, zw: texture size
     float2 depthParams;                // x: zNear / (zNear - zFar) y :(zNear * zFar) / (zFar - zNear)
+    // Plan C3: the cloud shadow map's projection and (on, far depth km, 0, 0) -- the SAME numbers the
+    // deferred lighting and the fog get (SceneRenderer sets them from the frame's VolumetricCloud).
+    float4x4 cloudShadowViewProj;
+    float4 cloudShadowParams;          // x: on, y: far depth km, z: how much of the shadow the water body takes (cloud.oceanBodyShadow), w: 0
 };
 
 Texture2DArray<float4> DisplacementDerivatives : register(t0);
@@ -225,8 +229,6 @@ struct BrunetonInputs
 static const float3 kLegacyFoamSkyColor = float3(0.24f, 0.38f, 0.55f);
 static const float kSpecularMinPower = 64.0f;
 static const float kSpecularMaxPower = 512.0f;
-static const float kLodThreshold = 0.05f;
-
 // Keep the presentation boundary in step with the compute shader's 24-texel absorber. The
 // camera-following window eventually discards persistent wave/foam data in Relocate; fading the
 // sampled result first prevents that loss from reading as a moving square cut.
@@ -247,102 +249,17 @@ struct Gradient
     int colorsCount;
     bool type;
 };
+#include "ocean_surface_common.hlsli" // the functions both surfaces share (and the cloud shadow read)
 
-Gradient CreateGradient(float4 src[kGradientMaxKeys], float2 params)
-{
-    Gradient g;
-    [unroll]
-    for (uint i = 0u; i < kGradientMaxKeys; ++i)
-    {
-        g.colors[i] = src[i];
-    }
-    g.colorsCount = (int)params.x;
-    g.type = params.y > 0.5f;
-    return g;
-}
-
-float3 SampleGradient(Gradient grad, float t)
-{
-    float3 color = grad.colors[0].rgb;
-    [unroll]
-    for (uint i = 1u; i < kGradientMaxKeys; ++i)
-    {
-        float prevPos = grad.colors[i - 1u].w;
-        float nextPos = grad.colors[i].w;
-        float denom = max(nextPos - prevPos, 1e-4f);
-        float colorPos = saturate((t - prevPos) / denom);
-        float active = step((float)i, (float)(grad.colorsCount - 1));
-        colorPos *= active;
-        float typeMask = grad.type ? 1.0f : 0.0f;
-        float blendType = lerp(colorPos, step(0.01f, colorPos), typeMask);
-        color = lerp(color, grad.colors[i].rgb, blendType);
-    }
-    return color;
-}
-
-float2 ComputeScreenUV(float4 clipPosition)
-{
-    float2 ndc = clipPosition.xy / max(clipPosition.w, 1e-5f);
-    return ndc * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-}
-
-float2 ScreenUVToNDC(float2 uv)
-{
-    float2 ndc;
-    ndc.x = uv.x * 2.0f - 1.0f;
-    ndc.y = 1.0f - uv.y * 2.0f;
-    return ndc;
-}
 
 float SampleSceneDepth(float2 uv)
 {
     return SceneDepthTexture.SampleLevel(PointSampler, uv, 0).r;
 }
 
-float3 ViewSpacePosition(float depthSample, float2 uv)
-{
-    float2 ndc = ScreenUVToNDC(uv);
-    float4 clipPos = float4(ndc, depthSample, 1.0f);
-    float4 viewPos = mul(clipPos, invProj);
-    return viewPos.xyz / max(viewPos.w, 1e-6f);
-}
-
-float DepthToViewZ_Fast(float d)
-{
-    return depthParams.y / (d - depthParams.x);
-}
-
-float3 PositionWsFromDepth(float depthSample, float2 uv)
-{
-    float3 viewPos = ViewSpacePosition(depthSample, uv);
-    float4 worldPos = mul(float4(viewPos, 1.0f), invView);
-    float invW = rcp(max(worldPos.w, 1e-6f));
-    return worldPos.xyz * invW;
-}
-
 float SampleShoreDepth(float2 uv)
 {
     return ShoreDepthTexture.SampleLevel(LinearClampSampler, uv, 0).r;
-}
-
-float2 ShoreDepthUV(float2 baseXZ)
-{
-    float2 offsetXZ = baseXZ - shoreViewParams.xy;
-    float invExtent = shoreViewParams.w;
-    return float2(offsetXZ.x * invExtent + 0.5f, 0.5f - offsetXZ.y * invExtent);
-}
-
-// surf sim injection (debug): the modern surface's SDF UV mapping, duplicated for the debug view.
-float2 ShoreSdfUV(float2 baseXZ)
-{
-    float2 offsetXZ = baseXZ - shoreSdfParams.xy;
-    float invExtent = shoreSdfParams.z;
-    return float2(offsetXZ.x * invExtent + 0.5f, 0.5f - offsetXZ.y * invExtent);
-}
-
-float ShoreViewDepth(float depthSample)
-{
-    return lerp(shoreDepthParams.x, shoreDepthParams.y, depthSample);
 }
 
 float ShoreWaterDepthAt(float2 worldXZ)
@@ -364,79 +281,6 @@ float ShoreWaterDepthAt(float2 worldXZ)
     return -terrainHeight;
 }
 
-float ModifiedManhattanDistance(float3 a, float3 b)
-{
-    float3 v = a - b;
-    return max(abs(v.x + v.z) + abs(v.x - v.z), abs(v.y)) * 0.5f;
-}
-
-float EaseInOutClamped(float x)
-{
-    x = saturate(x);
-    return 3.0f * x * x - 2.0f * x * x * x;
-}
-
-float4 LodWeights(float viewDist, float lodScale)
-{
-    float4 length = max(cascadeLengthScales, float4(1e-3f, 1e-3f, 1e-3f, 1e-3f));
-    float4 fade = max(length * lodScale, float4(1e-3f, 1e-3f, 1e-3f, 1e-3f));
-    float4 x = (viewDist - fade) / fade;
-    return float4(1.0f, 1.0f, 1.0f, 1.0f) - float4(
-        EaseInOutClamped(x.x),
-        EaseInOutClamped(x.y),
-        EaseInOutClamped(x.z),
-        EaseInOutClamped(x.w));
-}
-
-float3 ClipMapVertexInternal(float3 positionOS,
-    float2 uv,
-    float clipScale,
-    float levelHalfSize,
-    float3 viewerPosition)
-{
-    float3 morphOffset = float3(uv.x, 0.0f, uv.y);
-    positionOS *= clipScale;
-    float meshScale = positionOS.y;
-    float step = max(meshScale * 4.0f, 1e-3f);
-
-    float snappedX = floor(viewerPosition.x / step) * step;
-    float snappedZ = floor(viewerPosition.z / step) * step;
-    float3 worldPos = float3(snappedX + positionOS.x, 0.0f, snappedZ + positionOS.z);
-
-    float morphStart = ((levelHalfSize + 1.0f) * 0.5f + 8.0f) * meshScale;
-    float morphEnd = (levelHalfSize - 2.0f) * meshScale;
-
-    float denom = max(1e-3f, morphEnd - morphStart);
-    float t = saturate((ModifiedManhattanDistance(worldPos, viewerPosition) - morphStart) / denom);
-    worldPos += morphOffset * meshScale * t;
-    return worldPos;
-}
-
-float3 ClipMapVertex(float3 positionOS, float2 uv)
-{
-    return ClipMapVertexInternal(positionOS, uv, clipMapParams.x, clipMapParams.y, clipMapViewer.xyz);
-}
-
-float3 ClipMapVertexPrev(float3 positionOS, float2 uv)
-{
-    return ClipMapVertexInternal(positionOS, uv, prevClipMapParams.x, prevClipMapParams.y, prevClipMapViewer.xyz);
-}
-
-float2 ApplyClipMapWarp(float2 worldUV, float viewDistXzSquared, float warpDistance)
-{
-    float warpScale = min(1.0f, viewDistXzSquared / max(warpDistance * warpDistance * 100.0f, 1.0f));
-    float2 warpOffset = sin(worldUV.yx / max(warpDistance, 1e-3f)) * warpDistance * 0.4f * windParams0.w;
-    return worldUV + warpOffset * warpScale;
-}
-
-float3 SampleDisplacementCascadeTexture(Texture2DArray<float4> tex, float2 worldXZ, uint cascade)
-{
-    float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
-    float3 uvw = float3(worldXZ / lengthScale, cascade * 2.0f);
-    float4 sample = tex.SampleLevel(LinearWrapSampler, uvw, 0);
-    return sample.xyz;
-}
-
 float4 SampleDerivativesCascade(float2 worldXZ, uint cascade, float mipBias)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
@@ -444,35 +288,6 @@ float4 SampleDerivativesCascade(float2 worldXZ, uint cascade, float mipBias)
     //float4 sample = DisplacementDerivatives.SampleLevel(LinearWrapSampler, uvw, 0);
     float4 sample = DisplacementDerivatives.SampleBias(AnisotropicWrapSampler, uvw, mipBias); //give more details far away
     return sample;
-}
-
-float3 SampleDisplacementTexture(Texture2DArray<float4> tex, float2 worldXZ, float4 weights, uint cascadesCount)
-{
-    float3 displacement = float3(0.0f, 0.0f, 0.0f);
-    [unroll]
-    for (uint cascade = 0; cascade < 4; ++cascade)
-    {
-        if (cascade >= cascadesCount)
-        {
-            break;
-        }
-        float w = weights[cascade];
-        if (cascade == 0 || w > kLodThreshold)
-        {
-            displacement += w * SampleDisplacementCascadeTexture(tex, worldXZ, cascade);
-        }
-    }
-    return displacement;
-}
-
-float3 SampleCurrentDisplacement(float2 worldXZ, float4 weights, uint cascadesCount)
-{
-    return SampleDisplacementTexture(DisplacementDerivatives, worldXZ, weights, cascadesCount);
-}
-
-float3 SamplePreviousDisplacement(float2 worldXZ, float4 weights, uint cascadesCount)
-{
-    return SampleDisplacementTexture(PrevDisplacementDerivatives, worldXZ, weights, cascadesCount);
 }
 
 DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCount, float mipBias)
@@ -499,33 +314,6 @@ DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCo
         }
     }
     return derivatives;
-}
-
-float4 CombineDerivatives(DerivativesSet derivatives, float4 weights)
-{
-    float4 combined = float4(0.0f, 0.0f, 0.0f, 0.0f);
-    [unroll]
-    for (uint cascade = 0; cascade < 4; ++cascade)
-    {
-        combined += derivatives.cascades[cascade] * weights[cascade];
-    }
-    return combined;
-}
-
-static const float kNormalScale = 1.5f;
-
-float3 NormalFromCombinedDerivatives(float4 derivatives)
-{
-    float denomX = max(1e-3f, 1.0f + derivatives.z);
-    float denomZ = max(1e-3f, 1.0f + derivatives.w);
-    float2 slope = float2(derivatives.x / denomX, derivatives.y / denomZ) * kNormalScale;
-    return normalize(float3(-slope.x, 1.0f, -slope.y));
-}
-
-float3 NormalFromDerivatives(DerivativesSet derivatives, float4 normalWeights)
-{
-    float4 combined = CombineDerivatives(derivatives, normalWeights);
-    return NormalFromCombinedDerivatives(combined);
 }
 
 [RootSignature(OCEAN_SURFACE_RS)]
@@ -646,113 +434,6 @@ VSOutput VSMain(VSInput input)
     float4 prevWorld = mul(prevLocal, prevModel);
     output.prevPositionNDC = mul(prevWorld, prevViewProjNoJitter);
     return output;
-}
-
-float4 SampleFoamCascade(float2 worldXZ, uint cascade)
-{
-    float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
-    float3 uvw = float3(worldXZ / lengthScale, cascade);
-    return FoamTurbulence.Sample(LinearWrapSampler, uvw);
-}
-
-FoamTurbulenceSet SampleFoamTurbulence(float2 worldXZ, float4 weights, uint cascadesCount)
-{
-    FoamTurbulenceSet set;
-    [unroll]
-    for (uint cascade = 0; cascade < 4; ++cascade)
-    {
-        set.cascades[cascade] = float4(0.0f, 0.0f, 0.0f, 0.0f);
-        if (cascade >= cascadesCount)
-        {
-            continue;
-        }
-
-        float w = weights[cascade];
-        if (cascade == 0 || w > kLodThreshold)
-        {
-            float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);
-            float3 uvw = float3(worldXZ / lengthScale, cascade);
-            set.cascades[cascade] = FoamTurbulence.Sample(LinearWrapSampler, uvw) * w;
-        }
-    }
-    return set;
-}
-
-float4 ActiveCascadesMask(uint cascadesCount)
-{
-    return float4(
-        cascadesCount > 0 ? 1.0f : 0.0f,
-        cascadesCount > 1 ? 1.0f : 0.0f,
-        cascadesCount > 2 ? 1.0f : 0.0f,
-        cascadesCount > 3 ? 1.0f : 0.0f);
-}
-
-float4 MixTurbulence(FoamTurbulenceSet turbulence, float4 foamWeights, float4 mixWeights)
-{
-    float4 accum = float4(0.0f, 0.0f, 0.0f, 0.0f);
-    [unroll]
-    for (uint cascade = 0; cascade < 4; ++cascade)
-    {
-        accum += turbulence.cascades[cascade] * foamWeights[cascade];
-    }
-    float totalWeight = dot(foamWeights * mixWeights, float4(1.0f, 1.0f, 1.0f, 1.0f));
-    return accum / max(totalWeight, 1e-3f);
-}
-
-float2 RotateUV(float2 uv, float2 center, float2 rotation, float sign)
-{
-    uv -= center;
-    float s = rotation.y;
-    float c = rotation.x;
-    float2x2 rMatrix = float2x2(c, -sign * s, sign * s, c);
-    rMatrix *= 0.5f;
-    rMatrix += 0.5f;
-    rMatrix = rMatrix * 2.0f - 1.0f;
-    uv = mul(uv, rMatrix);
-    uv += center;
-    return uv;
-}
-
-float FoamTrailSample(float2 worldUV, float2 direction, float2 scale)
-{
-    float2 rotated = RotateUV(worldUV, float2(0.0f, 0.0f), direction, 1.0f);
-    float2 safeScale = max(scale, float2(1e-3f, 1e-3f));
-    return FoamTrailTex.SampleLevel(LinearWrapSampler, rotated / safeScale, 0).r;
-}
-
-float DeepFoam(float2 worldUV, float3 viewDir, float3 normal, float time)
-{
-    float denom = max(dot(normal, viewDir), 1e-3f);
-    float2 parallaxDir = (viewDir.xz / denom + 0.5f * normal.xz);
-    float2 uv = worldUV - parallaxDir * foamParams2.z - windParams1.xy * time;
-    return FoamUnderwaterTex.SampleLevel(LinearWrapSampler, uv * 0.2f, 0).r;
-}
-
-float2 Coverage(FoamTurbulenceSet turbulence, float4 mixWeights, float2 worldUV, float deepFoam, float bias)
-{
-    float4 mixed = MixTurbulence(turbulence, foamCascadeWeights, mixWeights);
-    float foamValueCurrent = lerp(mixed.y, mixed.x, foamParams0.z);
-    float foamValuePersistent = 0.5f * (mixed.z + mixed.w);
-    foamValueCurrent = lerp(foamValueCurrent, foamValuePersistent, foamParams0.w);
-    foamValueCurrent -= 1.0f;
-    foamValuePersistent -= 1.0f;
-
-    float trail0 = FoamTrailSample(worldUV, foamTrailParams1.xy, foamTrailParams0.xy);
-    float trailTexture = trail0;
-    if (foamParams2.x > 0.0f)
-    {
-        float trail1 = FoamTrailSample(worldUV, foamTrailParams1.zw, foamTrailParams0.zw);
-        trailTexture = lerp(trail0, trail1, saturate(foamParams2.x));
-    }
-    
-    foamValuePersistent += saturate(foamValuePersistent + 1.0f) * trailTexture * foamParams1.y;
-    float foamValue = max(foamValuePersistent + foamParams1.x * (1.0f - bias),
-        foamValueCurrent + foamParams0.x * (1.0f - bias));
-
-    float surfaceFoam = saturate(foamValue * foamParams0.y);
-    float shallowUnderwaterFoam = saturate((foamValue + 0.1f * foamParams1.z) * foamParams0.y);
-    float deepUnderwaterFoam = deepFoam * saturate((foamValue + foamParams1.z * 0.25f) * foamParams0.y * 0.8f);
-    return float2(surfaceFoam, max(shallowUnderwaterFoam, deepUnderwaterFoam));
 }
 
 // foam dissipation injection (see docs/ocean_shore_foam_breakup_plan.md, variant A); the other
@@ -889,39 +570,6 @@ float SurfSimFoamCoverage(float2 baseXZ)
     return saturate(coverage * SurfSimWindowEdgeFade(simUV) * surfSimParams3.x);
 }
 
-float Pow5(float x)
-{
-    float x2 = x * x;
-    return x2 * x2 * x;
-}
-
-float SchlickFresnel(float cosTheta)
-{
-    const float baseReflectivity = 0.02f;
-    float clamped = saturate(cosTheta);
-    return baseReflectivity + (1.0f - baseReflectivity) * Pow5(1.0f - clamped);
-}
-
-float2 SlopeVarianceSquared(float windSpeed, float viewDist, float alignment, float scale)
-{
-    float upwind = 0.01f * sqrt(max(windSpeed, 0.0f)) * viewDist / max(viewDist + scale, 1e-3f);
-    return float2(upwind, upwind * (1.0f - 0.3f * alignment));
-}
-
-float3 TransformToWind(float3 v)
-{
-    return mul(worldToWind, float4(v, 0.0f)).xyz;
-}
-
-float SampleDistantRoughness(float2 worldUV, float viewDist)
-{
-    float2 uv = worldUV * 0.001f * 0.01f;
-    float roughness = DistantRoughnessMap.SampleLevel(LinearWrapSampler, uv, 0).r;
-    float patchLength = max(simulationParams.x, 1.0f);
-    roughness *= saturate((viewDist / patchLength) * 0.05f);
-    return roughness;
-}
-
 FoamData GetFoamData(FoamInput input, uint cascadesCount)
 {
     FoamData data;
@@ -1015,26 +663,6 @@ float3 LitFoamColor(const LightingInput li, const FoamData foamData)
     return foamData.albedo * foamTint.rgb * (ndotl * li.mainLight.color + skyAmbient);
 }
 
-float2 SubsurfaceScatteringFactor(const LightingInput li)
-{
-    float3 aligned = normalize(lerp(li.viewDir, li.normal, subsurfaceParams.w));
-    float normalFactor = saturate(dot(aligned, li.viewDir));
-
-    float heightOffset = li.referenceWaveHeight * (1.0f + heightFogParams.x);
-    float heightFactor = saturate((li.positionWS.y + heightOffset) * 0.5f / max(0.5f, li.referenceWaveHeight));
-    heightFactor = pow(abs(heightFactor), max(1.0f, li.referenceWaveHeight * 0.4f));
-
-    float spread = max(subsurfaceParams.z, 1e-3f);
-    float sunDot = saturate(dot(-li.mainLight.direction, -li.viewDir));
-    float sunExponent = min(50.0f, 1.0f / spread);
-    float sun = subsurfaceParams.x * normalFactor * heightFactor * pow(sunDot, sunExponent);
-
-    float distFade = heightFogParams.y;
-    float environment = subsurfaceParams.y * normalFactor * heightFactor * saturate(1.0f - li.viewDir.y);
-    float fade = distFade / (distFade + li.viewDist + 1e-3f);
-    return float2(sun, environment) * fade;
-}
-
 BrunetonInputs BuildBrunetonInputs(const LightingInput li)
 {
     float3 tangentY = float3(0.0f, li.normal.z, -li.normal.y);
@@ -1058,33 +686,6 @@ BrunetonInputs BuildBrunetonInputs(const LightingInput li)
     return bi;
 }
 
-float meanFresnel(float cosThetaV, float sigmaV)
-{
-    return pow(abs(1.0f - cosThetaV), 5.0f * exp(-2.69f * sigmaV)) / (1.0f + 22.7f * pow(abs(sigmaV), 1.5f));
-}
-
-// V, N in wind space
-float MeanFresnel(float3 V, float3 N, float2 sigmaSq)
-{
-    float2 v = V.xz; // view direction in wind space
-    float2 t = v * v / (1.0f - V.y * V.y); // cos^2 and sin^2 of view direction
-    float sigmaV2 = dot(t, sigmaSq); // slope variance in view direction
-    return meanFresnel(dot(V, N), sqrt(sigmaV2));
-}
-
-float EffectiveFresnel(const LightingInput li, const BrunetonInputs bi)
-{
-    //(void)bi;
-    //return saturate(SchlickFresnel(dot(li.viewDir, li.normal)));
-
-    const float R = 0.02f;
-    float fresnel = R + (1.0f - R) * MeanFresnel(
-		bi.viewDirWind,
-		bi.normalWind,
-		bi.slopeVarianceSquared);
-    return saturate(fresnel);
-}
-
 float3 Specular(const LightingInput li, const BrunetonInputs bi)
 {
     //(void)bi;
@@ -1094,48 +695,6 @@ float3 Specular(const LightingInput li, const BrunetonInputs bi)
     float spec = pow(saturate(dot(li.normal, halfDir)), specPower);
     spec *= specularParams.x * li.mainLight.shadowAttenuation;
     return spec * li.mainLight.color;
-}
-
-// Horizon pull for the ENVIRONMENT reflection ray (skyParams.w; 1 = identity, the shipped default).
-//
-// A wave crest swings the reflected ray between "just above the horizon" (bright) and "high into the
-// zenith" (dark), and a clear-sky HDRI has a steep Rayleigh gradient between those two — so adjacent
-// facets sample very different radiance, and at grazing angles Fresnel is ~1, which passes that
-// contrast to the eye at full strength. It reads as hard dark streaks along the crests.
-//
-// The prefilter is supposed to soften exactly this, but IblClampToSharp (ibl_common.hlsli) bounds the
-// blurred sample by the SHARP one in the same direction — a one-sided guard against the sun smearing
-// through the lobe. Where the sharp direction lands in the dark zenith, the ceiling is "2x dark" and
-// the blur is undone precisely where it was needed, so the streaks stay pixel-crisp at any roughness.
-//
-// Compressing the ray's Y before the sky lookup keeps the reflection in the band near the horizon,
-// which is also where real water reflects from at these view angles. Sun glitter is unaffected while
-// the sun is low (this scene's is ~3 degrees) because the pull moves rays TOWARD it; a high sun would
-// have its specular handled by the direct term anyway. Only the ocean's env sample is touched --
-// the planar reflection, the land IBL and the sky itself are untouched.
-float3 OceanSkyReflectDir(float3 reflectDir)
-{
-    const float pull = (skyParams.w > 0.0f) ? skyParams.w : 1.0f;
-    if (pull >= 0.999f) { return reflectDir; }
-    return normalize(float3(reflectDir.x, reflectDir.y * pull, reflectDir.z));
-}
-
-float2 OceanReflectionUvOffset(const LightingInput li, float3 adjustedNormal)
-{
-    float3 flatReflectDir = reflect(-li.viewDir, float3(0.0f, 1.0f, 0.0f));
-    float3 waveReflectDir = reflect(-li.viewDir, adjustedNormal);
-    float2 reflectionDelta = waveReflectDir.xz - flatReflectDir.xz;
-
-    float distanceFade = saturate(li.viewDist / max(specularParams.z, 1.0f));
-    float grazing = saturate(1.0f - abs(waveReflectDir.y));
-    float strength = lerp(0.08f, 0.025f, distanceFade) * lerp(0.45f, 1.0f, grazing) * 20;
-    return reflectionDelta * strength;
-}
-
-float OceanReflectionEdgeFade(float2 uv)
-{
-    float2 edgeDist = min(uv, float2(1.0f, 1.0f) - uv);
-    return saturate(min(edgeDist.x, edgeDist.y) * 64.0f);
 }
 
 // P5: takes a roughness now. The legacy surface has no per-pixel roughness of its own -- it is a
@@ -1173,48 +732,6 @@ float3 Reflection(const LightingInput li, float roughness)
     return oceanReflection.rgb * edgeFade + skySample * (1.0f - visibility);
 }
 
-float3 DeepScatterColor(float depthScale)
-{
-    return deepScatterColor.rgb;
-}
-
-float3 SssColor(float depthScale)
-{
-    return sssColor.rgb;
-}
-
-float3 DiffuseColor(float depthScale)
-{
-    return diffuseColor.rgb;
-}
-
-float3 AbsorptionTint(float attenuation)
-{
-    float4 colors[kGradientMaxKeys];
-    [unroll]
-    for (uint i = 0u; i < kGradientMaxKeys; ++i)
-    {
-        colors[i] = absorptionColors[i];
-    }
-    Gradient gradient = CreateGradient(colors, absorptionGradientParams.xy);
-    return SampleGradient(gradient, attenuation);
-}
-
-float3 ColorThroughWater(float3 color, float3 volumeColor, float distThroughWater, float depth)
-{
-    distThroughWater = max(distThroughWater, 0.0f);
-    depth = max(depth, 0.0f);
-
-    float absorptionScale = max(refractionParams.z, 1.0f);
-    float fogDensity = max(refractionParams.w, 0.0f);
-
-    float attenuation = exp(-(distThroughWater + depth) / absorptionScale);
-    float3 tinted = color * AbsorptionTint(attenuation);
-
-    float fog = 1.0f - exp(-fogDensity * distThroughWater);
-    return lerp(tinted, volumeColor, saturate(fog));
-}
-
 float3 RefractionCoords(float refractionStrength, float4 positionNDC, float viewDepth, float3 normal)
 {
     float2 uvOffset = normal.xz * refractionStrength;
@@ -1248,7 +765,23 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     //
     // At the pre-P16 scale the sun colour was ~0.92, so this is under 0.13 stops on these two terms
     // for any level that has not been converted yet.
-    const float3 waterLight = li.mainLight.color;
+    // Plan C3/C4 (owner, 2026-09-12): THE SKY LIGHTS THE WATER BODY TOO. These terms were sun-only
+    // (the diffuse line carried its "sky" as a 0.2 floor ON THE SUN COLOUR), so a cloud shadow that
+    // took the sun away left the sea black beside sand that keeps its sky irradiance ("дико тёмные"),
+    // and a floor tied to the sun could never follow the sky. Now the light that scatters in the
+    // body is the sun through the cloud (shadowAttenuation, C3) PLUS the measured sky irradiance at
+    // the surface normal -- the same SkyFillRadiance the foam uses, E/pi in the sun colour's units,
+    // from the environment cube that carries the clouds (C4), so under a deck it dims by itself.
+    // HOW MUCH OF THE CLOUD SHADOW THE BODY TAKES is dosed (cloudShadowParams.z, the level's
+    // cloud.oceanBodyShadow): the glints and the foam lose the sun outright, the water-leaving
+    // light only partly. Mobley: the body is lit by the whole downwelling irradiance, and under
+    // broken cloud the diffuse part stays 30-60 % of the clear-sky total because the bright cloud
+    // sides and undersides add light -- light our cube does not yet carry (its undersides are lit
+    // by the distant sky only), so a body that followed the sun as the land does went too dark
+    // (owner, 2026-09-12: "вода не так реагирует на тень, как плотная геометрия").
+    const float bodyShadow = lerp(1.0f, li.mainLight.shadowAttenuation, saturate(cloudShadowParams.z));
+    const float3 skyFill = SkyFillRadiance(li.normal);
+    const float3 waterLight = li.mainLight.color * bodyShadow + skyFill;
     float3 color = DeepScatterColor(depthScale) * waterLight;
 
     float3 sssColor = SssColor(depthScale);
@@ -1257,7 +790,8 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     //return color;
 
     float ndotl = saturate(dot(li.normal, -li.mainLight.direction));
-    color += (ndotl * 0.8f + 0.2f) * li.mainLight.color * DiffuseColor(depthScale);
+    // The directional part keeps its 0.8 weight; the 0.2 sun-tinted floor is the sky term above.
+    color += (ndotl * 0.8f * bodyShadow * li.mainLight.color + skyFill) * DiffuseColor(depthScale);
     
     //return color;
 
@@ -1409,7 +943,7 @@ PSOut PSMain(VSOutput input)
     LightData light;
     light.direction = lightDir;
     light.color = sunColorExposure.xyz * sunColorExposure.w;
-    light.shadowAttenuation = 1.0f;
+    light.shadowAttenuation = CloudSunVisibility(input.worldPos); // plan C3: the cloud shadow (was a constant 1)
 
     LightingInput li;
     li.normal = normal;

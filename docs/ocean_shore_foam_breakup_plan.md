@@ -60,7 +60,7 @@ shifting thread right at the waterline, not a uniform strip.
   FIXED world directions (not wind: the shape must not collapse at dead calm), at slightly
   different scales/speeds so the beat never repeats. `field = sat(((n1+n2)/2 − 0.5)·contrast + 0.5)`,
   `factor = lerp(1, field, amount)`.
-- **Injection contract** (the only touches to `ocean_surface_legacy.hlsli`, each tagged
+- **Injection contract** (the only touches to `ocean_surface_surf_sim.hlsli`, each tagged
   `foam dissipation`): one cbuffer field `shoreLegacyDissipationParams`, one `#include` above
   `ContactFoam`, and `TailDepth → TailDepth · factor` inside `ContactFoam`. Delete those three
   and the file is byte-equivalent to the pre-A state; at runtime `Dissipation amount = 0` is the
