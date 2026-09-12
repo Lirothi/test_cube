@@ -456,6 +456,7 @@ namespace
             env.type == "directionalLight" ? "Edit Directional Light" :
             env.type == "camera" ? "Edit Camera" :
             env.type == "skyAtmosphere" ? "Edit Sky Atmosphere" :
+            env.type == "volumetricCloud" ? "Edit Volumetric Cloud" :
             env.type == "skybox" ? "Edit Skybox" :
             env.type == "ocean" ? "Edit Ocean" :
             env.type == "wind" ? "Edit Wind" :
@@ -2037,6 +2038,153 @@ namespace
             dragF("Multi-scattering Factor", "multiScatteringFactor", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
             InspectorHelp("Weight on the multi-scattering LUT's contribution. 0 leaves single "
                           "scattering alone, which reads as a much darker sky away from the sun.");
+        }
+        else if (env.type == "volumetricCloud")
+        {
+            // Plan part C. Having this object is what gives the level clouds, as adding UE's
+            // VolumetricCloud actor is; it needs the Sky Atmosphere object (the clouds are lit by its
+            // distant light and hazed by its aerial perspective) and does nothing on a cubemap sky.
+            checkB("Enabled", "enabled", true);
+            InspectorHelp(
+                "A layer of volumetric clouds marched at half resolution every frame and resolved "
+                "over time, with their shadow on the island and in the fog. Needs the Sky Atmosphere "
+                "object: on a cubemap sky this stays off and the session log says so.\n\n"
+                "--set=cloud.enabled overrides this for a headless run; every row below is "
+                "--set=cloud.<key> too.");
+
+            ImGui::SeparatorText("Layer");
+            dragF("Bottom Altitude (km)", "layerBottomKm", 1.5f, 0.05f, 0.1f, 20.0f, "%.2f");
+            InspectorHelp("Height of the layer's base above sea level. UE's default is 5 km for a big "
+                          "sky; 1.5 puts a fair-weather deck over an island.");
+            dragF("Layer Height (km)", "layerHeightKm", 2.5f, 0.05f, 0.1f, 20.0f, "%.2f");
+            InspectorHelp("Thickness of the layer. Cumulus grows into most of it, stratus hugs the bottom.");
+
+            ImGui::SeparatorText("Shape");
+            dragF("Coverage", "coverage", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("A threshold on the weather map's coverage field: 0 is a clear sky, 1 lets "
+                          "every part of the field through in proportion. The single most visible knob.");
+            dragF("Cloud Type", "cloudType", 0.0f, 0.01f, -1.0f, 1.0f, "%.2f");
+            InspectorHelp("Bias on the weather map's type field: towards -1 everything is flat stratus, "
+                          "towards +1 towering cumulus; 0 lets the map decide per formation.");
+            dragF("Extinction (1/m)", "extinctionScale", 0.05f, 0.001f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("How dense the cloud is at full coverage, per metre. Real cumulus is 0.04 to "
+                          "0.1; lower reads as thin haze, higher as a hard-edged wall.");
+            dragF("Albedo", "albedo", 0.95f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("Single-scattering albedo of the droplets -- how much of the light a "
+                          "particle scatters rather than absorbs. Water is close to 1; lower darkens "
+                          "the shadowed sides.");
+            dragF("Detail Strength", "detailStrength", 0.35f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("How much the small Worley noise erodes the base shape: 0 keeps blobby "
+                          "primitives, higher carves wisps at the bottom and cauliflower at the top.");
+            dragF("Base Tile (km)", "baseTileKm", 6.0f, 0.1f, 0.1f, 100.0f, "%.1f");
+            InspectorHelp("World period of the base noise, i.e. the size of the largest lumps.");
+            dragF("Detail Tile (km)", "detailTileKm", 0.5f, 0.01f, 0.01f, 10.0f, "%.2f");
+            InspectorHelp("World period of the detail noise -- the size of the smallest features.");
+            dragF("Weather Tile (km)", "weatherTileKm", 40.0f, 0.5f, 1.0f, 1000.0f, "%.0f");
+            InspectorHelp("World period of the weather map: the scale on which whole formations and "
+                          "clear gaps between them repeat.");
+            dragF("Wind Speed (km/h)", "windKmH", 20.0f, 0.5f, 0.0f, 500.0f, "%.0f");
+            InspectorHelp("How fast the whole field drifts along the level's wind heading (the Wind "
+                          "object), on the shared clock --wind-freeze pins.");
+            {
+                int seed = static_cast<int>(tgt().value("seed", 0u));
+                if (ImGui::DragInt("Seed", &seed, 1.0f, 0, 100000))
+                {
+                    nlohmann::json after = withField("seed", static_cast<unsigned>(std::max(seed, 0)));
+                    executeChange(std::move(after), historyLabel);
+                }
+            }
+            InspectorHelp("Reseeds the three noise textures; a different sky, the same weather.");
+
+            ImGui::SeparatorText("Lighting");
+            dragF("Phase G", "phaseG", 0.6f, 0.005f, -0.99f, 0.99f, "%.3f");
+            InspectorHelp("Henyey-Greenstein anisotropy of the main lobe, POSITIVE forward: this is "
+                          "the silver lining when the sun is behind the cloud. (UE's material node "
+                          "uses the opposite sign.)");
+            dragF("Phase G2", "phaseG2", -0.3f, 0.005f, -0.99f, 0.99f, "%.3f");
+            InspectorHelp("The second lobe, usually slightly backward, which keeps the sunlit face "
+                          "from going flat.");
+            dragF("Phase Blend", "phaseBlend", 0.25f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("How much of the second lobe is mixed in. 0 = the main lobe alone.");
+            dragF("Multi-scatter Contribution", "msContribution", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("UE MultiScatteringContribution: how much light each further scattering "
+                          "octave adds. Brightens the thick, self-shadowed middle of a cloud.");
+            dragF("Multi-scatter Occlusion", "msOcclusion", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("UE MultiScatteringOcclusion: how much less each octave is shadowed. "
+                          "Lower lets light deeper into the cloud.");
+            dragF("Multi-scatter Eccentricity", "msEccentricity", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("UE MultiScatteringEclipse: how much each octave keeps the phase's "
+                          "direction. Lower makes the extra light more even.");
+            dragF("Sky Light Bottom Occlusion", "skyLightBottomOcclusion", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("UE SkyLightCloudBottomOcclusion: how much of the sky's ambient the bottom "
+                          "of the layer loses. 0 lights the underside like the top, 1 leaves it only "
+                          "the sun.");
+
+            ImGui::SeparatorText("Tracing");
+            {
+                int samples = static_cast<int>(tgt().value("viewSampleCountMax", 256u));
+                if (ImGui::DragInt("View Samples (max)", &samples, 1.0f, 4, 768))
+                {
+                    nlohmann::json after = withField("viewSampleCountMax", static_cast<unsigned>(std::clamp(samples, 4, 768)));
+                    executeChange(std::move(after), historyLabel);
+                }
+            }
+            InspectorHelp("Samples along a view ray that crosses the full 15 km; the step is 15 km "
+                          "divided by this and stays constant for shorter rays (256 = 58 m). UE run "
+                          "768 at cinematic quality; this is where the cost is.");
+            {
+                int samples = static_cast<int>(tgt().value("shadowSampleCount", 6u));
+                if (ImGui::DragInt("Sun Shadow Samples", &samples, 1.0f, 1, 80))
+                {
+                    nlohmann::json after = withField("shadowSampleCount", static_cast<unsigned>(std::clamp(samples, 1, 80)));
+                    executeChange(std::move(after), historyLabel);
+                }
+            }
+            InspectorHelp("Samples of the march towards the sun taken at EVERY lit view sample -- the "
+                          "self-shadowing that gives a cloud its dark belly. Multiplies the cost.");
+            dragF("Sun Shadow Distance (km)", "shadowTracingDistanceKm", 15.0f, 0.1f, 0.1f, 100.0f, "%.1f");
+            InspectorHelp("UE ShadowTracingDistance: how far towards the sun the self-shadow march looks.");
+            dragF("Stop Transmittance", "stopTracingTransmittance", 0.005f, 0.0005f, 0.0f, 0.5f, "%.4f");
+            InspectorHelp("UE StopTracingTransmittanceThreshold: the ray stops once this little light "
+                          "would get through. Higher is cheaper and lets less light punch through.");
+            dragF("Tracing Max Distance (km)", "tracingMaxDistanceKm", 50.0f, 0.5f, 1.0f, 1000.0f, "%.0f");
+            InspectorHelp("UE TracingMaxDistance: how far past the layer's entry point a ray is followed.");
+            dragF("Tracing Start Max (km)", "tracingStartMaxDistanceKm", 350.0f, 1.0f, 1.0f, 10000.0f, "%.0f");
+            InspectorHelp("UE TracingStartMaxDistance: a ray whose layer entry is further than this is "
+                          "not traced at all.");
+            checkB("Temporal", "temporal", true);
+            InspectorHelp("Accumulate the half-res march over frames (reprojected by the cloud's own "
+                          "depth). OFF shows the raw jittered trace.");
+            dragF("History Weight", "historyWeight", 0.9f, 0.005f, 0.0f, 0.99f, "%.2f");
+            InspectorHelp("How much of the previous frame survives: 0.9 is a ten-frame history, "
+                          "lower follows a fast sun or wind more closely at the price of noise.");
+
+            ImGui::SeparatorText("Shadow map");
+            checkB("Cloud Shadows", "shadowMap", true);
+            InspectorHelp("UE r.VolumetricCloud.ShadowMap: an orthographic map from the sun over the "
+                          "ground under the camera, multiplied into the sun wherever it lights the "
+                          "scene -- the island, the volumetric fog. This is the cloud's shadow "
+                          "crawling over the sand, and it works even when no cloud is in frame.");
+            dragF("Shadow Extent (km)", "shadowExtentKm", 20.0f, 0.5f, 1.0f, 500.0f, "%.0f");
+            InspectorHelp("Half-width of the map on the ground. 512 texels across twice this: 20 km "
+                          "is 78 m a texel. UE default 150 km (585 m a texel) is for a continent.");
+            dragF("Shadow Strength", "shadowStrength", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("UE CloudShadowStrength: scales the optical depth the map reports. 1 = the "
+                          "cloud's own density.");
+            dragF("Shadow Snap (km)", "shadowSnapKm", 2.0f, 0.1f, 0.01f, 100.0f, "%.2f");
+            InspectorHelp("UE ShadowMap.SnapLength: the map's centre moves in steps of this, so the "
+                          "shadow does not shimmer as the camera walks.");
+            dragF("Shadow Depth Bias (km)", "shadowDepthBiasKm", 0.0f, 0.01f, -5.0f, 5.0f, "%.2f");
+            InspectorHelp("UE CloudShadowDepthBias: pushes the recorded cloud front along the light.");
+            {
+                int samples = static_cast<int>(tgt().value("shadowMapSampleCount", 16u));
+                if (ImGui::DragInt("Shadow Map Samples", &samples, 1.0f, 4, 128))
+                {
+                    nlohmann::json after = withField("shadowMapSampleCount", static_cast<unsigned>(std::clamp(samples, 4, 128)));
+                    executeChange(std::move(after), historyLabel);
+                }
+            }
+            InspectorHelp("Samples per map texel through the layer (UE base 16, doubled towards the horizon).");
         }
         else if (env.type == "skybox")
         {

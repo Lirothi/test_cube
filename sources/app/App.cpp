@@ -597,6 +597,47 @@ namespace
             sun.SetDirection(-Math::float3(std::cos(elevation)*std::sin(azimuth), std::sin(elevation), std::cos(elevation)*std::cos(azimuth)));
             return true;
         }
+        // Plan part C: the clouds, every level-authored knob plus the session debug view. The
+        // names are the JSON keys of the `volumetricCloud` object (VolumetricCloudSettingsJson).
+        if (setting.rfind("cloud.", 0) == 0)
+        {
+            auto& c = scene.VolumetricCloudRef();
+            const std::string key = setting.substr(6);
+            if (key == "enabled") { c.enabled = value != 0.0f; return true; }
+            if (key == "debugView") { c.debugView = static_cast<unsigned>(std::clamp(value, 0.0f, 3.0f)); return true; }
+            if (key == "seed") { c.seed = static_cast<std::uint32_t>(std::max(value, 0.0f)); return true; }
+            if (key == "temporal") { c.temporal = value != 0.0f; return true; }
+            if (key == "shadowMap") { c.shadowMap = value != 0.0f; return true; }
+            if (key == "viewSampleCountMax") { c.viewSampleCountMax = static_cast<std::uint32_t>(std::clamp(value, 4.0f, 768.0f)); return true; }
+            if (key == "viewSampleCountMin") { c.viewSampleCountMin = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
+            if (key == "shadowSampleCount") { c.shadowSampleCount = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 80.0f)); return true; }
+            if (key == "shadowMapSampleCount") { c.shadowMapSampleCount = static_cast<std::uint32_t>(std::clamp(value, 4.0f, 128.0f)); return true; }
+            struct FloatKnob { const char* name; float* field; float lo, hi; };
+            const FloatKnob knobs[] = {
+                { "layerBottomKm", &c.layerBottomKm, 0.1f, 20.0f }, { "layerHeightKm", &c.layerHeightKm, 0.1f, 20.0f },
+                { "coverage", &c.coverage, 0.0f, 1.0f }, { "cloudType", &c.cloudType, -1.0f, 1.0f },
+                { "extinctionScale", &c.extinctionScale, 0.0f, 1.0f }, { "albedo", &c.albedo, 0.0f, 1.0f },
+                { "detailStrength", &c.detailStrength, 0.0f, 1.0f }, { "baseTileKm", &c.baseTileKm, 0.1f, 100.0f },
+                { "detailTileKm", &c.detailTileKm, 0.01f, 10.0f }, { "weatherTileKm", &c.weatherTileKm, 1.0f, 1000.0f },
+                { "windKmH", &c.windKmH, 0.0f, 500.0f }, { "phaseG", &c.phaseG, -0.99f, 0.99f },
+                { "phaseG2", &c.phaseG2, -0.99f, 0.99f }, { "phaseBlend", &c.phaseBlend, 0.0f, 1.0f },
+                { "msContribution", &c.msContribution, 0.0f, 1.0f }, { "msOcclusion", &c.msOcclusion, 0.0f, 1.0f },
+                { "msEccentricity", &c.msEccentricity, 0.0f, 1.0f }, { "skyLightBottomOcclusion", &c.skyLightBottomOcclusion, 0.0f, 1.0f },
+                { "distanceToSampleCountMaxKm", &c.distanceToSampleCountMaxKm, 0.1f, 1000.0f },
+                { "shadowTracingDistanceKm", &c.shadowTracingDistanceKm, 0.1f, 100.0f },
+                { "stopTracingTransmittance", &c.stopTracingTransmittance, 0.0f, 0.5f },
+                { "tracingStartMaxDistanceKm", &c.tracingStartMaxDistanceKm, 1.0f, 10000.0f },
+                { "tracingMaxDistanceKm", &c.tracingMaxDistanceKm, 1.0f, 1000.0f },
+                { "historyWeight", &c.historyWeight, 0.0f, 0.99f }, { "shadowExtentKm", &c.shadowExtentKm, 1.0f, 500.0f },
+                { "shadowStrength", &c.shadowStrength, 0.0f, 1.0f }, { "shadowSnapKm", &c.shadowSnapKm, 0.01f, 100.0f },
+                { "shadowDepthBiasKm", &c.shadowDepthBiasKm, -5.0f, 5.0f },
+            };
+            for (const FloatKnob& k : knobs)
+            {
+                if (key == k.name) { *k.field = std::clamp(value, k.lo, k.hi); return true; }
+            }
+            return false;
+        }
         if (setting == "sky.environmentLighting") { scene.SkyAtmosphereRef().environmentLighting = value != 0.0f; return true; }
         if (setting == "sky.mode") { scene.SkyAtmosphereRef().mode = value >= 1.0f ? 1u : 0u; return true; }
         if (setting == "sky.aerialPerspective") { scene.SkyAtmosphereRef().aerialPerspective = value != 0.0f; return true; }

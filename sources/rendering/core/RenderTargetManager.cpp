@@ -626,6 +626,24 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         D.lightShaftWidth = std::max(1u, sizes.lightShaftWidth);
         D.lightShaftHeight = std::max(1u, sizes.lightShaftHeight);
 
+        // Plan C2 volumetric clouds: the half-res march (colour + front depth) and its temporal
+        // resolve (the same pair; the previous slot's is the history). Compute-written and
+        // compute-read, resting NON_PIXEL like the fog volumes.
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.cloud,
+            DeferredSrvSlot::CloudTrace, DeferredSrvSlot::CloudTraceUAV, f,
+            D.cloudTrace, D.cloudTraceSRV, D.cloudTraceUAV, sizes.cloudWidth, sizes.cloudHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.cloudDepth,
+            DeferredSrvSlot::CloudTraceDepth, DeferredSrvSlot::CloudTraceDepthUAV, f,
+            D.cloudTraceDepth, D.cloudTraceDepthSRV, D.cloudTraceDepthUAV, sizes.cloudWidth, sizes.cloudHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.cloud,
+            DeferredSrvSlot::CloudResolved, DeferredSrvSlot::CloudResolvedUAV, f,
+            D.cloudResolved, D.cloudResolvedSRV, D.cloudResolvedUAV, sizes.cloudWidth, sizes.cloudHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.cloudDepth,
+            DeferredSrvSlot::CloudResolvedDepth, DeferredSrvSlot::CloudResolvedDepthUAV, f,
+            D.cloudResolvedDepth, D.cloudResolvedDepthSRV, D.cloudResolvedDepthUAV, sizes.cloudWidth, sizes.cloudHeight);
+        D.cloudWidth = std::max(1u, sizes.cloudWidth);
+        D.cloudHeight = std::max(1u, sizes.cloudHeight);
+
         // P8: the bloom pyramid. Same construction as the HZB chain above -- one SRV over the whole
         // thing, one UAV per mip, built entirely in UNORDERED_ACCESS -- but sized off the DISPLAY
         // resolution, because bloom runs after the upscaler on the image the tonemap reads.
@@ -839,6 +857,10 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.fogIntegrated.Get(), L"FogIntegrated", kNps);
         nameRes(D.lightShaftA.Get(), L"LightShaftA", kNps);
         nameRes(D.lightShaftB.Get(), L"LightShaftB", kNps);
+        nameRes(D.cloudTrace.Get(), L"CloudTrace", kNps);
+        nameRes(D.cloudTraceDepth.Get(), L"CloudTraceDepth", kNps);
+        nameRes(D.cloudResolved.Get(), L"CloudResolved", kNps);
+        nameRes(D.cloudResolvedDepth.Get(), L"CloudResolvedDepth", kNps);
         nameRes(D.debugPreview.Get(), L"DebugPreview", kNps);
         // Tonemap/FXAA end as the compute outputs they are — the resolve flips them back.
         nameRes(D.tonemap.Get(), L"Tonemap", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1110,6 +1132,10 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         collect(D.streakB);
         collect(D.fogScatter);
         collect(D.fogIntegrated);
+        collect(D.cloudTrace);
+        collect(D.cloudTraceDepth);
+        collect(D.cloudResolved);
+        collect(D.cloudResolvedDepth);
     }
 
     shadowAtlas_.Reset(); // S3.5: the single cascade atlas; Reset unregisters it

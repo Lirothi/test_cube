@@ -26,10 +26,11 @@
 #include "lighting_cb.hlsli"
 #include "fog_common.hlsli"
 #include "rt_lights.hlsli" // SpotLightData / PointLightData (the light passes' layout)
+#include "cloud_shadow_common.hlsli" // plan C3: the cloud's shadow on the sun in the air
 
 #define FOG_SCATTER_RS \
     "CBV(b0), CBV(b1), " \
-    "DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
@@ -47,6 +48,7 @@ StructuredBuffer<PointLightData> PointLights     : register(t8);
 Texture2DArray                   SpotShadowAtlas : register(t9);  // Legacy local shadows
 TextureCubeArray                 PointShadowCube : register(t10);
 Texture2D<float4>       DistantSkyLight : register(t11); // B5 raw isotropic luminance at 6 km
+Texture2D<float4>       CloudShadowMap  : register(t12); // C3 cloud shadow map (dummy without clouds)
 RWTexture3D<float4>     FogScatter    : register(u0);
 
 SamplerState            gSmpPoint       : register(s0);
@@ -67,17 +69,22 @@ static const float3 kFogR3 = float3(0.8191725134f, 0.6710436067f, 0.5497004779f)
 // in a volume, and it keeps one sampler for both consumers.
 float FogSunShadow(float3 P)
 {
+    // Plan C3: the cloud's shadow on the air (UE VolumetricFog.usf:874-880 multiply the same
+    // GetCloudVolumetricShadow into the directional light's scattering).
+    const float cloud = cloudShadowParams.x != 0.0f
+        ? CloudShadowTransmittance(P, cloudShadowViewProj, cloudShadowParams.y, CloudShadowMap, gSmpLinearClamp)
+        : 1.0f;
     const float3 dirToLight = normalize(-sunDirWS);
     if (useVsm != 0u)
     {
         VsmSmrtParams smrt = (VsmSmrtParams)0; // rayCount 0 = the single-tap SampleCmp path
-        return VsmClipmapShadow(P, dirToLight, camPosWS, clipmapNormalBias, vsmDepthBias,
-                                clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,
-                                invProj._11, clipmapUvNormal, dirToLight, smrt, 0.0f,
-                                clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
+        return cloud * VsmClipmapShadow(P, dirToLight, camPosWS, clipmapNormalBias, vsmDepthBias,
+                                        clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,
+                                        invProj._11, clipmapUvNormal, dirToLight, smrt, 0.0f,
+                                        clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
     }
     int cascade;
-    return CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, dirToLight, 1.0f, cascade);
+    return cloud * CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, dirToLight, 1.0f, cascade);
 }
 
 // The light passes' LightDistanceAttenuation (utils.hlsli) with UE's volumetric distance bias in

@@ -37,13 +37,16 @@ namespace LevelDocumentSerializer
             bool haveSpot = false;
             bool havePoint = false;
             bool haveOcean = false;
+            bool haveSky = false;
+            bool haveCloud = false;
             for (const EditorObject& env : document.Environment())
             {
                 if (env.type == "camera") { out["camera"] = env.properties; }
                 else if (env.type == "directionalLight") { out["directionalLight"] = env.properties; }
                 else if (env.type == "skybox") { out["skybox"] = env.properties; }
                 else if (env.type == "wind") { out["wind"] = env.properties; } // W2: round-trip the wind entity
-                else if (env.type == "skyAtmosphere") { out["skyAtmosphere"] = env.properties; } // B6.2
+                else if (env.type == "skyAtmosphere") { out["skyAtmosphere"] = env.properties; haveSky = true; } // B6.2
+                else if (env.type == "volumetricCloud") { out["volumetricCloud"] = env.properties; haveCloud = true; } // plan part C
                 // P8B: the five look groups are one section now. The legacy top-level keys are
                 // ERASED rather than left beside it, because two copies of the same setting is a
                 // question about which one wins that nobody should have to answer -- the loader
@@ -86,6 +89,10 @@ namespace LevelDocumentSerializer
             // Ocean can be removed via the Ocean menu; if there's no ocean entity,
             // drop any stale section carried over from the loaded header.
             if (!haveOcean && out.contains("ocean")) { out.erase("ocean"); }
+            // Same for the two "presence is the switch" objects: deleting the Sky Atmosphere or the
+            // Volumetric Cloud object must not leave the loaded header's section to resurrect it.
+            if (!haveSky && out.contains("skyAtmosphere")) { out.erase("skyAtmosphere"); }
+            if (!haveCloud && out.contains("volumetricCloud")) { out.erase("volumetricCloud"); }
         }
 
         // Camera position is intentionally not persisted in level files; it lives

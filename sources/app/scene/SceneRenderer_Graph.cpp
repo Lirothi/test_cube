@@ -82,6 +82,49 @@ namespace
     }
 }
 
+// Plan part C: the frame's cloud inputs, from what this renderer owns or is handed. The trace's
+// half of it (the aerial volume) is only known after BuildAerial, so the shadow pass, registered
+// in the prologue, sees `aerialBuilt` false -- it does not read the volume.
+VolumetricCloud::FrameInputs SceneRenderer::MakeCloudInputs(Renderer* renderer) const
+{
+    VolumetricCloud::FrameInputs in{};
+    in.settings = &frame_->settings.volumetricCloud;
+    const Camera& camera = *frame_->camera;
+    in.invViewProjNoJitter = camera.GetInvProjMatrixNoJitter() * camera.GetInvViewMatrix();
+    in.viewProjNoJitter = camera.GetViewProjMatrixNoJitter();
+    in.prevViewProjNoJitter = camera.GetPrevViewProjMatrixNoJitter();
+    in.cameraPos = camera.GetPosition();
+    const mat4& projNoJitter = camera.GetProjMatrixNoJitter();
+    in.projZ33 = projNoJitter.m._33;
+    in.projZ43 = projNoJitter.m._43;
+    in.sunDirection = frame_->dirLight->GetDirection();
+    in.sunIlluminance = frame_->dirLight->GetEffectiveColor();
+    in.planetRadiusKm = frame_->settings.skyAtmosphere.parameters.radii[0];
+    in.aerialBuilt = skyAtmosphere_.AerialBuilt();
+    in.aerialStartKm = std::max(0.0f, frame_->settings.skyAtmosphere.aerialStartDepthMetres) / kMetresPerKm;
+    in.aerialResource = skyAtmosphere_.AerialResource();
+    in.aerialSrv = skyAtmosphere_.AerialSrv();
+    in.distantActive = skyAtmosphere_.DistantActive();
+    in.distantResource = skyAtmosphere_.DistantResource();
+    in.distantSrv = skyAtmosphere_.DistantSrv();
+    in.preExposure = preExposure_;
+    in.prevPreExposure = prevPreExposure_;
+    if (frame_->wind)
+    {
+        in.windDirXZ = frame_->wind->windDirXZ;
+        in.windTime = frame_->wind->time;
+    }
+    const auto& D = renderer->GetDeferredForFrame();
+    in.outputWidth = D.cloudWidth;
+    in.outputHeight = D.cloudHeight;
+    in.depthWidth = renderer->GetRenderWidth();
+    in.depthHeight = renderer->GetRenderHeight();
+    in.historyValid = decisions_.cloudHistoryValid;
+    in.frameIndex = static_cast<unsigned>(renderer->GetTotalFrameNumber() & 1023ull);
+    in.debugView = frame_->settings.volumetricCloud.debugView;
+    return in;
+}
+
 // AS build, prologue clear, object compute, surf sim, shore wetness, terrain depth.
 void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
 {
@@ -93,6 +136,20 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
     const auto pDistant = skyAtmosphere_.BuildDistant(renderer, rg, frame_->settings.skyAtmosphere, environmentView, pEnvironment);
     if (pDistant != GraphBuild::kNone) environmentDeps.push_back(pDistant);
+    // Plan part C: the noise set (seed-dirty) and the cloud shadow map, ahead of the lighting and
+    // the fog that multiply it into the sun. The view trace itself is registered in BuildLighting,
+    // after the aerial volume it reads.
+    gb.pCloudNoise = GraphBuild::kNone;
+    gb.pCloudShadow = GraphBuild::kNone;
+    if (decisions_.volumetricCloud)
+    {
+        gb.pCloudNoise = volumetricCloud_.BuildNoise(renderer, rg, frame_->settings.volumetricCloud);
+        gb.pCloudShadow = volumetricCloud_.BuildShadow(renderer, rg, MakeCloudInputs(renderer), gb.pCloudNoise);
+    }
+    else
+    {
+        volumetricCloud_.ClearFrameState();
+    }
 
 
     // RT acceleration-structure build (S5): the first pass when RT is enabled.
@@ -972,6 +1029,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             if (fogDistantRevision_ != distantRevision) decisions_.fogHistoryValid = false;
             fogDistantRevision_ = distantRevision;
             if (skyAtmosphere_.DistantActive()) ctx.Use(skyAtmosphere_.DistantResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            // Plan C3: the cloud shadow map, multiplied into the sun in the air (its rest; named).
+            if (volumetricCloud_.ShadowBuilt()) ctx.Use(volumetricCloud_.ShadowResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             FogPoints pts{};
             pts.scatter = ctx.usePoint ? *ctx.usePoint : 0u;
             if (frame_->skybox) frame_->skybox->DeclareEnvironment(ctx, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1017,6 +1076,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         if (vsmShadows) { fogPrereqs.push_back(gb.pVsmPageRender); }
         // A3: the conservative depth reads this frame's FINAL furthest pyramid.
         if (decisions_.fogConservativeDepth && gb.pHzb != GraphBuild::kNone) { fogPrereqs.push_back(gb.pHzb); }
+        // C3: the cloud shadow map, on the frames it was built.
+        if (gb.pCloudShadow != GraphBuild::kNone && fogPrereqs.size() < fogPrereqs.capacity()) { fogPrereqs.push_back(gb.pCloudShadow); }
         // A4: the local lights' shadows -- the point cube pass is a prereq (as Main_PointLights
         // takes it), the spot atlas an mtDep (as Main_SpotLights takes it).
         if (decisions_.fogLocalLights && gb.pPointShadow != GraphBuild::kNone && fogPrereqs.size() < fogPrereqs.capacity())
@@ -1041,6 +1102,9 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         }
         ctx.UseDeclared();
         if (frame_->skybox) frame_->skybox->DeclareEnvironment(ctx, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        // Plan C3: the cloud shadow map, at its rest; declared so the read is named (GBV flags a
+        // descriptor over an undeclared resource even unread).
+        if (volumetricCloud_.ShadowBuilt()) ctx.Use(volumetricCloud_.ShadowResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
         return [this, renderer, point](RenderGraphPassContext c) {
             CPU_SCOPE(ProfilerScopes::kPassLighting);
@@ -1053,11 +1117,18 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     // P6B item 7: lighting now SAMPLES the AO target, so it must order after the chain that writes
     // it. Until this step the AO pass was a leaf nobody depended on, and the two were free to run
     // concurrently -- correct only while nothing read the result.
+    // Plan C3: the cloud shadow map is one more input, on the frames it was built (a run-time list:
+    // a temporary initializer_list's array dies with the full expression).
+    RenderGraph<kMainRenderGraphPassCount>::DependencyList lightPrereqs;
+    lightPrereqs.push_back(gb.pGbufDone);
+    if (decisions_.vsmActive && gb.pVsmPageRender != static_cast<size_t>(-1)) { lightPrereqs.push_back(gb.pVsmPageRender); }
+    lightPrereqs.push_back(gb.pGtao);
+    if (gb.pCloudShadow != GraphBuild::kNone && lightPrereqs.size() < lightPrereqs.capacity()) { lightPrereqs.push_back(gb.pCloudShadow); }
     if (decisions_.vsmActive && gb.pVsmPageRender != static_cast<size_t>(-1))
     {
         ID3D12Resource* vpool = frame_->vsm->PagePool();
         ID3D12Resource* vpt = frame_->vsm->PageTable();
-        pLight = rg.AddPass2(RenderPass::Main_Lighting, { gb.pGbufDone, gb.pVsmPageRender, gb.pGtao }, { gb.pShadow },
+        pLight = rg.AddPass2(RenderPass::Main_Lighting, lightPrereqs, { gb.pShadow },
             { { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
               { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
               { D.shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
@@ -1069,7 +1140,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     }
     else
     {
-        pLight = rg.AddPass2(RenderPass::Main_Lighting, { gb.pGbufDone, gb.pGtao }, { gb.pShadow },
+        pLight = rg.AddPass2(RenderPass::Main_Lighting, lightPrereqs, { gb.pShadow },
             { { D.gb0.Get(), kSrvAll },
               { D.gb1.Get(), kSrvAll },
               { D.gb2.Get(), kSrvAll },
@@ -1220,6 +1291,17 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
     const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, skyView,
         *frame_->camera, skySettings.aerialStartDepthMetres, pSkyView);
+    // Plan C2: the clouds' half-res march and resolve, after the depth it clamps to and the aerial
+    // volume it hazes with (pAerial chains from the SkyView LUT and the distant light); compose
+    // applies the result, and that edge rides the reflection group's first member (withFog below).
+    gb.pCloud = GraphBuild::kNone;
+    if (decisions_.volumetricCloud)
+    {
+        gb.pCloud = volumetricCloud_.BuildTrace(renderer, rg, MakeCloudInputs(renderer),
+            { pAerial, gb.pGbufDone, gb.pCloudNoise, GraphBuild::kNone }, 3);
+        // No pass, no consumer: compose must not read a pair nobody wrote this frame.
+        if (gb.pCloud == GraphBuild::kNone) { decisions_.volumetricCloud = false; }
+    }
     gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, { pAerial }, /*mtDeps=*/{},
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
@@ -1288,6 +1370,8 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
         RenderGraph<kMainRenderGraphPassCount>::DependencyList deps;
         for (size_t d : base) { deps.push_back(d); }
         if (gb.pFog != GraphBuild::kNone) { deps.push_back(gb.pFog); }
+        // Plan C2: compose reads the resolved clouds too, under the same group rule.
+        if (gb.pCloud != GraphBuild::kNone && deps.size() < deps.capacity()) { deps.push_back(gb.pCloud); }
         return deps;
     };
     size_t pReflectionSource; // node the blur depends on (reflection chain end)
@@ -1442,6 +1526,12 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             if (decisions_.volumetricFog && DC.fogIntegrated.Get())
             {
                 ctx.Use(DC.fogIntegrated.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+            // Plan C2: the resolved cloud pair (its rest; named on the frames it is read).
+            if (decisions_.volumetricCloud && DC.cloudResolved.Get() && DC.cloudResolvedDepth.Get())
+            {
+                ctx.Use(DC.cloudResolved.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(DC.cloudResolvedDepth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             }
             ctx.NextPoint();
             const std::uint32_t handBack = ctx.usePoint ? *ctx.usePoint : 0u;

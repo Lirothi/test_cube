@@ -567,6 +567,9 @@
     <ClCompile Include="sources/rendering/lighting/SkyAtmosphere.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/lighting/VolumetricCloud.cpp">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/lighting/Skybox.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
@@ -1106,6 +1109,15 @@
     <ClInclude Include="sources/rendering/lighting/SkyAtmosphereSettings.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/VolumetricCloud.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/VolumetricCloudSettings.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/scene/VolumetricCloudSettingsJson.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/lighting/Skybox.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
@@ -1364,6 +1376,12 @@
     <None Include="shaders\sky_ibl_capture_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_ibl_filter_cs.hlsl"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_lut_distant_cs.hlsl"><Filter>shaders</Filter></None>
+    <None Include="shaders\cloud_common.hlsli"><Filter>shaders</Filter></None>
+    <None Include="shaders\cloud_noise_cs.hlsl"><Filter>shaders</Filter></None>
+    <None Include="shaders\cloud_trace_cs.hlsl"><Filter>shaders</Filter></None>
+    <None Include="shaders\cloud_temporal_cs.hlsl"><Filter>shaders</Filter></None>
+    <None Include="shaders\cloud_shadow_cs.hlsl"><Filter>shaders</Filter></None>
+    <None Include="shaders\cloud_shadow_common.hlsli"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_aerial_common.hlsli"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_view_mapping.hlsli"><Filter>shaders</Filter></None>
     <None Include="shaders\sky_lut_debug_cs.hlsl">

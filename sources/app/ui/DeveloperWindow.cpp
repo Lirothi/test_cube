@@ -1187,6 +1187,21 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "Choose Scene to return to normal rendering.");
                 ImGui::TextDisabled("Transmittance: 256 x 64; multi-scattering: 32 x 32.");
                 ImGui::TextWrapped("Preview settings apply for this session.");
+                // Plan part C: the clouds' debug views. Their look lives on the Volumetric Cloud
+                // object in the outliner; only the session's view selector is here.
+                ImGui::SeparatorText("Volumetric clouds");
+                auto& clouds = scene.VolumetricCloudRef();
+                ImGui::TextDisabled("Clouds: %s (level object: outliner > Volumetric Cloud)",
+                                    clouds.enabled ? (sky.mode != 0u ? "on" : "authored, but the sky is a cubemap") : "none");
+                ImGui::BeginDisabled(!clouds.enabled || sky.mode == 0u);
+                int cloudView = static_cast<int>(clouds.debugView);
+                const char* cloudViews[] = { "Scene", "Weather coverage", "Transmittance", "Samples taken" };
+                if (ImGui::Combo("Cloud view", &cloudView, cloudViews, IM_ARRAYSIZE(cloudViews)))
+                    clouds.debugView = static_cast<unsigned>(cloudView);
+                ImGui::EndDisabled();
+                ImGui::TextWrapped("Gray views of the half-res trace, display-linear with the calibration "
+                                   "ramp on top; the temporal resolve is bypassed while one is shown. "
+                                   "--set=cloud.debugView:0..3");
             }
 
             if (activeTab_ == Tab::Debug)

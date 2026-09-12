@@ -77,6 +77,8 @@ void SceneRenderer::Reset()
     resources_ = SceneResourceBootstrapper{};
     rtAs_.Reset();
     skyAtmosphere_.Reset();
+    volumetricCloud_.Reset();
+    cloudHistoryFrames_ = 0u; cloudLogged_ = -1;
     fogDistantRevision_ = 0u;
     decisions_.reflectionTemporal = false;
     ssrHistoryValid_ = false;
@@ -119,6 +121,12 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
 {
     if (!renderer || !frame_) { return; }
     skyAtmosphere_.Prepare(renderer, frame_->settings.skyAtmosphere);
+    // Plan part C: the clouds' fixed resources, once the level asks for them AND the sky is
+    // procedural (their light and haze come from its LUTs; on a cubemap sky nothing is allocated).
+    if (frame_->settings.skyAtmosphere.mode != 0u)
+    {
+        volumetricCloud_.Prepare(renderer, frame_->settings.volumetricCloud);
+    }
 
     if (frame_->shadowGpu)
     {
@@ -452,6 +460,46 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
                      decisions_.volumetricFog ? 1 : 0, decisions_.fogHistoryValid ? 1 : 0, decisions_.fogConservativeDepth ? 1 : 0,
                      decisions_.fogLocalLights ? 1 : 0, w, h, D.fogGridDepth, renderer->GetTotalFrameNumber());
             fogLogged_ = state;
+        }
+    }
+
+    // Volumetric clouds (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part C): the level has them,
+    // the sky is procedural (the trace reads its distant light and aerial volume), the owner's
+    // fixed resources built and the ring holds the half-res pair. History as the fog's: frames in
+    // a row at this size under this camera history (a cut voids it).
+    {
+        const auto& D = renderer->GetDeferredForFrame();
+        const auto& P = renderer->GetDeferredForPrevFrame();
+        const VolumetricCloudSettings& c = frame.settings.volumetricCloud;
+        const bool procedural = frame.settings.skyAtmosphere.mode != 0u;
+        decisions_.volumetricCloud = c.enabled && procedural && volumetricCloud_.Ready() && frame.dirLight && frame.camera &&
+            D.cloudTrace.Get() != nullptr && D.cloudTraceDepth.Get() != nullptr && D.cloudResolved.Get() != nullptr &&
+            D.cloudResolvedDepth.Get() != nullptr && P.cloudResolved.Get() != nullptr && P.cloudResolvedDepth.Get() != nullptr &&
+            D.cloudTraceUAV.ptr != 0 && D.cloudTraceDepthUAV.ptr != 0 && D.cloudResolvedUAV.ptr != 0 && D.cloudResolvedDepthUAV.ptr != 0 &&
+            D.cloudTraceSRV.ptr != 0 && D.cloudTraceDepthSRV.ptr != 0 && D.cloudResolvedSRV.ptr != 0 && D.cloudResolvedDepthSRV.ptr != 0 &&
+            P.cloudResolvedSRV.ptr != 0 && P.cloudResolvedDepthSRV.ptr != 0 && D.depthSRV.ptr != 0;
+        const UINT w = D.cloudWidth, h = D.cloudHeight;
+        const std::uint64_t rev = frame.camera ? frame.camera->GetHistoryRevision() : 0ull;
+        const bool sameHistory = cloudHistoryWidth_ == w && cloudHistoryHeight_ == h && cloudHistoryRevision_ == rev;
+        decisions_.cloudHistoryValid = decisions_.volumetricCloud && c.temporal && cloudHistoryFrames_ > 0u && sameHistory;
+        cloudHistoryFrames_ = decisions_.volumetricCloud ? (sameHistory ? cloudHistoryFrames_ + 1u : 1u) : 0u;
+        cloudHistoryWidth_ = w;
+        cloudHistoryHeight_ = h;
+        cloudHistoryRevision_ = rev;
+        const int state = decisions_.volumetricCloud
+            ? (1 + (decisions_.cloudHistoryValid ? 1 : 0) + (c.shadowMap ? 2 : 0))
+            : ((c.enabled && !procedural) ? -2 : 0);
+        if (state != cloudLogged_)
+        {
+            if (c.enabled && !procedural)
+            {
+                LOG_WARNING(logging::LogCategory::Render, "volumetric clouds: the level authors clouds but its sky is a cubemap; "
+                            "they need the Sky Atmosphere object (procedural sky) and stay off");
+            }
+            LOG_INFO(logging::LogCategory::Render, "volumetric clouds: on={} history={} shadowMap={} trace={}x{} (frame {})",
+                     decisions_.volumetricCloud ? 1 : 0, decisions_.cloudHistoryValid ? 1 : 0,
+                     (decisions_.volumetricCloud && c.shadowMap) ? 1 : 0, w, h, renderer->GetTotalFrameNumber());
+            cloudLogged_ = state;
         }
     }
 

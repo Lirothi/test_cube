@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=18, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -43,6 +43,10 @@ Texture3D<float4> SkyAerialVolume : register(t14);
 // t15: the SkyView LUT, read ONLY for sky pixels and ONLY to make the fog's in-scattering colour
 // the same value the skybox drew. Empty in HDRI mode -- `skyViewPlanet.z` gates it.
 Texture2D<float4> SkyViewLut : register(t15);
+// Plan C2: the resolved clouds at half resolution (rgb pre-exposed luminance, a transmittance) and
+// the cloud's front depth in km, gated by `cloudParams.x`; dummies keep the range populated otherwise.
+Texture2D<float4> CloudTex : register(t16);
+Texture2D<float> CloudDepthTex : register(t17);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -96,6 +100,9 @@ cbuffer PerFrame : register(b0)
     // B6.2: x = view height (km), y = planet bottom radius (km), z = procedural sky on,
     // w = 1 / the LUT's storage pre-exposure. Mirrors what Skybox.cpp hands the sky pass.
     float4 skyViewPlanet;
+    // Plan C2: x = the cloud pair was built this frame, y = 1 / preExposure (the cloud's luminance
+    // is stored pre-exposed, `lit` is raw), z = the cloud debug view (replaces the frame), w = 0.
+    float4 cloudParams;
 }
 
 static const float kEps = 1e-6;
@@ -285,6 +292,32 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     float z = ReadDepth(uv);
+
+    // Plan C2: THE CLOUDS, composed over what the sky pass drew and under everything this pass
+    // adds -- the height fog, the froxel volume and the aerial perspective all sit on top, exactly
+    // as they sit on the sky (UE ComposeVolumetricRTOverScene runs before their fog for the same
+    // reason). `lit` is raw radiance, the cloud's luminance is pre-exposed: one scale reconciles them.
+    // On a GEOMETRY pixel the cloud is applied only where the surface lies BEHIND the cloud's front
+    // (the trace already stopped at the depth buffer; this keeps a half-res texel that straddles a
+    // silhouette from bleeding cloud onto the near side of it).
+    if (cloudParams.x > 0.0f)
+    {
+        const float4 cloud = CloudTex.SampleLevel(gSmp, uv, 0);
+        bool applyCloud = !(z > kEps);
+        if (!applyCloud)
+        {
+            const float3 cloudPos = ReconstructPosWS(uv, z, invProj, invView);
+            const float surfaceKm = length(cloudPos - camPosWS) / 1000.0f;
+            applyCloud = surfaceKm > CloudDepthTex.SampleLevel(gSmpPoint, uv, 0);
+        }
+        if (applyCloud)
+        {
+            const float3 delta = lit * (cloud.a - 1.0f) + cloud.rgb * cloudParams.y;
+            lit += delta;
+            color += delta;
+        }
+    }
+
     if (z > kEps)
     {
         float4 gb0 = GB0.SampleLevel(gSmp, uv, 0);
@@ -612,7 +645,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // were exposed like sunlight -- a transmittance of 1.0 came out BLACK under a daylight EV --
     // which is how the volumetric fog's parity check first "passed" on two black images. Views 2
     // and 4 are radiance (what the air adds) and stay exposed like the scene.
-    const bool debugGray = fogDebugView == 1u || fogDebugView == 6u || fogDebugView == 7u;
+    // Plan C2: a cloud debug view is a display-linear gray written by the trace (coverage,
+    // transmittance, samples); it replaces the frame, under the same ramp rule as the fog's grays.
+    const bool cloudDebug = cloudParams.x > 0.0f && cloudParams.z != 0.0f;
+    if (cloudDebug) { color = CloudTex.SampleLevel(gSmp, uv, 0).rgb; }
+    const bool debugGray = cloudDebug || fogDebugView == 1u || fogDebugView == 6u || fogDebugView == 7u;
     // EVERY gray view carries the calibration ramp, not just the ones that were written with it.
     // "Display-linear" is not the same as "readable": the tonemapper still runs, its shoulder
     // compresses the top of the range, and its input scale moves with auto-exposure -- so a ramp

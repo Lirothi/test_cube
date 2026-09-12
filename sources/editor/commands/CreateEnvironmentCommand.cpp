@@ -20,6 +20,7 @@ namespace
         return object.type == "directionalLight" ||
             object.type == "skybox" ||
             object.type == "skyAtmosphere" || // B6.2: one atmosphere per level, as UE allow one actor
+            object.type == "volumetricCloud" || // plan part C: one cloud layer per level, likewise
             object.type == "camera" ||
             object.type == "cameraExposure" || // P1
             object.type == "colorPipeline" ||  // P3C

@@ -87,6 +87,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle csmFadeParams;     // S10: cascade cross-fade + distance fade
     // The sky's indirect specular, moved here from compose so the SSR pass can see it.
     Material::CBFieldHandle enableSkySpecular, skySpecMipCount, skyboxIntensity;
+    Material::CBFieldHandle cloudShadowViewProj, cloudShadowParams; // plan C3: the cloud shadow map
 
     void Populate(Material* material);
 };
@@ -194,6 +195,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle fogVolumeParams, fogVolumeZParams;
     Material::CBFieldHandle preExposure;
     Material::CBFieldHandle skyViewPlanet; // B6.2: the sky's own LUT, for the fog's sky colour
+    Material::CBFieldHandle cloudParams;   // plan C2: the resolved clouds, applied under the fog
 
     void Populate(Material* material);
 };
@@ -687,6 +689,10 @@ struct LightingPassConstants
     uint32_t enableSkySpecular = 1;
     uint32_t skySpecMipCount = 0;
     float skyboxIntensity = 1.0f;
+    // Plan C3: the cloud shadow map (cloud_shadow_common.hlsli). `cloudShadowParams.x` 0 = no map
+    // this frame, the sun is unshadowed by clouds; y = the map's far depth in km.
+    mat4 cloudShadowViewProj{};
+    float4 cloudShadowParams{};
 };
 
 struct PointLightPassConstants
@@ -835,6 +841,9 @@ struct ComposePassConstants
     // B6.2: x view height (km), y planet bottom radius (km), z procedural sky on,
     // w 1 / the SkyView LUT's storage pre-exposure.
     float4 skyViewPlanet{};
+    // Plan C2: x = the resolved cloud pair was built this frame, y = 1 / preExposure (the cloud's
+    // luminance is stored pre-exposed, `lit` is raw), z = the cloud debug view, w = 0.
+    float4 cloudParams{};
 };
 
 // B6.1. MIRROR of fog_apply.hlsl's `FogApply` cbuffer, field for field and in order: it is uploaded

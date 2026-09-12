@@ -93,6 +93,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     enableSkySpecular = material->ComputeCB0FieldHandle("enableSkySpecular");
     skySpecMipCount = material->ComputeCB0FieldHandle("skySpecMipCount");
     skyboxIntensity = material->ComputeCB0FieldHandle("skyboxIntensity");
+    cloudShadowViewProj = material->ComputeCB0FieldHandle("cloudShadowViewProj");
+    cloudShadowParams = material->ComputeCB0FieldHandle("cloudShadowParams");
 
     // A name that does not resolve leaves `field` null, UpdateCBField writes NOTHING, and the
     // shader then reads whatever was in that constant-buffer memory. That is normally a cosmetic
@@ -279,6 +281,7 @@ void SceneComposeCBHandles::Populate(Material* material)
     skyViewPlanet = material->ComputeCB0FieldHandle("skyViewPlanet");
     aerialParams = material->ComputeCB0FieldHandle("aerialParams");
     aerialViewProj = material->ComputeCB0FieldHandle("aerialViewProj");
+    cloudParams = material->ComputeCB0FieldHandle("cloudParams");
 }
 
 void SceneFxaaCBHandles::Populate(Material* material)
@@ -1590,6 +1593,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.enableSkySpecular, data.enableSkySpecular, dest);
     matLighting_->UpdateCBField(handles.skySpecMipCount, data.skySpecMipCount, dest);
     matLighting_->UpdateCBField(handles.skyboxIntensity, data.skyboxIntensity, dest);
+    matLighting_->UpdateCBField(handles.cloudShadowViewProj, data.cloudShadowViewProj, dest);
+    matLighting_->UpdateCBField(handles.cloudShadowParams, data.cloudShadowParams, dest);
     for (size_t i = 0; i < data.clipmapViewProj.size(); ++i)
     {
         matLighting_->UpdateCBField(handles.clipmapViewProj, data.clipmapViewProj[i], dest, static_cast<uint32_t>(i));
@@ -1852,6 +1857,7 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.preExposure, data.preExposure, dest);
     matComposeCS_->UpdateCBField(handles.aerialParams, data.aerialParams, dest);
     matComposeCS_->UpdateCBField(handles.aerialViewProj, data.aerialViewProj, dest);
+    matComposeCS_->UpdateCBField(handles.cloudParams, data.cloudParams, dest);
 }
 
 void SceneResourceBootstrapper::WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const

@@ -1571,6 +1571,118 @@ RT-отражения при промахе TLAS сэмплируют небо: 
 80/24` (дёшево — мало лучей уходит в небо); IBL-захват B4 включает облака (низкая частота обновления:
 раз в N кадров или при смене солнца).
 
+### Что сделано (2026-09-12): C1 + C2 + C3 одним инкрементом — НЕ закоммичено, C4 не начат
+
+**Файлы.** Шейдеры: `cloud_common.hlsli` (CB-зеркало, слой, фаза, октавы MS, модель плотности),
+`cloud_noise_cs.hlsl` (CSBase / CSDetail / CSWeather, последний под дефайном `CLOUD_NOISE_2D`),
+`cloud_trace_cs.hlsl` (марш), `cloud_temporal_cs.hlsl` (резолв), `cloud_shadow_cs.hlsl` (CSTrace /
+CSFilter), `cloud_shadow_common.hlsli` (чтение карты теней потребителями). C++: владелец
+`rendering/lighting/VolumetricCloud.h/.cpp` (форма `SkyAtmosphere`: фиксированные ресурсы, PSO,
+три пасса), `VolumetricCloudSettings.h` (настройки + `VolumetricCloudConstants` — зеркало CB, грузится
+одним блобом, размер сверяется с рефлексией при Prepare), `app/scene/VolumetricCloudSettingsJson.h`
+(одно отображение JSON ↔ настройки: уровень, редактор, сериализатор). Ring-таргеты
+`cloudTrace/cloudTraceDepth/cloudResolved/cloudResolvedDepth` (половина рендера, RGBA16F + R16F,
+`kCloudFormat`/`kCloudDepthFormat`), предыдущий слот = история, как у GTAO/тумана. Пассы
+`Main_CloudNoise` (по сид-ключу), `Main_CloudShadow` (каждый кадр, в прологе, prereq у Main_Lighting и
+Main_VolumetricFog), `Main_CloudTrace` (после pAerial и G-buffer; ребро в композ через `withFog`).
+
+**Объект уровня `volumetricCloud`** (наличие секции = облака есть, как `skyAtmosphere` и UE-актор):
+JsonLevel читает, EditorSceneDocument/EnvironmentRuntime/EditorController (меню «Volumetric Cloud»),
+Inspector «Edit Volumetric Cloud» — группы Layer / Shape / Lighting / Tracing / Shadow map с подсказками;
+`--set=cloud.<ключ JSON>` для всех полей + `cloud.debugView` (сессия; комбо в Developer → Sky).
+Требует процедурного неба: на HDRI-уровне пасс не регистрируется, один WARNING в session-лог.
+
+**Транскрипция (UE `VolumetricCloud.usf`)**: пересечение оболочек `:459-497`, клэмп по глубине
+`:534-593` (полурез-тексель берёт ДАЛЬНЮЮ из четырёх полноразмерных глубин), число сэмплов
+`:637-647` (max(min, max·sat(len/15 км))), режим `TracingMaxDistance` 0 (от точки входа), октавы MS
+`:368-424` (литерал `CLOUD_MS_COUNT 2`), две лопасти HG `:329-337`, x²-марш к солнцу `:1101-1131`
+без джиттера, интеграция Frostbite `:1352-1364`, стоп по T `:1376`, tAP `:1223`, AP поверх облака
+однократно `:1503-1541`, выход `:1710-1737` (depth = tAP либо tMax при T > 0.99). Ambient = distant
+sky light B5 × `saturate(SkyLightCloudBottomVisibility + normAlt)` `:864-869`. Карта теней:
+`SHADER_SHADOW_PS :2067-2219` (front depth / mean extinction / max optical depth, снап и матрица из
+`VolumetricCloudRendering.cpp:1725-1810`, включая snap-to-pixel-grid и horizon-фактор ×2 на сэмплы),
+фильтр `:2333-2348` (глубина = mean − отклонение), чтение `VolumetricCloudCommon.ush:59-75`.
+
+**Дельты (все сознательные, записаны в шапках файлов):**
+* плотность — НЕ транскрипция (у UE материал): Schneider 2015 — Perlin-Worley 128³ RGBA8 + Worley 32³
+  + weather 512² (coverage/type), height-gradient трёх типов, эрозия деталью; conservative density =
+  базовая форма > 0 (деталь считается только там);
+* blue noise → IGN с R2-сдвигом по кадру; чекерборда 2×2 нет — трассируем каждый полурез-тексель с
+  джиттером старта и копим темпорально (репроекция ПО ГЛУБИНЕ ОБЛАКА tAP, а не по gbVelocity: у неба
+  velocity = только поворот камеры; отбраковка истории по |Δглубины| > 10 % (`VolumetricRenderTarget.usf:431`),
+  3×3-клэмп, глубина не фильтруется);
+* height fog в трассе НЕ применяется (`:1548-1567`): облако кладётся в light target ДО композа, и
+  композ туманит его тем же путём, что небо (аналитика на «бесконечности» + froxel-объём);
+* AP на облако — из B3 при `sky.aerialPerspective`; знак фазы g — учебный (+ вперёд), у UE-ноды
+  инвертирован; дефолты фазы/октав — не нулевые UE-ноды (изотропия), а «как у демо-контента»:
+  g 0.6 / g2 −0.3 / blend 0.25, MS 0.5/0.5/0.5;
+* карта теней 512², extent 20 км (UE 150 км = 585 м/тексель, для континента), трассируется в
+  разрешении карты (UE — в 2× и сводит 2×2), 3×3 фильтр на месте; temporal-фильтр UE (выкл. у них по
+  умолчанию) не перенесён; потребители — `lighting_cs` (t15, три места умножения на
+  `CloudSunVisibility(P)`), `fog_scatter_cs` (t12, в `FogSunShadow`); ОКЕАН ПОКА НЕ ЗАТЕНЯЕТСЯ облаками;
+* половинное разрешение всегда (UE mode 0), апскейл в композе билинейный с тестом «геометрия дальше
+  фронта облака» по R16F-глубине; `pre-exposure`: L хранится pre-exposed текущего кадра, история
+  пересчитывается на `preExposure/prevPreExposure`.
+
+**Дефолты (UE где есть):** слой 1.5 + 2.5 км (план; UE 5 + 10), coverage 0.5, extinction 0.05 /м,
+albedo 0.95, `viewSampleCountMax` 128 (UE cinematic 768 — бюджет), `shadowSampleCount` 6 (UE 80),
+ShadowTracingDistance 15, stop 0.005, TracingMaxDistance 50, TracingStartMaxDistance 350,
+historyWeight 0.9, wind 20 км/ч по heading уровня на общих (замораживаемых) часах.
+
+**Debug-view (`cloud.debugView`)**: 1 coverage weather-карты на входе в слой, 2 transmittance,
+3 сэмплов/макс — серые display-linear с калибровочной рампой (правило туманных греев), темпоральный
+резолв в это время обходится.
+
+**Замеры (2026-09-12, Release, 2560×1440 native, `--dlss=off --wind-freeze --no-streamline`,
+камера рощи под солнце `-37.61,2.50,-98.03 / -0.1656,0.2958,0.0522,0.9393`, `--profdump`, дефолты
+выше, `--set=cloud.enabled:1`):** GPU.Frame 2.94 мс; **Pass_CloudTrace 0.509 мс** (March 0.486,
+Temporal ≈ 0.02) на 1280×720 — в бюджете плана (≤ 1.0 мс на половине 1080p; здесь половина 1440p);
+**Pass_CloudShadow 0.231 мс** (512² × 16 сэмплов × horizon-фактор 1.43 при солнце 28°) — ВЫШЕ
+плановых 0.1 мс; ручка `shadowMapSampleCount` (UE-база 16) — первый кандидат, второй — трассировать
+базовую форму без детали (тексель 78 м всё равно крупнее детали 15 м). Pass_CloudNoise — разово при
+загрузке (0.95 мс CPU-записи). Compose 0.070 мс. Снимки: `logs/c2_rel_sun20.png` (кучевые,
+серебряная кромка у солнца, серо-голубой низ, мелкая «крошка» на кромках от детали — вопрос вкуса:
+`detailStrength` 0.35 → меньше), `logs/c2_debug_smoke.png` (островная камера F4 смотрит ВНИЗ, неба в
+кадре нет — на воде виден только мягкий провал от карты теней).
+Приёмка глазами — за владельцем.
+
+**Гейты (2026-09-12):** три конфига (Debug /WX, Release, Release_Editor) собраны чисто;
+`check_shaders` **84/84**; `check_logging` **0 findings**; `--log-stress` Debug и Release — **0 failed
+checks**. GBV: `--scene-stress-gbv=20 --gbv-mode=unguarded --no-streamline --set=cloud.enabled:1`
+(Debug, обычное окно) — **CLEAN за 20 итераций, 195 с, exit 0, ERROR/FATAL = 0, clean shutdown**
+(`session_20260912_101034_72320_debug.log`); НО churn крутит demo/demo1/new1 — HDRI-уровни, где
+облака честно отключаются с WARNING'ом, так что под GBV с облаками отработали только кадры первого
+уровня (1280×720). Поэтому второй прогон: `--scene-stress-gbv=64 --scene-stress-sky --gbv-mode=unguarded
+--no-streamline --set=cloud.enabled:1` — wind_test, солнце 5°→36°, переключения mode/IBL/экспозиции
+(история пересчитывается на отношение экспозиций, включение/выключение пасса) — **CLEAN за 64
+итерации, 132.8 с, exit 0, ERROR/FATAL = 0, 7 включений / 4 выключения пасса за прогон, clean
+shutdown** (`session_20260912_101538_43664_debug.log`, `gbv.log` — только штатные live-device футеры).
+
+**Правки по первому просмотру владельца (2026-09-12, вечер):**
+* «Не сохраняются в уровне» — `LevelDocumentSerializer` пишет секции по явному списку типов, и
+  `volumetricCloud` в нём не было (загрузка, редактор и меню были, запись — нет). Добавлен, плюс
+  снятие устаревшей секции при удалении объекта — и для `volumetricCloud`, и для `skyAtmosphere`
+  (у того же дефекта: удалённый объект воскресал из заголовка загруженного файла при сохранении).
+  `CreateEnvironmentCommand` (один слой на уровень) и Outliner (группа Environment) тоже знают тип.
+* «Концентрические ободы при высоком coverage» — UE `:637-647` считают ЧИСЛО сэмплов целым от
+  длины пути и делят длину на него: длина шага прыгает всякий раз, когда длина пересекает кратное
+  15 км / SampleCountMax. При их 768 это 19.5 м и не видно; при 128 (117 м) прыжок — целая деталь
+  облака, и на плотном слое он рисует кольца вокруг зенита (там путь сквозь оболочку кратчайший).
+  Теперь длина шага ПОСТОЯННА = 15 км / SampleCountMax, число сэмплов = ceil(длина / шаг), последний
+  сегмент частичный (dt = min(шаг, до конца)), старт с джиттером; за 15 км шаг растёт плавно, как у
+  UE. Дефолт `viewSampleCountMax` 128 → **256** (58 м): при 117 м кучевые читались кашей.
+  Цена на той же камере рощи (Release, 1440p native, `--profdump`): **Pass_CloudTrace 0.890 мс**
+  (March 0.867, Temporal 0.016) против 0.509 при 128; Pass_CloudShadow 0.230 без изменений;
+  GPU.Frame 3.34 мс. В бюджете плана (≤ 1.0 мс), но с малым запасом — ручка у владельца.
+  Проверка колец: поза владельца `-67.20,4.97,52.82 / -0.4151,0.1524,0.0707,0.8942` при
+  `cloud.coverage:0.85`, native — `logs/c2_rings_after.png`, плотный слой без контуров.
+
+**Не сделано / открыто:** C4 (облака в RT-отражениях и IBL-захвате); тень облаков на ОКЕАНЕ
+(ocean_surface не читает карту); темпоральный пол on/on статичного кадра не мерился (правило
+плана — ≥ 3 прогона пола); паритет `cloud.enabled:0` не гонялся отдельно (пасс тогда не регистрируется,
+композ берёт ветку `cloudParams.x == 0` — тот же код, что до правки, плюс одна ветка); стоимость карты
+теней 0.23 мс против бюджета 0.1; вкус картинки (крошка на кромках, дефолты покрытия/типа/фазы).
+
 ### Гейты части C
 `cloud.enabled 0` = паритет; GBV (новые 3D-ресурсы); стоимость; глаза.
 

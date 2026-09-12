@@ -411,8 +411,15 @@ CascadeCullVolume BuildCascadeCullVolume(const std::array<float3, 8>& cornersWor
         {
             // Edge direction from far-scale geometry (see above): near-quad edges 0..3 borrow the
             // parallel far-quad edge 4..7, far-quad edges use their own, side edges 8..11 are the
-            // corner rays from the apex. The anchor is the edge's own first corner.
-            const float3& a = c[kEdges[e][2]];
+            // corner rays from the apex. The anchor is the edge's own first corner -- EXCEPT for
+            // the side edges, which are anchored at the APEX (the origin here, exactly on the ray by
+            // definition). Anchoring them at the near corner put the far corner's distance to its
+            // own edge plane at the mercy of the near corner's float error TIMES the lever arm to
+            // the far corner: measured 2026-09-12 on cascade 3 (corner at |p| ~ 530 m, ulp 6e-5),
+            // the far top-left corner sat 1.2 mm outside its side-edge plane and the self-check's
+            // "closed toward the sun" probe fired. Through the apex, d(far corner) = n . c[far] is
+            // the cross product's own rounding (~1e-4 m) and the near corner's error is not amplified.
+            const float3 a = (e >= 8) ? float3(0.0f, 0.0f, 0.0f) : c[kEdges[e][2]];
             float3 dir;
             if (e < 4)       { dir = c[kEdges[e + 4][3]] - c[kEdges[e + 4][2]]; }
             else if (e < 8)  { dir = c[kEdges[e][3]] - c[kEdges[e][2]]; }
@@ -901,7 +908,19 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
                 // the plane, and the plane is what tells the geometry from the tolerance.
                 int worstPlane = -1;
                 float worstDist = 0.0f;
-                const auto inside = [&](const float3& p)
+                float worstTol = 0.0f;
+                // THE TOLERANCE SCALES WITH THE COORDINATES. A plane test is three products of
+                // unit-normal components with world coordinates plus an offset of the same size,
+                // so its float32 rounding is a few ulps OF |p| (6e-5 m per ulp at 512 m), and a
+                // probe stepped `lever` metres toward the sun adds the normal's residual n.sun
+                // (~1e-7) times that lever. 2e-6 per metre is ~30 ulps: 2.3 mm on cascade 3's
+                // 600-metre corners, where a fixed 1 mm was exceeded by float alone (measured
+                // -1.19 mm, 2026-09-12) while a real defect of the volume is decimetres.
+                const auto tolerance = [](const float3& p, float lever)
+                {
+                    return 1e-3f + 2e-6f * (p.Length() + lever);
+                };
+                const auto inside = [&](const float3& p, float lever = 0.0f)
                 {
                     worstPlane = -1; worstDist = 1e30f;
                     for (int i = 0; i < vol.count; ++i)
@@ -910,16 +929,17 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
                         const float d = pl.x * p.x + pl.y * p.y + pl.z * p.z + pl.w;
                         if (d < worstDist) { worstDist = d; worstPlane = i; }
                     }
-                    return worstDist >= -1e-3f;
+                    worstTol = tolerance(p, lever);
+                    return worstDist >= -worstTol;
                 };
                 const auto report = [&](const char* what, int corner, const float3& p)
                 {
                     // Fatal: flushed synchronously, so the record is on disk whatever the dialog's
                     // button does to the process.
                     LOG_FATAL(logging::LogCategory::RenderShadow,
-                              "S14 cascade {}: {}  corner {}  p=({:.3f},{:.3f},{:.3f})  worst plane {}/{} dist {:.5f}  "
+                              "S14 cascade {}: {}  corner {}  p=({:.3f},{:.3f},{:.3f})  worst plane {}/{} dist {:.5f} (tol {:.5f})  "
                               "sun=({:.4f},{:.4f},{:.4f}) reach={:.1f} nearCull={:.3f} minZ~{:.3f} radius={:.3f}",
-                              idx, what, corner, p.x, p.y, p.z, worstPlane, vol.count, worstDist,
+                              idx, what, corner, p.x, p.y, p.z, worstPlane, vol.count, worstDist, worstTol,
                               sunDirWS.x, sunDirWS.y, sunDirWS.z, cascadeConfig_.casterReachWS,
                               nearCullLS, minZ, radius);
                     for (int i = 0; i < vol.count; ++i)
@@ -941,8 +961,8 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
                     const float zp = (p - eyeWS).Dot(fwd);
                     const float step = std::max(0.0f, 0.5f * (zp - nearCullLS));
                     const float3 q = p - fwd * step;
-                    if (!inside(q)) { report("closed toward the sun", ci, q); }
-                    assert(inside(q) && "S14 cull volume closed toward the sun");
+                    if (!inside(q, step)) { report("closed toward the sun", ci, q); }
+                    assert(inside(q, step) && "S14 cull volume closed toward the sun");
                 }
                 {
                     const float3 q = center + fwd * (2.0f * radius + zPad + 10.0f);
@@ -1907,6 +1927,7 @@ void Scene::PrepareViews(Renderer* renderer)
     // takes the source directly.
     frameData_.settings.heightFog = heightFog_;
     frameData_.settings.skyAtmosphere = skyAtmosphere_;
+    frameData_.settings.volumetricCloud = volumetricCloud_;
     // B6.2: THE SUN'S TRANSMITTANCE, here because this is where the frame's light is still mutable
     // and because every consumer downstream reads it through GetEffectiveColor(). UE do the same
     // thing in PrepareSunLightProxy and hand it to the light proxy, which each lighting path then

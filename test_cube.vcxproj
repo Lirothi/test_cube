@@ -360,6 +360,7 @@
     <ClCompile Include="sources/rendering/lighting/SpotLight.cpp" />
     <ClCompile Include="sources/rendering/lighting/Skybox.cpp" />
     <ClCompile Include="sources/rendering/lighting/SkyAtmosphere.cpp" />
+    <ClCompile Include="sources/rendering/lighting/VolumetricCloud.cpp" />
     <ClCompile Include="sources/rendering/meshes/GpuInstancedModels.cpp" />
     <ClCompile Include="sources/rendering/meshes/InstanceBuffer.cpp" />
     <ClCompile Include="sources/rendering/meshes/Mesh.cpp" />
@@ -566,6 +567,9 @@
     <ClInclude Include="sources/rendering/lighting/Skybox.h" />
     <ClInclude Include="sources/rendering/lighting/SkyAtmosphere.h" />
     <ClInclude Include="sources/rendering/lighting/SkyAtmosphereSettings.h" />
+    <ClInclude Include="sources/rendering/lighting/VolumetricCloud.h" />
+    <ClInclude Include="sources/rendering/lighting/VolumetricCloudSettings.h" />
+    <ClInclude Include="sources/app/scene/VolumetricCloudSettingsJson.h" />
     <ClInclude Include="sources/core/math/AABB.h" />
     <ClInclude Include="sources/core/math/OBB.h" />
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />
@@ -651,6 +655,12 @@
     <None Include="shaders\sky_ibl_capture_cs.hlsl" />
     <None Include="shaders\sky_ibl_filter_cs.hlsl" />
     <None Include="shaders\sky_lut_distant_cs.hlsl" />
+    <None Include="shaders\cloud_common.hlsli" />
+    <None Include="shaders\cloud_noise_cs.hlsl" />
+    <None Include="shaders\cloud_trace_cs.hlsl" />
+    <None Include="shaders\cloud_temporal_cs.hlsl" />
+    <None Include="shaders\cloud_shadow_cs.hlsl" />
+    <None Include="shaders\cloud_shadow_common.hlsli" />
     <None Include="shaders\sky_aerial_common.hlsli" />
     <None Include="shaders\sky_view_mapping.hlsli" />
     <None Include="shaders\skybox.hlsl" />

@@ -19,6 +19,7 @@
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneResourceBootstrapper.h"
 #include "rendering/lighting/SkyAtmosphere.h"
+#include "rendering/lighting/VolumetricCloud.h"
 #include "rendering/post/BloomRenderer.h" // R3: the bloom subsystem, a member below
 
 class Renderer;
@@ -120,6 +121,11 @@ private:
         std::uint32_t fogHzbMip = 3u; // furthest-HZB mip whose texel is one cell: log2(cell px) - 1 (base = half res)
         // A4: spots / points light the volume this frame (the knob, and there are any).
         bool fogLocalLights = false;
+        // Volumetric clouds (plan part C): the level has them, the sky is procedural and the ring
+        // targets exist; `cloudHistoryValid` = the previous slot's resolve was written last frame
+        // at this size under this camera history. Cleared again in BuildLighting if no pass registered.
+        bool volumetricCloud = false;
+        bool cloudHistoryValid = false;
         // The volume's lookup parameters, decided ONCE for every consumer (fog pass, compose,
         // ocean, glass, particles): (on, far view depth, 1/preExposure, slice count) and (B, O, S).
         Math::float4 fogVolumeParams{};
@@ -182,6 +188,9 @@ private:
         size_t pGtao = kNone;      // gbuffer  -> lighting
         size_t pSkyLuts = kNone; // B1 -> compose debug (later SkyView)
         size_t pFog = kNone;       // volumetric fog -> compose (plan part A)
+        size_t pCloudNoise = kNone;  // plan C1: seed-dirty noise set -> shadow / trace
+        size_t pCloudShadow = kNone; // plan C3: cloud shadow map -> lighting, fog
+        size_t pCloud = kNone;       // plan C2: half-res trace + resolve -> compose
         size_t pRtTrace = kNone;   // gbuffer/AS -> RT resolve (gather phase of the RT split)
         size_t pSky = kNone;       // lighting -> reflection source
         size_t pCompose = kNone;   // reflections -> transparent
@@ -288,6 +297,9 @@ private:
         uint32_t restore = 0;   // integrated NPS (its resting state, what compose samples)
     };
     void Pass_VolumetricFog(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const FogPoints& pts);
+    // Plan part C: what one frame's cloud constants are made of (camera, sun, exposure, the sky's
+    // per-frame products, the wind clock, the ring sizes); VolumetricCloud::MakeConstants is pure.
+    VolumetricCloud::FrameInputs MakeCloudInputs(Renderer* r) const;
     // Plan A7 light shafts: five dispatches under five declared points (downsample + mask, three
     // radial blurs ping-ponging the two half-res targets, the additive apply into scene colour).
     struct LightShaftPoints
@@ -551,6 +563,7 @@ private:
     // Decide / Declare / Record. Deliberately has no Reset: its kernel and sprite are assets.
     BloomRenderer bloom_;
     SkyAtmosphere skyAtmosphere_;
+    VolumetricCloud volumetricCloud_; // plan part C: noise set, shadow map, the half-res trace passes
     // R4: the RT acceleration structures (S5), the bindless table (S9) and the two caches that keep
     // their rebuild incremental, together with the build body that was Pass_BuildAS. The RT passes
     // reach them through rtAs_.Manager() / rtAs_.Bindless().
@@ -638,6 +651,12 @@ private:
     UINT fogHistoryDepth_ = 0u;
     std::uint64_t fogHistoryRevision_ = 0u;
     int fogLogged_ = -1;             // last logged (on, historyValid) state
+    // Volumetric cloud temporal history (plan part C): the same rule as the fog's.
+    uint32_t cloudHistoryFrames_ = 0u;
+    UINT cloudHistoryWidth_ = 0u;
+    UINT cloudHistoryHeight_ = 0u;
+    std::uint64_t cloudHistoryRevision_ = 0u;
+    int cloudLogged_ = -1;
     int lightShaftsLogged_ = -1;     // plan A7: last logged on/off, so the log gets the flips only
 
     // ---- PER-LEVEL / ONE-SHOT: survives frames, cleared by Reset(). ----

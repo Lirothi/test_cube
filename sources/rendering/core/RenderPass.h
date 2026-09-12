@@ -19,6 +19,8 @@ enum class RenderQueue : uint8_t {
 };
 
 enum class RenderPass : uint16_t {
+    Main_CloudNoise, // C1: the noise set, seed-dirty
+    Main_CloudShadow, // C3: the cloud shadow map from the sun, per frame
     Main_SkyDistant, // B5: isotropic ambient at 6 km
     Main_SkyEnvironment, // B4: dirty sky capture and IBL convolution
     Main_SkyAerial, // B3: per-view finite-distance atmosphere
@@ -62,6 +64,7 @@ enum class RenderPass : uint16_t {
     Main_SpotLights,
     Main_PointLights,
     Main_Skybox,
+    Main_CloudTrace, // C2: the half-res view march + temporal resolve, before compose applies it
     Main_ReflectionSource,
     Main_ReflectionTemporal, // SSR temporal resolve, between the trace and the glossy blur
     Main_ReflectionBlur,
@@ -121,6 +124,9 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
 {
     switch (pass)
     {
+    case RenderPass::Main_CloudNoise: return L"CloudNoise";
+    case RenderPass::Main_CloudShadow: return L"CloudShadow";
+    case RenderPass::Main_CloudTrace: return L"CloudTrace";
     case RenderPass::Main_SkyDistant: return L"SkyDistant";
     case RenderPass::Main_SkyEnvironment: return L"SkyEnvironment";
     case RenderPass::Main_SkyAerial: return L"SkyAerial";

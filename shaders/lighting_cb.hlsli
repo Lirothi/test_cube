@@ -126,6 +126,10 @@ cbuffer PerFrame : register(b0)
     uint skySpecMipCount;
     float skyboxIntensity;
     float _padSkySpec;
+    // Plan C3: the cloud shadow map (cloud_shadow_common.hlsli), multiplied into the sun's
+    // visibility wherever it is sampled. cloudShadowParams.x 0 = no map this frame; y = far depth km.
+    float4x4 cloudShadowViewProj;
+    float4 cloudShadowParams;
 }
 
 

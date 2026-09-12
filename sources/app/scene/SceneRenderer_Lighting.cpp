@@ -415,6 +415,13 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     // 0 is the reserved "no temporal rotation" value, so the phase runs 1..64.
     constants.smrtFrameIndex = frame_->smrtFrameIndex;
     constants.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount;
+    // Plan C3: the cloud shadow map, on the frames it was built; both consumers of this fill (the
+    // lighting pass and the fog's scatter) multiply it into the sun through the same helper.
+    if (volumetricCloud_.ShadowBuilt())
+    {
+        constants.cloudShadowViewProj = volumetricCloud_.ShadowViewProj();
+        constants.cloudShadowParams = float4(1.0f, volumetricCloud_.ShadowFarDepthKm(), 0.0f, 0.0f);
+    }
     constants.smrtScreenRayLength = vsm::g_smrtScreenRayLength;
     constants.smrtScreenRaySamples = vsm::g_smrtScreenRaySamples;
     // World -> clip for the screen-space ray. The CB carries only the inverses today, and
@@ -602,7 +609,9 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
                 pointBufferSrv,
                 (fc.local[0] && !localVsm && D.spotShadowSRV.ptr != 0) ? D.spotShadowSRV : renderer->VsmDummyTexSrv(),
                 (fc.local[1] && !localVsm && D.pointShadowSRV.ptr != 0) ? D.pointShadowSRV : renderer->VsmDummyTexSrv(),
-                skyAtmosphere_.DistantActive() ? skyAtmosphere_.DistantSrv() : renderer->VsmDummyTexSrv() }).gpu;
+                skyAtmosphere_.DistantActive() ? skyAtmosphere_.DistantSrv() : renderer->VsmDummyTexSrv(),
+                // t12: plan C3 cloud shadow map (gated by the lighting cbuffer's cloudShadowParams.x).
+                volumetricCloud_.ShadowBuilt() ? volumetricCloud_.ShadowSrv() : renderer->VsmDummyTexSrv() }).gpu;
             rc.uavTable[0] = renderer->StageSrvUavTable({ D.fogScatterUAV }).gpu;
             const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
                                                   *SamplerManager::ComparisonLinearClamp(),
@@ -766,7 +775,10 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
               (frame_->skybox && frame_->skybox->HasIbl())
                   ? frame_->skybox->GetBrdfLut()->GetSRVCPU()
                   : renderer->VsmDummyTexSrv(),
-              frame_->skybox ? frame_->skybox->EnvironmentSrv() : renderer->VsmDummyTexSrv() },
+              frame_->skybox ? frame_->skybox->EnvironmentSrv() : renderer->VsmDummyTexSrv(),
+              // t15: plan C3 cloud shadow map, gated by `cloudShadowParams.x`; the dummy keeps the
+              // VOLATILE range populated on frames without one.
+              volumetricCloud_.ShadowBuilt() ? volumetricCloud_.ShadowSrv() : renderer->VsmDummyTexSrv() },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -1031,6 +1043,10 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             1.0f / std::max(preExposure_, 1.e-8f),
             0.0f);
         constants.aerialViewProj = camera.GetViewProjMatrixNoJitter();
+        // Plan C2: the resolved clouds, applied under the fog; the debug view replaces the frame.
+        constants.cloudParams = float4(decisions_.volumetricCloud ? 1.0f : 0.0f,
+            1.0f / std::max(preExposure_, 1.e-8f),
+            decisions_.volumetricCloud ? static_cast<float>(frame_->settings.volumetricCloud.debugView) : 0.0f, 0.0f);
         // B6.2: the sky's own LUT, so the fog's in-scattering colour over a SKY pixel is the value
         // the skybox drew rather than the captured cube's 0.70-degree average of it. The same data
         // the sky pass was handed (Skybox::SetSkyAtmosphere), read back here so there is one source.
@@ -1074,7 +1090,10 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
               skyAtmosphere_.AerialBuilt() ? skyAtmosphere_.AerialSrv() : renderer->VsmDummyTexSrv(),
               // t15: B6.2 SkyView LUT, gated by `skyViewPlanet.z`; the dummy keeps the VOLATILE
               // range populated in HDRI mode, where the shader never reads it.
-              skyAtmosphere_.ViewSrv().ptr != 0 ? skyAtmosphere_.ViewSrv() : renderer->VsmDummyTexSrv() },
+              skyAtmosphere_.ViewSrv().ptr != 0 ? skyAtmosphere_.ViewSrv() : renderer->VsmDummyTexSrv(),
+              // t16/t17: plan C2 resolved clouds + front depth, gated by `cloudParams.x`.
+              decisions_.volumetricCloud ? D.cloudResolvedSRV : renderer->VsmDummyTexSrv(),
+              decisions_.volumetricCloud ? D.cloudResolvedDepthSRV : renderer->VsmDummyTexSrv() },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

@@ -24,6 +24,7 @@
 #include "app/scene/HeightFogSettingsJson.h"
 #include "app/scene/BloomSettingsJson.h"
 #include "app/scene/SkyAtmosphereSettingsJson.h"
+#include "app/scene/VolumetricCloudSettingsJson.h"
 
 // P8B: the level-wide look settings live under one "postProcess" section now. A level written
 // before that carries them as top-level sections, and must keep loading unchanged -- so this
@@ -256,6 +257,17 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             SkyAtmosphereSettingsJson::ApplyOverrides(*it, sky);
         }
         scene.SetSkyAtmosphere(sky);
+    }
+    // Plan part C: the clouds, the same shape -- the section's presence gives the level clouds, its
+    // absence leaves the struct default (off). They need the procedural sky; the renderer says so
+    // once if a level pairs them with a cubemap.
+    {
+        VolumetricCloudSettings clouds{};
+        if (const auto it = j.find("volumetricCloud"); it != j.end() && it->is_object())
+        {
+            VolumetricCloudSettingsJson::ApplyOverrides(*it, clouds);
+        }
+        scene.SetVolumetricCloud(clouds);
     }
 
     if (j.contains("skybox") && j["skybox"].contains("texture"))

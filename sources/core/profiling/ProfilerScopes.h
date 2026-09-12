@@ -98,6 +98,11 @@ extern const Profiler::ScopeNameKey kPassSkyEnvironment;
 extern const Profiler::ScopeNameKey kPassSkyAerial;
 extern const Profiler::ScopeNameKey kPassSkyView;
 extern const Profiler::ScopeNameKey kPassSkyAtmosphereLuts;
+extern const Profiler::ScopeNameKey kPassCloudNoise;    // plan C1: the noise set (seed-dirty)
+extern const Profiler::ScopeNameKey kPassCloudShadow;   // plan C3: the cloud shadow map
+extern const Profiler::ScopeNameKey kPassCloudTrace;    // plan C2: the half-res march + resolve
+extern const Profiler::ScopeNameKey kCloudTraceMarch;   // ... its march dispatch
+extern const Profiler::ScopeNameKey kCloudTraceTemporal; // ... and its temporal resolve
 extern const Profiler::ScopeNameKey kPassVolumetricFog; // plan part A: the froxel volume
 extern const Profiler::ScopeNameKey kPassLightShafts;   // plan A7: UE LightShaftBloom (5 dispatches)
 extern const Profiler::ScopeNameKey kFogScatter;        // ... its per-cell lighting dispatch

@@ -321,6 +321,8 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     // B6.2: present = this level uses the procedural atmosphere, absent = its cubemap. Same shape
     // as UE, where the SkyAtmosphere is an actor you add rather than a flag on the sky.
     addSingleton("skyAtmosphere", "skyAtmosphere", "Sky Atmosphere");
+    // Plan part C: present = this level has volumetric clouds (needs the atmosphere above).
+    addSingleton("volumetricCloud", "volumetricCloud", "Volumetric Cloud");
     // P1: photographic camera. addSingleton only materialises an entity when the section is
     // present, so a level that predates the plan gains nothing and saves back byte-identical.
     // Both of these are always in effect, so they are always listed -- see addSingletonAlways.

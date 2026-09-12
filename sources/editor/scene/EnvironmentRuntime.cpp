@@ -4,6 +4,7 @@
 #include "app/scene/HeightFogSettingsJson.h"
 #include "app/scene/BloomSettingsJson.h"
 #include "app/scene/SkyAtmosphereSettingsJson.h"
+#include "app/scene/VolumetricCloudSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -387,6 +388,12 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         SkyAtmosphereSettingsJson::ApplyOverrides(p, sky);
         ctx.scene.SetSkyAtmosphere(sky);
     }
+    else if (env.type == "volumetricCloud")
+    {
+        VolumetricCloudSettings clouds{};
+        VolumetricCloudSettingsJson::ApplyOverrides(p, clouds);
+        ctx.scene.SetVolumetricCloud(clouds);
+    }
     else if (env.type == "wind")
     {
         ApplyWind(ctx, p);
@@ -509,6 +516,10 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
         // Removing the atmosphere returns the level to its cubemap -- the state a level without
         // the section loads with.
         ctx.scene.SetSkyAtmosphere(SkyAtmosphereSettings{});
+    }
+    else if (env.type == "volumetricCloud")
+    {
+        ctx.scene.SetVolumetricCloud(VolumetricCloudSettings{}); // no section = no clouds
     }
 }
 

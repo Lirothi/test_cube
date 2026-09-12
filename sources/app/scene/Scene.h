@@ -169,6 +169,15 @@ public:
         skyAtmosphere_.lutEnabled = lutEnabled;
         skyAtmosphere_.lutValidate = lutValidate;
     }
+    // Plan part C: the clouds, the same ownership rule as the sky -- the level-authored half is
+    // replaced wholesale, the session's debug view is preserved.
+    VolumetricCloudSettings& VolumetricCloudRef() { return volumetricCloud_; }
+    void SetVolumetricCloud(const VolumetricCloudSettings& s)
+    {
+        const unsigned debugView = volumetricCloud_.debugView;
+        volumetricCloud_ = s;
+        volumetricCloud_.debugView = debugView;
+    }
 
     // P8 bloom. Same ownership rule as the two above: the SCENE copy is the source of truth and
     // SceneRenderSettings is only the per-frame transport, so the dev window, `--set` and the
@@ -183,6 +192,7 @@ public:
         renderSettings_.gtao = gtao_;
         renderSettings_.heightFog = heightFog_;
         renderSettings_.skyAtmosphere = skyAtmosphere_;
+        renderSettings_.volumetricCloud = volumetricCloud_;
         renderSettings_.bloom = bloom_;
     }
     const SceneRenderSettings& GetRenderSettings() const { return renderSettings_; }
@@ -310,6 +320,7 @@ private:
     render::ColorPipelineSettings colorPipeline_{};   // P3; see PhotographicSettings.h
     GtaoSettings gtao_{};                             // P6B; level-scoped, see GetGtao
     SkyAtmosphereSettings skyAtmosphere_{}; // B1 authoritative settings, including headless harnesses
+    VolumetricCloudSettings volumetricCloud_{}; // plan part C; same rule
     HeightFogSettings heightFog_{};                 // P7; level-scoped, see GetHeightFog
     BloomSettings bloom_{};                           // P8; level-scoped, see GetBloom
 

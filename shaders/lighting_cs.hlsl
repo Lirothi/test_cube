@@ -20,6 +20,7 @@
 #include "vsm_sample.hlsli"
 #include "csm_sample.hlsli"
 #include "caustics.hlsli"
+#include "cloud_shadow_common.hlsli"
 
 Texture2D GB0 : register(t0);
 Texture2D GB1 : register(t1);
@@ -48,6 +49,8 @@ Texture2D GtaoTex : register(t11);
 TextureCube SkySpecular : register(t12);
 Texture2D BrdfLut : register(t13);
 TextureCube SkyboxTex : register(t14);
+// t15: plan C3, the cloud shadow map (dummy when no clouds; `cloudShadowParams.x` gates the read).
+Texture2D<float4> CloudShadowMap : register(t15);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -236,9 +239,17 @@ CausticsParams LoadCausticsParams()
     return p;
 }
 
+// Plan C3: the cloud's shadow on the sun, from the cloud shadow map (cloud_shadow_common.hlsli).
+// 1 when the level has no clouds or the map was not built this frame.
+float CloudSunVisibility(float3 P)
+{
+    if (cloudShadowParams.x == 0.0f) { return 1.0f; }
+    return CloudShadowTransmittance(P, cloudShadowViewProj, cloudShadowParams.y, CloudShadowMap, gSmpLinearClamp);
+}
+
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
@@ -369,7 +380,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // and same shadow as DefaultLit.
         if (fr.NdotL > 0.0)
         {
-            float shadow = SampleSunShadow(P, N, fr.NdotL, csmCascade, dispatchThreadId.xy);
+            float shadow = SampleSunShadow(P, N, fr.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
             const float3 specSun = fr.specBRDF * (1.0 + metal * sunMetalSpec * 1);
             color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow * causticsGain;
         }
@@ -385,7 +396,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             // Separate index, discarded: the transmission lobe samples with a flipped normal and
             // must not decide which cascade the debug tint reports for this pixel.
             int transCascade;
-            float shadowT = SampleSunShadow(P, -N, saturate(dot(-N, L)), transCascade, dispatchThreadId.xy);
+            float shadowT = SampleSunShadow(P, -N, saturate(dot(-N, L)), transCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
             color += fr.transBRDF * lightRgb * shadowT;
         }
     }
@@ -395,7 +406,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (br.NdotL > 0.0)
         {
             // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
-            float shadow = SampleSunShadow(P, N, br.NdotL, csmCascade, dispatchThreadId.xy);
+            float shadow = SampleSunShadow(P, N, br.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
             // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
             // highlight reads against the environment reflection. metal=0 -> no change.
             const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);

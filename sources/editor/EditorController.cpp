@@ -3,6 +3,7 @@
 #include "core/diagnostics/BootProfile.h"
 #include "app/scene/GtaoSettingsJson.h"
 #include "app/scene/SkyAtmosphereSettingsJson.h"
+#include "app/scene/VolumetricCloudSettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -372,6 +373,17 @@ namespace
         sky.properties = SkyAtmosphereSettingsJson::ToJson(SkyAtmosphereSettings{});
         sky.properties["enabled"] = true;
         return sky;
+    }
+
+    // Plan part C: the clouds, the same shape as the atmosphere they need.
+    EditorObject BuildVolumetricCloudObject()
+    {
+        EditorObject clouds;
+        clouds.name = "Volumetric Cloud";
+        clouds.type = "volumetricCloud";
+        clouds.properties = VolumetricCloudSettingsJson::ToJson(VolumetricCloudSettings{});
+        clouds.properties["enabled"] = true;
+        return clouds;
     }
 
     EditorObject BuildWindObject()
@@ -3710,6 +3722,13 @@ void EditorController::Draw(
                 {
                     commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                         BuildSkyAtmosphereObject()));
+                }
+                const bool hasVolumetricCloud = HasEnvironmentObject(document_, "volumetricCloud");
+                if (MenuItemWithDisabledReason("Volumetric Cloud", !hasVolumetricCloud,
+                        "This level already has volumetric clouds."))
+                {
+                    commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
+                        BuildVolumetricCloudObject()));
                 }
                 const bool hasWind = HasEnvironmentObject(document_, "wind");
                 if (MenuItemWithDisabledReason("Wind", !hasWind,

@@ -120,6 +120,14 @@ public:
         // (light, transmittance) that compose / the ocean / glass sample by view depth.
         GpuResource fogScatter;
         GpuResource fogIntegrated;
+        // Plan C2 volumetric clouds, half the render resolution: the raw march (pre-exposed
+        // luminance + transmittance, and the cloud's front depth in km) and its temporal resolve,
+        // which compose samples and which is next frame's history (the previous slot's copy, like
+        // gtaoHistory / fogScatter). Compute-only, rest NON_PIXEL.
+        GpuResource cloudTrace;
+        GpuResource cloudTraceDepth;
+        GpuResource cloudResolved;
+        GpuResource cloudResolvedDepth;
         // Plan A7 light shafts: UE LightShaftBloom's two half-res ping-pong targets (downsample+mask
         // into A, three radial blurs A->B->A->B, B added into scene colour). Compute-only, rest NPS.
         GpuResource lightShaftA;
@@ -198,6 +206,11 @@ public:
         // Volumetric fog volumes (3D): SRV over the whole volume + one UAV, and the grid they hold.
         D3D12_CPU_DESCRIPTOR_HANDLE fogScatterSRV{}, fogScatterUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE fogIntegratedSRV{}, fogIntegratedUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE cloudTraceSRV{}, cloudTraceUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE cloudTraceDepthSRV{}, cloudTraceDepthUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE cloudResolvedSRV{}, cloudResolvedUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE cloudResolvedDepthSRV{}, cloudResolvedDepthUAV{};
+        UINT cloudWidth = 1, cloudHeight = 1;
         UINT fogGridWidth = 1, fogGridHeight = 1, fogGridDepth = 1;
         // Plan A7 light shafts (half the render resolution).
         D3D12_CPU_DESCRIPTOR_HANDLE lightShaftASRV{}, lightShaftAUAV{};
@@ -249,6 +262,8 @@ public:
         DXGI_FORMAT hzb;                // P6C hierarchical depth
         DXGI_FORMAT fog;                // volumetric fog froxel volumes (RGBA16F)
         DXGI_FORMAT lightShaft;         // plan A7 light shaft targets (UE PF_FloatRGB)
+        DXGI_FORMAT cloud;              // plan C2 cloud trace / resolve (RGBA16F)
+        DXGI_FORMAT cloudDepth;         // plan C2 cloud front depth (R16F, km)
         DXGI_FORMAT bloom;              // P8 bloom pyramid (HDR)
         DXGI_FORMAT bloomFft;           // P8C convolution grid (complex, 32-bit)
         DXGI_FORMAT debugPreview;       // texture-inspector preview (RGBA8)
@@ -265,6 +280,8 @@ public:
         UINT fogGridWidth = 1, fogGridHeight = 1, fogGridDepth = 1;
         // Plan A7 light shafts: half the render resolution (UE r.LightShaftDownSampleFactor 2).
         UINT lightShaftWidth = 1, lightShaftHeight = 1;
+        // Plan C2 volumetric clouds: half the render resolution (UE r.VolumetricRenderTarget.Mode 0).
+        UINT cloudWidth = 1, cloudHeight = 1;
         // P8 mip 0, half the DISPLAY resolution: bloom runs after the upscaler, so it is sized off
         // the image the tonemap actually reads, not off the internal render target.
         UINT bloomWidth = 1, bloomHeight = 1;
@@ -338,6 +355,9 @@ private:
     LightShaftA, LightShaftAUAV, LightShaftB, LightShaftBUAV,
     // The ocean reflection's temporal history.
     OceanReflectionHistory, OceanReflectionHistoryUAV,
+    // Plan C2 volumetric clouds: the half-res march and its resolve, each with its depth.
+    CloudTrace, CloudTraceUAV, CloudTraceDepth, CloudTraceDepthUAV,
+    CloudResolved, CloudResolvedUAV, CloudResolvedDepth, CloudResolvedDepthUAV,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 
