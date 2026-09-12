@@ -2081,10 +2081,22 @@ namespace
             dragF("Detail Strength", "detailStrength", 0.35f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("How much the small Worley noise erodes the base shape: 0 keeps blobby "
                           "primitives, higher carves wisps at the bottom and cauliflower at the top.");
-            dragF("Evolution Speed", "evolutionSpeed", 0.0f, 0.01f, 0.0f, 10.0f, "%.2f tiles/min");
-            InspectorHelp("Moves the detail noise through the main cloud shape, changing its edges. "
-                          "0 keeps the original shape; requires nonzero Detail Strength. Works without wind. "
-                          "Uses the shared clock, so --wind-freeze also freezes evolution.");
+            dragF("Weather Distortion Strength", "weatherDistortionStrength", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("Bends the coverage and cloud-type map with a moving noise field, allowing "
+                          "the large cloud boundaries to change. Strength is horizontal "
+                          "displacement in weather-map tiles; try 0.1. 0 preserves the original map. "
+                          "Use Shape Distortion Tile and Speed to control its scale and animation. "
+                          "A fully uniform overcast coverage field has no gaps to deform.");
+            dragF("Shape Distortion Tile (km)", "shapeDistortionTileKm", 6.0f, 0.1f, 0.1f, 1000.0f, "%.1f");
+            InspectorHelp("Repeat distance of the distortion texture. Larger values make broader bends; "
+                          "smaller values break the shape into finer folds. Increasing this value does "
+                          "not increase strength. Follows Base Vertical Tiles "
+                          "so thin cloud layers also deform through their height.");
+            dragF("Shape Distortion Speed", "shapeDistortionSpeed", 0.15f, 0.01f, 0.0f, 10.0f, "%.2f tiles/min");
+            InspectorHelp("Animates the distortion field independently of wind. With nonzero Weather "
+                          "Distortion Strength this changes the large cloud boundaries. 0 holds a static warp "
+                          "that travels with the wind. Changing speed rephases the animation; "
+                          "--wind-freeze freezes it together with the cloud shadows and reflections.");
             dragF("Base Tile (km)", "baseTileKm", 6.0f, 0.1f, 0.1f, 100.0f, "%.1f");
             InspectorHelp("World period of the base noise, i.e. the size of the largest lumps.");
             dragF("Base Vertical Tiles", "baseVerticalTiles", 1.0f, 0.05f, 0.1f, 100.0f, "%.2f");

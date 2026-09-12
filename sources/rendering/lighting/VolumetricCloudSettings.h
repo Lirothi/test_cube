@@ -27,7 +27,10 @@ struct VolumetricCloudSettings
     float extinctionScale = 0.05f;  // extinction at full density, 1/m (real cumulus 0.04-0.1)
     float albedo = 0.95f;           // single-scattering albedo of the droplets
     float detailStrength = 0.35f;   // how much the Worley detail erodes the base shape
-    float evolutionSpeed = 0.0f;    // relative detail drift in texture tiles/minute; 0 preserves the static shape
+    // Animated domain warp of the weather map; independent of bulk wind.
+    float weatherDistortionStrength = 0.0f; // horizontal weather displacement in weather texture tiles; 0 disables
+    float shapeDistortionTileKm = 6.0f;   // distortion texture period, before the base's vertical compression
+    float shapeDistortionSpeed = 0.15f;   // relative distortion drift, texture tiles/minute; 0 holds the warp
     float baseTileKm = 6.0f;        // world period of the 128^3 base noise (horizontally)
     // How many layer heights one base tile spans VERTICALLY, at most. A 6 km tile through a 0.5 km
     // layer barely changes with height, so the density is the weather map extruded into columns,
@@ -114,6 +117,7 @@ struct VolumetricCloudConstants
     float temporal[4];    // history valid, history weight, exposure ratio, frame index
     float shadowMap[4];   // resolution, 1/resolution, far depth km, strength
     float shadowMap2[4];  // sample count, depth bias km, base vertical compression, overcast
-    float evolution[4];  // xyz: wrapped detail-only offset in texture UVW, w: unused
+    float distortion[4]; // x: weather strength (UV), y: 1/distortion tile km, zw: unused
+    float distortionOffset[4]; // xyz: wrapped distortion offset in texture UVW, w: unused
 };
-static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 17 * 16, "CloudCB layout");
+static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 18 * 16, "CloudCB layout");

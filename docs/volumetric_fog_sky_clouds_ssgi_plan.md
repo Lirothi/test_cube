@@ -2040,21 +2040,28 @@ opaque/cloud shadows».
 до самого верха атмосферы. У UE SkyAtmosphere ровно так же; играбельная ночь — отдельный слой.
 
 
-### Cloud detail evolution — код (2026-09-12), без прогонов
+### Cloud weather distortion — current implementation (2026-09-12), no runs
 
-* Inspector → Volumetric Cloud → Evolution Speed; JSON `volumetricCloud.evolutionSpeed`,
-  CLI `--set=cloud.evolutionSpeed:<value>`. Диапазон 0–10 тайлов detail noise в минуту,
-  default 0 сохраняет прежнюю форму. Ручка сохранена в общей JSON-схеме, доступна через undo/reset инспектора.
-* Собственная анимация density model: базовая форма и weather движутся прежним ветром,
-  детальный Worley дополнительно сдвигается по направлению (0.36, 0.80, 0.48) в UVW.
-  Нужен Detail Strength > 0. Это изменение эрозии краёв, не моделирование роста и распада
-  крупных облаков. Дополнительных texture samples или пересоздания noise textures нет.
-* Фаза = shared wind time × speed / 60; покомпонентный modulo 1 вычисляется на CPU в double.
-  Бесшовный wrap сохраняет непрерывность при переходе через границу тайла; при speed 0 offset=0.
-  Работает с windKmH=0, `--wind-freeze` фиксирует и перенос, и эволюцию. Изменение скорости
-  переопределяет фазу относительно общего времени, как существующая ручка скорости ветра.
-* Общий CloudCB расширен на один float4 перед appended SkyAtmosphereCB; CPU layout/static_assert
-  обновлены вместе с HLSL. View, self-shadow, shadow map и C4 environment получают одинаковый
-  offset из MakeConstants. C4 уже обновляется по изменению shared clock (раз в 4 кадра),
-  в том числе при нулевой скорости переноса; новый параметр также входит в settings dirty key.
-* По запросу пользователя сборки, shader check и рендер-прогоны не запускались.
+* Weather Distortion Strength deforms coverage and cloud type before density evaluation. The
+  moving 3D Worley field bends the weather map horizontally, with variation through cloud height.
+  Layer bounds, base noise coordinates and ordinary detail erosion remain unchanged.
+* Inspector -> Volumetric Cloud: Weather Distortion Strength (0..1, default 0), Shape Distortion
+  Tile (0.1..1000 km, default 6), Shape Distortion Speed (0..10 tiles/min, default 0.15).
+  JSON keys: `weatherDistortionStrength`, `shapeDistortionTileKm`, `shapeDistortionSpeed` under
+  `volumetricCloud`; CLI uses the same names under `--set=cloud.<name>:<value>`. Inspector undo/reset
+  and level persistence use the shared settings mapping. The owner's 1000 km limit is retained.
+* Strength is displacement in weather texture tiles. One sample of the existing detail volume
+  supplies R/B channels for X/Z displacement: clamp((noise - 0.48) * 2, -1, 1) * strength.
+  Distortion coordinates use the base's vertical compression, preserving height variation in thin
+  layers. Strength 0 skips the distortion sample and preserves the original weather coordinates.
+* Phase uses shared wind time * speed / 60 along (0.80, 0.48, -0.36), wrapped per axis in double
+  before upload. Works with zero wind; --wind-freeze holds it. Speed 0 gives a static wind-carried
+  warp; editing speed rephases the animation. View, self-shadow, shadow map and C4 capture all
+  use the same density function and constants; C4 refresh remains driven by the shared clock.
+* Removed the earlier detail-drift and base-coordinate-deformation features at the owner's request,
+  including their settings, JSON/CLI entries, CPU phase/amplitude calculations and HLSL operations.
+  Removed the detail-animation float4 from both CloudCB layouts; updated the size assertion.
+  Removed the obsolete saved detail-animation key from wind_test.json. Weather distortion retains
+  its existing phase and amplitude, using cloudDistortion.x for strength and .y for inverse tile.
+* This is procedural deformation, not a physical growth/dissipation simulation. Uniform overcast
+  coverage has no coverage boundaries to deform. No builds, shader checks or render runs were made.

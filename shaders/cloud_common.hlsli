@@ -46,7 +46,8 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 cloudTemporal;    // x: history valid, y: history weight, z: preExposure / previous preExposure, w: frame index
     float4 cloudShadowMap;   // x: resolution, y: 1 / resolution, z: far depth (km), w: strength
     float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), z: base noise vertical compression (>= 1), w: overcast (0..1)
-    float4 cloudEvolution;  // xyz: detail-only offset in texture UVW, w: unused
+    float4 cloudDistortion; // x: weather strength (UV), y: 1/distortion tile km, zw: unused
+    float4 cloudDistortionOffset; // xyz: distortion offset in texture UVW, w: unused
 #ifdef CLOUD_WITH_SKY_CB
     // The sky's SkyAtmosphereCB (sky_atmosphere.hlsli, its SKY_VIEW layout), appended for the one
     // pass that needs both -- the environment capture composites the cloud INTO the sky
@@ -233,13 +234,34 @@ struct CloudSample
     float coverage;   // the weather map's coverage after the knob (debug view 1)
 };
 
+// Animated weather-map domain warp. Sample the same R/B Worley channels and coordinates as
+// before, but only compute the horizontal displacement needed by coverage and cloud type.
+// The 3D field bends weather boundaries through height; base noise coordinates stay undeformed.
+float2 CloudWeatherCoordinates(float3 shapeKm, float2 weatherUV)
+{
+    [branch] if (cloudDistortion.x > 0.0f)
+    {
+        const float2 noise = CloudDetailNoise.SampleLevel(CloudLinearWrap,
+            shapeKm * cloudDistortion.y + cloudDistortionOffset.xyz, 0).rb;
+        // Worley channels have mean ~0.48; remove the mean translation and bound each axis.
+        const float2 displacement = clamp((noise - 0.48f) * 2.0f, -1.0f, 1.0f);
+        weatherUV += displacement * cloudDistortion.x;
+    }
+    return weatherUV;
+}
+
 // The cheap half: weather + base shape. `conservative` > 0 means "medium may be here"; the detail
 // erosion is only paid when it is (UE's VolumeSampleConservativeDensity, usf:781-787). The wind
-// offset drifts the whole field rigidly with the level's wind.
+// offset drifts the whole field with the level's wind. Evaluate the warp here too: empty-space
+// decisions must use the same warped weather as the full view, self-shadow, map and capture samples.
 float CloudBaseDensity(float3 worldMetres, float normAlt, out float coverageOut, out float typeOut)
 {
     const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm; // km, drifting
-    const float4 weather = CloudSampleWeather(p.xz * cloudShape.z);
+    const float3 shapeKm = float3(p.x, p.y * cloudShadowMap2.z, p.z);
+    const float3 baseCoordinates = shapeKm * cloudShape.x;
+    // Warp before ALL weather interpretation: coverage, type and conservative density agree.
+    const float2 weatherCoordinates = CloudWeatherCoordinates(shapeKm, p.xz * cloudShape.z);
+    const float4 weather = CloudSampleWeather(weatherCoordinates);
     // The coverage knob is a THRESHOLD on the weather field: 0 clears the sky, 1 lets every part of
     // the field through in proportion -- and no further: a third of the procedural map is zero after
     // its contrast stretch, so coverage 1 is "the map as drawn", not a closed sky (owner,
@@ -260,7 +282,7 @@ float CloudBaseDensity(float3 worldMetres, float normAlt, out float coverageOut,
     // heights (cloudShadowMap2.z, >= 1): a 6 km tile through a 0.5 km layer is otherwise constant
     // with height, the density becomes the weather map extruded into columns, and a grazing ray
     // integrates the columns along itself into radial streaks. Flat cells instead of columns.
-    const float4 base = CloudBaseNoise.SampleLevel(CloudLinearWrap, float3(p.x, p.y * cloudShadowMap2.z, p.z) * cloudShape.x, 0);
+    const float4 base = CloudBaseNoise.SampleLevel(CloudLinearWrap, baseCoordinates, 0);
     const float lowFreqFbm = base.g * 0.625f + base.b * 0.25f + base.a * 0.125f;
     float baseCloud = saturate(CloudRemap(base.r, -(1.0f - lowFreqFbm), 1.0f, 0.0f, 1.0f));
     baseCloud *= CloudHeightGradient(normAlt, type);
@@ -286,9 +308,7 @@ CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight)
     s.extinction = 0.0f;
     if (base <= 0.0f) { return s; }
     const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm;
-    // Relative detail drift changes the eroded edges without translating the base/weather.
-    // Shared by the view, sun shadow march/map and environment capture; no extra noise samples.
-    const float4 detail = CloudDetailNoise.SampleLevel(CloudLinearWrap, p * cloudShape.y + cloudEvolution.xyz, 0);
+    const float4 detail = CloudDetailNoise.SampleLevel(CloudLinearWrap, p * cloudShape.y, 0);
     const float pointFbm = detail.r * 0.625f + detail.g * 0.25f + detail.b * 0.125f;
     const float highFreqFbm = lerp(kCloudDetailMean, pointFbm, saturate(detailWeight));
     // Wispy at the bottom of the cloud, billowy towards the top.

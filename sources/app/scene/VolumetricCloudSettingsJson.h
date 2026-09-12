@@ -25,7 +25,9 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.extinctionScale = std::clamp(j.value("extinctionScale", s.extinctionScale), 0.0f, 1.0f);
     s.albedo = std::clamp(j.value("albedo", s.albedo), 0.0f, 1.0f);
     s.detailStrength = std::clamp(j.value("detailStrength", s.detailStrength), 0.0f, 1.0f);
-    s.evolutionSpeed = std::clamp(j.value("evolutionSpeed", s.evolutionSpeed), 0.0f, 10.0f);
+    s.weatherDistortionStrength = std::clamp(j.value("weatherDistortionStrength", s.weatherDistortionStrength), 0.0f, 1.0f);
+    s.shapeDistortionTileKm = std::clamp(j.value("shapeDistortionTileKm", s.shapeDistortionTileKm), 0.1f, 1000.0f);
+    s.shapeDistortionSpeed = std::clamp(j.value("shapeDistortionSpeed", s.shapeDistortionSpeed), 0.0f, 10.0f);
     s.baseTileKm = std::clamp(j.value("baseTileKm", s.baseTileKm), 0.1f, 100.0f);
     s.baseVerticalTiles = std::clamp(j.value("baseVerticalTiles", s.baseVerticalTiles), 0.1f, 100.0f);
     s.detailTileKm = std::clamp(j.value("detailTileKm", s.detailTileKm), 0.01f, 10.0f);
@@ -70,7 +72,9 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["extinctionScale"] = s.extinctionScale;
     j["albedo"] = s.albedo;
     j["detailStrength"] = s.detailStrength;
-    j["evolutionSpeed"] = s.evolutionSpeed;
+    j["weatherDistortionStrength"] = s.weatherDistortionStrength;
+    j["shapeDistortionTileKm"] = s.shapeDistortionTileKm;
+    j["shapeDistortionSpeed"] = s.shapeDistortionSpeed;
     j["baseTileKm"] = s.baseTileKm;
     j["baseVerticalTiles"] = s.baseVerticalTiles;
     j["detailTileKm"] = s.detailTileKm;
