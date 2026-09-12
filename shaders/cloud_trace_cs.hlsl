@@ -43,12 +43,22 @@ SamplerState gSmpLinearClamp : register(s1);
 // The value a texel with no cloud in front of anything carries: far, and inside FP16.
 static const float kCloudNoDepthKm = 60000.0f;
 
-// Jimenez interleaved gradient noise, rotated per frame by the R2 sequence so the start offset
-// decorrelates across the temporal history (UE use a blue-noise texture indexed by StateFrameIndexMod8).
+// The start offset's noise, per pixel and per frame. UE use a blue-noise texture indexed by
+// StateFrameIndexMod8; we have no blue-noise asset. This is the canonical TEMPORAL interleaved
+// gradient noise: a FIXED spatial IGN phase plus the golden ratio times the frame index. Two
+// versions came before it and both were measured wrong (owner, 2026-09-12):
+//   * IGN TRANSLATED by a fixed diagonal vector every frame -- IGN is a hatch, its values run in
+//     lines, and a long history averaged the moving hatch into broad diagonal bands across every
+//     thick cloud;
+//   * white noise from an integer hash -- no bands, but three times the temporal sigma (0.14 ->
+//     0.48 codes): a random sequence per pixel converges as 1/sqrt(N).
+// The golden-ratio sequence per pixel is the best-distributed 1D sequence there is (error ~ 1/N),
+// so the accumulation converges fastest, and nothing moves spatially, so there is no direction
+// for the resolve to smear the hatch along -- it fades out with the history instead.
 float CloudStartNoise(uint2 pixel, float frame)
 {
-    const float2 p = float2(pixel) + frame * float2(0.7548776662f, 0.5698402910f) * 64.0f;
-    return frac(52.9829189f * frac(dot(p, float2(0.06711056f, 0.00583715f))));
+    const float ign = frac(52.9829189f * frac(dot(float2(pixel), float2(0.06711056f, 0.00583715f))));
+    return frac(ign + 0.61803398875f * frame);
 }
 
 [numthreads(8, 8, 1)]
