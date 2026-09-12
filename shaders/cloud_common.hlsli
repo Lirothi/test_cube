@@ -46,6 +46,7 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 cloudTemporal;    // x: history valid, y: history weight, z: preExposure / previous preExposure, w: frame index
     float4 cloudShadowMap;   // x: resolution, y: 1 / resolution, z: far depth (km), w: strength
     float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), z: base noise vertical compression (>= 1), w: overcast (0..1)
+    float4 cloudEvolution;  // xyz: detail-only offset in texture UVW, w: unused
 #ifdef CLOUD_WITH_SKY_CB
     // The sky's SkyAtmosphereCB (sky_atmosphere.hlsli, its SKY_VIEW layout), appended for the one
     // pass that needs both -- the environment capture composites the cloud INTO the sky
@@ -285,7 +286,9 @@ CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight)
     s.extinction = 0.0f;
     if (base <= 0.0f) { return s; }
     const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm;
-    const float4 detail = CloudDetailNoise.SampleLevel(CloudLinearWrap, p * cloudShape.y, 0);
+    // Relative detail drift changes the eroded edges without translating the base/weather.
+    // Shared by the view, sun shadow march/map and environment capture; no extra noise samples.
+    const float4 detail = CloudDetailNoise.SampleLevel(CloudLinearWrap, p * cloudShape.y + cloudEvolution.xyz, 0);
     const float pointFbm = detail.r * 0.625f + detail.g * 0.25f + detail.b * 0.125f;
     const float highFreqFbm = lerp(kCloudDetailMean, pointFbm, saturate(detailWeight));
     // Wispy at the bottom of the cloud, billowy towards the top.

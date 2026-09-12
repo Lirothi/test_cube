@@ -14042,6 +14042,7 @@
     "detailTileKm": 1.0,
     "distanceToSampleCountMaxKm": 15.0,
     "enabled": true,
+    "evolutionSpeed": 0.5,
     "extinctionScale": 0.029999999329447746,
     "historyWeight": 0.8999999761581421,
     "layerBottomKm": 1.5,

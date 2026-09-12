@@ -2081,6 +2081,10 @@ namespace
             dragF("Detail Strength", "detailStrength", 0.35f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("How much the small Worley noise erodes the base shape: 0 keeps blobby "
                           "primitives, higher carves wisps at the bottom and cauliflower at the top.");
+            dragF("Evolution Speed", "evolutionSpeed", 0.0f, 0.01f, 0.0f, 10.0f, "%.2f tiles/min");
+            InspectorHelp("Moves the detail noise through the main cloud shape, changing its edges. "
+                          "0 keeps the original shape; requires nonzero Detail Strength. Works without wind. "
+                          "Uses the shared clock, so --wind-freeze also freezes evolution.");
             dragF("Base Tile (km)", "baseTileKm", 6.0f, 0.1f, 0.1f, 100.0f, "%.1f");
             InspectorHelp("World period of the base noise, i.e. the size of the largest lumps.");
             dragF("Base Vertical Tiles", "baseVerticalTiles", 1.0f, 0.05f, 0.1f, 100.0f, "%.2f");

@@ -272,6 +272,20 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in)
     // The field moves WITH the wind, so the sample point moves against it.
     const float driftM = s.windKmH / 3.6f * in.windTime;
     c.wind[0] = -in.windDirXZ.x * driftM; c.wind[1] = 0.0f; c.wind[2] = -in.windDirXZ.y * driftM; c.wind[3] = s.tracingStartMaxDistanceKm;
+    // Our density-model animation: detail slides through the unchanged weather/base fields.
+    // All consumers call MakeConstants with the same freezable wind clock, including C4.
+    // Bound each texture coordinate separately; wrap sampling makes these boundaries continuous.
+    // Compute in double before reducing modulo one, to avoid growing float UV offsets.
+    if (s.evolutionSpeed > 0.0f && std::isfinite(s.evolutionSpeed) && std::isfinite(in.windTime))
+    {
+        const double travel = static_cast<double>(in.windTime) * std::min(s.evolutionSpeed, 10.0f) / 60.0;
+        constexpr double direction[3] = {0.36, 0.80, 0.48}; // unit length, non-axis-aligned
+        for (unsigned axis = 0; axis < 3; ++axis)
+        {
+            const double offset = travel * direction[axis];
+            c.evolution[axis] = static_cast<float>(offset - std::floor(offset));
+        }
+    }
     c.output[0] = static_cast<float>(in.outputWidth); c.output[1] = static_cast<float>(in.outputHeight);
     c.output[2] = in.preExposure; c.output[3] = 1.0f / std::max(in.preExposure, 1.0e-8f);
     c.depth[0] = static_cast<float>(in.depthWidth); c.depth[1] = static_cast<float>(in.depthHeight);

@@ -105,7 +105,7 @@ private:
     UINT cbBytes_ = 0;
     // C4: the environment capture material and the key of the last capture. The cube refreshes when
     // the settings, the noise or the distant light changed, and otherwise at most every
-    // kCaptureIntervalFrames while the clouds drift (wind) or the probe moves (the camera): a still
+    // kCaptureIntervalFrames while the clouds drift/evolve (shared wind clock) or the probe moves: a still
     // scene with frozen wind never recaptures (B4's rule).
     static constexpr unsigned kCaptureIntervalFrames = 4;
     static constexpr float kCaptureMoveMetres = 10.0f;

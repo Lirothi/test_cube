@@ -617,6 +617,7 @@ namespace
                 { "layerBottomKm", &c.layerBottomKm, 0.1f, 20.0f }, { "layerHeightKm", &c.layerHeightKm, 0.1f, 20.0f },
                 { "coverage", &c.coverage, 0.0f, 1.0f }, { "overcast", &c.overcast, 0.0f, 1.0f }, { "cloudType", &c.cloudType, -1.0f, 1.0f },
                 { "extinctionScale", &c.extinctionScale, 0.0f, 1.0f }, { "albedo", &c.albedo, 0.0f, 1.0f },
+                { "evolutionSpeed", &c.evolutionSpeed, 0.0f, 10.0f },
                 { "detailStrength", &c.detailStrength, 0.0f, 1.0f }, { "baseTileKm", &c.baseTileKm, 0.1f, 100.0f },
                 { "baseVerticalTiles", &c.baseVerticalTiles, 0.1f, 100.0f },
                 { "detailTileKm", &c.detailTileKm, 0.01f, 10.0f }, { "weatherTileKm", &c.weatherTileKm, 1.0f, 1000.0f },
