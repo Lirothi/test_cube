@@ -580,8 +580,8 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             for (auto& r : environment_) ctx.Use(r.Get(), kRest);
             environmentReady_ = true; environmentParameters_ = params; environmentKey_ = view;
             environmentOverlayActive_ = ov.material != nullptr;
-            LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI{}",
-                      ++environmentBuilds_, ov.material ? ", cloud overlay" : "");
+            //LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI{}",
+            //          ++environmentBuilds_, ov.material ? ", cloud overlay" : "");
             return [this, renderer, params, view, points, ov](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyEnvironment);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);

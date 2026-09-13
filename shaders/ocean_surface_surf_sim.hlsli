@@ -785,7 +785,7 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     float3 color = DeepScatterColor(depthScale) * waterLight;
 
     float3 sssColor = SssColor(depthScale);
-    color += sssColor * saturate(sss.x + sss.y) * waterLight;
+    color += sssColor * saturate(sss.x + sss.y) * waterLight * bodyShadow;
     
     //return color;
 
