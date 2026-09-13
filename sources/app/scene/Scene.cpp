@@ -2329,7 +2329,26 @@ void Scene::Render(Renderer* renderer) {
     if (renderer->ConsumeMaterialHotReloadFlag())
     {
         sceneRenderer_.RefreshMaterialHandles(renderer, objects_, skyBox_.get());
-        shadowGpu_.InvalidateGroupMaterials(); // S4: the registry caches per-group PSOs
+        // THE MEGA BUFFER IS WHY THIS IS A FULL REBUILD AND NOT `InvalidateGroupMaterials`.
+        //
+        // That call only set `rebuildPending_`, so the next `UpdateForFrame` ran
+        // `ShadowGpuData::Rebuild` -- which CLEARS `megaReady_` and does not put it back, because
+        // the consolidated VB/IB is only ever built by `EnsureMegaBuffer`, and that needs a
+        // GPU-idle upload batch. `VirtualShadowMap::RecordPageRender` then falls back to the
+        // per-page loop (pool pages x mesh-groups x bind VB/IB + ExecuteIndirect) and STAYS there
+        // for the rest of the session. Measured on `wind_test` by touching an ocean shader
+        // mid-run: Pass_VsmPageRender CPU 0.47 ms -> 5.24 ms, with the engine's own
+        // "[VSM] single-draw page render OFF: mega buffer unavailable" warning one millisecond
+        // after the rebuild line.
+        //
+        // This is the same failure the editor's spawn preview hit (ViewportGizmo) and the
+        // shadow-LOD-bias slider hit (ReconcileShadowLodCurve); both already route through
+        // RebuildShadowCasters, which is called from THIS phase of the frame two lines above.
+        // A shader reload is the third trigger, and it was the one nobody wired.
+        //
+        // The ForceContentRefreshNextFrame inside is not incidental either: the cached VSM pages
+        // were rasterised with the shaders that just changed.
+        RebuildShadowCasters(*renderer);
     }
 
     lightManager_.UpdateSpotLightCache();

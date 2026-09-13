@@ -1737,7 +1737,6 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     RebuildCullDescriptors(renderer);
     RebuildUnifiedDescriptors(renderer); // Step 2: per-region SRVs onto the unified buffers
     valState_ = 0; // re-validate after a caster-set change
-    rebuildPending_ = false;
 
     char buf[352];
     std::snprintf(buf, sizeof(buf),
@@ -1776,7 +1775,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
     // the static count unchanged but must re-run Rebuild (else groupMesh_/giCasters_ dangle). The
     // instances_/bounds_ rings are sized to the static count only (GI lives in the unified buffers).
     if (!instances_.Valid() || !bounds_.Valid() || newStatic != staticCount_ ||
-        newGiInstances != giFoldableInstances_ || rebuildPending_ ||
+        newGiInstances != giFoldableInstances_ ||
         newStatic > instances_.capacity || newStatic > bounds_.capacity)
     {
         Rebuild(renderer, objects);

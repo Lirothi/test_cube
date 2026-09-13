@@ -660,7 +660,17 @@ float3 LitFoamColor(const LightingInput li, const FoamData foamData)
     // foam is the one thing the ocean lights with the sky. The directional term stays: it is a
     // shape (upward-facing foam sees more sky), not a strength.
     float3 skyAmbient = SkyFillRadiance(foamData.normal) * (1.0f + 0.3f * (1.0f - foamData.normal.y));
-    return foamData.albedo * foamTint.rgb * (ndotl * li.mainLight.color + skyAmbient);
+    // THE TWO HALVES OF THIS SUM MUST BE THE SAME QUANTITY, and `kInvPi` is what makes them so.
+    // `skyAmbient` is already a RADIANCE -- SkyFillRadiance reads the cosine-convolved irradiance
+    // cube, E/pi, which is why Refraction's comment calls it "E/pi in the sun colour's units".
+    // `li.mainLight.color` is the opposite: an ILLUMINANCE, the same `GetEffectiveColor()` lux that
+    // lighting_cs binds as `lightRgb`. Adding one to the other without the 1/pi made the sun half
+    // pi times the sky half, and pi times what every other diffuse surface in the engine gets --
+    // the Lambertian everywhere else is `albedo * kInvPi * NdotL * lightRgb` (`utils.hlsli:301`
+    // feeding `lighting_cs.hlsl:385`). Foam is near-white, so 1.65 stops of extra gain put it at
+    // the tone curve's white point and it started reading as a specular highlight rather than as
+    // wet white cloth. The wrap term (0.2 + 0.8*NdotL) stays: it is a shape, not a strength.
+    return foamData.albedo * foamTint.rgb * (ndotl * li.mainLight.color * kInvPi + skyAmbient);
 }
 
 BrunetonInputs BuildBrunetonInputs(const LightingInput li)

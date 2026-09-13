@@ -1536,7 +1536,10 @@ float3 LitFoamColor(const LightingInput li, const FoamData foamData)
     // foam is the one thing the ocean lights with the sky. The directional term stays: it is a
     // shape (upward-facing foam sees more sky), not a strength.
     float3 skyAmbient = SkyFillRadiance(foamData.normal) * (1.0f + 0.3f * (1.0f - foamData.normal.y));
-    return foamData.albedo * foamTint.rgb * (ndotl * li.mainLight.color + skyAmbient);
+    // `kInvPi` for the same reason as in ocean_surface_surf_sim.hlsli, where the long version of
+    // this note lives: `skyAmbient` is a radiance (E/pi) and `li.mainLight.color` is an illuminance,
+    // so without it the sun half was pi times the sky half sitting beside it in the same sum.
+    return foamData.albedo * foamTint.rgb * (ndotl * li.mainLight.color * kInvPi + skyAmbient);
 }
 
 BrunetonInputs BuildBrunetonInputs(const LightingInput li)

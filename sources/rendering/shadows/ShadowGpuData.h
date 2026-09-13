@@ -153,9 +153,12 @@ public:
                                     D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool wireframe,
                                     std::uint32_t vgBegin, std::uint32_t vgEnd, bool passB = false);
     std::uint32_t VirtualGroupCount() const { return numVirtualGroups_; }
-    // A material hot reload may have rebuilt the PSOs the groups cached: rebuild the registry on
-    // the next frame (the caster count alone would not notice).
-    void InvalidateGroupMaterials() { rebuildPending_ = true; }
+    // NO `InvalidateGroupMaterials()` HERE ANY MORE, and do not bring it back. It set a flag that
+    // made the next UpdateForFrame run Rebuild -- which clears `megaReady_` with nothing to put it
+    // back, dropping the VSM page render onto its per-page loop for the rest of the session. Its
+    // one caller (the material hot reload in Scene::Render) now goes through
+    // `Scene::RebuildShadowCasters`, which pairs the Rebuild with EnsureMegaBuffer on a GPU-idle
+    // upload batch. Anything else that needs the group registry refreshed wants that pair too.
 
     // ---- Occlusion plan S5: the camera's two-pass HZB occlusion ---------------------------------
     // Mirrors CameraHzbCB (b2 of shadow_cull_cs.hlsl, b1 of cam_cull_post_cs.hlsl).
@@ -552,7 +555,6 @@ private:
     bool camHzbThisFrame_ = false;
     std::shared_ptr<Material> camCullPostMat_;    // cam_cull_post_cs.hlsl
     bool gbufferIndirectFrame_ = false;           // Scene's decision for this frame
-    bool rebuildPending_ = false;                 // InvalidateGroupMaterials
     std::uint32_t eligibleCasterCount_ = 0;
     std::uint32_t camListCount_ = 0;              // this frame's camera candidates (sum of vgCamCount_)
     // Validation snapshot of the camera row (see PollValidation).
