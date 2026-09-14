@@ -14,7 +14,7 @@ struct EditorHotkeyActions
     bool save = false;
     bool focusSelection = false;
     bool frameScene = false;
-    bool snapSelectionToSurfaceBelow = false;
+    bool burySelectionBelowSurface = false;
     bool clearSelection = false;
     int storeCameraBookmark = -1;
     int recallCameraBookmark = -1;

@@ -115,6 +115,10 @@ private:
     bool showMeshEditor_ = false;  // J: dedicated Mesh Editor window (edits a .mesh.json)
     bool showMaterialEditor_ = false; // I2: Material Editor window (edits a data/materials/<name>.json)
     bool showLevelErrors_ = false; // J: level-errors window (missing geometry/material/textures)
+    // Bury depth, as a PERCENT of the object's world height (End). It is the thickness of the
+    // footing band that must end up under the surface, which is the same thing as how deep the
+    // object ends up past contact -- see BurySelectionBelowSurface.
+    float buryDepthPercent_ = 1.0f;
     int selectionOutlineRadius_ = 1;
 
     // J: per-object missing-asset problems (objectId.value -> messages). Rescanned when the loaded

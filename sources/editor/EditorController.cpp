@@ -1946,7 +1946,8 @@ namespace
         return true;
     }
 
-    void LoadEditorState(std::vector<std::string>& recentLevelPaths, int& selectionOutlineRadius)
+    void LoadEditorState(std::vector<std::string>& recentLevelPaths, int& selectionOutlineRadius,
+        float& buryDepthPercent)
     {
         recentLevelPaths.clear();
         const nlohmann::json root = LoadEditorStateJson();
@@ -1960,6 +1961,12 @@ namespace
         if (outlineRadiusIt != levelEditorIt->end() && outlineRadiusIt->is_number_integer())
         {
             selectionOutlineRadius = std::clamp(outlineRadiusIt->get<int>(), 1, 8);
+        }
+
+        const auto buryIt = levelEditorIt->find("buryDepthPercent");
+        if (buryIt != levelEditorIt->end() && buryIt->is_number())
+        {
+            buryDepthPercent = std::clamp(buryIt->get<float>(), 0.05f, 25.0f);
         }
 
         const auto recentIt = levelEditorIt->find("recentLevels");
@@ -1990,7 +1997,8 @@ namespace
         }
     }
 
-    bool SaveEditorState(const std::vector<std::string>& recentLevelPaths, int selectionOutlineRadius)
+    bool SaveEditorState(const std::vector<std::string>& recentLevelPaths, int selectionOutlineRadius,
+        float buryDepthPercent)
     {
         nlohmann::json root = LoadEditorStateJson();
         nlohmann::json recent = nlohmann::json::array();
@@ -2009,6 +2017,7 @@ namespace
         }
         root["levelEditor"]["recentLevels"] = std::move(recent);
         root["levelEditor"]["selectionOutlineRadius"] = std::clamp(selectionOutlineRadius, 1, 8);
+        root["levelEditor"]["buryDepthPercent"] = std::clamp(buryDepthPercent, 0.05f, 25.0f);
         return SaveEditorStateJson(root);
     }
 
@@ -2210,13 +2219,60 @@ namespace
         return FrameSelection(renderer, scene, document, visibleObjects);
     }
 
-    std::string SnapSelectionToSurfaceBelow(EditorContext& ctx, EditorCommandStack& commandStack)
+    // Bury depth limits, as a fraction of the object's world height. The caller passes the tuned
+    // value (Level Editor > Placement); these only keep it sane.
+    //
+    // THE FRACTION IS THE DEPTH, which is not obvious and is why the first attempt overshot. It is
+    // the thickness of the footing band that must end up under the surface, so demanding the WHOLE
+    // band go under means the object sinks at least as deep as the band is tall. At a tenth of a
+    // 15 m palm that was a metre and a half of trunk, and it looked exactly as buried as it sounds.
+    // It only has to swallow the ground's unevenness under the footprint -- centimetres on sand.
+    //
+    // It is only the EXTRA depth, though: an object hovering a metre up still travels the whole
+    // metre, because the band's vertices measure their real gap to the ground. The fraction decides
+    // only how far PAST contact it ends up.
+    constexpr float kBuryFootingFractionMin = 0.0005f;
+    constexpr float kBuryFootingFractionMax = 0.25f;
+    // Ray budget per object, per keypress. The answer is a maximum over a ring of points, so a few
+    // dozen evenly spread samples find it; thousands only cost time the user can feel.
+    constexpr std::size_t kBuryMaxProbes = 64;
+
+    // End -- BURY the selection: drop it until EVERY ONE of its vertices is under the surface it
+    // is being buried into. This replaced a "snap to surface below" that cast ONE ray from the
+    // bounds centre and rested the bottom of the AABB on what it hit; the owner asked for burying
+    // instead and did not want the old behaviour kept, so it was removed rather than rebound.
+    //
+    // IT IS THE FOOTING THAT GETS BURIED, NOT THE WHOLE MESH -- and that is the lesson of the
+    // first version. Taking "every vertex ends up under the surface" literally across ALL vertices
+    // lets the HIGHEST one decide, so a 15 m palm sank fifteen metres and disappeared. Correct,
+    // and useless. What burying has to fix is a footing hanging in the air on uneven ground: the
+    // bottom ring of the trunk must be under the sand all the way round, while the crown is none
+    // of this function's business. So only vertices within kBuryFootingFraction of the object's
+    // world height, measured up from its lowest point, get a vote -- a fraction of the OBJECT
+    // rather than a world distance, so it means the same thing for a palm and for a pebble.
+    //
+    // It still cannot use the AABB: its corners are not points on the mesh, so on a slope the
+    // highest footing vertex is nowhere near a corner. For each footing vertex, in world space,
+    // cast straight down -- a hit means that vertex is still ABOVE the surface by exactly that
+    // distance. Drop by the LARGEST such distance and the whole footing goes under. Vertices
+    // already beneath the surface find nothing below them and contribute nothing.
+    //
+    // AND THE RAYS ARE CAPPED at kBuryMaxProbes, because the first version was slow enough for the
+    // user to notice. Every ray runs the scene broad phase and then exact triangles of whatever it
+    // finds, and a terrain chunk is a great many triangles; thousands of rays per keypress is a
+    // visible stall for an answer that is a MAXIMUM over a ring of points, which a few dozen evenly
+    // spread samples locate just as well.
+    std::string BurySelectionBelowSurface(EditorContext& ctx, EditorCommandStack& commandStack,
+        float footingFraction)
     {
         if (ctx.selection.Empty())
         {
-            return "Select a mesh to snap below";
+            return "Select a mesh to bury";
         }
+        footingFraction = std::clamp(footingFraction, kBuryFootingFractionMin, kBuryFootingFractionMax);
 
+        // The whole selection is ignored, not just the object being moved: burying one palm into
+        // the sand must not measure against another palm that happens to be selected with it.
         std::vector<Scene::SceneObjectId> ignoredObjectIds;
         ignoredObjectIds.reserve(ctx.selection.Size());
         for (const EditorObjectId id : ctx.selection.Ordered())
@@ -2228,92 +2284,170 @@ namespace
         std::vector<std::unique_ptr<EditorCommand>> commands;
         commands.reserve(ctx.selection.Size());
         std::size_t meshCount = 0;
-        std::size_t alreadyRestingCount = 0;
         std::size_t noSurfaceCount = 0;
+        std::size_t noGeometryCount = 0;
+        std::size_t alreadyBuriedCount = 0;
 
         for (const EditorObjectId id : ctx.selection.Ordered())
         {
             EditorObject* object = ctx.document.Find(id);
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id.value);
-            if (!object || !runtime || !runtime->AsRenderableObject())
+            RenderableObject* renderable = runtime ? runtime->AsRenderableObject() : nullptr;
+            if (!object || !renderable)
             {
                 continue;
             }
             ++meshCount;
 
-            const AABB& bounds = runtime->GetWorldBounds();
-            if (!bounds.IsValid())
+            const Mesh* mesh = renderable->GetMesh();
+            if (!mesh || !mesh->HasRaycastTriangles())
             {
-                ++noSurfaceCount;
+                // No CPU geometry (a runtime generator, an instanced batch): there is no honest
+                // per-vertex answer, and quietly falling back to the AABB would bury it wrong.
+                ++noGeometryCount;
                 continue;
             }
 
-            const Math::float3 center = bounds.GetCenter();
-            const Math::float3 rayOrigin(center.x, bounds.GetMin().y, center.z);
-            float hitDistance = 0.0f;
-            const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(
-                rayOrigin, rayDirection, &hitDistance, 0, &ignoredObjectIds);
-            if (hit == 0 || !std::isfinite(hitDistance))
+            const Math::mat4& world = renderable->GetModelMatrix();
+            const std::vector<Math::float3>& localPositions = mesh->RaycastPositions();
+
+            // The footing band is measured in WORLD height: the object can be rotated, so the
+            // mesh's own local Y is not the direction gravity cares about.
+            float lowestY = std::numeric_limits<float>::max();
+            float highestY = std::numeric_limits<float>::lowest();
+            for (const Math::float3& local : localPositions)
+            {
+                const float y = world.TransformPoint(local).y;
+                lowestY = std::min(lowestY, y);
+                highestY = std::max(highestY, y);
+            }
+            if (!(highestY >= lowestY))
+            {
+                ++noGeometryCount;
+                continue;
+            }
+            const float footingTopY = lowestY + (highestY - lowestY) * footingFraction;
+
+            // Gather the footing FIRST and thin it after: striding the raw vertex list would spend
+            // the ray budget on the crown and leave the ring underneath barely sampled.
+            std::vector<Math::float3> footing;
+            for (const Math::float3& local : localPositions)
+            {
+                const Math::float3 worldPos = world.TransformPoint(local);
+                if (worldPos.y <= footingTopY)
+                {
+                    footing.push_back(worldPos);
+                }
+            }
+            if (footing.empty())
+            {
+                ++noGeometryCount;
+                continue;
+            }
+            const std::size_t stride = (footing.size() + kBuryMaxProbes - 1) / kBuryMaxProbes;
+
+            // A PROBE THAT IS ALREADY UNDERGROUND MUST NOT VOTE, and finding that out needs the
+            // upward ray. Casting only downwards cannot tell "hovering above the sand" from
+            // "buried in it": a vertex inside the terrain still reports a hit below it -- the far
+            // side of the surface, or the slope further down -- so pressing the key again would
+            // sink an already-buried object deeper every time, without limit.
+            //
+            // Anything hit going UP means this vertex has surface over it, which is the definition
+            // of buried. Overhanging geometry (a neighbour's crown) can answer this too, and that
+            // is the safe direction to be wrong in: such a probe abstains, so the object is buried
+            // slightly less rather than run away downwards.
+            const Math::float3 rayUp(0.0f, 1.0f, 0.0f);
+            float deepest = 0.0f;
+            bool hitAnything = false;
+            std::size_t probeCount = 0;
+            std::size_t coveredProbes = 0;
+            for (std::size_t v = 0; v < footing.size(); v += stride)
+            {
+                ++probeCount;
+                float upDistance = 0.0f;
+                if (ctx.scene.RaycastEditorObject(
+                        footing[v], rayUp, &upDistance, 0, &ignoredObjectIds) != 0)
+                {
+                    ++coveredProbes;
+                    continue;   // already under a surface: contributes nothing
+                }
+                float hitDistance = 0.0f;
+                const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(
+                    footing[v], rayDirection, &hitDistance, 0, &ignoredObjectIds);
+                if (hit == 0 || !std::isfinite(hitDistance))
+                {
+                    continue;   // nothing below this vertex either
+                }
+                hitAnything = true;
+                deepest = std::max(deepest, hitDistance);
+            }
+
+            // Every probe covered: the footing is fully under. Leave the object exactly where it
+            // is -- re-running the tool on a finished object is a no-op, not a nudge.
+            if (probeCount > 0 && coveredProbes == probeCount)
+            {
+                ++alreadyBuriedCount;
+                continue;
+            }
+
+            if (!hitAnything)
             {
                 ++noSurfaceCount;
                 continue;
             }
-            if (hitDistance <= 1.0e-4f)
+            if (deepest <= 1.0e-4f)
             {
-                ++alreadyRestingCount;
+                ++alreadyBuriedCount;
                 continue;
             }
 
             EditorTransform after = object->transform;
-            after.position.y -= hitDistance;
+            // A hair past contact, so the highest vertex ends up INSIDE rather than coplanar with
+            // the surface -- coplanar is where z-fighting lives.
+            after.position.y -= deepest + 1.0e-3f;
             commands.push_back(std::make_unique<TransformObjectCommand>(
                 object->id, object->transform, after));
         }
 
         if (meshCount == 0)
         {
-            return "Select one or more meshes to snap below";
+            return "Select one or more meshes to bury";
         }
         if (commands.empty())
         {
-            if (alreadyRestingCount == meshCount)
+            if (noGeometryCount == meshCount)
             {
-                return meshCount == 1 ?
-                    "Selection is already resting on a surface" :
-                    "Selected meshes are already resting on surfaces";
+                return "Selected object has no CPU geometry to bury";
+            }
+            if (alreadyBuriedCount > 0 && noSurfaceCount == 0)
+            {
+                return meshCount == 1 ? "Selection is already buried" : "Selected meshes are already buried";
             }
             return "No visible editor object below selected meshes";
         }
 
-        const std::size_t snappedCount = commands.size();
-        bool snapped = false;
+        const std::size_t buriedCount = commands.size();
+        bool buried = false;
         if (commands.size() == 1)
         {
-            snapped = commandStack.Execute(ctx, std::move(commands.front()));
+            buried = commandStack.Execute(ctx, std::move(commands.front()));
         }
         else
         {
             auto composite = std::make_unique<CompositeCommand>(
-                "Snap " + std::to_string(commands.size()) + " Objects to Surface Below");
+                "Bury " + std::to_string(commands.size()) + " Objects");
             for (std::unique_ptr<EditorCommand>& command : commands)
             {
                 composite->Add(std::move(command));
             }
-            snapped = commandStack.Execute(ctx, std::move(composite));
+            buried = commandStack.Execute(ctx, std::move(composite));
         }
-        if (!snapped)
+        if (!buried)
         {
-            return "Snap to surface below failed";
+            return "Bury failed";
         }
-
-        std::string status = "Snapped " + std::to_string(snappedCount) +
-            (snappedCount == 1 ? " object" : " objects") + " to surfaces below";
-        const std::size_t skippedCount = alreadyRestingCount + noSurfaceCount;
-        if (skippedCount > 0)
-        {
-            status += "; skipped " + std::to_string(skippedCount);
-        }
-        return status;
+        return buriedCount == 1 ? "Buried selection below surface"
+                                : "Buried " + std::to_string(buriedCount) + " objects below surface";
     }
 
     const EditorObject* FindEnvironmentObject(
@@ -2740,7 +2874,7 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     cameraBookmarkSlots_ = LoadCameraBookmarkSlots(levelPath);
     if (RememberRecentLevel(recentLevelPaths_, levelPath))
     {
-        SaveEditorState(recentLevelPaths_, selectionOutlineRadius_);
+        SaveEditorState(recentLevelPaths_, selectionOutlineRadius_, buryDepthPercent_);
     }
 
     if (SaveLevelCameraState(levelPath, scene.CameraRef()))
@@ -2957,7 +3091,7 @@ void EditorController::Draw(
             assetRegistry_.Refresh();
         }
         nextAssetRegistryPollTimeSec_ = ImGui::GetTime() + 2.0;
-        LoadEditorState(recentLevelPaths_, selectionOutlineRadius_);
+        LoadEditorState(recentLevelPaths_, selectionOutlineRadius_, buryDepthPercent_);
         LoadEditorPanelState(showContentBrowser_, showOutliner_, showInspector_, showCommandHistory_,
             contentBrowser_, outliner_, meshEditor_, viewportGizmo_);
         lastObservedPanelStateSnapshot_ = CapturePanelState();
@@ -3393,7 +3527,7 @@ void EditorController::Draw(
         {
             if (ForgetRecentLevel(recentLevelPaths_, normalizedPath))
             {
-                SaveEditorState(recentLevelPaths_, selectionOutlineRadius_);
+                SaveEditorState(recentLevelPaths_, selectionOutlineRadius_, buryDepthPercent_);
             }
             levelStatus_ = "Level file not found: " + normalizedPath;
             return false;
@@ -3415,7 +3549,7 @@ void EditorController::Draw(
         document_.SetDirty(false);
         if (RememberRecentLevel(recentLevelPaths_, normalizedPath))
         {
-            SaveEditorState(recentLevelPaths_, selectionOutlineRadius_);
+            SaveEditorState(recentLevelPaths_, selectionOutlineRadius_, buryDepthPercent_);
         }
 
         if (SaveLevelCameraState(normalizedPath, scene.CameraRef()))
@@ -3555,9 +3689,9 @@ void EditorController::Draw(
             levelStatus_ = "No visible objects to frame";
         }
     }
-    if (hotkeyActions.snapSelectionToSurfaceBelow)
+    if (hotkeyActions.burySelectionBelowSurface)
     {
-        levelStatus_ = SnapSelectionToSurfaceBelow(ctx, commandStack_);
+        levelStatus_ = BurySelectionBelowSurface(ctx, commandStack_, buryDepthPercent_ * 0.01f);
     }
     if (hotkeyActions.clearSelection)
     {
@@ -3649,11 +3783,12 @@ void EditorController::Draw(
                         break;
                     }
                 }
-                if (ImGui::MenuItem("Snap to Surface Below", "End", false, canSnapBelow))
+                if (ImGui::MenuItem("Bury Below Surface", "End", false, canSnapBelow))
                 {
-                    levelStatus_ = SnapSelectionToSurfaceBelow(ctx, commandStack_);
+                    levelStatus_ = BurySelectionBelowSurface(ctx, commandStack_, buryDepthPercent_ * 0.01f);
                 }
-                ShowDisabledItemTooltip(!canSnapBelow, "Select a mesh to snap to the nearest surface below it.");
+                ShowDisabledItemTooltip(!canSnapBelow,
+                    "Select a mesh to sink it until every one of its vertices is under the surface below it.");
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Create"))
@@ -4089,7 +4224,27 @@ void EditorController::Draw(
         if (ImGui::SliderInt("Outline width", &selectionOutlineRadius_, 1, 8))
         {
             selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);
-            SaveEditorState(recentLevelPaths_, selectionOutlineRadius_);
+            SaveEditorState(recentLevelPaths_, selectionOutlineRadius_, buryDepthPercent_);
+        }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Placement");
+        ImGui::SetNextItemWidth(160.0f);
+        if (ImGui::SliderFloat("Bury depth (%)", &buryDepthPercent_, 0.05f, 25.0f, "%.2f",
+                ImGuiSliderFlags_Logarithmic))
+        {
+            buryDepthPercent_ = std::clamp(buryDepthPercent_, 0.05f, 25.0f);
+            SaveEditorState(recentLevelPaths_, selectionOutlineRadius_, buryDepthPercent_);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "How deep End buries the selection, as a percent of the object's own height --\n"
+                "a fraction of the OBJECT so it means the same for a palm and for a pebble.\n"
+                "It is the extra depth PAST contact: something left hovering still drops all the\n"
+                "way down first. Raise it until the footing stops showing a gap on rough ground;\n"
+                "much past a few percent and tall objects start visibly sinking.\n"
+                "Logarithmic, because everything useful lives near the bottom of the range.");
         }
 
         ImGui::Separator();

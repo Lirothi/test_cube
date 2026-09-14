@@ -179,6 +179,10 @@ public:
     // Editor picking/placement narrow phase. Geometry stays in mesh-local space;
     // callers transform the ray so its parameter remains a world-ray distance.
     bool HasRaycastTriangles() const { return !raycastPositions_.empty() && raycastIndices_.size() >= 3; }
+    // The same mesh-local positions the narrow phase tests, exposed so a placement tool can ask
+    // about EVERY vertex rather than about the AABB -- burying a mesh under a sloped surface is
+    // a per-vertex question, and an AABB corner is not a point on the mesh.
+    const std::vector<Math::float3>& RaycastPositions() const { return raycastPositions_; }
     bool RaycastLocal(const Math::float3& origin, const Math::float3& direction,
         float* outDistance) const;
 #endif
