@@ -111,6 +111,8 @@ cbuffer PerFrame : register(b0)
     float4 causticsParams0;       // x: intensity, y: metres per tile, z: frames/sec, w: water level Y
     float4 causticsParams1;       // x: depth fade, y: surface fade, z: up-facing gate, w: bias
     float4 causticsParams2;       // x: dispersion, y: second-layer blend, z: time, w: world metres per pixel
+    float4 causticsAtlasLayout;   // columns, rows, used frames, max safe mip
+    float4 causticsFrameSize;     // frame width/height in texels, reciprocal width/height
     // S0.3: Legacy CSM debug visualization. 0 = off, 1 = tint by the RESOLVED cascade.
     // Always 0 in VSM mode (the CPU side forces it), so the branch below is dead there.
     uint csmDebugMode;

@@ -201,10 +201,14 @@ struct OceanRenderConfig
     // line, so they land on the lagoon floor, the submerged beach and any prop under water, and
     // they inherit the sun shadow for free. Off when there is no ocean in the level.
     bool  causticsEnabled = true;
+    std::string causticsTexture = "textures/ocean/caustics_flipbook.dds";
+    int causticsColumns = 4;
+    int causticsRows = 4;
+    int causticsFrameCount = 0; // 0 = use the entire grid, in row-major order
     float causticsIntensity = 2.6f;     // gain added to the direct sun term at a cord
     float causticsScale = 6.0f;         // metres per tile; the pattern is ~16 cells wide, so this
                                         // sets the cell size (6 m -> ~37 cm cells)
-    float causticsSpeed = 10.0f;        // flipbook frames per second (the loop is 16 frames)
+    float causticsSpeed = 10.0f;        // flipbook frames per second
     float causticsDepthFade = 14.0f;    // metres below the surface over which it fades to nothing
     float causticsSurfaceFade = 0.4f;   // metres of fade-in right under the surface (kills the waterline seam)
     float causticsUpFacing = 0.7f;      // 0 = ignore the normal, 1 = full N.up gate

@@ -364,6 +364,8 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
                     oc.causticsUpFacing, oc.causticsBias);
                 constants.causticsParams2 = float4(oc.causticsDispersion, oc.causticsLayerBlend,
                     frame_->ocean->GetElapsedTime(), pixelWorldScale);
+                constants.causticsAtlasLayout = frame_->ocean->GetCausticsAtlasLayout();
+                constants.causticsFrameSize = frame_->ocean->GetCausticsFrameSize();
             }
         }
     }

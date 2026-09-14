@@ -499,6 +499,11 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     const bool forcePrimaryVisible = trackSelection_ && selectedExists;
     bool scrollToPrimary = forcePrimaryVisible &&
         lastTrackedPrimary_.value != primarySelection.value;
+    // Set while drawing the primary row if it turned out to already be on screen. Selecting a row
+    // by clicking it in this very list would otherwise recentre the list under the cursor, which
+    // moves the next row the user was about to click. Tracking should only pull the view when the
+    // selection came from somewhere else -- the viewport -- and landed off screen.
+    bool primaryRowOnScreen = false;
     if (trackSelection_)
     {
         lastTrackedPrimary_ = primarySelection;
@@ -811,6 +816,13 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                     selectRow(obj->id);
                 }
                 ImGui::PopStyleVar();
+                if (obj->id.value == primarySelection.value)
+                {
+                    // The clipper is told to draw this row even when it is far off screen (see
+                    // IncludeItemByIndex), so "drawn" does not mean "visible" -- ask ImGui whether
+                    // the item actually intersects the clip rect.
+                    primaryRowOnScreen = ImGui::IsItemVisible();
+                }
 
                 if (ImGui::BeginPopupContextItem())
                 {
@@ -932,7 +944,10 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
 
             if (scrollToPrimary && obj->id.value == primarySelection.value)
             {
-                ImGui::SetScrollHereY(0.5f);
+                if (!primaryRowOnScreen)
+                {
+                    ImGui::SetScrollHereY(0.5f);
+                }
                 scrollToPrimary = false;
             }
 

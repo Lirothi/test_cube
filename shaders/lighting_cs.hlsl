@@ -239,6 +239,11 @@ CausticsParams LoadCausticsParams()
     p.layerBlend = causticsParams2.y;
     p.time = causticsParams2.z;
     p.pixelWorldScale = causticsParams2.w;
+    p.grid = causticsAtlasLayout.xy;
+    p.frameCount = causticsAtlasLayout.z;
+    p.maxLod = causticsAtlasLayout.w;
+    p.frameTexels = causticsFrameSize.xy;
+    p.invFrameTexels = causticsFrameSize.zw;
     return p;
 }
 

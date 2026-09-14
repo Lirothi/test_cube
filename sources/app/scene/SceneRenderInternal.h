@@ -73,14 +73,15 @@ namespace scene_internal
         {
             return false;
         }
-        for (std::uint32_t i = 0; i < frame.selectedEditorObjectCount; ++i)
+        if (frame.selectedEditorObjectIds == nullptr || frame.selectedEditorObjectCount == 0)
         {
-            if (frame.selectedEditorObjectIds[i] == id)
-            {
-                return true;
-            }
+            return false;
         }
-        return false;
+        // BINARY, not linear: this runs for every object of every view, every frame, so a linear
+        // scan made the cost of the outline quadratic in the size of the selection -- which is the
+        // reason the list used to be capped at 64 instead of simply being big.
+        return std::binary_search(frame.selectedEditorObjectIds,
+            frame.selectedEditorObjectIds + frame.selectedEditorObjectCount, id);
     }
 
     inline bool ShouldRenderSelectionStencil(const SceneFrameData& frame,

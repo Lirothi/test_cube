@@ -3006,6 +3006,77 @@ namespace
                             "Sun caustics on everything below the water line. Applied in the\n"
                             "deferred lighting pass, so they follow the sun shadow.");
                     }
+                    const auto selectCausticsTexture = [&](const std::string& path)
+                    {
+                        OceanRenderConfig afterRender = render;
+                        afterRender.causticsTexture = NormalizePath(path);
+                        nlohmann::json after = withField("render", OceanRenderConfigJson::ToJson(afterRender));
+                        executeChange(std::move(after), "Set Ocean Caustics Texture");
+                        render = afterRender;
+                    };
+                    if (ImGui::BeginCombo("Flipbook Asset", render.causticsTexture.c_str()))
+                    {
+                        for (const EditorAssetRecord& rec : registry.Assets())
+                        {
+                            if (rec.id.type != EditorAssetType::Texture || !rec.texture.valid ||
+                                rec.texture.kind != EditorTextureKind::Texture2D)
+                                continue;
+                            const bool selected = rec.id.key == render.causticsTexture;
+                            if (ImGui::Selectable(rec.id.key.c_str(), selected) && !selected)
+                                selectCausticsTexture(rec.id.key);
+                            if (selected) ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    if (ImGui::BeginDragDropTarget())
+                    {
+                        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(EditorDragDrop::kAssetPayloadType))
+                        {
+                            EditorAssetId id;
+                            if (EditorDragDrop::DecodeAssetPayload(payload, id))
+                            {
+                                const auto* rec = registry.FindById(id);
+                                if (rec && rec->id.type == EditorAssetType::Texture && rec->texture.valid &&
+                                    rec->texture.kind == EditorTextureKind::Texture2D)
+                                    selectCausticsTexture(rec->id.key);
+                            }
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+                    char causticsPath[1024];
+                    std::snprintf(causticsPath, sizeof(causticsPath), "%s", render.causticsTexture.c_str());
+                    const bool pathChanged = ImGui::InputText("Flipbook Path", causticsPath, sizeof(causticsPath));
+                    beginRenderContinuousEdit();
+                    if (pathChanged)
+                    {
+                        render.causticsTexture = NormalizePath(causticsPath);
+                        storeRender();
+                        ctx.document.SetDirty(true);
+                    }
+                    // Commit once focus leaves the field, rather than uploading on each keystroke.
+                    finishRenderContinuousEdit(false);
+                    const auto causticsInt = [&](const char* label, int& value, int minimum, int maximum)
+                    {
+                        const bool edited = ImGui::InputInt(label, &value);
+                        beginRenderContinuousEdit();
+                        if (edited)
+                        {
+                            value = std::clamp(value, minimum, maximum);
+                            render.causticsFrameCount = std::clamp(render.causticsFrameCount, 0,
+                                render.causticsColumns * render.causticsRows);
+                            storeRender();
+                        }
+                        finishRenderContinuousEdit(edited);
+                    };
+                    causticsInt("Columns", render.causticsColumns, 1, 1024);
+                    causticsInt("Rows", render.causticsRows, 1, 1024);
+                    causticsInt("Frame Count (0 = all)", render.causticsFrameCount, 0,
+                        render.causticsColumns * render.causticsRows);
+                    ImGui::TextDisabled("Frames: left to right, then top to bottom.");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("The image width/height must divide evenly by Columns/Rows.\n"
+                                          "Both bundled caustics atlases use 4 columns and 4 rows.\n"
+                                          "Texture selection keeps Dark Bias and the other lighting controls.");
                     renderDrag("Intensity", render.causticsIntensity, 0.01f, 0.0f, 6.0f);
                     renderDrag("Tile Size (m)", render.causticsScale, 0.05f, 0.25f, 60.0f);
                     renderDrag("Speed (frames/s)", render.causticsSpeed, 0.1f, 0.0f, 60.0f);

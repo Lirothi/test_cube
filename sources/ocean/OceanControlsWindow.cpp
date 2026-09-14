@@ -1451,6 +1451,43 @@ namespace
             ImGui::SetTooltip("Sun caustics on everything below the water line.\n"
                               "Applied in the deferred lighting pass, so they follow the sun shadow.");
         }
+        static std::string causticsPathSource;
+        static char causticsPath[1024]{};
+        if (causticsPathSource != render.causticsTexture)
+        {
+            causticsPathSource = render.causticsTexture;
+            std::snprintf(causticsPath, sizeof(causticsPath), "%s", causticsPathSource.c_str());
+        }
+        const bool submitCausticsPath = ImGui::InputText("Flipbook path", causticsPath, sizeof(causticsPath),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        const bool commitCausticsPath = ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SameLine();
+        const bool applyCausticsPath = ImGui::Button("Apply##causticsPath");
+        if (submitCausticsPath || commitCausticsPath || applyCausticsPath)
+        {
+            render.causticsTexture = causticsPath;
+            std::replace(render.causticsTexture.begin(), render.causticsTexture.end(), '\\', '/');
+            changed = true;
+        }
+        const auto causticsInt = [&](const char* label, int& value, int minimum, int maximum)
+        {
+            if (ImGui::InputInt(label, &value))
+            {
+                value = std::clamp(value, minimum, maximum);
+                render.causticsFrameCount = std::clamp(render.causticsFrameCount, 0,
+                    render.causticsColumns * render.causticsRows);
+                changed = true;
+            }
+        };
+        causticsInt("Columns", render.causticsColumns, 1, 1024);
+        causticsInt("Rows", render.causticsRows, 1, 1024);
+        causticsInt("Frame count (0 = all)", render.causticsFrameCount, 0,
+            render.causticsColumns * render.causticsRows);
+        ImGui::TextDisabled("Frames: left to right, then top to bottom.");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("The image width/height must divide evenly by Columns/Rows.\n"
+                              "Both bundled caustics atlases use 4 columns and 4 rows.\n"
+                              "Texture selection keeps Dark bias and the other lighting controls.");
         drag("Intensity", render.causticsIntensity, 0.01f, 0.0f, 6.0f);
         drag("Tile size (m)", render.causticsScale, 0.05f, 0.25f, 60.0f);
         drag("Speed (frames/s)", render.causticsSpeed, 0.1f, 0.0f, 60.0f);

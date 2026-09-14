@@ -420,6 +420,25 @@ namespace OceanRenderConfigJson
         }
 
         {
+            const auto it = object.find("causticsTexture");
+            if (it != object.end() && it->is_string())
+            {
+                render.causticsTexture = it->get<std::string>();
+            }
+        }
+        const auto readCausticsInt = [&](const char* key, int fallback, int minimum, int maximum)
+        {
+            const auto it = object.find(key);
+            return it != object.end() && it->is_number_integer()
+                ? static_cast<int>(std::clamp(it->get<double>(), double(minimum), double(maximum)))
+                : fallback;
+        };
+        render.causticsColumns = readCausticsInt("causticsColumns", render.causticsColumns, 1, 1024);
+        render.causticsRows = readCausticsInt("causticsRows", render.causticsRows, 1, 1024);
+        render.causticsFrameCount = readCausticsInt("causticsFrameCount", render.causticsFrameCount,
+            0, render.causticsColumns * render.causticsRows);
+
+        {
             const auto it = object.find("surfSimEnabled");
             if (it != object.end() && it->is_boolean())
             {
@@ -661,6 +680,10 @@ namespace OceanRenderConfigJson
         out["underwaterFoamParallax"] = render.underwaterFoamParallax;
 
         out["causticsEnabled"] = render.causticsEnabled;
+        out["causticsTexture"] = render.causticsTexture;
+        out["causticsColumns"] = render.causticsColumns;
+        out["causticsRows"] = render.causticsRows;
+        out["causticsFrameCount"] = render.causticsFrameCount;
         out["surfSimEnabled"] = render.surfSimEnabled;
         out["surfSimSpawnDistance"] = render.surfSimSpawnDistance;
         out["surfSimSegmentLength"] = render.surfSimSegmentLength;

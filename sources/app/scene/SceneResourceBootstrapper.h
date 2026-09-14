@@ -81,6 +81,8 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle causticsParams0;
     Material::CBFieldHandle causticsParams1;
     Material::CBFieldHandle causticsParams2;
+    Material::CBFieldHandle causticsAtlasLayout;
+    Material::CBFieldHandle causticsFrameSize;
     Material::CBFieldHandle csmDebugMode;      // S0.3: Legacy CSM cascade-tint visualization
     Material::CBFieldHandle csmFilterMode;     // S8: soft-occlusion ramp + Gather tent kernel
     Material::CBFieldHandle csmFilterParams;   // S8: receiver bias / sharpen / over-blur
@@ -683,6 +685,8 @@ struct LightingPassConstants
     float4 causticsParams0{};   // intensity, metres per tile, frames/sec, water level Y
     float4 causticsParams1{};   // depth fade, surface fade, up-facing gate, bias
     float4 causticsParams2{};   // dispersion, second-layer blend, time, world metres per pixel
+    float4 causticsAtlasLayout{}; // columns, rows, used frames, max safe mip
+    float4 causticsFrameSize{};   // frame texel width/height and reciprocals
     uint32_t csmDebugMode = 0;  // S0.3: 0 = off, 1 = cascade tint (Legacy CSM only)
     uint32_t csmFilterMode = 2; // S8 kernel: 0 = 3x3 box, 1 = 4x4 tent, 2 = 6x6 tent (UE default)
     float4 csmFilterParams{};   // S8: x = receiver bias, y = sharpen (shader units), z = over-blur

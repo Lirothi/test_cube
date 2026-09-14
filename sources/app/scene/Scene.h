@@ -264,8 +264,8 @@ private:
     // 0 for a runtime object with no editor identity.
     std::vector<SceneObjectId> objectIds_;
     SceneObjectId nextEditorId_ = 1;
-    std::array<SceneObjectId, SceneFrameData::kMaxEditorSelection> selectedEditorObjectIds_{};
-    std::uint32_t selectedEditorObjectCount_ = 0;
+    // Sorted + deduplicated; no cap. SceneFrameData points straight at it.
+    std::vector<SceneObjectId> selectedEditorObjectIds_;
     std::uint32_t selectionOutlineRadius_ = 1;
 #endif
     std::array<SceneView, kCascades> cascadeViews_{};

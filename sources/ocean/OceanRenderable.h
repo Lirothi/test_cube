@@ -131,7 +131,9 @@ public:
     // Caustics: the flipbook lives with the ocean because it IS a water effect, but it is consumed
     // by the deferred lighting pass (see SceneRenderer::Pass_Lighting), which needs the CPU-side
     // SRV handle to stage into its own descriptor table. Null until Initialize has run.
-    D3D12_CPU_DESCRIPTOR_HANDLE GetCausticsSrvCPU() const { return causticsTexture_.GetSRVCPU(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetCausticsSrvCPU() const;
+    Math::float4 GetCausticsAtlasLayout() const; // columns, rows, used frames, maximum safe mip
+    Math::float4 GetCausticsFrameSize() const;   // width, height, 1/width, 1/height
     // World-space Y of the still water plane. Everything below it receives caustics.
     float GetWaterLevel() const { return GetPosition().y; }
 
@@ -310,7 +312,9 @@ private:
     Texture2D foamTrailTexture_;
     Texture2D shoreFoamBreakupMaskTexture_;
     Texture2D shoreFoamAlbedoTexture_;
-    Texture2D causticsTexture_;
+    std::unique_ptr<Texture2D> causticsTexture_;
+    std::string causticsLoadedPath_;
+    bool causticsTextureReady_ = false;
 
     Math::float2 foamTrailTextureSize0_ = Math::float2(100.0f, 50.0f);
     Math::float2 foamTrailTextureSize1_ = Math::float2(100.0f, 50.0f);

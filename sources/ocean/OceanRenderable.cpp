@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
 #include "app/camera/Camera.h"
@@ -14,6 +15,8 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/UploadBatch.h"
+#include "core/logging/Log.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/Skybox.h"
 #include "vfx/WindState.h" // W8: g_windFreeze pins the shared wind/ocean clock
@@ -634,11 +637,63 @@ void OceanRenderable::Init(Renderer* renderer,
     loadTexture(foamTrailTexture_, L"textures/ocean/FoamTrail.png", Texture2D::Usage::LinearData);
     loadTexture(shoreFoamBreakupMaskTexture_, L"textures/ocean/ContactFoam.png", Texture2D::Usage::LinearData);
     loadTexture(shoreFoamAlbedoTexture_, L"textures/ocean/ShoreFoamAlbedo.png", Texture2D::Usage::AlbedoSRGB);
-    // 8x8 flipbook of 128px caustic frames (BC4, per-frame mips) — see tools/gen_caustics.py.
-    // Consumed by lighting_cs.hlsl, not by the ocean surface shader.
-    loadTexture(causticsTexture_, L"textures/ocean/caustics_flipbook.dds", Texture2D::Usage::LinearData);
+    // Caustic atlases are linear data. The authored grid is independent of the image dimensions.
+    causticsLoadedPath_ = GetRenderConfig().causticsTexture;
+    causticsTextureReady_ = false;
+    causticsTexture_ = std::make_unique<Texture2D>();
+    if (!causticsLoadedPath_.empty())
+    {
+        Texture2D::CreateDesc desc{};
+        desc.path = std::filesystem::path(std::u8string(causticsLoadedPath_.begin(), causticsLoadedPath_.end())).wstring();
+        desc.usage = Texture2D::Usage::LinearData;
+        causticsTextureReady_ = causticsTexture_->CreateFromFile(
+            renderer, uploadCmdList, desc, uploadKeepAlive);
+    }
 
     UpdateFoamTrailState();
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE OceanRenderable::GetCausticsSrvCPU() const
+{
+    return GetCausticsAtlasLayout().x > 0.0f ? causticsTexture_->GetSRVCPU()
+        : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+
+Math::float4 OceanRenderable::GetCausticsAtlasLayout() const
+{
+    const auto& cfg = GetRenderConfig();
+    if (!causticsTextureReady_ || !causticsTexture_ || causticsLoadedPath_ != cfg.causticsTexture)
+        return {};
+    auto* resource = causticsTexture_->GetResource();
+    if (!resource) return {};
+    const auto resourceDesc = resource->GetDesc();
+    if (resourceDesc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || resourceDesc.DepthOrArraySize != 1)
+        return {};
+    const UINT columns = static_cast<UINT>(std::clamp(cfg.causticsColumns, 1, 1024));
+    const UINT rows = static_cast<UINT>(std::clamp(cfg.causticsRows, 1, 1024));
+    const UINT width = causticsTexture_->GetWidth(), height = causticsTexture_->GetHeight();
+    if (width < columns || height < rows || width % columns != 0 || height % rows != 0)
+        return {};
+    UINT fw = width / columns, fh = height / rows;
+    UINT maxMip = 0;
+    const UINT mipCount = resourceDesc.MipLevels;
+    // A mip is usable only while every frame border still lies on an integer texel boundary.
+    while (maxMip + 1 < mipCount && fw > 1 && fh > 1 && fw % 2 == 0 && fh % 2 == 0)
+    {
+        fw /= 2; fh /= 2; ++maxMip;
+    }
+    const int capacity = static_cast<int>(columns * rows);
+    const int count = cfg.causticsFrameCount <= 0 ? capacity : std::clamp(cfg.causticsFrameCount, 1, capacity);
+    return Math::float4(float(columns), float(rows), float(count), float(maxMip));
+}
+
+Math::float4 OceanRenderable::GetCausticsFrameSize() const
+{
+    const auto layout = GetCausticsAtlasLayout();
+    if (layout.x <= 0.0f) return {};
+    const float width = causticsTexture_->GetWidth() / layout.x;
+    const float height = causticsTexture_->GetHeight() / layout.y;
+    return Math::float4(width, height, 1.0f / width, 1.0f / height);
 }
 
 void OceanRenderable::Tick(float deltaTime)
@@ -1060,6 +1115,40 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
 
 void OceanRenderable::EnsureSimulationResources(Renderer* renderer)
 {
+    const auto& desiredPath = GetRenderConfig().causticsTexture;
+    if (desiredPath != causticsLoadedPath_)
+    {
+        // Edits are rare: use the established synchronous upload path before graph recording.
+        // Both GPU queues must finish before the old atlas and its descriptor are released.
+        renderer->WaitForPreviousFrame();
+        causticsTextureReady_ = false;
+        causticsLoadedPath_ = desiredPath;
+        causticsTexture_.reset();
+        if (!desiredPath.empty())
+        {
+            UploadBatch upload;
+            if (upload.Begin(renderer))
+            {
+                auto texture = std::make_unique<Texture2D>();
+                Texture2D::CreateDesc desc{};
+                desc.path = std::filesystem::path(std::u8string(desiredPath.begin(), desiredPath.end())).wstring();
+                desc.usage = Texture2D::Usage::LinearData;
+                causticsTextureReady_ = texture->CreateFromFile(
+                    renderer, upload.CommandList(), desc, upload.KeepAlive());
+                upload.SubmitAndWait(renderer);
+                causticsTexture_ = std::move(texture);
+            }
+            if (!causticsTextureReady_)
+                LOG_ERROR(logging::LogCategory::Asset, "Failed to load ocean caustics atlas: {}", desiredPath);
+        }
+    }
+    if (causticsTextureReady_ && GetCausticsAtlasLayout().x <= 0.0f)
+    {
+        LOG_WARNING_ONCE_PER_MESSAGE(logging::LogCategory::Asset,
+            "Invalid caustics atlas {} ({}x{}): expected a single 2D image divisible into {} columns and {} rows",
+            causticsLoadedPath_, causticsTexture_->GetWidth(), causticsTexture_->GetHeight(),
+            GetRenderConfig().causticsColumns, GetRenderConfig().causticsRows);
+    }
     if (simulation_)
     {
         simulation_->EnsureFrameResources(renderer);

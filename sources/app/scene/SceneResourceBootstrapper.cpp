@@ -86,6 +86,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     causticsParams0 = material->ComputeCB0FieldHandle("causticsParams0");
     causticsParams1 = material->ComputeCB0FieldHandle("causticsParams1");
     causticsParams2 = material->ComputeCB0FieldHandle("causticsParams2");
+    causticsAtlasLayout = material->ComputeCB0FieldHandle("causticsAtlasLayout");
+    causticsFrameSize = material->ComputeCB0FieldHandle("causticsFrameSize");
     csmDebugMode = material->ComputeCB0FieldHandle("csmDebugMode");
     csmFilterMode = material->ComputeCB0FieldHandle("csmFilterMode");
     csmFilterParams = material->ComputeCB0FieldHandle("csmFilterParams");
@@ -1589,6 +1591,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.causticsParams0, data.causticsParams0, dest);
     matLighting_->UpdateCBField(handles.causticsParams1, data.causticsParams1, dest);
     matLighting_->UpdateCBField(handles.causticsParams2, data.causticsParams2, dest);
+    matLighting_->UpdateCBField(handles.causticsAtlasLayout, data.causticsAtlasLayout, dest);
+    matLighting_->UpdateCBField(handles.causticsFrameSize, data.causticsFrameSize, dest);
     matLighting_->UpdateCBField(handles.csmDebugMode, data.csmDebugMode, dest);
     matLighting_->UpdateCBField(handles.csmFilterMode, data.csmFilterMode, dest);
     matLighting_->UpdateCBField(handles.csmFilterParams, data.csmFilterParams, dest);

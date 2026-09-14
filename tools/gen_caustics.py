@@ -16,6 +16,7 @@ Two things set the look:
 The height field tiles exactly (integer wave vectors) and loops exactly (integer temporal
 frequencies), so the atlas is seamless in space and in time.
 """
+import argparse
 import numpy as np, struct, sys, os
 from scipy import ndimage
 
@@ -236,8 +237,18 @@ def write_dds(path, mips):
 
 
 if __name__ == '__main__':
-    out_path = sys.argv[1] if len(sys.argv) > 1 else 'caustics_flipbook.dds'
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('output', nargs='?', default='caustics_flipbook.dds')
+    parser.add_argument('--sun-blur', type=float, default=SUNBLUR,
+                        help='Focus blur sigma in frame texels (default: %(default)s); '
+                             'smaller values produce thinner caustic filaments.')
+    args = parser.parse_args()
+    if not np.isfinite(args.sun_blur) or args.sun_blur < 0.0:
+        parser.error('--sun-blur must be finite and non-negative')
+    SUNBLUR = args.sun_blur
+    out_path = args.output
     print('generating %d frames of %dx%d ...' % (GRID*GRID, FRAME, FRAME))
+    print('  focus blur sigma: %.3f texels' % SUNBLUR)
     frames, neutral = tone(build_frames())
     print('  value stats: mean %.3f  p50 %.3f  p99 %.3f' %
           (frames.mean(), np.percentile(frames, 50), np.percentile(frames, 99)))

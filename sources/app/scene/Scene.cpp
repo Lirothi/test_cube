@@ -1354,29 +1354,18 @@ const RenderableObjectBase* Scene::FindEditorObject(SceneObjectId id) const
 
 void Scene::SetSelectedEditorObjectIds(const std::vector<SceneObjectId>& ids)
 {
-    selectedEditorObjectIds_.fill(0);
-    selectedEditorObjectCount_ = 0;
+    // Sort + unique rather than the old scan-for-duplicates: that was O(n^2) on a list that is
+    // now unbounded, and the render side needs it sorted anyway to test membership by bisection.
+    selectedEditorObjectIds_.clear();
+    selectedEditorObjectIds_.reserve(ids.size());
     for (const SceneObjectId id : ids)
     {
-        if (id == 0 || selectedEditorObjectCount_ >= selectedEditorObjectIds_.size())
-        {
-            continue;
-        }
-
-        bool alreadySelected = false;
-        for (std::uint32_t i = 0; i < selectedEditorObjectCount_; ++i)
-        {
-            if (selectedEditorObjectIds_[i] == id)
-            {
-                alreadySelected = true;
-                break;
-            }
-        }
-        if (!alreadySelected)
-        {
-            selectedEditorObjectIds_[selectedEditorObjectCount_++] = id;
-        }
+        if (id != 0) { selectedEditorObjectIds_.push_back(id); }
     }
+    std::sort(selectedEditorObjectIds_.begin(), selectedEditorObjectIds_.end());
+    selectedEditorObjectIds_.erase(
+        std::unique(selectedEditorObjectIds_.begin(), selectedEditorObjectIds_.end()),
+        selectedEditorObjectIds_.end());
 }
 
 Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
@@ -1955,11 +1944,13 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.cameraExposure = cameraExposure_;
     frameData_.colorPipeline = colorPipeline_;
 #if WITH_EDITOR
-    frameData_.selectedEditorObjectIds = selectedEditorObjectIds_;
-    frameData_.selectedEditorObjectCount = selectedEditorObjectCount_;
+    frameData_.selectedEditorObjectIds =
+        selectedEditorObjectIds_.empty() ? nullptr : selectedEditorObjectIds_.data();
+    frameData_.selectedEditorObjectCount =
+        static_cast<std::uint32_t>(selectedEditorObjectIds_.size());
     frameData_.selectionOutlineRadius = std::clamp<std::uint32_t>(selectionOutlineRadius_, 1u, 8u);
 #else
-    frameData_.selectedEditorObjectIds.fill(0);
+    frameData_.selectedEditorObjectIds = nullptr;
     frameData_.selectedEditorObjectCount = 0;
     frameData_.selectionOutlineRadius = 1;
 #endif
@@ -2681,13 +2672,17 @@ void Scene::Render(Renderer* renderer) {
     // lockstep mapping. Kept out of SceneFrameData: this is a same-frame main-thread read, and the
     // frame data is for what the render threads consume.
     {
-        tc::inl_vector<const RenderableObjectBase*, SceneFrameData::kMaxEditorSelection> sel;
-        for (std::uint32_t i = 0; i < selectedEditorObjectCount_; ++i)
+        // One pass over the objects testing each against the sorted selection, instead of a scan
+        // of every object per selected id -- the old shape was O(selection x objects) and a few
+        // hundred selected meshes made it the most expensive thing in the editor frame.
+        std::vector<const RenderableObjectBase*> sel;
+        sel.reserve(selectedEditorObjectIds_.size());
+        for (size_t o = 0; o < objectIds_.size() && o < objects_.size(); ++o)
         {
-            const SceneObjectId id = selectedEditorObjectIds_[i];
-            for (size_t o = 0; o < objectIds_.size() && o < objects_.size(); ++o)
+            if (std::binary_search(selectedEditorObjectIds_.begin(),
+                    selectedEditorObjectIds_.end(), objectIds_[o]))
             {
-                if (objectIds_[o] == id) { sel.push_back(objects_[o].get()); break; }
+                sel.push_back(objects_[o].get());
             }
         }
         render::DrawLodDebug(renderer, camera_, objects_, sel.data(), sel.size());
@@ -2787,8 +2782,7 @@ void Scene::Clear()
     shoreAreaValid_ = false; // the next level's terrain sits somewhere else
 #if WITH_EDITOR
     objectIds_.clear();
-    selectedEditorObjectIds_.fill(0);
-    selectedEditorObjectCount_ = 0;
+    selectedEditorObjectIds_.clear();
     selectionOutlineRadius_ = 1;
 #endif
     camera_.GetView().queue.Clear();

@@ -589,7 +589,6 @@ struct SceneRenderSettings
 struct SceneFrameData
 {
     static constexpr int kCascades = 4;
-    static constexpr std::size_t kMaxEditorSelection = 64;
 
     struct CascadeData
     {
@@ -679,7 +678,12 @@ struct SceneFrameData
     OceanRenderable* ocean = nullptr;
 
     CascadeData cascades{};
-    std::array<std::uint64_t, kMaxEditorSelection> selectedEditorObjectIds{};
+    // The editor selection, SORTED ASCENDING, owned by Scene -- a pointer rather than a copied
+    // fixed array. It used to be a std::array of 64 and everything past that was dropped without a
+    // word, so selecting a few hundred meshes outlined the first 64 of them (reported 2026-09-15).
+    // Sorted because the membership test runs per object per frame and has to be a binary search
+    // once the selection is large; see IsSelectedEditorObject.
+    const std::uint64_t* selectedEditorObjectIds = nullptr;
     std::uint32_t selectedEditorObjectCount = 0;
     std::uint32_t selectionOutlineRadius = 1;
 
