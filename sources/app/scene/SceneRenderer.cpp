@@ -358,6 +358,20 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     // still declare the 1x1 D.shadow NON_PIXEL for their (unused) bind.
     decisions_.vsmActive = render::VsmActive() && frame.vsm && frame.vsm->IsAllocated();
 
+    // S15: the same shape for SDSM. `frame.sdsm` already carries the mode + residency gate
+    // (Scene::UpdateSdsmFrameParams); what is added here is the DRAW readiness, which depends on
+    // EnsureFrameResources having built the permutation's PSO -- and Render() calls that before
+    // DecideFrame, which is the ordering this relies on. False means Main_CSM stays in the graph
+    // and the frame renders Legacy cascades, which is the right fallback: shadows, just not SDSM's.
+    decisions_.sdsmActive = render::SdsmActive() && frame.sdsm != nullptr &&
+                            frame.shadowGpu != nullptr && frame.shadowGpu->SdsmDrawReady();
+    // The mode's own occlusion cull. Gated on the SAME knob as Legacy's (CascadeShadowConfig::
+    // hzbCull) plus the indirect path, because it IS the same machinery -- the pyramids, the
+    // deferred list and the pass-B pair are one set of resources serving whichever mode runs.
+    decisions_.sdsmHzb = decisions_.sdsmActive && render::g_indirectShadowsEnabled &&
+                         frame.cascadeConfig != nullptr && frame.cascadeConfig->hzbCull &&
+                         frame.shadowGpu->CascadeHzbRef().Ready();
+
     // Rung 2 / Step 22 skip-when-still. Skip the VSM update (request + alloc + render) only when
     // NOTHING changed — the camera view is unchanged AND no shadow caster moved. Then the pool +
     // page table persist and last frame's content is still valid (saving the dominant cost, the

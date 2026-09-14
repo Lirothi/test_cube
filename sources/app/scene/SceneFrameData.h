@@ -23,6 +23,7 @@ class RenderableObjectBase;
 class Skybox;
 class ShadowGpuData;
 class VirtualShadowMap;
+class SdsmShadows;
 namespace vfx { struct WindState; } // W3: global wind, read when building the gbuffer per-view CB
 namespace vis { struct OcclusionQueryPlan; class OcclusionQueryHeap; class HzbOcclusionTester; } // occlusion plan S3a / S3b
 
@@ -668,6 +669,10 @@ struct SceneFrameData
     // G-buffer pass (Scene decided before the camera prepare; the CPU buckets hold the rest).
     bool gbufferIndirect = false;
     VirtualShadowMap* vsm = nullptr;    // Rung 2: page pool + page table (Step 18; unused yet)
+    // S15: the SDSM analysis. Non-null only while the mode is Sdsm AND its resources built --
+    // which is exactly the gate every SDSM pass builder uses, so a failed PSO degrades to
+    // "the passes are not in the graph" rather than to a black shadow atlas.
+    SdsmShadows* sdsm = nullptr;
     const vfx::WindState* wind = nullptr; // W3: global wind, folded into the gbuffer per-view CB
     // Water in the level, or null. The deferred lighting pass reads its caustics settings, clock
     // and flipbook; no ocean simply means no caustics.

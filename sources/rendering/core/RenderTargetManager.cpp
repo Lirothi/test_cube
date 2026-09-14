@@ -1,5 +1,6 @@
 #include "rendering/core/RenderTargetManager.h"
 #include "rendering/core/TextureCreate.h"
+#include "rendering/shadows/ShadowSettings.h" // render::g_csmAtlasRes + the S5 gutter
 
 #include <algorithm>
 #include <cstdio>
@@ -416,7 +417,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 
         // S3.5: ONE atlas for all frames — created after this loop. The per-frame field is kept
         // because readers (lighting CB, Renderer::BindShadowTarget) index it through Deferred(f).
-        D.shadowRes = 4096; // could be driven by config/parameter
+        // The knob, not a literal: render::g_csmAtlasRes (ShadowSettings.h). Clamped here so a
+        // settings file or a --set cannot ask for a size the device will refuse.
+        D.shadowRes = std::clamp(render::g_csmAtlasRes, render::kCsmAtlasResMin, render::kCsmAtlasResMax);
 
         D.spotShadowRes = 512;
         CreateSpotShadowResource(dev, decls, f, D.spotShadowRes);
@@ -877,7 +880,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution)
 {
     if (!dev) { return; }
-    if (resolution == 0) { resolution = 4096; }
+    if (resolution == 0) { resolution = render::g_csmAtlasRes; }
 
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -1081,6 +1084,16 @@ void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceDec
     // (GetAddressOfForCreate inside does the Forget; the explicit one here would be redundant.)
     CreateShadowResource(dev, decls, full ? deferred_[0].shadowRes : 1u);
     localShadowFull_ = full;
+}
+
+void RenderTargetManager::SetCsmAtlasResolution(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution)
+{
+    resolution = std::clamp(resolution, render::kCsmAtlasResMin, render::kCsmAtlasResMax);
+    if (!dev || resolution == deferred_[0].shadowRes) { return; }
+    for (UINT f = 0; f < render::kFrameCount; ++f) { deferred_[f].shadowRes = resolution; }
+    // Only rebuild if the atlas is actually resident. In VSM mode it is the 1x1 placeholder and
+    // the new size is simply remembered above -- SetLocalShadowResidency(true) will use it.
+    if (localShadowFull_) { CreateShadowResource(dev, decls, resolution); }
 }
 
 void RenderTargetManager::Destroy(ResourceDeclarations decls)

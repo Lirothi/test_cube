@@ -2266,6 +2266,183 @@ void Scene::PrepareViews(Renderer* renderer)
     }
 }
 
+// S15 -- the per-frame inputs of the SDSM analysis, and the gate that decides whether this frame
+// has an SDSM path at all. Published into frameData_ so every pass builder asks ONE question
+// ("is frame_->sdsm non-null?") instead of re-deriving the mode, the residency and the PSO state.
+void Scene::UpdateSdsmFrameParams(Renderer* renderer)
+{
+    frameData_.sdsm = nullptr;
+    if (!renderer || !render::SdsmActive() || !sdsm_.Ready()) { return; }
+
+    const auto& D = renderer->GetDeferredForFrame();
+    const UINT tileRes = D.shadowRes > 0 ? D.shadowRes / 2u : 0u;
+    if (tileRes == 0u) { return; }
+    const UINT borderRes = (tileRes > 2u * render::kCascadeAtlasBorder) ? render::kCascadeAtlasBorder : 0u;
+    const UINT contentRes = tileRes - 2u * borderRes;
+
+    render::sdsm::AnalyzeConstants cb{};
+    // NON-JITTERED, exactly as S1's cascade fit is: the DLSS sub-pixel offset has no business
+    // moving a shadow partition, and the reduction would carry it straight into the box.
+    cb.invProj = mat4::Inverse(camera_.GetProjMatrixNoJitter()).m;
+    cb.invView = camera_.GetInvViewMatrix().m;
+
+    // The light frame: orthonormal, anchored at the camera so light-space metres stay small (a
+    // world-anchored frame puts a kilometre of magnitude into every reduced coordinate, and the
+    // box we are measuring is metres wide). Built by hand rather than through LookAtLH so the
+    // sun-parallel-to-up degeneracy has an explicit fallback instead of a NaN matrix.
+    //
+    // NO TEXEL SNAP, deliberately, and this is the one place it has to be said: Legacy snaps the
+    // cascade centre to whole texels to stop edge crawl, and SDSM cannot -- the box changes shape
+    // every frame, so there is no fixed grid to snap to. The plan takes that trade knowingly
+    // (S15 note: "стабильность даёт разрешение + EVSM"), and S16 is what pays for it.
+    {
+        const float3 fwd = dirLight_.GetDirection().Normalized();
+        const float3 up(0.0f, 1.0f, 0.0f);
+        float3 right = up.Cross(fwd);
+        if (right.Dot(right) < 1e-12f) { right = float3(0, 0, 1).Cross(fwd); }
+        right = right.Normalized();
+        const float3 trueUp = fwd.Cross(right);
+        const float3 eye = camera_.GetPosition();
+        mat4 lv{};
+        lv.m._11 = right.x;  lv.m._12 = trueUp.x;  lv.m._13 = fwd.x;  lv.m._14 = 0.0f;
+        lv.m._21 = right.y;  lv.m._22 = trueUp.y;  lv.m._23 = fwd.y;  lv.m._24 = 0.0f;
+        lv.m._31 = right.z;  lv.m._32 = trueUp.z;  lv.m._33 = fwd.z;  lv.m._34 = 0.0f;
+        lv.m._41 = -eye.Dot(right);
+        lv.m._42 = -eye.Dot(trueUp);
+        lv.m._43 = -eye.Dot(fwd);
+        lv.m._44 = 1.0f;
+        cb.lightView = lv.m;
+    }
+
+    // tan(halfFov) from the projection, the same read S1's sphere does.
+    const mat4& proj = camera_.GetProjMatrixNoJitter();
+    const float tanHalfX = 1.0f / std::max(1e-6f, proj.m._11);
+    const float tanHalfY = 1.0f / std::max(1e-6f, proj.m._22);
+    const float3 camPos = camera_.GetPosition();
+    const float3 camDir = camera_.GetDirection();
+    cb.camPosWS = DirectX::XMFLOAT4(camPos.x, camPos.y, camPos.z, tanHalfX);
+    cb.camDirWS = DirectX::XMFLOAT4(camDir.x, camDir.y, camDir.z, tanHalfY);
+
+    cb.nearZ = camera_.GetZNear();
+    // The reduction's accept window, NOT the camera's far plane: a partition set that has to reach
+    // 10 km would put the whole island in one logarithmic step. `maxDistance` is the same number
+    // the Legacy splits end at, so the two modes shade the same range and the A/B is honest.
+    cb.farZ = std::max(cb.nearZ + 1.0f, cascadeConfig_.maxDistance);
+    cb.partitions = std::min<std::uint32_t>(render::sdsm::g_partitions, render::sdsm::kMaxPartitions);
+    cb.depthWidth = renderer->GetRenderWidth();
+    cb.depthHeight = renderer->GetRenderHeight();
+    cb.reduceTileDim = render::sdsm::kReduceTileDim;
+    cb.borderTexels = render::sdsm::g_borderTexels;
+    cb.dilation = render::sdsm::g_dilation;
+    cb.minScaleOverSphere = render::sdsm::g_minScaleOverSphere;
+    cb.zMargin = render::sdsm::g_zMargin;
+    cb.pancakeSlack = cascadeConfig_.pancakeSlackWS;
+    cb.casterReach = cascadeConfig_.casterReachWS;
+    cb.depthBiasTexels = cascadeConfig_.depthBiasInTexels;
+    cb.slopeScale = cascadeConfig_.slopeScale;
+    cb.maxSlope = cascadeConfig_.maxSlope;
+    cb.clampNear = cascadeConfig_.pancakeCasters ? 1.0f : 0.0f;
+    cb.atlasRes = static_cast<float>(D.shadowRes);
+    cb.contentRes = static_cast<float>(contentRes);
+    cb.tileRes = tileRes;
+    cb.borderRes = borderRes;
+    // Clamped to what the SDSM frustum buffer holds (kMaxShadowViews + 1, the camera slot
+    // included). ShadowGpuData owns this count; a slot added there must not run off this buffer.
+    cb.viewFrustumCount = std::min<std::uint32_t>(shadowGpu_.ViewFrustumCount(),
+                                                  render::kMaxShadowViews + 1u);
+    // S15.4: the accurate cull volume, on the SAME knob Legacy uses -- it is the same construction
+    // (UE's ComputeShadowCullingVolume), just evaluated in the analyze instead of on the CPU,
+    // because the partition intervals it needs are a GPU result.
+    cb.blendFraction = cascadeConfig_.blendFraction;
+    cb.accurateCull = cascadeConfig_.accurateCasterCull ? 1u : 0u;
+
+    // The gbuffer's wind, so the analyze can write a COMPLETE PerView block per partition. Read
+    // from the SAME WindState the gbuffer CB is built from -- a shadow swaying to different
+    // numbers than its own tree detaches from it (W5).
+    cb.windTime = windState_.time;
+    cb.windPrevTime = windState_.prevTime;
+    cb.windDirX = windState_.windDirXZ.x;
+    cb.windDirZ = windState_.windDirXZ.y;
+    cb.windSwayAmp = windState_.swayAmplitude;
+    cb.windSwayFreq = windState_.swayFrequency;
+    cb.windGustMul = windState_.gustMul;
+    cb.windPrevGustMul = windState_.prevGustMul;
+
+    // Occlusion S5b for SDSM: the same pyramids and the same knob as Legacy. The MATRICES are the
+    // analyze's own (this frame's partitions and last frame's copy); these four rows are the part
+    // only the CPU knows, and they travel in the analyze CB so the block it writes is complete.
+    {
+        const bool wantHzb = cascadeConfig_.hzbCull && render::g_indirectShadowsEnabled;
+        const ShadowGpuData::SdsmHzbState hzb =
+            shadowGpu_.SetSdsmHzbViews(renderer, renderer->GetTotalFrameNumber(), wantHzb, contentRes);
+        for (int c = 0; c < 4; ++c)
+        {
+            cb.hzbPrevValid[c] = hzb.prevValid[c];
+            cb.hzbViewRect[c] = hzb.viewRect[c];
+        }
+        cb.hzbSize[0] = hzb.hzbSize[0];
+        cb.hzbSize[1] = hzb.hzbSize[1];
+        cb.hzbOn = hzb.on ? 1u : 0u;
+    }
+
+    sdsm_.SetFrameParams(cb);
+    sdsm_.SetSourceFrustumSrv(shadowGpu_.ViewFrustumSrv(renderer->GetCurrentFrameIndex()));
+    sdsm_.PollReadout(renderer);
+    // The Anno grabble, made visible: a GPU-instanced caster the GI fold did not take is drawn in
+    // Legacy by Pass_CSM's CPU tail with the cascade's matrix. SDSM has no such matrix on the CPU,
+    // so those casters do not cast at all -- and this is the number that says whether that matters.
+    sdsm_.SetCpuCasterCount(shadowGpu_.CountCpuTailCasters(objects_));
+    frameData_.sdsm = &sdsm_;
+
+    // --sdsm-readout: the same table the dev window shows, into the SESSION LOG, once, past the
+    // streaming window (frame 600 -- the same reason --csm-readout waits: at frame 8 the level is
+    // still loading and the reduction sees half a scene). A headless --shot run has no dev window,
+    // and the per-axis texel is the whole acceptance criterion of the step.
+    if (render::sdsm::g_dumpReadout && sdsm_.ReadoutValid() && renderer->GetTotalFrameNumber() > 600)
+    {
+        render::sdsm::g_dumpReadout = false;
+        const auto& parts = sdsm_.Readout();
+        LOG_INFO(logging::LogCategory::RenderShadow,
+                 "SDSM readout frame {} partitions={} border={:.1f} dilation={:.3f} minScale={:.3f} cpuTailCasters={} hzb={}",
+                 renderer->GetTotalFrameNumber(), cb.partitions, cb.borderTexels, cb.dilation,
+                 cb.minScaleOverSphere, sdsm_.CpuCasterCount(), cb.hzbOn);
+        if (cb.hzbOn != 0u)
+        {
+            // What the occlusion cull actually did, per partition: how many casters last frame's
+            // tile hid (deferred) and how many of those turned out to be visible after all (pass
+            // B). deferred - drawnB is the CUT; drawnB is the price of a bad guess. Counters of
+            // frame N - kFrameCount, which is the latency of the readback that carries them.
+            for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c)
+            {
+                LOG_INFO(logging::LogCategory::RenderShadow,
+                         "  p{} hzb deferred {} drawnB {} (cut {})", c,
+                         shadowGpu_.HzbDeferred(c), shadowGpu_.HzbDrawnB(c),
+                         shadowGpu_.HzbDeferred(c) >= shadowGpu_.HzbDrawnB(c)
+                             ? shadowGpu_.HzbDeferred(c) - shadowGpu_.HzbDrawnB(c) : 0u);
+            }
+        }
+        for (std::uint32_t p = 0; p < render::sdsm::kMaxPartitions; ++p)
+        {
+            const render::sdsm::Partition& sp = parts[p];
+            const float ex = sp.boundsMax.x - sp.boundsMin.x;
+            const float ey = sp.boundsMax.y - sp.boundsMin.y;
+            const float ez = sp.boundsMax.z - sp.boundsMin.z;
+            LOG_INFO(logging::LogCategory::RenderShadow,
+                     "  p{} interval {:.2f}-{:.2f}  box {:.1f}x{:.1f}x{:.1f} m  texel {:.2f}/{:.2f} mm  "
+                     "bias {:.2f} mm  samples {}  flags {}{}  legacyTexel {:.2f} mm",
+                     p, sp.intervalBegin, sp.intervalEnd, ex, ey, ez,
+                     sp.texelWS[0] * 1000.0f, sp.texelWS[1] * 1000.0f,
+                     sp.depthBiasNDC * ez * 1000.0f, sp.sampleCount,
+                     (sp.flags & render::sdsm::kPartitionFlagEmpty) ? "EMPTY " : "",
+                     (sp.flags & render::sdsm::kPartitionFlagVolumeLeak) ? "VOLUME-LEAK "
+                         : ((sp.flags & render::sdsm::kPartitionFlagScaleClamped) ? "CLAMP" : "-"),
+                     // The Legacy cascade of the SAME index, this frame -- the A/B baseline, on
+                     // the same line, so the comparison needs no second artefact.
+                     frameData_.cascades.unitsPerTexelDbg[p] * 1000.0f);
+        }
+    }
+}
+
 void Scene::ReconcileShadowMode(Renderer* renderer)
 {
     // Step 24b: make the VSM resource state match the active shadow mode. The common path is a cheap
@@ -2275,13 +2452,53 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     if (!renderer) { return; }
     const bool wantVsm = render::VsmActive();
     const bool wantAtlasFull = !wantVsm; // legacy spot/point atlases full-res only in Legacy mode
+    // S15: the SDSM buffers follow the same residency rule -- resident only in the mode that uses
+    // them. They are tiny (a few KB) next to the VSM pool, but the rule is what keeps "which mode
+    // owns which memory" answerable, and the readout ring is a mapped READBACK page.
+    const bool wantSdsm = render::SdsmActive();
     const bool vsmOk = (wantVsm == vsm_.IsAllocated());
     const bool atlasOk = (wantAtlasFull == renderer->IsLocalShadowFull());
-    if (vsmOk && atlasOk) { return; }    // both in sync — the common per-frame path
+    const bool sdsmOk = (wantSdsm == sdsm_.Ready());
+    // The CSM atlas edge is a knob now (render::g_csmAtlasRes). Changing it reallocates the atlas,
+    // so it is reconciled HERE, with the other shadow residency changes, rather than applied where
+    // the slider moved -- one GPU-idle stall covers all of them.
+    const unsigned wantAtlasRes =
+        std::clamp(render::g_csmAtlasRes, render::kCsmAtlasResMin, render::kCsmAtlasResMax);
+    const bool atlasResOk = (wantAtlasRes == renderer->CsmAtlasResolution());
+    if (vsmOk && atlasOk && sdsmOk && atlasResOk) { return; }    // all in sync — the common per-frame path
     // Reconciled independently so a resize (which rebuilds the atlases full-res) also self-corrects.
     renderer->WaitForPreviousFrame(); // GPU idle before freeing/allocating shadow resources
     if (!vsmOk) { if (wantVsm) { vsm_.EnsureResources(renderer); } else { vsm_.ReleaseResources(); } }
     if (!atlasOk) { renderer->SetLocalShadowResidency(wantAtlasFull); }
+    if (!atlasResOk)
+    {
+        renderer->SetCsmAtlasResolution(wantAtlasRes);
+        // The cascade tile pyramids are sized off the tile's CONTENT rect; EnsureResources
+        // recreates them (and drops the history) when it changes, but it only ever sees the size
+        // through SetSdsmHzbViews / SetCascadeHzbViews next frame. Nothing to do here -- noted so
+        // the absence of a call is deliberate rather than forgotten.
+        LOG_INFO(logging::LogCategory::RenderShadow, "CSM atlas resolution -> {} ({} MB, R16)",
+                 wantAtlasRes,
+                 (static_cast<double>(wantAtlasRes) * wantAtlasRes * 2.0) / (1024.0 * 1024.0));
+    }
+    if (!sdsmOk)
+    {
+        if (wantSdsm)
+        {
+            if (!sdsm_.EnsureResources(renderer))
+            {
+                // The mode cannot run. Say so once and fall back to Legacy rather than leaving a
+                // mode selected whose passes are all absent -- that reads as "shadows vanished".
+                LOG_ERROR(logging::LogCategory::RenderShadow,
+                          "SDSM resources unavailable; falling back to Legacy CSM");
+                render::g_shadowMode = render::ShadowMode::Legacy;
+            }
+        }
+        else
+        {
+            sdsm_.ReleaseResources(renderer);
+        }
+    }
 }
 
 void Scene::Render(Renderer* renderer) {
@@ -2425,9 +2642,15 @@ void Scene::Render(Renderer* renderer) {
         // registry's camera row (the indirect G-buffer). Never a shadow view: the shadow cull
         // loops kMaxShadowViews and the camera branch addresses its slot by index.
         std::array<const Frustum*, kCascadeSlots + kSpotSlots + kPointFaceSlots + kClipmapSlots + 1> frustums{};
+        // S15: in SDSM the four directional slots are written by Main_SdsmAnalyze from this frame's
+        // depth, and Main_SdsmCull re-clears and re-fills their args rows. Uploading the Legacy
+        // cascade frusta here would make the MAIN cull append every caster into rows that are
+        // about to be thrown away -- so they go up as reject-all instead, exactly as the clipmap
+        // slots do in Legacy mode. (Null = the reject-all sentinel; see UpdateViewFrustums.)
+        const bool sdsmDirectional = render::SdsmActive();
         for (size_t i = 0; i < kCascadeSlots; ++i)
         {
-            frustums[i] = &cascadeViews_[i].frustum;
+            frustums[i] = sdsmDirectional ? nullptr : &cascadeViews_[i].frustum;
         }
         const size_t spotCount = lightManager_.GetShadowedSpotCount();
         for (size_t i = 0; i < kSpotSlots; ++i)
@@ -2467,6 +2690,11 @@ void Scene::Render(Renderer* renderer) {
                                 cascadeViews_[0].frustum.IsValid();
             shadowGpu_.SetCascadeHzbViews(renderer, lightViewProj.data(), renderer->GetTotalFrameNumber(), wantOn, content);
         }
+
+        // S15: everything the GPU analysis needs that only the CPU knows. AFTER UpdateViewFrustums,
+        // because the analyze pass copies the non-directional slots out of THIS frame's ring region
+        // and the handle moves with the region.
+        UpdateSdsmFrameParams(renderer);
     }
 
     sceneRenderer_.Render(renderer, frameData_);

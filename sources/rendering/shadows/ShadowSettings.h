@@ -32,6 +32,24 @@ namespace render
 // 0 disables the whole mechanism: content == tile, and every UV clamp collapses to a no-op.
 inline constexpr unsigned kCascadeAtlasBorder = 4u;
 
+// The CSM atlas edge, in texels. 2x2 tiles, so a tile is half this and its CONTENT is the tile
+// minus twice the gutter above. Shared by Legacy and SDSM -- they render into the same atlas with
+// the same layout, which is what makes the two comparable at all.
+//
+// A KNOB because it is the single biggest quality/cost lever the directional shadow has, and the
+// two modes want opposite answers from it: Legacy fits a cascade to a frustum-slice SPHERE and
+// spends most of a tile on empty air, so it needs the texels; SDSM fits the tile to the geometry
+// and reaches Legacy's density at half the edge (measured: SDSM's texel is 0.24-0.32x of Legacy's
+// at the same 4096, so 2048 would still be ~0.5-0.65x). S16's whole bet is that 1K tiles beat
+// Legacy's 2K, and without this there is nothing to test it with.
+//
+// Changing it REALLOCATES the atlas, so it is reconciled at GPU idle next to the shadow-mode
+// residency switch (Scene::ReconcileShadowMode) rather than applied where it is set.
+// Memory, R16 depth: 4096 = 33.5 MB, 2048 = 8.4 MB, 1024 = 2.1 MB.
+inline constexpr unsigned kCsmAtlasResMin = 512u;
+inline constexpr unsigned kCsmAtlasResMax = 8192u;
+inline unsigned g_csmAtlasRes = 4096u;
+
 // Rung 0 runtime toggle (default ON): the shadow passes draw via GPU cull + ExecuteIndirect
 // (ShadowGpuData) instead of the per-object CPU RenderShadow loop — the CPU-submission win.
 // Toggle OFF (Ctrl+I, "ToggleIndirectShadows") for the CPU-path A/B. If the cull PSOs fail to
@@ -68,9 +86,25 @@ inline bool g_gbufferHzbCullEnabled = true;
 // whether the VSM pipeline passes run AND which sampler the light/glass shaders use (VsmActive() →
 // useVsm). Toggle Legacy<->VSM with Ctrl+V ("ToggleVsmPageRequest"). Step 24b makes the switch free
 // the inactive mode's GPU resources (only one mode ever resident).
-enum class ShadowMode : std::uint32_t { Legacy = 0, VSM = 1 };
+//
+// S15 adds a THIRD mode, Sdsm: the same CSM atlas and the same indirect caster path, but the four
+// cascades are replaced by four PARTITIONS whose depth interval and light-space box are computed
+// on the GPU from THIS frame's depth buffer (docs/csm_improvement_plan.md S15-S18). It is not a
+// variant of Legacy: Legacy's cascade fit, its splits and its sphere are all bypassed, and the
+// shadow passes move from the head of the frame to after the G-buffer because the analysis needs
+// the depth of the frame being shaded.
+//
+// `VsmActive()` deliberately stays "the mode IS VSM": every existing `!VsmActive()` site means
+// "the LEGACY ATLAS machinery runs" (spot/point atlases at full size, the CSM atlas allocated,
+// glass sampling the atlas), and all of that is true in Sdsm too. Sites that must tell Sdsm from
+// Legacy ask SdsmActive() explicitly.
+enum class ShadowMode : std::uint32_t { Legacy = 0, VSM = 1, Sdsm = 2 };
 inline ShadowMode g_shadowMode = ShadowMode::VSM;
 inline bool VsmActive() { return g_shadowMode == ShadowMode::VSM; }
+inline bool SdsmActive() { return g_shadowMode == ShadowMode::Sdsm; }
+// The directional sun comes from the CSM ATLAS (Legacy fit or SDSM partitions) rather than from
+// the clipmap. The atlas, its gutter, the 2x2 tile grid and the indirect draw path are shared.
+inline bool AtlasDirectional() { return g_shadowMode != ShadowMode::VSM; }
 // `--shadow-mode=` on the command line is a BOOT OVERRIDE: it wins over graphics_settings.json
 // for the session and is never written back into it. Before 2026-09-04 the settings file was
 // applied after the flag and silently replaced it, so a headless `--shadow-mode=vsm` run
@@ -226,6 +260,64 @@ namespace contact
             ? static_cast<std::uint32_t>((frameNumber & 7ull) + 1ull)
             : 0u;
     }
+}
+
+// ---- SDSM (docs/csm_improvement_plan.md S15) ------------------------------------------------
+// Sample Distribution Shadow Maps: the partition intervals AND their light-space boxes come from
+// a compute reduction over this frame's depth buffer, so a cascade covers the depth range and the
+// screen area that is actually THERE instead of a static split and a frustum-slice sphere.
+//
+// Transcribed from the Intel sample (D:\Programming\sdsm\sdsm_dx11): LogPartitions.hlsl
+// (ReduceZBoundsFromGBuffer, LogPartitionFromRange, ComputeLogPartitionsFromZBounds),
+// CustomPartitions.hlsl (ReduceBoundsFromGBuffer) and SDSMPartitions.hlsl
+// (ComputePartitionDataFromBounds). Our deviations are listed in shaders/sdsm_partitions.hlsli.
+//
+// PROCESS globals, like the mode switch itself and for the same reason: `--set=sdsm.*` is applied
+// before any Scene exists and they must survive a level switch. The per-SCENE CSM tuning that
+// SDSM still uses (the depth bias in texels, the filter knobs, the blend fraction) stays in
+// CascadeShadowConfig -- SDSM changes WHERE a cascade looks, not how it is filtered.
+namespace sdsm
+{
+    // How many partitions are computed and rendered. The atlas is the Legacy 2x2 grid, so 4 is
+    // both the default and the cap until S17 makes the count dynamic.
+    inline constexpr std::uint32_t kMaxPartitions = 4u;
+    inline std::uint32_t g_partitions = 4u;
+
+    // `mLightSpaceBorder` (SDSMPartitions.hlsl:35). Expressed in TEXELS of the partition's own
+    // tile, not in the sample's normalized light-space units: our bounds are metres, so a
+    // normalized border would mean a different world distance per partition. It reserves room for
+    // the filter kernel inside the partition's own box -- it is NOT the S5 atlas gutter, which
+    // still exists and still sits outside the content rect.
+    inline float g_borderTexels = 4.0f;
+
+    // `mDilationFactor` (SDSMPartitions.hlsl:38). A fraction of the box's own extent added on
+    // every side. Covers what the per-sample reduction cannot see: a caster whose shadow lands
+    // just outside the visible samples' bounds, and the anisotropic reach of a filter kernel.
+    inline float g_dilation = 0.01f;
+
+    // `mMaxScale` (SDSMPartitions.hlsl:36), expressed as a MULTIPLE OF THE LEGACY SPHERE. The
+    // sample clamp the zoom so a partition holding a handful of samples cannot magnify without
+    // bound; our ceiling is the S1 bounding sphere of the same interval, which is also the
+    // FALLBACK when a partition has no samples at all. 1 = never tighter than Legacy (the A/B
+    // control), 0.05 = at most 20x tighter.
+    inline float g_minScaleOverSphere = 0.02f;
+
+    // Metres added to the light-space Z range on both sides of the sampled bounds, so a caster
+    // between the sun and the visible geometry is still inside the projection. The Legacy twin is
+    // `casterReachWS` + `zPadding`; here the near side is handled by the same pancake clamp S7
+    // uses, so this only has to cover the far cap and the depth-precision margin.
+    inline float g_zMargin = 25.0f;
+
+    // NO `analyzeFullRes` KNOB, and that is a decision rather than an omission. The plan listed
+    // one; it was written, wired to --set, and read by NOBODY -- a control that lies. The
+    // reduction always walks EVERY depth pixel, because a min/max over a strided grid loses a
+    // thin object entirely and a thin object is exactly what pulls a partition's near plane in.
+    // Measured, the whole analysis is 0.037 ms; a half-res mode would save ~0.02 ms and cost
+    // correctness, so there is nothing here worth choosing between.
+
+    // Dump the partition readout (intervals, box extents, texel size, sample counts, the
+    // CPU-caster tail) to the session log on the next analyze, then clear itself. `--sdsm-readout`.
+    inline bool g_dumpReadout = false;
 }
 
 } // namespace render

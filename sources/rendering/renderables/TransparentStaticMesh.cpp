@@ -240,7 +240,7 @@ bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
             ? sky->SpecularSrv()
             : skyDisplaySrv;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 13> srvs{
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 14> srvs{
         sceneColorSrv,
         deferred.shadowSRV,
         deferred.spotShadowSRV,
@@ -255,7 +255,11 @@ bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
         skySpecSrv,                       // t11: P5 prefiltered sky
         // t12: the volumetric fog's integrated volume (plan A5); Main_Transparent declares it
         // PS-readable every frame, the shader gates on fogVolumeParams.x.
-        deferred.fogIntegratedSRV.ptr != 0 ? deferred.fogIntegratedSRV : sceneColorSrv
+        deferred.fogIntegratedSRV.ptr != 0 ? deferred.fogIntegratedSRV : sceneColorSrv,
+        // t13: S15, this frame's SDSM partitions (the dummy buffer in Legacy and VSM -- the shader
+        // gates on csmSdsmParams.x, which is 0 there).
+        renderer->GetSdsmPartitionSrv().ptr != 0 ? renderer->GetSdsmPartitionSrv()
+                                                 : renderer->VsmDummyBufferSrv()
     };
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs).gpu;
 

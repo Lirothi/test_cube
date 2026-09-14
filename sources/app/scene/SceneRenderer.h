@@ -11,6 +11,7 @@
 // pass-flow S7a: Pass_ShadowCull takes ShadowGpuData::CullDecisions by reference, so the type has
 // to be complete here (SceneFrameData only forward-declares the class).
 #include "rendering/shadows/ShadowGpuData.h"
+#include "rendering/shadows/SdsmShadows.h" // S15: the analyze pass's decision type
 #include "rendering/rt/RtSceneAs.h"
 #include "core/task/TaskSystem.h"
 #include "app/scene/SceneFrameData.h"
@@ -105,6 +106,12 @@ private:
         // Render() used to compute this predicate twice under two names (`vsmDirectional` and
         // `vsmActive`) from the same three terms.
         bool vsmActive = false;
+        // S15: directional shadows come from GPU-fitted partitions, so Main_CSM is omitted and the
+        // three SDSM passes take its place -- AFTER the G-buffer, because the fit reduces its depth.
+        bool sdsmActive = false;
+        // Occlusion S5b inside SDSM: the mode runs the two-pass light-space occlusion cull this
+        // frame (the knob, the pyramids, and a previous frame to test against).
+        bool sdsmHzb = false;
         bool vsmSkipUpdate = false;    // nothing moved: keep last frame's pages (was vsmSkipUpdate_)
         bool willDlss = false;         // the DLSS evaluate is predicted to run (was a local)
         // Occlusion plan S5: the camera's two-pass HZB occlusion inside the indirect G-buffer --
@@ -184,6 +191,13 @@ private:
         // Every consumer of the G-buffer chains off this, never off pGbuf directly.
         size_t pGbufDone = kNone;
         size_t pVsmPageRender = kNone;
+        // S15 (SDSM): the depth reduction, the caster cull against the boxes it wrote, and the
+        // depth pass into the CSM atlas. kNone in every other mode. `pSdsmShadow` is what the
+        // sun's consumers (lighting, fog, glass) chain off, exactly as they chain off
+        // pVsmPageRender in VSM mode -- in SDSM the shadow map is finished AFTER the G-buffer.
+        size_t pSdsmAnalyze = kNone;
+        size_t pSdsmCull = kNone;
+        size_t pSdsmShadow = kNone;
         size_t pHzb = kNone;       // gbuffer  -> SSR
         size_t pGtao = kNone;      // gbuffer  -> lighting
         size_t pSkyLuts = kNone; // B1 -> compose debug (later SkyView)
@@ -250,6 +264,19 @@ private:
         const ShadowGpuData::CullPostDecisions& dec);
     void Pass_CSMPost(Renderer* r, RenderGraphPassContext ctx,
         const std::array<SceneView, kCascades>& cascadeViews, std::uint32_t atlasPoint);
+    // S15 (SDSM). Analyze reduces this frame's depth into the partition buffer + the cull planes;
+    // Cull re-runs the SHARED caster cull over the four directional view slots with those planes;
+    // Shadow draws them into the CSM atlas. Same builder/record contract as everything above: the
+    // decision travels by value, so the declarations and the record cannot disagree.
+    void Pass_SdsmAnalyze(Renderer* r, RenderGraphPassContext ctx,
+        const SdsmShadows::AnalyzeDecisions& dec);
+    void Pass_SdsmCull(Renderer* r, RenderGraphPassContext ctx,
+        const ShadowGpuData::DirectionalCullDecisions& dec);
+    // `passB` draws the post cull's survivors (the main cull's bad occlusion guesses) into the
+    // same tiles, without the clear -- occlusion S5b's two-pass shape, reused verbatim.
+    void Pass_SdsmShadow(Renderer* r, RenderGraphPassContext ctx, std::uint32_t atlasPoint, bool passB);
+    void Pass_SdsmCullPost(Renderer* r, RenderGraphPassContext ctx,
+        const ShadowGpuData::CullPostDecisions& dec);
     // pass-flow S7d: `bindPoint` is the outer pass's single declared point; the INNER graph's
     // driver emits it instead of carrying a second copy of the same declaration list.
     void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,

@@ -161,6 +161,10 @@ namespace scene_internal
         float shadowClampNear = 0.0f;   // 236 (S7 pancaking; plumbed here, still unused)
     };
     static_assert(sizeof(PerViewCB) == 240, "PerViewCB must match the gbuffer/shadow HLSL layout");
+    // S15: what SDSM's analyze pass writes per partition, in this very layout, straight into a
+    // DEFAULT-heap buffer that the depth pass then binds as its b1 root CBV. 256 because a root
+    // CBV address must be 256-byte aligned; the block's last 16 bytes are padding.
+    inline constexpr std::uint32_t kSdsmViewCbStride = 256u;
 
     // Matches glass.hlsl `cbuffer GlassView : register(b1)`.
     struct GlassViewCB
@@ -201,6 +205,7 @@ namespace scene_internal
         float4 fogParams0;            // PackHeightFog: density, height falloff, reference height, start distance
         float4 fogParams1;            // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
         float4 fogParams2;            // sky blur, sky back-scatter, zw reserved
+        float4 csmSdsmParams;         // S15: x = active SDSM partitions, 0 = not SDSM mode
     };
 
     // MIRRORS the OceanReflectionCB in shaders/ocean_reflection_cs.hlsl. This one is uploaded by
@@ -299,6 +304,7 @@ namespace scene_internal
         return UploadFrameCB(renderer, vc);
     }
 
+
     inline D3D12_GPU_VIRTUAL_ADDRESS BuildGlassViewCB(Renderer* renderer, const Camera& camera, const SceneFrameData& frame,
                                                      const float4& fogVolumeParams, const float4& fogVolumeZParams,
                                                       bool glassReflActive)
@@ -385,6 +391,11 @@ namespace scene_internal
         vc.smrtParams2 = float4(std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f),
                                 vsm::g_smrtTexelDitherScale, vsm::g_smrtLevelMargin,
                                 (float)frame.smrtFrameIndex);
+        // S15: non-zero makes glass overwrite the cascade fields of CsmParams from the partition
+        // buffer, exactly as lighting_cb.hlsli's MakeCsmParams does. Glass MUST agree with the
+        // geometry beside it -- that disagreement is what S3 existed to remove.
+        vc.csmSdsmParams = float4(frame.sdsm ? (float)frame.sdsm->FrameParams().partitions : 0.0f,
+                                  0.0f, 0.0f, 0.0f);
         if (frame.clipmapViews)
         {
             for (size_t i = 0; i < vsm::kNumClipmapLevels && i < frame.clipmapViews->size(); ++i)

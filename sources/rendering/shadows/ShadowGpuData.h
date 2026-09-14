@@ -123,6 +123,49 @@ public:
     };
     CullPostDecisions PrepareCullPostPass(RenderGraphPassContext& ctx);
     void RecordCullPost(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullPostDecisions& dec);
+
+    // ---- S15 (SDSM): the DIRECTIONAL re-cull -------------------------------------------------
+    // In SDSM the four directional view slots have no CPU frustum at all -- their boxes are
+    // computed by Main_SdsmAnalyze, after the G-buffer. The main cull (which has to stay at the
+    // head of the frame, because the camera row feeds the indirect G-buffer) therefore fills rows
+    // 0..3 with the Legacy cascade frusta, and this pass OVERWRITES them: the SAME clear and cull
+    // shaders, dispatched with `gNumViews = kMaxPartitions` and the SDSM plane buffer at t1, so
+    // rows 0..3 are re-seeded and re-filled before anything reads them.
+    //
+    // No shader edit was needed for this and that is the point: the clear's loop covers
+    // [0, gNumViews) rows and the cull's loop [0, gNumViews) views, so a smaller gNumViews IS the
+    // sub-range. Legacy and VSM pass the same CB they always did and are byte-identical.
+    struct DirectionalCullDecisions
+    {
+        bool active = false;
+        std::uint32_t views = 0;                   // how many directional slots to re-cull
+        D3D12_CPU_DESCRIPTOR_HANDLE planeSrv{};    // the GPU-written planes (SdsmShadows::FrustumSrv)
+        // S15 + occlusion S5b: the GPU-written CascadeHzbCB (SdsmShadows::CullCbAddress). Non-zero
+        // turns the two-pass occlusion cull on for the mode -- the cull defers whatever LAST
+        // frame's tile pyramid hid, and the post pair below cleans up the bad guesses.
+        D3D12_GPU_VIRTUAL_ADDRESS hzbCB = 0;
+        bool hzb = false;
+        std::uint32_t base = 0;                    // args/visible list -> UAV
+        std::uint32_t consume = 0;                 // args -> INDIRECT_ARGUMENT, list -> vertex stream
+    };
+    DirectionalCullDecisions PrepareDirectionalCullPass(RenderGraphPassContext& ctx,
+                                                        D3D12_CPU_DESCRIPTOR_HANDLE planeSrv,
+                                                        std::uint32_t views,
+                                                        D3D12_GPU_VIRTUAL_ADDRESS hzbCB,
+                                                        bool hzb);
+    void RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                               const DirectionalCullDecisions& dec);
+    // The SDSM twin of PrepareCullPostPass: the deferred casters retested against THIS frame's
+    // pyramids. Identical machinery; the only difference is that the matrices come from the
+    // GPU-written CB rather than from CascadeHzb's CPU history.
+    CullPostDecisions PrepareSdsmCullPostPass(RenderGraphPassContext& ctx, D3D12_GPU_VIRTUAL_ADDRESS hzbCB);
+    void RecordSdsmCullPost(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                            const CullPostDecisions& dec, D3D12_GPU_VIRTUAL_ADDRESS hzbCB);
+    // S15 readout: GPU-instanced casters the GI fold did NOT take this frame. In Legacy they are
+    // drawn by Pass_CSM's CPU tail with the cascade's matrix; in SDSM there is no CPU matrix to
+    // draw them with, so they cannot cast at all -- and this is the number that says whether that
+    // matters on this level. Counted over the object list, cheap (a handful of GI objects).
+    std::uint32_t CountCpuTailCasters(const std::vector<std::unique_ptr<RenderableObjectBase>>& objects) const;
     // Decided by PrepareCullPass; the S5b passes' builders read it (builders run serially, in
     // schedule order, so the cull's decision is final by the time they ask).
     bool CascadeHzbCullThisFrame() const { return hzbCullThisFrame_; }
@@ -201,6 +244,17 @@ public:
     // the tile content size the pyramids are built over. Creates the pyramids on first use.
     void SetCascadeHzbViews(Renderer* renderer, const Math::mat4* lightViewProj, std::uint64_t frameNumber,
                             bool wantOn, UINT contentRes);
+    // S15: the SDSM twin. Same pyramids, same residency, same PrevValid bookkeeping -- but the
+    // matrices are the analyze pass's, not the CPU's. Returns what the analyze has to put in the
+    // CascadeHzbCB block it writes, so the two cannot disagree about whether the test is on.
+    struct SdsmHzbState
+    {
+        bool on = false;                 // the pyramids exist and the test should run this frame
+        std::uint32_t prevValid[4] = { 0u, 0u, 0u, 0u };
+        std::int32_t viewRect[4] = { 0, 0, 0, 0 };
+        std::uint32_t hzbSize[2] = { 0u, 0u };
+    };
+    SdsmHzbState SetSdsmHzbViews(Renderer* renderer, std::uint64_t frameNumber, bool wantOn, UINT contentRes);
     // The counters of frame N - kFrameCount, mapped when its fence has passed: per cascade,
     // casters the main cull deferred and casters pass B drew (the cut = the difference).
     void PollHzbStats(Renderer* renderer);
@@ -224,6 +278,10 @@ public:
     // `viewSlot` indexes the args/frustum layout (cascade i | 4+spot | 12+point-face). Returns
     // false (drew nothing) if not ready. Thread-safe for the parallel per-view shadow CLs.
     // S5b: `passB` draws the post cull's args/list (cascade rows only) instead of the main cull's.
+    // S15 needs no parameter here: an SDSM partition IS a view slot (its atlas tile and its args
+    // row carry the same index a cascade's do), and its projection arrives as `viewCB` like any
+    // other -- from a GPU-written block rather than a CPU upload, which this function cannot tell
+    // apart and does not need to.
     bool RecordIndirectShadowDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                    std::uint32_t viewSlot, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
                                    bool passB = false);
@@ -330,6 +388,9 @@ public:
     // one PSO for the whole set (opaque groups early-out in the PS), so the single-ExecuteIndirect
     // structure of both consumers (per-view CSM + VSM per-page) is preserved.
     Material* IndirectShadowMaterial() const; // defined in the .cpp (needs Material's definition)
+
+    // S15: the gate the mode's passes ask. SDSM draws with the LEGACY atlas PSOs.
+    bool SdsmDrawReady() const;
 
     // Same selection rule, but the VSM_PAGE permutations: ONE ExecuteIndirect over every pool page
     // instead of the per-page CPU loop. Null when those PSOs failed to build, which is the signal
@@ -611,6 +672,7 @@ private:
     // per-page loop. Used ONLY by VirtualShadowMap::RecordPageRender, never by the Legacy path.
     std::shared_ptr<Material> indirectShadowPageMat_;
     std::shared_ptr<Material> indirectShadowPageMaskedMat_;
+
     // Pool-format (D32) twins of the plain/masked pair, for the VSM per-page LOOP fallback only.
     std::shared_ptr<Material> indirectShadowPoolMat_;
     std::shared_ptr<Material> indirectShadowPoolMaskedMat_;

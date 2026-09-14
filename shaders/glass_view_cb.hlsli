@@ -54,6 +54,9 @@ cbuffer GlassView : register(b1)
     float4 fogParams0;            // density, height falloff, reference height, start distance
     float4 fogParams1;            // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
     float4 fogParams2;            // sky blur, sky back-scatter, zw reserved
+    // S15: x = active SDSM partitions, 0 = not SDSM mode (the gate on reading SdsmPartitions).
+    // APPENDED at the tail, the same rule the fog block above followed.
+    float4 csmSdsmParams;
 };
 
 #endif // GLASS_VIEW_CB_HLSLI

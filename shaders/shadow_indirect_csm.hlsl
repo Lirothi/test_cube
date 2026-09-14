@@ -212,20 +212,29 @@ cbuffer PerView : register(b1)
     float  shadowClampNear;   // 236 (S7)
 };
 
+// S15 (SDSM) NEEDS NO PERMUTATION HERE, and that is deliberate. Its projection and bias ARE GPU
+// results, but they arrive the same way Legacy's do: as this very cbuffer. The analyze pass writes
+// a finished 256-byte PerView block per partition into a DEFAULT-heap buffer and the CPU binds
+// that block's address as the b1 root CBV (SdsmShadows::ViewCbAddress). A permutation that read
+// the matrix out of a StructuredBuffer existed first and was deleted: it cost a per-VERTEX load of
+// a draw-uniform value, two more PSOs, a reshuffled descriptor table in the masked variant, and 16
+// bytes on every PerView in the engine -- for a value D3D12 is perfectly happy to take as a CBV,
+// because SDSM issues one ExecuteIndirect per partition and a root CBV is legal per draw.
 inline float4 WindTransformH(float3 objPos, float3 objNormal, float4x4 world, float4 windWeights,
                              float windStrengthValue, float foliageValue, float trunkStiffValue,
                              float leafScaleValue)
 {
+    const float4x4 vp = viewProj;
+    const float4 bias = float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear);
     const float4 H = WindTransformCore(objPos, world, windWeights, windStrengthValue, foliageValue,
-                                       trunkStiffValue, leafScaleValue, viewProj,
+                                       trunkStiffValue, leafScaleValue, vp,
                                        float4(windTime, windPrevTime, windDirXZ),
                                        float4(windSwayAmp, windSwayFreq, windGustMul, windPrevGustMul),
                                        float4(0.0f, 0.0f, 0.0f, 0.0f)); // no falloff on the legacy path
 #if SHADOW_DEPTH_BIAS
     // S6. Wind has already moved the vertex; the normal is NOT re-oriented by the sway, exactly as
     // the gbuffer leaves it -- a swayed leaf's lighting normal and its shadow bias then agree.
-    return ApplyShadowDepthBias(H, mul(objNormal, (float3x3)world), viewProj,
-                                float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear));
+    return ApplyShadowDepthBias(H, mul(objNormal, (float3x3)world), vp, bias);
 #else
     return H;
 #endif

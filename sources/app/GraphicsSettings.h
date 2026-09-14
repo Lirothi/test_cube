@@ -78,6 +78,14 @@ enum class GraphicsControl
     CsmSharpen,
     CsmReceiverBias,
     CsmOverBlur,
+    CsmAtlasRes,
+    // S15 (SDSM). In the CSM group on purpose: they tune the same atlas and the same filter, and
+    // the CSM tab's Reset button is what a user reaches for after moving them.
+    SdsmPartitions,
+    SdsmBorder,
+    SdsmDilation,
+    SdsmMinScale,
+    SdsmZMargin,
     ContactEnabled,
     ContactLocalMode,
     ContactTemporal,

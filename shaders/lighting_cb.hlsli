@@ -130,6 +130,10 @@ cbuffer PerFrame : register(b0)
     // visibility wherever it is sampled. cloudShadowParams.x 0 = no map this frame; y = far depth km.
     float4x4 cloudShadowViewProj;
     float4 cloudShadowParams;
+    // S15: active SDSM partitions this frame, 0 = not SDSM mode. The one gate on reading the
+    // partition buffer -- in Legacy and VSM a placeholder SRV sits in its slot.
+    uint csmSdsmPartitions;
+    uint3 _padSdsm;
 }
 
 
@@ -169,6 +173,10 @@ CsmParams MakeCsmParams()
     p.blendFraction        = csmFadeParams.y;
     p.distanceFadeFraction = csmFadeParams.z;
     p.useGatherPcf     = csmFilterMode;
+    // S15: in SDSM the six fields above that describe WHERE a cascade looks were computed by this
+    // frame's reduction, not by the CPU -- overwrite them from the buffer. Everything else (the
+    // filter, the biases in texels, the blend fractions) is per-scene tuning that SDSM shares.
+    if (csmSdsmPartitions != 0u) { CsmApplySdsm(p, SdsmPartitions, csmSdsmPartitions); }
     return p;
 }
 

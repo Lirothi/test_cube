@@ -419,7 +419,11 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
 
     // Step 24f-2 (decided in DecideFrame): in VSM mode the CSM pass is omitted entirely and
     // downstream passes chain off the cull instead.
-    if (decisions_.vsmActive)
+    // S15: SDSM omits it for a DIFFERENT reason -- the atlas is still the target, but its four
+    // tiles are drawn by Main_SdsmShadow after the G-buffer, from partitions this frame's depth
+    // produced. Leaving Main_CSM in would draw the Legacy cascades into the same tiles first, and
+    // every texel of it would then be cleared and overwritten.
+    if (decisions_.vsmActive || decisions_.sdsmActive)
     {
         gb.pShadow = pShadowCull;
     }
@@ -746,6 +750,119 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                     Pass_VsmPageRender(renderer, c, dec);
                 };
             });
+    }
+
+    // ---- S15 (SDSM): analyze -> cull -> shadow, all AFTER the G-buffer -------------------------
+    // This is the mode's defining structural change. Legacy renders the sun's cascades at the head
+    // of the frame because their fit is CPU-side and depends on nothing this frame draws; SDSM
+    // fits its partitions to THIS frame's depth buffer, so the whole directional chain moves here.
+    // The cost of that is the same one VSM already pays -- the shadow work no longer overlaps the
+    // G-buffer -- which is why the acceptance criterion is GPU.Frame, not the pass.
+    //
+    // `frame_->sdsm` is the single gate (Scene::UpdateSdsmFrameParams): mode is Sdsm AND the
+    // resources built AND the atlas exists. A null there leaves all three passes unregistered, so
+    // a failure degrades to Legacy's own chain rather than to an empty atlas.
+    gb.pSdsmAnalyze = GraphBuild::kNone;
+    gb.pSdsmCull = GraphBuild::kNone;
+    gb.pSdsmShadow = GraphBuild::kNone;
+    if (decisions_.sdsmActive)
+    {
+        gb.pSdsmAnalyze = rg.AddPass2(RenderPass::Main_SdsmAnalyze, { gb.pGbufDone },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                if (!frame_->sdsm) { return {}; }
+                const SdsmShadows::AnalyzeDecisions dec = frame_->sdsm->PrepareAnalyzePass(ctx);
+                if (!dec.active) { return {}; }
+                return [this, renderer, dec](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassSdsmAnalyze);
+                    Pass_SdsmAnalyze(renderer, c, dec);
+                };
+            });
+
+        gb.pSdsmCull = rg.AddPass2(RenderPass::Main_SdsmCull, { gb.pSdsmAnalyze },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                if (!frame_->sdsm || !frame_->shadowGpu) { return {}; }
+                const ShadowGpuData::DirectionalCullDecisions dec =
+                    frame_->shadowGpu->PrepareDirectionalCullPass(ctx, frame_->sdsm->FrustumSrv(),
+                                                                  frame_->sdsm->FrameParams().partitions,
+                                                                  frame_->sdsm->CullCbAddress(),
+                                                                  decisions_.sdsmHzb);
+                if (!dec.active) { return {}; }
+                return [this, renderer, dec](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassShadowCull);
+                    Pass_SdsmCull(renderer, c, dec);
+                };
+            });
+
+        gb.pSdsmShadow = rg.AddPass2(RenderPass::Main_SdsmShadow, { gb.pSdsmCull }, /*mtDeps=*/{},
+            { { D.shadow, D3D12_RESOURCE_STATE_DEPTH_WRITE } },
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                if (!frame_->sdsm || !frame_->shadowGpu || !frame_->shadowGpu->SdsmDrawReady()) { return {}; }
+                ctx.UseDeclared(); // the CSM atlas -> DEPTH_WRITE
+                const std::uint32_t atlasPoint = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.NextPoint();
+                return [this, renderer, atlasPoint](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassSdsmShadow);
+                    Pass_SdsmShadow(renderer, c, atlasPoint, /*passB=*/false);
+                };
+            });
+
+        // Occlusion S5b for SDSM -- the same three passes the Legacy chain has, and the same enum
+        // values: they build the same pyramids from the same atlas and draw into the same tiles.
+        // Only the MATRICES differ, and those the analyze wrote into a GPU constant block, so not
+        // one of the three shaders knows which mode it is serving.
+        if (decisions_.sdsmHzb)
+        {
+            auto pSdsmHzb = rg.AddPass2(RenderPass::Main_CsmHzb, { gb.pSdsmShadow },
+                [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                    ShadowGpuData* sg = frame_->shadowGpu;
+                    if (!sg || !sg->CascadeHzbCullThisFrame()) { return {}; }
+                    render::CascadeHzb& hzb = sg->CascadeHzbRef();
+                    const auto& DF = ctx.renderer->GetDeferredForFrame();
+                    if (!hzb.Ready() || DF.shadow == nullptr || DF.shadowSRV.ptr == 0) { return {}; }
+                    const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+                    ctx.Use(DF.shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                    for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c)
+                    {
+                        ctx.Use(hzb.Pyramid(c), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                    }
+                    ctx.NextPoint();
+                    for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c)
+                    {
+                        ctx.Use(hzb.Pyramid(c), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                    }
+                    hzb.MarkBuilt(ctx.renderer->GetTotalFrameNumber());
+                    return [this, renderer, point](RenderGraphPassContext c) {
+                        CPU_SCOPE(ProfilerScopes::kPassCsmHzb);
+                        Pass_CsmHzb(renderer, c, point);
+                    };
+                });
+            auto pSdsmCullPost = rg.AddPass2(RenderPass::Main_ShadowCullPost, { pSdsmHzb },
+                [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                    if (!frame_->shadowGpu || !frame_->sdsm) { return {}; }
+                    const ShadowGpuData::CullPostDecisions dec =
+                        frame_->shadowGpu->PrepareSdsmCullPostPass(ctx, frame_->sdsm->CullCbAddress());
+                    if (!dec.active) { return {}; }
+                    return [this, renderer, dec](RenderGraphPassContext c) {
+                        CPU_SCOPE(ProfilerScopes::kPassShadowCullPost);
+                        Pass_SdsmCullPost(renderer, c, dec);
+                    };
+                });
+            gb.pSdsmShadow = rg.AddPass2(RenderPass::Main_CSMPost, { pSdsmCullPost }, /*mtDeps=*/{},
+                { { D.shadow, D3D12_RESOURCE_STATE_DEPTH_WRITE } },
+                [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                    if (!frame_->sdsm || !frame_->shadowGpu || !frame_->shadowGpu->CascadeHzbCullThisFrame()) { return {}; }
+                    ctx.UseDeclared(); // the atlas -> DEPTH_WRITE, back from the pyramid build's read
+                    const std::uint32_t atlasPoint = ctx.usePoint ? *ctx.usePoint : 0u;
+                    ctx.NextPoint();
+                    return [this, renderer, atlasPoint](RenderGraphPassContext c) {
+                        CPU_SCOPE(ProfilerScopes::kPassCSMPost);
+                        Pass_SdsmShadow(renderer, c, atlasPoint, /*passB=*/true);
+                    };
+                });
+        }
+        // The sun's consumers order after the LAST pass that writes the atlas, not after the (now
+        // stale) Main_CSM slot.
+        gb.pShadow = gb.pSdsmShadow;
     }
 
     // P6B: AO reads the G-buffer normal and depth and writes its own half-res target, so it only
@@ -1092,6 +1209,9 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         RenderGraph<kMainRenderGraphPassCount>::DependencyList fogPrereqs;
         fogPrereqs.push_back(gb.pGbufDone);
         if (vsmShadows) { fogPrereqs.push_back(gb.pVsmPageRender); }
+        // S15: same reason as lighting -- the fog's scatter samples the sun's shadow map, and in
+        // SDSM that map is not finished until after the G-buffer.
+        if (gb.pSdsmShadow != GraphBuild::kNone) { fogPrereqs.push_back(gb.pSdsmShadow); }
         // A3: the conservative depth reads this frame's FINAL furthest pyramid.
         if (decisions_.fogConservativeDepth && gb.pHzb != GraphBuild::kNone) { fogPrereqs.push_back(gb.pHzb); }
         // C3: the cloud shadow map, on the frames it was built.
@@ -1140,6 +1260,10 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     RenderGraph<kMainRenderGraphPassCount>::DependencyList lightPrereqs;
     lightPrereqs.push_back(gb.pGbufDone);
     if (decisions_.vsmActive && gb.pVsmPageRender != static_cast<size_t>(-1)) { lightPrereqs.push_back(gb.pVsmPageRender); }
+    // S15: in SDSM the sun's atlas is finished AFTER the G-buffer, so lighting has to order after
+    // the depth pass the same way it orders after the VSM page render. A REAL prerequisite, not
+    // just the mtDep `gb.pShadow` already carries: the atlas content is what this pass samples.
+    if (gb.pSdsmShadow != GraphBuild::kNone) { lightPrereqs.push_back(gb.pSdsmShadow); }
     lightPrereqs.push_back(gb.pGtao);
     if (gb.pCloudShadow != GraphBuild::kNone && lightPrereqs.size() < lightPrereqs.capacity()) { lightPrereqs.push_back(gb.pCloudShadow); }
     if (decisions_.vsmActive && gb.pVsmPageRender != static_cast<size_t>(-1))

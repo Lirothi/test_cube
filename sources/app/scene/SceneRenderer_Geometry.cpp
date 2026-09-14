@@ -361,6 +361,10 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
     {
         renderer->SetVsmShadowSrvs({}, {});
     }
+    // S15: the same transport for the SDSM partitions (t13). Null outside SDSM mode, which
+    // substitutes the inert dummy buffer -- glass gates on csmSdsmParams.x.
+    renderer->SetSdsmPartitionSrv(frame_->sdsm ? frame_->sdsm->PartitionSrv()
+                                               : D3D12_CPU_DESCRIPTOR_HANDLE{});
 
     RenderGraph<kTransparentRenderGraphPassCount> rgTr(ctx.batchIndex);
 
@@ -438,6 +442,9 @@ void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext 
     {
         renderer->SetVsmShadowSrvs({}, {});
     }
+    // S15: the same transport for the SDSM partitions (t13) -- see Pass_Transparent.
+    renderer->SetSdsmPartitionSrv(frame_->sdsm ? frame_->sdsm->PartitionSrv()
+                                               : D3D12_CPU_DESCRIPTOR_HANDLE{});
 
     RenderGraph<kTranslucentRenderGraphPassCount> rgTl(ctx.batchIndex);
 

@@ -54,6 +54,14 @@ enum class RenderPass : uint16_t {
     Main_ObjectIdReadback,
     Main_VsmPageRequest,
     Main_VsmPageRender,
+    // S15 (SDSM). These sit HERE, after the G-buffer, and that is the defining structural change
+    // of the mode: the partition fit is a reduction over THIS frame's depth, so the sun's shadow
+    // map can no longer be rendered at the head of the frame. Analyze reduces the depth into the
+    // partition buffer, then the shared caster cull runs against the boxes it wrote
+    // (Main_SdsmCull, the same shader as Main_ShadowCull), then the depth pass draws them.
+    Main_SdsmAnalyze,
+    Main_SdsmCull,
+    Main_SdsmShadow,
     Main_OcclusionQueries, // occlusion plan S3a: box queries against the G-buffer depth
     Main_Gtao,   // P6B screen-space ambient occlusion, between the G-buffer and lighting
     Main_VolumetricFog, // plan part A: the froxel scatter + integration, before lighting/compose
@@ -154,6 +162,9 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_ObjectIdReadback: return L"ObjectIdReadback";
     case RenderPass::Main_VsmPageRequest: return L"VsmPageRequest";
     case RenderPass::Main_VsmPageRender: return L"VsmPageRender";
+    case RenderPass::Main_SdsmAnalyze: return L"SdsmAnalyze";
+    case RenderPass::Main_SdsmCull: return L"SdsmCull";
+    case RenderPass::Main_SdsmShadow: return L"SdsmShadow";
     case RenderPass::Main_OcclusionQueries: return L"OcclusionQueries";
     case RenderPass::Main_Gtao: return L"Gtao";
     case RenderPass::Main_VolumetricFog: return L"VolumetricFog";

@@ -40,6 +40,7 @@
 #include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/shadows/SdsmShadows.h" // S15: the partition buffer + the analyze record
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
 #include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
@@ -488,6 +489,90 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->EndThreadCommandList(t, ctx.batchIndex, static_cast<uint32_t>(idx) + 1u);
     }
 #endif
+}
+
+// ---- S15 (SDSM): analyze, cull, draw --------------------------------------------------------
+void SceneRenderer::Pass_SdsmAnalyze(Renderer* renderer, RenderGraphPassContext ctx,
+    const SdsmShadows::AnalyzeDecisions& dec)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassSdsmAnalyze);
+        if (frame_->sdsm) { frame_->sdsm->RecordAnalyze(renderer, t.cl, dec); }
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_SdsmCull(Renderer* renderer, RenderGraphPassContext ctx,
+    const ShadowGpuData::DirectionalCullDecisions& dec)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassShadowCull);
+        if (frame_->shadowGpu) { frame_->shadowGpu->RecordDirectionalCull(renderer, t.cl, dec); }
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_SdsmCullPost(Renderer* renderer, RenderGraphPassContext ctx,
+    const ShadowGpuData::CullPostDecisions& dec)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassShadowCullPost);
+        if (frame_->shadowGpu && frame_->sdsm)
+        {
+            frame_->shadowGpu->RecordSdsmCullPost(renderer, t.cl, dec, frame_->sdsm->CullCbAddress());
+        }
+    }
+    ctx.EndCL(t);
+}
+
+void SceneRenderer::Pass_SdsmShadow(Renderer* renderer, RenderGraphPassContext ctx,
+    std::uint32_t atlasPoint, bool passB)
+{
+    ShadowGpuData* shadowGpu = frame_->shadowGpu;
+    SdsmShadows* sdsm = frame_->sdsm;
+    // NO EARLY RETURN before the point below: this pass declared the atlas DEPTH_WRITE, and a
+    // body that skips its own marker leaves that transition unrecorded while the compile believes
+    // it happened. The builder already gated on both pointers, so this is belt and braces -- but
+    // it is the belt the comparator checks.
+
+    // ONE list for all four partitions, unlike Pass_CSM's fan-out. The per-cascade workers exist
+    // there because the CPU tail (RenderShadow per object) is the expensive half; here every draw
+    // is an ExecuteIndirect whose instance count the GPU decided, so the recording is four binds
+    // and a handful of indirect calls -- nothing to spread over threads.
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassSdsmShadow);
+        renderer->EmitPoint(t.cl, atlasPoint);
+        // Pass A clears the whole atlas once, exactly as Pass_CSM does: the S5 gutter has to keep
+        // the clear value (1.0 = lit) or a filter tap that lands in it reads a stale shadow.
+        // Pass B draws into the SAME tiles and must not clear them.
+        if (!passB) { renderer->BindShadowTarget(t.cl, 0, /*clear=*/true); }
+
+        const std::uint32_t partitions = (shadowGpu && sdsm)
+            ? std::min<std::uint32_t>(sdsm->FrameParams().partitions, render::sdsm::kMaxPartitions)
+            : 0u;
+        for (std::uint32_t p = 0; p < partitions; ++p)
+        {
+            // Partition p -> atlas tile p -> args row p: the same identity a cascade index carries,
+            // which is what lets the whole indirect path stay unchanged.
+            renderer->BindShadowTarget(t.cl, static_cast<int>(p), /*clear=*/false);
+            // No scissor (S11): the partition box IS the tight rect, so there is nothing left for a
+            // view-cone scissor to cut -- and a rect computed from a CPU cascade would be wrong here.
+            //
+            // The projection and the bias come from the block the ANALYSIS wrote, bound by address
+            // as an ordinary root CBV. Pass B uses the same block: a different bias between the two
+            // halves of one tile would seam the shadow down the middle.
+            shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, p, sdsm->ViewCbAddress(p), passB);
+        }
+    }
+    ctx.EndCL(t);
 }
 
 const Profiler::ScopeNameKey kShadows1 = Profiler::RegisterTraceLiteral(L"SpotShadows1");

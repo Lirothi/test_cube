@@ -521,7 +521,10 @@ int WINAPI WinMain(
     if (lpCmdLine) {
         if (const char* flag = std::strstr(lpCmdLine, "--shadow-mode=")) {
             const char* p = flag + std::strlen("--shadow-mode=");
+            // S15: three modes now. Anything unrecognised still lands on VSM, which is the build
+            // default -- a typo must not silently select a mode the run was not asked for.
             render::g_shadowMode = (std::strncmp(p, "legacy", 6) == 0) ? render::ShadowMode::Legacy
+                                 : (std::strncmp(p, "sdsm", 4) == 0)   ? render::ShadowMode::Sdsm
                                                                        : render::ShadowMode::VSM;
             render::g_shadowModeFromCli = true; // wins over graphics_settings.json (see ShadowSettings.h)
         }
@@ -830,6 +833,13 @@ int WINAPI WinMain(
         }
         if (std::strstr(lpCmdLine, "--csm-readout")) {
             render::g_csmDumpReadout = true;
+        }
+        // S15: "--sdsm-readout" dumps the partition table (interval, light-space box, texel size,
+        // sample count, the CPU-caster tail) into the session log once the analysis has settled.
+        // Same reason as --csm-readout: a headless --shot run has no dev window to read it from,
+        // and the texel size is the whole acceptance criterion of the step.
+        if (std::strstr(lpCmdLine, "--sdsm-readout")) {
+            render::sdsm::g_dumpReadout = true;
         }
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
         // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our

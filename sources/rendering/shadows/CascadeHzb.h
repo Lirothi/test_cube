@@ -61,6 +61,13 @@ public:
     // matrices (forward-Z, row vectors) and whether the cull should test this frame at all.
     // Whatever was set last frame becomes `prev`.
     void SetFrameViews(const Math::mat4* lightViewProj, std::uint64_t frameNumber, bool active);
+    // S15 (SDSM): the same per-frame bookkeeping for a mode whose light matrices live ONLY on the
+    // GPU. Everything this class stores about them -- `prevViewProjRev_` / `viewProjRev_` -- is
+    // only ever read back out through FillParams, and SDSM does not use FillParams: its analyze
+    // pass assembles the whole CascadeHzbCB itself, prev matrices included. What is left, and what
+    // this sets, is the part that is genuinely CPU state: which frame we are on and whether the
+    // pyramids hold the previous one (PrevValid).
+    void SetFrameExternalViews(std::uint64_t frameNumber, bool active);
     bool Active() const { return active_; }
     // The pyramid of cascade `c` holds last frame's tile, built with `prev`'s matrices.
     bool PrevValid(unsigned c) const;

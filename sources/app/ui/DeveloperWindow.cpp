@@ -132,7 +132,10 @@ namespace
         case GraphicsControl::ReflectionTemporal:
         case GraphicsControl::RtWindBlas:
         case GraphicsControl::LodEnabled:
-        case GraphicsControl::ShadowMode:
+        // ShadowMode is NOT here any more: S15 made it a three-way combo, and this list decides
+        // where the reset icon is placed. A toggle's frame is one FrameHeight wide, so the icon
+        // landed a checkbox-width in -- i.e. on top of the combo's own text ("SDS(o)(GPU-fit)").
+        // Anything whose frame is CalcItemWidth() wide belongs in the default branch.
         case GraphicsControl::CsmAutoSplits:
         case GraphicsControl::CsmScissorOptim:
         case GraphicsControl::CsmAccurateCasterCull:
@@ -437,6 +440,27 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         ImGui::SetNextItemWidth(width); \
         return (expression); \
     })
+
+    // S15 -- THE shadow-mode control, in one place and drawn from both tabs (CSM and VSM). It was
+    // two checkboxes, one per tab, each phrased as "my algorithm is the active one"; with a third
+    // mode that phrasing cannot be honest in either tab. The order matches the Ctrl+V cycle.
+    auto DrawShadowModeCombo = [&](const char* id)
+    {
+        static const char* const kModeNames[] = { "Legacy CSM", "VSM (clipmap)", "SDSM (GPU-fit)" };
+        int modeIdx = static_cast<int>(render::g_shadowMode);
+        if (GRAPHICS_CONTROL(ShadowMode, id,
+            ImGui::Combo("Shadow mode [Ctrl+V]", &modeIdx, kModeNames, 3)))
+        {
+            render::g_shadowMode = static_cast<render::ShadowMode>(std::clamp(modeIdx, 0, 2));
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Which machinery produces the SUN's shadow.\n"
+                              "Legacy CSM: four cascades fitted on the CPU to frustum-slice spheres.\n"
+                              "VSM: the virtual clipmap (directional and locals).\n"
+                              "SDSM: four partitions whose depth range AND light-space box are reduced\n"
+                              "from THIS frame's depth buffer on the GPU. Same atlas, same filter --\n"
+                              "the cascades simply stop covering empty air.");
+    };
 
     if (!open_)
     {
@@ -1610,19 +1634,57 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "frame (Scene::UpdateCascades), not a value the UI re-derived.");
                 ImGui::Separator();
 
-                bool legacyMode = !render::VsmActive();
-                if (GRAPHICS_CONTROL(ShadowMode, "legacyShadowMode",
-                    ImGui::Checkbox("Legacy CSM active [Ctrl+V]", &legacyMode)))
-                    render::g_shadowMode = legacyMode ? render::ShadowMode::Legacy : render::ShadowMode::VSM;
-                if (!legacyMode)
+                // S15: three modes, so this is a 3-way pick, not a checkbox. A checkbox that reads
+                // "Legacy CSM active" while the mode is SDSM would be lying about two different
+                // things at once (which algorithm runs, and whether the table below is what the
+                // picture came from).
+                DrawShadowModeCombo("csmShadowMode");
+                if (render::VsmActive())
                     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
                         "VSM drives directional shadows right now. The cascades below are still\n"
                         "computed every frame, but nothing samples them \xE2\x80\x94 the readout is live,\n"
-                        "the picture is not. Uncheck the box above before judging any change.");
+                        "the picture is not. Switch the mode above before judging any change.");
+                else if (render::SdsmActive())
+                    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                        "SDSM drives directional shadows right now. The table below is the LEGACY\n"
+                        "fit, still computed every frame but not what the picture came from \xE2\x80\x94 it is\n"
+                        "the A/B baseline. The partitions actually used are in the SDSM section.");
 
                 CascadeShadowConfig& csmCfg = scene.CascadeConfig();
 
                 ImGui::SeparatorText("Coverage");
+                // The atlas edge. A COMBO of powers of two, not a slider: the 2x2 split and the
+                // gutter arithmetic want an even edge, and the interesting values are four.
+                // Changing it reallocates the atlas at GPU idle (Scene::ReconcileShadowMode), so
+                // it stutters once on change -- like the Legacy/VSM switch above.
+                {
+                    static const char* const kResNames[] = { "512", "1024", "2048", "4096", "8192" };
+                    static const unsigned kResValues[] = { 512u, 1024u, 2048u, 4096u, 8192u };
+                    int resIdx = 3;
+                    for (int i = 0; i < 5; ++i) { if (kResValues[i] == render::g_csmAtlasRes) { resIdx = i; } }
+                    if (GRAPHICS_CONTROL(CsmAtlasRes, "csmAtlasRes",
+                        ImGui::Combo("Atlas resolution", &resIdx, kResNames, 5)))
+                    {
+                        render::g_csmAtlasRes = kResValues[std::clamp(resIdx, 0, 4)];
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Edge of the shared CSM atlas, in texels. A tile is half of it,\n"
+                                          "its content is the tile minus twice the %u-texel gutter.\n"
+                                          "R16 depth: 4096 = 33.5 MB, 2048 = 8.4 MB, 1024 = 2.1 MB.\n"
+                                          "Legacy needs the texels (it fits a cascade to a slice SPHERE and\n"
+                                          "spends most of a tile on empty air); SDSM fits the tile to the\n"
+                                          "geometry and reaches Legacy's density at half the edge -- that is\n"
+                                          "the whole S16 bet, and this is what tests it.",
+                                          render::kCascadeAtlasBorder);
+                    const double mb = (static_cast<double>(render::g_csmAtlasRes) *
+                                       render::g_csmAtlasRes * 2.0) / (1024.0 * 1024.0);
+                    ImGui::TextDisabled("tile %u, content %u, %.1f MB",
+                                        render::g_csmAtlasRes / 2u,
+                                        (render::g_csmAtlasRes / 2u) > 2u * render::kCascadeAtlasBorder
+                                            ? (render::g_csmAtlasRes / 2u) - 2u * render::kCascadeAtlasBorder
+                                            : (render::g_csmAtlasRes / 2u),
+                                        mb);
+                }
                 GRAPHICS_CONTROL(CsmMaxDistance, "csmMaxDistance",
                     ImGui::SliderFloat("Max distance (m)", &csmCfg.maxDistance,
                                        20.0f, 1000.0f, "%.0f"));
@@ -2016,6 +2078,106 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                     "atlas over zRange.  bias = depth bias in world mm (= peter-panning).\n"
                                     "scissor %% = share of the tile the view-cone scissor would rasterise (S11).");
 
+                // ---- S15: SDSM -------------------------------------------------------------
+                // Lives in the CSM tab on purpose: SDSM renders into the SAME atlas with the SAME
+                // filter, and the table above is its A/B baseline. The comparison that judges the
+                // step is one row of this table against one row of that one.
+                ImGui::SeparatorText("SDSM (GPU-fitted partitions)");
+                ImGui::TextWrapped("Sample Distribution Shadow Maps: the four partitions' depth interval "
+                    "AND their light-space box are reduced from THIS frame's depth buffer by compute "
+                    "(docs/csm_improvement_plan.md S15). Pick the mode above to turn it on.");
+                {
+                    // How many partitions are analysed AND rendered. Fewer means bigger tiles for
+                    // the ones that remain (they still land on the same 2x2 grid), which is S17's
+                    // whole idea -- in a top-down view three of four tiles are wasted.
+                    int parts = static_cast<int>(render::sdsm::g_partitions);
+                    if (GRAPHICS_CONTROL(SdsmPartitions, "sdsmPartitions",
+                        ImGui::SliderInt("Partitions", &parts, 1,
+                                         static_cast<int>(render::sdsm::kMaxPartitions))))
+                    {
+                        render::sdsm::g_partitions = static_cast<std::uint32_t>(
+                            std::clamp(parts, 1, static_cast<int>(render::sdsm::kMaxPartitions)));
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Active partitions. Unused atlas tiles are not drawn at all --\n"
+                                          "their cull rows carry the reject-all plane. The sampler's\n"
+                                          "interval selection collapses onto the last active one, so\n"
+                                          "coverage stays complete at any count.");
+                }
+                GRAPHICS_CONTROL(SdsmBorder, "sdsmBorder",
+                    ImGui::SliderFloat("Filter border (texels)", &render::sdsm::g_borderTexels, 0.0f, 16.0f, "%.0f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Room reserved INSIDE the partition's box for the filter kernel\n"
+                                      "(the sample's mLightSpaceBorder). NOT the atlas gutter, which\n"
+                                      "still sits outside the content rect.");
+                GRAPHICS_CONTROL(SdsmDilation, "sdsmDilation",
+                    ImGui::SliderFloat("Dilation (fraction)", &render::sdsm::g_dilation, 0.0f, 0.2f, "%.3f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Grows the measured box by this fraction of its own extent.\n"
+                                      "Covers what a per-sample reduction cannot see: a caster whose\n"
+                                      "shadow lands just past the last visible sample.");
+                GRAPHICS_CONTROL(SdsmMinScale, "sdsmMinScale",
+                    ImGui::SliderFloat("Min box / sphere", &render::sdsm::g_minScaleOverSphere, 0.005f, 1.0f, "%.3f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The CEILING on the zoom, as a fraction of the Legacy bounding\n"
+                                      "sphere of the same interval. 1 = never tighter than Legacy (the\n"
+                                      "A/B control). A partition with a handful of pixels would\n"
+                                      "otherwise magnify without bound.");
+                GRAPHICS_CONTROL(SdsmZMargin, "sdsmZMargin",
+                    ImGui::SliderFloat("Z margin (m)", &render::sdsm::g_zMargin, 0.0f, 200.0f, "%.0f"));
+
+                const SdsmShadows& sdsm = scene.Sdsm();
+                if (!sdsm.ReadoutValid())
+                {
+                    ImGui::TextDisabled("No partition readout yet (switch to SDSM and let a few frames pass).");
+                }
+                else
+                {
+                    if (ImGui::BeginTable("SdsmReadout", 8, csmTableFlags))
+                    {
+                        ImGui::TableSetupColumn("p");
+                        ImGui::TableSetupColumn("interval (m)");
+                        ImGui::TableSetupColumn("box XY (m)");
+                        ImGui::TableSetupColumn("texel (mm)");
+                        ImGui::TableSetupColumn("zRange (m)");
+                        ImGui::TableSetupColumn("bias (mm)");
+                        ImGui::TableSetupColumn("samples");
+                        ImGui::TableSetupColumn("flags");
+                        ImGui::TableHeadersRow();
+                        const auto& parts = sdsm.Readout();
+                        for (int p = 0; p < static_cast<int>(render::sdsm::kMaxPartitions); ++p)
+                        {
+                            const render::sdsm::Partition& sp = parts[p];
+                            const float ex = sp.boundsMax.x - sp.boundsMin.x;
+                            const float ey = sp.boundsMax.y - sp.boundsMin.y;
+                            const float ez = sp.boundsMax.z - sp.boundsMin.z;
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0); ImGui::Text("%d", p);
+                            ImGui::TableSetColumnIndex(1); ImGui::Text("%.1f-%.1f", sp.intervalBegin, sp.intervalEnd);
+                            ImGui::TableSetColumnIndex(2); ImGui::Text("%.1f x %.1f", ex, ey);
+                            ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f / %.2f",
+                                sp.texelWS[0] * 1000.0f, sp.texelWS[1] * 1000.0f);
+                            ImGui::TableSetColumnIndex(4); ImGui::Text("%.1f", ez);
+                            ImGui::TableSetColumnIndex(5); ImGui::Text("%.1f", sp.depthBiasNDC * ez * 1000.0f);
+                            ImGui::TableSetColumnIndex(6); ImGui::Text("%u", sp.sampleCount);
+                            ImGui::TableSetColumnIndex(7); ImGui::Text("%s%s%s",
+                                (sp.flags & render::sdsm::kPartitionFlagEmpty) ? "EMPTY " : "",
+                                (sp.flags & render::sdsm::kPartitionFlagScaleClamped) ? "CLAMP " : "",
+                                (sp.flags & render::sdsm::kPartitionFlagVolumeLeak) ? "VOLUME-LEAK" : "");
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TextDisabled("texel = world mm per texel along EACH light-space axis (the box is\n"
+                                        "anisotropic -- that is half the win). Compare the smaller of the two\n"
+                                        "against the same row of the cascade table above.\n"
+                                        "EMPTY = the partition saw no samples and fell back to the Legacy sphere;\n"
+                                        "CLAMP = the zoom ceiling fired.");
+                    if (sdsm.CpuCasterCount() > 0)
+                        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f),
+                            "%u CPU-tail casters do NOT cast in SDSM (their light matrix exists only\n"
+                            "on the GPU). Fold them into the indirect path or accept the missing shadow.",
+                            sdsm.CpuCasterCount());
+                }
             }
 
             // Its own tab because it belongs to NEITHER shadow mode: the trace reads the camera
@@ -2178,10 +2340,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "(spot + point + glass). Legacy = CSM directional + spot/point atlas. Tunes "
                     "quality vs. cost live (no reallocation). Directional still uses CSM until Step 24.");
                 ImGui::Separator();
-                bool vsmMode = render::VsmActive();
-                if (GRAPHICS_CONTROL(ShadowMode, "vsmShadowMode",
-                    ImGui::Checkbox("VSM shadows enabled [Ctrl+V]", &vsmMode)))
-                    render::g_shadowMode = vsmMode ? render::ShadowMode::VSM : render::ShadowMode::Legacy;
+                DrawShadowModeCombo("vsmShadowMode");
 
                 // Applies to BOTH modes (folds GPU-instanced casters into the indirect cull): ON =
                 // GI casts in VSM + via indirect in Legacy; OFF = GI reverts to the Legacy CPU tail.

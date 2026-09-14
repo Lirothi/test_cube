@@ -67,6 +67,17 @@ namespace
         render::ShadowMode shadowMode = render::ShadowMode::VSM;
         bool giIndirectShadows = true;
         CascadeShadowConfig csm{};
+        // The CSM atlas edge (render::g_csmAtlasRes) -- a RESOURCE size, shared by Legacy and
+        // SDSM, reallocated at GPU idle by Scene::ReconcileShadowMode.
+        std::uint32_t csmAtlasRes = 4096u;
+
+        // S15 (SDSM). Defaults mirror render::sdsm::g_* -- one place decides them (the header),
+        // and this snapshot only records what the user changed.
+        std::uint32_t sdsmPartitions = 4u;
+        float sdsmBorderTexels = 4.0f;
+        float sdsmDilation = 0.01f;
+        float sdsmMinScaleOverSphere = 0.02f;
+        float sdsmZMargin = 25.0f;
 
         bool contactEnabled = false;
         std::uint32_t contactLocalMode = 1u;
@@ -180,7 +191,12 @@ namespace
 
     const char* ShadowModeName(render::ShadowMode mode)
     {
-        return mode == render::ShadowMode::Legacy ? "legacy" : "vsm";
+        switch (mode)
+        {
+        case render::ShadowMode::Legacy: return "legacy";
+        case render::ShadowMode::Sdsm:   return "sdsm";
+        default:                         return "vsm";
+        }
     }
 
     render::ShadowMode ParseShadowMode(const json& value, render::ShadowMode fallback)
@@ -189,6 +205,7 @@ namespace
         const std::string name = value.get<std::string>();
         if (name == "legacy") { return render::ShadowMode::Legacy; }
         if (name == "vsm")    { return render::ShadowMode::VSM; }
+        if (name == "sdsm")   { return render::ShadowMode::Sdsm; }
         return fallback;
     }
 
@@ -260,6 +277,23 @@ namespace
         s.lodFadeBand = std::clamp(finite(s.lodFadeBand, 0.10f), 0.0f, 0.35f);
         s.chunkLodDistance = std::clamp(finite(s.chunkLodDistance, 24.0f), 24.0f, 400.0f);
         s.chunkLodFactor = std::clamp(finite(s.chunkLodFactor, 2.0f), 1.2f, 4.0f);
+
+        // S15 (SDSM). The partition count is a hard cap, not a taste: it is the atlas's 2x2 grid
+        // and the compile-time bound of every unrolled loop in the analysis.
+        // Powers of two only: the 2x2 tile split and the gutter arithmetic assume an even edge,
+        // and a non-power-of-two atlas buys nothing anyone would ask for.
+        {
+            std::uint32_t r = std::clamp(s.csmAtlasRes, render::kCsmAtlasResMin, render::kCsmAtlasResMax);
+            std::uint32_t p = render::kCsmAtlasResMin;
+            while (p * 2u <= r) { p *= 2u; }
+            s.csmAtlasRes = p;
+        }
+
+        s.sdsmPartitions = std::clamp(s.sdsmPartitions, 1u, render::sdsm::kMaxPartitions);
+        s.sdsmBorderTexels = std::clamp(finite(s.sdsmBorderTexels, 4.0f), 0.0f, 32.0f);
+        s.sdsmDilation = std::clamp(finite(s.sdsmDilation, 0.01f), 0.0f, 0.45f);
+        s.sdsmMinScaleOverSphere = std::clamp(finite(s.sdsmMinScaleOverSphere, 0.02f), 0.001f, 1.0f);
+        s.sdsmZMargin = std::clamp(finite(s.sdsmZMargin, 25.0f), 0.0f, 1000.0f);
 
         s.contactLocalMode = std::min(s.contactLocalMode, 2u);
         s.contactLength = std::max(0.0f, finite(s.contactLength, 0.05f));
@@ -363,6 +397,13 @@ namespace
         s.shadowMode = render::g_shadowModeFromCli ? render::g_shadowModePersisted : render::g_shadowMode;
         s.giIndirectShadows = render::g_giIndirectShadowsEnabled;
         s.csm = scene.CascadeConfig();
+        s.csmAtlasRes = render::g_csmAtlasRes;
+
+        s.sdsmPartitions = render::sdsm::g_partitions;
+        s.sdsmBorderTexels = render::sdsm::g_borderTexels;
+        s.sdsmDilation = render::sdsm::g_dilation;
+        s.sdsmMinScaleOverSphere = render::sdsm::g_minScaleOverSphere;
+        s.sdsmZMargin = render::sdsm::g_zMargin;
 
         s.contactEnabled = render::contact::g_enabled;
         s.contactLocalMode = render::contact::g_localMode;
@@ -473,6 +514,15 @@ namespace
         render::g_chunkLodDistFactor = s.chunkLodFactor;
     }
 
+    void ApplySdsm(const GraphicsSettingsSnapshot& s)
+    {
+        render::sdsm::g_partitions = s.sdsmPartitions;
+        render::sdsm::g_borderTexels = s.sdsmBorderTexels;
+        render::sdsm::g_dilation = s.sdsmDilation;
+        render::sdsm::g_minScaleOverSphere = s.sdsmMinScaleOverSphere;
+        render::sdsm::g_zMargin = s.sdsmZMargin;
+    }
+
     void ApplyContact(const GraphicsSettingsSnapshot& s)
     {
         render::contact::g_enabled = s.contactEnabled;
@@ -537,8 +587,12 @@ namespace
         ApplyFog(s);
         ApplyLod(s);
         ApplyContact(s);
+        ApplySdsm(s);
         ApplyVsm(s);
         scene.CascadeConfig() = s.csm;
+        // A RESOURCE size, so it is only recorded here; Scene::ReconcileShadowMode reallocates
+        // the atlas at GPU idle on the next frame that sees the change.
+        render::g_csmAtlasRes = s.csmAtlasRes;
     }
 
     json ToJson(const GraphicsSettingsSnapshot& s)
@@ -638,7 +692,15 @@ namespace
                     { "filterMode", s.csm.filterMode },
                     { "filterSharpen", s.csm.shadowFilterSharpen },
                     { "receiverBias", s.csm.csmReceiverBias },
-                    { "pcfOverBlurCorrection", s.csm.pcfOverBlurCorrection }
+                    { "pcfOverBlurCorrection", s.csm.pcfOverBlurCorrection },
+                    { "atlasResolution", s.csmAtlasRes }
+                } },
+                { "sdsm", {
+                    { "partitions", s.sdsmPartitions },
+                    { "borderTexels", s.sdsmBorderTexels },
+                    { "dilation", s.sdsmDilation },
+                    { "minScaleOverSphere", s.sdsmMinScaleOverSphere },
+                    { "zMargin", s.sdsmZMargin }
                 } },
                 { "vsm", {
                     { "shadowLodBias", s.shadowLodBias },
@@ -686,6 +748,7 @@ namespace
         const json& shadows = Section(root, "shadows");
         const json& contact = Section(shadows, "contact");
         const json& csm = Section(shadows, "legacyCsm");
+        const json& sdsmSettings = Section(shadows, "sdsm");
         const json& vsmSettings = Section(shadows, "vsm");
 
         Read(performance, "asyncCompute", s.asyncCompute);
@@ -802,6 +865,13 @@ namespace
         Read(csm, "filterSharpen", s.csm.shadowFilterSharpen);
         Read(csm, "receiverBias", s.csm.csmReceiverBias);
         Read(csm, "pcfOverBlurCorrection", s.csm.pcfOverBlurCorrection);
+        Read(csm, "atlasResolution", s.csmAtlasRes);
+
+        Read(sdsmSettings, "partitions", s.sdsmPartitions);
+        Read(sdsmSettings, "borderTexels", s.sdsmBorderTexels);
+        Read(sdsmSettings, "dilation", s.sdsmDilation);
+        Read(sdsmSettings, "minScaleOverSphere", s.sdsmMinScaleOverSphere);
+        Read(sdsmSettings, "zMargin", s.sdsmZMargin);
 
         Read(vsmSettings, "shadowLodBias", s.shadowLodBias);
         Read(vsmSettings, "biasNearestTier", s.shadowLodBiasNearTier);
@@ -1070,6 +1140,12 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::CsmSharpen:                     current.csm.shadowFilterSharpen = defaults.csm.shadowFilterSharpen; break;
     case GraphicsControl::CsmReceiverBias:                current.csm.csmReceiverBias = defaults.csm.csmReceiverBias; break;
     case GraphicsControl::CsmOverBlur:                    current.csm.pcfOverBlurCorrection = defaults.csm.pcfOverBlurCorrection; break;
+    case GraphicsControl::CsmAtlasRes:                    current.csmAtlasRes = defaults.csmAtlasRes; break;
+    case GraphicsControl::SdsmPartitions:                 current.sdsmPartitions = defaults.sdsmPartitions; break;
+    case GraphicsControl::SdsmBorder:                     current.sdsmBorderTexels = defaults.sdsmBorderTexels; break;
+    case GraphicsControl::SdsmDilation:                   current.sdsmDilation = defaults.sdsmDilation; break;
+    case GraphicsControl::SdsmMinScale:                   current.sdsmMinScaleOverSphere = defaults.sdsmMinScaleOverSphere; break;
+    case GraphicsControl::SdsmZMargin:                    current.sdsmZMargin = defaults.sdsmZMargin; break;
     case GraphicsControl::ContactEnabled:                 current.contactEnabled = defaults.contactEnabled; break;
     case GraphicsControl::ContactLocalMode:               current.contactLocalMode = defaults.contactLocalMode; break;
     case GraphicsControl::ContactTemporal:                current.contactTemporalDither = defaults.contactTemporalDither; break;
@@ -1146,9 +1222,15 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
         ApplyLod(current);
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::CsmMaxDistance) &&
-             value <= static_cast<unsigned>(GraphicsControl::CsmOverBlur))
+             value <= static_cast<unsigned>(GraphicsControl::CsmAtlasRes))
     {
         scene.CascadeConfig() = current.csm;
+        render::g_csmAtlasRes = current.csmAtlasRes;
+    }
+    else if (value >= static_cast<unsigned>(GraphicsControl::SdsmPartitions) &&
+             value <= static_cast<unsigned>(GraphicsControl::SdsmZMargin))
+    {
+        ApplySdsm(current);
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::ContactEnabled) &&
              value <= static_cast<unsigned>(GraphicsControl::ContactFadeBand))

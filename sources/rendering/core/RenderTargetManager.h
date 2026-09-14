@@ -236,7 +236,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE streakBSRV{}, streakBUAV{};
         UINT streakWidth = 1, streakHeight = 1;
 
-        UINT shadowRes = 4096; // atlas 4096x4096, tile size 2048
+        UINT shadowRes = 4096; // atlas edge; tile = half, content = tile - 2 * gutter. See render::g_csmAtlasRes.
         UINT spotShadowRes = 512;
         UINT pointShadowRes = 256; // per cube face
     };
@@ -309,6 +309,12 @@ public:
     // working with no null handling. MUST be called at GPU idle (the shadow-mode reconcile waits).
     void SetLocalShadowResidency(ID3D12Device* dev, ResourceDeclarations decls, bool full);
     bool IsLocalShadowFull() const { return localShadowFull_; }
+    // The CSM atlas edge. Changing it REALLOCATES the atlas and rebuilds its views, so the
+    // caller must be at GPU idle (Scene::ReconcileShadowMode, beside the residency switch).
+    // A no-op while the atlas is the VSM-mode 1x1 placeholder -- the size is remembered and
+    // applied when the mode comes back.
+    void SetCsmAtlasResolution(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution);
+    UINT CsmAtlasResolution() const { return deferred_[0].shadowRes; }
 
 private:
     enum class DeferredRtvSlot : UINT {

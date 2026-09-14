@@ -11,6 +11,11 @@
 #ifndef CSM_SAMPLE_HLSLI
 #define CSM_SAMPLE_HLSLI
 
+// S15: the partition STRUCT only -- this header must stay global-free, and the analyze constants
+// (b0 in sdsm_partitions.hlsli) belong to a root signature none of these consumers declare.
+#define SDSM_PARTITIONS_STRUCTS_ONLY 1
+#include "sdsm_partitions.hlsli"
+
 struct CsmParams
 {
     float4x4 lightViewProj[4];
@@ -55,6 +60,48 @@ struct CsmParams
 // 4 = the sample fell past cascade 3, i.e. there is no shadow data for this pixel at all. Kept as a
 // named constant because the debug tint (S0.3) and the fallback chain must agree on it.
 static const int kCsmNoCascade = 4;
+
+// --- S15: the SDSM overlay ---------------------------------------------------------------------
+//
+// SDSM changes WHERE a cascade looks, not how it is filtered -- so it does not get a fourth arm in
+// this header. It overwrites the six fields of CsmParams that the CPU cannot know in SDSM mode
+// (they are results of the GPU reduction) and every line below runs unchanged:
+//
+//   lightViewProj[c]  the partition's own matrix
+//   scaleBias[c]      its atlas content rect (same 2x2 grid, same S5 gutter)
+//   splitsVS / farSplit  its view-Z interval, so CsmChooseCascade picks the partition whose box
+//                     was fitted with this very pixel in it
+//   cascadeTexelWS[c] the WORST axis of an anisotropic box. Two consumers: the receiver normal
+//                     offset (conservative is correct -- it must clear a texel on either axis) and
+//                     the legacy 3x3 arm's radius ratio.
+//   transitionScale   1 / depthBiasNDC, the same derivation MakeCsmParams does, from the
+//                     partition's own bias
+//
+// The blend band (S10) then works by construction: partition intervals are contiguous, so
+// `sFar - sNear` is the partition's own slice exactly as a cascade's split is.
+//
+// The caller provides the buffer; this header stays global-free (two callers, two cbuffer layouts).
+void CsmApplySdsm(inout CsmParams p, StructuredBuffer<SdsmPartition> parts, uint count)
+{
+    [unroll]
+    for (uint i = 0; i < 4; ++i)
+    {
+        const uint c = min(i, count - 1u);
+        const SdsmPartition sp = parts[c];
+        p.lightViewProj[i] = sp.lightViewProj;
+        p.scaleBias[i] = sp.atlasScaleBias;
+        p.cascadeTexelWS[i] = max(sp.texelWS.x, sp.texelWS.y);
+        p.transitionScale[i] = 1.0f / max(1e-6f, sp.depthBiasNDC);
+        p.depthBiasNDC[i] = sp.depthBiasNDC;
+    }
+    // splitsVS carries (near, far0, far1, far2) and farSplit the last far -- the same packing the
+    // Legacy splits use, so CsmChooseCascade and the blend band need no SDSM branch at all.
+    p.splitsVS = float4(parts[0].intervalBegin,
+                        parts[min(0u, count - 1u)].intervalEnd,
+                        parts[min(1u, count - 1u)].intervalEnd,
+                        parts[min(2u, count - 1u)].intervalEnd);
+    p.farSplit = parts[count - 1u].intervalEnd;
+}
 
 // --- S8: soft occlusion + Gather4 tent PCF ---------------------------------------------------
 //

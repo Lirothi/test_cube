@@ -101,6 +101,15 @@ COMPUTE_ENTRIES = [
     ("shadow_cull_post_cs.hlsl", "CSMain"),
     # Occlusion plan S5: the camera's HZB post cull (the same include).
     ("cam_cull_post_cs.hlsl", "CSMain"),
+    # S15 (SDSM): six entry points of one file, sharing one root signature. All six have to be
+    # listed -- they are compiled independently at runtime, and a typo in any one of them takes the
+    # whole mode out with a message that names only the entry.
+    ("sdsm_analyze_cs.hlsl", "ClearBounds"),
+    ("sdsm_analyze_cs.hlsl", "ReduceZBounds"),
+    ("sdsm_analyze_cs.hlsl", "LogPartitions"),
+    ("sdsm_analyze_cs.hlsl", "ReduceBounds"),
+    ("sdsm_analyze_cs.hlsl", "Finalize"),
+    ("sdsm_analyze_cs.hlsl", "CarryFrustums"),
 ]
 
 # Shaders needing a target above the 6_0 default. Kept separate rather than widening every entry to
@@ -156,6 +165,14 @@ GRAPHICS_ENTRIES = [
     # selects it -- the atlas rect source and the 1 - z store). A compute shader in this list
     # because only this list carries defines.
     ("hzb_build_cs.hlsl", "cs_6_0", "CSMain", ["HZB_LIGHT=1"], "light"),
+    # The Legacy ATLAS pair of the shadow depth shader -- the pair SDSM also draws with (S15 needs
+    # no permutation there: its projection arrives as an ordinary b1 root CBV, from a block the
+    # analyze pass wrote). Listed because the PerView layout in it is a mirror of
+    # scene_internal::PerViewCB and drifts silently.
+    ("shadow_indirect_csm.hlsl", "vs_6_0", "VSMain", ["SHADOW_DEPTH_BIAS=1"], "atlas"),
+    ("shadow_indirect_csm.hlsl", "ps_6_0", "PSMain", ["SHADOW_DEPTH_BIAS=1"], "atlas"),
+    ("shadow_indirect_csm.hlsl", "vs_6_0", "VSMain", ["SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1"], "atlas-masked"),
+    ("shadow_indirect_csm.hlsl", "ps_6_0", "PSMain", ["SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1"], "atlas-masked"),
 ]
 
 

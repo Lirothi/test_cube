@@ -88,6 +88,7 @@ struct SceneLightingCBHandles
     // The sky's indirect specular, moved here from compose so the SSR pass can see it.
     Material::CBFieldHandle enableSkySpecular, skySpecMipCount, skyboxIntensity;
     Material::CBFieldHandle cloudShadowViewProj, cloudShadowParams; // plan C3: the cloud shadow map
+    Material::CBFieldHandle csmSdsmPartitions; // S15: 0 = not SDSM mode
 
     void Populate(Material* material);
 };
@@ -695,6 +696,9 @@ struct LightingPassConstants
     // this frame, the sun is unshadowed by clouds; y = the map's far depth in km.
     mat4 cloudShadowViewProj{};
     float4 cloudShadowParams{};
+    // S15: active SDSM partitions this frame; 0 = the mode is not SDSM and the partition SRV
+    // slot holds a placeholder. The ONE gate on reading it in lighting_cb.hlsli.
+    uint32_t csmSdsmPartitions = 0;
 };
 
 struct PointLightPassConstants

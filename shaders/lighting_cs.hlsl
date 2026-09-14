@@ -51,6 +51,9 @@ Texture2D BrdfLut : register(t13);
 TextureCube SkyboxTex : register(t14);
 // t15: plan C3, the cloud shadow map (dummy when no clouds; `cloudShadowParams.x` gates the read).
 Texture2D<float4> CloudShadowMap : register(t15);
+// t16: S15, this frame's SDSM partitions. `csmSdsmPartitions` (0 in Legacy and VSM) gates the read;
+// a placeholder SRV is bound otherwise, because a VOLATILE table may not have a hole.
+StructuredBuffer<SdsmPartition> SdsmPartitions : register(t16);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -249,7 +252,7 @@ float CloudSunVisibility(float3 P)
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=17, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 

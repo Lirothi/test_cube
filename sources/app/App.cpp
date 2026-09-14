@@ -468,6 +468,22 @@ namespace
         // S14 [UE ShadowBoundsAccurate]: cull cascade casters against the slice extruded toward the sun.
         if (setting == "csm.accurateCull") { scene.CascadeConfig().accurateCasterCull = value != 0.0f; return true; }
         if (setting == "csm.hzbCull") { scene.CascadeConfig().hzbCull = value != 0.0f; return true; } // occlusion plan S5b
+        // The atlas edge, shared by Legacy and SDSM. A process global (it outlives a level switch
+        // and is a RESOURCE size, not per-scene tuning); applied at GPU idle by
+        // Scene::ReconcileShadowMode, so setting it here is safe at any time.
+        if (setting == "csm.atlasRes")
+        {
+            render::g_csmAtlasRes = static_cast<unsigned>(std::clamp(value,
+                static_cast<float>(render::kCsmAtlasResMin), static_cast<float>(render::kCsmAtlasResMax)));
+            return true;
+        }
+        // S15 (SDSM). Process globals, so no `scene` -- they must survive a level switch and be
+        // settable before any Scene exists, exactly like the mode switch itself.
+        if (setting == "sdsm.partitions") { render::sdsm::g_partitions = (std::uint32_t)std::clamp(value, 1.0f, (float)render::sdsm::kMaxPartitions); return true; }
+        if (setting == "sdsm.borderTexels") { render::sdsm::g_borderTexels = std::clamp(value, 0.0f, 32.0f); return true; }
+        if (setting == "sdsm.dilation") { render::sdsm::g_dilation = std::clamp(value, 0.0f, 0.45f); return true; }
+        if (setting == "sdsm.minScaleOverSphere") { render::sdsm::g_minScaleOverSphere = std::clamp(value, 0.001f, 1.0f); return true; }
+        if (setting == "sdsm.zMargin") { render::sdsm::g_zMargin = std::clamp(value, 0.0f, 1000.0f); return true; }
         // Occlusion plan S1: per-chunk / per-GI-instance frustum mask below the object cull. 0 = rollback.
         if (setting == "vis.chunkMask") { render::g_visChunkMask = value != 0.0f; return true; }
         // Occlusion plan S3a: hardware occlusion queries with history. method 0 off / 1 queries /

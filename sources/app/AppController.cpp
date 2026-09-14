@@ -111,10 +111,16 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         }
         if (input.WasActionPressed("ToggleVsmPageRequest"))
         {
-            // Ctrl+V: switch the active shadow method Legacy(CSM/atlas) <-> VSM (Step 24a). Drives
-            // both which sampler the light/glass shaders use and whether the VSM pipeline runs.
-            render::g_shadowMode = render::VsmActive() ? render::ShadowMode::Legacy
-                                                       : render::ShadowMode::VSM;
+            // Ctrl+V: CYCLE the active shadow method Legacy(CSM/atlas) -> VSM -> SDSM -> Legacy
+            // (Step 24a; S15 added the third). Drives which sampler the light/glass shaders use,
+            // whether the VSM pipeline runs, and whether the cascades are fitted on the CPU
+            // (Legacy) or reduced from this frame's depth on the GPU (SDSM).
+            switch (render::g_shadowMode)
+            {
+            case render::ShadowMode::Legacy: render::g_shadowMode = render::ShadowMode::VSM;    break;
+            case render::ShadowMode::VSM:    render::g_shadowMode = render::ShadowMode::Sdsm;   break;
+            default:                         render::g_shadowMode = render::ShadowMode::Legacy; break;
+            }
         }
         if (input.WasActionPressed("CycleReflectionSource"))
         {

@@ -51,7 +51,7 @@
   "scope": "Global runtime graphics quality. Scene look stays in level environment data.",
   "shadows": {
     "contact": {
-      "enabled": true,
+      "enabled": false,
       "fadeBand": 10.0,
       "grazingFade": 0.15000000596046448,
       "intensity": 1.0,
@@ -68,18 +68,19 @@
     "gpuInstancedCasters": true,
     "legacyCsm": {
       "accurateCasterCull": true,
+      "atlasResolution": 2048,
       "autoSplits": false,
-      "blendFraction": 0.10000000149011612,
+      "blendFraction": 0.029999999329447746,
       "casterReach": 150.0,
       "depthBiasTexels": 1.0,
-      "distanceFadeFraction": 0.10000000149011612,
+      "distanceFadeFraction": 0.05999999865889549,
       "distributionExponent": 3.0,
-      "filterMode": 1,
+      "filterMode": 0,
       "filterSharpen": 0.019999999552965164,
       "hzbCull": false,
-      "maxDistance": 300.0,
-      "maxSlope": 3.0,
-      "normalBiasTexels": 1.5,
+      "maxDistance": 1000.0,
+      "maxSlope": 1.0,
+      "normalBiasTexels": 0.5,
       "overlapTexels": 2.0,
       "pancakeCasters": true,
       "pancakeSlack": 40.0,
@@ -87,7 +88,7 @@
       "receiverBias": 0.8999999761581421,
       "scissorOptim": false,
       "scissorPadTexels": 4.0,
-      "slopeScale": 3.0,
+      "slopeScale": 2.0,
       "splitDistances": [
         10.0,
         35.0,
@@ -96,7 +97,14 @@
       ],
       "zPadding": 25.0
     },
-    "mode": "legacy",
+    "mode": "sdsm",
+    "sdsm": {
+      "borderTexels": 4.0,
+      "dilation": 0.009999999776482582,
+      "minScaleOverSphere": 0.019999999552965164,
+      "partitions": 4,
+      "zMargin": 25.0
+    },
     "vsm": {
       "biasNearestTier": false,
       "clipmapBaseExtent": 8.0,

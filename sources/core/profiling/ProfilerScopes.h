@@ -84,6 +84,11 @@ extern const Profiler::ScopeNameKey kVsmHzbBuild;   // occlusion plan S5b.2: the
 extern const Profiler::ScopeNameKey kVsmHzbPost;    // occlusion plan S5b.2: the deferred-pair retest + setup B
 extern const Profiler::ScopeNameKey kVsmPageDrawB;  // occlusion plan S5b.2: pass B into the pages
 extern const Profiler::ScopeNameKey kPassCSM;
+// S15 (SDSM): the depth reduction that produces this frame's partitions, and the depth pass that
+// draws them. Separate scopes rather than one, because the acceptance criterion is a SUM against
+// Legacy's Pass_CSM + Pass_ShadowCull and a sum whose terms are invisible cannot be argued with.
+extern const Profiler::ScopeNameKey kPassSdsmAnalyze;
+extern const Profiler::ScopeNameKey kPassSdsmShadow;
 extern const Profiler::ScopeNameKey kPassCsmHzb;         // occlusion plan S5b
 extern const Profiler::ScopeNameKey kPassShadowCullPost; // occlusion plan S5b
 extern const Profiler::ScopeNameKey kPassCSMPost;        // occlusion plan S5b

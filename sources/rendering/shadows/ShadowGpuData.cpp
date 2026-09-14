@@ -378,6 +378,14 @@ Material* ShadowGpuData::IndirectShadowMaterial() const
     return MaskedShadowsActive() ? indirectShadowMaskedMat_.get() : indirectShadowMat_.get();
 }
 
+// S15: SDSM draws with the LEGACY atlas PSOs -- its per-partition projection arrives as the b1
+// root CBV like everyone else's, from a buffer the analyze pass wrote (SdsmShadows::ViewCbAddress).
+// There is no SDSM permutation to be ready or not, so the gate is the plain indirect one.
+bool ShadowGpuData::SdsmDrawReady() const
+{
+    return IndirectDrawReady();
+}
+
 // Same masked-selection rule, pool-format (D32) twins — the VSM per-page loop draws into the pool.
 Material* ShadowGpuData::IndirectShadowPoolMaterial() const
 {
@@ -2129,6 +2137,7 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
             LOG_ERROR(logging::LogCategory::RenderShadow, "VSM_PAGE masked indirect shadow PSO FAILED (single-draw page render off)");
             indirectShadowPageMaskedMat_.reset();
         }
+
     }
 
     const bool cullOk = cullClearMat_ && cullClearMat_->GetPipelineState() &&
@@ -2684,6 +2693,266 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     renderer->EmitPoint(cl, dec.consume);
 }
 
+// ---- S15: the SDSM directional re-cull -------------------------------------------------------
+
+ShadowGpuData::DirectionalCullDecisions ShadowGpuData::PrepareDirectionalCullPass(
+    RenderGraphPassContext& ctx, D3D12_CPU_DESCRIPTOR_HANDLE planeSrv, std::uint32_t views,
+    D3D12_GPU_VIRTUAL_ADDRESS hzbCB, bool hzb)
+{
+    DirectionalCullDecisions dec{};
+    if (!ctx.renderer || planeSrv.ptr == 0 || views == 0) { return dec; }
+    if (ctx.renderer->GetCurrentFrameIndex() >= render::kFrameCount) { return dec; }
+    if (!cullClearMat_ || !cullMat_ || numVirtualGroups_ == 0 || !IndirectDrawReady()) { return dec; }
+    if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return dec; }
+    dec.active = true;
+    dec.views = views;
+    dec.planeSrv = planeSrv;
+    dec.hzbCB = hzbCB;
+    // Occlusion S5b for SDSM. Everything the Legacy chain needs is already here -- the deferred
+    // list, the counters, the pass-B pair, the tile pyramids -- and only the MATRICES differed,
+    // which the analyze now writes into `hzbCB`. The two-pass structure is what makes a poor
+    // predictor safe: a caster last frame's tile hid is retested against THIS frame's tile after
+    // pass A, so a partition that changed shape costs a pass-B draw, never a missing shadow.
+    dec.hzb = hzb && hzbCB != 0 && cullPostMat_ && HzbRingsValid() && cascadeHzb_.Ready();
+    hzbCullThisFrame_ = dec.hzb;
+    if (dec.hzb)
+    {
+        for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c)
+        {
+            ctx.Use(cascadeHzb_.Pyramid(c), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+    }
+
+    // The main cull left these in INDIRECT_ARGUMENT / vertex-buffer; they go back to UAV for the
+    // re-seed and the re-cull, then forward again for the draws. Declared here rather than assumed
+    // because this pass is the SECOND writer of the same rows in one frame, and a compiled barrier
+    // set that does not know that would hand the draws a stale before-state.
+    dec.base = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(indirectCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (dec.hzb)
+    {
+        ctx.Use(deferredList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    ctx.NextPoint();
+    dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    return dec;
+}
+
+ShadowGpuData::CullPostDecisions ShadowGpuData::PrepareSdsmCullPostPass(RenderGraphPassContext& ctx,
+                                                                        D3D12_GPU_VIRTUAL_ADDRESS hzbCB)
+{
+    // The Legacy twin's gate, minus `cascadeHzb_.Active()` (which is CascadeHzb's own CPU matrix
+    // history -- SDSM has none, its matrices live in `hzbCB`).
+    CullPostDecisions dec{};
+    if (!hzbCullThisFrame_ || hzbCB == 0 || !cullPostMat_ || !HzbRingsValid() || !cascadeHzb_.Ready()) { return dec; }
+    if (ctx.renderer == nullptr || ctx.renderer->GetCurrentFrameIndex() >= render::kFrameCount) { return dec; }
+    const UINT f = ctx.renderer->GetCurrentFrameIndex();
+    dec.active = true;
+
+    dec.base = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(indirectArgsB_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(visibleListB_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(deferredList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c)
+    {
+        ctx.Use(cascadeHzb_.Pyramid(c), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
+    ctx.NextPoint();
+    dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(indirectArgsB_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    ctx.Use(visibleListB_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    EnsureHzbStatsReadback(ctx.renderer);
+    dec.stats = hzbStatsReadback_ != nullptr;
+    if (dec.stats)
+    {
+        ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        hzbStatsFrame_[f] = ctx.renderer->GetTotalFrameNumber();
+    }
+    ctx.NextPoint();
+    dec.restore = ctx.usePoint ? *ctx.usePoint : 0u;
+    if (dec.stats) { ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+    return dec;
+}
+
+void ShadowGpuData::RecordSdsmCullPost(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                       const CullPostDecisions& dec, D3D12_GPU_VIRTUAL_ADDRESS hzbCB)
+{
+    if (!renderer || !cl || !dec.active || hzbCB == 0) { return; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    const std::uint32_t numCasters = cullCastersThisFrame_;
+    const std::uint32_t numGroups = numVirtualGroups_;
+    const std::uint32_t hzbViews = render::CascadeHzb::kCascades;
+
+    renderer->EmitPoint(cl, dec.base);
+    if (numCasters > 0 && numGroups > 0)
+    {
+        struct CullCB { std::uint32_t numCasters, numViews, numGroups, pad; };
+        auto cb0 = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(CullCB)),
+                                                              render::kConstantBufferAlignment);
+        if (cb0.cpu)
+        {
+            const CullCB c{ numCasters, hzbViews, numGroups, 0u };
+            std::memcpy(cb0.cpu, &c, sizeof(c));
+
+            auto h = renderer->GetRenderContextPool()->Acquire();
+            RenderContext& rc = h.ref();
+            rc.cbv[0] = cb0.gpu;
+            // b1 is the GPU-WRITTEN block: this frame's partition matrices, already z-flipped by
+            // the analyze. shadow_cull_post_cs.hlsl cannot tell it from a CPU upload.
+            rc.cbv[1] = hzbCB;
+            rc.srvTable[0] = renderer->StageSrvUavTable({ BoundsReadSrv(f), casterGroup_.Srv(0), perGroupVg_.Srv(f), CasterLodSrv(f),
+                                                          cascadeHzb_.Srv(0), cascadeHzb_.Srv(1), cascadeHzb_.Srv(2), cascadeHzb_.Srv(3) }).gpu;
+            rc.uavTable[0] = renderer->StageSrvUavTable({ cullUav_[5 * render::kFrameCount + f], cullUav_[6 * render::kFrameCount + f],
+                                                          cullUav_[3 * render::kFrameCount + f], cullUav_[4 * render::kFrameCount + f] }).gpu;
+            rc.samplerTable[0] = D3D12_GPU_DESCRIPTOR_HANDLE{};
+            cullPostMat_->Bind(cl, rc);
+            const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
+            if (groupsX > 0) { cl->Dispatch(groupsX, 1, 1); }
+            renderer->UAVBarrier(cl, indirectArgsB_.buffer.Get());
+        }
+    }
+    renderer->EmitPoint(cl, dec.consume);
+    if (dec.stats)
+    {
+        cl->CopyBufferRegion(hzbStatsReadback_.Get(), static_cast<UINT64>(f) * kHzbStatsBytes,
+                             deferredCount_.buffer.Get(), static_cast<UINT64>(f) * deferredCount_.regionBytes, kHzbStatsBytes);
+    }
+    renderer->EmitPoint(cl, dec.restore);
+}
+
+void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                          const DirectionalCullDecisions& dec)
+{
+    if (!renderer || !cl || !dec.active) { return; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return; }
+
+    const std::uint32_t numGroups = numVirtualGroups_;
+    // The SAME caster set the main cull walked this frame: the two must agree, or a row cleared
+    // with one stride and filled with another puts a caster id in another group's slice.
+    const std::uint32_t numCasters = cullCastersThisFrame_;
+
+    // THE POINTS ARE EMITTED WHATEVER THE DATA SAYS. A body that early-returns past a point it
+    // declared leaves the compiled barriers for that point unrecorded, and the compile's model is
+    // then one transition ahead of the GPU -- silent corruption for every later user of those
+    // buffers. The barrier comparator caught exactly this here ("pass=30 SKIPPED (body performed
+    // nothing - registration unverified)") on the frames before the caster set exists. Same shape
+    // as RecordCullPost: emit, guard only the work between.
+    renderer->EmitPoint(cl, dec.base);
+    if (numCasters == 0 || numGroups == 0)
+    {
+        renderer->EmitPoint(cl, dec.consume);
+        return;
+    }
+
+    struct CullCB { std::uint32_t numCasters, numViews, numGroups, camView; };
+    const std::uint32_t kNoCamView = 0xFFFFFFFFu;
+    auto writeCB = [&](std::uint8_t* dst)
+    {
+        CullCB c{ numCasters, dec.views, numGroups, kNoCamView };
+        std::memcpy(dst, &c, sizeof(c));
+    };
+    const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
+    const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
+    const D3D12_CPU_DESCRIPTOR_HANDLE deferredCountUav = cullUav_[4 * render::kFrameCount + f];
+
+    // Re-seed rows [0, views): the clear's thread mapping is (view * numGroups + group) over
+    // `numViews * numGroups` threads, so a smaller numViews IS the sub-range -- no shader change.
+    // It also re-zeroes DeferredCount[0..views), the CASCADE counters; the camera's ([8]..[10])
+    // are past that and untouched, which is what keeps the camera HZB path intact.
+    RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCB,
+        { perGroupVg_.Srv(f) },
+        { cullUav_[f], cullUav_[2 * render::kFrameCount + f], deferredCountUav },
+        noSampler,
+        dec.views * numGroups, 1,
+        indirectArgs_.buffer.Get());
+
+    // Re-cull them against the GPU-written partition boxes. The camera row is off (camView = ~0)
+    // and the CAMERA HZB is off; the CASCADE HZB is on whenever `dec.hzb` says so, and then b1 is
+    // the block the analyze wrote -- prev matrices from last frame's partitions, this frame's from
+    // this frame's, both already z-flipped. shadow_cull_cs.hlsl is untouched either way.
+    {
+        auto cb0 = renderer->GetFrameResource()->AllocDynamic(cbSize, render::kConstantBufferAlignment);
+        auto cb2 = renderer->GetFrameResource()->AllocDynamic(
+            static_cast<UINT>(sizeof(CameraHzbParams)), render::kConstantBufferAlignment);
+        // Same rule as above: an allocation failure skips the WORK, never the point.
+        if (!cb0.cpu || !cb2.cpu) { renderer->EmitPoint(cl, dec.consume); return; }
+        writeCB(static_cast<std::uint8_t*>(cb0.cpu));
+        CameraHzbParams camOff{};
+        camOff.on = 0u;
+        camOff.prevValid = 0u;
+        std::memcpy(cb2.cpu, &camOff, sizeof(camOff));
+
+        D3D12_GPU_VIRTUAL_ADDRESS cullHzbCB = dec.hzbCB;
+        if (!dec.hzb)
+        {
+            // Not this frame: an all-zero block, whose `on` is 0. Allocated rather than reusing
+            // the GPU one, because that one's `on` says otherwise.
+            auto cb1 = renderer->GetFrameResource()->AllocDynamic(
+                static_cast<UINT>(sizeof(render::CascadeHzb::GpuParams)), render::kConstantBufferAlignment);
+            if (!cb1.cpu) { renderer->EmitPoint(cl, dec.consume); return; }
+            render::CascadeHzb::GpuParams hzbOff{};
+            hzbOff.on = 0u;
+            std::memcpy(cb1.cpu, &hzbOff, sizeof(hzbOff));
+            cullHzbCB = cb1.gpu;
+        }
+
+        const D3D12_CPU_DESCRIPTOR_HANDLE stand = renderer->GetDeferredForFrame().shadowSRV;
+        const auto pyramid = [&](unsigned c)
+        {
+            return (dec.hzb && cascadeHzb_.Srv(c).ptr != 0) ? cascadeHzb_.Srv(c) : stand;
+        };
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        RenderContext& rc = h.ref();
+        rc.cbv[0] = cb0.gpu;
+        rc.cbv[1] = cullHzbCB;
+        rc.cbv[2] = cb2.gpu;
+        // t1 is THE difference from the main cull: the planes Main_SdsmAnalyze wrote, instead of
+        // the CPU ring. The camera tables stand in with any valid descriptor (the shader reads
+        // none of them here); t5..t8 are the real tile pyramids when the occlusion test is on.
+        rc.srvTable[0] = renderer->StageSrvUavTable({ BoundsReadSrv(f), dec.planeSrv, casterGroup_.Srv(0),
+                                                      perGroupVg_.Srv(f), CasterLodSrv(f),
+                                                      pyramid(0), pyramid(1), pyramid(2), pyramid(3),
+                                                      perGroupVg_.Srv(f), casterGroup_.Srv(0),
+                                                      casterGroup_.Srv(0), stand }).gpu;
+        rc.uavTable[0] = renderer->StageSrvUavTable({ cullUav_[f], cullUav_[render::kFrameCount + f],
+                                                      cullUav_[3 * render::kFrameCount + f], deferredCountUav,
+                                                      cullUav_[7 * render::kFrameCount + f],
+                                                      cullUav_[8 * render::kFrameCount + f],
+                                                      cullUav_[9 * render::kFrameCount + f] }).gpu;
+        rc.samplerTable[0] = noSampler;
+        cullMat_->Bind(cl, rc);
+        const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
+        if (groupsX > 0) { cl->Dispatch(groupsX, 1, 1); }
+        renderer->UAVBarrier(cl, indirectArgs_.buffer.Get());
+    }
+
+    renderer->EmitPoint(cl, dec.consume);
+}
+
+std::uint32_t ShadowGpuData::CountCpuTailCasters(
+    const std::vector<std::unique_ptr<RenderableObjectBase>>& objects) const
+{
+    std::uint32_t n = 0;
+    for (const auto& objPtr : objects)
+    {
+        const RenderableObjectBase* obj = objPtr.get();
+        if (!obj || !obj->IsGpuInstancedCaster()) { continue; }
+        if (IsGiFoldedActive(obj)) { continue; }
+        if (!obj->IsVisible() || !obj->CastsShadow()) { continue; }
+        n += std::max<std::uint32_t>(1u, obj->GetInstanceCasterCount());
+    }
+    return n;
+}
+
 // ---- S5b: the cascade HZB post cull ---------------------------------------------------------
 
 ShadowGpuData::CullPostDecisions ShadowGpuData::PrepareCullPostPass(RenderGraphPassContext& ctx)
@@ -2822,6 +3091,33 @@ void ShadowGpuData::SetCascadeHzbViews(Renderer* renderer, const Math::mat4* lig
 {
     const bool ready = wantOn && renderer && cascadeHzb_.EnsureResources(renderer, contentRes);
     cascadeHzb_.SetFrameViews(lightViewProj, frameNumber, ready && IndirectDrawReady() && HzbRingsValid());
+}
+
+ShadowGpuData::SdsmHzbState ShadowGpuData::SetSdsmHzbViews(Renderer* renderer, std::uint64_t frameNumber,
+                                                            bool wantOn, UINT contentRes)
+{
+    SdsmHzbState s{};
+    const bool ready = wantOn && renderer && cascadeHzb_.EnsureResources(renderer, contentRes);
+    const bool on = ready && IndirectDrawReady() && HzbRingsValid();
+    cascadeHzb_.SetFrameExternalViews(frameNumber, on);
+    s.on = on && cascadeHzb_.Active();
+    if (!s.on) { return s; }
+    // The rows FillParams would have produced, minus the matrices (the analyze has those).
+    // Half the content: hzb_cull.hlsli derives mip-0 texels as view pixels >> 1, and mip 0 is a
+    // quarter of the tile -- CascadeHzb::EnsureResources' own arithmetic, not a second guess.
+    for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c)
+    {
+        s.prevValid[c] = cascadeHzb_.PrevValid(c) ? 1u : 0u;
+    }
+    render::CascadeHzb::GpuParams p{};
+    cascadeHzb_.FillParams(p, true);
+    s.viewRect[0] = p.viewRect[0];
+    s.viewRect[1] = p.viewRect[1];
+    s.viewRect[2] = p.viewRect[2];
+    s.viewRect[3] = p.viewRect[3];
+    s.hzbSize[0] = p.hzbSize[0];
+    s.hzbSize[1] = p.hzbSize[1];
+    return s;
 }
 
 bool ShadowGpuData::IndirectDrawReady() const

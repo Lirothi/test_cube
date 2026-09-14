@@ -1,7 +1,7 @@
 // t7 = GlassReflection: the off-screen RT glass reflection (S15b), computed by the
 // GlassReflGbuffer + GlassReflections passes and sampled here. It's a normal texture
 // (no RayQuery in this shader), so the glass PSO is identical on RT and non-RT HW.
-#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
@@ -59,6 +59,9 @@ Texture2D VsmPool : register(t10);
 // glass stops guessing `rough * 5` on the display cube and reads the shared environment.
 TextureCube SkySpecular : register(t11);
 Texture3D<float4> FogVolume : register(t12); // plan A5: the integrated froxel volume
+// t13: S15, this frame's SDSM partitions. glass is a PIXEL shader, which is why the partition
+// buffer's canonical state carries the PIXEL bit as well as the non-pixel one.
+StructuredBuffer<SdsmPartition> SdsmPartitions : register(t13);
 
 SamplerState LinearSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
@@ -217,6 +220,9 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
     p.blendFraction        = csmFilterParams.y;
     p.distanceFadeFraction = csmFilterParams.z;
     p.useGatherPcf     = (uint)csmFilterMode.x;
+    // S15: same overlay as lighting_cb.hlsli's MakeCsmParams. Glass has to agree with the geometry
+    // beside it EXACTLY -- that was the whole point of S3 -- so this is not optional here.
+    if (csmSdsmParams.x > 0.0f) { CsmApplySdsm(p, SdsmPartitions, (uint)csmSdsmParams.x); }
 
     int cascade;
     return CsmSampleShadow(p, ShadowAtlas, ShadowSampler, LinearSampler, Pws, Nws, NdotL, cascade);

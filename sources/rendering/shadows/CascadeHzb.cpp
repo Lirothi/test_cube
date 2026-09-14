@@ -172,6 +172,13 @@ void CascadeHzb::SetFrameViews(const Math::mat4* lightViewProj, std::uint64_t fr
     active_ = active && Ready() && haveViews_;
 }
 
+void CascadeHzb::SetFrameExternalViews(std::uint64_t frameNumber, bool active)
+{
+    haveViews_ = true; // the matrices exist, just not here (see the declaration)
+    frame_ = frameNumber;
+    active_ = active && Ready();
+}
+
 bool CascadeHzb::PrevValid(unsigned c) const
 {
     // Built last frame, with the matrices now in `prev` -- both by the same frame counter.

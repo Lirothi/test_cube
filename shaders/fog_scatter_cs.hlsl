@@ -23,14 +23,13 @@
 #include "utils.hlsli"
 #include "vsm_sample.hlsli"
 #include "csm_sample.hlsli"
-#include "lighting_cb.hlsli"
 #include "fog_common.hlsli"
 #include "rt_lights.hlsli" // SpotLightData / PointLightData (the light passes' layout)
 #include "cloud_shadow_common.hlsli" // plan C3: the cloud's shadow on the sun in the air
 
 #define FOG_SCATTER_RS \
     "CBV(b0), CBV(b1), " \
-    "DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
@@ -49,7 +48,14 @@ Texture2DArray                   SpotShadowAtlas : register(t9);  // Legacy loca
 TextureCubeArray                 PointShadowCube : register(t10);
 Texture2D<float4>       DistantSkyLight : register(t11); // B5 raw isotropic luminance at 6 km
 Texture2D<float4>       CloudShadowMap  : register(t12); // C3 cloud shadow map (dummy without clouds)
+// t13: S15, this frame's SDSM partitions (placeholder SRV when the mode is not SDSM).
+StructuredBuffer<SdsmPartition> SdsmPartitions : register(t13);
 RWTexture3D<float4>     FogScatter    : register(u0);
+
+// S15: AFTER the resource declarations, not before. MakeCsmParams reads SdsmPartitions, so the
+// resource has to exist by the time this header is expanded -- which is the order lighting_cs.hlsl
+// has always had, and the only reason this include sat above was that nothing forced it down.
+#include "lighting_cb.hlsli"
 
 SamplerState            gSmpPoint       : register(s0);
 SamplerComparisonState  gSmpLinear      : register(s1);

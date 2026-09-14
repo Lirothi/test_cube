@@ -304,6 +304,10 @@ public:
     // reconcile calls this at GPU idle so only the active mode's shadow memory is resident.
     void SetLocalShadowResidency(bool full) { if (GetDevice()) { rtManager_.SetLocalShadowResidency(GetDevice(), Declarations(), full); } }
     bool IsLocalShadowFull() const { return rtManager_.IsLocalShadowFull(); }
+    // The CSM atlas edge (Legacy and SDSM share it). MUST be called at GPU idle -- it reallocates
+    // the atlas and rebuilds every view onto it.
+    void SetCsmAtlasResolution(UINT res) { if (GetDevice()) { rtManager_.SetCsmAtlasResolution(GetDevice(), Declarations(), res); } }
+    UINT CsmAtlasResolution() const { return rtManager_.CsmAtlasResolution(); }
 
     // Step 21: transient VSM page-table + pool SRVs for the transparent (glass) pass, which lacks
     // frame/VSM access. Set by SceneRenderer::Pass_Transparent each frame; read by the glass draws.
@@ -318,6 +322,15 @@ public:
     }
     D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPageTableSrv() const { return vsmPageTableSrv_; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPoolSrv() const { return vsmPoolSrv_; }
+    // S15: the same transport for the SDSM partition buffer (t13 of glass.hlsl). The glass draws
+    // have no frame access either, and a null handle here substitutes the inert dummy buffer -- the
+    // shader reads it only when csmSdsmParams.x != 0.
+    void SetSdsmPartitionSrv(D3D12_CPU_DESCRIPTOR_HANDLE partitions)
+    {
+        EnsureVsmDummySrvs();
+        sdsmPartitionSrv_ = partitions.ptr ? partitions : vsmDummyBufferSrv_;
+    }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetSdsmPartitionSrv() const { return sdsmPartitionSrv_; }
     // Inert stand-in SRVs (null StructuredBuffer / null Texture2D) for the VSM t7/t8 slots when VSM
     // isn't resident (Legacy mode) — valid to bind, never sampled (useVsm=0). See the spot/point passes.
     D3D12_CPU_DESCRIPTOR_HANDLE VsmDummyBufferSrv() { EnsureVsmDummySrvs(); return vsmDummyBufferSrv_; }
@@ -831,6 +844,7 @@ private:
     UINT                              currentFrameIndex_ = 0;                   // 0..render::kFrameCount-1
     UINT                              lastPresentedIndex_ = 0;                  // backbuffer last shown (screenshots)
     FrameResource*                    currentFrameResource_ = nullptr;
+    D3D12_CPU_DESCRIPTOR_HANDLE       sdsmPartitionSrv_{};                      // S15: glass SDSM sampling
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPageTableSrv_{};                       // Step 21: glass VSM sampling
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPoolSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> vsmDummyHeap_;                 // Step 24b: inert VSM stand-in SRVs

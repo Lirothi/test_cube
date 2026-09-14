@@ -9,6 +9,7 @@
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/shadows/VirtualShadowMap.h"
+#include "rendering/shadows/SdsmShadows.h"
 #include "app/camera/Camera.h"
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/lighting/DirectionalLight.h"
@@ -82,6 +83,8 @@ public:
     const CascadeShadowConfig& CascadeConfig() const { return cascadeConfig_; }
     // Occlusion plan S5b: the cascade HZB cull's counters for the Render tab (read-only).
     const ShadowGpuData& ShadowGpu() const { return shadowGpu_; }
+    // S15: the SDSM partition readout (dev window + --sdsm-readout).
+    const SdsmShadows& Sdsm() const { return sdsm_; }
 
     void InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
@@ -219,7 +222,8 @@ private:
 
     static constexpr int kCascades = SceneFrameData::kCascades;
 
-    void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM resource switch
+    void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM<->SDSM resource switch
+    void UpdateSdsmFrameParams(Renderer* renderer); // S15: the analysis CB + this frame's SDSM gate
     // GPU-idle rebuild of the shadow caster data + consolidated mega VB/IB (the body shared by the
     // editor caster-set refresh and shadow-LOD curve changes). Waits for the GPU, so call sparingly.
     void RebuildShadowCasters(Renderer& renderer);
@@ -307,6 +311,9 @@ private:
     // Rung 2 (Step 18): persistent virtual-shadow-map page pool + page table. Allocated once at
     // level load; not yet consumed by any pass.
     VirtualShadowMap vsm_{};
+    // S15: the SDSM analysis (partition buffer + GPU-written cull planes). Allocated only while
+    // the mode is Sdsm and released on the way out, the same residency rule VSM follows.
+    SdsmShadows sdsm_{};
     LightManager lightManager_{};
     Camera camera_;
 

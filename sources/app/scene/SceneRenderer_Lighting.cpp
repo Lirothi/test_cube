@@ -326,6 +326,12 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     constants.shadowAtlasSize = float2(shadowRes, shadowRes);
     constants.shadowBiasNDC = float4(cascades.depthBiasNDC[0], cascades.depthBiasNDC[1], cascades.depthBiasNDC[2], cascades.depthBiasNDC[3]);
     constants.cascadeTexelWS = float4(cascades.cascadeTexelWS[0], cascades.cascadeTexelWS[1], cascades.cascadeTexelWS[2], cascades.cascadeTexelWS[3]);
+    // S15: in SDSM the six cascade fields just written are the CPU's Legacy fit and are WRONG --
+    // the shader overwrites them from the partition buffer. Non-zero here is the only thing that
+    // makes it do so, so it is also the switch: SDSM is decided once, in DecideFrame, and read here.
+    constants.csmSdsmPartitions = decisions_.sdsmActive && frame_->sdsm
+        ? std::min<std::uint32_t>(frame_->sdsm->FrameParams().partitions, render::sdsm::kMaxPartitions)
+        : 0u;
     const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));
     const float height = static_cast<float>(std::max(renderer->GetRenderHeight(), 1u));
     constants.screenSize = float2(width, height);
@@ -611,7 +617,11 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
                 (fc.local[1] && !localVsm && D.pointShadowSRV.ptr != 0) ? D.pointShadowSRV : renderer->VsmDummyTexSrv(),
                 skyAtmosphere_.DistantActive() ? skyAtmosphere_.DistantSrv() : renderer->VsmDummyTexSrv(),
                 // t12: plan C3 cloud shadow map (gated by the lighting cbuffer's cloudShadowParams.x).
-                volumetricCloud_.ShadowBuilt() ? volumetricCloud_.ShadowSrv() : renderer->VsmDummyTexSrv() }).gpu;
+                volumetricCloud_.ShadowBuilt() ? volumetricCloud_.ShadowSrv() : renderer->VsmDummyTexSrv(),
+                // t13: S15 SDSM partitions -- the fog samples the sun through the same helper.
+                (frame_->sdsm && frame_->sdsm->PartitionSrv().ptr != 0)
+                    ? frame_->sdsm->PartitionSrv()
+                    : renderer->VsmDummyBufferSrv() }).gpu;
             rc.uavTable[0] = renderer->StageSrvUavTable({ D.fogScatterUAV }).gpu;
             const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
                                                   *SamplerManager::ComparisonLinearClamp(),
@@ -778,7 +788,13 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
               frame_->skybox ? frame_->skybox->EnvironmentSrv() : renderer->VsmDummyTexSrv(),
               // t15: plan C3 cloud shadow map, gated by `cloudShadowParams.x`; the dummy keeps the
               // VOLATILE range populated on frames without one.
-              volumetricCloud_.ShadowBuilt() ? volumetricCloud_.ShadowSrv() : renderer->VsmDummyTexSrv() },
+              volumetricCloud_.ShadowBuilt() ? volumetricCloud_.ShadowSrv() : renderer->VsmDummyTexSrv(),
+              // t16: S15, this frame's SDSM partitions. Gated by the cbuffer's csmSdsmPartitions;
+              // the dummy BUFFER srv (not the texture one) keeps the VOLATILE range populated
+              // in Legacy and VSM, where the shader never reads it.
+              (frame_->sdsm && frame_->sdsm->PartitionSrv().ptr != 0)
+                  ? frame_->sdsm->PartitionSrv()
+                  : renderer->VsmDummyBufferSrv() },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
