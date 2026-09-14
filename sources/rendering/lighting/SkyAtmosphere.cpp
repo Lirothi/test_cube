@@ -470,7 +470,16 @@ void SkyAtmosphere::ValidateReadback(UINT slot)
 // :304,312): bLowerHemisphereIsBlack = true, LowerHemisphereColor = Black, and the shader form is
 // lerp(sky, rgb, a) -- so an opaque black replacement. RGBA, and the alpha IS the coverage.
 // Applies to the diffuse and specular probes only; the captured radiance keeps the whole sphere.
-static constexpr float kLowerHemisphereColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+// ...and WE DEPART FROM IT for the specular probe, filling the lower hemisphere with the ground's
+// own outgoing radiance instead of black: `albedo * (sunOnGroundOverPi + skyOnGroundOverPi)`, the
+// same expression `lighting_cs.hlsl`'s GroundBounceOverPi already uses for surfaces. UE's black is
+// safe for them because the ground comes back through reflection captures and Lumen; here a
+// near-mirror simply saw black below the horizon and went blotchy. The DIFFUSE probe keeps the
+// black (the CPU hands it albedo 0), because that path adds GroundBounceOverPi separately and would
+// otherwise count the ground twice. See SkyProbeSample in sky_ibl_filter_cs.hlsl for the measurement.
+//
+// `kLowerHemisphereColor` is gone with it: the replacement colour is no longer a constant, it is
+// computed per rebuild from the sun, the sky and `groundAlbedo`.
 
 // B4: fixed-size persistent resources, allocated before graph registration. No per-frame uploads.
 void SkyAtmosphere::PrepareEnvironment(Renderer* renderer)
@@ -562,8 +571,25 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     if (luts != none) deps.push_back(luts);
     if (overlayActive && overlay->dependency != none) deps.push_back(overlay->dependency);
     const SkyEnvironmentOverlay ov = overlayActive ? *overlay : SkyEnvironmentOverlay{};
+    // The ground's outgoing radiance for the probes' lower hemisphere, solved HERE rather than in
+    // the record body: it is a pure function of `params` + `view`, which are exactly the two things
+    // the `dirty` test above keys on, so it changes once per rebuild and never per dispatch.
+    // (It also cannot be solved in there -- the record lambda does not capture `settings`.)
+    const float sinElevation = std::clamp(view.sunDirection[2], -1.0f, 1.0f);
+    float sunTransmittance[3] = {1.0f, 1.0f, 1.0f};
+    SkyTransmittanceTowardSun(params, std::asin(sinElevation), sunTransmittance);
+    const float groundCosine = std::max(0.0f, sinElevation);
+    constexpr float kInvPi = 0.3183098861837907f;
+    // w = the radiance cube's coarsest mip (1x1 per face), the sky's sphere average, which the
+    // shader adds as the sky's half of the same ground irradiance.
+    const std::array<float, 4> groundSun{view.illuminance[0] * sunTransmittance[0] * groundCosine * kInvPi,
+                                         view.illuminance[1] * sunTransmittance[1] * groundCosine * kInvPi,
+                                         view.illuminance[2] * sunTransmittance[2] * groundCosine * kInvPi,
+                                         7.0f};
+    const std::array<float, 3> groundAlbedo{params.groundAlbedo[0], params.groundAlbedo[1],
+                                            params.groundAlbedo[2]};
     return graph.AddPass2(RenderPass::Main_SkyEnvironment, deps, {}, {},
-        [this, renderer, params, view, ov](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, params, view, ov, groundSun, groundAlbedo](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             std::array<std::uint32_t, 4> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& r : lut_) ctx.Use(r.Get(), kRest);
@@ -582,7 +608,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             environmentOverlayActive_ = ov.material != nullptr;
             //LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI{}",
             //          ++environmentBuilds_, ov.material ? ", cloud overlay" : "");
-            return [this, renderer, params, view, points, ov](RenderGraphPassContext c) {
+            return [this, renderer, params, view, points, ov, groundSun, groundAlbedo](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyEnvironment);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
@@ -638,10 +664,21 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
                     {
                         const bool diffuse = mip == 8;
                         const UINT size = diffuse ? 32u : 128u >> mip;
-                        struct FilterCB { UINT size, mip, mipCount, diffuse; float lower[4]; };
+                        struct FilterCB { UINT size, mip, mipCount, diffuse; float albedo[4]; float sun[4]; float source[4]; };
+                        // ALBEDO 0 FOR THE DIFFUSE PROBE, which collapses the shader's expression to
+                        // UE's opaque black: `lighting_cs.hlsl:336` adds `GroundBounceOverPi(N)` to
+                        // the irradiance itself, so a ground term in that cube would be counted
+                        // twice. The specular probe has no such second source -- that is the whole
+                        // asymmetry this fixes.
                         const FilterCB filter{size, diffuse ? 0u : mip, 8u, diffuse ? 1u : 0u,
-                            {kLowerHemisphereColor[0], kLowerHemisphereColor[1],
-                             kLowerHemisphereColor[2], kLowerHemisphereColor[3]}};
+                            {diffuse ? 0.0f : groundAlbedo[0],
+                             diffuse ? 0.0f : groundAlbedo[1],
+                             diffuse ? 0.0f : groundAlbedo[2],
+                             1.0f},
+                            {groundSun[0], groundSun[1], groundSun[2], groundSun[3]},
+                            // The SOURCE is environment_[0], the radiance capture: 128 with 8 mips
+                            // (PrepareEnvironment). The filter picks a mip per sample from these.
+                            {128.0f, 8.0f, 0.0f, 0.0f}};
                         RecordComputeDispatch(renderer, t.cl, filterMaterial_.get(), render::kConstantBufferAlignment,
                             [&filter](uint8_t* dst) { std::memcpy(dst, &filter, sizeof(filter)); },
                             {environmentSrv_[0]}, {environmentUav_[8 + mip]}, sampler, size, size*6);

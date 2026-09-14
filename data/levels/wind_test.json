@@ -13736,33 +13736,6 @@
       ],
       "type": "staticMesh",
       "useMR": false
-    },
-    {
-      "enabled": true,
-      "id": 747,
-      "mesh": "models/box.mesh.json",
-      "metalRough": [
-        1.0,
-        0.07999999821186066
-      ],
-      "name": "staticMesh #747",
-      "position": [
-        -62.593780517578125,
-        2.085287570953369,
-        60.89453125
-      ],
-      "rotationDeg": [
-        0.0,
-        -0.0,
-        0.0
-      ],
-      "scale": [
-        6.199999809265137,
-        1.0,
-        6.199999809265137
-      ],
-      "type": "staticMesh",
-      "useMR": false
     }
   ],
   "ocean": {
@@ -14043,17 +14016,21 @@
       "toneCurve": "filmic"
     },
     "gtao": {
+      "denoise": true,
       "enabled": true,
       "fadeStart": 100.0,
-      "intensity": 2.0,
-      "numSteps": 6,
+      "intensity": 1.5,
+      "numAngles": 2,
+      "numSteps": 10,
       "skyIntensity": 0.0,
       "skyMipBias": 3,
       "skyRadius": 25.0,
       "strength": 1.0,
+      "temporal": true,
       "temporalBlendWeight": 0.10000000149011612,
       "thickness": 0.800000011920929,
-      "worldRadius": 2.0
+      "useHzb": true,
+      "worldRadius": 1.2000000476837158
     },
     "heightFog": {
       "density": 0.0010000000474974513,
@@ -14073,7 +14050,7 @@
   "skyAtmosphere": {
     "aerialPerspective": true,
     "distantSkyLight": true,
-    "enabled": false,
+    "enabled": true,
     "environmentLighting": true,
     "groundAlbedo": 0.4019777774810791,
     "luminanceScale": 1.0,

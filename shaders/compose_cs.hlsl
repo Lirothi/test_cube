@@ -591,6 +591,30 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             ? (z > kEps ? 1.0f : 0.0f).xxx
             : (z > 0.0f ? saturate((log2(z) + 24.0f) / 24.0f) : 0.0f).xxx;
     }
+    else if (fogDebugView == 8u || fogDebugView == 9u)
+    {
+        // THE ENVIRONMENT CUBES, so the thing reflections actually read can be LOOKED AT instead of
+        // inferred. Both are already bound here for the fog and the IBL, so this costs no binding.
+        //   8 = SkyboxTex  -- the RADIANCE capture, i.e. exactly what sky_ibl_capture_cs wrote.
+        //   9 = SkySpecular mip 1 -- the first mip the prefilter actually convolves (mip 0 of that
+        //       cube is a verbatim copy of 8, see sky_ibl_filter_cs).
+        //
+        // EQUIRECTANGULAR, not a face cross: the vertical axis is then elevation, which is the axis
+        // the SkyView LUT's parameterisation compresses, so banding and blotching separate at a
+        // glance instead of being cut across six tiles.
+        const float2 t = (float2(dispatchThreadId.xy) + 0.5f) / max(screenSize, 1.0f.xx);
+        const float phi = (t.x * 2.0f - 1.0f) * 3.14159265f;
+        const float theta = (0.5f - t.y) * 3.14159265f;
+        const float3 d = float3(cos(theta) * sin(phi), sin(theta), cos(theta) * cos(phi));
+        const float3 raw = fogDebugView == 8u
+            ? SkyboxTex.SampleLevel(gSmp, d, 0.0f).rgb
+            : SkySpecular.SampleLevel(gSmp, d, 1.0f).rgb;
+        // LOG, not Reinhard. The cube holds RAW radiance and the sky sits far above 1, so Reinhard
+        // pinned the whole upper hemisphere to white and showed nothing -- 16 stops of log is what
+        // makes structure visible across that range. Structure is what this view is for; read
+        // numbers with the gray views, not this one.
+        color = saturate((log2(max(raw, 1.0e-8f.xxx)) + 20.0f) / 40.0f);
+    }
     else
     {
         // B3 + P7, composed in UE's ORDER. Theirs runs RenderSkyAtmosphere (aerial perspective)
@@ -650,6 +674,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     const bool cloudDebug = cloudParams.x > 0.0f && cloudParams.z != 0.0f;
     if (cloudDebug) { color = CloudTex.SampleLevel(gSmp, uv, 0).rgb; }
     const bool debugGray = cloudDebug || fogDebugView == 1u || fogDebugView == 6u || fogDebugView == 7u;
+    // 8/9 are COLOUR views but must skip the pre-exposure the same way: they already carry their own
+    // Reinhard, and multiplying raw cube radiance by the frame's pre-exposure would only flatten the
+    // structure they exist to show. They get no calibration ramp -- they are not read as numbers.
+    const bool debugRawColor = fogDebugView == 8u || fogDebugView == 9u;
     // EVERY gray view carries the calibration ramp, not just the ones that were written with it.
     // "Display-linear" is not the same as "readable": the tonemapper still runs, its shoulder
     // compresses the top of the range, and its input scale moves with auto-exposure -- so a ramp
@@ -660,5 +688,6 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     {
         color = (((float)dispatchThreadId.x + 0.5f) / max(screenSize.x, 1.0f)).xxx;
     }
-    SceneColor[dispatchThreadId.xy] = float4(debugGray ? color : color * preExposure, 1.0);
+    SceneColor[dispatchThreadId.xy] =
+        float4((debugGray || debugRawColor) ? color : color * preExposure, 1.0);
 }
