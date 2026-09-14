@@ -591,6 +591,18 @@ public:
         return AddPass2Internal(name, prereqs, mtDeps, declares, std::move(builder), queue);
     }
 
+    // The same for a caller whose prereqs are a built-up DependencyList rather than a literal; the
+    // non-queue form has had one since the start. `Main_CloudShadow` is the first async pass whose
+    // prereq list is conditional (it chains off the noise rebuild only on the frames that run one).
+    size_t AddPass2(RenderPass name, RenderQueue queue,
+        const DependencyList& prereqs,
+        std::initializer_list<size_t> mtDeps,
+        std::initializer_list<ResourceStateDecl> declares,
+        BuildFn builder)
+    {
+        return AddPass2Internal(name, prereqs, mtDeps, declares, std::move(builder), queue);
+    }
+
     // Command-list group brackets (step 5). Passes added between Begin/End share
     // ONE command list and run as ONE schedulable node (one batch, one task,
     // members executed in declaration order). Members must form a contiguous

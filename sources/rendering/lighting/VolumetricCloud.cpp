@@ -364,7 +364,17 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     const VolumetricCloudConstants constants = MakeConstants(in);
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
     if (after != kNone) { deps.push_back(after); }
-    return graph.AddPass2(RenderPass::Main_CloudShadow, deps, {}, {},
+    // ASYNC COMPUTE. Everything this pass registers is compute-legal (`kRest` here is NON_PIXEL)
+    // and its consumers -- `Main_VolumetricFog` and `Main_Lighting` -- already name `pCloudShadow`
+    // as an explicit prereq (SceneRenderer_Graph.cpp:1087,1133), so the cross-queue fence has a
+    // graph edge to compile from. What sits between is the whole G-buffer and shadow block.
+    //
+    // THE HAND-OVER IS CROSS-FRAME, and that is what an ordinary audit misses: the first attempt
+    // failed with the shadow map in 0x80 (PIXEL_SHADER_RESOURCE), left there by the OCEAN, which
+    // samples it in a pixel shader (`Main_Transparent`, SceneRenderer_Graph.cpp:1785) and hands it
+    // to the NEXT frame's write in that state -- and no compute acquire may begin from it.
+    // `Main_TransparentFog` hands it back; see the note there.
+    return graph.AddPass2(RenderPass::Main_CloudShadow, RenderQueue::AsyncCompute, deps, {}, {},
         [this, renderer, constants](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             std::array<std::uint32_t, 3> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;

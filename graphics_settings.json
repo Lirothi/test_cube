@@ -27,11 +27,11 @@
     "glossyBlur": 1.0,
     "oceanResolution": 0.5,
     "resolution": 0.5,
-    "rtFoliageAlphaMode": 0,
+    "rtFoliageAlphaMode": 1,
     "rtFoliageFill": 0.15000000596046448,
     "rtWindRadius": 40.0,
-    "rtWindSway": false,
-    "source": "ssr",
+    "rtWindSway": true,
+    "source": "rt",
     "ssrTechnique": "ueHzb",
     "sunMetalSpec": 0.0,
     "temporal": true,
@@ -96,7 +96,7 @@
       ],
       "zPadding": 25.0
     },
-    "mode": "vsm",
+    "mode": "legacy",
     "vsm": {
       "biasNearestTier": false,
       "clipmapBaseExtent": 8.0,

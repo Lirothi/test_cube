@@ -842,6 +842,17 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         });
 
     // P6C: the horizon search reads the pyramid, so GTAO orders after the build.
+    //
+    // ASYNC COMPUTE: TRIED AND REJECTED (2026-09-14), and the numbers are the reason to leave it
+    // here. Every stage is a compute dispatch and the move is cheap to express -- one D7 hand-over
+    // (`gbVelocity`, in Main_Hzb) on a pass that runs anyway, the shape that made CloudShadow pay.
+    // It scheduled exactly as intended: the compute queue waited on Main_Hzb and ran alongside
+    // Main_VsmPageRender + Main_VolumetricFog. Measured on the owner's camera, 3 interleaved runs
+    // per arm, GPU.Frame 4.097 -> 4.100 ms -- a WASH. The per-pass rows say why: Pass_Gtao itself
+    // went 0.090 -> 0.169 ms and VsmPageRender 1.33 -> 1.64 ms. The overlap is real; the silicon it
+    // would need is not. The window this pass can hide in is owned by VsmPageRender, which already
+    // saturates the SMs, so the second queue interleaves the two instead of filling a gap.
+    // Don't retry until that window contains something that LEAVES the GPU idle.
     gb.pGtao = rg.AddPass2(RenderPass::Main_Gtao, { gb.pGbufDone, gb.pHzb },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const GtaoSettings& s = frame_->settings.gtao;
@@ -1838,6 +1849,23 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             ctx.UseDeclared();
             if (frame_->skybox) { frame_->skybox->DeclareEnvironment(ctx, kSrvAll); }
+            // D7 HAND-BACK for `Main_CloudShadow`, which is on the ASYNC COMPUTE queue -- and the
+            // only declaration in this pass for a resource it does not use.
+            //
+            // The dependency it serves is CROSS-FRAME. The ocean samples the cloud shadow map in a
+            // pixel shader (Main_Transparent, :1785) and leaves it in PIXEL_SHADER_RESOURCE; NEXT
+            // frame the compute queue wants to write it, and an async acquire may not start from a
+            // direct-queue-only state. So the graphics side hands it back here -- the first pass
+            // after the ocean, registered unconditionally, riding a point it already emits.
+            //
+            // Guarded on ShadowBuilt() for the same reason the ocean's declaration is: with clouds
+            // off the map is never written and never read, and a transition for a resource nobody
+            // touched is noise in the barrier program.
+            if (volumetricCloud_.ShadowBuilt())
+            {
+                ctx.Use(volumetricCloud_.ShadowResource(),
+                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
             const auto& DF = ctx.renderer->GetDeferredForFrame();
             if (DF.fogIntegrated.Get())
             {
