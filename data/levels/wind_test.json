@@ -13811,7 +13811,7 @@
       "horizonFogDistanceScale": 2.5,
       "horizonFogStrength": 0.009999999776482582,
       "macroNormalMipBiasDlss": 0.0,
-      "macroNormalMipBiasNative": 1.0,
+      "macroNormalMipBiasNative": 2.0,
       "minMeshScale": 15.0,
       "reflectionNormalStrength": 0.10000000149011612,
       "reflectionSkyHorizonPull": 1.0,
@@ -14111,7 +14111,7 @@
     "windKmH": 150.0
   },
   "wind": {
-    "directionDeg": 90.0,
+    "directionDeg": 130.0,
     "foliageSwayMeters": 1.100000023841858,
     "gust": {
       "amplitude": 0.20000000298023224,

@@ -1,9 +1,9 @@
 {
   "antiAliasing": {
-    "dlssEnabled": false,
-    "dlssMode": "off",
-    "fxaa": true,
-    "renderScale": 1.0
+    "dlssEnabled": true,
+    "dlssMode": "balanced",
+    "fxaa": false,
+    "renderScale": 0.580078125
   },
   "lod": {
     "chunkDistance": 24.0,
@@ -31,7 +31,7 @@
     "rtFoliageFill": 0.15000000596046448,
     "rtWindRadius": 40.0,
     "rtWindSway": false,
-    "source": "skyOnly",
+    "source": "ssr",
     "ssrTechnique": "ueHzb",
     "sunMetalSpec": 0.0,
     "temporal": true,
