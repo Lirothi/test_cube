@@ -1850,7 +1850,21 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         const std::uint32_t matVersion = gbMat ? gbMat->MaterialContentVersion() : 0u;
         const bool materialChanged = idx < cpuMaterialVersion_.size() &&
                                      cpuMaterialVersion_[idx] != matVersion;
-        if ((ro && ro->MovedThisFrame()) || windFadeChanged || materialChanged)
+        const bool contentChanged = (ro && ro->MovedThisFrame()) || windFadeChanged || materialChanged;
+        // ONE MORE FILL IS OWED AFTER A MOVER STOPS, and leaving it out is a permanent artefact
+        // rather than a transient one. FillInstanceSlot writes prevWorld straight from the object,
+        // and on the frame the move happens prev is still the OLD transform -- correct, that is the
+        // motion vector. But the record is never filled again once `MovedThisFrame()` goes false,
+        // so prevWorld stays at that old transform forever while world sits at the new one. The
+        // G-buffer then reports the same jump every single frame, DLSS believes the object is flying
+        // and keeps smearing it: an object that was nudged once loses its surface detail for the
+        // rest of the session. (Reported 2026-09-15: palm trunks go soft after moving them.)
+        //
+        // `pending_` already tracks "changed recently" for kFrameCount frames to walk the change
+        // through every ring region, so it is exactly the window in which prev has to converge --
+        // refill during it, but do NOT re-arm it, or the object would refill itself forever.
+        const bool settling = !contentChanged && idx < pending_.size() && pending_[idx] > 0;
+        if (contentChanged || settling)
         {
             render::CasterBounds objectBounds{};
             FillBounds(obj, objectBounds);
@@ -1869,9 +1883,12 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
                 // every frame forever.
                 if (idx + s < cpuMaterialVersion_.size()) { cpuMaterialVersion_[idx + s] = matVersion; }
             }
-            for (size_t s = 0; s < slots; ++s)
+            if (contentChanged)
             {
-                pending_[idx + s] = static_cast<std::uint8_t>(render::kFrameCount);
+                for (size_t s = 0; s < slots; ++s)
+                {
+                    pending_[idx + s] = static_cast<std::uint8_t>(render::kFrameCount);
+                }
             }
         }
         // pending>0 propagates a recent change across all kFrameCount ring regions (even after
