@@ -110,6 +110,9 @@ COMPUTE_ENTRIES = [
     ("sdsm_analyze_cs.hlsl", "ReduceBounds"),
     ("sdsm_analyze_cs.hlsl", "Finalize"),
     ("sdsm_analyze_cs.hlsl", "CarryFrustums"),
+    # S16: the EVSM4 converter (depth tile -> moments).
+    ("sdsm_evsm_cs.hlsl", "CSMain"),
+    ("sdsm_evsm_blur_cs.hlsl", "CSMain"),
 ]
 
 # Shaders needing a target above the 6_0 default. Kept separate rather than widening every entry to

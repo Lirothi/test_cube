@@ -242,7 +242,9 @@ bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
 
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 14> srvs{
         sceneColorSrv,
-        deferred.shadowSRV,
+        // t1: the SUN atlas -- DEPTH normally, EVSM4 MOMENTS when S16 is on. glass.hlsl reads
+        // whichever through csm_sample, which decides from the partition's exponents.
+        renderer->GetSdsmMomentsSrv().ptr != 0 ? renderer->GetSdsmMomentsSrv() : deferred.shadowSRV,
         deferred.spotShadowSRV,
         skyDisplaySrv,
         lights.GetPointLightSrv(renderer->GetCurrentFrameIndex()),

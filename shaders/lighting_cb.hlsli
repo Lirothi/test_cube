@@ -173,6 +173,7 @@ CsmParams MakeCsmParams()
     p.blendFraction        = csmFadeParams.y;
     p.distanceFadeFraction = csmFadeParams.z;
     p.useGatherPcf     = csmFilterMode;
+    p.evsmExponents    = float2(0.0f, 0.0f); // S16: set by CsmApplySdsm, and only when EVSM is on
     // S15: in SDSM the six fields above that describe WHERE a cascade looks were computed by this
     // frame's reduction, not by the CPU -- overwrite them from the buffer. Everything else (the
     // filter, the biases in texels, the blend fractions) is per-scene tuning that SDSM shares.

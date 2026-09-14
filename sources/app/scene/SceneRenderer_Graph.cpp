@@ -860,6 +860,21 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                     };
                 });
         }
+        // S16: the finished depth tiles -> EVSM4 moments. AFTER pass B, because it converts the
+        // FINISHED tile: converting before it would bake the main cull's bad occlusion guesses in.
+        if (decisions_.sdsmEvsm)
+        {
+            gb.pSdsmShadow = rg.AddPass2(RenderPass::Main_SdsmMoments, { gb.pSdsmShadow },
+                [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                    if (!frame_->sdsm) { return {}; }
+                    const SdsmShadows::MomentsDecisions dec = frame_->sdsm->PrepareMomentsPass(ctx);
+                    if (!dec.active) { return {}; }
+                    return [this, renderer, dec](RenderGraphPassContext c) {
+                        CPU_SCOPE(ProfilerScopes::kPassSdsmMoments);
+                        Pass_SdsmMoments(renderer, c, dec);
+                    };
+                });
+        }
         // The sun's consumers order after the LAST pass that writes the atlas, not after the (now
         // stale) Main_CSM slot.
         gb.pShadow = gb.pSdsmShadow;

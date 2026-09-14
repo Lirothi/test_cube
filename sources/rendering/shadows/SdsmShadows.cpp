@@ -10,6 +10,7 @@
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/TextureCreate.h" // barrier plan step 11: the ONE place a texture is made
 #include "rendering/renderables/InstanceTypes.h" // render::kShadowViewPlanes
 
 namespace
@@ -258,6 +259,26 @@ void SdsmShadows::EnsurePipelines(Renderer* renderer)
         }
         return m;
     };
+    {
+        // S16: the moments converter. Optional -- a failure leaves MomentsReady() false and the
+        // mode keeps its PCF arm, which is also the A/B.
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/sdsm_evsm_cs.hlsl";
+        cd.csEntry = "CSMain";
+        evsmMat_ = mm->GetOrCreateCompute(renderer, cd);
+        if (!evsmMat_ || !evsmMat_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::RenderShadow, "sdsm_evsm_cs.hlsl did not build a PSO; EVSM unavailable");
+            evsmMat_.reset();
+        }
+        cd.shaderFile = L"shaders/sdsm_evsm_blur_cs.hlsl";
+        evsmBlurMat_ = mm->GetOrCreateCompute(renderer, cd);
+        if (!evsmBlurMat_ || !evsmBlurMat_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::RenderShadow, "sdsm_evsm_blur_cs.hlsl did not build a PSO; EVSM blur off");
+            evsmBlurMat_.reset();
+        }
+    }
     clearMat_ = make("ClearBounds");
     reduceZMat_ = make("ReduceZBounds");
     logMat_ = make("LogPartitions");
@@ -281,6 +302,7 @@ void SdsmShadows::ReleaseResources(Renderer* renderer)
     partitionSrv_ = {};
     prevPartitionSrv_ = {};
     frustumSrv_ = {};
+    ReleaseMoments(renderer);
     partitions_.Reset();
     prevPartitions_.Reset();
     zbounds_.Reset();
@@ -290,6 +312,236 @@ void SdsmShadows::ReleaseResources(Renderer* renderer)
     cullCB_.Reset();
     readback_.Reset();
     readbackFrame_.fill(0ull);
+}
+
+// ---------------------------------------------------------------------------------------------
+// S16 -- the EVSM moments atlas
+// ---------------------------------------------------------------------------------------------
+
+bool SdsmShadows::EnsureMoments(Renderer* renderer, UINT atlasRes)
+{
+    if (!renderer || !renderer->GetDevice() || atlasRes == 0) { return false; }
+    if (moments_ && momentsRes_ == atlasRes) { return true; }
+    ReleaseMoments(renderer);
+
+    ID3D12Device* dev = renderer->GetDevice();
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = atlasRes;
+    desc.Height = atlasRes;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1; // the mip chain is a later sub-step (see CsmSampleEvsm's note)
+    // R32G32B32A32_FLOAT, and it is not negotiable: the exponents clamp at 42 precisely because
+    // exp(42)^2 ~ 2.9e36 already sits just under fp32's ceiling. In fp16 the SECOND moment is Inf
+    // for any occluder at all, and every shadow test returns garbage.
+    desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    constexpr D3D12_RESOURCE_STATES kSrvAll =
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    // CREATED DIRECTLY IN ITS CANONICAL STATE, not in COMMON. Under enhanced barriers a TEXTURE
+    // has a LAYOUT, and the graph compiles its first barrier FROM the declared canonical -- so a
+    // texture that actually starts in COMMON gets a barrier whose before-layout is a lie
+    // (GBV id=1334, caught 2026-09-14). Buffers have no layout and are unaffected, which is why
+    // the buffers above may keep COMMON; RenderTargetManager states the same rule for every
+    // texture it makes -- created directly in its resting state, so creation == canonical.
+    Microsoft::WRL::ComPtr<ID3D12Resource> tex;
+    if (FAILED(render::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, desc,
+                                              kSrvAll, nullptr, tex.GetAddressOf())) || !tex)
+    {
+        LOG_ERROR(logging::LogCategory::RenderShadow,
+                  "SDSM moments atlas {}x{} RGBA32F allocation FAILED; EVSM unavailable", atlasRes, atlasRes);
+        return false;
+    }
+    moments_.Attach(renderer->Declarations(), tex, kSrvAll, kSrvAll, L"SDSM.Moments");
+
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.NumDescriptors = 2;
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(momentsHeap_.GetAddressOf()))) || !momentsHeap_)
+    {
+        ReleaseMoments(renderer);
+        return false;
+    }
+    const UINT incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const D3D12_CPU_DESCRIPTOR_HANDLE base = momentsHeap_->GetCPUDescriptorHandleForHeapStart();
+    momentsSrv_ = base;
+    momentsUav_ = D3D12_CPU_DESCRIPTOR_HANDLE{ base.ptr + incr };
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+    sd.Format = desc.Format;
+    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sd.Texture2D.MipLevels = 1;
+    dev->CreateShaderResourceView(moments_.Get(), &sd, momentsSrv_);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+    ud.Format = desc.Format;
+    ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    dev->CreateUnorderedAccessView(moments_.Get(), nullptr, &ud, momentsUav_);
+
+    // The blur's intermediate: one TILE. Failure is not fatal -- the blur simply does not run.
+    {
+        const UINT tile = std::max<UINT>(1u, atlasRes / 2u);
+        D3D12_RESOURCE_DESC bd = desc;
+        bd.Width = tile;
+        bd.Height = tile;
+        Microsoft::WRL::ComPtr<ID3D12Resource> scratch;
+        if (SUCCEEDED(render::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, bd,
+                                                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                     scratch.GetAddressOf())) && scratch)
+        {
+            blurScratch_.Attach(renderer->Declarations(), scratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"SDSM.MomentsBlurScratch");
+            D3D12_DESCRIPTOR_HEAP_DESC sh{};
+            sh.NumDescriptors = 2;
+            sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+            sh.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+            Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sheap;
+            if (SUCCEEDED(dev->CreateDescriptorHeap(&sh, IID_PPV_ARGS(sheap.GetAddressOf()))) && sheap)
+            {
+                blurScratchHeap_ = sheap;
+                const D3D12_CPU_DESCRIPTOR_HANDLE sbase = sheap->GetCPUDescriptorHandleForHeapStart();
+                blurScratchSrv_ = sbase;
+                blurScratchUav_ = D3D12_CPU_DESCRIPTOR_HANDLE{ sbase.ptr + incr };
+                dev->CreateShaderResourceView(blurScratch_.Get(), &sd, blurScratchSrv_);
+                dev->CreateUnorderedAccessView(blurScratch_.Get(), nullptr, &ud, blurScratchUav_);
+            }
+            else
+            {
+                blurScratch_.Reset();
+            }
+        }
+    }
+
+    momentsRes_ = atlasRes;
+    LOG_INFO(logging::LogCategory::RenderShadow,
+             "SDSM EVSM moments atlas {}x{} RGBA32F ({:.1f} MB) + {:.1f} MB blur scratch",
+             atlasRes, atlasRes, (static_cast<double>(atlasRes) * atlasRes * 16.0) / (1024.0 * 1024.0),
+             blurScratch_ ? (static_cast<double>(atlasRes / 2u) * (atlasRes / 2u) * 16.0) / (1024.0 * 1024.0) : 0.0);
+    return true;
+}
+
+void SdsmShadows::ReleaseMoments(Renderer* renderer)
+{
+    (void)renderer;
+    // Both sides of the residency say so, not just the allocating one: "the atlas appeared" with no
+    // matching "it went away" is indistinguishable from a leak in the session log, and this pair is
+    // 67 MB at 2048.
+    if (moments_)
+    {
+        LOG_INFO(logging::LogCategory::RenderShadow, "SDSM EVSM moments atlas released ({}x{})",
+                 momentsRes_, momentsRes_);
+    }
+    blurScratch_.Reset();
+    blurScratchHeap_.Reset();
+    blurScratchSrv_ = {};
+    blurScratchUav_ = {};
+    moments_.Reset();
+    momentsHeap_.Reset();
+    momentsSrv_ = {};
+    momentsUav_ = {};
+    momentsRes_ = 0;
+}
+
+SdsmShadows::MomentsDecisions SdsmShadows::PrepareMomentsPass(RenderGraphPassContext& ctx)
+{
+    MomentsDecisions dec{};
+    if (!ready_ || !MomentsReady() || !evsmMat_ || !ctx.renderer) { return dec; }
+    const auto& D = ctx.renderer->GetDeferredForFrame();
+    if (D.shadow == nullptr || D.shadowSRV.ptr == 0) { return dec; }
+    dec.active = true;
+
+    dec.write = ctx.usePoint ? *ctx.usePoint : 0u;
+    // The depth atlas the S15 depth pass just wrote, read by a COMPUTE shader: NON_PIXEL only.
+    ctx.Use(D.shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(moments_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(partitions_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // The blur ping-pongs the scratch between UAV (the horizontal pass writes it) and
+    // NON_PIXEL (the vertical pass reads it). Both states live inside THIS point; the UAV
+    // barriers between the dispatches are emitted by the record.
+    if (blurScratch_) { ctx.Use(blurScratch_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+
+    ctx.NextPoint();
+    dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
+    constexpr D3D12_RESOURCE_STATES kSrvAll =
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    // PIXEL as well as non-pixel: glass samples the moments from a pixel shader, like the atlas.
+    ctx.Use(moments_.Get(), kSrvAll);
+    return dec;
+}
+
+void SdsmShadows::RecordMoments(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                const MomentsDecisions& dec)
+{
+    if (!renderer || !cl || !dec.active) { return; }
+    // Points first, work second -- the rule the barrier comparator enforces.
+    renderer->EmitPoint(cl, dec.write);
+
+    const auto& D = renderer->GetDeferredForFrame();
+    if (evsmMat_ && D.shadowSRV.ptr != 0 && momentsUav_.ptr != 0 && momentsRes_ > 0)
+    {
+        struct EvsmCB { std::uint32_t atlasRes, tileRes, partitions, pad; };
+        const EvsmCB c{ momentsRes_, momentsRes_ / 2u,
+                        std::min<std::uint32_t>(cb_.partitions, render::sdsm::kMaxPartitions), 0u };
+        RecordComputeDispatch(renderer, cl, evsmMat_.get(), static_cast<UINT>(sizeof(EvsmCB)),
+            [&](std::uint8_t* dst) { std::memcpy(dst, &c, sizeof(c)); },
+            { D.shadowSRV, partitionSrv_ },
+            { momentsUav_ },
+            D3D12_GPU_DESCRIPTOR_HANDLE{},
+            momentsRes_, momentsRes_,
+            moments_.Get());
+
+        // The separable box, per partition, in light space. Two dispatches each: the tile out into
+        // the scratch (horizontal), the scratch back into the tile (vertical). Tile at a time
+        // because a tap must never leave its own partition, and the whole atlas holds four.
+        const float softening = render::sdsm::g_evsmBlur;
+        const UINT tile = momentsRes_ / 2u;
+        if (evsmBlurMat_ && blurScratch_ && softening > 0.0f && tile > 0u)
+        {
+            // Width in TEXELS: a fraction of the partition, and the partition's box maps exactly
+            // onto the tile's content, so the fraction times the tile IS the texel count. Capped,
+            // and floored at 1 -- below one texel the box is the identity and the passes are waste.
+            const float widthTexels = std::min(softening * static_cast<float>(tile),
+                                               render::sdsm::g_evsmBlurMaxTexels);
+            if (widthTexels > 1.0f)
+            {
+                struct BlurCB
+                {
+                    std::int32_t srcOrigin[2], dstOrigin[2], tileSize[2];
+                    std::uint32_t dimension;
+                    float filterTexels;
+                };
+                const std::uint32_t parts = std::min<std::uint32_t>(cb_.partitions, render::sdsm::kMaxPartitions);
+                for (std::uint32_t p = 0; p < parts; ++p)
+                {
+                    const std::int32_t ox = static_cast<std::int32_t>((p % 2u) * tile);
+                    const std::int32_t oy = static_cast<std::int32_t>((p / 2u) * tile);
+                    const std::int32_t t = static_cast<std::int32_t>(tile);
+
+                    BlurCB h{ { ox, oy }, { 0, 0 }, { t, t }, 0u, widthTexels };
+                    RecordComputeDispatch(renderer, cl, evsmBlurMat_.get(), static_cast<UINT>(sizeof(BlurCB)),
+                        [&](std::uint8_t* dst) { std::memcpy(dst, &h, sizeof(h)); },
+                        {}, { momentsUav_, blurScratchUav_ }, D3D12_GPU_DESCRIPTOR_HANDLE{},
+                        tile, tile, blurScratch_.Get());
+
+                    BlurCB v{ { 0, 0 }, { ox, oy }, { t, t }, 1u, widthTexels };
+                    RecordComputeDispatch(renderer, cl, evsmBlurMat_.get(), static_cast<UINT>(sizeof(BlurCB)),
+                        [&](std::uint8_t* dst) { std::memcpy(dst, &v, sizeof(v)); },
+                        {}, { blurScratchUav_, momentsUav_ }, D3D12_GPU_DESCRIPTOR_HANDLE{},
+                        tile, tile, moments_.Get());
+                }
+            }
+        }
+    }
+
+    renderer->EmitPoint(cl, dec.consume);
 }
 
 void SdsmShadows::SetFrameParams(const render::sdsm::AnalyzeConstants& cb)

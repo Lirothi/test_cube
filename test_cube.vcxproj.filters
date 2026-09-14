@@ -1521,6 +1521,9 @@
     <None Include="shaders\sdsm_analyze_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\sdsm_evsm_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\sdsm_partitions.hlsli">
       <Filter>shaders</Filter>
     </None>

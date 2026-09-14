@@ -112,6 +112,9 @@ private:
         // Occlusion S5b inside SDSM: the mode runs the two-pass light-space occlusion cull this
         // frame (the knob, the pyramids, and a previous frame to test against).
         bool sdsmHzb = false;
+        // S16: the mode samples EVSM4 moments instead of PCF this frame (the knob, the mode,
+        // the converter PSO and the moments atlas all present).
+        bool sdsmEvsm = false;
         bool vsmSkipUpdate = false;    // nothing moved: keep last frame's pages (was vsmSkipUpdate_)
         bool willDlss = false;         // the DLSS evaluate is predicted to run (was a local)
         // Occlusion plan S5: the camera's two-pass HZB occlusion inside the indirect G-buffer --
@@ -277,6 +280,8 @@ private:
     void Pass_SdsmShadow(Renderer* r, RenderGraphPassContext ctx, std::uint32_t atlasPoint, bool passB);
     void Pass_SdsmCullPost(Renderer* r, RenderGraphPassContext ctx,
         const ShadowGpuData::CullPostDecisions& dec);
+    void Pass_SdsmMoments(Renderer* r, RenderGraphPassContext ctx,
+        const SdsmShadows::MomentsDecisions& dec);
     // pass-flow S7d: `bindPoint` is the outer pass's single declared point; the INNER graph's
     // driver emits it instead of carrying a second copy of the same declaration list.
     void Pass_GBuffer(Renderer* r, RenderGraphPassContext ctx,

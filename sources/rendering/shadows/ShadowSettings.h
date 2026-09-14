@@ -111,6 +111,17 @@ inline bool AtlasDirectional() { return g_shadowMode != ShadowMode::VSM; }
 // measured Legacy whenever the saved mode was Legacy -- a control that lied.
 inline bool g_shadowModeFromCli = false;
 inline ShadowMode g_shadowModePersisted = ShadowMode::VSM; // what the settings file holds (saved back unchanged under the override)
+// ...and it lied a SECOND way, found 2026-09-14: the flag's parser mapped everything it did not
+// recognise onto VSM, so `--shadow-mode=csm` (the obvious spelling for the Legacy CSM mode) ran a
+// whole measurement session against VSM while every log line and every `csm.*` knob said Legacy.
+// A boot override that silently selects a mode nobody asked for is worse than no override, so an
+// unrecognised token now LEAVES THE MODE ALONE and raises this flag, which the first reconcile
+// turns into a WARN next to the mode it actually settled on.
+inline bool g_shadowModeCliUnknown = false;
+inline const char* ShadowModeLabel(ShadowMode m)
+{
+    return (m == ShadowMode::Legacy) ? "Legacy CSM" : (m == ShadowMode::Sdsm) ? "SDSM" : "VSM";
+}
 
 // S0.3 — Legacy CSM debug visualization, forwarded to lighting_cs.hlsl as `csmDebugMode`.
 // 0 = off (the shader's only cost is one uint compare). 1 = tint each pixel by the cascade the
@@ -224,7 +235,10 @@ namespace contact
     // all -- so off always means "shadow map", whatever the combo says.
     inline std::uint32_t EffectiveLocalMode() { return g_enabled ? g_localMode : 0u; }
     // Distance window in METRES from the camera. Outside it the term is off. maxDistance 0 = no
-    // far limit. The far end fades over the last `g_fadeBandM` metres so it does not pop.
+    // far limit. BOTH ends fade over `g_fadeBandM` metres so neither pops -- the near end used to
+    // cut hard, which only looked fine because this defaults to 0 and no geometry sits at zero
+    // metres. Raising it to where there IS ground (the ask was 500 m: keep contacts only out
+    // where the cascades are too coarse to resolve anything) needs the near ramp too.
     inline float         g_minDistanceM = 0.0f;
     // 0 = NO LIMIT, and it stays that way. A 150 m default was tried here and it was the wrong
     // answer to the wrong question: the ask was contacts that KEEP WORKING at distance, and
@@ -308,12 +322,76 @@ namespace sdsm
     // uses, so this only has to cover the far cap and the depth-precision margin.
     inline float g_zMargin = 25.0f;
 
+    // S16.7. How much of LAST frame's reduced depth range survives into this one, 0 = none (the
+    // raw per-frame reduction, and the A/B). The partition boundaries are logarithmic over
+    // [minZ, maxZ], so a frond swinging past the camera moves minZ and drags EVERY boundary with
+    // it -- the cascade edge visibly walks across the ground under wind. Smoothing the RANGE
+    // rather than the boundaries keeps the split's shape intact.
+    //
+    // Per FRAME, deliberately: the wind clock can be frozen, and a per-second decay stops
+    // converging when dt is 0. The consequence is that the time constant follows the frame rate,
+    // which is acceptable for a stabiliser.
+    //
+    // IN FRAMES OF HALF-LIFE, not in a retention factor. The factor is what the shader needs
+    // (0.977, 0.9971 ...) and it is unreadable as a setting: everything useful hides between
+    // 0.97 and 0.999. "How many frames until half the wobble is gone" is the actual question,
+    // so that is what is stored, typed and saved; Scene converts once, at the CB.
+    // 0 = off. Frames rather than seconds because the average IS per frame -- seconds would be
+    // a lie at a different frame rate, and the wind clock can be frozen at dt = 0.
+    inline float g_stabilityFrames = 30.0f;
+
     // NO `analyzeFullRes` KNOB, and that is a decision rather than an omission. The plan listed
     // one; it was written, wired to --set, and read by NOBODY -- a control that lies. The
     // reduction always walks EVERY depth pixel, because a min/max over a strided grid loses a
     // thin object entirely and a thin object is exactly what pulls a partition's near plane in.
     // Measured, the whole analysis is 0.037 ms; a half-res mode would save ~0.02 ms and cost
     // correctness, so there is nothing here worth choosing between.
+
+    // ---- S16: EVSM4 (transcription of the sample's RenderingEVSM.hlsl) -----------------------
+    // The depth tile is converted to four exponentially-warped MOMENTS (pos, neg, pos^2, neg^2)
+    // and sampled through a Chebyshev upper bound instead of a percentage-closer filter. The point
+    // is that moments are PREFILTERABLE: hardware bilinear, a box blur and mips all operate on the
+    // shadow ESTIMATE, where PCF can only ever average binary compares taken before the filter.
+    //
+    // Master switch, default OFF: it costs a second atlas (RGBA32F) and a conversion pass, and the
+    // PCF arm stays the A/B and the fallback.
+    inline bool g_evsm = false;
+
+    // The warp exponents, applied to the partition's OWN depth rescaled to [-1, 1].
+    //
+    // DEVIATION, and it is a real one. The sample write them as light-space constants (800 / 100)
+    // divided by `partition.scale.z`, which keeps the warp consistent across partitions of ONE
+    // global light projection. We have no global light projection -- each partition builds its own
+    // ortho from measured bounds -- and at our metre scales that formula saturates at the fp32
+    // clamp (42) for every partition we ever build. The clamp IS the operating point, so it is
+    // exposed directly rather than behind an indirection that always saturates. The 8:1 ratio
+    // between them is the sample's, and it is what the pair is for: the positive warp is steep
+    // (sharp contact, crushes light leaking), the negative one shallow (catches what the positive
+    // one lets through).
+    //
+    // 42 is not a taste: exp(42) ~ 1.7e18 and its SQUARE ~ 2.9e36, against fp32's 3.4e38 ceiling.
+    // Past it the second moment is Inf and every shadow test returns garbage.
+    inline constexpr float kEvsmMaxExponent = 42.0f;
+    inline float g_evsmPos = 42.0f;
+    inline float g_evsmNeg = 5.25f;
+
+    // Edge softening: a separable box over the moments, its width a FRACTION OF THE PARTITION
+    // (the sample's edgeSofteningAmount, 0.02). Because a partition's box is fitted to the
+    // geometry, a fraction of it is an authored WORLD size that keeps its meaning as the
+    // partition moves -- which a texel count would not. 0 = no blur pass at all.
+    //
+    // DEFAULT 0.002, NOT THE SAMPLE'S 0.02, and the difference is our world scale rather than
+    // taste. The fraction is of the PARTITION, and ours are metres wide: 0.02 of p3's 163 m box is
+    // a 3.3 m penumbra, which on the atoll washes the whole far field to a flat grey (shot and
+    // looked at, 2026-09-14). 0.002 gives ~1 cm on the near partition and ~33 cm on the far one --
+    // softness that grows with distance, which is what a penumbra does, instead of erasing the
+    // shadow. The sample's scene is simply not measured in metres.
+    inline float g_evsmBlur = 0.002f;
+    // ...capped, because the kernel must not reach out of its own tile: the S5 gutter is 4
+    // texels and past it lies ANOTHER partition. The blur clamps its taps to the tile, so the
+    // cap is about cost and about the edge going flat, not about correctness.
+    // (the sample's maxEdgeSofteningFilter, 16 texels.)
+    inline float g_evsmBlurMaxTexels = 16.0f;
 
     // Dump the partition readout (intervals, box extents, texel size, sample counts, the
     // CPU-caster tail) to the session log on the next analyze, then clear itself. `--sdsm-readout`.

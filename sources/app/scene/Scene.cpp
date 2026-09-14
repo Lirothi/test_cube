@@ -2336,6 +2336,13 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     cb.dilation = render::sdsm::g_dilation;
     cb.minScaleOverSphere = render::sdsm::g_minScaleOverSphere;
     cb.zMargin = render::sdsm::g_zMargin;
+    // The ONE place the human unit becomes the shader's: half-life in frames -> per-frame
+    // retention. Below a frame there is nothing to average, so that end is simply off.
+    {
+        const float halfLife = std::clamp(render::sdsm::g_stabilityFrames, 0.0f, 240.0f);
+        cb.stability = (halfLife < 1.0f) ? 0.0f
+                                         : std::pow(0.5f, 1.0f / halfLife);
+    }
     cb.pancakeSlack = cascadeConfig_.pancakeSlackWS;
     cb.casterReach = cascadeConfig_.casterReachWS;
     cb.depthBiasTexels = cascadeConfig_.depthBiasInTexels;
@@ -2355,6 +2362,19 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     // because the partition intervals it needs are a GPU result.
     cb.blendFraction = cascadeConfig_.blendFraction;
     cb.accurateCull = cascadeConfig_.accurateCasterCull ? 1u : 0u;
+
+    // S16: the moments atlas, allocated only while EVSM is on -- four times the bytes per texel
+    // of the depth it is derived from. The EXPONENTS are zero when it is off, and that single
+    // zero is what makes csm_sample take the PCF arm: one switch, no second opinion.
+    // RESIDENCY IS NOT DECIDED HERE. `ReconcileShadowMode` (which runs earlier in the same frame,
+    // with the GPU idle) owns allocating and freeing the moments atlas; this only asks whether the
+    // thing exists and matches THIS frame's atlas. The size compare is the guard for the one frame
+    // where the deferred atlas edge and the reconciled one can disagree: EVSM simply sits out that
+    // frame on the PCF arm instead of the moments pass writing a texture of the wrong size.
+    const bool evsmReady = sdsm_.MomentsReady() && sdsm_.MomentsRes() == D.shadowRes;
+    cb.evsmOn = evsmReady ? 1u : 0u;
+    cb.evsmPos = evsmReady ? std::min(render::sdsm::g_evsmPos, render::sdsm::kEvsmMaxExponent) : 0.0f;
+    cb.evsmNeg = evsmReady ? std::min(render::sdsm::g_evsmNeg, render::sdsm::kEvsmMaxExponent) : 0.0f;
 
     // The gbuffer's wind, so the analyze can write a COMPLETE PerView block per partition. Read
     // from the SAME WindState the gbuffer CB is built from -- a shadow swaying to different
@@ -2400,12 +2420,21 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     // and the per-axis texel is the whole acceptance criterion of the step.
     if (render::sdsm::g_dumpReadout && sdsm_.ReadoutValid() && renderer->GetTotalFrameNumber() > 600)
     {
-        render::sdsm::g_dumpReadout = false;
+        // EIGHT CONSECUTIVE FRAMES, not one. A single table says what the partitions ARE; the
+        // question that keeps coming up is what they DO between frames (S16.7: the boundaries
+        // visibly walk on some viewpoints), and that is only readable as a run.
+        static int s_readoutFrames = 0;
+        if (s_readoutFrames == 0) { s_readoutFrames = 8; }
+        if (--s_readoutFrames == 0) { render::sdsm::g_dumpReadout = false; }
         const auto& parts = sdsm_.Readout();
         LOG_INFO(logging::LogCategory::RenderShadow,
-                 "SDSM readout frame {} partitions={} border={:.1f} dilation={:.3f} minScale={:.3f} cpuTailCasters={} hzb={}",
+                 "SDSM readout frame {} partitions={} border={:.1f} dilation={:.3f} minScale={:.3f} stability={:.2f} cpuTailCasters={} hzb={}",
                  renderer->GetTotalFrameNumber(), cb.partitions, cb.borderTexels, cb.dilation,
-                 cb.minScaleOverSphere, sdsm_.CpuCasterCount(), cb.hzbOn);
+                 cb.minScaleOverSphere, cb.stability, sdsm_.CpuCasterCount(), cb.hzbOn);
+        LOG_INFO(logging::LogCategory::RenderShadow,
+                 "  evsm={} exponents {:.1f}/{:.1f} atlas {}x{} moments {:.1f} MB",
+                 cb.evsmOn, cb.evsmPos, cb.evsmNeg, D.shadowRes, D.shadowRes,
+                 cb.evsmOn ? (static_cast<double>(D.shadowRes) * D.shadowRes * 16.0) / (1024.0 * 1024.0) : 0.0);
         if (cb.hzbOn != 0u)
         {
             // What the occlusion cull actually did, per partition: how many casters last frame's
@@ -2450,6 +2479,29 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     // and free/allocate — the same idle-then-realloc pattern the level-load path uses. So only ONE
     // mode's shadow resources are ever resident (memory-optimal). Legacy atlas freeing is Step 24c.
     if (!renderer) { return; }
+    // The mode that is ACTUALLY active, every time it changes. Without this line a run's shadow
+    // mode was only inferable from side effects (an "[VSM] allocated" here, an "SDSM resources
+    // ready" there) and Legacy announced nothing at all -- which is how a whole measurement
+    // session compared SDSM against VSM believing it was Legacy (2026-09-14, see ShadowSettings.h).
+    {
+        static render::ShadowMode s_logged = static_cast<render::ShadowMode>(0xFFFFFFFFu);
+        if (s_logged != render::g_shadowMode)
+        {
+            s_logged = render::g_shadowMode;
+            LOG_INFO(logging::LogCategory::RenderShadow, "directional shadow mode: {}{}",
+                     render::ShadowModeLabel(render::g_shadowMode),
+                     render::g_shadowModeFromCli ? " (--shadow-mode)" : "");
+        }
+        static bool s_warnedCli = false;
+        if (render::g_shadowModeCliUnknown && !s_warnedCli)
+        {
+            s_warnedCli = true;
+            LOG_WARNING(logging::LogCategory::RenderShadow,
+                     "--shadow-mode= had an unrecognised value and was IGNORED; running {} from "
+                     "settings. Valid: legacy (or csm), sdsm, vsm",
+                     render::ShadowModeLabel(render::g_shadowMode));
+        }
+    }
     const bool wantVsm = render::VsmActive();
     const bool wantAtlasFull = !wantVsm; // legacy spot/point atlases full-res only in Legacy mode
     // S15: the SDSM buffers follow the same residency rule -- resident only in the mode that uses
@@ -2465,7 +2517,15 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     const unsigned wantAtlasRes =
         std::clamp(render::g_csmAtlasRes, render::kCsmAtlasResMin, render::kCsmAtlasResMax);
     const bool atlasResOk = (wantAtlasRes == renderer->CsmAtlasResolution());
-    if (vsmOk && atlasOk && sdsmOk && atlasResOk) { return; }    // all in sync — the common per-frame path
+    // S16: the EVSM moments atlas is the SAME kind of decision -- resident only while SDSM is the
+    // mode AND EVSM is on, and sized to the atlas edge. It belongs here and NOWHERE ELSE, because
+    // turning EVSM off FREES a texture: doing that from the per-frame update (where the toggle
+    // used to be read) destroys a resource the frames in flight are still reading, which is a
+    // device removal, not a leak (found 2026-09-14 by toggling the EVSM checkbox in the editor).
+    const bool wantMoments = wantSdsm && render::sdsm::g_evsm;
+    const bool momentsOk = (wantMoments == sdsm_.MomentsReady()) &&
+                           (!wantMoments || sdsm_.MomentsRes() == wantAtlasRes);
+    if (vsmOk && atlasOk && sdsmOk && atlasResOk && momentsOk) { return; } // all in sync — the common per-frame path
     // Reconciled independently so a resize (which rebuilds the atlases full-res) also self-corrects.
     renderer->WaitForPreviousFrame(); // GPU idle before freeing/allocating shadow resources
     if (!vsmOk) { if (wantVsm) { vsm_.EnsureResources(renderer); } else { vsm_.ReleaseResources(); } }
@@ -2497,6 +2557,19 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
         else
         {
             sdsm_.ReleaseResources(renderer);
+        }
+    }
+    // AFTER the SDSM buffers: leaving the mode already released the moments with them, and
+    // entering it has to have the buffers before the atlas they are derived from is worth having.
+    // Re-read `wantMoments` against the mode that actually settled -- the EnsureResources failure
+    // above can demote us to Legacy, and allocating 67 MB of moments for a mode we just left is
+    // exactly the kind of thing a residency reconcile exists to prevent.
+    {
+        const bool haveMoments = render::SdsmActive() && render::sdsm::g_evsm && sdsm_.Ready();
+        if (haveMoments != sdsm_.MomentsReady() || (haveMoments && sdsm_.MomentsRes() != wantAtlasRes))
+        {
+            if (haveMoments) { sdsm_.EnsureMoments(renderer, wantAtlasRes); }
+            else             { sdsm_.ReleaseMoments(renderer); }
         }
     }
 }

@@ -78,9 +78,19 @@ struct alignas(16) Partition
     std::uint32_t sampleCount = 0u;
     // bit 0: the scale clamp fired (the box was widened to the sphere ceiling).
     // bit 1: the partition is empty (sampleCount == 0) and got the sphere fallback.
+    // bit 2: the accurate cull volume dropped one of its own slice corners (must be 0).
     std::uint32_t flags = 0u;
+
+    // --- 144 --- S16 (EVSM4): the two warp exponents, ALREADY clamped to the fp32 ceiling.
+    // Written by the analyze so the converter and the sampler read one value, never two copies
+    // of a CPU knob that could be applied on one side and not the other.
+    float evsmExponents[2] = { 0.0f, 0.0f };
+    // S16.7: partition 0 carries the SMOOTHED depth range here (min, max) so the next frame
+    // can continue the average. It cannot be read back off intervalBegin/intervalEnd any
+    // more -- those are the RAW ends now, deliberately (see LogPartitions).
+    float smoothedRange[2] = { 0.0f, 0.0f };
 };
-static_assert(sizeof(Partition) == 144, "sdsm::Partition must match SdsmPartition in shaders/sdsm_partitions.hlsli");
+static_assert(sizeof(Partition) == 160, "sdsm::Partition must match SdsmPartition in shaders/sdsm_partitions.hlsli");
 
 // Flags of Partition::flags.
 inline constexpr std::uint32_t kPartitionFlagScaleClamped = 1u << 0;
@@ -153,10 +163,23 @@ struct alignas(16) AnalyzeConstants
     // previous partition's cross-fade band samples THIS partition too (S10), so the casters over
     // it must survive this cull. CascadeShadowConfig::blendFraction.
     float blendFraction = 0.0f;
+    // S16: the EVSM warp exponents (already clamped on the CPU) and the master switch. Non-zero
+    // `evsmOn` also ZEROES the depth-pass bias in the per-partition block Finalize writes: the
+    // sample carry none, and the Chebyshev bound's minimum variance is what does that job here.
+    float evsmPos = 0.0f;
+    float evsmNeg = 0.0f;
+    std::uint32_t evsmOn = 0u;
     // 1 = the accurate volume (the camera slice extruded toward the sun, S14); 0 = the plain
     // light-space box. The A/B, one flag inside one binary -- CascadeShadowConfig::accurateCasterCull.
     std::uint32_t accurateCull = 0u;
-    std::uint32_t pad2 = 0u;
+    // S16.7: how much of LAST frame's reduced depth range to keep, 0 = none (raw, the A/B).
+    // Took one of the two pads below rather than growing the block -- the row stays full, so no
+    // field after it moves. render::sdsm::g_stability.
+    float stability = 0.0f;
+    // ONE pad, and it is still load-bearing: HLSL never straddles a scalar across a 16-byte
+    // cbuffer row, so the scalars above occupy two full rows and the wind block starts on the
+    // third. Dropping it would leave the C++ struct a slot short and slide every field after it.
+    std::uint32_t pad3 = 0u;
 
     // ---- the wind tail of PerViewCB, passed through so the analyze can write a COMPLETE
     // per-partition constant block. It is the gbuffer's wind, verbatim: a shadow swaying to
@@ -180,7 +203,7 @@ struct alignas(16) AnalyzeConstants
     std::uint32_t hzbOn = 0u;                           // 0 = no occlusion test this frame
     std::uint32_t hzbPad = 0u;
 };
-static_assert(sizeof(AnalyzeConstants) == 400,
+static_assert(sizeof(AnalyzeConstants) == 416,
               "sdsm::AnalyzeConstants must stay byte-identical to SdsmAnalyzeCB in "
               "shaders/sdsm_partitions.hlsli -- it is uploaded by raw memcpy");
 

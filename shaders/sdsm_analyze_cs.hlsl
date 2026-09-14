@@ -358,10 +358,12 @@ void ReduceZBounds(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThr
 
 // ---------------------------------------------------------------------------------------------
 // 3. LogPartitions -- LogPartitions.hlsl:132 ComputeLogPartitionsFromZBounds.
-//    The interior boundaries are logarithmic over the REDUCED range; the first and last are
-//    expanded to the camera's own near/far so the set still covers the whole framebuffer. The
-//    sample's comment is the reason that expansion is free: the BOXES come from the samples, not
-//    from the partition frusta, so widening an interval that contains nothing costs nothing.
+//    ALL the boundaries are logarithmic over the REDUCED range, ends included (S16.2). The sample
+//    expand the first and last to the camera's own near/far and argue the expansion is free
+//    because the BOXES come from the samples rather than from the partition frusta. It is free for
+//    the boxes; it is not free for the CULL VOLUME and the slice-sphere ceiling, which Finalize
+//    builds from the interval itself. See the block at the assignment for why nothing downstream
+//    needs the padding.
 // ---------------------------------------------------------------------------------------------
 [numthreads(SDSM_MAX_PARTITIONS, 1, 1)]
 [RootSignature(SDSM_ANALYZE_RS)]
@@ -372,15 +374,80 @@ void LogPartitions(uint groupIndex : SV_GroupIndex)
     // Nothing visible at all (a frame that is pure sky): fall back to the camera range so the
     // partitions stay ordered and the sphere fallback in Finalize produces a valid, if useless,
     // box. Without this `minZ` is +inf and every interval collapses to NaN.
-    const float minZ = empty ? gNearZ : max(gNearZ, SdsmFloatUnflip(ZBounds[0].minZ));
-    const float maxZ = empty ? gFarZ  : min(gFarZ,  SdsmFloatUnflip(ZBounds[0].maxZ));
+    const float rawMin = empty ? gNearZ : max(gNearZ, SdsmFloatUnflip(ZBounds[0].minZ));
+    const float rawMax = empty ? gFarZ  : min(gFarZ,  SdsmFloatUnflip(ZBounds[0].maxZ));
+
+    // S16.7 -- TEMPORAL SMOOTHING, APPLIED ONLY TO THE INTERIOR SPLIT POINTS.
+    //
+    // What actually rings, measured per frame on the reported viewpoint with a STATIC scene: it is
+    // not minZ (15.23 m, rock steady) but maxZ, which walks 154 -> 166 -> 153 -> 154 m as ocean
+    // waves open and close the furthest visible point. Every interior boundary is logarithmic over
+    // [minZ, maxZ], so an 8 % swing at the far end moves all of them at once and the cascade edge
+    // visibly jumps across the ground.
+    //
+    // The first attempt smoothed the RANGE and made expansion instant so the range stayed a
+    // superset of the measurement. Safe, but useless here: the ringing IS an expansion every other
+    // frame, so the instant side passed it straight through (measured 0.70 % of screen area per
+    // frame against 0.64 % raw -- no better than nothing).
+    //
+    // So the ENDS STAY RAW and only the interior splits ride the smoothed range. Coverage and
+    // culling cannot regress by construction: the cull volume and the sphere ceiling are built from
+    // a partition's own interval ends, and partition 0's begin and the last one's end are still
+    // exactly what the reduction measured. Contiguity survives because boundary i is computed once
+    // and serves as both `intervalEnd[i-1]` and `intervalBegin[i]`.
+    //
+    // Freed of the superset obligation the average can be SYMMETRIC, which is what damps a
+    // two-sided oscillation. In log space, because the split is logarithmic. Per FRAME, not per
+    // second: the wind clock can be frozen and a dt-based decay stops converging when dt is 0.
+    float splitMin = rawMin;
+    float splitMax = rawMax;
+    if (gStability > 0.0f && empty == 0u)
+    {
+        // Carried in partition 0's spare pair rather than read back off the interval ends -- those
+        // are raw now, so they cannot continue an average.
+        const float prevMin = PrevPartitions[0].smoothedRange.x;
+        const float prevMax = PrevPartitions[0].smoothedRange.y;
+        // A frame that never ran leaves zeroes, and log(0) is -inf. Positive and ordered is the
+        // whole validity test: the buffer is cleared, not garbage.
+        if (prevMin > 0.0f && prevMax > prevMin)
+        {
+            splitMin = exp(lerp(log(rawMin), log(prevMin), gStability));
+            splitMax = exp(lerp(log(rawMax), log(prevMax), gStability));
+            // The split divides by splitMin, so a denormal here would take every interval with it.
+            splitMin = clamp(splitMin, gNearZ, gFarZ);
+            splitMax = clamp(splitMax, splitMin * 1.0001f, gFarZ);
+        }
+    }
+    // Partition 0 owns the state for the next frame, written by ITS thread only. Finalize must not
+    // clear this field or the average would restart every frame.
+    if (groupIndex == 0u)
+    {
+        Partitions[0].smoothedRange = float2(splitMin, splitMax);
+    }
 
     if (groupIndex >= count) { return; }
 
+    // S16.2 -- BOTH ENDS RIDE THE REDUCED RANGE NOW. They used to be pinned to the camera's own
+    // near and to `gFarZ` (= the shadow distance), on the argument that widening an interval that
+    // contains nothing is free because the BOXES come from the samples. That is true of the boxes
+    // and of nothing else. `Finalize` builds this partition's CULL VOLUME and its slice-sphere
+    // ceiling from `intervalBegin/intervalEnd`, so a last partition declared 35.85..1000 while the
+    // depth buffer ends at ~120 m submits casters down an EIGHT TIMES longer prism than the
+    // geometry occupies, and its empty-partition fallback box is the sphere of that whole prism.
+    //
+    // Nothing downstream needs the old padding, and that is the other half of this change rather
+    // than a second edit: `CsmChooseCascade` counts how many of the three INTERIOR boundaries the
+    // receiver is past (`splitsVS.yzw`), so it already returns the last partition for everything
+    // beyond the last boundary -- the clamp is structural, not a comparison against `farSplit`.
+    // `farSplit` itself only ever reaches the blend band's `sFar`, which the `idx < 3` guard drops
+    // for the last partition. A receiver past maxZ (glass or water, which do not write the depth
+    // the reduction reads) therefore still lands in the last partition and is still bounded by its
+    // box test in `CsmSampleChain` -- exactly as before, because the BOX did not move: the samples
+    // that define it are the same samples that define maxZ.
     Partitions[groupIndex].intervalBegin =
-        (groupIndex == 0u) ? gNearZ : SdsmLogPartitionFromRange(groupIndex, minZ, maxZ, count);
+        (groupIndex == 0u) ? rawMin : SdsmLogPartitionFromRange(groupIndex, splitMin, splitMax, count);
     Partitions[groupIndex].intervalEnd =
-        (groupIndex == (count - 1u)) ? gFarZ : SdsmLogPartitionFromRange(groupIndex + 1u, minZ, maxZ, count);
+        (groupIndex == (count - 1u)) ? rawMax : SdsmLogPartitionFromRange(groupIndex + 1u, splitMin, splitMax, count);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -620,11 +687,21 @@ void Finalize(uint groupIndex : SV_GroupIndex)
     Partitions[p].texelWS = texelWS;
     Partitions[p].sampleCount = samples;
     Partitions[p].flags = flags;
+    // S16: the warp exponents, clamped on the CPU, stored here so the converter and the sampler
+    // read ONE value rather than two copies of a knob.
+    Partitions[p].evsmExponents = float2(gEvsmPos, gEvsmNeg);
 
     // The two GPU-written constant blocks. The depth pass binds the first by address (b1) and the
     // caster cull the second (b1) -- neither knows SDSM exists.
-    SdsmWriteViewCB(p, viewProj, float4(depthBias, max(0.0f, depthBias * gSlopeScale),
-                                        gMaxSlope, gClampNear));
+    //
+    // S16: with EVSM on the DEPTH-PASS BIAS IS ZEROED. The sample carry none, and they are right
+    // to: a Chebyshev bound already has a minimum-variance floor that plays the part a constant
+    // depth push plays for a binary compare, and stacking the two means the moments describe a
+    // surface that is not where the geometry is -- peter-panning that no filter can take back.
+    const float4 depthPassBias = (gEvsmOn != 0u)
+        ? float4(0.0f, 0.0f, 0.0f, gClampNear)
+        : float4(depthBias, max(0.0f, depthBias * gSlopeScale), gMaxSlope, gClampNear);
+    SdsmWriteViewCB(p, viewProj, depthPassBias);
     SdsmWriteCullCBMatrices(p, PrevPartitions[p].lightViewProj, viewProj);
 
     // ---- the cull box, as six world-space inward planes -------------------------------------

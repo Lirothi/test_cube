@@ -51,7 +51,7 @@
   "scope": "Global runtime graphics quality. Scene look stays in level environment data.",
   "shadows": {
     "contact": {
-      "enabled": false,
+      "enabled": true,
       "fadeBand": 10.0,
       "grazingFade": 0.15000000596046448,
       "intensity": 1.0,
@@ -60,7 +60,7 @@
       "localLightMode": 0,
       "maxDistance": 0.0,
       "maxThickness": 0.25,
-      "minDistance": 200.0,
+      "minDistance": 480.0,
       "normalOffset": 0.03999999910593033,
       "steps": 8,
       "temporalDither": true
@@ -68,17 +68,17 @@
     "gpuInstancedCasters": true,
     "legacyCsm": {
       "accurateCasterCull": true,
-      "atlasResolution": 2048,
+      "atlasResolution": 4096,
       "autoSplits": false,
-      "blendFraction": 0.029999999329447746,
+      "blendFraction": 0.0,
       "casterReach": 150.0,
       "depthBiasTexels": 1.0,
-      "distanceFadeFraction": 0.05999999865889549,
+      "distanceFadeFraction": 0.05000000074505806,
       "distributionExponent": 3.0,
       "filterMode": 0,
       "filterSharpen": 0.019999999552965164,
       "hzbCull": false,
-      "maxDistance": 1000.0,
+      "maxDistance": 500.0,
       "maxSlope": 1.0,
       "normalBiasTexels": 0.5,
       "overlapTexels": 2.0,
@@ -101,8 +101,14 @@
     "sdsm": {
       "borderTexels": 4.0,
       "dilation": 0.009999999776482582,
+      "evsm": false,
+      "evsmBlur": 0.0020000000949949026,
+      "evsmBlurMaxTexels": 16.0,
+      "evsmNegativeExponent": 5.25,
+      "evsmPositiveExponent": 42.0,
       "minScaleOverSphere": 0.019999999552965164,
       "partitions": 4,
+      "stabilityFrames": 30.0,
       "zMargin": 25.0
     },
     "vsm": {

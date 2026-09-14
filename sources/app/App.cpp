@@ -484,6 +484,12 @@ namespace
         if (setting == "sdsm.dilation") { render::sdsm::g_dilation = std::clamp(value, 0.0f, 0.45f); return true; }
         if (setting == "sdsm.minScaleOverSphere") { render::sdsm::g_minScaleOverSphere = std::clamp(value, 0.001f, 1.0f); return true; }
         if (setting == "sdsm.zMargin") { render::sdsm::g_zMargin = std::clamp(value, 0.0f, 1000.0f); return true; }
+        if (setting == "sdsm.stabilityFrames") { render::sdsm::g_stabilityFrames = std::clamp(value, 0.0f, 240.0f); return true; }
+        if (setting == "sdsm.evsm") { render::sdsm::g_evsm = value != 0.0f; return true; }
+        if (setting == "sdsm.evsmPos") { render::sdsm::g_evsmPos = std::clamp(value, 1.0f, render::sdsm::kEvsmMaxExponent); return true; }
+        if (setting == "sdsm.evsmNeg") { render::sdsm::g_evsmNeg = std::clamp(value, 1.0f, render::sdsm::kEvsmMaxExponent); return true; }
+        if (setting == "sdsm.blur") { render::sdsm::g_evsmBlur = std::clamp(value, 0.0f, 0.25f); return true; }
+        if (setting == "sdsm.blurMaxTexels") { render::sdsm::g_evsmBlurMaxTexels = std::clamp(value, 1.0f, 64.0f); return true; }
         // Occlusion plan S1: per-chunk / per-GI-instance frustum mask below the object cull. 0 = rollback.
         if (setting == "vis.chunkMask") { render::g_visChunkMask = value != 0.0f; return true; }
         // Occlusion plan S3a: hardware occlusion queries with history. method 0 off / 1 queries /

@@ -521,12 +521,24 @@ int WINAPI WinMain(
     if (lpCmdLine) {
         if (const char* flag = std::strstr(lpCmdLine, "--shadow-mode=")) {
             const char* p = flag + std::strlen("--shadow-mode=");
-            // S15: three modes now. Anything unrecognised still lands on VSM, which is the build
-            // default -- a typo must not silently select a mode the run was not asked for.
-            render::g_shadowMode = (std::strncmp(p, "legacy", 6) == 0) ? render::ShadowMode::Legacy
-                                 : (std::strncmp(p, "sdsm", 4) == 0)   ? render::ShadowMode::Sdsm
-                                                                       : render::ShadowMode::VSM;
-            render::g_shadowModeFromCli = true; // wins over graphics_settings.json (see ShadowSettings.h)
+            // S15: three modes. "csm" is accepted as a synonym of "legacy" because that is what the
+            // mode is called everywhere else -- the knobs (`csm.*`), the pass (`Pass_CSM`), the
+            // readout (`--csm-readout`) and the atlas. An UNRECOGNISED token used to land on VSM,
+            // which turned a typo into a silent mode switch (see ShadowSettings.h); it now leaves
+            // the mode where it was and is reported.
+            if (std::strncmp(p, "legacy", 6) == 0 || std::strncmp(p, "csm", 3) == 0) {
+                render::g_shadowMode = render::ShadowMode::Legacy;
+            } else if (std::strncmp(p, "sdsm", 4) == 0) {
+                render::g_shadowMode = render::ShadowMode::Sdsm;
+            } else if (std::strncmp(p, "vsm", 3) == 0) {
+                render::g_shadowMode = render::ShadowMode::VSM;
+            } else {
+                render::g_shadowModeCliUnknown = true;
+            }
+            // An unrecognised token is NOT an override: the settings file decides, exactly as if
+            // the flag had not been passed. Otherwise a typo would still pin the session to
+            // whatever the build default happens to be.
+            render::g_shadowModeFromCli = !render::g_shadowModeCliUnknown;
         }
     }
 

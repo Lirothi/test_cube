@@ -62,6 +62,9 @@ enum class RenderPass : uint16_t {
     Main_SdsmAnalyze,
     Main_SdsmCull,
     Main_SdsmShadow,
+    // S16: the depth tile -> EVSM4 moments. After the depth pass (and after its pass B when the
+    // occlusion cull runs), because it converts the FINISHED tile.
+    Main_SdsmMoments,
     Main_OcclusionQueries, // occlusion plan S3a: box queries against the G-buffer depth
     Main_Gtao,   // P6B screen-space ambient occlusion, between the G-buffer and lighting
     Main_VolumetricFog, // plan part A: the froxel scatter + integration, before lighting/compose
@@ -165,6 +168,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_SdsmAnalyze: return L"SdsmAnalyze";
     case RenderPass::Main_SdsmCull: return L"SdsmCull";
     case RenderPass::Main_SdsmShadow: return L"SdsmShadow";
+    case RenderPass::Main_SdsmMoments: return L"SdsmMoments";
     case RenderPass::Main_OcclusionQueries: return L"OcclusionQueries";
     case RenderPass::Main_Gtao: return L"Gtao";
     case RenderPass::Main_VolumetricFog: return L"VolumetricFog";

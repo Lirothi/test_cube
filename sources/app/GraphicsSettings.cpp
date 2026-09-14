@@ -78,6 +78,13 @@ namespace
         float sdsmDilation = 0.01f;
         float sdsmMinScaleOverSphere = 0.02f;
         float sdsmZMargin = 25.0f;
+        float sdsmStabilityFrames = 30.0f;
+        // S16 (EVSM4). Off by default: it costs an RGBA32F atlas beside the depth one.
+        bool sdsmEvsm = false;
+        float sdsmEvsmPos = 42.0f;
+        float sdsmEvsmNeg = 5.25f;
+        float sdsmBlur = 0.002f;
+        float sdsmBlurMaxTexels = 16.0f;
 
         bool contactEnabled = false;
         std::uint32_t contactLocalMode = 1u;
@@ -294,6 +301,11 @@ namespace
         s.sdsmDilation = std::clamp(finite(s.sdsmDilation, 0.01f), 0.0f, 0.45f);
         s.sdsmMinScaleOverSphere = std::clamp(finite(s.sdsmMinScaleOverSphere, 0.02f), 0.001f, 1.0f);
         s.sdsmZMargin = std::clamp(finite(s.sdsmZMargin, 25.0f), 0.0f, 1000.0f);
+        s.sdsmStabilityFrames = std::clamp(finite(s.sdsmStabilityFrames, 30.0f), 0.0f, 240.0f);
+        s.sdsmEvsmPos = std::clamp(finite(s.sdsmEvsmPos, 42.0f), 1.0f, render::sdsm::kEvsmMaxExponent);
+        s.sdsmEvsmNeg = std::clamp(finite(s.sdsmEvsmNeg, 5.25f), 1.0f, render::sdsm::kEvsmMaxExponent);
+        s.sdsmBlur = std::clamp(finite(s.sdsmBlur, 0.002f), 0.0f, 0.25f);
+        s.sdsmBlurMaxTexels = std::clamp(finite(s.sdsmBlurMaxTexels, 16.0f), 1.0f, 64.0f);
 
         s.contactLocalMode = std::min(s.contactLocalMode, 2u);
         s.contactLength = std::max(0.0f, finite(s.contactLength, 0.05f));
@@ -302,7 +314,10 @@ namespace
         s.contactMaxThickness = std::clamp(finite(s.contactMaxThickness, 0.5f), 0.0f, 3.0f);
         s.contactNormalOffset = std::clamp(finite(s.contactNormalOffset, 0.04f), 0.0f, 0.5f);
         s.contactGrazingFade = std::clamp(finite(s.contactGrazingFade, 0.15f), 0.0f, 0.5f);
-        s.contactMinDistance = std::clamp(finite(s.contactMinDistance, 0.0f), 0.0f, 200.0f);
+        // Same ceiling as the far end: the window is [min, max] and there is no reason the near
+        // edge should reach a tenth as far as the far one. 200 here is what actually blocked
+        // "start contacts at 500 m" -- the slider AND this clamp both had to move.
+        s.contactMinDistance = std::clamp(finite(s.contactMinDistance, 0.0f), 0.0f, 2000.0f);
         s.contactMaxDistance = std::clamp(finite(s.contactMaxDistance, 0.0f), 0.0f, 2000.0f);
         s.contactFadeBand = std::clamp(finite(s.contactFadeBand, 10.0f), 0.1f, 200.0f);
 
@@ -404,6 +419,12 @@ namespace
         s.sdsmDilation = render::sdsm::g_dilation;
         s.sdsmMinScaleOverSphere = render::sdsm::g_minScaleOverSphere;
         s.sdsmZMargin = render::sdsm::g_zMargin;
+        s.sdsmStabilityFrames = render::sdsm::g_stabilityFrames;
+        s.sdsmEvsm = render::sdsm::g_evsm;
+        s.sdsmEvsmPos = render::sdsm::g_evsmPos;
+        s.sdsmEvsmNeg = render::sdsm::g_evsmNeg;
+        s.sdsmBlur = render::sdsm::g_evsmBlur;
+        s.sdsmBlurMaxTexels = render::sdsm::g_evsmBlurMaxTexels;
 
         s.contactEnabled = render::contact::g_enabled;
         s.contactLocalMode = render::contact::g_localMode;
@@ -521,6 +542,12 @@ namespace
         render::sdsm::g_dilation = s.sdsmDilation;
         render::sdsm::g_minScaleOverSphere = s.sdsmMinScaleOverSphere;
         render::sdsm::g_zMargin = s.sdsmZMargin;
+        render::sdsm::g_stabilityFrames = s.sdsmStabilityFrames;
+        render::sdsm::g_evsm = s.sdsmEvsm;
+        render::sdsm::g_evsmPos = s.sdsmEvsmPos;
+        render::sdsm::g_evsmNeg = s.sdsmEvsmNeg;
+        render::sdsm::g_evsmBlur = s.sdsmBlur;
+        render::sdsm::g_evsmBlurMaxTexels = s.sdsmBlurMaxTexels;
     }
 
     void ApplyContact(const GraphicsSettingsSnapshot& s)
@@ -700,7 +727,13 @@ namespace
                     { "borderTexels", s.sdsmBorderTexels },
                     { "dilation", s.sdsmDilation },
                     { "minScaleOverSphere", s.sdsmMinScaleOverSphere },
-                    { "zMargin", s.sdsmZMargin }
+                    { "zMargin", s.sdsmZMargin },
+                    { "stabilityFrames", s.sdsmStabilityFrames },
+                    { "evsm", s.sdsmEvsm },
+                    { "evsmPositiveExponent", s.sdsmEvsmPos },
+                    { "evsmNegativeExponent", s.sdsmEvsmNeg },
+                    { "evsmBlur", s.sdsmBlur },
+                    { "evsmBlurMaxTexels", s.sdsmBlurMaxTexels }
                 } },
                 { "vsm", {
                     { "shadowLodBias", s.shadowLodBias },
@@ -872,6 +905,12 @@ namespace
         Read(sdsmSettings, "dilation", s.sdsmDilation);
         Read(sdsmSettings, "minScaleOverSphere", s.sdsmMinScaleOverSphere);
         Read(sdsmSettings, "zMargin", s.sdsmZMargin);
+        Read(sdsmSettings, "stabilityFrames", s.sdsmStabilityFrames);
+        Read(sdsmSettings, "evsm", s.sdsmEvsm);
+        Read(sdsmSettings, "evsmPositiveExponent", s.sdsmEvsmPos);
+        Read(sdsmSettings, "evsmNegativeExponent", s.sdsmEvsmNeg);
+        Read(sdsmSettings, "evsmBlur", s.sdsmBlur);
+        Read(sdsmSettings, "evsmBlurMaxTexels", s.sdsmBlurMaxTexels);
 
         Read(vsmSettings, "shadowLodBias", s.shadowLodBias);
         Read(vsmSettings, "biasNearestTier", s.shadowLodBiasNearTier);
@@ -1146,6 +1185,12 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::SdsmDilation:                   current.sdsmDilation = defaults.sdsmDilation; break;
     case GraphicsControl::SdsmMinScale:                   current.sdsmMinScaleOverSphere = defaults.sdsmMinScaleOverSphere; break;
     case GraphicsControl::SdsmZMargin:                    current.sdsmZMargin = defaults.sdsmZMargin; break;
+    case GraphicsControl::SdsmStability:                  current.sdsmStabilityFrames = defaults.sdsmStabilityFrames; break;
+    case GraphicsControl::SdsmEvsm:                       current.sdsmEvsm = defaults.sdsmEvsm; break;
+    case GraphicsControl::SdsmEvsmPos:                    current.sdsmEvsmPos = defaults.sdsmEvsmPos; break;
+    case GraphicsControl::SdsmEvsmNeg:                    current.sdsmEvsmNeg = defaults.sdsmEvsmNeg; break;
+    case GraphicsControl::SdsmBlur:                       current.sdsmBlur = defaults.sdsmBlur; break;
+    case GraphicsControl::SdsmBlurMax:                    current.sdsmBlurMaxTexels = defaults.sdsmBlurMaxTexels; break;
     case GraphicsControl::ContactEnabled:                 current.contactEnabled = defaults.contactEnabled; break;
     case GraphicsControl::ContactLocalMode:               current.contactLocalMode = defaults.contactLocalMode; break;
     case GraphicsControl::ContactTemporal:                current.contactTemporalDither = defaults.contactTemporalDither; break;
@@ -1228,7 +1273,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
         render::g_csmAtlasRes = current.csmAtlasRes;
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::SdsmPartitions) &&
-             value <= static_cast<unsigned>(GraphicsControl::SdsmZMargin))
+             value <= static_cast<unsigned>(GraphicsControl::SdsmBlurMax))
     {
         ApplySdsm(current);
     }

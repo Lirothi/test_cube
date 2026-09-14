@@ -166,12 +166,24 @@ float ApplyContactShadow(float shadow, float3 P, float3 N, float3 dirToLight, fl
     const float viewDepth = length(P - camPosWS);
 
     // ---- OURS: distance window (UE have none) ------------------------------------------------
+    // BOTH EDGES FADE, over the same band. The near edge used to be a hard cut, which was
+    // invisible only because `minDist` defaulted to 0 and nothing sits at zero metres. The moment
+    // it is moved out to where there IS ground -- the ask was 500 m -- a hard cut draws exactly
+    // the line across the terrain that `fadeBand` exists to prevent at the far edge. A window
+    // with one soft side and one hard side is a knob that works at its default and lies anywhere
+    // else.
     if (viewDepth < cp.minDist) { return shadow; }
     float distFade = 1.0f;
+    if (cp.minDist > 0.0f)
+    {
+        distFade = saturate((viewDepth - cp.minDist) / max(cp.fadeBand, 0.1f));
+    }
     if (cp.maxDist > 0.0f)
     {
         if (viewDepth > cp.maxDist) { return shadow; }
-        distFade = saturate((cp.maxDist - viewDepth) / max(cp.fadeBand, 0.1f));
+        // min(), not a second multiply: with a window narrower than two bands the two ramps
+        // overlap, and multiplying them would dip the middle of the window below full strength.
+        distFade = min(distFade, saturate((cp.maxDist - viewDepth) / max(cp.fadeBand, 0.1f)));
     }
 
     // ---- OURS: grazing guard -----------------------------------------------------------------

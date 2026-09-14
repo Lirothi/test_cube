@@ -725,6 +725,7 @@
     <None Include="shaders\shadow_cull_clear_cs.hlsl" />
     <None Include="shaders\shadow_cull_cs.hlsl" />
     <None Include="shaders\sdsm_analyze_cs.hlsl" />
+    <None Include="shaders\sdsm_evsm_cs.hlsl" />
     <None Include="shaders\sdsm_partitions.hlsli" />
     <None Include="shaders\shadow_cull_post_cs.hlsl" />
     <None Include="shaders\cam_cull_post_cs.hlsl" />

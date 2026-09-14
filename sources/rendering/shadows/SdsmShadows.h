@@ -57,6 +57,36 @@ public:
     // handle moves.
     void SetSourceFrustumSrv(D3D12_CPU_DESCRIPTOR_HANDLE h) { srcFrustumSrv_ = h; }
 
+    // ---- S16 (EVSM4) --------------------------------------------------------------------
+    // The MOMENTS atlas: RGBA32F of the same edge as the depth atlas, same 2x2 tile layout.
+    // Allocated only while EVSM is on AND the mode is SDSM, and freed the moment either stops
+    // -- it is four times the bytes per texel of the D16 it is derived from (2048: 67 MB against
+    // 8.4), which is exactly why the mode pays for it by needing a SMALLER atlas, not a bigger
+    // one. fp16 is not an option: the second moment of exp(42) overflows it by 30 orders.
+    // Returns false if it could not be provided; the caller then keeps the PCF arm.
+    //
+    // BOTH OF THESE FREE A TEXTURE IMMEDIATELY, so they may ONLY be called with the GPU idle.
+    // `Scene::ReconcileShadowMode` is that place -- it already stalls once for the VSM pool, the
+    // SDSM buffers and the atlas edge, and the moments atlas is the same kind of decision.
+    // Calling them from the per-frame update (which is where the EVSM toggle used to land) frees
+    // a texture that the frames still in flight are reading: device removed, 2026-09-14.
+    bool EnsureMoments(Renderer* renderer, UINT atlasRes);
+    void ReleaseMoments(Renderer* renderer);
+    bool MomentsReady() const { return static_cast<bool>(moments_) && momentsRes_ != 0; }
+    UINT MomentsRes() const { return momentsRes_; }
+    ID3D12Resource* MomentsTexture() const { return moments_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE MomentsSrv() const { return momentsSrv_; }
+    // The conversion pass (Main_SdsmMoments): depth atlas -> moments. Same builder/record
+    // contract as everything else here.
+    struct MomentsDecisions
+    {
+        bool active = false;
+        std::uint32_t write = 0;   // atlas -> NON_PIXEL, moments -> UAV
+        std::uint32_t consume = 0; // moments -> SRV (lighting, fog, glass)
+    };
+    MomentsDecisions PrepareMomentsPass(RenderGraphPassContext& ctx);
+    void RecordMoments(Renderer* renderer, ID3D12GraphicsCommandList* cl, const MomentsDecisions& dec);
+
     // pass-flow S7a contract, the same as ShadowGpuData's: the BUILDER decides and declares, the
     // record takes the decision by value so the two cannot disagree.
     struct AnalyzeDecisions
@@ -120,6 +150,20 @@ private:
     GpuResource frustums_;    // float4[(kMaxShadowViews + 1) * kShadowViewPlanes]
     GpuResource viewCBs_;     // kMaxPartitions x 256 B, each a scene_internal::PerViewCB
     GpuResource cullCB_;      // one render::CascadeHzb::GpuParams, 560 B
+    GpuResource moments_;     // S16: RGBA32F EVSM moments, atlas-sized
+    UINT momentsRes_ = 0;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> momentsHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE momentsSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE momentsUav_{};
+    std::shared_ptr<Material> evsmMat_;
+    std::shared_ptr<Material> evsmBlurMat_;
+    // Blur scratch: ONE TILE, not one atlas. The separable pass needs an intermediate, and the
+    // partitions are blurred one after another, so a tile-sized target is reused four times --
+    // a quarter of the bytes of an atlas-sized ping-pong (at 2048: 16 MB against 64).
+    GpuResource blurScratch_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> blurScratchHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE blurScratchSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE blurScratchUav_{};
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_;
     D3D12_CPU_DESCRIPTOR_HANDLE zboundsUav_{};

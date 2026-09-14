@@ -2098,33 +2098,99 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         render::sdsm::g_partitions = static_cast<std::uint32_t>(
                             std::clamp(parts, 1, static_cast<int>(render::sdsm::kMaxPartitions)));
                     }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Active partitions. Unused atlas tiles are not drawn at all --\n"
-                                          "their cull rows carry the reject-all plane. The sampler's\n"
-                                          "interval selection collapses onto the last active one, so\n"
-                                          "coverage stays complete at any count.");
+                    DevHelp("How many partitions are analysed and drawn. Fewer means BIGGER tiles for "
+                            "the ones that remain -- they still land on the same 2x2 atlas grid, so "
+                            "dropping to 2 doubles the edge of each. Unused tiles are not drawn at all "
+                            "(their cull rows carry the reject-all plane), and the sampler's interval "
+                            "selection collapses onto the last active partition, so coverage stays "
+                            "complete at any count. Worth lowering when the camera looks down, where "
+                            "the far partitions cover almost no screen.");
                 }
                 GRAPHICS_CONTROL(SdsmBorder, "sdsmBorder",
                     ImGui::SliderFloat("Filter border (texels)", &render::sdsm::g_borderTexels, 0.0f, 16.0f, "%.0f"));
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Room reserved INSIDE the partition's box for the filter kernel\n"
-                                      "(the sample's mLightSpaceBorder). NOT the atlas gutter, which\n"
-                                      "still sits outside the content rect.");
+                DevHelp("Room reserved INSIDE the partition's box for the filter kernel, measured in "
+                        "texels of that partition's own tile. Too low: a wide filter reaches past the "
+                        "fitted box and its outer taps read cleared (lit) texels, so shadows thin out "
+                        "at the edge of a partition. Too high: every partition zooms OUT to make room, "
+                        "which costs resolution everywhere. This is NOT the atlas gutter -- that is a "
+                        "separate 4-texel ring outside the content rect and it still exists.");
                 GRAPHICS_CONTROL(SdsmDilation, "sdsmDilation",
                     ImGui::SliderFloat("Dilation (fraction)", &render::sdsm::g_dilation, 0.0f, 0.2f, "%.3f"));
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Grows the measured box by this fraction of its own extent.\n"
-                                      "Covers what a per-sample reduction cannot see: a caster whose\n"
-                                      "shadow lands just past the last visible sample.");
+                DevHelp("Grows the measured box by this fraction of its own extent, on every side. The "
+                        "reduction only ever sees VISIBLE depth samples, so a caster whose shadow lands "
+                        "just past the last of them would fall outside the projection and stop casting; "
+                        "this buys margin for it. It costs resolution in direct proportion -- 0.01 is a "
+                        "1% wider box and a 1% coarser texel -- so raise it only if shadows clip at the "
+                        "edges of what the camera can see.");
                 GRAPHICS_CONTROL(SdsmMinScale, "sdsmMinScale",
                     ImGui::SliderFloat("Min box / sphere", &render::sdsm::g_minScaleOverSphere, 0.005f, 1.0f, "%.3f"));
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("The CEILING on the zoom, as a fraction of the Legacy bounding\n"
-                                      "sphere of the same interval. 1 = never tighter than Legacy (the\n"
-                                      "A/B control). A partition with a handful of pixels would\n"
-                                      "otherwise magnify without bound.");
+                DevHelp("A FLOOR on the box size, written as a fraction of the Legacy bounding sphere "
+                        "for the same depth interval -- which makes it a CEILING on how far SDSM may "
+                        "zoom in. Without it a partition holding a handful of pixels magnifies without "
+                        "bound and flickers as those pixels come and go. 1.0 = never tighter than "
+                        "Legacy, which is the A/B control; 0.02 = at most 50x tighter. It is also the "
+                        "fallback box for a partition that saw no samples at all.");
                 GRAPHICS_CONTROL(SdsmZMargin, "sdsmZMargin",
                     ImGui::SliderFloat("Z margin (m)", &render::sdsm::g_zMargin, 0.0f, 200.0f, "%.0f"));
+                DevHelp("Metres added to the light-space DEPTH range beyond the measured bounds, so a "
+                        "caster standing between the sun and the visible geometry is still inside the "
+                        "partition's projection and still casts. Too low and tall casters clip out "
+                        "through the far cap -- their shadows blink off as the camera moves. It only "
+                        "has to cover that cap and the depth-precision margin: the near side is held "
+                        "by the same pancake clamp the Legacy path uses, not by this.");
+                GRAPHICS_CONTROL(SdsmStability, "sdsmStability",
+                    ImGui::SliderFloat("Stability (half-life, frames)",
+                        &render::sdsm::g_stabilityFrames, 0.0f, 240.0f, "%.0f"));
+                DevHelp("How many FRAMES it takes for half of a wobble in the measured depth range to "
+                        "decay. The interior boundaries are logarithmic over [minZ, maxZ], so anything "
+                        "that moves either end moves ALL of them and the cascade edge walks across the "
+                        "ground -- on an ocean view it is maxZ, swinging metres as waves open and close "
+                        "the furthest visible point. 0 = raw per-frame reduction (the A/B). Only the "
+                        "INTERIOR splits are smoothed; the ends of the range stay exactly as measured, "
+                        "so coverage and caster culling cannot regress however inert this gets. The "
+                        "cost is lag: the splits chase the scene, so very long half-lives can leave a "
+                        "boundary in the wrong place for a moment after a hard cut or a fast turn. "
+                        "Counted in FRAMES, so the real time constant follows the frame rate.");
+
+                // ---- S16: EVSM4 -------------------------------------------------------------
+                ImGui::SeparatorText("SDSM filter (EVSM4)");
+                GRAPHICS_CONTROL(SdsmEvsm, "sdsmEvsm",
+                    ImGui::Checkbox("EVSM4 moments instead of PCF", &render::sdsm::g_evsm));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The depth tile is converted to four exponentially-warped MOMENTS and\n"
+                                      "sampled through a Chebyshev bound. Moments are PREFILTERABLE: bilinear,\n"
+                                      "a box blur and (later) mips act on the shadow ESTIMATE, where PCF can\n"
+                                      "only average binary compares taken before the filter.\n"
+                                      "Costs a second atlas, RGBA32F -- four times the bytes per texel of the\n"
+                                      "depth it comes from, which is why the mode pays for it with a SMALLER\n"
+                                      "atlas rather than a bigger one.");
+                ImGui::BeginDisabled(!render::sdsm::g_evsm);
+                GRAPHICS_CONTROL(SdsmEvsmPos, "sdsmEvsmPos",
+                    ImGui::SliderFloat("Positive exponent", &render::sdsm::g_evsmPos,
+                                       1.0f, render::sdsm::kEvsmMaxExponent, "%.1f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The steep warp: sharp contact, and what crushes light leaking.\n"
+                                      "42 is the fp32 ceiling, not a taste -- exp(42) SQUARED is already\n"
+                                      "2.9e36 against the format's 3.4e38.");
+                GRAPHICS_CONTROL(SdsmEvsmNeg, "sdsmEvsmNeg",
+                    ImGui::SliderFloat("Negative exponent", &render::sdsm::g_evsmNeg,
+                                       1.0f, render::sdsm::kEvsmMaxExponent, "%.2f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The shallow warp, which catches what the positive one lets through.\n"
+                                      "The sample's ratio is 8:1 against the positive one.");
+                GRAPHICS_CONTROL(SdsmBlur, "sdsmBlur",
+                    ImGui::SliderFloat("Edge softening (of partition)", &render::sdsm::g_evsmBlur,
+                                       0.0f, 0.05f, "%.4f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Separable box over the moments, its width a FRACTION OF THE PARTITION --\n"
+                                      "so it is a world size that grows with distance, like a real penumbra,\n"
+                                      "rather than a texel count that means something different per tile.\n"
+                                      "0 skips both blur passes. The sample's 0.02 is 3 m on our far partition\n"
+                                      "and washes the field flat: our scene is measured in metres, theirs is not.");
+                GRAPHICS_CONTROL(SdsmBlurMax, "sdsmBlurMax",
+                    ImGui::SliderFloat("Softening cap (texels)", &render::sdsm::g_evsmBlurMaxTexels,
+                                       1.0f, 64.0f, "%.0f"));
+                ImGui::EndDisabled();
 
                 const SdsmShadows& sdsm = scene.Sdsm();
                 if (!sdsm.ReadoutValid())
@@ -2312,7 +2378,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(ContactMinDistance, "contactMinDistance",
                     ImGui::SliderFloat("Min distance (m)",
-                        &render::contact::g_minDistanceM, 0.0f, 200.0f, "%.1f"));
+                        &render::contact::g_minDistanceM, 0.0f, 2000.0f, "%.0f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Nearer than this the term is off, fading IN over the band below. Push it out\n"
+                                      "to spend contacts only where the cascades are too coarse to resolve contact\n"
+                                      "detail -- the near field already has the shadow map for that.");
                 GRAPHICS_CONTROL(ContactMaxDistance, "contactMaxDistance",
                     ImGui::SliderFloat("Max distance (m)",
                         &render::contact::g_maxDistanceM, 0.0f, 2000.0f, "%.0f"));
@@ -2321,11 +2391,13 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "is off entirely -- which is the blunt way to kill artifacts in the far field\n"
                                       "where contacts buy the least anyway.");
                 GRAPHICS_CONTROL(ContactFadeBand, "contactFadeBand",
-                    ImGui::SliderFloat("Far fade band (m)",
+                    ImGui::SliderFloat("Fade band (m)",
                         &render::contact::g_fadeBandM, 0.1f, 200.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("The last N metres before Max fade out instead of cutting, or the boundary\n"
-                                      "itself reads as a line across the ground.");
+                    ImGui::SetTooltip("Applies to BOTH edges of the window: N metres after Min to fade in, N metres\n"
+                                      "before Max to fade out. Without it either boundary reads as a line across\n"
+                                      "the ground. A window narrower than two bands simply never reaches full\n"
+                                      "strength -- the two ramps are combined with min(), not multiplied.");
 
                 ImGui::EndDisabled();
             }

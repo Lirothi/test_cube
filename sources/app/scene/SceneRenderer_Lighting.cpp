@@ -600,7 +600,8 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
             // t0 atlas, t1/t2 VSM table + pool (dummies in Legacy: useVsm = 0 never samples them),
             // t3 sky irradiance (dummy without IBL: skyIrradianceEnabled = 0), t4 the history.
             rc.srvTable[0] = renderer->StageSrvUavTable({
-                D.shadowSRV,
+                // t0: moments instead of depth under EVSM -- see Pass_Lighting.
+                (decisions_.sdsmEvsm && frame_->sdsm) ? frame_->sdsm->MomentsSrv() : D.shadowSRV,
                 vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),
                 vsmDir ? frame_->vsm->PagePoolSrv() : renderer->VsmDummyTexSrv(),
                 (frame_->skybox && frame_->skybox->HasIbl()) ? frame_->skybox->IrradianceSrv()
@@ -760,7 +761,12 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
                                               *SamplerManager::LinearClamp() };
         RecordComputeDispatch(renderer, t.cl, lighting.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteLightingConstants(constants, dest); },
-            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.shadowSRV,
+            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV,
+              // t5: S16 -- the SAME SLOT holds MOMENTS when EVSM is on. Swapping the resource
+              // rather than adding a binding is what keeps this root signature, the fog's and
+              // glass's unchanged; csm_sample decides how to read it from the exponents in the
+              // partition, and both switches come from decisions_.sdsmEvsm.
+              (decisions_.sdsmEvsm && frame_->sdsm) ? frame_->sdsm->MomentsSrv() : D.shadowSRV,
               vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t6 (inert in Legacy)
               vsmDir ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv(),     // t7 (inert in Legacy)
               D.gbAuxSRV,                                                             // t8

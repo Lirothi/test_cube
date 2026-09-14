@@ -331,6 +331,11 @@ public:
         sdsmPartitionSrv_ = partitions.ptr ? partitions : vsmDummyBufferSrv_;
     }
     D3D12_CPU_DESCRIPTOR_HANDLE GetSdsmPartitionSrv() const { return sdsmPartitionSrv_; }
+    // S16: what the glass draws should bind in the SUN ATLAS slot (t1 of glass.hlsl). Under EVSM
+    // that slot holds MOMENTS, not depth -- the same swap the light and fog passes make, routed
+    // the same way because the glass draws have no frame access. Null = the depth atlas.
+    void SetSdsmMomentsSrv(D3D12_CPU_DESCRIPTOR_HANDLE moments) { sdsmMomentsSrv_ = moments; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetSdsmMomentsSrv() const { return sdsmMomentsSrv_; }
     // Inert stand-in SRVs (null StructuredBuffer / null Texture2D) for the VSM t7/t8 slots when VSM
     // isn't resident (Legacy mode) — valid to bind, never sampled (useVsm=0). See the spot/point passes.
     D3D12_CPU_DESCRIPTOR_HANDLE VsmDummyBufferSrv() { EnsureVsmDummySrvs(); return vsmDummyBufferSrv_; }
@@ -845,6 +850,7 @@ private:
     UINT                              lastPresentedIndex_ = 0;                  // backbuffer last shown (screenshots)
     FrameResource*                    currentFrameResource_ = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE       sdsmPartitionSrv_{};                      // S15: glass SDSM sampling
+    D3D12_CPU_DESCRIPTOR_HANDLE       sdsmMomentsSrv_{};                        // S16: glass EVSM atlas slot
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPageTableSrv_{};                       // Step 21: glass VSM sampling
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPoolSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> vsmDummyHeap_;                 // Step 24b: inert VSM stand-in SRVs

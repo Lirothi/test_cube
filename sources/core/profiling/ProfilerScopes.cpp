@@ -74,6 +74,7 @@ const Profiler::ScopeNameKey kVsmPageDrawB = Profiler::RegisterTraceLiteral(L"Vs
 const Profiler::ScopeNameKey kPassCSM = Profiler::RegisterTraceLiteral(L"Pass_CSM");
 const Profiler::ScopeNameKey kPassSdsmAnalyze = Profiler::RegisterTraceLiteral(L"Pass_SdsmAnalyze");
 const Profiler::ScopeNameKey kPassSdsmShadow = Profiler::RegisterTraceLiteral(L"Pass_SdsmShadow");
+const Profiler::ScopeNameKey kPassSdsmMoments = Profiler::RegisterTraceLiteral(L"Pass_SdsmMoments");
 const Profiler::ScopeNameKey kPassCsmHzb = Profiler::RegisterTraceLiteral(L"Pass_CsmHzb");
 const Profiler::ScopeNameKey kPassShadowCullPost = Profiler::RegisterTraceLiteral(L"Pass_ShadowCullPost");
 const Profiler::ScopeNameKey kPassCSMPost = Profiler::RegisterTraceLiteral(L"Pass_CSMPost");

@@ -220,6 +220,7 @@ float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
     p.blendFraction        = csmFilterParams.y;
     p.distanceFadeFraction = csmFilterParams.z;
     p.useGatherPcf     = (uint)csmFilterMode.x;
+    p.evsmExponents    = float2(0.0f, 0.0f); // S16: see lighting_cb.hlsli
     // S15: same overlay as lighting_cb.hlsli's MakeCsmParams. Glass has to agree with the geometry
     // beside it EXACTLY -- that was the whole point of S3 -- so this is not optional here.
     if (csmSdsmParams.x > 0.0f) { CsmApplySdsm(p, SdsmPartitions, (uint)csmSdsmParams.x); }

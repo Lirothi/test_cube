@@ -52,6 +52,9 @@ struct CsmParams
     // 2 = 6x6 tent / 9 gathers  (UE Manual5x5PCF, their SHADOW_QUALITY 4-5 -- and r.ShadowQuality
     //     DEFAULTS TO 5, so this is what a stock Unreal actually runs).
     uint     useGatherPcf;
+    // S16: EVSM warp exponents, and the switch. Non-zero x means the atlas slot holds MOMENTS
+    // and the whole PCF chain below is bypassed -- see CsmSampleEvsm.
+    float2   evsmExponents;
 };
 
 // (S10 moved the cross-fade fraction into CsmParams -- it is UE's CascadeTransitionFraction, an
@@ -96,11 +99,48 @@ void CsmApplySdsm(inout CsmParams p, StructuredBuffer<SdsmPartition> parts, uint
     }
     // splitsVS carries (near, far0, far1, far2) and farSplit the last far -- the same packing the
     // Legacy splits use, so CsmChooseCascade and the blend band need no SDSM branch at all.
+    //
+    // S16.2: for SDSM these ends are now the REDUCED depth range, not the camera's near/far, so
+    // `splitsVS.x` is the nearest thing the depth buffer actually held and `farSplit` the furthest.
+    // Neither is a cutoff. CsmChooseCascade counts boundaries passed, so a receiver beyond the last
+    // one still selects the last partition; `farSplit` only reaches the blend band's `sFar`, which
+    // the `idx < 3` guard never uses. What the tighter ends DO change is the blend width of the
+    // first partition, which becomes its real slice instead of one padded down to the camera near.
     p.splitsVS = float4(parts[0].intervalBegin,
                         parts[min(0u, count - 1u)].intervalEnd,
                         parts[min(1u, count - 1u)].intervalEnd,
                         parts[min(2u, count - 1u)].intervalEnd);
     p.farSplit = parts[count - 1u].intervalEnd;
+    p.evsmExponents = parts[0].evsmExponents; // per-partition, but all four carry the same knob
+}
+
+// --- S16: EVSM4 lookup ------------------------------------------------------------------------
+//
+// `ShadowContribution` of RenderingEVSM.hlsl, transcribed. The atlas slot holds MOMENTS
+// (pos, neg, pos^2, neg^2) rather than depth, so this is a plain bilinear fetch plus two Chebyshev
+// bounds -- no taps, no kernel, no ramp. All of S8's machinery is bypassed on purpose: a soft edge
+// here comes from the moments having been blurred/mipped, not from averaging compares.
+//
+// DEVIATION: the sample use `SampleGrad` with an anisotropic clamp sampler, because they have a
+// pixel shader and therefore ddx/ddy of the light texcoord. Our lighting is a COMPUTE shader with
+// no derivatives, so this takes mip 0 through a linear clamp sampler. That costs the mip chain's
+// minification filtering (far partitions can alias), and closing it needs ANALYTIC derivatives
+// from texelWS and the receiver's depth -- a later sub-step, recorded here rather than faked.
+float CsmSampleEvsm(CsmParams p, Texture2D moments, SamplerState smp, float2 uv, float depth01,
+                    float4 uvClamp)
+{
+    const float2 exponents = p.evsmExponents;
+    const float2 warped = SdsmWarpDepth(depth01, exponents);
+    const float4 occluder = moments.SampleLevel(smp, clamp(uv, uvClamp.xy, uvClamp.zw), 0.0f);
+
+    // The derivative of the warp AT this depth: the minimum variance has to scale with how fast
+    // the warp is moving, or a steep exponent reads as huge variance and every surface unshadows.
+    const float2 depthScale = 0.0001f * exponents * warped;
+    const float2 minVariance = depthScale * depthScale;
+
+    const float posContrib = SdsmChebyshev(occluder.xz, warped.x, minVariance.x);
+    const float negContrib = SdsmChebyshev(occluder.yw, warped.y, minVariance.y);
+    return min(posContrib, negContrib);
 }
 
 // --- S8: soft occlusion + Gather4 tent PCF ---------------------------------------------------
@@ -280,6 +320,14 @@ float CsmSampleChain(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, S
         const float4 uvClampAll = float4(biasUV + 0.5f * texel, biasUV + scale - 0.5f * texel);
 
         outCascade = c;
+
+        if (p.evsmExponents.x > 0.0f)
+        {
+            // S16. The atlas holds moments; the receiver's own warped depth is compared against
+            // them by a Chebyshev bound. No taps, no ramp, no sharpen: softness is whatever the
+            // moments were prefiltered to, which is the entire reason the representation exists.
+            return CsmSampleEvsm(p, atlas, smp, uv, z, uvClampAll);
+        }
 
         if (p.useGatherPcf != 0u)
         {

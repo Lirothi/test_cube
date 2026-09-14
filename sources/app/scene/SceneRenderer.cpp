@@ -371,6 +371,11 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     decisions_.sdsmHzb = decisions_.sdsmActive && render::g_indirectShadowsEnabled &&
                          frame.cascadeConfig != nullptr && frame.cascadeConfig->hzbCull &&
                          frame.shadowGpu->CascadeHzbRef().Ready();
+    // S16: EVSM4. Scene allocated the moments atlas (or failed to); this is the last gate, and
+    // every consumer -- the conversion pass, the atlas SRV the light passes bind, the CB flag
+    // that makes csm_sample take the Chebyshev arm -- asks THIS ONE, so they cannot disagree
+    // about whether the slot holds depth or moments.
+    decisions_.sdsmEvsm = decisions_.sdsmActive && render::sdsm::g_evsm && frame.sdsm->MomentsReady();
 
     // Rung 2 / Step 22 skip-when-still. Skip the VSM update (request + alloc + render) only when
     // NOTHING changed — the camera view is unchanged AND no shadow caster moved. Then the pool +

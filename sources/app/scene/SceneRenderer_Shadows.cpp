@@ -516,6 +516,18 @@ void SceneRenderer::Pass_SdsmCull(Renderer* renderer, RenderGraphPassContext ctx
     ctx.EndCL(t);
 }
 
+void SceneRenderer::Pass_SdsmMoments(Renderer* renderer, RenderGraphPassContext ctx,
+    const SdsmShadows::MomentsDecisions& dec)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassSdsmMoments);
+        if (frame_->sdsm) { frame_->sdsm->RecordMoments(renderer, t.cl, dec); }
+    }
+    ctx.EndCL(t);
+}
+
 void SceneRenderer::Pass_SdsmCullPost(Renderer* renderer, RenderGraphPassContext ctx,
     const ShadowGpuData::CullPostDecisions& dec)
 {

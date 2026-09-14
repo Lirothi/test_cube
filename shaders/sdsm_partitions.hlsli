@@ -39,7 +39,9 @@ struct SdsmPartition
     float2 texelWS;           // 128 world metres per texel, per axis
     uint   sampleCount;       // 136
     uint   flags;             // 140
-};                            // 144
+    float2 evsmExponents;     // 144 S16: (c+, c-), already clamped -- see SdsmEvsmExponents
+    float2 smoothedRange;     // 152  S16.7: partition 0 only -- smoothed (minZ, maxZ)
+};                            // 160
 
 #define SDSM_FLAG_SCALE_CLAMPED 1u
 #define SDSM_FLAG_EMPTY         2u
@@ -116,8 +118,12 @@ cbuffer SdsmAnalyzeCB : register(b0)
 
     uint   gViewFrustumCount;
     float  gBlendFraction;
+    float  gEvsmPos;
+    float  gEvsmNeg;
+    uint   gEvsmOn;
     uint   gAccurateCull;
-    uint   gSdsmPad2;
+    float  gStability;   // S16.7: fraction of LAST frame's reduced range to keep, 0 = raw
+    uint   gSdsmPad3;
 
     // The gbuffer's wind, passed through so Finalize can write a COMPLETE PerView block.
     float  gWindTime;
@@ -152,6 +158,40 @@ float4x4 SdsmFlipZ(float4x4 vp)
 }
 
 #endif // SDSM_PARTITIONS_STRUCTS_ONLY
+
+// ---------------------------------------------------------------------------------------------
+// S16 -- EVSM4. These three live HERE, not in either consumer, because the WRITER (sdsm_evsm_cs)
+// and the READER (csm_sample.hlsli) must warp depth with byte-identical arithmetic: a Chebyshev
+// bound compares the receiver's own warped depth against moments produced by this very function,
+// and any drift between the two is a shadow that is uniformly wrong rather than obviously broken.
+// Transcribed from RenderingEVSM.hlsl (`GetEVSMExponents`, `WarpDepth`, `ChebyshevUpperBound`).
+//
+// The exponents ride in the partition, written once by the analyze (Finalize) so the CPU knobs
+// reach both sides through one path.
+// ---------------------------------------------------------------------------------------------
+float2 SdsmEvsmExponents(SdsmPartition p)
+{
+    return p.evsmExponents;
+}
+
+// Input depth in [0, 1]; rescaled to [-1, 1] first, exactly as the sample do.
+float2 SdsmWarpDepth(float depth, float2 exponents)
+{
+    depth = 2.0f * depth - 1.0f;
+    const float pos =  exp( exponents.x * depth);
+    const float neg = -exp(-exponents.y * depth);
+    return float2(pos, neg);
+}
+
+// One-tailed Chebyshev upper bound on P(depth <= mean), verbatim.
+float SdsmChebyshev(float2 moments, float mean, float minVariance)
+{
+    float variance = moments.y - (moments.x * moments.x);
+    variance = max(variance, minVariance);
+    const float d = mean - moments.x;
+    const float pMax = variance / (variance + (d * d));
+    return (mean <= moments.x) ? 1.0f : pMax;
+}
 
 // DEVIATION from the sample. Theirs reduce light TEXCOORDS in [0,1], where `asuint` happens to be
 // a monotonic map and a raw InterlockedMin/Max on it is correct. Ours are light-space METRES and
