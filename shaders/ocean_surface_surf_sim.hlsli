@@ -651,8 +651,8 @@ float3 SkyFillRadiance(float3 normal)
 
 float3 LitFoamColor(const LightingInput li, const FoamData foamData)
 {
-    float ndotl = (0.2f + 0.8f * saturate(dot(foamData.normal, -li.mainLight.direction)))
-        * li.mainLight.shadowAttenuation;
+    const float bodyShadow = lerp(1.0f, li.mainLight.shadowAttenuation, saturate(cloudShadowParams.z));
+    float ndotl = (0.2f + 0.8f * saturate(dot(foamData.normal, -li.mainLight.direction))) * bodyShadow;
     // P16.7: `SkyFillRadiance` is the sky's MEASURED irradiance; `li.ambient` is the legacy
     // FRACTION-OF-THE-SUN knob (0.05-0.15). Multiplying one by the other is the exact mistake F8
     // documents about its own first version -- "multiplying an absolute measured irradiance by a
@@ -847,7 +847,7 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData)
     float3 foamLitColor = LitFoamColor(li, foamData);
 
     float fresnel = EffectiveFresnel(li, bi);
-    float3 specular = Specular(li, bi) * Pow5(1.0f - saturate(foamData.coverage.y));
+    float3 specular = Specular(li, bi) * Pow5(1.0f - saturate(foamData.coverage.x));
     // Bruneton slope variance -> an RMS slope -> a GGX-ish roughness for the shared environment.
     // Clamped low: open water is a near-mirror and the variance can spike on wave crests.
     const float oceanRoughness = clamp(sqrt(max(bi.slopeVarianceSquared.x, 0.0f)), 0.02f, 0.6f);

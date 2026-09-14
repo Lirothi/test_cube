@@ -1146,6 +1146,9 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     cpuInstances_.assign(casterCount, render::InstancePerObject{});
     cpuBounds_.assign(casterCount, render::CasterBounds{});
     pending_.assign(casterCount, 0);
+    // The material-content version each caster's mirror was last filled from. Rebuild fills every
+    // record below, so seeding these from the objects happens there; 0 here only sizes the array.
+    cpuMaterialVersion_.assign(casterCount, 0u);
     // S4: eligibility is re-decided below for every object in the registry; everything else (a
     // non-caster, a GI object, an object that just stopped casting) must read as CPU-drawn.
     casterEligible_.assign(casterCount, 0u);
@@ -1254,6 +1257,13 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             FillInstanceSlot(obj, s, cpuInstances_[idx]);
             cpuBounds_[idx] = bnd;
             if (chunked) { FillChunkBounds(ro, s, bnd, cpuBounds_[idx]); }
+            // Seed the version this record was filled from, or the first UpdateForFrame after any
+            // rebuild would see a mismatch on EVERY caster and re-fill the whole scene once.
+            if (idx < cpuMaterialVersion_.size())
+            {
+                const GBufferRenderable* gbVer = obj->AsGBufferRenderable();
+                cpuMaterialVersion_[idx] = gbVer ? gbVer->MaterialContentVersion() : 0u;
+            }
             casterMesh[idx] = mesh;
             casterSub[idx] = static_cast<std::uint32_t>(s);
             staticDynamic[idx] = dyn;
@@ -1822,7 +1832,17 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
                 windFadeChanged = std::abs(now - cpuInstances_[idx].windStrength) > (1.0f / 255.0f);
             }
         }
-        if ((ro && ro->MovedThisFrame()) || windFadeChanged)
+        // S4 fallout: the move signal is NOT the whole change signal any more. This mirror feeds
+        // the indirect G-buffer too, and a camera record carries baseColor / metalRough / texFlags
+        // / mrMultiply / emissive -- so an editor material edit on a STANDING mesh was never
+        // re-uploaded and never appeared. One integer compare per caster; the O(movers) property
+        // that Step 7 exists for is about the FILL and the UPLOAD, and both still only happen on a
+        // real change.
+        const GBufferRenderable* gbMat = obj->AsGBufferRenderable();
+        const std::uint32_t matVersion = gbMat ? gbMat->MaterialContentVersion() : 0u;
+        const bool materialChanged = idx < cpuMaterialVersion_.size() &&
+                                     cpuMaterialVersion_[idx] != matVersion;
+        if ((ro && ro->MovedThisFrame()) || windFadeChanged || materialChanged)
         {
             render::CasterBounds objectBounds{};
             FillBounds(obj, objectBounds);
@@ -1836,6 +1856,10 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
                 FillInstanceSlot(obj, s, cpuInstances_[idx + s]);
                 cpuBounds_[idx + s] = objectBounds;
                 if (chunkedMover) { FillChunkBounds(ro, s, objectBounds, cpuBounds_[idx + s]); }
+                // Stamped per slot so every one of an object's caster ids agrees, the way the
+                // bounds above do -- a version left on slot 0 alone would re-fill this object
+                // every frame forever.
+                if (idx + s < cpuMaterialVersion_.size()) { cpuMaterialVersion_[idx + s] = matVersion; }
             }
             for (size_t s = 0; s < slots; ++s)
             {

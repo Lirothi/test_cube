@@ -719,6 +719,11 @@ private:
     std::vector<render::InstancePerObject> cpuInstances_;
     std::vector<render::CasterBounds>      cpuBounds_;
     std::vector<std::uint8_t>              pending_;
+    // Occlusion S4 fallout: this mirror feeds the INDIRECT G-BUFFER as well as the shadows, so a
+    // camera record carries material fields and "the object moved" stopped being the whole change
+    // signal. One version per caster id (duplicated across an object's slots, like the bounds),
+    // compared in UpdateForFrame's Step 7. See GBufferRenderable::MaterialContentVersion.
+    std::vector<std::uint32_t>             cpuMaterialVersion_;
 
     std::uint32_t logFramesRemaining_ = 5; // one-off warmup logging (see .cpp)
 };

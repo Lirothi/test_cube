@@ -20,10 +20,31 @@ public:
     GBufferRenderable* AsGBufferRenderable() override { return this; }
     const GBufferRenderable* AsGBufferRenderable() const override { return this; }
 
+    // A counter the GPU-side instance mirror watches, bumped by every mutable path into
+    // `matParamses_` below.
+    //
+    // WHY IT HAS TO EXIST. `ShadowGpuData::UpdateForFrame` re-fills a caster's
+    // `InstancePerObject` only when the object MOVED -- "the move signal tracks transform changes,
+    // which is all a depth-only shadow entry depends on", as its Step 7 says. That was true while
+    // that buffer fed shadows alone. Occlusion plan S4 then pointed the INDIRECT G-BUFFER at the
+    // same buffer, and a camera entry is not depth-only: it carries baseColor, metalRough,
+    // texFlags, mrMultiply and emissive. So a material edit on a standing object was never
+    // re-uploaded and simply did not appear -- the owner reported it as "Use MR Texture / Metallic
+    // stopped working at runtime", and confirmed the tell: nudge the mesh and the edit pops in.
+    //
+    // A VERSION AND NOT A DIRTY FLAG, because the reader is per-frame and per-ring-region: a flag
+    // would have to be cleared by whoever read it first and the other regions would miss it, which
+    // is the same shape as the bug it fixes.
+    std::uint32_t MaterialContentVersion() const
+    {
+        return materialContentVersion_.load(std::memory_order_relaxed);
+    }
+
     // Slot-0 ("legacy single material") accessors — the factory/editor write these.
     MaterialParams& MaterialParamsRef()
     {
         instanceSlotsCompatibilityKey_.store(0, std::memory_order_relaxed);
+        materialContentVersion_.fetch_add(1, std::memory_order_relaxed);
         return matParamses_[0];
     }
     const MaterialParams& MaterialParamsRef() const { return matParamses_[0]; }
@@ -54,6 +75,10 @@ public:
     {
         windStrength_ = w;
         for (MaterialParams& mp : matParamses_) { mp.windStrength = w; }
+        // Writes matParamses_ without going through MaterialParamsRef, so it owes the bump itself.
+        // The wind-fade check in Step 7 does NOT cover this: that one watches the camera DISTANCE
+        // fade and only while `g_windFadeEnd > g_windFadeStart`.
+        materialContentVersion_.fetch_add(1, std::memory_order_relaxed);
     }
     float GetWindStrength() const { return windStrength_; }
 
@@ -252,6 +277,9 @@ private:
     std::vector<std::shared_ptr<MaterialData>> matDatas_;
     std::vector<MaterialParams> matParamses_;
     mutable std::atomic<std::uint64_t> instanceSlotsCompatibilityKey_{ 0 };
+    // See MaterialContentVersion(). Atomic for the same reason the key above is: the render-graph
+    // workers read it while the editor writes from the UI thread.
+    std::atomic<std::uint32_t> materialContentVersion_{ 0 };
     std::vector<std::string> slotPresets_;
     uint32_t currentDrawSlot_ = 0;
     uint32_t materialParamOverrideMask_ = 0;

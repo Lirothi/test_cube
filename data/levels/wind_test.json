@@ -18,14 +18,14 @@
       1.0
     ],
     "direction": [
-      -0.5199939012527466,
-      -0.4226182699203491,
-      -0.7422938346862793
+      -0.5065910220146179,
+      -0.46947160363197327,
+      -0.7231611609458923
     ],
     "groundAlbedo": [
-      0.25,
-      0.25,
-      0.25
+      0.03322261571884155,
+      0.03322261571884155,
+      0.03322261571884155
     ],
     "lightShaftBloomMaxBrightness": 100.0,
     "lightShaftBloomScale": 0.15000000596046448,
@@ -37,7 +37,7 @@
     ],
     "lightShaftsEnabled": true,
     "lightSourceAngle": 2.0,
-    "skyFillIntensity": 1.0,
+    "skyFillIntensity": 2.0,
     "sunIlluminanceLux": 120000.0,
     "useSunTemperature": true
   },
@@ -13707,6 +13707,62 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 738,
+      "material": "bronze",
+      "mesh": "models/sphere.mesh.json",
+      "metalRough": [
+        0.0,
+        0.15000000596046448
+      ],
+      "name": "staticMesh #722 Copy",
+      "normalStrength": 0.0,
+      "position": [
+        -49.97444534301758,
+        3.486403465270996,
+        60.89213943481445
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        1.600000023841858,
+        1.600000023841858,
+        1.600000023841858
+      ],
+      "type": "staticMesh",
+      "useMR": false
+    },
+    {
+      "enabled": true,
+      "id": 747,
+      "mesh": "models/box.mesh.json",
+      "metalRough": [
+        1.0,
+        0.07999999821186066
+      ],
+      "name": "staticMesh #747",
+      "position": [
+        -62.593780517578125,
+        2.085287570953369,
+        60.89453125
+      ],
+      "rotationDeg": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "scale": [
+        6.199999809265137,
+        1.0,
+        6.199999809265137
+      ],
+      "type": "staticMesh",
+      "useMR": false
     }
   ],
   "ocean": {
@@ -13773,9 +13829,9 @@
       ],
       "foamNormalStrength": 0.6000000238418579,
       "foamTint": [
-        0.7232481241226196,
-        0.798922598361969,
-        0.8604651093482971,
+        0.8936877250671387,
+        0.9523184299468994,
+        1.0,
         1.0
       ],
       "fogDensity": 0.10000000149011612,
@@ -13988,15 +14044,16 @@
     },
     "gtao": {
       "enabled": true,
-      "fadeStart": 80.0,
+      "fadeStart": 100.0,
       "intensity": 2.0,
+      "numSteps": 6,
       "skyIntensity": 0.0,
       "skyMipBias": 3,
       "skyRadius": 25.0,
       "strength": 1.0,
       "temporalBlendWeight": 0.10000000149011612,
       "thickness": 0.800000011920929,
-      "worldRadius": 1.0
+      "worldRadius": 2.0
     },
     "heightFog": {
       "density": 0.0010000000474974513,
@@ -14016,7 +14073,7 @@
   "skyAtmosphere": {
     "aerialPerspective": true,
     "distantSkyLight": true,
-    "enabled": true,
+    "enabled": false,
     "environmentLighting": true,
     "groundAlbedo": 0.4019777774810791,
     "luminanceScale": 1.0,
@@ -14049,7 +14106,7 @@
     "msContribution": 0.5,
     "msEccentricity": 0.5,
     "msOcclusion": 0.5,
-    "oceanBodyShadow": 0.6000000238418579,
+    "oceanBodyShadow": 0.800000011920929,
     "overcast": 0.0,
     "phaseBlend": 0.25,
     "phaseG": 0.6000000238418579,

@@ -2220,6 +2220,36 @@ namespace
         }
         else if (env.type == "skybox")
         {
+            // BOTH ROWS BELOW MEET IN ONE LINE, `Skybox::GetExposure()`:
+            //     return HasEnvironment() ? 1.0f : exposure_ * PhysicalScale();
+            // `exposure_` is Intensity, `PhysicalScale()` is Sky Illuminance / the cube's own
+            // measured up-illuminance. When the procedural atmosphere supplies the environment --
+            // `sky.mode` on AND `environmentLighting` on, the exact gate in
+            // `SkyAtmosphere::BuildEnvironment` -- their product is discarded and the whole sky,
+            // its ambient fill, its reflections and the fog's sky term run at a hard 1.0.
+            //
+            // Asking the Skybox itself rather than re-deriving the condition here: this is the same
+            // object `GetExposure()` branches on, so the greying cannot drift from the behaviour.
+            // Measured before shipping the grey: `--set=light.skyIlluminanceLux` 12000 vs 40000 on
+            // a procedural level moved the water by 0.007 % of pixels against a 0.007 % same-build
+            // noise floor, and the frame median by 0.05 of a code.
+            const Skybox* liveSky = ctx.scene.GetSkybox();
+            const bool skyInert = liveSky != nullptr && liveSky->HasEnvironment();
+            if (skyInert)
+            {
+                ImGui::TextDisabled("Procedural sky owns the environment -- the two rows below do nothing.");
+                InspectorHelp(
+                    "The Sky Atmosphere object is on with Environment Lighting enabled, so it "
+                    "supplies this level's environment cubes and `Skybox::GetExposure()` returns a "
+                    "hard 1.0. Intensity and Sky Illuminance are multiplied into that value and "
+                    "nowhere else, so neither changes anything -- including the drawn sky.\n\n"
+                    "What to use instead: Sky Atmosphere > Sky Luminance Scale for how bright the "
+                    "sky reads, and the directional light's Sky Fill Intensity for how hard it "
+                    "lights the scene.\n\n"
+                    "Turn Environment Lighting off (or delete the Sky Atmosphere object) and these "
+                    "two come back, because the level is then lit by the cubemap again.");
+            }
+            ImGui::BeginDisabled(skyInert);
             dragF("Intensity", "intensity", 1.0f, 0.01f, 0.0f, 8.0f, "%.3f");
             InspectorHelp(
                 "How bright this level's sky is, on the engine's linear scale. 1 = the cubemap's "
@@ -2284,6 +2314,10 @@ namespace
                     "The import log says which kind you have: 'sky sun REMOVED ... the sun was N%%' "
                     "for a clear sky, 'NOT REMOVED ... no sun to take out' for an overcast one.");
             }
+            // The Texture Asset row below stays LIVE even when the two above are greyed: a
+            // procedural level still needs a cubemap named here, because `JsonLevel` only creates
+            // the Skybox object -- the thing that draws the atmosphere -- when one is.
+            ImGui::EndDisabled();
             const std::string current = tgt().value("texture", std::string());
             const std::string currentLabel = current.empty()
                 ? std::string("(none)")

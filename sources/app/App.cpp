@@ -1499,7 +1499,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 renderer.Tick(deltaTime);
                 // The memory line (rendering/core/MemoryReport.h): every 5 s, after the previous
                 // frame's work is joined so the providers read settled state.
-                render::TickMemoryReport(renderer.GetDevice(), now);
+                //render::TickMemoryReport(renderer.GetDevice(), now);
                 appController_.Tick(input, renderer, scene, levelManager, deltaTime);
                 scene.Tick(deltaTime);
 
