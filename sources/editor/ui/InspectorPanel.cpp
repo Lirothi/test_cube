@@ -3551,6 +3551,22 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
         const float rowHeight = ImGui::GetFrameHeightWithSpacing();
         if (ImGui::BeginChild("##zonePoints", ImVec2(0.0f, rowHeight * 10.0f), true))
         {
+            // ONE HEIGHT FOR THE WHOLE ROW, and it has to be said explicitly because the
+            // three widgets disagree by default: Selectable sizes itself to its text,
+            // DragFloat3 to the frame, and SmallButton to something smaller than either.
+            // Left alone they came out as three different heights side by side, none of
+            // them lined up with the others.
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float rowH = ImGui::GetFrameHeight();
+            const float indexW = 30.0f;
+            // Square, so the glyph sits in the middle instead of in a wide slab.
+            const float buttonW = rowH;
+            // The numbers take whatever is left, so the list grows with the panel instead
+            // of keeping a width that was right on one person's screen.
+            const float dragW = (std::max)(120.0f,
+                ImGui::GetContentRegionAvail().x - indexW - buttonW * 2.0f
+                    - style.ItemSpacing.x * 3.0f - style.ScrollbarSize);
+
             for (std::size_t index = 0; index < points.size(); ++index)
             {
                 ImGui::PushID(static_cast<int>(index));
@@ -3559,13 +3575,15 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
                 // when it was picked in the viewport, and the other way round.
                 char label[32];
                 std::snprintf(label, sizeof(label), "%zu", index);
-                if (ImGui::Selectable(label, active, 0, ImVec2(26.0f, 0.0f)))
+                ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.5f, 0.5f));
+                if (ImGui::Selectable(label, active, 0, ImVec2(indexW, rowH)))
                 {
                     ctx.selection.SetActivePoint(active ? -1 : static_cast<int>(index));
                 }
+                ImGui::PopStyleVar();
                 ImGui::SameLine();
                 float xyz[3] = { points[index].x, points[index].y, points[index].z };
-                ImGui::SetNextItemWidth(210.0f);
+                ImGui::SetNextItemWidth(dragW);
                 if (ImGui::DragFloat3("##xyz", xyz, 0.1f, 0.0f, 0.0f, "%.1f"))
                 {
                     points[index] = Math::float3(xyz[0], xyz[1], xyz[2]);
@@ -3573,7 +3591,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
                     changed = true;
                 }
                 ImGui::SameLine();
-                if (ImGui::SmallButton("+"))
+                if (ImGui::Button("+", ImVec2(buttonW, rowH)))
                 {
                     const int added = editorzone::InsertPointAfter(object,
                         static_cast<int>(index));
@@ -3588,7 +3606,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
                 // Disabled rather than hidden at the floor, so the reason is visible instead
                 // of the button vanishing and leaving someone hunting for it.
                 ImGui::BeginDisabled(points.size() <= 2);
-                if (ImGui::SmallButton("-"))
+                if (ImGui::Button("-", ImVec2(buttonW, rowH)))
                 {
                     if (editorzone::RemovePoint(object, static_cast<int>(index)))
                     {

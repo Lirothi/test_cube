@@ -63,6 +63,10 @@ private:
         std::string thinking;
         // The answer stopped at the token budget rather than finishing.
         bool truncated = false;
+        // Part of the search round trip -- either the model's request or the output it
+        // got back. Shown folded: the conversation is what the person reads, and the
+        // plumbing underneath it is available rather than in the way.
+        bool toolRequest = false;
         // A phrase the model offered to run but did not run. The turn keeps it so the
         // button stays with the sentence that proposed it -- an offer that scrolls away
         // from its own answer is an offer nobody connects to anything.
@@ -104,6 +108,14 @@ private:
     // it (a grammar is waiting for JSON there); the chat now offers the same choice.
     // Turn it on for anything where the working is the interesting part.
     bool reasoning_ = false;
+    // Reading this engine's own source, so "how does the ocean work here" is answered
+    // about THIS engine instead of about game engines in general. On by default: the whole
+    // reason for a local model sitting inside the editor is that it can see the editor.
+    bool searchEnabled_ = true;
+    // Search rounds spent on the message being answered now. See the cap's reasoning where
+    // it is enforced.
+    int toolRounds_ = 0;
+    static constexpr int kMaxToolRounds = 3;
     std::string levelPath_;
     std::size_t objectCount_ = 0;
     std::string pendingCommand_;

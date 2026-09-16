@@ -271,6 +271,7 @@
     <ClCompile Include="sources/editor/intent/EditorActionRegistry.cpp" />
     <ClCompile Include="sources/editor/intent/IntentSchema.cpp" />
     <ClCompile Include="sources/editor/intent/EditorSceneQuery.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorRepoSearch.cpp" />
     <ClCompile Include="sources/editor/intent/EnvironmentSettings.cpp" />
     <ClCompile Include="sources/editor/intent/IntentNotes.cpp" />
     <ClCompile Include="sources/editor/intent/IntentPrompt.cpp" />
@@ -434,6 +435,7 @@
     <ClInclude Include="sources/editor/intent/EditorActionRegistry.h" />
     <ClInclude Include="sources/editor/intent/IntentSchema.h" />
     <ClInclude Include="sources/editor/intent/EditorSceneQuery.h" />
+    <ClInclude Include="sources/editor/intent/EditorRepoSearch.h" />
     <ClInclude Include="sources/editor/intent/EnvironmentSettings.h" />
     <ClInclude Include="sources/editor/intent/IntentNotes.h" />
     <ClInclude Include="sources/editor/intent/IntentPrompt.h" />

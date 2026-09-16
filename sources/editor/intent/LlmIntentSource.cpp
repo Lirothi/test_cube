@@ -568,17 +568,57 @@ bool LlmIntentSource::OwnsRunningServer() const
 
 void LlmIntentSource::StopServer()
 {
-    if (!serverOwned_)
-    {
-        return;
-    }
+    std::string ignored;
+    StopServer(ignored);
+}
+
+bool LlmIntentSource::StopServer(std::string& outStatus)
+{
     Cancel();
-    LOG_INFO(logging::LogCategory::Editor, "intent model: stopping llama-server pid={}",
-        server_.processId);
-    server_.Terminate();
-    serverOwned_ = false;
+    if (serverOwned_ && server_.Running())
+    {
+        LOG_INFO(logging::LogCategory::Editor, "intent model: stopping llama-server pid={}",
+            server_.processId);
+        server_.Terminate();
+        serverOwned_ = false;
+        serverHealthy_ = false;
+        serverStatus_ = "Server stopped";
+        outStatus = serverStatus_;
+        return true;
+    }
+
+    // NOT OURS, AND STOP MUST STILL STOP IT. A server kept alive by a previous session is
+    // exactly when somebody reaches for this, and a button that quietly did nothing then
+    // would be claiming an authority the editor does not have. Found by who is listening on
+    // the endpoint, which is the only handle anybody has on a process they did not start.
+    std::string error;
+    if (llmclient::StopListener(settings_.endpoint, error))
+    {
+        serverOwned_ = false;
+        serverHealthy_ = false;
+        serverStatus_ = "Server stopped";
+        outStatus = serverStatus_;
+        return true;
+    }
     serverHealthy_ = false;
-    serverStatus_ = "Server stopped";
+    serverStatus_ = error;
+    outStatus = error;
+    return false;
+}
+
+bool LlmIntentSource::StartServerNow(std::string& outStatus)
+{
+    // Clears the session-wide "the watchdog cannot start" latch, because pressing Start is
+    // somebody saying try again -- perhaps after they fixed whatever blocked it. Retrying on
+    // its own would be the loop that was removed; retrying when asked is the button's job.
+    reaperUnavailable_ = false;
+    nextHealthPollSec_ = 0.0;
+    const bool ready = EnsureServerReady(outStatus);
+    if (ready && outStatus.empty())
+    {
+        outStatus = "Server is up";
+    }
+    return ready;
 }
 
 std::string LlmIntentSource::WebUiUrl() const

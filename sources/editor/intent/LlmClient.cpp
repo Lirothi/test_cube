@@ -10,8 +10,15 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// winsock2 BEFORE windows.h: windows.h pulls in the original winsock, and the two declare
+// the same names differently. iphlpapi needs the newer one for AF_INET and htons.
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <winhttp.h>
+#include <iphlpapi.h>
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -216,6 +223,73 @@ namespace llmclient
             job = nullptr;
         }
         processId = 0;
+    }
+
+    unsigned long FindListenerPid(const std::string& hostPort)
+    {
+        std::wstring host;
+        int port = 0;
+        SplitHostPort(hostPort, host, port);
+        if (port <= 0)
+        {
+            return 0;
+        }
+        // Network byte order: the table stores the port as it goes on the wire, and
+        // comparing it against a host-order int is the classic way to match nothing on a
+        // little-endian machine and then blame the API.
+        const DWORD wanted = static_cast<DWORD>(::htons(static_cast<u_short>(port)));
+
+        DWORD size = 0;
+        if (::GetExtendedTcpTable(nullptr, &size, FALSE, AF_INET,
+                TCP_TABLE_OWNER_PID_LISTENER, 0) != ERROR_INSUFFICIENT_BUFFER)
+        {
+            return 0;
+        }
+        std::vector<char> buffer(size);
+        if (::GetExtendedTcpTable(buffer.data(), &size, FALSE, AF_INET,
+                TCP_TABLE_OWNER_PID_LISTENER, 0) != NO_ERROR)
+        {
+            return 0;
+        }
+        const MIB_TCPTABLE_OWNER_PID* table =
+            reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(buffer.data());
+        for (DWORD i = 0; i < table->dwNumEntries; ++i)
+        {
+            const MIB_TCPROW_OWNER_PID& row = table->table[i];
+            if (row.dwState == MIB_TCP_STATE_LISTEN && row.dwLocalPort == wanted)
+            {
+                return row.dwOwningPid;
+            }
+        }
+        return 0;
+    }
+
+    bool StopListener(const std::string& hostPort, std::string& outError)
+    {
+        const unsigned long pid = FindListenerPid(hostPort);
+        if (pid == 0)
+        {
+            outError = "nothing is listening on " + hostPort;
+            return false;
+        }
+        HANDLE handle = ::OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+        if (!handle)
+        {
+            outError = "cannot stop pid " + std::to_string(pid) + " (error " +
+                std::to_string(::GetLastError()) + ")";
+            return false;
+        }
+        const BOOL ok = ::TerminateProcess(handle, 0);
+        ::CloseHandle(handle);
+        if (!ok)
+        {
+            outError = "could not terminate pid " + std::to_string(pid) + " (error " +
+                std::to_string(::GetLastError()) + ")";
+            return false;
+        }
+        LOG_INFO(logging::LogCategory::Editor,
+            "intent model: stopped whatever was listening on {} (pid {})", hostPort, pid);
+        return true;
     }
 
     bool StartReaper(const std::string& hostPort,

@@ -858,6 +858,55 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                         }
                         hasAction = true;
                     }
+                    // Grouping acts on the SELECTION, not on the row that was right-clicked,
+                    // because "put these in a folder" is a thing said about several objects.
+                    // The row still matters: right-clicking outside the selection selects it
+                    // first, the way every other entry here behaves.
+                    if (!row.environment && IsMeshType(obj->type))
+                    {
+                        if (ImGui::BeginMenu("Group"))
+                        {
+                            // Existing groups first: joining one is commoner than inventing
+                            // one, and typing a name that differs by a character makes a
+                            // second folder that looks like a typo because it is.
+                            for (const auto& entry : namedGroups)
+                            {
+                                if (ImGui::MenuItem(entry.first.c_str()))
+                                {
+                                    action.type = OutlinerAction::Type::GroupSelection;
+                                    action.target = obj->id;
+                                    action.nameValue = entry.first;
+                                }
+                            }
+                            if (!namedGroups.empty())
+                            {
+                                ImGui::Separator();
+                            }
+                            ImGui::SetNextItemWidth(160.0f);
+                            const bool entered = ImGui::InputTextWithHint("##newGroup",
+                                "new group name", groupNameBuffer_, sizeof(groupNameBuffer_),
+                                ImGuiInputTextFlags_EnterReturnsTrue);
+                            if (entered && groupNameBuffer_[0] != '\0')
+                            {
+                                action.type = OutlinerAction::Type::GroupSelection;
+                                action.target = obj->id;
+                                action.nameValue = groupNameBuffer_;
+                                groupNameBuffer_[0] = '\0';
+                                ImGui::CloseCurrentPopup();
+                            }
+                            ImGui::Separator();
+                            // An EMPTY name is how you leave a group, said in one place
+                            // rather than as a second verb somewhere else.
+                            if (ImGui::MenuItem("Remove from group"))
+                            {
+                                action.type = OutlinerAction::Type::GroupSelection;
+                                action.target = obj->id;
+                                action.nameValue.clear();
+                            }
+                            ImGui::EndMenu();
+                        }
+                        hasAction = true;
+                    }
 
                     const bool supportsEnable =
                         row.environment ? SupportsEnvironmentEnable(*obj) : true;

@@ -51,6 +51,7 @@
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/intent/EditorActionRegistry.h"
+#include "editor/intent/EditorIntentResolver.h"
 #include "editor/intent/LlmIntentSource.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/serialization/LevelDocumentSerializer.h"
@@ -3113,6 +3114,32 @@ void EditorController::Draw(
                             selection_))
                     {
                         levelStatus_ = "Nothing to frame";
+                    }
+                }
+                else if (outlinerAction.type == OutlinerAction::Type::GroupSelection)
+                {
+                    // Right-clicking a row outside the selection selects it first, as every
+                    // other entry in that menu does -- otherwise "Group" would act on
+                    // something other than what is highlighted, which is the one thing a
+                    // context menu must never do.
+                    if (!selection_.Contains(outlinerAction.target))
+                    {
+                        selection_.Replace(outlinerAction.target);
+                    }
+                    EditorIntent intent;
+                    intent.kind = EditorIntentKind::Command;
+                    intent.action = "group";
+                    intent.sourceLabel = "outliner";
+                    intent.target.scope = EditorIntentScope::Selected;
+                    intent.params["name"] = outlinerAction.nameValue;
+                    // THROUGH THE SAME ACTION THE MODEL USES, not a second implementation of
+                    // grouping: one undo entry, one set of rules about what a group name may
+                    // be, and a menu that cannot drift from the phrase that does the same.
+                    const EditorActionContext actionCtx{ panelCtx, assetRegistry_, extensions_ };
+                    const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+                    if (!ExecuteIntent(actionCtx, commandStack_, preview, levelStatus_))
+                    {
+                        levelStatus_ = preview.problem.empty() ? levelStatus_ : preview.problem;
                     }
                 }
                 else if (outlinerAction.type == OutlinerAction::Type::RenameObject)

@@ -91,6 +91,18 @@ namespace llmclient
     // Start the watchdog that retires a kept-alive server. Returns false and fills
     // `outError` when it could not be launched -- which the caller should treat as a reason
     // to fall back to the job object rather than to shrug.
+    // The process listening on this endpoint, whoever started it, or 0.
+    //
+    // Needed because "stop the server" must work on a server this editor did not start. One
+    // kept alive by a previous session is exactly the case somebody reaches for the button
+    // in, and a Stop that quietly does nothing then is worse than no button: the editor
+    // would be claiming an authority it does not have.
+    unsigned long FindListenerPid(const std::string& hostPort);
+
+    // Terminate whatever is listening there, with its children. False when nothing was
+    // listening or it could not be killed; `outError` says which.
+    bool StopListener(const std::string& hostPort, std::string& outError);
+
     bool StartReaper(const std::string& hostPort,
         unsigned long serverPid,
         int idleSeconds,

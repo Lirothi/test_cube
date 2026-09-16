@@ -622,27 +622,65 @@ void CommandBarPanel::DrawSettings()
             ImGui::SetClipboardText(webUi.c_str());
         }
     }
-    if (model_->OwnsRunningServer())
+    // BOTH BUTTONS, ALWAYS, and the state beside them says which one does anything.
+    //
+    // Stop used to appear only for a server this session started, which is precisely
+    // backwards: the case somebody wants a stop button for is the one they did NOT start --
+    // a server kept alive by a previous editor, holding 38 GB while they do something else.
+    // It works on that one now, found by who is listening on the endpoint.
     {
-        const double remaining = model_->SecondsUntilIdleStop();
-        if (remaining >= 0.0)
+        const bool up = model_->ServerIsUp();
+        const bool ours = model_->OwnsRunningServer();
+        if (up)
         {
-            ImGui::TextDisabled("Server stops in %ds if unused", static_cast<int>(remaining));
+            const double remaining = model_->SecondsUntilIdleStop();
+            if (remaining >= 0.0)
+            {
+                ImGui::TextDisabled("Server up, stops in %ds if unused",
+                    static_cast<int>(remaining));
+            }
+            else
+            {
+                ImGui::TextDisabled(ours ? "Server up (started here)"
+                                         : "Server up (started elsewhere, kept alive)");
+            }
         }
         else
         {
-            ImGui::TextDisabled("Server running (no idle timeout)");
+            ImGui::TextDisabled("Server is not up");
         }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Stop now"))
+
+        ImGui::BeginDisabled(!model_->Available() || up);
+        if (ImGui::SmallButton("Start server"))
         {
-            model_->StopServer();
+            std::string status;
+            model_->StartServerNow(status);
+            status_ = status.empty() ? std::string("Starting the model server...") : status;
         }
+        ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("It also dies with the editor -- it runs inside a job object, "
-                "so a crash or a kill takes it too. The model is memory-mapped, so while it "
-                "is up the cost is page cache the OS can reclaim, not committed RAM.");
+            ImGui::SetTooltip("Load the model now instead of on the next phrase. It takes a "
+                "few seconds from the page cache and about twenty from cold, and the panel "
+                "says \"Model loading...\" until it answers.");
+        }
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!up);
+        if (ImGui::SmallButton("Stop server"))
+        {
+            std::string status;
+            model_->StopServer(status);
+            status_ = status;
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Stops whatever is serving this endpoint, including a server "
+                "this editor did not start. Its watchdog notices and exits too. The model is "
+                "memory-mapped, so what an idle server costs is page cache the OS can "
+                "reclaim rather than committed RAM -- stopping it frees the VRAM, which is "
+                "the part the renderer wants back.");
         }
     }
     if (!model_->Available())

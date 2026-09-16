@@ -4,8 +4,10 @@
 #include <string>
 #include <vector>
 
+#include "core/logging/Log.h"
 #include "editor/intent/EditorActionRegistry.h"
 #include "editor/intent/LlmIntentSource.h"
+#include "editor/intent/EditorRepoSearch.h"
 #include "editor/ui/ImGuiTextInput.h"
 #include "imgui.h"
 // ClearActiveID: an input keeps its own copy of the text while active, and emptying
@@ -14,6 +16,20 @@
 
 namespace
 {
+    // Long enough to read a conversation back, short enough that one rambling answer does
+    // not bury the rest of the session. A 30k-character reply is itself worth recording as
+    // a fact, which is why the cut says how much it cut.
+    std::string ForLog(const std::string& text)
+    {
+        constexpr std::size_t kMax = 4000;
+        if (text.size() <= kMax)
+        {
+            return text;
+        }
+        return text.substr(0, kMax) + " ...[+" +
+            std::to_string(text.size() - kMax) + " more characters]";
+    }
+
     // Reasoning models put their working in a <think> block before the answer. Split it out
     // rather than dropping it: it is the most interesting part of talking to one, and also
     // the part that would bury the answer if left inline.
@@ -123,6 +139,10 @@ std::string ModelChatPanel::BuildPrompt(const LlmIntentSettings& settings,
             "complaining that the palms look wrong -- those are conversation, and at most "
             "they earn a SUGGEST. When unsure, suggest rather than do: a suggestion costs a "
             "glance, a command costs undoing it.";
+        if (searchEnabled_)
+        {
+            text += reposearch::ProtocolPrompt();
+        }
     }
     text += "<|im_end|>\n";
     for (std::size_t index = firstKept; index < turns_.size(); ++index)
@@ -159,6 +179,12 @@ void ModelChatPanel::Send(LlmIntentSource& model)
         return;
     }
 
+    // EVERY message, logged where the command bar logs its phrases. The chat was the one
+    // path with no record at all: it lived in this panel's memory and died with the editor,
+    // so a conversation that worked something out about the engine was gone the moment the
+    // window closed, and a conversation that went wrong could not be read back at all.
+    LOG_INFO(logging::LogCategory::Editor, "chat: > {}", ForLog(message));
+
     Turn mine;
     mine.fromUser = true;
     mine.text = message;
@@ -166,6 +192,7 @@ void ModelChatPanel::Send(LlmIntentSource& model)
     input_.clear();
     waiting_ = true;
     scrollToBottom_ = true;
+    toolRounds_ = 0;   // a new question gets its own search budget
 
     std::size_t dropped = 0;
     const std::string prompt = BuildPrompt(model.Settings(), dropped);
@@ -263,6 +290,58 @@ void ModelChatPanel::Draw(LlmIntentSource& model, bool* open)
             {
                 turn.text = "(the whole token budget went on thinking -- raise max tokens)";
             }
+            // DID IT ASK TO LOOK SOMETHING UP? Checked before the turn is closed, because a
+            // tool request is half an answer: the model has said what it needs, not what it
+            // thinks. Running the tools and asking again is how it gets to the second half.
+            //
+            // Capped, and the cap is about the person rather than the machine. Each round is
+            // a whole generation -- tens of seconds -- spent watching a box that says
+            // thinking. A model three rounds in has either found it or is not going to.
+            std::string toolReport;
+            if (searchEnabled_ && commanded.empty() && toolRounds_ < kMaxToolRounds &&
+                reposearch::RunRequestedTools(turn.text, toolReport))
+            {
+                ++toolRounds_;
+                LOG_INFO(logging::LogCategory::Editor,
+                    "chat: searched the source (round {}/{}), {} characters back",
+                    toolRounds_, kMaxToolRounds, toolReport.size());
+                // The request stays in the history so the model can see what it asked, but
+                // the panel shows it folded: a conversation is not a transcript of its own
+                // plumbing.
+                turn.toolRequest = true;
+                turns_.push_back(std::move(turn));
+
+                Turn results;
+                results.fromUser = true;
+                results.toolRequest = true;
+                results.text = toolReport;
+                results.promptText = "Tool output:\n\n```\n" + toolReport +
+                    "\n```\n\nNow answer using what it says. Ask for more only if you truly "
+                    "cannot answer yet.";
+                turns_.push_back(std::move(results));
+
+                std::size_t dropped = 0;
+                const std::string prompt = BuildPrompt(model.Settings(), dropped);
+                droppedTurns_ = dropped;
+                model.BeginFreeform(prompt, temperature_, maxTokens_);
+                lastPartialSize_ = 0;
+                scrollToBottom_ = true;
+                return;   // still waiting_, on the follow-up
+            }
+
+            toolRounds_ = 0;
+            LOG_INFO(logging::LogCategory::Editor, "chat: < {}{}", ForLog(turn.text),
+                turn.truncated ? "  [TRUNCATED at the token budget]" : "");
+            if (!commanded.empty())
+            {
+                LOG_INFO(logging::LogCategory::Editor,
+                    "chat: handed to the command bar: \"{}\"", commanded);
+            }
+            else if (!turn.suggestion.empty())
+            {
+                LOG_INFO(logging::LogCategory::Editor,
+                    "chat: offered to run: \"{}\"", turn.suggestion);
+            }
             turns_.push_back(std::move(turn));
             waiting_ = false;
             lastPartialSize_ = 0;
@@ -324,6 +403,16 @@ void ModelChatPanel::Draw(LlmIntentSource& model, bool* open)
                 "Turn it on when the reasoning is the part you want.");
         }
         ImGui::SameLine();
+        ImGui::Checkbox("read source", &searchEnabled_);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Let it search this engine's own source before answering -- "
+                "grep, read and ls over sources, shaders, tools and docs, read-only. "
+                "Without it, \"how does the ocean work here\" is answered with general "
+                "facts about game engines instead of anything about THIS one. Each search "
+                "costs a whole extra round trip, and it may take up to three.");
+        }
+        ImGui::SameLine();
         ImGui::SetNextItemWidth(140.0f);
         // The ceiling is the model's own room, not a number picked here. The budget is
         // reserved OUT of the context (see the trimming above), so a budget that ate the
@@ -365,6 +454,27 @@ void ModelChatPanel::Draw(LlmIntentSource& model, bool* open)
         {
             const Turn& turn = turns_[index];
             ImGui::PushID(static_cast<int>(index));
+            // The search round trip, folded away. It IS the conversation's plumbing, and
+            // somebody debugging a wrong answer needs to see exactly what the model asked
+            // for and exactly what came back -- but it is not what anybody is reading the
+            // chat for, and inline it would be most of the window.
+            if (turn.toolRequest)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.78f, 1.0f, 1.0f));
+                const bool open = ImGui::TreeNode(turn.fromUser
+                    ? "source search -- what came back"
+                    : "source search -- what it asked for");
+                ImGui::PopStyleColor();
+                if (open)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+                    ImGui::TextWrapped("%s", turn.text.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+                continue;
+            }
             if (turn.fromUser)
             {
                 ImGui::TextColored(ImVec4(0.55f, 0.78f, 1.0f, 1.0f), "you");

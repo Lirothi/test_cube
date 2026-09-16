@@ -303,6 +303,9 @@
     <ClCompile Include="sources/editor/intent/EditorSceneQuery.cpp">
       <Filter>sources\editor\intent</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorRepoSearch.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/intent/EnvironmentSettings.cpp">
       <Filter>sources\editor\intent</Filter>
     </ClCompile>
@@ -732,6 +735,9 @@
       <Filter>sources\editor\intent</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/intent/EditorSceneQuery.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/EditorRepoSearch.h">
       <Filter>sources\editor\intent</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/intent/EnvironmentSettings.h">

@@ -24,12 +24,17 @@ struct OutlinerAction
         FrameSelection,
         RenameObject,
         SetEnabled,
-        SetEnvEnabled
+        SetEnvEnabled,
+        // Put the selection into a named group, or take it out of one with an empty name.
+        // The outliner DISPLAYS groups as folders and the command bar can assign them by
+        // phrase; without this the only way to make one by hand was to type a sentence,
+        // which is a strange thing to require of somebody already looking at the list.
+        GroupSelection
     };
     Type type = Type::None;
     EditorObjectId target;
     bool enabledValue = false; // for SetEnabled / SetEnvEnabled
-    std::string nameValue; // for RenameObject
+    std::string nameValue; // for RenameObject and GroupSelection
 };
 
 // Lists document and environment entities in a searchable/filterable table.
@@ -87,6 +92,9 @@ private:
     EditorObjectId rangeAnchor_{};
     EditorObjectId renamingObject_{};
     char renameBuffer_[256] = {};
+    // Typed into the Group submenu. Fixed and small on purpose: a group name is a label
+    // somebody will read at a glance in the list, not a sentence.
+    char groupNameBuffer_[64] = {};
     bool renameFocusRequested_ = false;
 
     // Per-frame scratch, reused across Draw calls (cleared each frame, capacity

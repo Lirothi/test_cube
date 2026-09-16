@@ -197,6 +197,17 @@ public:
     // True when THIS editor started the server that is running, so the panel can offer to
     // stop it. A server the user started themselves is never offered up.
     bool OwnsRunningServer() const;
+
+    // Something is answering on the endpoint, whoever started it. Different from
+    // OwnsRunningServer, which is only true for a server THIS session launched -- and the
+    // difference is visible to the user the moment a kept-alive server outlives an editor.
+    bool ServerIsUp() const { return serverHealthy_; }
+
+    // Force it up or down, for the buttons in the settings. Stop works on a server this
+    // editor did not start; Start clears the session latch that stops the watchdog being
+    // retried, because pressing it is somebody saying "try again".
+    bool StopServer(std::string& outStatus);
+    bool StartServerNow(std::string& outStatus);
     // Stop the server we started. The model is mmapped, so an idle one costs reclaimable
     // page cache rather than committed RAM -- but "reclaimable" is still not "gone", and
     // someone about to do something memory-hungry should not have to find Task Manager.
