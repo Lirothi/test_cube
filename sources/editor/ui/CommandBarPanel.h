@@ -94,7 +94,7 @@ private:
         std::string verdict;
         // Colour-coded by outcome, because at a glance the difference between "ran" and
         // "cannot run" matters more than the words.
-        enum class Kind { Ran, Preview, Refused, Failed } kind = Kind::Preview;
+        enum class Kind { Ran, Preview, Refused, Failed, Asked } kind = Kind::Preview;
     };
     void RecordOutcome(const std::string& verdict, Exchange::Kind kind);
     // Up/Down while the box has focus. Returns true when it changed the text, so the caller
@@ -127,10 +127,26 @@ private:
     std::string historyDraft_;
     bool historyDirty_ = false;
     std::string phrase_;
-    // The exchanges that led to the phrase being typed now. Only ever non-empty after the
-    // model answered `unclear`: it asked which palms, and this is where the answer goes so
-    // the whole request does not have to be retyped. Cleared the moment a command lands.
+    // What the model is actually sent, which is the typed phrase for the first turn and the
+    // EDITOR'S ANSWER for every query turn after it. Kept apart from `phrase_` because the
+    // panel, the log and the phrase history all mean the thing the person typed, and a
+    // query round would otherwise rewrite the record of what was asked for.
+    std::string sendPhrase_;
+    // The exchanges that led to the phrase being typed now. Non-empty after the model
+    // answered `unclear` -- it asked which palms, and this is where the answer goes so the
+    // whole request does not have to be retyped -- and during a query round, where it
+    // carries the question the model asked and the answer it got. Cleared when a command
+    // lands.
     std::vector<IntentTurn> history_;
+    // Query rounds spent on the phrase currently being worked on.
+    //
+    // CAPPED, AND THE CAP IS THE POINT. A query costs a whole generation -- seconds the
+    // designer spends watching a greyed-out box -- so a model that asks, asks again, and
+    // asks a third time has stopped being useful whatever it eventually answers. Three is
+    // enough for "how big is it, where is the water, now place it" and short enough that a
+    // loop cannot run away.
+    int queryRounds_ = 0;
+    static constexpr int kMaxQueryRounds = 3;
     // Index into sources_ of the one currently being asked. Sources are tried in cost
     // order, so this walks forward as cheaper ones decline (E7).
     std::size_t activeSource_ = 0;

@@ -49,6 +49,27 @@ namespace
         const auto it = object.find(key);
         return (it != object.end() && it->is_boolean()) ? it->get<bool>() : fallback;
     }
+
+    // Did the answer stop because it ran out of budget, rather than because it was finished?
+    //
+    // THIS WAS READING A FIELD THE SERVER DOES NOT SEND. The check was `stopped_limit`, which
+    // is not in llama-server's reply at all any more -- so the flag was false every time and
+    // an answer that hit n_predict lost its tail in silence, in the chat and in the command
+    // bar alike. Probed against the running server: the reply carries `stop_type`, one of
+    // "eos", "word" or "limit".
+    //
+    // NOT the field called `truncated`, tempting as the name is: that one means the PROMPT
+    // was cut to fit the context, which is a different failure with a different fix.
+    bool HitTheTokenLimit(const nlohmann::json& reply)
+    {
+        const auto it = reply.find("stop_type");
+        if (it != reply.end() && it->is_string())
+        {
+            return it->get<std::string>() == "limit";
+        }
+        // Older llama-server builds, which said it this way instead.
+        return ReadBoolOr(reply, "stopped_limit", false);
+    }
 }
 
 LlmIntentSource::LlmIntentSource(LlmIntentSettings settings)
@@ -638,7 +659,7 @@ void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature
                 }
             }
             // The final event carries the verdict and the timings.
-            truncated = truncated || event.value("stopped_limit", false);
+            truncated = truncated || HitTheTokenLimit(event);
             const auto timings = event.find("timings");
             if (timings != event.end() && timings->is_object())
             {
@@ -703,7 +724,7 @@ void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature
                 return;
             }
             answer = parsed["content"].get<std::string>();
-            truncated = parsed.value("stopped_limit", false);
+            truncated = HitTheTokenLimit(parsed);
             const auto timings = parsed.find("timings");
             if (timings != parsed.end() && timings->is_object())
             {

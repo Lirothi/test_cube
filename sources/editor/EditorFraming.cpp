@@ -49,6 +49,41 @@ namespace
 
 namespace editorframing
 {
+    bool TryGetWorldBounds(
+        const Scene& scene,
+        const EditorSceneDocument& document,
+        EditorObjectId id,
+        Math::float3& outMin,
+        Math::float3& outMax)
+    {
+        if (id.value == 0)
+        {
+            return false;
+        }
+        if (const RenderableObjectBase* runtime = scene.FindEditorObject(id.value))
+        {
+            const AABB& bounds = runtime->GetWorldBounds();
+            if (bounds.IsValid())
+            {
+                outMin = bounds.GetMin();
+                outMax = bounds.GetMax();
+                return true;
+            }
+        }
+        // No live renderable: fall back to the centre-and-radius answer, which is a sphere
+        // and so a cube here. Honest for a light or a zone; it is only the MESHES that
+        // deserve better, and those have runtime bounds.
+        Math::float3 centre;
+        float radius = 0.0f;
+        if (!TryGetFrameTarget(scene, document, id, centre, radius))
+        {
+            return false;
+        }
+        outMin = centre - Math::float3(radius);
+        outMax = centre + Math::float3(radius);
+        return true;
+    }
+
     bool TryGetFrameTarget(
         const Scene& scene,
         const EditorSceneDocument& document,

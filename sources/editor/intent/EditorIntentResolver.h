@@ -49,6 +49,19 @@ struct EditorIntentPreview
     EditorIntent resolved;
 };
 
+// The objects a target names: the outliner's search predicate over `filter`, then the
+// `exclude` list, then the spatial narrowing. `target` is taken by reference because
+// resolving it can REWRITE it -- "the selected zone" means the level narrowed by that
+// zone, not the zone itself -- and the caller must act on what was actually resolved.
+//
+// Public because the preview is no longer the only caller: a query answers questions
+// about the same sets ("how big is what I would be deleting"), and a second copy of this
+// would be a second opinion about which objects a phrase reaches.
+void ResolveTargetObjects(const EditorActionContext& actionCtx,
+    EditorIntentTarget& target,
+    std::vector<EditorObjectId>& outTargets,
+    std::vector<EditorIntentPreview::Group>& outGroups);
+
 // Resolve the intent's target -- existing objects through the outliner's own search
 // predicate (E5), or an asset through the AssetRegistry -- validate its parameters
 // against the action's declared list, and describe what would happen. Touches nothing.

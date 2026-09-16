@@ -42,6 +42,16 @@ enum class EditorIntentKind
     NeedsApi,
     // Understood as a request, but the target or a parameter is genuinely ambiguous.
     Unclear,
+    // A question to the EDITOR, not to the user: "how big is the island", "where is the
+    // waterline". Executes nothing and changes nothing -- the editor answers, the answer
+    // is appended to the conversation, and the model gets another turn to act on it.
+    //
+    // This branch exists because the prompt cannot carry the scene. It is built when the
+    // level loads and must stay byte-identical for the server's prefix cache to hold, so
+    // anything that changes while editing cannot live in it. Asking is the way to see
+    // something current, and it costs a whole extra generation -- which is why the query
+    // list is short and the loop is capped.
+    Query,
 };
 
 // What the words of the sentence point AT, which is a different question from what the
@@ -129,6 +139,19 @@ struct EditorIntentTarget
     std::string setting;
 };
 
+// One question inside a query answer. It carries the same target and params a command
+// would: "the bounds of the palms in zone Beach" narrows exactly the way "delete the palms
+// in zone Beach" does, and a second dialect for saying WHICH would be a second thing to
+// keep in step.
+struct EditorIntentQuery
+{
+    // An id from the query list. Closed like `action` is, and for the same reason: a
+    // question the editor cannot answer must be impossible to ask, not answered wrongly.
+    std::string query;
+    EditorIntentTarget target;
+    nlohmann::json params = nlohmann::json::object();
+};
+
 struct EditorIntent
 {
     EditorIntentKind kind = EditorIntentKind::None;
@@ -148,6 +171,20 @@ struct EditorIntent
 
     // --- kind == Unclear -------------------------------------------------------
     std::string question;
+
+    // --- kind == Query ---------------------------------------------------------
+    // Everything being asked in this one turn. ALWAYS A LIST, even for one question.
+    //
+    // A list because a round trip is the expensive part and a question is not: wanting the
+    // waterline AND the island's extent is one thought, and making it two turns charged the
+    // designer twice for it. Checking the ground at five points was five turns, which is
+    // most of a minute for an answer the editor computes in microseconds.
+    //
+    // ALWAYS a list, with no singular spelling beside it, because this codebase has already
+    // learned that lesson once: `asset` and `assets` both worked, every example used the
+    // singular, and the plural went unused for weeks while the model refused phrases it had
+    // the schema to express.
+    std::vector<EditorIntentQuery> asks;
 
     // Which source produced this ("grammar" or "llm"). Shown in the preview and
     // logged, so a surprising result can be traced to the right half of the system.

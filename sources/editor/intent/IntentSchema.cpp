@@ -8,6 +8,7 @@
 #include "editor/assets/AssetRegistry.h"
 #include "editor/scene/EditorZone.h"
 #include "editor/intent/EditorActionRegistry.h"
+#include "editor/intent/EditorSceneQuery.h"
 #include "editor/scene/EditorSceneDocument.h"
 
 namespace
@@ -105,6 +106,12 @@ namespace
             }
         }
     }
+
+    // Defined below, next to the rest of the reader. Declared here because ParseAnswer
+    // sits between the two and both of its branches need it.
+    void ReadTargetAndParams(const nlohmann::json& parsed,
+        EditorIntentTarget& target,
+        nlohmann::json& params);
 }
 
 namespace intentschema
@@ -180,7 +187,7 @@ namespace intentschema
 
         std::string g;
         g += "# Generated from the action registry and this level. Do not hand-edit.\n";
-        g += "root ::= command | needsapi | unclear\n\n";
+        g += "root ::= command | query | needsapi | unclear\n\n";
 
         // --- command ------------------------------------------------------------
         g += "command ::= \"{\\\"kind\\\":\\\"command\\\",\\\"action\\\":\" action "
@@ -246,6 +253,32 @@ namespace intentschema
         g += "vec3 ::= \"[\" number \",\" number \",\" number \"]\"\n";
         g += "pstring ::= string\n\n";
 
+        // --- query ----------------------------------------------------------------
+        // A question to the editor rather than an instruction. It reuses `target` and
+        // `params` verbatim, which is not laziness: "the bounds of the palms in zone Beach"
+        // is the same narrowing as "delete the palms in zone Beach", and giving the query
+        // branch its own way to say WHICH would be a second dialect of the same sentence.
+        //
+        // The names are a CLOSED set for the same reason action ids are: a question the
+        // editor cannot answer must be unaskable, not answered with the nearest thing. And
+        // the escape hatch is the same one -- needs_api covers what no query can reach.
+        {
+            std::vector<std::string> queryIds;
+            for (const EditorQueryDesc& query : editorquery::All())
+            {
+                queryIds.push_back(std::string(query.id));
+            }
+            // A LIST, always, even for one question. A round trip is what costs seconds;
+            // a second question inside it costs microseconds. Wanting the waterline AND
+            // the island's extent is one thought, and charging two turns for it was the
+            // thing that made the three-round cap bite.
+            g += "query ::= \"{\\\"kind\\\":\\\"query\\\",\\\"ask\\\":[\" ask "
+                 "( \",\" ask )* \"]}\"\n";
+            g += "ask ::= \"{\\\"query\\\":\" queryname ( \",\\\"target\\\":\" target )? "
+                 "( \",\\\"params\\\":\" params )? \"}\"\n";
+            g += "queryname ::= " + Alternation(queryIds) + "\n\n";
+        }
+
         // --- the two branches that execute nothing --------------------------------
         // `needs_api` is the only place free text is allowed, and by definition it runs
         // nothing: its maximum effect is a log line and a sentence on screen (E3.1).
@@ -297,6 +330,37 @@ namespace intentschema
             }
             return true;
         }
+        if (kind == "query")
+        {
+            outIntent.kind = EditorIntentKind::Query;
+            const auto askIt = parsed.find("ask");
+            if (askIt == parsed.end() || !askIt->is_array() || askIt->empty())
+            {
+                outError = "query answer has no 'ask' list";
+                return false;
+            }
+            for (const nlohmann::json& entry : *askIt)
+            {
+                EditorIntentQuery ask;
+                if (!entry.is_object() || !ReadStringMember(entry, "query", ask.query))
+                {
+                    outError = "an entry in 'ask' has no query name";
+                    return false;
+                }
+                // Same assertion as the one the command branch makes, for the same reason:
+                // the grammar lists the names literally, so an unknown one means the grammar
+                // and the query list have drifted, and everything downstream would then rest
+                // on a false premise.
+                if (!editorquery::Find(ask.query))
+                {
+                    outError = "model named a query that does not exist: '" + ask.query + "'";
+                    return false;
+                }
+                ReadTargetAndParams(entry, ask.target, ask.params);
+                outIntent.asks.push_back(std::move(ask));
+            }
+            return true;
+        }
         if (kind != "command")
         {
             outError = "unknown answer kind '" + kind + "'";
@@ -320,31 +384,45 @@ namespace intentschema
         }
         outIntent.target.kind = action->target;
 
+        ReadTargetAndParams(parsed, outIntent.target, outIntent.params);
+        return true;
+    }
+}
+
+namespace
+{
+    // The `target` and `params` blocks, which a command and a query spell identically.
+    // Kept in one function because they are one wire format: the moment the query branch
+    // reads `where` its own way, "in zone Beach" starts meaning two things.
+    void ReadTargetAndParams(const nlohmann::json& parsed,
+        EditorIntentTarget& target,
+        nlohmann::json& params)
+    {
         const auto targetIt = parsed.find("target");
         if (targetIt != parsed.end() && targetIt->is_object())
         {
-            ReadNeedleList(*targetIt, "filter", outIntent.target.filter);
-            ReadNeedleList(*targetIt, "exclude", outIntent.target.exclude);
+            ReadNeedleList(*targetIt, "filter", target.filter);
+            ReadNeedleList(*targetIt, "exclude", target.exclude);
 
             std::string scope;
             if (ReadStringMember(*targetIt, "scope", scope))
             {
-                outIntent.target.scope = scope == "selected"
+                target.scope = scope == "selected"
                     ? EditorIntentScope::Selected : EditorIntentScope::All;
             }
-            ReadStringMember(*targetIt, "asset", outIntent.target.asset);
-            ReadNeedleList(*targetIt, "assets", outIntent.target.assets);
+            ReadStringMember(*targetIt, "asset", target.asset);
+            ReadNeedleList(*targetIt, "assets", target.assets);
             // One spelling downstream: a single `asset` is just a list of one, so nothing
             // that consumes this has to ask which of the two fields was used.
-            if (outIntent.target.assets.empty() && !outIntent.target.asset.empty())
+            if (target.assets.empty() && !target.asset.empty())
             {
-                outIntent.target.assets.push_back(outIntent.target.asset);
+                target.assets.push_back(target.asset);
             }
-            else if (!outIntent.target.assets.empty() && outIntent.target.asset.empty())
+            else if (!target.assets.empty() && target.asset.empty())
             {
-                outIntent.target.asset = outIntent.target.assets.front();
+                target.asset = target.assets.front();
             }
-            ReadStringMember(*targetIt, "setting", outIntent.target.setting);
+            ReadStringMember(*targetIt, "setting", target.setting);
 
             const auto whereIt = targetIt->find("where");
             if (whereIt != targetIt->end() && whereIt->is_object())
@@ -352,30 +430,30 @@ namespace intentschema
                 std::string anchor;
                 if (ReadStringMember(*whereIt, "anchor", anchor))
                 {
-                    outIntent.target.where.anchor = anchor == "selection"
+                    target.where.anchor = anchor == "selection"
                         ? EditorSpatialAnchor::Selection : EditorSpatialAnchor::Camera;
                 }
-                ReadStringMember(*whereIt, "zone", outIntent.target.where.zone);
+                ReadStringMember(*whereIt, "zone", target.where.zone);
                 const auto radiusIt = whereIt->find("radius");
                 if (radiusIt != whereIt->end() && radiusIt->is_number())
                 {
-                    outIntent.target.where.radius = radiusIt->get<float>();
-                    if (outIntent.target.where.anchor == EditorSpatialAnchor::None)
+                    target.where.radius = radiusIt->get<float>();
+                    if (target.where.anchor == EditorSpatialAnchor::None)
                     {
-                        outIntent.target.where.anchor = EditorSpatialAnchor::Camera;
+                        target.where.anchor = EditorSpatialAnchor::Camera;
                     }
                 }
                 const auto minYIt = whereIt->find("minY");
                 if (minYIt != whereIt->end() && minYIt->is_number())
                 {
-                    outIntent.target.where.hasMinY = true;
-                    outIntent.target.where.minY = minYIt->get<float>();
+                    target.where.hasMinY = true;
+                    target.where.minY = minYIt->get<float>();
                 }
                 const auto maxYIt = whereIt->find("maxY");
                 if (maxYIt != whereIt->end() && maxYIt->is_number())
                 {
-                    outIntent.target.where.hasMaxY = true;
-                    outIntent.target.where.maxY = maxYIt->get<float>();
+                    target.where.hasMaxY = true;
+                    target.where.maxY = maxYIt->get<float>();
                 }
             }
         }
@@ -383,9 +461,8 @@ namespace intentschema
         const auto paramsIt = parsed.find("params");
         if (paramsIt != parsed.end() && paramsIt->is_object())
         {
-            outIntent.params = *paramsIt;
+            params = *paramsIt;
         }
-        return true;
     }
 }
 

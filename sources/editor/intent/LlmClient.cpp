@@ -223,9 +223,9 @@ namespace llmclient
         int idleSeconds,
         std::string& outError)
     {
-        // OUR OWN EXE, in a mode that builds no window and no device -- a loop and a socket.
-        // A separate helper binary would be another thing to ship, to sign and to forget to
-        // rebuild; this one is already beside the server it watches.
+        // This executable's own path, used only to locate model_reaper.exe beside it -- see
+        // the note below for why the watchdog is a binary of its own and not a mode of this
+        // one, which is what it was first.
         wchar_t modulePath[MAX_PATH] = {};
         if (::GetModuleFileNameW(nullptr, modulePath, MAX_PATH) == 0)
         {

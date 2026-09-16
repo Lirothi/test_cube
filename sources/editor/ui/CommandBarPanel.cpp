@@ -9,6 +9,7 @@
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/intent/EditorIntentSource.h"
+#include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/GrammarIntentSource.h"
 #include "editor/ui/ImGuiTextInput.h"
 #include "imgui.h"
@@ -108,6 +109,7 @@ void CommandBarPanel::SetModelSettings(const LlmIntentSettings& settings)
 void CommandBarPanel::ClearThread()
 {
     history_.clear();
+    queryRounds_ = 0;
 }
 
 void CommandBarPanel::SetPhraseHistory(std::vector<std::string> history)
@@ -208,6 +210,8 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
     buryDepthPercent_ = buryDepthPercent;
 
     phrase_ = input_;
+    sendPhrase_ = phrase_;
+    queryRounds_ = 0;
     if (phrase_.find_first_not_of(" \t\r\n") == std::string::npos)
     {
         waiting_ = false;
@@ -244,7 +248,7 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
         whyNot_ = "No intent source is available.";
         return;
     }
-    sources_[activeSource_]->Begin(phrase_, world, history_);
+    sources_[activeSource_]->Begin(sendPhrase_, world, history_);
 }
 
 void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
@@ -302,7 +306,7 @@ void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
         }
         if (activeSource_ < sources_.size())
         {
-            sources_[activeSource_]->Begin(phrase_, world, history_);
+            sources_[activeSource_]->Begin(sendPhrase_, world, history_);
             return;   // give it a frame; the model answers on a later poll
         }
     }
@@ -322,6 +326,50 @@ void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
 
 void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
 {
+    // A QUESTION TO THE EDITOR, ANSWERED HERE AND HANDED STRAIGHT BACK. The designer is not
+    // asked anything: they typed a sentence and are waiting for it to happen, and stopping
+    // to say "the island is 355 m wide, carry on?" would be an interruption with no decision
+    // in it. So the editor answers, the answer becomes the next user turn, and the model
+    // gets another go at the ORIGINAL phrase -- which is why `phrase_` is left alone and
+    // only `sendPhrase_` moves.
+    if (intent_.kind == EditorIntentKind::Query && intent_.sourceLabel == "llm")
+    {
+        const std::string answer = editorquery::Answer(actionCtx, intent_);
+        std::string asked;
+        for (const EditorIntentQuery& ask : intent_.asks)
+        {
+            asked += (asked.empty() ? "" : ", ") + ask.query;
+        }
+        LOG_INFO(logging::LogCategory::Editor,
+            "command bar: query [{}] -> {}", asked, answer);
+
+        if (queryRounds_ >= kMaxQueryRounds)
+        {
+            // Out of rounds. The answer still goes in the log, because a model that spent
+            // three turns asking was probably asking something worth reading.
+            ClearThread();
+            RecordOutcome("asked " + std::to_string(kMaxQueryRounds) +
+                " times without deciding; last answer was: " + answer,
+                Exchange::Kind::Refused);
+            return;
+        }
+        ++queryRounds_;
+
+        history_.push_back({ sendPhrase_, model_->LastRawAnswer() });
+        sendPhrase_ = "EDITOR ANSWERS: " + answer +
+            "\n\nNow answer the original request: \"" + phrase_ + "\"";
+
+        RecordOutcome("asked the editor -- " + asked + ": " + answer, Exchange::Kind::Asked);
+        transcript_.push_back({ phrase_, "thinking...", Exchange::Kind::Preview });
+        transcriptScrollToBottom_ = true;
+
+        const EditorIntentWorld world{ actionCtx.editor.document, actionCtx.assets };
+        ClearResult();
+        waiting_ = true;
+        sources_[activeSource_]->Begin(sendPhrase_, world, history_);
+        return;
+    }
+
     if (intent_.kind == EditorIntentKind::Unclear && intent_.sourceLabel == "llm")
     {
         // Remember the exchange so the next thing typed is read as an ANSWER. Without
@@ -656,6 +704,9 @@ void CommandBarPanel::Draw(EditorContext& ctx,
                 exchange.kind == Exchange::Kind::Ran ? ImVec4(0.65f, 0.95f, 0.65f, 1.0f) :
                 exchange.kind == Exchange::Kind::Refused ? ImVec4(1.0f, 0.78f, 0.24f, 1.0f) :
                 exchange.kind == Exchange::Kind::Failed ? ImVec4(1.0f, 0.55f, 0.55f, 1.0f) :
+                // A query is the model looking something up, not a result. Blue keeps it
+                // legible as a step along the way rather than an answer to the phrase.
+                exchange.kind == Exchange::Kind::Asked ? ImVec4(0.58f, 0.78f, 1.0f, 1.0f) :
                 ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
             ImGui::PushStyleColor(ImGuiCol_Text, colour);
             ImGui::TextWrapped("%s", exchange.verdict.c_str());

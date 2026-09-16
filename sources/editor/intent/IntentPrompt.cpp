@@ -7,6 +7,7 @@
 
 #include "editor/assets/AssetRegistry.h"
 #include "editor/intent/EditorActionRegistry.h"
+#include "editor/intent/EditorSceneQuery.h"
 #include "editor/scene/EditorSceneDocument.h"
 
 namespace
@@ -52,8 +53,9 @@ namespace intentprompt
         p += "The designer usually writes Russian; the JSON you emit is always English.\n";
         p += "Answer with a single JSON object and nothing else.\n\n";
 
-        p += "THREE ANSWERS ARE ALLOWED, and choosing between them is your actual job:\n";
+        p += "FOUR ANSWERS ARE ALLOWED, and choosing between them is your actual job:\n";
         p += "  {\"kind\":\"command\", ...}    -- the editor can do this\n";
+        p += "  {\"kind\":\"query\", ...}      -- you need to SEE something first; ask, then act\n";
         p += "  {\"kind\":\"needs_api\", ...}  -- the editor has NO action for this\n";
         p += "  {\"kind\":\"unclear\", ...}    -- you need one more detail to be safe\n\n";
 
@@ -113,6 +115,33 @@ namespace intentprompt
             }
         }
 
+        // WHAT THIS PROMPT CANNOT TELL YOU is the point of the query branch. Everything
+        // above is built when the level loads and must stay byte-identical afterwards --
+        // the server's prefix cache is what makes a request 3 s instead of 20 -- so
+        // nothing that changes while somebody edits can live up here. Asking is the way
+        // to see something current, and the cost is one whole extra answer.
+        p += "\nQUERIES ask the EDITOR a question and change nothing. The editor answers with\n";
+        p += "JSON, and you get another turn to act on what it said. Ask when a number you\n";
+        p += "need is not above -- where something is, how big it is, what is selected right\n";
+        p += "now. Do NOT ask when the answer is already in this prompt.\n";
+        // The round trip is the expense, not the question, and a model that does not know
+        // that asks one thing per turn and spends a minute on what one turn could answer.
+        p += "ASK FOR EVERYTHING YOU NEED IN ONE GO -- `ask` is a list, and three questions\n";
+        p += "in one turn cost what one costs. You get at most three turns of asking before\n";
+        p += "the editor stops waiting, so a turn spent on a single question is wasted.\n";
+        for (const EditorQueryDesc& query : editorquery::All())
+        {
+            p += "- " + std::string(query.id) + ": " + std::string(query.description) + "\n";
+            if (query.usesTarget)
+            {
+                p += "    target: the same filter/scope/where a command uses\n";
+            }
+            if (!query.params.empty())
+            {
+                p += "    params." + std::string(query.params) + "\n";
+            }
+        }
+
         p += "\nTARGET.FILTER names what is ALREADY in the level. Use the exact strings below;\n";
         p += "a Russian word like \"palms\" must become the asset string that means it.\n";
         AppendList(p, vocabulary.needles, 80);
@@ -128,7 +157,19 @@ namespace intentprompt
             AppendList(p, vocabulary.materials, 80);
         }
 
-        if (!vocabulary.zones.empty())
+        // ALWAYS SAID, even when the answer is "none", and that is the whole point. The
+        // section used to be printed only when the level had zones, so a level with none
+        // said nothing about them -- and silence reads as "not mentioned", not as "there
+        // are zero". Asked to plant on the south shore of a zoneless atoll, the model
+        // passed zone:"South Shore": not a guess about the world, a guess about what the
+        // editor had, filling in a section that was missing rather than empty.
+        if (vocabulary.zones.empty())
+        {
+            p += "\nZONES: this level has NONE. The `zone` parameter therefore cannot be\n";
+            p += "used at all, and target.where.zone matches nothing. To say WHERE without a\n";
+            p += "zone, ask for bounds and pass the point as spawn's `at`.\n";
+        }
+        else
         {
             p += "\nZONES are named regions someone drew on this level. Two ways to use one,\n";
             p += "and which one depends on whether objects are being MADE or FOUND:\n";
@@ -242,6 +283,34 @@ namespace intentprompt
         p += "  \"postav' gtao intensivnost 0.8\" (set the GTAO intensity to 0.8)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"setEnvironment\","
              "\"target\":{\"setting\":\"gtao.intensity\"},\"params\":{\"value\":0.8}}\n";
+        // The query example earns its place the way the multi-asset one did: a branch that
+        // is described but never demonstrated goes unused. Note that it asks about
+        // something the prompt genuinely cannot say -- the island's extent -- and note the
+        // SECOND line, which is what the model does with the answer when it arrives.
+        p += "  \"posadi palmy po krayu ostrova, tolko nad vodoy\" (plant palms around the "
+             "island's edge, only above water) -- ask for BOTH facts in one turn\n";
+        p += "  -> {\"kind\":\"query\",\"ask\":["
+             "{\"query\":\"bounds\",\"target\":{\"filter\":"
+             "[\"models/atoll_island.mesh.json\"],\"scope\":\"all\"}},"
+             "{\"query\":\"waterLevel\"}]}\n";
+        p += "     ...the editor answers {\"bounds\":{\"centre\":[-2,-4.7,-4],"
+             "\"size\":[361,15,388],...},\"waterLevel\":{\"y\":0}}, and THEN you act on the\n";
+        p += "     NUMBERS THAT CAME BACK -- not on the ones in this example:\n";
+        p += "  -> {\"kind\":\"command\",\"action\":\"spawn\","
+             "\"target\":{\"asset\":\"models/coconut_palm.mesh.json\"},"
+             "\"params\":{\"count\":10,\"at\":[-2,0,-4],\"radius\":180,\"minHeight\":0.3}}\n";
+
+        // THIS ENGINE HAS NO COMPASS, and the first version of this example invented one --
+        // "the north edge is the largest z" -- which is a convention that exists nowhere in
+        // the code. The model then used it, correctly, for a sentence that said SOUTH. A
+        // fabricated fact in the prompt is worse than a missing one: it is obeyed.
+        p += "  THERE IS NO NORTH. This engine has no compass and no world orientation, so\n";
+        p += "  \"the north shore\" names nothing you can compute. If a zone is called that,\n";
+        p += "  use the zone. Otherwise ask which side is meant:\n";
+        p += "  \"postav' kamen' na severnom beregu\" (put a rock on the north shore), no "
+             "such zone\n";
+        p += "  -> {\"kind\":\"unclear\",\"question\":\"There is no compass in this level -- "
+             "which side do you mean, +X, -X, +Z or -Z?\"}\n";
         p += "  \"pokras' palmy v krasnyy\" (paint the palms red)\n";
         p += "  -> {\"kind\":\"needs_api\",\"requested\":\"paint objects red\","
              "\"proposed\":\"setBaseColor(objects, rgba)\","

@@ -17,6 +17,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -36,6 +39,7 @@
 #include "editor/intent/GrammarIntentSource.h"
 #include "editor/intent/IntentNotes.h"
 #include "editor/intent/IntentPrompt.h"
+#include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/IntentSchema.h"
 #include "editor/intent/LlmIntentSource.h"
 #include "rendering/core/Renderer.h"
@@ -100,6 +104,70 @@ EditorSceneDocument MakePalmDocument()
 }
 
 // ------------------------------------------------------------------ the registry
+
+// The query list, the grammar and the reader are three statements of one contract, and the
+// only reason the action registry survives is that a test says so out loud. A query the
+// grammar permits but the dispatcher cannot run would be answered with a sentence saying
+// it is not implemented -- valid, useless, and invisible until somebody typed the phrase
+// that reached it.
+void TestQueryListIntegrity()
+{
+    Check(!editorquery::All().empty(), "there is at least one query");
+    for (const EditorQueryDesc& query : editorquery::All())
+    {
+        Check(!query.id.empty(), "query has an id");
+        Check(query.description.size() > 20, "query carries a real description for the model");
+        Check(editorquery::Find(std::string(query.id)) == &query, "Find returns the same entry");
+    }
+    Check(editorquery::Find("no_such_query") == nullptr, "unknown query id is not resolved");
+
+    // Every name the grammar offers must be one the dispatcher answers. Reading it out of
+    // the generated grammar rather than the list is the point: this catches the two drifting
+    // apart, which comparing the list with itself could not.
+    EditorSceneDocument document = MakePalmDocument();
+    AssetRegistry assets;
+    assets.Refresh();
+    const intentschema::Vocabulary vocabulary = intentschema::BuildVocabulary(document, assets);
+    const std::string gbnf = intentschema::BuildGbnf(vocabulary);
+    Check(gbnf.find("root ::= command | query |") != std::string::npos,
+        "the grammar offers the query branch at the root");
+    const std::size_t line = gbnf.find("queryname ::=");
+    Check(line != std::string::npos, "the grammar has a queryname rule");
+    const std::string rule = gbnf.substr(line, gbnf.find('\n', line) - line);
+    for (const EditorQueryDesc& query : editorquery::All())
+    {
+        Check(rule.find("\\\"" + std::string(query.id) + "\\\"") != std::string::npos,
+            "grammar lists query '" + std::string(query.id) + "'");
+    }
+
+    Check(gbnf.find("ask ::=") != std::string::npos,
+        "the grammar spells a query as a LIST of asks");
+
+    // And the reader accepts what the grammar can produce, including the target it shares
+    // with a command -- "the bounds of the palms" is the same narrowing as "delete the palms".
+    EditorIntent intent;
+    std::string error;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"query","ask":[)"
+        R"({"query":"bounds","target":{"filter":["coconut_palm"],"scope":"all"}},)"
+        R"({"query":"waterLevel"}]})",
+        intent, error), "a batched query answer parses: " + error);
+    Check(intent.kind == EditorIntentKind::Query, "kind is Query");
+    Check(intent.asks.size() == 2, "both questions survive the read");
+    Check(intent.asks[0].query == "bounds" && intent.asks[1].query == "waterLevel",
+        "query names survive the read, in order");
+    Check(intent.asks[0].target.filter.size() == 1 &&
+        intent.asks[0].target.filter[0] == "coconut_palm",
+        "a query carries the same target a command would");
+    // Each ask owns its own target. Sharing one would make "the bounds of the palms and of
+    // the rocks" quietly mean the bounds of whichever was read last.
+    Check(intent.asks[1].target.filter.empty(), "a second ask does not inherit the first's target");
+
+    Check(!intentschema::ParseAnswer(R"({"kind":"query","ask":[{"query":"invent_something"}]})",
+        intent, error), "a query name that does not exist is refused, not answered");
+    Check(!intentschema::ParseAnswer(R"({"kind":"query","ask":[]})", intent, error),
+        "an empty ask list is refused rather than answered with nothing");
+}
 
 void TestRegistryIntegrity()
 {
@@ -1423,6 +1491,139 @@ int StreamProbe(const char* endpoint, const char* phrase)
     }
 }
 
+// `intent_regression --talk <prompt-file> <answer-file> [max-tokens]` holds ONE turn of a
+// conversation with the model editor_state.json is configured for, and times it.
+//
+// THE PROMPT FILE IS THE WHOLE PROMPT, ChatML markers and all, in UTF-8. The caller owns the
+// conversation and appends each answer to it by hand, which is deliberate twice over: a
+// Windows command line cannot carry Cyrillic through reliably, and a multi-turn discussion
+// needs its history byte-identical under the caller's control -- that is what the server's
+// prefix cache keys on, and it is the difference between a 20 s turn and a 3 s one.
+//
+// Unlike --stream, this prints what the model actually SAID. --stream answers "do tokens
+// arrive in pieces"; this one answers "what does this model know", so the text is the point.
+int TalkProbe(const char* promptFile, const char* answerFile, int maxTokens)
+{
+    std::ifstream in(promptFile, std::ios::binary);
+    if (!in)
+    {
+        std::printf("cannot open prompt file: %s\n", promptFile);
+        return 2;
+    }
+    const std::string prompt((std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+    in.close();
+
+    // The editor's own settings, so this talks to the same weights on the same endpoint with
+    // the same gpuLayers. Reading them beats retyping them: a probe that quietly differs from
+    // the editor measures a configuration nobody runs.
+    LlmIntentSettings settings;
+    {
+        std::ifstream state("editor_state.json", std::ios::binary);
+        if (state)
+        {
+            Json json = Json::parse(state, nullptr, false);
+            if (!json.is_discarded())
+            {
+                const auto it = json.find("levelEditor");
+                if (it != json.end() && it->is_object())
+                {
+                    settings = LlmIntentSource::LoadSettings(*it);
+                }
+            }
+        }
+    }
+    settings.autoStart = true;
+    // Said now rather than discovered by waiting. editor_state.json is read by a RELATIVE
+    // path, so a probe started from another directory gets defaults -- no model path, and
+    // then three minutes of polling for a server nobody asked to start.
+    if (settings.modelPath.empty() || settings.serverExe.empty())
+    {
+        std::puts("no model configured -- run this from the repository root, where "
+            "editor_state.json is");
+        return 2;
+    }
+
+    LlmIntentSource model(std::move(settings));
+    const auto start = std::chrono::steady_clock::now();
+    const auto elapsed = [&start]()
+    {
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - start).count();
+    };
+
+    // EnsureServerReady polls rather than waits -- the editor has frames to draw while a
+    // 38 GB model loads, and this tool inherits that. So the waiting happens here.
+    std::string status;
+    while (!model.EnsureServerReady(status))
+    {
+        if (elapsed() > 180.0)
+        {
+            std::printf("server never came up after %.0fs: %s\n", elapsed(), status.c_str());
+            return 1;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    const double serverSec = elapsed();
+    std::printf("server ready at : %.1fs\n", serverSec);
+    std::printf("prompt chars    : %zu (~%zu tokens at 3 chars/token)\n",
+        prompt.size(), prompt.size() / 3);
+
+    model.BeginFreeform(prompt, 0.7f, maxTokens);
+
+    double firstPieceSec = -1.0;
+    std::size_t lastSize = 0;
+    std::string text;
+    std::string error;
+    bool truncated = false;
+    for (;;)
+    {
+        const IntentParseState state = model.PollFreeform(text, error, truncated);
+        const std::size_t size = model.FreeformPartial().size();
+        if (size != lastSize)
+        {
+            if (firstPieceSec < 0.0)
+            {
+                firstPieceSec = elapsed();
+            }
+            lastSize = size;
+        }
+        if (state == IntentParseState::Ready || state == IntentParseState::Failed)
+        {
+            const double total = elapsed();
+            if (state == IntentParseState::Failed)
+            {
+                std::printf("FAILED after %.1fs: %s\n", total, error.c_str());
+                return 1;
+            }
+            std::ofstream out(answerFile, std::ios::binary);
+            out.write(text.data(), static_cast<std::streamsize>(text.size()));
+            out.close();
+
+            // The two halves are worth separating. Time to the first token is PREFILL -- it
+            // scales with the prompt and is nearly free on a cache hit; everything after is
+            // generation, which scales with the answer and never gets cheaper.
+            std::printf("first token at  : %.1fs (prefill %.1fs)\n",
+                firstPieceSec, firstPieceSec - serverSec);
+            std::printf("answer done at  : %.1fs\n", total);
+            std::printf("answer chars    : %zu%s\n", text.size(),
+                truncated ? "   TRUNCATED -- raise max-tokens" : "");
+            const double genSec = total - firstPieceSec;
+            if (genSec > 0.0)
+            {
+                // Characters, because the server reports no token count on this path. Three
+                // chars per token is what the editor itself budgets mixed Russian and
+                // English with, so the derived figure is comparable with its numbers.
+                std::printf("generation      : %.1fs, %.0f chars/s (~%.1f tok/s)\n",
+                    genSec, text.size() / genSec, text.size() / genSec / 3.0);
+            }
+            std::printf("written to      : %s\n", answerFile);
+            return 0;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+}
+
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -1434,10 +1635,15 @@ int main(int argc, char** argv)
     {
         return StreamProbe(argv[2], argv[3]);
     }
+    if ((argc == 4 || argc == 5) && std::string(argv[1]) == "--talk")
+    {
+        return TalkProbe(argv[2], argv[3], argc == 5 ? std::atoi(argv[4]) : 8192);
+    }
     std::puts("Intent regression: editor command layer");
     try
     {
         TestRegistryIntegrity();
+        TestQueryListIntegrity();
         TestParamsCannotBeInvented();
         std::puts("Intent regression: registry and parameter typing OK");
 

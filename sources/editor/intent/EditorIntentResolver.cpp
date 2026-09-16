@@ -229,6 +229,100 @@ namespace
     }
 }
 
+void ResolveTargetObjects(const EditorActionContext& actionCtx,
+    EditorIntentTarget& target,
+    std::vector<EditorObjectId>& outTargets,
+    std::vector<EditorIntentPreview::Group>& outGroups)
+{
+    const EditorContext& ctx = actionCtx.editor;
+
+    // An unfiltered request is the one that may take environment entities as they are:
+    // they carry no searchable asset and no transform, so a filter can never reach them.
+    const bool saysNothingAboutWhich =
+        target.filter.empty() && target.exclude.empty() && !target.where.Any();
+
+    // "IN THE SELECTED ZONE" IS A PLACE, NOT A SET. Selecting a zone and saying "randomise
+    // the palms in the selected zone" produced "Nothing in the selection matches": scope
+    // `selected` means "among the selected objects", the selection held one zone, and a
+    // zone is not a palm. But nobody selecting a region means the region itself -- they
+    // mean what is inside it.
+    //
+    // So when the selection is ZONES ONLY, the scope becomes the whole level narrowed by
+    // those zones. When it holds anything else the old reading stands, because then
+    // "selected" really is a set of things.
+    if (target.scope == EditorIntentScope::Selected && target.where.zone.empty() &&
+        !ctx.selection.Empty())
+    {
+        const EditorObject* onlyZone = nullptr;
+        bool zonesOnly = true;
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            const EditorObject* object = ctx.document.Find(id);
+            if (!object || object->type != editorzone::kTypeName)
+            {
+                zonesOnly = false;
+                break;
+            }
+            // More than one selected zone has no single answer -- "in the selected zone" is
+            // singular -- so the old reading is left alone rather than picking one.
+            if (onlyZone)
+            {
+                zonesOnly = false;
+                break;
+            }
+            onlyZone = object;
+        }
+        if (zonesOnly && onlyZone)
+        {
+            target.where.zone = onlyZone->name;
+            target.scope = EditorIntentScope::All;
+        }
+    }
+
+    const auto consider = [&](const EditorObject& object)
+    {
+        if (!target.filter.empty() && !MatchesAnyNeedle(object, target.filter))
+        {
+            return;
+        }
+        if (MatchesAnyNeedle(object, target.exclude))
+        {
+            return;
+        }
+        if (!PassesSpatialFilter(ctx, target.where, object.transform.position))
+        {
+            return;
+        }
+        outTargets.push_back(object.id);
+        AppendGroup(outGroups, GroupLabel(object));
+    };
+
+    if (target.scope == EditorIntentScope::Selected)
+    {
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            const EditorObject* object = ctx.document.Find(id);
+            if (!object)
+            {
+                if (saysNothingAboutWhich)
+                {
+                    outTargets.push_back(id);
+                    AppendGroup(outGroups, "environment");
+                }
+                continue;
+            }
+            consider(*object);
+        }
+    }
+    else
+    {
+        for (const EditorObject& object : ctx.document.Objects())
+        {
+            consider(object);
+        }
+    }
+}
+
 EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
     const EditorIntent& intent)
 {
@@ -379,89 +473,7 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
     }
 
     EditorIntentTarget& target = preview.resolved.target;
-
-    // "IN THE SELECTED ZONE" IS A PLACE, NOT A SET. Selecting a zone and saying "randomise
-    // the palms in the selected zone" produced "Nothing in the selection matches": scope
-    // `selected` means "among the selected objects", the selection held one zone, and a
-    // zone is not a palm. But nobody selecting a region means the region itself -- they
-    // mean what is inside it.
-    //
-    // So when the selection is ZONES ONLY, the scope becomes the whole level narrowed by
-    // those zones. When it holds anything else the old reading stands, because then
-    // "selected" really is a set of things.
-    if (target.scope == EditorIntentScope::Selected && target.where.zone.empty() &&
-        !ctx.selection.Empty())
-    {
-        const EditorObject* onlyZone = nullptr;
-        bool zonesOnly = true;
-        for (const EditorObjectId id : ctx.selection.Ordered())
-        {
-            const EditorObject* object = ctx.document.Find(id);
-            if (!object || object->type != editorzone::kTypeName)
-            {
-                zonesOnly = false;
-                break;
-            }
-            // More than one selected zone has no single answer -- "in the selected zone" is
-            // singular -- so the old reading is left alone rather than picking one.
-            if (onlyZone)
-            {
-                zonesOnly = false;
-                break;
-            }
-            onlyZone = object;
-        }
-        if (zonesOnly && onlyZone)
-        {
-            target.where.zone = onlyZone->name;
-            target.scope = EditorIntentScope::All;
-        }
-    }
-
-    const auto consider = [&](const EditorObject& object)
-    {
-        if (!target.filter.empty() && !MatchesAnyNeedle(object, target.filter))
-        {
-            return;
-        }
-        if (MatchesAnyNeedle(object, target.exclude))
-        {
-            return;
-        }
-        if (!PassesSpatialFilter(ctx, target.where, object.transform.position))
-        {
-            return;
-        }
-        preview.targets.push_back(object.id);
-        AppendGroup(preview.groups, GroupLabel(object));
-    };
-
-    if (target.scope == EditorIntentScope::Selected)
-    {
-        for (const EditorObjectId id : ctx.selection.Ordered())
-        {
-            const EditorObject* object = ctx.document.Find(id);
-            if (!object)
-            {
-                // Environment entities are selectable too; they carry no searchable asset
-                // and no transform, so only an unfiltered request takes them as they are.
-                if (saysNothingAboutWhich)
-                {
-                    preview.targets.push_back(id);
-                    AppendGroup(preview.groups, "environment");
-                }
-                continue;
-            }
-            consider(*object);
-        }
-    }
-    else
-    {
-        for (const EditorObject& object : ctx.document.Objects())
-        {
-            consider(object);
-        }
-    }
+    ResolveTargetObjects(actionCtx, target, preview.targets, preview.groups);
 
     if (preview.targets.empty())
     {

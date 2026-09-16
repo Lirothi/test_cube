@@ -14,6 +14,7 @@
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorFraming.h"
+#include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/EnvironmentSettings.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/assets/AssetRegistry.h"
@@ -518,32 +519,15 @@ namespace
     // under this point", and both have to ignore the objects they are about to move or
     // create, or they measure against themselves.
 
-    // How far above the anchor a ground probe starts. Generous enough for a scene whose
-    // terrain rises well above the point the camera is looking at, cheap either way --
-    // a miss costs one broad-phase query.
-    constexpr float kGroundProbeUp = 500.0f;
+    // The ground probe and its start height now live in editor/intent/EditorSceneQuery,
+    // because the scatter is no longer the only caller: the model can ask how high the
+    // ground is at a point, and the two answers have to be the same answer. They were a
+    // copy here for exactly as long as there was one caller.
+    using editorquery::kGroundProbeUp;
+    using editorquery::ProbeGroundHeight;
+
     // Horizontal step for the two extra probes that estimate the slope.
     constexpr float kSlopeProbeStep = 0.75f;
-
-    // Height of the surface under (x, z), or false when nothing is below.
-    bool ProbeGroundHeight(const Scene& scene,
-        float x,
-        float z,
-        float startY,
-        const std::vector<Scene::SceneObjectId>& ignored,
-        float& outHeight)
-    {
-        const Math::float3 origin(x, startY, z);
-        const Math::float3 down(0.0f, -1.0f, 0.0f);
-        float distance = 0.0f;
-        if (scene.RaycastEditorObject(origin, down, &distance, 0, &ignored) == 0 ||
-            !std::isfinite(distance))
-        {
-            return false;
-        }
-        outHeight = startY - distance;
-        return true;
-    }
 
     // ---------------------------------------------------------------------- bury
 
@@ -1445,8 +1429,14 @@ namespace
         }
 
         const float scatterRadius = hasZone ? editorzone::BoundingRadius(zone) : radius;
+        // Zone first, then an explicit point, then wherever the camera is looking. The
+        // order is the order of how specific each one is, and a zone is the most specific
+        // thing anyone can say -- it is a shape somebody drew, not a guess at a radius.
+        const bool hasPoint = !hasZone && intent.params.contains("at");
         const Math::float3 anchor = hasZone
-            ? zone.centre : ResolveScatterAnchor(ctx, intent.target.where, radius);
+            ? zone.centre
+            : (hasPoint ? Vec3Or(intent.params, "at", Math::float3(0.0f, 0.0f, 0.0f))
+                        : ResolveScatterAnchor(ctx, intent.target.where, radius));
 
         // Anything already in the level within reach is an obstacle, so a scatter does not
         // grow a palm out of a rock. Terrain is excluded by the fact that it is what we
@@ -1740,7 +1730,10 @@ EditorActionRegistry::EditorActionRegistry()
         "to ask for, because that is what this already does.\n"
         "When the level has ZONES and the phrase says where -- \"on the beach\", \"in the "
         "north zone\" -- pass that zone's name as the `zone` parameter and leave radius "
-        "alone: the zone decides the shape and the area, and nothing lands outside it.",
+        "alone: the zone decides the shape and the area, and nothing lands outside it. "
+        "When the phrase says where but NO zone covers it -- \"by that rock\", \"around the "
+        "island\" -- ask for the bounds and pass the point as `at`. Do not invent a zone "
+        "name: only the zones listed in the prompt exist.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Asset,
         {
@@ -1760,6 +1753,14 @@ EditorActionRegistry::EditorActionRegistry()
             { "seed", EditorParamKind::Number, false, "fixes the layout; omit for a fresh one" },
             { "zone", EditorParamKind::String, false,
               "name of a zone to fill instead of a disc around the camera" },
+            // The one that makes asking worth it. Without it a model that has just been
+            // told where the island's north edge is has nowhere to PUT that answer: it can
+            // scatter around the camera or inside a named zone, and neither is "there".
+            // Asked to place a rock on the north shore of a level with no zones, it
+            // invented a zone name -- not a guess about the world, a guess about the API.
+            { "at", EditorParamKind::Vec3, false,
+              "world point to scatter around, instead of the camera. Y is ignored when "
+              "alignToGround is on, which it is by default" },
         },
         &BuildSpawn,
     });

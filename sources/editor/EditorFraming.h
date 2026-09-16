@@ -26,6 +26,17 @@ namespace editorframing
         Math::float3& outCenter,
         float& outRadius);
 
+    // The world AABB rather than the sphere around it. The camera does not care -- it needs
+    // a distance -- but anything REPORTING an extent does: the bounding sphere of the atoll
+    // is a 530 m cube around a 355 m island, and a model told that would place things two
+    // hundred metres out to sea. Falls back to the sphere for entries with no runtime
+    // renderable, where a sphere is all there is.
+    bool TryGetWorldBounds(const Scene& scene,
+        const EditorSceneDocument& document,
+        EditorObjectId id,
+        Math::float3& outMin,
+        Math::float3& outMax);
+
     // Move the camera so the whole set fits. Keeps the current view DIRECTION and only
     // changes position: turning the camera as well would leave the user re-orienting
     // themselves after every jump. False when nothing in the set could be located.
