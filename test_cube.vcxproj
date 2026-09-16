@@ -172,7 +172,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>mimalloc.lib;tbb12_debug.lib;gdi32.lib;sl.interposer.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;mimalloc.lib;tbb12_debug.lib;gdi32.lib;sl.interposer.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(ProjectDir)third_party\tbb\lib;$(ProjectDir)third_party\mimalloc\lib\$(Configuration);$(ProjectDir)third_party\streamline\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
@@ -219,7 +219,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ProjectDir)third_party\tbb\lib;$(ProjectDir)third_party\mimalloc\lib\Release;$(ProjectDir)third_party\streamline\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>mimalloc.lib;tbb12.lib;gdi32.lib;sl.interposer.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>winhttp.lib;mimalloc.lib;tbb12.lib;gdi32.lib;sl.interposer.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -235,6 +235,7 @@
     <ClCompile Include="sources/editor/EditorController.cpp" />
     <ClCompile Include="sources/editor/EditorExtensionRegistry.cpp" />
     <ClCompile Include="sources/editor/EditorHotkeys.cpp" />
+    <ClCompile Include="sources/editor/EditorFraming.cpp" />
     <ClCompile Include="sources/editor/assets/AssetRegistry.cpp" />
     <ClCompile Include="sources/editor/assets/AssetThumbnailCache.cpp" />
     <ClCompile Include="sources/editor/assets/EditorPreviewRenderer.cpp" />
@@ -245,11 +246,13 @@
     <ClCompile Include="sources/editor/ui/MaterialEditorPanel.cpp" />
     <ClCompile Include="sources/editor/assets/MaterialFileGen.cpp" />
     <ClCompile Include="sources/editor/ui/CommandHistoryPanel.cpp" />
+    <ClCompile Include="sources/editor/scene/EditorZone.cpp" />
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp" />
     <ClCompile Include="sources/editor/scene/EnvironmentRuntime.cpp" />
     <ClCompile Include="sources/editor/serialization/LevelDocumentSerializer.cpp" />
     <ClCompile Include="sources/editor/commands/EditorCommandStack.cpp" />
     <ClCompile Include="sources/editor/commands/CompositeCommand.cpp" />
+    <ClCompile Include="sources/editor/commands/EditObjectPropertiesCommand.cpp" />
     <ClCompile Include="sources/editor/commands/EditEnvironmentCommand.cpp" />
     <ClCompile Include="sources/editor/commands/CreateDocumentObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/CreateEnvironmentCommand.cpp" />
@@ -265,6 +268,17 @@
     <ClCompile Include="sources/editor/commands/SetMaterialSlotCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetParticlePresetCommand.cpp" />
     <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionRegistry.cpp" />
+    <ClCompile Include="sources/editor/intent/IntentSchema.cpp" />
+    <ClCompile Include="sources/editor/intent/EnvironmentSettings.cpp" />
+    <ClCompile Include="sources/editor/intent/IntentNotes.cpp" />
+    <ClCompile Include="sources/editor/intent/IntentPrompt.cpp" />
+    <ClCompile Include="sources/editor/intent/LlmClient.cpp" />
+    <ClCompile Include="sources/editor/intent/LlmIntentSource.cpp" />
+    <ClCompile Include="sources/editor/intent/GrammarIntentSource.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorIntentResolver.cpp" />
+    <ClCompile Include="sources/editor/ui/CommandBarPanel.cpp" />
+    <ClCompile Include="sources/editor/ui/ModelChatPanel.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorMultiEdit.cpp" />
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp" />
@@ -411,6 +425,22 @@
     <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/editor/EditorContext.h" />
     <ClInclude Include="sources/editor/EditorSelection.h" />
+    <ClInclude Include="sources/editor/EditorObjectMatch.h" />
+    <ClInclude Include="sources/editor/EditorFraming.h" />
+    <ClInclude Include="sources/editor/intent/EditorIntent.h" />
+    <ClInclude Include="sources/editor/intent/EditorIntentSource.h" />
+    <ClInclude Include="sources/editor/intent/EditorActionRegistry.h" />
+    <ClInclude Include="sources/editor/intent/IntentSchema.h" />
+    <ClInclude Include="sources/editor/intent/EnvironmentSettings.h" />
+    <ClInclude Include="sources/editor/intent/IntentNotes.h" />
+    <ClInclude Include="sources/editor/intent/IntentPrompt.h" />
+    <ClInclude Include="sources/editor/intent/LlmClient.h" />
+    <ClInclude Include="sources/editor/intent/LlmIntentSource.h" />
+    <ClInclude Include="sources/editor/intent/GrammarIntentSource.h" />
+    <ClInclude Include="sources/editor/intent/EditorIntentResolver.h" />
+    <ClInclude Include="sources/editor/ui/CommandBarPanel.h" />
+    <ClInclude Include="sources/editor/ui/ImGuiTextInput.h" />
+    <ClInclude Include="sources/editor/ui/ModelChatPanel.h" />
     <ClInclude Include="sources/editor/EditorController.h" />
     <ClInclude Include="sources/editor/EditorExtensionRegistry.h" />
     <ClInclude Include="sources/editor/EditorHotkeys.h" />
@@ -427,12 +457,14 @@
     <ClInclude Include="sources/editor/ui/CommandHistoryPanel.h" />
     <ClInclude Include="sources/editor/ui/EditorDragDrop.h" />
     <ClInclude Include="sources/editor/ui/EditorLightDirection.h" />
+    <ClInclude Include="sources/editor/scene/EditorZone.h" />
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />
     <ClInclude Include="sources/editor/scene/EnvironmentRuntime.h" />
     <ClInclude Include="sources/editor/serialization/LevelDocumentSerializer.h" />
     <ClInclude Include="sources/editor/commands/EditorCommand.h" />
     <ClInclude Include="sources/editor/commands/EditorCommandStack.h" />
     <ClInclude Include="sources/editor/commands/CompositeCommand.h" />
+    <ClInclude Include="sources/editor/commands/EditObjectPropertiesCommand.h" />
     <ClInclude Include="sources/editor/commands/EditEnvironmentCommand.h" />
     <ClInclude Include="sources/editor/commands/CreateDocumentObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/CreateEnvironmentCommand.h" />

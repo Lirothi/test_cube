@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/StringMatch.h"
+#include "editor/EditorObjectMatch.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "imgui.h"
@@ -74,15 +75,6 @@ namespace
         { "Other",            OutlinerTypeFilter::Other },
     };
 
-    constexpr const char* kSearchPropertyKeys[] = {
-        "model",
-        "material",
-        "texture",
-        "preset",
-        "shader",
-        "inputLayout",
-    };
-
     std::string LowerCopy(std::string text)
     {
         for (char& ch : text)
@@ -90,11 +82,6 @@ namespace
             ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
         }
         return text;
-    }
-
-    bool ContainsLower(const std::string& haystack, const std::string& lowerNeedle)
-    {
-        return textmatch::ContainsCaseInsensitive(haystack, lowerNeedle);
     }
 
     void DrawSearchInputWithClear(const char* id, const char* hint, char* buffer, size_t bufferSize)
@@ -252,41 +239,12 @@ namespace
         return true;
     }
 
+    // The predicate itself lives in editor/EditorObjectMatch.h: the natural-language
+    // command bar resolves its selector through the same one, so a phrase and a typed
+    // search select the same objects (docs/editor_llm_plan.md, E5).
     bool MatchesSearch(const EditorObject& object, const std::string& lowerNeedle)
     {
-        if (lowerNeedle.empty())
-        {
-            return true;
-        }
-
-        if (ContainsLower(object.name, lowerNeedle) ||
-            ContainsLower(object.type, lowerNeedle))
-        {
-            return true;
-        }
-
-        char idText[32];
-        std::snprintf(idText, sizeof(idText), "%llu",
-            static_cast<unsigned long long>(object.id.value));
-        if (ContainsLower(idText, lowerNeedle))
-        {
-            return true;
-        }
-
-        if (object.properties.is_object())
-        {
-            for (const char* key : kSearchPropertyKeys)
-            {
-                const auto it = object.properties.find(key);
-                if (it != object.properties.end() && it->is_string() &&
-                    ContainsLower(it->get<std::string>(), lowerNeedle))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return editormatch::MatchesSearch(object, lowerNeedle);
     }
 
     void PushEditorObjectId(EditorObjectId id)

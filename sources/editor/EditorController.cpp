@@ -1,6 +1,7 @@
 #include "editor/EditorController.h"
 
 #include "core/diagnostics/BootProfile.h"
+#include "core/logging/Log.h"
 #include "app/scene/GtaoSettingsJson.h"
 #include "app/scene/SkyAtmosphereSettingsJson.h"
 #include "app/scene/VolumetricCloudSettingsJson.h"
@@ -35,7 +36,9 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "editor/EditorContext.h"
+#include "editor/EditorFraming.h"
 #include "editor/commands/CreateDocumentObjectCommand.h"
+#include "editor/scene/EditorZone.h"
 #include "editor/commands/CreateEnvironmentCommand.h"
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
@@ -47,6 +50,8 @@
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
+#include "editor/intent/EditorActionRegistry.h"
+#include "editor/intent/LlmIntentSource.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "imgui.h"
@@ -139,6 +144,26 @@ namespace
             camPos.x + camDir.x * 5.0f,
             camPos.y + camDir.y * 5.0f,
             camPos.z + camDir.z * 5.0f });
+    }
+
+    // Where a new ZONE goes: the point the camera is looking at, on the ground. Not
+    // SpawnPositionJson's five metres in front -- that is right for a mesh you are about to
+    // nudge into place and useless for a region you are about to scatter inside, which
+    // wants to land on the terrain under the view. The ground plane here is y = 0, which is
+    // the waterline on the levels this is for; a zone is a footprint, and the gizmo moves
+    // it in one drag if the guess is wrong.
+    Math::float3 ZoneSpawnCentre(const Scene& scene)
+    {
+        const Math::float3& camPos = scene.CameraRef().GetPosition();
+        const Math::float3& camDir = scene.CameraRef().GetDirection();
+        constexpr float kFallbackDistance = 60.0f;
+        if (camDir.y < -0.05f && camPos.y > 0.0f)
+        {
+            const float t = std::min(-camPos.y / camDir.y, 400.0f);
+            return Math::float3(camPos.x + camDir.x * t, 0.0f, camPos.z + camDir.z * t);
+        }
+        return Math::float3(camPos.x + camDir.x * kFallbackDistance, 0.0f,
+            camPos.z + camDir.z * kFallbackDistance);
     }
 
     nlohmann::json CameraDirectionJson(const Scene& scene)
@@ -1602,6 +1627,8 @@ namespace
         bool showOutliner,
         bool showInspector,
         bool showCommandHistory,
+        bool showCommandBar,
+        bool showModelChat,
         const ContentBrowserPanel& contentBrowser,
         const SceneOutlinerPanel& outliner,
         const MeshEditorPanel& meshEditor,
@@ -1612,6 +1639,8 @@ namespace
             { "outlinerVisible", showOutliner },
             { "inspectorVisible", showInspector },
             { "commandHistoryVisible", showCommandHistory },
+            { "commandBarVisible", showCommandBar },
+            { "modelChatVisible", showModelChat },
             { "contentBrowser", ContentBrowserStateToJson(contentBrowser.GetPersistentState()) },
             { "outliner", OutlinerStateToJson(outliner.GetPersistentState()) },
             { "meshEditor", MeshEditorStateToJson(meshEditor.GetPersistentState()) },
@@ -1712,6 +1741,8 @@ namespace
         bool& showOutliner,
         bool& showInspector,
         bool& showCommandHistory,
+        bool& showCommandBar,
+        bool& showModelChat,
         ContentBrowserPanel& contentBrowser,
         SceneOutlinerPanel& outliner,
         MeshEditorPanel& meshEditor,
@@ -1735,6 +1766,8 @@ namespace
         ReadBoolMember(panelState, "outlinerVisible", showOutliner);
         ReadBoolMember(panelState, "inspectorVisible", showInspector);
         ReadBoolMember(panelState, "commandHistoryVisible", showCommandHistory);
+        ReadBoolMember(panelState, "commandBarVisible", showCommandBar);
+        ReadBoolMember(panelState, "modelChatVisible", showModelChat);
 
         const auto contentBrowserIt = panelState.find("contentBrowser");
         if (contentBrowserIt != panelState.end())
@@ -1997,6 +2030,66 @@ namespace
         }
     }
 
+    // The local model's paths live beside the other editor preferences. They are read
+    // once at first open and written back whenever the settings UI changes them; the
+    // fetch script prints the same block so it can be pasted instead.
+    LlmIntentSettings LoadIntentModelSettings()
+    {
+        const nlohmann::json root = LoadEditorStateJson();
+        const auto levelEditorIt = root.find("levelEditor");
+        if (levelEditorIt == root.end() || !levelEditorIt->is_object())
+        {
+            return LlmIntentSettings{};
+        }
+        return LlmIntentSource::LoadSettings(*levelEditorIt);
+    }
+
+    std::vector<std::string> LoadCommandBarHistory()
+    {
+        std::vector<std::string> history;
+        const nlohmann::json root = LoadEditorStateJson();
+        const auto levelEditorIt = root.find("levelEditor");
+        if (levelEditorIt == root.end() || !levelEditorIt->is_object())
+        {
+            return history;
+        }
+        const auto historyIt = levelEditorIt->find("commandBarHistory");
+        if (historyIt == levelEditorIt->end() || !historyIt->is_array())
+        {
+            return history;
+        }
+        for (const nlohmann::json& entry : *historyIt)
+        {
+            if (entry.is_string())
+            {
+                history.push_back(entry.get<std::string>());
+            }
+        }
+        return history;
+    }
+
+    bool SaveCommandBarHistory(const std::vector<std::string>& history)
+    {
+        nlohmann::json root = LoadEditorStateJson();
+        if (!root["levelEditor"].is_object())
+        {
+            root["levelEditor"] = nlohmann::json::object();
+        }
+        root["levelEditor"]["commandBarHistory"] = history;
+        return SaveEditorStateJson(root);
+    }
+
+    bool SaveIntentModelSettings(const LlmIntentSettings& settings)
+    {
+        nlohmann::json root = LoadEditorStateJson();
+        if (!root["levelEditor"].is_object())
+        {
+            root["levelEditor"] = nlohmann::json::object();
+        }
+        root["levelEditor"]["intentModel"] = LlmIntentSource::SaveSettings(settings);
+        return SaveEditorStateJson(root);
+    }
+
     bool SaveEditorState(const std::vector<std::string>& recentLevelPaths, int selectionOutlineRadius,
         float buryDepthPercent)
     {
@@ -2079,375 +2172,42 @@ namespace
         return !ec && regularFile;
     }
 
-    bool TryGetSelectionFrameTarget(
-        const Scene& scene,
-        const EditorSceneDocument& document,
-        EditorObjectId id,
-        Math::float3& outCenter,
-        float& outRadius)
-    {
-        if (id.value == 0)
-        {
-            return false;
-        }
-
-        if (const RenderableObjectBase* runtime = scene.FindEditorObject(id.value))
-        {
-            const AABB& bounds = runtime->GetWorldBounds();
-            if (bounds.IsValid())
-            {
-                outCenter = bounds.GetCenter();
-                outRadius = std::max(bounds.GetRadius(), 1.0f);
-                return true;
-            }
-        }
-
-        if (const EditorObject* object = document.Find(id))
-        {
-            outCenter = object->transform.position;
-            outRadius = std::max(object->transform.scale.Length(), 1.0f);
-            return true;
-        }
-
-        for (const EditorObject& env : document.Environment())
-        {
-            if (env.id.value != id.value)
-            {
-                continue;
-            }
-
-            const auto positionIt = env.properties.find("position");
-            if (positionIt == env.properties.end() || !TryReadFloat3(*positionIt, outCenter))
-            {
-                return false;
-            }
-
-            if (env.type == "pointLight")
-            {
-                outRadius = std::max(env.properties.value("radius", 1.0f), 1.0f);
-            }
-            else if (env.type == "spotLight")
-            {
-                outRadius = std::max(env.properties.value("range", 4.0f) * 0.25f, 1.0f);
-            }
-            else
-            {
-                outRadius = 1.0f;
-            }
-            return true;
-        }
-
-        return false;
-    }
-
+    // Camera framing lives in editor/EditorFraming.h: the F key and the typed phrase
+    // "show me the palms" must move the camera the same way, and two copies of "where is
+    // this object and how big is it" would eventually disagree.
     bool FrameSelection(Renderer& renderer,
         Scene& scene,
         const EditorSceneDocument& document,
         const EditorSelection& selection)
     {
-        Math::float3 firstCenter;
-        float firstRadius = 1.0f;
-        Math::float3 boundsMin;
-        Math::float3 boundsMax;
-        std::size_t validTargetCount = 0;
-        for (const EditorObjectId id : selection.Ordered())
-        {
-            Math::float3 center;
-            float radius = 1.0f;
-            if (!TryGetSelectionFrameTarget(scene, document, id, center, radius))
-            {
-                continue;
-            }
-
-            if (validTargetCount == 0)
-            {
-                firstCenter = center;
-                firstRadius = radius;
-                boundsMin = center - Math::float3(radius);
-                boundsMax = center + Math::float3(radius);
-            }
-            else
-            {
-                boundsMin.x = std::min(boundsMin.x, center.x - radius);
-                boundsMin.y = std::min(boundsMin.y, center.y - radius);
-                boundsMin.z = std::min(boundsMin.z, center.z - radius);
-                boundsMax.x = std::max(boundsMax.x, center.x + radius);
-                boundsMax.y = std::max(boundsMax.y, center.y + radius);
-                boundsMax.z = std::max(boundsMax.z, center.z + radius);
-            }
-            ++validTargetCount;
-        }
-
-        if (validTargetCount == 0)
-        {
-            return false;
-        }
-
-        Math::float3 center = firstCenter;
-        float radius = firstRadius;
-        if (validTargetCount > 1)
-        {
-            center = (boundsMin + boundsMax) * 0.5f;
-            radius = std::max((boundsMax - boundsMin).Length() * 0.5f, 1.0f);
-        }
-
-        Camera& camera = scene.CameraRef();
-        Math::float3 forward = camera.GetDirection();
-        if (forward.Length() <= Math::EPS)
-        {
-            forward = Math::float3(0.0f, 0.0f, 1.0f);
-        }
-
-        const float distance = std::max(radius * 2.5f, 3.0f);
-        camera.SetPosition(center - forward.Normalized() * distance);
-        camera.CalcMatrices(&renderer);
-        camera.ResetHistory();
-        return true;
+        return editorframing::FrameObjects(renderer, scene, document, selection);
     }
 
     bool FrameVisibleScene(Renderer& renderer, Scene& scene, const EditorSceneDocument& document)
     {
-        EditorSelection visibleObjects;
-        for (const EditorObject& object : document.Objects())
-        {
-            const RenderableObjectBase* runtime = scene.FindEditorObject(object.id.value);
-            if (object.enabled && runtime && runtime->IsVisible())
-            {
-                visibleObjects.Add(object.id, false);
-            }
-        }
-        return FrameSelection(renderer, scene, document, visibleObjects);
+        return editorframing::FrameVisibleScene(renderer, scene, document);
     }
 
-    // Bury depth limits, as a fraction of the object's world height. The caller passes the tuned
-    // value (Level Editor > Placement); these only keep it sane.
-    //
-    // THE FRACTION IS THE DEPTH, which is not obvious and is why the first attempt overshot. It is
-    // the thickness of the footing band that must end up under the surface, so demanding the WHOLE
-    // band go under means the object sinks at least as deep as the band is tall. At a tenth of a
-    // 15 m palm that was a metre and a half of trunk, and it looked exactly as buried as it sounds.
-    // It only has to swallow the ground's unevenness under the footprint -- centimetres on sand.
-    //
-    // It is only the EXTRA depth, though: an object hovering a metre up still travels the whole
-    // metre, because the band's vertices measure their real gap to the ground. The fraction decides
-    // only how far PAST contact it ends up.
-    constexpr float kBuryFootingFractionMin = 0.0005f;
-    constexpr float kBuryFootingFractionMax = 0.25f;
-    // Ray budget per object, per keypress. The answer is a maximum over a ring of points, so a few
-    // dozen evenly spread samples find it; thousands only cost time the user can feel.
-    constexpr std::size_t kBuryMaxProbes = 64;
-
-    // End -- BURY the selection: drop it until EVERY ONE of its vertices is under the surface it
-    // is being buried into. This replaced a "snap to surface below" that cast ONE ray from the
-    // bounds centre and rested the bottom of the AABB on what it hit; the owner asked for burying
-    // instead and did not want the old behaviour kept, so it was removed rather than rebound.
-    //
-    // IT IS THE FOOTING THAT GETS BURIED, NOT THE WHOLE MESH -- and that is the lesson of the
-    // first version. Taking "every vertex ends up under the surface" literally across ALL vertices
-    // lets the HIGHEST one decide, so a 15 m palm sank fifteen metres and disappeared. Correct,
-    // and useless. What burying has to fix is a footing hanging in the air on uneven ground: the
-    // bottom ring of the trunk must be under the sand all the way round, while the crown is none
-    // of this function's business. So only vertices within kBuryFootingFraction of the object's
-    // world height, measured up from its lowest point, get a vote -- a fraction of the OBJECT
-    // rather than a world distance, so it means the same thing for a palm and for a pebble.
-    //
-    // It still cannot use the AABB: its corners are not points on the mesh, so on a slope the
-    // highest footing vertex is nowhere near a corner. For each footing vertex, in world space,
-    // cast straight down -- a hit means that vertex is still ABOVE the surface by exactly that
-    // distance. Drop by the LARGEST such distance and the whole footing goes under. Vertices
-    // already beneath the surface find nothing below them and contribute nothing.
-    //
-    // AND THE RAYS ARE CAPPED at kBuryMaxProbes, because the first version was slow enough for the
-    // user to notice. Every ray runs the scene broad phase and then exact triangles of whatever it
-    // finds, and a terrain chunk is a great many triangles; thousands of rays per keypress is a
-    // visible stall for an answer that is a MAXIMUM over a ring of points, which a few dozen evenly
-    // spread samples locate just as well.
-    std::string BurySelectionBelowSurface(EditorContext& ctx, EditorCommandStack& commandStack,
+    // End -- BURY the selection. The measuring and the command building live in the action
+    // registry ("bury"), because the natural-language command bar reaches the same action over
+    // an arbitrary set of objects and two copies of a 200-line ray probe would drift apart.
+    // This wrapper only supplies the selection and the selection-specific wording.
+    std::string BurySelectionBelowSurface(const EditorActionContext& actionCtx,
+        EditorCommandStack& commandStack,
         float footingFraction)
     {
-        if (ctx.selection.Empty())
+        if (actionCtx.editor.selection.Empty())
         {
             return "Select a mesh to bury";
         }
-        footingFraction = std::clamp(footingFraction, kBuryFootingFractionMin, kBuryFootingFractionMax);
 
-        // The whole selection is ignored, not just the object being moved: burying one palm into
-        // the sand must not measure against another palm that happens to be selected with it.
-        std::vector<Scene::SceneObjectId> ignoredObjectIds;
-        ignoredObjectIds.reserve(ctx.selection.Size());
-        for (const EditorObjectId id : ctx.selection.Ordered())
-        {
-            ignoredObjectIds.push_back(id.value);
-        }
+        nlohmann::json params;
+        params["depthPercent"] = footingFraction * 100.0f;
 
-        const Math::float3 rayDirection(0.0f, -1.0f, 0.0f);
-        std::vector<std::unique_ptr<EditorCommand>> commands;
-        commands.reserve(ctx.selection.Size());
-        std::size_t meshCount = 0;
-        std::size_t noSurfaceCount = 0;
-        std::size_t noGeometryCount = 0;
-        std::size_t alreadyBuriedCount = 0;
-
-        for (const EditorObjectId id : ctx.selection.Ordered())
-        {
-            EditorObject* object = ctx.document.Find(id);
-            RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id.value);
-            RenderableObject* renderable = runtime ? runtime->AsRenderableObject() : nullptr;
-            if (!object || !renderable)
-            {
-                continue;
-            }
-            ++meshCount;
-
-            const Mesh* mesh = renderable->GetMesh();
-            if (!mesh || !mesh->HasRaycastTriangles())
-            {
-                // No CPU geometry (a runtime generator, an instanced batch): there is no honest
-                // per-vertex answer, and quietly falling back to the AABB would bury it wrong.
-                ++noGeometryCount;
-                continue;
-            }
-
-            const Math::mat4& world = renderable->GetModelMatrix();
-            const std::vector<Math::float3>& localPositions = mesh->RaycastPositions();
-
-            // The footing band is measured in WORLD height: the object can be rotated, so the
-            // mesh's own local Y is not the direction gravity cares about.
-            float lowestY = std::numeric_limits<float>::max();
-            float highestY = std::numeric_limits<float>::lowest();
-            for (const Math::float3& local : localPositions)
-            {
-                const float y = world.TransformPoint(local).y;
-                lowestY = std::min(lowestY, y);
-                highestY = std::max(highestY, y);
-            }
-            if (!(highestY >= lowestY))
-            {
-                ++noGeometryCount;
-                continue;
-            }
-            const float footingTopY = lowestY + (highestY - lowestY) * footingFraction;
-
-            // Gather the footing FIRST and thin it after: striding the raw vertex list would spend
-            // the ray budget on the crown and leave the ring underneath barely sampled.
-            std::vector<Math::float3> footing;
-            for (const Math::float3& local : localPositions)
-            {
-                const Math::float3 worldPos = world.TransformPoint(local);
-                if (worldPos.y <= footingTopY)
-                {
-                    footing.push_back(worldPos);
-                }
-            }
-            if (footing.empty())
-            {
-                ++noGeometryCount;
-                continue;
-            }
-            const std::size_t stride = (footing.size() + kBuryMaxProbes - 1) / kBuryMaxProbes;
-
-            // A PROBE THAT IS ALREADY UNDERGROUND MUST NOT VOTE, and finding that out needs the
-            // upward ray. Casting only downwards cannot tell "hovering above the sand" from
-            // "buried in it": a vertex inside the terrain still reports a hit below it -- the far
-            // side of the surface, or the slope further down -- so pressing the key again would
-            // sink an already-buried object deeper every time, without limit.
-            //
-            // Anything hit going UP means this vertex has surface over it, which is the definition
-            // of buried. Overhanging geometry (a neighbour's crown) can answer this too, and that
-            // is the safe direction to be wrong in: such a probe abstains, so the object is buried
-            // slightly less rather than run away downwards.
-            const Math::float3 rayUp(0.0f, 1.0f, 0.0f);
-            float deepest = 0.0f;
-            bool hitAnything = false;
-            std::size_t probeCount = 0;
-            std::size_t coveredProbes = 0;
-            for (std::size_t v = 0; v < footing.size(); v += stride)
-            {
-                ++probeCount;
-                float upDistance = 0.0f;
-                if (ctx.scene.RaycastEditorObject(
-                        footing[v], rayUp, &upDistance, 0, &ignoredObjectIds) != 0)
-                {
-                    ++coveredProbes;
-                    continue;   // already under a surface: contributes nothing
-                }
-                float hitDistance = 0.0f;
-                const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(
-                    footing[v], rayDirection, &hitDistance, 0, &ignoredObjectIds);
-                if (hit == 0 || !std::isfinite(hitDistance))
-                {
-                    continue;   // nothing below this vertex either
-                }
-                hitAnything = true;
-                deepest = std::max(deepest, hitDistance);
-            }
-
-            // Every probe covered: the footing is fully under. Leave the object exactly where it
-            // is -- re-running the tool on a finished object is a no-op, not a nudge.
-            if (probeCount > 0 && coveredProbes == probeCount)
-            {
-                ++alreadyBuriedCount;
-                continue;
-            }
-
-            if (!hitAnything)
-            {
-                ++noSurfaceCount;
-                continue;
-            }
-            if (deepest <= 1.0e-4f)
-            {
-                ++alreadyBuriedCount;
-                continue;
-            }
-
-            EditorTransform after = object->transform;
-            // A hair past contact, so the highest vertex ends up INSIDE rather than coplanar with
-            // the surface -- coplanar is where z-fighting lives.
-            after.position.y -= deepest + 1.0e-3f;
-            commands.push_back(std::make_unique<TransformObjectCommand>(
-                object->id, object->transform, after));
-        }
-
-        if (meshCount == 0)
-        {
-            return "Select one or more meshes to bury";
-        }
-        if (commands.empty())
-        {
-            if (noGeometryCount == meshCount)
-            {
-                return "Selected object has no CPU geometry to bury";
-            }
-            if (alreadyBuriedCount > 0 && noSurfaceCount == 0)
-            {
-                return meshCount == 1 ? "Selection is already buried" : "Selected meshes are already buried";
-            }
-            return "No visible editor object below selected meshes";
-        }
-
-        const std::size_t buriedCount = commands.size();
-        bool buried = false;
-        if (commands.size() == 1)
-        {
-            buried = commandStack.Execute(ctx, std::move(commands.front()));
-        }
-        else
-        {
-            auto composite = std::make_unique<CompositeCommand>(
-                "Bury " + std::to_string(commands.size()) + " Objects");
-            for (std::unique_ptr<EditorCommand>& command : commands)
-            {
-                composite->Add(std::move(command));
-            }
-            buried = commandStack.Execute(ctx, std::move(composite));
-        }
-        if (!buried)
-        {
-            return "Bury failed";
-        }
-        return buriedCount == 1 ? "Buried selection below surface"
-                                : "Buried " + std::to_string(buriedCount) + " objects below surface";
+        std::string status;
+        RunEditorAction(actionCtx, commandStack, MakeActionIntent("bury", params),
+            actionCtx.editor.selection.Ordered(), status);
+        return status;
     }
 
     const EditorObject* FindEnvironmentObject(
@@ -2637,150 +2397,53 @@ namespace
         return true;
     }
 
-    bool IsBulkObjectSupported(const EditorSceneDocument& document, EditorObjectId id)
-    {
-        if (const EditorObject* object = document.Find(id))
-        {
-            return object->type != "ocean";
-        }
-        const EditorObject* environment = FindEnvironmentObject(document, id);
-        return environment &&
-            (environment->type == "pointLight" || environment->type == "spotLight");
-    }
+    // The three bulk selection operations below are wrappers, not implementations. What
+    // they do lives in the action registry, because the typed-phrase command bar reaches
+    // the same actions over a set of objects that is not the selection -- and an action
+    // that exists twice is an action whose two copies eventually disagree about which
+    // objects it refuses to touch. The registry owns the rules; these own the wording for
+    // the case where the object set came from the selection.
 
-    bool DuplicateSelection(EditorContext& ctx,
+    bool DuplicateSelection(const EditorActionContext& actionCtx,
         EditorCommandStack& commandStack,
         std::string& outStatus)
     {
-        if (ctx.selection.Empty())
+        if (actionCtx.editor.selection.Empty())
         {
             outStatus = "Nothing selected to duplicate";
             return false;
         }
-        for (const EditorObjectId id : ctx.selection.Ordered())
-        {
-            if (!IsBulkObjectSupported(ctx.document, id))
-            {
-                outStatus = "Selection contains an object that cannot be duplicated";
-                return false;
-            }
-        }
-
-        if (ctx.selection.Size() == 1)
-        {
-            return commandStack.Execute(ctx,
-                std::make_unique<DuplicateObjectCommand>(ctx.selection.Primary()));
-        }
-
-        auto composite = std::make_unique<CompositeCommand>(
-            "Duplicate " + std::to_string(ctx.selection.Size()) + " Objects");
-        std::size_t index = 0;
-        for (const EditorObjectId id : ctx.selection.Ordered())
-        {
-            composite->Add(std::make_unique<DuplicateObjectCommand>(id, index != 0));
-            ++index;
-        }
-        return commandStack.Execute(ctx, std::move(composite));
+        return RunEditorAction(actionCtx, commandStack, MakeActionIntent("duplicate"),
+            actionCtx.editor.selection.Ordered(), outStatus);
     }
 
-    bool DeleteSelection(EditorContext& ctx,
+    bool DeleteSelection(const EditorActionContext& actionCtx,
         EditorCommandStack& commandStack,
         std::string& outStatus)
     {
-        if (ctx.selection.Empty())
+        if (actionCtx.editor.selection.Empty())
         {
             outStatus = "Nothing selected to delete";
             return false;
         }
-        for (const EditorObjectId id : ctx.selection.Ordered())
-        {
-            if (!IsBulkObjectSupported(ctx.document, id))
-            {
-                outStatus = "Selection contains an object that cannot be deleted";
-                return false;
-            }
-        }
-
-        if (ctx.selection.Size() == 1)
-        {
-            return commandStack.Execute(ctx,
-                std::make_unique<DeleteObjectCommand>(ctx.selection.Primary()));
-        }
-
-        auto composite = std::make_unique<CompositeCommand>(
-            "Delete " + std::to_string(ctx.selection.Size()) + " Objects");
-        for (const EditorObjectId id : ctx.selection.Ordered())
-        {
-            composite->Add(std::make_unique<DeleteObjectCommand>(id));
-        }
-        return commandStack.Execute(ctx, std::move(composite));
+        return RunEditorAction(actionCtx, commandStack, MakeActionIntent("delete"),
+            actionCtx.editor.selection.Ordered(), outStatus);
     }
 
-    std::unique_ptr<EditorCommand> BuildSetEnabledCommand(
-        const EditorSceneDocument& document,
-        EditorObjectId id,
-        bool enabled)
-    {
-        if (document.Find(id))
-        {
-            return std::make_unique<SetEnabledCommand>(id, enabled);
-        }
-
-        const EditorObject* environment = FindEnvironmentObject(document, id);
-        if (!environment || (environment->type != "pointLight" &&
-            environment->type != "spotLight" &&
-            environment->type != "directionalLight" &&
-            environment->type != "ocean"))
-        {
-            return nullptr;
-        }
-
-        nlohmann::json after = environment->properties;
-        after["enabled"] = enabled;
-        return std::make_unique<EditEnvironmentCommand>(
-            id,
-            environment->properties,
-            std::move(after),
-            enabled ? "Enable Environment" : "Disable Environment");
-    }
-
-    bool SetSelectionEnabled(EditorContext& ctx,
+    bool SetSelectionEnabled(const EditorActionContext& actionCtx,
         EditorCommandStack& commandStack,
         bool enabled,
         std::string& outStatus)
     {
-        std::vector<std::unique_ptr<EditorCommand>> commands;
-        commands.reserve(ctx.selection.Size());
-        for (const EditorObjectId id : ctx.selection.Ordered())
-        {
-            std::unique_ptr<EditorCommand> command =
-                BuildSetEnabledCommand(ctx.document, id, enabled);
-            if (!command)
-            {
-                outStatus = "Selection contains an object that cannot be enabled or disabled";
-                return false;
-            }
-            commands.push_back(std::move(command));
-        }
-
-        if (commands.empty())
+        if (actionCtx.editor.selection.Empty())
         {
             outStatus = "Nothing selected";
             return false;
         }
-        if (commands.size() == 1)
-        {
-            return commandStack.Execute(ctx, std::move(commands.front()));
-        }
-
-        auto composite = std::make_unique<CompositeCommand>(
-            std::string(enabled ? "Enable " : "Disable ") +
-            std::to_string(commands.size()) + " Objects");
-        for (std::unique_ptr<EditorCommand>& command : commands)
-        {
-            composite->Add(std::move(command));
-        }
-        return commandStack.Execute(ctx, std::move(composite));
+        nlohmann::json params;
+        params["enabled"] = enabled;
+        return RunEditorAction(actionCtx, commandStack, MakeActionIntent("setEnabled", params),
+            actionCtx.editor.selection.Ordered(), outStatus);
     }
 }
 
@@ -2841,6 +2504,10 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     const PendingLevelAction completedAction = pendingLevelAction_;
     pendingLevelAction_ = PendingLevelAction::None;
     pendingLevelPath_.clear();
+
+    // The model's grammar lists this level's assets literally, so a different level means
+    // a different grammar. Rebuilt lazily on the next phrase, not here.
+    commandBar_.OnLevelChanged();
 
     if (!loaded)
     {
@@ -3008,6 +2675,8 @@ EditorController::PanelStateSnapshot EditorController::CapturePanelState() const
         showOutliner_,
         showInspector_,
         showCommandHistory_,
+        showCommandBar_,
+        showModelChat_,
         contentBrowser_.GetPersistentState(),
         outliner_.GetPersistentState(),
         meshEditor_.GetPersistentState(),
@@ -3022,6 +2691,8 @@ bool EditorController::PanelStateMatches(const PanelStateSnapshot& a,
         a.showOutliner == b.showOutliner &&
         a.showInspector == b.showInspector &&
         a.showCommandHistory == b.showCommandHistory &&
+        a.showCommandBar == b.showCommandBar &&
+        a.showModelChat == b.showModelChat &&
         ContentBrowserStatesMatch(a.contentBrowser, b.contentBrowser) &&
         OutlinerStatesMatch(a.outliner, b.outliner) &&
         MeshEditorStatesMatch(a.meshEditor, b.meshEditor) &&
@@ -3092,11 +2763,16 @@ void EditorController::Draw(
         }
         nextAssetRegistryPollTimeSec_ = ImGui::GetTime() + 2.0;
         LoadEditorState(recentLevelPaths_, selectionOutlineRadius_, buryDepthPercent_);
+        commandBar_.SetModelSettings(LoadIntentModelSettings());
+        commandBar_.SetPhraseHistory(LoadCommandBarHistory());
         LoadEditorPanelState(showContentBrowser_, showOutliner_, showInspector_, showCommandHistory_,
+            showCommandBar_, showModelChat_,
             contentBrowser_, outliner_, meshEditor_, viewportGizmo_);
         lastObservedPanelStateSnapshot_ = CapturePanelState();
         lastObservedPanelState_ = BuildPanelStateJson(showContentBrowser_, showOutliner_,
-            showInspector_, showCommandHistory_, contentBrowser_, outliner_, meshEditor_, viewportGizmo_);
+            showInspector_, showCommandHistory_, showCommandBar_, showModelChat_,
+            contentBrowser_, outliner_,
+            meshEditor_, viewportGizmo_);
         panelStateLoaded_ = true;
         const std::string activeLevelPath =
             NormalizeLevelPath(std::string(levelManager.GetActiveLevelSourcePath()));
@@ -3172,6 +2848,10 @@ void EditorController::Draw(
         materialEditor_.Open(materialName, materialPath);
         showMaterialEditor_ = true;
     };
+    // What the action registry needs on top of the document: the asset registry (to
+    // resolve an asset name) and the extension registry (to build one). Every road into
+    // an action -- menu, hotkey, typed phrase -- passes the same one.
+    const EditorActionContext actionCtx{ ctx, assetRegistry_, extensions_ };
     if (!extensionsRegistered_)
     {
         EditorExtensionRegistry::RegisterBuiltins(extensions_);
@@ -3409,7 +3089,8 @@ void EditorController::Draw(
                     {
                         selection_.Replace(outlinerAction.target);
                     }
-                    DeleteSelection(panelCtx, commandStack_, levelStatus_);
+                    DeleteSelection(EditorActionContext{ panelCtx, assetRegistry_, extensions_ },
+                        commandStack_, levelStatus_);
                 }
                 else if (outlinerAction.type == OutlinerAction::Type::DuplicateObject)
                 {
@@ -3417,7 +3098,8 @@ void EditorController::Draw(
                     {
                         selection_.Replace(outlinerAction.target);
                     }
-                    DuplicateSelection(panelCtx, commandStack_, levelStatus_);
+                    DuplicateSelection(EditorActionContext{ panelCtx, assetRegistry_, extensions_ },
+                        commandStack_, levelStatus_);
                 }
                 else if (outlinerAction.type == OutlinerAction::Type::FrameSelection)
                 {
@@ -3451,7 +3133,7 @@ void EditorController::Draw(
                     {
                         selection_.Replace(outlinerAction.target);
                     }
-                    SetSelectionEnabled(panelCtx,
+                    SetSelectionEnabled(EditorActionContext{ panelCtx, assetRegistry_, extensions_ },
                         commandStack_,
                         outlinerAction.enabledValue,
                         levelStatus_);
@@ -3477,6 +3159,38 @@ void EditorController::Draw(
             {
                 commandHistory_.Draw(panelCtx, commandStack_, &showCommandHistory_);
             }));
+
+        // E8: registered only when something can actually parse a phrase. With no source
+        // available the panel is not hidden or greyed out -- it is not there at all, because
+        // a text box that answers nothing is a control that lies about what the editor does.
+        if (commandBar_.AnySourceAvailable())
+        {
+            extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+                "commandBar",
+                "Command Bar",
+                &showCommandBar_,
+                true,
+                [this](EditorContext& panelCtx)
+                {
+                    commandBar_.Draw(panelCtx, commandStack_, assetRegistry_, extensions_,
+                        buryDepthPercent_, &showCommandBar_);
+                }));
+        }
+
+        if (commandBar_.AnySourceAvailable())
+        {
+            extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+                "modelChat",
+                "Model Chat",
+                &showModelChat_,
+                true,
+                [this](EditorContext&)
+                {
+                    modelChat_.SetEditorContext(NormalizeLevelPath(document_.LevelPath()),
+                        document_.Objects().size());
+                    modelChat_.Draw(commandBar_.Model(), &showModelChat_);
+                }));
+        }
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "viewportGizmo",
@@ -3661,7 +3375,7 @@ void EditorController::Draw(
     }
     if (hotkeyActions.duplicateSelection)
     {
-        DuplicateSelection(ctx, commandStack_, levelStatus_);
+        DuplicateSelection(actionCtx, commandStack_, levelStatus_);
     }
     if (hotkeyActions.copySelection)
     {
@@ -3673,7 +3387,7 @@ void EditorController::Draw(
     }
     if (hotkeyActions.deleteSelection)
     {
-        DeleteSelection(ctx, commandStack_, levelStatus_);
+        DeleteSelection(actionCtx, commandStack_, levelStatus_);
     }
     if (hotkeyActions.focusSelection)
     {
@@ -3691,7 +3405,7 @@ void EditorController::Draw(
     }
     if (hotkeyActions.burySelectionBelowSurface)
     {
-        levelStatus_ = BurySelectionBelowSurface(ctx, commandStack_, buryDepthPercent_ * 0.01f);
+        levelStatus_ = BurySelectionBelowSurface(actionCtx, commandStack_, buryDepthPercent_ * 0.01f);
     }
     if (hotkeyActions.clearSelection)
     {
@@ -3785,7 +3499,7 @@ void EditorController::Draw(
                 }
                 if (ImGui::MenuItem("Bury Below Surface", "End", false, canSnapBelow))
                 {
-                    levelStatus_ = BurySelectionBelowSurface(ctx, commandStack_, buryDepthPercent_ * 0.01f);
+                    levelStatus_ = BurySelectionBelowSurface(actionCtx, commandStack_, buryDepthPercent_ * 0.01f);
                 }
                 ShowDisabledItemTooltip(!canSnapBelow,
                     "Select a mesh to sink it until every one of its vertices is under the surface below it.");
@@ -3799,6 +3513,40 @@ void EditorController::Draw(
                     {
                         commandStack_.Execute(ctx, std::make_unique<CreateDocumentObjectCommand>(
                             BuildFreeCameraStartObject(scene)));
+                    }
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Zone"))
+                {
+                    // Placed where the camera is looking, which is where anyone about to
+                    // draw a region is already looking. Named uniquely so two zones can be
+                    // told apart in a phrase; renaming is a rename away.
+                    const auto createZone = [&](editorzone::Shape shape, const char* prefix)
+                    {
+                        const Math::float3 centre = ZoneSpawnCentre(scene);
+                        int ordinal = 1;
+                        for (const EditorObject& object : document_.Objects())
+                        {
+                            if (object.type == editorzone::kTypeName)
+                            {
+                                ++ordinal;
+                            }
+                        }
+                        commandStack_.Execute(ctx, std::make_unique<CreateDocumentObjectCommand>(
+                            editorzone::BuildObject(shape, centre, 25.0f,
+                                std::string(prefix) + " " + std::to_string(ordinal))));
+                    };
+                    if (ImGui::MenuItem("Circle"))
+                    {
+                        createZone(editorzone::Shape::Circle, "Zone");
+                    }
+                    if (ImGui::MenuItem("Rectangle"))
+                    {
+                        createZone(editorzone::Shape::Rect, "Zone");
+                    }
+                    if (ImGui::MenuItem("Spline"))
+                    {
+                        createZone(editorzone::Shape::Spline, "Path");
                     }
                     ImGui::EndMenu();
                 }
@@ -3979,6 +3727,8 @@ void EditorController::Draw(
                 drawPanelMenuItem("sceneOutliner");
                 drawPanelMenuItem("inspector");
                 drawPanelMenuItem("commandHistory");
+                drawPanelMenuItem("commandBar");
+                drawPanelMenuItem("modelChat");
                 drawPanelMenuItem("importAssets");
                 drawPanelMenuItem("meshEditor");
                 drawPanelMenuItem("materialEditor");
@@ -4257,6 +4007,116 @@ void EditorController::Draw(
     // level or an edit changed the document) so the outliner group + errors window are fresh.
     RefreshAssetErrorsIfStale();
 
+    // Warm the model while the user is still looking at the level they just opened. The
+    // first phrase of a session costs 53 s against 1.5 s for the next one, and almost all of
+    // that is starting the server and prefilling a prompt that never changes -- both of
+    // which can happen before anyone types anything. Retried each frame until it takes, and
+    // a no-op when the model is not on disk.
+    //
+    // BEFORE the harness block, and that ordering is the whole point: llama-server answers
+    // one request at a time, so a phrase submitted first does not race the warmup, it makes
+    // the warmup wait -- which is how the first attempt at this measured SLOWER than no
+    // warmup at all.
+    if (!modelWarmed_ && ++modelWarmupFrames_ >= 30)
+    {
+        modelWarmed_ = commandBar_.Model().BeginWarmup(
+            EditorIntentWorld{ document_, assetRegistry_ });
+    }
+
+    // "--intent=<phrase>": the headless harness. Submitted once the editor has its level and
+    // its asset registry, then polled every frame -- the model answers on its own thread and
+    // this must not block one. App quits as soon as the verdict is logged.
+    // headlessIntentRunning_ is what keeps a multi-pass run alive. The two obvious flags do
+    // not: g_intentPhrase is cleared when a pass is SUBMITTED and headlessIntentPending_
+    // drops when it COMPLETES, so with both as the gate the block stopped executing after
+    // pass 1, g_intentFinished never got set, and the process sat out its whole timeout
+    // while the idle timer reaped the server underneath it.
+    if (!g_intentPhrase.empty() || headlessIntentPending_ || headlessIntentRunning_)
+    {
+        ++headlessIntentWarmupFrames_;
+        // 30 frames of warmup: the level's runtime objects, the shadow resources and the
+        // acceleration structures all finish arriving over the first few frames, and a
+        // command executed before then takes the process down with it.
+        constexpr int kHeadlessIntentWarmupFrames = 30;
+        if (headlessIntentWarmupFrames_ < kHeadlessIntentWarmupFrames)
+        {
+            // fall through to the rest of Draw; try again next frame
+        }
+        else if (headlessIntentPending_)
+        {
+            // Polling belongs to a pass that is actually in flight. Ordering this AFTER the
+            // submit branch, as it was, meant that any frame where the submit conditions
+            // were not met fell through to here and polled nothing -- which logged a verdict
+            // of "pass 0/2" every frame, several hundred times, the moment a gate was added.
+            std::string verdict;
+            const CommandBarPanel::HeadlessState state =
+                commandBar_.PollHeadless(actionCtx, commandStack_, g_intentRun, verdict);
+            if (state != CommandBarPanel::HeadlessState::Pending)
+            {
+                headlessIntentPending_ = false;
+                const double elapsed = ImGui::GetTime() - headlessIntentStartedSec_;
+                LOG_INFO(logging::LogCategory::Editor,
+                    "intent harness pass {}/{} in {:.1f}s: {}",
+                    headlessIntentPass_, g_intentRepeat, elapsed, verdict);
+                if (headlessIntentPass_ >= g_intentRepeat)
+                {
+                    headlessIntentRunning_ = false;
+                    g_intentFinished = true;
+                }
+            }
+        }
+        else if (modelWarmed_ && !commandBar_.Model().Busy() &&
+            !commandBar_.Model().BusyInBackground())
+        {
+            // Not until the warmup has been SENT and has COME BACK. Both halves are needed.
+            // llama-server answers one request at a time, so a phrase submitted during the
+            // warmup queues behind it and the harness reports that wait as the phrase's own
+            // cost. Waiting on Busy() alone is not enough either: for the first thirty frames
+            // the server is still starting, nothing is in flight, and a phrase submitted then
+            // is simply PARKED -- to be sent the instant the server answers, in a dead heat
+            // with the warmup. That is how the first two attempts at measuring this came out
+            // slower than no warmup at all.
+            if (!g_intentPhrase.empty())
+            {
+                headlessIntentPhrase_ = g_intentPhrase;
+                g_intentPhrase.clear();
+                LOG_INFO(logging::LogCategory::Editor, "intent harness: \"{}\" on level {} "
+                    "({} pass(es))",
+                    headlessIntentPhrase_, NormalizeLevelPath(document_.LevelPath()),
+                    g_intentRepeat);
+            }
+            headlessIntentPending_ = true;
+            headlessIntentRunning_ = true;
+            ++headlessIntentPass_;
+            headlessIntentStartedSec_ = ImGui::GetTime();
+            commandBar_.BeginHeadless(actionCtx, headlessIntentPhrase_, buryDepthPercent_);
+        }
+    }
+
+    // The frame loop reads this to stop rendering flat out while the model works. Set every
+    // frame rather than on transitions, so a request that ends in any of its several ways
+    // cannot leave the editor throttled.
+    g_modelBusy.store(commandBar_.Model().Busy(), std::memory_order_relaxed);
+    g_modelBusyBackground.store(commandBar_.Model().BusyInBackground(),
+        std::memory_order_relaxed);
+
+    // "--chat=<phrase>": press Send once the editor is warm, then leave it alone -- the
+    // panel polls its own stream. Retried every frame until it goes out, because the first
+    // press only gets as far as "the server is still loading a 38 GB file".
+    if (!g_chatPhrase.empty())
+    {
+        if (++headlessChatWarmupFrames_ >= 30)
+        {
+            showModelChat_ = true;
+            if (modelChat_.SendHeadless(commandBar_.Model(), g_chatPhrase))
+            {
+                LOG_INFO(logging::LogCategory::Editor, "chat harness: sent \"{}\"",
+                    g_chatPhrase);
+                g_chatPhrase.clear();
+            }
+        }
+    }
+
     const auto drawPanel = [this, &ctx](const char* panelId)
     {
         IEditorPanel* panel = extensions_.FindPanel(panelId);
@@ -4272,6 +4132,24 @@ void EditorController::Draw(
     drawPanel("contentBrowser");
     drawPanel("inspector");
     drawPanel("commandHistory");
+    // Registering a panel is not the same as drawing one: this list is what actually puts
+    // it on screen, and leaving a panel out of it produces a window that exists, toggles
+    // from the Window menu, persists its visibility -- and never appears. Which is exactly
+    // what happened to these two until a screenshot showed the gap.
+    drawPanel("commandBar");
+    drawPanel("modelChat");
+    // The chat judged a message to be an edit rather than a question, so hand the phrase to
+    // the Command Bar and open that window. Read HERE rather than inside the panel's own
+    // lambda because that lambda is registered once and would have to capture an
+    // EditorActionContext that is rebuilt every frame. What lands there is a PREVIEW waiting
+    // to be confirmed -- the chat can start an edit, but it cannot commit one, and a preview
+    // in a window nobody opened is the same as no preview at all.
+    if (std::string phrase = modelChat_.TakePendingCommand(); !phrase.empty())
+    {
+        showCommandBar_ = true;
+        commandBar_.SubmitPhrase(actionCtx, phrase, buryDepthPercent_);
+        LOG_INFO(logging::LogCategory::Editor, "chat -> command bar: \"{}\"", phrase);
+    }
     drawPanel("importAssets");
     drawPanel("meshEditor");
     drawPanel("materialEditor");
@@ -4347,11 +4225,20 @@ void EditorController::Draw(
         {
             CPU_SCOPE(ProfilerScopes::kEditorPanelStateBuildJson);
             lastObservedPanelState_ = BuildPanelStateJson(showContentBrowser_, showOutliner_,
-                showInspector_, showCommandHistory_, contentBrowser_, outliner_, meshEditor_, viewportGizmo_);
+                showInspector_, showCommandHistory_, showCommandBar_, showModelChat_,
+            contentBrowser_, outliner_,
+                meshEditor_, viewportGizmo_);
             lastObservedPanelStateSnapshot_ = std::move(panelStateSnapshot);
             panelStateLoaded_ = true;
             panelStateDirty_ = true;
             nextPanelStateSaveTimeSec_ = ImGui::GetTime() + 0.25;
+        }
+        // The command bar's phrase history, saved on the same beat as the panel layout and
+        // only when it actually changed -- a phrase that took three attempts to word is
+        // worth more than the session it was worded in.
+        if (commandBar_.TakeHistoryDirty())
+        {
+            SaveCommandBarHistory(commandBar_.PhraseHistory());
         }
         if (panelStateDirty_ && (!open_ || ImGui::GetTime() >= nextPanelStateSaveTimeSec_))
         {

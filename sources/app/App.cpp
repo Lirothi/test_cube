@@ -9,9 +9,11 @@
 #include "core/logging/Log.h"
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdio>
+#include <thread>
 #include <mimalloc.h>
 #include <vector>
 #include <wincodec.h>
@@ -50,6 +52,15 @@ int g_bootDlssMode = -1;
 // Empty-HUD capture mode; see App.h. Set by main.cpp from "--no-hud".
 bool g_hudHidden = false;
 bool g_bootLogWindow = false;
+bool g_bootEditor = false;
+std::string g_intentPhrase;
+bool   g_intentRun = false;
+bool   g_intentFinished = false;
+double g_intentTimeoutSec = 180.0;
+int    g_intentRepeat = 1;
+std::string g_chatPhrase;
+std::atomic<bool> g_modelBusy{ false };
+std::atomic<bool> g_modelBusyBackground{ false };
 // Single-process settings sweep; see App.h. Set by main.cpp from "--sweep=<setting>:<v0>,...".
 std::string g_sweepSetting;
 std::vector<float> g_sweepValues;
@@ -1429,6 +1440,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         MSG msg = {};
         double lastTime = GetTimeSeconds();
         bool firstFrameDumped = false;
+        double frameStart = GetTimeSeconds();
         while (isRunning_) {
             if (!firstFrameDumped && renderer.GetTotalFrameNumber() > 0)
             {
@@ -1654,6 +1666,27 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 }
             }
 
+            // "--intent=<phrase>": quit as soon as the editor has logged its verdict, or
+            // when the model has had long enough. The wait is open-ended rather than a fixed
+            // delay because inference takes whatever it takes.
+            static const double intentStart = GetTimeSeconds();
+            if (g_intentFinished || (!g_intentPhrase.empty() &&
+                GetTimeSeconds() - intentStart >= g_intentTimeoutSec))
+            {
+                if (!g_intentFinished)
+                {
+                    LOG_ERROR(logging::LogCategory::Editor,
+                        "intent harness: no verdict after {:.0f}s", g_intentTimeoutSec);
+                }
+                // ...unless a --shot is still pending. What a command DID is the interesting
+                // part, and quitting on the verdict meant the only photograph that could ever
+                // be taken was of the moment before it happened.
+                if (g_shotPath.empty())
+                {
+                    isRunning_ = false;
+                }
+            }
+
             // "--profdump=<path>": temporary VSM perf harness — after the same warmup delay, dump the
             // profiler overlay to a file and quit. Independent of --shot so timings can be swept headlessly.
             if (!g_profDumpPath.empty())
@@ -1699,6 +1732,38 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
 
             Profiler::Get().EndFrame();
+
+            // While the local model is answering, STOP rendering flat out.
+            //
+            // The editor draws the atoll in 1.56 ms, which is about 640 frames a second,
+            // and every one of them is the main thread plus the render graph's workers on
+            // every core. The model's experts run on those same cores, and the bill was
+            // measured: a phrase that takes 21 s on an idle machine takes 57 s inside a
+            // running editor, and a chat's first token 33 s instead of 5. The user found
+            // it from the outside -- alt-tabbing away made the model noticeably faster,
+            // because Windows was doing this throttling for us and only when unfocused.
+            //
+            // Nobody needs 640 fps while waiting for an answer. At 30 the editor still
+            // feels live and hands back about 95% of the duty cycle. This costs nothing
+            // when no request is in flight, which is almost always.
+            // 30 while someone waits on an answer; 120 while the model does background work
+            // it was never asked for. The second number exists because the startup warmup
+            // runs for about 44 s, and holding the editor at 30 for that long right after it
+            // opens trades frames the user IS looking at for an answer nobody requested.
+            // 120 still hands over most of the duty cycle -- the unthrottled frame is 1.56 ms.
+            const double busyFrameSeconds =
+                g_modelBusy.load(std::memory_order_relaxed) ? 1.0 / 30.0
+                : g_modelBusyBackground.load(std::memory_order_relaxed) ? 1.0 / 120.0
+                : 0.0;
+            if (busyFrameSeconds > 0.0)
+            {
+                const double spare = busyFrameSeconds - (GetTimeSeconds() - frameStart);
+                if (spare > 0.0)
+                {
+                    std::this_thread::sleep_for(std::chrono::duration<double>(spare));
+                }
+            }
+            frameStart = GetTimeSeconds();
         }
 
         appController_.FlushGraphicsSettings(renderer, scene);

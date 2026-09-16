@@ -37,6 +37,9 @@
     <Filter Include="sources\editor\commands">
       <UniqueIdentifier>{d9cb89dc-091f-4d5d-8eb4-c21e21a65eed}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\editor\intent">
+      <UniqueIdentifier>{fbcab36a-f287-4fce-a55f-80988633b4dc}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\scene">
       <UniqueIdentifier>{c3a9a9e2-1a4c-48d3-9b46-0a0401bc9c86}</UniqueIdentifier>
     </Filter>
@@ -204,6 +207,9 @@
     <ClCompile Include="sources/editor/EditorHotkeys.cpp">
       <Filter>sources\editor</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/EditorFraming.cpp">
+      <Filter>sources\editor</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/assets/AssetRegistry.cpp">
       <Filter>sources\editor\assets</Filter>
     </ClCompile>
@@ -225,6 +231,9 @@
     <ClCompile Include="sources/editor/ui/CommandHistoryPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/scene/EditorZone.cpp">
+      <Filter>sources\editor\scene</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp">
       <Filter>sources\editor\scene</Filter>
     </ClCompile>
@@ -238,6 +247,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/commands/CompositeCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/commands/EditObjectPropertiesCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/commands/EditEnvironmentCommand.cpp">
@@ -280,6 +292,39 @@
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionRegistry.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/IntentSchema.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EnvironmentSettings.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/IntentNotes.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/IntentPrompt.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/LlmClient.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/LlmIntentSource.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/GrammarIntentSource.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorIntentResolver.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/CommandBarPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/ModelChatPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp">
@@ -662,6 +707,54 @@
     <ClInclude Include="sources/editor/EditorSelection.h">
       <Filter>sources\editor</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/EditorObjectMatch.h">
+      <Filter>sources\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/EditorFraming.h">
+      <Filter>sources\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/EditorIntent.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/EditorIntentSource.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/EditorActionRegistry.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/IntentSchema.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/EnvironmentSettings.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/IntentNotes.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/IntentPrompt.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/LlmClient.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/LlmIntentSource.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/GrammarIntentSource.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/EditorIntentResolver.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/CommandBarPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/ImGuiTextInput.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/ModelChatPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/EditorController.h">
       <Filter>sources\editor</Filter>
     </ClInclude>
@@ -701,6 +794,9 @@
     <ClInclude Include="sources/editor/ui/EditorLightDirection.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/scene/EditorZone.h">
+      <Filter>sources\editor\scene</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h">
       <Filter>sources\editor\scene</Filter>
     </ClInclude>
@@ -717,6 +813,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/CompositeCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/EditObjectPropertiesCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/EditEnvironmentCommand.h">

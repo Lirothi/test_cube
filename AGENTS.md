@@ -147,3 +147,62 @@ parameter. Without it, an animated scene differs ~2.3 % between runs and swamps 
 with it the floor is ~0.05-0.4 % (the residual is DLSS jitter phase, which follows the frame index).
 Use two different values (e.g. `=0` and `=1.5`) to prove something ANIMATES — that is the test a
 frozen/over-cached shadow fails, and one that authoring `swayFrequency: 0` cannot perform.
+
+## The Local Intent Model (llama-server) — Starting and Stopping It
+
+The editor's Command Bar talks to a local `llama-server` (llama.cpp) holding a ~38 GB GGUF.
+Neither is in the repository; `python tools/fetch_intent_model.py` puts both under
+`D:/llm_models`, and `editor_state.json` -> `levelEditor.intentModel` points at them.
+
+**The rule: nothing may outlive the process that started it.** A 38 GB inference server
+left running is a third of this machine's RAM held by something the user did not ask to
+keep. The editor enforces this by construction — the server is launched inside a **Windows
+job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`**, so it dies with the editor whether
+the editor exits cleanly, crashes, is killed from Task Manager, or is stopped in a debugger.
+No shutdown path is trusted, because a crash runs none of them. On top of that the editor
+stops it after `idleTimeoutSeconds` (default 600) with no request. That default was 60 and
+was raised: restarting costs ~22 s once the weights go to the card, and a minute is an
+ordinary pause mid-thought. An idle server is cheap because the model is mmapped, so it
+holds reclaimable page cache rather than committed RAM.
+
+**When starting one by hand** — a test script, a probe, a conversation with the model —
+the same rule applies and nothing enforces it for you:
+
+- Start it only for as long as the check needs, and **kill it in the same turn**:
+  `Get-Process llama-server | Stop-Process -Force`, then VERIFY it is gone
+  (`Get-Process llama-server` must come back empty). A `Stop-Process` can report success
+  while the process is still tearing down 38 GB of mappings — check, do not assume.
+- Prefer `-ngl 0` (CPU). The renderer owns the GPU, and a 35B-A3B answers in seconds on CPU.
+- Always pass `--load-mode mmap` and never `--mlock`: mmap makes the weights file-backed
+  page cache the OS can reclaim, mlock pins all 38 GB for real.
+- Reuse a server that is already healthy on the endpoint instead of starting a second one.
+  Two of these do not fit in RAM together.
+
+Learned the hard way on 2026-09-15: a probe server was left running after the checks were
+done, holding 35.4 GB of working set until it was noticed.
+
+**Talking to the model directly.** `intent_regression --dump <level> <gbnf> <prompt>` writes
+the exact grammar and system prompt the editor would send, so a conversation exercises the
+contract that ships rather than a retyped approximation. Two things that cost an iteration
+each and are not obvious:
+
+- **Every GBNF rule must be on ONE line.** llama.cpp ends a rule at the newline, so a
+  continuation line starting with `|` is a parse error, and the server rejects the whole
+  grammar with one unhelpful sentence ("failed to parse grammar") naming neither rule nor line.
+- **Qwen3.x thinks before answering**, and a grammar demanding JSON from the first token
+  does not let it — the two fight over every token and the request fails or stalls. Pre-fill
+  an empty `<think>\n\n</think>\n\n` after the assistant tag; it is part of the prompt, so the
+  grammar never sees it.
+
+### Photographing the editor
+
+`--editor` opens the Level Editor at boot, for the same reason `--log-window` exists: so a
+headless `--shot` can capture a panel that otherwise needs a keypress. Which panels appear is
+whatever `editor_state.json` -> `levelEditor.panelState.*Visible` last held, so set those first.
+Allow a long `--shot-delay` (40 frames is comfortable) -- the asset registry scan and the first
+editor frame both happen before the panels look settled.
+
+**Registering a panel is not the same as drawing one.** `EditorController::Draw` ends with a
+hardcoded list of `drawPanel("<id>")` calls; a panel missing from it exists, toggles from the
+Window menu, persists its visibility -- and never appears. Two panels shipped that way until a
+screenshot showed the gap, because no headless gate can see ImGui wiring.

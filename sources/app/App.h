@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <wrl.h>
 #include <d3d12.h>
+#include <atomic>
 #include <vector>
 #include <string>
 #include <DirectXMath.h>
@@ -92,6 +93,43 @@ extern std::vector<std::pair<std::string, float>> g_fixedSettings;
 // "--log-window": open the session-log viewer at boot, so a headless --shot can capture the
 // viewer itself — the only way its rendering is verifiable without driving the GUI by hand.
 extern bool g_bootLogWindow;
+// "--editor": open the Level Editor at boot, for the same reason g_bootLogWindow exists --
+// so a headless --shot can capture a panel that otherwise needs a keypress to appear.
+// WITH_EDITOR only; ignored elsewhere.
+extern bool g_bootEditor;
+
+// "--intent=<phrase>": run ONE phrase through the editor's real command pipeline at boot,
+// log the verdict, and quit. This is the only harness that exercises the whole chain as the
+// app actually wires it -- level file -> document -> asset vocabulary -> grammar or model ->
+// resolver -> action registry -> command stack. The regression tool runs on a synthetic
+// document and the live probes run on a dumped prompt; neither sees that wiring.
+//
+// Preview only unless "--intent-run" is also given: showing what a phrase WOULD do is the
+// safe default for something that can touch six hundred objects.
+extern std::string g_intentPhrase;
+extern bool   g_intentRun;
+extern bool   g_intentFinished;   // set by the editor once the verdict is logged
+extern double g_intentTimeoutSec;
+// "--intent-repeat=<n>": ask the same phrase n times in one process. The first request pays
+// for the system prompt's prefill and every later one hits the server's cache, so a single
+// run only ever reports the worst case.
+extern int g_intentRepeat;
+
+// "--chat=<phrase>": send one message through the Model Chat panel once the editor is warm.
+// The chat's reply is STREAMED, so the only thing worth looking at exists only while it is
+// arriving -- which makes a headless --shot the only way to see it at all.
+extern std::string g_chatPhrase;
+
+// True while the local model has a request in flight. The frame loop reads it and caps the
+// frame rate, because the renderer at 640 fps and the model's experts want the same cores
+// and the renderer wins -- which is why alt-tabbing away from the editor visibly speeds the
+// model up. Set by the editor every frame; always false in a build without one.
+extern std::atomic<bool> g_modelBusy;
+
+// The model is doing work nobody is waiting for: the startup warmup, or a note written
+// after a refusal. Worth yielding some cores to, but not at the price of a sluggish editor
+// in the first minute after it opens -- so this caps frames far more gently than the above.
+extern std::atomic<bool> g_modelBusyBackground;
 
 // "--no-hud": build an EMPTY HUD text buffer. The FPS/MS readout is composited into the backbuffer
 // that "--shot" reads back, so it differs between two runs of the same frozen frame — which would

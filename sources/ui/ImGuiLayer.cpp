@@ -11,6 +11,7 @@
 #endif
 #include "backends/imgui_impl_dx12.h"
 #include "backends/imgui_impl_win32.h"
+#include "core/logging/Log.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
 
@@ -27,6 +28,9 @@ constexpr uint32_t kSrvDescriptorCapacity = 512;
 constexpr uint32_t kSrvDescriptorCapacity = 64;
 #endif
 constexpr float kUiScale = 1.5f;
+// Shipped with the repo, and picked over a system font for that reason. Covers Latin,
+// Greek and U+0400-U+052F, which is what the command bar and the model chat need.
+constexpr const char* kUiFontPath = "fonts/consolas.ttf";
 
 #if WITH_EDITOR
 void SubmitEditorDockSpace()
@@ -128,6 +132,30 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleMain = kUiScale;
     style.ScaleAllSizes(kUiScale);
+
+    // ImGui's built-in font is ASCII-only, and a glyph it does not have is drawn as '?'.
+    // That is what every Cyrillic character typed into the command bar and the model chat
+    // turned into. Nothing was wrong with the text: the same phrases reach the model intact
+    // and come back with the right answer, and the headless harness has been running
+    // Russian through this layer all along. Only the atlas was missing the glyphs.
+    //
+    // fonts/consolas.ttf already ships with the repo and covers U+0400-U+052F, so this
+    // needs no system font path and no download. It is monospace like the built-in font,
+    // so the editor's metrics do not shift; 13.0f is that font's own size, and
+    // FontScaleMain above still does the UI scaling. ImGui 1.92 rasterises glyphs on
+    // demand, so the glyph-range tables older versions required are not needed here.
+    if (::GetFileAttributesA(kUiFontPath) != INVALID_FILE_ATTRIBUTES)
+    {
+        io.Fonts->AddFontFromFileTTF(kUiFontPath, 13.0f);
+    }
+    else
+    {
+        // Not fatal -- the built-in font still draws Latin. But it is the whole reason
+        // Cyrillic would be question marks again, so it must not fail silently.
+        LOG_WARNING(logging::LogCategory::App,
+            "UI font '{}' not found (cwd must be the repo root); falling back to the "
+            "built-in ASCII-only font, so non-Latin text will render as '?'", kUiFontPath);
+    }
 
     if (!ImGui_ImplWin32_Init(hwnd))
     {

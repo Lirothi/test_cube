@@ -27,6 +27,10 @@ public:
 
 private:
     void DrawTransformEditor(EditorContext& ctx, EditorCommandStack& commandStack, EditorObject& object);
+    // Shape, closure, fill, width and the control-point list for a zone. Lives here rather
+    // than only in the viewport because adding and removing points had no home at all: the
+    // gizmo could move one and nothing could make or unmake one.
+    void DrawZoneEditor(EditorContext& ctx, EditorCommandStack& commandStack, EditorObject& object);
 
     InspectorMultiEdit multiEdit_;
     EditorObjectId nameEditObject_{};

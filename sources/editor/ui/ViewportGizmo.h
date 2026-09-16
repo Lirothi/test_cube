@@ -70,6 +70,9 @@ private:
     bool wasUsing_ = false;
     EditorObjectId dragPrimary_{};
     Math::mat4 primaryMatrixBeforeDrag_;
+    // The zone's properties as they were when a point drag began, so the whole drag lands
+    // on the undo stack as one entry rather than one per frame.
+    nlohmann::json splinePropertiesBeforeDrag_;
     std::vector<DragSnapshot> dragSnapshots_;
     bool pendingPickToggle_ = false;
 

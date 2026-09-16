@@ -22,6 +22,7 @@
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditEnvironmentCommand.h"
+#include "editor/commands/EditObjectPropertiesCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
@@ -31,6 +32,7 @@
 #include "editor/ui/EditorDragDrop.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
+#include "editor/scene/EditorZone.h"
 #include "rendering/debug/DebugDraw.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "imgui.h"
@@ -53,6 +55,21 @@ namespace
         DirectX::XMFLOAT4X4 matrix;
         std::memcpy(&matrix, values, sizeof(matrix));
         return Math::mat4(matrix);
+    }
+
+    // The inverse of TransformFromMatrix, for document objects that have a transform but no
+    // renderable to ask for a model matrix -- zones, and freeCameraStart, which had no
+    // gizmo at all for the same reason.
+    Math::mat4 MatrixFromTransform(const EditorTransform& transform)
+    {
+        const float translation[3] = { transform.position.x, transform.position.y,
+            transform.position.z };
+        const float rotation[3] = { transform.rotationDeg.x, transform.rotationDeg.y,
+            transform.rotationDeg.z };
+        const float scale[3] = { transform.scale.x, transform.scale.y, transform.scale.z };
+        float values[16];
+        ImGuizmo::RecomposeMatrixFromComponents(translation, rotation, scale, values);
+        return FromFloat16(values);
     }
 
     EditorTransform TransformFromMatrix(const Math::mat4& matrix)
@@ -637,6 +654,33 @@ void ViewportGizmo::Update(EditorContext& ctx,
     ToFloat16(camera.GetViewMatrix(), view);
     ToFloat16(camera.GetProjMatrixNoJitter(), proj);
 
+    // Shared projection and picking for editor atlas icons.
+    ImDrawList* iconDrawList = ImGui::GetBackgroundDrawList();
+    const Math::mat4& iconViewProjection = camera.GetViewProjMatrixNoJitter();
+    constexpr float kIconHalf = 15.0f;
+    const auto beginWorldIcon = [&](const Math::float3& pos, EditorObjectId id,
+                                    ImVec2& mn, ImVec2& mx)
+    {
+        const DirectX::XMVECTOR clip = DirectX::XMVector4Transform(
+            DirectX::XMVectorSet(pos.x, pos.y, pos.z, 1.0f), iconViewProjection.xm());
+        const float w = DirectX::XMVectorGetW(clip);
+        if (w <= 1e-3f) { return false; }
+        const float ndcX = DirectX::XMVectorGetX(clip) / w;
+        const float ndcY = DirectX::XMVectorGetY(clip) / w;
+        if (ndcX < -1.5f || ndcX > 1.5f || ndcY < -1.5f || ndcY > 1.5f) { return false; }
+        const float sx = (ndcX * 0.5f + 0.5f) * width;
+        const float sy = (1.0f - (ndcY * 0.5f + 0.5f)) * height;
+        mn = ImVec2(sx - kIconHalf, sy - kIconHalf);
+        mx = ImVec2(sx + kIconHalf, sy + kIconHalf);
+        if (ctx.selection.Contains(id))
+        {
+            iconDrawList->AddRect(ImVec2(mn.x - 2.0f, mn.y - 2.0f),
+                ImVec2(mx.x + 2.0f, mx.y + 2.0f), IM_COL32(255, 200, 40, 255), 3.0f, 0, 2.0f);
+        }
+        iconHits.push_back({ mn, mx, id });
+        return true;
+    };
+
     // --- Editor icon billboards for world-positioned editor entities ---
     // Screen-space, always-on-top ImGui overlay images from the icon atlas;
     // clickable to select the entity. Directional/camera have no world position,
@@ -668,42 +712,27 @@ void ViewportGizmo::Update(EditorContext& ctx,
         if (iconTex != ImTextureID_Invalid)
         {
             ImDrawList* dl = ImGui::GetBackgroundDrawList();
-            const Math::mat4& vp = camera.GetViewProjMatrixNoJitter();
-            constexpr float kIconHalf = 15.0f;
 
             auto drawWorldIcon = [&](const Math::float3& pos,
                 EditorObjectId id,
-                ImVec2 uv0,
-                ImVec2 uv1,
+                int column,
+                int row,
                 ImU32 tint)
             {
-                const DirectX::XMVECTOR clip =
-                    DirectX::XMVector4Transform(DirectX::XMVectorSet(pos.x, pos.y, pos.z, 1.0f), vp.xm());
-                const float w = DirectX::XMVectorGetW(clip);
-                if (w <= 1e-3f) { return; } // behind the camera
-                const float ndcX = DirectX::XMVectorGetX(clip) / w;
-                const float ndcY = DirectX::XMVectorGetY(clip) / w;
-                if (ndcX < -1.5f || ndcX > 1.5f || ndcY < -1.5f || ndcY > 1.5f) { return; }
-                const float sx = (ndcX * 0.5f + 0.5f) * width;
-                const float sy = (1.0f - (ndcY * 0.5f + 0.5f)) * height;
-
-                const ImVec2 mn(sx - kIconHalf, sy - kIconHalf);
-                const ImVec2 mx(sx + kIconHalf, sy + kIconHalf);
-                if (ctx.selection.Contains(id))
-                {
-                    dl->AddRect(ImVec2(mn.x - 2.0f, mn.y - 2.0f), ImVec2(mx.x + 2.0f, mx.y + 2.0f),
-                                IM_COL32(255, 200, 40, 255), 3.0f, 0, 2.0f);
-                }
+                ImVec2 mn, mx;
+                if (!beginWorldIcon(pos, id, mn, mx)) { return; }
+                // 2 columns x 3 rows, 256 px per cell. Keep in sync with build_editor_icons.py.
+                const ImVec2 uv0(float(column) / 2.0f, float(row) / 3.0f);
+                const ImVec2 uv1(float(column + 1) / 2.0f, float(row + 1) / 3.0f);
                 dl->AddImage(iconTex, mn, mx, uv0, uv1, tint);
-                iconHits.push_back({ mn, mx, id });
             };
 
             for (EditorObject& env : ctx.document.Environment())
             {
-                // Atlas cells: [dirlight | point] top row, [spot | camera] bottom row.
-                ImVec2 uv0, uv1;
-                if (env.type == "pointLight")     { uv0 = ImVec2(0.5f, 0.0f); uv1 = ImVec2(1.0f, 0.5f); }
-                else if (env.type == "spotLight") { uv0 = ImVec2(0.0f, 0.5f); uv1 = ImVec2(0.5f, 1.0f); }
+                // Atlas rows: [dirlight | point], [spot | camera], [zone | empty].
+                int column, row;
+                if (env.type == "pointLight")     { column = 1; row = 0; }
+                else if (env.type == "spotLight") { column = 0; row = 1; }
                 else                              { continue; }
 
                 const auto posIt = env.properties.find("position");
@@ -726,11 +755,21 @@ void ViewportGizmo::Update(EditorContext& ctx,
                     tint = IM_COL32(ch(0), ch(1), ch(2), 255);
                 }
 
-                drawWorldIcon(Math::float3(px, py, pz), env.id, uv0, uv1, tint);
+                drawWorldIcon(Math::float3(px, py, pz), env.id, column, row, tint);
             }
 
             for (EditorObject& obj : ctx.document.Objects())
             {
+                if (obj.type == editorzone::kTypeName)
+                {
+                    const auto& pos = obj.transform.position;
+                    const ImU32 tint = !obj.enabled ? IM_COL32(150, 150, 150, 170)
+                        : ctx.selection.Contains(obj.id) ? IM_COL32(255, 200, 40, 255)
+                                                       : IM_COL32(64, 217, 255, 255);
+                    // The icon sits at the top of the zone's existing centre mast.
+                    drawWorldIcon(Math::float3(pos.x, pos.y + 6.0f, pos.z), obj.id, 0, 2, tint);
+                    continue;
+                }
                 if (obj.type != "freeCameraStart")
                 {
                     continue;
@@ -742,8 +781,8 @@ void ViewportGizmo::Update(EditorContext& ctx,
                 drawWorldIcon(
                     obj.transform.position,
                     obj.id,
-                    ImVec2(0.5f, 0.5f),
-                    ImVec2(1.0f, 1.0f),
+                    1,
+                    1,
                     tint);
             }
         }
@@ -837,6 +876,62 @@ void ViewportGizmo::Update(EditorContext& ctx,
         }
     }
 
+    // ZONES. Drawn always, not only when selected: a zone is invisible otherwise -- it has
+    // no mesh and no billboard -- and a region you cannot see is a region you cannot aim a
+    // command at. Through the debug-draw system rather than an ImGui overlay so the outline
+    // is clipped in 3D and sits behind the terrain it is drawn on, like the light proxies.
+    if (DebugDrawSystem* dd = ctx.renderer.GetDebugDrawSystem())
+    {
+        for (const EditorObject& object : ctx.document.Objects())
+        {
+            editorzone::Zone zone;
+            if (!editorzone::FromObject(object, zone))
+            {
+                continue;
+            }
+            const bool selected = ctx.selection.Contains(object.id);
+            const Math::float4 colour = !object.enabled
+                ? Math::float4(0.45f, 0.45f, 0.45f, 0.5f)
+                : selected ? Math::float4(1.0f, 0.78f, 0.2f, 1.0f)
+                           : Math::float4(0.25f, 0.85f, 1.0f, 0.65f);
+
+            for (const std::vector<Math::float3>& outline : editorzone::OutlineLoops(zone))
+            {
+                for (std::size_t index = 0; index < outline.size(); ++index)
+                {
+                    const Math::float3& a = outline[index];
+                    const Math::float3& b = outline[(index + 1) % outline.size()];
+                    dd->AddLine(a, b, colour);
+                }
+            }
+            // A short mast at the centre, because a flat ring on flat ground is easy to
+            // lose and this is what you grab with the translate gizmo.
+            dd->AddLine(zone.centre, Math::float3(zone.centre.x, zone.centre.y + 6.0f,
+                zone.centre.z), colour);
+
+            // A selected spline shows its points, and the active one wears a taller mast.
+            // Without a handle per point the shape can only be moved as a whole, which for
+            // a coastline is the one thing that is no use.
+            if (selected && zone.shape == editorzone::Shape::Spline)
+            {
+                // Spheres, at a radius the zone carries. A sphere is what a grabbable point
+                // looks like, and -- less obviously -- it is also what makes PICKING honest:
+                // the click test is a ray against these same spheres, so what is hit is
+                // exactly what is drawn, at the size it is drawn.
+                const float radius = editorzone::PointRadius(object);
+                for (std::size_t index = 0; index < zone.points.size(); ++index)
+                {
+                    const bool active = static_cast<int>(index) == ctx.selection.ActivePoint();
+                    const Math::float4 handleColour = active
+                        ? Math::float4(1.0f, 0.4f, 0.1f, 1.0f) : colour;
+                    const Math::float3& p = zone.points[index];
+                    dd->AddSphere(p, active ? radius * 1.35f : radius, handleColour,
+                        /*wireframe=*/true);
+                }
+            }
+        }
+    }
+
     bool gizmoBusy = false;
 
     const auto snapForOperation = [this](ImGuizmo::OPERATION operation, float values[3]) -> const float*
@@ -865,15 +960,16 @@ void ViewportGizmo::Update(EditorContext& ctx,
             {
                 RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id.value);
                 RenderableObject* renderable = runtime ? runtime->AsRenderableObject() : nullptr;
-                if (!renderable)
-                {
-                    continue;
-                }
 
                 DragSnapshot snapshot;
                 snapshot.id = id;
                 snapshot.transform = object->transform;
-                snapshot.model = renderable->GetModelMatrix();
+                // A document object without a renderable is still a thing with a transform,
+                // and skipping it here is why a zone could not be dragged at all. Its model
+                // matrix comes from the document instead of from the scene -- the same
+                // matrix, built from the same numbers, just not by way of a mesh.
+                snapshot.model = renderable ? renderable->GetModelMatrix()
+                                            : MatrixFromTransform(object->transform);
                 dragSnapshots_.push_back(std::move(snapshot));
                 continue;
             }
@@ -1019,8 +1115,15 @@ void ViewportGizmo::Update(EditorContext& ctx,
         }
     }
 
+    // A document object with a transform and no renderable gets the gizmo from its own
+    // transform. Without this the condition below was "has a mesh in the scene", which
+    // silently excluded every transform-carrying object that is not drawn -- zones, and
+    // freeCameraStart before them.
+    EditorObject* primaryTransformOnly =
+        (primaryObject && !primaryRenderable) ? primaryObject : nullptr;
+
     bool gizmoHandled = false;
-    if (gizmoVisible && (primaryRenderable || primaryEnvironment))
+    if (gizmoVisible && (primaryRenderable || primaryEnvironment || primaryTransformOnly))
     {
         bool primaryHasPosition = false;
         bool primaryHasDirection = false;
@@ -1030,6 +1133,26 @@ void ViewportGizmo::Update(EditorContext& ctx,
         {
             primaryPosition = primaryRenderable->GetPosition();
             primaryModel = primaryRenderable->GetModelMatrix();
+        }
+        else if (primaryTransformOnly)
+        {
+            primaryPosition = primaryTransformOnly->transform.position;
+            primaryModel = MatrixFromTransform(primaryTransformOnly->transform);
+            // A picked spline point takes the gizmo instead of the zone. Handled here
+            // rather than as a separate manipulator so the point gets snapping, the same
+            // drag-commit path and the same undo entry as everything else.
+            editorzone::Zone activeZone;
+            if (ctx.selection.ActivePoint() >= 0 &&
+                editorzone::FromObject(*primaryTransformOnly, activeZone) &&
+                ctx.selection.ActivePoint() < static_cast<int>(activeZone.points.size()))
+            {
+                primaryPosition = activeZone.points[static_cast<std::size_t>(ctx.selection.ActivePoint())];
+                EditorTransform pointTransform;
+                pointTransform.position = primaryPosition;
+                pointTransform.rotationDeg = Math::float3(0.0f, 0.0f, 0.0f);
+                pointTransform.scale = Math::float3(1.0f, 1.0f, 1.0f);
+                primaryModel = MatrixFromTransform(pointTransform);
+            }
         }
         else
         {
@@ -1068,19 +1191,69 @@ void ViewportGizmo::Update(EditorContext& ctx,
             ImGuizmo::Manipulate(view, proj, operation, mode, model, nullptr,
                 snapForOperation(operation, snapValues));
             const bool usingNow = ImGuizmo::IsUsing();
-            if (usingNow && !wasUsing_)
+            // Dragging ONE POINT of a spline is its own small path. It cannot go through
+            // the snapshot machinery, which moves whole objects by a matrix delta -- here
+            // the object does not move at all, one number pair inside its properties does.
+            const bool draggingSplinePoint = primaryTransformOnly && ctx.selection.ActivePoint() >= 0;
+            if (draggingSplinePoint)
             {
-                captureDragSnapshots();
-                primaryMatrixBeforeDrag_ = primaryModel;
-                dragPrimary_ = primary;
+                if (usingNow && !wasUsing_)
+                {
+                    splinePropertiesBeforeDrag_ = primaryTransformOnly->properties;
+                }
+                if (usingNow)
+                {
+                    // World back to the object's own frame -- undoing scale and yaw -- so a
+                    // rotated or stretched zone writes the point the user actually pointed
+                    // at rather than one skewed by its own transform.
+                    const Math::float3 world = TransformFromMatrix(FromFloat16(model)).position;
+                    const EditorTransform& t = primaryTransformOnly->transform;
+                    const float yaw = -t.rotationDeg.y * 0.017453293f;
+                    const float c = std::cos(yaw);
+                    const float s = std::sin(yaw);
+                    const float dx = world.x - t.position.x;
+                    const float dz = world.z - t.position.z;
+                    const float sx = std::fabs(t.scale.x) > 1e-4f ? t.scale.x : 1.0f;
+                    const float sz = std::fabs(t.scale.z) > 1e-4f ? t.scale.z : 1.0f;
+                    std::vector<Math::float3> points =
+                        editorzone::LocalPoints(*primaryTransformOnly);
+                    if (ctx.selection.ActivePoint() < static_cast<int>(points.size()))
+                    {
+                        points[static_cast<std::size_t>(ctx.selection.ActivePoint())] = Math::float3(
+                            (dx * c - dz * s) / sx, 0.0f, (dx * s + dz * c) / sz);
+                        editorzone::StoreLocalPoints(*primaryTransformOnly, points);
+                        ctx.document.SetDirty(true);
+                    }
+                }
+                if (!usingNow && wasUsing_)
+                {
+                    // One history entry for the whole drag, committed by replaying it: the
+                    // live edits above were written straight to the document so the shape
+                    // follows the mouse, and the command puts the BEFORE snapshot behind
+                    // them so Ctrl+Z has something to go back to.
+                    nlohmann::json after = primaryTransformOnly->properties;
+                    primaryTransformOnly->properties = splinePropertiesBeforeDrag_;
+                    commandStack.Execute(ctx, std::make_unique<EditObjectPropertiesCommand>(
+                        primary, splinePropertiesBeforeDrag_, std::move(after),
+                        "Move Spline Point"));
+                }
             }
-            if (usingNow && !dragSnapshots_.empty())
+            else
             {
-                applyDragDelta(FromFloat16(model));
-            }
-            if (!usingNow && wasUsing_)
-            {
-                commitDrag();
+                if (usingNow && !wasUsing_)
+                {
+                    captureDragSnapshots();
+                    primaryMatrixBeforeDrag_ = primaryModel;
+                    dragPrimary_ = primary;
+                }
+                if (usingNow && !dragSnapshots_.empty())
+                {
+                    applyDragDelta(FromFloat16(model));
+                }
+                if (!usingNow && wasUsing_)
+                {
+                    commitDrag();
+                }
             }
             wasUsing_ = usingNow;
             gizmoBusy = usingNow || ImGuizmo::IsOver();
@@ -1097,12 +1270,79 @@ void ViewportGizmo::Update(EditorContext& ctx,
     if (flying || io.WantCaptureMouse || gizmoBusy) { return; }
     if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) { return; }
 
+    // A spline point takes priority over everything: its handles sit on top of the zone it
+    // belongs to, and the zone is already selected, so a click here means the point and
+    // cannot sensibly mean anything else. Clicking the active one again lets go, which is
+    // how the gizmo is handed back to the zone as a whole.
+    if (EditorObject* selectedZoneObject = ctx.document.Find(ctx.selection.Primary()))
+    {
+        editorzone::Zone selectedZone;
+        if (editorzone::FromObject(*selectedZoneObject, selectedZone) &&
+            selectedZone.shape == editorzone::Shape::Spline)
+        {
+            // RAY AGAINST THE SPHERES, in 3D, nearest hit along the ray.
+            //
+            // The first version projected each point to the screen and took the first one
+            // inside a 14-pixel box -- first in INDEX order, not nearest. Point the camera
+            // along the curve so the handles overlap and it grabbed whichever happened to
+            // come first in the array, which is the wrong one about half the time. The
+            // handles are spheres with a real radius, so the honest test is the one the
+            // shape already implies, and "nearest along the ray" is unambiguous even when
+            // three of them stack up.
+            Math::float3 rayOrigin;
+            Math::float3 rayDirection;
+            if (BuildViewportCursorRay(camera, io.MousePos, ImVec2(0.0f, 0.0f), width, height,
+                    rayOrigin, rayDirection))
+            {
+                const float radius = editorzone::PointRadius(*selectedZoneObject);
+                int nearest = -1;
+                float nearestT = 0.0f;
+                for (std::size_t index = 0; index < selectedZone.points.size(); ++index)
+                {
+                    const Math::float3 toCentre = selectedZone.points[index] - rayOrigin;
+                    const float along = toCentre.x * rayDirection.x +
+                        toCentre.y * rayDirection.y + toCentre.z * rayDirection.z;
+                    if (along <= 0.0f)
+                    {
+                        continue;   // behind the camera
+                    }
+                    const float perpSq =
+                        (toCentre.x * toCentre.x + toCentre.y * toCentre.y +
+                         toCentre.z * toCentre.z) - along * along;
+                    if (perpSq > radius * radius)
+                    {
+                        continue;
+                    }
+                    if (nearest < 0 || along < nearestT)
+                    {
+                        nearest = static_cast<int>(index);
+                        nearestT = along;
+                    }
+                }
+                if (nearest >= 0)
+                {
+                    // Clicking the active one again lets go, handing the gizmo back to the
+                    // zone as a whole.
+                    ctx.selection.SetActivePoint(
+                        ctx.selection.ActivePoint() == nearest ? -1 : nearest);
+                    return;
+                }
+            }
+        }
+    }
+
     // Editor icon billboards take click priority over mesh id-buffer picking.
     for (auto it = iconHits.rbegin(); it != iconHits.rend(); ++it)
     {
         if (io.MousePos.x >= it->mn.x && io.MousePos.x <= it->mx.x &&
             io.MousePos.y >= it->mn.y && io.MousePos.y <= it->mx.y)
         {
+            // A zone's icon selects the whole object, not a previously active spline point.
+            if (const EditorObject* object = ctx.document.Find(it->id);
+                object && object->type == editorzone::kTypeName)
+            {
+                ctx.selection.SetActivePoint(-1);
+            }
             if (io.KeyCtrl) { ctx.selection.Toggle(it->id); }
             else { ctx.selection.Replace(it->id); }
             return;

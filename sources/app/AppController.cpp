@@ -72,6 +72,13 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         g_bootLogWindow = false; // once: "--log-window" opens the viewer for a headless capture
         developerWindow_.ToggleLogWindow();
     }
+#if WITH_EDITOR
+    if (g_bootEditor)
+    {
+        g_bootEditor = false; // once: "--editor" opens the editor for a headless capture
+        editorController_.SetOpen(true);
+    }
+#endif
 
     if (!uiCapturingKeyboard)
     {

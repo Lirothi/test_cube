@@ -14,7 +14,9 @@
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/EditorSelection.h"
 #include "editor/scene/EditorSceneDocument.h"
+#include "editor/ui/CommandBarPanel.h"
 #include "editor/ui/CommandHistoryPanel.h"
+#include "editor/ui/ModelChatPanel.h"
 #include "editor/ui/ContentBrowserPanel.h"
 #include "editor/ui/ImportPanel.h"
 #include "editor/ui/InspectorPanel.h"
@@ -93,6 +95,8 @@ private:
         bool showOutliner = true;
         bool showInspector = true;
         bool showCommandHistory = true;
+        bool showCommandBar = false;
+        bool showModelChat = false;
         ContentBrowserPanel::PersistentState contentBrowser;
         SceneOutlinerPanel::PersistentState outliner;
         MeshEditorPanel::PersistentState meshEditor;
@@ -111,6 +115,38 @@ private:
     bool showOutliner_ = true;
     bool showInspector_ = true;
     bool showCommandHistory_ = true;
+    // E1/E6: type a phrase, preview what it reaches, run it as one undoable entry. Off by
+    // default -- it is a power tool beside the panels, not a fourth thing always on screen.
+    bool showCommandBar_ = false;
+    // A plain conversation with the local model, beside the command bar rather than inside
+    // it -- see ModelChatPanel for why the two are not one panel.
+    bool showModelChat_ = false;
+    // "--intent=<phrase>" is in flight: submitted, waiting for the source to settle.
+    bool headlessIntentPending_ = false;
+    // Editor frames drawn since boot. The harness waits for a few before submitting: firing
+    // on frame zero ran a command while the renderer was still standing its resources up,
+    // and took the process with it. Nobody can type that fast, so this is a harness-only
+    // hazard -- but a harness that crashes is not a harness.
+    int headlessIntentWarmupFrames_ = 0;
+    // --intent-repeat: which pass this is, the phrase to repeat, and when it was submitted.
+    // The elapsed time is the whole point of repeating -- the first pass carries the system
+    // prompt's prefill and no later one does.
+    int headlessIntentPass_ = 0;
+    std::string headlessIntentPhrase_;
+    double headlessIntentStartedSec_ = 0.0;
+    // True from the first pass's submission until the last one's verdict. Separate from
+    // headlessIntentPending_, which is only true while ONE pass is in flight -- between two
+    // passes both the phrase and the pending flag are clear, and without this the run
+    // silently ended after pass 1.
+    bool headlessIntentRunning_ = false;
+    // Same warmup reasoning as the intent harness, counted separately because --chat can be
+    // used without --intent and that counter only advances while the intent block runs.
+    int headlessChatWarmupFrames_ = 0;
+    // The model's own warmup: server started and system prompt prefilled, before anyone
+    // types. Same frame delay as the harness, for the same reason -- the level's runtime
+    // objects are still arriving over the first few frames and the prompt is built from them.
+    bool modelWarmed_ = false;
+    int modelWarmupFrames_ = 0;
     bool showImportPanel_ = false; // H3: import_staging -> engine assets window
     bool showMeshEditor_ = false;  // J: dedicated Mesh Editor window (edits a .mesh.json)
     bool showMaterialEditor_ = false; // I2: Material Editor window (edits a data/materials/<name>.json)
@@ -143,6 +179,8 @@ private:
     SceneOutlinerPanel outliner_;
     InspectorPanel inspector_;
     CommandHistoryPanel commandHistory_;
+    CommandBarPanel commandBar_;
+    ModelChatPanel modelChat_;
     ViewportGizmo viewportGizmo_;
     EditorHotkeys hotkeys_;
     EditorExtensionRegistry extensions_;

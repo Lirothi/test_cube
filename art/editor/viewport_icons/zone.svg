@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64">
+  <!-- White artwork takes the editor's enabled / selected tint at runtime. -->
+  <path d="M9 42 32 30 55 42 32 55Z" fill="#FFFFFF" fill-opacity="0.12"
+        stroke="#101820" stroke-opacity="0.75" stroke-width="5.5" stroke-linejoin="round"/>
+  <path d="M9 42 32 30 55 42 32 55Z" fill="none" stroke="#FFFFFF"
+        stroke-width="3" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 3"/>
+  <path d="M32 7C24.3 7 18 13.3 18 21c0 10 14 23 14 23s14-13 14-23C46 13.3 39.7 7 32 7Z"
+        fill="#FFFFFF" stroke="#101820" stroke-opacity="0.75" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="32" cy="21" r="5.5" fill="#101820" fill-opacity="0.9"/>
+</svg>

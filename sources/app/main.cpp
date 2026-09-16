@@ -39,6 +39,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <string>
 
 #pragma comment(lib, "d3dcompiler.lib")
@@ -763,6 +764,107 @@ int WINAPI WinMain(
         // "--log-window": open the session-log viewer at boot (see App.h).
         if (std::strstr(lpCmdLine, "--log-window")) {
             g_bootLogWindow = true;
+        }
+        // "--editor": open the Level Editor at boot, so a --shot can photograph its panels.
+        if (std::strstr(lpCmdLine, "--editor")) {
+            g_bootEditor = true;
+        }
+        // "--intent=<phrase>": one phrase through the editor's real pipeline, then quit.
+        // Implies --editor, because the pipeline lives behind EditorController::Draw.
+        if (const char* flag = std::strstr(lpCmdLine, "--intent=")) {
+            const char* value = flag + std::strlen("--intent=");
+            // A PHRASE HAS SPACES IN IT, and stopping at the first one is how the first
+            // version of this turned "bury all coconut_palm" into "bury". Quotes do not
+            // survive the shell reliably either, so the rule is: take everything up to the
+            // next flag (" --") or the end of the line, and strip surrounding quotes if any
+            // did survive.
+            // WinMain's lpCmdLine is ANSI, so a Russian phrase arrives as question marks --
+            // which is exactly what happened the first time this was pointed at the model.
+            // Take the phrase from the WIDE command line and convert it to UTF-8, which is
+            // what the prompt and the session log want anyway.
+            if (const wchar_t* wide = ::GetCommandLineW()) {
+                if (const wchar_t* wflag = std::wcsstr(wide, L"--intent=")) {
+                    const wchar_t* wvalue = wflag + 9;   // wcslen(L"--intent=")
+                    std::wstring wphrase;
+                    if (*wvalue == L'"') {
+                        ++wvalue;
+                        while (*wvalue && *wvalue != L'"') { wphrase.push_back(*wvalue++); }
+                    } else {
+                        const wchar_t* wnext = std::wcsstr(wvalue, L" --");
+                        wphrase.assign(wvalue, wnext ? wnext : wvalue + std::wcslen(wvalue));
+                    }
+                    const int needed = ::WideCharToMultiByte(CP_UTF8, 0, wphrase.c_str(),
+                        static_cast<int>(wphrase.size()), nullptr, 0, nullptr, nullptr);
+                    std::string utf8(static_cast<std::size_t>(needed), char{});
+                    ::WideCharToMultiByte(CP_UTF8, 0, wphrase.c_str(),
+                        static_cast<int>(wphrase.size()), utf8.data(), needed, nullptr, nullptr);
+                    value = nullptr;   // the wide path won
+                    g_intentPhrase = utf8;
+                }
+            }
+
+            std::string phrase;
+            if (value && *value == '"') {
+                ++value;
+                while (*value && *value != '"') { phrase.push_back(*value++); }
+            } else if (value) {
+                const char* nextFlag = std::strstr(value, " --");
+                phrase.assign(value, nextFlag ? nextFlag : value + std::strlen(value));
+            }
+            // Shells hand over quotes half-eaten -- PowerShell delivered the closing one and
+            // not the opening one -- so strip whitespace and quotes from BOTH ends rather
+            // than trusting either to arrive.
+            const auto trimmable = [](char c) { return c == ' ' || c == '	' || c == '"'; };
+            if (!phrase.empty()) {
+                g_intentPhrase = phrase;
+            }
+            std::string& out = g_intentPhrase;
+            while (!out.empty() && trimmable(out.back())) { out.pop_back(); }
+            std::size_t front = 0;
+            while (front < out.size() && trimmable(out[front])) { ++front; }
+            out = out.substr(front);
+            g_bootEditor = true;
+        }
+        if (std::strstr(lpCmdLine, "--intent-run")) {
+            g_intentRun = true;
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--intent-repeat=")) {
+            g_intentRepeat = std::max(1, std::atoi(flag + std::strlen("--intent-repeat=")));
+        }
+        if (const char* flag = std::strstr(lpCmdLine, "--intent-timeout=")) {
+            g_intentTimeoutSec = std::max(5.0, std::atof(flag + std::strlen("--intent-timeout=")));
+        }
+        // "--chat=<phrase>": one message through the Model Chat panel. Wide command line for
+        // the same reason --intent uses it -- lpCmdLine is ANSI and turns Russian into
+        // question marks before anything else gets a look at it.
+        if (const wchar_t* wide = ::GetCommandLineW()) {
+            if (const wchar_t* wflag = std::wcsstr(wide, L"--chat=")) {
+                const wchar_t* wvalue = wflag + 7;   // wcslen(L"--chat=")
+                std::wstring wphrase;
+                if (*wvalue == L'"') {
+                    ++wvalue;
+                    while (*wvalue && *wvalue != L'"') { wphrase.push_back(*wvalue++); }
+                } else {
+                    const wchar_t* wnext = std::wcsstr(wvalue, L" --");
+                    wphrase.assign(wvalue, wnext ? wnext : wvalue + std::wcslen(wvalue));
+                }
+                const int needed = ::WideCharToMultiByte(CP_UTF8, 0, wphrase.c_str(),
+                    static_cast<int>(wphrase.size()), nullptr, 0, nullptr, nullptr);
+                std::string utf8(static_cast<std::size_t>(needed), char{});
+                ::WideCharToMultiByte(CP_UTF8, 0, wphrase.c_str(),
+                    static_cast<int>(wphrase.size()), utf8.data(), needed, nullptr, nullptr);
+                g_chatPhrase = utf8;
+                // Shells hand quotes over half-eaten, exactly as --intent found: strip them
+                // from BOTH ends rather than trusting either to arrive.
+                const auto trimmable = [](char c) { return c == ' ' || c == '\t' || c == '"'; };
+                while (!g_chatPhrase.empty() && trimmable(g_chatPhrase.back())) {
+                    g_chatPhrase.pop_back();
+                }
+                std::size_t front = 0;
+                while (front < g_chatPhrase.size() && trimmable(g_chatPhrase[front])) { ++front; }
+                g_chatPhrase = g_chatPhrase.substr(front);
+                g_bootEditor = true;
+            }
         }
         // "--no-hud": empty HUD text buffer, so a --shot carries no frame-varying FPS readout.
         if (std::strstr(lpCmdLine, "--no-hud")) {

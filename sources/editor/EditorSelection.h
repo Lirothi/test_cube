@@ -15,6 +15,13 @@ class EditorSelection
 public:
     const std::vector<EditorObjectId>& Ordered() const { return ordered_; }
     EditorObjectId Primary() const { return primary_; }
+
+    // Which control point of a selected spline zone is being worked on. It lives HERE, with
+    // the selection, because two panels need the same answer: the Inspector highlights the
+    // row and the viewport gives the gizmo to that point, and a copy in each would be two
+    // that drift. -1 means the zone as a whole.
+    int ActivePoint() const { return activePoint_; }
+    void SetActivePoint(int index) { activePoint_ = index; }
     std::size_t Size() const { return ordered_.size(); }
     bool Empty() const { return ordered_.empty(); }
 
@@ -28,6 +35,8 @@ public:
     {
         ordered_.clear();
         primary_ = EditorObjectId{};
+        // A point index means nothing once the zone it indexed is no longer selected.
+        activePoint_ = -1;
     }
 
     void Replace(EditorObjectId id)
@@ -104,6 +113,7 @@ public:
 private:
     std::vector<EditorObjectId> ordered_;
     EditorObjectId primary_{};
+    int activePoint_ = -1;
 };
 
 #endif // WITH_EDITOR

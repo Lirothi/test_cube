@@ -18,9 +18,11 @@
 #include "editor/EditorContext.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
+#include "editor/scene/EditorZone.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditEnvironmentCommand.h"
+#include "editor/commands/EditObjectPropertiesCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
@@ -3416,6 +3418,7 @@ void InspectorPanel::Draw(EditorContext& ctx,
 
     ImGui::Separator();
     DrawTransformEditor(ctx, commandStack, *obj);
+    DrawZoneEditor(ctx, commandStack, *obj);
 
     if (const IEditorPropertyDrawer* drawer = extensions.FindPropertyDrawer(obj->type))
     {
@@ -3425,6 +3428,215 @@ void InspectorPanel::Draw(EditorContext& ctx,
 
     DrawInspectorDropTarget(ctx, commandStack, registry, obj);
     ImGui::End();
+}
+
+void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& commandStack,
+    EditorObject& object)
+{
+    if (object.type != editorzone::kTypeName)
+    {
+        return;
+    }
+    editorzone::Zone zone;
+    if (!editorzone::FromObject(object, zone))
+    {
+        return;
+    }
+
+    ImGui::Separator();
+    if (!ImGui::CollapsingHeader("Zone", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        return;
+    }
+
+    // Every edit here goes through one snapshot-and-command path. A zone's whole definition
+    // lives in `properties`, so there is nothing to be gained from a command per field, and
+    // one entry per gesture is what undo should feel like.
+    const nlohmann::json before = object.properties;
+    bool changed = false;
+
+    const char* shapes[] = { "circle", "rect", "spline" };
+    const std::string current = object.properties.value("shape", "circle");
+    int shapeIndex = current == "rect" ? 1 : current == "spline" ? 2 : 0;
+    if (ImGui::Combo("Shape", &shapeIndex, shapes, IM_ARRAYSIZE(shapes)))
+    {
+        object.properties["shape"] = shapes[shapeIndex];
+        // Switching INTO a spline with no points would give a zone that silently falls back
+        // to a circle. Seed it from the size it already had, so the change is visible.
+        if (shapeIndex == 2 && editorzone::LocalPoints(object).size() < 2)
+        {
+            const float size = std::max(object.properties.value("radius", 25.0f),
+                object.properties.value("halfX", 25.0f));
+            editorzone::StoreLocalPoints(object, {
+                Math::float3(-size, 0.0f, -size * 0.4f),
+                Math::float3(-size * 0.35f, 0.0f, size * 0.45f),
+                Math::float3(size * 0.35f, 0.0f, size * 0.45f),
+                Math::float3(size, 0.0f, -size * 0.4f),
+            });
+            object.properties["halfWidth"] = size * 0.25f;
+        }
+        changed = true;
+    }
+
+    if (shapeIndex == 2)
+    {
+        bool closed = object.properties.value("closed", false);
+        if (ImGui::Checkbox("Closed loop", &closed))
+        {
+            object.properties["closed"] = closed;
+            changed = true;
+        }
+
+        const char* fills[] = { "along the line", "inside the outline" };
+        int fillIndex = object.properties.value("fill", std::string("along")) == "inside" ? 1 : 0;
+        if (ImGui::Combo("Plant", &fillIndex, fills, IM_ARRAYSIZE(fills)))
+        {
+            object.properties["fill"] = fillIndex == 1 ? "inside" : "along";
+            changed = true;
+        }
+        if (fillIndex == 1 && !closed)
+        {
+            ImGui::TextDisabled("(open spline; it is closed automatically to fill it)");
+        }
+
+        if (fillIndex == 0)
+        {
+            float halfWidth = object.properties.value("halfWidth", 8.0f);
+            if (ImGui::DragFloat("Half width", &halfWidth, 0.1f, 0.25f, 500.0f, "%.1f m"))
+            {
+                object.properties["halfWidth"] = std::max(0.25f, halfWidth);
+                changed = true;
+            }
+        }
+
+        const char* planes[] = { "XZ (ground plan)", "XY (front)", "ZY (side)" };
+        const std::string planeNow = object.properties.value("plane", std::string("xz"));
+        int planeIndex = planeNow == "xy" ? 1 : planeNow == "zy" ? 2 : 0;
+        if (ImGui::Combo("Measured in", &planeIndex, planes, IM_ARRAYSIZE(planes)))
+        {
+            object.properties["plane"] = planeIndex == 1 ? "xy" : planeIndex == 2 ? "zy" : "xz";
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Points are full 3D. This picks the two axes that \"inside\" "
+                "and \"within the band\" are measured in -- a trail over ground is XZ, a "
+                "line up a cliff face is XY.");
+        }
+
+        float pointRadius = object.properties.value("pointRadius", 1.5f);
+        if (ImGui::DragFloat("Point size", &pointRadius, 0.05f, 0.05f, 50.0f, "%.2f m"))
+        {
+            object.properties["pointRadius"] = std::max(0.05f, pointRadius);
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Radius of the draggable spheres, and of the click test that "
+                "picks them -- what you see is what you hit.");
+        }
+
+        std::vector<Math::float3> points = editorzone::LocalPoints(object);
+        ImGui::TextDisabled("%zu points -- click one to work on it", points.size());
+        // Its own scrolling region, ten rows deep. A coastline is thirty points and the
+        // list was pushing everything else off the panel; and without a row to click,
+        // nothing told you WHICH of them is the one out in the water.
+        const float rowHeight = ImGui::GetFrameHeightWithSpacing();
+        if (ImGui::BeginChild("##zonePoints", ImVec2(0.0f, rowHeight * 10.0f), true))
+        {
+            for (std::size_t index = 0; index < points.size(); ++index)
+            {
+                ImGui::PushID(static_cast<int>(index));
+                const bool active = ctx.selection.ActivePoint() == static_cast<int>(index);
+                // The index is the label, so a row can be matched to the sphere that grew
+                // when it was picked in the viewport, and the other way round.
+                char label[32];
+                std::snprintf(label, sizeof(label), "%zu", index);
+                if (ImGui::Selectable(label, active, 0, ImVec2(26.0f, 0.0f)))
+                {
+                    ctx.selection.SetActivePoint(active ? -1 : static_cast<int>(index));
+                }
+                ImGui::SameLine();
+                float xyz[3] = { points[index].x, points[index].y, points[index].z };
+                ImGui::SetNextItemWidth(210.0f);
+                if (ImGui::DragFloat3("##xyz", xyz, 0.1f, 0.0f, 0.0f, "%.1f"))
+                {
+                    points[index] = Math::float3(xyz[0], xyz[1], xyz[2]);
+                    editorzone::StoreLocalPoints(object, points);
+                    changed = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("+"))
+                {
+                    const int added = editorzone::InsertPointAfter(object,
+                        static_cast<int>(index));
+                    if (added >= 0)
+                    {
+                        ctx.selection.SetActivePoint(added);
+                    }
+                    changed = true;
+                }
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Insert a point after this one"); }
+                ImGui::SameLine();
+                // Disabled rather than hidden at the floor, so the reason is visible instead
+                // of the button vanishing and leaving someone hunting for it.
+                ImGui::BeginDisabled(points.size() <= 2);
+                if (ImGui::SmallButton("-"))
+                {
+                    if (editorzone::RemovePoint(object, static_cast<int>(index)))
+                    {
+                        // The index would now point at a different point, or at none.
+                        ctx.selection.SetActivePoint(-1);
+                    }
+                    changed = true;
+                }
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip(points.size() <= 2 ? "A spline needs at least two points"
+                                                         : "Remove this point");
+                }
+                ImGui::PopID();
+                if (changed)
+                {
+                    break;   // the list just changed shape; redraw it next frame
+                }
+            }
+        }
+        ImGui::EndChild();
+    }
+    else
+    {
+        if (shapeIndex == 0)
+        {
+            float radius = object.properties.value("radius", 25.0f);
+            if (ImGui::DragFloat("Radius", &radius, 0.1f, 0.1f, 2000.0f, "%.1f m"))
+            {
+                object.properties["radius"] = std::max(0.1f, radius);
+                changed = true;
+            }
+        }
+        else
+        {
+            float half[2] = { object.properties.value("halfX", 25.0f),
+                object.properties.value("halfZ", 25.0f) };
+            if (ImGui::DragFloat2("Half extents", half, 0.1f, 0.1f, 2000.0f, "%.1f m"))
+            {
+                object.properties["halfX"] = std::max(0.1f, half[0]);
+                object.properties["halfZ"] = std::max(0.1f, half[1]);
+                changed = true;
+            }
+        }
+        ImGui::TextDisabled("Scale in the transform above resizes this too.");
+    }
+
+    if (changed)
+    {
+        nlohmann::json after = object.properties;
+        object.properties = before;
+        commandStack.Execute(ctx, std::make_unique<EditObjectPropertiesCommand>(
+            object.id, before, std::move(after), "Edit Zone"));
+    }
 }
 
 void InspectorPanel::DrawTransformEditor(EditorContext& ctx, EditorCommandStack& commandStack, EditorObject& object)
