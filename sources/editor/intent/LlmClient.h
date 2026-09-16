@@ -81,6 +81,19 @@ namespace llmclient
         int contextTokens,
         int threads,
         bool webUi,
+        // false: the job object's KILL_ON_JOB_CLOSE ties the server to this process, as it
+        // always did. true: the server is launched free, to survive the editor closing --
+        // and the caller MUST then start llmreaper, because that guarantee has to live
+        // somewhere and nothing else is watching.
+        bool keepAliveAfterExit,
+        std::string& outError);
+
+    // Start the watchdog that retires a kept-alive server. Returns false and fills
+    // `outError` when it could not be launched -- which the caller should treat as a reason
+    // to fall back to the job object rather than to shrug.
+    bool StartReaper(const std::string& hostPort,
+        unsigned long serverPid,
+        int idleSeconds,
         std::string& outError);
 }
 

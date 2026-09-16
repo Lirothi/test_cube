@@ -130,11 +130,13 @@ namespace intentprompt
 
         if (!vocabulary.zones.empty())
         {
-            p += "\nZONES are named regions someone drew on this level. When the phrase says "
-                 "WHERE\n";
-            p += "-- \"on the beach\", \"in the north zone\" -- pass the zone's name as "
-                 "spawn's `zone`\n";
-            p += "parameter and leave radius alone. This level has:\n";
+            p += "\nZONES are named regions someone drew on this level. Two ways to use one,\n";
+            p += "and which one depends on whether objects are being MADE or FOUND:\n";
+            p += "  spawn        -> params.zone: \"<name>\"   fills the region with new things\n";
+            p += "  anything else-> target.where.zone: \"<name>\"  narrows to what is ALREADY\n";
+            p += "                 inside it -- \"удали пальмы в зоне Beach\", \"сколько камней\n";
+            p += "                 в зоне Meadow\". Leave radius and anchor alone when using it.\n";
+            p += "This level has:\n";
             AppendList(p, vocabulary.zones, 80);
         }
 
@@ -199,6 +201,7 @@ namespace intentprompt
         p += "            BOTH -- filter for what changes, asset for what it becomes.\n";
         p += "  where   : a distance limit. \"within 50 m of the camera\" -> "
              "{\"anchor\":\"camera\",\"radius\":50}.\n";
+        p += "            Or a named region: \"in zone Beach\" -> {\"zone\":\"Beach\"}.\n";
         p += "            Leaving it out silently widens the command to the whole level.\n\n";
 
         p += "EXAMPLES\n";

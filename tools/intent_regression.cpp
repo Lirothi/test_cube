@@ -29,6 +29,7 @@
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/EditorCommandStack.h"
+#include "editor/scene/EditorZone.h"
 #include "editor/intent/EditorActionRegistry.h"
 #include "editor/intent/EditorIntentResolver.h"
 #include "editor/intent/EnvironmentSettings.h"
@@ -308,6 +309,45 @@ void TestGrammarSentenceShapes(GrammarIntentSource& grammar, const EditorSceneDo
 }
 
 // ------------------------------------------------------------------ the resolver
+
+// Selecting a ZONE and saying "in the selected zone" means the REGION, not the selection.
+// Reported from the editor as "Nothing in the selection matches": scope `selected` means
+// "among the selected objects", the selection held one zone, and a zone is not a palm.
+void TestSelectedZoneMeansItsArea(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+
+    // A circle at the origin, radius 20: it covers Palm_001 and Palm_002 (x = 0 and 10) and
+    // not Palm_003 (x = 100) or the rock, which is inside it in XZ but is not a palm.
+    EditorObject zone = editorzone::BuildObject(editorzone::Shape::Circle,
+        Math::float3(0.0f, 0.0f, 0.0f), 20.0f, "TestZone");
+    zone.id = EditorObjectId{ 900 };
+    ctx.document.Objects().push_back(zone);
+    ctx.selection.Replace(zone.id);
+
+    EditorIntent intent;
+    intent.kind = EditorIntentKind::Command;
+    intent.action = "randomizeRotation";
+    intent.sourceLabel = "test";
+    intent.target.kind = EditorTargetKind::Objects;
+    intent.target.filter.push_back("palm");
+    intent.target.scope = EditorIntentScope::Selected;
+
+    const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+    Check(preview.executable, "a selected zone resolves to what is inside it");
+    Check(preview.targets.size() == 2,
+        "the two palms inside the zone, not the one 100 m away and not the zone itself");
+
+    // And the other reading survives: a selection of real objects still means those objects.
+    ctx.selection.Clear();
+    ctx.selection.Replace(EditorObjectId{ 3 });     // the distant date palm
+    const EditorIntentPreview ordinary = BuildIntentPreview(actionCtx, intent);
+    Check(ordinary.targets.size() == 1,
+        "selecting objects still means those objects, zone rule not applied");
+
+    ctx.selection.Clear();
+    ctx.document.Objects().pop_back();
+}
 
 void TestSelectorReachesTheSameObjectsAsSearch(const EditorActionContext& actionCtx,
     GrammarIntentSource& grammar)
@@ -1421,6 +1461,7 @@ int main(int argc, char** argv)
         const EditorActionContext actionCtx{ ctx, assets, extensions };
 
         TestSelectorReachesTheSameObjectsAsSearch(actionCtx, grammar);
+        TestSelectedZoneMeansItsArea(actionCtx);
         TestWholeLevelIsRefusedEvenIfAnIntentAsksForIt(actionCtx);
         TestAssetResolution(actionCtx, grammar);
         std::puts("Intent regression: selector, assets and refusals OK");

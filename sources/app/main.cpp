@@ -7,6 +7,7 @@
 #include "mimalloc-new-delete.h"
 #pragma warning(pop)
 #include "app/App.h"
+
 #include "assets/AssetImporter.h"
 #include "app/diagnostics/CullBenchmark.h"
 #include "app/diagnostics/SceneStress.h"

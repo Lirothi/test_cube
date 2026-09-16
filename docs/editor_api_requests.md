@@ -96,3 +96,27 @@ The designer wants to rename selected objects to 'spheres'. No existing action s
 - **when**: 2026-09-15 05:14
 
 The designer wants to populate an island with twenty distinct palm models, evenly spaced. No existing action achieves this. A new `spawnEven` action is needed, accepting a list of asset IDs and a target area, then calculating a grid or Poisson-disc distribution to place instances. This requires spatial math absent from the current `spawn` command, which only scatters randomly around a single point. The complexity lies in handling mixed asset types while maintaining uniform density across irregular terrain. The editor would need to detect valid ground points for each type and ensure no overlap, rather than simple random placement. This is a significant feature gap for level setup efficiency.
+
+---
+
+## setMaterial with a red material or setBaseColor
+
+- **asked**: покрась пальмы в ярко-красный цвет
+- **read as**: paint palms bright red
+- **rejected existing because**: setMaterial requires an existing material asset name, and none of the available materials are described as 'bright red'; replace swaps the entire mesh which is not what was asked; no action exists to change only the color of an existing material.
+- **level**: C:/Users/darkc/AppData/Local/Temp/claude/D--Programming-test-cube/7e0da404-de59-4512-aa43-87c611d9772a/scratchpad/atoll_ring.json
+- **when**: 2026-09-16 13:50
+
+The designer wants to change the visual color of palm trees to bright red. The closest existing action is `setMaterial`, but it requires a pre-existing material asset name. Since no 'bright red' material exists in the asset library, this action fails. To support this request, we need a new action, perhaps `setColor`, that accepts a hex code or RGB value to dynamically tint the base color of the selected objects' materials without requiring a new asset file. This is harder than it looks because it requires runtime material modification logic, which may not be supported by the current rendering pipeline or material system architecture. Implementing this would allow designers to quickly iterate on color themes without needing an artist to create new assets for every shade.
+
+---
+
+## setMaterial with a red material or setBaseColor
+
+- **asked**: покрась пальмы в ярко-красный цвет
+- **read as**: paint palms bright red
+- **rejected existing because**: setMaterial requires an existing material asset name, and none of the available materials are described as 'bright red'; replace swaps the entire mesh which is not what was asked; no action exists to change only the color of an existing material.
+- **level**: C:/Users/darkc/AppData/Local/Temp/claude/D--Programming-test-cube/7e0da404-de59-4512-aa43-87c611d9772a/scratchpad/atoll_ring.json
+- **when**: 2026-09-16 13:53
+
+The designer wants to change the color of existing palm meshes to bright red without replacing the geometry. The closest existing action, `setMaterial`, requires a pre-existing material asset name. Since no "bright red" material exists in the current asset library, this action fails. A new action, `setMaterialColor`, would be needed, accepting a material reference and a hex color code to override the base color dynamically. This is harder than it looks because it requires the editor to support runtime material instance creation or modification, rather than just swapping static asset references. Without this capability, the only workaround is manually creating a red material asset first, which breaks the workflow.

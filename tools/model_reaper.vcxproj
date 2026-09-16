@@ -1,0 +1,49 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- The watchdog that retires a kept-alive llama-server, as its OWN executable.
+       It was a mode of test_cube.exe first, and that was wrong twice over: a live
+       watchdog held the engine binary open so the next Release_Editor build failed
+       with LNK1104, and launching a copy of it from %TEMP% to dodge that lock
+       produced a process with none of the DLLs the engine links against. It died
+       before its first log line and left the 38 GB server it was minding running
+       with nobody watching.
+       Five source files, no graphics, no DLLs beyond the system ones. -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals"><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType><PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <Repo>$(MSBuildProjectDirectory)\..\</Repo>
+    <!-- Beside the editor that spawns it: it is found by the editor's own directory. -->
+    <OutDir>$(Repo)x64\Release_Editor\</OutDir>
+    <IntDir>$(Repo)x64\ModelReaper\obj\</IntDir>
+    <TargetName>model_reaper</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><ExceptionHandling>Sync</ExceptionHandling>
+      <PreprocessorDefinitions>NDEBUG;WITH_EDITOR=1;NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(Repo);$(Repo)sources;$(Repo)third_party;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem><EntryPointSymbol>wWinMainCRTStartup</EntryPointSymbol>
+      <AdditionalDependencies>winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="model_reaper_main.cpp" />
+    <ClCompile Include="$(Repo)sources\editor\intent\LlmReaper.cpp" />
+    <ClCompile Include="$(Repo)sources\editor\intent\LlmClient.cpp" />
+    <ClCompile Include="$(Repo)sources\core\logging\Log.cpp" />
+    <ClCompile Include="$(Repo)sources\core\logging\LogQueue.cpp" />
+    <ClCompile Include="$(Repo)sources\core\logging\LogSinks.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

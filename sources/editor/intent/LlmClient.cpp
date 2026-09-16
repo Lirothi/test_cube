@@ -218,6 +218,67 @@ namespace llmclient
         processId = 0;
     }
 
+    bool StartReaper(const std::string& hostPort,
+        unsigned long serverPid,
+        int idleSeconds,
+        std::string& outError)
+    {
+        // OUR OWN EXE, in a mode that builds no window and no device -- a loop and a socket.
+        // A separate helper binary would be another thing to ship, to sign and to forget to
+        // rebuild; this one is already beside the server it watches.
+        wchar_t modulePath[MAX_PATH] = {};
+        if (::GetModuleFileNameW(nullptr, modulePath, MAX_PATH) == 0)
+        {
+            outError = "could not find this executable to start the model reaper";
+            return false;
+        }
+
+        // model_reaper.exe, beside this one. It began as a MODE of the engine binary and
+        // that was wrong twice: a live watchdog held test_cube.exe open, so the next build
+        // of Release_Editor failed to link; and copying the exe to %TEMP% to dodge that lock
+        // produced a process without the DLLs this binary links against, which died before
+        // its first log line and left the server running with nobody watching. Its own
+        // binary has neither problem -- five source files, no graphics, no DLLs.
+        std::wstring reaperPath = modulePath;
+        const std::size_t lastSlash = reaperPath.find_last_of(L"\\/");
+        reaperPath = (lastSlash == std::wstring::npos ? std::wstring{}
+                                                     : reaperPath.substr(0, lastSlash + 1)) +
+            L"model_reaper.exe";
+        if (::GetFileAttributesW(reaperPath.c_str()) == INVALID_FILE_ATTRIBUTES)
+        {
+            outError = "model_reaper.exe is missing beside the editor; build "
+                "tools/model_reaper.vcxproj";
+            return false;
+        }
+
+        std::wstring command = L"\"" + reaperPath + L"\"" +
+            L" --reap-model=" + Widen(hostPort) +
+            L" --reap-model-pid=" + std::to_wstring(serverPid) +
+            L" --reap-idle=" + std::to_wstring(idleSeconds);
+        std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+        mutableCommand.push_back(L'\0');
+
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION info{};
+        // DETACHED and in its own group: it has to outlive this process, which is the whole
+        // point, so it must not be in our job and must not take our Ctrl+C.
+        if (!::CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, FALSE,
+                CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+                nullptr, nullptr, &startup, &info))
+        {
+            outError = "could not start the model reaper (error " +
+                std::to_string(::GetLastError()) + ")";
+            return false;
+        }
+        LOG_INFO(logging::LogCategory::Editor,
+            "intent model: reaper pid={} will retire the server after {}s idle",
+            info.dwProcessId, idleSeconds);
+        ::CloseHandle(info.hThread);
+        ::CloseHandle(info.hProcess);
+        return true;
+    }
+
     ServerProcess StartServer(const std::string& serverExe,
         const std::string& modelPath,
         const std::string& hostPort,
@@ -225,6 +286,7 @@ namespace llmclient
         int contextTokens,
         int threads,
         bool webUi,
+        bool keepAliveAfterExit,
         std::string& outError)
     {
         ServerProcess process;
@@ -268,6 +330,11 @@ namespace llmclient
             // should do.
             (threads > 0 ? " -t " + std::to_string(threads) : "") +
             " --load-mode mmap" +
+            // The counters the reaper watches. Without them "idle" could only mean "the
+            // editor made no request", which is blind to the server's own chat page -- and
+            // that blindness is how a conversation used to get its model retired underneath
+            // it. With them, activity means activity, whoever caused it.
+            " --metrics" +
             (webUi ? "" : " --no-webui");
 
         std::wstring wideCommand = Widen(command);
@@ -277,7 +344,7 @@ namespace llmclient
         // The job object dies with this process, and JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         // means the server dies with it -- on a clean exit, on a crash, on a kill from Task
         // Manager, on a debugger stop. No shutdown path has to be trusted.
-        HANDLE job = ::CreateJobObjectW(nullptr, nullptr);
+        HANDLE job = keepAliveAfterExit ? nullptr : ::CreateJobObjectW(nullptr, nullptr);
         if (job)
         {
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
@@ -318,6 +385,17 @@ namespace llmclient
             return process;
         }
 
+        if (!keepAliveAfterExit && !job)
+        {
+            // Asked for the guarantee and could not have it: better to fail loudly than to
+            // leave a 38 GB process with no owner.
+            ::TerminateProcess(info.hProcess, 0);
+            ::CloseHandle(info.hThread);
+            ::CloseHandle(info.hProcess);
+            outError = "could not create a job object for llama-server (error " +
+                std::to_string(::GetLastError()) + "); refusing to start an unowned server";
+            return process;
+        }
         if (job && !::AssignProcessToJobObject(job, info.hProcess))
         {
             // Without the job there is no orphan guarantee, and that guarantee is the point.

@@ -62,9 +62,15 @@ LlmIntentSource::~LlmIntentSource()
     // Only a server THIS process started is ours to stop -- one the user already had
     // running is theirs. Closing the job handle is what actually guarantees it goes, and
     // it happens here on a clean exit and by the OS on any other kind.
-    if (serverOwned_)
+    if (serverOwned_ && !keepsServerAlive_)
     {
         server_.Terminate();
+    }
+    else if (keepsServerAlive_)
+    {
+        LOG_INFO(logging::LogCategory::Editor,
+            "intent model: leaving llama-server pid={} running; its watchdog retires it "
+            "after {}s with no requests", server_.processId, settings_.keepAliveSeconds);
     }
 }
 
@@ -182,16 +188,35 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
     }
 
     std::string error;
+    const bool keepAlive = settings_.keepServerAfterExit && settings_.keepAliveSeconds > 0;
     server_ = llmclient::StartServer(settings_.serverExe, settings_.modelPath,
         settings_.endpoint, settings_.gpuLayers, settings_.contextTokens,
-        settings_.threads, settings_.webUi, error);
+        settings_.threads, settings_.webUi, keepAlive, error);
     if (!server_.handle)
     {
         serverStatus_ = error;
         outStatus = serverStatus_;
         return false;
     }
+    if (keepAlive)
+    {
+        // The guarantee moved out of the job object, so it has to be picked up here in the
+        // same breath. If the watchdog cannot start, the server is retired at once rather
+        // than left running with nobody minding it -- a slow editor is a nuisance, a 38 GB
+        // orphan is the thing this whole arrangement exists to prevent.
+        std::string reaperError;
+        if (!llmclient::StartReaper(settings_.endpoint, server_.processId,
+                settings_.keepAliveSeconds, reaperError))
+        {
+            server_.Terminate();
+            serverStatus_ = reaperError + " -- refusing to leave a server nobody watches";
+            LOG_ERROR(logging::LogCategory::Editor, "intent model: {}", serverStatus_);
+            outStatus = serverStatus_;
+            return false;
+        }
+    }
     serverOwned_ = true;
+    keepsServerAlive_ = keepAlive;
     lastUseSec_ = NowSeconds();
     serverStatus_ = "Starting llama-server...";
     outStatus = serverStatus_;
@@ -447,7 +472,9 @@ bool LlmIntentSource::BusyInBackground() const
 
 void LlmIntentSource::Tick()
 {
-    if (!serverOwned_ || settings_.idleTimeoutSeconds <= 0)
+    // The watchdog owns retirement for a kept-alive server, and it counts EVERY request --
+    // including ones made from the server's own chat page, which this timer cannot see.
+    if (!serverOwned_ || keepsServerAlive_ || settings_.idleTimeoutSeconds <= 0)
     {
         return;
     }
@@ -883,6 +910,9 @@ LlmIntentSettings LlmIntentSource::LoadSettings(const nlohmann::json& levelEdito
         ReadStringOr(json, "apiRequestNotesPath", settings.apiRequestNotesPath);
     settings.webUi = ReadBoolOr(json, "webUi", settings.webUi);
     settings.idleTimeoutSeconds = ReadIntOr(json, "idleTimeoutSeconds", settings.idleTimeoutSeconds);
+    settings.keepServerAfterExit =
+        ReadBoolOr(json, "keepServerAfterExit", settings.keepServerAfterExit);
+    settings.keepAliveSeconds = ReadIntOr(json, "keepAliveSeconds", settings.keepAliveSeconds);
     return settings;
 }
 
@@ -903,6 +933,8 @@ nlohmann::json LlmIntentSource::SaveSettings(const LlmIntentSettings& settings)
         { "apiRequestNotesPath", settings.apiRequestNotesPath },
         { "webUi", settings.webUi },
         { "idleTimeoutSeconds", settings.idleTimeoutSeconds },
+        { "keepServerAfterExit", settings.keepServerAfterExit },
+        { "keepAliveSeconds", settings.keepAliveSeconds },
     };
 }
 

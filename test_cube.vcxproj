@@ -273,6 +273,7 @@
     <ClCompile Include="sources/editor/intent/EnvironmentSettings.cpp" />
     <ClCompile Include="sources/editor/intent/IntentNotes.cpp" />
     <ClCompile Include="sources/editor/intent/IntentPrompt.cpp" />
+    <ClCompile Include="sources/editor/intent/LlmReaper.cpp" />
     <ClCompile Include="sources/editor/intent/LlmClient.cpp" />
     <ClCompile Include="sources/editor/intent/LlmIntentSource.cpp" />
     <ClCompile Include="sources/editor/intent/GrammarIntentSource.cpp" />
@@ -434,6 +435,7 @@
     <ClInclude Include="sources/editor/intent/EnvironmentSettings.h" />
     <ClInclude Include="sources/editor/intent/IntentNotes.h" />
     <ClInclude Include="sources/editor/intent/IntentPrompt.h" />
+    <ClInclude Include="sources/editor/intent/LlmReaper.h" />
     <ClInclude Include="sources/editor/intent/LlmClient.h" />
     <ClInclude Include="sources/editor/intent/LlmIntentSource.h" />
     <ClInclude Include="sources/editor/intent/GrammarIntentSource.h" />

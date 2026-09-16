@@ -86,6 +86,17 @@ private:
     void FinishIntent(const EditorActionContext& actionCtx);
     void ClearResult();
     void RememberPhrase(const std::string& phrase);
+    // Record what came back. `phrase` empty attaches the line to the newest exchange, which
+    // is how a preview later becomes "ran" without becoming a second entry.
+    struct Exchange
+    {
+        std::string phrase;
+        std::string verdict;
+        // Colour-coded by outcome, because at a glance the difference between "ran" and
+        // "cannot run" matters more than the words.
+        enum class Kind { Ran, Preview, Refused, Failed } kind = Kind::Preview;
+    };
+    void RecordOutcome(const std::string& verdict, Exchange::Kind kind);
     // Up/Down while the box has focus. Returns true when it changed the text, so the caller
     // knows to move the caret to the end rather than leaving it mid-phrase.
     bool WalkHistory(int direction);
@@ -98,6 +109,12 @@ private:
     // Grows as it is typed into (editorui::InputText). 512 bytes was about 250 Cyrillic
     // characters, and a phrase naming several assets and a spatial filter reaches that.
     std::string input_;
+    // The exchange, as it happened: what was typed and what came back. The bar used to show
+    // only the newest result, so the answer to the previous phrase vanished the moment the
+    // next one was typed -- and with a preview that needs confirming, the thing you were
+    // deciding about disappeared as soon as you asked anything else.
+    std::vector<Exchange> transcript_;
+    bool transcriptScrollToBottom_ = false;
     // Everything typed here, newest LAST, deduplicated against the previous entry and
     // capped. Walked with Up/Down in the box the way a shell's history is, and persisted in
     // editor_state.json -- a phrase that took three tries to word is worth more than the

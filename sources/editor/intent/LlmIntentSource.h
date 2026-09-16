@@ -80,6 +80,18 @@ struct LlmIntentSettings
     // crime of thinking before typing. It is cheap to keep: the model is mmapped rather
     // than loaded, so an idle server holds reclaimable page cache, not committed RAM.
     int idleTimeoutSeconds = 600;
+    // Let the server OUTLIVE the editor, and retire it after this long with no requests
+    // from anybody. 0 keeps the old behaviour: the server is job-owned and dies with the
+    // editor, no orphan possible by construction.
+    //
+    // Keeping it alive means giving that construction up, so the guarantee moves to a
+    // watchdog process (llmreaper) launched beside it. That is a real trade and it is worth
+    // naming: a machine that loses power mid-session, or a reaper killed from Task Manager,
+    // leaves a 38 GB server with nobody watching. What it buys is the second launch of the
+    // editor within the window starting instantly instead of paying 22 s to put the weights
+    // back on the card.
+    bool keepServerAfterExit = true;
+    int keepAliveSeconds = 300;
 
     bool Configured() const { return !modelPath.empty() && !serverExe.empty(); }
 };
@@ -224,6 +236,10 @@ private:
     std::shared_ptr<Request> request_;
     llmclient::ServerProcess server_;
     bool serverOwned_ = false;
+    // This server was started to OUTLIVE us, and a watchdog is minding it. The destructor
+    // must then leave it alone, and the in-editor idle timer must stay out of the way too:
+    // two things retiring the same server is how one of them kills it mid-answer.
+    bool keepsServerAlive_ = false;
     std::string serverStatus_;
     double nextHealthPollSec_ = 0.0;
     double lastUseSec_ = 0.0;

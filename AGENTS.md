@@ -154,16 +154,35 @@ The editor's Command Bar talks to a local `llama-server` (llama.cpp) holding a ~
 Neither is in the repository; `python tools/fetch_intent_model.py` puts both under
 `D:/llm_models`, and `editor_state.json` -> `levelEditor.intentModel` points at them.
 
-**The rule: nothing may outlive the process that started it.** A 38 GB inference server
-left running is a third of this machine's RAM held by something the user did not ask to
-keep. The editor enforces this by construction — the server is launched inside a **Windows
-job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`**, so it dies with the editor whether
-the editor exits cleanly, crashes, is killed from Task Manager, or is stopped in a debugger.
-No shutdown path is trusted, because a crash runs none of them. On top of that the editor
-stops it after `idleTimeoutSeconds` (default 600) with no request. That default was 60 and
-was raised: restarting costs ~22 s once the weights go to the card, and a minute is an
-ordinary pause mid-thought. An idle server is cheap because the model is mmapped, so it
-holds reclaimable page cache rather than committed RAM.
+**The rule: nothing runs that nobody is minding.** A 38 GB inference server left over is a
+third of this machine's RAM held by something the user did not ask to keep. There are two
+arrangements, and `levelEditor.intentModel.keepServerAfterExit` picks between them:
+
+- **`false` — the server dies with the editor, by construction.** It is launched inside a
+  **Windows job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`**, so it goes whether the
+  editor exits cleanly, crashes, is killed from Task Manager, or is stopped in a debugger.
+  No shutdown path is trusted, because a crash runs none of them.
+- **`true` (the default) — the server outlives the editor, and `model_reaper.exe` minds
+  it.** The job object is given up, so the guarantee moves to that watchdog: it polls the
+  server's `/metrics` counters and terminates it after `keepAliveSeconds` (default 300) with
+  no requests **from anybody**, which is strictly better than the editor's own timer — that
+  one is blind to requests made from the server's own chat page. If the watchdog cannot be
+  started the editor retires the server at once rather than leave it unwatched. The trade is
+  real and worth knowing: lose power, or kill the watchdog from Task Manager, and the server
+  is left running. What it buys is the next editor launch inside the window starting
+  instantly instead of paying ~22 s to put the weights back on the card.
+
+`model_reaper.exe` is its own binary (`tools/model_reaper.vcxproj`, built into
+`x64/Release_Editor/`) and must be, twice over. As a mode of `test_cube.exe` a live watchdog
+held that file open and the next `Release_Editor` link failed with LNK1104; launching a copy
+of the exe from `%TEMP%` to dodge the lock produced a process without the DLLs the engine
+links against, which died before its first log line and left the server unwatched — the
+exact failure it exists to prevent. **Build it after changing anything under
+`sources/editor/intent/`**, or the editor will refuse to keep a server alive and say so.
+
+While the editor is running its own `idleTimeoutSeconds` (default 600) also applies, but
+only in the `false` arrangement; with a watchdog the editor stands down so two things are
+never retiring the same server.
 
 **When starting one by hand** — a test script, a probe, a conversation with the model —
 the same rule applies and nothing enforces it for you:

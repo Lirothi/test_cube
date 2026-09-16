@@ -90,10 +90,16 @@ struct EditorSpatialFilter
     float minY = 0.0f;
     bool  hasMaxY = false;
     float maxY = 0.0f;
+    // A named zone. The other fields describe a place in numbers the model has to guess;
+    // this one names a region somebody drew, which is the difference between "удали пальмы
+    // в радиусе 50" and "удали пальмы в зоне Beach". Only `spawn` could take a zone at
+    // first, so everything else -- delete, select, count -- had no way to say where.
+    std::string zone;
 
     bool Any() const
     {
-        return anchor != EditorSpatialAnchor::None || radius > 0.0f || hasMinY || hasMaxY;
+        return anchor != EditorSpatialAnchor::None || radius > 0.0f || hasMinY || hasMaxY ||
+            !zone.empty();
     }
 };
 

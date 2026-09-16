@@ -309,6 +309,9 @@
     <ClCompile Include="sources/editor/intent/IntentPrompt.cpp">
       <Filter>sources\editor\intent</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/intent/LlmReaper.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/intent/LlmClient.cpp">
       <Filter>sources\editor\intent</Filter>
     </ClCompile>
@@ -732,6 +735,9 @@
       <Filter>sources\editor\intent</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/intent/IntentPrompt.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/LlmReaper.h">
       <Filter>sources\editor\intent</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/intent/LlmClient.h">

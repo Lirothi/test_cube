@@ -1,5 +1,8 @@
 #include "editor/intent/EditorIntentResolver.h"
 #if WITH_EDITOR
+#include "editor/scene/EditorZone.h"
+#endif
+#if WITH_EDITOR
 
 #include <algorithm>
 #include <cmath>
@@ -100,6 +103,38 @@ namespace
         if (where.hasMaxY && position.y > where.maxY)
         {
             return false;
+        }
+        if (!where.zone.empty())
+        {
+            // Resolved per call rather than cached: the zone is an ordinary object and can
+            // be dragged between one phrase and the next, and an answer computed against
+            // where it USED to be would be wrong in the way hardest to notice.
+            editorzone::Zone zone;
+            std::string whyNot;
+            if (!editorzone::Find(ctx.document, where.zone, zone, whyNot))
+            {
+                // An unresolvable zone must exclude everything, not pass everything: a
+                // typo'd name turning "delete the palms in zone Beach" into "delete the
+                // palms" is the one failure this layer must never have. The preview then
+                // reports nothing matched, and nothing runs.
+                return false;
+            }
+            // A CLOSED spline means the area it encloses when we are FINDING things, whatever
+            // its Plant setting says. That setting answers "where do new objects go", and
+            // for a ribbon along a coastline it is right; but asked which palms are "in zone
+            // test", nobody means the ones within the band's half-width of the line. The
+            // screenshot that produced this: a closed loop around half an island, half width
+            // 0.2 m, and "удали пальмы в зоне test" deleted one -- the only palm that
+            // happened to stand within 20 cm of the curve.
+            editorzone::Zone forQuery = zone;
+            if (forQuery.shape == editorzone::Shape::Spline && forQuery.closed)
+            {
+                forQuery.fill = editorzone::Fill::Inside;
+            }
+            if (!editorzone::Contains(forQuery, position))
+            {
+                return false;
+            }
         }
         if (where.radius <= 0.0f || where.anchor == EditorSpatialAnchor::None)
         {
@@ -343,7 +378,46 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
         return preview;
     }
 
-    const EditorIntentTarget& target = preview.resolved.target;
+    EditorIntentTarget& target = preview.resolved.target;
+
+    // "IN THE SELECTED ZONE" IS A PLACE, NOT A SET. Selecting a zone and saying "randomise
+    // the palms in the selected zone" produced "Nothing in the selection matches": scope
+    // `selected` means "among the selected objects", the selection held one zone, and a
+    // zone is not a palm. But nobody selecting a region means the region itself -- they
+    // mean what is inside it.
+    //
+    // So when the selection is ZONES ONLY, the scope becomes the whole level narrowed by
+    // those zones. When it holds anything else the old reading stands, because then
+    // "selected" really is a set of things.
+    if (target.scope == EditorIntentScope::Selected && target.where.zone.empty() &&
+        !ctx.selection.Empty())
+    {
+        const EditorObject* onlyZone = nullptr;
+        bool zonesOnly = true;
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            const EditorObject* object = ctx.document.Find(id);
+            if (!object || object->type != editorzone::kTypeName)
+            {
+                zonesOnly = false;
+                break;
+            }
+            // More than one selected zone has no single answer -- "in the selected zone" is
+            // singular -- so the old reading is left alone rather than picking one.
+            if (onlyZone)
+            {
+                zonesOnly = false;
+                break;
+            }
+            onlyZone = object;
+        }
+        if (zonesOnly && onlyZone)
+        {
+            target.where.zone = onlyZone->name;
+            target.scope = EditorIntentScope::All;
+        }
+    }
+
     const auto consider = [&](const EditorObject& object)
     {
         if (!target.filter.empty() && !MatchesAnyNeedle(object, target.filter))

@@ -1219,8 +1219,14 @@ void ViewportGizmo::Update(EditorContext& ctx,
                         editorzone::LocalPoints(*primaryTransformOnly);
                     if (ctx.selection.ActivePoint() < static_cast<int>(points.size()))
                     {
+                        // Y comes back through the transform like the other two. Writing a
+                        // literal 0 here is why a point could be dragged sideways and never
+                        // up: the handle moved, the height was thrown away on the way to the
+                        // document, and the sphere snapped back to the zone's plane.
+                        const float sy = std::fabs(t.scale.y) > 1e-4f ? t.scale.y : 1.0f;
                         points[static_cast<std::size_t>(ctx.selection.ActivePoint())] = Math::float3(
-                            (dx * c - dz * s) / sx, 0.0f, (dx * s + dz * c) / sz);
+                            (dx * c - dz * s) / sx, (world.y - t.position.y) / sy,
+                            (dx * s + dz * c) / sz);
                         editorzone::StoreLocalPoints(*primaryTransformOnly, points);
                         ctx.document.SetDirty(true);
                     }

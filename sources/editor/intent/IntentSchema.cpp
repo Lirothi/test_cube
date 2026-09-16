@@ -203,7 +203,8 @@ namespace intentschema
         g += "scope ::= \"\\\"all\\\"\" | \"\\\"selected\\\"\"\n";
         g += "where ::= \"{\" ( wmember ( \",\" wmember )* )? \"}\"\n";
         g += "wmember ::= \"\\\"anchor\\\":\" anchor | \"\\\"radius\\\":\" number"
-             " | \"\\\"minY\\\":\" number | \"\\\"maxY\\\":\" number\n";
+             " | \"\\\"minY\\\":\" number | \"\\\"maxY\\\":\" number"
+             " | \"\\\"zone\\\":\" string\n";
         g += "anchor ::= \"\\\"camera\\\"\" | \"\\\"selection\\\"\"\n\n";
 
         // NAMES ARE FREE TEXT, AND THAT IS A DELIBERATE REVERSAL OF THE PLAN.
@@ -354,6 +355,7 @@ namespace intentschema
                     outIntent.target.where.anchor = anchor == "selection"
                         ? EditorSpatialAnchor::Selection : EditorSpatialAnchor::Camera;
                 }
+                ReadStringMember(*whereIt, "zone", outIntent.target.where.zone);
                 const auto radiusIt = whereIt->find("radius");
                 if (radiusIt != whereIt->end() && radiusIt->is_number())
                 {

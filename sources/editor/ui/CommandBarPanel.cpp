@@ -175,6 +175,17 @@ bool CommandBarPanel::WalkHistory(int direction)
     return true;
 }
 
+void CommandBarPanel::RecordOutcome(const std::string& verdict, Exchange::Kind kind)
+{
+    if (transcript_.empty() || verdict.empty())
+    {
+        return;
+    }
+    transcript_.back().verdict = verdict;
+    transcript_.back().kind = kind;
+    transcriptScrollToBottom_ = true;
+}
+
 void CommandBarPanel::ClearResult()
 {
     intent_ = EditorIntent{};
@@ -210,6 +221,14 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
     // sentence that asked for it, which is the half worth reading back.
     LOG_INFO(logging::LogCategory::Editor, "command bar: \"{}\"", phrase_);
     RememberPhrase(phrase_);
+    constexpr std::size_t kMaxTranscript = 200;
+    transcript_.push_back({ phrase_, "thinking...", Exchange::Kind::Preview });
+    if (transcript_.size() > kMaxTranscript)
+    {
+        transcript_.erase(transcript_.begin(),
+            transcript_.begin() + (transcript_.size() - kMaxTranscript));
+    }
+    transcriptScrollToBottom_ = true;
 
     const EditorIntentWorld world{ actionCtx.editor.document, actionCtx.assets };
     activeSource_ = 0;
@@ -266,6 +285,7 @@ void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
             // falling through to a weaker answer the user did not ask for.
             waiting_ = false;
             whyNot_ = whyNot.empty() ? "The local model could not answer." : whyNot;
+            RecordOutcome(whyNot_, Exchange::Kind::Failed);
             return;
         }
 
@@ -294,6 +314,7 @@ void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
         {
             whyNot_ = "No intent source understood that.";
         }
+        RecordOutcome(whyNot_, Exchange::Kind::Failed);
         LOG_INFO(logging::LogCategory::Editor, "command bar: unparsed phrase \"{}\" ({})",
             phrase_, whyNot_);
     }
@@ -307,6 +328,8 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
         // this the question is a dead end: the user would have to retype the original
         // phrase with the missing detail wedged into it.
         history_.push_back({ phrase_, model_->LastRawAnswer() });
+        RecordOutcome(intent_.question.empty() ? std::string("needs a clearer phrase")
+                                               : intent_.question, Exchange::Kind::Refused);
         return;
     }
     // Anything conclusive ends the thread -- a command, a refusal, or a decline.
@@ -320,6 +343,8 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
         LOG_INFO(logging::LogCategory::Editor,
             "command bar: NO SUCH ACTION for \"{}\" | requested={} | proposed={} | rejected={}",
             phrase_, intent_.requested, intent_.proposed, intent_.whyExistingDontFit);
+        RecordOutcome("the editor cannot do this: " + intent_.whyExistingDontFit,
+            Exchange::Kind::Refused);
         return;
     }
     if (intent_.kind != EditorIntentKind::Command)
@@ -333,6 +358,12 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
         intent_.params["depthPercent"] = buryDepthPercent_;
     }
     preview_ = BuildIntentPreview(actionCtx, intent_);
+    // The preview IS the outcome until something is run: a line saying what it would touch
+    // is what the user is deciding about, and it has to survive the next phrase being typed.
+    RecordOutcome(preview_.executable || preview_.answerOnly ? preview_.summary
+                                                             : preview_.problem,
+        preview_.executable || preview_.answerOnly ? Exchange::Kind::Preview
+                                                   : Exchange::Kind::Failed);
 }
 
 void CommandBarPanel::BeginHeadless(const EditorActionContext& actionCtx,
@@ -585,6 +616,7 @@ void CommandBarPanel::Draw(EditorContext& ctx,
         if (preview_.executable && !preview_.undoable && !preview_.answerOnly)
         {
             ExecuteIntent(actionCtx, commandStack, preview_, status_);
+            RecordOutcome(status_, Exchange::Kind::Ran);
             ClearResult();
             LOG_INFO(logging::LogCategory::Editor,
                 "command bar: ran \"{}\" without asking (changes nothing undoable)", phrase_);
@@ -600,12 +632,194 @@ void CommandBarPanel::Draw(EditorContext& ctx,
             ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.30f,
                    viewport->WorkPos.y + 40.0f), ImGuiCond_FirstUseEver);
     }
-    ImGui::SetNextWindowSize(ImVec2(480.0f, 380.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(560.0f, 520.0f), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Command Bar", open))
     {
         ImGui::End();
         return;
     }
+
+    // THE LOG IS THE PANEL. Everything that happened, with the live preview as its newest
+    // entry -- Run and Cancel included, so what is being decided about sits in the place it
+    // was asked, not in a strip underneath. The input is pinned below it, the way the chat
+    // does it, and the reserve is the input plus its button row and nothing else.
+    const float reserve = ImGui::GetFrameHeightWithSpacing() * 2.6f;
+    if (ImGui::BeginChild("##barLog", ImVec2(0.0f, -reserve), true))
+    {
+        for (std::size_t index = 0; index < transcript_.size(); ++index)
+        {
+            const Exchange& exchange = transcript_[index];
+            ImGui::PushID(static_cast<int>(index));
+            ImGui::TextColored(ImVec4(0.55f, 0.78f, 1.0f, 1.0f), "you");
+            ImGui::TextWrapped("%s", exchange.phrase.c_str());
+            const ImVec4 colour =
+                exchange.kind == Exchange::Kind::Ran ? ImVec4(0.65f, 0.95f, 0.65f, 1.0f) :
+                exchange.kind == Exchange::Kind::Refused ? ImVec4(1.0f, 0.78f, 0.24f, 1.0f) :
+                exchange.kind == Exchange::Kind::Failed ? ImVec4(1.0f, 0.55f, 0.55f, 1.0f) :
+                ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
+            ImGui::PushStyleColor(ImGuiCol_Text, colour);
+            ImGui::TextWrapped("%s", exchange.verdict.c_str());
+            ImGui::PopStyleColor();
+            ImGui::Spacing();
+            ImGui::PopID();
+        }
+
+        if (waiting_)
+        {
+            // Said once, by the state line at the foot of the log.
+        }
+        else if (!whyNot_.empty() && !hasResult_)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.24f, 1.0f), "Not understood");
+            ImGui::TextWrapped("%s", whyNot_.c_str());
+        }
+        else if (hasResult_ && intent_.kind == EditorIntentKind::NeedsApi)
+        {
+            // No Run button, because there is nothing to run. Offering one would be the lie
+            // the three-branch answer exists to avoid.
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.24f, 1.0f), "No such action in the editor");
+            if (!intent_.proposed.empty())
+            {
+                ImGui::TextWrapped("Would need: %s", intent_.proposed.c_str());
+            }
+            if (!intent_.whyExistingDontFit.empty())
+            {
+                ImGui::TextWrapped("Existing actions rejected because: %s",
+                    intent_.whyExistingDontFit.c_str());
+            }
+            ImGui::TextDisabled("Logged to the session log as an API request.");
+        }
+        else if (hasResult_ && intent_.kind == EditorIntentKind::Unclear)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.24f, 1.0f), "Needs one more detail");
+            ImGui::TextWrapped("%s", intent_.question.c_str());
+            if (!history_.empty())
+            {
+                ImGui::TextDisabled("Type the answer -- the question is remembered.");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Start over"))
+                {
+                    ClearThread();
+                    ClearResult();
+                }
+            }
+        }
+        else if (hasResult_ && intent_.kind == EditorIntentKind::Command)
+        {
+            if (preview_.executable)
+            {
+                ImGui::TextUnformatted(preview_.summary.c_str());
+                std::string breakdown;
+                for (const EditorIntentPreview::Group& group : preview_.groups)
+                {
+                    if (!breakdown.empty())
+                    {
+                        breakdown += ", ";
+                    }
+                    breakdown += group.label + " x" + std::to_string(group.count);
+                }
+                ImGui::TextWrapped("%s", breakdown.c_str());
+                const char* note = " - not undoable";
+                if (preview_.answerOnly)
+                {
+                    note = " - a question; nothing was changed";
+                }
+                else if (preview_.undoable)
+                {
+                    note = " - one Ctrl+Z undoes it";
+                }
+                else if (preview_.viewOnly)
+                {
+                    note = " - moves the camera only";
+                }
+                else
+                {
+                    note = " - selection only, not undoable";
+                }
+                ImGui::TextDisabled("via %s%s", intent_.sourceLabel.c_str(), note);
+
+                if (preview_.answerOnly)
+                {
+                    // No Run button: the answer is already on screen, and a button that does
+                    // nothing is exactly the inert control this panel exists not to have.
+                    // Selecting what was just counted is the one thing worth offering next.
+                    ImGui::BeginDisabled(preview_.targets.empty());
+                    if (ImGui::Button("Select these"))
+                    {
+                        ctx.selection.SetOrdered(preview_.targets, preview_.targets.front());
+                        status_ = "Selected " + std::to_string(preview_.targets.size()) +
+                            (preview_.targets.size() == 1 ? " object" : " objects");
+                        RecordOutcome(status_, Exchange::Kind::Ran);
+                        ClearResult();
+                        input_.clear();
+                        ImGui::ClearActiveID();
+                        focusInput_ = true;
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    if (ImGui::Button("Dismiss"))
+                    {
+                        ClearResult();
+                    }
+                }
+                else
+                {
+                    if (ImGui::Button("Run"))
+                    {
+                        ExecuteIntent(actionCtx, commandStack, preview_, status_);
+                        RecordOutcome(status_, Exchange::Kind::Ran);
+                        ClearResult();
+                        input_.clear();
+                        ImGui::ClearActiveID();
+                        focusInput_ = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Cancel"))
+                    {
+                        ClearResult();
+                    }
+                }
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.24f, 1.0f), "Cannot run");
+                ImGui::TextWrapped("%s", preview_.problem.c_str());
+            }
+        }
+
+        if (!status_.empty())
+        {
+            ImGui::TextWrapped("%s", status_.c_str());
+        }
+        // WHAT THE MODEL IS DOING, in the log where the answers are. This line existed only
+        // inside the collapsed "Local model" fold, so the first minute of a session -- the
+        // 22 s to put 38 GB on the card, then the prompt warming -- looked from here like an
+        // editor ignoring the box. A phrase typed then is not lost, it is queued, and saying
+        // so is the difference between waiting and wondering.
+        {
+            const std::string state = model_->StatusLine();
+            const bool ready = state.rfind("Local model ready", 0) == 0 ||
+                state == "Local model idle";
+            if (!ready && !state.empty())
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.0f));
+                ImGui::TextWrapped("%s", state.c_str());
+                ImGui::PopStyleColor();
+            }
+            else if (waiting_)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.0f));
+                ImGui::TextWrapped("Asking the local model. The editor keeps running.");
+                ImGui::PopStyleColor();
+            }
+        }
+        if (transcriptScrollToBottom_)
+        {
+            ImGui::SetScrollHereY(1.0f);
+            transcriptScrollToBottom_ = false;
+        }
+    }
+    ImGui::EndChild();
 
     if (focusInput_)
     {
@@ -651,6 +865,12 @@ void CommandBarPanel::Draw(EditorContext& ctx,
     if (submitted)
     {
         Begin(actionCtx, buryDepthPercent);
+        // Emptied on send, like the chat. The phrase is already the newest line in the log,
+        // so leaving it in the box showed it twice and, worse, left the next phrase to be
+        // typed on top of a failed one -- which is exactly when someone is retyping in a
+        // hurry. Up recalls it if the retry wants the same words.
+        input_.clear();
+        ImGui::ClearActiveID();
         focusInput_ = true;
     }
 
@@ -658,6 +878,9 @@ void CommandBarPanel::Draw(EditorContext& ctx,
     if (ImGui::Button("Parse"))
     {
         Begin(actionCtx, buryDepthPercent);
+        input_.clear();
+        ImGui::ClearActiveID();
+        focusInput_ = true;
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -717,147 +940,19 @@ void CommandBarPanel::Draw(EditorContext& ctx,
         ImGui::TextDisabled("thinking...");
     }
 
-    ImGui::Separator();
 
-    if (waiting_)
-    {
-        ImGui::TextDisabled("Asking the local model. The editor keeps running.");
-    }
-    else if (!whyNot_.empty() && !hasResult_)
-    {
-        ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.24f, 1.0f), "Not understood");
-        ImGui::TextWrapped("%s", whyNot_.c_str());
-    }
-    else if (hasResult_ && intent_.kind == EditorIntentKind::NeedsApi)
-    {
-        // No Run button, because there is nothing to run. Offering one would be the lie
-        // the three-branch answer exists to avoid.
-        ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.24f, 1.0f), "No such action in the editor");
-        if (!intent_.proposed.empty())
-        {
-            ImGui::TextWrapped("Would need: %s", intent_.proposed.c_str());
-        }
-        if (!intent_.whyExistingDontFit.empty())
-        {
-            ImGui::TextWrapped("Existing actions rejected because: %s",
-                intent_.whyExistingDontFit.c_str());
-        }
-        ImGui::TextDisabled("Logged to the session log as an API request.");
-    }
-    else if (hasResult_ && intent_.kind == EditorIntentKind::Unclear)
-    {
-        ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.24f, 1.0f), "Needs one more detail");
-        ImGui::TextWrapped("%s", intent_.question.c_str());
-        if (!history_.empty())
-        {
-            ImGui::TextDisabled("Type the answer -- the question is remembered.");
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Start over"))
-            {
-                ClearThread();
-                ClearResult();
-            }
-        }
-    }
-    else if (hasResult_ && intent_.kind == EditorIntentKind::Command)
-    {
-        if (preview_.executable)
-        {
-            ImGui::TextUnformatted(preview_.summary.c_str());
-            std::string breakdown;
-            for (const EditorIntentPreview::Group& group : preview_.groups)
-            {
-                if (!breakdown.empty())
-                {
-                    breakdown += ", ";
-                }
-                breakdown += group.label + " x" + std::to_string(group.count);
-            }
-            ImGui::TextWrapped("%s", breakdown.c_str());
-            const char* note = " - not undoable";
-            if (preview_.answerOnly)
-            {
-                note = " - a question; nothing was changed";
-            }
-            else if (preview_.undoable)
-            {
-                note = " - one Ctrl+Z undoes it";
-            }
-            else if (preview_.viewOnly)
-            {
-                note = " - moves the camera only";
-            }
-            else
-            {
-                note = " - selection only, not undoable";
-            }
-            ImGui::TextDisabled("via %s%s", intent_.sourceLabel.c_str(), note);
-
-            if (preview_.answerOnly)
-            {
-                // No Run button: the answer is already on screen, and a button that does
-                // nothing is exactly the inert control this panel exists not to have.
-                // Selecting what was just counted is the one thing worth offering next.
-                ImGui::BeginDisabled(preview_.targets.empty());
-                if (ImGui::Button("Select these"))
-                {
-                    ctx.selection.SetOrdered(preview_.targets, preview_.targets.front());
-                    status_ = "Selected " + std::to_string(preview_.targets.size()) +
-                        (preview_.targets.size() == 1 ? " object" : " objects");
-                    ClearResult();
-                    input_.clear();
-                    ImGui::ClearActiveID();
-                    focusInput_ = true;
-                }
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                if (ImGui::Button("Dismiss"))
-                {
-                    ClearResult();
-                }
-            }
-            else
-            {
-                if (ImGui::Button("Run"))
-                {
-                    ExecuteIntent(actionCtx, commandStack, preview_, status_);
-                    ClearResult();
-                    input_.clear();
-                    ImGui::ClearActiveID();
-                    focusInput_ = true;
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel"))
-                {
-                    ClearResult();
-                }
-            }
-        }
-        else
-        {
-            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.24f, 1.0f), "Cannot run");
-            ImGui::TextWrapped("%s", preview_.problem.c_str());
-        }
-    }
-    else
-    {
-        // Folded away. It is a reference for the exact grammar -- the road that needs no
-        // model -- and it is nine lines of syntax sitting where the answer goes, read once
-        // and then in the way every time after. Closed by default; the panel's job when
-        // idle is to look empty and ready.
-        if (ImGui::CollapsingHeader("Exact form (no model needed)"))
-        {
-            ImGui::TextDisabled("%s", GrammarIntentSource::HelpText().c_str());
-        }
-    }
-
-    if (!status_.empty())
-    {
-        ImGui::Separator();
-        ImGui::TextWrapped("%s", status_.c_str());
-    }
 
     ImGui::Separator();
+
+
+
+    // The reference folds live at the BOTTOM. Above the log they pushed the conversation
+    // down the panel, which is backwards: the newest exchange is what the panel is for, and
+    // a syntax crib read once a week is not.
+    if (ImGui::CollapsingHeader("Exact form (no model needed)"))
+    {
+        ImGui::TextDisabled("%s", GrammarIntentSource::HelpText().c_str());
+    }
     DrawSettings();
 
     // The same list, word for word, that the model is handed as its action vocabulary.

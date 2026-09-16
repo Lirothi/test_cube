@@ -3498,6 +3498,13 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
         {
             ImGui::TextDisabled("(open spline; it is closed automatically to fill it)");
         }
+        if (fillIndex == 0 && closed)
+        {
+            // Saying it, because the two readings of "in this zone" are genuinely different
+            // and only one of them is on screen.
+            ImGui::TextDisabled("(finding objects \"in this zone\" uses the whole enclosed\n"
+                "area; this setting only decides where NEW ones go)");
+        }
 
         if (fillIndex == 0)
         {

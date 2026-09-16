@@ -678,14 +678,18 @@ namespace editorzone
             // rather than dropping a point on top of the last one.
             const Math::float3& a = points[static_cast<std::size_t>(count - 2)];
             const Math::float3& b = points[static_cast<std::size_t>(count - 1)];
-            points.push_back(Math::float3(b.x + (b.x - a.x) * 0.5f, 0.0f,
-                b.z + (b.z - a.z) * 0.5f));
+            points.push_back(Math::float3(b.x + (b.x - a.x) * 0.5f,
+                b.y + (b.y - a.y) * 0.5f, b.z + (b.z - a.z) * 0.5f));
+            // STORE IT. Without this the vector grew, the index came back, and nothing was
+            // written -- so "+" on the last point of an open spline did nothing at all,
+            // which is every "+" anyone presses when extending a path.
+            StoreLocalPoints(object, points);
             return count;
         }
         const Math::float3& a = points[static_cast<std::size_t>(index)];
         const Math::float3& b = points[static_cast<std::size_t>(wraps ? 0 : index + 1)];
         points.insert(points.begin() + index + 1,
-            Math::float3((a.x + b.x) * 0.5f, 0.0f, (a.z + b.z) * 0.5f));
+            Math::float3((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f));
         StoreLocalPoints(object, points);
         return index + 1;
     }
