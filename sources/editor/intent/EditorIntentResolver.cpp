@@ -24,22 +24,7 @@ namespace
     // it is the asset the user was thinking of when they said "palms".
     std::string GroupLabel(const EditorObject& object)
     {
-        if (object.properties.is_object())
-        {
-            for (const char* key : { "mesh", "model", "preset", "material" })
-            {
-                const auto it = object.properties.find(key);
-                if (it != object.properties.end() && it->is_string())
-                {
-                    const std::string value = it->get<std::string>();
-                    if (!value.empty())
-                    {
-                        return value;
-                    }
-                }
-            }
-        }
-        return object.type.empty() ? object.name : object.type;
+        return editormatch::AssetLabel(object);
     }
 
     bool MatchesAnyNeedle(const EditorObject& object, const std::vector<std::string>& needles)
@@ -281,6 +266,18 @@ void ResolveTargetObjects(const EditorActionContext& actionCtx,
 
     const auto consider = [&](const EditorObject& object)
     {
+        // A ZONE IS A PLACE, AND A PLACE IS NOT ONE OF THE THINGS IN IT. "удали всё в
+        // выделенной зоне" resolves to the whole level narrowed by that zone -- and a
+        // circle's centre is inside itself, so the zone object landed in its own target
+        // list and was deleted along with the palms. The region then could not be reused,
+        // which is the opposite of what someone drawing a region wants.
+        //
+        // Only an UNFILTERED phrase is affected. "удали зону Beach" names it, so the filter
+        // matches below and the zone is a perfectly ordinary target.
+        if (object.type == editorzone::kTypeName && target.filter.empty())
+        {
+            return;
+        }
         if (!target.filter.empty() && !MatchesAnyNeedle(object, target.filter))
         {
             return;
@@ -391,35 +388,88 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
         return preview;
     }
 
-    // `replace` is the verb with TWO nouns: it selects existing objects AND names the
-    // asset they should become. Resolve the asset for any action that carries one.
-    if (!intent.target.asset.empty() || action->target == EditorTargetKind::Asset)
+    // `replace` is the verb with TWO nouns: it selects existing objects AND names the asset
+    // they should become. Which verbs those are is DECLARED, not inferred from whether an
+    // asset happens to be present -- the grammar permits `asset` inside any target, and a
+    // stray one on a delete used to change the verdict.
+    if (action->target == EditorTargetKind::Asset || action->takesDestinationAsset)
     {
         if (intent.target.asset.empty())
         {
             preview.problem = "'" + std::string(action->id) + "' needs an asset to place";
             return preview;
         }
-        std::string assetProblem;
-        const EditorAssetRecord* record =
-            ResolveAsset(actionCtx.assets, intent.target.asset, assetProblem);
-        if (!record)
+        // EVERY asset the intent names, not just the first one. `spawn` plants from
+        // `target.assets` and the reader mirrors a lone `asset` into that list, so ALL of
+        // them arrive populated -- while this resolved only the singular and described only
+        // the singular. The multi-asset shape the prompt teaches by example ("20 palms of
+        // different types") therefore previewed as "spawn up to 20 x Coconut Palm" and then
+        // planted seven each of three kinds. Someone pressed Run on a sentence naming one.
+        //
+        // Resolving the whole list here also collapses the second half of that bug: the
+        // preview used a substring search with an exact-match tie-break while the builder
+        // used an exact lookup, so a name the preview rescued could still fail at Run. The
+        // builder is handed resolved keys now and never sees the phrase.
+        // Both spellings, mirrored HERE rather than in one source's reader. The model's
+        // reader mirrors them; the hand-written grammar source writes only `asset`, so a
+        // loop over `assets` alone silently refused every grammar-built spawn -- which the
+        // gate caught, because the gate drives the grammar. The resolver is the one place
+        // both roads pass through, so it is the place the two spellings become one.
+        std::vector<std::string> named = intent.target.assets;
+        if (named.empty() && !intent.target.asset.empty())
         {
-            preview.problem = assetProblem;
+            named.push_back(intent.target.asset);
+        }
+
+        std::vector<std::string> resolvedAssets;
+        std::vector<const EditorAssetRecord*> records;
+        for (const std::string& name : named)
+        {
+            std::string assetProblem;
+            const EditorAssetRecord* record = ResolveAsset(actionCtx.assets, name, assetProblem);
+            if (!record)
+            {
+                preview.problem = assetProblem;
+                return preview;
+            }
+            if (std::find(resolvedAssets.begin(), resolvedAssets.end(), record->id.key) ==
+                resolvedAssets.end())
+            {
+                resolvedAssets.push_back(record->id.key);
+                records.push_back(record);
+            }
+        }
+        if (resolvedAssets.empty())
+        {
+            preview.problem = "'" + std::string(action->id) + "' needs an asset to place";
             return preview;
         }
-        // Downstream works with the resolved key, never the phrase the user typed.
-        preview.resolved.target.asset = record->id.key;
+        // Downstream works with the resolved keys, never the phrase the user typed.
+        preview.resolved.target.assets = resolvedAssets;
+        preview.resolved.target.asset = resolvedAssets.front();
 
         if (action->target == EditorTargetKind::Asset)
         {
             const int count =
                 std::clamp(static_cast<int>(preview.resolved.params.value("count", 1.0f)), 1, 200);
-            preview.groups.push_back({ record->displayName, static_cast<std::size_t>(count) });
+            // The count is the TOTAL, shared between the kinds -- which is what the builder
+            // does with it, and what the prompt says. Splitting it here so the preview adds
+            // up to the same number keeps the two telling one story.
+            const std::size_t kinds = records.size();
+            std::size_t assigned = 0;
+            for (std::size_t i = 0; i < kinds; ++i)
+            {
+                const std::size_t share = i + 1 == kinds
+                    ? static_cast<std::size_t>(count) - assigned
+                    : static_cast<std::size_t>(count) / kinds;
+                assigned += share;
+                preview.groups.push_back({ records[i]->displayName, share });
+            }
             // "up to", because the ground decides: water, cliffs and whatever is already
             // standing there can refuse a spot, and the run reports what actually landed.
             preview.summary = std::string(action->id) + " up to " + std::to_string(count) +
-                " x " + record->displayName;
+                " x " + (kinds == 1 ? records.front()->displayName
+                                    : std::to_string(kinds) + " kinds");
             preview.executable = true;
             return preview;
         }
@@ -461,6 +511,17 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
         preview.resolved.target.scope = EditorIntentScope::All;
     }
 
+    // A NEGATIVE RADIUS IS A REFUSAL, NOT A ZERO. `Any()` counts the anchor, so a `where`
+    // with an anchor and radius -50 looks like a narrowing and passes this guard -- and then
+    // PassesSpatialFilter bails on `radius <= 0` and lets everything through. The limit
+    // evaporates and the command quietly reaches the whole level, with only the count in the
+    // preview to warn anybody. Zero is left alone: it is the "not set" default.
+    if (preview.resolved.target.where.radius < 0.0f)
+    {
+        preview.problem = "A radius cannot be negative";
+        return preview;
+    }
+
     // An EMPTY filter with All scope would mean the whole level. No source is allowed to
     // produce it, and if one does the answer is "no" rather than "all". An `exclude` list
     // is a filter too -- "everything except the palms" discriminates, "everything" does not.
@@ -474,6 +535,26 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
 
     EditorIntentTarget& target = preview.resolved.target;
     ResolveTargetObjects(actionCtx, target, preview.targets, preview.groups);
+
+    // A ZONE THAT DOES NOT RESOLVE IS A DIFFERENT ANSWER FROM AN EMPTY ONE, and until now
+    // they were the same sentence. PassesSpatialFilter turns a failed lookup into "this
+    // object is not inside", correctly -- a typo'd zone must exclude everything rather than
+    // pass everything -- but that makes EVERY object fail, and the report came out as "No
+    // object in the level matches": indistinguishable from there genuinely being no palms
+    // there. The lookup's own reason says which it is, and it was being discarded.
+    //
+    // Checked after the resolve, not before, because the selected-zone rewrite inside it is
+    // what puts a name in `where.zone` for "удали пальмы в выделенной зоне".
+    if (preview.targets.empty() && !target.where.zone.empty())
+    {
+        editorzone::Zone zone;
+        std::string whyNot;
+        if (!editorzone::Find(actionCtx.editor.document, target.where.zone, zone, whyNot))
+        {
+            preview.problem = whyNot;
+            return preview;
+        }
+    }
 
     if (preview.targets.empty())
     {
@@ -500,11 +581,22 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
             (preview.targets.size() == 1 ? " object matches" : " objects match")
         : std::string(action->id) + " " + std::to_string(preview.targets.size()) +
             (preview.targets.size() == 1 ? " object" : " objects");
-    if (!preview.resolved.target.asset.empty())
+    // Only for the verb that actually turns them into it. The field can hold a stray asset
+    // the grammar allowed into any target, and appending it read as a replace: "delete 183
+    // objects -> models/coconut_palm.mesh.json" is a sentence about a different command.
+    if (action->takesDestinationAsset && !preview.resolved.target.asset.empty())
     {
         preview.summary += " -> " + preview.resolved.target.asset;
     }
     preview.executable = true;
+
+    // An action that touches fewer things than its target names gets the last word on what
+    // the line above says. Only `thin` uses it so far; the generic summary counts what the
+    // filter reached, which for a thinning verb is the wrong number in front of the button.
+    if (action->refinePreview)
+    {
+        action->refinePreview(actionCtx, preview.resolved, preview);
+    }
     return preview;
 }
 

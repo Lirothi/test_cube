@@ -39,6 +39,7 @@
 #include "editor/intent/GrammarIntentSource.h"
 #include "editor/intent/IntentNotes.h"
 #include "editor/intent/IntentPrompt.h"
+#include "editor/EditorObjectMatch.h"
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/IntentSchema.h"
 #include "editor/intent/LlmIntentSource.h"
@@ -142,6 +143,13 @@ void TestQueryListIntegrity()
 
     Check(gbnf.find("ask ::=") != std::string::npos,
         "the grammar spells a query as a LIST of asks");
+    // groundHeight takes up to 64 points and its description tells the model to ask for
+    // many at once. `pvalue` had no array-of-arrays production, so the sampler could not
+    // emit one: a feature described in the prompt, implemented in the editor, and
+    // unreachable in between.
+    Check(gbnf.find("pointlist ::=") != std::string::npos &&
+        gbnf.find("| pointlist") != std::string::npos,
+        "a parameter can be a LIST of points, which groundHeight exists to take");
 
     // And the reader accepts what the grammar can produce, including the target it shares
     // with a command -- "the bounds of the palms" is the same narrowing as "delete the palms".
@@ -498,6 +506,247 @@ void TestWholeLevelIsRefusedEvenIfAnIntentAsksForIt(const EditorActionContext& a
     environment.target.setting = "fog.density";
     const EditorIntentPreview environmentPreview = BuildIntentPreview(actionCtx, environment);
     Check(!environmentPreview.executable, "an environment target is refused for now");
+}
+
+// THE PREVIEW MUST DESCRIBE WHAT ACTUALLY RUNS. All three of these shipped broken and the
+// gate did not notice, for one reason worth remembering: every existing preview test builds
+// its intent through the GRAMMAR source, and the grammar cannot produce the shapes that were
+// wrong. These go through the model's own reader instead.
+void TestPreviewDescribesWhatRuns(const EditorActionContext& actionCtx)
+{
+    EditorIntent intent;
+    std::string error;
+
+    // A spawn naming three kinds -- the shape the prompt teaches by example. The preview
+    // resolved only `target.asset` while the builder plants from `target.assets`, so this
+    // previewed as "20 x Coconut Palm" and planted seven each of three kinds.
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"spawn","target":{"assets":[)"
+        R"("models/coconut_palm.mesh.json","models/date_palm.mesh.json",)"
+        R"("models/curly_palm.mesh.json"]},"params":{"count":20}})",
+        intent, error), "a multi-asset spawn parses: " + error);
+    const EditorIntentPreview many = BuildIntentPreview(actionCtx, intent);
+    Check(many.executable, "a multi-asset spawn previews: " + many.problem);
+    Check(many.resolved.target.assets.size() == 3,
+        "all three assets are resolved, not just the first");
+    Check(many.groups.size() == 3, "the preview names every kind it is about to plant");
+    std::size_t previewed = 0;
+    for (const EditorIntentPreview::Group& group : many.groups)
+    {
+        previewed += group.count;
+    }
+    Check(previewed == 20, "the previewed counts add up to the count that was asked for");
+    for (const std::string& key : many.resolved.target.assets)
+    {
+        Check(key.find(".mesh.json") != std::string::npos,
+            "the builder is handed a resolved key, never the phrase: " + key);
+    }
+
+    // A parameter the action does not declare. `params.zone` on `delete` was dropped in
+    // silence, and the command then deleted every palm in the level rather than the twelve
+    // in the zone -- with a preview that was honest about the number and wrong about the
+    // request.
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"delete","target":{"filter":["coconut_palm"],)"
+        R"("scope":"all"},"params":{"zone":"Beach"}})", intent, error),
+        "a delete carrying a stray zone parses: " + error);
+    const EditorIntentPreview stray = BuildIntentPreview(actionCtx, intent);
+    Check(!stray.executable, "an undeclared parameter is refused, not dropped");
+    Check(stray.problem.find("zone") != std::string::npos,
+        "the refusal names the offending parameter: " + stray.problem);
+}
+
+// THE REPORT MUST SAY WHICH FAILURE IT WAS. Each of these used to come back as a sentence
+// that was true of a different situation, which is the worst kind of wrong: it sends the
+// reader off to fix something that was never broken.
+void TestRefusalsNameTheRealReason(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+
+    // A zone nobody drew. PassesSpatialFilter correctly excludes everything -- a typo must
+    // not widen the command to the whole level -- but the report was "No object in the
+    // level matches", indistinguishable from there genuinely being none there.
+    EditorIntent intent;
+    std::string error;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"delete","target":{"filter":["coconut_palm"],)"
+        R"("scope":"all","where":{"zone":"Nowhere"}}})", intent, error),
+        "a delete naming an absent zone parses: " + error);
+    const EditorIntentPreview absent = BuildIntentPreview(actionCtx, intent);
+    Check(!absent.executable, "an absent zone cannot be acted in");
+    Check(absent.problem.find("zone") != std::string::npos,
+        "the refusal says the ZONE is the problem, not that nothing matched: " + absent.problem);
+
+    // Two zones whose names share a prefix. The exactly-correct word was ambiguous by
+    // substring, so the lookup refused and the user read "nothing matches".
+    EditorObject beach = editorzone::BuildObject(editorzone::Shape::Circle,
+        Math::float3(0.0f, 0.0f, 0.0f), 40.0f, "Beach");
+    // NOT AllocateId(). MakePalmDocument pushes ids 1-4 straight into Objects() without
+    // going through the allocator, so nextId_ is still 1 and AllocateId hands back an id a
+    // palm is already using -- after which the cleanup below removed the palm instead of
+    // the zone, and three tests later something unrelated failed.
+    std::uint64_t highest = 0;
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        highest = std::max(highest, object.id.value);
+    }
+    beach.id = EditorObjectId{ highest + 1 };
+    EditorObject beachNorth = editorzone::BuildObject(editorzone::Shape::Circle,
+        Math::float3(200.0f, 0.0f, 0.0f), 40.0f, "Beach North");
+    beachNorth.id = EditorObjectId{ highest + 2 };
+    ctx.document.Add(beach);
+    ctx.document.Add(beachNorth);
+    // Taken out again at the end of this function. The document is shared with every test
+    // after this one, and leaving two zones in it changed what "hide the palms" reached --
+    // which is how this test first announced itself, as a failure three tests later.
+    struct ZoneCleanup
+    {
+        EditorSceneDocument& document;
+        EditorObjectId a;
+        EditorObjectId b;
+        ~ZoneCleanup() { document.Remove(a); document.Remove(b); }
+    } cleanup{ ctx.document, beach.id, beachNorth.id };
+    editorzone::Zone found;
+    std::string whyNot;
+    Check(editorzone::Find(ctx.document, "Beach", found, whyNot),
+        "an exact zone name wins over a longer one that contains it: " + whyNot);
+    Check(found.name == "Beach", "and it is the exactly-named zone: " + found.name);
+
+    // A zone is a PLACE. Acting on everything inside one must not consume the region.
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"delete","target":{"scope":"all",)"
+        R"("where":{"zone":"Beach"}}})", intent, error),
+        "an unfiltered delete inside a zone parses: " + error);
+    const EditorIntentPreview inside = BuildIntentPreview(actionCtx, intent);
+    for (const EditorObjectId id : inside.targets)
+    {
+        const EditorObject* object = ctx.document.Find(id);
+        Check(!object || object->type != editorzone::kTypeName,
+            "the zone itself is not one of the things inside it");
+    }
+
+    // And naming it explicitly still reaches it -- the rule is about unfiltered phrases.
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"delete","target":{"filter":["Beach"],"scope":"all"}})",
+        intent, error), "a delete naming the zone parses: " + error);
+    const EditorIntentPreview named = BuildIntentPreview(actionCtx, intent);
+    Check(!named.targets.empty(), "a zone named in the filter is still a target");
+}
+
+// The filter vocabulary is presented to the model as "what is ALREADY in the level -- use
+// the exact strings below". A word in it that can never match anything is a trap the prompt
+// itself sets.
+void TestVocabularyOffersNothingUnreachable(const EditorSceneDocument& document,
+    const AssetRegistry& assets)
+{
+    // WITH AN ENVIRONMENT ENTITY IN IT, which the first version of this test did not have --
+    // so it passed against the very bug it was written for. MakePalmDocument has no
+    // Environment() entries, the loop that used to feed their types into the filter
+    // vocabulary had nothing to feed, and the check proved only that the meshes were fine.
+    EditorSceneDocument withEnvironment = document;
+    EditorObject sun;
+    sun.id = EditorObjectId{ 9001 };
+    sun.name = "Sun";
+    sun.type = "directionalLight";
+    sun.properties = nlohmann::json::object();
+    withEnvironment.Environment().push_back(sun);
+
+    const intentschema::Vocabulary vocabulary =
+        intentschema::BuildVocabulary(withEnvironment, assets);
+    for (const std::string& needle : vocabulary.needles)
+    {
+        bool reachable = false;
+        // Objects() only, which is the point: a filter is resolved against those and nothing
+        // else, so a word that matches only an Environment() entry is a word that can never
+        // select anything.
+        for (const EditorObject& object : withEnvironment.Objects())
+        {
+            if (editormatch::MatchesSearch(object, needle))
+            {
+                reachable = true;
+                break;
+            }
+        }
+        Check(reachable, "every filter word the prompt offers can match something: '" +
+            needle + "'");
+    }
+}
+
+// A GROUP IS ONLY USEFUL IF ITS NAME IS A FILTER. Grouping that produced a label nothing
+// could then select would be a tidy-looking dead end: the point of "сгруппируй эти в
+// Северную рощу" is the sentence after it, "а теперь спрячь её".
+void TestGroupsAreFilterable(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+    EditorCommandStack commandStack;
+    EditorIntent intent;
+    std::string error;
+
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"group","target":{"filter":["coconut_palm"],)"
+        R"("scope":"all"},"params":{"name":"North Grove"}})", intent, error),
+        "a group command parses: " + error);
+    const EditorIntentPreview grouped = BuildIntentPreview(actionCtx, intent);
+    Check(grouped.executable, "grouping the palms previews: " + grouped.problem);
+    const std::size_t historyBefore = commandStack.HistorySize();
+    std::string status;
+    Check(ExecuteIntent(actionCtx, commandStack, grouped, status), "grouping runs: " + status);
+    Check(commandStack.HistorySize() == historyBefore + 1,
+        "grouping several objects is ONE undo entry");
+
+    // The name must now reach them the same way an asset name does -- through the
+    // outliner's own predicate, which is what the command bar resolves through.
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"setEnabled","target":{"filter":["North Grove"],)"
+        R"("scope":"all"},"params":{"enabled":false}})", intent, error),
+        "a command filtering on the group name parses: " + error);
+    const EditorIntentPreview byName = BuildIntentPreview(actionCtx, intent);
+    Check(byName.executable, "the group's name selects its members: " + byName.problem);
+    Check(byName.targets.size() == grouped.targets.size(),
+        "and reaches exactly the objects that were grouped");
+
+    // Undo puts the property back, which is what makes this safe to try.
+    commandStack.Undo(ctx);
+    const EditorIntentPreview afterUndo = BuildIntentPreview(actionCtx, intent);
+    Check(!afterUndo.executable, "undo removes the group, so the name stops matching");
+}
+
+// Two ways a narrowing could quietly stop narrowing, and one way a verdict could describe
+// a different verb than the one that would run.
+void TestNarrowingsCannotEvaporate(const EditorActionContext& actionCtx)
+{
+    EditorIntent intent;
+    std::string error;
+
+    // A negative radius passed Any() on the strength of its anchor and was then dropped by
+    // the distance test, so "delete the palms within -50 m" reached every palm in the level.
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"delete","target":{"filter":["coconut_palm"],)"
+        R"("scope":"all","where":{"anchor":"camera","radius":-50}}})", intent, error),
+        "a negative radius parses: " + error);
+    const EditorIntentPreview negative = BuildIntentPreview(actionCtx, intent);
+    Check(!negative.executable, "a negative radius is refused, not silently dropped");
+
+    // A stray `asset` on an Objects verb used to enter asset resolution, so the preview read
+    // "delete 3 objects -> models/coconut_palm.mesh.json" -- which reads as a replace.
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"delete","target":{"filter":["coconut_palm"],)"
+        R"("asset":"models/coconut_palm.mesh.json","scope":"all"}})", intent, error),
+        "a delete carrying a stray asset parses: " + error);
+    const EditorIntentPreview stray = BuildIntentPreview(actionCtx, intent);
+    Check(stray.executable, "the stray asset does not break the delete: " + stray.problem);
+    Check(stray.summary.find("->") == std::string::npos,
+        "and the verdict does not describe it as becoming something: " + stray.summary);
+
+    // `replace` must still resolve its destination -- it is the verb the flag exists for.
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"replace","target":{"filter":["coconut_palm"],)"
+        R"("asset":"date_palm","scope":"all"}})", intent, error),
+        "a replace parses: " + error);
+    const EditorIntentPreview replace = BuildIntentPreview(actionCtx, intent);
+    Check(replace.executable, "replace still resolves its destination: " + replace.problem);
+    Check(replace.summary.find("->") != std::string::npos,
+        "and says what they become: " + replace.summary);
 }
 
 void TestAssetResolution(const EditorActionContext& actionCtx, GrammarIntentSource& grammar)
@@ -1670,6 +1919,11 @@ int main(int argc, char** argv)
         TestSelectedZoneMeansItsArea(actionCtx);
         TestWholeLevelIsRefusedEvenIfAnIntentAsksForIt(actionCtx);
         TestAssetResolution(actionCtx, grammar);
+        TestPreviewDescribesWhatRuns(actionCtx);
+        TestGroupsAreFilterable(actionCtx);
+        TestNarrowingsCannotEvaporate(actionCtx);
+        TestVocabularyOffersNothingUnreachable(document, assets);
+        TestRefusalsNameTheRealReason(actionCtx);
         std::puts("Intent regression: selector, assets and refusals OK");
 
         TestOnePhraseIsOneUndo(actionCtx, grammar);

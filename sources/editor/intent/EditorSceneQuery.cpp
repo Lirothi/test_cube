@@ -7,8 +7,10 @@
 #include <limits>
 #include <map>
 
+#include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
+#include "editor/EditorObjectMatch.h"
 #include "editor/EditorFraming.h"
 #include "editor/intent/EditorIntentResolver.h"
 #include "editor/scene/EditorZone.h"
@@ -21,8 +23,7 @@ namespace
     // display name it cannot then use as a needle would be a dead end.
     std::string AssetKeyOf(const EditorObject& object)
     {
-        return object.properties.value("asset",
-            object.properties.value("mesh", object.type));
+        return editormatch::AssetLabel(object);
     }
 
     // Rounded to a decimetre. The level is metres of sand and palm trees; the digits past
@@ -221,6 +222,15 @@ namespace
             // cannot say which way a thing is facing. "Put another one like that beside it"
             // needs the rotation, and approximating it from an axis-aligned box is exactly
             // the kind of guess this layer exists to avoid.
+            // Deixis. "вон тот камень", "а это что?" -- the designer is pointing with the
+            // camera, and until now that was answerable only if they had also clicked the
+            // thing. The answer is exactly what the next turn needs: a name to filter on
+            // and a position to place `at`.
+            { "lookingAt",
+              "what the camera is pointed at right now: the first object under the centre of "
+              "the view, with its name, asset and position. Use it for \"that one\", \"вон "
+              "тот\", \"это\" -- anything the designer is pointing at rather than naming",
+              false, "" },
             { "getTransform",
               "the exact position, rotation in degrees and scale of each object the target "
               "names. bounds gives a box; this gives orientation, which cloning or aligning "
@@ -291,6 +301,60 @@ namespace
                 out["waterLevel"] = Round1(level);
             }
             out["zones"] = zoneNames;
+            return out;
+        }
+
+        if (ask.query == "lookingAt")
+        {
+            const Math::float3 origin = ctx.scene.CameraRef().GetPosition();
+            const Math::float3 direction = ctx.scene.CameraRef().GetDirection();
+            float distance = 0.0f;
+            const std::vector<std::uint64_t> noIgnores;
+            const Scene::SceneObjectId hit =
+                ctx.scene.RaycastEditorObject(origin, direction, &distance, 0, &noIgnores);
+            if (hit == 0 || !std::isfinite(distance))
+            {
+                out["hit"] = false;
+                // Where the view meets the ground is still an answer: "put it over there"
+                // with nothing standing there means the ground there.
+                float height = 0.0f;
+                if (direction.y < -0.05f)
+                {
+                    const float t = std::min(-origin.y / direction.y, 1000.0f);
+                    const float x = origin.x + direction.x * t;
+                    const float z = origin.z + direction.z * t;
+                    if (editorquery::ProbeGroundHeight(ctx.scene, x, z,
+                            editorquery::kGroundProbeUp, noIgnores, height))
+                    {
+                        out["groundUnderView"] = Xyz(Math::float3(x, height, z));
+                    }
+                }
+                return out;
+            }
+            out["hit"] = true;
+            out["distance"] = Round1(distance);
+            if (const EditorObject* object = ctx.document.Find(EditorObjectId{ hit }))
+            {
+                out["name"] = object->name;
+                out["asset"] = AssetKeyOf(*object);
+                out["position"] = Xyz(object->transform.position);
+                out["rotationDeg"] = Xyz(object->transform.rotationDeg);
+                Math::float3 lo;
+                Math::float3 hi;
+                if (editorframing::TryGetWorldBounds(ctx.scene, ctx.document,
+                        EditorObjectId{ hit }, lo, hi))
+                {
+                    Aabb box;
+                    box.Add(lo, hi);
+                    box.WriteInto(out);
+                }
+            }
+            else
+            {
+                // A runtime object with no document entry -- terrain generated at load, for
+                // instance. Saying so beats reporting nothing.
+                out["name"] = "(not an editable object)";
+            }
             return out;
         }
 

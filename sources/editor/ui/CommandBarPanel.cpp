@@ -109,7 +109,7 @@ void CommandBarPanel::SetModelSettings(const LlmIntentSettings& settings)
 void CommandBarPanel::ClearThread()
 {
     history_.clear();
-    queryRounds_ = 0;
+    assistRounds_ = 0;
 }
 
 void CommandBarPanel::SetPhraseHistory(std::vector<std::string> history)
@@ -211,7 +211,7 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
 
     phrase_ = input_;
     sendPhrase_ = phrase_;
-    queryRounds_ = 0;
+    assistRounds_ = 0;
     if (phrase_.find_first_not_of(" \t\r\n") == std::string::npos)
     {
         waiting_ = false;
@@ -277,6 +277,37 @@ void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
         }
         if (state == IntentParseState::Ready)
         {
+            // A QUESTION FROM THE GRAMMAR IS NOT AN ANSWER, it is the cheap source saying it
+            // cannot tell. Treated as Ready it ended the thread at the first source: the
+            // model -- which understands what the words MEAN and would have answered, or
+            // asked something better -- was never consulted, and `FinishIntent` dropped the
+            // turn entirely, because its Unclear branch is guarded on the LLM source. The
+            // transcript line kept the "thinking..." placeholder forever.
+            //
+            // The question is kept as the fallback reason, so if nobody after this can
+            // answer either, the user reads "Randomize what -- rotation or scale?" rather
+            // than a generic shrug.
+            if (intent.kind == EditorIntentKind::Unclear && intent.sourceLabel != "llm")
+            {
+                if (!intent.question.empty())
+                {
+                    whyNot_ = intent.question;
+                }
+                ++activeSource_;
+                while (activeSource_ < sources_.size() &&
+                    (!sources_[activeSource_] || !sources_[activeSource_]->Available()))
+                {
+                    ++activeSource_;
+                }
+                if (activeSource_ < sources_.size())
+                {
+                    sources_[activeSource_]->Begin(sendPhrase_, world, history_);
+                    return;
+                }
+                waiting_ = false;
+                RecordOutcome(whyNot_, Exchange::Kind::Refused);
+                return;
+            }
             intent_ = std::move(intent);
             hasResult_ = true;
             waiting_ = false;
@@ -343,17 +374,17 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
         LOG_INFO(logging::LogCategory::Editor,
             "command bar: query [{}] -> {}", asked, answer);
 
-        if (queryRounds_ >= kMaxQueryRounds)
+        if (assistRounds_ >= kMaxAssistRounds)
         {
             // Out of rounds. The answer still goes in the log, because a model that spent
             // three turns asking was probably asking something worth reading.
             ClearThread();
-            RecordOutcome("asked " + std::to_string(kMaxQueryRounds) +
+            RecordOutcome("asked " + std::to_string(kMaxAssistRounds) +
                 " times without deciding; last answer was: " + answer,
                 Exchange::Kind::Refused);
             return;
         }
-        ++queryRounds_;
+        ++assistRounds_;
 
         history_.push_back({ sendPhrase_, model_->LastRawAnswer() });
         sendPhrase_ = "EDITOR ANSWERS: " + answer +
@@ -380,11 +411,13 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
                                                : intent_.question, Exchange::Kind::Refused);
         return;
     }
-    // Anything conclusive ends the thread -- a command, a refusal, or a decline.
-    ClearThread();
-
+    // ClearThread belongs in each terminal branch, NOT here. It used to sit at this point,
+    // which meant the history and the round budget were already gone by the time the
+    // command's preview was built -- and the preview is exactly where the last round of
+    // the conversation can still be spent usefully.
     if (intent_.kind == EditorIntentKind::NeedsApi)
     {
+        ClearThread();
         // The backlog entry. Over a week of use these lines are the honest list of what
         // was actually wanted from the editor, sorted by how often it was asked for --
         // which is the list worth extending the action registry from (E3.1).
@@ -397,6 +430,7 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
     }
     if (intent_.kind != EditorIntentKind::Command)
     {
+        ClearThread();
         return;
     }
 
@@ -406,8 +440,46 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
         intent_.params["depthPercent"] = buryDepthPercent_;
     }
     preview_ = BuildIntentPreview(actionCtx, intent_);
+
+    // THE MODEL NEVER SAW WHAT ITS COMMAND WOULD DO. The preview was computed, shown to the
+    // designer and thrown away -- so a command the editor refused ("No mesh asset matches
+    // 'palm'", "'delete' has no parameter 'zone'") ended the thread with a sentence only a
+    // human could act on, while the one participant who could rewrite the command was told
+    // nothing. The model asked for this channel itself, in those words, when it was shown
+    // its own query list.
+    //
+    // ONLY ON A REFUSAL. Feeding every successful preview back would charge a whole extra
+    // generation for every phrase, to tell the model something it already predicted; a
+    // refusal is the case where it has something to learn and a reason to try again.
+    //
+    // Drawn from the same budget as the queries, deliberately: the number the designer
+    // cares about is how many turns they wait, not what the editor spent them on.
+    if (!preview_.executable && !preview_.answerOnly && intent_.sourceLabel == "llm" &&
+        assistRounds_ < kMaxAssistRounds && !preview_.problem.empty())
+    {
+        ++assistRounds_;
+        history_.push_back({ sendPhrase_, model_->LastRawAnswer() });
+        sendPhrase_ = "THE EDITOR REFUSED THAT COMMAND: " + preview_.problem +
+            "\n\nThat is the editor's own words, not a guess. Fix the command and answer the "
+            "original request again: \"" + phrase_ + "\". If it cannot be fixed with the "
+            "actions you have, say needs_api.";
+        LOG_INFO(logging::LogCategory::Editor,
+            "command bar: preview refused ({}), handing it back to the model", preview_.problem);
+        RecordOutcome("the editor refused -- " + preview_.problem + " (asking the model to fix it)",
+            Exchange::Kind::Asked);
+        transcript_.push_back({ phrase_, "thinking...", Exchange::Kind::Preview });
+        transcriptScrollToBottom_ = true;
+
+        const EditorIntentWorld world{ actionCtx.editor.document, actionCtx.assets };
+        ClearResult();
+        waiting_ = true;
+        sources_[activeSource_]->Begin(sendPhrase_, world, history_);
+        return;
+    }
+
     // The preview IS the outcome until something is run: a line saying what it would touch
     // is what the user is deciding about, and it has to survive the next phrase being typed.
+    ClearThread();
     RecordOutcome(preview_.executable || preview_.answerOnly ? preview_.summary
                                                              : preview_.problem,
         preview_.executable || preview_.answerOnly ? Exchange::Kind::Preview

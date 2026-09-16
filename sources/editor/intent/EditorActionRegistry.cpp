@@ -14,11 +14,15 @@
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorFraming.h"
+#include "editor/EditorObjectMatch.h"
+#include "editor/intent/EditorIntentResolver.h"
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/EnvironmentSettings.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/CompositeCommand.h"
+#include "editor/commands/CreateDocumentObjectCommand.h"
+#include "editor/commands/EditObjectPropertiesCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
 #include "editor/commands/EditEnvironmentCommand.h"
@@ -351,6 +355,369 @@ namespace
     }
 
     // ------------------------------------------------------------------ rename
+
+    // Defined further down with the scatter it was written for. Declared here because
+    // createZone wants the same answer to "where is the designer pointing": a zone made by
+    // a phrase and a scatter made by a phrase must land in the same place.
+    Math::float3 ResolveScatterAnchor(EditorContext& ctx,
+        const EditorSpatialFilter& where,
+        float radius);
+
+    // ---------------------------------------------------------------- setColor
+
+    // THE ONE GENUINE GAP IN THE REFUSAL LOG. "покрась пальмы в ярко-красный" was answered
+    // needs_api twice, and the model's reasoning was right both times: `replace` swaps the
+    // whole mesh and `setMaterial` swaps the whole material, and neither is "the same tree,
+    // red". The engine could already do it -- MaterialParams::baseColor multiplies the
+    // albedo and reaches the shader every frame -- but nothing could mark it as authored
+    // per object, so no level could carry the value and no action could set it.
+    //
+    // Written through EditObjectPropertiesCommand, like `group`: the property is the level's
+    // own JSON, the runtime picks it up through the inspector's live path, and Ctrl+Z puts
+    // the old colour back.
+    std::unique_ptr<EditorCommand> BuildSetColor(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        EditorContext& ctx = actionCtx.editor;
+        if (targets.empty())
+        {
+            outStatus = "Nothing to colour";
+            return nullptr;
+        }
+
+        const auto colourIt = intent.params.find("color");
+        Math::float3 rgb(1.0f, 1.0f, 1.0f);
+        if (colourIt == intent.params.end() || !colourIt->is_array() || colourIt->size() < 3 ||
+            !(*colourIt)[0].is_number())
+        {
+            outStatus = "setColor needs a color as [r, g, b], each 0..1";
+            return nullptr;
+        }
+        rgb = Math::float3(std::clamp((*colourIt)[0].get<float>(), 0.0f, 1.0f),
+            std::clamp((*colourIt)[1].get<float>(), 0.0f, 1.0f),
+            std::clamp((*colourIt)[2].get<float>(), 0.0f, 1.0f));
+
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        commands.reserve(targets.size());
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* object = ctx.document.Find(id);
+            if (!object)
+            {
+                continue;
+            }
+            nlohmann::json before = object->properties.is_object()
+                ? object->properties : nlohmann::json::object();
+            nlohmann::json after = before;
+            after["baseColor"] = nlohmann::json::array({ rgb.x, rgb.y, rgb.z });
+            if (after == before)
+            {
+                continue;
+            }
+            commands.push_back(std::make_unique<EditObjectPropertiesCommand>(
+                id, std::move(before), std::move(after), "Set Colour"));
+        }
+        if (commands.empty())
+        {
+            outStatus = "They are that colour already";
+            return nullptr;
+        }
+        outStatus = "Coloured " + std::to_string(commands.size()) + " objects";
+        return FoldIntoOneEntry(std::move(commands), "Set Colour");
+    }
+
+    // ---------------------------------------------------------------- group
+
+    // PUT THESE IN A NAMED GROUP, which is a flat label rather than a hierarchy.
+    //
+    // The flat version is not a lesser one here. A group name lives in the object's own
+    // `properties`, so it serialises with the level for free, it is matched by the
+    // outliner's search predicate the moment the key is in kSearchPropertyKeys, and every
+    // action that takes a filter can therefore act on a group without knowing groups exist.
+    // "удали северную рощу" is a delete whose filter is a group name, and nothing had to be
+    // taught about it. A parent/child tree would have brought inherited transforms, a
+    // serialisation format change and a question about what deleting a parent means -- none
+    // of which anyone asked for.
+    std::unique_ptr<EditorCommand> BuildGroup(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        EditorContext& ctx = actionCtx.editor;
+        if (targets.empty())
+        {
+            outStatus = "Nothing to group";
+            return nullptr;
+        }
+        // An EMPTY name is how you leave a group, and saying so explicitly beats a second
+        // action that does only that.
+        const std::string name = StringOr(intent.params, "name", "");
+
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        commands.reserve(targets.size());
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* object = ctx.document.Find(id);
+            if (!object)
+            {
+                continue;
+            }
+            nlohmann::json before = object->properties.is_object()
+                ? object->properties : nlohmann::json::object();
+            nlohmann::json after = before;
+            if (name.empty())
+            {
+                after.erase("group");
+            }
+            else
+            {
+                after["group"] = name;
+            }
+            if (after == before)
+            {
+                continue;
+            }
+            commands.push_back(std::make_unique<EditObjectPropertiesCommand>(
+                id, std::move(before), std::move(after),
+                name.empty() ? "Ungroup" : "Group"));
+        }
+        if (commands.empty())
+        {
+            outStatus = name.empty() ? "None of them was in a group"
+                                     : "They are already in '" + name + "'";
+            return nullptr;
+        }
+        outStatus = name.empty()
+            ? "Removed " + std::to_string(commands.size()) + " from their group"
+            : "Put " + std::to_string(commands.size()) + " in '" + name + "'";
+        return FoldIntoOneEntry(std::move(commands), name.empty() ? "Ungroup" : "Group");
+    }
+
+    // ---------------------------------------------------------------- thin
+
+    // THE VERB SPAWN HAS NO INVERSE, and a scatter that came out too dense had no answer
+    // but undo-and-retry with a different seed -- which throws away every hand placement
+    // made since. Thinning is the same min-separation rule spawn already applies to
+    // candidates, run over what is actually standing there.
+    //
+    // KEEPS THE FIRST OF EACH CROWDED PAIR rather than choosing by some quality, because
+    // there is no quality to choose by and a rule anybody can predict beats a clever one
+    // nobody can. Document order is placement order, so the oldest survives.
+    // WHICH ONES GO. Shared by the builder and by the preview, because the preview's whole
+    // job is to say what the builder will do, and a second implementation of "which ones
+    // are too close together" would be a second answer to that.
+    std::vector<EditorObjectId> CollectThinVictims(EditorContext& ctx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outProblem)
+    {
+        std::vector<EditorObjectId> doomed;
+        if (targets.empty())
+        {
+            outProblem = "Nothing to thin";
+            return doomed;
+        }
+
+        const float spacing = NumberOr(intent.params, "minSeparation", 0.0f);
+        const float keepFraction = NumberOr(intent.params, "keepPercent", 0.0f) * 0.01f;
+        if (spacing <= 0.0f && keepFraction <= 0.0f)
+        {
+            outProblem = "thin needs either minSeparation (metres) or keepPercent";
+            return doomed;
+        }
+
+        if (spacing > 0.0f)
+        {
+            std::vector<Math::float3> kept;
+            kept.reserve(targets.size());
+            for (const EditorObjectId id : targets)
+            {
+                const EditorObject* object = ctx.document.Find(id);
+                if (!object)
+                {
+                    continue;
+                }
+                const Math::float3& p = object->transform.position;
+                bool crowded = false;
+                for (const Math::float3& other : kept)
+                {
+                    const float dx = p.x - other.x;
+                    const float dz = p.z - other.z;
+                    // In PLAN, like the scatter's own test: two palms on a slope are not
+                    // further apart because one is higher up.
+                    if (dx * dx + dz * dz < spacing * spacing)
+                    {
+                        crowded = true;
+                        break;
+                    }
+                }
+                if (crowded)
+                {
+                    doomed.push_back(id);
+                }
+                else
+                {
+                    kept.push_back(p);
+                }
+            }
+        }
+        else
+        {
+            // Evenly through the list rather than at random: asked to keep a third, the
+            // designer means a thinner version of the same arrangement, not a new one.
+            const float keep = std::clamp(keepFraction, 0.01f, 1.0f);
+            const double step = 1.0 / static_cast<double>(keep);
+            double next = 0.0;
+            for (std::size_t i = 0; i < targets.size(); ++i)
+            {
+                if (static_cast<double>(i) + 1e-6 >= next)
+                {
+                    next += step;
+                    continue;
+                }
+                doomed.push_back(targets[i]);
+            }
+        }
+
+        if (doomed.empty())
+        {
+            outProblem = "Nothing was closer together than that";
+        }
+        return doomed;
+    }
+
+    // Same label the resolver's preview uses -- the asset name where there is one, because
+    // a hundred palms are "Palm_0xx" individually and `coconut_palm` together.
+    void AppendVictimGroup(std::vector<EditorIntentPreview::Group>& groups,
+        const EditorObject& object)
+    {
+        const std::string label = editormatch::AssetLabel(object);
+        for (EditorIntentPreview::Group& group : groups)
+        {
+            if (group.label == label)
+            {
+                ++group.count;
+                return;
+            }
+        }
+        groups.push_back({ label, 1 });
+    }
+
+    // The preview's own number: how many actually go, not how many were considered.
+    void RefineThinPreview(const EditorActionContext& actionCtx,
+        const EditorIntent& intent,
+        EditorIntentPreview& preview)
+    {
+        std::string problem;
+        const std::vector<EditorObjectId> doomed =
+            CollectThinVictims(actionCtx.editor, preview.targets, intent, problem);
+        if (doomed.empty())
+        {
+            preview.executable = false;
+            preview.problem = problem.empty() ? "Nothing to thin" : problem;
+            return;
+        }
+        // The groups are rebuilt from the victims, so the line under the summary names what
+        // is about to disappear rather than what was searched.
+        preview.groups.clear();
+        for (const EditorObjectId id : doomed)
+        {
+            if (const EditorObject* object = actionCtx.editor.document.Find(id))
+            {
+                AppendVictimGroup(preview.groups, *object);
+            }
+        }
+        preview.summary = "thin: remove " + std::to_string(doomed.size()) + " of " +
+            std::to_string(preview.targets.size());
+    }
+
+    std::unique_ptr<EditorCommand> BuildThin(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        EditorContext& ctx = actionCtx.editor;
+        const std::vector<EditorObjectId> doomed =
+            CollectThinVictims(ctx, targets, intent, outStatus);
+        if (doomed.empty())
+        {
+            return nullptr;
+        }
+
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        commands.reserve(doomed.size());
+        for (const EditorObjectId id : doomed)
+        {
+            commands.push_back(std::make_unique<DeleteObjectCommand>(id));
+        }
+        outStatus = "Removed " + std::to_string(doomed.size()) + " of " +
+            std::to_string(targets.size());
+        return FoldIntoOneEntry(std::move(commands), "Thin");
+    }
+
+    // ---------------------------------------------------------------- createZone
+
+    // DRAW THE REGION, so that saying WHERE stops costing a round trip.
+    //
+    // A level with no zones is the common case -- atoll has none -- and on such a level
+    // every spatial phrase went the long way: ask for the island's bounds, then scatter in
+    // a disc around a point, which is not the shape anybody meant. `params.zone`,
+    // `target.where.zone` and the whole "the selected zone means its area" rule were
+    // unreachable until somebody opened the Create menu by hand.
+    //
+    // Circle and rect only. A spline is a list of control points somebody drags, and there
+    // is no sentence that places eight of them where they were wanted.
+    std::unique_ptr<EditorCommand> BuildCreateZone(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        (void)targets;
+        EditorContext& ctx = actionCtx.editor;
+
+        const std::string shapeName = StringOr(intent.params, "shape", "circle");
+        const editorzone::Shape shape = shapeName == "rect"
+            ? editorzone::Shape::Rect : editorzone::Shape::Circle;
+        const float size = std::clamp(NumberOr(intent.params, "size", 25.0f), 1.0f, 2000.0f);
+
+        std::string name = StringOr(intent.params, "name", "");
+        if (name.empty())
+        {
+            // Numbered, like the menu does it. Two zones called "Zone" cannot be told apart
+            // in a phrase, which is the one thing a zone name is for.
+            int ordinal = 1;
+            for (const EditorObject& object : ctx.document.Objects())
+            {
+                if (object.type == editorzone::kTypeName)
+                {
+                    ++ordinal;
+                }
+            }
+            name = "Zone " + std::to_string(ordinal);
+        }
+        for (const EditorObject& object : ctx.document.Objects())
+        {
+            if (object.type == editorzone::kTypeName && object.name == name)
+            {
+                outStatus = "There is already a zone called '" + name + "'";
+                return nullptr;
+            }
+        }
+
+        // Where the scatter would have gone, so "make a zone here" and "plant here" agree
+        // about where "here" is.
+        Math::float3 centre = ResolveScatterAnchor(ctx, intent.target.where, size);
+        if (intent.params.contains("at"))
+        {
+            centre = Vec3Or(intent.params, "at", centre);
+        }
+
+        outStatus = "Created zone '" + name + "'";
+        return std::make_unique<CreateDocumentObjectCommand>(
+            editorzone::BuildObject(shape, centre, size, name));
+    }
 
     std::unique_ptr<EditorCommand> BuildRename(const EditorActionContext& actionCtx,
         const std::vector<EditorObjectId>& targets,
@@ -1709,8 +2076,14 @@ EditorActionRegistry::EditorActionRegistry()
         "standing on it with a visible gap. Only changes height, never the horizontal position.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
+        // THE CEILING IS PART OF THE DESCRIPTION, because the value is clamped to it. Said
+        // as "default 1" with no upper bound, "зарой в два раза глубже" came back as 200
+        // and silently became 25 -- a control that accepts a number and does something
+        // else with it.
         { { "depthPercent", EditorParamKind::Number, false,
-            "how far past contact it ends up, as a percent of the object's height (default 1)" } },
+            "how far past contact it ends up, as a percent of the object's height "
+            "(default 1, and anything over 25 is treated as 25 -- it is the footing that "
+            "gets buried, not the whole mesh)" } },
         &BuildBury,
     });
 
@@ -1809,6 +2182,9 @@ EditorActionRegistry::EditorActionRegistry()
         EditorTargetKind::Objects,
         {},
         &BuildReplace,
+        false,   // filterFromSelection
+        nullptr, // refinePreview
+        true,    // takesDestinationAsset -- the one verb with two nouns
     });
 
     actions_.push_back({
@@ -1874,6 +2250,86 @@ EditorActionRegistry::EditorActionRegistry()
         EditorTargetKind::Objects,
         {},
         &BuildIsolate,
+    });
+
+    actions_.push_back({
+        "setColor",
+        "THE ACTION FOR \"покрась\", \"перекрась\", \"сделай <цвет>\", \"paint\", \"tint\". "
+        "It sets the object's colour and leaves everything else alone -- the same tree, red. "
+        "Use it whenever a phrase names a colour for objects that already exist; it is not a "
+        "near-miss for those phrases, it is the answer to them, so do NOT reach for "
+        "needs_api. (It is not replace, which swaps the mesh, and not setMaterial, which "
+        "swaps the whole material.)\n"
+        "Colour as [r, g, b], each 0..1, and a plain colour word is a plain value: red "
+        "[1, 0, 0], bright red [1, 0, 0], dark red [0.4, 0, 0], green [0, 1, 0], blue "
+        "[0, 0, 1], warm sand [0.9, 0.8, 0.6]. White [1, 1, 1] puts them back to normal. "
+        "A textured object keeps its texture and takes the colour over it, which is what "
+        "painting something means -- that is not a limitation to warn about.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        {
+            { "color", EditorParamKind::Vec3, true, "[r, g, b], each 0..1" },
+        },
+        &BuildSetColor,
+    });
+
+    actions_.push_back({
+        "group",
+        "Put the matching objects into a named GROUP -- a label they carry, shown as a "
+        "folder in the outliner. Once grouped, the group's name works as a filter "
+        "everywhere: \"спрячь северную рощу\" is setEnabled with that name in the filter, "
+        "\"удали её\" is a delete. Use it for \"сгруппируй\", \"собери в группу\", "
+        "\"назови это\". An EMPTY name takes them out of whatever group they were in.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        {
+            { "name", EditorParamKind::String, false,
+              "the group's name; empty removes them from their group" },
+        },
+        &BuildGroup,
+    });
+
+    actions_.push_back({
+        "thin",
+        "Thin OUT objects that are already in the level, by deleting some of them. Two ways "
+        "to say how much: minSeparation removes whatever stands closer together than that "
+        "many metres, keepPercent keeps roughly that share and drops the rest evenly. This "
+        "is the answer to \"проредь\", \"слишком густо\", \"убери половину\" -- it is the "
+        "undo spawn does not have, and it keeps the arrangement rather than replacing it.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        {
+            { "minSeparation", EditorParamKind::Number, false,
+              "closest two may stand, in metres; anything nearer loses the newer one" },
+            { "keepPercent", EditorParamKind::Number, false,
+              "keep about this share, 50 = half. Use one of these two, not both" },
+        },
+        &BuildThin,
+        false,
+        &RefineThinPreview,
+    });
+
+    actions_.push_back({
+        "createZone",
+        "Draw a named region on the ground -- a circle or a rectangle -- around the point "
+        "the camera is looking at, or around an explicit `at`. A zone is how the editor says "
+        "WHERE: once one exists, spawn can fill it with params.zone, and every other action "
+        "can narrow to what is inside it with target.where.zone. Make one when the designer "
+        "names a place the level does not have yet (\"заведи зону на пляже\", \"сделай "
+        "область вокруг того камня\"), and when a later command will need to refer to it.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::None,
+        {
+            { "shape", EditorParamKind::Enum, false,
+              "circle (default) or rect", { "circle", "rect" } },
+            { "size", EditorParamKind::Number, false,
+              "radius for a circle, half-extent for a rect, in metres (default 25)" },
+            { "name", EditorParamKind::String, false,
+              "what to call it; numbered automatically when omitted" },
+            { "at", EditorParamKind::Vec3, false,
+              "world centre. Omit to use what the camera is looking at" },
+        },
+        &BuildCreateZone,
     });
 
     actions_.push_back({
@@ -2008,6 +2464,39 @@ bool ValidateParams(const EditorActionDesc& action, nlohmann::json& params, std:
     if (!params.is_object())
     {
         outError = "parameters must be an object";
+        return false;
+    }
+
+    // A PARAMETER THE ACTION DOES NOT DECLARE IS A REFUSAL, NOT A SHRUG. This loop used to
+    // be absent, and an unknown key was dropped without a word -- which is worse than a bad
+    // value, because the command then runs and does something plausible.
+    //
+    // The prompt makes the collision likely on purpose: `spawn` says WHERE with params.zone
+    // while every other action says it with target.where.zone. "удали пальмы в зоне Beach"
+    // answered with params.zone lost the zone silently, and the preview said "delete 183
+    // objects" -- honest, plausible, and the whole level's palms instead of the twelve on
+    // the beach. Naming the permitted keys is what turns that into a fixable message.
+    for (const auto& entry : params.items())
+    {
+        const auto known = std::find_if(action.params.begin(), action.params.end(),
+            [&entry](const EditorActionParam& param) { return param.name == entry.key(); });
+        if (known != action.params.end())
+        {
+            continue;
+        }
+        outError = "'" + std::string(action.id) + "' has no parameter '" + entry.key() + "'";
+        if (action.params.empty())
+        {
+            outError += "; it takes none";
+        }
+        else
+        {
+            outError += "; it takes ";
+            for (std::size_t i = 0; i < action.params.size(); ++i)
+            {
+                outError += (i ? ", " : "") + std::string(action.params[i].name);
+            }
+        }
         return false;
     }
 

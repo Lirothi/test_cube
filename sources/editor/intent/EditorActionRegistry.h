@@ -12,6 +12,9 @@
 
 class AssetRegistry;
 class EditorCommand;
+// Forward-declared rather than included: EditorIntentResolver.h includes THIS header, and
+// refinePreview below only needs to name the type in a function-pointer signature.
+struct EditorIntentPreview;
 class EditorCommandStack;
 class EditorExtensionRegistry;
 struct EditorContext;
@@ -115,6 +118,33 @@ struct EditorActionDesc
     // LAST on purpose, so every existing entry keeps its aggregate initialiser and takes
     // the default -- adding a field in the middle would silently shift every one of them.
     bool filterFromSelection = false;
+
+    // Rewrite the preview for an action that touches FEWER things than its target names.
+    //
+    // The generic summary is "<action> N objects", where N is what the filter reached, and
+    // for nearly every verb that is also what it does. `thin` is the exception that made
+    // this necessary: asked to thin a hundred palms it removes perhaps thirty, and a
+    // preview reading "thin 100 objects" put the wrong number in front of the button --
+    // true about the target, wrong about the consequence, which is the kind of honest-
+    // looking line nobody double-checks.
+    //
+    // Runs after the targets resolve and before the preview is called executable. It may
+    // refuse, by clearing `executable` and setting `problem`.
+    using RefineFn = void (*)(const EditorActionContext& actionCtx,
+        const EditorIntent& intent,
+        EditorIntentPreview& preview);
+    RefineFn refinePreview = nullptr;
+
+    // This action acts on OBJECTS and also names an asset they become. `replace` is the only
+    // verb with two nouns, and the resolver needs to know which those are rather than
+    // guessing from whether an asset happens to be present.
+    //
+    // It used to guess: any Objects action carrying an `asset` entered asset resolution,
+    // and the grammar lets `asset` appear in any target. A delete that picked one up was
+    // then refused outright when the name did not resolve, or -- worse when it did --
+    // previewed as "delete 183 objects -> models/coconut_palm.mesh.json", which any reader
+    // takes for a replace.
+    bool takesDestinationAsset = false;
 };
 
 class EditorActionRegistry

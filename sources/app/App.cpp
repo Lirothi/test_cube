@@ -1681,7 +1681,13 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 // ...unless a --shot is still pending. What a command DID is the interesting
                 // part, and quitting on the verdict meant the only photograph that could ever
                 // be taken was of the moment before it happened.
-                if (g_shotPath.empty())
+                //
+                // A pending --profdump holds it open for a different reason: the question
+                // that pairing answers is what the MODEL costs the frame while it is
+                // thinking, and quitting the moment the verdict lands threw the dump away
+                // unwritten. Size --intent-repeat so the passes outlast --shot-delay, or the
+                // dump measures an idle editor and says inference is free.
+                if (g_shotPath.empty() && g_profDumpPath.empty())
                 {
                     isRunning_ = false;
                 }

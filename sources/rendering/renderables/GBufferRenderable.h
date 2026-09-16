@@ -59,7 +59,13 @@ public:
         UseMR = 1u << 2,
         EmissiveColor = 1u << 3,
         EmissiveStrength = 1u << 4,
-        MetalRough = 1u << 5
+        MetalRough = 1u << 5,
+        // A flat tint multiplied into the albedo. The field has been in MaterialParams all
+        // along and reaches the shader every frame (GBufferRenderable.cpp), but nothing
+        // could mark it as authored per-object, so no level could set it and the command
+        // bar answered "покрась пальмы в красный" with needs_api -- twice, which in this
+        // project's own reading is a feature rather than a mood.
+        BaseColor = 1u << 6
     };
     void MarkMaterialParamOverride(MaterialParamField field)
     {

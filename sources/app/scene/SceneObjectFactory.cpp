@@ -279,6 +279,24 @@ namespace SceneObjectFactory
         }
         // Self-illumination on slot 0 (glowing embers etc). The override mask keeps explicitly
         // authored object values while unrelated fields continue to inherit from the material.
+        // A flat tint multiplied into the albedo, per object. [r, g, b] keeps the material's
+        // own alpha, which is what someone painting a palm red means; [r, g, b, a] is there
+        // because alpha is part of this field and refusing to write it would be a rule with
+        // nothing behind it.
+        if (o.contains("baseColor"))
+        {
+            const json& c = o["baseColor"];
+            if (c.is_array() && c.size() == 3)
+            {
+                const float3 rgb = ToFloat3(c, float3(mp.baseColor.x, mp.baseColor.y, mp.baseColor.z));
+                mp.baseColor = float4(rgb.x, rgb.y, rgb.z, mp.baseColor.w);
+            }
+            else
+            {
+                mp.baseColor = ToFloat4(c, mp.baseColor);
+            }
+            mesh.MarkMaterialParamOverride(ParamField::BaseColor);
+        }
         if (o.contains("emissiveColor"))
         {
             mp.emissiveColor = ToFloat3(o["emissiveColor"], mp.emissiveColor);

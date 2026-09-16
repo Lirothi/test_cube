@@ -490,6 +490,10 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     const int totalRows = static_cast<int>(document.Objects().size() + document.Environment().size());
     std::vector<OutlinerRowRef>& badAssets = scratchBadAssets_;
     std::vector<OutlinerRowRef>& meshes = scratchMeshes_;
+    // Keyed by name and therefore drawn in alphabetical order, which is the order somebody
+    // scanning for a group expects. std::map also guarantees the references handed to
+    // drawGroup stay valid while it iterates.
+    std::map<std::string, std::vector<OutlinerRowRef>>& namedGroups = scratchNamedGroups_;
     std::vector<OutlinerRowRef>& lights = scratchLights_;
     std::vector<OutlinerRowRef>& cameras = scratchCameras_;
     std::vector<OutlinerRowRef>& environmentRows = scratchEnvironment_;
@@ -521,6 +525,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     {
         badAssets.clear();
         meshes.clear();
+        namedGroups.clear();
         lights.clear();
         cameras.clear();
         environmentRows.clear();
@@ -541,6 +546,23 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             case OutlinerGroup::Environment: group = &environmentRows; break;
             case OutlinerGroup::PostProcess: group = &postProcessRows; break;
             case OutlinerGroup::Other:       group = &other; break;
+            }
+            // A NAMED GROUP OVERRIDES THE MESHES BUCKET, and only that one. The other
+            // buckets answer "what kind of thing is this", which a designer's grouping does
+            // not change: a light put in "North Shore" is still a light and still belongs
+            // with the lights, where someone looking for lights will find it. Placed
+            // geometry is the only bucket big enough to need dividing anyway -- 600 rows of
+            // "Meshes" is the problem groups exist to solve.
+            if (group == &meshes && !environment && object.properties.is_object())
+            {
+                const auto it = object.properties.find("group");
+                if (it != object.properties.end() && it->is_string() &&
+                    !it->get<std::string>().empty())
+                {
+                    namedGroups[it->get<std::string>()].push_back(
+                        OutlinerRowRef{ &object, environment });
+                    return;
+                }
             }
             if (group)
             {
@@ -581,7 +603,13 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
 
     const std::string selectedName = selectedObject ? selectedObject->name : std::string{};
 
+    std::size_t groupedRows = 0;
+    for (const auto& entry : namedGroups)
+    {
+        groupedRows += entry.second.size();
+    }
     const int visibleRows = static_cast<int>(
+        groupedRows +
         meshes.size() +
         lights.size() +
         cameras.size() +
@@ -627,6 +655,10 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         {
             SortRows(badAssets, sortSpecs);
             SortRows(meshes, sortSpecs);
+            for (auto& entry : namedGroups)
+            {
+                SortRows(entry.second, sortSpecs);
+            }
             SortRows(lights, sortSpecs);
             SortRows(cameras, sortSpecs);
             SortRows(environmentRows, sortSpecs);
@@ -656,6 +688,13 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             }
         };
         appendDisplayedRows(badAssets, badAssetsGroupOpen_);
+        // In the SAME order they are drawn below, because this list is what the up/down
+        // keys walk: a keyboard order that disagrees with the screen order is a cursor that
+        // jumps.
+        for (const auto& entry : namedGroups)
+        {
+            appendDisplayedRows(entry.second, namedGroupOpen_[entry.first]);
+        }
         appendDisplayedRows(meshes, meshesGroupOpen_);
         appendDisplayedRows(lights, lightsGroupOpen_);
         appendDisplayedRows(cameras, camerasGroupOpen_);
@@ -992,8 +1031,24 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         };
 
         drawGroup("##badAssetsGroup", "Bad Assets", badAssets, badAssetsGroupOpen_);
-        drawGroup("##meshesGroup", "Meshes", meshes, meshesGroupOpen_,
-            "Placed geometry.");
+        // The designer's own groups first: they are the folders somebody made on purpose,
+        // and "Meshes" below them is what is left over.
+        for (auto& entry : namedGroups)
+        {
+            const auto openIt = namedGroupOpen_.find(entry.first);
+            if (openIt == namedGroupOpen_.end())
+            {
+                namedGroupOpen_[entry.first] = true;
+            }
+            drawGroup(entry.first.c_str(), entry.first.c_str(), entry.second,
+                namedGroupOpen_[entry.first],
+                "A group somebody put these in. Its name works as a filter everywhere -- in "
+                "the search box above and in a typed phrase.");
+        }
+        drawGroup("##meshesGroup", "Meshes",
+            meshes, meshesGroupOpen_,
+            namedGroups.empty() ? "Placed geometry."
+                                : "Placed geometry that is not in any group.");
         drawGroup("##lightsGroup", "Lights", lights, lightsGroupOpen_,
             "The directional light plus every placed point and spot light.");
         drawGroup("##camerasGroup", "Cameras", cameras, camerasGroupOpen_);

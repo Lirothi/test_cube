@@ -194,6 +194,7 @@ InspectorMultiEdit::Snapshot InspectorMultiEdit::Capture(
             values["windStrength"] = gb->GetWindStrength();
             values["useMR"] = mp.texFlags.y > 0.5f;
             values["metalRough"] = { mp.metalRough.x, mp.metalRough.y };
+            values["baseColor"] = { mp.baseColor.x, mp.baseColor.y, mp.baseColor.z };
             values["materials"] = Json::array();
             for (size_t i = 0; i < gb->SlotCount(); ++i)
             {
@@ -300,6 +301,17 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
             {
                 gb->MaterialParamsRef().metalRough = Math::float2(
                     values["metalRough"][0].get<float>(), values["metalRough"][1].get<float>());
+            }
+            // The tint. Alpha is left as the material set it: painting something red is
+            // about its colour, and quietly making it transparent would be a surprise.
+            if (changed("baseColor"))
+            {
+                Math::float4& c = gb->MaterialParamsRef().baseColor;
+                c = Math::float4(values["baseColor"][0].get<float>(),
+                    values["baseColor"][1].get<float>(),
+                    values["baseColor"][2].get<float>(), c.w);
+                gb->MarkMaterialParamOverride(
+                    GBufferRenderable::MaterialParamField::BaseColor);
             }
             if (changed("renderLayer"))
             {

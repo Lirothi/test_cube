@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "editor/EditorObjectMatch.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/scene/EditorZone.h"
 #include "editor/intent/EditorActionRegistry.h"
@@ -128,7 +129,7 @@ namespace intentschema
             PushUnique(vocabulary.needles, object.type);
             if (object.properties.is_object())
             {
-                for (const char* key : { "mesh", "model", "preset", "material" })
+                for (const char* key : editormatch::kAssetNameKeys)
                 {
                     const auto it = object.properties.find(key);
                     if (it != object.properties.end() && it->is_string())
@@ -138,10 +139,17 @@ namespace intentschema
                 }
             }
         }
-        for (const EditorObject& object : document.Environment())
-        {
-            PushUnique(vocabulary.needles, object.type);
-        }
+        // ENVIRONMENT TYPES ARE DELIBERATELY NOT HERE, and they used to be. `needles` is what
+        // the prompt presents as "what is ALREADY in the level -- use the exact strings
+        // below", and a filter is resolved against `document.Objects()` only. So listing
+        // `directionalLight`, `ocean` and `wind` beside `models/coconut_palm.mesh.json`
+        // offered the model a word that can never match anything: "выключи солнце" came back
+        // as setEnabled with filter ["directionalLight"] -- correct-looking, and empty every
+        // time. The right answer for those is `setEnvironment`, and the vocabulary was
+        // steering away from it.
+        //
+        // Environment entities stay reachable the one way they ever were: selected, with a
+        // phrase that says nothing about WHICH (EditorIntentResolver's saysNothingAboutWhich).
         for (const editorzone::Zone& zone : editorzone::Collect(document))
         {
             PushUnique(vocabulary.zones, zone.name);
@@ -248,9 +256,16 @@ namespace intentschema
         // sampler refusal cannot do. A string parameter may also be genuinely free text
         // (EditorParamKind::String), which an enum-only rule would have made unwritable.
         g += "pname ::= string\n";
-        g += "pvalue ::= number | boolean | pstring | range | vec3\n";
+        g += "pvalue ::= number | boolean | pstring | range | vec3 | pointlist\n";
         g += "range ::= \"[\" number \",\" number \"]\"\n";
         g += "vec3 ::= \"[\" number \",\" number \",\" number \"]\"\n";
+        // A LIST OF POINTS, without which `groundHeight`'s whole reason for existing is
+        // unreachable. The query takes up to 64 of them and its own description tells the
+        // model to ask for many at once -- tracing a shoreline is that question along a
+        // line -- but `pvalue` had no array-of-arrays production, so the sampler blocked
+        // the second `[` and forced a single point. The feature was advertised in the
+        // prompt and could not be sampled: described, implemented, and unreachable.
+        g += "pointlist ::= \"[\" ( range | vec3 ) ( \",\" ( range | vec3 ) )* \"]\"\n";
         g += "pstring ::= string\n\n";
 
         // --- query ----------------------------------------------------------------

@@ -243,7 +243,19 @@ namespace intentprompt
         p += "  where   : a distance limit. \"within 50 m of the camera\" -> "
              "{\"anchor\":\"camera\",\"radius\":50}.\n";
         p += "            Or a named region: \"in zone Beach\" -> {\"zone\":\"Beach\"}.\n";
-        p += "            Leaving it out silently widens the command to the whole level.\n\n";
+        // HEIGHT HAS BEEN IN THE GRAMMAR AND THE READER ALL ALONG and was described
+        // nowhere, so "удали всё под водой" had to ask for the waterline and then had
+        // nothing to do with the answer. The comment two paragraphs down says a field left
+        // undemonstrated goes unused; these two were not even mentioned.
+        p += "            Or a height band: minY / maxY, in world metres. \"everything below\n";
+        p += "            the waterline\" -> ask waterLevel, then {\"maxY\": <that y>}.\n";
+        p += "  scope   : \"all\" is the whole level; \"selected\" is what the designer has\n";
+        p += "            picked right now. A phrase that says \"these\", \"this one\",\n";
+        p += "            \"выделенные\" or names nothing at all means SELECTED -- and then\n";
+        p += "            the filter is usually empty, because the selection already says\n";
+        p += "            which. Omitting scope means \"all\", which is rarely what\n";
+        p += "            \"подвинь их повыше\" meant.\n";
+        p += "            Leaving where out silently widens the command to the whole level.\n\n";
 
         p += "EXAMPLES\n";
         p += "  \"zaroy vse palmy\" (bury all palms)\n";
@@ -274,6 +286,29 @@ namespace intentprompt
         p += "  -> {\"kind\":\"command\",\"action\":\"delete\","
              "\"target\":{\"filter\":[\"models/beach_rock.mesh.json\"],\"scope\":\"all\","
              "\"where\":{\"anchor\":\"camera\",\"radius\":50}}}\n";
+        // The two shapes that were described and never shown. `assets` taught this lesson
+        // once already: a field the examples do not use is a field the model does not use.
+        // Groups are a label, so the second half of the story is the important half: the
+        // name becomes an ordinary filter, and nothing else had to learn about groups.
+        p += "  \"sgruppiruy eti palmy v Severnuyu roshchu\" (group these palms into "
+             "\"Северная роща\")\n";
+        p += "  -> {\"kind\":\"command\",\"action\":\"group\","
+             "\"target\":{\"scope\":\"selected\"},"
+             "\"params\":{\"name\":\"Северная роща\"}}\n";
+        p += "     ...and afterwards the group's NAME is a filter like any other:\n";
+        p += "  -> {\"kind\":\"command\",\"action\":\"setEnabled\","
+             "\"target\":{\"filter\":[\"Северная роща\"],\"scope\":\"all\"},"
+             "\"params\":{\"enabled\":false}}\n";
+        p += "  \"podnimi eti na dva metra\" (raise THESE by two metres) -- what is selected\n";
+        p += "  -> {\"kind\":\"command\",\"action\":\"move\","
+             "\"target\":{\"scope\":\"selected\"},"
+             "\"params\":{\"value\":[0,2,0],\"relative\":true}}\n";
+        p += "  \"udali vsyo pod vodoy\" (delete everything below the waterline)\n";
+        p += "  -> {\"kind\":\"query\",\"ask\":[{\"query\":\"waterLevel\"}]}\n";
+        p += "     ...the editor answers {\"waterLevel\":{\"y\":0}}, and then the height band\n";
+        p += "     is what carries it:\n";
+        p += "  -> {\"kind\":\"command\",\"action\":\"delete\","
+             "\"target\":{\"scope\":\"all\",\"where\":{\"maxY\":0}}}\n";
         p += "  \"skolko palm na urovne?\" (how many palms are in the level?)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"count\","
              "\"target\":{\"filter\":[\"models/coconut_palm.mesh.json\"],\"scope\":\"all\"}}\n";

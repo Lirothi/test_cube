@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -92,6 +93,11 @@ private:
     // retained) so the row buckets and display order don't reallocate every frame.
     std::vector<OutlinerRowRef> scratchBadAssets_;
     std::vector<OutlinerRowRef> scratchMeshes_;
+    // Placed geometry that carries a `group` property, bucketed by that name. Rebuilt with
+    // the rest; the open/closed flags below outlive it, so collapsing a group and then
+    // typing in the search box does not reopen it.
+    std::map<std::string, std::vector<OutlinerRowRef>> scratchNamedGroups_;
+    std::map<std::string, bool> namedGroupOpen_;
     std::vector<OutlinerRowRef> scratchLights_;
     std::vector<OutlinerRowRef> scratchCameras_;
     std::vector<OutlinerRowRef> scratchEnvironment_;

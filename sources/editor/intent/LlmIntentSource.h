@@ -240,6 +240,12 @@ private:
     // must then leave it alone, and the in-editor idle timer must stay out of the way too:
     // two things retiring the same server is how one of them kills it mid-answer.
     bool keepsServerAlive_ = false;
+    // Set once, when the watchdog could not be launched. It fails for reasons that hold for
+    // the whole session -- a missing binary, or this process sitting in a job object that
+    // forbids CREATE_BREAKAWAY_FROM_JOB -- so retrying is a loop that starts and kills a
+    // 38 GB server once a second and never succeeds. After this the server is job-owned:
+    // it dies with the editor, which is the arrangement that never needed a watchdog.
+    bool reaperUnavailable_ = false;
     std::string serverStatus_;
     double nextHealthPollSec_ = 0.0;
     double lastUseSec_ = 0.0;

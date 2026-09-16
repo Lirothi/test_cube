@@ -330,6 +330,10 @@ void GBufferRenderable::MergeMaterialDefaults(size_t slot, const MaterialParams&
         return (materialParamOverrideMask_ & static_cast<uint32_t>(field)) != 0;
     };
 
+    if (overridden(MaterialParamField::BaseColor))
+    {
+        matParamses_[slot].baseColor = explicitValues.baseColor;
+    }
     if (overridden(MaterialParamField::TexOffsScale))
     {
         matParamses_[slot].texOffsScale = explicitValues.texOffsScale;

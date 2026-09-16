@@ -250,6 +250,22 @@ namespace editorzone
             return false;
         }
         const std::string wanted = Lowered(needle);
+
+        // AN EXACT NAME WINS OUTRIGHT, before the substring pass gets a say. Without this,
+        // a level holding both "Beach" and "Beach North" made the exactly-correct word
+        // "Beach" ambiguous: two substring hits, a refusal, and -- because the caller in
+        // PassesSpatialFilter turns a failed lookup into "nothing is inside" -- a preview
+        // reading "No object in the level matches". Correct input, silent wrong answer.
+        // ResolveAsset has had this tie-break all along; zones did not.
+        for (const Zone& zone : zones)
+        {
+            if (Lowered(zone.name) == wanted)
+            {
+                outZone = zone;
+                return true;
+            }
+        }
+
         std::vector<const Zone*> hits;
         for (const Zone& zone : zones)
         {

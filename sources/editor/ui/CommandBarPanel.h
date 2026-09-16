@@ -138,15 +138,17 @@ private:
     // carries the question the model asked and the answer it got. Cleared when a command
     // lands.
     std::vector<IntentTurn> history_;
-    // Query rounds spent on the phrase currently being worked on.
+    // Extra model turns spent on the phrase currently being worked on -- questions to the
+    // editor AND second attempts after the editor refused a command. ONE budget for both,
+    // because the number the designer feels is how long they waited, not what the editor
+    // spent the time on.
     //
-    // CAPPED, AND THE CAP IS THE POINT. A query costs a whole generation -- seconds the
-    // designer spends watching a greyed-out box -- so a model that asks, asks again, and
-    // asks a third time has stopped being useful whatever it eventually answers. Three is
-    // enough for "how big is it, where is the water, now place it" and short enough that a
-    // loop cannot run away.
-    int queryRounds_ = 0;
-    static constexpr int kMaxQueryRounds = 3;
+    // CAPPED, AND THE CAP IS THE POINT. Each round costs a whole generation -- seconds
+    // watching a greyed-out box -- so a model that asks, asks again, and asks a third time
+    // has stopped being useful whatever it eventually answers. Three is enough for "how big
+    // is it, where is the water, now place it" and short enough that a loop cannot run away.
+    int assistRounds_ = 0;
+    static constexpr int kMaxAssistRounds = 3;
     // Index into sources_ of the one currently being asked. Sources are tried in cost
     // order, so this walks forward as cheaper ones decline (E7).
     std::size_t activeSource_ = 0;

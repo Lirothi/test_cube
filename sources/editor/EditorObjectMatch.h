@@ -31,7 +31,49 @@ namespace editormatch
         "preset",
         "shader",
         "inputLayout",
+        // The GROUP a designer put it in. Not an asset name like the rest, and it earns its
+        // place here for the same reason they did: it is a word somebody will type into the
+        // search box, and typing it must find the same set the command bar finds. Naming a
+        // group in a filter is how "удали северную рощу" works at all.
+        "group",
     };
+
+    // What to CALL a group of these objects, in priority order. A subset of the list above,
+    // and a different question from it: matching tries every key, naming picks one.
+    // "texture" and "shader" are searchable and make poor labels; "group" is searchable and
+    // is not the object's identity at all.
+    //
+    // FOUR COPIES OF THIS EXISTED -- the outliner's preview label, the prompt's filter
+    // vocabulary, the query layer's report and the thinning preview -- in a file whose own
+    // comment warns that two would drift. They agreed by luck: the query layer's copy also
+    // read a key called "asset" that no other list knew, so an object carrying one would
+    // have been reported to the model under a name the prompt never offered and the search
+    // predicate could not find.
+    constexpr const char* kAssetNameKeys[] = {
+        "mesh",
+        "model",
+        "preset",
+        "material",
+    };
+
+    // The asset this object was built from, or its type, or its name -- the first of those
+    // that says anything. This is the string a designer means by "the palms".
+    inline std::string AssetLabel(const EditorObject& object)
+    {
+        if (object.properties.is_object())
+        {
+            for (const char* key : kAssetNameKeys)
+            {
+                const auto it = object.properties.find(key);
+                if (it != object.properties.end() && it->is_string() &&
+                    !it->get<std::string>().empty())
+                {
+                    return it->get<std::string>();
+                }
+            }
+        }
+        return object.type.empty() ? object.name : object.type;
+    }
 
     // True when `needle` (any case) appears in the object's name, type, decimal id,
     // or one of the asset-name properties above. An empty needle matches everything,

@@ -209,7 +209,12 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
     }
 
     std::string error;
-    const bool keepAlive = settings_.keepServerAfterExit && settings_.keepAliveSeconds > 0;
+    // `reaperUnavailable_` is why this is not simply the setting. A watchdog that could not
+    // be started once will not start on the next frame either -- it fails for reasons that
+    // do not change within a session, such as this process sitting in a job object that
+    // forbids breakaway -- so asking again every frame buys nothing and costs everything.
+    const bool keepAlive = settings_.keepServerAfterExit && settings_.keepAliveSeconds > 0 &&
+        !reaperUnavailable_;
     server_ = llmclient::StartServer(settings_.serverExe, settings_.modelPath,
         settings_.endpoint, settings_.gpuLayers, settings_.contextTokens,
         settings_.threads, settings_.webUi, keepAlive, error);
@@ -222,22 +227,46 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
     if (keepAlive)
     {
         // The guarantee moved out of the job object, so it has to be picked up here in the
-        // same breath. If the watchdog cannot start, the server is retired at once rather
-        // than left running with nobody minding it -- a slow editor is a nuisance, a 38 GB
-        // orphan is the thing this whole arrangement exists to prevent.
+        // same breath: a kept-alive server with no watchdog is the 38 GB orphan this whole
+        // arrangement exists to prevent.
+        //
+        // BUT THE ANSWER IS TO FALL BACK, NOT TO REFUSE. The first version terminated the
+        // server and returned false, leaving `serverOwned_` unset -- so the next poll
+        // started another one, failed again, killed it again, and did that once a second
+        // forever. The editor never got a model and the headless harness sat there until
+        // its 180 s deadline with no verdict, while a 38 GB process was created and
+        // destroyed under it the whole time. A permanent failure handled as a temporary one
+        // is worse than either.
+        //
+        // The fallback is the arrangement that came before the watchdog and needed no
+        // watchdog: job-owned, dies with the editor. It loses `keepServerAfterExit` and
+        // nothing else, and it cannot orphan anything by construction.
         std::string reaperError;
         if (!llmclient::StartReaper(settings_.endpoint, server_.processId,
                 settings_.keepAliveSeconds, reaperError))
         {
             server_.Terminate();
-            serverStatus_ = reaperError + " -- refusing to leave a server nobody watches";
-            LOG_ERROR(logging::LogCategory::Editor, "intent model: {}", serverStatus_);
-            outStatus = serverStatus_;
-            return false;
+            reaperUnavailable_ = true;
+            LOG_WARNING(logging::LogCategory::Editor,
+                "intent model: {} -- falling back to a job-owned server that dies with the "
+                "editor; it will not outlive this session", reaperError);
+            server_ = llmclient::StartServer(settings_.serverExe, settings_.modelPath,
+                settings_.endpoint, settings_.gpuLayers, settings_.contextTokens,
+                settings_.threads, settings_.webUi, false, error);
+            if (!server_.handle)
+            {
+                serverStatus_ = error;
+                outStatus = serverStatus_;
+                return false;
+            }
         }
     }
     serverOwned_ = true;
-    keepsServerAlive_ = keepAlive;
+    // Not `keepAlive`: the fallback above may have started a job-owned server instead, and
+    // this flag decides whether the editor leaves it running on the way out and whether the
+    // idle stop applies. Saying it keeps a server alive when it does not would strand the
+    // idle timeout on a process that dies with us anyway.
+    keepsServerAlive_ = keepAlive && !reaperUnavailable_;
     lastUseSec_ = NowSeconds();
     serverStatus_ = "Starting llama-server...";
     outStatus = serverStatus_;
