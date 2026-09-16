@@ -132,6 +132,21 @@ public:
     // Using it counts as activity, so chatting keeps the idle timer from retiring the
     // server out from under the conversation.
     void BeginFreeform(const std::string& prompt, float temperature, int maxTokens);
+
+    // Answer in PROSE, with the conversation so far, on the same cached system prompt.
+    //
+    // This is what a `chat` verdict turns into. It deliberately goes through the same
+    // server, the same weights and the same prefix as a command: one 38 GB load, and the
+    // expensive half of the prompt is already in the cache when it starts.
+    //
+    // `toolProtocol` is appended after the shared prefix -- the source search and the scene
+    // queries a prose turn may ask for. Empty leaves them out.
+    void BeginConversation(const std::vector<IntentTurn>& history,
+        const std::string& phrase,
+        const std::string& toolProtocol,
+        float temperature,
+        int maxTokens,
+        bool reasoning);
     // `outTruncated` is set when the answer stopped because it hit the token budget rather
     // than because it finished. A reasoning model can spend the whole budget thinking, and
     // an answer that just stops mid-sentence with no explanation is the kind of quiet lie

@@ -42,6 +42,15 @@ enum class EditorIntentKind
     NeedsApi,
     // Understood as a request, but the target or a parameter is genuinely ambiguous.
     Unclear,
+    // Not an editing request at all -- a greeting, a question about graphics, a complaint
+    // about how something looks. The editor answers it in PROSE, in the same window, by
+    // asking the same model again without the grammar.
+    //
+    // It is a value in the closed set rather than a guess made outside it, so the decision
+    // is made by the thing that understands the sentence, and made once. The cost is about
+    // a second: this answer is twenty tokens, and only then does a conversational turn
+    // begin. A phrase that IS a command never pays it.
+    Chat,
     // A question to the EDITOR, not to the user: "how big is the island", "where is the
     // waterline". Executes nothing and changes nothing -- the editor answers, the answer
     // is appended to the conversation, and the model gets another turn to act on it.

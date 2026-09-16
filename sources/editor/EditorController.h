@@ -16,7 +16,6 @@
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/CommandBarPanel.h"
 #include "editor/ui/CommandHistoryPanel.h"
-#include "editor/ui/ModelChatPanel.h"
 #include "editor/ui/ContentBrowserPanel.h"
 #include "editor/intent/LlmReaper.h"
 #include "editor/ui/ImportPanel.h"
@@ -119,8 +118,8 @@ private:
     // E1/E6: type a phrase, preview what it reaches, run it as one undoable entry. Off by
     // default -- it is a power tool beside the panels, not a fourth thing always on screen.
     bool showCommandBar_ = false;
-    // A plain conversation with the local model, beside the command bar rather than inside
-    // it -- see ModelChatPanel for why the two are not one panel.
+    // Kept only so a layout saved before the two panels became one still loads; nothing
+    // opens a window with it any more.
     bool showModelChat_ = false;
     // "--intent=<phrase>" is in flight: submitted, waiting for the source to settle.
     bool headlessIntentPending_ = false;
@@ -186,7 +185,6 @@ private:
     // watchdog's rule is about sessions, not about model use.
     llmreaper::EditorSessionMark modelSessionMark_;
     CommandBarPanel commandBar_;
-    ModelChatPanel modelChat_;
     ViewportGizmo viewportGizmo_;
     EditorHotkeys hotkeys_;
     EditorExtensionRegistry extensions_;

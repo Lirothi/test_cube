@@ -333,9 +333,6 @@
     <ClCompile Include="sources/editor/ui/CommandBarPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
-    <ClCompile Include="sources/editor/ui/ModelChatPanel.cpp">
-      <Filter>sources\editor\ui</Filter>
-    </ClCompile>
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
@@ -768,9 +765,6 @@
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/ImGuiTextInput.h">
-      <Filter>sources\editor\ui</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/editor/ui/ModelChatPanel.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/EditorController.h">

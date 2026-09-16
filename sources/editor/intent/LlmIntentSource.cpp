@@ -128,7 +128,16 @@ void LlmIntentSource::SetSettings(LlmIntentSettings settings)
         settings.modelPath != settings_.modelPath ||
         settings.gpuLayers != settings_.gpuLayers ||
         settings.webUi != settings_.webUi;
+    // The prompt NAMES the loaded file, so a different file is a different prompt. Without
+    // this the server would be restarted on the new model while the system prefix went on
+    // introducing it as the old one -- and being wrong about that is exactly what putting
+    // the name in the prompt was meant to prevent.
+    const bool modelChanged = settings.modelPath != settings_.modelPath;
     settings_ = std::move(settings);
+    if (modelChanged)
+    {
+        worldBuilt_ = false;
+    }
     if (endpointChanged && serverOwned_)
     {
         server_.Terminate();
@@ -151,7 +160,8 @@ void LlmIntentSource::EnsureWorld(const EditorIntentWorld& world)
     levelPathForNotes_ = world.document.LevelPath();
     vocabulary_ = intentschema::BuildVocabulary(world.document, world.assets);
     gbnf_ = intentschema::BuildGbnf(vocabulary_);
-    systemPrompt_ = intentprompt::BuildSystemPrompt(world.document, world.assets, vocabulary_);
+    systemPrompt_ = intentprompt::BuildSystemPrompt(world.document, world.assets, vocabulary_,
+        intentprompt::ModelNameFromPath(settings_.modelPath));
     worldBuilt_ = true;
     LOG_INFO(logging::LogCategory::Editor,
         "intent model: grammar rebuilt for level -- {} filter names, {} spawnable assets, "
@@ -640,6 +650,41 @@ bool LlmIntentSource::EnsureServerReady(std::string& outStatus)
         return false;
     }
     return EnsureServer(outStatus);
+}
+
+void LlmIntentSource::BeginConversation(const std::vector<IntentTurn>& history,
+    const std::string& phrase,
+    const std::string& toolProtocol,
+    float temperature,
+    int maxTokens,
+    bool reasoning)
+{
+    std::string text = "<|im_start|>system\n" + systemPrompt_;
+    text += "\n\nRIGHT NOW YOU ARE ANSWERING IN PROSE, not in JSON. The editor decided "
+        "this was conversation rather than an edit, and the rules above about emitting a "
+        "single JSON object do NOT apply to this turn. Reply the way a person would, in "
+        "the language they wrote in.\n"
+        "You are still inside the editor and everything above is still true about it, so "
+        "answer about THIS level and THIS engine rather than about game engines in "
+        "general. If they ask for something the editor can do, say so and let them ask for "
+        "it -- you cannot run it from here.";
+    text += toolProtocol;
+    text += "<|im_end|>\n";
+    for (const IntentTurn& turn : history)
+    {
+        text += "<|im_start|>user\n" + turn.user + "<|im_end|>\n";
+        text += "<|im_start|>assistant\n" + turn.assistant + "<|im_end|>\n";
+    }
+    text += "<|im_start|>user\n" + phrase + "<|im_end|>\n";
+    text += "<|im_start|>assistant\n";
+    if (!reasoning)
+    {
+        // The same already-closed think block the command path uses: this model reasons
+        // before it answers and the reasoning is most of the tokens, which is most of the
+        // seconds somebody spends watching a box say "thinking".
+        text += "<think>\n\n</think>\n\n";
+    }
+    BeginFreeform(text, temperature, maxTokens);
 }
 
 void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature, int maxTokens)

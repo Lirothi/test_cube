@@ -1019,8 +1019,31 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                 ImGuiTreeNodeFlags_LabelSpanAllColumns |
                 ImGuiTreeNodeFlags_FramePadding |
                 ImGuiTreeNodeFlags_NoTreePushOnOpen;
-            const bool openNow =
-                ImGui::TreeNodeEx(id, groupFlags, "%s (%zu)", label, rows.size());
+
+            // TRUNCATED TO THE NAME COLUMN, with the full text on hover. The label is
+            // allowed to span the row, which is right for a heading, but a name long
+            // enough to reach the ID column stops reading as one -- it reads as text that
+            // escaped its cell. Measured rather than cut at a fixed character count,
+            // because the column is resizable and the font is not monospaced.
+            char shown[128];
+            std::snprintf(shown, sizeof(shown), "%s (%zu)", label, rows.size());
+            const float room = ImGui::GetContentRegionAvail().x -
+                ImGui::GetTreeNodeToLabelSpacing();
+            if (ImGui::CalcTextSize(shown).x > room && room > 0.0f)
+            {
+                std::string fitted(shown);
+                while (!fitted.empty() &&
+                    ImGui::CalcTextSize((fitted + "...").c_str()).x > room)
+                {
+                    fitted.pop_back();
+                }
+                std::snprintf(shown, sizeof(shown), "%s...", fitted.c_str());
+            }
+            const bool openNow = ImGui::TreeNodeEx(id, groupFlags, "%s", shown);
+            if (ImGui::IsItemHovered() && tooltip == nullptr)
+            {
+                ImGui::SetTooltip("%s -- %zu rows", label, rows.size());
+            }
             if (tooltip != nullptr && ImGui::IsItemHovered())
             {
                 ImGui::BeginTooltip();

@@ -94,7 +94,14 @@ private:
         std::string verdict;
         // Colour-coded by outcome, because at a glance the difference between "ran" and
         // "cannot run" matters more than the words.
-        enum class Kind { Ran, Preview, Refused, Failed, Asked } kind = Kind::Preview;
+        enum class Kind { Ran, Preview, Refused, Failed, Asked, Said } kind = Kind::Preview;
+        // A prose answer's reasoning block, shown folded. Kept apart from the answer
+        // because it is most of the tokens and none of the point.
+        std::string thinking;
+        // A phrase the model says the editor COULD carry out. It sits on a button beside
+        // the sentence that offered it; pressing it submits the phrase the ordinary way,
+        // through the grammar and the preview. Nothing here runs anything by itself.
+        std::string offer;
     };
     void RecordOutcome(const std::string& verdict, Exchange::Kind kind);
     // Up/Down while the box has focus. Returns true when it changed the text, so the caller
@@ -149,6 +156,32 @@ private:
     // is it, where is the water, now place it" and short enough that a loop cannot run away.
     int assistRounds_ = 0;
     static constexpr int kMaxAssistRounds = 3;
+
+    // --- the conversation half ------------------------------------------------------
+    // There used to be a second window for this, and a person had to know which box to
+    // type into. The model decides now (EditorIntentKind::Chat), so both kinds of thing
+    // arrive in one place and leave in one transcript.
+    void PollConversation(const EditorActionContext& actionCtx);
+    void BeginConversationTurn(const EditorActionContext& actionCtx);
+
+    // True while a prose answer is streaming in.
+    bool inConversation_ = false;
+    // The prose exchanges, kept across messages -- this is the chat's memory, and it is
+    // separate from `history_`, which belongs to ONE command and is cleared when it lands.
+    std::vector<IntentTurn> conversation_;
+    // Search rounds spent on the prose turn being answered now.
+    int conversationTools_ = 0;
+    static constexpr int kMaxConversationTools = 3;
+    std::size_t lastPartialSize_ = 0;
+    // Let it think out loud. OFF by default and that is a speed decision: reasoning is
+    // most of the tokens and every token is a second somebody waits.
+    bool reasoning_ = false;
+    // A ceiling, not a target -- the model still stops at EOS, so a short answer costs
+    // what it costs.
+    int conversationTokens_ = 8192;
+    bool searchEnabled_ = true;
+    // An offer the person pressed, waiting to be submitted at the top of the next frame.
+    std::string pendingOffer_;
     // Index into sources_ of the one currently being asked. Sources are tried in cost
     // order, so this walks forward as cheaper ones decline (E7).
     std::size_t activeSource_ = 0;

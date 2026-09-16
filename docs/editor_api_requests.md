@@ -120,3 +120,15 @@ The designer wants to change the visual color of palm trees to bright red. The c
 - **when**: 2026-09-16 13:53
 
 The designer wants to change the color of existing palm meshes to bright red without replacing the geometry. The closest existing action, `setMaterial`, requires a pre-existing material asset name. Since no "bright red" material exists in the current asset library, this action fails. A new action, `setMaterialColor`, would be needed, accepting a material reference and a hex color code to override the base color dynamically. This is harder than it looks because it requires the editor to support runtime material instance creation or modification, rather than just swapping static asset references. Without this capability, the only workaround is manually creating a red material asset first, which breaks the workflow.
+
+---
+
+## createSplineZone(points, name)
+
+- **asked**: создай сплайн зону по контуру острова над водой
+- **read as**: create a spline zone following the island's contour
+- **rejected existing because**: createZone only supports circles and rectangles; there is no action to draw a spline or polygonal zone along an arbitrary contour.
+- **level**: data/levels/wind_test.json
+- **when**: 2026-09-16 20:44
+
+The designer wants a spline-shaped zone following an island’s waterline. The closest existing action is `createZone`, but it only supports circles and rectangles. To fulfill this, we need a new action, such as `createSplineZone(points, name)`, which would accept a list of 3D coordinates defining the contour. This requires the editor to handle arbitrary polygonal or spline-based region definitions, rather than just axis-aligned bounding boxes or simple geometric primitives. The main difficulty is determining the precise points for the spline. The editor would need a way to either manually input coordinates or, more ideally, automatically sample the terrain/water intersection along a path. Without this capability, the designer must manually calculate and input dozens of points, which is error-prone and inefficient. This feature would significantly streamline coastal level design.

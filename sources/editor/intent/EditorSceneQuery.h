@@ -37,6 +37,22 @@ struct EditorQueryDesc
     bool usesTarget = false;
     // Named parameters it reads, purely so the prompt can say so.
     std::string_view params;
+
+    // What the CHAT's plain-text form of this query takes after its name.
+    //
+    // The chat reaches these through a line of text ("scene bounds coconut_palm"), not
+    // through the grammar, because nothing constrains its sampling -- so something has to
+    // say how the rest of that line becomes a target or a parameter. Declared here, beside
+    // the query, rather than as a switch in the panel: a mapping kept somewhere else is a
+    // second place to remember when a query is added.
+    enum class ChatArg
+    {
+        None,       // "scene waterLevel"
+        Filter,     // "scene bounds coconut_palm"  -> target.filter
+        Point,      // "scene groundHeight 12 -40"  -> params.point
+        ZoneName,   // "scene zoneInfo Beach"       -> params.zone
+    };
+    ChatArg chatArg = ChatArg::None;
 };
 
 namespace editorquery
@@ -58,6 +74,17 @@ namespace editorquery
     // A failure is an answer too: {"waterLevel":{"error":"this level has no ocean"}} tells
     // the model where the waterline is just as surely as a number would.
     std::string Answer(const EditorActionContext& actionCtx, const EditorIntent& intent);
+
+    // The CHAT's plain-text form: "bounds coconut_palm", "groundHeight 12 -40", "waterLevel".
+    //
+    // Same queries, same answers, same list -- only the way of saying which one differs,
+    // because the chat is sampled freely and has no grammar to spell a JSON object for it.
+    // Anything the chat is told about the scene therefore agrees with what the command bar
+    // is told, by construction rather than by two lists being kept in step.
+    std::string AnswerChatLine(const EditorActionContext& actionCtx, const std::string& line);
+
+    // The block describing these for the chat's system prompt.
+    std::string ChatProtocolPrompt();
 
     // Height of the surface under (x, z), or false when nothing is below. Cast from
     // `startY` downwards through the scene, so the mesh's own transform, the terrain's

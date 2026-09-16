@@ -19,9 +19,20 @@ namespace intentprompt
 {
     // The action list with DESCRIPTIONS, the level's assets, and the instruction that
     // matters most: prefer an honest "no such action" over a near-miss.
+    //
+    // `modelName` is what the model should say when asked what it is. It is passed in
+    // rather than written here because it is a fact about the FILE that was loaded, and a
+    // string compiled into the prompt would go on claiming a model the person had already
+    // replaced. Empty when nothing is loaded, and then the prompt claims nothing.
     std::string BuildSystemPrompt(const EditorSceneDocument& document,
         const AssetRegistry& assets,
-        const intentschema::Vocabulary& vocabulary);
+        const intentschema::Vocabulary& vocabulary,
+        const std::string& modelName = std::string{});
+
+    // "D:/llm_models/Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf" -> "Qwen3.6-35B-A3B-UD-Q8_K_XL".
+    // The only identity the editor actually has: llama.cpp is handed a file, and the file's
+    // name is what the person chose to run.
+    std::string ModelNameFromPath(const std::string& modelPath);
 
     // Wrap system + prior turns + user into the model's chat format. `chatml` covers Qwen
     // and most current instruct models; `plain` is the escape hatch for one that does not.

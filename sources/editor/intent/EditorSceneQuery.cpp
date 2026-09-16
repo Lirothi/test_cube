@@ -195,29 +195,31 @@ namespace
         static const std::vector<EditorQueryDesc> queries = {
             { "sceneSummary",
               "how big this level is and what is in it: object count, the commonest assets, "
-              "the world bounds of everything, and the zones that exist",
-              false, "" },
+              "the GROUPS objects have been put into, the world bounds of everything, and "
+              "the zones that exist. Ask it again after grouping something to see the result",
+              false, "", EditorQueryDesc::ChatArg::None },
             { "bounds",
               "the world bounding box, centre and size of whatever the target names. Use it "
               "before placing something relative to an existing thing",
-              true, "" },
+              true, "", EditorQueryDesc::ChatArg::Filter },
             { "waterLevel",
               "the Y of the ocean surface, or that this level has no ocean. Everything below "
               "it is under water",
-              false, "" },
+              false, "", EditorQueryDesc::ChatArg::None },
             { "groundHeight",
               "the height of the surface under world points, by casting a ray down through "
               "the scene, and whether each one is above the waterline. Ask for MANY points "
               "at once -- tracing a shoreline is this question along a line",
-              false, "point: [x, z] or [x, y, z]; or points: a list of those, up to 64" },
+              false, "point: [x, z] or [x, y, z]; or points: a list of those, up to 64",
+              EditorQueryDesc::ChatArg::Point },
             { "zoneInfo",
               "the shape of one named zone: its kind, size, control points, whether it is "
               "closed, and whether it fills along the line or inside it",
-              false, "zone: the zone's name" },
+              false, "zone: the zone's name", EditorQueryDesc::ChatArg::ZoneName },
             { "selection",
               "what the designer has selected right now. The prompt cannot say -- it is "
               "built once per level and the selection changes constantly",
-              false, "" },
+              false, "", EditorQueryDesc::ChatArg::None },
             // Asked for by the model reading its own query list: bounds is a box, and a box
             // cannot say which way a thing is facing. "Put another one like that beside it"
             // needs the rotation, and approximating it from an axis-aligned box is exactly
@@ -230,12 +232,12 @@ namespace
               "what the camera is pointed at right now: the first object under the centre of "
               "the view, with its name, asset and position. Use it for \"that one\", \"вон "
               "тот\", \"это\" -- anything the designer is pointing at rather than naming",
-              false, "" },
+              false, "", EditorQueryDesc::ChatArg::None },
             { "getTransform",
               "the exact position, rotation in degrees and scale of each object the target "
               "names. bounds gives a box; this gives orientation, which cloning or aligning "
               "needs",
-              true, "" },
+              true, "", EditorQueryDesc::ChatArg::Filter },
         };
         return queries;
     }
@@ -264,6 +266,7 @@ namespace
         if (ask.query == "sceneSummary")
         {
             std::map<std::string, std::size_t> perType;
+            std::map<std::string, std::size_t> perGroup;
             std::vector<EditorObjectId> everything;
             nlohmann::json zoneNames = nlohmann::json::array();
             everything.reserve(ctx.document.Objects().size());
@@ -276,6 +279,15 @@ namespace
                     continue;
                 }
                 ++perType[AssetKeyOf(object)];
+                if (object.properties.is_object())
+                {
+                    const auto it = object.properties.find("group");
+                    if (it != object.properties.end() && it->is_string() &&
+                        !it->get<std::string>().empty())
+                    {
+                        ++perGroup[it->get<std::string>()];
+                    }
+                }
             }
             out["objects"] = ctx.document.Objects().size();
 
@@ -301,6 +313,24 @@ namespace
                 out["waterLevel"] = Round1(level);
             }
             out["zones"] = zoneNames;
+
+            // ALWAYS PRESENT, EVEN WHEN EMPTY. An absent key is read as "not mentioned" and
+            // filled in from imagination; an empty object is read as "none", which is the
+            // fact. This is the same rule the prompt's ZONES section learned the hard way.
+            nlohmann::json groups = nlohmann::json::object();
+            for (const auto& entry : perGroup)
+            {
+                groups[entry.first] = entry.second;
+            }
+            out["groups"] = groups;
+            if (perGroup.empty())
+            {
+                out["groupsNote"] = "nothing in this level is in a group yet";
+            }
+            else
+            {
+                out["groupsNote"] = "a group's name works as a filter, like an asset name";
+            }
             return out;
         }
 
@@ -374,6 +404,23 @@ namespace
             }
             out["count"] = ids.size();
             out["items"] = items;
+            nlohmann::json selectedGroups = nlohmann::json::object();
+            for (const EditorObjectId id : ids)
+            {
+                const EditorObject* object = ctx.document.Find(id);
+                if (!object || !object->properties.is_object())
+                {
+                    continue;
+                }
+                const auto it = object->properties.find("group");
+                if (it != object->properties.end() && it->is_string() &&
+                    !it->get<std::string>().empty())
+                {
+                    const std::string name = it->get<std::string>();
+                    selectedGroups[name] = selectedGroups.value(name, std::size_t{ 0 }) + 1;
+                }
+            }
+            out["groups"] = selectedGroups;
             BoundsOf(ctx, ids).WriteInto(out);
             return out;
         }
@@ -564,6 +611,139 @@ namespace editorquery
         }
         outHeight = startY - distance;
         return true;
+    }
+
+    std::string AnswerChatLine(const EditorActionContext& actionCtx, const std::string& line)
+    {
+        // "bounds coconut_palm" -> name, then the rest.
+        const std::size_t nameEnd = line.find_first_of(" \t");
+        const std::string name = line.substr(0, nameEnd);
+        std::string rest = nameEnd == std::string::npos ? std::string{} : line.substr(nameEnd);
+        const std::size_t from = rest.find_first_not_of(" \t");
+        rest = from == std::string::npos ? std::string{} : rest.substr(from);
+        while (!rest.empty() && (rest.back() == ' ' || rest.back() == '\t'))
+        {
+            rest.pop_back();
+        }
+
+        const EditorQueryDesc* desc = Find(name);
+        if (!desc)
+        {
+            std::string known;
+            for (const EditorQueryDesc& query : All())
+            {
+                known += (known.empty() ? "" : ", ") + std::string(query.id);
+            }
+            return "no such scene query '" + name + "'. There are: " + known;
+        }
+
+        EditorIntent intent;
+        intent.kind = EditorIntentKind::Query;
+        EditorIntentQuery ask;
+        ask.query = name;
+        switch (desc->chatArg)
+        {
+        case EditorQueryDesc::ChatArg::Filter:
+            if (rest.empty())
+            {
+                return "'" + name + "' needs something to look at, e.g. \"" + name +
+                    " coconut_palm\"";
+            }
+            ask.target.filter.push_back(rest);
+            ask.target.scope = EditorIntentScope::All;
+            break;
+        case EditorQueryDesc::ChatArg::Point:
+        {
+            // "12 -40" or "12 -40 3". Two numbers is a ground plan question, which is what
+            // this is for; the third is accepted because refusing it would be a rule with
+            // nothing behind it.
+            std::vector<float> numbers;
+            std::size_t at = 0;
+            while (at < rest.size() && numbers.size() < 3)
+            {
+                std::size_t used = 0;
+                try
+                {
+                    numbers.push_back(std::stof(rest.substr(at), &used));
+                }
+                catch (const std::exception&)
+                {
+                    break;
+                }
+                at += used;
+                while (at < rest.size() && (rest[at] == ' ' || rest[at] == '\t' ||
+                    rest[at] == ',')) { ++at; }
+            }
+            if (numbers.size() < 2)
+            {
+                return "'" + name + "' needs a point, e.g. \"" + name + " 12 -40\"";
+            }
+            ask.params["point"] = numbers.size() >= 3
+                ? nlohmann::json::array({ numbers[0], numbers[1], numbers[2] })
+                : nlohmann::json::array({ numbers[0], numbers[1] });
+            break;
+        }
+        case EditorQueryDesc::ChatArg::ZoneName:
+            if (rest.empty())
+            {
+                return "'" + name + "' needs a zone name, e.g. \"" + name + " Beach\"";
+            }
+            ask.params["zone"] = rest;
+            break;
+        case EditorQueryDesc::ChatArg::None:
+            // AN ARGUMENT NOBODY ASKED FOR IS A MISUNDERSTANDING, not noise to drop. Asked
+            // how wind_test differed from the open level, the model wrote
+            // `scene sceneSummary wind_test`, this branch discarded the name, and the query
+            // described the OPEN level for the second time -- so the model compared the
+            // level to itself and reported them identical. Saying "I ignored that" is the
+            // whole fix: it can then go and read the file, which is where that answer is.
+            if (!rest.empty())
+            {
+                return "'" + name + "' takes no argument and always describes the level "
+                    "that is OPEN in the editor, so '" + rest + "' was not used. These "
+                    "queries cannot be pointed at another level. To see one that is not "
+                    "open, read its file: TOOL: read data/levels/" + rest + ".json 1 120";
+            }
+            break;
+        }
+        intent.asks.push_back(std::move(ask));
+        return Answer(actionCtx, intent);
+    }
+
+    std::string ChatProtocolPrompt()
+    {
+        std::string text =
+            "\nYOU CAN ALSO ASK ABOUT THE LEVEL THAT IS OPEN, the same way:\n";
+        for (const EditorQueryDesc& query : All())
+        {
+            text += "  TOOL: scene " + std::string(query.id);
+            switch (query.chatArg)
+            {
+            case EditorQueryDesc::ChatArg::Filter:   text += " <asset or group name>"; break;
+            case EditorQueryDesc::ChatArg::Point:    text += " <x> <z>"; break;
+            case EditorQueryDesc::ChatArg::ZoneName: text += " <zone name>"; break;
+            case EditorQueryDesc::ChatArg::None:     break;
+            }
+            text += "\n      " + std::string(query.description) + "\n";
+        }
+        text +=
+            "These read the LIVE level, not a file, so they are the only way to answer "
+            "\"which of these objects is the island\" or \"how big is it\" -- searching the "
+            "source cannot, and guessing from the object count is how a wrong answer gets "
+            "written confidently. Start with sceneSummary when you do not know what is in "
+            "the level.\n"
+            // WHERE THE OTHER LEVELS ARE, said here rather than only in the file-search
+            // block, because here is where the question comes up. Asked how wind_test
+            // differed from the open one, the model ran sceneSummary, did not find
+            // wind_test in it, and answered that no such level existed -- while
+            // data/levels/wind_test.json sat there readable. It had both tools and did not
+            // connect them, which is a gap in what it was told, not in what it can do.
+            "THESE SEE ONE LEVEL: the open one. They cannot be pointed at another, and a\n"
+            "level missing from sceneSummary is not a level that does not exist -- every\n"
+            "level in this project is a file in data/levels. To answer about one that is\n"
+            "not open, `ls data/levels` for the names and `read` the file. Opening a level\n"
+            "is not something you can offer either; the editor has no action for it.\n";
+        return text;
     }
 
     std::string Answer(const EditorActionContext& actionCtx, const EditorIntent& intent)

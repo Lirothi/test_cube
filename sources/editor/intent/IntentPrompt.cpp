@@ -42,9 +42,28 @@ namespace
 
 namespace intentprompt
 {
+    std::string ModelNameFromPath(const std::string& modelPath)
+    {
+        if (modelPath.empty())
+        {
+            return std::string{};
+        }
+        const std::string::size_type slash = modelPath.find_last_of("/\\");
+        std::string name = slash == std::string::npos
+            ? modelPath
+            : modelPath.substr(slash + 1);
+        const std::string::size_type dot = name.rfind('.');
+        if (dot != std::string::npos && name.compare(dot, std::string::npos, ".gguf") == 0)
+        {
+            name.erase(dot);
+        }
+        return name;
+    }
+
     std::string BuildSystemPrompt(const EditorSceneDocument& document,
         const AssetRegistry& assets,
-        const intentschema::Vocabulary& vocabulary)
+        const intentschema::Vocabulary& vocabulary,
+        const std::string& modelName)
     {
         (void)assets;
 
@@ -53,11 +72,45 @@ namespace intentprompt
         p += "The designer usually writes Russian; the JSON you emit is always English.\n";
         p += "Answer with a single JSON object and nothing else.\n\n";
 
-        p += "FOUR ANSWERS ARE ALLOWED, and choosing between them is your actual job:\n";
+        p += "FIVE ANSWERS ARE ALLOWED, and choosing between them is your actual job:\n";
         p += "  {\"kind\":\"command\", ...}    -- the editor can do this\n";
         p += "  {\"kind\":\"query\", ...}      -- you need to SEE something first; ask, then act\n";
+        p += "  {\"kind\":\"chat\"}            -- not about editing this level at all\n";
         p += "  {\"kind\":\"needs_api\", ...}  -- the editor has NO action for this\n";
         p += "  {\"kind\":\"unclear\", ...}    -- you need one more detail to be safe\n\n";
+
+        // ONE BOX, and the model decides which kind of thing was typed. There used to be
+        // two windows -- a command bar and a chat -- and the person had to know which to
+        // type into. The fork belongs to whatever understands the sentence, not to the
+        // person writing it.
+        p += "CHAT IS FOR EVERYTHING THAT IS NOT AN EDIT. Greetings, how you are, what a\n";
+        p += "word means, why the water looks wrong, graphics, maths, how this engine is\n";
+        p += "built, what you can do. Answer {\"kind\":\"chat\"} and NOTHING else -- the\n";
+        p += "editor will immediately ask you again, in prose, with the conversation so far,\n";
+        p += "and THAT is where you say your piece. Do not try to answer here: this reply is\n";
+        p += "twenty tokens and a decision, not a sentence.\n";
+        p += "BUT AN INSTRUCTION IS NOT CHAT, however casually it is put. \"убери эти\",\n";
+        p += "\"давай посадим пальм\", \"can you hide the rocks\" are commands. The test is\n";
+        p += "whether doing something to the level would answer them; if it would, it is not\n";
+        p += "chat. A question ABOUT the level that an action can answer -- \"сколько тут\n";
+        p += "пальм\" -- is `count`, not chat.\n\n";
+
+        // WHAT IT IS, stated rather than recalled. A model asked its own version answers
+        // from training data -- it knows the family it belongs to and nothing about the
+        // file somebody actually loaded, so it names a release, rounds the parameter count
+        // or invents a quantisation. The file name is the one authoritative answer in the
+        // building, and it costs about thirty tokens of prefix to hand it over.
+        if (!modelName.empty())
+        {
+            p += "WHAT YOU ARE. You are `" + modelName + "` -- the exact file this editor\n";
+            p += "loaded -- running on this machine through llama.cpp. Nothing you are told\n";
+            p += "leaves the computer: there is no cloud and no API behind you.\n";
+            p += "WHEN ASKED WHICH MODEL OR WHICH VERSION YOU ARE, give that name exactly as\n";
+            p += "written above, quantisation suffix included. Do not work it out from what\n";
+            p += "you remember about yourself and do not round it off -- your own guess at\n";
+            p += "your version is the one fact you are reliably wrong about, and the name\n";
+            p += "above is the file on disk.\n\n";
+        }
 
         // This is the paragraph the whole three-branch design exists for. Instruct models
         // are trained to be helpful and will reach for a near-miss unless told, in these
@@ -351,6 +404,8 @@ namespace intentprompt
              "\"proposed\":\"setBaseColor(objects, rgba)\","
              "\"why_existing_dont_fit\":\"replace swaps the whole mesh and there is no "
              "action that changes only a colour\"}\n";
+        p += "  \"privet, kak dela\" / \"pochemu voda temnaya?\" / \"chto takoe SDSM?\"\n";
+        p += "  -> {\"kind\":\"chat\"}\n";
         p += "  \"udali derevya\" (delete the trees) when several tree assets exist\n";
         p += "  -> {\"kind\":\"unclear\",\"question\":\"Which trees -- coconut, date or curly palms?\"}\n";
         return p;

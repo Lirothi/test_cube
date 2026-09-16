@@ -195,7 +195,7 @@ namespace intentschema
 
         std::string g;
         g += "# Generated from the action registry and this level. Do not hand-edit.\n";
-        g += "root ::= command | query | needsapi | unclear\n\n";
+        g += "root ::= command | query | chat | needsapi | unclear\n\n";
 
         // --- command ------------------------------------------------------------
         g += "command ::= \"{\\\"kind\\\":\\\"command\\\",\\\"action\\\":\" action "
@@ -299,7 +299,10 @@ namespace intentschema
         // nothing: its maximum effect is a log line and a sentence on screen (E3.1).
         g += "needsapi ::= \"{\\\"kind\\\":\\\"needs_api\\\",\\\"requested\\\":\" string "
              "\",\\\"proposed\\\":\" string \",\\\"why_existing_dont_fit\\\":\" string \"}\"\n";
-        g += "unclear ::= \"{\\\"kind\\\":\\\"unclear\\\",\\\"question\\\":\" string \"}\"\n\n";
+        g += "unclear ::= \"{\\\"kind\\\":\\\"unclear\\\",\\\"question\\\":\" string \"}\"\n";
+        // Twenty tokens and no payload: everything it would say belongs in the prose turn
+        // that follows, and asking for it twice would mean paying for it twice.
+        g += "chat ::= \"{\\\"kind\\\":\\\"chat\\\"}\"\n\n";
 
         g += "string ::= \"\\\"\" char* \"\\\"\"\n";
         g += "char ::= [^\"\\\\] | \"\\\\\" [\"\\\\/bfnrt]\n";
@@ -343,6 +346,11 @@ namespace intentschema
             {
                 outIntent.question = "Could you say which objects you mean?";
             }
+            return true;
+        }
+        if (kind == "chat")
+        {
+            outIntent.kind = EditorIntentKind::Chat;
             return true;
         }
         if (kind == "query")

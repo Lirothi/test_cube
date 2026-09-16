@@ -3204,20 +3204,12 @@ void EditorController::Draw(
                 }));
         }
 
-        if (commandBar_.AnySourceAvailable())
-        {
-            extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
-                "modelChat",
-                "Model Chat",
-                &showModelChat_,
-                true,
-                [this](EditorContext&)
-                {
-                    modelChat_.SetEditorContext(NormalizeLevelPath(document_.LevelPath()),
-                        document_.Objects().size());
-                    modelChat_.Draw(commandBar_.Model(), &showModelChat_);
-                }));
-        }
+        // THE MODEL CHAT PANEL IS GONE, folded into the Command Bar. It was the same model
+        // behind a second input box, and the person had to know which box a sentence
+        // belonged in -- a distinction the thing that understands the sentence can make
+        // better than the person writing it. The Command Bar now answers conversation too
+        // (EditorIntentKind::Chat), in the same transcript, and offers a button when it
+        // thinks the editor could carry something out.
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "viewportGizmo",
@@ -4132,15 +4124,16 @@ void EditorController::Draw(
     // press only gets as far as "the server is still loading a 38 GB file".
     if (!g_chatPhrase.empty())
     {
-        if (++headlessChatWarmupFrames_ >= 30)
+        if (++headlessChatWarmupFrames_ >= 30 && modelWarmed_ &&
+            !commandBar_.Model().Busy() && !commandBar_.Model().BusyInBackground())
         {
-            showModelChat_ = true;
-            if (modelChat_.SendHeadless(commandBar_.Model(), g_chatPhrase))
-            {
-                LOG_INFO(logging::LogCategory::Editor, "chat harness: sent \"{}\"",
-                    g_chatPhrase);
-                g_chatPhrase.clear();
-            }
+            // Through the same box everything else goes through. `--chat=` stays as a flag
+            // because a conversational answer is the one thing no gate can look at -- it
+            // exists only while it is streaming -- but there is no second panel behind it.
+            showCommandBar_ = true;
+            commandBar_.SubmitPhrase(actionCtx, g_chatPhrase, buryDepthPercent_);
+            LOG_INFO(logging::LogCategory::Editor, "chat harness: sent \"{}\"", g_chatPhrase);
+            g_chatPhrase.clear();
         }
     }
 
@@ -4171,12 +4164,6 @@ void EditorController::Draw(
     // EditorActionContext that is rebuilt every frame. What lands there is a PREVIEW waiting
     // to be confirmed -- the chat can start an edit, but it cannot commit one, and a preview
     // in a window nobody opened is the same as no preview at all.
-    if (std::string phrase = modelChat_.TakePendingCommand(); !phrase.empty())
-    {
-        showCommandBar_ = true;
-        commandBar_.SubmitPhrase(actionCtx, phrase, buryDepthPercent_);
-        LOG_INFO(logging::LogCategory::Editor, "chat -> command bar: \"{}\"", phrase);
-    }
     drawPanel("importAssets");
     drawPanel("meshEditor");
     drawPanel("materialEditor");

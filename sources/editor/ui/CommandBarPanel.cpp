@@ -9,6 +9,7 @@
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/intent/EditorIntentSource.h"
+#include "editor/intent/EditorRepoSearch.h"
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/GrammarIntentSource.h"
 #include "editor/ui/ImGuiTextInput.h"
@@ -212,6 +213,9 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
     phrase_ = input_;
     sendPhrase_ = phrase_;
     assistRounds_ = 0;
+    inConversation_ = false;
+    conversationTools_ = 0;
+    lastPartialSize_ = 0;
     if (phrase_.find_first_not_of(" \t\r\n") == std::string::npos)
     {
         waiting_ = false;
@@ -254,6 +258,14 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
 void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
 {
     if (!waiting_)
+    {
+        return;
+    }
+    // A PROSE TURN IS ALSO "waiting", and it is not this function's to poll. Without this
+    // the next frame asked the intent source for an answer it no longer had, read the Idle
+    // that came back as a decline, ran out of sources and reported the phrase as not
+    // understood -- two seconds after the model had understood it perfectly and said so.
+    if (inConversation_)
     {
         return;
     }
@@ -401,6 +413,16 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
         return;
     }
 
+    // NOT AN EDIT AT ALL: answer it in prose, in this same window. The verdict cost about
+    // a second and twenty tokens; the sentence comes from the turn that starts here.
+    if (intent_.kind == EditorIntentKind::Chat)
+    {
+        ClearThread();
+        RecordOutcome("...", Exchange::Kind::Said);
+        BeginConversationTurn(actionCtx);
+        return;
+    }
+
     if (intent_.kind == EditorIntentKind::Unclear && intent_.sourceLabel == "llm")
     {
         // Remember the exchange so the next thing typed is read as an ANSWER. Without
@@ -486,6 +508,251 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
                                                    : Exchange::Kind::Failed);
 }
 
+
+void CommandBarPanel::BeginConversationTurn(const EditorActionContext& actionCtx)
+{
+    std::string protocol;
+    if (searchEnabled_)
+    {
+        protocol = reposearch::ProtocolPrompt();
+        protocol += editorquery::ChatProtocolPrompt();
+    }
+    // The offer, which is how a conversation reaches the editor without becoming one.
+    protocol +=
+        "\nWHEN THE EDITOR COULD DO WHAT YOU ARE TALKING ABOUT, end your answer with one\n"
+        "last line:\n"
+        "  RUN: <the phrase a person would type>\n"
+        "They get a button saying so, and nothing happens until they press it -- it then\n"
+        "goes through the ordinary path, with a preview and an undo, so an offer costs a\n"
+        "glance and never costs an edit. Write a SENTENCE in their language naming what it\n"
+        "applies to, never an action id.\n"
+        // The action list is ALREADY in this prompt: BeginConversation reuses the same
+        // system block the grammar turn uses, so the prose turn is loaded with every
+        // action, its description and its parameters. Saying so is what turns that from a
+        // thing it happens to have read into a thing it knows it may offer from.
+        "THE ACTION LIST ABOVE IS YOURS TO OFFER FROM -- the same list, in this same\n"
+        "prompt, with every parameter each one takes. You are the one who can tell whether\n"
+        "something on it would answer what they just said, so use your judgement and offer\n"
+        "freely: a suggestion they ignore costs nothing.\n"
+        // The one offer that costs something: one for a thing the editor cannot do. The
+        // button goes down the ordinary command path, which answers "no such action" --
+        // a round of waiting to be told no, for a button that should never have appeared.
+        // Seen live: asked which other levels exist, it listed them correctly and then
+        // offered "покажи содержимое demo.json" -- work it can do itself, this turn, with
+        // no button and no editor.
+        "BUT THE OFFER MUST BE AN EDIT, from that list. Looking something up is not an\n"
+        "offer: if reading a file or asking about the level would answer them, use TOOL:\n"
+        "and answer -- do not hand them a button for it. No RUN: line is the normal case.\n";
+
+    ClearResult();
+    inConversation_ = true;
+    // NOT `conversationTools_ = 0` -- this function is re-entered for every round of the
+    // search loop, so resetting here reset the loop's own budget and the cap never bit.
+    // The log said "round 1/3" twice in a row for the same question, which is what a
+    // counter that has forgotten looks like. It is reset in SubmitPhrase, where a NEW
+    // question starts, and only there.
+    lastPartialSize_ = 0;
+    waiting_ = true;
+    model_->BeginConversation(conversation_, sendPhrase_, protocol,
+        0.7f, conversationTokens_, reasoning_);
+    (void)actionCtx;
+}
+
+void CommandBarPanel::PollConversation(const EditorActionContext& actionCtx)
+{
+    if (!inConversation_)
+    {
+        return;
+    }
+
+    std::string text;
+    std::string error;
+    bool truncated = false;
+    const IntentParseState state = model_->PollFreeform(text, error, truncated);
+    if (state == IntentParseState::Pending)
+    {
+        // Streamed into the transcript as it lands. The alternative is a box that says
+        // nothing for half a minute, which is indistinguishable from a hang.
+        const std::string partial = model_->FreeformPartial();
+        if (partial.size() != lastPartialSize_)
+        {
+            lastPartialSize_ = partial.size();
+            const std::size_t close = partial.find("</think>");
+            const std::string shown = close == std::string::npos
+                ? (reasoning_ ? partial : std::string("thinking..."))
+                : partial.substr(close + 8);
+            RecordOutcome(shown.empty() ? "..." : shown, Exchange::Kind::Said);
+        }
+        return;
+    }
+
+    inConversation_ = false;
+    waiting_ = false;
+    lastPartialSize_ = 0;
+    if (state == IntentParseState::Failed || state == IntentParseState::Idle)
+    {
+        RecordOutcome(error.empty() ? "The model did not answer." : error,
+            Exchange::Kind::Failed);
+        return;
+    }
+
+    std::string thinking;
+    std::string answer = text;
+    const std::size_t open = text.find("<think>");
+    const std::size_t close = text.find("</think>");
+    if (open != std::string::npos && close != std::string::npos && close > open)
+    {
+        thinking = text.substr(open + 7, close - open - 7);
+        answer = text.substr(close + 8);
+    }
+    const auto trim = [](std::string& value)
+    {
+        const std::size_t first = value.find_first_not_of(" \t\r\n");
+        const std::size_t last = value.find_last_not_of(" \t\r\n");
+        value = first == std::string::npos ? std::string{}
+                                           : value.substr(first, last - first + 1);
+    };
+    trim(thinking);
+    trim(answer);
+
+    // Did it ask to look something up? Same protocol and same budget reasoning as the
+    // command side: each round is a whole generation the person waits through.
+    const reposearch::SceneQueryFn askScene = [&actionCtx](const std::string& rest)
+    {
+        return editorquery::AnswerChatLine(actionCtx, rest);
+    };
+    std::string toolReport;
+    if (searchEnabled_ && conversationTools_ < kMaxConversationTools &&
+        reposearch::RunRequestedTools(answer, askScene, toolReport))
+    {
+        ++conversationTools_;
+        // THE COMMANDS, not just how much came back. A byte count cannot tell you whether
+        // an answer was grounded: the one time this mattered, the model described four
+        // level files it had never opened, and the log said only "2438 characters back" --
+        // enough to know it looked something up, not enough to know what. The bodies stay
+        // out; they are kilobytes and they are what the answer is made of anyway.
+        for (std::size_t lineStart = 0; lineStart < toolReport.size();)
+        {
+            const std::size_t eol = toolReport.find('\n', lineStart);
+            if (toolReport.compare(lineStart, 2, "$ ") == 0)
+            {
+                LOG_INFO(logging::LogCategory::Editor, "command bar: chat ran  {}",
+                    toolReport.substr(lineStart + 2,
+                        eol == std::string::npos ? eol : eol - lineStart - 2));
+            }
+            if (eol == std::string::npos)
+            {
+                break;
+            }
+            lineStart = eol + 1;
+        }
+        LOG_INFO(logging::LogCategory::Editor,
+            "command bar: chat searched (round {}/{}), {} characters back",
+            conversationTools_, kMaxConversationTools, toolReport.size());
+        conversation_.push_back({ sendPhrase_, answer });
+        // HOW MANY LOOKUPS ARE LEFT, said every round. A budget the model cannot see is a
+        // budget it walks into: on the last round it asked for two more greps, they were
+        // never run, and those `TOOL:` lines became the visible answer -- the person got a
+        // request for a shell command instead of a reply. Told the count, it spends the
+        // last one on the answer instead.
+        const int left = kMaxConversationTools - conversationTools_;
+        sendPhrase_ = "Tool output:\n\n```\n" + toolReport + "\n```\n\n";
+        sendPhrase_ += left > 0
+            ? "Now answer using what it says. You may look up " + std::to_string(left) +
+                  " more time" + (left == 1 ? "" : "s") + " for this question if you must."
+            : "THAT WAS THE LAST LOOKUP for this question -- no further TOOL: line will be "
+              "run. Answer now with what you have, and say plainly what you could not "
+              "check rather than guessing at it.";
+        RecordOutcome("looked it up -- " + std::to_string(toolReport.size()) +
+            " characters back", Exchange::Kind::Asked);
+        transcript_.push_back({ phrase_, "...", Exchange::Kind::Said });
+        transcriptScrollToBottom_ = true;
+        BeginConversationTurn(actionCtx);
+        return;
+    }
+
+    // Any lookup still being asked for here was NOT run -- the budget is spent, or search
+    // is off. It is a request, not a reply, and it must not be shown as one.
+    if (answer.find("TOOL:") != std::string::npos)
+    {
+        const std::string before = answer;
+        reposearch::StripToolLines(answer);
+        if (before != answer)
+        {
+            LOG_INFO(logging::LogCategory::Editor,
+                "command bar: chat asked for a lookup with none left -- hid the request");
+        }
+        if (answer.empty())
+        {
+            // Nothing but the request. Saying so is the only honest thing left: the person
+            // asked a question and there is no answer, and a blank bubble reads as a hang.
+            answer = "Мне не хватило запросов, чтобы это выяснить. Спроси ещё раз -- "
+                     "счётчик обнулится, и я продолжу с того, что уже прочитал.";
+        }
+    }
+
+    // The offer line, taken off the visible text: it is a protocol between the model and
+    // this panel, and showing it would make the conversation read as a transcript of that.
+    std::string offer;
+    const std::size_t at = answer.rfind("RUN:");
+    if (at != std::string::npos)
+    {
+        const std::size_t eol = answer.find('\n', at);
+        offer = answer.substr(at + 4,
+            eol == std::string::npos ? std::string::npos : eol - at - 4);
+        const std::size_t a = offer.find_first_not_of(" \t\r\n`\"");
+        const std::size_t b = offer.find_last_not_of(" \t\r\n`\"");
+        offer = a == std::string::npos ? std::string{} : offer.substr(a, b - a + 1);
+        // AN OFFER IS A PHRASE A PERSON WOULD TYPE, and this takes the whole line, so a
+        // model that keeps writing past the command hands the button a paragraph. Seen:
+        // "открой уровень wind_test.json** (Если бы у меня была возможность..." -- two
+        // hundred characters of reasoning on a button. It is DROPPED rather than cut at
+        // some length: a truncated command still looks like a command, and the person
+        // would be pressing something nobody wrote.
+        // The line comes off the visible text whether or not the offer survives -- it is
+        // protocol either way, and leaving it in shows the person a bare "RUN: ..." where
+        // prose belongs.
+        if (!offer.empty())
+        {
+            answer.erase(at, eol == std::string::npos ? std::string::npos : eol - at + 1);
+            trim(answer);
+        }
+        constexpr std::size_t kMaxOffer = 120;
+        if (offer.size() > kMaxOffer)
+        {
+            LOG_INFO(logging::LogCategory::Editor,
+                "command bar: chat offered {} characters -- too long to be a command, dropped",
+                offer.size());
+            offer.clear();
+        }
+    }
+
+    if (answer.empty() && !thinking.empty())
+    {
+        answer = "(the whole token budget went on thinking -- raise the budget in settings)";
+    }
+    conversation_.push_back({ phrase_, answer });
+    constexpr std::size_t kMaxConversation = 40;
+    if (conversation_.size() > kMaxConversation)
+    {
+        conversation_.erase(conversation_.begin(),
+            conversation_.begin() + (conversation_.size() - kMaxConversation));
+    }
+
+    LOG_INFO(logging::LogCategory::Editor, "command bar: chat < {}{}", answer,
+        truncated ? "  [TRUNCATED at the token budget]" : "");
+    RecordOutcome(answer, Exchange::Kind::Said);
+    if (!transcript_.empty())
+    {
+        transcript_.back().thinking = thinking;
+        transcript_.back().offer = offer;
+    }
+    if (!offer.empty())
+    {
+        LOG_INFO(logging::LogCategory::Editor, "command bar: offered to run \"{}\"", offer);
+    }
+}
+
 void CommandBarPanel::BeginHeadless(const EditorActionContext& actionCtx,
     const std::string& phrase,
     float buryDepthPercent)
@@ -517,6 +784,7 @@ CommandBarPanel::HeadlessState CommandBarPanel::PollHeadless(const EditorActionC
         return HeadlessState::Idle;
     }
 
+    PollConversation(actionCtx);
     PollSources(actionCtx);
     if (waiting_)
     {
@@ -525,6 +793,19 @@ CommandBarPanel::HeadlessState CommandBarPanel::PollHeadless(const EditorActionC
 
     headless_ = false;
     input_.clear();
+
+    // A CONVERSATION IS AN OUTCOME TOO. The headless path knew only about commands, so a
+    // phrase the model answered perfectly well in prose came back as "not understood" --
+    // the harness reporting the absence of a command as the absence of an answer.
+    if (!transcript_.empty() && transcript_.back().kind == Exchange::Kind::Said)
+    {
+        outVerdict = "CHAT: " + transcript_.back().verdict;
+        if (!transcript_.back().offer.empty())
+        {
+            outVerdict += " | offers to run: \"" + transcript_.back().offer + "\"";
+        }
+        return HeadlessState::Done;
+    }
 
     if (!hasResult_)
     {
@@ -683,6 +964,33 @@ void CommandBarPanel::DrawSettings()
                 "the part the renderer wants back.");
         }
     }
+    // The conversation half's knobs, which used to live in the chat panel. They only
+    // affect a turn the model decided was conversation: a command is still one grammar-
+    // constrained answer with reasoning suppressed, and none of these touch it.
+    ImGui::SeparatorText("When it answers in prose");
+    ImGui::Checkbox("read source and scene", &searchEnabled_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Let it look things up before answering -- this engine's own "
+            "source, and the level that is open. Each lookup costs a whole extra round "
+            "trip, and it may take up to three.");
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("think out loud", &reasoning_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Reasoning is most of the tokens and therefore most of the "
+            "seconds. Off, a reply comes in seconds; on, it can take half a minute -- turn "
+            "it on when the working is the part you want.");
+    }
+    ImGui::SetNextItemWidth(160.0f);
+    ImGui::SliderInt("answer budget", &conversationTokens_, 1024, 32768, "%d tokens");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("A ceiling, not a target: the model stops when it is finished, so "
+            "a short answer costs what it costs. Raise it when an answer gets cut off.");
+    }
+
     if (!model_->Available())
     {
         ImGui::TextDisabled("Run: python tools/fetch_intent_model.py");
@@ -757,9 +1065,20 @@ void CommandBarPanel::Draw(EditorContext& ctx,
 {
     const EditorActionContext actionCtx{ ctx, assets, extensions };
 
+    // A button pressed LAST frame, acted on now. Submitting from inside the transcript loop
+    // would rewrite the vector being iterated, and the offer is the one control here that
+    // adds an entry rather than changing one.
+    if (!pendingOffer_.empty() && !waiting_)
+    {
+        input_ = pendingOffer_;
+        pendingOffer_.clear();
+        Begin(actionCtx, buryDepthPercent);
+    }
+
     // The model answers on its own thread; this is where its answer is picked up, and
     // where an idle server is retired.
     model_->Tick();
+    PollConversation(actionCtx);
     PollSources(actionCtx);
 
     // An action that changes nothing undoable just runs. `undoable` is exactly that line:
@@ -817,10 +1136,34 @@ void CommandBarPanel::Draw(EditorContext& ctx,
                 // A query is the model looking something up, not a result. Blue keeps it
                 // legible as a step along the way rather than an answer to the phrase.
                 exchange.kind == Exchange::Kind::Asked ? ImVec4(0.58f, 0.78f, 1.0f, 1.0f) :
+                // Prose is the ordinary text colour: it is somebody talking, not a verdict
+                // about the level, and colouring it would make a conversation look like a
+                // status report.
+                exchange.kind == Exchange::Kind::Said ? ImVec4(0.88f, 0.88f, 0.88f, 1.0f) :
                 ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
+            if (!exchange.thinking.empty() && ImGui::TreeNode("thinking"))
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+                ImGui::TextWrapped("%s", exchange.thinking.c_str());
+                ImGui::PopStyleColor();
+                ImGui::TreePop();
+            }
             ImGui::PushStyleColor(ImGuiCol_Text, colour);
             ImGui::TextWrapped("%s", exchange.verdict.c_str());
             ImGui::PopStyleColor();
+            // AN OFFER, NOT AN ACTION. The phrase sits on a button beside the sentence that
+            // proposed it -- an offer that scrolls away from its own answer is one nobody
+            // connects to anything -- and pressing it submits the phrase the ordinary way,
+            // so it still meets the grammar, the preview and the undo stack.
+            if (!exchange.offer.empty())
+            {
+                if (ImGui::Button("Выполнить в редакторе"))
+                {
+                    pendingOffer_ = exchange.offer;
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("\"%s\"", exchange.offer.c_str());
+            }
             ImGui::Spacing();
             ImGui::PopID();
         }

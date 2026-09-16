@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <functional>
 #include <string>
 
 // Read-only search over this repository, for the CHAT to use.
@@ -34,7 +35,22 @@ namespace reposearch
     // Budgeted: at most a few calls per turn, capped output per call. The caps are not
     // politeness. A tool result is prefill on this turn and on every turn after it, so an
     // unbounded grep poisons the rest of the conversation as well as this answer.
-    bool RunRequestedTools(const std::string& answer, std::string& outReport);
+
+    // Answers a `TOOL: scene ...` line. Supplied by the caller rather than implemented
+    // here: this module knows about FILES, and what is in the level is a question only the
+    // editor's live document can answer. Empty when the caller has no editor to ask.
+    using SceneQueryFn = std::function<std::string(const std::string& rest)>;
+
+    bool RunRequestedTools(const std::string& answer,
+        const SceneQueryFn& scene,
+        std::string& outReport);
+
+    // Remove any `TOOL:` line from text that is about to be SHOWN. They are a protocol
+    // between the model and the panel, and one that was never run is not a sentence: when
+    // the lookup budget ran out mid-question the model's next request became the visible
+    // answer, and the person was shown a grep command where a reply should have been.
+    // Lives here because what a TOOL line looks like is this module's business.
+    void StripToolLines(std::string& text);
 }
 
 #endif // WITH_EDITOR

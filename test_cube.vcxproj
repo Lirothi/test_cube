@@ -281,7 +281,6 @@
     <ClCompile Include="sources/editor/intent/GrammarIntentSource.cpp" />
     <ClCompile Include="sources/editor/intent/EditorIntentResolver.cpp" />
     <ClCompile Include="sources/editor/ui/CommandBarPanel.cpp" />
-    <ClCompile Include="sources/editor/ui/ModelChatPanel.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorMultiEdit.cpp" />
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp" />
@@ -446,7 +445,6 @@
     <ClInclude Include="sources/editor/intent/EditorIntentResolver.h" />
     <ClInclude Include="sources/editor/ui/CommandBarPanel.h" />
     <ClInclude Include="sources/editor/ui/ImGuiTextInput.h" />
-    <ClInclude Include="sources/editor/ui/ModelChatPanel.h" />
     <ClInclude Include="sources/editor/EditorController.h" />
     <ClInclude Include="sources/editor/EditorExtensionRegistry.h" />
     <ClInclude Include="sources/editor/EditorHotkeys.h" />

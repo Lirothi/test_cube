@@ -40,6 +40,7 @@
 #include "editor/intent/IntentNotes.h"
 #include "editor/intent/IntentPrompt.h"
 #include "editor/EditorObjectMatch.h"
+#include "editor/intent/EditorRepoSearch.h"
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/IntentSchema.h"
 #include "editor/intent/LlmIntentSource.h"
@@ -1382,6 +1383,166 @@ void TestRefusalWritesANoteForTheImplementer()
         "and to write prose, not another form");
 }
 
+// ------------------------------------------------------- scene queries from chat
+//
+// A query that quietly drops an argument it did not expect answers a question nobody asked
+// and looks like it succeeded. Lived: `scene sceneSummary wind_test` returned the OPEN
+// level's summary, the model had asked for it twice, saw the same numbers both times, and
+// reported that the two levels were identical. The answer was true and the comparison was
+// invented, which is the worst shape a wrong answer can take.
+
+void TestAnUnwantedArgumentIsRefusedNotDropped(const EditorActionContext& actionCtx)
+{
+    const std::string plain = editorquery::AnswerChatLine(actionCtx, "sceneSummary");
+    Check(plain.find("objects") != std::string::npos || plain.find("assets") != std::string::npos,
+        "sceneSummary with no argument still answers");
+
+    const std::string extra = editorquery::AnswerChatLine(actionCtx, "sceneSummary wind_test");
+    Check(extra != plain,
+        "a query handed an argument it does not take must not answer as though it were not "
+        "there -- that is how one level got compared to itself");
+    Check(extra.find("wind_test") != std::string::npos,
+        "and the refusal repeats the argument, so the model can see what was ignored");
+    Check(extra.find("read data/levels") != std::string::npos,
+        "and points at the thing that would actually answer it");
+}
+
+// ------------------------------------------------------------- model identity
+//
+// Asked what it is, a model answers from training data: it knows its family and nothing
+// about the file somebody loaded, so it names a release it half-remembers and rounds off
+// the quantisation. The file name is the authoritative answer, so the prompt states it --
+// and what is guarded here is that it states the CURRENT one, and states nothing at all
+// when no model is configured. An identity paragraph introducing a model that is not
+// loaded is worse than no paragraph: it is a confident wrong answer.
+
+void TestThePromptNamesTheLoadedModel(const EditorSceneDocument& document,
+    const AssetRegistry& assets)
+{
+    Check(intentprompt::ModelNameFromPath("D:/llm_models/Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf") ==
+            "Qwen3.6-35B-A3B-UD-Q8_K_XL",
+        "the name is the file's, without its directory or its .gguf");
+    Check(intentprompt::ModelNameFromPath("C:\\models\\a.gguf") == "a",
+        "backslashes are paths too");
+    Check(intentprompt::ModelNameFromPath("").empty(), "no file loaded, no name");
+
+    const intentschema::Vocabulary vocabulary = intentschema::BuildVocabulary(document, assets);
+    const std::string named =
+        intentprompt::BuildSystemPrompt(document, assets, vocabulary, "Some-Model-UD-Q8_K_XL");
+    Check(named.find("Some-Model-UD-Q8_K_XL") != std::string::npos,
+        "the prompt tells the model which file it is");
+    Check(named.find("WHICH MODEL OR WHICH VERSION") != std::string::npos,
+        "and to answer with that rather than from memory");
+
+    const std::string anonymous = intentprompt::BuildSystemPrompt(document, assets, vocabulary);
+    Check(anonymous.find("WHAT YOU ARE") == std::string::npos,
+        "with nothing loaded the prompt claims no identity rather than an empty one");
+}
+
+// ------------------------------------------------------------- repository search
+//
+// The search had NO gate at all until this test, and the failure it is written for is the
+// quiet one: a root the protocol advertises but the walk never enters. `grep` answers "0
+// matches" for that, and no matches is not an error anyone can see through -- it reads as
+// "this engine has no such thing", which is a lie the model then repeats with confidence.
+// (Lived: data/levels was outside kRoots for weeks while `read` and `ls` reached it fine,
+// so the model could open one level file at a time and could not search any of them.)
+//
+// Both directions are checked. A root the walk enters but the prompt never names is just as
+// useless -- a capability the model has no way to know it has.
+
+void TestEverySearchableRootIsReachableAndAdvertised()
+{
+    // (root, a word that is certainly in it). The words are witnesses, not the subject: any
+    // of them going missing is a rename, and a rename should make this test say so out loud
+    // rather than quietly stop testing anything.
+    const std::pair<const char*, const char*> kRootWitness[] = {
+        { "sources", "ProbeGroundHeight" },
+        { "shaders", "numthreads" },
+        { "tools", "intent_regression" },
+        { "docs", "waterLevel" },
+        { "data", "hfovDeg" },
+    };
+
+    const std::string protocol = reposearch::ProtocolPrompt();
+    for (const auto& [root, witness] : kRootWitness)
+    {
+        std::string report;
+        const bool ran = reposearch::RunRequestedTools(
+            std::string("TOOL: grep ") + witness + " " + root, {}, report);
+        Check(ran, std::string("the search runs a TOOL: grep line for ") + root);
+        // The report OPENS with the count, and the check has to be anchored there: a search
+        // returning "10 matches" contains "0 matches" as a substring, and the first run of
+        // this test failed on `sources` for exactly that -- ProbeGroundHeight has ten.
+        Check(report.rfind("0 matches", 0) != 0,
+            std::string("grep reaches '") + root + "' -- it found nothing for '" + witness +
+                "', so either that root is outside kRoots or the word was renamed");
+        Check(protocol.find(root) != std::string::npos,
+            std::string("the protocol tells the model that '") + root + "' is searchable");
+    }
+}
+
+void TestAPartialReadSaysHowMuchIsLeft()
+{
+    // Without a denominator a window reads as a whole file. Lived: handed lines 1-600 of a
+    // 14181-line level, the model reported where that level's objects stood -- from four
+    // per cent of it, stated as fact.
+    std::string report;
+    Check(reposearch::RunRequestedTools(
+              "TOOL: read data/levels/wind_test.json 1 40", {}, report),
+        "a read of a long level file runs");
+    Check(report.find(" of 14181") != std::string::npos ||
+            report.find("lines 1-40 of ") != std::string::npos,
+        "the read says how long the whole file is, not just what it returned");
+    Check(report.find("THE REST YOU HAVE NOT SEEN") != std::string::npos,
+        "and says outright that the rest is unseen");
+
+    std::string whole;
+    Check(reposearch::RunRequestedTools(
+              "TOOL: read tools/intent_regression.vcxproj 1 120", {}, whole),
+        "a read of a short file runs");
+    Check(whole.find("THE REST YOU HAVE NOT SEEN") == std::string::npos,
+        "a file that fits in the window carries no warning -- it is all there");
+}
+
+void TestAnUnrunLookupIsNeverShown()
+{
+    // The visible answer is prose. A TOOL line in it is a request the panel did not run --
+    // the person was once shown two grep commands where a reply belonged, because the
+    // lookup budget ran out and nobody hid what came after it.
+    std::string text =
+        "Вот что я нашёл:\n"
+        "TOOL: grep wind data/levels/wind_test.json\n"
+        "  TOOL: read data/levels/atoll.json 1 40\n"
+        "Остальное не проверял.";
+    reposearch::StripToolLines(text);
+    Check(text.find("TOOL:") == std::string::npos, "every tool line is taken out");
+    Check(text.find("Вот что я нашёл") != std::string::npos &&
+            text.find("Остальное не проверял") != std::string::npos,
+        "and the prose around them survives intact");
+
+    std::string onlyTools = "TOOL: ls data/levels\n";
+    reposearch::StripToolLines(onlyTools);
+    Check(onlyTools.empty(),
+        "an answer that was nothing but a request comes back empty, so the panel can say so");
+}
+
+void TestCodeOutranksContentInABroadSearch()
+{
+    // A level with six hundred palms in it matches "palm" six hundred times, and the file
+    // that decides what a palm IS matches three or four. Ranking by count alone hands the
+    // whole answer to repetition: every listed file is a level, and the code is never seen.
+    std::string report;
+    Check(reposearch::RunRequestedTools("TOOL: grep palm", {}, report),
+        "a broad grep runs");
+    const std::string::size_type firstFile = report.find("sources/");
+    const std::string::size_type firstLevel = report.find("data/levels/");
+    Check(firstFile != std::string::npos,
+        "a broad search for 'palm' still reaches the code that handles palms");
+    Check(firstLevel == std::string::npos || firstFile < firstLevel,
+        "code is listed before level content, which only out-matches it by repetition");
+}
+
 // ----------------------------------------------------------------- questions
 //
 // A question is a preview with nothing to run. What is guarded here is that it stays that
@@ -1632,9 +1793,35 @@ int DumpForLevel(const char* levelPath, const char* gbnfOut, const char* promptO
     AssetRegistry assets;
     assets.Refresh();
 
+    // The editor's own settings, for the one thing in the prompt that comes from outside
+    // the level: which model file is loaded. Dumping without it would produce a prompt that
+    // differs from the shipping one in the paragraph telling the model what it is -- and a
+    // dump that differs from what ships is the thing this mode exists to avoid.
+    std::string modelName;
+    if (std::ifstream state("editor_state.json"); state)
+    {
+        try
+        {
+            const Json root = Json::parse(state);
+            const auto editor = root.find("levelEditor");
+            if (editor != root.end() && editor->is_object())
+            {
+                modelName = intentprompt::ModelNameFromPath(
+                    LlmIntentSource::LoadSettings(*editor).modelPath);
+            }
+        }
+        catch (const std::exception&)
+        {
+            // A settings file nobody can parse is not a reason to refuse a dump.
+        }
+    }
+
     const intentschema::Vocabulary vocabulary = intentschema::BuildVocabulary(document, assets);
     const std::string gbnf = intentschema::BuildGbnf(vocabulary);
-    const std::string prompt = intentprompt::BuildSystemPrompt(document, assets, vocabulary);
+    const std::string prompt =
+        intentprompt::BuildSystemPrompt(document, assets, vocabulary, modelName);
+    std::printf("dump: model in the prompt = %s\n",
+        modelName.empty() ? "(none configured)" : modelName.c_str());
 
     const auto write = [](const char* path, const std::string& text) -> bool
     {
@@ -1986,6 +2173,12 @@ int main(int argc, char** argv)
         TestModelAnswersAreRead();
         TestModelSettingsRoundTrip();
         TestRefusalWritesANoteForTheImplementer();
+        TestAnUnwantedArgumentIsRefusedNotDropped(actionCtx);
+        TestAPartialReadSaysHowMuchIsLeft();
+        TestAnUnrunLookupIsNeverShown();
+        TestThePromptNamesTheLoadedModel(document, assets);
+        TestEverySearchableRootIsReachableAndAdvertised();
+        TestCodeOutranksContentInABroadSearch();
         std::puts("PASS: intent layer parses, previews, places, undoes, and the model contract holds");
         return 0;
     }
