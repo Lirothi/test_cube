@@ -414,9 +414,15 @@ namespace llmclient
         process.handle = info.hProcess;
         process.job = job;
         process.processId = info.dwProcessId;
+        // WHICH LIFETIME IT ACTUALLY GOT. The line said "job-owned: dies with the editor"
+        // unconditionally, including for a kept-alive server that has no job at all -- so
+        // the one log anybody reads to find out whether the server will outlive the session
+        // answered the opposite of the truth, right above the line announcing its watchdog.
         LOG_INFO(logging::LogCategory::Editor,
-            "intent model: started llama-server pid={} on {} (job-owned: dies with the editor)",
-            info.dwProcessId, hostPort);
+            "intent model: started llama-server pid={} on {} ({})",
+            info.dwProcessId, hostPort,
+            job ? "job-owned: dies with the editor"
+                : "kept alive after the editor exits; a watchdog retires it");
         return process;
     }
 }

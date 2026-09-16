@@ -113,15 +113,45 @@ namespace llmreaper
         return true;
     }
 
+    EditorSessionMark::EditorSessionMark()
+    {
+        // Not an error if it already exists: a second editor shares the object, and the
+        // countdown starts only when the LAST handle closes.
+        handle_ = ::CreateMutexW(nullptr, FALSE, kEditorSessionMutex);
+    }
+
+    EditorSessionMark::~EditorSessionMark()
+    {
+        if (handle_)
+        {
+            ::CloseHandle(static_cast<HANDLE>(handle_));
+        }
+    }
+
+    bool AnyEditorSessionOpen()
+    {
+        // SYNCHRONIZE is the cheapest right that still proves the object exists; we never
+        // wait on it. Opening succeeds exactly while some editor holds a handle.
+        const HANDLE handle = ::OpenMutexW(SYNCHRONIZE, FALSE, kEditorSessionMutex);
+        if (!handle)
+        {
+            return false;
+        }
+        ::CloseHandle(handle);
+        return true;
+    }
+
     int Run(const Options& options)
     {
         LOG_INFO(logging::LogCategory::Editor,
-            "model reaper: watching {} (pid {}), retiring it after {}s with no requests",
+            "model reaper: watching {} (pid {}); the {}s timer starts when the last editor "
+            "closes, and a new session resets it",
             options.endpoint, options.serverPid, options.idleSeconds);
 
         std::string lastCounters;
         double idleFor = 0.0;
         bool everReached = false;
+        bool sawEditor = false;
 
         for (;;)
         {
@@ -148,14 +178,42 @@ namespace llmreaper
                     // whole body and say so once.
                     counters = response.body;
                 }
-                if (counters != lastCounters)
+                // AN OPEN EDITOR STOPS THE CLOCK ENTIRELY -- it does not merely count as
+                // activity. Somebody with the editor open is using the server whether or not
+                // they have typed a phrase in the last five minutes, and retiring it under
+                // them would charge the next phrase a 38 GB reload.
+                if (AnyEditorSessionOpen())
                 {
-                    lastCounters = std::move(counters);
+                    if (!sawEditor)
+                    {
+                        LOG_INFO(logging::LogCategory::Editor,
+                            "model reaper: an editor is open; holding the server");
+                        sawEditor = true;
+                    }
                     idleFor = 0.0;
+                    lastCounters = std::move(counters);
                 }
                 else
                 {
-                    idleFor += static_cast<double>(options.pollSeconds);
+                    if (sawEditor)
+                    {
+                        LOG_INFO(logging::LogCategory::Editor,
+                            "model reaper: the last editor closed; retiring the server in {}s "
+                            "unless one opens again", options.idleSeconds);
+                        sawEditor = false;
+                        idleFor = 0.0;   // the countdown starts HERE, not from the last request
+                    }
+                    // With no editor open, a request can still come from the server's own
+                    // web page. That counts: somebody is using the model, just not through us.
+                    if (counters != lastCounters)
+                    {
+                        lastCounters = std::move(counters);
+                        idleFor = 0.0;
+                    }
+                    else
+                    {
+                        idleFor += static_cast<double>(options.pollSeconds);
+                    }
                 }
             }
             else if (everReached)
@@ -184,8 +242,8 @@ namespace llmreaper
             if (idleFor >= static_cast<double>(options.idleSeconds))
             {
                 LOG_INFO(logging::LogCategory::Editor,
-                    "model reaper: no requests for {}s, stopping llama-server pid={}",
-                    options.idleSeconds, options.serverPid);
+                    "model reaper: no editor and no requests for {}s, stopping llama-server "
+                    "pid={}", options.idleSeconds, options.serverPid);
                 KillProcessTree(options.serverPid);
                 return 0;
             }

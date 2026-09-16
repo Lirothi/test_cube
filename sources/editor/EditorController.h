@@ -18,6 +18,7 @@
 #include "editor/ui/CommandHistoryPanel.h"
 #include "editor/ui/ModelChatPanel.h"
 #include "editor/ui/ContentBrowserPanel.h"
+#include "editor/intent/LlmReaper.h"
 #include "editor/ui/ImportPanel.h"
 #include "editor/ui/InspectorPanel.h"
 #include "editor/ui/MaterialEditorPanel.h"
@@ -179,6 +180,11 @@ private:
     SceneOutlinerPanel outliner_;
     InspectorPanel inspector_;
     CommandHistoryPanel commandHistory_;
+    // Held for the whole editor session, so the model watchdog can tell that somebody is
+    // still editing. FIRST among the members that matter here and deliberately not tied to
+    // the command bar: an editor that never types a phrase is still an editor, and the
+    // watchdog's rule is about sessions, not about model use.
+    llmreaper::EditorSessionMark modelSessionMark_;
     CommandBarPanel commandBar_;
     ModelChatPanel modelChat_;
     ViewportGizmo viewportGizmo_;
