@@ -59,6 +59,7 @@ bool   g_intentFinished = false;
 double g_intentTimeoutSec = 180.0;
 int    g_intentRepeat = 1;
 std::string g_chatPhrase;
+std::string g_chatThenPhrase;
 std::atomic<bool> g_modelBusy{ false };
 std::atomic<bool> g_modelBusyBackground{ false };
 // Single-process settings sweep; see App.h. Set by main.cpp from "--sweep=<setting>:<v0>,...".

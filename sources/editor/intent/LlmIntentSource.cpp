@@ -161,7 +161,7 @@ void LlmIntentSource::EnsureWorld(const EditorIntentWorld& world)
     vocabulary_ = intentschema::BuildVocabulary(world.document, world.assets);
     gbnf_ = intentschema::BuildGbnf(vocabulary_);
     systemPrompt_ = intentprompt::BuildSystemPrompt(world.document, world.assets, vocabulary_,
-        intentprompt::ModelNameFromPath(settings_.modelPath));
+        intentprompt::ModelNameFromPath(settings_.modelPath), gbnf_);
     worldBuilt_ = true;
     LOG_INFO(logging::LogCategory::Editor,
         "intent model: grammar rebuilt for level -- {} filter names, {} spawnable assets, "
@@ -176,25 +176,44 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
         return true;
     }
 
-    // Health is polled, never waited on: the first load of a 38 GB model takes a while and
-    // the editor has frames to draw in the meantime.
+    // POLLED ON A THREAD, because this is the frame thread and the wire is not fast.
+    //
+    // The comment here used to say "polled, never waited on", and the line under it was a
+    // blocking GET with a two-second timeout, run once a second, on the thread that draws.
+    // While the server is loading 38 GB or busy generating, /health does not answer
+    // promptly -- so the editor stopped painting for up to two seconds out of every one,
+    // Windows greyed the window out and titled it "Not Responding", and from the outside
+    // asking the model looked like asking the model had crashed the editor.
+    //
+    // Nothing else in this file was ever synchronous: every /completion already runs on a
+    // detached thread. This was the one that got missed, and it was the one that ran most
+    // often.
     const double now = NowSeconds();
-    if (now < nextHealthPollSec_)
+    if (healthProbe_ && healthProbe_->done.load(std::memory_order_acquire))
     {
-        outStatus = serverStatus_;
-        return false;
+        const bool ok = healthProbe_->ok.load(std::memory_order_relaxed);
+        healthProbe_.reset();
+        if (ok)
+        {
+            serverHealthy_ = true;
+            serverStatus_.clear();
+            LOG_INFO(logging::LogCategory::Editor, "intent model: server healthy on {}",
+                settings_.endpoint);
+            return true;
+        }
     }
-    nextHealthPollSec_ = now + 1.0;
+    if (!healthProbe_ && now >= nextHealthPollSec_)
+    {
+        nextHealthPollSec_ = now + 1.0;
+        healthProbe_ = std::make_shared<HealthProbe>();
+        std::thread([probe = healthProbe_, endpoint = settings_.endpoint]()
+        {
+            const llmclient::Response health = llmclient::Get(endpoint, "/health", 2);
+            probe->ok.store(health.ok, std::memory_order_relaxed);
+            probe->done.store(true, std::memory_order_release);
+        }).detach();
+    }
 
-    const llmclient::Response health = llmclient::Get(settings_.endpoint, "/health", 2);
-    if (health.ok)
-    {
-        serverHealthy_ = true;
-        serverStatus_.clear();
-        LOG_INFO(logging::LogCategory::Editor, "intent model: server healthy on {}",
-            settings_.endpoint);
-        return true;
-    }
 
     if (serverOwned_ && server_.Running())
     {
@@ -324,15 +343,35 @@ void LlmIntentSource::SendPending()
 
     nlohmann::json body;
     body["prompt"] = intentprompt::ApplyChatTemplate(systemPrompt_, phrase,
-        settings_.chatTemplate, history);
+        settings_.chatTemplate, history, settings_.commandReasoning);
     body["grammar"] = gbnf_;
+    // LET IT THINK FIRST. A grammar applies from the FIRST token, so with one attached the
+    // model cannot open a think block at all -- the only way to get an answer was to
+    // pre-fill an empty one and take whatever came out without any deliberation. That is
+    // the shape behind a whole run of today's wrong answers: there was no step in which it
+    // could notice anything.
+    //
+    // `grammar_lazy` holds the grammar back until the output matches a trigger, and the
+    // trigger is the opening brace: reasoning runs free, the JSON is constrained from that
+    // brace onwards exactly as before. Probed against this server before writing it -- a
+    // WORD trigger on the brace is refused (not a preserved token), a PATTERN one is taken.
+    const bool reasoning = settings_.commandReasoning;
+    if (reasoning)
+    {
+        body["grammar_lazy"] = true;
+        body["grammar_triggers"] = nlohmann::json::array({
+            nlohmann::json{ { "type", 2 }, { "value", "\\{" } },
+        });
+    }
     // Deterministic: the same phrase on the same level must not mean two different things
     // on two days.
     body["temperature"] = 0.0;
     body["top_k"] = 1;
     // With a grammar in place, generation ends when the JSON closes; this is only a cap
     // against a runaway, so raising it costs nothing that is not already going wrong.
-    body["n_predict"] = 1024;
+    // Thinking is most of the tokens when it is on, so the cap must make room for it or the
+    // answer is cut off mid-thought and nothing parses at all.
+    body["n_predict"] = reasoning ? 6144 : 1024;
     // The system prompt is identical between requests, so the server keeps its prefill
     // and each phrase costs a dozen input tokens instead of the whole vocabulary (E4).
     body["cache_prompt"] = true;
@@ -424,15 +463,50 @@ IntentParseState LlmIntentSource::Poll(EditorIntent& outIntent, std::string& out
     std::string error;
     if (!intentschema::ParseAnswer(answer, outIntent, error))
     {
-        // The grammar makes this impossible, which is exactly why it is checked: if it
-        // ever fires, the grammar and the reader have drifted.
+        // IT RAN OUT WHILE THINKING is a different failure from a malformed answer, and it
+        // wants a different sentence. An opened think block with no close means the budget
+        // went entirely on deliberation and the command never started -- seen live: two
+        // minutes and sixteen seconds of reasoning about which zone to trace, then nothing.
+        // Reported as "did not fit the schema" it sends the reader looking at the grammar,
+        // which is the one thing that was not wrong.
+        const bool thoughtItsWayOut = answer.find("<think>") != std::string::npos &&
+            answer.find("</think>") == std::string::npos;
         LOG_WARNING(logging::LogCategory::Editor,
             "intent model: unreadable answer ({}) -- raw: {}", error, answer);
-        outWhyNot = "The model's answer did not fit the schema: " + error;
+        outWhyNot = thoughtItsWayOut
+            ? "The model spent its whole budget thinking and never answered. Ask for "
+              "something smaller, or turn off command reasoning in the model settings."
+            : "The model's answer did not fit the schema: " + error;
         return IntentParseState::Failed;
     }
 
-    LOG_INFO(logging::LogCategory::Editor, "intent model: answered {}", answer);
+    // THE ANSWER, NOT THE DELIBERATION. With reasoning on, `answer` opens with a think
+    // block that runs to hundreds of words, and logging it whole turned every command into
+    // a wall of multi-line text in the middle of the session log -- unreadable, and it
+    // breaks the one-event-per-line shape everything else in there has. The thinking is
+    // reported as a size, which is the part worth knowing: it is what the seconds went on.
+    {
+        std::string decided = answer;
+        std::size_t thoughtChars = 0;
+        const std::size_t closed = decided.rfind("</think>");
+        if (closed != std::string::npos)
+        {
+            thoughtChars = closed + 8;
+            decided.erase(0, closed + 8);
+        }
+        const std::size_t firstReal = decided.find_first_not_of(" \t\r\n");
+        decided = firstReal == std::string::npos ? std::string{} : decided.substr(firstReal);
+        if (thoughtChars > 0)
+        {
+            LOG_INFO(logging::LogCategory::Editor,
+                "intent model: answered {} (after {} characters of thinking)",
+                decided, thoughtChars);
+        }
+        else
+        {
+            LOG_INFO(logging::LogCategory::Editor, "intent model: answered {}", decided);
+        }
+    }
     if (outIntent.kind == EditorIntentKind::NeedsApi)
     {
         RequestDeveloperNote(lastPhrase_, outIntent);
@@ -660,15 +734,26 @@ void LlmIntentSource::BeginConversation(const std::vector<IntentTurn>& history,
     bool reasoning)
 {
     std::string text = "<|im_start|>system\n" + systemPrompt_;
-    text += "\n\nRIGHT NOW YOU ARE ANSWERING IN PROSE, not in JSON. The editor decided "
-        "this was conversation rather than an edit, and the rules above about emitting a "
-        "single JSON object do NOT apply to this turn. Reply the way a person would, in "
-        "the language they wrote in.\n"
-        "You are still inside the editor and everything above is still true about it, so "
-        "answer about THIS level and THIS engine rather than about game engines in "
-        "general. If they ask for something the editor can do, say so and let them ask for "
-        "it -- you cannot run it from here.";
     text += toolProtocol;
+    // LAST, AND IT HAS TO BE LAST. This paragraph fights the several thousand words above
+    // it, all of which describe a JSON form, and the fight is decided by what the model
+    // read most recently. It used to sit BEFORE the tool protocol; as that protocol grew,
+    // "привет" started coming back as the literal text {"kind":"chat"} -- the model, given
+    // nothing to say and a prompt whose last two pages are JSON rules, emitted the shortest
+    // thing the prompt had taught it. Moving these lines to the end of the system block is
+    // the whole fix, and the example is spelled out because "do not emit JSON" was already
+    // there in other words and was not enough.
+    text += "\n\nRIGHT NOW YOU ARE ANSWERING IN PROSE, not in JSON. The editor has already "
+        "decided this is conversation rather than an edit -- that decision is made, and "
+        "every rule above about emitting a single JSON object belongs to the OTHER kind of "
+        "turn and does not apply to this one.\n"
+        "Never answer with {\"kind\":\"chat\"} or any other JSON object. That is not an "
+        "answer, it is the verdict that got us here, and the person sees it as your reply. "
+        "Even to a bare \"привет\" with nothing to add, greet them back in words.\n"
+        "Reply the way a person would, in the language they wrote in. You are still inside "
+        "the editor and everything above is still true about it, so answer about THIS level "
+        "and THIS engine rather than about game engines in general. If they ask for "
+        "something the editor can do, say so and let them ask for it.";
     text += "<|im_end|>\n";
     for (const IntentTurn& turn : history)
     {
@@ -1037,10 +1122,12 @@ LlmIntentSettings LlmIntentSource::LoadSettings(const nlohmann::json& levelEdito
     settings.gpuLayers = ReadIntOr(json, "gpuLayers", settings.gpuLayers);
     settings.contextTokens = ReadIntOr(json, "contextTokens", settings.contextTokens);
     settings.threads = ReadIntOr(json, "threads", settings.threads);
-    settings.charsPerTokenEstimate =
-        ReadIntOr(json, "charsPerTokenEstimate", settings.charsPerTokenEstimate);
     settings.timeoutSeconds = ReadIntOr(json, "timeoutSeconds", settings.timeoutSeconds);
     settings.chatTemplate = ReadStringOr(json, "chatTemplate", settings.chatTemplate);
+    settings.commandReasoning = ReadBoolOr(json, "commandReasoning", settings.commandReasoning);
+    settings.chatAnswerTokens = ReadIntOr(json, "chatAnswerTokens", settings.chatAnswerTokens);
+    settings.chatSearch = ReadBoolOr(json, "chatSearch", settings.chatSearch);
+    settings.chatThinkOutLoud = ReadBoolOr(json, "chatThinkOutLoud", settings.chatThinkOutLoud);
     settings.apiRequestNotesPath =
         ReadStringOr(json, "apiRequestNotesPath", settings.apiRequestNotesPath);
     settings.webUi = ReadBoolOr(json, "webUi", settings.webUi);
@@ -1062,9 +1149,12 @@ nlohmann::json LlmIntentSource::SaveSettings(const LlmIntentSettings& settings)
         { "gpuLayers", settings.gpuLayers },
         { "contextTokens", settings.contextTokens },
         { "threads", settings.threads },
-        { "charsPerTokenEstimate", settings.charsPerTokenEstimate },
         { "timeoutSeconds", settings.timeoutSeconds },
         { "chatTemplate", settings.chatTemplate },
+        { "commandReasoning", settings.commandReasoning },
+        { "chatAnswerTokens", settings.chatAnswerTokens },
+        { "chatSearch", settings.chatSearch },
+        { "chatThinkOutLoud", settings.chatThinkOutLoud },
         { "apiRequestNotesPath", settings.apiRequestNotesPath },
         { "webUi", settings.webUi },
         { "idleTimeoutSeconds", settings.idleTimeoutSeconds },

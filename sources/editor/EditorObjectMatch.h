@@ -75,6 +75,43 @@ namespace editormatch
         return object.type.empty() ? object.name : object.type;
     }
 
+    // The same thing, as a person would write it: "models/coconut_palm.mesh.json" becomes
+    // "Coconut Palm". AssetLabel returns the PATH, which is right for matching and filtering
+    // -- it is the identity -- and wrong the moment it is used as a label somebody reads.
+    // Asked to give the level sensible names, the first version named 107 objects
+    // "models/coconut_palm.mesh.json 001", which is the opposite of what was asked for.
+    inline std::string PrettyAssetLabel(const EditorObject& object)
+    {
+        std::string label = AssetLabel(object);
+        const std::size_t slash = label.find_last_of("/\\");
+        if (slash != std::string::npos)
+        {
+            label.erase(0, slash + 1);
+        }
+        // Everything from the first dot: ".mesh.json", ".json", ".mesh" all go the same way.
+        const std::size_t dot = label.find('.');
+        if (dot != std::string::npos && dot > 0)
+        {
+            label.erase(dot);
+        }
+        bool startOfWord = true;
+        for (char& ch : label)
+        {
+            if (ch == '_' || ch == '-')
+            {
+                ch = ' ';
+                startOfWord = true;
+                continue;
+            }
+            if (startOfWord && ch >= 'a' && ch <= 'z')
+            {
+                ch = static_cast<char>(ch - 'a' + 'A');
+            }
+            startOfWord = (ch == ' ');
+        }
+        return label;
+    }
+
     // True when `needle` (any case) appears in the object's name, type, decimal id,
     // or one of the asset-name properties above. An empty needle matches everything,
     // which is what the search box wants and what the command bar must never pass.

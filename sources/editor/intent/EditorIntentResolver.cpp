@@ -24,6 +24,14 @@ namespace
     // it is the asset the user was thinking of when they said "palms".
     std::string GroupLabel(const EditorObject& object)
     {
+        // THE IDENTITY, NOT THE LABEL, whatever the name of this function suggests. It is
+        // used twice and the two uses pull opposite ways: the preview's breakdown wants
+        // something readable, and `filterFromSelection` -- "select the ones like this" --
+        // feeds the result straight back in as a FILTER, matched against the object's asset
+        // path. Making this pretty broke that instantly: the filter became "Coconut Palm",
+        // which matches nothing, and the gate said "No object in the level matches".
+        //
+        // So this stays the path. The breakdown tidies it at the point of display.
         return editormatch::AssetLabel(object);
     }
 
@@ -291,7 +299,7 @@ void ResolveTargetObjects(const EditorActionContext& actionCtx,
             return;
         }
         outTargets.push_back(object.id);
-        AppendGroup(outGroups, GroupLabel(object));
+        AppendGroup(outGroups, editormatch::PrettyAssetLabel(object));
     };
 
     if (target.scope == EditorIntentScope::Selected)
@@ -527,7 +535,21 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
     // is a filter too -- "everything except the palms" discriminates, "everything" does not.
     const bool saysNothingAboutWhich = preview.resolved.target.filter.empty() &&
         preview.resolved.target.exclude.empty() && !preview.resolved.target.where.Any();
-    if (preview.resolved.target.scope == EditorIntentScope::All && saysNothingAboutWhich)
+    // ...unless the action's whole point is everything. Organising the outliner is not the
+    // same risk as deleting, and refusing it made the model narrow to the first filter it
+    // could think of: "наведи порядок в аутлайнере" came back as one group of coconut
+    // palms out of six hundred objects.
+    const EditorActionDesc* wholeLevelDesc =
+        EditorActionRegistry::Builtin().Find(preview.resolved.action);
+    bool mayTakeEverything = wholeLevelDesc && wholeLevelDesc->wholeLevelIsFine;
+    if (wholeLevelDesc && wholeLevelDesc->wholeLevelNeedsParam)
+    {
+        const auto it = preview.resolved.params.find(wholeLevelDesc->wholeLevelNeedsParam);
+        mayTakeEverything = it != preview.resolved.params.end() &&
+            it->is_boolean() && it->get<bool>();
+    }
+    if (preview.resolved.target.scope == EditorIntentScope::All && saysNothingAboutWhich &&
+        !mayTakeEverything)
     {
         preview.problem = "Refusing to act on the whole level without a filter";
         return preview;

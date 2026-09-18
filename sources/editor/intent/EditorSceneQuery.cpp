@@ -291,20 +291,31 @@ namespace
             }
             out["objects"] = ctx.document.Objects().size();
 
-            // The commonest eight. A level with sixty kinds of thing in it would otherwise
-            // spend most of this answer on the fifty nobody asked about.
+            // THE CAP WAS EIGHT AND EIGHT WAS TOO FEW. A level with sixty kinds in it
+            // should not spend this answer on the fifty nobody asked about -- but wind_test
+            // has twelve, so four kinds were replaced by the number 4, and among the four
+            // were the island, the tents and the rocks. Asked to tidy the outliner, the
+            // model wrote a filter naming the eight it could see and grouped only those:
+            // the answer looked complete and left a third of the level out. Twenty covers
+            // every level in this project with room to spare and costs a few dozen tokens.
+            constexpr std::size_t kListedAssets = 20;
             std::vector<std::pair<std::string, std::size_t>> sorted(perType.begin(), perType.end());
             std::sort(sorted.begin(), sorted.end(),
                 [](const auto& a, const auto& b) { return a.second > b.second; });
             nlohmann::json assets = nlohmann::json::object();
-            for (std::size_t i = 0; i < sorted.size() && i < 8; ++i)
+            for (std::size_t i = 0; i < sorted.size() && i < kListedAssets; ++i)
             {
                 assets[sorted[i].first] = sorted[i].second;
             }
             out["assets"] = assets;
-            if (sorted.size() > 8)
+            if (sorted.size() > kListedAssets)
             {
-                out["otherAssetKinds"] = sorted.size() - 8;
+                // NAMED, not counted. "otherAssetKinds: 4" tells the reader that something
+                // is missing and gives it no way to ask about it.
+                out["otherAssetKinds"] = sorted.size() - kListedAssets;
+                out["assetsNote"] = "the list above is the " + std::to_string(kListedAssets) +
+                    " commonest kinds and is NOT complete -- do not build a filter from it "
+                    "when you mean everything; leave the filter out instead";
             }
             BoundsOf(ctx, everything).WriteInto(out);
             float level = 0.0f;
@@ -599,12 +610,14 @@ namespace editorquery
         float z,
         float startY,
         const std::vector<std::uint64_t>& ignored,
-        float& outHeight)
+        float& outHeight,
+        const std::vector<std::uint64_t>* only)
     {
         const Math::float3 origin(x, startY, z);
         const Math::float3 down(0.0f, -1.0f, 0.0f);
         float distance = 0.0f;
-        if (scene.RaycastEditorObject(origin, down, &distance, 0, &ignored) == 0 ||
+        if (scene.RaycastEditorObject(origin, down, &distance, 0, &ignored,
+                (only && !only->empty()) ? only : nullptr) == 0 ||
             !std::isfinite(distance))
         {
             return false;

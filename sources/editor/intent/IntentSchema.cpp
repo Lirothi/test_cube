@@ -183,6 +183,59 @@ namespace intentschema
         return vocabulary;
     }
 
+    // A GBNF rule name for one action's parameters.
+    //
+    // HYPHEN, NOT UNDERSCORE. llama.cpp's grammar parser reads a rule name as
+    // [a-zA-Z0-9-] and stops at anything else, so `p_group ::= ...` is not a rule with an
+    // odd name -- it is a parse error for the whole grammar, and the server answers every
+    // request with HTTP 400 "failed to parse grammar". Nothing says which line is wrong.
+    // Probed against the running server to be sure: `p_select` is refused, `p-select` and
+    // `pSelect` are both taken.
+    std::string ParamsRuleName(std::string_view actionId)
+    {
+        std::string name = "p-";
+        for (const char ch : actionId)
+        {
+            name.push_back(ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch);
+        }
+        return name;
+    }
+
+    // What a parameter of this kind may be written as. Enum values are spelled out where
+    // the registry knows them -- that is a genuinely closed set and the one place a sampler
+    // refusal is better than a validation message, because it cannot be got wrong at all.
+    std::string ValueRuleFor(const EditorActionParam& param)
+    {
+        switch (param.kind)
+        {
+        case EditorParamKind::Number: return "number";
+        case EditorParamKind::Bool:   return "boolean";
+        case EditorParamKind::String: return "pstring";
+        case EditorParamKind::Range:  return "range";
+        case EditorParamKind::Vec3:   return "vec3";
+        case EditorParamKind::Enum:
+        {
+            if (param.values.empty())
+            {
+                return "pstring";
+            }
+            std::string rule = "(";
+            bool first = true;
+            for (const std::string_view value : param.values)
+            {
+                rule += (first ? " " : " | ");
+                first = false;
+                rule += "\"\\\"" + std::string(value) + "\\\"\"";
+            }
+            return rule + " )";
+        }
+        // `Any` means "a later check knows the type and its message is better". It keeps
+        // the old wide rule, which is exactly what that comment was always describing.
+        case EditorParamKind::Any: return "pvalue";
+        }
+        return "pvalue";
+    }
+
     std::string BuildGbnf(const Vocabulary& vocabulary)
     {
         const EditorActionRegistry& registry = EditorActionRegistry::Builtin();
@@ -198,9 +251,33 @@ namespace intentschema
         g += "root ::= command | query | chat | needsapi | unclear\n\n";
 
         // --- command ------------------------------------------------------------
-        g += "command ::= \"{\\\"kind\\\":\\\"command\\\",\\\"action\\\":\" action "
-             "\",\\\"target\\\":\" target ( \",\\\"params\\\":\" params )? \"}\"\n";
-        g += "action ::= " + Alternation(actionIds) + "\n\n";
+        // ONE ALTERNATIVE PER VERB, so each can carry its own parameters. A single
+        // `command` rule with a shared `params` could only ever accept every parameter for
+        // every action.
+        g += "command ::= \"{\\\"kind\\\":\\\"command\\\",\\\"action\\\":\\\"\"";
+        {
+            bool first = true;
+            for (const EditorActionDesc& action : registry.Actions())
+            {
+                g += first ? " ( " : " | ";
+                first = false;
+                g += "cmd-" + std::string(action.id);
+            }
+            g += " )\n";
+        }
+        for (const EditorActionDesc& action : registry.Actions())
+        {
+            // THE SHARED PREFIX IS WRITTEN ONCE, in `command` above, and each alternative
+            // starts at the action's own name. Spelling the full `{"kind":"command",
+            // "action":"` into all twenty-seven alternatives is the same language and a
+            // much worse grammar to sample: llama.cpp advances every alternative in
+            // parallel, so thirty tokens of identical prefix meant twenty-seven live stacks
+            // for thirty tokens. Measured after that version shipped -- the model stopped
+            // answering at all, three minutes for a phrase that had taken thirty seconds.
+            g += "cmd-" + std::string(action.id) + " ::= \"" +
+                std::string(action.id) + "\\\",\\\"target\\\":\" target ( \",\\\"params\\\":\" " +
+                ParamsRuleName(action.id) + " )? \"}\"\n";
+        }
 
         // EVERY RULE ON ONE LINE. llama.cpp's GBNF parser ends a rule at the newline, so a
         // continuation line beginning with `|` is not a prettier alternation -- it is a
@@ -249,12 +326,100 @@ namespace intentschema
         // a set of objects and whose destination is one mesh.
         g += "assetlist ::= \"[\" ( asset ( \",\" asset )* )? \"]\"\n\n";
 
+        // PARAMETERS, PER ACTION, GENERATED FROM THE REGISTRY.
+        //
+        // This used to be `pname ::= string` -- any name, any value, for any verb. The
+        // reasoning written here was that ValidateParams gives a better message than a
+        // sampler refusal, and for VALUES that is still true: a string parameter can be
+        // genuinely free text. For NAMES it was never true. The set of parameters a verb
+        // takes is closed, the registry knows it exactly, and leaving it open meant the
+        // grammar described the envelope and said nothing about the part that decides what
+        // happens.
+        //
+        // What it cost, concretely: `group` grew a `perAsset` parameter and the model had
+        // no way to learn that from the grammar it is sampled against -- it could only read
+        // it in the prose above, or not. Now `"perAsset"` is a literal in the rule for
+        // group and appears nowhere else, so "tidy the outliner" has a shape to reach for
+        // and `rename` cannot be handed a parameter belonging to `thin`.
+        //
+        // ValidateParams still runs and still owns required-ness and value ranges. This
+        // moves one class of mistake from "refused after a whole round trip" to
+        // "unrepresentable", which is the class worth moving.
+        for (const EditorActionDesc& action : registry.Actions())
+        {
+            const std::string rule = ParamsRuleName(action.id);
+            if (action.params.empty())
+            {
+                // An action with no parameters gets an empty object rather than no rule at
+                // all: the model can still write `"params":{}` and it stays legal.
+                g += rule + " ::= \"{}\"\n";
+                continue;
+            }
+            // REQUIRED PARAMETERS ARE REQUIRED BY THE GRAMMAR, not only by the check that
+            // runs afterwards. `spawn` needs a count; asked for fifteen rocks the model
+            // wrote a spawn without one, the editor refused it and handed it back, and it
+            // did the same thing three times before the round budget ran out -- about a
+            // minute of somebody's life spent rediscovering a rule that was written down.
+            // Spelled into the rule, that answer cannot be produced at all.
+            //
+            // They come FIRST and in declaration order, which is the only arrangement a
+            // context-free rule can insist on without exploding into permutations. The
+            // model reads this grammar, so the order is visible rather than guessed at.
+            std::vector<const EditorActionParam*> required;
+            std::vector<const EditorActionParam*> optional;
+            for (const EditorActionParam& param : action.params)
+            {
+                (param.required ? required : optional).push_back(&param);
+            }
+
+            g += rule + " ::= \"{\"";
+            for (std::size_t i = 0; i < required.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    g += " \",\"";
+                }
+                g += " \"\\\"" + std::string(required[i]->name) + "\\\":\" " +
+                    ValueRuleFor(*required[i]);
+            }
+            if (!optional.empty())
+            {
+                const std::string member = rule + "m";
+                if (required.empty())
+                {
+                    g += " ( " + member + " ( \",\" " + member + " )* )?";
+                }
+                else
+                {
+                    g += " ( \",\" " + member + " )*";
+                }
+            }
+            g += " \"}\"\n";
+
+            if (!optional.empty())
+            {
+                g += rule + "m ::=";
+                bool first = true;
+                for (const EditorActionParam* param : optional)
+                {
+                    g += (first ? " " : " | ");
+                    first = false;
+                    g += "\"\\\"" + std::string(param->name) + "\\\":\" " +
+                        ValueRuleFor(*param);
+                }
+                g += "\n";
+            }
+        }
+        g += "\n";
+        // THE OPEN RULE STAYS, FOR QUERIES ONLY. `ask` is not split per query id -- there
+        // are eight of them and their parameters are a point or a zone name -- so it still
+        // needs a generic `params`. Removing it when the COMMANDS stopped using it left
+        // `ask` referencing a rule that no longer existed, and llama.cpp answers a dangling
+        // reference the way it answers every grammar fault: HTTP 400, "failed to parse
+        // grammar", with no line number and no name. Every request failed until it was
+        // found by listing defined rules against referenced ones -- which is now a test.
         g += "params ::= \"{\" ( pmember ( \",\" pmember )* )? \"}\"\n";
         g += "pmember ::= pname \":\" pvalue\n";
-        // Same reasoning for parameter names, and ValidateParams is what actually refuses a
-        // shape that does not fit -- with a message naming the permitted values, which a
-        // sampler refusal cannot do. A string parameter may also be genuinely free text
-        // (EditorParamKind::String), which an enum-only rule would have made unwritable.
         g += "pname ::= string\n";
         g += "pvalue ::= number | boolean | pstring | range | vec3 | pointlist\n";
         g += "range ::= \"[\" number \",\" number \"]\"\n";
@@ -313,7 +478,27 @@ namespace intentschema
 
     bool ParseAnswer(const std::string& json, EditorIntent& outIntent, std::string& outError)
     {
-        nlohmann::json parsed = nlohmann::json::parse(json, nullptr, false);
+        // THE ANSWER MAY BEGIN WITH THINKING. With the grammar applied lazily -- which is
+        // what lets the model reason about a command at all -- what comes back is
+        // "<think>...</think>{...}", and the JSON starts where the grammar was triggered.
+        // Everything before it is deliberation, not an answer, and was never meant to parse.
+        //
+        // Cut at the LAST </think> rather than the first, because a model quoting its own
+        // tags mid-thought would otherwise leave half the reasoning in front of the JSON,
+        // and then at the first brace after it -- braces inside the thinking are common and
+        // the close tag is what makes them unambiguous.
+        std::string body = json;
+        const std::size_t closed = body.rfind("</think>");
+        if (closed != std::string::npos)
+        {
+            body.erase(0, closed + 8);
+        }
+        const std::size_t brace = body.find('{');
+        if (brace != std::string::npos && brace > 0)
+        {
+            body.erase(0, brace);
+        }
+        nlohmann::json parsed = nlohmann::json::parse(body, nullptr, false);
         if (parsed.is_discarded() || !parsed.is_object())
         {
             outError = "model answer was not a JSON object";

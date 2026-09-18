@@ -119,6 +119,7 @@ extern int g_intentRepeat;
 // The chat's reply is STREAMED, so the only thing worth looking at exists only while it is
 // arriving -- which makes a headless --shot the only way to see it at all.
 extern std::string g_chatPhrase;
+extern std::string g_chatThenPhrase;
 
 // True while the local model has a request in flight. The frame loop reads it and caps the
 // frame rate, because the renderer at 640 fps and the model's experts want the same cores

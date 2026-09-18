@@ -125,11 +125,19 @@ public:
     // broad phase; standalone CPU meshes use exact base-LOD triangles as the narrow
     // phase. Runtime generators and hidden objects are intentionally not editor
     // picking or placement surfaces.
+    // `onlyObjectIds`, when given, restricts the cast to those objects. It is not an
+    // optimisation dressed as an option: a query about ONE thing should not be answered by
+    // whatever else happens to stand in the way. Tracing the island's shoreline was casting
+    // 9216 rays at the whole scene, and every one of them walked the triangles of any palm
+    // whose bounding box it crossed -- 71.6 seconds on the frame thread, which from outside
+    // the editor is indistinguishable from a hang, and a contour that followed the tops of
+    // the palms rather than the ground they stand on.
     SceneObjectId RaycastEditorObject(const Math::float3& origin,
         const Math::float3& dir,
         float* outDistance = nullptr,
         SceneObjectId ignoredObjectId = 0,
-        const std::vector<SceneObjectId>* ignoredObjectIds = nullptr) const;
+        const std::vector<SceneObjectId>* ignoredObjectIds = nullptr,
+        const std::vector<SceneObjectId>* onlyObjectIds = nullptr) const;
 #endif
 
     void Tick(float deltaTime);

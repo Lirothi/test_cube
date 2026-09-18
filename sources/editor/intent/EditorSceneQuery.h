@@ -94,12 +94,17 @@ namespace editorquery
     // the registry where it was born: the contour of a shoreline and the planting inside
     // that contour have to agree about where the ground is, and they only agree for sure
     // while it is one function.
+    // `only`, when non-empty, is the set of scene objects the ray may hit. Tracing a
+    // shoreline means "where is THE ISLAND", and answering it with whatever stands on the
+    // island is both wrong and slow -- measured at 7.8 ms a ray against the whole scene,
+    // which is 71.6 seconds for one contour and a frozen editor while it runs.
     bool ProbeGroundHeight(const Scene& scene,
         float x,
         float z,
         float startY,
         const std::vector<std::uint64_t>& ignored,
-        float& outHeight);
+        float& outHeight,
+        const std::vector<std::uint64_t>* only = nullptr);
 
     // How far above the anchor a ground probe starts.
     constexpr float kGroundProbeUp = 500.0f;

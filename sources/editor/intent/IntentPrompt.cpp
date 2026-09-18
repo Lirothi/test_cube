@@ -2,8 +2,12 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
+
+#include "core/logging/Log.h"
 
 #include "editor/assets/AssetRegistry.h"
 #include "editor/intent/EditorActionRegistry.h"
@@ -40,6 +44,34 @@ namespace
     }
 }
 
+namespace
+{
+    // (continued) The orientation text, or nothing. Read every time the prompt is built, which is once
+    // per level: editing the file and reloading the level is the whole edit-test loop.
+    std::string ReadIntroFile()
+    {
+        std::ifstream file("docs/editor_model_intro.md", std::ios::binary);
+        if (!file)
+        {
+            LOG_WARNING(logging::LogCategory::Editor,
+                "intent model: docs/editor_model_intro.md not found -- the model gets no "
+                "orientation, only the rules");
+            return {};
+        }
+        std::string text((std::istreambuf_iterator<char>(file)),
+            std::istreambuf_iterator<char>());
+        if (text.empty())
+        {
+            return {};
+        }
+        if (text.back() != '\n')
+        {
+            text += '\n';
+        }
+        return text + "\n";
+    }
+}
+
 namespace intentprompt
 {
     std::string ModelNameFromPath(const std::string& modelPath)
@@ -63,11 +95,35 @@ namespace intentprompt
     std::string BuildSystemPrompt(const EditorSceneDocument& document,
         const AssetRegistry& assets,
         const intentschema::Vocabulary& vocabulary,
-        const std::string& modelName)
+        const std::string& modelName,
+        const std::string& grammar)
     {
         (void)assets;
 
         std::string p;
+        // WHERE YOU ARE, FIRST, AND FROM A FILE. Everything after this is rules and lists,
+        // and rules land differently when the reader knows what they are looking at.
+        //
+        // It lives in docs/editor_model_intro.md rather than in this function because it is
+        // PROSE ABOUT THE SITUATION, not generated from the registry like everything below
+        // it: nobody should rebuild the editor to reword a paragraph, and the person can
+        // read exactly what their model was told. Missing file is not an error -- the rest
+        // of the prompt is what makes the thing work.
+        p += ReadIntroFile();
+        // THINK SHORT HERE. This turn is allowed to reason -- the grammar is held back
+        // until the answer's opening brace -- and left unsaid, a plan-shaped request gets a
+        // plan-shaped deliberation: two minutes and sixteen seconds of weighing which zone
+        // to trace, the whole token budget gone, and no command at all. The budget is not
+        // a thinking allowance, it is somebody sitting in front of the editor.
+        p += "THINK BRIEFLY BEFORE YOU ANSWER, and then answer. A few sentences is the\n";
+        p += "right amount: which action, what it applies to, whether you need to look\n";
+        p += "something up first. That is a decision, not a plan -- do not weigh options\n";
+        p += "you have already rejected, do not rehearse the whole task, and do not write\n";
+        p += "out what you will do after this command. If the request is too big for one\n";
+        p += "command, say so with `unclear` or do the first part; do not think your way\n";
+        p += "through all of it. Every second spent thinking is a second somebody is\n";
+        p += "watching a box that says \"thinking\", and a reply that never arrives because\n";
+        p += "the budget ran out is worse than a plain one that does.\n\n";
         p += "You translate a level designer's instruction into ONE editor command.\n";
         p += "The designer usually writes Russian; the JSON you emit is always English.\n";
         p += "Answer with a single JSON object and nothing else.\n\n";
@@ -93,7 +149,16 @@ namespace intentprompt
         p += "\"давай посадим пальм\", \"can you hide the rocks\" are commands. The test is\n";
         p += "whether doing something to the level would answer them; if it would, it is not\n";
         p += "chat. A question ABOUT the level that an action can answer -- \"сколько тут\n";
-        p += "пальм\" -- is `count`, not chat.\n\n";
+        p += "пальм\" -- is `count`, not chat.\n";
+        // A QUESTION ABOUT YOURSELF IS NOT A TASK. Right after grouping 614 objects, asked
+        // "и что ты сделал?", the model answered with another `group` command -- it read a
+        // question about the work as an instruction to carry on with it. The answer to that
+        // question is in the conversation, which only the prose turn can see; no action in
+        // the registry can produce it.
+        p += "BUT A QUESTION ABOUT WHAT *YOU* DID IS CHAT, always. \"что ты сделал\", \"и\n";
+        p += "что дальше\", \"почему ты так решил\", \"ты уверен\" -- these are about the\n";
+        p += "conversation, not about the level, and no action can answer them. Do not read\n";
+        p += "them as permission to carry on with the last task.\n\n";
 
         // WHAT IT IS, stated rather than recalled. A model asked its own version answers
         // from training data -- it knows the family it belongs to and nothing about the
@@ -230,6 +295,18 @@ namespace intentprompt
             p += "  anything else-> target.where.zone: \"<name>\"  narrows to what is ALREADY\n";
             p += "                 inside it -- \"удали пальмы в зоне Beach\", \"сколько камней\n";
             p += "                 в зоне Meadow\". Leave radius and anchor alone when using it.\n";
+            // A NAME IN THIS LIST IS VOCABULARY, NOT AN INSTRUCTION. Asked to tidy up the
+            // outliner -- a sentence with no place in it at all -- the model read
+            // `zones:["test"]` out of sceneSummary and quietly added where.zone:"test" to
+            // the group command. 51 objects of 610 were grouped and the answer looked like
+            // a success. A zone existing is not a reason to use it, and that has to be said
+            // here: the empty case above already says what to do when there are none, and
+            // the case that bit was the opposite one.
+            p += "ONLY WHEN THEY NAME THE PLACE. A zone existing is not a reason to narrow\n";
+            p += "to it. If the phrase does not mention that region -- \"наведи порядок\",\n";
+            p += "\"сгруппируй пальмы\", \"сколько тут камней\" -- leave where.zone OUT and\n";
+            p += "act on the whole level. Adding it silently turns the answer into a\n";
+            p += "different, smaller question than the one you were asked.\n";
             p += "This level has:\n";
             AppendList(p, vocabulary.zones, 80);
         }
@@ -408,13 +485,37 @@ namespace intentprompt
         p += "  -> {\"kind\":\"chat\"}\n";
         p += "  \"udali derevya\" (delete the trees) when several tree assets exist\n";
         p += "  -> {\"kind\":\"unclear\",\"question\":\"Which trees -- coconut, date or curly palms?\"}\n";
+
+        // THE GRAMMAR ITSELF, LAST. The sampler is constrained by this whether the model
+        // has read it or not: a token outside it simply cannot be emitted. Describing the
+        // shapes in prose and hiding the actual rule was leaving it to discover the walls
+        // by walking into them -- and a model that knows only the prose spends its choice
+        // on forms that were never reachable. It is the authority here, so it is quoted
+        // rather than paraphrased, and it says so.
+        if (!grammar.empty())
+        {
+            p += "\nTHE GRAMMAR YOUR ANSWER IS SAMPLED AGAINST. This is not advice and not a\n";
+            p += "summary -- it is the actual GBNF the server enforces on every token you\n";
+            p += "emit for a command. Anything it does not allow you literally cannot say,\n";
+            p += "and every name in it is a name that exists in THIS level:\n";
+            p += "```gbnf\n";
+            p += grammar;
+            if (grammar.back() != '\n')
+            {
+                p += '\n';
+            }
+            p += "```\n";
+            p += "Read it when you are unsure whether a form is legal. It is also the honest\n";
+            p += "answer to \"can you do X\": if no rule spells X, the answer is needs_api.\n";
+        }
         return p;
     }
 
     std::string ApplyChatTemplate(const std::string& systemPrompt,
         const std::string& userPhrase,
         const std::string& templateName,
-        const std::vector<IntentTurn>& history)
+        const std::vector<IntentTurn>& history,
+        bool reasoning)
     {
         if (templateName == "plain")
         {
@@ -448,7 +549,7 @@ namespace intentprompt
         //
         // Costs nothing on a model that does not think: it reads as a stray tag it ignores.
         // `chatml-think` is here for the day someone wants the reasoning back.
-        if (templateName != "chatml-think")
+        if (!reasoning)
         {
             text += "<think>\n\n</think>\n\n";
         }

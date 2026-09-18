@@ -1372,7 +1372,8 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
     const Math::float3& dir,
     float* outDistance,
     SceneObjectId ignoredObjectId,
-    const std::vector<SceneObjectId>* ignoredObjectIds) const
+    const std::vector<SceneObjectId>* ignoredObjectIds,
+    const std::vector<SceneObjectId>* onlyObjectIds) const
 {
     SceneObjectId best = 0;
     float bestT = FLT_MAX;
@@ -1385,6 +1386,15 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
 
     for (size_t i = 0; i < objects_.size(); ++i)
     {
+        // Checked FIRST and before anything expensive: this is the whole point of the
+        // restriction -- an object that is not in the set costs one comparison, not a
+        // bounding-box test and a walk through its triangles.
+        if (onlyObjectIds &&
+            std::find(onlyObjectIds->begin(), onlyObjectIds->end(), objectIds_[i]) ==
+                onlyObjectIds->end())
+        {
+            continue;
+        }
         const bool ignoredBySet = ignoredObjectIds &&
             std::find(ignoredObjectIds->begin(), ignoredObjectIds->end(), objectIds_[i]) != ignoredObjectIds->end();
         if (objectIds_[i] == 0 || objectIds_[i] == ignoredObjectId || ignoredBySet ||

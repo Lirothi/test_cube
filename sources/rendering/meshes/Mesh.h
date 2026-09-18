@@ -183,6 +183,13 @@ public:
     // about EVERY vertex rather than about the AABB -- burying a mesh under a sloped surface is
     // a per-vertex question, and an AABB corner is not a point on the mesh.
     const std::vector<Math::float3>& RaycastPositions() const { return raycastPositions_; }
+    // The triangles too, for a caller that wants to sweep the whole surface rather than
+    // probe it point by point. RaycastLocal is a LINEAR walk of this list -- there is no
+    // acceleration structure behind it -- so asking it nine thousand questions about one
+    // mesh costs nine thousand walks. Tracing a shoreline did exactly that and took 71
+    // seconds with the frame thread held; rasterising these triangles into the same grid
+    // is one pass and answers the same question.
+    const std::vector<uint32_t>& RaycastIndices() const { return raycastIndices_; }
     bool RaycastLocal(const Math::float3& origin, const Math::float3& direction,
         float* outDistance) const;
 #endif

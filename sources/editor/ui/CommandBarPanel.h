@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -60,10 +61,20 @@ public:
     const std::vector<std::string>& PhraseHistory() const { return phraseHistory_; }
     void SetPhraseHistory(std::vector<std::string> history);
     bool TakeHistoryDirty();
+    // True once after the model settings were edited, so the editor knows to save them.
+    bool TakeModelSettingsDirty();
 
     void SubmitPhrase(const EditorActionContext& actionCtx,
         const std::string& phrase,
         float buryDepthPercent);
+
+    // Is a preview sitting there waiting for someone to press Run? True only for an edit
+    // that has resolved and is allowed to run.
+    bool PreviewAwaitsRun() const;
+    // Press it. Exactly what the Run button does, through the same call -- the harness must
+    // not have a private way of executing, or it would be testing a path nobody ships.
+    void RunPendingPreview(const EditorActionContext& actionCtx,
+        EditorCommandStack& commandStack);
 
     void BeginHeadless(const EditorActionContext& actionCtx,
         const std::string& phrase,
@@ -166,20 +177,75 @@ private:
 
     // True while a prose answer is streaming in.
     bool inConversation_ = false;
-    // The prose exchanges, kept across messages -- this is the chat's memory, and it is
-    // separate from `history_`, which belongs to ONE command and is cleared when it lands.
+    // THE SESSION. Every phrase typed into this box and what came of it -- the model's own
+    // answer, and then what the editor actually did with it. Both paths read it and both
+    // paths write to it, so there is ONE memory of the session rather than one per code
+    // path.
+    //
+    // It used to be the chat's alone, and commands were invisible to it. The model grouped
+    // 222 palms, was asked twelve seconds later what it had done, and answered "я пока
+    // ничего не делал, это самое первое сообщение в нашей сессии" -- true of what it could
+    // see, and false about the world. `history_` is still separate and still short: it is
+    // the back-and-forth WITHIN one command, and it is cleared when that command lands.
     std::vector<IntentTurn> conversation_;
+
+    // Fold one completed phrase into the session memory: what was asked, what the model
+    // said, and the editor's verdict attached to the model's own turn -- which is where a
+    // consequence belongs, since it is a consequence of what the model chose.
+    void RememberTurn(const std::string& phrase,
+        const std::string& modelAnswer,
+        const std::string& editorDid);
+
+    // What the model is sent as prior turns: the session, then the back-and-forth inside
+    // the command being worked on right now. The command path used to get only the second
+    // half, so "и удали их" after a successful select had nothing to refer to.
+    std::vector<IntentTurn> ThreadForModel() const;
+
+    // Fold the older part of the session into a list of what the editor actually did, once
+    // the session gets long. No model turn is spent on it -- see the definition.
+    void CompactSession();
+    std::size_t SessionChars() const;
+
+    // ONE MEMORY PER LEVEL. Every remembered turn names objects, counts and groups that
+    // belong to the level that was open; carried into another one they are wrong with the
+    // confidence of something the model watched happen. But throwing them away on a level
+    // switch is wrong too -- come back to the atoll and it should still know what was done
+    // there. So each level keeps its own, and switching swaps rather than forgets.
+    std::map<std::string, std::vector<IntentTurn>> sessionsByLevel_;
+    std::string sessionLevel_;
+    // Swap `conversation_` for the one belonging to `levelPath`, stashing what is there.
+    void SwitchSessionTo(const std::string& levelPath);
+    // Which level's memory changed and has not been written yet. ONE LEVEL, not a flag:
+    // each level's memory is its own file, and a phrase typed about the atoll is no reason
+    // to rewrite what was remembered about every other level.
+    std::string dirtySessionLevel_;
+
+public:
+    // The per-level memories, for the editor to persist and restore -- one file per level,
+    // in its own folder. They are the reason "и что ты сделал?" is answerable after a
+    // restart and not only within one run.
+    const std::vector<IntentTurn>* SessionFor(const std::string& levelPath);
+    void SetSession(const std::string& levelPath, std::vector<IntentTurn> turns);
+    // The level whose memory needs writing, or empty. Clears it.
+    std::string TakeDirtySessionLevel();
+
+private:
+
     // Search rounds spent on the prose turn being answered now.
+    // One retry when the prose turn answers with a JSON verdict instead of a sentence.
+    int verdictRetries_ = 0;
+    // Something in the model settings changed and has not been written to disk. There was
+    // no such flag and no writer: `SaveIntentModelSettings` existed in the controller and
+    // was never once called, so every change made in this panel -- endpoint, GPU layers,
+    // answer budget -- lived until the editor closed and then did not.
+    bool modelSettingsDirty_ = false;
+    // When the current wait started, so the status line can say how long it has been. With
+    // reasoning on a command turn runs ten to fifteen seconds, and a motionless line for
+    // that long reads as a hang.
+    double waitingSinceSec_ = 0.0;
     int conversationTools_ = 0;
     static constexpr int kMaxConversationTools = 3;
     std::size_t lastPartialSize_ = 0;
-    // Let it think out loud. OFF by default and that is a speed decision: reasoning is
-    // most of the tokens and every token is a second somebody waits.
-    bool reasoning_ = false;
-    // A ceiling, not a target -- the model still stops at EOS, so a short answer costs
-    // what it costs.
-    int conversationTokens_ = 8192;
-    bool searchEnabled_ = true;
     // An offer the person pressed, waiting to be submitted at the top of the next frame.
     std::string pendingOffer_;
     // Index into sources_ of the one currently being asked. Sources are tried in cost

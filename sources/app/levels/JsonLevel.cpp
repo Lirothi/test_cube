@@ -522,6 +522,28 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
                 continue;
             }
 
+            // A ZONE IS AN EDITOR OBJECT WITH NO RUNTIME SIDE -- a named region used to say
+            // WHERE, exactly as `freeCameraStart` is a named pose. The runtime object
+            // registry has never heard of it and is not supposed to, so it took the
+            // "unknown type" branch: a level with a zone drawn into it fired "Unknown object
+            // type in level JSON" on load in Debug and did not open.
+            //
+            // It is handed to the EDITOR DOCUMENT first and only then skipped. The plain
+            // `continue` that this replaces looked right and was worse than the assert: the
+            // document add happens further down, so the zone would have vanished from the
+            // outliner and then out of the file itself at the next save.
+            if (type == "zone")
+            {
+#if WITH_EDITOR
+                if (ctx.editorDocument)
+                {
+                    const EditorObjectId zoneId = ctx.editorDocument->ReadOrAllocateObjectId(o);
+                    ctx.editorDocument->AddObjectFromJson(zoneId, o);
+                }
+#endif
+                continue;
+            }
+
             const bool objectTypeRegistered = objectRegistry.Has(type);
             if (!objectTypeRegistered)
             {

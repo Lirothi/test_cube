@@ -57,11 +57,44 @@ struct LlmIntentSettings
     // 0). 60 s looked reasonable and turned a slow first answer into "no response from the
     // server", which sends someone debugging a network problem that is really a queue.
     int timeoutSeconds = 300;
-    // Estimated characters per token, for keeping a conversation inside the context. Mixed
-    // Russian and English runs about 3; erring low means trimming a turn early rather than
-    // discovering the overflow as a server error mid-sentence.
-    int charsPerTokenEstimate = 3;
+    // Which wire format the prompt is wrapped in. "chatml" covers Qwen and most current
+    // instruct models; "plain" is the escape hatch for one that does not speak it.
     std::string chatTemplate = "chatml";
+
+    // MAY IT THINK BEFORE IT ANSWERS A COMMAND. Its own setting, not a spelling of the
+    // template's name -- those are two different decisions, and while they shared one field
+    // the saved value "chatml" quietly meant "never reason" on every machine that had ever
+    // written a settings file. Turning reasoning on by editing a field called `chatTemplate`
+    // is not something anybody would find.
+    //
+    // With this on, the grammar is applied LAZILY (see where the request is built): the
+    // model reasons freely and the JSON is constrained from its opening brace. With it off,
+    // an already-closed think block is pre-filled and the model answers from the phrase
+    // alone -- faster, and with no step in which it can notice anything.
+    bool commandReasoning = true;
+
+    // How many tokens ONE prose answer may generate. Not the context and not the memory --
+    // purely a ceiling on the reply, and therefore on how long somebody waits: generation
+    // runs at about 50 tokens a second here, so the whole of this budget is a couple of
+    // minutes of watching the box. It is the model's own maximum because an answer that
+    // stops mid-sentence is worthless and a short one costs nothing extra: the model stops
+    // when it is finished, and the cap only ever decides what happens when it is not.
+    //
+    // A token is NOT a character. English runs about four characters per token, Russian
+    // closer to two or three, so this is roughly 80-100k characters of Cyrillic prose --
+    // far more than any answer needs, which is the point of putting it at the top.
+    int chatAnswerTokens = 32768;
+
+    // The two switches over the conversation. They lived in the panel and were written
+    // nowhere, so turning either one on lasted until the editor closed -- the same hole the
+    // answer budget had, and the same fix.
+    //
+    // `chatSearch` lets a prose answer read the repository and ask the live scene.
+    // `chatThinkOutLoud` SHOWS the reasoning; it does not enable it (the prose turn always
+    // reasons -- no grammar constrains it). Off means the thinking is folded away, which is
+    // usually what is wanted: it is most of the tokens and none of the answer.
+    bool chatSearch = true;
+    bool chatThinkOutLoud = false;
     // Where a refusal's note for the implementer is appended. Empty turns the notes off.
     std::string apiRequestNotesPath = "docs/editor_api_requests.md";
     // llama-server ships a chat page, and it is ON by default. The command bar only ever
@@ -274,6 +307,14 @@ private:
     bool reaperUnavailable_ = false;
     std::string serverStatus_;
     double nextHealthPollSec_ = 0.0;
+    // One outstanding /health request, answered on a detached thread. Shared rather than
+    // owned so the thread can outlive a settings change without writing into freed memory.
+    struct HealthProbe
+    {
+        std::atomic<bool> done{ false };
+        std::atomic<bool> ok{ false };
+    };
+    std::shared_ptr<HealthProbe> healthProbe_;
     double lastUseSec_ = 0.0;
     bool serverHealthy_ = false;
 

@@ -142,6 +142,14 @@ private:
     // Same warmup reasoning as the intent harness, counted separately because --chat can be
     // used without --intent and that counter only advances while the intent block runs.
     int headlessChatWarmupFrames_ = 0;
+    // `--then=`: the second phrase waits for the first to finish, and "finished" is a
+    // busy->idle transition rather than a timer -- the first answer can take forty seconds
+    // or four, and a fixed wait would be wrong in both directions.
+    // True when `--then=` was given: the harness then presses Run for every command it
+    // produces, because there is nobody there to press it.
+    bool harnessRunsCommands_ = false;
+    bool headlessChatSawBusy_ = false;
+    int headlessChatSettleFrames_ = 0;
     // The model's own warmup: server started and system prompt prefilled, before anyone
     // types. Same frame delay as the harness, for the same reason -- the level's runtime
     // objects are still arriving over the first few frames and the prompt is built from them.

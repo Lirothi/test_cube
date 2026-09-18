@@ -1383,6 +1383,29 @@ void TestRefusalWritesANoteForTheImplementer()
         "and to write prose, not another form");
 }
 
+// --------------------------------------------------- organising the whole level
+//
+// The no-filter guard is what stands between a vague sentence and six hundred deleted
+// objects, and it must stay that for everything that destroys. But it also caught `group`,
+// whose whole point is everything: refused, the model narrowed to the first filter it could
+// name and "наведи порядок в аутлайнере" produced one group of coconut palms.
+
+void TestOnlyOrganisingActionsMayTakeTheWholeLevel()
+{
+    const EditorActionDesc* group = EditorActionRegistry::Builtin().Find("group");
+    Check(group && group->wholeLevelIsFine, "group may organise the whole level");
+
+    // The ones that must NEVER be allowed to, named individually rather than by a rule --
+    // a rule would be satisfied by whatever the flags happen to say.
+    for (const char* id : { "delete", "move", "scale", "rotate", "thin", "replace", "bury" })
+    {
+        const EditorActionDesc* desc = EditorActionRegistry::Builtin().Find(id);
+        Check(desc, std::string("action ") + id + " exists");
+        Check(!desc->wholeLevelIsFine,
+            std::string("'") + id + "' must never run on the whole level without a filter");
+    }
+}
+
 // ------------------------------------------------------- scene queries from chat
 //
 // A query that quietly drops an argument it did not expect answers a question nobody asked
@@ -1405,6 +1428,137 @@ void TestAnUnwantedArgumentIsRefusedNotDropped(const EditorActionContext& action
         "and the refusal repeats the argument, so the model can see what was ignored");
     Check(extra.find("read data/levels") != std::string::npos,
         "and points at the thing that would actually answer it");
+}
+
+// ------------------------------------------------------------- the grammar is a file
+//
+// A GBNF fault is not a bad rule that gets skipped -- llama.cpp refuses the WHOLE grammar
+// and answers every request with HTTP 400 "failed to parse grammar", naming no line and no
+// rule. So the editor goes silent, completely, and nothing on the screen says why.
+//
+// It happened twice within an hour while the grammar grew per-action parameters: once from
+// an underscore in a rule name (the parser reads a name as [a-zA-Z0-9-] and stops dead at
+// anything else), once from a rule that was deleted while something still referenced it.
+// Both are checkable here, in a second, without a model or a server -- which is the whole
+// argument for checking them here.
+
+void TestGrammarIsWellFormed(const EditorSceneDocument& document, const AssetRegistry& assets)
+{
+    const intentschema::Vocabulary vocabulary = intentschema::BuildVocabulary(document, assets);
+    const std::string gbnf = intentschema::BuildGbnf(vocabulary);
+
+    // Names on the left of ::=, and every identifier on the right that is not inside a
+    // string literal or a character class.
+    std::vector<std::string> defined;
+    std::vector<std::string> referenced;
+    std::size_t lineStart = 0;
+    while (lineStart < gbnf.size())
+    {
+        const std::size_t eol = gbnf.find('\n', lineStart);
+        const std::string line = gbnf.substr(lineStart,
+            eol == std::string::npos ? std::string::npos : eol - lineStart);
+        lineStart = eol == std::string::npos ? gbnf.size() : eol + 1;
+
+        const std::size_t arrow = line.find("::=");
+        if (arrow == std::string::npos || line.find('#') == 0)
+        {
+            continue;
+        }
+        std::string name = line.substr(0, arrow);
+        while (!name.empty() && (name.back() == ' ' || name.back() == '\t'))
+        {
+            name.pop_back();
+        }
+        Check(!name.empty(), "a rule has a name");
+        for (const char ch : name)
+        {
+            const bool legal = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                (ch >= '0' && ch <= '9') || ch == '-';
+            Check(legal, "rule name '" + name + "' uses only [a-zA-Z0-9-]; llama.cpp's "
+                "parser stops at anything else and then rejects the entire grammar");
+        }
+        Check(std::find(defined.begin(), defined.end(), name) == defined.end(),
+            "rule '" + name + "' is defined once");
+        defined.push_back(name);
+
+        const std::string rhs = line.substr(arrow + 3);
+        for (std::size_t at = 0; at < rhs.size(); ++at)
+        {
+            if (rhs[at] == '"')
+            {
+                ++at;
+                while (at < rhs.size() && rhs[at] != '"')
+                {
+                    at += rhs[at] == '\\' ? 2 : 1;
+                }
+                continue;
+            }
+            if (rhs[at] == '[')
+            {
+                while (at < rhs.size() && rhs[at] != ']')
+                {
+                    at += rhs[at] == '\\' ? 2 : 1;
+                }
+                continue;
+            }
+            if (!std::isalpha(static_cast<unsigned char>(rhs[at])))
+            {
+                continue;
+            }
+            std::size_t end = at;
+            while (end < rhs.size() &&
+                (std::isalnum(static_cast<unsigned char>(rhs[end])) || rhs[end] == '-'))
+            {
+                ++end;
+            }
+            referenced.push_back(rhs.substr(at, end - at));
+            at = end - 1;
+        }
+    }
+
+    Check(std::find(defined.begin(), defined.end(), "root") != defined.end(),
+        "the grammar has a root rule");
+    for (const std::string& name : referenced)
+    {
+        Check(std::find(defined.begin(), defined.end(), name) != defined.end(),
+            "rule '" + name + "' is referenced and defined -- a dangling reference makes "
+            "llama.cpp reject the whole grammar, and the editor then answers nothing at all");
+    }
+
+    // The point of splitting the command rule per action: a parameter belongs to its verb.
+    // Plain `perAsset`, not the quoted form: inside the GBNF the JSON key is escaped, so
+    // what is actually in the text is \"perAsset\" and searching for the tidy spelling
+    // finds nothing. (This check failed on its own first run for exactly that reason.)
+    Check(gbnf.find("perAsset") != std::string::npos,
+        "the grammar names perAsset, so the model can see it without being told in prose");
+    Check(gbnf.find("cmd-group") != std::string::npos && gbnf.find("p-group") != std::string::npos,
+        "each action has its own command and parameter rules");
+}
+
+// ------------------------------------------------------- thinking before answering
+
+void TestThinkingIsStrippedBeforeTheAnswerIsParsed()
+{
+    // With the grammar applied lazily -- which is what lets the model reason about a
+    // command -- the reply is "<think>...</think>{...}". The parser used to be handed the
+    // whole thing and answered "model answer was not a JSON object", so turning reasoning
+    // on broke every command at once.
+    EditorIntent intent;
+    std::string error;
+    Check(intentschema::ParseAnswer(
+              "<think>\nThe outliner has palms and rocks. perAsset with no filter covers "
+              "everything, and {braces} in here must not confuse the reader.\n</think>\n"
+              "{\"kind\":\"command\",\"action\":\"group\",\"target\":{\"scope\":\"all\"},"
+              "\"params\":{\"perAsset\":true}}",
+              intent, error),
+        "an answer with reasoning in front of it parses: " + error);
+    Check(intent.kind == EditorIntentKind::Command && intent.action == "group",
+        "and the command survives intact");
+
+    EditorIntent plain;
+    Check(intentschema::ParseAnswer("{\"kind\":\"chat\"}", plain, error),
+        "an answer with no reasoning still parses");
+    Check(plain.kind == EditorIntentKind::Chat, "and means what it says");
 }
 
 // ------------------------------------------------------------- model identity
@@ -2173,9 +2327,12 @@ int main(int argc, char** argv)
         TestModelAnswersAreRead();
         TestModelSettingsRoundTrip();
         TestRefusalWritesANoteForTheImplementer();
+        TestOnlyOrganisingActionsMayTakeTheWholeLevel();
         TestAnUnwantedArgumentIsRefusedNotDropped(actionCtx);
         TestAPartialReadSaysHowMuchIsLeft();
         TestAnUnrunLookupIsNeverShown();
+        TestGrammarIsWellFormed(document, assets);
+        TestThinkingIsStrippedBeforeTheAnswerIsParsed();
         TestThePromptNamesTheLoadedModel(document, assets);
         TestEverySearchableRootIsReachableAndAdvertised();
         TestCodeOutranksContentInABroadSearch();

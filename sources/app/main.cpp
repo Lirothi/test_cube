@@ -839,8 +839,15 @@ int WINAPI WinMain(
         // the same reason --intent uses it -- lpCmdLine is ANSI and turns Russian into
         // question marks before anything else gets a look at it.
         if (const wchar_t* wide = ::GetCommandLineW()) {
-            if (const wchar_t* wflag = std::wcsstr(wide, L"--chat=")) {
-                const wchar_t* wvalue = wflag + 7;   // wcslen(L"--chat=")
+            // One parse for both flags. `--then=<phrase>` sends a SECOND phrase down the
+            // same box once the first has landed, in ONE editor session -- the only way to
+            // test what the model remembers, since a second process is a second session and
+            // remembers nothing by construction. The harness presses Run for the first one,
+            // so the question has something real to be about.
+            const auto phraseAfter = [wide](const wchar_t* flagName) -> std::string {
+                const wchar_t* wflag = std::wcsstr(wide, flagName);
+                if (!wflag) { return {}; }
+                const wchar_t* wvalue = wflag + std::wcslen(flagName);
                 std::wstring wphrase;
                 if (*wvalue == L'"') {
                     ++wvalue;
@@ -854,16 +861,17 @@ int WINAPI WinMain(
                 std::string utf8(static_cast<std::size_t>(needed), char{});
                 ::WideCharToMultiByte(CP_UTF8, 0, wphrase.c_str(),
                     static_cast<int>(wphrase.size()), utf8.data(), needed, nullptr, nullptr);
-                g_chatPhrase = utf8;
                 // Shells hand quotes over half-eaten, exactly as --intent found: strip them
                 // from BOTH ends rather than trusting either to arrive.
                 const auto trimmable = [](char c) { return c == ' ' || c == '\t' || c == '"'; };
-                while (!g_chatPhrase.empty() && trimmable(g_chatPhrase.back())) {
-                    g_chatPhrase.pop_back();
-                }
+                while (!utf8.empty() && trimmable(utf8.back())) { utf8.pop_back(); }
                 std::size_t front = 0;
-                while (front < g_chatPhrase.size() && trimmable(g_chatPhrase[front])) { ++front; }
-                g_chatPhrase = g_chatPhrase.substr(front);
+                while (front < utf8.size() && trimmable(utf8[front])) { ++front; }
+                return utf8.substr(front);
+            };
+            g_chatPhrase = phraseAfter(L"--chat=");
+            g_chatThenPhrase = phraseAfter(L"--then=");
+            if (!g_chatPhrase.empty()) {
                 g_bootEditor = true;
             }
         }

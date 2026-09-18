@@ -47,6 +47,114 @@ namespace
         return "?";
     }
 
+    // Greedy word wrap to a pixel width, measured with the font actually in use.
+    //
+    // ImGui's multiline INPUT -- the only widget here with real text selection -- does not
+    // wrap: a paragraph becomes one line running off to the right. TextWrapped wraps and
+    // cannot be selected. Neither is usable alone, so the wrapping is done here and the
+    // result goes into the input; that is the whole trick behind selectable chat text.
+    //
+    // Splits on spaces, which are single bytes in UTF-8, so no multi-byte sequence is ever
+    // cut. A single word longer than the line is broken at a CHARACTER boundary, found by
+    // skipping continuation bytes (0b10xxxxxx) -- breaking mid-sequence would draw the
+    // replacement glyph and, worse, would corrupt what gets copied out.
+    std::string WrapToWidth(const std::string& text, float width)
+    {
+        if (width <= 1.0f)
+        {
+            return text;
+        }
+        std::string out;
+        out.reserve(text.size() + text.size() / 32);
+        std::size_t lineStart = 0;
+        while (lineStart <= text.size())
+        {
+            const std::size_t hardEnd = text.find('\n', lineStart);
+            const std::string line = text.substr(lineStart,
+                hardEnd == std::string::npos ? std::string::npos : hardEnd - lineStart);
+            std::size_t at = 0;
+            std::string current;
+            while (at < line.size())
+            {
+                std::size_t space = line.find(' ', at);
+                if (space == std::string::npos)
+                {
+                    space = line.size();
+                }
+                const std::string word = line.substr(at, space - at);
+                const std::string candidate = current.empty() ? word : current + " " + word;
+                if (!current.empty() &&
+                    ImGui::CalcTextSize(candidate.c_str()).x > width)
+                {
+                    out += current;
+                    out += '\n';
+                    current = word;
+                }
+                else
+                {
+                    current = candidate;
+                }
+                // One word wider than the whole line: break it rather than let it run off.
+                while (ImGui::CalcTextSize(current.c_str()).x > width && current.size() > 1)
+                {
+                    std::size_t cut = current.size() - 1;
+                    while (cut > 0 && (static_cast<unsigned char>(current[cut]) & 0xC0) == 0x80)
+                    {
+                        --cut;
+                    }
+                    std::string head = current.substr(0, cut);
+                    while (!head.empty() && ImGui::CalcTextSize(head.c_str()).x > width)
+                    {
+                        std::size_t back = head.size() - 1;
+                        while (back > 0 && (static_cast<unsigned char>(head[back]) & 0xC0) == 0x80)
+                        {
+                            --back;
+                        }
+                        head.erase(back);
+                    }
+                    if (head.empty())
+                    {
+                        break;
+                    }
+                    out += head;
+                    out += '\n';
+                    current.erase(0, head.size());
+                }
+                at = space + 1;
+            }
+            out += current;
+            if (hardEnd == std::string::npos)
+            {
+                break;
+            }
+            out += '\n';
+            lineStart = hardEnd + 1;
+        }
+        return out;
+    }
+
+    // Text the mouse can select, drawn to look like ordinary text: no frame, no background,
+    // no padding. Read-only, so the buffer is never written to.
+    void SelectableText(const char* id, const std::string& text, const ImVec4& colour)
+    {
+        std::string wrapped = WrapToWidth(text, ImGui::GetContentRegionAvail().x - 4.0f);
+        int lines = 1;
+        for (const char ch : wrapped)
+        {
+            if (ch == '\n') { ++lines; }
+        }
+        const float height = lines * ImGui::GetTextLineHeight() + 2.0f;
+
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, colour);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+        ImGui::InputTextMultiline(id, wrapped.data(), wrapped.size() + 1,
+            ImVec2(-1.0f, height), ImGuiInputTextFlags_ReadOnly);
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
+    }
+
     void CopyToBuffer(char* buffer, std::size_t size, const std::string& text)
     {
         const std::size_t count = text.size() < size - 1 ? text.size() : size - 1;
@@ -94,6 +202,58 @@ void CommandBarPanel::OnLevelChanged()
     }
 }
 
+void CommandBarPanel::SwitchSessionTo(const std::string& levelPath)
+{
+    if (levelPath == sessionLevel_)
+    {
+        return;
+    }
+    if (!sessionLevel_.empty())
+    {
+        sessionsByLevel_[sessionLevel_] = conversation_;
+    }
+    const auto found = sessionsByLevel_.find(levelPath);
+    conversation_ = found == sessionsByLevel_.end() ? std::vector<IntentTurn>{} : found->second;
+    sessionLevel_ = levelPath;
+    LOG_INFO(logging::LogCategory::Editor,
+        "command bar: session for \"{}\" is now active -- {} remembered turns ({} chars); "
+        "{} levels have a memory",
+        levelPath, conversation_.size(), SessionChars(), sessionsByLevel_.size());
+}
+
+const std::vector<IntentTurn>* CommandBarPanel::SessionFor(const std::string& levelPath)
+{
+    // The ACTIVE level's memory lives in `conversation_` while it is open, so fold it back
+    // before handing it out -- otherwise a save taken mid-session would write the level's
+    // memory as it stood when the level was opened.
+    if (!sessionLevel_.empty())
+    {
+        sessionsByLevel_[sessionLevel_] = conversation_;
+    }
+    const auto found = sessionsByLevel_.find(levelPath);
+    return found == sessionsByLevel_.end() ? nullptr : &found->second;
+}
+
+void CommandBarPanel::SetSession(const std::string& levelPath, std::vector<IntentTurn> turns)
+{
+    if (levelPath.empty())
+    {
+        return;
+    }
+    sessionsByLevel_[levelPath] = std::move(turns);
+    if (levelPath == sessionLevel_)
+    {
+        conversation_ = sessionsByLevel_[levelPath];
+    }
+}
+
+std::string CommandBarPanel::TakeDirtySessionLevel()
+{
+    std::string level;
+    level.swap(dirtySessionLevel_);
+    return level;
+}
+
 const LlmIntentSettings& CommandBarPanel::ModelSettings() const
 {
     return model_->Settings();
@@ -113,6 +273,151 @@ void CommandBarPanel::ClearThread()
     assistRounds_ = 0;
 }
 
+void CommandBarPanel::CompactSession()
+{
+    // AUTOCOMPACT, and it needs no model turn. What is worth keeping from an old exchange
+    // is not the prose and certainly not the kilobytes of grep output that were pasted in
+    // to produce it -- it is WHAT THE EDITOR DID, which is already one line and already
+    // written in `[editor] ...`. Keeping those verbatim and dropping everything else around
+    // them is a summary that cannot hallucinate, costs nothing and takes no seconds off the
+    // person's next answer.
+    //
+    // The cost that decides the numbers is prefill. llama.cpp caches the common PREFIX, so
+    // history that only grows at the end is nearly free -- but compacting rewrites the
+    // beginning and throws that cache away, at roughly 450 tokens a second. So it must fire
+    // rarely and cut deep: at about 6000 tokens of session, down to a quarter of that.
+    constexpr std::size_t kBudgetChars = 24000;
+    constexpr std::size_t kKeepChars = 6000;
+    if (SessionChars() <= kBudgetChars)
+    {
+        return;
+    }
+
+    // Walk back from the newest, keeping whole turns until the keep-budget is spent.
+    std::size_t kept = 0;
+    std::size_t firstKept = conversation_.size();
+    while (firstKept > 0)
+    {
+        const IntentTurn& turn = conversation_[firstKept - 1];
+        const std::size_t cost = turn.user.size() + turn.assistant.size();
+        if (kept + cost > kKeepChars && firstKept < conversation_.size())
+        {
+            break;
+        }
+        kept += cost;
+        --firstKept;
+    }
+    if (firstKept == 0)
+    {
+        return;   // one enormous turn; there is nothing older to fold
+    }
+
+    std::string digest;
+    std::size_t dropped = 0;
+    for (std::size_t at = 0; at < firstKept; ++at)
+    {
+        const IntentTurn& turn = conversation_[at];
+        ++dropped;
+        const std::size_t mark = turn.assistant.find("[editor] ");
+        if (mark == std::string::npos)
+        {
+            continue;   // a conversation turn: it changed nothing, and it goes
+        }
+        std::string did = turn.assistant.substr(mark + 9);
+        const std::size_t eol = did.find('\n');
+        if (eol != std::string::npos)
+        {
+            did.erase(eol);
+        }
+        digest += "- \"" + turn.user + "\" -> " + did + "\n";
+    }
+
+    const std::size_t before = SessionChars();
+    conversation_.erase(conversation_.begin(),
+        conversation_.begin() + static_cast<std::ptrdiff_t>(firstKept));
+    if (!digest.empty())
+    {
+        // ABSENT AND EMPTY ARE DIFFERENT THINGS to a model: an earlier part of the session
+        // that is simply missing reads as "nothing happened yet", which is the exact answer
+        // that made this whole problem visible. The digest says outright that it is a
+        // summary and that the talking around these actions was dropped.
+        conversation_.insert(conversation_.begin(), IntentTurn{
+            "(what happened earlier in this session -- the talk is gone, the edits are not)",
+            "Earlier in this session the editor carried out, in order:\n" + digest +
+                "Ask `TOOL: scene` if you need the level as it stands now." });
+    }
+    LOG_INFO(logging::LogCategory::Editor,
+        "command bar: session compacted -- {} older turns folded into {} remembered edits, "
+        "{} -> {} chars",
+        dropped, digest.empty() ? 0 : 1, before, SessionChars());
+}
+
+std::size_t CommandBarPanel::SessionChars() const
+{
+    std::size_t total = 0;
+    for (const IntentTurn& turn : conversation_)
+    {
+        total += turn.user.size() + turn.assistant.size();
+    }
+    return total;
+}
+
+bool CommandBarPanel::PreviewAwaitsRun() const
+{
+    return hasResult_ && !waiting_ && preview_.executable && !preview_.answerOnly;
+}
+
+void CommandBarPanel::RunPendingPreview(const EditorActionContext& actionCtx,
+    EditorCommandStack& commandStack)
+{
+    if (!PreviewAwaitsRun())
+    {
+        return;
+    }
+    ExecuteIntent(actionCtx, commandStack, preview_, status_);
+    RecordOutcome(status_, Exchange::Kind::Ran);
+    ClearResult();
+}
+
+std::vector<IntentTurn> CommandBarPanel::ThreadForModel() const
+{
+    std::vector<IntentTurn> thread = conversation_;
+    thread.insert(thread.end(), history_.begin(), history_.end());
+    return thread;
+}
+
+void CommandBarPanel::RememberTurn(const std::string& phrase,
+    const std::string& modelAnswer,
+    const std::string& editorDid)
+{
+    if (phrase.empty())
+    {
+        return;
+    }
+    std::string said = modelAnswer;
+    if (!editorDid.empty())
+    {
+        // Attached to the MODEL's turn, not written as a user message: the editor is not a
+        // participant in this conversation, it is what happened because of what the model
+        // answered. Reading it back, the model sees its own choice and that choice's result
+        // side by side, which is the only form in which "и что ты сделал?" is answerable.
+        said += (said.empty() ? "" : "\n") + std::string("[editor] ") + editorDid;
+    }
+    if (said.empty())
+    {
+        return;
+    }
+    conversation_.push_back({ phrase, said });
+    dirtySessionLevel_ = sessionLevel_;
+    CompactSession();
+    // ITS ACTIONS, IN THE LOG, in the same words the model will read them back in. The log
+    // said what the resolver did (`intent [llm] action=group ... -> Put 222 into 1 groups`)
+    // and separately what the model answered, and neither line said what the MODEL would
+    // remember -- which is the thing that decides its next answer.
+    LOG_INFO(logging::LogCategory::Editor, "command bar: session remembers ({} turns) \"{}\" -> {}",
+        conversation_.size(), phrase, said);
+}
+
 void CommandBarPanel::SetPhraseHistory(std::vector<std::string> history)
 {
     phraseHistory_ = std::move(history);
@@ -124,6 +429,13 @@ bool CommandBarPanel::TakeHistoryDirty()
 {
     const bool dirty = historyDirty_;
     historyDirty_ = false;
+    return dirty;
+}
+
+bool CommandBarPanel::TakeModelSettingsDirty()
+{
+    const bool dirty = modelSettingsDirty_;
+    modelSettingsDirty_ = false;
     return dirty;
 }
 
@@ -187,6 +499,46 @@ void CommandBarPanel::RecordOutcome(const std::string& verdict, Exchange::Kind k
     transcript_.back().verdict = verdict;
     transcript_.back().kind = kind;
     transcriptScrollToBottom_ = true;
+    // The same sentence was on screen twice: `status_` is drawn under the transcript, and a
+    // run wrote its result into BOTH. Once it is in the transcript the loose line is a copy,
+    // so it goes -- the transcript is the record, the status line is only for what has not
+    // reached it yet.
+    if (status_ == verdict)
+    {
+        status_.clear();
+    }
+
+    // EVERY ENDING OF A PHRASE GOES INTO THE SESSION, and it is done here because here is
+    // the one place all of them pass through. Doing it at the call sites meant the three
+    // that execute remembered nothing: the run button, the auto-run and "Select these" each
+    // recorded a verdict for the screen and nothing for the model.
+    //
+    // Preview and Asked are deliberately NOT remembered -- they are mid-phrase, and the
+    // ending that follows will carry the whole thing. Said is remembered by the prose path
+    // itself, which has the answer AND the thinking to keep apart.
+    if (kind == Exchange::Kind::Ran || kind == Exchange::Kind::Refused ||
+        kind == Exchange::Kind::Failed)
+    {
+        // NO RAW JSON IN THE SESSION. It used to store `model_->LastRawAnswer()`, the
+        // verdict exactly as the grammar turn emitted it -- and the prose turn reads this
+        // same history, sees that every previous thing it "said" was a JSON object, and
+        // says one too. Right after grouping 610 palms, "и что ты сделал?" came back as the
+        // literal text {"kind":"chat"}.
+        //
+        // What is worth remembering was never the JSON: it is which action ran and what it
+        // did, and both read as a sentence. The raw answer still lives in `history_`, the
+        // thread inside ONE command, where a model fixing its own malformed output needs to
+        // see it.
+        // NOT A SENTENCE IN THE FIRST PERSON. It used to record "I used the editor's
+        // `group` action." -- and asked "что ты сделал?", the model replied with exactly
+        // that string: an English canned line, in a Russian conversation, saying nothing.
+        // A record it can READ is not a line it should REPEAT, so it is written as a record:
+        // no pronoun, no verb, nothing that reads like speech. What it then says is its own.
+        const std::string did = intent_.action.empty()
+            ? std::string{}
+            : ("<action>" + intent_.action + "</action> ");
+        RememberTurn(transcript_.back().phrase, did, verdict);
+    }
 }
 
 void CommandBarPanel::ClearResult()
@@ -215,6 +567,7 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
     assistRounds_ = 0;
     inConversation_ = false;
     conversationTools_ = 0;
+    verdictRetries_ = 0;
     lastPartialSize_ = 0;
     if (phrase_.find_first_not_of(" \t\r\n") == std::string::npos)
     {
@@ -241,6 +594,7 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
     const EditorIntentWorld world{ actionCtx.editor.document, actionCtx.assets };
     activeSource_ = 0;
     waiting_ = true;
+    waitingSinceSec_ = ImGui::GetTime();
     while (activeSource_ < sources_.size() &&
         (!sources_[activeSource_] || !sources_[activeSource_]->Available()))
     {
@@ -252,7 +606,7 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
         whyNot_ = "No intent source is available.";
         return;
     }
-    sources_[activeSource_]->Begin(sendPhrase_, world, history_);
+    sources_[activeSource_]->Begin(sendPhrase_, world, ThreadForModel());
 }
 
 void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
@@ -313,7 +667,7 @@ void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
                 }
                 if (activeSource_ < sources_.size())
                 {
-                    sources_[activeSource_]->Begin(sendPhrase_, world, history_);
+                    sources_[activeSource_]->Begin(sendPhrase_, world, ThreadForModel());
                     return;
                 }
                 waiting_ = false;
@@ -349,7 +703,7 @@ void CommandBarPanel::PollSources(const EditorActionContext& actionCtx)
         }
         if (activeSource_ < sources_.size())
         {
-            sources_[activeSource_]->Begin(sendPhrase_, world, history_);
+            sources_[activeSource_]->Begin(sendPhrase_, world, ThreadForModel());
             return;   // give it a frame; the model answers on a later poll
         }
     }
@@ -402,14 +756,30 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
         sendPhrase_ = "EDITOR ANSWERS: " + answer +
             "\n\nNow answer the original request: \"" + phrase_ + "\"";
 
-        RecordOutcome("asked the editor -- " + asked + ": " + answer, Exchange::Kind::Asked);
+        // THE PERSON GETS THE GIST, THE MODEL GETS THE JSON. `answer` is the query result
+        // verbatim -- six hundred characters of braces and mesh paths -- and putting it in
+        // the transcript filled the window with something no human reads. It still goes to
+        // the model in full, one line above; this is only what is shown.
+        std::string shownAnswer = answer;
+        for (char& ch : shownAnswer)
+        {
+            if (ch == '\n' || ch == '\r') { ch = ' '; }
+        }
+        constexpr std::size_t kShownAnswer = 140;
+        if (shownAnswer.size() > kShownAnswer)
+        {
+            shownAnswer = shownAnswer.substr(0, kShownAnswer) + "...";
+        }
+        RecordOutcome("asked the editor -- " + asked + ": " + shownAnswer,
+            Exchange::Kind::Asked);
         transcript_.push_back({ phrase_, "thinking...", Exchange::Kind::Preview });
         transcriptScrollToBottom_ = true;
 
         const EditorIntentWorld world{ actionCtx.editor.document, actionCtx.assets };
         ClearResult();
         waiting_ = true;
-        sources_[activeSource_]->Begin(sendPhrase_, world, history_);
+        waitingSinceSec_ = ImGui::GetTime();
+        sources_[activeSource_]->Begin(sendPhrase_, world, ThreadForModel());
         return;
     }
 
@@ -495,7 +865,8 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
         const EditorIntentWorld world{ actionCtx.editor.document, actionCtx.assets };
         ClearResult();
         waiting_ = true;
-        sources_[activeSource_]->Begin(sendPhrase_, world, history_);
+        waitingSinceSec_ = ImGui::GetTime();
+        sources_[activeSource_]->Begin(sendPhrase_, world, ThreadForModel());
         return;
     }
 
@@ -512,7 +883,7 @@ void CommandBarPanel::FinishIntent(const EditorActionContext& actionCtx)
 void CommandBarPanel::BeginConversationTurn(const EditorActionContext& actionCtx)
 {
     std::string protocol;
-    if (searchEnabled_)
+    if (model_->Settings().chatSearch)
     {
         protocol = reposearch::ProtocolPrompt();
         protocol += editorquery::ChatProtocolPrompt();
@@ -553,8 +924,9 @@ void CommandBarPanel::BeginConversationTurn(const EditorActionContext& actionCtx
     // question starts, and only there.
     lastPartialSize_ = 0;
     waiting_ = true;
+    waitingSinceSec_ = ImGui::GetTime();
     model_->BeginConversation(conversation_, sendPhrase_, protocol,
-        0.7f, conversationTokens_, reasoning_);
+        0.7f, model_->Settings().chatAnswerTokens, model_->Settings().chatThinkOutLoud);
     (void)actionCtx;
 }
 
@@ -579,7 +951,7 @@ void CommandBarPanel::PollConversation(const EditorActionContext& actionCtx)
             lastPartialSize_ = partial.size();
             const std::size_t close = partial.find("</think>");
             const std::string shown = close == std::string::npos
-                ? (reasoning_ ? partial : std::string("thinking..."))
+                ? (model_->Settings().chatThinkOutLoud ? partial : std::string("thinking..."))
                 : partial.substr(close + 8);
             RecordOutcome(shown.empty() ? "..." : shown, Exchange::Kind::Said);
         }
@@ -622,7 +994,7 @@ void CommandBarPanel::PollConversation(const EditorActionContext& actionCtx)
         return editorquery::AnswerChatLine(actionCtx, rest);
     };
     std::string toolReport;
-    if (searchEnabled_ && conversationTools_ < kMaxConversationTools &&
+    if (model_->Settings().chatSearch && conversationTools_ < kMaxConversationTools &&
         reposearch::RunRequestedTools(answer, askScene, toolReport))
     {
         ++conversationTools_;
@@ -649,7 +1021,11 @@ void CommandBarPanel::PollConversation(const EditorActionContext& actionCtx)
         LOG_INFO(logging::LogCategory::Editor,
             "command bar: chat searched (round {}/{}), {} characters back",
             conversationTools_, kMaxConversationTools, toolReport.size());
-        conversation_.push_back({ sendPhrase_, answer });
+        // Through RememberTurn like everything else, so a search round is compacted and
+        // persisted on the same rules. It matters most here: `sendPhrase_` on a later round
+        // IS the tool output, kilobytes of it, and a push straight into the vector would put
+        // that on disk and keep it there past the point where anything still needed it.
+        RememberTurn(sendPhrase_, answer, std::string{});
         // HOW MANY LOOKUPS ARE LEFT, said every round. A budget the model cannot see is a
         // budget it walks into: on the last round it asked for two more greps, they were
         // never run, and those `TOOL:` lines became the visible answer -- the person got a
@@ -731,13 +1107,34 @@ void CommandBarPanel::PollConversation(const EditorActionContext& actionCtx)
     {
         answer = "(the whole token budget went on thinking -- raise the budget in settings)";
     }
-    conversation_.push_back({ phrase_, answer });
-    constexpr std::size_t kMaxConversation = 40;
-    if (conversation_.size() > kMaxConversation)
+    // A VERDICT IS NOT AN ANSWER, and it must never become one. The prose turn once came
+    // back with the literal text {"kind":"chat"} -- the routing decision, echoed as though
+    // it were a reply -- and the person saw that in the transcript. The prompt fix is in
+    // BeginConversation; this is the guard, and it is here because the failure feeds
+    // itself: remembered, the bad answer becomes an example the next turn copies.
+    if (!answer.empty() && answer.front() == '{' && answer.size() < 200 &&
+        answer.find("\"kind\"") != std::string::npos)
     {
-        conversation_.erase(conversation_.begin(),
-            conversation_.begin() + (conversation_.size() - kMaxConversation));
+        LOG_WARNING(logging::LogCategory::Editor,
+            "command bar: the prose turn answered with a verdict ({}) instead of a sentence",
+            answer);
+        // ASK IT AGAIN RATHER THAN ASKING THE PERSON TO. This is a slip of the model's, and
+        // making somebody retype their question because of it is charging them for it. One
+        // retry only: twice in a row is a real fault and then they do need to know.
+        if (++verdictRetries_ <= 1)
+        {
+            LOG_INFO(logging::LogCategory::Editor, "command bar: asking it again for prose");
+            BeginConversationTurn(actionCtx);
+            return;
+        }
+        // Kind::Said DELIBERATELY, not Failed: Failed is one of the kinds RecordOutcome
+        // folds into the session, and remembering this would be the exact poisoning the
+        // guard exists to prevent.
+        RecordOutcome("(модель дважды ответила формой вместо фразы -- спроси ещё раз)",
+            Exchange::Kind::Said);
+        return;
     }
+    RememberTurn(phrase_, answer, std::string{});
 
     LOG_INFO(logging::LogCategory::Editor, "command bar: chat < {}{}", answer,
         truncated ? "  [TRUNCATED at the token budget]" : "");
@@ -968,7 +1365,14 @@ void CommandBarPanel::DrawSettings()
     // affect a turn the model decided was conversation: a command is still one grammar-
     // constrained answer with reasoning suppressed, and none of these touch it.
     ImGui::SeparatorText("When it answers in prose");
-    ImGui::Checkbox("read source and scene", &searchEnabled_);
+    {
+        LlmIntentSettings toggles = model_->Settings();
+        if (ImGui::Checkbox("read source and scene", &toggles.chatSearch))
+        {
+            model_->SetSettings(toggles);
+            modelSettingsDirty_ = true;
+        }
+    }
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Let it look things up before answering -- this engine's own "
@@ -976,7 +1380,14 @@ void CommandBarPanel::DrawSettings()
             "trip, and it may take up to three.");
     }
     ImGui::SameLine();
-    ImGui::Checkbox("think out loud", &reasoning_);
+    {
+        LlmIntentSettings toggles = model_->Settings();
+        if (ImGui::Checkbox("think out loud", &toggles.chatThinkOutLoud))
+        {
+            model_->SetSettings(toggles);
+            modelSettingsDirty_ = true;
+        }
+    }
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Reasoning is most of the tokens and therefore most of the "
@@ -984,7 +1395,24 @@ void CommandBarPanel::DrawSettings()
             "it on when the working is the part you want.");
     }
     ImGui::SetNextItemWidth(160.0f);
-    ImGui::SliderInt("answer budget", &conversationTokens_, 1024, 32768, "%d tokens");
+    // EDITS THE SETTING, not a copy of it. This slider used to move a panel member that
+    // nothing ever wrote to disk, so it reset to its default on every launch and the person
+    // who raised it had to raise it again tomorrow.
+    {
+        LlmIntentSettings budget = model_->Settings();
+        if (ImGui::SliderInt("answer budget", &budget.chatAnswerTokens, 1024, 32768,
+                "%d tokens"))
+        {
+            model_->SetSettings(budget);
+            modelSettingsDirty_ = true;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("the longest ONE answer may be. A token is a piece of a word, "
+                "not a character -- about 3 characters of Russian. This is a ceiling on how "
+                "long you wait, not on quality: the model stops when it has finished.");
+        }
+    }
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("A ceiling, not a target: the model stops when it is finished, so "
@@ -1003,13 +1431,13 @@ void CommandBarPanel::DrawSettings()
     {
         changed = true;
     }
-    ImGui::SetNextItemWidth(160.0f);
-    changed |= ImGui::SliderInt("Idle stop (s)", &settings.idleTimeoutSeconds, 0, 600);
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("0 = never. The chat page does NOT count as activity: the editor "
-            "cannot see requests it did not make, so raise this while chatting.");
-    }
+    // THE "IDLE STOP" SLIDER IS GONE. It moved a number that stopped being reachable the
+    // day the server was allowed to outlive the editor: the idle check begins with
+    // `if (!serverOwned_ || keepsServerAlive_ || ...)` and keepServerAfterExit is on by
+    // default, so dragging it changed nothing whatsoever. Retirement is the watchdog's job
+    // now -- five minutes after the LAST editor closes -- and that is where the timer is.
+    // A control that cannot affect anything is worse than a missing one: it answers the
+    // question "how do I make it let go of the model" with a lie.
 
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::InputTextWithHint("##modelPath", "path to .gguf",
@@ -1047,6 +1475,7 @@ void CommandBarPanel::DrawSettings()
     if (changed)
     {
         model_->SetSettings(settings);
+        modelSettingsDirty_ = true;
     }
 
     if (!model_->Gbnf().empty())
@@ -1065,6 +1494,20 @@ void CommandBarPanel::Draw(EditorContext& ctx,
 {
     const EditorActionContext actionCtx{ ctx, assets, extensions };
 
+    // Which level's memory is the live one. Checked from the document every frame rather
+    // than hung off a level-changed callback: the callback exists, but a memory that is
+    // silently wrong about WHICH level it describes is exactly the failure this whole thing
+    // is for, and the document is the only thing that always knows.
+    SwitchSessionTo(ctx.document.LevelPath());
+
+    // NOT TIED TO THE SERVER, deliberately. The obvious place to forget is when the server
+    // goes away -- its prefix cache dies with it, so the next one re-reads everything. But
+    // the server is retired after five idle minutes, and the person never sees that happen:
+    // group the palms, go for a coffee, come back and ask what was done, and the answer
+    // would be "ничего" again. The cache is a question of COST, one re-prefill at about 450
+    // tokens a second; the session is a question of TRUTH. Only the second one is worth
+    // protecting, so the memory lives as long as the level does.
+    //
     // A button pressed LAST frame, acted on now. Submitting from inside the transcript loop
     // would rewrite the vector being iterated, and the offer is the one control here that
     // adds an entry rather than changing one.
@@ -1121,14 +1564,23 @@ void CommandBarPanel::Draw(EditorContext& ctx,
     // was asked, not in a strip underneath. The input is pinned below it, the way the chat
     // does it, and the reserve is the input plus its button row and nothing else.
     const float reserve = ImGui::GetFrameHeightWithSpacing() * 2.6f;
-    if (ImGui::BeginChild("##barLog", ImVec2(0.0f, -reserve), true))
+
+if (ImGui::BeginChild("##barLog", ImVec2(0.0f, -reserve), true))
     {
+        // (the matching EndChild is guarded the same way -- ImGui wants it whenever
+        //  BeginChild was CALLED, and in the selectable branch above it never was)
         for (std::size_t index = 0; index < transcript_.size(); ++index)
         {
             const Exchange& exchange = transcript_[index];
             ImGui::PushID(static_cast<int>(index));
+            // GROUPED so the whole exchange is one hover target for the copy menu below.
+            // ImGui's TextWrapped cannot be selected with the mouse -- there is no text
+            // selection in it at all -- so dragging across an answer to copy a number or a
+            // path does nothing and looks broken. A right-click menu is the honest way to
+            // get the text out.
+            ImGui::BeginGroup();
             ImGui::TextColored(ImVec4(0.55f, 0.78f, 1.0f, 1.0f), "you");
-            ImGui::TextWrapped("%s", exchange.phrase.c_str());
+            SelectableText("##phrase", exchange.phrase, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
             const ImVec4 colour =
                 exchange.kind == Exchange::Kind::Ran ? ImVec4(0.65f, 0.95f, 0.65f, 1.0f) :
                 exchange.kind == Exchange::Kind::Refused ? ImVec4(1.0f, 0.78f, 0.24f, 1.0f) :
@@ -1143,14 +1595,11 @@ void CommandBarPanel::Draw(EditorContext& ctx,
                 ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
             if (!exchange.thinking.empty() && ImGui::TreeNode("thinking"))
             {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-                ImGui::TextWrapped("%s", exchange.thinking.c_str());
-                ImGui::PopStyleColor();
+                SelectableText("##thinking", exchange.thinking,
+                    ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
                 ImGui::TreePop();
             }
-            ImGui::PushStyleColor(ImGuiCol_Text, colour);
-            ImGui::TextWrapped("%s", exchange.verdict.c_str());
-            ImGui::PopStyleColor();
+            SelectableText("##verdict", exchange.verdict, colour);
             // AN OFFER, NOT AN ACTION. The phrase sits on a button beside the sentence that
             // proposed it -- an offer that scrolls away from its own answer is one nobody
             // connects to anything -- and pressing it submits the phrase the ordinary way,
@@ -1163,6 +1612,32 @@ void CommandBarPanel::Draw(EditorContext& ctx,
                 }
                 ImGui::SameLine();
                 ImGui::TextDisabled("\"%s\"", exchange.offer.c_str());
+            }
+            ImGui::EndGroup();
+            if (ImGui::BeginPopupContextItem("##copy"))
+            {
+                if (ImGui::MenuItem("Copy answer"))
+                {
+                    ImGui::SetClipboardText(exchange.verdict.c_str());
+                }
+                if (ImGui::MenuItem("Copy question and answer"))
+                {
+                    ImGui::SetClipboardText((exchange.phrase + "\n" + exchange.verdict).c_str());
+                }
+                if (ImGui::MenuItem("Copy the whole conversation"))
+                {
+                    std::string all;
+                    for (const Exchange& entry : transcript_)
+                    {
+                        all += "you: " + entry.phrase + "\n" + entry.verdict + "\n\n";
+                    }
+                    ImGui::SetClipboardText(all.c_str());
+                }
+                ImGui::EndPopup();
+            }
+            else if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("right-click to copy");
             }
             ImGui::Spacing();
             ImGui::PopID();
@@ -1212,7 +1687,10 @@ void CommandBarPanel::Draw(EditorContext& ctx,
         {
             if (preview_.executable)
             {
-                ImGui::TextUnformatted(preview_.summary.c_str());
+                // NOT the summary again. The newest transcript entry, two lines above this
+                // one, already IS that sentence -- RecordOutcome put it there when the
+                // preview landed -- so printing it here showed the person the same words
+                // twice with a blank line between them.
                 std::string breakdown;
                 for (const EditorIntentPreview::Group& group : preview_.groups)
                 {
@@ -1312,14 +1790,34 @@ void CommandBarPanel::Draw(EditorContext& ctx,
             }
             else if (waiting_)
             {
+                // WITH A NUMBER ON IT. A command turn used to take under four seconds and
+                // a still line was fine; now that the model reasons first it takes ten to
+                // fifteen, and a line that does not move for fifteen seconds is
+                // indistinguishable from a hang -- the first thing asked on seeing it was
+                // "опять висит?". The seconds are the difference between waiting and
+                // wondering, and they cost one float.
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.0f));
-                ImGui::TextWrapped("Asking the local model. The editor keeps running.");
+                const double waited = ImGui::GetTime() - waitingSinceSec_;
+                ImGui::TextWrapped("Asking the local model -- %.0fs%s. The editor keeps "
+                    "running.", waited,
+                    model_ && model_->Settings().commandReasoning ? ", it is thinking first"
+                                                                  : "");
                 ImGui::PopStyleColor();
             }
         }
+        // FOLLOW THE ANSWER ONLY IF THEY ARE ALREADY AT THE BOTTOM. A streamed reply sets
+        // this flag on every token, so an unconditional jump meant the view was yanked back
+        // down about fifty times a second: scrolling up to re-read anything was impossible
+        // for as long as the model was talking, which is exactly when there is something
+        // worth re-reading. Scrolled up, the person is left where they put themselves and
+        // the new text simply arrives below.
         if (transcriptScrollToBottom_)
         {
-            ImGui::SetScrollHereY(1.0f);
+            constexpr float kAtBottom = 8.0f;   // a line's worth of slack, in pixels
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - kAtBottom)
+            {
+                ImGui::SetScrollHereY(1.0f);
+            }
             transcriptScrollToBottom_ = false;
         }
     }
@@ -1396,6 +1894,7 @@ void CommandBarPanel::Draw(EditorContext& ctx,
         status_.clear();
         waiting_ = false;
     }
+
     // The history, visible rather than only walkable. Up/Down is faster once you know what
     // is in there; this is how you find out, and how you pick something from twenty phrases
     // ago without pressing Up twenty times. Newest first, because that is what is wanted.

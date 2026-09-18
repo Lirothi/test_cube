@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -69,6 +70,12 @@ namespace
 {
     constexpr size_t kMaxRecentLevels = 8;
     constexpr const char* kEditorStatePath = "editor_state.json";
+    // ITS OWN FOLDER, ONE FILE PER LEVEL. Not a section of `editor_state.json`: that file is
+    // read at boot and rewritten WHOLE whenever anything in it changes -- the camera, a
+    // panel, a phrase -- while what the model remembers changes on every phrase and runs to
+    // tens of kilobytes per level. And not one big sessions file either: a sentence typed
+    // about the atoll is no reason to rewrite what is remembered about every other level.
+    constexpr const char* kCommandBarSessionsDir = "editor_sessions";
 
     bool MenuItemWithDisabledReason(const char* label, bool enabled, const char* disabledReason)
     {
@@ -2080,6 +2087,121 @@ namespace
         return SaveEditorStateJson(root);
     }
 
+    // WHAT THE MODEL REMEMBERS, PER LEVEL, kept across restarts. Stored compact -- `u` and
+    // `a` rather than user/assistant -- because a level's memory runs to a few thousand
+    // characters and this file is read on every boot.
+    // A level path becomes a file name. The whole path goes in, separators and all, because
+    // two levels can share a stem and a memory attached to the wrong atoll is worse than no
+    // memory. The level path is kept INSIDE the file as well, so a file whose name got
+    // mangled by a filesystem is still readable for what it is.
+    std::string SessionFileName(const std::string& levelPath)
+    {
+        // The level's own ".json" comes off first, or the file is called atoll.json.json.
+        std::string stem = levelPath;
+        if (stem.size() > 5 && stem.compare(stem.size() - 5, 5, ".json") == 0)
+        {
+            stem.erase(stem.size() - 5);
+        }
+        std::string name;
+        name.reserve(stem.size() + 5);
+        for (const char ch : stem)
+        {
+            const bool safe = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                (ch >= '0' && ch <= '9') || ch == '-' || ch == '.' || ch == '_';
+            name.push_back(safe ? ch : '_');
+        }
+        return name + ".json";
+    }
+
+    bool SaveCommandBarSession(const std::string& levelPath,
+        const std::vector<IntentTurn>* turns)
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(kCommandBarSessionsDir, ec);
+        const std::filesystem::path path =
+            std::filesystem::path(kCommandBarSessionsDir) / SessionFileName(levelPath);
+        if (!turns || turns->empty())
+        {
+            // AN EMPTY MEMORY IS A DELETED FILE, not a file holding an empty list. Otherwise
+            // a level whose memory was cleared keeps a file forever, and the next reader has
+            // to know that `[]` and "never talked about" are the same thing.
+            std::filesystem::remove(path, ec);
+            return true;
+        }
+        nlohmann::json list = nlohmann::json::array();
+        for (const IntentTurn& turn : *turns)
+        {
+            list.push_back({ { "u", turn.user }, { "a", turn.assistant } });
+        }
+        nlohmann::json root = nlohmann::json::object();
+        root["level"] = levelPath;
+        root["turns"] = std::move(list);
+        std::ofstream file(path, std::ios::binary);
+        if (!file)
+        {
+            return false;
+        }
+        file << root.dump(2) << '\n';
+        return file.good();
+    }
+
+    std::map<std::string, std::vector<IntentTurn>> LoadCommandBarSessions()
+    {
+        std::map<std::string, std::vector<IntentTurn>> sessions;
+        std::error_code ec;
+        if (!std::filesystem::is_directory(kCommandBarSessionsDir, ec))
+        {
+            return sessions;
+        }
+        for (std::filesystem::directory_iterator it(kCommandBarSessionsDir, ec), end;
+             it != end; it.increment(ec))
+        {
+            if (ec || !it->is_regular_file(ec) || it->path().extension() != ".json")
+            {
+                continue;
+            }
+            std::ifstream file(it->path(), std::ios::binary);
+            if (!file)
+            {
+                continue;
+            }
+            const nlohmann::json root =
+                nlohmann::json::parse(file, nullptr, false, /*ignore_comments=*/true);
+            if (!root.is_object())
+            {
+                continue;
+            }
+            // The path inside the file is authoritative -- the NAME is a flattening of it
+            // and cannot be turned back into a path.
+            const std::string level = root.value("level", std::string{});
+            const auto stored = root.find("turns");
+            if (level.empty() || stored == root.end() || !stored->is_array())
+            {
+                continue;
+            }
+            std::vector<IntentTurn> turns;
+            for (const nlohmann::json& entry : *stored)
+            {
+                if (!entry.is_object())
+                {
+                    continue;
+                }
+                IntentTurn turn;
+                turn.user = entry.value("u", std::string{});
+                turn.assistant = entry.value("a", std::string{});
+                if (!turn.user.empty() || !turn.assistant.empty())
+                {
+                    turns.push_back(std::move(turn));
+                }
+            }
+            if (!turns.empty())
+            {
+                sessions[level] = std::move(turns);
+            }
+        }
+        return sessions;
+    }
+
     bool SaveIntentModelSettings(const LlmIntentSettings& settings)
     {
         nlohmann::json root = LoadEditorStateJson();
@@ -2766,6 +2888,10 @@ void EditorController::Draw(
         LoadEditorState(recentLevelPaths_, selectionOutlineRadius_, buryDepthPercent_);
         commandBar_.SetModelSettings(LoadIntentModelSettings());
         commandBar_.SetPhraseHistory(LoadCommandBarHistory());
+        for (auto& [level, turns] : LoadCommandBarSessions())
+        {
+            commandBar_.SetSession(level, std::move(turns));
+        }
         LoadEditorPanelState(showContentBrowser_, showOutliner_, showInspector_, showCommandHistory_,
             showCommandBar_, showModelChat_,
             contentBrowser_, outliner_, meshEditor_, viewportGizmo_);
@@ -4122,6 +4248,7 @@ void EditorController::Draw(
     // "--chat=<phrase>": press Send once the editor is warm, then leave it alone -- the
     // panel polls its own stream. Retried every frame until it goes out, because the first
     // press only gets as far as "the server is still loading a 38 GB file".
+    harnessRunsCommands_ = harnessRunsCommands_ || !g_chatThenPhrase.empty();
     if (!g_chatPhrase.empty())
     {
         if (++headlessChatWarmupFrames_ >= 30 && modelWarmed_ &&
@@ -4134,6 +4261,39 @@ void EditorController::Draw(
             commandBar_.SubmitPhrase(actionCtx, g_chatPhrase, buryDepthPercent_);
             LOG_INFO(logging::LogCategory::Editor, "chat harness: sent \"{}\"", g_chatPhrase);
             g_chatPhrase.clear();
+        }
+    }
+    // "--then=<phrase>": a SECOND phrase in the SAME editor session, once the first has
+    // finished. It exists because what the model remembers can only be tested inside one
+    // session -- a second process starts with an empty one by construction -- and the case
+    // it was written for is "сгруппируй пальмы" followed by "и что ты сделал?".
+    //
+    // The first phrase's preview is RUN here: a command that only ever got previewed did
+    // not happen, and a question about what happened would be answered correctly by saying
+    // nothing did.
+    // PRESSES RUN FOR EVERY COMMAND, not only the first. Once a `--then` phrase is on the
+    // table this session is a sequence of edits with nobody at the keyboard, and a second
+    // command that only ever reaches its preview has not happened -- which makes the whole
+    // point of a two-step run ("scatter the palms, THEN the rocks so they miss the palms")
+    // impossible to check. `harnessRunsCommands_` is latched at startup so this stays a
+    // harness behaviour and never becomes a thing the editor does to somebody.
+    else if (harnessRunsCommands_ && commandBar_.PreviewAwaitsRun())
+    {
+        commandBar_.RunPendingPreview(actionCtx, commandStack_);
+        LOG_INFO(logging::LogCategory::Editor, "chat harness: pressed Run");
+    }
+    else if (!g_chatThenPhrase.empty())
+    {
+        if (commandBar_.Model().Busy() || commandBar_.Model().BusyInBackground())
+        {
+            headlessChatSawBusy_ = true;
+        }
+        else if (headlessChatSawBusy_ && ++headlessChatSettleFrames_ >= 30)
+        {
+            commandBar_.SubmitPhrase(actionCtx, g_chatThenPhrase, buryDepthPercent_);
+            LOG_INFO(logging::LogCategory::Editor, "chat harness: then sent \"{}\"",
+                g_chatThenPhrase);
+            g_chatThenPhrase.clear();
         }
     }
 
@@ -4250,9 +4410,20 @@ void EditorController::Draw(
         // The command bar's phrase history, saved on the same beat as the panel layout and
         // only when it actually changed -- a phrase that took three attempts to word is
         // worth more than the session it was worded in.
+        // The model's settings, which until now were loaded at boot and never written
+        // back: SaveIntentModelSettings was dead code the whole time.
+        if (commandBar_.TakeModelSettingsDirty())
+        {
+            SaveIntentModelSettings(commandBar_.ModelSettings());
+        }
         if (commandBar_.TakeHistoryDirty())
         {
             SaveCommandBarHistory(commandBar_.PhraseHistory());
+        }
+        // And what the model remembers, for the ONE level whose memory changed.
+        if (const std::string level = commandBar_.TakeDirtySessionLevel(); !level.empty())
+        {
+            SaveCommandBarSession(level, commandBar_.SessionFor(level));
         }
         if (panelStateDirty_ && (!open_ || ImGui::GetTime() >= nextPanelStateSaveTimeSec_))
         {

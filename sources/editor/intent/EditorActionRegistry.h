@@ -145,6 +145,24 @@ struct EditorActionDesc
     // previewed as "delete 183 objects -> models/coconut_palm.mesh.json", which any reader
     // takes for a replace.
     bool takesDestinationAsset = false;
+
+    // May this action take the WHOLE level, with no filter at all? Normally no: an empty
+    // filter with All scope is a phrase that said nothing about which objects, and the
+    // resolver answers "no" rather than "all" -- that guard is what stands between a vague
+    // sentence and six hundred deleted objects.
+    //
+    // But it is wrong for the actions whose whole point is everything. "наведи порядок в
+    // аутлайнере" means every object, and the guard turned it into one group of coconut
+    // palms: the model, refused, narrowed to the first filter it could think of and the
+    // person got a tenth of what they asked for. Set only where acting on everything is
+    // ORGANISING rather than destroying, and where undo puts it all back.
+    bool wholeLevelIsFine = false;
+
+    // ...or the whole level is fine ONLY when this parameter is set. `rename` over
+    // everything is right when it means "call each thing what it is" (perAsset) and wrong
+    // when it means one name for six hundred objects -- the same action, and the difference
+    // is in the parameters, so the permission has to be able to look at them.
+    const char* wholeLevelNeedsParam = nullptr;
 };
 
 class EditorActionRegistry
