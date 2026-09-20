@@ -170,20 +170,42 @@ void LlmIntentSource::InvalidateWorld()
 
 void LlmIntentSource::EnsureWorld(const EditorIntentWorld& world)
 {
-    if (worldBuilt_)
+    // THE VOCABULARY FOLLOWS THE DOCUMENT, not the level load. It used to be built once and
+    // kept until a different level opened, which made the model's picture of the world a
+    // photograph: it traced a zone at 22:00:43, and at 22:01:43 its prompt still said
+    // "ZONES: this level has NONE" -- so, asked to work "in the zone", it invented the name
+    // `test`. The refusal caught it and the retry was right, but that is a wasted turn and
+    // twelve hundred characters of reasoning spent on a fact we had and withheld.
+    //
+    // `ContentVersion` advances on every dirtying edit, so this covers the user's own edits
+    // and undo as well, not only the model's commands.
+    const uint64_t version = world.document.ContentVersion();
+    if (worldBuilt_ && version == worldVersion_)
     {
         return;
     }
+    worldVersion_ = version;
     levelPathForNotes_ = world.document.LevelPath();
     vocabulary_ = intentschema::BuildVocabulary(world.document, world.assets);
-    gbnf_ = intentschema::BuildGbnf(vocabulary_);
-    systemPrompt_ = intentprompt::BuildSystemPrompt(world.document, world.assets, vocabulary_,
-        intentprompt::ModelNameFromPath(settings_.modelPath), gbnf_);
+    std::string gbnf = intentschema::BuildGbnf(vocabulary_);
+    std::string prompt = intentprompt::BuildSystemPrompt(world.document, world.assets,
+        vocabulary_, intentprompt::ModelNameFromPath(settings_.modelPath), gbnf);
+
+    // MOST EDITS CHANGE NOTHING THE MODEL CAN SEE -- moving a rock does not rename a filter
+    // or add a zone. When the text comes out identical the server's cached prefix is still
+    // good and there is nothing to announce; only a real change is worth a line.
+    const bool changed = !worldBuilt_ || gbnf != gbnf_ || prompt != systemPrompt_;
+    gbnf_ = std::move(gbnf);
+    systemPrompt_ = std::move(prompt);
     worldBuilt_ = true;
-    LOG_INFO(logging::LogCategory::Editor,
-        "intent model: grammar rebuilt for level -- {} filter names, {} spawnable assets, "
-        "{} bytes of grammar",
-        vocabulary_.needles.size(), vocabulary_.assets.size(), gbnf_.size());
+    if (changed)
+    {
+        LOG_INFO(logging::LogCategory::Editor,
+            "intent model: grammar rebuilt for level -- {} filter names, {} spawnable assets, "
+            "{} zones, {} bytes of grammar",
+            vocabulary_.needles.size(), vocabulary_.assets.size(), vocabulary_.zones.size(),
+            gbnf_.size());
+    }
 }
 
 bool LlmIntentSource::EnsureServer(std::string& outStatus)

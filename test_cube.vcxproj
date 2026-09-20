@@ -111,6 +111,25 @@
     <IncludePath>C:\Program Files %28x86%29\Intel\oneAPI\tbb\2022.2\include;$(IncludePath)</IncludePath>
     <LibraryPath>C:\Program Files %28x86%29\Intel\oneAPI\tbb\2022.2\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
+  <!-- EVERY CONFIGURATION, and it is not cosmetic. The Russian in the intent layer's string
+       literals is what tells the model that "покрась" means setColor, and without this flag
+       it cannot survive being compiled.
+       MSVC's default execution charset is the system codepage, 1252, which has no Cyrillic.
+       Two files carried Russian and each lived on a different accident. IntentPrompt.cpp has
+       no BOM, so the compiler read its UTF-8 bytes AS 1252 and wrote the same bytes back
+       out; the literal came out right by luck. EditorActionRegistry.cpp has a BOM, so the
+       compiler decoded it properly, could not encode Cyrillic into 1252, and raised C4566.
+       That was silenced by pasting in the double-encoded spelling, the one form that IS
+       representable in 1252 and round-trips to the right bytes; the model was handed it
+       verbatim as its Russian vocabulary.
+       /utf-8 makes both files right for the right reason: sources are decoded as UTF-8 and
+       literals are emitted as UTF-8. Checked before switching it on: all 189 non-ASCII files
+       under sources are valid UTF-8, so nothing else changes meaning. -->
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>

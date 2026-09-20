@@ -650,6 +650,59 @@ void TestRefusalsNameTheRealReason(const EditorActionContext& actionCtx)
 // The filter vocabulary is presented to the model as "what is ALREADY in the level -- use
 // the exact strings below". A word in it that can never match anything is a trap the prompt
 // itself sets.
+// THE MODEL MUST SEE WHAT IT JUST MADE. The vocabulary used to be built once, when the level
+// loaded, and kept until a different level opened -- so the model's picture of the world was
+// a photograph. On 2026-09-20 it traced a zone at 22:00:43, and at 22:01:43 its own prompt
+// still said "ZONES: this level has NONE"; asked to work "in the zone", it therefore invented
+// the name `test`, was refused, and spent a second turn and twelve hundred characters of
+// reasoning on a fact the editor had and withheld.
+//
+// EnsureWorld is public for exactly this: it touches no server, so the whole rule can be
+// checked here rather than by opening the editor and typing.
+void TestTheModelSeesAZoneItJustMade(const EditorSceneDocument& document,
+    const AssetRegistry& assets)
+{
+    EditorSceneDocument working = document;
+    LlmIntentSettings settings;
+    settings.modelPath = "models/Qwen3.8-27B-UD-IQ4_XS.gguf";
+    LlmIntentSource source(settings);
+
+    // Bound to `working` by reference, so the second EnsureWorld below sees the edit -- the
+    // same way the editor hands the live document to every request.
+    const EditorIntentWorld world{ working, assets };
+    source.EnsureWorld(world);
+    const std::string before = source.SystemPrompt();
+    Check(before.find("Traced Shore") == std::string::npos,
+        "the zone is not in the prompt before it exists");
+
+    std::uint64_t highest = 0;
+    for (const EditorObject& object : working.Objects())
+    {
+        highest = std::max(highest, object.id.value);
+    }
+    EditorObject zone = editorzone::BuildObject(editorzone::Shape::Circle,
+        Math::float3(0.0f, 0.0f, 0.0f), 20.0f, "Traced Shore");
+    zone.id = EditorObjectId{ highest + 1 };
+    working.Add(zone);
+    // Add does not dirty the document on its own; the command stack does it for every real
+    // edit, and the content version it advances is what EnsureWorld watches.
+    working.SetDirty(true);
+
+    source.EnsureWorld(world);
+    const std::string after = source.SystemPrompt();
+    Check(after != before, "the prompt is rebuilt after the document changes");
+    Check(after.find("Traced Shore") != std::string::npos,
+        "and it names the zone the model just made");
+    Check(after.find("this level has NONE") == std::string::npos,
+        "and it no longer claims the level has no zones");
+
+    // The other half of the bargain: an UNCHANGED document must not rebuild, or every phrase
+    // would hand the server a fresh prefix and throw away a cache worth twelve thousand
+    // tokens of prefill.
+    source.EnsureWorld(world);
+    Check(source.SystemPrompt() == after, "an unchanged document rebuilds nothing");
+}
+
 void TestVocabularyOffersNothingUnreachable(const EditorSceneDocument& document,
     const AssetRegistry& assets)
 {
@@ -2277,6 +2330,7 @@ int main(int argc, char** argv)
         TestGroupsAreFilterable(actionCtx);
         TestNarrowingsCannotEvaporate(actionCtx);
         TestVocabularyOffersNothingUnreachable(document, assets);
+        TestTheModelSeesAZoneItJustMade(document, assets);
         TestRefusalsNameTheRealReason(actionCtx);
         std::puts("Intent regression: selector, assets and refusals OK");
 

@@ -7,7 +7,8 @@
        produced a process with none of the DLLs the engine links against. It died
        before its first log line and left the 38 GB server it was minding running
        with nobody watching.
-       Five source files, no graphics, no DLLs beyond the system ones. -->
+       Six source files, no graphics, no DLLs beyond the system ones. The notification-area
+       icon is drawn with GDI into a bitmap, so it needs no resource and no .ico. -->
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
   </ItemGroup>
@@ -34,11 +35,14 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem><EntryPointSymbol>wWinMainCRTStartup</EntryPointSymbol>
-      <AdditionalDependencies>winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- shell32 for the notification-area icon, user32/gdi32 for the window that receives
+           its messages and the bitmap the icon is drawn into. -->
+      <AdditionalDependencies>winhttp.lib;shell32.lib;user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="model_reaper_main.cpp" />
+    <ClCompile Include="model_reaper_tray.cpp" />
     <ClCompile Include="$(Repo)sources\editor\intent\LlmReaper.cpp" />
     <ClCompile Include="$(Repo)sources\editor\intent\LlmClient.cpp" />
     <ClCompile Include="$(Repo)sources\core\logging\Log.cpp" />

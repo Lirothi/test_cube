@@ -283,8 +283,14 @@ public:
     // someone about to do something memory-hungry should not have to find Task Manager.
     void StopServer();
 
-    // The generated grammar and prompt, for the settings UI and for the gate. Built once
-    // per level; see InvalidateWorld.
+    // Brings the grammar and the prompt up to date with the document, rebuilding them when
+    // it has changed since last time. Called before every request; public because it touches
+    // no server and nothing else, which makes it the seam the gate uses to check that a zone
+    // the model just made is visible to it on the next phrase.
+    void EnsureWorld(const EditorIntentWorld& world);
+
+    // The generated grammar and prompt, for the settings UI and for the gate. They follow
+    // the document's content version; see EnsureWorld and InvalidateWorld.
     const std::string& Gbnf() const { return gbnf_; }
     const std::string& SystemPrompt() const { return systemPrompt_; }
 
@@ -313,7 +319,6 @@ private:
         float tokensPerSecond = 0.0f;
     };
 
-    void EnsureWorld(const EditorIntentWorld& world);
     bool EnsureServer(std::string& outStatus);
 
     LlmIntentSettings settings_;
@@ -371,6 +376,10 @@ private:
     void RequestDeveloperNote(const std::string& phrase, const EditorIntent& refusal);
     bool warmedUp_ = false;
     bool worldBuilt_ = false;
+    // The document version the vocabulary was built from. Without it the model's picture of
+    // the level was a photograph taken when the level loaded: it traced a zone, was told on
+    // the very next phrase that this level has NO zones, and invented one.
+    uint64_t worldVersion_ = 0;
     intentschema::Vocabulary vocabulary_;
     std::string gbnf_;
     std::string systemPrompt_;

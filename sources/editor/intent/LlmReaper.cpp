@@ -4,11 +4,10 @@
 #include <windows.h>
 
 #include <algorithm>
-#include <chrono>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <thread>
 
 #include "core/logging/Log.h"
 #include "editor/intent/LlmClient.h"
@@ -73,6 +72,17 @@ namespace
         ::CloseHandle(handle);
         return wait == WAIT_TIMEOUT;
     }
+
+    // Signalled by RequestStop; waited on instead of sleeping between polls. Manual-reset,
+    // so a stop asked for before the loop reaches the wait is still there when it does --
+    // the tray can be clicked at any moment, including the first second.
+    HANDLE StopEvent()
+    {
+        static HANDLE handle = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        return handle;
+    }
+
+    std::atomic<bool> g_retireOnStop{false};
 
     bool KillProcessTree(unsigned long pid)
     {
@@ -141,7 +151,13 @@ namespace llmreaper
         return true;
     }
 
-    int Run(const Options& options)
+    void RequestStop(bool retireServer)
+    {
+        g_retireOnStop.store(retireServer, std::memory_order_relaxed);
+        ::SetEvent(StopEvent());
+    }
+
+    int Run(const Options& options, const StatusCallback& onStatus)
     {
         LOG_INFO(logging::LogCategory::Editor,
             "model reaper: watching {} (pid {}); the {}s timer starts when the last editor "
@@ -153,8 +169,47 @@ namespace llmreaper
         bool everReached = false;
         bool sawEditor = false;
 
+        Status status;
+        status.serverPid = options.serverPid;
+        const auto publish = [&](Status::Phase phase, unsigned long long retireAtTick)
+        {
+            status.phase = phase;
+            status.retireAtTick = retireAtTick;
+            if (onStatus)
+            {
+                onStatus(status);
+            }
+        };
+        publish(Status::Phase::Reaching, 0);
+
+        // Somebody clicked the tray menu. Retiring the server is one choice and walking
+        // away from it is the other; both end the watch, and the second one is worth a
+        // WARNING because it leaves the memory allocated with nothing to free it.
+        const auto obeyStopRequest = [&]() -> int
+        {
+            if (g_retireOnStop.load(std::memory_order_relaxed))
+            {
+                LOG_INFO(logging::LogCategory::Editor,
+                    "model reaper: asked to stop llama-server pid={} now", options.serverPid);
+                KillProcessTree(options.serverPid);
+                publish(Status::Phase::Retired, 0);
+            }
+            else
+            {
+                LOG_WARNING(logging::LogCategory::Editor,
+                    "model reaper: closing on request; llama-server pid={} keeps running and "
+                    "nothing is left to retire it", options.serverPid);
+            }
+            return 0;
+        };
+
         for (;;)
         {
+            if (::WaitForSingleObject(StopEvent(), 0) == WAIT_OBJECT_0)
+            {
+                return obeyStopRequest();
+            }
+
             // The server going away on its own -- crash, Task Manager, a second editor
             // retiring it -- ends the watch. A reaper outliving what it watches would be the
             // orphan it exists to prevent.
@@ -162,6 +217,7 @@ namespace llmreaper
             {
                 LOG_INFO(logging::LogCategory::Editor,
                     "model reaper: server is already gone; nothing to retire");
+                publish(Status::Phase::Retired, 0);
                 return 0;
             }
 
@@ -192,9 +248,11 @@ namespace llmreaper
                     }
                     idleFor = 0.0;
                     lastCounters = std::move(counters);
+                    publish(Status::Phase::EditorOpen, 0);
                 }
                 else
                 {
+                    bool justClosed = false;
                     if (sawEditor)
                     {
                         LOG_INFO(logging::LogCategory::Editor,
@@ -202,6 +260,7 @@ namespace llmreaper
                             "unless one opens again", options.idleSeconds);
                         sawEditor = false;
                         idleFor = 0.0;   // the countdown starts HERE, not from the last request
+                        justClosed = true;
                     }
                     // With no editor open, a request can still come from the server's own
                     // web page. That counts: somebody is using the model, just not through us.
@@ -210,10 +269,20 @@ namespace llmreaper
                         lastCounters = std::move(counters);
                         idleFor = 0.0;
                     }
-                    else
+                    else if (!justClosed)
                     {
+                        // Not on the poll that NOTICED the editor go: that one both zeroed
+                        // the clock and charged it a full interval, so the line above promised
+                        // sixty seconds and the deadline was forty-five. Nobody could see the
+                        // difference until the tray started showing the number.
                         idleFor += static_cast<double>(options.pollSeconds);
                     }
+                    // A DEADLINE, not a countdown, so whatever shows it can be exact
+                    // between two polls half a minute apart.
+                    const double secondsLeft =
+                        std::max(0.0, static_cast<double>(options.idleSeconds) - idleFor);
+                    publish(Status::Phase::CountingDown,
+                        ::GetTickCount64() + static_cast<unsigned long long>(secondsLeft * 1000.0));
                 }
             }
             else if (everReached)
@@ -224,6 +293,7 @@ namespace llmreaper
                 LOG_INFO(logging::LogCategory::Editor,
                     "model reaper: server stopped answering; retiring it");
                 KillProcessTree(options.serverPid);
+                publish(Status::Phase::Retired, 0);
                 return 0;
             }
             else
@@ -245,10 +315,17 @@ namespace llmreaper
                     "model reaper: no editor and no requests for {}s, stopping llama-server "
                     "pid={}", options.idleSeconds, options.serverPid);
                 KillProcessTree(options.serverPid);
+                publish(Status::Phase::Retired, 0);
                 return 0;
             }
 
-            std::this_thread::sleep_for(std::chrono::seconds(options.pollSeconds));
+            // A WAIT, not a sleep: a tray click has to be obeyed now rather than in the
+            // up-to-thirty seconds until the next poll would have come round.
+            if (::WaitForSingleObject(StopEvent(),
+                    static_cast<DWORD>(options.pollSeconds) * 1000u) == WAIT_OBJECT_0)
+            {
+                return obeyStopRequest();
+            }
         }
     }
 }

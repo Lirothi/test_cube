@@ -3,11 +3,13 @@
 // own rather than a mode of the engine binary.
 //
 // Windowed subsystem, not console: it is spawned by the editor and must not flash a console
-// window on a machine where somebody is working.
+// window on a machine where somebody is working. Its one visible part is a notification-area
+// icon, which model_reaper_tray owns.
 #include <windows.h>
 
 #include "core/logging/Log.h"
 #include "editor/intent/LlmReaper.h"
+#include "model_reaper_tray.h"
 
 int WINAPI wWinMain(
     _In_ HINSTANCE,
@@ -35,7 +37,7 @@ int WINAPI wWinMain(
     logging::ApplyCommandLine(commandLine, config);
     logging::Initialize(config);
     logging::SetCurrentThreadName("ModelReaper");
-    const int code = llmreaper::Run(options);
+    const int code = reapertray::RunWithTray(options);
     logging::Shutdown();
     return code;
 }

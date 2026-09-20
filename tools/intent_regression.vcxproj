@@ -21,6 +21,11 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
+      <!-- Same reason as the engine's: the test phrases here are Russian, and without this
+           the compiler encodes them to the system codepage, which has no Cyrillic. It only
+           worked before because this file has no BOM and the compiler was reading its UTF-8
+           bytes as codepage 1252 and writing them straight back. -->
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard><Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary><ExceptionHandling>Sync</ExceptionHandling>
       <PreprocessorDefinitions>_DEBUG;WITH_EDITOR=1;NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>

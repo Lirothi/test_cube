@@ -369,7 +369,7 @@ namespace
     // ---------------------------------------------------------------- traceZone
 
     // DRAW THE WATERLINE. Asked for in the refusal log, in the designer's own words --
-    // "ÑÐ¾Ð·Ð´Ð°Ð¹ ÑÐ¿Ð»Ð°Ð¹Ð½ Ð·Ð¾Ð½Ñƒ Ð¿Ð¾ ÐºÐ¾Ð½Ñ‚ÑƒÑ€Ñƒ Ð¾ÑÑ‚Ñ€Ð¾Ð²Ð° Ð½Ð°Ð´ Ð²Ð¾Ð´Ð¾Ð¹" -- and the model's note named the
+    // "создай сплайн зону по контуру острова над водой" -- and the model's note named the
     // real difficulty exactly: the hard part is not the zone, it is finding the points.
     //
     // NOT BY READING THE MESH. The geometry is a 4 MB binary of local-space floats; the
@@ -776,7 +776,12 @@ namespace
             centre.z += point.z / static_cast<float>(simplified.size());
         }
 
+        // NAMING A ZONE THAT ALREADY EXISTS MEANS THAT ZONE. "можешь в этой зоне больше
+        // точек сделать?" used to leave a SECOND contour lying on top of the first, because
+        // the only thing this action could do with a name was hang it on something new --
+        // and re-tracing is the obvious follow-up to tracing, which is how it came up.
         std::string name = StringOr(intent.params, "name", "");
+        EditorObjectId replacing{ 0 };
         if (name.empty())
         {
             int ordinal = 1;
@@ -788,6 +793,17 @@ namespace
                 }
             }
             name = "Shoreline " + std::to_string(ordinal);
+        }
+        else
+        {
+            for (const EditorObject& object : ctx.document.Objects())
+            {
+                if (object.type == editorzone::kTypeName && object.name == name)
+                {
+                    replacing = object.id;
+                    break;
+                }
+            }
         }
 
         EditorObject zone = editorzone::BuildObject(editorzone::Shape::Spline, centre, 1.0f, name);
@@ -821,20 +837,31 @@ namespace
             cutoff, aboveCount, above.size(), traceLo.x, traceHi.x, traceLo.z, traceHi.z,
             lo.x, hi.x, lo.z, hi.z);
 
-        outStatus = "Traced '" + name + "' with " + std::to_string(simplified.size()) +
-            " points from " + std::to_string(resolution) + "x" + std::to_string(resolution) +
-            " probes";
+        outStatus = (replacing.value != 0 ? "Re-traced '" : "Traced '") + name + "' with " +
+            std::to_string(simplified.size()) + " points from " + std::to_string(resolution) +
+            "x" + std::to_string(resolution) + " probes";
         if (componentSize.size() > 1)
         {
             outStatus += " (largest of " + std::to_string(componentSize.size()) +
                 " separate pieces)";
         }
-        return std::make_unique<CreateDocumentObjectCommand>(std::move(zone));
+
+        auto create = std::make_unique<CreateDocumentObjectCommand>(std::move(zone));
+        if (replacing.value == 0)
+        {
+            return create;
+        }
+        // One history entry, so undoing a re-trace brings the old contour back rather than
+        // leaving the level with no zone of that name at all.
+        auto replace = std::make_unique<CompositeCommand>("Re-trace zone");
+        replace->Add(std::make_unique<DeleteObjectCommand>(replacing));
+        replace->Add(std::move(create));
+        return replace;
     }
 
     // ---------------------------------------------------------------- setColor
 
-    // THE ONE GENUINE GAP IN THE REFUSAL LOG. "Ð¿Ð¾ÐºÑ€Ð°ÑÑŒ Ð¿Ð°Ð»ÑŒÐ¼Ñ‹ Ð² ÑÑ€ÐºÐ¾-ÐºÑ€Ð°ÑÐ½Ñ‹Ð¹" was answered
+    // THE ONE GENUINE GAP IN THE REFUSAL LOG. "покрась пальмы в ярко-красный" was answered
     // needs_api twice, and the model's reasoning was right both times: `replace` swaps the
     // whole mesh and `setMaterial` swaps the whole material, and neither is "the same tree,
     // red". The engine could already do it -- MaterialParams::baseColor multiplies the
@@ -905,7 +932,7 @@ namespace
     // `properties`, so it serialises with the level for free, it is matched by the
     // outliner's search predicate the moment the key is in kSearchPropertyKeys, and every
     // action that takes a filter can therefore act on a group without knowing groups exist.
-    // "ÑƒÐ´Ð°Ð»Ð¸ ÑÐµÐ²ÐµÑ€Ð½ÑƒÑŽ Ñ€Ð¾Ñ‰Ñƒ" is a delete whose filter is a group name, and nothing had to be
+    // "удали северную рощу" is a delete whose filter is a group name, and nothing had to be
     // taught about it. A parent/child tree would have brought inherited transforms, a
     // serialisation format change and a question about what deleting a parent means -- none
     // of which anyone asked for.
@@ -924,7 +951,7 @@ namespace
         // action that does only that.
         const std::string name = StringOr(intent.params, "name", "");
 
-        // ONE GROUP PER KIND, when asked for that. "Ð“Ñ€ÑƒÐ¿Ð¿Ñ‹ Ð´Ð»Ñ ÐºÐ°Ð¶Ð´Ð¾Ð³Ð¾ Ñ‚Ð¸Ð¿Ð° Ð¿Ð°Ð»ÑŒÐ¼" is a
+        // ONE GROUP PER KIND, when asked for that. "Группы для каждого типа пальм" is a
         // single intention and used to need three commands, because the action took one
         // name; the model correctly did the first and stopped, and from outside that reads
         // as it being unable to finish. The name is derived from the asset, so the groups
@@ -1276,7 +1303,7 @@ namespace
         const EditorIntent& intent,
         std::string& outStatus)
     {
-        // PER ASSET: name each one after WHAT IT IS. "Ð½Ð°Ð·Ð¾Ð²Ð¸ Ð¾Ð±ÑŠÐµÐºÑ‚Ñ‹ Ð½Ð¾Ñ€Ð¼Ð°Ð»ÑŒÐ½Ñ‹Ð¼Ð¸ Ð¸Ð¼ÐµÐ½Ð°Ð¼Ð¸"
+        // PER ASSET: name each one after WHAT IT IS. "назови объекты нормальными именами"
         // is not one name for six hundred objects, it is six hundred objects each called
         // after its kind -- and with one `name` parameter there was no way to say that. The
         // model tried, was refused, tried again and ended up claiming the job was already
@@ -2615,7 +2642,7 @@ namespace
         {
             // Round-robin rather than random when several kinds were named: twenty palms of
             // three types come out 7/7/6 every time instead of occasionally 12/5/3, and
-            // "Ñ€Ð°Ð·Ð½Ð¾Ð³Ð¾ Ñ‚Ð¸Ð¿Ð°" means a mix, not a lottery. The positions are already random,
+            // "разного типа" means a mix, not a lottery. The positions are already random,
             // so nothing about the result looks regular.
             const EditorAssetRecord* kind = records[index % records.size()];
             nlohmann::json objectJson =
@@ -2743,7 +2770,7 @@ EditorActionRegistry::EditorActionRegistry()
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
         // THE CEILING IS PART OF THE DESCRIPTION, because the value is clamped to it. Said
-        // as "default 1" with no upper bound, "Ð·Ð°Ñ€Ð¾Ð¹ Ð² Ð´Ð²Ð° Ñ€Ð°Ð·Ð° Ð³Ð»ÑƒÐ±Ð¶Ðµ" came back as 200
+        // as "default 1" with no upper bound, "зарой в два раза глубже" came back as 200
         // and silently became 25 -- a control that accepts a number and does something
         // else with it.
         { { "depthPercent", EditorParamKind::Number, false,
@@ -2815,7 +2842,7 @@ EditorActionRegistry::EditorActionRegistry()
         "becomes \"spheres 001\", \"spheres 002\" -- because the outliner and every filter "
         "match on name, and two hundred objects sharing one is a level you cannot search. "
         "This changes the LABEL only; nothing moves and no mesh changes.\n"
-        "FOR \"Ð½Ð°Ð·Ð¾Ð²Ð¸ Ð¾Ð±ÑŠÐµÐºÑ‚Ñ‹ Ð½Ð¾Ñ€Ð¼Ð°Ð»ÑŒÐ½Ñ‹Ð¼Ð¸ Ð¸Ð¼ÐµÐ½Ð°Ð¼Ð¸\" -- naming the level's things after WHAT "
+        "FOR \"назови объекты нормальными именами\" -- naming the level's things after WHAT "
         "THEY ARE rather than giving them all one name -- pass perAsset and no name at all, "
         "with scope \"all\" and no filter. Each object is then called after its own asset "
         "and numbered within its kind: coconut_palm 001..222, rock_boulder 001, tent 001. "
@@ -2937,9 +2964,13 @@ EditorActionRegistry::EditorActionRegistry()
         "Draw a spline zone around the ABOVE-WATER part of whatever the target names -- the "
         "shoreline of an island, the dry part of a sandbank. The editor probes the ground on "
         "a grid, finds where it crosses the waterline, and makes a closed zone from that "
-        "contour, filling INSIDE it. This is the action for \"Ð¾Ð±Ð²ÐµÐ´Ð¸ Ð¾ÑÑ‚Ñ€Ð¾Ð²\", \"ÑÐ´ÐµÐ»Ð°Ð¹ "
-        "Ð·Ð¾Ð½Ñƒ Ð¿Ð¾ ÐºÐ¾Ð½Ñ‚ÑƒÑ€Ñƒ Ð±ÐµÑ€ÐµÐ³Ð°\", \"Ð·Ð¾Ð½Ð° Ð¿Ð¾ ÑƒÑ€ÐµÐ·Ñƒ Ð²Ð¾Ð´Ñ‹\". Afterwards the zone's name works "
-        "like any other: spawn can fill it, and target.where.zone narrows to what is in it.",
+        "contour, filling INSIDE it. This is the action for \"обведи остров\", \"сделай "
+        "зону по контуру берега\", \"зона по урезу воды\". Afterwards the zone's name works "
+        "like any other: spawn can fill it, and target.where.zone narrows to what is in it.\n"
+        "TO REDO AN EXISTING ZONE, pass its name: naming a zone this level already has "
+        "replaces that zone instead of laying a second contour on top of it. That is how to "
+        "answer \"больше точек в этой зоне\" or \"обведи поточнее\" -- same name, new "
+        "`points` or `resolution`.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
         {
@@ -2953,14 +2984,15 @@ EditorActionRegistry::EditorActionRegistry()
               "more closely and costs more" },
             { "points", EditorParamKind::Number, false,
               "how many control points to keep, 4-120 (default 32)" },
-            { "name", EditorParamKind::String, false, "what to call the zone" },
+            { "name", EditorParamKind::String, false,
+              "what to call the zone -- an existing zone's name re-traces THAT zone" },
         },
         &BuildTraceZone,
     });
 
     actions_.push_back({
         "setColor",
-        "THE ACTION FOR \"Ð¿Ð¾ÐºÑ€Ð°ÑÑŒ\", \"Ð¿ÐµÑ€ÐµÐºÑ€Ð°ÑÑŒ\", \"ÑÐ´ÐµÐ»Ð°Ð¹ <Ñ†Ð²ÐµÑ‚>\", \"paint\", \"tint\". "
+        "THE ACTION FOR \"покрась\", \"перекрась\", \"сделай <цвет>\", \"paint\", \"tint\". "
         "It sets the object's colour and leaves everything else alone -- the same tree, red. "
         "Use it whenever a phrase names a colour for objects that already exist; it is not a "
         "near-miss for those phrases, it is the answer to them, so do NOT reach for "
@@ -2991,14 +3023,14 @@ EditorActionRegistry::EditorActionRegistry()
         "group",
         "Put the matching objects into a named GROUP -- a label they carry, shown as a "
         "folder in the outliner. Once grouped, the group's name works as a filter "
-        "everywhere: \"ÑÐ¿Ñ€ÑÑ‡ÑŒ ÑÐµÐ²ÐµÑ€Ð½ÑƒÑŽ Ñ€Ð¾Ñ‰Ñƒ\" is setEnabled with that name in the filter, "
-        "\"ÑƒÐ´Ð°Ð»Ð¸ ÐµÑ‘\" is a delete. Use it for \"ÑÐ³Ñ€ÑƒÐ¿Ð¿Ð¸Ñ€ÑƒÐ¹\", \"ÑÐ¾Ð±ÐµÑ€Ð¸ Ð² Ð³Ñ€ÑƒÐ¿Ð¿Ñƒ\", "
-        "\"Ð½Ð°Ð·Ð¾Ð²Ð¸ ÑÑ‚Ð¾\". An EMPTY name takes them out of whatever group they were in.\n"
+        "everywhere: \"спрячь северную рощу\" is setEnabled with that name in the filter, "
+        "\"удали её\" is a delete. Use it for \"сгруппируй\", \"собери в группу\", "
+        "\"назови это\". An EMPTY name takes them out of whatever group they were in.\n"
         "FOR \"a group for each kind\" pass perAsset instead of naming one, and do it in a "
         "SINGLE command: perAsset splits whatever it is given, and the whole thing is one "
         "undo entry.\n"
-        "TO TIDY THE WHOLE OUTLINER -- \"Ð½Ð°Ð²ÐµÐ´Ð¸ Ð¿Ð¾Ñ€ÑÐ´Ð¾Ðº\", \"Ñ€Ð°Ð·Ð»Ð¾Ð¶Ð¸ Ð¿Ð¾ Ð¿Ð°Ð¿ÐºÐ°Ð¼\", "
-        "\"ÑÐ³Ñ€ÑƒÐ¿Ð¿Ð¸Ñ€ÑƒÐ¹ Ð¾Ð±ÑŠÐµÐºÑ‚Ñ‹ ÐºÐ°Ðº Ð½Ð°Ð´Ð¾\" -- send perAsset with scope \"all\" and NO filter "
+        "TO TIDY THE WHOLE OUTLINER -- \"наведи порядок\", \"разложи по папкам\", "
+        "\"сгруппируй объекты как надо\" -- send perAsset with scope \"all\" and NO filter "
         "at all. That is the one case where an empty filter is right, and it is the only "
         "way to catch every kind: the level summary lists the commonest assets and says "
         "`otherAssetKinds` for the rest, so a filter you type out by hand will silently "
@@ -3010,14 +3042,14 @@ EditorActionRegistry::EditorActionRegistry()
               "the group's name; empty removes them from their group" },
             { "perAsset", EditorParamKind::Bool, false,
               "one group per KIND instead of one group for all of them, each named after "
-              "its asset. This is what \"Ð³Ñ€ÑƒÐ¿Ð¿Ñ‹ Ð´Ð»Ñ ÐºÐ°Ð¶Ð´Ð¾Ð³Ð¾ Ñ‚Ð¸Ð¿Ð°\" means -- use it instead "
+              "its asset. This is what \"группы для каждого типа\" means -- use it instead "
               "of sending one command per kind" },
         },
         &BuildGroup,
         false,             // filterFromSelection
         &RefineGroupPreview,
         false,             // takesDestinationAsset
-        true,              // wholeLevelIsFine -- "Ð½Ð°Ð²ÐµÐ´Ð¸ Ð¿Ð¾Ñ€ÑÐ´Ð¾Ðº Ð² Ð°ÑƒÑ‚Ð»Ð°Ð¹Ð½ÐµÑ€Ðµ" IS the level
+        true,              // wholeLevelIsFine -- "наведи порядок в аутлайнере" IS the level
     });
 
     actions_.push_back({
@@ -3025,7 +3057,7 @@ EditorActionRegistry::EditorActionRegistry()
         "Thin OUT objects that are already in the level, by deleting some of them. Two ways "
         "to say how much: minSeparation removes whatever stands closer together than that "
         "many metres, keepPercent keeps roughly that share and drops the rest evenly. This "
-        "is the answer to \"Ð¿Ñ€Ð¾Ñ€ÐµÐ´ÑŒ\", \"ÑÐ»Ð¸ÑˆÐºÐ¾Ð¼ Ð³ÑƒÑÑ‚Ð¾\", \"ÑƒÐ±ÐµÑ€Ð¸ Ð¿Ð¾Ð»Ð¾Ð²Ð¸Ð½Ñƒ\" -- it is the "
+        "is the answer to \"проредь\", \"слишком густо\", \"убери половину\" -- it is the "
         "undo spawn does not have, and it keeps the arrangement rather than replacing it.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
@@ -3046,8 +3078,8 @@ EditorActionRegistry::EditorActionRegistry()
         "the camera is looking at, or around an explicit `at`. A zone is how the editor says "
         "WHERE: once one exists, spawn can fill it with params.zone, and every other action "
         "can narrow to what is inside it with target.where.zone. Make one when the designer "
-        "names a place the level does not have yet (\"Ð·Ð°Ð²ÐµÐ´Ð¸ Ð·Ð¾Ð½Ñƒ Ð½Ð° Ð¿Ð»ÑÐ¶Ðµ\", \"ÑÐ´ÐµÐ»Ð°Ð¹ "
-        "Ð¾Ð±Ð»Ð°ÑÑ‚ÑŒ Ð²Ð¾ÐºÑ€ÑƒÐ³ Ñ‚Ð¾Ð³Ð¾ ÐºÐ°Ð¼Ð½Ñ\"), and when a later command will need to refer to it.",
+        "names a place the level does not have yet (\"заведи зону на пляже\", \"сделай "
+        "область вокруг того камня\"), and when a later command will need to refer to it.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::None,
         {
@@ -3203,7 +3235,7 @@ bool ValidateParams(const EditorActionDesc& action, nlohmann::json& params, std:
     // value, because the command then runs and does something plausible.
     //
     // The prompt makes the collision likely on purpose: `spawn` says WHERE with params.zone
-    // while every other action says it with target.where.zone. "ÑƒÐ´Ð°Ð»Ð¸ Ð¿Ð°Ð»ÑŒÐ¼Ñ‹ Ð² Ð·Ð¾Ð½Ðµ Beach"
+    // while every other action says it with target.where.zone. "удали пальмы в зоне Beach"
     // answered with params.zone lost the zone silently, and the preview said "delete 183
     // objects" -- honest, plausible, and the whole level's palms instead of the twelve on
     // the beach. Naming the permitted keys is what turns that into a fixable message.

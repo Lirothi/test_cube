@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <functional>
 #include <string>
 
 // The watchdog that lets a llama-server outlive the editor without becoming an orphan.
@@ -46,9 +47,42 @@ namespace llmreaper
     // False when the command line is not asking for the reaper at all.
     bool ParseCommandLine(const char* commandLine, Options& outOptions);
 
+    // What the watch is doing right now, for anything that wants to show it -- the tray
+    // icon does. Deliberately a snapshot of FACTS rather than a formatted line: the phase
+    // and a deadline, so a display can count the seconds down itself and stay exact between
+    // polls, which are half a minute apart.
+    struct Status
+    {
+        enum class Phase
+        {
+            Reaching,     // the server has not answered yet; nothing is being counted
+            EditorOpen,   // an editor is open, so the clock does not run at all
+            CountingDown, // the last editor closed; `retireAtTick` is when the server goes
+            Retired,      // the server is gone, by our hand or its own
+        };
+
+        Phase phase = Phase::Reaching;
+        // GetTickCount64() value at which the server is retired; 0 unless CountingDown.
+        unsigned long long retireAtTick = 0;
+        unsigned long serverPid = 0;
+    };
+
+    // Called from the watch thread whenever the status changes, so it must not touch a
+    // window directly. Passed to Run rather than registered globally: there is one watch
+    // per process and tying the two together makes that visible.
+    using StatusCallback = std::function<void(const Status&)>;
+
     // Runs the loop to completion. Returns the process exit code: 0 when the server was
     // retired or had already gone, 1 when it could not be reached at all.
-    int Run(const Options& options);
+    int Run(const Options& options, const StatusCallback& onStatus = {});
+
+    // Ends a running Run() from another thread -- the tray menu does. `retireServer` says
+    // whether to stop the server on the way out; false leaves it running with nobody
+    // watching it, which is the user's to choose and the menu says so.
+    //
+    // The wait between polls is a wait on THIS signal with a timeout, not a sleep, because
+    // a menu click has to act now and not in the up-to-thirty seconds until the next poll.
+    void RequestStop(bool retireServer);
 
     // Held by an editor for as long as it lives, so the reaper can tell whether anybody is
     // still editing. Created once at editor startup and never released early: a second
