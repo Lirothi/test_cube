@@ -360,6 +360,7 @@ namespace llmclient
         int contextTokens,
         int threads,
         bool webUi,
+        bool cpuMoe,
         bool keepAliveAfterExit,
         std::string& outError)
     {
@@ -391,7 +392,7 @@ namespace llmclient
             //
             // It only makes sense with layers on the GPU at all, so it rides the one knob
             // the user actually sets rather than becoming a second one to get wrong.
-            (gpuLayers > 0 ? " --cpu-moe" : "") +
+            (cpuMoe && gpuLayers > 0 ? " --cpu-moe" : "") +
             // MEMORY-MAPPED, EXPLICITLY. A 38 GB model left running would be a third of a
             // workstation's RAM if it were a real allocation -- mmap makes it file-backed
             // page cache instead, which Windows reclaims the moment something else wants

@@ -1,8 +1,11 @@
 #include "editor/ui/CommandBarPanel.h"
 #if WITH_EDITOR
 
+#include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <string>
+#include <system_error>
 
 #include "core/logging/Log.h"
 #include "editor/EditorContext.h"
@@ -10,6 +13,7 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/intent/EditorIntentSource.h"
 #include "editor/intent/EditorRepoSearch.h"
+#include "rendering/core/MemoryReport.h"
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/GrammarIntentSource.h"
 #include "editor/ui/ImGuiTextInput.h"
@@ -286,7 +290,19 @@ void CommandBarPanel::CompactSession()
     // history that only grows at the end is nearly free -- but compacting rewrites the
     // beginning and throws that cache away, at roughly 450 tokens a second. So it must fire
     // rarely and cut deep: at about 6000 tokens of session, down to a quarter of that.
-    constexpr std::size_t kBudgetChars = 24000;
+    // THE BUDGET IS WHAT THE CONTEXT HAS LEFT, not a number chosen in the abstract.
+    //
+    // It was a flat 24000 characters -- roughly 8000 tokens -- and that was set while the
+    // context was 262144 and nothing could ever collide. On a model that lives on the card
+    // the context is 16384, of which the system prompt, the action list and the grammar
+    // already take about 13000: a session allowed to reach 8000 tokens would push the
+    // request past the end, and llama-server answers that with HTTP 400 and no explanation
+    // the editor could pass on. Proven, not feared -- an 8192 context refuses our prompt
+    // outright, which is how the size of it came to be known at all.
+    //
+    // So: whatever the context has spare after the last real request, less a margin for the
+    // answer. Falls back to the old number when nothing has been measured yet.
+    const std::size_t kBudgetChars = SessionBudgetChars();
     constexpr std::size_t kKeepChars = 6000;
     if (SessionChars() <= kBudgetChars)
     {
@@ -350,6 +366,134 @@ void CommandBarPanel::CompactSession()
         "command bar: session compacted -- {} older turns folded into {} remembered edits, "
         "{} -> {} chars",
         dropped, digest.empty() ? 0 : 1, before, SessionChars());
+}
+
+std::string CommandBarPanel::ModelLabelFor(const std::string& path)
+{
+    if (path.empty())
+    {
+        return "(no model chosen)";
+    }
+    const std::size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+void CommandBarPanel::RefreshModelChoices(const std::string& current)
+{
+    // Rescanned each time the list is opened rather than cached: a model downloaded while
+    // the editor was running should appear without restarting it, and the scan is one
+    // directory listing of a folder holding a handful of very large files.
+    modelChoices_.clear();
+    if (current.empty())
+    {
+        return;
+    }
+    std::error_code ec;
+    const std::filesystem::path folder = std::filesystem::path(current).parent_path();
+    if (folder.empty() || !std::filesystem::is_directory(folder, ec))
+    {
+        return;
+    }
+    for (std::filesystem::directory_iterator it(folder, ec), end; it != end; it.increment(ec))
+    {
+        if (ec || !it->is_regular_file(ec) || it->path().extension() != ".gguf")
+        {
+            continue;
+        }
+        const std::string name = it->path().filename().string();
+        // The projector is not a model to run; it rides ALONGSIDE one, and offering it here
+        // would be offering a choice that cannot work.
+        if (name.rfind("mmproj", 0) == 0)
+        {
+            continue;
+        }
+        const std::uintmax_t bytes = std::filesystem::file_size(it->path(), ec);
+        char size[32] = {};
+        std::snprintf(size, sizeof(size), "%.1f GB",
+            static_cast<double>(ec ? 0 : bytes) / (1024.0 * 1024.0 * 1024.0));
+        modelChoices_.push_back({ it->path().generic_string(), name + "   " + size });
+    }
+    std::sort(modelChoices_.begin(), modelChoices_.end(),
+        [](const ModelChoice& a, const ModelChoice& b) { return a.label < b.label; });
+}
+
+std::size_t CommandBarPanel::SessionBudgetChars() const
+{
+    if (!model_)
+    {
+        return kSessionCompactAtChars;
+    }
+    const int context = model_->ContextTokens();
+    const int prompt = model_->PromptTokens();
+    if (context <= 0 || prompt <= 0)
+    {
+        return kSessionCompactAtChars;
+    }
+    // `prompt` already INCLUDES whatever session was sent with that request, so the spare
+    // room is the context minus the prompt, plus what the session contributed -- which is
+    // what the session may grow back into. Reserved on top: room for the answer itself,
+    // since a reply that cannot be generated is as bad as a request that cannot be sent.
+    constexpr int kReserveForAnswer = 2048;
+    const int sessionTokens = static_cast<int>(SessionChars() / kCharsPerTokenGuess);
+    const int spare = context - prompt + sessionTokens - kReserveForAnswer;
+    if (spare <= 0)
+    {
+        return 0;   // nothing fits; compact everything that can be compacted
+    }
+    const std::size_t budget = static_cast<std::size_t>(spare) * kCharsPerTokenGuess;
+    return std::min(budget, kSessionCompactAtChars);
+}
+
+void CommandBarPanel::LogModelStats()
+{
+    if (!model_ || !model_->ServerIsUp())
+    {
+        return;
+    }
+    const double now = ImGui::GetTime();
+    if (now < nextStatsLogSec_)
+    {
+        return;
+    }
+    nextStatsLogSec_ = now + 30.0;
+
+    std::uint64_t gpuUsed = 0, gpuTotal = 0;
+    render::GpuMemoryTotals(gpuUsed, gpuTotal);
+    const std::uint64_t toMb = 1024 * 1024;
+
+    const int prompt = model_->PromptTokens();
+    const int context = model_->ContextTokens();
+    const std::size_t chars = SessionChars();
+    // The SAME function CompactSession asks, so the countdown cannot drift away from the
+    // thing it is counting down to -- and it moves with the context, which is the point:
+    // a smaller context leaves less room and the number here says so.
+    const std::size_t budget = SessionBudgetChars();
+    const std::size_t toCompact = chars >= budget ? 0 : budget - chars;
+
+    std::string vram = "vram unknown (no NVML)";
+    if (gpuTotal > 0)
+    {
+        const std::uint64_t modelMb = model_->ModelVramBytes() / toMb;
+        vram = "vram card " + std::to_string(gpuUsed / toMb) + " of " +
+            std::to_string(gpuTotal / toMb) + " MB";
+        if (modelMb > 0)
+        {
+            vram += ", of which the model " + std::to_string(modelMb) + " MB";
+        }
+        vram += ", free " + std::to_string((gpuTotal - gpuUsed) / toMb) + " MB";
+    }
+
+    // ZERO IS NOT A MEASUREMENT. Before the first request there is nothing to report, and
+    // "context 0 of 32768 (0%)" reads as a broken counter rather than as an empty one.
+    const std::string contextPart = prompt > 0
+        ? "context " + std::to_string(prompt) + " of " + std::to_string(context) +
+            " tokens at its fullest (" +
+            std::to_string(context > 0 ? (prompt * 100) / context : 0) + "%)"
+        : "context " + std::to_string(context) + " tokens, nothing asked yet";
+
+    LOG_INFO(logging::LogCategory::Editor,
+        "model stats: {} | {} | session {} of {} chars, compacts in {}",
+        vram, contextPart, chars, budget, toCompact);
 }
 
 std::size_t CommandBarPanel::SessionChars() const
@@ -926,7 +1070,7 @@ void CommandBarPanel::BeginConversationTurn(const EditorActionContext& actionCtx
     waiting_ = true;
     waitingSinceSec_ = ImGui::GetTime();
     model_->BeginConversation(conversation_, sendPhrase_, protocol,
-        0.7f, model_->Settings().chatAnswerTokens, model_->Settings().chatThinkOutLoud);
+        0.7f, model_->Settings().chatAnswerTokens, model_->Settings().chatReasoning);
     (void)actionCtx;
 }
 
@@ -951,7 +1095,7 @@ void CommandBarPanel::PollConversation(const EditorActionContext& actionCtx)
             lastPartialSize_ = partial.size();
             const std::size_t close = partial.find("</think>");
             const std::string shown = close == std::string::npos
-                ? (model_->Settings().chatThinkOutLoud ? partial : std::string("thinking..."))
+                ? (model_->Settings().chatReasoning ? partial : std::string("thinking..."))
                 : partial.substr(close + 8);
             RecordOutcome(shown.empty() ? "..." : shown, Exchange::Kind::Said);
         }
@@ -1286,6 +1430,34 @@ void CommandBarPanel::DrawSettings()
     LlmIntentSettings settings = model_->Settings();
     bool changed = false;
 
+    // THE MASTER SWITCH, FIRST. It was called "Enabled" and sat two thirds of the way down
+    // beside "Auto-start server", where it read as another detail of how the server starts
+    // rather than as the thing that decides whether any of this runs at all. Somebody
+    // looking for "turn the model off" scrolled past it.
+    //
+    // Off means off: no server at startup, no warmup, no requests -- and a running server
+    // is stopped and its video memory handed back (see SetSettings). The editor works
+    // perfectly well without it; the exact-form parser answers the phrases it knows and the
+    // rest simply says it needs the model.
+    {
+        LlmIntentSettings master = model_->Settings();
+        // NOT "Local model" -- that is the name of the fold this sits inside, and ImGui
+        // derives a widget's identity from its label, so two visible items called the same
+        // thing in the same window is a genuine ID collision. It says so in a red box.
+        if (ImGui::Checkbox("Model enabled", &master.enabled))
+        {
+            model_->SetSettings(master);
+            modelSettingsDirty_ = true;
+            settings = model_->Settings();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The whole feature. Off: nothing starts, nothing is asked, "
+                "and a server already running is stopped -- about 16 GB of video memory "
+                "back. On: it starts with the editor and runs while the editor does.");
+        }
+    }
+
     ImGui::TextWrapped("%s", model_->StatusLine().c_str());
     // The command bar only ever asks this model one narrow, grammar-constrained question.
     // It is a capable general model underneath, and llama-server already ships a chat page
@@ -1311,17 +1483,13 @@ void CommandBarPanel::DrawSettings()
         const bool ours = model_->OwnsRunningServer();
         if (up)
         {
-            const double remaining = model_->SecondsUntilIdleStop();
-            if (remaining >= 0.0)
-            {
-                ImGui::TextDisabled("Server up, stops in %ds if unused",
-                    static_cast<int>(remaining));
-            }
-            else
-            {
-                ImGui::TextDisabled(ours ? "Server up (started here)"
-                                         : "Server up (started elsewhere, kept alive)");
-            }
+            // NO COUNTDOWN. This said "stops in 571s if unused" against an idle timer that
+            // had been disabled by default for weeks -- the stop could not happen and the
+            // panel announced it anyway. The server now runs for as long as the editor
+            // does; what comes after is the watchdog's business and it starts counting when
+            // the last editor closes, not while somebody is thinking.
+            ImGui::TextDisabled(ours ? "Server up (started here, runs while the editor does)"
+                                     : "Server up (started elsewhere, kept alive)");
         }
         else
         {
@@ -1361,9 +1529,31 @@ void CommandBarPanel::DrawSettings()
                 "the part the renderer wants back.");
         }
     }
-    // The conversation half's knobs, which used to live in the chat panel. They only
-    // affect a turn the model decided was conversation: a command is still one grammar-
-    // constrained answer with reasoning suppressed, and none of these touch it.
+    // THE COMMAND TURN'S OWN SWITCH, which had a setting and no control. `commandReasoning`
+    // has been on by default since the lazy grammar made it possible, and the only
+    // reasoning-shaped checkbox on this panel was "think out loud" -- which shows the
+    // chat's working and has nothing to do with whether a COMMAND is thought about. Two
+    // different things that sounded like one, and the one that matters was invisible.
+    ImGui::SeparatorText("When it answers with a command");
+    {
+        LlmIntentSettings toggles = model_->Settings();
+        if (ImGui::Checkbox("think before choosing an action", &toggles.commandReasoning))
+        {
+            model_->SetSettings(toggles);
+            modelSettingsDirty_ = true;
+        }
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("On, the model reasons first and the grammar only takes over at "
+            "the end of its thinking. Measured on this machine: an ordinary phrase costs "
+            "1.8-7.7s instead of 0.5-2.1s, and a genuinely hard one can reach 30s -- but "
+            "it is the difference between picking an action and choosing one.\n"
+            "Off, an already-closed think block is pre-filled and it answers straight from "
+            "the phrase. Faster, with no step in which it can notice anything.");
+    }
+
+    // The conversation half's knobs, which used to live in the chat panel.
     ImGui::SeparatorText("When it answers in prose");
     {
         LlmIntentSettings toggles = model_->Settings();
@@ -1382,7 +1572,7 @@ void CommandBarPanel::DrawSettings()
     ImGui::SameLine();
     {
         LlmIntentSettings toggles = model_->Settings();
-        if (ImGui::Checkbox("think out loud", &toggles.chatThinkOutLoud))
+        if (ImGui::Checkbox("think before writing a reply", &toggles.chatReasoning))
         {
             model_->SetSettings(toggles);
             modelSettingsDirty_ = true;
@@ -1390,9 +1580,12 @@ void CommandBarPanel::DrawSettings()
     }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Reasoning is most of the tokens and therefore most of the "
-            "seconds. Off, a reply comes in seconds; on, it can take half a minute -- turn "
-            "it on when the working is the part you want.");
+        ImGui::SetTooltip("On, it reasons before replying. Measured here: a greeting goes "
+            "0.5s to 1.9s, a real question 19.8s to 32.7s, and a long one barely moves "
+            "(26.7s to 28.6s) because the answer's own length dominates.\n"
+            "The difference is what comes back: without it, general advice about game "
+            "engines; with it, a diagnosis of THIS problem with numbers to try. Turn it off "
+            "when you want a fast reply more than a considered one.");
     }
     ImGui::SetNextItemWidth(160.0f);
     // EDITS THE SETTING, not a copy of it. This slider used to move a panel member that
@@ -1400,7 +1593,11 @@ void CommandBarPanel::DrawSettings()
     // who raised it had to raise it again tomorrow.
     {
         LlmIntentSettings budget = model_->Settings();
-        if (ImGui::SliderInt("answer budget", &budget.chatAnswerTokens, 1024, 32768,
+        // Up to 65536, which is past what most contexts can hold -- deliberately. The cap
+        // is a ceiling on ONE answer, and the server clamps it to what the context has left
+        // anyway, so a high setting costs nothing until the room exists. The status line
+        // beside History is where the real limit is visible.
+        if (ImGui::SliderInt("answer budget", &budget.chatAnswerTokens, 1024, 65536,
                 "%d tokens"))
         {
             model_->SetSettings(budget);
@@ -1424,8 +1621,6 @@ void CommandBarPanel::DrawSettings()
         ImGui::TextDisabled("Run: python tools/fetch_intent_model.py");
     }
 
-    changed |= ImGui::Checkbox("Enabled", &settings.enabled);
-    ImGui::SameLine();
     changed |= ImGui::Checkbox("Auto-start server", &settings.autoStart);
     if (ImGui::Checkbox("Chat page (restarts the server)", &settings.webUi))
     {
@@ -1438,6 +1633,44 @@ void CommandBarPanel::DrawSettings()
     // now -- five minutes after the LAST editor closes -- and that is where the timer is.
     // A control that cannot affect anything is worse than a missing one: it answers the
     // question "how do I make it let go of the model" with a lie.
+
+    // PICK A MODEL FROM THE ONES ON DISK. Swapping models is a settings edit by design --
+    // the model is a parameter, not a build dependency -- but "a settings edit" had meant
+    // typing an absolute path into a text box, and getting one character wrong reads as the
+    // feature being broken rather than as a typo. Every .gguf beside the current one is
+    // listed with its size, because size is what decides whether it fits on the card, and
+    // that is the question anyone switching is actually asking.
+    //
+    // The text box stays underneath for a model kept somewhere else.
+    if (ImGui::BeginCombo("##modelPick", ModelLabelFor(settings.modelPath).c_str()))
+    {
+        RefreshModelChoices(settings.modelPath);
+        if (modelChoices_.empty())
+        {
+            ImGui::TextDisabled("no .gguf files beside the current one");
+        }
+        for (const ModelChoice& choice : modelChoices_)
+        {
+            const bool selected = choice.path == settings.modelPath;
+            if (ImGui::Selectable(choice.label.c_str(), selected))
+            {
+                settings.modelPath = choice.path;
+                CopyToBuffer(modelPathBuffer_, sizeof(modelPathBuffer_), choice.path);
+                changed = true;
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("every .gguf in the same folder. Switching restarts the server, "
+            "which costs a few seconds and reloads the weights. A vision model also needs "
+            "its mmproj file beside it to see anything.");
+    }
 
     ImGui::SetNextItemWidth(-1.0f);
     if (ImGui::InputTextWithHint("##modelPath", "path to .gguf",
@@ -1466,10 +1699,15 @@ void CommandBarPanel::DrawSettings()
     changed |= ImGui::SliderInt("GPU layers", &settings.gpuLayers, 0, 99);
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("0 = CPU only, and the renderer keeps all its VRAM. "
-            "99 puts the dense layers on the GPU and leaves the experts in RAM. "
-            "Measured here: 6.0s -> 3.5s per phrase, and 21.4s -> 17.1s for the first one "
-            "after a restart (that first one is prompt prefill, not model loading).");
+        ImGui::SetTooltip("How many of the model's layers live on the card. 99 means all of "
+            "them; lower puts the rest in RAM and each token then walks back across PCIe "
+            "for them.\n"
+            "This is the memory-for-speed dial. Measured on Qwen3.8-27B Q4_K_M, 32k "
+            "context: all layers = 19.1 GB of VRAM and 1.0-2.1s a phrase; 56 layers = "
+            "16.8 GB and 2.3-5.0s. Same answers either way -- you are buying latency, not "
+            "quality.\n"
+            "Leave room for the renderer: filling the card past about 22 GB makes the "
+            "driver evict its resources and the whole editor stutters.");
     }
 
     if (changed)
@@ -1499,6 +1737,7 @@ void CommandBarPanel::Draw(EditorContext& ctx,
     // silently wrong about WHICH level it describes is exactly the failure this whole thing
     // is for, and the document is the only thing that always knows.
     SwitchSessionTo(ctx.document.LevelPath());
+    LogModelStats();
 
     // NOT TIED TO THE SERVER, deliberately. The obvious place to forget is when the server
     // goes away -- its prefix cache dies with it, so the next one re-reads everything. But
@@ -1941,6 +2180,57 @@ if (ImGui::BeginChild("##barLog", ImVec2(0.0f, -reserve), true))
     {
         ImGui::SameLine();
         ImGui::TextDisabled("thinking...");
+    }
+
+    // THE STANDING COST, on the row where the buttons are. Everything here was learned the
+    // hard way in one evening: the card filled to 22.7 of 24.5 GB and the editor stuttered
+    // until somebody guessed why; the context ran out with nothing on screen saying it was
+    // filling; the session compacted with no warning that it was about to. All three are
+    // now one line somebody can glance at instead of a thing they find out afterwards.
+    if (model_ && model_->ServerIsUp())
+    {
+        std::uint64_t gpuUsed = 0, gpuTotal = 0;
+        render::GpuMemoryTotals(gpuUsed, gpuTotal);
+        const int prompt = model_->PromptTokens();
+        const int context = model_->ContextTokens();
+        const std::size_t chars = SessionChars();
+        const std::size_t budget = SessionBudgetChars();
+
+        std::string status;
+        if (context > 0 && prompt > 0)
+        {
+            status += "context " + std::to_string((prompt * 100) / context) + "%";
+        }
+        if (gpuTotal > 0)
+        {
+            char vram[64] = {};
+            std::snprintf(vram, sizeof(vram), "%svram %.1f/%.0f GB",
+                status.empty() ? "" : "  ·  ",
+                static_cast<double>(gpuUsed) / (1024.0 * 1024.0 * 1024.0),
+                static_cast<double>(gpuTotal) / (1024.0 * 1024.0 * 1024.0));
+            status += vram;
+        }
+        if (budget > 0)
+        {
+            status += (status.empty() ? "" : "  ·  ");
+            status += chars >= budget
+                ? "compacting next turn"
+                : "compact in " + std::to_string((budget - chars) / 1000) + "k";
+        }
+        if (!status.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", status.c_str());
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("context: how much of the model's window the prompt, the "
+                    "grammar and this level's remembered session take up together.\n"
+                    "vram: the whole card, not just this process -- the model server is a "
+                    "separate one and holds most of it.\n"
+                    "compact: how much more can be remembered before the oldest exchanges "
+                    "are folded into a list of what was actually done.");
+            }
+        }
     }
 
 

@@ -248,7 +248,19 @@ namespace intentschema
 
         std::string g;
         g += "# Generated from the action registry and this level. Do not hand-edit.\n";
-        g += "root ::= command | query | chat | needsapi | unclear\n\n";
+        // THE ROOT ACCEPTS THE TRIGGER WORD, because llama.cpp feeds it to the grammar.
+        //
+        // When the model is allowed to reason, the grammar is applied LAZILY and triggered
+        // by `</think>` -- everything before that is deliberation, everything after is the
+        // answer. What is not obvious until the server says so is that a WORD trigger is
+        // handed to the grammar as the first piece: with a root that starts at `{`, the
+        // very token that switched the grammar on is then rejected, and the request dies
+        // with "Unexpected empty grammar stack after accepting piece: </think>".
+        //
+        // So the tag is part of the language, optionally, along with the whitespace a model
+        // puts after it. Optional because the same grammar is used when reasoning is off,
+        // where nothing emits the tag at all.
+        g += "root ::= \"</think>\"? [ \\t\\r\\n]* ( command | query | chat | needsapi | unclear )\n\n";
 
         // --- command ------------------------------------------------------------
         // ONE ALTERNATIVE PER VERB, so each can carry its own parameters. A single

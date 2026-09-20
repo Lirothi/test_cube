@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "core/logging/Log.h"
+#include "rendering/core/MemoryReport.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/intent/EditorActionRegistry.h"
 #include "editor/intent/IntentNotes.h"
@@ -133,10 +134,26 @@ void LlmIntentSource::SetSettings(LlmIntentSettings settings)
     // introducing it as the old one -- and being wrong about that is exactly what putting
     // the name in the prompt was meant to prevent.
     const bool modelChanged = settings.modelPath != settings_.modelPath;
+    // SWITCHED OFF MEANS GIVE THE CARD BACK. `enabled` already keeps the server from
+    // starting -- Available() gates the warmup and every request -- but turning it off
+    // while one was running left it running: no more answers, and eighteen gigabytes of
+    // video memory still held by a process nobody was talking to. A switch that stops the
+    // feature and not its cost is a switch that lies about what it does.
+    const bool switchedOff = settings_.enabled && !settings.enabled;
     settings_ = std::move(settings);
     if (modelChanged)
     {
         worldBuilt_ = false;
+    }
+    if (switchedOff && serverOwned_)
+    {
+        LOG_INFO(logging::LogCategory::Editor,
+            "intent model: switched off -- stopping llama-server pid={} and freeing its VRAM",
+            server_.processId);
+        server_.Terminate();
+        serverOwned_ = false;
+        serverHealthy_ = false;
+        warmedUp_ = false;
     }
     if (endpointChanged && serverOwned_)
     {
@@ -193,12 +210,26 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
     {
         const bool ok = healthProbe_->ok.load(std::memory_order_relaxed);
         healthProbe_.reset();
+        // Answered, whichever way. Only now is "nothing is listening" a fact rather than a
+        // question nobody has asked yet.
+        healthProbeAnswered_ = true;
         if (ok)
         {
             serverHealthy_ = true;
             serverStatus_.clear();
-            LOG_INFO(logging::LogCategory::Editor, "intent model: server healthy on {}",
-                settings_.endpoint);
+            // The weights are on the card by the time /health answers, so this is the
+            // moment the delta means something.
+            std::uint64_t used = 0, total = 0;
+            render::GpuMemoryTotals(used, total);
+            if (used > vramBeforeServerBytes_ && vramBeforeServerBytes_ > 0)
+            {
+                modelVramBytes_ = used - vramBeforeServerBytes_;
+            }
+            LOG_INFO(logging::LogCategory::Editor,
+                "intent model: server healthy on {} -- it took {} MB of video memory, "
+                "card now {} of {} MB",
+                settings_.endpoint, modelVramBytes_ / (1024 * 1024),
+                used / (1024 * 1024), total / (1024 * 1024));
             return true;
         }
     }
@@ -237,6 +268,31 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
         return false;
     }
 
+    // NOT UNTIL THE PROBE HAS ANSWERED. The health check used to be a blocking GET right at
+    // the top of this function: by the time control reached here, "is something already
+    // listening" had a real answer, and a server kept alive by a previous editor was found
+    // and reused. Moving that GET onto a thread -- which it had to be, it was freezing the
+    // frame -- left this path reachable while the question was still in flight, so the
+    // editor started a SECOND llama-server on an endpoint that already had one.
+    //
+    // Two were caught running side by side on 127.0.0.1:8127, each with its own watchdog.
+    // The second cannot bind the port, so it answers nothing and is not even visible as a
+    // failure -- it simply sits there holding sixteen gigabytes of video memory.
+    //
+    // One round of waiting costs a second at startup. It is the difference between finding
+    // the running server and duplicating it.
+    if (!healthProbeAnswered_)
+    {
+        serverStatus_ = "Looking for a server on " + settings_.endpoint + "...";
+        outStatus = serverStatus_;
+        return false;
+    }
+
+    {
+        std::uint64_t used = 0, total = 0;
+        render::GpuMemoryTotals(used, total);
+        vramBeforeServerBytes_ = used;
+    }
     std::string error;
     // `reaperUnavailable_` is why this is not simply the setting. A watchdog that could not
     // be started once will not start on the next frame either -- it fails for reasons that
@@ -246,7 +302,7 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
         !reaperUnavailable_;
     server_ = llmclient::StartServer(settings_.serverExe, settings_.modelPath,
         settings_.endpoint, settings_.gpuLayers, settings_.contextTokens,
-        settings_.threads, settings_.webUi, keepAlive, error);
+        settings_.threads, settings_.webUi, settings_.cpuMoe, keepAlive, error);
     if (!server_.handle)
     {
         serverStatus_ = error;
@@ -281,7 +337,7 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
                 "editor; it will not outlive this session", reaperError);
             server_ = llmclient::StartServer(settings_.serverExe, settings_.modelPath,
                 settings_.endpoint, settings_.gpuLayers, settings_.contextTokens,
-                settings_.threads, settings_.webUi, false, error);
+                settings_.threads, settings_.webUi, settings_.cpuMoe, false, error);
             if (!server_.handle)
             {
                 serverStatus_ = error;
@@ -359,9 +415,23 @@ void LlmIntentSource::SendPending()
     if (reasoning)
     {
         body["grammar_lazy"] = true;
+        // TRIGGERED BY THE END OF THINKING, not by a brace.
+        //
+        // The first version triggered on `\{`, on the reasoning that the answer's opening
+        // brace is where the JSON starts. It is -- but it is not the FIRST brace: models
+        // write JSON inside their reasoning while working out what to answer, and the
+        // grammar fired on that one. Caught live: asked to tidy the outliner, the model was
+        // mid-thought, typed the command it was considering, and generation stopped there.
+        // It happened to be the right command. It could as easily have been the one it was
+        // about to reject.
+        //
+        // `</think>` is unambiguous: everything before it is deliberation and everything
+        // after it is the answer. It must be listed in `preserved_tokens` or the server
+        // refuses the request outright -- a trigger word has to survive tokenisation intact.
         body["grammar_triggers"] = nlohmann::json::array({
-            nlohmann::json{ { "type", 2 }, { "value", "\\{" } },
+            nlohmann::json{ { "type", 1 }, { "value", "</think>" } },
         });
+        body["preserved_tokens"] = nlohmann::json::array({ "</think>" });
     }
     // Deterministic: the same phrase on the same level must not mean two different things
     // on two days.
@@ -413,6 +483,20 @@ void LlmIntentSource::SendPending()
             return;
         }
         request->answer = parsed["content"].get<std::string>();
+        // How much context this actually cost, counted by the server. It belongs HERE, on
+        // the command path: this is the request that carries the system prompt, the grammar
+        // and the remembered session, and it is the one whose growth decides when the
+        // context runs out. The first version of this read it on the chat path instead, so
+        // the stats line went on saying "nothing asked yet" after every command.
+        const auto timings = parsed.find("timings");
+        if (timings != parsed.end() && timings->is_object())
+        {
+            request->promptTokens = timings->value("prompt_n", 0);
+        }
+        if (request->promptTokens <= 0)
+        {
+            request->promptTokens = parsed.value("tokens_evaluated", 0);
+        }
         request->state.store(static_cast<int>(IntentParseState::Ready));
     }).detach();
 }
@@ -456,6 +540,20 @@ IntentParseState LlmIntentSource::Poll(EditorIntent& outIntent, std::string& out
         return IntentParseState::Failed;
     }
 
+    // THE LARGEST SEEN, not the last one. `prompt_n` counts the tokens the server actually
+    // had to PROCESS, and with `cache_prompt` on, a warm request reports about five hundred
+    // where the cold one reported ten thousand -- the other ten thousand are still sitting
+    // in the KV cache, still occupying the context, just not recomputed. Reading the last
+    // value as "context used" made a nearly full window look nearly empty, which is exactly
+    // backwards for deciding when to compact.
+    //
+    // The cold request measures the whole prompt, so the maximum is the honest figure. It
+    // can only err LOW, which is the safe direction: it compacts early rather than letting
+    // a request overflow.
+    if (request_->promptTokens > lastPromptTokens_.load(std::memory_order_relaxed))
+    {
+        lastPromptTokens_.store(request_->promptTokens, std::memory_order_relaxed);
+    }
     const std::string answer = request_->answer;
     request_.reset();
     lastRawAnswer_ = answer;
@@ -570,10 +668,37 @@ bool LlmIntentSource::BeginWarmup(const EditorIntentWorld& world)
     const int timeout = settings_.timeoutSeconds;
     const std::string payload = body.dump();
     const auto started = std::chrono::steady_clock::now();
-    std::thread([request, endpoint, timeout, payload, started]()
+    // THE WARMUP IS THE ONLY COLD REQUEST, so it is the only one that ever measures the
+    // whole prompt. Everything after it hits the server's prefix cache and reports a few
+    // hundred tokens -- the rest are still in the KV cache and still occupying the context,
+    // they simply were not recomputed. Without recording it here the status line read
+    // "context 1%" on a window that was a third full.
+    std::thread([request, endpoint, timeout, payload, started, tokens = &lastPromptTokens_]()
     {
         const llmclient::Response response =
             llmclient::PostJson(endpoint, "/completion", payload, timeout);
+        if (response.ok)
+        {
+            const nlohmann::json parsed =
+                nlohmann::json::parse(response.body, nullptr, false);
+            if (!parsed.is_discarded() && parsed.is_object())
+            {
+                int prompt = 0;
+                const auto timings = parsed.find("timings");
+                if (timings != parsed.end() && timings->is_object())
+                {
+                    prompt = timings->value("prompt_n", 0);
+                }
+                if (prompt <= 0)
+                {
+                    prompt = parsed.value("tokens_evaluated", 0);
+                }
+                if (prompt > tokens->load(std::memory_order_relaxed))
+                {
+                    tokens->store(prompt, std::memory_order_relaxed);
+                }
+            }
+        }
         request->state.store(static_cast<int>(
             response.ok ? IntentParseState::Ready : IntentParseState::Failed));
         LOG_INFO(logging::LogCategory::Editor, "intent model: prompt warmed in {:.1f}s{}",
@@ -606,43 +731,24 @@ bool LlmIntentSource::BusyInBackground() const
 
 void LlmIntentSource::Tick()
 {
-    // The watchdog owns retirement for a kept-alive server, and it counts EVERY request --
-    // including ones made from the server's own chat page, which this timer cannot see.
-    if (!serverOwned_ || keepsServerAlive_ || settings_.idleTimeoutSeconds <= 0)
-    {
-        return;
-    }
-    // An in-flight request is use, even though it has not come back yet -- ALL three kinds.
-    // The command request and the chat both also refresh the clock as they are polled; the
-    // developer note does not, because nothing polls it: it is fired after a refusal and
-    // left to land on its own. Without it here, a note that takes longer than the idle
-    // timeout gets its own server shot out from under it.
-    const auto pending = [](const std::shared_ptr<Request>& r)
-    {
-        return r && static_cast<IntentParseState>(r->state.load()) == IntentParseState::Pending;
-    };
-    if (pending(request_) || pending(freeformRequest_) || pending(noteRequest_))
-    {
-        lastUseSec_ = NowSeconds();
-        return;
-    }
-    if (NowSeconds() - lastUseSec_ >= static_cast<double>(settings_.idleTimeoutSeconds))
-    {
-        LOG_INFO(logging::LogCategory::Editor,
-            "intent model: idle for {}s, stopping llama-server pid={}",
-            settings_.idleTimeoutSeconds, server_.processId);
-        StopServer();
-        serverStatus_ = "Stopped after being idle; the next phrase starts it again";
-    }
-}
-
-double LlmIntentSource::SecondsUntilIdleStop() const
-{
-    if (!serverOwned_ || settings_.idleTimeoutSeconds <= 0)
-    {
-        return -1.0;
-    }
-    return static_cast<double>(settings_.idleTimeoutSeconds) - (NowSeconds() - lastUseSec_);
+    // THE EDITOR DOES NOT RETIRE ITS OWN SERVER. There used to be an idle timer here that
+    // stopped it after ten quiet minutes, and it was wrong twice over.
+    //
+    // Wrong in principle: while the editor is open and the model is switched on, the server
+    // is a thing the person is using. Deciding they have gone quiet for long enough and
+    // taking it away means the next phrase pays twenty seconds to load the weights again,
+    // for a pause that is an ordinary part of thinking.
+    //
+    // Wrong in fact: the timer bailed out whenever `keepServerAfterExit` was set, which is
+    // the default, so it had not fired in a long time -- while the panel went on counting
+    // down to it out loud ("Server up, stops in 571s if unused"). A threat that could not be
+    // carried out, displayed as if it could.
+    //
+    // Retirement belongs to the watchdog, which starts its clock when the LAST editor
+    // closes and counts every request including the ones made from the server's own chat
+    // page -- requests this process cannot see at all. Nothing is left unattended: without
+    // a watchdog the server is job-owned and dies with the editor.
+    lastUseSec_ = NowSeconds();
 }
 
 bool LlmIntentSource::OwnsRunningServer() const
@@ -815,6 +921,7 @@ void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature
         std::string answer;
         bool truncated = false;
         float rate = 0.0f;
+        int promptTokens = 0;
         // When the first token lands is the number that decides whether this feels like a
         // conversation or like a hang, and it is invisible from outside -- so it is logged.
         const auto started = std::chrono::steady_clock::now();
@@ -928,11 +1035,17 @@ void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature
             if (timings != parsed.end() && timings->is_object())
             {
                 rate = timings->value("predicted_per_second", 0.0f);
+                promptTokens = timings->value("prompt_n", 0);
+            }
+            if (promptTokens <= 0)
+            {
+                promptTokens = parsed.value("tokens_evaluated", 0);
             }
         }
         request->answer = answer;
         request->truncated = truncated;
         request->tokensPerSecond = rate;
+        request->promptTokens = promptTokens;
         request->state.store(static_cast<int>(IntentParseState::Ready));
     }).detach();
 }
@@ -1124,14 +1237,21 @@ LlmIntentSettings LlmIntentSource::LoadSettings(const nlohmann::json& levelEdito
     settings.threads = ReadIntOr(json, "threads", settings.threads);
     settings.timeoutSeconds = ReadIntOr(json, "timeoutSeconds", settings.timeoutSeconds);
     settings.chatTemplate = ReadStringOr(json, "chatTemplate", settings.chatTemplate);
+    settings.cpuMoe = ReadBoolOr(json, "cpuMoe", settings.cpuMoe);
     settings.commandReasoning = ReadBoolOr(json, "commandReasoning", settings.commandReasoning);
     settings.chatAnswerTokens = ReadIntOr(json, "chatAnswerTokens", settings.chatAnswerTokens);
     settings.chatSearch = ReadBoolOr(json, "chatSearch", settings.chatSearch);
-    settings.chatThinkOutLoud = ReadBoolOr(json, "chatThinkOutLoud", settings.chatThinkOutLoud);
+    // THE OLD KEY IS DELIBERATELY NOT READ. Carrying `chatThinkOutLoud` forward looked like
+    // respecting a choice, and it was the opposite: that checkbox was labelled "think out
+    // loud" and described as merely showing the reasoning, while what it actually did was
+    // decide whether the model reasoned at all. A value chosen under a wrong label is not a
+    // preference, it is a misunderstanding, and inheriting it kept the feature switched off
+    // on exactly the machines where somebody had once decided they did not need to watch
+    // the model think.
+    settings.chatReasoning = ReadBoolOr(json, "chatReasoning", settings.chatReasoning);
     settings.apiRequestNotesPath =
         ReadStringOr(json, "apiRequestNotesPath", settings.apiRequestNotesPath);
     settings.webUi = ReadBoolOr(json, "webUi", settings.webUi);
-    settings.idleTimeoutSeconds = ReadIntOr(json, "idleTimeoutSeconds", settings.idleTimeoutSeconds);
     settings.keepServerAfterExit =
         ReadBoolOr(json, "keepServerAfterExit", settings.keepServerAfterExit);
     settings.keepAliveSeconds = ReadIntOr(json, "keepAliveSeconds", settings.keepAliveSeconds);
@@ -1151,13 +1271,13 @@ nlohmann::json LlmIntentSource::SaveSettings(const LlmIntentSettings& settings)
         { "threads", settings.threads },
         { "timeoutSeconds", settings.timeoutSeconds },
         { "chatTemplate", settings.chatTemplate },
+        { "cpuMoe", settings.cpuMoe },
         { "commandReasoning", settings.commandReasoning },
         { "chatAnswerTokens", settings.chatAnswerTokens },
         { "chatSearch", settings.chatSearch },
-        { "chatThinkOutLoud", settings.chatThinkOutLoud },
+        { "chatReasoning", settings.chatReasoning },
         { "apiRequestNotesPath", settings.apiRequestNotesPath },
         { "webUi", settings.webUi },
-        { "idleTimeoutSeconds", settings.idleTimeoutSeconds },
         { "keepServerAfterExit", settings.keepServerAfterExit },
         { "keepAliveSeconds", settings.keepAliveSeconds },
     };

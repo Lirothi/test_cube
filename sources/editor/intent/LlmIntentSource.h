@@ -73,6 +73,16 @@ struct LlmIntentSettings
     // alone -- faster, and with no step in which it can notice anything.
     bool commandReasoning = true;
 
+    // Keep the MIXTURE-OF-EXPERTS weights in RAM and give the card only the dense and
+    // attention tensors. Right for a MoE that cannot fit -- the 35B this started with is
+    // 38 GB against a 24 GB card -- and WRONG for a dense model that fits, where it would
+    // leave performance on the table for a set of tensors that does not exist. It used to
+    // ride on `gpuLayers > 0`, which was fine while there was only ever one model.
+    //
+    // Measured on the pair: the 27B whole on the card answers a phrase in 1.0-2.1 s against
+    // the 35B's 3.2-4.5 s, and its FIRST request costs 5.6 s against 50.4 s.
+    bool cpuMoe = true;
+
     // How many tokens ONE prose answer may generate. Not the context and not the memory --
     // purely a ceiling on the reply, and therefore on how long somebody waits: generation
     // runs at about 50 tokens a second here, so the whole of this budget is a couple of
@@ -90,29 +100,27 @@ struct LlmIntentSettings
     // answer budget had, and the same fix.
     //
     // `chatSearch` lets a prose answer read the repository and ask the live scene.
-    // `chatThinkOutLoud` SHOWS the reasoning; it does not enable it (the prose turn always
-    // reasons -- no grammar constrains it). Off means the thinking is folded away, which is
-    // usually what is wanted: it is most of the tokens and none of the answer.
+    //
+    // `chatReasoning` lets the prose turn THINK before it answers. It was called
+    // `chatThinkOutLoud` and described as merely showing the reasoning -- which was wrong,
+    // and wrong in the expensive direction: off, an already-closed think block is pre-filled
+    // and the model does not reason at all. Nothing was being hidden, it was being skipped.
+    // (The transcript folds whatever thinking arrives under its own heading regardless, so
+    // there was never a display switch to want.)
+    //
+    // ON by default, measured: "почему пальмы в тени тёмные" costs 19.8s without and 32.7s
+    // with, and the difference in the answer is generic advice about game engines against a
+    // diagnosis of palms specifically -- overlapping fronds, alpha-cutout shadows wider than
+    // the leaf, shadow strength pinned at 1.0 -- with numbers to try. The long answers are
+    // dominated by their own length anyway: "сделай атолл живее" went 26.7s to 28.6s.
     bool chatSearch = true;
-    bool chatThinkOutLoud = false;
+    bool chatReasoning = true;
     // Where a refusal's note for the implementer is appended. Empty turns the notes off.
     std::string apiRequestNotesPath = "docs/editor_api_requests.md";
     // llama-server ships a chat page, and it is ON by default. The command bar only ever
     // asks this model one narrow, grammar-constrained question; it is a capable general
     // model underneath, and making its own chat page reachable costs nothing.
     bool webUi = true;
-    // Stop the server after this many seconds with no request from the editor. The server
-    // is job-owned and so cannot outlive the editor at all; this is the other half -- an
-    // editing session where nobody types a phrase for an hour should not hold the model.
-    // 0 disables it. NOTE: the chat page does not count as activity, because the editor
-    // cannot see requests it did not make -- raise this while chatting.
-    //
-    // 600, not the 60 it started at. Restarting costs 22 s on the GPU split -- the weights
-    // have to go back across to the card -- and a minute is a perfectly ordinary pause in
-    // the middle of a thought, so the old value charged that 22 s over and over for the
-    // crime of thinking before typing. It is cheap to keep: the model is mmapped rather
-    // than loaded, so an idle server holds reclaimable page cache, not committed RAM.
-    int idleTimeoutSeconds = 600;
     // Let the server OUTLIVE the editor, and retire it after this long with no requests
     // from anybody. 0 keeps the old behaviour: the server is job-owned and dies with the
     // editor, no orphan possible by construction.
@@ -153,6 +161,20 @@ public:
     void InvalidateWorld() override;
 
     const LlmIntentSettings& Settings() const { return settings_; }
+
+    // WHAT THE MODEL COSTS RIGHT NOW. All three are measured, not estimated.
+    //
+    // `ModelVramBytes` is the card's total occupancy MINUS what it was just before this
+    // server started. It has to be a delta: the server is a separate process, and Windows
+    // does not report per-process video memory under WDDM -- nvidia-smi itself prints
+    // "N/A" for it. Zero when the server was not started by us or NVML is unavailable.
+    std::uint64_t ModelVramBytes() const { return modelVramBytes_; }
+    // The largest prompt this session has needed, from the server's own `timings`: the
+    // system prompt, the grammar and the remembered session together. It is the CONTEXT
+    // OCCUPANCY, and it is a maximum rather than a last-value because prompt caching makes
+    // a warm request report only what it recomputed -- see where it is stored.
+    int PromptTokens() const { return lastPromptTokens_.load(std::memory_order_relaxed); }
+    int ContextTokens() const { return settings_.contextTokens; }
     void SetSettings(LlmIntentSettings settings);
 
     // What the panel shows while the server is still loading a 38 GB file.
@@ -240,7 +262,7 @@ public:
     void Tick();
 
     // Seconds until the idle timeout fires, or -1 when it is off or nothing is running.
-    double SecondsUntilIdleStop() const;
+
 
     // True when THIS editor started the server that is running, so the panel can offer to
     // stop it. A server the user started themselves is never offered up.
@@ -279,6 +301,9 @@ private:
         std::string answer;
         std::string error;
         bool truncated = false;
+        // Context actually consumed by this request, counted by the server rather than
+        // estimated from characters: system prompt + grammar + remembered session.
+        int promptTokens = 0;
         // Written by the worker as tokens arrive, read by the frame. The mutex is held for
         // a string append and a copy, both trivial next to a token's arrival interval.
         std::mutex partialMutex;
@@ -307,6 +332,11 @@ private:
     bool reaperUnavailable_ = false;
     std::string serverStatus_;
     double nextHealthPollSec_ = 0.0;
+    // Card occupancy sampled just before launching the server, so the difference once it is
+    // healthy is what the model took.
+    std::uint64_t vramBeforeServerBytes_ = 0;
+    std::uint64_t modelVramBytes_ = 0;
+    std::atomic<int> lastPromptTokens_{ 0 };
     // One outstanding /health request, answered on a detached thread. Shared rather than
     // owned so the thread can outlive a settings change without writing into freed memory.
     struct HealthProbe
@@ -315,6 +345,10 @@ private:
         std::atomic<bool> ok{ false };
     };
     std::shared_ptr<HealthProbe> healthProbe_;
+    // True once a /health probe has come back at all. Guards the decision to START a
+    // server: before the check went asynchronous that decision could not be reached with
+    // the question outstanding, and reaching it early duplicated the server.
+    bool healthProbeAnswered_ = false;
     double lastUseSec_ = 0.0;
     bool serverHealthy_ = false;
 

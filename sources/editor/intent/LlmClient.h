@@ -81,6 +81,12 @@ namespace llmclient
         int contextTokens,
         int threads,
         bool webUi,
+        // Keep the MIXTURE-OF-EXPERTS weights in RAM and put only the dense and attention
+        // tensors on the card. True is right for a MoE too big for the GPU, and wrong for
+        // a dense model that fits: there are no expert tensors to leave behind, and the
+        // flag's whole purpose is to stop `-ngl 99` from trying to allocate what will not
+        // fit. It rode on `gpuLayers > 0` while there was only one model to run.
+        bool cpuMoe,
         // false: the job object's KILL_ON_JOB_CLOSE ties the server to this process, as it
         // always did. true: the server is launched free, to survive the editor closing --
         // and the caller MUST then start llmreaper, because that guarantee has to live

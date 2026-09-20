@@ -38,4 +38,17 @@ void UnregisterMemoryProvider(const void* self);
 // Emit the line if `periodSec` has passed since the last one (the first call emits). Main thread,
 // after the previous frame's work has been joined -- providers read their owners' state.
 void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec = 5.0);
+
+// THE WHOLE CARD, not this process's share of it.
+//
+// `QueryVideoMemoryInfo` above answers "how much have I got out", which is the right question
+// for a leak in our own resources and the wrong one the moment something ELSE on the machine
+// holds video memory. The local model server is a separate process: it had 18.6 GB of a 24 GB
+// card and this process could not see a byte of it, so "vram local 1400 MB" was true and
+// useless for deciding whether the next allocation would fit.
+//
+// Read through NVML, which ships with the NVIDIA driver and is loaded on demand -- no build
+// dependency and no failure on a machine without it. Both zero when unavailable, and a caller
+// that gets zero should say "unknown" rather than "0 MB".
+void GpuMemoryTotals(std::uint64_t& outUsedBytes, std::uint64_t& outTotalBytes);
 } // namespace render

@@ -205,6 +205,39 @@ private:
     // the session gets long. No model turn is spent on it -- see the definition.
     void CompactSession();
     std::size_t SessionChars() const;
+    // Where CompactSession starts folding. Named here rather than buried in that function
+    // because the stats line reports the distance to it, and a budget somebody is watching
+    // a countdown against must be the same number the countdown ends at.
+    // The CEILING, used when nothing has been measured yet. The real budget is whatever the
+    // context has spare, which SessionBudgetChars works out from the last request.
+    static constexpr std::size_t kSessionCompactAtChars = 24000;
+    // Characters per token, for turning a token budget back into the units the session is
+    // stored in. Deliberately LOW: mixed Russian and English runs about three, and erring
+    // low compacts a turn early instead of discovering the overflow as a 400 from the
+    // server mid-sentence. An earlier setting called `charsPerTokenEstimate` was deleted
+    // for being unused -- this is the one place that genuinely needs the conversion, and it
+    // converts a measured token count rather than replacing one.
+    static constexpr std::size_t kCharsPerTokenGuess = 3;
+    std::size_t SessionBudgetChars() const;
+
+    // The .gguf files sitting beside the current model, for the picker in the settings.
+    struct ModelChoice
+    {
+        std::string path;
+        std::string label;   // file name and size, which is what decides whether it fits
+    };
+    std::vector<ModelChoice> modelChoices_;
+    void RefreshModelChoices(const std::string& current);
+    static std::string ModelLabelFor(const std::string& path);
+
+    // ONE LINE, EVERYTHING THE MODEL COSTS. Written to the session log on a slow beat while
+    // the server is up: video memory for the editor and for the model separately, how much
+    // of the context the last request actually used, and how far the remembered session is
+    // from being compacted. All measured -- the VRAM from NVML, the tokens from the server's
+    // own timings -- because every one of these numbers was guessed at least once today and
+    // the guess was wrong every time.
+    void LogModelStats();
+    double nextStatsLogSec_ = 0.0;
 
     // ONE MEMORY PER LEVEL. Every remembered turn names objects, counts and groups that
     // belong to the level that was open; carried into another one they are wrong with the

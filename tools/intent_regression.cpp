@@ -131,8 +131,21 @@ void TestQueryListIntegrity()
     assets.Refresh();
     const intentschema::Vocabulary vocabulary = intentschema::BuildVocabulary(document, assets);
     const std::string gbnf = intentschema::BuildGbnf(vocabulary);
-    Check(gbnf.find("root ::= command | query |") != std::string::npos,
-        "the grammar offers the query branch at the root");
+    // What matters is that the root REACHES the query branch, not how the alternation is
+    // spelled. This asserted the exact text `root ::= command | query |` and duly failed
+    // the day the root grew an optional `</think>` prefix -- a change that altered nothing
+    // about which answers are legal. A test on formatting fails for reasons nobody cares
+    // about and passes when the meaning drifts.
+    {
+        const std::size_t rootAt = gbnf.find("root ::=");
+        Check(rootAt != std::string::npos, "the grammar has a root rule");
+        const std::string root = gbnf.substr(rootAt, gbnf.find('\n', rootAt) - rootAt);
+        for (const char* branch : { "command", "query", "chat", "needsapi", "unclear" })
+        {
+            Check(root.find(branch) != std::string::npos,
+                std::string("the root offers the ") + branch + " branch");
+        }
+    }
     const std::size_t line = gbnf.find("queryname ::=");
     Check(line != std::string::npos, "the grammar has a queryname rule");
     const std::string rule = gbnf.substr(line, gbnf.find('\n', line) - line);

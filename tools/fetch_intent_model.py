@@ -47,6 +47,31 @@ MODEL_QUANTS = {
 }
 DEFAULT_QUANT = "UD-Q8_K_XL"
 
+# THE OTHER CANDIDATE, and it is a different shape of bet.  Qwen3.8-27B is DENSE, not a
+# mixture of experts, and it carries a vision encoder.  Two things follow that the 35B
+# cannot offer at any quantisation:
+#
+#   - A 4-bit quant is about 15 GiB, which fits on this card ENTIRELY.  The 35B does not
+#     and never will (Q4 is 22 GiB before the KV cache), which is why it runs with
+#     `--cpu-moe` and pays 22 s for the first request while the experts sit in RAM.
+#     Measured free VRAM with the editor rendering the atoll: ~19.6 GiB.
+#   - `mmproj` is the vision projector.  The model the editor runs today is blind, and
+#     when asked what it was missing most it said so itself and asked for a screenshot.
+#
+# Qwen 3.7 is NOT here because it does not exist in open weights -- that generation was
+# API-only and skipped for open release.  3.8 is the next one that shipped.
+VISION_MODEL_REPO = "unsloth/Qwen3.8-27B-GGUF"
+VISION_MODEL_QUANTS = {
+    "UD-IQ4_XS":  ("Qwen3.8-27B-UD-IQ4_XS.gguf", 13.3),
+    "UD-Q4_K_S":  ("Qwen3.8-27B-UD-Q4_K_S.gguf", 14.3),
+    "UD-Q4_K_M":  ("Qwen3.8-27B-UD-Q4_K_M.gguf", 15.4),
+    "UD-Q4_K_XL": ("Qwen3.8-27B-UD-Q4_K_XL.gguf", 16.4),
+    "UD-Q5_K_S":  ("Qwen3.8-27B-UD-Q5_K_S.gguf", 17.4),
+    "UD-Q5_K_M":  ("Qwen3.8-27B-UD-Q5_K_M.gguf", 18.4),
+}
+# The projector is a separate file and llama-server wants it by path (--mmproj).
+VISION_PROJECTOR = ("mmproj-F16.gguf", 0.9)
+
 LLAMA_RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=8"
 # CUDA build for an NVIDIA box; the CPU build is the fallback and works everywhere.
 SERVER_FLAVOURS = ("win-cuda-12.4-x64", "win-cpu-x64")
@@ -105,10 +130,12 @@ def download(url: str, target: Path, expected_gib: float | None = None) -> None:
     print(f"  done: {target} ({human(target.stat().st_size)})")
 
 
-def fetch_model(dest: Path, quant: str) -> Path:
-    if quant not in MODEL_QUANTS:
-        raise SystemExit(f"unknown quant {quant!r}; pick one of {', '.join(MODEL_QUANTS)}")
-    filename, size_gib = MODEL_QUANTS[quant]
+def fetch_model(dest: Path, quant: str, vision: bool = False) -> Path:
+    repo = VISION_MODEL_REPO if vision else MODEL_REPO
+    quants = VISION_MODEL_QUANTS if vision else MODEL_QUANTS
+    if quant not in quants:
+        raise SystemExit(f"unknown quant {quant!r}; pick one of {', '.join(quants)}")
+    filename, size_gib = quants[quant]
     target = dest / filename
     if target.exists():
         print(f"model already present: {target} ({human(target.stat().st_size)})")
@@ -119,7 +146,7 @@ def fetch_model(dest: Path, quant: str) -> Path:
     if free < needed:
         raise SystemExit(f"need ~{size_gib:.1f} GiB free at {dest}, have {human(free)}")
 
-    url = f"https://huggingface.co/{MODEL_REPO}/resolve/main/{filename}?download=true"
+    url = f"https://huggingface.co/{repo}/resolve/main/{filename}?download=true"
     print(f"model {MODEL_REPO} [{quant}] ~{size_gib:.1f} GiB")
     download(url, target, size_gib)
     return target
@@ -204,6 +231,9 @@ def main() -> None:
                         help=f"where to put the model and server (default {DEFAULT_DEST})")
     parser.add_argument("--quant", default=DEFAULT_QUANT,
                         help=f"one of {', '.join(MODEL_QUANTS)} (default {DEFAULT_QUANT})")
+    parser.add_argument("--vision", action="store_true",
+                        help="fetch Qwen3.8-27B (dense, fits the card whole, has eyes) "
+                             "and its mmproj projector instead of the 35B MoE")
     parser.add_argument("--model-only", action="store_true")
     parser.add_argument("--server-only", action="store_true")
     parser.add_argument("--print-settings", action="store_true",
@@ -217,10 +247,23 @@ def main() -> None:
         print(settings_json(args.dest / filename, args.dest / "llama.cpp" / "llama-server.exe"))
         return
 
-    model = args.dest / MODEL_QUANTS[args.quant][0]
+    quants = VISION_MODEL_QUANTS if args.vision else MODEL_QUANTS
+    if args.vision and args.quant not in quants:
+        args.quant = "UD-Q4_K_M"
+    model = args.dest / quants[args.quant][0]
     server = args.dest / "llama.cpp" / "llama-server.exe"
     if not args.server_only:
-        model = fetch_model(args.dest, args.quant)
+        model = fetch_model(args.dest, args.quant, vision=args.vision)
+        if args.vision:
+            # The weights alone are a blind model: without the projector llama-server
+            # loads and answers text, and an image is simply not accepted.
+            name, gib = VISION_PROJECTOR
+            target = args.dest / name
+            if target.exists():
+                print(f"projector already present: {target}")
+            else:
+                download(f"https://huggingface.co/{VISION_MODEL_REPO}/resolve/main/{name}"
+                         "?download=true", target, gib)
     if not args.model_only:
         server = fetch_server(args.dest)
 

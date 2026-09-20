@@ -70,6 +70,85 @@ namespace
     }
 }
 
+void GpuMemoryTotals(std::uint64_t& outUsedBytes, std::uint64_t& outTotalBytes)
+{
+    outUsedBytes = 0;
+    outTotalBytes = 0;
+
+    // Resolved once. nvml.dll lives beside the driver, so it is present on an NVIDIA box and
+    // absent everywhere else; the absence is not an error, it is a machine without NVML.
+    struct Nvml
+    {
+        // The v2 memory struct is what current drivers want; the v1 entry point is kept
+        // because it is the one that exists on older ones and the fields we read are the
+        // same two.
+        struct MemoryV2 { unsigned int version; unsigned long long total, reserved, free, used; };
+        using InitFn = int (*)();
+        using HandleFn = int (*)(unsigned int, void**);
+        using MemFn = int (*)(void*, MemoryV2*);
+        using MemV1Fn = int (*)(void*, unsigned long long*);
+
+        HMODULE dll = nullptr;
+        HandleFn handleByIndex = nullptr;
+        MemFn memoryV2 = nullptr;
+        MemV1Fn memoryV1 = nullptr;
+        void* device = nullptr;
+        bool ready = false;
+
+        Nvml()
+        {
+            dll = LoadLibraryA("nvml.dll");
+            if (!dll)
+            {
+                // The driver's own directory, for installs that do not put it on the path.
+                dll = LoadLibraryA("C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll");
+            }
+            if (!dll)
+            {
+                return;
+            }
+            auto init = reinterpret_cast<InitFn>(GetProcAddress(dll, "nvmlInit_v2"));
+            handleByIndex = reinterpret_cast<HandleFn>(
+                GetProcAddress(dll, "nvmlDeviceGetHandleByIndex_v2"));
+            memoryV2 = reinterpret_cast<MemFn>(GetProcAddress(dll, "nvmlDeviceGetMemoryInfo_v2"));
+            memoryV1 = reinterpret_cast<MemV1Fn>(GetProcAddress(dll, "nvmlDeviceGetMemoryInfo"));
+            if (!init || !handleByIndex || (!memoryV2 && !memoryV1) || init() != 0)
+            {
+                return;
+            }
+            ready = handleByIndex(0, &device) == 0;
+        }
+    };
+    static Nvml nvml;
+    if (!nvml.ready)
+    {
+        return;
+    }
+
+    if (nvml.memoryV2)
+    {
+        Nvml::MemoryV2 info{};
+        // NVML's versioned structs carry their size and a version number in the top bits.
+        info.version = static_cast<unsigned int>(sizeof(info)) | (2u << 24);
+        if (nvml.memoryV2(nvml.device, &info) == 0 && info.total > 0)
+        {
+            outUsedBytes = info.used;
+            outTotalBytes = info.total;
+            return;
+        }
+    }
+    if (nvml.memoryV1)
+    {
+        // v1 lays out total, free, used as three consecutive 64-bit fields.
+        unsigned long long v1[3] = { 0, 0, 0 };
+        if (nvml.memoryV1(nvml.device, v1) == 0 && v1[0] > 0)
+        {
+            outTotalBytes = v1[0];
+            outUsedBytes = v1[2];
+        }
+    }
+}
+
 void RegisterMemoryProvider(const char* name, MemoryProviderFn fn, const void* self)
 {
     if (!name || !fn) { return; }
