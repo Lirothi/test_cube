@@ -1,5 +1,6 @@
 #include "materials/MaterialData.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/streaming/StreamingSettings.h" // A3: material textures load streamable
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/renderables/InstanceTypes.h"
 #include <algorithm>
@@ -57,8 +58,17 @@ bool MaterialData::LoadAlbedo(Renderer* r, ID3D12GraphicsCommandList* upload, co
     // Masked slots: preserve alpha-test coverage across the WIC-built mip chain (requires the
     // caller to set alphaMask/alphaCutoff BEFORE loading — see MaterialDataManager).
     d.alphaCoverageCutoff = (alphaMask && alphaCutoff >= 0.0f) ? alphaCutoff : -1.0f;
+    SetStreamable(d);
     if (albedo.CreateFromFile(r, upload, d, keepAlive)) { hasAlbedo = true; return true; }
     return false;
+}
+
+// Texture streaming A3: material textures load their non-streaming tail only; the manager streams
+// the rest in by distance. Off with the manager (or under the A2 forceMips test knob).
+void MaterialData::SetStreamable(Texture2D::CreateDesc& d)
+{
+    d.streamable = streaming::g_enabled && streaming::g_forceMips == 0;
+    d.residentMips = streaming::kNonStreamingMips;
 }
 
 bool MaterialData::LoadMR(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
@@ -68,6 +78,7 @@ bool MaterialData::LoadMR(Renderer* r, ID3D12GraphicsCommandList* upload, const 
     Texture2D::CreateDesc d{};
     d.path  = path;
     d.usage = Texture2D::Usage::MetalRough;
+    SetStreamable(d);
     if (mr.CreateFromFile(r, upload, d, keepAlive)) { hasMR = true; return true; }
     return false;
 }
@@ -80,6 +91,7 @@ bool MaterialData::LoadNormal(Renderer* r, ID3D12GraphicsCommandList* upload, co
     d.path       = path;
     d.usage      = Texture2D::Usage::NormalMap;
     d.normalIsRG = normalIsRG;
+    SetStreamable(d);
     if (normal.CreateFromFile(r, upload, d, keepAlive)) { hasNormal = true; return true; }
     return false;
 }

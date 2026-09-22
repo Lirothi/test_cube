@@ -209,4 +209,13 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
     s.prevLocal = local.CurrentUsage;
     LOG_INFO(logging::LogCategory::Core, "{}", line);
 }
+std::uint64_t DedicatedVideoMemoryBytes(ID3D12Device* device)
+{
+    IDXGIAdapter3* adapter = AdapterFor(device);
+    if (!adapter) { return 0; }
+    DXGI_ADAPTER_DESC desc{};
+    if (FAILED(adapter->GetDesc(&desc))) { return 0; }
+    return static_cast<std::uint64_t>(desc.DedicatedVideoMemory);
+}
+
 } // namespace render

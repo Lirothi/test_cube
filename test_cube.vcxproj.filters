@@ -603,6 +603,12 @@
     <ClCompile Include="sources/rendering/streaming/TextureStreaming.cpp">
       <Filter>sources\rendering\streaming</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/streaming/StreamingBounds.cpp">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/streaming/TextureStreamingManager.cpp">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp">
       <Filter>sources\rendering\debug</Filter>
     </ClCompile>
@@ -1131,6 +1137,15 @@
       <Filter>sources\rendering\streaming</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/streaming/TextureStreaming.h">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/StreamingTexture.h">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/StreamingBounds.h">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/TextureStreamingManager.h">
       <Filter>sources\rendering\streaming</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameResource.h">

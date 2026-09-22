@@ -127,6 +127,7 @@ public:
         const std::wstring& GetSourcePath() const { return Source_().sourcePath_; } // the file read
         // Slot in the streaming registry; -1 = not registered. Owners only (a view never registers).
         int StreamingIndex() const { return streamingIndex_; }
+        int StreamingOwnerIndex() const { return Source_().streamingIndex_; } // the shared owner's slot, from a view too
         void AttachStreaming(streaming::TextureStreaming* s, int index) { streaming_ = s; streamingIndex_ = index; }
         void DetachStreaming() { streaming_ = nullptr; streamingIndex_ = -1; }
         // Bumped by every AdoptResource: consumers that COPY the CPU SRV (RT bindless sets) key on it.

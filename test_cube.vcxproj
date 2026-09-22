@@ -387,6 +387,8 @@
     <ClCompile Include="sources/rendering/streaming/TextureRetireBin.cpp" />
     <ClCompile Include="sources/rendering/streaming/TextureStreamingIo.cpp" />
     <ClCompile Include="sources/rendering/streaming/TextureStreaming.cpp" />
+    <ClCompile Include="sources/rendering/streaming/StreamingBounds.cpp" />
+    <ClCompile Include="sources/rendering/streaming/TextureStreamingManager.cpp" />
     <ClCompile Include="sources/rendering/core/UploadBatch.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugDraw.cpp" />
@@ -619,6 +621,9 @@
     <ClInclude Include="sources/rendering/streaming/TextureRetireBin.h" />
     <ClInclude Include="sources/rendering/streaming/TextureStreamingIo.h" />
     <ClInclude Include="sources/rendering/streaming/TextureStreaming.h" />
+    <ClInclude Include="sources/rendering/streaming/StreamingTexture.h" />
+    <ClInclude Include="sources/rendering/streaming/StreamingBounds.h" />
+    <ClInclude Include="sources/rendering/streaming/TextureStreamingManager.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
     <ClInclude Include="sources/rendering/debug/DebugDraw.h" />
     <ClInclude Include="sources/rendering/debug/LodDebugView.h" />

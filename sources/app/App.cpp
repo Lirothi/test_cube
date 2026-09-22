@@ -389,6 +389,16 @@ namespace
         if (setting == "streaming.maxPerFrame")   { streaming::g_maxPerFrame = std::max(0, static_cast<int>(value)); return true; }
         if (setting == "streaming.forceMips")     { streaming::g_forceMips = static_cast<int>(value); return true; }
         if (setting == "streaming.maxIoInFlight") { streaming::g_maxIoInFlight = std::max(1, static_cast<int>(value)); return true; }
+        if (setting == "streaming.poolSizeMB")    { streaming::g_poolSizeMB = std::max(-1, static_cast<int>(value)); return true; }
+        if (setting == "streaming.mipBias")       { streaming::g_mipBias = std::clamp(static_cast<int>(value), 0, 8); return true; }
+        if (setting == "streaming.boost")         { streaming::g_boost = std::clamp(value, 0.1f, 8.0f); return true; }
+        if (setting == "streaming.hiddenScale")   { streaming::g_hiddenScale = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "streaming.framesForFullUpdate") { streaming::g_framesForFullUpdate = std::max(1, static_cast<int>(value)); return true; }
+        if (setting == "streaming.minMipForSplit") { streaming::g_minMipForSplit = static_cast<int>(value); return true; }
+        if (setting == "streaming.perTextureBias") { streaming::g_perTextureBias = value != 0.0f; return true; }
+        if (setting == "streaming.fullyLoadUsed") { streaming::g_fullyLoadUsed = value != 0.0f; return true; }
+        if (setting == "streaming.dropMips")      { streaming::g_dropMips = std::clamp(static_cast<int>(value), 0, 2); return true; }
+        if (setting == "streaming.selftest")      { streaming::g_selftest = value != 0.0f; return true; }
         if (setting == "vsm.clipmapDepthBias")  { vsm::g_clipmapDepthBias = value;  return true; }
         // Per-level depth-bias shaping (bias(L) = max(base * decay^L, floorTexels), see
         // VsmClipmapShadow) -- headless mirrors of the two dev-window sliders beside the base bias.

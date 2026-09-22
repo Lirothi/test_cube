@@ -1,6 +1,6 @@
 # План: текстурный стриминг и виртуальные текстуры (транскрипция UE 5.6)
 
-Дата: 2026-09-20. Статус: **A1 сделан 2026-09-22 (коммит `186e2be`), A2 сделан 2026-09-22 (см. блоки «Статус» в A1/A2); следующий — A3.** Референс — дроп `D:\Programming\ue_strip`
+Дата: 2026-09-20. Статус: **A1–A3 сделаны 2026-09-22 (коммиты `1e89f6f`, `6492c2a`; A3 — см. блок «Статус» в A3); следующий — A4.** Референс — дроп `D:\Programming\ue_strip`
 (оба дерева, `Source/` и `Shaders/`). Каждая ссылка на UE и на наш код — с `file:line`, сверено
 2026-09-20 по файлам; что не сверено — помечено «(сверить)». Документ написан как задание для
 исполнителя: шаг берётся целиком, без переразведки, кроме чтения файлов, перечисленных в шаге.
@@ -447,6 +447,46 @@ framesForFullUpdate, tempMemoryMB, minMipForSplit, perTextureBias, fullyLoadUsed
 место для use-after-free); Debug `--gbv` один прогон; `--sweep=streaming.enabled:1,0,1,0`.
 
 **Откат.** `streaming.enabled = 0`.
+
+**Статус (2026-09-22): СДЕЛАНО.** Файлы: `StreamingTexture.h` (`FStreamingRenderAsset`: wanted /
+retention / loadOrder / drop / keep — формулы `StreamingTexture.cpp:306-540` дословно),
+`StreamingBounds.h/.cpp` (бокс на объект × материал × 3 текстуры, `texelFactor = uvDensity ×
+scale / max(texOffsScale.zw)`, без uvDensity — размер AABB), `TextureStreamingManager.h/.cpp`
+(снимок → `SubmitDetach` задача `DoWork_` = UpdateBoundSizes → PerfectWantedMips → бюджет
+(TryDropMaxResolutions / TryDropMips / TryKeepMips) → load/cancel с temp-бюджетами → apply через
+`TextureStreaming::RequestResident/CancelRequest`); тик из `SceneRenderer::Render` после
+`DecideFrame`; материальные текстуры грузятся хвостом 7 мипов (`MaterialData::SetStreamable`);
+`render::DedicatedVideoMemoryBytes`; ручки `streaming.*` в `--set`, группа Streaming в
+`GraphicsSettings` (enabled/poolSizeMB/mipBias/boost/hiddenScale, JSON `streaming`, Reset) и
+вкладка «Streaming» dev-окна (ручки + пул/бюджет/занято/wanted, in/out за цикл, гистограмма
+wanted−resident, таблица текстур); `[texstream]` раз в 5 с несёт те же числа и `lag>2 max`.
+
+Отступления от текста шага: (1) видимость = CPU-тест AABB против фрустума нежиттерной камеры
+(`lastSeenAge < 0.5 с` = visible), а не `LastRenderTime` примитива — у нас его нет; (2) стадии
+1..3 пусты: сотни боксов пересобираются целиком в снимке; (3) текстура без единого бокса (превью,
+LUT, океан) = UE «unknown ref» с `lastRenderTime 0` → всегда полностью резидентна; (4) margin =
+5 МБ (`[TextureStreaming] MemoryMargin` BaseEngine.ini), не temp — с temp 24-МБ пул давал
+бюджет 0; (5) кламп `distSq ≥ 1 см²` (UE клампит в см), у нас метры; (6) одна вьюха.
+
+Приёмка. (1) Селф-тест: `size 454.4 → wanted 10 mips: PASS`. (2) Загрузка `wind_test` до
+первого кадра, `--shot-delay=0`, по 3 тёплых прогона: **текстурная корзина 130 → 50 мс (−62 %)**,
+общее время 3.75 → 3.67 с — критерий «≤ 0.3× HEAD» по общему времени недостижим стримингом
+(остальное = шейдеры/PSO/AS), критерий читать по текстурной корзине. (3) `poolSizeMB:24` →
+бюджет 19, занято 11, in/out 0 после установления; `poolSizeMB:10` → бюджет 5, занято 4
+(44 дропа), стабильно, картинка деградирует мипами без ошибок. (4) Пляж при `poolSizeMB:-1`:
+менеджер хочет 11 МБ вместо 76; кадр vs полная резидентность по зонам (пол = два HEAD-прогона):
+низ (песок) 9 %/0.09 при поле 0.7 %/0.01, середина (пальмы) 18.7 %/0.32/p99 3 при поле
+9.8 %/0.11/p99 1, верх (облака) в поле; при `boost:4` середина 12.6 %/0.14/p99 1 — в поле.
+Глазами кропы неразличимы: дефолтный `Boost 1` с `kExtraBoost 0.71` (UE) на один мип
+консервативнее полного набора на части пальм, это штатная ручка UE (`r.Streaming.Boost`), дефолт
+оставлен как у UE, **решение за владельцем** (цена boost 4 = 27 МБ вместо 11). Кольцо пальм:
+7 МБ, покой. (5) Орбита 30 м / 20°/с 22 с: 147 подмен, 35 МБ; `lag>2` только в стартовом бурсте
+(max 3, 2 цикла), дальше 0. Расчёт задачи 0.011–0.016 мс.
+
+Гейт: три конфига; Release `--scene-stress --barrier-cmp` CLEAN 300 (49 с, 99 подмен, 145 МБ
+сквозь смены уровней), компаратор молчит; `--sweep=streaming.enabled:1,0,1,0` — кадры 1/0 в
+поле; Debug `--gbv --barrier-cmp` с орбитой (72 подмены под GBV): 0 ошибок, 0 FATAL,
+`barrier_diag.log` не родился.
 
 ### A4. Fade мипов, провайдер памяти, debug — 1 день
 

@@ -196,6 +196,7 @@ public:
     size_t AppendGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst, size_t& inoutCount) const;
 
 private:
+    static void SetStreamable(Texture2D::CreateDesc& d); // A3: tail-only load when the manager is on
     struct SrvCache {
         // The descriptor allocator is reset every time a frame-resource slot is
         // reused. Cache against the monotonically increasing frame number, not

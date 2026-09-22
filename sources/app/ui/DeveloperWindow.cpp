@@ -24,6 +24,8 @@
 #include "imgui_internal.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/streaming/StreamingSettings.h" // Streaming tab (A3)
+#include "rendering/streaming/TextureStreaming.h"
 #include "rendering/core/RenderStats.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/VisibilityStats.h" // S0 occlusion plan: per-view visibility table
@@ -544,7 +546,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             { Tab::Visibility, "Visibility" }, { Tab::Reflections, "Reflections" },
             { Tab::Fog, "Fog" }, { Tab::Sky, "Sky" }, { Tab::Debug, "Debug" },
             { Tab::Lod, "LOD" }, { Tab::Csm, "CSM" }, { Tab::Contact, "Contact" },
-            { Tab::Vsm, "VSM" }, { Tab::Bindings, "Bindings" }
+            { Tab::Vsm, "VSM" }, { Tab::Streaming, "Streaming" }, { Tab::Bindings, "Bindings" }
         };
         const float navigationWidth = ImGui::GetFontSize() * 8.0f;
         if (ImGui::BeginChild("DeveloperControlsNavigation", ImVec2(navigationWidth, 0), true))
@@ -2863,6 +2865,82 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                             }
                         }
                     }
+                }
+            }
+
+            if (activeTab_ == Tab::Streaming)
+            {
+                ImGui::TextWrapped("Texture streaming (UE r.Streaming.*): level textures load their 7 smallest mips and the "
+                    "manager streams the rest by distance, inside the pool budget. --set=streaming.<knob>:<v>");
+                GRAPHICS_CONTROL(StreamingEnabled, "streamingEnabled", ImGui::Checkbox("Enabled", &streaming::g_enabled));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Off: no new requests; textures keep the mips they have. Textures loaded while off load whole.");
+                GRAPHICS_CONTROL(StreamingPoolSizeMB, "streamingPoolSizeMB", ImGui::InputInt("Pool size MB", &streaming::g_poolSizeMB));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("-1 = 70%% of dedicated VRAM (UE), 0 = unlimited. Over budget the manager drops the least-kept mips first.");
+                GRAPHICS_CONTROL(StreamingMipBias, "streamingMipBias", ImGui::SliderInt("Global mip bias", &streaming::g_mipBias, 0, 4));
+                GRAPHICS_CONTROL(StreamingBoost, "streamingBoost", ImGui::SliderFloat("Boost", &streaming::g_boost, 0.25f, 4.0f, "%.2f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Scales the screen size every texture is judged against: 2 = one mip sharper everywhere.");
+                GRAPHICS_CONTROL(StreamingHiddenScale, "streamingHiddenScale", ImGui::SliderFloat("Hidden primitive scale", &streaming::g_hiddenScale, 0.0f, 1.0f, "%.2f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Objects outside the frustum ask for this fraction of their size (UE 0.5): what stays warm for a camera turn.");
+                ImGui::Separator();
+                if (streaming::TextureStreaming* ts = renderer.GetTextureStreaming())
+                {
+                    const streaming::TextureStreamingManager::Stats& st = ts->Manager().GetStats();
+                    const auto mb = [](std::uint64_t b) { return static_cast<double>(b) / (1024.0 * 1024.0); };
+                    ImGui::Text("Textures %u (with bounds %u), bounds %u, cycles %u, calc %.3f ms, screen size %.0f px",
+                                st.textures, st.withBounds, st.bounds, st.cycles, st.calcMs, st.screenSize);
+                    ImGui::Text("Pool %.1f MB | budget %.1f | used %.1f | budgeted %.1f | wanted %.1f | retired %.1f",
+                                mb(st.poolBytes), mb(st.budgetBytes), mb(st.usedBytes), mb(st.budgetedBytes), mb(st.wantedBytes), mb(ts->RetiredBytes()));
+                    ImGui::Text("Last cycle: in %u (%.2f MB), out %u (%.2f MB), cancels %u, refused %u, in flight %u",
+                                st.requestsIn, mb(st.bytesInCycle), st.requestsOut, mb(st.bytesOutCycle), st.cancels, st.refused, st.inFlight);
+                    ImGui::Text("wanted - resident:");
+                    for (int i = 0; i < 9; ++i)
+                    {
+                        ImGui::SameLine();
+                        ImGui::Text("[%+d] %u", i - 4, st.deltaHistogram[static_cast<std::size_t>(i)]);
+                    }
+                    const std::vector<streaming::TextureStreamingManager::Row>& rows = ts->Manager().Rows();
+                    const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+                    if (ImGui::BeginTable("streamingTextures", 9, flags, ImVec2(0.0f, ImGui::GetFontSize() * 18.0f)))
+                    {
+                        ImGui::TableSetupScrollFreeze(0, 1);
+                        ImGui::TableSetupColumn("Texture", ImGuiTableColumnFlags_WidthStretch, 4.0f);
+                        ImGui::TableSetupColumn("mips");
+                        ImGui::TableSetupColumn("resident");
+                        ImGui::TableSetupColumn("wanted");
+                        ImGui::TableSetupColumn("budgeted");
+                        ImGui::TableSetupColumn("requested");
+                        ImGui::TableSetupColumn("texel m");
+                        ImGui::TableSetupColumn("seen s");
+                        ImGui::TableSetupColumn("retention");
+                        ImGui::TableHeadersRow();
+                        for (const streaming::TextureStreamingManager::Row& r : rows)
+                        {
+                            std::string path;
+                            path.reserve(r.path.size());
+                            for (wchar_t c : r.path) { path.push_back((c > 0 && c < 128) ? static_cast<char>(c) : '?'); }
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn(); ImGui::TextUnformatted(path.c_str());
+                            if (r.unknownRef && ImGui::IsItemHovered()) { ImGui::SetTooltip("no placed object references it: kept fully loaded (UE unknown ref)"); }
+                            ImGui::TableNextColumn(); ImGui::Text("%u", r.mipCount);
+                            ImGui::TableNextColumn(); ImGui::Text("%u", r.resident);
+                            ImGui::TableNextColumn(); ImGui::Text("%u", r.wanted);
+                            ImGui::TableNextColumn(); ImGui::Text("%u%s", r.budgeted, r.bias ? "*" : "");
+                            ImGui::TableNextColumn(); ImGui::Text("%u", r.requested);
+                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.texelFactor);
+                            ImGui::TableNextColumn(); if (r.lastSeen < 1.0e5f) { ImGui::Text("%.1f", r.lastSeen); } else { ImGui::TextUnformatted("-"); }
+                            ImGui::TableNextColumn(); ImGui::Text("%d", r.retention);
+                        }
+                        ImGui::EndTable();
+                    }
+                }
+                ImGui::Separator();
+                if (ImGui::Button("Reset streaming to defaults"))
+                {
+                    graphicsSettings.ResetStreaming(renderer, scene, settings);
                 }
             }
 

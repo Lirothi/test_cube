@@ -135,6 +135,11 @@ enum class GraphicsControl
     VsmHzbCull,
     VsmPageCaching,
     VsmWindAnimateMaxLevel,
+    StreamingEnabled,             // Streaming (texture streaming A3)
+    StreamingPoolSizeMB,
+    StreamingMipBias,
+    StreamingBoost,
+    StreamingHiddenScale,
 };
 
 // Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,
@@ -166,6 +171,7 @@ public:
     bool ResetContactShadows(Renderer& renderer, const Scene& scene,
                              const SceneRenderSettings& settings);
     bool ResetVsm(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings);
+    bool ResetStreaming(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings);
     bool ResetControl(GraphicsControl control, Renderer& renderer, Scene& scene,
                       SceneRenderSettings& settings);
 

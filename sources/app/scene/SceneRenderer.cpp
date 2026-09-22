@@ -36,6 +36,7 @@
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
 #include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
+#include "rendering/streaming/TextureStreaming.h" // A3: manager tick
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -648,6 +649,9 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     frame_ = &frame;
     EnsureFrameResources(renderer);
     DecideFrame(renderer, frame);
+    // Texture streaming A3: the manager's frame stage (snapshot / apply) before the graph is built,
+    // so this frame's Main_TextureStreaming records what it asked for.
+    if (streaming::TextureStreaming* ts = renderer->GetTextureStreaming()) { ts->TickManager(renderer, frame); }
 
     renderer->BeginSubmitTimeline();
 

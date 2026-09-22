@@ -12,6 +12,7 @@
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/Scene.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/streaming/StreamingSettings.h" // A3: streaming.* globals
 #include "rendering/core/VisibilityStats.h"
 #include "rendering/debug/LodDebugView.h"
 #include "rendering/meshes/LodSelect.h"
@@ -35,6 +36,12 @@ namespace
         bool gbufferHzbCull = true;
         int fogGridPixels = static_cast<int>(render::kFogGridPixels); // volumetric fog cell size, powers of two 4..64
         int fogGridZ = static_cast<int>(render::kFogGridZ);           // volumetric fog slices, 16..128
+        // Texture streaming A3 (UE r.Streaming.*)
+        bool streamingEnabled = true;
+        int streamingPoolSizeMB = -1;   // -1 = 70 % of dedicated VRAM, 0 = unlimited
+        int streamingMipBias = 0;
+        float streamingBoost = 1.0f;
+        float streamingHiddenScale = 0.5f;
 
         bool dlssEnabled = false;
         sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
@@ -381,6 +388,11 @@ namespace
         s.gbufferHzbCull = render::g_gbufferHzbCullEnabled;
         s.fogGridPixels = static_cast<int>(render::g_fogGridPixels);
         s.fogGridZ = static_cast<int>(render::g_fogGridZ);
+        s.streamingEnabled = streaming::g_enabled;
+        s.streamingPoolSizeMB = streaming::g_poolSizeMB;
+        s.streamingMipBias = streaming::g_mipBias;
+        s.streamingBoost = streaming::g_boost;
+        s.streamingHiddenScale = streaming::g_hiddenScale;
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
@@ -505,6 +517,15 @@ namespace
         render::g_fogGridZ = static_cast<unsigned>(std::clamp(s.fogGridZ, 16, 128));
     }
 
+    void ApplyStreaming(const GraphicsSettingsSnapshot& s)
+    {
+        streaming::g_enabled = s.streamingEnabled;
+        streaming::g_poolSizeMB = std::max(s.streamingPoolSizeMB, -1);
+        streaming::g_mipBias = std::clamp(s.streamingMipBias, 0, 8);
+        streaming::g_boost = std::clamp(s.streamingBoost, 0.1f, 8.0f);
+        streaming::g_hiddenScale = std::clamp(s.streamingHiddenScale, 0.0f, 1.0f);
+    }
+
     void ApplyReflections(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
     {
         settings.ssrTechnique = s.ssrTechnique;
@@ -612,6 +633,7 @@ namespace
         ApplyUpscale(s, renderer, settings);
         ApplyReflections(s, renderer, settings);
         ApplyFog(s);
+        ApplyStreaming(s);
         ApplyLod(s);
         ApplyContact(s);
         ApplySdsm(s);
@@ -633,6 +655,13 @@ namespace
                 { "gbufferHzbCull", s.gbufferHzbCull },
                 { "fogGridPixels", s.fogGridPixels },
                 { "fogGridZ", s.fogGridZ }
+            } },
+            { "streaming", {
+                { "enabled", s.streamingEnabled },
+                { "poolSizeMB", s.streamingPoolSizeMB },
+                { "mipBias", s.streamingMipBias },
+                { "boost", s.streamingBoost },
+                { "hiddenScale", s.streamingHiddenScale }
             } },
             { "visibility", {
                 { "chunkMask", s.visibilityChunkMask },
@@ -789,6 +818,12 @@ namespace
         Read(performance, "gbufferHzbCull", s.gbufferHzbCull);
         Read(performance, "fogGridPixels", s.fogGridPixels);
         Read(performance, "fogGridZ", s.fogGridZ);
+        const json& streamingSec = Section(root, "streaming");
+        Read(streamingSec, "enabled", s.streamingEnabled);
+        Read(streamingSec, "poolSizeMB", s.streamingPoolSizeMB);
+        Read(streamingSec, "mipBias", s.streamingMipBias);
+        Read(streamingSec, "boost", s.streamingBoost);
+        Read(streamingSec, "hiddenScale", s.streamingHiddenScale);
         Read(visibility, "chunkMask", s.visibilityChunkMask);
         Read(visibility, "occlusionMethod", s.occlusionMethod);
         Read(visibility, "queryLatency", s.occlusionQueryLatency);
@@ -1209,6 +1244,11 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::GbufferHzb:                     current.gbufferHzbCull = defaults.gbufferHzbCull; break;
     case GraphicsControl::FogGridPixels:                  current.fogGridPixels = defaults.fogGridPixels; break;
     case GraphicsControl::FogGridZ:                       current.fogGridZ = defaults.fogGridZ; break;
+    case GraphicsControl::StreamingEnabled:               current.streamingEnabled = defaults.streamingEnabled; break;
+    case GraphicsControl::StreamingPoolSizeMB:            current.streamingPoolSizeMB = defaults.streamingPoolSizeMB; break;
+    case GraphicsControl::StreamingMipBias:               current.streamingMipBias = defaults.streamingMipBias; break;
+    case GraphicsControl::StreamingBoost:                 current.streamingBoost = defaults.streamingBoost; break;
+    case GraphicsControl::StreamingHiddenScale:           current.streamingHiddenScale = defaults.streamingHiddenScale; break;
     case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
     case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
     case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;
@@ -1282,6 +1322,11 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     {
         ApplyContact(current);
     }
+    else if (value >= static_cast<unsigned>(GraphicsControl::StreamingEnabled) &&
+             value <= static_cast<unsigned>(GraphicsControl::StreamingHiddenScale))
+    {
+        ApplyStreaming(current);
+    }
     else
     {
         ApplyVsm(current);
@@ -1321,6 +1366,13 @@ bool GraphicsSettingsManager::ResetLod(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
     ApplyLod(GraphicsSettingsSnapshot{});
+    return SaveCurrent(renderer, scene, settings);
+}
+
+bool GraphicsSettingsManager::ResetStreaming(Renderer& renderer, const Scene& scene,
+                                             const SceneRenderSettings& settings)
+{
+    ApplyStreaming(GraphicsSettingsSnapshot{});
     return SaveCurrent(renderer, scene, settings);
 }
 

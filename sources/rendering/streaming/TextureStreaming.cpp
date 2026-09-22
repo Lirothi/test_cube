@@ -47,6 +47,7 @@ void TextureStreaming::Init(ID3D12Device* device)
     device_ = device;
     if (!device_) { return; }
     io_.Start();
+    manager_.Init();
     render::RegisterMemoryProvider("tex.ret", &RetiredBytesProvider, this);
     lastReadout_ = std::chrono::steady_clock::now();
 }
@@ -54,6 +55,7 @@ void TextureStreaming::Init(ID3D12Device* device)
 void TextureStreaming::Shutdown()
 {
     if (!device_) { return; }
+    manager_.Shutdown();
     io_.Stop();
     for (auto& s : swaps_) { s->newRes.Reset(); }
     swaps_.clear();
@@ -128,9 +130,45 @@ void TextureStreaming::DropSwap_(Swap* s, std::uint64_t frameNo)
     std::erase_if(swaps_, [s](const std::unique_ptr<Swap>& p) { return p.get() == s; });
 }
 
+void TextureStreaming::TickManager(Renderer* renderer, const SceneFrameData& frame)
+{
+    if (!device_) { return; }
+    manager_.Tick(*this, renderer, frame, frameNo_);
+}
+
+UINT TextureStreaming::InFlightTarget(std::uint32_t i) const
+{
+    if (i >= entries_.size() || !entries_[i].swap) { return 0; }
+    return entries_[i].swap->newResident;
+}
+
+bool TextureStreaming::RequestResident(std::uint32_t i, UINT mips)
+{
+    if (i >= entries_.size() || !entries_[i].tex || entries_[i].swap) { return false; }
+    if (mips == entries_[i].tex->GetResidentMips()) { return false; }
+    return IssueSwap_(i, mips);
+}
+
+bool TextureStreaming::CancelRequest(std::uint32_t i)
+{
+    if (i >= entries_.size() || !entries_[i].swap) { return false; }
+    Swap* s = entries_[i].swap;
+    if (s->stage == Swap::Stage::Copied) { return false; } // on the GPU already; it lands next frame
+    DropSwap_(s, frameNo_);
+    return true;
+}
+
+UINT64 TextureStreaming::ResidentBytes() const
+{
+    UINT64 total = 0;
+    for (const Entry& e : entries_) { if (e.tex) { total += e.tex->GetResidentBytes(); } }
+    return total;
+}
+
 void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
 {
     if (!device_ || !renderer) { return; }
+    frameNo_ = frameNo;
     {
         const auto now = std::chrono::steady_clock::now();
         if (lastFrameTime_ != std::chrono::steady_clock::time_point{})
@@ -196,6 +234,16 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
     }
 
     if (g_enabled) { IssueRequests_(frameNo); }
+    {
+        const TextureStreamingManager::Stats& m = manager_.GetStats();
+        if (m.cycles != lastCycleSeen_)
+        {
+            lastCycleSeen_ = m.cycles;
+            const unsigned lagging = m.deltaHistogram[7] + m.deltaHistogram[8];
+            lagMax_ = std::max(lagMax_, lagging);
+            if (lagging) { ++lagCycles_; }
+        }
+    }
     Readout_(frameNo);
 }
 
@@ -433,12 +481,17 @@ void TextureStreaming::Readout_(std::uint64_t frameNo)
         else { ++copied; }
     }
     const double avgMs = dtCount_ ? dtSumMs_ / dtCount_ : 0.0;
+    const TextureStreamingManager::Stats& m = manager_.GetStats();
     LOG_INFO(logging::LogCategory::Render,
-        "[texstream] frame {}: {} textures, swaps io {} / ready {} / copied {}, ring {}/{} KB, retired {} ({} KB), done {} failed {}, read {} MB | frame ms avg {:.2f} max quiet {:.2f} max swap {:.2f} ({} swap frames)",
+        "[texstream] frame {}: {} textures, swaps io {} / ready {} / copied {}, ring {}/{} KB, retired {} ({} KB), done {} failed {}, read {} MB | frame ms avg {:.2f} max quiet {:.2f} max swap {:.2f} ({} swap frames) | pool {} MB budget {} used {} wanted {} | cycle in {} ({} KB) out {} ({} KB) cancel {} refused {} | lag>2 max {} in {} cycles | calc {:.3f} ms",
         frameNo, registered_, waitIo, ready, copied, ring_.BytesInUse() >> 10, ring_.Capacity() >> 10,
         retire_.Count(), retire_.Bytes() >> 10, swapsDone_, swapsFailed_, io_.BytesRead() >> 20,
-        avgMs, dtMaxQuietMs_, dtMaxSwapMs_, swapFrames_);
+        avgMs, dtMaxQuietMs_, dtMaxSwapMs_, swapFrames_,
+        m.poolBytes >> 20, m.budgetBytes >> 20, m.usedBytes >> 20, m.wantedBytes >> 20,
+        m.requestsIn, m.bytesInCycle >> 10, m.requestsOut, m.bytesOutCycle >> 10, m.cancels, m.refused,
+        lagMax_, lagCycles_, m.calcMs);
     dtSumMs_ = 0.0; dtCount_ = 0; dtMaxQuietMs_ = 0.0; dtMaxSwapMs_ = 0.0; swapFrames_ = 0;
+    lagMax_ = 0; lagCycles_ = 0;
 }
 
 } // namespace streaming

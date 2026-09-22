@@ -51,4 +51,8 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec = 5.
 // dependency and no failure on a machine without it. Both zero when unavailable, and a caller
 // that gets zero should say "unknown" rather than "0 MB".
 void GpuMemoryTotals(std::uint64_t& outUsedBytes, std::uint64_t& outTotalBytes);
+
+// The adapter's dedicated video memory (DXGI_ADAPTER_DESC), 0 when unavailable. The texture
+// streaming pool defaults to a fraction of it (UE GPoolSizeVRAMPercentage).
+std::uint64_t DedicatedVideoMemoryBytes(ID3D12Device* device);
 } // namespace render

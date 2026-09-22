@@ -43,7 +43,7 @@ private:
     enum class Tab
     {
         Frame, AntiAliasing, Visibility, Reflections, Fog, Sky,
-        Debug, Lod, Csm, Contact, Vsm, Bindings
+        Debug, Lod, Csm, Contact, Vsm, Streaming, Bindings
     };
     Tab activeTab_ = Tab::Frame;
 

@@ -12,11 +12,13 @@
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/streaming/TextureRetireBin.h"
 #include "rendering/streaming/TextureStreamingIo.h"
+#include "rendering/streaming/TextureStreamingManager.h"
 #include "rendering/streaming/TextureUploadRing.h"
 
 class Renderer;
 class Texture2D;
 struct RenderGraphPassContext;
+struct SceneFrameData;
 
 namespace streaming {
 
@@ -46,6 +48,20 @@ public:
     UINT64 RetiredBytes() const { return retire_.Bytes(); }
     std::size_t RegisteredCount() const { return registered_; }
     std::size_t SwapsInFlight() const { return swaps_.size(); }
+
+    // A3: the manager decides, this executes. Tick once per frame from SceneRenderer::Render
+    // (needs the camera and the object list); requests land in this frame's Main_TextureStreaming.
+    void TickManager(Renderer* renderer, const SceneFrameData& frame);
+    TextureStreamingManager& Manager() { return manager_; }
+    std::size_t EntryCount() const { return entries_.size(); }
+    Texture2D* EntryTexture(std::uint32_t i) const { return i < entries_.size() ? entries_[i].tex : nullptr; }
+    std::uint32_t EntryGen(std::uint32_t i) const { return i < entries_.size() ? entries_[i].gen : 0u; }
+    bool EntryAlive(std::uint32_t i, std::uint32_t gen) const { return i < entries_.size() && entries_[i].tex != nullptr && entries_[i].gen == gen; }
+    UINT InFlightTarget(std::uint32_t i) const; // mips the in-flight swap lands on; 0 = idle
+    bool RequestResident(std::uint32_t i, UINT mips); // false: busy, ring full, or nothing to do
+    bool CancelRequest(std::uint32_t i);             // false: nothing cancellable (already copied)
+    UINT64 ResidentBytes() const;
+    std::uint64_t LastFrame() const { return frameNo_; }
 
 private:
     struct Swap;
@@ -88,6 +104,8 @@ private:
     std::vector<std::uint32_t> freeEntries_;
     std::vector<std::unique_ptr<Swap>> swaps_;
     std::vector<std::unique_ptr<IoRequest>> orphanIo_; // cancelled while the worker may still hold them
+    TextureStreamingManager manager_;
+    std::uint64_t frameNo_ = 0;
     std::size_t registered_ = 0;
     std::uint64_t swapsDone_ = 0;
     std::uint64_t swapsFailed_ = 0;
@@ -102,6 +120,9 @@ private:
     double dtMaxQuietMs_ = 0.0;
     double dtMaxSwapMs_ = 0.0;
     unsigned swapFrames_ = 0;
+    unsigned lagMax_ = 0;        // most textures with wanted - resident > 2 seen by any cycle since the last readout
+    unsigned lagCycles_ = 0;     // cycles (of those seen) that had any such texture
+    unsigned lastCycleSeen_ = 0;
 };
 
 } // namespace streaming
