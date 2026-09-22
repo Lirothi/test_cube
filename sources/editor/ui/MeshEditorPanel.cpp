@@ -1328,7 +1328,17 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
             if (MeshManager::BinaryNeedsRebake(geom, opt))
             {
                 MeshManager mm;
-                if (mm.BakeToBinary(src, geom, opt)) { rebaked = true; } else { rebakeFailed = true; }
+                std::vector<float> uvDensity;
+                if (mm.BakeToBinary(src, geom, opt, &uvDensity))
+                {
+                    rebaked = true;
+                    // Texture streaming A1: the manifest went to disk above, before the bake; the
+                    // density the bake measured follows it now, in memory and in the file.
+                    if (!uvDensity.empty()) { doc_["uvDensity"] = uvDensity; }
+                    else { doc_.erase("uvDensity"); }
+                    MeshManager::WriteManifestUvDensity(path_, uvDensity);
+                }
+                else { rebakeFailed = true; }
             }
         }
     }

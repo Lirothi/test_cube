@@ -135,6 +135,14 @@ void Renderer::Shutdown()
                       "[texcache] %u loads, %u shared (GPU copies avoided), %zu live entries\n",
                       loaded, saved, entries);
         logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, line);
+        // Texture streaming A1: the mip-table self-check readout. Every DDS this process loaded is
+        // either streamable (its table matched the file and D3D's footprints) or was reported by
+        // name the moment it failed; WIC loads have no table and are counted apart.
+        std::uint32_t streamable = 0, nonStreamable = 0, png = 0;
+        Texture2D::StreamingStats(streamable, nonStreamable, png);
+        std::snprintf(line, sizeof(line), "[texstream] streamable %u / nonStreamable %u / png %u\n",
+                      streamable, nonStreamable, png);
+        logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, line);
     }
     materialDataManager_.ClearAll();
     Texture2D::ClearCache();

@@ -213,6 +213,29 @@ public:
     // missing or is not an object.
     static bool ApplyManifestOptions(const std::string& meshJsonPath, MeshLoadOptions& opt);
 
+    // Texture streaming A1 (docs/texture_streaming_vt_plan.md): per material-slot UV density of a
+    // LOD0 triangle set -- UE's FStaticMeshRenderData::ComputeUVDensities
+    // (Engine/Private/StaticMesh.cpp:3974-4029) over FUVDensityAccumulator
+    // (Engine/Private/Streaming/UVChannelDensity.h:13-81), transcribed. Per triangle
+    // d = sqrt(|cross(P01, P02)| / |cross2D(UV01, UV02)|), weighted by sqrt(|cross|); sorted, the
+    // top and bottom 10% dropped, weighted mean. The number is the WORLD size, in the vertices'
+    // own unit (metres once bakeScale has been applied), of a texture square holding unit UVs on
+    // that slot; the streaming manager scales it by screen size over distance to pick the mip it
+    // wants (UE's TexelFactor, TextureStreamingTypes.h:151-157). Indexed by materialSlot; a slot
+    // without a usable triangle is 0 = unknown. Every bake writes it to mesh.json "uvDensity".
+    static std::vector<float> ComputeUvDensities(const std::vector<VertexPNTUV>& verts,
+                                                 const std::vector<uint32_t>& indices,
+                                                 const std::vector<Mesh::Submesh>& submeshes);
+    // The same, from whatever the manifest's "geometry" points at as it is on disk -- normally the
+    // baked .bin, whose LOD0 is the exact triangle set the bake measured with bakeScale already in
+    // the vertices. For manifests that predate the key, without re-baking anything (a re-bake from
+    // source is not free of risk; see the bakeScale note in ImportPanel). Empty on failure.
+    static std::vector<float> ComputeUvDensitiesForManifest(const std::string& meshJsonPath);
+    // Rewrite ONE key of a mesh.json in place (nlohmann round-trip, dump(2) like every other
+    // writer of the file). An empty vector removes the key. Used wherever a bake knows which
+    // manifest it belongs to; ImportPanel sets the key on its own in-memory copy instead.
+    static bool WriteManifestUvDensity(const std::string& meshJsonPath, const std::vector<float>& density);
+
     // J: number of material slots (submeshes) a geometry resolves to (CPU-only, no GPU). glTF =
     // the resolved group count (#N selector = 1); non-glTF (.obj/.mesh.txt) = 1. Used by the Mesh
     // Editor to show exactly one material picker per submesh. Returns 1 on any parse failure.
@@ -266,8 +289,10 @@ public:
     // and serializes verts+LODs. CPU-only (no GPU/device), so the `--reimport` CLI runs it headless
     // without booting the app. Pass the SAME opt the runtime loads with (wantCW=false, the mesh's
     // recomputeNormalSlots) or the baked winding/normals won't match.
+    // `outUvDensity` (optional) receives ComputeUvDensities of the LOD0 triangles as baked -- the
+    // caller owes it to the manifest (mesh.json "uvDensity").
     bool BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
-                      const MeshLoadOptions& opt);
+                      const MeshLoadOptions& opt, std::vector<float>* outUvDensity = nullptr);
 
     // True when binPath is missing, unreadable, or was baked under a different wood/foliage
     // classification — its per-vertex wind weights no longer match `opt` and it must be re-baked.

@@ -26,6 +26,12 @@
   ],
   "source": "import_staging\\curly_palm\\scene.gltf",
   "texOffsScale": null,
+  "uvDensity": [
+    0.3585130572319031,
+    0.489664763212204,
+    0.08869419991970062,
+    0.21209532022476196
+  ],
   "windFoliage": [
     0.0,
     1.0,

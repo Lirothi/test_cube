@@ -7,5 +7,10 @@
     "tent_2"
   ],
   "source": "import_staging\\tent\\scene.gltf",
-  "texOffsScale": null
+  "texOffsScale": null,
+  "uvDensity": [
+    3.2666447162628174,
+    0.806745707988739,
+    5.195128440856934
+  ]
 }

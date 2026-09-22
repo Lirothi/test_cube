@@ -920,9 +920,10 @@ namespace
         }
         if (effectiveChunkGrid < 0) { effectiveChunkGrid = 0; }
         bakeOpt.chunkGrid = static_cast<unsigned int>(effectiveChunkGrid);
+        std::vector<float> uvDensity;
         {
             MeshManager mm;
-            if (!mm.BakeToBinary(sourceGltf, binGeometry, bakeOpt)) { return false; }
+            if (!mm.BakeToBinary(sourceGltf, binGeometry, bakeOpt, &uvDensity)) { return false; }
         }
 
         asset["geometry"] = binGeometry;
@@ -995,6 +996,10 @@ namespace
         // The unit correction folded into the vertices must round-trip like the LOD knobs, or
         // the next Save/bulk re-import would re-bake the mesh at the SOURCE unit scale.
         writeLodF("bakeScale", bakeOpt.bakeScale, 1.0f);
+        // Texture streaming A1: the per-slot UV density the bake just measured. Derived data, so it
+        // is always rewritten -- a stale value would mis-size every mip request for the asset.
+        if (!uvDensity.empty()) { asset["uvDensity"] = uvDensity; }
+        else { asset.erase("uvDensity"); }
         // lod3DropSlots flowed asset -> bakeOpt above and stays in `asset` as-is.
 
         std::error_code ec;

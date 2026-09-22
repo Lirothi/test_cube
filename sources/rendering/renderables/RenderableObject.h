@@ -140,6 +140,16 @@ public:
     void SetLodDistanceScale(float s) { lodDistanceScale_ = s > 0.01f ? s : 0.01f; }
     float GetLodDistanceScale() const { return lodDistanceScale_; }
 
+    // mesh.json "uvDensity" (texture streaming A1): per material slot, the world size in metres of
+    // a texture square holding unit UVs on this mesh -- UE's LocalUVDensities[0], the mesh half of
+    // TexelFactor (the material's tiling, texOffsScale.zw, is the other half; the reader applies
+    // it). 0 or a missing slot = unknown, and A3's manager then sizes from the object's bounds, the
+    // way UE treats a reference it could not measure. Lives here, next to lodDistanceScale, because
+    // it is a property of the placed GEOMETRY and not of the material.
+    void SetUvDensities(std::vector<float> d) { uvDensities_ = std::move(d); }
+    const std::vector<float>& GetUvDensities() const { return uvDensities_; }
+    float UvDensityForSlot(std::size_t slot) const { return slot < uvDensities_.size() ? uvDensities_[slot] : 0.0f; }
+
     // The mesh's own DERIVED scale (Mesh::GetLodAutoDistanceScale), or 1 when the derivation is
     // switched off. Multiplied with the authored lodDistanceScale above, so the manifest tunes ON
     // TOP of the automatic answer instead of replacing it.
@@ -315,6 +325,7 @@ private:
     unsigned int cameraLod_ = 0u; // Step 6: camera LOD chosen in PrepareViews (persists for hysteresis)
     float cameraLodFade_ = 0.0f;  // crossfade weight to cameraLod_+1 (0 = solid), from PrepareViews
     float lodDistanceScale_ = 1.0f; // mesh.json "lodDistanceScale"; see SetLodDistanceScale
+    std::vector<float> uvDensities_; // mesh.json "uvDensity"; see SetUvDensities
     float drawLodFade_ = 0.0f;    // transient: the fade of the draw being recorded (binder reads it)
     std::vector<std::uint8_t> chunkLods_; // per-chunk camera tier (chunked meshes only; hysteresis state)
     std::vector<std::uint8_t> chunkVisCamera_; // S1: per-chunk camera frustum mask (see ChunkCameraVisible)

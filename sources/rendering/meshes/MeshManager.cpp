@@ -1358,7 +1358,7 @@ bool MeshManager::BinaryNeedsRebake(const std::string& binPath, const MeshLoadOp
 }
 
 bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
-    const MeshLoadOptions& opt)
+    const MeshLoadOptions& opt, std::vector<float>* outUvDensity)
 {
     MeshCpuData cpu;
     if (!ParseFileCpu(srcPath, cpu, opt)) { return false; } // parse glTF + regen normals/tangents (CPU)
@@ -1379,6 +1379,23 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
     if (lod0Subs.empty())
     {
         lod0Subs.push_back(Mesh::Submesh{ 0u, static_cast<uint32_t>(cpu.indices.size()), 0u });
+    }
+
+    // Texture streaming A1: UV density per slot, measured on the SAME triangles that go to the
+    // file -- after the unit fix (the density is a world size), before chunking and the LOD3 prune
+    // (the first reorders LOD0's triangles, the second appends vertices; neither changes the
+    // triangle set, which is why measuring here and from the finished .bin agree).
+    if (outUvDensity)
+    {
+        *outUvDensity = ComputeUvDensities(cpu.vertices, cpu.indices, lod0Subs);
+        char dmsg[512];
+        int dlen = std::snprintf(dmsg, sizeof(dmsg), "[meshbake] uvDensity per slot:");
+        for (float d : *outUvDensity)
+        {
+            if (dlen < (int)sizeof(dmsg) - 16) { dlen += std::snprintf(dmsg + dlen, sizeof(dmsg) - dlen, " %.4f", d); }
+        }
+        std::snprintf(dmsg + dlen, sizeof(dmsg) - dlen, "\n");
+        logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Asset, dmsg);
     }
 
     // W7.2: per-vertex wind weights into .color. After the submeshes exist, so the bake can tell wood
@@ -2512,4 +2529,122 @@ bool MeshManager::ApplyManifestOptions(const std::string& meshJsonPath, MeshLoad
         }
     }
     return true;
+}
+
+// Texture streaming A1 -- see the header. Transcription of FUVDensityAccumulator
+// (UVChannelDensity.h:13-81) driven the way ComputeUVDensities drives it (StaticMesh.cpp:3974-4029),
+// one accumulator per material slot instead of per UV channel (this engine has one UV set).
+std::vector<float> MeshManager::ComputeUvDensities(const std::vector<VertexPNTUV>& verts,
+    const std::vector<uint32_t>& indices, const std::vector<Mesh::Submesh>& submeshes)
+{
+    constexpr float kSmall = 1.0e-8f; // UE_SMALL_NUMBER
+    struct Element { float weight; float density; }; // FElementInfo {Weight, UVDensity}
+
+    uint32_t maxSlot = 0;
+    for (const Mesh::Submesh& s : submeshes) { maxSlot = std::max(maxSlot, s.materialSlot); }
+    std::vector<std::vector<Element>> acc(submeshes.empty() ? 0u : maxSlot + 1u);
+
+    for (const Mesh::Submesh& s : submeshes)
+    {
+        std::vector<Element>& el = acc[s.materialSlot];
+        const uint32_t triCount = s.indexCount / 3u;
+        el.reserve(el.size() + triCount);
+        for (uint32_t t = 0; t < triCount; ++t)
+        {
+            const uint32_t base = s.indexOffset + t * 3u;
+            if (base + 2u >= indices.size()) { break; }
+            const uint32_t i0 = indices[base], i1 = indices[base + 1u], i2 = indices[base + 2u];
+            if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) { continue; }
+            const DirectX::XMFLOAT3& p0 = verts[i0].position;
+            const DirectX::XMFLOAT3& p1 = verts[i1].position;
+            const DirectX::XMFLOAT3& p2 = verts[i2].position;
+            // GetTriangleAera: |(P1 - P0) x (P2 - P0)| -- twice the area; the ratio cancels it.
+            const float e1x = p1.x - p0.x, e1y = p1.y - p0.y, e1z = p1.z - p0.z;
+            const float e2x = p2.x - p0.x, e2y = p2.y - p0.y, e2z = p2.z - p0.z;
+            const float cx = e1y * e2z - e1z * e2y;
+            const float cy = e1z * e2x - e1x * e2z;
+            const float cz = e1x * e2y - e1y * e2x;
+            const float area = std::sqrt(cx * cx + cy * cy + cz * cz);
+            if (area <= kSmall) { continue; } // ComputeUVDensities skips the UV work for these
+            // GetUVChannelAera: |UV01.x * UV02.y - UV01.y * UV02.x|
+            const DirectX::XMFLOAT2& uv0 = verts[i0].uv;
+            const DirectX::XMFLOAT2& uv1 = verts[i1].uv;
+            const DirectX::XMFLOAT2& uv2 = verts[i2].uv;
+            const float uvArea = std::fabs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv1.y - uv0.y) * (uv2.x - uv0.x));
+            // PushTriangle
+            if (uvArea > kSmall) { el.push_back(Element{ std::sqrt(area), std::sqrt(area / uvArea) }); }
+        }
+    }
+
+    std::vector<float> out(acc.size(), 0.0f);
+    for (size_t slot = 0; slot < acc.size(); ++slot)
+    {
+        std::vector<Element>& el = acc[slot];
+        // AccumulateDensity: sort by density, drop 10% at either end, weighted mean; GetDensity's
+        // 0 when nothing survived.
+        std::sort(el.begin(), el.end(), [](const Element& a, const Element& b) { return a.density < b.density; });
+        const int n = static_cast<int>(el.size());
+        const int threshold = static_cast<int>(0.10f * static_cast<float>(n)); // FloorToInt of a non-negative
+        float weightedDensity = 0.0f, weight = 0.0f;
+        for (int i = threshold; i < n - threshold; ++i)
+        {
+            weightedDensity += el[i].density * el[i].weight;
+            weight += el[i].weight;
+        }
+        out[slot] = (weight > kSmall) ? (weightedDensity / weight) : 0.0f;
+    }
+    return out;
+}
+
+std::vector<float> MeshManager::ComputeUvDensitiesForManifest(const std::string& meshJsonPath)
+{
+    std::string geometry;
+    {
+        std::ifstream f(meshJsonPath);
+        if (!f) { return {}; }
+        nlohmann::json doc;
+        try { f >> doc; } catch (...) { return {}; }
+        if (!doc.is_object()) { return {}; }
+        geometry = doc.value("geometry", std::string());
+    }
+    if (geometry.empty()) { return {}; }
+
+    MeshLoadOptions opt;
+    opt.wantCW = false; // the runtime load's winding; irrelevant to areas, kept for the parse
+    ApplyManifestOptions(meshJsonPath, opt);
+    MeshManager mm;
+    MeshCpuData cpu;
+    if (!mm.ParseFileCpu(geometry, cpu, opt) || cpu.vertices.empty() || cpu.indices.empty()) { return {}; }
+    // A .mesh.bin already carries bakeScale in its vertices; raw source geometry (a manifest that
+    // still points at an .obj/.gltf) does not, and the density is a world size.
+    const bool baked = geometry.size() > 9 && geometry.rfind(".mesh.bin") == geometry.size() - 9;
+    if (!baked && opt.bakeScale > 0.0f && opt.bakeScale != 1.0f)
+    {
+        for (VertexPNTUV& v : cpu.vertices)
+        {
+            v.position.x *= opt.bakeScale;
+            v.position.y *= opt.bakeScale;
+            v.position.z *= opt.bakeScale;
+        }
+    }
+    std::vector<Mesh::Submesh> subs = cpu.submeshes;
+    if (subs.empty()) { subs.push_back(Mesh::Submesh{ 0u, static_cast<uint32_t>(cpu.indices.size()), 0u }); }
+    return ComputeUvDensities(cpu.vertices, cpu.indices, subs);
+}
+
+bool MeshManager::WriteManifestUvDensity(const std::string& meshJsonPath, const std::vector<float>& density)
+{
+    nlohmann::json doc;
+    {
+        std::ifstream f(meshJsonPath);
+        if (!f) { return false; }
+        try { f >> doc; } catch (...) { return false; }
+        if (!doc.is_object()) { return false; }
+    }
+    if (density.empty()) { doc.erase("uvDensity"); }
+    else { doc["uvDensity"] = density; }
+    std::ofstream out(meshJsonPath, std::ios::trunc);
+    if (!out) { return false; }
+    out << doc.dump(2) << '\n';
+    return static_cast<bool>(out);
 }

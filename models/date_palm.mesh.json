@@ -28,6 +28,12 @@
   ],
   "source": "import_staging\\date_palm\\scene.gltf",
   "texOffsScale": null,
+  "uvDensity": [
+    0.6493046879768372,
+    1.0242022275924683,
+    0.20581389963626862,
+    0.29478755593299866
+  ],
   "windFoliage": [
     0.0,
     1.0,

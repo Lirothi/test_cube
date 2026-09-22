@@ -1,7 +1,7 @@
 {
   "geometry": "models/atoll_lagoon_floor/atoll_lagoon_floor.mesh.bin",
-  "lod3Aggressive": false,
   "inputLayout": "PosNormTanUV",
+  "lod3Aggressive": false,
   "material": "sandstone_cracks",
   "renderLayer": "Terrain",
   "source": "import_staging\\atoll_lagoon_floor\\atoll_lagoon_floor.obj",
@@ -10,5 +10,8 @@
     0.0,
     20.0,
     20.0
+  ],
+  "uvDensity": [
+    119.99996185302734
   ]
 }

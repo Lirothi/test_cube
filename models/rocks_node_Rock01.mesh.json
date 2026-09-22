@@ -2,5 +2,8 @@
   "bakeScale": 0.1,
   "geometry": "models/rocks/rocks_node_Rock01.mesh.bin",
   "material": "rocks_Rock01_0",
-  "source": "import_staging\\rocks\\scene.gltf#node:Rock01"
+  "source": "import_staging\\rocks\\scene.gltf#node:Rock01",
+  "uvDensity": [
+    2.4701216220855713
+  ]
 }

@@ -609,6 +609,7 @@
     <ClInclude Include="sources/rendering/rt/BindlessTable.h" />
     <ClInclude Include="sources/rendering/rt/RtSceneAs.h" />
     <ClInclude Include="sources/rendering/rt/RtSmoke.h" />
+    <ClInclude Include="sources/rendering/streaming/DdsMipTable.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
     <ClInclude Include="sources/rendering/debug/DebugDraw.h" />
     <ClInclude Include="sources/rendering/debug/LodDebugView.h" />

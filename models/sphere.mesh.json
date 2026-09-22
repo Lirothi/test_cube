@@ -4,5 +4,8 @@
   "lodDistanceScale": 2.0,
   "material": "bronze",
   "source": "import_staging\\sphere\\sphere.obj",
-  "texOffsScale": null
+  "texOffsScale": null,
+  "uvDensity": [
+    1.8808413743972778
+  ]
 }

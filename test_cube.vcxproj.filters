@@ -115,6 +115,9 @@
     <Filter Include="sources\rendering\shadows">
       <UniqueIdentifier>{f843b580-8945-4bb6-a7e5-a54a45200f3b}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\rendering\streaming">
+      <UniqueIdentifier>{c4e1f5a2-7b3d-4e8f-9a1c-2d6e8f0b4a17}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\text">
       <UniqueIdentifier>{4426bb63-b333-4e9f-b709-016e83f65a2e}</UniqueIdentifier>
     </Filter>
@@ -1099,6 +1102,9 @@
     </ClInclude>
     <ClInclude Include="sources/rendering/rt/RtSmoke.h">
       <Filter>sources\rendering\rt</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/DdsMipTable.h">
+      <Filter>sources\rendering\streaming</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameResource.h">
       <Filter>sources\rendering\core</Filter>

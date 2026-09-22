@@ -1,6 +1,6 @@
 # План: текстурный стриминг и виртуальные текстуры (транскрипция UE 5.6)
 
-Дата: 2026-09-20. Статус: **PLANNED, не начат.** Референс — дроп `D:\Programming\ue_strip`
+Дата: 2026-09-20. Статус: **A1 сделан 2026-09-22 (не закоммичен, см. блок «Статус» в A1); следующий — A2.** Референс — дроп `D:\Programming\ue_strip`
 (оба дерева, `Source/` и `Shaders/`). Каждая ссылка на UE и на наш код — с `file:line`, сверено
 2026-09-20 по файлам; что не сверено — помечено «(сверить)». Документ написан как задание для
 исполнителя: шаг берётся целиком, без переразведки, кроме чтения файлов, перечисленных в шаге.
@@ -192,6 +192,50 @@ page table/пул/feedback части B. Порядок: A1→A6, затем B1�
 **Гейт.** Три конфига; Release `--scene-stress`; без GBV (ресурсы не менялись).
 
 **Откат.** `streamable = false` везде (код мёртвый).
+
+**Статус (2026-09-22): СДЕЛАНО, не закоммичено.** Вошло: `sources/rendering/streaming/DdsMipTable.h`
+(`streaming::kNonStreamingMips = 7`, `DdsMipTable::{Build, DataBytes, TailBytes}`);
+`Texture2D::CreateDesc::{streamable, residentMips}`; на текстуре `mipTable_ / sourcePath_ /
+residentMips_ / streamingIndex_ / streamable_` с аксессорами `IsStreamable, GetMipTable,
+GetResidentMips, GetFileMipCount, GetSourcePath, StreamingIndex`; `Texture2D::StreamingStats` +
+строка `[texstream] streamable N / nonStreamable M / png K` рядом с `[texcache]` при выходе
+(`Renderer.cpp`); `MeshManager::{ComputeUvDensities, ComputeUvDensitiesForManifest,
+WriteManifestUvDensity}`, `BakeToBinary(..., outUvDensity)`; ключ `uvDensity` пишут все три
+бейка (ImportPanel, MeshEditorPanel Save, `--reimport` при `--reimport-manifest=`);
+`RenderableObject::{SetUvDensities, GetUvDensities, UvDensityForSlot}`; `SceneObjectFactory`
+читает ключ, при отсутствии — `LOG_WARNING_ONCE` (первый попавшийся манифест в тексте).
+
+Отступления от текста шага (не от UE):
+* CLI `--import-max-tex` / `--import-bc5` НЕ добавлены — они уже существовали как
+  `--max-size=<n>` и `--bc5-normal` (`main.cpp`, блок `--import`); A5 пользуется ими.
+* «assert» на сумме мипов заменён на `LOG_ERROR` + `nonStreamable` (лишние байты в хвосте файла —
+  не повод падать); файл КОРОЧЕ, чем описывает заголовок, — отказ загрузки с `LOG_ERROR`
+  (раньше это было чтение за концом буфера).
+* Копирующий цикл `CreateFromDDS_` адресует мипы по таблице (`fileOffset`, `rowPitchBytes`), а не
+  бегущим смещением: таблицу проверяет каждая загрузка картинкой, не только самосверка.
+* Добавлен `--uv-density=<mesh.json>[,<mesh.json>…]`: считает плотность из `geometry` как она
+  лежит на диске (LOD0 `.mesh.bin`; `bakeScale` уже в вершинах, чанкинг и прун LOD3 множество
+  треугольников LOD0 не меняют) и пишет ключ, ничего не пере-бейкая — путь для 14 существующих
+  манифестов без риска повторного бейка (память `manifest-must-describe-its-bake`). Сырой
+  `.obj/.gltf` в `geometry` масштабируется `bakeScale` из манифеста.
+
+Приёмка: (1) `wind_test`, `--shot`: `[texstream] streamable 64 / nonStreamable 0 / png 6`
+(png = шесть океанских PNG без DDS); под `--scene-stress`: `455 / 0 / 606`. (2) Квад 2 м, UV
+0..1, `--reimport` на scratchpad-копии → `[meshbake] uvDensity per slot: 2.0000`, в манифесте
+`"uvDensity": [2.0]`. `--uv-density` на КОПИЯХ реальных манифестов: coconut_palm 5 слотов
+0.229/0.308/0.443/0.526/0.793 (пальма: атласы листьев), atoll_island 120.55 (остров ~1 км, тайлинг
+через `texOffsScale`). (3) Картинка, пляжная камера, `--set=exposure.autoExposure:0 --dlss=off
+--wind-freeze`: «бит-в-бит» недостижим и у HEAD — пол между двумя HEAD-прогонами 13.7 %
+пикселей, max 91, mean 0.18, p99 2 (темпоральные эффекты); новый бинарь vs HEAD_a/HEAD_b:
+14.4 % / 12.9 %, mean 0.180 / 0.166, p99 2, средняя яркость 134.58 у всех трёх — в полу.
+Гейт: три конфига собраны; Release `--scene-stress` CLEAN 300 итераций (45.7 с), компаратор
+молчит (`barrier_diag.log` не родился).
+
+**Манифесты в `models/` НЕ тронуты** (запись ассетов — по команде владельца). Заполнить одной
+командой из корня репо, без пере-бейка `.bin`:
+`x64/Release/test_cube.exe --uv-density=models/coconut_palm.mesh.json,models/curly_palm.mesh.json,…`
+(все 14 через запятую). До этого при каждой загрузке уровня — один `WARN` «mesh.json without
+uvDensity», и A3 будет считать `TexelFactor` от AABB объекта.
 
 ### A2. IO-ринг, аплоад-ринг, пасс `Main_TextureStreaming`, подмена ресурса — 3 дня
 

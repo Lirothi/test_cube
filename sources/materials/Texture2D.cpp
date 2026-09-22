@@ -27,6 +27,13 @@
 
 using Microsoft::WRL::ComPtr;
 
+// Texture streaming A1: since process start, DDS loads whose mip table passed the self-check, DDS
+// loads that failed it, and textures that came through WIC (no table at all). Reported next to
+// [texcache] at shutdown -- the acceptance readout of the step.
+static std::atomic<std::uint32_t> gTexStreamable{ 0 };
+static std::atomic<std::uint32_t> gTexNonStreamable{ 0 };
+static std::atomic<std::uint32_t> gTexPng{ 0 };
+
 // ========================= helpers =========================
 static bool CreateWICFactory(ComPtr<IWICImagingFactory>& out)
 {
@@ -180,27 +187,17 @@ namespace {
         }
     }
 
-    static bool MapLegacyFourCCToPair(uint32_t fourCC, FormatPair& out)
+    // Legacy (pre-DX10-header) FourCC -> the DXGI format it names, so the one MapDXGIToPair table
+    // serves both header kinds and the mip table records a real format for either.
+    static DXGI_FORMAT LegacyFourCCToDxgi(uint32_t fourCC)
     {
         switch (fourCC) {
-        case FOURCC('D', 'X', 'T', '1'): return MapDXGIToPair(DXGI_FORMAT_BC1_UNORM, out);
-        case FOURCC('D', 'X', 'T', '3'): return MapDXGIToPair(DXGI_FORMAT_BC2_UNORM, out);
-        case FOURCC('D', 'X', 'T', '5'): return MapDXGIToPair(DXGI_FORMAT_BC3_UNORM, out);
-        case FOURCC('B', 'C', '4', 'U'): return MapDXGIToPair(DXGI_FORMAT_BC4_UNORM, out);
-        case FOURCC('B', 'C', '5', 'U'): return MapDXGIToPair(DXGI_FORMAT_BC5_UNORM, out);
-        default: return false;
-        }
-    }
-
-    static size_t MipByteSize(const FormatPair& fp, UINT w, UINT h)
-    {
-        if (fp.isBC) {
-            UINT bw = std::max(1u, (w + 3u) / 4u);
-            UINT bh = std::max(1u, (h + 3u) / 4u);
-            return size_t(bw) * size_t(bh) * fp.bytesPerBlockOrPixel;
-        }
-        else {
-            return size_t(w) * size_t(h) * fp.bytesPerBlockOrPixel;
+        case FOURCC('D', 'X', 'T', '1'): return DXGI_FORMAT_BC1_UNORM;
+        case FOURCC('D', 'X', 'T', '3'): return DXGI_FORMAT_BC2_UNORM;
+        case FOURCC('D', 'X', 'T', '5'): return DXGI_FORMAT_BC3_UNORM;
+        case FOURCC('B', 'C', '4', 'U'): return DXGI_FORMAT_BC4_UNORM;
+        case FOURCC('B', 'C', '5', 'U'): return DXGI_FORMAT_BC5_UNORM;
+        default: return DXGI_FORMAT_UNKNOWN;
         }
     }
 }
@@ -248,14 +245,16 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     else {
         // Legacy FourCC
         if (hdr.ddspf.flags & DDPF_FOURCC) {
-            if (!MapLegacyFourCCToPair(hdr.ddspf.fourCC, fp)) {
+            fileFmt = LegacyFourCCToDxgi(hdr.ddspf.fourCC);
+            if (fileFmt == DXGI_FORMAT_UNKNOWN || !MapDXGIToPair(fileFmt, fp)) {
                 return false;
             }
         }
         else {
             // Assume RGBA8
             if (hdr.ddspf.RGBBitCount == 32 && hdr.ddspf.RBitMask == 0x00FF0000 && hdr.ddspf.GBitMask == 0x0000FF00 && hdr.ddspf.BBitMask == 0x000000FF && hdr.ddspf.ABitMask == 0xFF000000) {
-                MapDXGIToPair(DXGI_FORMAT_R8G8B8A8_UNORM, fp);
+                fileFmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+                MapDXGIToPair(fileFmt, fp);
             }
             else {
                 return false; // unsupported format
@@ -267,19 +266,41 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     const UINT width = std::max(1u, hdr.width);
     const UINT height = std::max(1u, hdr.height);
 
-    // 2) Load data into memory
-    std::vector<uint8_t> fileData;
+    // 2) Texture streaming A1: the file's mip table, then its self-check. Offsets and sizes come
+    //    from the header alone (DdsMipTable.h); the check is that (a) they add up to exactly the
+    //    bytes the file holds after its header and (b) every mip's tight row and slice agree with
+    //    D3D's own footprints for the full chain. Both hold for every file the importer writes. A
+    //    file that fails one is still loaded whole, exactly as before, but is `nonStreamable`: a
+    //    stream-in that read by this table could not trust it.
     f.seekg(0, std::ios::end);
     const std::streamoff fileSize = f.tellg();
-    std::streamoff dataStart = 4 + sizeof(DDS_HEADER) + (hasDX10 ? sizeof(DDS_HEADER_DXT10) : 0);
-    const std::streamoff dataSize = fileSize - dataStart;
-    fileData.resize(static_cast<size_t>(dataSize));
-    f.seekg(dataStart, std::ios::beg);
-    f.read(reinterpret_cast<char*>(fileData.data()), dataSize);
+    const std::streamoff dataStart = 4 + sizeof(DDS_HEADER) + (hasDX10 ? sizeof(DDS_HEADER_DXT10) : 0);
+    mipTable_.Build(width, height, mipCount, fileFmt, static_cast<UINT64>(dataStart), fp.isBC,
+                    fp.bytesPerBlockOrPixel);
+    sourcePath_ = desc.path;
+    streamable_ = true;
+    {
+        const UINT64 described = mipTable_.DataBytes();
+        const UINT64 held = static_cast<UINT64>(fileSize - dataStart);
+        if (described > held) {
+            // Shorter than its own header says. The old loader read past the end of what it had;
+            // refusing is the only honest answer.
+            LOG_ERROR(logging::LogCategory::Asset,
+                "DDS truncated: {} holds {} data bytes, header describes {}", desc.path, held, described);
+            return false;
+        }
+        if (described != held) {
+            LOG_ERROR(logging::LogCategory::Asset,
+                "DDS mip table mismatch (nonStreamable): {} holds {} data bytes, header describes {}",
+                desc.path, held, described);
+            streamable_ = false;
+        }
+    }
 
-    // 3) Create the resource (TYPELESS so SRGB/UNORM SRV can be selected later)
     auto* device = r->GetDevice();
 
+    // The FULL chain's desc: the footprint check runs on it, and the real resource below is the
+    // same desc cut down to the resident mips.
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
     D3D12_RESOURCE_DESC td{};
     td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -291,6 +312,48 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     td.SampleDesc.Count = 1;
     td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     td.Flags = D3D12_RESOURCE_FLAG_NONE;
+    {
+        std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fpAll(mipCount);
+        std::vector<UINT> rowsAll(mipCount);
+        std::vector<UINT64> rowBytesAll(mipCount);
+        device->GetCopyableFootprints(&td, 0, mipCount, 0, fpAll.data(), rowsAll.data(), rowBytesAll.data(), nullptr);
+        for (UINT m = 0; m < mipCount && streamable_; ++m) {
+            const streaming::DdsMipTable::Mip& mip = mipTable_.mips[m];
+            if (rowBytesAll[m] != mip.rowPitchBytes || UINT64(rowsAll[m]) * rowBytesAll[m] != mip.sliceBytes) {
+                LOG_ERROR(logging::LogCategory::Asset,
+                    "DDS mip table disagrees with D3D footprints (nonStreamable): {} mip {}: table row {} slice {}, D3D row {} rows {}",
+                    desc.path, m, mip.rowPitchBytes, mip.sliceBytes, rowBytesAll[m], rowsAll[m]);
+                streamable_ = false;
+            }
+        }
+    }
+
+    // How much of the chain goes to the GPU. Only a streamable request on a table that passed can
+    // stop short; everything else is the whole file, as it always was. The resident mips are the
+    // SMALLEST ones -- UE's inline tail -- and become the resource's own mips 0..residentMips-1.
+    UINT residentMips = mipCount;
+    if (desc.streamable && streamable_ && desc.residentMips != 0) {
+        residentMips = std::min(mipCount, desc.residentMips);
+    }
+    const UINT firstMip = mipCount - residentMips;
+
+    // 3) Read the resident tail. With every mip resident this is the exact byte range the loader
+    //    always read; with fewer, the tail from the first resident mip to the end of the file.
+    const UINT64 tailStart = mipTable_.mips[firstMip].fileOffset;
+    const UINT64 tailBytes = mipTable_.TailBytes(firstMip);
+    std::vector<uint8_t> fileData(static_cast<size_t>(tailBytes));
+    f.seekg(static_cast<std::streamoff>(tailStart), std::ios::beg);
+    f.read(reinterpret_cast<char*>(fileData.data()), static_cast<std::streamsize>(tailBytes));
+    if (!f) {
+        LOG_ERROR(logging::LogCategory::Asset, "DDS read failed: {} ({} bytes at offset {})",
+            desc.path, tailBytes, tailStart);
+        return false;
+    }
+
+    // 4) Create the resource (TYPELESS so SRGB/UNORM SRV can be selected later) -- resident mips only
+    td.Width = mipTable_.mips[firstMip].width;
+    td.Height = mipTable_.mips[firstMip].height;
+    td.MipLevels = static_cast<UINT16>(residentMips);
 
     // Step 6b: creating over an existing tex_ RELEASES the old resource, and until now nothing
     // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
@@ -299,14 +362,14 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     ThrowIfFailed(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr, tex_.GetAddressOfForCreate()));
 
-    // 4) Compute footprints for every mip
-    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(mipCount);
-    std::vector<UINT> numRows(mipCount);
-    std::vector<UINT64> rowSizes(mipCount);
+    // 5) Compute footprints for every RESIDENT mip
+    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(residentMips);
+    std::vector<UINT> numRows(residentMips);
+    std::vector<UINT64> rowSizes(residentMips);
     UINT64 uploadTotal = 0;
-    device->GetCopyableFootprints(&td, 0, mipCount, 0, fps.data(), numRows.data(), rowSizes.data(), &uploadTotal);
+    device->GetCopyableFootprints(&td, 0, residentMips, 0, fps.data(), numRows.data(), rowSizes.data(), &uploadTotal);
 
-    // 5) Upload buffer
+    // 6) Upload buffer
     D3D12_HEAP_PROPERTIES hpUp{}; hpUp.Type = D3D12_HEAP_TYPE_UPLOAD;
     D3D12_RESOURCE_DESC upDesc{};
     upDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -322,37 +385,28 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     ThrowIfFailed(device->CreateCommittedResource(&hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
 
-    // 6) Copy each mip while respecting the BC layout
+    // 7) Copy each mip while respecting the BC layout. Source rows come from the mip table -- the
+    //    same tight pitch the old running offset computed, now addressed by file offset -- so the
+    //    default (all resident) load reads the very same bytes, and a partial one is the same loop
+    //    over a shorter tail.
     uint8_t* mapped = nullptr;
     D3D12_RANGE rge{ 0, 0 };
     ThrowIfFailed(upload->Map(0, &rge, reinterpret_cast<void**>(&mapped)));
 
-    size_t srcOffset = 0;
-    UINT mw = width, mh = height;
-    for (UINT m = 0; m < mipCount; ++m) {
+    for (UINT m = 0; m < residentMips; ++m) {
+        const streaming::DdsMipTable::Mip& mip = mipTable_.mips[firstMip + m];
+        const uint8_t* srcMip = fileData.data() + static_cast<size_t>(mip.fileOffset - tailStart);
         const UINT rows = numRows[m];
-        size_t srcRowPitch = 0;
-        if (fp.isBC) {
-            const UINT bw = std::max(1u, (mw + 3u) / 4u);
-            srcRowPitch = size_t(bw) * fp.bytesPerBlockOrPixel;
-        }
-        else {
-            srcRowPitch = size_t(mw) * fp.bytesPerBlockOrPixel;
-        }
-        const uint8_t* srcMip = fileData.data() + srcOffset;
         for (UINT y = 0; y < rows; ++y) {
             std::memcpy(mapped + fps[m].Offset + size_t(y) * fps[m].Footprint.RowPitch,
-                srcMip + size_t(y) * srcRowPitch,
-                srcRowPitch);
+                srcMip + size_t(y) * mip.rowPitchBytes,
+                mip.rowPitchBytes);
         }
-        srcOffset += MipByteSize(fp, mw, mh);
-        mw = std::max(1u, mw >> 1);
-        mh = std::max(1u, mh >> 1);
     }
     upload->Unmap(0, nullptr);
 
-    // 7) Copy -> resource
-    for (UINT m = 0; m < mipCount; ++m) {
+    // 8) Copy -> resource
+    for (UINT m = 0; m < residentMips; ++m) {
         D3D12_TEXTURE_COPY_LOCATION dst{};
         dst.pResource = tex_.Get();
         dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -366,7 +420,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
         uploadCmd->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
     }
 
-    // 8) Barrier COPY_DEST -> shader resource. Leave it readable by BOTH pixel and
+    // 9) Barrier COPY_DEST -> shader resource. Leave it readable by BOTH pixel and
     //    non-pixel (compute) stages: the GBuffer pass reads it in a pixel shader,
     //    and RT reflection hit-shading (S10) reads it bindlessly in a compute
     //    shader. The combined read state is valid for both (read-only texture).
@@ -387,18 +441,24 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     }
     tex_.DeclareCreated(r->Declarations(), kShaderReadStates, debugName_.c_str());
 
-    // 9) Select the SRV format based on usage (sRGB for Albedo)
+    // 10) Select the SRV format based on usage (sRGB for Albedo)
     DXGI_FORMAT srvFmt = fp.srvUnorm;
     if (desc.usage == Usage::AlbedoSRGB && fp.srvSRGB != DXGI_FORMAT_UNKNOWN) {
         srvFmt = fp.srvSRGB;
     }
 
-    CreateCpuSrv_(r, srvFmt, mipCount);
+    CreateCpuSrv_(r, srvFmt, residentMips);
 
-    width_ = width; height_ = height; mipLevels_ = mipCount;
+    // width_/height_ are the FILE's mip 0 -- what the texture is -- even when the resource is smaller.
+    width_ = width; height_ = height; mipLevels_ = residentMips; residentMips_ = residentMips;
     resourceFormat_ = td.Format; srvFormat_ = srvFmt;
     stagedFrame_ = UINT(-1); srvGPU_.ptr = 0;
 
+    (streamable_ ? gTexStreamable : gTexNonStreamable).fetch_add(1u, std::memory_order_relaxed);
+    if (firstMip > 0) {
+        LOG_DEBUG(logging::LogCategory::Asset, "DDS partial load: {} resident {}/{} mips ({} bytes)",
+            desc.path, residentMips, mipCount, tailBytes);
+    }
     return true;
 }
 
@@ -529,6 +589,13 @@ void Texture2D::CacheStats(std::uint32_t& saved, std::uint32_t& loaded, std::siz
     loaded = gSharedTexLoaded;
     entries = 0;
     for (const auto& [key, e] : gSharedTex) { (void)key; if (!e.texture.expired()) { ++entries; } }
+}
+
+void Texture2D::StreamingStats(std::uint32_t& streamable, std::uint32_t& nonStreamable, std::uint32_t& png)
+{
+    streamable = gTexStreamable.load(std::memory_order_relaxed);
+    nonStreamable = gTexNonStreamable.load(std::memory_order_relaxed);
+    png = gTexPng.load(std::memory_order_relaxed);
 }
 
 bool Texture2D::CreateFromFile(Renderer* renderer,
@@ -693,6 +760,9 @@ bool Texture2D::LoadFromFileUncached_(Renderer* renderer,
 
     width_ = w; height_ = h; mipLevels_ = static_cast<UINT>(mips.size());
     resourceFormat_ = resourceFmt; srvFormat_ = srvFmt;
+    // A1: a WIC texture has no mip table -- its chain was built here, not read from a file.
+    residentMips_ = mipLevels_; sourcePath_ = d.path; streamable_ = false;
+    gTexPng.fetch_add(1u, std::memory_order_relaxed);
 
     // Reset the staged cache
     stagedFrame_ = UINT(-1); srvGPU_.ptr = 0;
@@ -728,7 +798,7 @@ void Texture2D::CreateFromRGBA8(Renderer* renderer,
     UploadRGBA8_(renderer, uploadCmd, rgba8, width, height, keepAlive, resFmt);
     CreateCpuSrv_(renderer, srvFmt, /*mips*/1);
 
-    width_ = width; height_ = height; mipLevels_ = 1;
+    width_ = width; height_ = height; mipLevels_ = 1; residentMips_ = 1;
     resourceFormat_ = resFmt; srvFormat_ = srvFmt;
 
     stagedFrame_ = UINT(-1); srvGPU_.ptr = 0;

@@ -1,5 +1,8 @@
 {
   "geometry": "models/corgi/corgi.mesh.bin",
   "material": "brick",
-  "source": "import_staging\\corgi\\corgi.obj"
+  "source": "import_staging\\corgi\\corgi.obj",
+  "uvDensity": [
+    0.25077778100967407
+  ]
 }

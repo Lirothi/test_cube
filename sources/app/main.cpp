@@ -964,6 +964,33 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--sdsm-readout")) {
             render::sdsm::g_dumpReadout = true;
         }
+        // "--uv-density=models/x.mesh.json[,models/y.mesh.json...]" (texture streaming A1): measure
+        // the per-slot UV density of each manifest's geometry as it is on disk (the baked .bin) and
+        // write it as "uvDensity" -- nothing else in the file and nothing in the .bin changes. For
+        // manifests that predate the key; a bake writes it on its own. Exit code = failures.
+        if (const char* flag = std::strstr(lpCmdLine, "--uv-density=")) {
+            const char* p = flag + std::strlen("--uv-density=");
+            std::string list;
+            while (*p && !std::isspace(static_cast<unsigned char>(*p))) { list.push_back(*p); ++p; }
+            int failed = 0;
+            for (size_t i = 0; i < list.size();) {
+                size_t j = list.find(',', i);
+                if (j == std::string::npos) { j = list.size(); }
+                const std::string path = list.substr(i, j - i);
+                i = j + 1;
+                if (path.empty()) { continue; }
+                const std::vector<float> density = MeshManager::ComputeUvDensitiesForManifest(path);
+                if (density.empty() || !MeshManager::WriteManifestUvDensity(path, density)) {
+                    LOG_ERROR(logging::LogCategory::Asset, "--uv-density: FAILED for {}", path);
+                    ++failed;
+                    continue;
+                }
+                std::string values;
+                for (float d : density) { values += (values.empty() ? "" : " ") + std::to_string(d); }
+                LOG_INFO(logging::LogCategory::Asset, "--uv-density: {} -> uvDensity [{}]", path, values);
+            }
+            return failed;
+        }
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
         // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our
         // binary geometry that mesh.json's "geometry" references. The explicit content reimport step.
@@ -1079,7 +1106,16 @@ int WINAPI WinMain(
                 i = j + 1;
             }
             MeshManager mm;
-            return mm.BakeToBinary(src, out, opt) ? 0 : 1;
+            std::vector<float> uvDensity;
+            const bool baked = mm.BakeToBinary(src, out, opt, &uvDensity);
+            // Texture streaming A1: the density the bake measured belongs in the manifest it was
+            // baked from (a manifest must describe its bake). Only when one was named -- a bare
+            // --reimport-src/--reimport-out has no file to write.
+            if (baked && !manifest.empty() && !MeshManager::WriteManifestUvDensity(manifest, uvDensity)) {
+                LOG_ERROR(logging::LogCategory::Asset, "--reimport-manifest: could not write uvDensity to {}", manifest);
+                return 4;
+            }
+            return baked ? 0 : 1;
         }
     }
 

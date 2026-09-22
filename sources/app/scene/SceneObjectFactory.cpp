@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "core/logging/Log.h"
 #include "core/math/Math.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/meshes/StaticMesh.h"
@@ -253,6 +254,25 @@ namespace SceneObjectFactory
         if (o.contains("lodDistanceScale") && o["lodDistanceScale"].is_number())
         {
             mesh.SetLodDistanceScale(o["lodDistanceScale"].get<float>());
+        }
+
+        // mesh.json "uvDensity" (texture streaming A1): per-slot world size of a unit-UV square,
+        // measured by the bake. Read, never derived here: the geometry is in the .bin and the
+        // manifest is what describes it. A manifest that predates the key gets one warning per
+        // process and no density; the streaming manager then sizes mips from the object's bounds,
+        // UE's own fallback for a reference it cannot measure. `--uv-density=<mesh.json>` fills
+        // the key in place, without a re-bake.
+        if (o.contains("uvDensity") && o["uvDensity"].is_array())
+        {
+            std::vector<float> density;
+            for (const json& v : o["uvDensity"]) { density.push_back(v.is_number() ? v.get<float>() : 0.0f); }
+            mesh.SetUvDensities(std::move(density));
+        }
+        else
+        {
+            LOG_WARNING_ONCE(logging::LogCategory::Asset,
+                "mesh.json without uvDensity (texel factor falls back to object bounds), first: {}",
+                o.value("mesh", o.value("model", std::string("?"))));
         }
 
         if (o.contains("rotationDeg"))

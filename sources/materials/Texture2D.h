@@ -9,6 +9,7 @@
 #include <string>
 
 #include "rendering/core/ResourceDeclarations.h"
+#include "rendering/streaming/DdsMipTable.h"
 
 class Renderer;
 
@@ -41,6 +42,16 @@ public:
                 // (Castano) — without it, averaged alpha sinks below the cutoff and masked
                 // foliage erodes/vanishes with distance.
                 float alphaCoverageCutoff = -1.0f;
+                // Texture streaming A1 (docs/texture_streaming_vt_plan.md). `streamable` lets a DDS
+                // load stop short of the full chain: the resource is created with `residentMips`
+                // levels (0 = all of them) holding the SMALLEST mips -- the tail UE always keeps
+                // inline (NUM_INLINE_DERIVED_MIPS = 7, streaming::kNonStreamingMips). A file whose
+                // mip table fails its self-check ignores the request and loads whole. Nothing sets
+                // it before A3's manager exists, so with the defaults every load is byte-identical
+                // to what it was. Not part of the shared-cache key: the resource is one per file for
+                // every consumer, and what is resident is the manager's decision, not the caller's.
+                bool streamable = false;
+                UINT residentMips = 0;
         };
 
 public:
@@ -102,6 +113,23 @@ public:
 	UINT GetWidth() const { return Source_().width_; }
 	UINT GetHeight() const { return Source_().height_; }
 	DXGI_FORMAT GetSrvFormat() const { return Source_().srvFormat_; }
+
+        // Texture streaming A1 (see CreateDesc::streamable). The FILE's mip table -- offset, pitch
+        // and size of every level whether resident or not -- and what of it is on the GPU now.
+        // IsStreamable() is the load-time self-check's verdict: every mip's byte range computed
+        // from the header matched both the file's size and D3D's own footprints, so a stream-in
+        // can read and copy by this table alone. WIC loads, cubes and a DDS that failed are not.
+        bool IsStreamable() const { return Source_().streamable_; }
+        const streaming::DdsMipTable& GetMipTable() const { return Source_().mipTable_; }
+        UINT GetResidentMips() const { return Source_().residentMips_; } // == the resource's mip count
+        UINT GetFileMipCount() const { return Source_().mipTable_.mipCount; }
+        const std::wstring& GetSourcePath() const { return Source_().sourcePath_; } // the file read
+        // Slot in the streaming manager's registry (A3); -1 = not registered.
+        int StreamingIndex() const { return Source_().streamingIndex_; }
+        // Since process start: DDS loads whose mip table passed the self-check, DDS loads that
+        // failed it (reported by name when they did), and WIC loads (no table at all).
+        static void StreamingStats(std::uint32_t& streamable, std::uint32_t& nonStreamable,
+                std::uint32_t& png);
 
         // NEVER decode on this thread: inside this scope, CreateFromFile asks the decode cache
         // instead and, when the image is not ready yet, FAILS the load and records it. The caller
@@ -190,8 +218,15 @@ private:
         D3D12_GPU_DESCRIPTOR_HANDLE srvGPU_{};
 
         // Metadata
-        UINT width_ = 0, height_ = 0;
-        UINT mipLevels_ = 1;
+        UINT width_ = 0, height_ = 0; // the FILE's mip 0 -- what the texture IS; the resource may hold less
+        UINT mipLevels_ = 1;          // the RESOURCE's mip count (== residentMips_ for a DDS)
         DXGI_FORMAT resourceFormat_ = DXGI_FORMAT_UNKNOWN; // Typically R8G8B8A8_TYPELESS / BC*_TYPELESS
         DXGI_FORMAT srvFormat_ = DXGI_FORMAT_UNKNOWN; // UNORM or SRGB
+
+        // Texture streaming A1 (filled by CreateFromDDS_; see the accessors above).
+        streaming::DdsMipTable mipTable_;
+        std::wstring sourcePath_;   // the resolved path the loader read (debugName_ carries a prefix)
+        UINT residentMips_ = 0;     // mips on the GPU: the LAST residentMips_ entries of mipTable_
+        int streamingIndex_ = -1;
+        bool streamable_ = false;
 };
