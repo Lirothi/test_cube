@@ -591,6 +591,18 @@
     <ClCompile Include="sources/rendering/rt/RtSmoke.cpp">
       <Filter>sources\rendering\rt</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/streaming/TextureUploadRing.cpp">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/streaming/TextureRetireBin.cpp">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/streaming/TextureStreamingIo.cpp">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/streaming/TextureStreaming.cpp">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp">
       <Filter>sources\rendering\debug</Filter>
     </ClCompile>
@@ -1104,6 +1116,21 @@
       <Filter>sources\rendering\rt</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/streaming/DdsMipTable.h">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/StreamingSettings.h">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/TextureUploadRing.h">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/TextureRetireBin.h">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/TextureStreamingIo.h">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/TextureStreaming.h">
       <Filter>sources\rendering\streaming</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameResource.h">

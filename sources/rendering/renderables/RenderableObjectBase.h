@@ -33,6 +33,8 @@ struct RtInstanceDesc
     D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv{};
     ID3D12Resource* mrTex = nullptr;       // metal/rough texture (null = use flat metalRough)
     D3D12_CPU_DESCRIPTOR_HANDLE mrSrv{};
+    uint32_t albedoGen = 0;                // Texture2D::GetSrvGeneration (texture streaming A2)
+    uint32_t mrGen = 0;
     Math::float4 baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
     Math::float2 metalRough{ 0.0f, 1.0f }; // x=metallic, y=roughness (flat fallback when no MR texture)
     bool mrMultiply = false;               // true = MR texture * metalRough; false = texture override

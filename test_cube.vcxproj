@@ -383,6 +383,10 @@
     <ClCompile Include="sources/rendering/rt/BindlessTable.cpp" />
     <ClCompile Include="sources/rendering/rt/RtSceneAs.cpp" />
     <ClCompile Include="sources/rendering/rt/RtSmoke.cpp" />
+    <ClCompile Include="sources/rendering/streaming/TextureUploadRing.cpp" />
+    <ClCompile Include="sources/rendering/streaming/TextureRetireBin.cpp" />
+    <ClCompile Include="sources/rendering/streaming/TextureStreamingIo.cpp" />
+    <ClCompile Include="sources/rendering/streaming/TextureStreaming.cpp" />
     <ClCompile Include="sources/rendering/core/UploadBatch.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugGrid.cpp" />
     <ClCompile Include="sources/rendering/debug/DebugDraw.cpp" />
@@ -610,6 +614,11 @@
     <ClInclude Include="sources/rendering/rt/RtSceneAs.h" />
     <ClInclude Include="sources/rendering/rt/RtSmoke.h" />
     <ClInclude Include="sources/rendering/streaming/DdsMipTable.h" />
+    <ClInclude Include="sources/rendering/streaming/StreamingSettings.h" />
+    <ClInclude Include="sources/rendering/streaming/TextureUploadRing.h" />
+    <ClInclude Include="sources/rendering/streaming/TextureRetireBin.h" />
+    <ClInclude Include="sources/rendering/streaming/TextureStreamingIo.h" />
+    <ClInclude Include="sources/rendering/streaming/TextureStreaming.h" />
     <ClInclude Include="sources/rendering/debug/DebugGrid.h" />
     <ClInclude Include="sources/rendering/debug/DebugDraw.h" />
     <ClInclude Include="sources/rendering/debug/LodDebugView.h" />

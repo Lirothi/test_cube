@@ -29,6 +29,7 @@ enum class RenderPass : uint16_t {
     Main_SkyAtmosphereLuts, // B1: parameter-dirty, view-independent LUTs
     Main_BuildAS,
     Main_PrologueClear,
+    Main_TextureStreaming, // texture streaming A2: this frame's mip copies (ring -> new, old -> new)
     // Async-compute step 9: the GI rotation compute, split out of Main_ObjectCompute because
     // Main_ShadowCull consumes its output two passes later — it has no slack and never moves.
     Main_GpuInstanceCompute,
@@ -146,6 +147,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_SkyAtmosphereLuts: return L"SkyAtmosphereLuts";
     case RenderPass::Main_BuildAS: return L"BuildAS";
     case RenderPass::Main_PrologueClear: return L"PrologueClear";
+    case RenderPass::Main_TextureStreaming: return L"TextureStreaming";
     case RenderPass::Main_GpuInstanceCompute: return L"GpuInstanceCompute";
     case RenderPass::Main_ObjectCompute: return L"ObjectCompute";
     case RenderPass::Main_SurfSim: return L"SurfSim";

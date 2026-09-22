@@ -17,6 +17,7 @@
 // a phase boundary in the middle of one would put its members' recording in two different places.
 
 #include "app/scene/SceneRenderer.h"
+#include "rendering/streaming/TextureStreaming.h" // A2: Main_TextureStreaming builder
 
 #include <algorithm>
 #include <cmath>
@@ -235,6 +236,14 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
             };
         });
 
+    // Texture streaming A2: this frame's mip copies, first on the graphics queue so every later
+    // pass sees the swapped-in resources in their resting state. Empty when nothing is ready.
+    auto pTexStream = rg.AddPass2(RenderPass::Main_TextureStreaming, { pClear },
+        [renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            streaming::TextureStreaming* ts = renderer->GetTextureStreaming();
+            return ts ? ts->BuildPass(renderer, ctx) : std::function<void(RenderGraphPassContext)>{};
+        });
+
     // pass-flow S7b: the builder walks the scene ONCE and collects the objects whose compute will
     // actually record; the body runs that list instead of re-walking and re-filtering. The two
     // walks agreeing was previously a matter of the two filters staying identical by hand.
@@ -272,7 +281,7 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
 
     // The GI rotation. Stays on the graphics queue permanently — Main_ShadowCull's scatter reads
     // the very buffer this writes, so there is no window to hide it in.
-    auto pGiCompute = rg.AddPass2(RenderPass::Main_GpuInstanceCompute, { pClear },
+    auto pGiCompute = rg.AddPass2(RenderPass::Main_GpuInstanceCompute, { pClear, pTexStream },
         computeBuilder(/*feedsShadowCull=*/true, ProfilerScopes::kPassGpuInstanceCompute));
     rg.EndCLGroup();
 

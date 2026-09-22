@@ -63,6 +63,7 @@ extern const Profiler::ScopeNameKey kSceneTickPostObjects;
 extern const Profiler::ScopeNameKey kSceneTickWind;
 extern const Profiler::ScopeNameKey kSceneRender;
 extern const Profiler::ScopeNameKey kPassPrologueClear;
+extern const Profiler::ScopeNameKey kPassTextureStreaming;
 extern const Profiler::ScopeNameKey kPassObjectCompute;
 extern const Profiler::ScopeNameKey kPassGpuInstanceCompute;
 extern const Profiler::ScopeNameKey kPassShoreWetness;

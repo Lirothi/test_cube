@@ -45,6 +45,15 @@ namespace
         };
         mix(reinterpret_cast<uint64_t>(object.GetMaterialData()));
         mix(static_cast<uint64_t>(object.SlotCount()));
+        // Texture streaming A2: a swapped texture carries a new SRV; the copied set must follow it.
+        for (size_t s = 0; s < object.SlotCount(); ++s)
+        {
+            if (const MaterialData* md = object.GetMaterialDataForSlot(s))
+            {
+                mix(md->albedo.GetSrvGeneration());
+                mix(md->mr.GetSrvGeneration());
+            }
+        }
         mixFloat(p.baseColor.x); mixFloat(p.baseColor.y);
         mixFloat(p.baseColor.z); mixFloat(p.baseColor.w);
         mixFloat(p.metalRough.x); mixFloat(p.metalRough.y);
@@ -139,6 +148,7 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
     // bin comment for the leak the single deadline was.
     const uint64_t frameNo = renderer->GetTotalFrameNumber();
     asManager_.ReleaseRetired(frameNo);
+    bindless_.BeginFrame(frameNo); // A2: descriptor sets retired by a texture swap return to the pool
 
     // Gather opaque, single-mesh, CPU-placed instances. Ocean (GPU-displaced) is
     // excluded by design — kept on its planar-reflection path (S13). Instanced clouds
@@ -231,8 +241,16 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 {
                     MaterialData* md = gb->GetMaterialDataForSlot(s);
                     const MaterialParams* p = gb->InstanceSlotParams(s);
-                    if (md && md->hasAlbedo) { slotMats[s].albedoSrv = md->albedo.GetSRVCPU(); }
-                    if (md && md->hasMR && p && p->texFlags.y > 0.5f) { slotMats[s].mrSrv = md->mr.GetSRVCPU(); }
+                    if (md && md->hasAlbedo)
+                    {
+                        slotMats[s].albedoSrv = md->albedo.GetSRVCPU();
+                        slotMats[s].albedoGen = md->albedo.GetSrvGeneration();
+                    }
+                    if (md && md->hasMR && p && p->texFlags.y > 0.5f)
+                    {
+                        slotMats[s].mrSrv = md->mr.GetSRVCPU();
+                        slotMats[s].mrGen = md->mr.GetSrvGeneration();
+                    }
                     if (p)
                     {
                         slotMats[s].baseColor4 = &p->baseColor.x;
@@ -302,7 +320,7 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                     entry.instanceId = bindless_.Ready()
                         ? bindless_.GetOrUpdateMesh(obj.get(), desc.mesh, desc.albedoSrv, desc.mrSrv, &desc.baseColor.x,
                                                       /*roughness*/ desc.metalRough.y, /*metalness*/ desc.metalRough.x,
-                                                      desc.mrMultiply, desc.alphaCutoff)
+                                                      desc.mrMultiply, desc.alphaCutoff, desc.albedoGen, desc.mrGen)
                         : instanceId;
                 }
                 if (entry.instanceId == rt::BindlessTable::kInvalidGeometry) { break; }

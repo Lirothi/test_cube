@@ -12,6 +12,7 @@
 #include "rendering/streaming/DdsMipTable.h"
 
 class Renderer;
+namespace streaming { class TextureStreaming; }
 
 
 class Texture2D {
@@ -22,7 +23,7 @@ public:
         // This is the GpuResource guarantee applied in place; swapping tex_ for a GpuResource
         // outright is the tidier end state but has to thread through the upload path, which still
         // uses tex_ between creation and declaration.
-        ~Texture2D() = default; // the wrapper unregisters
+        ~Texture2D(); // the wrapper unregisters the resource; the streaming registry is left here too
         Texture2D() = default;
         Texture2D(const Texture2D&) = delete;
         Texture2D& operator=(const Texture2D&) = delete;
@@ -124,8 +125,20 @@ public:
         UINT GetResidentMips() const { return Source_().residentMips_; } // == the resource's mip count
         UINT GetFileMipCount() const { return Source_().mipTable_.mipCount; }
         const std::wstring& GetSourcePath() const { return Source_().sourcePath_; } // the file read
-        // Slot in the streaming manager's registry (A3); -1 = not registered.
-        int StreamingIndex() const { return Source_().streamingIndex_; }
+        // Slot in the streaming registry; -1 = not registered. Owners only (a view never registers).
+        int StreamingIndex() const { return streamingIndex_; }
+        void AttachStreaming(streaming::TextureStreaming* s, int index) { streaming_ = s; streamingIndex_ = index; }
+        void DetachStreaming() { streaming_ = nullptr; streamingIndex_ = -1; }
+        // Bumped by every AdoptResource: consumers that COPY the CPU SRV (RT bindless sets) key on it.
+        std::uint32_t GetSrvGeneration() const { return Source_().srvGeneration_; }
+        // Bytes of the mips on the GPU (the resident tail of the file's table); 0 for a WIC texture.
+        UINT64 GetResidentBytes() const;
+        // Texture streaming A2: swap in a resource holding `residentMips` mips (copies already on the
+        // GPU) and hand back the old resource for the retire bin. The SRV is rewritten IN PLACE in
+        // the same CPU heap: every consumer that keeps the CPU handle and copies it per frame
+        // (ShadowGpuData::maskedAlbedoSrvs_, material tables) sees the new resource on its next
+        // copy; the one consumer that keeps a GPU COPY (rt::BindlessTable) keys on the generation.
+        void AdoptResource(Renderer* r, GpuResource&& newRes, UINT residentMips, GpuResource& outOld);
         // Since process start: DDS loads whose mip table passed the self-check, DDS loads that
         // failed it (reported by name when they did), and WIC loads (no table at all).
         static void StreamingStats(std::uint32_t& streamable, std::uint32_t& nonStreamable,
@@ -229,4 +242,6 @@ private:
         UINT residentMips_ = 0;     // mips on the GPU: the LAST residentMips_ entries of mipTable_
         int streamingIndex_ = -1;
         bool streamable_ = false;
+        std::uint32_t srvGeneration_ = 0;
+        streaming::TextureStreaming* streaming_ = nullptr; // set by the registry; nulled on unregister
 };

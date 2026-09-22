@@ -1,6 +1,6 @@
 # План: текстурный стриминг и виртуальные текстуры (транскрипция UE 5.6)
 
-Дата: 2026-09-20. Статус: **A1 сделан 2026-09-22 (коммит `186e2be`, см. блок «Статус» в A1); следующий — A2.** Референс — дроп `D:\Programming\ue_strip`
+Дата: 2026-09-20. Статус: **A1 сделан 2026-09-22 (коммит `186e2be`), A2 сделан 2026-09-22 (см. блоки «Статус» в A1/A2); следующий — A3.** Референс — дроп `D:\Programming\ue_strip`
 (оба дерева, `Source/` и `Shaders/`). Каждая ссылка на UE и на наш код — с `file:line`, сверено
 2026-09-20 по файлам; что не сверено — помечено «(сверить)». Документ написан как задание для
 исполнителя: шаг берётся целиком, без переразведки, кроме чтения файлов, перечисленных в шаге.
@@ -317,6 +317,48 @@ Debug `--gbv` (окно не свёрнуто), компаратор барье�
 
 **Откат.** `streaming.enabled = 0` → пасс не регистрируется, `forceMips` игнорируется, все
 текстуры создаются полными.
+
+**Статус (2026-09-22): СДЕЛАНО.** Файлы `sources/rendering/streaming/`: `StreamingSettings.h`
+(ручки `streaming::g_*`), `TextureUploadRing` (persistent-mapped UPLOAD 50 МБ, FIFO по штампам
+кадров), `TextureStreamingIo` (воркер, LRU 64 хендлов), `TextureRetireBin`, `TextureStreaming`
+(реестр текстур, `OnFrameBegin` в `Renderer::BeginFrame`, билдер пасса `Main_TextureStreaming`).
+`Texture2D::AdoptResource` + `srvGeneration_` + регистрация владельца после DDS-загрузки;
+`rt::BindlessTable` ключует наборы дескрипторов по (mesh, ptr, поколение) и ретайрит старый набор
+на kFrameCount (`BeginFrame(frameNo)` из `RtSceneAs::Build`), `RtMaterialFingerprint` мешает
+поколения; `--profdump` при `--sweep` пишет дамп после последнего шота.
+
+Два бага, пойманные гейтами (оба — контракт подмены, не логика копий):
+* **DEVICE_HUNG на первом же прогоне**: подмена создавала НОВЫЙ CPU-хип под SRV и освобождала
+  старый через 3 кадра, а `ShadowGpuData::maskedAlbedoSrvs_` хранит CPU-хендлы «static after
+  Rebuild» и стейджит их каждый кадр → мусорный дескриптор в t3 теней. Лечение: SRV переписывается
+  НА МЕСТЕ (CPU-хип GPU не читает), retire-bin держит только ресурс. Правило — память
+  `descriptor-handle-caches`.
+* **GBV 1334 ×252**: новый ресурс создавался в COPY_DEST, а компилятор барьеров считает стартом
+  каждого ресурса КАНОНИЧЕСКОЕ состояние (`creationState` в `ResourceDeclarations::Declare` не
+  имеет потребителя) → точка A эмитила SHADER_RESOURCE→COPY_DEST на ресурсе в COPY_DEST. Лечение:
+  ресурс рождается в `PIXEL|NON_PIXEL`, точка A ведёт его в COPY_DEST, точка B — обратно.
+
+Приёмка (`wind_test`, пляжная камера, `--set=exposure.autoExposure:0 --dlss=off --wind-freeze`):
+(1) `--sweep=streaming.forceMips:12,4,12,4`: 186 подмен (62 в каждую сторону), 123 МБ прочитано;
+12 после круга vs HEAD — 11.5 % пикселей, p99 2, mean 0.14 (пол HEAD 13.7 %); 4 — 68 % пикселей,
+mean 9.4, листва размыта без артефактов (глазами). (2) Профдамп, непрерывные подмены (sweep
+4/12 раз в секунду, 496 подмен, 492 МБ): `GPU.Frame` avg 3.10 vs 3.18 мс baseline (шум), max
+4.33 vs 3.71 (**+17 % на худшем кадре**, `Pass_TextureStreaming` GPU max 1.34 мс = 8 подмен ×
+2048² BC7); при `maxPerFrame:2` max 4.15, `Pass_TextureStreaming` max 0.84. **CPU**: кадр с
+подменами до 38 мс при 8/кадр, до 13 мс при 2/кадр (baseline 3.4) — цена пропорциональна числу
+подмен, не кадру: `CreateCommittedTexture` на каждую + перекомпиляция барьеров после
+`DeclareCreated`. Столов на GPU нет (`WaitForFrame` не растёт). (3) Реестр без FATAL, компаратор
+(`--barrier-cmp`) молчит в Release и Debug. (4) Ринг и retire-bin к каждому ридауту пусты
+(`ring 0/51200 KB`, `retired 0`), `[texcache]` на выходе 70/62 как у HEAD.
+
+Гейт: три конфига; Release `--scene-stress --set=streaming.forceMips:4 --barrier-cmp` CLEAN 300
+итераций (57 с, 334 подмены сквозь смены уровней); Debug `--gbv --barrier-cmp` + sweep
+`12,4,12,4` на финальном бинаре: 0 ошибок GBV, 0 FATAL, `barrier_diag.log` не родился, 186 подмен.
+
+**Для A3:** (а) `maxPerFrame` по умолчанию 8 держать только пока подмены редки; менеджер должен
+ограничивать не число подмен, а БАЙТЫ копий в кадр; (б) committed-ресурс на подмену дорог —
+placed-ресурсы из пула стриминга (UE: пул `r.Streaming.PoolSize`); (в) 8 `DeclareCreated` за кадр =
+8 сбросов кэша компиляции барьеров — регистрировать одной пачкой или без бампа поколения (риск §7).
 
 ### A3. Менеджер: границы, wanted mips, бюджет, приоритеты, воркер — 3 дня
 
@@ -881,6 +923,9 @@ persistent-buffer аплоад обходит RHI (`VirtualTextureUploadCache.cp
 | Adaptive / 3D / lightmap VT, `StreamLowMips` RVT | нет | нет потребителя |
 | Меши в стриминг-менеджере | нет | свой контракт LOD |
 | Лимит подмен в кадр 0 (без лимита) | `streaming.maxPerFrame` 8 всегда | амортизация копий общих мипов в графе |
+| IO батчем прямо в целевую память (`AIOP_FLAG_HW_TARGET_MEMORY`) | A2: один воркер, синхронный `ReadFile` плотного диапазона мипов во временный буфер, раскладка рядов в ринг под pitch 256 на воркере | один поток = один запрос в полёте, overlapped ничего не даёт; вернуться при упоре в диск |
+| Освобождение ринга/старого ресурса по фенсу | штамп «кадр + kFrameCount», дренаж в `BeginFrame` после `WaitForFrame` | тот же контракт, что `rt.as.retired`; отдельный фенс не нужен |
+| `RHIUpdateTextureReference` (все ссылки обновляются RHI) | SRV переписывается НА МЕСТЕ в CPU-хипе текстуры + `srvGeneration_`; `rt::BindlessTable` ключует наборы по поколению и ретайрит старый набор на kFrameCount | у нас потребители копируют CPU-хендл в кольцо кадра сами; единственный, кто держит GPU-копию, — RT-bindless |
 | DirectStorage / tiled resources / Sampler Feedback | возможные отступления на потом | не путь UE; вернуться, если копия общих мипов дорога |
 
 ## 6. Ручки: UE → `--set`
@@ -901,6 +946,7 @@ persistent-buffer аплоад обходит RHI (`VirtualTextureUploadCache.cp
 | `r.Streaming.MaxNumTexturesToStreamPerFrame` (UE: 0 = без лимита, только при `AmortizeCPUToGPUCopy`) | `streaming.maxPerFrame` | 8 (отступление, §5) |
 | `GEnableMipLevelFading`, `GMipFadeSettings` | `streaming.mipFade`, `mipFadeIn/Out` | 1 / 0.3 / 0.1 |
 | — | `streaming.forceMips`, `streaming.selftest` | тест |
+| — | `streaming.maxIoInFlight` (A2: чтений в полёте у воркера) | 16 |
 | — (UE bindless RHI, `D3D12BindlessDescriptors`) | `raster.bindless` | 1 при tier 3 / SM 6.6, иначе 0 |
 | `r.VT.TileSize` / `TileBorderSize` | импорт: `vt.tileSize` / `vt.border` | 128 / 4 |
 | `VirtualTexturePoolConfig` | `vt.poolSizeMB` (на группу) | 48 |

@@ -9,6 +9,7 @@
 #include "materials/TextureDecodeCache.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
+#include "rendering/streaming/TextureStreaming.h"
 #include "core/Helpers.h"
 
 #include <wrl.h>
@@ -33,6 +34,38 @@ using Microsoft::WRL::ComPtr;
 static std::atomic<std::uint32_t> gTexStreamable{ 0 };
 static std::atomic<std::uint32_t> gTexNonStreamable{ 0 };
 static std::atomic<std::uint32_t> gTexPng{ 0 };
+
+Texture2D::~Texture2D()
+{
+    if (streaming_) { streaming_->Unregister(this); }
+}
+
+UINT64 Texture2D::GetResidentBytes() const
+{
+    const Texture2D& s = Source_();
+    if (s.mipTable_.mipCount == 0 || s.residentMips_ > s.mipTable_.mipCount) { return 0; }
+    return s.mipTable_.TailBytes(s.mipTable_.mipCount - s.residentMips_);
+}
+
+void Texture2D::AdoptResource(Renderer* r, GpuResource&& newRes, UINT residentMips, GpuResource& outOld)
+{
+    outOld = std::move(tex_);
+    tex_ = std::move(newRes);
+    // Same heap, same handle: a CPU-only heap is never read by the GPU, only copied from at record
+    // time, so rewriting it at the frame boundary is safe and keeps every cached handle valid.
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+    sd.Format = srvFormat_;
+    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sd.Texture2D.MipLevels = residentMips;
+    sd.Texture2D.MostDetailedMip = 0;
+    sd.Texture2D.ResourceMinLODClamp = 0.f;
+    r->GetDevice()->CreateShaderResourceView(tex_.Get(), &sd, srvCPU_);
+    mipLevels_ = residentMips;
+    residentMips_ = residentMips;
+    ++srvGeneration_;
+    stagedFrame_ = UINT64_MAX; srvGPU_.ptr = 0;
+}
 
 // ========================= helpers =========================
 static bool CreateWICFactory(ComPtr<IWICImagingFactory>& out)
@@ -452,7 +485,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     // width_/height_ are the FILE's mip 0 -- what the texture is -- even when the resource is smaller.
     width_ = width; height_ = height; mipLevels_ = residentMips; residentMips_ = residentMips;
     resourceFormat_ = td.Format; srvFormat_ = srvFmt;
-    stagedFrame_ = UINT(-1); srvGPU_.ptr = 0;
+    stagedFrame_ = UINT64_MAX; srvGPU_.ptr = 0;
 
     (streamable_ ? gTexStreamable : gTexNonStreamable).fetch_add(1u, std::memory_order_relaxed);
     if (firstMip > 0) {
@@ -722,6 +755,10 @@ bool Texture2D::LoadFromFileUncached_(Renderer* renderer,
             LOG_ERROR(logging::LogCategory::Asset, "DDS texture load failed: {}", d.path);
             return false;
         }
+        // A2: the OWNER joins the streaming registry (views share it); a table that failed stays out.
+        if (streamable_ && renderer) {
+            if (streaming::TextureStreaming* s = renderer->GetTextureStreaming()) { s->Register(this); }
+        }
         return true;
     }
 
@@ -765,7 +802,7 @@ bool Texture2D::LoadFromFileUncached_(Renderer* renderer,
     gTexPng.fetch_add(1u, std::memory_order_relaxed);
 
     // Reset the staged cache
-    stagedFrame_ = UINT(-1); srvGPU_.ptr = 0;
+    stagedFrame_ = UINT64_MAX; srvGPU_.ptr = 0;
 
     return true;
 }
@@ -801,7 +838,7 @@ void Texture2D::CreateFromRGBA8(Renderer* renderer,
     width_ = width; height_ = height; mipLevels_ = 1; residentMips_ = 1;
     resourceFormat_ = resFmt; srvFormat_ = srvFmt;
 
-    stagedFrame_ = UINT(-1); srvGPU_.ptr = 0;
+    stagedFrame_ = UINT64_MAX; srvGPU_.ptr = 0;
 }
 
 D3D12_GPU_DESCRIPTOR_HANDLE Texture2D::GetSRVForFrame(Renderer* r)

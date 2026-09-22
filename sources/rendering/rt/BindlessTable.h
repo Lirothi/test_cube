@@ -97,6 +97,10 @@ public:
         bool mrMultiply = false;
         // < 0 = opaque slot (no alpha test); >= 0 = masked, tested against baseColor.a * albedo.a.
         float alphaCutoff = -1.0f;
+        // Texture streaming A2: Texture2D::GetSrvGeneration of each texture. A swap bumps it, which
+        // retires the copied set instead of serving a copy of a released resource.
+        uint32_t albedoGen = 0;
+        uint32_t mrGen = 0;
     };
 
     // One stable, contiguous record run per owner + mesh (InstanceID + GeometryIndex).
@@ -107,7 +111,11 @@ public:
     uint32_t GetOrUpdateMesh(const void* owner, Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
                                const float* baseColor4, float roughness, float metalness,
-                               bool mrMultiply, float alphaCutoff = -1.0f);
+                               bool mrMultiply, float alphaCutoff = -1.0f,
+                               uint32_t albedoGen = 0, uint32_t mrGen = 0);
+
+    // Frame boundary: descriptor sets retired kFrameCount frames ago go back to the free list.
+    void BeginFrame(uint64_t frameNo);
 
     // Absolute heap index of per-frame scene descriptor `which` for `frameIndex`.
     UINT SceneIndex(UINT frameIndex, UINT which) const
@@ -150,12 +158,28 @@ private:
         Mesh* mesh;
         SIZE_T albedo;
         SIZE_T mr;
+        uint32_t albedoGen;
+        uint32_t mrGen;
         bool operator==(const DescriptorKey&) const = default;
+    };
+    // The same material regardless of texture generation: what a swap replaces the set of.
+    struct MaterialKey
+    {
+        Mesh* mesh;
+        SIZE_T albedo;
+        SIZE_T mr;
+        bool operator==(const MaterialKey&) const = default;
     };
     struct KeyHash
     {
         size_t operator()(const GeometryKey& key) const;
         size_t operator()(const DescriptorKey& key) const;
+        size_t operator()(const MaterialKey& key) const;
+    };
+    struct RetiredSet
+    {
+        UINT slot;
+        uint64_t frame; // reusable once the frame number reaches this
     };
     struct FrameGeometry
     {
@@ -165,6 +189,11 @@ private:
     };
     robin_hood::unordered_map<GeometryKey, uint32_t, KeyHash> geomCache_;
     robin_hood::unordered_map<DescriptorKey, uint32_t, KeyHash> descriptorCache_;
+    robin_hood::unordered_map<MaterialKey, DescriptorKey, KeyHash> latestSet_; // material -> its live key
+    std::vector<RetiredSet> retiredSets_;
+    std::vector<UINT> freeSets_;
+    UINT setSlotsUsed_ = 0;   // descriptor-set slots ever handed out (free-list reuse does not count)
+    uint64_t frameNo_ = 0;
     std::vector<GeometryInfoGPU> geomInfo_; // latest CPU material state
     std::array<FrameGeometry, render::kFrameCount> frameGeometry_{};
     uint64_t geomVersion_ = 0;

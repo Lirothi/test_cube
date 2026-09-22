@@ -202,6 +202,8 @@ inline std::uint32_t g_crossQueueWaits = 0;
 inline bool g_deviceRemovalCheck = false;
 } // namespace render
 
+namespace streaming { class TextureStreaming; } // A2; the member is a unique_ptr, ~Renderer is out of line
+
 class Renderer {
 public:
     struct ThreadCL {
@@ -452,6 +454,8 @@ public:
     MaterialManager* GetMaterialManager() { return &materialManager_; }
     InputLayoutManager* GetInputLayoutManager() { return &inputLayoutManager_; }
     MeshManager* GetMeshManager() { return &meshManager_; }
+    // Texture streaming A2 (null before the device exists and after Shutdown).
+    streaming::TextureStreaming* GetTextureStreaming() { return textureStreaming_.get(); }
     TextManager* GetTextManager() { return &textManager_; }
     FontManager* GetFontManager() { return &fontManager_; }
     MaterialDataManager* GetMaterialDataManager() { return &materialDataManager_; }
@@ -892,6 +896,7 @@ private:
     // Streamline / DLSS integration
     sl::DLSSMode dlssMode_ = sl::DLSSMode::eBalanced;
     std::unique_ptr<DlssHandler> dlssHandler_;
+    std::unique_ptr<streaming::TextureStreaming> textureStreaming_; // A2; created with the device
     bool streamlineInitialized_ = false;
     bool shutdown_ = false;
 

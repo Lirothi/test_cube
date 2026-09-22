@@ -22,7 +22,25 @@ size_t BindlessTable::KeyHash::operator()(const DescriptorKey& key) const
     h = (h ^ reinterpret_cast<uintptr_t>(key.mesh)) * 1099511628211ull;
     h = (h ^ key.albedo) * 1099511628211ull;
     h = (h ^ key.mr) * 1099511628211ull;
+    h = (h ^ key.albedoGen) * 1099511628211ull;
+    h = (h ^ key.mrGen) * 1099511628211ull;
     return static_cast<size_t>(h);
+}
+
+size_t BindlessTable::KeyHash::operator()(const MaterialKey& key) const
+{
+    uint64_t h = 1469598103934665603ull;
+    h = (h ^ reinterpret_cast<uintptr_t>(key.mesh)) * 1099511628211ull;
+    h = (h ^ key.albedo) * 1099511628211ull;
+    h = (h ^ key.mr) * 1099511628211ull;
+    return static_cast<size_t>(h);
+}
+
+void BindlessTable::BeginFrame(uint64_t frameNo)
+{
+    frameNo_ = frameNo;
+    for (const RetiredSet& r : retiredSets_) { if (r.frame <= frameNo) { freeSets_.push_back(r.slot); } }
+    std::erase_if(retiredSets_, [frameNo](const RetiredSet& r) { return r.frame <= frameNo; });
 }
 
 void BindlessTable::Init(ID3D12Device* device)
@@ -46,6 +64,11 @@ void BindlessTable::Reset()
 {
     geomCache_.clear();
     descriptorCache_.clear();
+    latestSet_.clear();
+    retiredSets_.clear();
+    freeSets_.clear();
+    setSlotsUsed_ = 0;
+    frameNo_ = 0;
     geomInfo_.clear();
     frameGeometry_ = {};
     geomVersion_ = 0;
@@ -74,20 +97,38 @@ void BindlessTable::WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_
 uint32_t BindlessTable::GetOrUpdateMesh(const void* owner, Mesh* mesh, D3D12_CPU_DESCRIPTOR_HANDLE albedoSrv,
                                           D3D12_CPU_DESCRIPTOR_HANDLE mrSrv,
                                           const float* baseColor4, float roughness, float metalness,
-                                          bool mrMultiply, float alphaCutoff)
+                                          bool mrMultiply, float alphaCutoff,
+                                          uint32_t albedoGen, uint32_t mrGen)
 {
-    const SlotMaterial one{ albedoSrv, mrSrv, baseColor4, roughness, metalness, mrMultiply, alphaCutoff };
+    const SlotMaterial one{ albedoSrv, mrSrv, baseColor4, roughness, metalness, mrMultiply, alphaCutoff, albedoGen, mrGen };
     return GetOrUpdateMesh(owner, mesh, &one, 1);
 }
 
 uint32_t BindlessTable::GetOrRegisterDescriptors(Mesh* mesh, const SlotMaterial& material)
 {
-    const DescriptorKey key{ mesh, material.albedoSrv.ptr, material.mrSrv.ptr };
+    const DescriptorKey key{ mesh, material.albedoSrv.ptr, material.mrSrv.ptr, material.albedoGen, material.mrGen };
     auto it = descriptorCache_.find(key);
     if (it != descriptorCache_.end()) {
         return it->second;
     }
-    if (descriptorCache_.size() >= (kMaxDescriptors - kGeoBase) / kDescPerGeom) {
+    // A2: same material, new texture generation -> the old set is retired (frames in flight still
+    // index it) and this registration takes a fresh slot. Sets are never rewritten in place.
+    const MaterialKey mk{ mesh, material.albedoSrv.ptr, material.mrSrv.ptr };
+    auto latest = latestSet_.find(mk);
+    if (latest != latestSet_.end()) {
+        auto old = descriptorCache_.find(latest->second);
+        if (old != descriptorCache_.end()) {
+            retiredSets_.push_back(RetiredSet{ old->second, frameNo_ + render::kFrameCount });
+            descriptorCache_.erase(old);
+        }
+        latestSet_.erase(latest);
+    }
+    UINT geoSlot = 0;
+    if (!freeSets_.empty()) {
+        geoSlot = freeSets_.back();
+        freeSets_.pop_back();
+    }
+    else if (setSlotsUsed_ >= (kMaxDescriptors - kGeoBase) / kDescPerGeom) {
         // On the transition only: every registration after exhaustion lands here again, and the
         // renderer has already switched to SSR on the first one.
         if (!buildFailed_) {
@@ -98,7 +139,9 @@ uint32_t BindlessTable::GetOrRegisterDescriptors(Mesh* mesh, const SlotMaterial&
         buildFailed_ = true;
         return kInvalidGeometry;
     }
-    const UINT geoSlot = kGeoBase + kDescPerGeom * static_cast<UINT>(descriptorCache_.size());
+    else {
+        geoSlot = kGeoBase + kDescPerGeom * setSlotsUsed_++;
+    }
 
     // Raw (ByteAddressBuffer) SRVs over the whole VB/IB.
     auto makeRawSrv = [&](ID3D12Resource* res, UINT slot) {
@@ -127,6 +170,7 @@ uint32_t BindlessTable::GetOrRegisterDescriptors(Mesh* mesh, const SlotMaterial&
                                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
     descriptorCache_.emplace(key, geoSlot);
+    latestSet_[mk] = key;
     return geoSlot;
 }
 

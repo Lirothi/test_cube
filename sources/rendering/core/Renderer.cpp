@@ -1,6 +1,7 @@
 #include "rendering/core/Renderer.h"
 #include <unordered_set>
 #include "core/diagnostics/BootProfile.h"
+#include "rendering/streaming/TextureStreaming.h" // A2: the subsystem behind the unique_ptr member
 
 #include <chrono>
 #include "core/diagnostics/ArtifactWriter.h"
@@ -146,6 +147,12 @@ void Renderer::Shutdown()
     }
     materialDataManager_.ClearAll();
     Texture2D::ClearCache();
+    // A2: after the material textures are gone (they unregister in their destructors), before the
+    // device goes; a texture that outlives this (editor thumbnails) is detached here.
+    if (textureStreaming_) {
+        textureStreaming_->Shutdown();
+        textureStreaming_.reset();
+    }
     meshManager_.Clear();
     textManager_.Clear();
     fontManager_.Clear();
@@ -287,6 +294,10 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
         BOOT_SCOPE("GraphicsDevice::InitQueue");
         graphicsDevice_.InitQueue();
     }
+
+    // Texture streaming A2: registry + IO worker; the upload ring is created on first use.
+    textureStreaming_ = std::make_unique<streaming::TextureStreaming>();
+    textureStreaming_->Init(GetDevice());
 
     // --- SwapChain + RTVs (render::kFrameCount) ---
     {
@@ -725,6 +736,12 @@ void Renderer::BeginFrame() {
         fr->GetDescAlloc().ResetPerFrame();
         fr->GetSamplerAlloc().ResetPerFrame();
         fr->ResetUpload();
+    }
+
+    // Texture streaming A2: frame boundary -- release what this slot's fence just retired, adopt
+    // last frame's copies, hand out new requests. Before any descriptor of this frame is staged.
+    if (textureStreaming_) {
+        textureStreaming_->OnFrameBegin(this, totalFrameNumber_);
     }
 
     ctxPool_.ResetForFrame();

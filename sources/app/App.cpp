@@ -73,6 +73,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "ocean/OceanRenderable.h"  // --set=ocean.contactFoam
 #include "ocean/OceanSimulation.h"
 #include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
+#include "rendering/streaming/StreamingSettings.h" // --set=streaming.* (texture streaming A2)
 #include "rendering/meshes/LodSelect.h" // --sweep=vsm.shadowLod* (docs/bug_shadow_lod_bias_perf.md)
 #include "rendering/debug/LodDebugView.h" // --set=lod.debug (LOD selection debug view)
 #include "rendering/core/Screenshot.h"
@@ -381,6 +382,13 @@ namespace
         // without these a clipmap artifact can only be argued about, not measured. They are
         // process globals, not scene state -- deliberately, so they survive a level switch the
         // way the dev-window sliders do.
+        // Texture streaming (plan §6). forceMips is the A2 test knob: every streamable texture wants
+        // clamp(N) mips, so `--sweep=streaming.forceMips:12,4,12,4` drives swaps both ways.
+        if (setting == "streaming.enabled")       { streaming::g_enabled = value != 0.0f; return true; }
+        if (setting == "streaming.tempMemoryMB")  { streaming::g_tempMemoryMB = std::max(1, static_cast<int>(value)); return true; }
+        if (setting == "streaming.maxPerFrame")   { streaming::g_maxPerFrame = std::max(0, static_cast<int>(value)); return true; }
+        if (setting == "streaming.forceMips")     { streaming::g_forceMips = static_cast<int>(value); return true; }
+        if (setting == "streaming.maxIoInFlight") { streaming::g_maxIoInFlight = std::max(1, static_cast<int>(value)); return true; }
         if (setting == "vsm.clipmapDepthBias")  { vsm::g_clipmapDepthBias = value;  return true; }
         // Per-level depth-bias shaping (bias(L) = max(base * decay^L, floorTexels), see
         // VsmClipmapShadow) -- headless mirrors of the two dev-window sliders beside the base bias.
@@ -1699,7 +1707,12 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             if (!g_profDumpPath.empty())
             {
                 static double profStart = GetTimeSeconds();
-                if (GetTimeSeconds() - profStart >= g_shotDelaySec)
+                // With a --sweep the dump waits for the LAST shot, so its window covers the swept
+                // values instead of the settle time before the first one.
+                const bool due = g_sweepValues.empty()
+                    ? (GetTimeSeconds() - profStart >= g_shotDelaySec)
+                    : (g_shotPath.empty() && !isRunning_);
+                if (due)
                 {
                     const bool ok = Profiler::Get().DumpOverlay(g_profDumpPath);
                     if (ok)
