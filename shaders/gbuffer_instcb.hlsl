@@ -6,10 +6,26 @@
 #define GBUFFER_SKIP_PEROBJECT
 #include "gbuffer_common.hlsli"
 
+// A6: GBUFFER_BINDLESS=1 reaches the material textures through ResourceDescriptorHeap[] by the
+// indices the b2 CB carries (slotTexIndices / surfaceTexIndices); the t0..t2 table leaves the RS.
+#ifndef GBUFFER_BINDLESS
+#define GBUFFER_BINDLESS 0
+#endif
+
+#if !GBUFFER_BINDLESS
 Texture2D gAlbedo : register(t0);
 Texture2D gMR : register(t1); // R=metal, G=rough
 Texture2D gNormalMap : register(t2); // tangent-space, +Z
+#endif
 SamplerState gSmp : register(s0);
+
+#if GBUFFER_BINDLESS
+#define GBUFFER_INSTCB_RS_FLAGS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT | CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED),"
+#define GBUFFER_INSTCB_RS_TEX ""
+#else
+#define GBUFFER_INSTCB_RS_FLAGS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT),"
+#define GBUFFER_INSTCB_RS_TEX "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)),"
+#endif
 
 // B2b multi-slot instancing: material params come from a per-SUBMESH-draw CB (b2, one upload
 // per slot per batch) instead of the per-instance entry — instances share slot materials, so
@@ -19,7 +35,7 @@ SamplerState gSmp : register(s0);
 #endif
 
 #if INSTCB_SLOT_PARAMS
-// Mirrors render::InstanceSlotParams (InstanceTypes.h) — 144 bytes, cbuffer packing.
+// Mirrors render::InstanceSlotParams (InstanceTypes.h) — 160 bytes, cbuffer packing.
 cbuffer SlotParams : register(b2)
 {
     float4 slotBaseColor;
@@ -38,16 +54,8 @@ cbuffer SlotParams : register(b2)
     float slotTransmissionNormalWeight;
     float4 slotTerrainTiling;
     float4 slotTerrainEdgeParams;
+    uint4 slotTexIndices; // A6: albedo, MR, normal slots in the bindless heap
 };
-
-#define GBUFFER_INSTCB_RS \
-    "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \
-    "CBV(b0)," \
-    "CBV(b1)," \
-    "CBV(b2)," \
-    "CBV(b3)," \
-    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
-    "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #else
 cbuffer SurfaceParams : register(b2)
 {
@@ -59,17 +67,19 @@ cbuffer SurfaceParams : register(b2)
     float surfaceTransmissionNormalWeight;
     float4 surfaceTerrainTiling;
     float4 surfaceTerrainEdgeParams;
+    uint4 surfaceTexIndices; // A6: albedo, MR, normal slots in the bindless heap
 };
+#endif
 
+// One root signature for both b2 flavors (the CB layout is the only difference between them).
 #define GBUFFER_INSTCB_RS \
-    "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \
+    GBUFFER_INSTCB_RS_FLAGS \
     "CBV(b0)," \
     "CBV(b1)," \
     "CBV(b2)," \
     "CBV(b3)," \
-    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    GBUFFER_INSTCB_RS_TEX \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
-#endif
 
 // Per-instance dithered LOD crossfade (see LodFadeClip). Packed float4s (256 floats); filled
 // by InstancedDrawBatch per draw chunk, zeros when nothing in the chunk fades. Deliberately
@@ -141,6 +151,7 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float  mTransmissionNormalWeight = slotTransmissionNormalWeight;
     const float4 mTerrainTiling = slotTerrainTiling;
     const float4 mTerrainEdgeParams = slotTerrainEdgeParams;
+    const uint4  mTexIndices = slotTexIndices;
 #else
     const float4 mBaseColor    = d.baseColor;
     const float2 mMetalRough   = d.metalRough;
@@ -157,6 +168,12 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float  mTransmissionNormalWeight = surfaceTransmissionNormalWeight;
     const float4 mTerrainTiling = surfaceTerrainTiling;
     const float4 mTerrainEdgeParams = surfaceTerrainEdgeParams;
+    const uint4  mTexIndices = surfaceTexIndices;
+#endif
+#if GBUFFER_BINDLESS
+    Texture2D gAlbedo = ResourceDescriptorHeap[mTexIndices.x];
+    Texture2D gMR = ResourceDescriptorHeap[mTexIndices.y];
+    Texture2D gNormalMap = ResourceDescriptorHeap[mTexIndices.z];
 #endif
 
     AlphaTestClip(gAlbedo, gSmp, i.UV, mTexOffsScale, mTerrainTiling, mTerrainEdgeParams,

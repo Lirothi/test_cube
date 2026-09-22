@@ -196,6 +196,15 @@ public:
                                     D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool wireframe,
                                     std::uint32_t vgBegin, std::uint32_t vgEnd, bool passB = false);
     std::uint32_t VirtualGroupCount() const { return numVirtualGroups_; }
+    // Texture streaming plan A6, the merged path: with raster.bindless the groups whose PSO is the
+    // GBUFFER_BINDLESS permutation draw with ONE ExecuteIndirect per PSO from 64-byte commands
+    // ({VBV, IBV, CBV(b2), CONSTANT(b0) = LOD, DRAW_INDEXED}). The CPU writes the static part of
+    // every command per frame in PSO-sorted order (FillGBufferCommandsForFrame, from PrepareCullPass),
+    // and a kernel pairs it with the cull's draw counts (RecordGBufferCommandExpand, after the camera
+    // cull for pass A and after the camera post cull for pass B). Groups the merged path cannot take
+    // (table PSOs, textureless materials) keep the per-group ExecuteIndirect.
+    bool FillGBufferCommandsForFrame(Renderer* renderer);
+    void RecordGBufferCommandExpand(Renderer* renderer, ID3D12GraphicsCommandList* cl, bool passB);
     // NO `InvalidateGroupMaterials()` HERE ANY MORE, and do not bring it back. It set a flag that
     // made the next UpdateForFrame run Rebuild -- which clears `megaReady_` with nothing to put it
     // back, dropping the VSM page render onto its per-page loop for the rest of the session. Its
@@ -414,7 +423,12 @@ public:
     // carry {instances, casterGroup, groupMask} and srvTable[3] the masked albedo table.
     static constexpr std::uint32_t kMaxMaskedGroups = 16; // matches gMaskAlbedo[16] in shadow_indirect_csm.hlsl
     bool MaskedShadowsActive() const;
-    D3D12_CPU_DESCRIPTOR_HANDLE GroupMaskSrv() const { return groupMask_.Srv(0); }
+    // A6: the masked PSOs are GBUFFER_BINDLESS permutations: GroupMask.x is the albedo's slot in the
+    // shared heap (rewritten into region f every frame, RefreshGroupMaskForFrame), there is no
+    // albedo table and no 16-group cap. Call sites stage srvTable[3] only when this is false.
+    bool MaskedShadowsBindless() const;
+    void RefreshGroupMaskForFrame(Renderer* renderer);
+    D3D12_CPU_DESCRIPTOR_HANDLE GroupMaskSrv() const { return groupMask_.Srv(groupMaskRegion_); }
     const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxMaskedGroups>& MaskedAlbedoSrvs() const { return maskedAlbedoSrvs_; }
     std::uint32_t MaskedAlbedoCount() const { return maskedAlbedoCount_; }
 
@@ -615,6 +629,31 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE camHzbCurSrv_{};
     bool camHzbThisFrame_ = false;
     std::shared_ptr<Material> camCullPostMat_;    // cam_cull_post_cs.hlsl
+    // A6 merged indirect: one command per (static group with a drawable material, LOD), ordered by
+    // PSO so a run is one ExecuteIndirect. Built at Rebuild; the static part is refilled per frame.
+    struct GBufferCmdRun
+    {
+        Material* mat = nullptr;
+        MaterialData* md = nullptr; // the run's first group's material (the sampler comes from it)
+        std::uint32_t first = 0;    // first command of the run
+        std::uint32_t count = 0;
+    };
+    std::vector<std::uint32_t> cmdOrder_;         // command k -> virtual group
+    std::vector<DirectX::XMUINT4> cmdGeom_;       // 2 per command: {vbVA lo, hi, size, stride} {ibVA lo, hi, size, format} (static after Rebuild)
+    std::vector<GBufferCmdRun> cmdRuns_;
+    Ring cmdStatic_;                              // per frame: 3 x uint4 per command (the expand kernel's input)
+    UavRing camCmds_;                             // per frame: 64 B per command, pass A (rests INDIRECT_ARGUMENT)
+    UavRing camCmdsB_;                            // pass B
+    std::shared_ptr<Material> gbufferCmdExpandMat_; // gbuffer_indirect_expand_cs.hlsl
+    bool cmdFrameReady_ = false;                  // this frame's static part is written (PrepareCullPass)
+    // [passB]: decided on the main thread by the pass builders (PrepareCullPass / PrepareCamCullPostPass):
+    // the expand kernel records and the draws merge. NOT set at record time -- the G-buffer passes
+    // record on workers in parallel with the cull passes, so a record-time flag is a race.
+    std::array<bool, 2> cmdMerge_{};
+    std::uint32_t cmdCountFrame_ = 0;
+    void BuildGBufferCommandOrder_();
+    void RecordIndirectGBufferStats_(bool passB, std::uint32_t mergedCalls, std::uint32_t mergedCmds,
+                                     std::uint32_t perGroupDraws) const;
     bool gbufferIndirectFrame_ = false;           // Scene's decision for this frame
     std::uint32_t eligibleCasterCount_ = 0;
     std::uint32_t camListCount_ = 0;              // this frame's camera candidates (sum of vgCamCount_)
@@ -660,7 +699,7 @@ private:
     // S4: [7k..8k)=camArgs (RAW), [8k..9k)=camVisibleList,
     // S5: [9k..10k)=camDeferred, [10k..11k)=camArgsB (RAW), [11k..12k)=camVisibleListB.
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cullUavHeap_;
-    static constexpr std::size_t kCullUavSets = 12;
+    static constexpr std::size_t kCullUavSets = 14; // A6: 12 = camCmds_ RAW, 13 = camCmdsB_ RAW
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCullUavSets * render::kFrameCount> cullUav_{};
 
     std::shared_ptr<Material> cullClearMat_;     // shadow_cull_clear_cs.hlsl
@@ -688,6 +727,13 @@ private:
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxMaskedGroups> maskedAlbedoSrvs_{};
     std::uint32_t maskedAlbedoCount_ = 0;
     bool hasMaskedGroups_ = false;
+    // A6: the per-group mask as built (x = table slot), the masked groups' MaterialData (null =
+    // opaque) and the region GroupMaskSrv() serves: 0 = the static table-path copy, f = this
+    // frame's bindless copy (x = heap index).
+    std::vector<DirectX::XMUINT2> groupMaskCpu_;
+    std::vector<const MaterialData*> groupMaskMd_;
+    std::uint32_t maskedGroupCount_ = 0; // every masked group, cap or not
+    UINT groupMaskRegion_ = 0;
     bool hasWindCasters_ = false; // W5: any caster with windStrength > 0 (see HasWindCasters)
 
     std::uint32_t count_ = 0;            // live caster count (TOTAL: static + folded GI instances)

@@ -43,10 +43,18 @@ void BindlessTable::BeginFrame(uint64_t frameNo)
     std::erase_if(retiredSets_, [frameNo](const RetiredSet& r) { return r.frame <= frameNo; });
 }
 
-void BindlessTable::Init(ID3D12Device* device)
+void BindlessTable::Init(ID3D12Device* device, render::BindlessHeap* shared)
 {
     device_ = device;
-    if (!device_ || heap_) {
+    if (!device_ || Ready()) {
+        return;
+    }
+    static_assert(kMaxDescriptors == render::BindlessHeap::kRtRegionCapacity,
+                  "the RT region of the shared heap is sized for this table");
+    if (shared && shared->Ready()) {
+        shared_ = shared;
+        base_ = render::BindlessHeap::kRtRegionBase;
+        incr_ = shared->Increment();
         return;
     }
     D3D12_DESCRIPTOR_HEAP_DESC desc{};
@@ -74,12 +82,15 @@ void BindlessTable::Reset()
     geomVersion_ = 0;
     buildFailed_ = false;
     heap_.Reset();
+    shared_ = nullptr;
+    base_ = 0;
     incr_ = 0;
     device_ = nullptr;
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE BindlessTable::CpuHandle(UINT index) const
 {
+    if (shared_) { return shared_->Cpu(index); }
     D3D12_CPU_DESCRIPTOR_HANDLE h = heap_->GetCPUDescriptorHandleForHeapStart();
     h.ptr += static_cast<SIZE_T>(index) * incr_;
     return h;
@@ -87,7 +98,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE BindlessTable::CpuHandle(UINT index) const
 
 void BindlessTable::WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_DESCRIPTOR_HANDLE srcCpu)
 {
-    if (!heap_ || frameIndex >= render::kFrameCount || which >= kScenePerFrame || srcCpu.ptr == 0) {
+    if (!Ready() || frameIndex >= render::kFrameCount || which >= kScenePerFrame || srcCpu.ptr == 0) {
         return;
     }
     device_->CopyDescriptorsSimple(1, CpuHandle(SceneIndex(frameIndex, which)), srcCpu,
@@ -140,12 +151,12 @@ uint32_t BindlessTable::GetOrRegisterDescriptors(Mesh* mesh, const SlotMaterial&
         return kInvalidGeometry;
     }
     else {
-        geoSlot = kGeoBase + kDescPerGeom * setSlotsUsed_++;
+        geoSlot = base_ + kGeoBase + kDescPerGeom * setSlotsUsed_++;
     }
 
     // Raw (ByteAddressBuffer) SRVs over the whole VB/IB.
     auto makeRawSrv = [&](ID3D12Resource* res, UINT slot) {
-        if (!res || !heap_) {
+        if (!res || !Ready()) {
             return;
         }
         const UINT64 bytes = res->GetDesc().Width;

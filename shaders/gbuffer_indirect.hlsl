@@ -18,9 +18,19 @@
 #define GBUFFER_SKIP_PEROBJECT
 #include "gbuffer_common.hlsli"
 
+// A6: GBUFFER_BINDLESS=1 -- the material textures come through ResourceDescriptorHeap[] by the
+// indices SurfaceParams carries, and b0 (the group LOD) is ROOT CONSTANTS instead of a CBV: that is
+// what lets one ExecuteIndirect span every group -- the command signature writes the constants and
+// the b2 address per command ({VBV, IBV, CBV(b2), CONSTANT(b0), DRAW_INDEXED}).
+#ifndef GBUFFER_BINDLESS
+#define GBUFFER_BINDLESS 0
+#endif
+
+#if !GBUFFER_BINDLESS
 Texture2D gAlbedo : register(t0);
 Texture2D gMR : register(t1); // R=metal, G=rough
 Texture2D gNormalMap : register(t2); // tangent-space, +Z
+#endif
 StructuredBuffer<InstancePerObject> gInstances : register(t3);
 StructuredBuffer<float> gCasterFade : register(t4); // > 0: the caster fades between lod and lod + 1
 StructuredBuffer<uint>  gCasterLod  : register(t5); // the caster's camera tier (bit 7 = chunk EXACT)
@@ -42,8 +52,18 @@ cbuffer SurfaceParams : register(b2)
     float transmissionNormalWeight;
     float4 terrainTiling;
     float4 terrainEdgeParams;
+    uint4 texIndices; // A6: albedo, MR, normal slots in the bindless heap (read under GBUFFER_BINDLESS)
 };
 
+#if GBUFFER_BINDLESS
+#define GBUFFER_INDIRECT_RS \
+    "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT | CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
+    "RootConstants(num32BitConstants=4, b0)," \
+    "CBV(b1)," \
+    "CBV(b2)," \
+    "DescriptorTable(SRV(t3, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#else
 #define GBUFFER_INDIRECT_RS \
     "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT)," \
     "CBV(b0)," \
@@ -52,6 +72,7 @@ cbuffer SurfaceParams : register(b2)
     "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(SRV(t3, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#endif
 
 static const uint kCasterLodMask = 0x0Fu;
 
@@ -99,6 +120,11 @@ VSOutIndirect VSMain(VSInIndirect i)
 [RootSignature(GBUFFER_INDIRECT_RS)]
 PSOut PSMain(VSOutIndirect v, bool isFrontFace : SV_IsFrontFace)
 {
+#if GBUFFER_BINDLESS
+    Texture2D gAlbedo = ResourceDescriptorHeap[texIndices.x];
+    Texture2D gMR = ResourceDescriptorHeap[texIndices.y];
+    Texture2D gNormalMap = ResourceDescriptorHeap[texIndices.z];
+#endif
     const VSOut i = v.b;
     const float4 baseColor = v.baseColor;
     const float2 metalRough = v.mrCut.xy;

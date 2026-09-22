@@ -1783,9 +1783,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             tbl[n++] = shadowGpu->CasterGroupSrv(); // t1
             tbl[n++] = shadowGpu->GroupMaskSrv();   // t2
             tbl[n++] = pageProjSrv_;                // t3
-            const std::uint32_t albedos = shadowGpu->MaskedAlbedoCount();
-            const auto& src = shadowGpu->MaskedAlbedoSrvs();
-            for (std::uint32_t a = 0; a < albedos && n < tbl.size(); ++a) { tbl[n++] = src[a]; } // t4..
+            if (!shadowGpu->MaskedShadowsBindless()) // A6: the bindless PSO reads albedos by heap index
+            {
+                const std::uint32_t albedos = shadowGpu->MaskedAlbedoCount();
+                const auto& src = shadowGpu->MaskedAlbedoSrvs();
+                for (std::uint32_t a = 0; a < albedos && n < tbl.size(); ++a) { tbl[n++] = src[a]; } // t4..
+            }
         }
         else
         {
@@ -1800,8 +1803,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         ctx.srvTable[0] = renderer->StageSrvUavTable({ shadowGpu->InstanceReadSrv(f),
                                                        shadowGpu->CasterGroupSrv(),
                                                        shadowGpu->GroupMaskSrv() }).gpu;
-        ctx.srvTable[3] = renderer->StageSrvUavTable(shadowGpu->MaskedAlbedoSrvs(),
-                                                     shadowGpu->MaskedAlbedoCount()).gpu;
+        if (!shadowGpu->MaskedShadowsBindless()) // A6: no albedo table on the bindless PSO
+        {
+            ctx.srvTable[3] = renderer->StageSrvUavTable(shadowGpu->MaskedAlbedoSrvs(),
+                                                         shadowGpu->MaskedAlbedoCount()).gpu;
+        }
     }
     else
     {

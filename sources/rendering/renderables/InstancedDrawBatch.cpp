@@ -15,6 +15,7 @@
 #include "materials/Material.h"
 #include "materials/MaterialData.h"
 #include "rendering/core/GBufferBindingGuard.h"
+#include "rendering/descriptors/BindlessHeap.h" // A6: the null texture index
 
 void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*>::const_iterator first,
                                    std::vector<RenderableObjectBase*>::const_iterator last,
@@ -140,12 +141,19 @@ void InstancedDrawBatch::PrepareSlotBindings(Renderer* renderer)
             0.0f,
             0.0f);
 
+        {
+            uint32_t idx[4] = { render::BindlessHeap::kNullTextureIndex, render::BindlessHeap::kNullTextureIndex,
+                                render::BindlessHeap::kNullTextureIndex, 0u };
+            if (slotData) { slotData->GatherGBufferIndices(idx); }
+            sp->surface.texIndices = DirectX::XMUINT4(idx[0], idx[1], idx[2], idx[3]); // A6
+        }
+
         binding.paramsCbv = cb.gpu;
         binding.material = leadInst_->InstancedGraphicsMaterialForSlot(slot);
         RenderContext ctx{};
         if (MaterialData* md = leadInst_->InstanceSlotData(slot))
         {
-            md->StageGBufferBindings(renderer, ctx, 0, 0);
+            md->StageGBufferBindings(renderer, ctx, 0, 0, binding.material && binding.material->IsBindless());
         }
         binding.srvTable = ctx.srvTable[0];
         binding.samplerTable = ctx.samplerTable[0];
@@ -229,7 +237,7 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
                 {
                     // Shared material textures (t0..t2) + sampler (s0); instances live in b0, so no
                     // t0 conflict with the GpuInstancedModels structured-buffer path.
-                    matData_->StageGBufferBindings(renderer, ctx, 0, 0);
+                    matData_->StageGBufferBindings(renderer, ctx, 0, 0, material && material->IsBindless());
                     matData_->StageGBufferSurfaceParams(renderer, ctx, 2);
                 }
                 else

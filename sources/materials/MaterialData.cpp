@@ -2,6 +2,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/streaming/StreamingSettings.h" // A3: material textures load streamable
 #include "rendering/descriptors/SamplerManager.h"
+#include "rendering/descriptors/BindlessHeap.h" // A6: texture indices for the bindless permutations
 #include "rendering/renderables/InstanceTypes.h"
 #include <algorithm>
 #include <array>
@@ -155,12 +156,39 @@ size_t MaterialData::AppendGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst, size_t&
     return appended;
 }
 
+void MaterialData::GatherGBufferIndices(std::uint32_t dst[4]) const
+{
+    constexpr std::uint32_t kInvalid = render::BindlessHeap::kInvalidIndex;
+    std::uint32_t filler = kInvalid;
+    if (hasAlbedo)      { filler = albedo.BindlessIndex(); }
+    else if (hasNormal) { filler = normal.BindlessIndex(); }
+    else if (hasMR)     { filler = mr.BindlessIndex(); }
+    if (filler == kInvalid) { filler = render::BindlessHeap::kNullTextureIndex; }
+    const auto pick = [&](bool has, const Texture2D& t)
+    {
+        const std::uint32_t i = has ? t.BindlessIndex() : filler;
+        return i == kInvalid ? filler : i;
+    };
+    dst[0] = pick(hasAlbedo, albedo);
+    dst[1] = pick(hasMR, mr);
+    dst[2] = pick(hasNormal, normal);
+    dst[3] = 0u;
+}
+
 void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
-                                        UINT srvTableRegister, UINT samplerTableRegister)
+                                        UINT srvTableRegister, UINT samplerTableRegister,
+                                        bool bindless)
 {
     const uint64_t frameNumber = r->GetTotalFrameNumber();
     std::lock_guard lck(cacheMtx_);
-    if (gbufferSrvCache_.frameNumber == frameNumber && gbufferSrvCache_.gpu.ptr != 0) {
+    if (bindless) {
+        // A6: the textures travel as indices in SurfaceParams; the table is not a root parameter
+        // of this PSO. A material with no textures stages nothing (not even the sampler), so
+        // Material::Bind refuses the draw the way the table path's missing table does.
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> srvs{};
+        if (GatherGBufferSRVs(srvs.data()) == 0) { return; }
+    }
+    else if (gbufferSrvCache_.frameNumber == frameNumber && gbufferSrvCache_.gpu.ptr != 0) {
         ctx.srvTable[srvTableRegister] = gbufferSrvCache_.gpu;
     }
     else {
@@ -208,6 +236,9 @@ void MaterialData::StageGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UI
             surfaceParams.terrainEdgeDetail,
             0.0f,
             0.0f);
+        std::uint32_t idx[4];
+        GatherGBufferIndices(idx); // A6: fresh every frame (a swap or a fade renames a slot)
+        dst->texIndices = DirectX::XMUINT4(idx[0], idx[1], idx[2], idx[3]);
         surfaceCbCache_.frameNumber = frameNumber;
         surfaceCbCache_.gpu = cb.gpu;
     }

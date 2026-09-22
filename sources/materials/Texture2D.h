@@ -124,6 +124,11 @@ public:
         const streaming::DdsMipTable& GetMipTable() const { return Source_().mipTable_; }
         UINT GetResidentMips() const { return Source_().residentMips_; } // == the resource's mip count
         UINT GetFileMipCount() const { return Source_().mipTable_.mipCount; }
+        // A6: this texture's slot in the shared bindless heap (render::BindlessHeap), what a
+        // raster shader passes to ResourceDescriptorHeap[]. A swap or a fade clamp RENAMES it (new
+        // slot, old one retired for kFrameCount frames), so read it per frame, never cache it
+        // across frames. BindlessHeap::kInvalidIndex when the heap is absent or exhausted.
+        UINT BindlessIndex() const { return Source_().bindlessIndex_; }
         const std::wstring& GetSourcePath() const { return Source_().sourcePath_; } // the file read
         // Slot in the streaming registry; -1 = not registered. Owners only (a view never registers).
         int StreamingIndex() const { return streamingIndex_; }
@@ -236,6 +241,10 @@ private:
         // Cache of the staged GPU handle per frame
         std::uint64_t stagedFrame_ = UINT64_MAX; // MONOTONIC frame number, not the in-flight slot
         D3D12_GPU_DESCRIPTOR_HANDLE srvGPU_{};
+        // A6: slot in the shared bindless heap (owner only; a view reads the owner's). Taken when
+        // the CPU SRV is created, renamed when it is rewritten, retired by the destructor.
+        std::uint32_t bindlessIndex_ = 0xFFFFFFFFu;
+        void RenameBindless_(); // after a CPU SRV rewrite: new slot in, old slot to the retire bin
 
         // Metadata
         UINT width_ = 0, height_ = 0; // the FILE's mip 0 -- what the texture IS; the resource may hold less

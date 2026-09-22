@@ -5,6 +5,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "core/diagnostics/ArtifactWriter.h"
 #include "rendering/core/Renderer.h" // g_crossQueueWaits / g_asyncComputeLists
+#include "rendering/descriptors/BindlessHeap.h"
 
 #include <cstdio>
 
@@ -138,12 +139,19 @@ void FrameScheduler::InitFence(ID3D12Device* device)
     }
 }
 
-void FrameScheduler::CreateFrameResources(ID3D12Device* device)
+void FrameScheduler::CreateFrameResources(ID3D12Device* device, render::BindlessHeap* shared)
 {
     for (UINT i = 0; i < render::kFrameCount; ++i) {
         // per-frame shader-visible heaps
         frameResources_[i] = std::make_unique<FrameResource>();
-        frameResources_[i]->GetDescAlloc().Init(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4096);
+        if (shared && shared->Ready()) {
+            frameResources_[i]->GetDescAlloc().InitView(shared->Heap(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+                                                        shared->FrameRingBase(i), render::BindlessHeap::kFrameRingCapacity,
+                                                        shared->Increment());
+        }
+        else {
+            frameResources_[i]->GetDescAlloc().Init(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, render::BindlessHeap::kFrameRingCapacity);
+        }
         frameResources_[i]->GetSamplerAlloc().Init(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 256);
         frameFenceValues_[i] = 0;
         frameResources_[i]->InitUpload(device, /*bytes*/ 4 * 1024 * 1024);

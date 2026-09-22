@@ -8,6 +8,8 @@
 #include "rendering/core/FrameResource.h"
 #include "rendering/core/RenderConstants.h"
 
+namespace render { class BindlessHeap; }
+
 // Owns frame pacing state: the frame fence + event, per-frame fence values,
 // and the per-frame FrameResource pools (command allocators/lists, descriptor
 // allocators, upload ring). The current frame index stays with the caller.
@@ -17,7 +19,9 @@ public:
     ~FrameScheduler();
 
     void InitFence(ID3D12Device* device);     // safe no-op when already initialized
-    void CreateFrameResources(ID3D12Device* device);
+    // A6: with a ready shared heap the per-frame CBV_SRV_UAV ring is a partition of it (one heap
+    // bound per list, so the ring and the bindless slots must share one); else its own heap.
+    void CreateFrameResources(ID3D12Device* device, render::BindlessHeap* shared = nullptr);
 
     // Waits until the GPU has finished the given frame slot — on BOTH queues.
     //

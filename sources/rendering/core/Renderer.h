@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include "core/logging/LogLevel.h" // DiagLog/CanonicalLogOnce take the session-log level
 
@@ -20,6 +21,7 @@ namespace diag { class ArtifactFile; } // device_removed.log writer (ArtifactWri
 
 #include "core/math/Math.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
+#include "rendering/descriptors/BindlessHeap.h"
 #include "rendering/core/FrameResource.h"
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/core/SwapchainManager.h"
@@ -482,6 +484,8 @@ public:
     MeshManager* GetMeshManager() { return &meshManager_; }
     // Texture streaming A2 (null before the device exists and after Shutdown).
     streaming::TextureStreaming* GetTextureStreaming() { return textureStreaming_.get(); }
+    // A6: the one shader-visible CBV_SRV_UAV heap (frame rings + RT region + texture slots).
+    render::BindlessHeap* GetBindlessHeap() { return &bindlessHeap_; }
     TextManager* GetTextManager() { return &textManager_; }
     FontManager* GetFontManager() { return &fontManager_; }
     MaterialDataManager* GetMaterialDataManager() { return &materialDataManager_; }
@@ -660,6 +664,16 @@ public:
     // Independent of any root signature (pRootSignature = nullptr at creation). Null on
     // failure. Owned by the Renderer for the lifetime of the device.
     ID3D12CommandSignature* GetDrawIndexedCommandSignature();
+    // Texture streaming plan A6: the command signature of the bindless G-buffer indirect draw --
+    // {CONSTANT(b0, two dwords), VBV(slot 0), IBV, CBV(b2), DRAW_INDEXED}, kBindlessIndirectCommandBytes
+    // per command (root arguments have to come in increasing root-parameter order, which is why the
+    // constants lead; the 64-bit addresses then sit on 8-byte offsets) -- built against `mat`'s
+    // root signature (root arguments need one) and cached per root-signature object; the cache holds
+    // a reference, so a retired root signature's address is never re-keyed to a new object. Null
+    // when `mat` is not the GBUFFER_BINDLESS gbuffer_indirect permutation (no root constants at b0 /
+    // no CBV at b2).
+    ID3D12CommandSignature* GetBindlessIndirectCommandSignature(const Material* mat);
+    static constexpr UINT kBindlessIndirectCommandBytes = 72; // 8 + 16 + 16 + 8 + 20, padded to 8
     // Thin ExecuteIndirect wrapper. countBuffer may be null (then all maxCommandCount commands
     // execute). No-op if cl/sig/argBuffer are null.
     void ExecuteIndirect(ID3D12GraphicsCommandList* cl, ID3D12CommandSignature* sig,
@@ -867,6 +881,7 @@ private:
     float    shaderWatchIntervalSec_ = 1.0f; // once per second
     float    shaderWatchAccumSec_ = 0.0f;
     bool     materialsHotReloaded_ = false;
+    bool     rasterBindlessApplied_ = true;  // A6: render::g_rasterBindless as the material PSOs were last built
 
     // D3D12 core (device/queue), presentation surface, frame pacing
     bool computeLaneProbed_ = false;  // async-compute step 1: the probe runs at most once
@@ -918,11 +933,16 @@ private:
 
     // Rung 0 (Step 3): shared DRAW_INDEXED indirect command signature (lazy). See getter.
     ComPtr<ID3D12CommandSignature> drawIndexedCmdSig_;
+    // A6: bindless G-buffer command signatures per root signature (see getter).
+    struct BindlessCmdSig { ComPtr<ID3D12RootSignature> rs; ComPtr<ID3D12CommandSignature> sig; };
+    std::unordered_map<ID3D12RootSignature*, BindlessCmdSig> bindlessCmdSigs_;
+    std::mutex bindlessCmdSigMtx_; // the G-buffer passes record on worker lists
 
     // Streamline / DLSS integration
     sl::DLSSMode dlssMode_ = sl::DLSSMode::eBalanced;
     std::unique_ptr<DlssHandler> dlssHandler_;
     std::unique_ptr<streaming::TextureStreaming> textureStreaming_; // A2; created with the device
+    render::BindlessHeap bindlessHeap_;                             // A6; created with the device, before the frame rings
     bool streamlineInitialized_ = false;
     bool shutdown_ = false;
 

@@ -8,6 +8,7 @@
 
 #include "third_party/robin_hood.h"
 #include "rendering/core/RenderConstants.h" // render::kFrameCount
+#include "rendering/descriptors/BindlessHeap.h" // A6: the shared heap this table takes a region of
 
 class Mesh;
 
@@ -77,13 +78,18 @@ public:
     static constexpr UINT kMaxDescriptors = 8192;
     static constexpr uint32_t kInvalidGeometry = 0xFFFFFFFFu;
 
-    void Init(ID3D12Device* device);
+    // A6: with a ready shared heap this table is the region [base, base + kMaxDescriptors) of it
+    // (render::BindlessHeap::kRtRegionBase) and every index above is base-relative; the RT passes
+    // then bind the same heap object the raster frame ring lives in. Without one (the shared heap
+    // failed) it creates its own heap as before, base 0.
+    void Init(ID3D12Device* device, render::BindlessHeap* shared = nullptr);
     void Reset();
 
-    bool Ready() const { return heap_ != nullptr; }
+    bool Ready() const { return shared_ != nullptr || heap_ != nullptr; }
     bool BuildFailed() const { return buildFailed_; }
     bool FrameReady(UINT frameIndex) const;
-    ID3D12DescriptorHeap* Heap() const { return heap_.Get(); }
+    ID3D12DescriptorHeap* Heap() const { return shared_ ? shared_->Heap() : heap_.Get(); }
+    UINT Base() const { return base_; }
 
     // Per-slot material inputs for a multi-submesh registration (mirrors what the single-
     // material overload takes). baseColor4 may be null (white).
@@ -120,9 +126,9 @@ public:
     // Absolute heap index of per-frame scene descriptor `which` for `frameIndex`.
     UINT SceneIndex(UINT frameIndex, UINT which) const
     {
-        return kSceneBase + frameIndex * kScenePerFrame + which;
+        return base_ + kSceneBase + frameIndex * kScenePerFrame + which;
     }
-    UINT GeomInfoIndex(UINT frameIndex) const { return frameIndex; }
+    UINT GeomInfoIndex(UINT frameIndex) const { return base_ + frameIndex; }
 
     // Copy a CPU descriptor (SRV or UAV) into a per-frame scene slot.
     void WriteSceneDescriptor(UINT frameIndex, UINT which, D3D12_CPU_DESCRIPTOR_HANDLE srcCpu);
@@ -144,7 +150,9 @@ private:
     uint32_t GetOrRegisterDescriptors(Mesh* mesh, const SlotMaterial& material);
 
     ID3D12Device* device_ = nullptr;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_; // shader-visible CBV_SRV_UAV
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_; // own shader-visible CBV_SRV_UAV heap (fallback only)
+    render::BindlessHeap* shared_ = nullptr;             // A6: the shared heap this table is a region of
+    UINT base_ = 0;                                      // first absolute index of the region
     UINT incr_ = 0;
 
     struct GeometryKey

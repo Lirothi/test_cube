@@ -17,6 +17,7 @@
 #include "rendering/debug/LodDebugView.h"
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/core/RasterSettings.h" // A6: rasterBindless
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/visibility/OcclusionHistory.h"
 #include "third_party/json/json.hpp"
@@ -36,6 +37,7 @@ namespace
         bool occlusionIndirectQueries = false;
         bool indirectGBuffer = true;
         bool gbufferHzbCull = true;
+        bool rasterBindless = true; // texture streaming A6: material textures by heap index (SM6.6)
         int fogGridPixels = static_cast<int>(render::kFogGridPixels); // volumetric fog cell size, powers of two 4..64
         int fogGridZ = static_cast<int>(render::kFogGridZ);           // volumetric fog slices, 16..128
         // Texture streaming A3 (UE r.Streaming.*)
@@ -393,6 +395,7 @@ namespace
         s.occlusionIndirectQueries = vis::g_occlusion.indirectQueries;
         s.indirectGBuffer = render::g_indirectGBufferEnabled;
         s.gbufferHzbCull = render::g_gbufferHzbCullEnabled;
+        s.rasterBindless = render::g_rasterBindless;
         s.fogGridPixels = static_cast<int>(render::g_fogGridPixels);
         s.fogGridZ = static_cast<int>(render::g_fogGridZ);
         s.streamingEnabled = streaming::g_enabled;
@@ -509,6 +512,7 @@ namespace
         vis::g_occlusion.indirectQueries = s.occlusionIndirectQueries;
         render::g_indirectGBufferEnabled = s.indirectGBuffer;
         render::g_gbufferHzbCullEnabled = s.gbufferHzbCull;
+        render::g_rasterBindless = s.rasterBindless; // the renderer's tick rebuilds the PSOs on a change
     }
 
     void ApplyUpscale(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
@@ -670,6 +674,7 @@ namespace
                 { "asyncCompute", s.asyncCompute },
                 { "gpuDrivenGBuffer", s.indirectGBuffer },
                 { "gbufferHzbCull", s.gbufferHzbCull },
+                { "rasterBindless", s.rasterBindless },
                 { "fogGridPixels", s.fogGridPixels },
                 { "fogGridZ", s.fogGridZ }
             } },
@@ -838,6 +843,7 @@ namespace
         Read(performance, "asyncCompute", s.asyncCompute);
         Read(performance, "gpuDrivenGBuffer", s.indirectGBuffer);
         Read(performance, "gbufferHzbCull", s.gbufferHzbCull);
+        Read(performance, "rasterBindless", s.rasterBindless);
         Read(performance, "fogGridPixels", s.fogGridPixels);
         Read(performance, "fogGridZ", s.fogGridZ);
         const json& streamingSec = Section(root, "streaming");
@@ -1268,6 +1274,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::GiIndirectShadows:              current.giIndirectShadows = defaults.giIndirectShadows; break;
     case GraphicsControl::IndirectGBuffer:                 current.indirectGBuffer = defaults.indirectGBuffer; break;
     case GraphicsControl::GbufferHzb:                     current.gbufferHzbCull = defaults.gbufferHzbCull; break;
+    case GraphicsControl::RasterBindless:                 current.rasterBindless = defaults.rasterBindless; break;
     case GraphicsControl::FogGridPixels:                  current.fogGridPixels = defaults.fogGridPixels; break;
     case GraphicsControl::FogGridZ:                       current.fogGridZ = defaults.fogGridZ; break;
     case GraphicsControl::StreamingEnabled:               current.streamingEnabled = defaults.streamingEnabled; break;
@@ -1314,7 +1321,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     {
         ApplyFrame(current);
     }
-    else if (value <= static_cast<unsigned>(GraphicsControl::GbufferHzb))
+    else if (value <= static_cast<unsigned>(GraphicsControl::RasterBindless))
     {
         ApplyVisibility(current);
     }

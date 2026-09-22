@@ -26,6 +26,7 @@
 #include "materials/Texture2D.h" // shared-texture cache stats reported at shutdown
 #include "rendering/core/DlssHandler.h"
 #include "rendering/shadows/ShadowSettings.h" // S5: kCascadeAtlasBorder
+#include "rendering/core/RasterSettings.h"    // A6: raster.bindless -> material PSO rebuild
 #include "streamline/include/sl.h"
 
 #pragma comment(lib, "dxguid.lib")
@@ -153,6 +154,9 @@ void Renderer::Shutdown()
         textureStreaming_->Shutdown();
         textureStreaming_.reset();
     }
+    // A6: after the level's textures retired their slots (the frame rings are views of this heap,
+    // released with the frame resources further down).
+    bindlessHeap_.Shutdown();
     meshManager_.Clear();
     textManager_.Clear();
     fontManager_.Clear();
@@ -295,6 +299,13 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
         graphicsDevice_.InitQueue();
     }
 
+    // A6: the shared shader-visible heap, before anything that takes a slot in it (textures) or
+    // a partition of it (the frame rings below).
+    {
+        BOOT_SCOPE("BindlessHeap::Init");
+        bindlessHeap_.Init(GetDevice());
+    }
+
     // Texture streaming A2: registry + IO worker; the upload ring is created on first use.
     textureStreaming_ = std::make_unique<streaming::TextureStreaming>();
     textureStreaming_->Init(GetDevice());
@@ -321,7 +332,7 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     // --- Frame resources ---
     {
         BOOT_SCOPE("CreateFrameResources");
-        frameScheduler_.CreateFrameResources(GetDevice());
+        frameScheduler_.CreateFrameResources(GetDevice(), &bindlessHeap_);
     }
 
     {
@@ -738,6 +749,10 @@ void Renderer::BeginFrame() {
         fr->ResetUpload();
     }
 
+    // A6: texture slots retired kFrameCount frames ago are free again -- before the streaming
+    // boundary below renames any (a swap or a fade clamp takes a fresh slot).
+    bindlessHeap_.BeginFrame(totalFrameNumber_);
+
     // Texture streaming A2: frame boundary -- release what this slot's fence just retired, adopt
     // last frame's copies, hand out new requests. Before any descriptor of this frame is staged.
     if (textureStreaming_) {
@@ -1137,11 +1152,21 @@ void Renderer::Tick(float dt)
             shaderWatchAccumSec_ -= shaderWatchIntervalSec_;
             shaderWatchAccumSec_ = std::max(0.0f, shaderWatchAccumSec_);
         }
+    }
 
-        // 2) Apply pending rebuilds (if the scan found changes and set the flag)
-        if (materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_, /*keepAliveFrames=*/render::kFrameCount + 1)) {
-            materialsHotReloaded_ = true;
-        }
+    // A6: raster.bindless changed since the material PSOs were built -> every G-buffer / masked
+    // shadow material rebuilds with (or without) GBUFFER_BINDLESS, in place, keep-alive for the
+    // frames in flight. The same path the shader watcher uses, so it works with the watcher off.
+    if (rasterBindlessApplied_ != render::g_rasterBindless) {
+        rasterBindlessApplied_ = render::g_rasterBindless;
+        const unsigned flagged = materialManager_.RequestReloadWhere(&Material::IsBindlessTextureShader);
+        LOG_INFO(logging::LogCategory::Render, "[bindless] raster.bindless = {} -> {} material PSOs rebuild (dynamic resources {})",
+                 render::g_rasterBindless ? 1 : 0, flagged, bindlessHeap_.DynamicResourcesSupported() ? "supported" : "UNSUPPORTED, staying on tables");
+    }
+
+    // 2) Apply pending rebuilds (the scan found changes, or the toggle above flagged them)
+    if (materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_, /*keepAliveFrames=*/render::kFrameCount + 1)) {
+        materialsHotReloaded_ = true;
     }
 }
 
@@ -2155,6 +2180,61 @@ ID3D12CommandSignature* Renderer::GetDrawIndexedCommandSignature() {
     }
     drawIndexedCmdSig_->SetName(L"Renderer.DrawIndexedIndirectSig");
     return drawIndexedCmdSig_.Get();
+}
+
+ID3D12CommandSignature* Renderer::GetBindlessIndirectCommandSignature(const Material* mat) {
+    static_assert(2 * sizeof(UINT) + sizeof(D3D12_VERTEX_BUFFER_VIEW) + sizeof(D3D12_INDEX_BUFFER_VIEW) +
+                  sizeof(D3D12_GPU_VIRTUAL_ADDRESS) + sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) == 68 &&
+                  kBindlessIndirectCommandBytes == 72,
+                  "gbuffer_indirect_expand_cs.hlsl writes this layout: CONSTANT 8 | VBV 16 | IBV 16 | CBV 8 | DRAW_INDEXED 20 | pad 4");
+    if (!mat || !mat->GetRootSignature()) {
+        return nullptr;
+    }
+    ID3D12RootSignature* rs = mat->GetRootSignature();
+    std::lock_guard<std::mutex> lock(bindlessCmdSigMtx_);
+    auto it = bindlessCmdSigs_.find(rs);
+    if (it != bindlessCmdSigs_.end()) {
+        return it->second.sig.Get();
+    }
+    BindlessCmdSig entry{};
+    entry.rs = rs;
+    const int constIdx = mat->FindRootParameterIndex(Material::RootParameterInfo::Constants, 0);
+    const int cbvIdx = mat->FindRootParameterIndex(Material::RootParameterInfo::CBV, 2);
+    ID3D12Device* device = GetDevice();
+    if (constIdx < 0 || cbvIdx < 0) {
+        LOG_ERROR(logging::LogCategory::Render, "[bindless] G-buffer indirect command signature: the root signature has no root constants at b0 / CBV at b2 ({} / {}); that PSO keeps one ExecuteIndirect per group",
+                  constIdx, cbvIdx);
+    }
+    if (device && constIdx >= 0 && cbvIdx >= 0) {
+        // Root arguments in increasing root-parameter order (the debug layer's rule 743): the
+        // constants (b0, index 0) before the CBV (b2, index 2). IA views are not root parameters.
+        D3D12_INDIRECT_ARGUMENT_DESC args[5]{};
+        args[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
+        args[0].Constant.RootParameterIndex = static_cast<UINT>(constIdx);
+        args[0].Constant.DestOffsetIn32BitValues = 0;
+        args[0].Constant.Num32BitValuesToSet = 2; // LOD + a pad that keeps the views 8-byte aligned
+        args[1].Type = D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW;
+        args[1].VertexBuffer.Slot = 0;
+        args[2].Type = D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW;
+        args[3].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW;
+        args[3].ConstantBufferView.RootParameterIndex = static_cast<UINT>(cbvIdx);
+        args[4].Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+        D3D12_COMMAND_SIGNATURE_DESC desc{};
+        desc.ByteStride = kBindlessIndirectCommandBytes;
+        desc.NumArgumentDescs = 5;
+        desc.pArgumentDescs = args;
+        desc.NodeMask = 0;
+        if (FAILED(device->CreateCommandSignature(&desc, rs, IID_PPV_ARGS(entry.sig.GetAddressOf())))) {
+            entry.sig.Reset();
+            LOG_ERROR(logging::LogCategory::Render, "[bindless] G-buffer indirect command signature failed; that PSO keeps one ExecuteIndirect per group");
+        }
+        else {
+            entry.sig->SetName(L"Renderer.BindlessGBufferIndirectSig");
+        }
+    }
+    ID3D12CommandSignature* result = entry.sig.Get();
+    bindlessCmdSigs_.emplace(rs, std::move(entry));
+    return result;
 }
 
 void Renderer::ExecuteIndirect(ID3D12GraphicsCommandList* cl, ID3D12CommandSignature* sig,

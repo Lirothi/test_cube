@@ -621,6 +621,9 @@
     <ClCompile Include="sources/rendering/debug/TextureDebugViewer.cpp">
       <Filter>sources\rendering\debug</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/descriptors/BindlessHeap.cpp">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp">
       <Filter>sources\rendering\descriptors</Filter>
     </ClCompile>
@@ -1247,6 +1250,12 @@
     <ClInclude Include="sources/rendering/debug/TextureDebugViewer.h">
       <Filter>sources\rendering\debug</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/RasterSettings.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/descriptors/BindlessHeap.h">
+      <Filter>sources\rendering\descriptors</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h">
       <Filter>sources\rendering\descriptors</Filter>
     </ClInclude>
@@ -1729,6 +1738,9 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\rt_resolve_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\gbuffer_indirect_expand_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\shadow_cull_clear_cs.hlsl">

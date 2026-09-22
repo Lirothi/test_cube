@@ -96,7 +96,7 @@ void RtSceneAs::EnsureInit(Renderer* renderer)
 {
     if (asManagerInited_) { return; }
     asManager_.Init(renderer->GetDevice5());
-    bindless_.Init(renderer->GetDevice());
+    bindless_.Init(renderer->GetDevice(), renderer->GetBindlessHeap()); // A6: a region of the shared heap
     asManagerInited_ = true;
     // The memory line in the session log: what the acceleration structures hold, and how much
     // of it is sitting in the retire bin waiting for a fence -- the number that would have

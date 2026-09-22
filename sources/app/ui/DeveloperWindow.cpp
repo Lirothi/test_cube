@@ -35,6 +35,7 @@
 #include "rendering/renderables/InstanceTypes.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/core/RasterSettings.h" // A6: the bindless checkbox
 #include "ocean/OceanSimulation.h"
 #include "text/TextManager.h"
 
@@ -811,6 +812,15 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Objects the registry did not take (non-casters, GI clouds, shader overrides,\n"
                                       "per-object texture overrides on a shared mesh) keep the CPU path. Pixel parity\n"
                                       "with the CPU path is the contract (measured 2026-09-04). --set=gbuffer.indirect:0|1");
+                // Texture streaming A6: material textures by index in one shader-visible heap.
+                GRAPHICS_CONTROL(RasterBindless, "rasterBindless",
+                    ImGui::Checkbox("Bindless material textures (SM6.6 ResourceDescriptorHeap)",
+                                    &render::g_rasterBindless));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("G-buffer and masked-shadow PSOs read albedo/MR/normal by heap index instead of a\n"
+                                      "per-draw descriptor table; the GPU-driven G-buffer then draws every group of one PSO\n"
+                                      "with a single ExecuteIndirect. Toggling rebuilds those PSOs in place (a hitch).\n"
+                                      "Same pixels either way. --set=raster.bindless:0|1");
                 {
                     const ShadowGpuData& sg = scene.ShadowGpu();
                     ImGui::Text("indirect gbuffer: %s, %u eligible caster slots",

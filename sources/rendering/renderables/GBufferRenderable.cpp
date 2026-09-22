@@ -666,7 +666,8 @@ bool GBufferRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommand
 
     if (MaterialData* md = GetMaterialDataForSlot(currentDrawSlot_))
     {
-        md->StageGBufferBindings(renderer, ctx, 0, 0);
+        const Material* mat = CurrentGraphicsMaterial();
+        md->StageGBufferBindings(renderer, ctx, 0, 0, mat && mat->IsBindless());
         md->StageGBufferSurfaceParams(renderer, ctx, 2);
     }
     else

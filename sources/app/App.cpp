@@ -84,6 +84,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
 #include <fstream>
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/core/RasterSettings.h" // A6: --set=raster.bindless
 #if WITH_EDITOR
 #include "editor/EditorController.h"
 #endif
@@ -573,6 +574,7 @@ namespace
         // a headless gate can read its PASS/MISMATCH verdict from the session log.
         if (setting == "shadow.giIndirect") { render::g_giIndirectShadowsEnabled = value != 0.0f; return true; }
         if (setting == "gbuffer.indirect") { render::g_indirectGBufferEnabled = value != 0.0f; return true; } // occlusion plan S4
+        if (setting == "raster.bindless") { render::g_rasterBindless = value != 0.0f; return true; }          // texture streaming A6
         if (setting == "gbuffer.hzb") { render::g_gbufferHzbCullEnabled = value != 0.0f; return true; }       // occlusion plan S5
         // Volumetric fog cell size (8 / 16 / 32 render pixels); the renderer picks the change up at the next frame.
         if (setting == "fog.gridPixels") { render::g_fogGridPixels = static_cast<unsigned>(std::clamp(value, 4.0f, 64.0f)); return true; } // the renderer rounds to a power of two

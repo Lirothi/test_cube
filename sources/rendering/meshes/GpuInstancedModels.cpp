@@ -12,6 +12,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/VisibilityStats.h" // S1: g_visChunkMask
+#include "rendering/descriptors/BindlessHeap.h" // A6: the null texture index
 #include "core/math/Frustum.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/SamplerManager.h"
@@ -34,9 +35,9 @@ namespace
     {
         uint32_t instanceBase = 0;
         uint32_t _pad[3]{};
-        render::MaterialSurfaceParamsGpu surface{};
+        render::MaterialSurfaceParamsGpu surface{}; // ends with the A6 texIndices
     };
-    static_assert(sizeof(GpuInstDrawParams) == 80,
+    static_assert(sizeof(GpuInstDrawParams) == 96,
         "GpuInstDrawParams must match the HLSL InstDraw cbuffer layout");
 }
 
@@ -221,11 +222,13 @@ void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
     ctx.cbv[1] = viewCB;
     ctx.cbv[3] = remapCB.gpu;
 
-    // Instance SRV (t0) + material textures (t1..t3) + sampler (s0).
+    // Instance SRV (t0) + material textures (t1..t3) + sampler (s0). A6: a bindless PSO has a
+    // one-descriptor table (the instances); the textures go by index in InstDraw below.
+    const bool bindless = mat->IsBindless();
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4> srvs{};
     size_t count = 0;
     srvs[count++] = instanceBuffer_.GetSRVCPU();
-    if (auto* data = GetMaterialData()) { data->AppendGBufferSRVs(srvs.data(), count); }
+    if (auto* data = GetMaterialData(); data && !bindless) { data->AppendGBufferSRVs(srvs.data(), count); }
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs, count).gpu;
     D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(16);
     aniso.MipLODBias = renderer->GetDlssMipBias(); // match the material path's DLSS mip bias
@@ -247,6 +250,12 @@ void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
         const MaterialSurfaceParams surface = GetMaterialData()
             ? GetMaterialData()->surfaceParams
             : MaterialSurfaceParams{};
+        {
+            uint32_t idx[4] = { render::BindlessHeap::kNullTextureIndex, render::BindlessHeap::kNullTextureIndex,
+                                render::BindlessHeap::kNullTextureIndex, 0u };
+            if (auto* data = GetMaterialData()) { data->GatherGBufferIndices(idx); }
+            drawParams->surface.texIndices = XMUINT4(idx[0], idx[1], idx[2], idx[3]);
+        }
         drawParams->surface.subsurfaceColor = XMFLOAT3(
             surface.subsurfaceColor.x, surface.subsurfaceColor.y, surface.subsurfaceColor.z);
         drawParams->surface.transmissionStrength = surface.transmissionStrength;

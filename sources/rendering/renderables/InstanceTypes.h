@@ -17,9 +17,12 @@ struct alignas(16) MaterialSurfaceParamsGpu
     float             transmissionNormalWeight;// 28
     DirectX::XMFLOAT4  terrainTiling;        // 32: zone size, rotation radians, scale variance, blend
     DirectX::XMFLOAT4  terrainEdgeParams;    // 48: breakup, detail, reserved, reserved
-};                                           // 64
-static_assert(sizeof(MaterialSurfaceParamsGpu) == 64,
-    "MaterialSurfaceParamsGpu must match the HLSL SurfaceParams layout (64 bytes)");
+    // A6: albedo / MR / normal slots in the shared bindless heap (MaterialData::GatherGBufferIndices),
+    // read by the GBUFFER_BINDLESS permutations through ResourceDescriptorHeap[]; w spare.
+    DirectX::XMUINT4   texIndices;           // 64
+};                                           // 80
+static_assert(sizeof(MaterialSurfaceParamsGpu) == 80,
+    "MaterialSurfaceParamsGpu must match the HLSL SurfaceParams layout (80 bytes)");
 
 // CPU mirror of HLSL `InstancePerObject` in shaders/gbuffer_common.hlsli. Field order and
 // padding must match the cbuffer layout exactly (constant-buffer packing rules put
@@ -75,9 +78,9 @@ struct alignas(16) InstanceSlotParams
                                     //     reads wind foliage from here, everything else from
                                     //     InstancePerObject)
     MaterialSurfaceParamsGpu surface; // 80
-};                                  // 144
-static_assert(sizeof(InstanceSlotParams) == 144,
-    "InstanceSlotParams must match the HLSL SlotParams cbuffer layout (144 bytes)");
+};                                  // 160
+static_assert(sizeof(InstanceSlotParams) == 160,
+    "InstanceSlotParams must match the HLSL SlotParams cbuffer layout (160 bytes)");
 
 // Per-caster world bounds for GPU shadow culling (Rung 0, Step 2). center.xyz = world-space
 // AABB center (w = bounding radius, for a cheap sphere pre-test); halfExtents.xyz = world-space

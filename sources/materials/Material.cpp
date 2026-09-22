@@ -3,6 +3,7 @@
 
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/core/GBufferBindingGuard.h"
+#include "rendering/core/RasterSettings.h" // A6: g_rasterBindless decides the GBUFFER_BINDLESS permutation
 
 #include <d3dcompiler.h>
 #include <fstream>
@@ -49,6 +50,34 @@ static D3D_SHADER_MODEL QueryMaxShaderModel(ID3D12Device* dev)
         return data.HighestShaderModel;
     }
     return D3D_SHADER_MODEL_6_0; // safest fallback
+}
+
+// Texture streaming plan A6: the shaders that have a GBUFFER_BINDLESS permutation (material
+// textures through ResourceDescriptorHeap[]). Matched on the file name so a material shader
+// override elsewhere is never handed a define it does not implement.
+bool Material::IsBindlessTextureShader(const std::wstring& shaderFile)
+{
+    const std::wstring name = std::filesystem::path(shaderFile).filename().wstring();
+    return name == L"gbuffer.hlsl" || name == L"gbuffer_inst.hlsl" || name == L"gbuffer_instcb.hlsl" ||
+           name == L"gbuffer_indirect.hlsl" || name == L"shadow_indirect_csm.hlsl";
+}
+
+// Whether a build of `gd` right now takes the bindless permutation: the knob, the device (tier 3 +
+// SM 6.6) and the shader all have to agree. Decided HERE rather than by the caller so a runtime
+// toggle rebuilds every cached desc with the new answer (HotReloadIfPending passes cachedGfxDesc_
+// back through BuildGraphicsPSO).
+static bool ChoosesBindless(Renderer* r, const Material::GraphicsDesc& gd)
+{
+    return render::g_rasterBindless && r && r->GetBindlessHeap() && r->GetBindlessHeap()->DynamicResourcesSupported() &&
+           Material::IsBindlessTextureShader(gd.shaderFile);
+}
+
+int Material::FindRootParameterIndex(RootParameterInfo::Type type, UINT bindingRegister) const
+{
+    for (const RootParameterInfo& p : rootParams_) {
+        if (p.type == type && p.bindingRegister == bindingRegister) { return static_cast<int>(p.rootIndex); }
+    }
+    return -1;
 }
 
 static std::wstring BuildProfile(const char* stage4cc, D3D_SHADER_MODEL sm)
@@ -1228,6 +1257,7 @@ void Material::CreateGraphics(Renderer* r, const GraphicsDesc& gd)
                   gd.shaderFile, gd.vsEntry, gd.psEntry);
         return;
     }
+    bindlessTextures_ = ChoosesBindless(r, gd); // A6: what BuildGraphicsPSO just decided for this build
     {
         std::lock_guard<std::mutex> lock(wireframeMtx_);
         pipelineStateWire_.Reset();
@@ -1327,6 +1357,7 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
     if (!ok) {
         return false; // leave pending=true — try again on the next tick
     }
+    if (!isCompute_) { bindlessTextures_ = ChoosesBindless(r, cachedGfxDesc_); } // A6: the rebuilt answer
 
     {
         std::lock_guard<std::mutex> lock(wireframeMtx_);
@@ -1629,7 +1660,7 @@ static bool BuildRootFromEmbedded(ID3D12Device* device, ID3DBlob* rsBlob,
 }
 
 // ===== Shared builder: Graphics =====
-bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
+bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gdIn,
     ComPtr<ID3D12RootSignature>& outRS,
     ComPtr<ID3D12PipelineState>& outPSO,
     ComPtr<ID3DBlob>& outVS,
@@ -1637,6 +1668,19 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gd,
     std::vector<RootParameterInfo>& outParams,
     std::vector<std::wstring>& outIncludes)
 {
+    // A6: the bindless permutation is one define, injected here (see ChoosesBindless). The cached
+    // desc keeps the caller's define list, so the answer can change between two builds of it.
+    GraphicsDesc bindlessDesc;
+    const bool bindless = ChoosesBindless(r, gdIn);
+    if (bindless) {
+        bindlessDesc = gdIn;
+        bindlessDesc.defines.erase(std::remove_if(bindlessDesc.defines.begin(), bindlessDesc.defines.end(),
+                                                  [](const auto& p) { return p.first == "GBUFFER_BINDLESS"; }),
+                                   bindlessDesc.defines.end());
+        bindlessDesc.defines.emplace_back("GBUFFER_BINDLESS", "1");
+    }
+    const GraphicsDesc& gd = bindless ? bindlessDesc : gdIn;
+
     ComPtr<ID3DBlob> vs, ps;
     std::vector<std::wstring> incVS, incPS;
 
@@ -2041,6 +2085,19 @@ void MaterialManager::Clear()
         static_cast<unsigned long long>(psoBytes));
     logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, psoLine);
     materials_.clear();
+}
+
+unsigned MaterialManager::RequestReloadWhere(bool (*pred)(const std::wstring& shaderFile))
+{
+    unsigned flagged = 0;
+    for (auto& kv : materials_) {
+        auto& mat = kv.second;
+        if (mat && !mat->IsCompute() && pred(mat->GetCachedGraphicsDesc().shaderFile)) {
+            mat->RequestReload();
+            ++flagged;
+        }
+    }
+    return flagged;
 }
 
 bool MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, uint64_t keepAliveFrames)

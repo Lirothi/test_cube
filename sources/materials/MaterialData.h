@@ -151,6 +151,11 @@ public:
     // always this wide -- see GatherGBufferSRVs for why a skipped slot was a bug.
     static constexpr size_t kGBufferSrvCount = 3;
     size_t GatherGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst) const;
+    // A6: the same three slots as bindless heap indices (albedo, MR, normal, spare), with the
+    // same filler rule -- an absent map takes a sibling's index, and a material with no textures
+    // at all points every slot at the heap's null SRV. Read fresh every frame: a streaming swap or
+    // a fade clamp renames a texture's slot.
+    void GatherGBufferIndices(std::uint32_t dst[4]) const;
 
     bool      hasAlbedo = false;
     bool      hasMR     = false;
@@ -183,8 +188,13 @@ public:
 
     // Assemble the SRV table and sampler for the standard GBuffer pass:
     // TABLE(SRV(t0) SRV(t1) SRV(t2)) + TABLE(SAMPLER(s0))
+    // A6: `bindless` = the material's PSO is a GBUFFER_BINDLESS permutation (Material::IsBindless):
+    // no SRV table exists, the textures are reached by the indices StageGBufferSurfaceParams
+    // writes; only the sampler is staged -- and not at all for a textureless material, so
+    // Material::Bind refuses the draw exactly as the table path does (GBufferBindingGuard.h).
     void StageGBufferBindings(Renderer* r, RenderContext& ctx,
-                              UINT srvTableRegister = 0, UINT samplerTableRegister = 0);
+                              UINT srvTableRegister = 0, UINT samplerTableRegister = 0,
+                              bool bindless = false);
 
     // Stage the material-static SurfaceParams root CBV. Cached once per material per frame.
     void StageGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister = 2);

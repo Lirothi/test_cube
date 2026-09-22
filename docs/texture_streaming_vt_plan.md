@@ -1,6 +1,6 @@
 # План: текстурный стриминг и виртуальные текстуры (транскрипция UE 5.6)
 
-Дата: 2026-09-20. Статус: **A1–A4 сделаны 2026-09-22 (коммиты `1e89f6f`, `6492c2a`, `55a0e5c`; A4 — см. блок «Статус» в A4); следующий — A5 (по согласованию: переимпорт камней 4K), затем A6.** Референс — дроп `D:\Programming\ue_strip`
+Дата: 2026-09-20. Статус: **A1–A4 и A6 сделаны 2026-09-22 (коммиты `1e89f6f`, `6492c2a`, `55a0e5c`, `48a58b7`, пост-A4 фикс mip bias `1fd0153`; A6 — см. блок «Статус» в A6); остался A5 (по согласованию: переимпорт камней 4K), затем часть B/C по решению.** Референс — дроп `D:\Programming\ue_strip`
 (оба дерева, `Source/` и `Shaders/`). Каждая ссылка на UE и на наш код — с `file:line`, сверено
 2026-09-20 по файлам; что не сверено — помечено «(сверить)». Документ написан как задание для
 исполнителя: шаг берётся целиком, без переразведки, кроме чтения файлов, перечисленных в шаге.
@@ -654,6 +654,60 @@ indirect-списка ниже нынешних 0.19 мс (`SceneRenderer_Geomet
 
 **Откат.** `raster.bindless = 0`.
 
+**Статус (2026-09-22): СДЕЛАНО.** Три стадии. (1) **Один хип** — `sources/rendering/descriptors/
+BindlessHeap.h/.cpp`: 65536 дескрипторов = кольцо кадра 3 × 4096 (партиция через
+`DescriptorHeapGPU::InitView`, `FrameScheduler::CreateFrameResources(device, heap)`) + RT-регион 8192
+с базы 12288 (`rt::BindlessTable::Init(device, heap)`, все индексы `base_ +`, свой хип остался
+фолбэком) + слоты текстур 45056 с базы 20480; слот 20480 — null-SRV. `Texture2D` берёт слот при
+создании CPU-SRV (`BindlessIndex()`), любая перезапись SRV (подмена A2, кламп фейда A4) = НОВЫЙ слот +
+ретайр старого на kFrameCount (`RenameBindless_`), деструктор ретайрит; при исчерпании — перезапись
+на месте с одноразовым ERROR. Лог при старте: tier 3, SM 0x67, dynamic resources yes; wind_test:
+high water 218 слотов. (2) **Bindless-семплинг в растре** — `GBUFFER_BINDLESS=1` в `gbuffer.hlsl`,
+`gbuffer_inst.hlsl`, `gbuffer_instcb.hlsl`, `gbuffer_indirect.hlsl` и `shadow_indirect_csm.hlsl`
+(SHADOW_MASKED): RS без таблицы t0..t2, флаг `CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED`, текстуры =
+`ResourceDescriptorHeap[texIndices.xyz]`; индексы едут в `SurfaceParams`/`SlotParams`/`InstDraw`
+(+`uint4`, CPU-зеркала 80/160/96 байт, `MaterialData::GatherGBufferIndices` с тем же правилом
+заполнителя, что у `GatherGBufferSRVs`; материал без текстур → null-слот и сэмплер не стейджится,
+так что `Material::Bind` отказывает в дро как и раньше). Дефайн инжектится в
+`Material::BuildGraphicsPSO` по `render::g_rasterBindless` + `DynamicResourcesSupported()` + белому
+списку файлов (`Material::IsBindlessTextureShader`), `Material::IsBindless()` — что собрано; тумблер
+перестраивает 22 PSO на месте через путь hot-reload (`MaterialManager::RequestReloadWhere`,
+keep-alive кадров в полёте). Маскированные тени: `GroupMask.x` = индекс хипа, регион кадра
+перезаписывается каждый кадр (`RefreshGroupMaskForFrame`, индексы меняются с подменами и фейдами),
+таблицы `gMaskAlbedo[16]` и капа 16 групп в bindless-режиме нет. (3) **Слитый indirect** — command
+signature `{CONSTANT(b0) 8 | VBV 16 | IBV 16 | CBV(b2) 8 | DRAW_INDEXED 20 | pad 4}` = 72 байта
+(`Renderer::GetBindlessIndirectCommandSignature`, кэш по объекту RS с удержанием ссылки), CPU пишет
+статику команды в порядке PSO (`FillGBufferCommandsForFrame` из `PrepareCullPass`: VBV/IBV меша,
+адрес `SurfaceParams`, LOD, исходная виртуальная группа), ядро `gbuffer_indirect_expand_cs.hlsl`
+после камерного кулла (пасс A) и после post-кулла (пасс B) склеивает её с InstanceCount кулла;
+`RecordIndirectGBufferDraws` — один `ExecuteIndirect` на PSO-ран, остаток (табличные PSO) — прежний
+цикл. Ридаут: `[gbuffer.indirect] pass A/B: N ExecuteIndirect (…)` раз в 5 с; `raster.bindless`
+(`--set`, чекбокс «Bindless material textures» во вкладке с GPU-driven G-buffer, JSON
+`performance.rasterBindless`), дефолт 1, авто-0 без tier 3 / SM 6.6.
+
+Приёмка (Release, wind_test, статичная камера, пол 12.9 % px / p99 4): (1) `raster.bindless:1` vs
+`:0` — 12.8 % px / p99 3, против эталона до A6 — p99 2 / max 26; свип `1,0,1,0` чистый. (2)
+`ExecuteIndirect` на пасс **85 → 5** (444 команды в 5 PSO-ранах над 111 статическими группами; «~1000»
+плана — оценка по всем виртуальным группам, CPU-цикл и раньше пропускал пустые); CPU-запись
+`GBuffer_Indirect` **0.091 → 0.022 мс**, `Pass_GBuffer` CPU 0.152 → 0.079, `Pass_GBufferB` CPU
+0.112 → 0.047; GPU `GBuffer_Indirect` 0.563 → 0.546 (в шуме), `Pass_ShadowCull` GPU +0.008 (expand),
+`Pass_GBufferB` GPU 0.002 → 0.026 (444 в основном пустых команд вместо 85 непустых), кадр GPU 3.654 →
+3.716. (3) Debug `--gbv`: 0 ошибок, 5 предупреждений (id=1044 ×1 — GBV предупреждает, что
+ExecuteIndirect с root-аргументами он валидирует неточно, свойство метода; 274 ×2, 577, 582 — как до
+A6). (4) RT (`rt.as` 61 МБ в кадре) и SDSM/VSM в тех же шотах. (5) Три конфига собраны, Debug
+`--scene-stress=20` CLEAN, exit 0 (порядок команд пересобирается на каждой смене уровня).
+
+Отступления от текста шага: (a) команда 72 байта с VBV/IBV вместо `{CONSTANT×3, DRAW}` 32 байта — план
+подразумевал мега-буфер (`megaReady_`), который `Rebuild` роняет; виды в команде снимают зависимость;
+(b) индексы текстур в `SurfaceParams` через indirect-аргумент CBV, а не тремя root-константами — один
+слой для CPU- и indirect-путей; (c) отдельное expand-ядро вместо смены страйда аргументов кулла —
+шейдеры кулла, валидатор ридбэка и pass B не тронуты; (d) корневые аргументы в сигнатуре обязаны идти
+по возрастанию индекса (ошибка 743 debug layer), поэтому константы первыми; (e) решение «пасс слит»
+принимается на главном потоке в builder'ах (`cmdMerge_[pass]`) — флаг на записи гонялся с
+параллельной записью G-buffer-пасса; (f) семплерный хип остаётся per-frame (один семплер на
+материал), `rt::BindlessTable` по-прежнему копирует SRV текстур в свои наборы — переход на
+`Texture2D::BindlessIndex()` там возможен, но не нужен для A6.
+
 ---
 
 ### Часть B — статус (решение 2026-09-22)
@@ -1021,12 +1075,15 @@ persistent-buffer аплоад обходит RHI (`VirtualTextureUploadCache.cp
 | Освобождение ринга/старого ресурса по фенсу | штамп «кадр + kFrameCount», дренаж в `BeginFrame` после `WaitForFrame` | тот же контракт, что `rt.as.retired`; отдельный фенс не нужен |
 | `RHIUpdateTextureReference` (все ссылки обновляются RHI) | SRV переписывается НА МЕСТЕ в CPU-хипе текстуры + `srvGeneration_`; `rt::BindlessTable` ключует наборы по поколению и ретайрит старый набор на kFrameCount | у нас потребители копируют CPU-хендл в кольцо кадра сами; единственный, кто держит GPU-копию, — RT-bindless |
 | DirectStorage / tiled resources / Sampler Feedback | возможные отступления на потом | не путь UE; вернуться, если копия общих мипов дорога |
+| Bindless в UE = версионирование целых GPU-хипов (`FD3D12BindlessResourceManager`, «has to handle renames on command lists») | A6: один хип 65536, слот текстуры иммутабелен, перезапись SRV = новый слот + ретайр на kFrameCount | правило ABA из памяти; тот же контракт, что `rt.as.retired` |
+| UE растр биндит таблицы per-draw (bindless только RT/Nanite/VT) | A6: пермутации `GBUFFER_BINDLESS`, индексы в `SurfaceParams`, один `ExecuteIndirect` на PSO | цель A6 |
 
 ## 6. Ручки: UE → `--set`
 
 | UE | наша | дефолт |
 |---|---|---|
 | `r.TextureStreaming` | `streaming.enabled` | 1 |
+| — (A6, у UE нет) | `raster.bindless` (чекбокс «Bindless material textures», JSON `performance.rasterBindless`; тумблер перестраивает PSO на месте) | 1 (авто-0 без tier 3 / SM 6.6) |
 | `r.Streaming.PoolSize` | `streaming.poolSizeMB` | −1 (70 % VRAM) |
 | `r.Streaming.MipBias` | `streaming.mipBias` | 0 |
 | `r.Streaming.Boost` | `streaming.boost` | 1.0 |

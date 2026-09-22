@@ -29,8 +29,21 @@
 #define VSM_PAGE 0
 #endif
 
+// Texture streaming plan A6: GBUFFER_BINDLESS=1 (with SHADOW_MASKED) reads the masked albedo through
+// SM6.6 ResourceDescriptorHeap[] -- GroupMask.x is then the texture's slot in the shared heap, the
+// gMaskAlbedo[16] table is gone and so is the 16-group cap.
+#ifndef GBUFFER_BINDLESS
+#define GBUFFER_BINDLESS 0
+#endif
+
 #if VSM_PAGE
-  #if SHADOW_MASKED
+  #if SHADOW_MASKED && GBUFFER_BINDLESS
+    // t0 Instances, t1 CasterGroup, t2 GroupMask, t3 PageProj; the albedos by heap index.
+    #define SHADOW_INDIRECT_CSM_RS \
+        "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT | CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), " \
+        "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+        "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
+  #elif SHADOW_MASKED
     // ONE table: t0 Instances, t1 CasterGroup, t2 GroupMask, t3 PageProj, t4..t19 gMaskAlbedo[16].
     // Folded into a single range because Material::Bind keys tables by their base register and
     // silently drops any base >= RenderContext::kMaxBindings (4) — a second table at t4 would never
@@ -47,6 +60,12 @@
         "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), " \
         "DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
   #endif
+#elif SHADOW_MASKED && GBUFFER_BINDLESS
+#define SHADOW_INDIRECT_CSM_RS \
+    "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT | CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), " \
+    "CBV(b1), " \
+    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
 #elif SHADOW_MASKED
 #define SHADOW_INDIRECT_CSM_RS \
     "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), " \
@@ -245,8 +264,10 @@ inline float4 WindTransformH(float3 objPos, float3 objNormal, float4x4 world, fl
 #if SHADOW_MASKED
 
 StructuredBuffer<uint>  CasterGroup : register(t1); // per-caster mesh-group id (region 0, static)
-StructuredBuffer<uint2> GroupMask   : register(t2); // per group: x = albedo slot in gMaskAlbedo (~0 = opaque), y = asuint(alphaCutoff)
-#if VSM_PAGE
+StructuredBuffer<uint2> GroupMask   : register(t2); // per group: x = albedo slot in gMaskAlbedo, or its bindless heap index (~0 = opaque), y = asuint(alphaCutoff)
+#if GBUFFER_BINDLESS
+// A6: the albedo is ResourceDescriptorHeap[GroupMask.x]; no table.
+#elif VSM_PAGE
 Texture2D    gMaskAlbedo[16] : register(t4);        // t3 is PageProj in this permutation
 #else
 Texture2D    gMaskAlbedo[16] : register(t3);        // masked groups' albedo textures (alpha channel)
@@ -311,7 +332,12 @@ VSOutMasked VSMain(VSInMasked i)
 void PSMain(PSInMasked i)
 {
     if (i.texSlot == 0xFFFFFFFFu) { return; } // opaque group — draw-uniform branch, no sample
+#if GBUFFER_BINDLESS
+    Texture2D maskAlbedo = ResourceDescriptorHeap[NonUniformResourceIndex(i.texSlot)];
+    const float a = maskAlbedo.Sample(gMaskSmp, i.UV).a;
+#else
     const float a = gMaskAlbedo[NonUniformResourceIndex(i.texSlot)].Sample(gMaskSmp, i.UV).a;
+#endif
     clip(a - i.cutoff);
 }
 

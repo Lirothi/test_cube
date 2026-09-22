@@ -22,6 +22,7 @@ enum class GraphicsControl
     OcclusionIndirectQueries,
     IndirectGBuffer,
     GbufferHzb,
+    RasterBindless,               // texture streaming A6
     DlssEnabled,                  // AA / Scale ...
     DlssMode,
     Fxaa,

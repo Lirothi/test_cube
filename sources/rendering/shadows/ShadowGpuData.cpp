@@ -16,6 +16,9 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h" // PrepareCullPass takes a RenderGraphPassContext&
 #include "rendering/core/ComputeDispatch.h"
+#include "rendering/core/CommandListBindState.h" // A6: the merged draws bypass the bind cache
+#include "rendering/core/RasterSettings.h"       // A6: raster.bindless gates the merged path
+#include <chrono>                                // A6: the throttled readout
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias + ShadowTierBaseLod (per-view LOD)
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumCascades / kNumClipmapLevels (view tiers)
@@ -658,8 +661,15 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     // next pass that touches them (measured: VsmPageRender reading IndirectArgs right after a
     // level switch, when the cull bails on count_ == 0).
     CullDecisions dec{};
+    cmdFrameReady_ = false; // A6: decided below for this frame; a frame the cull skips has no merged draws
+    cmdMerge_ = { false, false };
     if (!cullClearMat_ || !cullMat_) { return dec; }
     if (count_ == 0 || numMeshGroups_ == 0) { return dec; }
+    // A6: this frame's GroupMask copy for the bindless masked PSO (heap indices change with
+    // streaming swaps and fades). Main-thread builder, before any shadow pass records.
+    RefreshGroupMaskForFrame(ctx.renderer);
+    // A6: the merged G-buffer's static command part (VBV/IBV/SurfaceParams/LOD per command).
+    FillGBufferCommandsForFrame(ctx.renderer);
     if (!indirectArgs_.Valid() || !visibleList_.Valid() || !indirectCounts_.Valid()) { return dec; }
     if (!bounds_.Valid() || !viewFrustums_.Valid() || !casterGroup_.Valid() || !perGroup_.Valid() ||
         !perGroupVg_.Valid()) { return dec; }
@@ -733,6 +743,10 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         // S4: the camera's pair, written here, consumed by Main_GBuffer's indirect pass.
         ctx.Use(camArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ctx.Use(camVisibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        // A6: the merged commands the expand kernel writes after the camera cull. The decision the
+        // record bodies (RecordCull's expand, the G-buffer pass's draws) both read.
+        cmdMerge_[0] = cmdFrameReady_ && camCmds_.Valid();
+        if (cmdMerge_[0]) { ctx.Use(camCmds_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
     }
     if (dec.camHzb)
     {
@@ -870,6 +884,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     {
         ctx.Use(camArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
         ctx.Use(camVisibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        if (cmdMerge_[0]) { ctx.Use(camCmds_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT); } // A6
     }
     // S5: the counters back to UAV after the validation copy (the post cull adds to them); the
     // deferred list and pass B's pair stay UAV for the post cull, which consumes them.
@@ -905,6 +920,10 @@ ShadowGpuData::CamCullPostDecisions ShadowGpuData::PrepareCamCullPostPass(Render
     ctx.Use(camDeferred_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(camHzbCur_, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // A6: pass B's merged commands -- the decision RecordCamCullPost (expand) and the G-buffer B
+    // pass (draws) both read.
+    cmdMerge_[1] = cmdFrameReady_ && camCmdsB_.Valid();
+    if (cmdMerge_[1]) { ctx.Use(camCmdsB_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
 
     // Pass B consumes the pair exactly as pass A's; the counters go out to the readout and back
     // to their resting state. The cascade post cull owns the same readback ring on frames it
@@ -915,6 +934,7 @@ ShadowGpuData::CamCullPostDecisions ShadowGpuData::PrepareCamCullPostPass(Render
     dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(camArgsB_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     ctx.Use(camVisibleListB_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    if (cmdMerge_[1]) { ctx.Use(camCmdsB_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT); } // A6
     EnsureHzbStatsReadback(ctx.renderer);
     dec.stats = hzbStatsReadback_ != nullptr;
     if (dec.stats)
@@ -962,6 +982,7 @@ void ShadowGpuData::RecordCamCullPost(Renderer* renderer, ID3D12GraphicsCommandL
             const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
             if (groupsX > 0) { cl->Dispatch(groupsX, 1, 1); }
             renderer->UAVBarrier(cl, camArgsB_.buffer.Get());
+            if (cmdMerge_[1]) { RecordGBufferCommandExpand(renderer, cl, /*passB=*/true); } // A6: pass B's merged commands
         }
     }
     renderer->EmitPoint(cl, dec.consume);
@@ -1029,9 +1050,49 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
     const Mesh* boundMesh = nullptr;
     UINT boundLod = 0xFFFFFFFFu;
     bool drew = false;
+
+    // A6, the merged path: every run whose PSO is the bindless permutation draws with ONE
+    // ExecuteIndirect from the commands the expand kernel wrote this frame; the loop below then
+    // only handles what is left (table PSOs, runs without a command signature). Only a full range
+    // merges -- the fan-out shape of the callers is a whole pass on one list.
+    const UavRing& cmds = passB ? camCmdsB_ : camCmds_;
+    const bool merged = cmdFrameReady_ && cmdMerge_[passB ? 1u : 0u] && cmds.Valid() && !cmdRuns_.empty() &&
+                        vgBegin == 0u && vgEnd >= numVirtualGroups_ && cmdOrder_.size() == cmdCountFrame_;
+    std::vector<std::uint8_t> mergedVg; // per virtual group: 1 = a merged run drew it
+    std::uint32_t mergedCalls = 0, mergedCmds = 0, perGroupDraws = 0;
+    if (merged)
+    {
+        mergedVg.assign(numVirtualGroups_, 0u);
+        const UINT64 cmdRegionBase = static_cast<UINT64>(f) * cmds.regionBytes;
+        for (const GBufferCmdRun& run : cmdRuns_)
+        {
+            if (!run.mat || !run.md || run.count == 0 || !run.mat->IsBindless()) { continue; }
+            ID3D12CommandSignature* runSig = renderer->GetBindlessIndirectCommandSignature(run.mat);
+            if (!runSig) { continue; }
+            auto h = renderer->GetRenderContextPool()->Acquire();
+            RenderContext& ctx = h.ref();
+            ctx.cbv[1] = viewCB;
+            run.md->StageGBufferBindings(renderer, ctx, 0, 0, /*bindless=*/true); // the sampler; textures by index
+            ctx.srvTable[3] = tail;
+            if (!run.mat->Bind(cl, ctx, wireframe)) { continue; }
+            renderer->ExecuteIndirect(cl, runSig, run.count, cmds.buffer.Get(),
+                                      cmdRegionBase + static_cast<UINT64>(run.first) * Renderer::kBindlessIndirectCommandBytes, nullptr, 0);
+            for (std::uint32_t k = run.first; k < run.first + run.count && k < cmdOrder_.size(); ++k)
+            {
+                if (cmdOrder_[k] < mergedVg.size()) { mergedVg[cmdOrder_[k]] = 1u; }
+            }
+            ++mergedCalls;
+            mergedCmds += run.count;
+            drew = true;
+        }
+        // The commands set root arguments and IA views behind the bind cache's back: the per-group
+        // draws below start from a clean slate.
+        render::g_clBindState.Reset();
+    }
     for (std::uint32_t vg = vgBegin; vg < vgEnd; ++vg)
     {
         if (vg >= vgCamCount_.size() || vgCamCount_[vg] == 0u) { continue; }
+        if (merged && vg < mergedVg.size() && mergedVg[vg]) { continue; } // A6: drawn by a merged run
         const std::uint32_t g = vg / render::kMaxShadowLods;
         const std::uint32_t vgLod = vg % render::kMaxShadowLods;
         if (g >= numStaticGroups_ || g >= groupGbuf_.size()) { continue; } // GI groups draw their own way
@@ -1063,11 +1124,15 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
         // (t0..t2, s0), surface params (b2); plus the view CB and the LOD constant.
         auto h = renderer->GetRenderContextPool()->Acquire();
         RenderContext& ctx = h.ref();
-        ctx.cbv[0] = lodCb[vgLod];
+        // A6: the bindless permutation takes the LOD as root constants (what the merged command
+        // signature writes per command); the table permutation keeps its b0 CBV.
+        const bool bindless = gg.mat->IsBindless();
+        if (bindless) { ctx.constants[0] = { vgLod, 0u, 0u, 0u }; }
+        else { ctx.cbv[0] = lodCb[vgLod]; }
         ctx.cbv[1] = viewCB;
         if (gg.md)
         {
-            gg.md->StageGBufferBindings(renderer, ctx, 0, 0);
+            gg.md->StageGBufferBindings(renderer, ctx, 0, 0, bindless);
             gg.md->StageGBufferSurfaceParams(renderer, ctx, 2);
         }
         else
@@ -1082,7 +1147,10 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
         const UINT64 argOffset = argRegionBase + static_cast<UINT64>(vg) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
         renderer->ExecuteIndirect(cl, sig, 1, args.buffer.Get(), argOffset, nullptr, 0);
         drew = true;
+        ++perGroupDraws;
     }
+    // A6 readout: how many ExecuteIndirect the pass cost (the plan's acceptance number).
+    RecordIndirectGBufferStats_(passB, mergedCalls, mergedCmds, perGroupDraws);
     return drew;
 }
 
@@ -1093,7 +1161,165 @@ Material* ShadowGpuData::IndirectShadowPageMaterial() const
 
 bool ShadowGpuData::MaskedShadowsActive() const
 {
-    return hasMaskedGroups_ && indirectShadowMaskedMat_ && indirectShadowMaskedMat_->GetPipelineState();
+    if (!hasMaskedGroups_ || !indirectShadowMaskedMat_ || !indirectShadowMaskedMat_->GetPipelineState()) { return false; }
+    // A6: the table PSO can only serve the first kMaxMaskedGroups masked groups; the bindless one
+    // serves them all by heap index.
+    return MaskedShadowsBindless() ? maskedGroupCount_ > 0 : maskedAlbedoCount_ > 0;
+}
+
+bool ShadowGpuData::MaskedShadowsBindless() const
+{
+    return indirectShadowMaskedMat_ && indirectShadowMaskedMat_->IsBindless();
+}
+
+void ShadowGpuData::RefreshGroupMaskForFrame(Renderer* renderer)
+{
+    groupMaskRegion_ = 0; // the static table-path copy, written at Rebuild
+    if (!renderer || !MaskedShadowsBindless() || !groupMask_.Valid() || numMeshGroups_ == 0 ||
+        groupMaskCpu_.size() < numMeshGroups_ || groupMaskMd_.size() < numMeshGroups_)
+    {
+        return;
+    }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return; }
+    auto* dst = reinterpret_cast<DirectX::XMUINT2*>(groupMask_.Region(f));
+    if (!dst) { return; }
+    for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+    {
+        DirectX::XMUINT2 gm = groupMaskCpu_[g];
+        if (const MaterialData* md = groupMaskMd_[g])
+        {
+            const std::uint32_t index = md->albedo.BindlessIndex();
+            gm.x = index != render::BindlessHeap::kInvalidIndex ? index : 0xFFFFFFFFu; // no slot = casts solid
+        }
+        dst[g] = gm;
+    }
+    groupMaskRegion_ = f;
+}
+
+void ShadowGpuData::BuildGBufferCommandOrder_()
+{
+    cmdOrder_.clear();
+    cmdGeom_.clear();
+    cmdRuns_.clear();
+    struct Entry { Material* mat; const Mesh* mesh; std::uint32_t lod; std::uint32_t vg; };
+    std::vector<Entry> entries;
+    entries.reserve(numVirtualGroups_);
+    for (std::uint32_t g = 0; g < numStaticGroups_ && g < groupGbuf_.size() && g < groupMesh_.size(); ++g)
+    {
+        const GroupGbuf& gg = groupGbuf_[g];
+        const Mesh* mesh = groupMesh_[g];
+        if (!gg.mat || !gg.md || !mesh || !mesh->GetVertexBufferResource()) { continue; }
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> srvs{};
+        if (gg.md->GatherGBufferSRVs(srvs.data()) == 0) { continue; } // textureless: the per-group path skips it too
+        for (std::uint32_t lod = 0; lod < render::kMaxShadowLods; ++lod)
+        {
+            if (!mesh->GetLodIndexBufferResource(mesh->ClampExplicitLod(lod))) { continue; }
+            entries.push_back(Entry{ gg.mat, mesh, lod, g * render::kMaxShadowLods + lod });
+        }
+    }
+    std::stable_sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b)
+    {
+        if (a.mat != b.mat) { return a.mat < b.mat; }
+        if (a.mesh != b.mesh) { return a.mesh < b.mesh; }
+        return a.lod < b.lod;
+    });
+    for (const Entry& e : entries)
+    {
+        if (cmdRuns_.empty() || cmdRuns_.back().mat != e.mat)
+        {
+            GBufferCmdRun run;
+            run.mat = e.mat;
+            run.md = groupGbuf_[e.vg / render::kMaxShadowLods].md;
+            run.first = static_cast<std::uint32_t>(cmdOrder_.size());
+            run.count = 0;
+            cmdRuns_.push_back(run);
+        }
+        ++cmdRuns_.back().count;
+        cmdOrder_.push_back(e.vg);
+        // The geometry views are immutable after load: written once here, copied per frame.
+        ID3D12Resource* vb = e.mesh->GetVertexBufferResource();
+        ID3D12Resource* ib = e.mesh->GetLodIndexBufferResource(e.mesh->ClampExplicitLod(e.lod));
+        const D3D12_GPU_VIRTUAL_ADDRESS vbVA = vb->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS ibVA = ib->GetGPUVirtualAddress();
+        cmdGeom_.push_back(DirectX::XMUINT4(static_cast<std::uint32_t>(vbVA & 0xFFFFFFFFull), static_cast<std::uint32_t>(vbVA >> 32),
+                                            static_cast<std::uint32_t>(vb->GetDesc().Width), e.mesh->GetVertexStride()));
+        cmdGeom_.push_back(DirectX::XMUINT4(static_cast<std::uint32_t>(ibVA & 0xFFFFFFFFull), static_cast<std::uint32_t>(ibVA >> 32),
+                                            static_cast<std::uint32_t>(ib->GetDesc().Width), static_cast<std::uint32_t>(e.mesh->GetIndexFormat())));
+    }
+    LOG_INFO(logging::LogCategory::RenderShadow, "[gbuffer.indirect] merged command order: {} commands in {} PSO runs over {} static groups",
+             cmdOrder_.size(), cmdRuns_.size(), numStaticGroups_);
+}
+
+bool ShadowGpuData::FillGBufferCommandsForFrame(Renderer* renderer)
+{
+    cmdFrameReady_ = false;
+    cmdCountFrame_ = 0;
+    if (!renderer || !render::g_rasterBindless || !gbufferIndirectFrame_ || cmdOrder_.empty() ||
+        !gbufferCmdExpandMat_ || !gbufferCmdExpandMat_->GetPipelineState() ||
+        !cmdStatic_.Valid() || !camCmds_.Valid())
+    {
+        return false;
+    }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return false; }
+    const std::size_t n = cmdOrder_.size();
+    if (cmdGeom_.size() != n * 2 || cmdStatic_.capacity < n * 3 || camCmds_.regionBytes < n * Renderer::kBindlessIndirectCommandBytes) { return false; }
+    auto* dst = reinterpret_cast<DirectX::XMUINT4*>(cmdStatic_.Region(f));
+    if (!dst) { return false; }
+    for (std::size_t k = 0; k < n; ++k)
+    {
+        const std::uint32_t vg = cmdOrder_[k];
+        const std::uint32_t g = vg / render::kMaxShadowLods;
+        const std::uint32_t vgLod = vg % render::kMaxShadowLods;
+        RenderContext ctx{};
+        groupGbuf_[g].md->StageGBufferSurfaceParams(renderer, ctx, 2); // per material per frame (cached), carries the texture indices
+        dst[k * 3 + 0] = cmdGeom_[k * 2 + 0];
+        dst[k * 3 + 1] = cmdGeom_[k * 2 + 1];
+        dst[k * 3 + 2] = DirectX::XMUINT4(static_cast<std::uint32_t>(ctx.cbv[2] & 0xFFFFFFFFull),
+                                          static_cast<std::uint32_t>(ctx.cbv[2] >> 32), vgLod, vg);
+    }
+    cmdCountFrame_ = static_cast<std::uint32_t>(n);
+    cmdFrameReady_ = true;
+    return true;
+}
+
+void ShadowGpuData::RecordIndirectGBufferStats_(bool passB, std::uint32_t mergedCalls, std::uint32_t mergedCmds,
+                                                std::uint32_t perGroupDraws) const
+{
+    // Two call sites on purpose: the throttle is per site, and the two passes record on different lists.
+    if (passB)
+    {
+        LOG_INFO_THROTTLED(std::chrono::seconds(5), logging::LogCategory::RenderShadow,
+                           "[gbuffer.indirect] pass B: {} ExecuteIndirect ({} merged runs over {} commands + {} per-group), raster.bindless {}",
+                           mergedCalls + perGroupDraws, mergedCalls, mergedCmds, perGroupDraws, render::g_rasterBindless ? 1 : 0);
+    }
+    else
+    {
+        LOG_INFO_THROTTLED(std::chrono::seconds(5), logging::LogCategory::RenderShadow,
+                           "[gbuffer.indirect] pass A: {} ExecuteIndirect ({} merged runs over {} commands + {} per-group), raster.bindless {}",
+                           mergedCalls + perGroupDraws, mergedCalls, mergedCmds, perGroupDraws, render::g_rasterBindless ? 1 : 0);
+    }
+}
+
+void ShadowGpuData::RecordGBufferCommandExpand(Renderer* renderer, ID3D12GraphicsCommandList* cl, bool passB)
+{
+    if (!renderer || !cl || !cmdFrameReady_ || cmdCountFrame_ == 0 || !gbufferCmdExpandMat_) { return; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return; }
+    const UavRing& cmds = passB ? camCmdsB_ : camCmds_;
+    if (!cmds.Valid()) { return; }
+    const std::size_t argSet = passB ? 10u : 7u;  // the pass's camera args (RAW UAV)
+    const std::size_t cmdSet = passB ? 13u : 12u; // the pass's commands (RAW UAV)
+    struct ExpandCB { std::uint32_t count; std::uint32_t pad[3]; };
+    const std::uint32_t count = cmdCountFrame_;
+    RecordComputeDispatch(renderer, cl, gbufferCmdExpandMat_.get(), static_cast<UINT>(sizeof(ExpandCB)),
+        [count](std::uint8_t* dst) { const ExpandCB c{ count, { 0u, 0u, 0u } }; std::memcpy(dst, &c, sizeof(c)); },
+        { cmdStatic_.Srv(f) },
+        { cullUav_[argSet * render::kFrameCount + f], cullUav_[cmdSet * render::kFrameCount + f] },
+        D3D12_GPU_DESCRIPTOR_HANDLE{},
+        count, 1,
+        cmds.buffer.Get());
 }
 
 bool ShadowGpuData::IsGiIndirectActive() const
@@ -1175,7 +1401,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // C2: per-group shadow-mask table, filled when a mesh is FIRST seen — the first object using
     // a (mesh, slot) defines the group's mask (an object overriding a shared mesh's slot keeps
     // the first object's shadow mask; same shared-mesh semantics as the mega buffer / RT BLAS).
-    std::vector<DirectX::XMUINT2> groupMaskCpu; // per group: {albedo slot (~0 = opaque), asuint(cutoff)}
+    std::vector<DirectX::XMUINT2>& groupMaskCpu = groupMaskCpu_; // per group: {albedo slot (~0 = opaque), asuint(cutoff)}
+    groupMaskCpu.clear();
+    groupMaskMd_.clear(); // A6: the masked groups' MaterialData, for the per-frame bindless refresh
+    maskedGroupCount_ = 0;
     maskedAlbedoSrvs_.fill({});
     maskedAlbedoCount_ = 0;
     hasWindCasters_ = false; // W5: recomputed below over the static set + the folded GI objects
@@ -1211,14 +1440,20 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
                 }
                 DirectX::XMUINT2 gm{ 0xFFFFFFFFu, 0u };
                 const MaterialData* md = gb ? gb->GetMaterialDataForSlot(s) : nullptr;
+                const MaterialData* maskMd = nullptr;
                 if (md && md->alphaMask && md->hasAlbedo)
                 {
+                    // A6: the bindless masked PSO reads the albedo by heap index, refreshed per
+                    // frame from maskMd (RefreshGroupMaskForFrame) -- no cap. The table PSO keeps
+                    // the 16-slot cap below.
+                    maskMd = md;
+                    ++maskedGroupCount_;
+                    const float cutoff = md->alphaCutoff;
+                    std::memcpy(&gm.y, &cutoff, sizeof(gm.y));
                     if (maskedAlbedoCount_ < kMaxMaskedGroups)
                     {
                         maskedAlbedoSrvs_[maskedAlbedoCount_] = md->albedo.GetSRVCPU();
                         gm.x = maskedAlbedoCount_++;
-                        const float cutoff = md->alphaCutoff;
-                        std::memcpy(&gm.y, &cutoff, sizeof(gm.y));
                     }
                     else
                     {
@@ -1226,6 +1461,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
                     }
                 }
                 groupMaskCpu.push_back(gm);
+                groupMaskMd_.push_back(maskMd);
             }
             nextGroup += static_cast<std::uint32_t>(slots);
         }
@@ -1559,12 +1795,15 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // C2: per-group shadow-mask table (uint2; region 0, static like perGroup_). GI groups (and
     // any group past the static set) are opaque.
     groupMaskCpu.resize(numMeshGroups_, DirectX::XMUINT2{ 0xFFFFFFFFu, 0u });
-    hasMaskedGroups_ = maskedAlbedoCount_ > 0;
+    groupMaskMd_.resize(numMeshGroups_, nullptr);
+    hasMaskedGroups_ = maskedGroupCount_ > 0;
+    BuildGBufferCommandOrder_(); // A6: groupGbuf_ and groupMesh_ are final here
     if (maskedOverflow)
     {
         LOG_WARNING(logging::LogCategory::RenderShadow,
-                    "masked shadow groups exceed the albedo table cap; excess groups cast solid shadows");
+                    "masked shadow groups exceed the albedo table cap; excess groups cast solid shadows on the table path (the bindless path has no cap)");
     }
+    groupMaskRegion_ = 0;
     if (EnsureRing(renderer, groupMask_, std::max<size_t>(numMeshGroups_, 1), sizeof(DirectX::XMUINT2), L"ShadowGpuData.GroupMask") &&
         numMeshGroups_ > 0)
     {
@@ -1744,6 +1983,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     EnsureUavRing(renderer, camDeferred_, casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"ShadowGpuData.CamDeferred");
     EnsureUavRing(renderer, camArgsB_, groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.CamArgsB");
     EnsureUavRing(renderer, camVisibleListB_, 2u * casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.CamVisibleListB");
+    // A6: the merged G-buffer's commands (64 B per virtual group at most) for both passes, and the
+    // CPU-written static part the expand kernel reads (3 x uint4 per command).
+    EnsureUavRing(renderer, camCmds_, groups * Renderer::kBindlessIndirectCommandBytes, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.CamCmds");
+    EnsureUavRing(renderer, camCmdsB_, groups * Renderer::kBindlessIndirectCommandBytes, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.CamCmdsB");
+    EnsureRing(renderer, cmdStatic_, std::max<size_t>(groups, 1) * 3, static_cast<UINT>(sizeof(DirectX::XMUINT4)), L"ShadowGpuData.GBufferCmdStatic");
     // Step 2 (GI→VSM): DEFAULT-heap mirrors of instances_/bounds_, sized to `casters` per region.
     // RecordCull copies the ring's region into these each frame (verbatim at this step; Step 4 also
     // scatters GI casters into them). Their per-region SRVs feed the cull (bounds) + indirect VS (t0).
@@ -2055,6 +2299,18 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
             camCullPostMat_.reset();
         }
     }
+    // A6: the merged G-buffer's expand kernel. Failure is non-fatal: one ExecuteIndirect per group stays.
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/gbuffer_indirect_expand_cs.hlsl";
+        cd.csEntry = "CSMain";
+        gbufferCmdExpandMat_ = mm->GetOrCreateCompute(renderer, cd);
+        if (!gbufferCmdExpandMat_ || !gbufferCmdExpandMat_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::RenderShadow, "gbuffer_indirect_expand_cs.hlsl did not build a PSO; the G-buffer keeps one ExecuteIndirect per group");
+            gbufferCmdExpandMat_.reset();
+        }
+    }
     // Step 4 (GI→VSM): the GI-scatter compute that folds each GPU-instanced object's per-instance
     // transforms into the unified caster buffers. Optional — a failure just leaves GI on the CPU tail.
     {
@@ -2325,6 +2581,28 @@ void ShadowGpuData::RebuildCullDescriptors(Renderer* renderer)
             }
         }
         structuredUint(camVisibleListB_, 11);
+        // A6: the merged G-buffer's command buffers (RAW; the expand kernel writes them).
+        const auto rawUav = [&](const UavRing& ring, std::size_t set)
+        {
+            const D3D12_CPU_DESCRIPTOR_HANDLE h = slotHandle(static_cast<UINT>(set * render::kFrameCount + f));
+            if (ring.Valid())
+            {
+                D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+                ud.Format = DXGI_FORMAT_R32_TYPELESS;
+                ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+                ud.Buffer.FirstElement = static_cast<UINT64>(f) * (ring.regionBytes / 4);
+                ud.Buffer.NumElements = static_cast<UINT>(ring.regionBytes / 4);
+                ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+                dev->CreateUnorderedAccessView(ring.buffer.Get(), nullptr, &ud, h);
+                cullUav_[set * render::kFrameCount + f] = h;
+            }
+            else
+            {
+                cullUav_[set * render::kFrameCount + f] = cullUav_[f];
+            }
+        };
+        rawUav(camCmds_, 12);
+        rawUav(camCmdsB_, 13);
     }
 }
 
@@ -2678,6 +2956,14 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             if (groupsX > 0) { cl->Dispatch(groupsX, 1, 1); }
             renderer->UAVBarrier(cl, indirectArgs_.buffer.Get());
         }
+    }
+
+    // A6: pair the camera cull's counts with the PSO-sorted static part into the bindless commands
+    // (pass A). The cull's InterlockedAdds on the camera args have to land before the kernel reads.
+    if (dec.gbuffer && cmdMerge_[0])
+    {
+        renderer->UAVBarrier(cl, camArgs_.buffer.Get());
+        RecordGBufferCommandExpand(renderer, cl, /*passB=*/false);
     }
 
     // Step 4 validation (temporary, one-shot after warmup): read back this region's args so a CPU
@@ -3167,7 +3453,8 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
     if (MaskedShadowsActive())
     {
         ctx.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f), CasterGroupSrv(), GroupMaskSrv() }).gpu;
-        ctx.srvTable[3] = renderer->StageSrvUavTable(maskedAlbedoSrvs_, maskedAlbedoCount_).gpu;
+        // A6: the bindless masked PSO has no albedo table -- GroupMask.x is the heap index.
+        if (!MaskedShadowsBindless()) { ctx.srvTable[3] = renderer->StageSrvUavTable(maskedAlbedoSrvs_, maskedAlbedoCount_).gpu; }
     }
     else
     {
@@ -3456,6 +3743,16 @@ void ShadowGpuData::Reset()
     giCasters_.clear();            // GI reservation dropped; next Rebuild re-enumerates + refreshes obj*
     giFoldableInstances_ = 0;
     megaCopy_.clear();             // mesh pointers dangle across a level unload
+    groupMaskCpu_.clear();         // A6: same contract as the SRV handles below (MaterialData-owned)
+    groupMaskMd_.clear();
+    maskedGroupCount_ = 0;
+    groupMaskRegion_ = 0;
+    cmdOrder_.clear();             // A6: the merged commands point at materials the level owned
+    cmdGeom_.clear();
+    cmdRuns_.clear();
+    cmdFrameReady_ = false;
+    cmdMerge_ = { false, false };
+    cmdCountFrame_ = 0;
     maskedAlbedoSrvs_.fill({});    // C2: MaterialData-owned SRV handles dangle across a level unload
     maskedAlbedoCount_ = 0;
     hasMaskedGroups_ = false;

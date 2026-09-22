@@ -9,6 +9,7 @@
 #include "materials/TextureDecodeCache.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
+#include "rendering/descriptors/BindlessHeap.h"
 #include "rendering/streaming/TextureStreaming.h"
 #include "core/Helpers.h"
 
@@ -38,6 +39,26 @@ static std::atomic<std::uint32_t> gTexPng{ 0 };
 Texture2D::~Texture2D()
 {
     if (streaming_) { streaming_->Unregister(this); }
+    // A6: the slot outlives the SRV by kFrameCount frames (frames in flight may still index it).
+    // A view never took one (bindlessIndex_ stays invalid on it).
+    if (bindlessIndex_ != render::BindlessHeap::kInvalidIndex) {
+        if (auto* heap = render::BindlessHeap::Instance()) { heap->RetireSlot(bindlessIndex_); }
+    }
+}
+
+void Texture2D::RenameBindless_()
+{
+    auto* heap = render::BindlessHeap::Instance();
+    if (!heap || bindlessIndex_ == render::BindlessHeap::kInvalidIndex) { return; }
+    const UINT fresh = heap->AllocateSlot(srvCPU_);
+    if (fresh == render::BindlessHeap::kInvalidIndex) {
+        // Exhausted (AllocateSlot logged it once): the old slot rewritten in place is the lesser
+        // evil -- a stale descriptor would reference the released resource.
+        heap->RewriteSlot(bindlessIndex_, srvCPU_);
+        return;
+    }
+    heap->RetireSlot(bindlessIndex_);
+    bindlessIndex_ = fresh;
 }
 
 UINT64 Texture2D::GetResidentBytes() const
@@ -81,6 +102,7 @@ void Texture2D::WriteCpuSrv_(Renderer* r, float minLodClamp)
     sd.Texture2D.MostDetailedMip = 0;
     sd.Texture2D.ResourceMinLODClamp = minLodClamp;
     r->GetDevice()->CreateShaderResourceView(tex_.Get(), &sd, srvCPU_);
+    RenameBindless_(); // A6: the shared heap's copy is immutable -- a rewrite is a new slot
 }
 
 // ========================= helpers =========================
@@ -1208,4 +1230,10 @@ void Texture2D::CreateCpuSrv_(Renderer* r, DXGI_FORMAT srvFmt, UINT mipLevels)
     device->CreateShaderResourceView(tex_.Get(), &sd, srvCPU_);
 
     srvFormat_ = srvFmt;
+    // A6: every texture takes its slot in the shared heap up front (a few hundred per level out
+    // of ~45k), so a material's indices are known the moment its textures are.
+    if (auto* heap = render::BindlessHeap::Instance()) {
+        if (bindlessIndex_ != render::BindlessHeap::kInvalidIndex) { heap->RetireSlot(bindlessIndex_); }
+        bindlessIndex_ = heap->AllocateSlot(srvCPU_);
+    }
 }

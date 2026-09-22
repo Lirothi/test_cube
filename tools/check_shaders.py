@@ -101,6 +101,8 @@ COMPUTE_ENTRIES = [
     ("shadow_cull_post_cs.hlsl", "CSMain"),
     # Occlusion plan S5: the camera's HZB post cull (the same include).
     ("cam_cull_post_cs.hlsl", "CSMain"),
+    # Texture streaming plan A6: the merged G-buffer's command expand (cull args -> 64-byte commands).
+    ("gbuffer_indirect_expand_cs.hlsl", "CSMain"),
     # S15 (SDSM): six entry points of one file, sharing one root signature. All six have to be
     # listed -- they are compiled independently at runtime, and a typo in any one of them takes the
     # whole mode out with a message that names only the entry.
@@ -164,6 +166,22 @@ GRAPHICS_ENTRIES = [
     ("gbuffer_indirect.hlsl", "vs_6_0", "VSMain", [], ""),
     ("gbuffer_indirect.hlsl", "ps_6_0", "PSMain", [], ""),
     ("gbuffer_indirect.hlsl", "ps_6_0", "PSMain", ["EDITOR_OBJECT_ID=1"], "editor-id"),
+    # Texture streaming plan A6: the GBUFFER_BINDLESS permutations of every G-buffer shader and of
+    # the masked shadow depth (SM 6.6: ResourceDescriptorHeap[]). One define selects each.
+    ("gbuffer.hlsl", "vs_6_6", "VSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
+    ("gbuffer.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
+    ("gbuffer.hlsl", "ps_6_0", "PSMain", [], "tables"),
+    ("gbuffer_inst.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
+    ("gbuffer_inst.hlsl", "ps_6_0", "PSMain", [], "tables"),
+    ("gbuffer_instcb.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
+    ("gbuffer_instcb.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1", "INSTCB_SLOT_PARAMS=1"], "bindless-slot"),
+    ("gbuffer_instcb.hlsl", "ps_6_0", "PSMain", [], "tables"),
+    ("gbuffer_instcb.hlsl", "ps_6_0", "PSMain", ["INSTCB_SLOT_PARAMS=1"], "tables-slot"),
+    ("gbuffer_indirect.hlsl", "vs_6_6", "VSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
+    ("gbuffer_indirect.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
+    ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "atlas-masked-bindless"),
+    ("shadow_indirect_csm.hlsl", "vs_6_6", "VSMain", ["VSM_PAGE=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "page-masked-bindless"),
+    ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["VSM_PAGE=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "page-masked-bindless"),
     # Occlusion plan S5b: the cascade-tile permutation of the depth pyramid build (one define
     # selects it -- the atlas rect source and the 1 - z store). A compute shader in this list
     # because only this list carries defines.

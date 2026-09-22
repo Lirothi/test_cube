@@ -116,6 +116,18 @@ public:
     ID3D12RootSignature* GetRootSignature() const { return rootSignature_.Get(); }
     ID3D12PipelineState* GetPipelineState() const { return pipelineState_.Get(); }
 
+    // Texture streaming plan A6: true when this graphics PSO was built as a GBUFFER_BINDLESS
+    // permutation (render::g_rasterBindless on, the device supports SM6.6 dynamic resources and the
+    // shader is one of the G-buffer / masked-shadow files). Its root signature then has no material
+    // SRV table; the call sites stage indices instead (MaterialData::StageGBufferBindings).
+    bool IsBindless() const { return bindlessTextures_; }
+    static bool IsBindlessTextureShader(const std::wstring& shaderFile);
+    // Root parameter index of a (type, register) pair, or -1 -- what a command signature with root
+    // arguments needs (Renderer::GetBindlessIndirectCommandSignature).
+    int FindRootParameterIndex(RootParameterInfo::Type type, UINT bindingRegister) const;
+    // Flags the PSO for a rebuild on the next ApplyPendingHotReloads (the raster.bindless toggle).
+    void RequestReload() { pendingReload_.store(true, std::memory_order_release); }
+
     // Returns FALSE when the root signature DECLARES a descriptor table the context has no handle
     // for. Bind cannot skip the draw itself, so the caller must: issuing it would leave that root
     // parameter unbound while the shader samples it -- "Uninitialized root argument accessed" to
@@ -197,6 +209,7 @@ private:
     Renderer* renderer_ = nullptr;
     mutable std::mutex wireframeMtx_;
     bool isCompute_ = false;
+    bool bindlessTextures_ = false; // A6: set by BuildGraphicsPSO with the define it injected
     std::vector<RootParameterInfo> rootParams_;
 
     // Cache for rebuilding
@@ -265,6 +278,9 @@ public:
     bool RequestFSProbeAsync();
     bool ApplyPendingHotReloads(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
     bool IsProbeInFlight() const { return fsProbeInFlight_.load(std::memory_order_acquire); }
+    // A6: flag every graphics material whose shader `pred` accepts for a rebuild (raster.bindless
+    // toggled at runtime). Returns how many were flagged.
+    unsigned RequestReloadWhere(bool (*pred)(const std::wstring& shaderFile));
 
     void Clear();
 

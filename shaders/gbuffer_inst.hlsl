@@ -1,4 +1,13 @@
+// A6: GBUFFER_BINDLESS=1 -- the instances stay a one-descriptor table at t0; the material textures
+// are reached through ResourceDescriptorHeap[] by the indices InstDraw carries.
+#ifndef GBUFFER_BINDLESS
+#define GBUFFER_BINDLESS 0
+#endif
+#if GBUFFER_BINDLESS
+#define GBUFFER_INST_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT | CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), CBV(b0), CBV(b1), CBV(b2), CBV(b3), DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#else
 #define GBUFFER_INST_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), CBV(b3), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#endif
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsli"
 
@@ -12,9 +21,11 @@ struct InstanceData
 };
 
 StructuredBuffer<InstanceData> gInstances : register(t0);
+#if !GBUFFER_BINDLESS
 Texture2D gAlbedo : register(t1);
 Texture2D gMR : register(t2);
 Texture2D gNormalMap : register(t3);
+#endif
 SamplerState gSmp : register(s0);
 
 // Step 6 per-instance LOD: the cloud is drawn one range per LOD tier. gInstanceBase is the
@@ -32,6 +43,7 @@ cbuffer InstDraw : register(b2)
     float transmissionNormalWeight;
     float4 terrainTiling;
     float4 terrainEdgeParams;
+    uint4 texIndices; // A6: albedo, MR, normal slots in the bindless heap (read under GBUFFER_BINDLESS)
 };
 cbuffer InstRemap : register(b3) { uint4 gRemap[64]; };
 
@@ -50,6 +62,11 @@ VSOut VSMain(VSInInst i)
 [RootSignature(GBUFFER_INST_RS)]
 PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
 {
+#if GBUFFER_BINDLESS
+    Texture2D gAlbedo = ResourceDescriptorHeap[texIndices.x];
+    Texture2D gMR = ResourceDescriptorHeap[texIndices.y];
+    Texture2D gNormalMap = ResourceDescriptorHeap[texIndices.z];
+#endif
     AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, terrainTiling, terrainEdgeParams,
                   baseColor.a, alphaCutoff);
 
