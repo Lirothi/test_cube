@@ -40,6 +40,20 @@ namespace
         return wide;
     }
 
+    std::string Narrow(const std::wstring& text)
+    {
+        if (text.empty())
+        {
+            return {};
+        }
+        const int needed = ::WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
+            static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+        std::string narrow(static_cast<std::size_t>(needed), '\0');
+        ::WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+            narrow.data(), needed, nullptr, nullptr);
+        return narrow;
+    }
+
     // "127.0.0.1:8127" -> host + port.
     void SplitHostPort(const std::string& hostPort, std::wstring& outHost, int& outPort)
     {
@@ -297,7 +311,7 @@ namespace llmclient
         int idleSeconds,
         std::string& outError)
     {
-        // This executable's own path, used only to locate model_reaper.exe beside it -- see
+        // This executable's own path, used only to locate model_reaper.exe from it -- see
         // the note below for why the watchdog is a binary of its own and not a mode of this
         // one, which is what it was first.
         wchar_t modulePath[MAX_PATH] = {};
@@ -307,21 +321,32 @@ namespace llmclient
             return false;
         }
 
-        // model_reaper.exe, beside this one. It began as a MODE of the engine binary and
+        // model_reaper.exe, a binary of its own. It began as a MODE of the engine binary and
         // that was wrong twice: a live watchdog held test_cube.exe open, so the next build
         // of Release_Editor failed to link; and copying the exe to %TEMP% to dodge that lock
         // produced a process without the DLLs this binary links against, which died before
         // its first log line and left the server running with nobody watching. Its own
-        // binary has neither problem -- five source files, no graphics, no DLLs.
+        // binary has neither problem -- six source files, no graphics, no DLLs.
+        //
+        // IN ITS OWN FOLDER, x64/ModelReaper/, a sibling of the configuration folders -- so
+        // from x64/<Config>/test_cube.exe it is always ../ModelReaper/model_reaper.exe. It used
+        // to be looked for BESIDE the editor and was only built beside Release_Editor, so a
+        // Debug editor ran whatever an older build had once left next to it -- on the machine
+        // where this was found, a copy six days stale, without the tray icon or anything else
+        // since. One build, one place, the same file whichever editor starts it.
         std::wstring reaperPath = modulePath;
-        const std::size_t lastSlash = reaperPath.find_last_of(L"\\/");
-        reaperPath = (lastSlash == std::wstring::npos ? std::wstring{}
-                                                     : reaperPath.substr(0, lastSlash + 1)) +
-            L"model_reaper.exe";
+        std::size_t slash = reaperPath.find_last_of(L"\\/");
+        reaperPath = slash == std::wstring::npos ? std::wstring{} : reaperPath.substr(0, slash);
+        slash = reaperPath.find_last_of(L"\\/");
+        reaperPath = (slash == std::wstring::npos ? std::wstring{}
+                                                 : reaperPath.substr(0, slash + 1)) +
+            L"ModelReaper\\model_reaper.exe";
         if (::GetFileAttributesW(reaperPath.c_str()) == INVALID_FILE_ATTRIBUTES)
         {
-            outError = "model_reaper.exe is missing beside the editor; build "
-                "tools/model_reaper.vcxproj";
+            // The path it LOOKED at, not a description of it: "missing beside the editor"
+            // sent people to the wrong folder the day the folder moved.
+            outError = "model_reaper.exe is not at " + Narrow(reaperPath) +
+                "; build tools/model_reaper.vcxproj";
             return false;
         }
 

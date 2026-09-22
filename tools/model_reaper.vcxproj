@@ -8,11 +8,21 @@
        before its first log line and left the 38 GB server it was minding running
        with nobody watching.
        Six source files, no graphics, no DLLs beyond the system ones. The notification-area
-       icon is drawn with GDI into a bitmap, so it needs no resource and no .ico. -->
+       icon is drawn with GDI into a bitmap, so it needs no resource and no .ico.
+       In test_cube.sln it has ONE configuration and ONE output, x64\ModelReaper\. The solution
+       builds that same configuration under Debug and Release_Editor, the two that carry the
+       editor that spawns it, so whichever you build it is current; Release has no editor and
+       skips it. A running watchdog holds this exe open, so a change to its sources while one
+       is alive fails to link with LNK1104; close it from the tray first. -->
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
   </ItemGroup>
-  <PropertyGroup Label="Globals"><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <!-- The GUID test_cube.sln knows this project by. Without one here Visual Studio mints its
+       own on load and rewrites the solution to match, which is a diff nobody asked for. -->
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{529A5F77-C508-4194-BC5C-CDC481D70C19}</ProjectGuid>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
     <ConfigurationType>Application</ConfigurationType><PlatformToolset>v143</PlatformToolset>
@@ -21,8 +31,11 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
     <Repo>$(MSBuildProjectDirectory)\..\</Repo>
-    <!-- Beside the editor that spawns it: it is found by the editor's own directory. -->
-    <OutDir>$(Repo)x64\Release_Editor\</OutDir>
+    <!-- ITS OWN FOLDER, a sibling of x64\Debug and x64\Release_Editor. Every editor finds it
+         at ..\ModelReaper\ from its own exe, so one build serves both. It used to land beside
+         Release_Editor only, and a Debug editor ran whatever stale copy an older build had
+         left beside IT: six days old when this was found. -->
+    <OutDir>$(Repo)x64\ModelReaper\</OutDir>
     <IntDir>$(Repo)x64\ModelReaper\obj\</IntDir>
     <TargetName>model_reaper</TargetName>
   </PropertyGroup>

@@ -161,18 +161,51 @@ namespace llmreaper
     {
         LOG_INFO(logging::LogCategory::Editor,
             "model reaper: watching {} (pid {}); the {}s timer starts when the last editor "
-            "closes, and a new session resets it",
-            options.endpoint, options.serverPid, options.idleSeconds);
+            "closes, and a new session resets it. Editors and the process are checked every "
+            "second, /metrics every {}s",
+            options.endpoint, options.serverPid, options.idleSeconds, options.pollSeconds);
+
+        // TWO CLOCKS. Whether an editor is open and whether the server process is alive are
+        // checked EVERY SECOND -- an OpenMutex and an OpenProcess, microseconds each -- so the
+        // countdown starts, and the icon changes colour, the moment the last editor closes.
+        // /metrics is asked only every `pollSeconds`: it is an HTTP round trip to a server that
+        // may be busy generating, and all it can add is "somebody used the web page", which
+        // only ever makes the server live LONGER, so being late with it is the safe direction.
+        //
+        // It used to be one clock, thirty seconds, for everything. The icon then stayed green
+        // for up to half a minute after the editor closed, and the five minutes started from
+        // whichever poll noticed -- 300 to 330 seconds in practice, with the tray showing a
+        // number the watch was not actually keeping.
+        //
+        // And the idle time is now a DEADLINE on the clock rather than a sum of poll
+        // intervals, so the log line, the tooltip and the moment of retirement are one number.
+        constexpr DWORD kTickMs = 1000;
+        const unsigned long long startedAt = ::GetTickCount64();
+        const unsigned long long idleMs =
+            static_cast<unsigned long long>(options.idleSeconds) * 1000ull;
+        const unsigned long long metricsEveryMs =
+            static_cast<unsigned long long>(options.pollSeconds) * 1000ull;
 
         std::string lastCounters;
-        double idleFor = 0.0;
         bool everReached = false;
         bool sawEditor = false;
+        // When the countdown last (re)started: the moment the last editor closed, or the
+        // last request anybody made with no editor open. The server goes at this + idleMs.
+        unsigned long long quietSince = startedAt;
+        unsigned long long nextMetricsAt = startedAt;   // the first poll is immediate
 
         Status status;
         status.serverPid = options.serverPid;
+        bool published = false;
+        // On CHANGE only: the tick is once a second and most seconds nothing has moved. The
+        // tray counts the seconds down itself from the deadline, so it needs no nudging.
         const auto publish = [&](Status::Phase phase, unsigned long long retireAtTick)
         {
+            if (published && status.phase == phase && status.retireAtTick == retireAtTick)
+            {
+                return;
+            }
+            published = true;
             status.phase = phase;
             status.retireAtTick = retireAtTick;
             if (onStatus)
@@ -221,87 +254,71 @@ namespace llmreaper
                 return 0;
             }
 
-            const llmclient::Response response =
-                llmclient::Get(options.endpoint, "/metrics", 5);
-            if (response.ok)
+            const unsigned long long now = ::GetTickCount64();
+
+            // AN OPEN EDITOR STOPS THE CLOCK ENTIRELY -- it does not merely count as
+            // activity. Somebody with the editor open is using the server whether or not they
+            // have typed a phrase in the last five minutes, and retiring it under them would
+            // charge the next phrase a reload of the whole model.
+            const bool editorOpen = AnyEditorSessionOpen();
+            if (editorOpen && !sawEditor)
             {
-                everReached = true;
-                std::string counters = CountersOnly(response.body);
-                if (counters.empty())
+                LOG_INFO(logging::LogCategory::Editor,
+                    "model reaper: an editor is open; holding the server");
+                sawEditor = true;
+            }
+            else if (!editorOpen && sawEditor)
+            {
+                LOG_INFO(logging::LogCategory::Editor,
+                    "model reaper: the last editor closed; retiring the server in {}s "
+                    "unless one opens again", options.idleSeconds);
+                sawEditor = false;
+                quietSince = now;   // the countdown starts HERE, within a second of the close
+            }
+
+            if (now >= nextMetricsAt)
+            {
+                nextMetricsAt = now + metricsEveryMs;
+                const llmclient::Response response =
+                    llmclient::Get(options.endpoint, "/metrics", 5);
+                if (response.ok)
                 {
-                    // No counters at all means the endpoint is not what we assumed. Rather
-                    // than retire a server that might be busy, fall back to watching the
-                    // whole body and say so once.
-                    counters = response.body;
-                }
-                // AN OPEN EDITOR STOPS THE CLOCK ENTIRELY -- it does not merely count as
-                // activity. Somebody with the editor open is using the server whether or not
-                // they have typed a phrase in the last five minutes, and retiring it under
-                // them would charge the next phrase a 38 GB reload.
-                if (AnyEditorSessionOpen())
-                {
-                    if (!sawEditor)
+                    everReached = true;
+                    std::string counters = CountersOnly(response.body);
+                    if (counters.empty())
                     {
-                        LOG_INFO(logging::LogCategory::Editor,
-                            "model reaper: an editor is open; holding the server");
-                        sawEditor = true;
+                        // No counters at all means the endpoint is not what we assumed.
+                        // Rather than retire a server that might be busy, fall back to
+                        // watching the whole body.
+                        counters = response.body;
                     }
-                    idleFor = 0.0;
-                    lastCounters = std::move(counters);
-                    publish(Status::Phase::EditorOpen, 0);
-                }
-                else
-                {
-                    bool justClosed = false;
-                    if (sawEditor)
-                    {
-                        LOG_INFO(logging::LogCategory::Editor,
-                            "model reaper: the last editor closed; retiring the server in {}s "
-                            "unless one opens again", options.idleSeconds);
-                        sawEditor = false;
-                        idleFor = 0.0;   // the countdown starts HERE, not from the last request
-                        justClosed = true;
-                    }
-                    // With no editor open, a request can still come from the server's own
-                    // web page. That counts: somebody is using the model, just not through us.
+                    // With no editor open, a request can still come from the server's own web
+                    // page. That counts: somebody is using the model, just not through us. The
+                    // first answer counts the same way, so the clock starts when the server
+                    // is up rather than while it was still loading.
                     if (counters != lastCounters)
                     {
                         lastCounters = std::move(counters);
-                        idleFor = 0.0;
+                        if (!editorOpen)
+                        {
+                            quietSince = now;
+                        }
                     }
-                    else if (!justClosed)
-                    {
-                        // Not on the poll that NOTICED the editor go: that one both zeroed
-                        // the clock and charged it a full interval, so the line above promised
-                        // sixty seconds and the deadline was forty-five. Nobody could see the
-                        // difference until the tray started showing the number.
-                        idleFor += static_cast<double>(options.pollSeconds);
-                    }
-                    // A DEADLINE, not a countdown, so whatever shows it can be exact
-                    // between two polls half a minute apart.
-                    const double secondsLeft =
-                        std::max(0.0, static_cast<double>(options.idleSeconds) - idleFor);
-                    publish(Status::Phase::CountingDown,
-                        ::GetTickCount64() + static_cast<unsigned long long>(secondsLeft * 1000.0));
                 }
-            }
-            else if (everReached)
-            {
-                // It answered before and does not now: treat it as gone rather than as idle,
-                // because killing something unreachable is the one case where being wrong
-                // costs nothing.
-                LOG_INFO(logging::LogCategory::Editor,
-                    "model reaper: server stopped answering; retiring it");
-                KillProcessTree(options.serverPid);
-                publish(Status::Phase::Retired, 0);
-                return 0;
-            }
-            else
-            {
-                // Never reached it. Give the 38 GB load its time before deciding.
-                idleFor += static_cast<double>(options.pollSeconds);
-                if (idleFor > 600.0)
+                else if (everReached)
                 {
+                    // It answered before and does not now: treat it as gone rather than as
+                    // idle, because killing something unreachable is the one case where being
+                    // wrong costs nothing.
+                    LOG_INFO(logging::LogCategory::Editor,
+                        "model reaper: server stopped answering; retiring it");
+                    KillProcessTree(options.serverPid);
+                    publish(Status::Phase::Retired, 0);
+                    return 0;
+                }
+                else if (now - startedAt > 600000ull)
+                {
+                    // Never reached it. The model's load had ten minutes to finish.
                     LOG_ERROR(logging::LogCategory::Editor,
                         "model reaper: {} never answered in 10 minutes; giving up",
                         options.endpoint);
@@ -309,20 +326,32 @@ namespace llmreaper
                 }
             }
 
-            if (idleFor >= static_cast<double>(options.idleSeconds))
+            if (!everReached)
             {
-                LOG_INFO(logging::LogCategory::Editor,
-                    "model reaper: no editor and no requests for {}s, stopping llama-server "
-                    "pid={}", options.idleSeconds, options.serverPid);
-                KillProcessTree(options.serverPid);
-                publish(Status::Phase::Retired, 0);
-                return 0;
+                publish(Status::Phase::Reaching, 0);
+            }
+            else if (editorOpen)
+            {
+                publish(Status::Phase::EditorOpen, 0);
+            }
+            else
+            {
+                const unsigned long long retireAt = quietSince + idleMs;
+                publish(Status::Phase::CountingDown, retireAt);
+                if (now >= retireAt)
+                {
+                    LOG_INFO(logging::LogCategory::Editor,
+                        "model reaper: no editor and no requests for {}s, stopping "
+                        "llama-server pid={}", options.idleSeconds, options.serverPid);
+                    KillProcessTree(options.serverPid);
+                    publish(Status::Phase::Retired, 0);
+                    return 0;
+                }
             }
 
-            // A WAIT, not a sleep: a tray click has to be obeyed now rather than in the
-            // up-to-thirty seconds until the next poll would have come round.
-            if (::WaitForSingleObject(StopEvent(),
-                    static_cast<DWORD>(options.pollSeconds) * 1000u) == WAIT_OBJECT_0)
+            // A WAIT, not a sleep: a tray click is obeyed at once rather than at the end of
+            // the tick.
+            if (::WaitForSingleObject(StopEvent(), kTickMs) == WAIT_OBJECT_0)
             {
                 return obeyStopRequest();
             }

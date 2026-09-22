@@ -172,13 +172,17 @@ arrangements, and `levelEditor.intentModel.keepServerAfterExit` picks between th
   is left running. What it buys is the next editor launch inside the window starting
   instantly instead of paying ~22 s to put the weights back on the card.
 
-`model_reaper.exe` is its own binary (`tools/model_reaper.vcxproj`, built into
-`x64/Release_Editor/`) and must be, twice over. As a mode of `test_cube.exe` a live watchdog
+`model_reaper.exe` is its own binary (`tools/model_reaper.vcxproj`, built into its own folder
+`x64/ModelReaper/`) and must be, twice over. As a mode of `test_cube.exe` a live watchdog
 held that file open and the next `Release_Editor` link failed with LNK1104; launching a copy
 of the exe from `%TEMP%` to dodge the lock produced a process without the DLLs the engine
 links against, which died before its first log line and left the server unwatched — the
-exact failure it exists to prevent. **Build it after changing anything under
-`sources/editor/intent/`**, or the editor will refuse to keep a server alive and say so.
+exact failure it exists to prevent. It has one configuration and one output; both the Debug
+and the Release_Editor editor start it from `../ModelReaper/` relative to their own exe, and
+`test_cube.sln` builds it under both of those configurations. **Build it after changing
+anything under `sources/editor/intent/`**, or the editor will refuse to keep a server alive
+and say so, naming the path it looked at. While a watchdog is running its exe is locked, so
+close it from its tray icon before rebuilding it.
 
 While the editor is running its own `idleTimeoutSeconds` (default 600) also applies, but
 only in the `false` arrangement; with a watchdog the editor stands down so two things are

@@ -11,6 +11,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "third_party_assets", "third
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "third_party_tasks", "third_party\third_party_tasks.vcxproj", "{6B73E75B-CDA7-48AA-A51C-F0E3E7289A6D}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "model_reaper", "tools\model_reaper.vcxproj", "{529A5F77-C508-4194-BC5C-CDC481D70C19}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -69,6 +71,14 @@ Global
 		{6B73E75B-CDA7-48AA-A51C-F0E3E7289A6D}.Release|x64.Build.0 = Release|x64
 		{6B73E75B-CDA7-48AA-A51C-F0E3E7289A6D}.Release|x86.ActiveCfg = Release|Win32
 		{6B73E75B-CDA7-48AA-A51C-F0E3E7289A6D}.Release|x86.Build.0 = Release|Win32
+		{529A5F77-C508-4194-BC5C-CDC481D70C19}.Debug|x64.ActiveCfg = Release|x64
+		{529A5F77-C508-4194-BC5C-CDC481D70C19}.Debug|x64.Build.0 = Release|x64
+		{529A5F77-C508-4194-BC5C-CDC481D70C19}.Debug|x86.ActiveCfg = Release|x64
+		{529A5F77-C508-4194-BC5C-CDC481D70C19}.Release_Editor|x64.ActiveCfg = Release|x64
+		{529A5F77-C508-4194-BC5C-CDC481D70C19}.Release_Editor|x64.Build.0 = Release|x64
+		{529A5F77-C508-4194-BC5C-CDC481D70C19}.Release_Editor|x86.ActiveCfg = Release|x64
+		{529A5F77-C508-4194-BC5C-CDC481D70C19}.Release|x64.ActiveCfg = Release|x64
+		{529A5F77-C508-4194-BC5C-CDC481D70C19}.Release|x86.ActiveCfg = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

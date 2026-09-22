@@ -4,7 +4,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
-#include <cmath>
+#include <cstdint>
 #include <cwchar>
 #include <mutex>
 #include <string>
@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/logging/Log.h"
+#include "model_reaper_icon.h"
 
 namespace
 {
@@ -137,10 +138,11 @@ namespace
         }
     }
 
-    // A filled dot with a darker rim, drawn at whatever size this machine asks small icons
-    // to be. The watchdog has no .ico and does not need a resource step for one; drawing it
-    // is also what lets the colour carry the state.
-    HICON MakeDotIcon(COLORREF colour)
+    // A W in the state's colour, drawn at whatever size this machine asks small icons to be.
+    // The watchdog has no .ico and does not need a resource step for one; drawing it is also
+    // what lets the colour carry the state. The pixels come from model_reaper_icon.h, which
+    // is where to look -- and what to render -- to see what the tray will show.
+    HICON MakeGlyphIcon(COLORREF colour)
     {
         const int size = std::max(16, ::GetSystemMetrics(SM_CXSMICON));
 
@@ -162,52 +164,8 @@ namespace
             return nullptr;
         }
 
-        const double centre = (size - 1) * 0.5;
-        const double radius = size * 0.45;
-        const double rim = radius - std::max(1.0, size * 0.09);
-        const int samples = 4;   // 4x4 per pixel: enough that the edge does not look sawn
-
-        auto* pixels = static_cast<unsigned char*>(rawPixels);
-        for (int y = 0; y < size; ++y)
-        {
-            for (int x = 0; x < size; ++x)
-            {
-                // Accumulated over ALL subsamples and divided by their count, which makes
-                // the result premultiplied by construction -- what a 32-bit icon wants.
-                double blue = 0.0;
-                double green = 0.0;
-                double red = 0.0;
-                double alpha = 0.0;
-                for (int sy = 0; sy < samples; ++sy)
-                {
-                    for (int sx = 0; sx < samples; ++sx)
-                    {
-                        const double px = x + (sx + 0.5) / samples;
-                        const double py = y + (sy + 0.5) / samples;
-                        const double dx = px - centre - 0.5;
-                        const double dy = py - centre - 0.5;
-                        const double distance = std::sqrt(dx * dx + dy * dy);
-                        if (distance > radius)
-                        {
-                            continue;
-                        }
-                        // The rim is the same hue at two thirds, so the dot reads as a dot
-                        // on a light taskbar and on a dark one.
-                        const double shade = distance > rim ? 0.62 : 1.0;
-                        blue += GetBValue(colour) * shade;
-                        green += GetGValue(colour) * shade;
-                        red += GetRValue(colour) * shade;
-                        alpha += 255.0;
-                    }
-                }
-                const double total = samples * samples;
-                unsigned char* pixel = pixels + (static_cast<std::size_t>(y) * size + x) * 4;
-                pixel[0] = static_cast<unsigned char>(blue / total);
-                pixel[1] = static_cast<unsigned char>(green / total);
-                pixel[2] = static_cast<unsigned char>(red / total);
-                pixel[3] = static_cast<unsigned char>(alpha / total);
-            }
-        }
+        reapericon::PaintW(size, GetRValue(colour), GetGValue(colour), GetBValue(colour),
+            static_cast<std::uint8_t*>(rawPixels));
 
         // An all-zero AND mask means "opaque everywhere" and leaves the decision to the
         // alpha channel. Supplying the bits rather than passing null matters: a bitmap
@@ -256,7 +214,7 @@ namespace
         {
             ::DestroyIcon(g_icon);
         }
-        g_icon = MakeDotIcon(g_shownColour);
+        g_icon = MakeGlyphIcon(g_shownColour);
 
         NOTIFYICONDATAW data = {};
         FillIconData(data, window);
@@ -313,7 +271,7 @@ namespace
         if (colour != g_shownColour)
         {
             replaced = g_icon;
-            g_icon = MakeDotIcon(colour);
+            g_icon = MakeGlyphIcon(colour);
             data.uFlags |= NIF_ICON;
             data.hIcon = g_icon;
         }

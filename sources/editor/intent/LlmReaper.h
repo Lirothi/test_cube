@@ -40,6 +40,9 @@ namespace llmreaper
         std::string endpoint;         // "127.0.0.1:8127"
         unsigned long serverPid = 0;
         int idleSeconds = 300;
+        // How often /metrics is asked -- a quarter of idleSeconds, 2 to 30. Whether an editor
+        // is open and whether the server process is alive are checked every second
+        // regardless; see Run.
         int pollSeconds = 15;
     };
 
