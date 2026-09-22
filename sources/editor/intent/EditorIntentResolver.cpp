@@ -222,27 +222,23 @@ namespace
     }
 }
 
-void ResolveTargetObjects(const EditorActionContext& actionCtx,
-    EditorIntentTarget& target,
-    std::vector<EditorObjectId>& outTargets,
-    std::vector<EditorIntentPreview::Group>& outGroups)
+// "IN THE SELECTED ZONE" IS A PLACE, NOT A SET. Selecting a zone and saying "randomise
+// the palms in the selected zone" produced "Nothing in the selection matches": scope
+// `selected` means "among the selected objects", the selection held one zone, and a
+// zone is not a palm. But nobody selecting a region means the region itself -- they
+// mean what is inside it.
+//
+// So when the selection is ZONES ONLY, the scope becomes the whole level narrowed by
+// those zones. When it holds anything else the old reading stands, because then
+// "selected" really is a set of things.
+//
+// Done for EVERY verb, before the target kind is looked at. This used to live inside the
+// object path, which `spawn` never enters -- so "разбросай по выделенной зоне" arrived at
+// spawn with no zone at all and scattered a disc around the camera, which looks like it
+// worked. A rule about what a selection MEANS belongs to the intent, not to one branch.
+void NormaliseSelectedZone(const EditorActionContext& actionCtx, EditorIntentTarget& target)
 {
     const EditorContext& ctx = actionCtx.editor;
-
-    // An unfiltered request is the one that may take environment entities as they are:
-    // they carry no searchable asset and no transform, so a filter can never reach them.
-    const bool saysNothingAboutWhich =
-        target.filter.empty() && target.exclude.empty() && !target.where.Any();
-
-    // "IN THE SELECTED ZONE" IS A PLACE, NOT A SET. Selecting a zone and saying "randomise
-    // the palms in the selected zone" produced "Nothing in the selection matches": scope
-    // `selected` means "among the selected objects", the selection held one zone, and a
-    // zone is not a palm. But nobody selecting a region means the region itself -- they
-    // mean what is inside it.
-    //
-    // So when the selection is ZONES ONLY, the scope becomes the whole level narrowed by
-    // those zones. When it holds anything else the old reading stands, because then
-    // "selected" really is a set of things.
     if (target.scope == EditorIntentScope::Selected && target.where.zone.empty() &&
         !ctx.selection.Empty())
     {
@@ -271,6 +267,19 @@ void ResolveTargetObjects(const EditorActionContext& actionCtx,
             target.scope = EditorIntentScope::All;
         }
     }
+}
+
+void ResolveTargetObjects(const EditorActionContext& actionCtx,
+    EditorIntentTarget& target,
+    std::vector<EditorObjectId>& outTargets,
+    std::vector<EditorIntentPreview::Group>& outGroups)
+{
+    const EditorContext& ctx = actionCtx.editor;
+
+    // An unfiltered request is the one that may take environment entities as they are:
+    // they carry no searchable asset and no transform, so a filter can never reach them.
+    const bool saysNothingAboutWhich =
+        target.filter.empty() && target.exclude.empty() && !target.where.Any();
 
     const auto consider = [&](const EditorObject& object)
     {
@@ -362,6 +371,10 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
         preview.problem = paramError;
         return preview;
     }
+
+    // Before the target kind is branched on, so every verb gets the same reading of what a
+    // selected zone means -- including the ones that never reach the object path.
+    NormaliseSelectedZone(actionCtx, preview.resolved.target);
 
     if (action->target == EditorTargetKind::Environment)
     {

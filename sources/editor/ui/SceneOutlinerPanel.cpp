@@ -1040,15 +1040,21 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
                 std::snprintf(shown, sizeof(shown), "%s...", fitted.c_str());
             }
             const bool openNow = ImGui::TreeNodeEx(id, groupFlags, "%s", shown);
-            if (ImGui::IsItemHovered() && tooltip == nullptr)
-            {
-                ImGui::SetTooltip("%s -- %zu rows", label, rows.size());
-            }
-            if (tooltip != nullptr && ImGui::IsItemHovered())
+            if (ImGui::IsItemHovered())
             {
                 ImGui::BeginTooltip();
                 ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
-                ImGui::TextUnformatted(tooltip);
+                // THE FULL NAME FIRST, ALWAYS -- which is what the label above promises by
+                // cutting itself to the column, and what this code stopped doing the moment
+                // a group was given an explanation: the name was dropped for it. Three
+                // folders whose names were all elided to "Rock..." then showed one identical
+                // sentence, so the hover said nothing about which one was under the pointer.
+                ImGui::Text("%s -- %zu rows", label, rows.size());
+                if (tooltip != nullptr)
+                {
+                    ImGui::Separator();
+                    ImGui::TextUnformatted(tooltip);
+                }
                 ImGui::PopTextWrapPos();
                 ImGui::EndTooltip();
             }

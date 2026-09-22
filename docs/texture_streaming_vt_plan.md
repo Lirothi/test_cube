@@ -125,7 +125,9 @@ Main_TextureStreaming (первый пасс кадра, графическая 
 барьерный реестр живёт в графе.
 
 Части независимы по коду, но B использует IO-ринг, аплоад и retire-bin части A; C использует
-page table/пул/feedback части B. Порядок: A1→A5, B1→B4, C1→C3.
+page table/пул/feedback части B. Порядок: A1→A6, затем B1→B4 + C1→C3 вместе (или ни то, ни
+другое — см. «Часть B — статус» перед B1). A6 (bindless для растра) стоит перед B, потому что
+снимает единственный не-VT аргумент за SVT — батчинг indirect по материалам.
 
 ## 3. Шаги
 
@@ -390,6 +392,99 @@ Slow`), `:633-690` (расчёт скорости), `StreamableTextureResource.c
 владелец согласен на смену формата); сравнить `mem:` до/после и close-up камня. Приёмка:
 при `poolSizeMB:-1` камень вблизи 4K-резкий, вдали резидентно ≤ 1K (ридаут); память уровня
 выросла не более чем на размер резидентных мипов камней.
+
+### A6. Bindless для растра — 3 дня (решение 2026-09-22, перед частью B)
+
+**Цель.** Убрать per-draw бинд текстур материала в растровом пути: текстуры адресуются
+индексами в одном персистентном shader-visible хипе через SM6.6 `ResourceDescriptorHeap[]`
+(как уже делает RT), per-draw копирование трёх SRV в кольцо кадра исчезает, а indirect-группы
+с разными материалами могут идти одним `ExecuteIndirect` — материальные индексы едут
+root-константами в команде. Это то, что мегатекстура давала «побочно»; здесь — напрямую и
+без цены VT-семпла.
+
+**Референс (наш код и UE).** RT-путь: `sources/rendering/rt/BindlessTable.h:55-135` (раскладка
+хипа: `heap[f]` geometry-info, `kSceneBase + f·kScenePerFrame + i` per-frame регион,
+`kGeoBase + 4·d` иммутабельные наборы, `kMaxDescriptors 8192`, `GetOrUpdateMesh`,
+`WriteSceneDescriptor`), RT-диспатчи биндят ТОЛЬКО этот хип
+(`SceneRenderer_Reflections.cpp:311/375/543/822`, `rtAs_.Bindless().Heap()`), проверка
+возможностей `RtSmoke.cpp:97-107` (`ResourceBindingTier 3`, `HighestShaderModel ≥ 0x66`).
+Сегодняшний растр: `MaterialData::StageGBufferBindings` (`MaterialData.cpp:146-169`) копирует
+3 SRV на КАЖДЫЙ draw — вызовы `GBufferRenderable.cpp:669`, `InstancedDrawBatch.cpp:148/232`,
+`ShadowGpuData.cpp:1070`; кольцо кадра 4096 (`FrameScheduler.cpp:146-147`); indirect G-buffer —
+`t0..t2` в RS (`gbuffer_indirect.hlsl:21-23`), «one ExecuteIndirect per (group, LOD)»
+(`SceneRenderer_Geometry.cpp:267`, ~1000 вызовов, CPU 0.19–0.28 мс `:277`); command signature —
+только `DRAW_INDEXED`, без root signature (`Renderer.cpp:2111-2132`); маскированные тени —
+массив `gMaskAlbedo[16]` + `NonUniformResourceIndex` (`shadow_indirect_csm.hlsl:250-314`,
+кап `kMaxMaskedGroups = 16`, `ShadowGpuData.h:415`). `InstancePerObject` — 224 байта и **расти не
+может** (`InstanceTypes.h:38-62`, static_assert; shadow stride, память `lod-crossfade`) —
+индексы материала в инстанс НЕ кладём. UE: `D3D12RHI/Private/D3D12BindlessDescriptors.h/.cpp`
+(менеджер ресурсных дескрипторов `:164`, семплеров `:74`, контекст `:102`; «has to handle
+renames on command lists» — их вариант per-frame ретайра слотов; читать структуру, не API).
+
+**Файлы.** Создать: `sources/rendering/descriptors/BindlessHeap.h/.cpp` (общий персистентный
+хип; `BindlessTable` RT становится клиентом с зарезервированным регионом). Изменить:
+`FrameScheduler.cpp:146-147` (кольцо кадра — партиция того же хипа), `Renderer.cpp:1163-1172`
+(`BindDescriptorHeaps` биндит один CBV_SRV_UAV хип + семплерный), `BindlessTable.h/.cpp`
+(`kSceneBase/kGeoBase` от базы региона), `Texture2D.h/.cpp` (`bindlessIndex_`, `EnsureBindless`),
+`MaterialData.h/.cpp` (индексы в `SurfaceParams`), `gbuffer.hlsl` / `gbuffer_inst.hlsl` /
+`gbuffer_indirect.hlsl` / `gbuffer_instcb.hlsl` (пермутация `GBUFFER_BINDLESS=1`),
+`shadow_indirect_csm.hlsl` + `ShadowGpuData.cpp:1070/1216` (маска по индексу вместо массива 16),
+`Renderer.cpp:2111` (вторая command signature `{CONSTANT ×3, DRAW_INDEXED}` с root signature),
+CS, пишущий indirect-аргументы (`shadow_cull_cs.hlsl` / G-buffer args builder — добавить
+3 uint индексов группы в команду), `SceneRenderer_Geometry.cpp:262-300` (один `ExecuteIndirect`
+на LOD-тир × PSO), `App.cpp` (`raster.bindless`), vcxproj/filters, `check_shaders.py`.
+
+**Конструкция.**
+1. **Один shader-visible CBV_SRV_UAV хип** (tier 3 — до 1M дескрипторов; берём 65536):
+   `[кольцо кадра 3 × 4096][RT-регион 8192][слоты текстур …]`. Биндится один раз на список —
+   D3D12 держит один CBV_SRV_UAV хип одновременно, поэтому кольцо кадра и bindless-слоты
+   ОБЯЗАНЫ жить в одном хипе; `DescriptorAllocator` кольца работает в своей партиции без
+   изменений интерфейса.
+2. **Слот текстуры иммутабелен.** `Texture2D::EnsureBindless()` при первом использовании пишет
+   SRV в новый слот и запоминает индекс; **подмена ресурса (A2 `AdoptResource`) = НОВЫЙ слот +
+   новый индекс**, старый слот уходит в retire-bin вместе со старым ресурсом и переиспользуется
+   через `kFrameCount` кадров. Это снимает гонку «кадр N−1 на GPU ещё читает слот, который кадр N
+   переписал» — правило ABA из памяти `gpu-helpers-have-fixed-shapes`, применённое к дескрипторам.
+3. **Материал** несёт `uint albedoIdx, mrIdx, normalIdx` в `SurfaceParams`
+   (`gbuffer_indirect.hlsl:35`, per-frame CB — индексы обновляются каждый кадр вместе с ним, так
+   что новый слот после подмены виден в следующем кадре); семплер остаётся статическим
+   `AnisoWrap(16)` (с DLSS-bias) — bindless-семплеры не нужны. Пермутация `GBUFFER_BINDLESS=1`:
+   `Texture2D t = ResourceDescriptorHeap[NonUniformResourceIndex(idx)]`; `NonUniformResourceIndex`
+   обязателен там, где индекс различается внутри волны (слитые indirect-группы).
+4. **Indirect.** Command signature `{D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT (root-слот констант,
+   3 uint), DRAW_INDEXED}`, stride 32 байта, `CreateCommandSignature(&desc, rootSignature, …)` —
+   с root-аргументами сигнатура требует root signature; кулл-CS пишет индексы материала группы в
+   первые 12 байт команды. Группы одного PSO/LOD-тира сливаются в один `ExecuteIndirect` с общим
+   count-буфером (список аргументов — уже сплошной по группам, `MeshManager.cpp:2109`).
+   Маскированные тени: `gMaskAlbedo[16]` → индекс из тех же констант, кап 16 групп снимается.
+5. **Фолбэк** — `raster.bindless = 0` (или tier < 3 / SM < 6.6 по `RtSmoke`-проверке): staged
+   tables как сегодня; обе ветки живут, пока bindless не принят по умолчанию.
+
+**Ридаут/ручки.** `raster.bindless 0|1`; `LOG_INFO` при старте: tier/SM, размер хипа, слотов
+занято; в профдампе — число `ExecuteIndirect` на кадр и CPU-время записи indirect-списка.
+
+**Критерий приёмки.** (1) Картинка бит-в-бит `raster.bindless:1` vs `:0` на трёх камерах
+(те же SRV, тот же семплер); (2) `wind_test`: `ExecuteIndirect` на кадр ~1000 → ≤ 50, CPU-запись
+indirect-списка ниже нынешних 0.19 мс (`SceneRenderer_Geometry.cpp:277`), `Pass_GBuffer` GPU не
+хуже; (3) Debug `--gbv` чистый (GBV ловит выход индекса за хип); (4) RT- и VSM-паритет (RT-регион
+хипа переехал, `kSceneBase/kGeoBase` пересчитаны); (5) `--sweep=raster.bindless:1,0,1,0`.
+
+**Гейт.** Полный набор (новый хип, RS, command signature, шейдерные пермутации).
+
+**Откат.** `raster.bindless = 0`.
+
+---
+
+### Часть B — статус (решение 2026-09-22)
+
+Аргументы за SVT сами по себе закрыты: память и загрузку без стола даёт часть A, «один бинд
+на всё» и батчинг indirect даёт A6 дешевле и без VT-семпла, а наши текстуры малы относительно
+видимого (резидентный набор ≈ вся текстура, см. пример с пальмами: 600 инстансов на всех
+дистанциях просят все мипы 1K-атласа). **B делается только как ядро для C** — page table,
+пул, feedback, аплоад тайлов нужны RVT террейна; B1 (`.vt`-импортёр) и SVT-материалы —
+только если появятся ассеты 8K+. Решение «B+C или ничего» — по замеру бомбинга: профдамп
+`Pass_GBuffer` террейна с бомбингом против одного тапа на пляжной висте; ниже ~0.2 мс — не
+окупает 3.5 недели, 0.5 мс и выше плюс желание мирового слоя под декали/мокрость — делать.
 
 ### B1. Импортёр `.vt` и офлайн-валидатор — 2 дня
 
@@ -761,6 +856,7 @@ persistent-buffer аплоад обходит RHI (`VirtualTextureUploadCache.cp
 | `r.Streaming.MaxNumTexturesToStreamPerFrame` (UE: 0 = без лимита, только при `AmortizeCPUToGPUCopy`) | `streaming.maxPerFrame` | 8 (отступление, §5) |
 | `GEnableMipLevelFading`, `GMipFadeSettings` | `streaming.mipFade`, `mipFadeIn/Out` | 1 / 0.3 / 0.1 |
 | — | `streaming.forceMips`, `streaming.selftest` | тест |
+| — (UE bindless RHI, `D3D12BindlessDescriptors`) | `raster.bindless` | 1 при tier 3 / SM 6.6, иначе 0 |
 | `r.VT.TileSize` / `TileBorderSize` | импорт: `vt.tileSize` / `vt.border` | 128 / 4 |
 | `VirtualTexturePoolConfig` | `vt.poolSizeMB` (на группу) | 48 |
 | `r.vt.FeedbackFactor` / `FeedbackLatency` | `vt.feedbackFactor` / `vt.feedbackLatency` | 16 / 3 |
@@ -807,9 +903,11 @@ persistent-buffer аплоад обходит RHI (`VirtualTextureUploadCache.cp
 
 ## 8. Порядок и оценка
 
-A1 (2) → A2 (3) → A3 (3) → A4 (1) → A5 (0.5) ≈ 2 нед.; B1 (2) → B2 (4) → B3 (4) → B4 (1) ≈ 2.5 нед.;
-C1 (3) → C2 (1) ≈ 1 нед.; C3 — опционально. Первый видимый результат — A3 (смена уровня без
-стола); первый «зачем VT» — B3 (камень 4K); первый перф-выигрыш — C1 (террейн без 3× бомбинга).
+A1 (2) → A2 (3) → A3 (3) → A4 (1) → A5 (0.5) → A6 (3) ≈ 2.5 нед.; затем решение по замеру
+бомбинга: B1 (2) → B2 (4) → B3 (4) → B4 (1) ≈ 2.5 нед. + C1 (3) → C2 (1) ≈ 1 нед., либо ничего
+(B без C не делается; B1 — только под ассеты 8K+). C3 — опционально. Первый видимый результат —
+A3 (смена уровня без стола); первый перф-выигрыш — A6 (~1000 → ≤ 50 `ExecuteIndirect`), затем
+C1 (террейн без 3× бомбинга).
 
 ## 9. Файлы UE для дословного чтения
 

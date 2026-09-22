@@ -80,9 +80,12 @@ namespace editormatch
     // -- it is the identity -- and wrong the moment it is used as a label somebody reads.
     // Asked to give the level sensible names, the first version named 107 objects
     // "models/coconut_palm.mesh.json 001", which is the opposite of what was asked for.
-    inline std::string PrettyAssetLabel(const EditorObject& object)
+    // Split out from PrettyAssetLabel because a thing that does not EXIST yet still needs
+    // the name its kind would get: `spawn` has an asset path and no object, and has to
+    // arrive at the same spelling `group perAsset` uses, or a new rock would land in a
+    // second folder beside the one it belongs in.
+    inline std::string PrettyLabelFromPath(std::string label)
     {
-        std::string label = AssetLabel(object);
         const std::size_t slash = label.find_last_of("/\\");
         if (slash != std::string::npos)
         {
@@ -110,6 +113,11 @@ namespace editormatch
             startOfWord = (ch == ' ');
         }
         return label;
+    }
+
+    inline std::string PrettyAssetLabel(const EditorObject& object)
+    {
+        return PrettyLabelFromPath(AssetLabel(object));
     }
 
     // True when `needle` (any case) appears in the object's name, type, decimal id,

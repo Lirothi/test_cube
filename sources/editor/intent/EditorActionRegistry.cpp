@@ -2394,9 +2394,24 @@ namespace
         }
         const EditorAssetRecord* record = records.front();
 
-        const int requested = std::clamp(static_cast<int>(NumberOr(intent.params, "count", 1.0f)), 1, 200);
+        // The number ASKED FOR is kept beside the number allowed, because the cap is silent
+        // otherwise: told "раскидай 300 камней", the editor answered "asked for 200" and the
+        // 300 vanished without anyone saying it had been refused.
+        const int wanted = static_cast<int>(NumberOr(intent.params, "count", 1.0f));
+        const int requested = std::clamp(wanted, 1, 200);
         const float radius = std::max(0.5f, NumberOr(intent.params, "radius", 25.0f));
-        const float minSeparation = std::max(0.0f, NumberOr(intent.params, "minSeparation", 6.0f));
+        // 1.5, NOT 6, AND THE CHANGE IS A CORRECTION. This number used to be the distance
+        // between CENTRES, and 6 was chosen to stand in for the sizes nobody measured. Then
+        // the code learned each object's true radius and started adding it to this -- without
+        // anyone lowering the number whose whole job had just been taken over. A rock then
+        // had to keep six metres of clear air from the EDGE of every palm.
+        //
+        // Measured on wind_test, which is where it showed: 610 palms, median nearest
+        // neighbour 2.5 m, and a palm's bounds are its CANOPY (~4 m). Clearance came to
+        // ~11.5 m, which leaves 572 m2 of the island's ~15,000 usable -- and the scatter
+        // duly placed 14 of 200 and reported the island full. At 1.5 the same island offers
+        // ~2,500 m2 and fits of the order of 150.
+        const float minSeparation = std::max(0.0f, NumberOr(intent.params, "minSeparation", 1.5f));
         const bool alignToGround = BoolOr(intent.params, "alignToGround", true);
         const float minNormalY = std::clamp(NumberOr(intent.params, "minGroundNormalY", 0.82f), 0.0f, 1.0f);
         float yawLo = 0.0f;
@@ -2405,12 +2420,36 @@ namespace
         float scaleLo = 0.9f;
         float scaleHi = 1.1f;
         RangeOr(intent.params, "scaleRange", scaleLo, scaleHi);
+        // "РАНДОМНЫМ СКЕЙЛОМ -0.5+0.1" IS A DELTA, NOT A RANGE. People write the spread of a
+        // size the way they write the spread of an angle, as a signed pair around what is
+        // already there. Read literally it asks for a scale of minus one half, which mirrors
+        // the mesh through the origin -- so a negative low end cannot mean what it says, and
+        // the only reading left is the one that was meant: multiply by 1 + each end.
+        const bool scaleWasADelta = scaleLo < 0.0f;
+        if (scaleWasADelta)
+        {
+            scaleLo += 1.0f;
+            scaleHi += 1.0f;
+        }
+        // Whatever arrives, a size multiplier is positive. Zero would place an invisible
+        // object and negative turns it inside out; neither is ever what was asked for.
+        scaleLo = std::clamp(scaleLo, 0.01f, 100.0f);
+        scaleHi = std::clamp(scaleHi, scaleLo, 100.0f);
 
         // A named zone replaces the disc entirely: its own centre, its own shape, its own
         // size. This is the answer to the phrases that had nowhere to say WHERE -- "only on
         // the beach, not in the water" was refused outright, and "along the shore" got a
         // 15 m circle, which is worse than a refusal because it looks like it worked.
-        const std::string zoneName = StringOr(intent.params, "zone", "");
+        // "В ВЫДЕЛЕННОЙ ЗОНЕ" ARRIVES SOMEWHERE ELSE. A zone the user selected is turned into
+        // `target.where.zone` by the resolver, once, for every verb -- that is what makes
+        // "удали пальмы в выделенной зоне" work. Spawn had its own `zone` parameter and read
+        // only that, so the one phrase that names the place without knowing its name
+        // scattered around the camera instead, which looks like it worked.
+        std::string zoneName = StringOr(intent.params, "zone", "");
+        if (zoneName.empty())
+        {
+            zoneName = intent.target.where.zone;
+        }
         bool hasZone = false;
         editorzone::Zone zone;
         if (!zoneName.empty())
@@ -2449,6 +2488,13 @@ namespace
         // object's own size is taken from another instance of the same asset when the level
         // has one, and otherwise falls back to the plain separation. That gap is real and
         // it is the one place this can still put two new meshes into each other.
+        //
+        // KNOWN AND NOT FIXED HERE: for a tree the world bounds are the CANOPY, and a rock
+        // may sit under fronds perfectly happily -- the thing it must not share ground with
+        // is the trunk. Measured on wind_test a palm reads as ~4 m of radius where its
+        // footprint is well under one, so every palm reserves fifty times the ground it
+        // stands on. Fixing that needs a footprint per asset, recorded at import, which is
+        // the same missing number as the one two paragraphs up.
         struct Obstacle
         {
             Math::float3 position;
@@ -2527,6 +2573,10 @@ namespace
         std::size_t rejectedUnderwater = 0;
         std::size_t rejectedSteep = 0;
         std::size_t rejectedCrowded = 0;
+        // Its own bucket. A point that fell in the zone's bounding box but outside the
+        // spline was being counted as CROWDED, which is a different thing entirely and the
+        // one number a reader would act on.
+        std::size_t rejectedOutsideZone = 0;
 
         for (int attempt = 0; attempt < maxAttempts && static_cast<int>(placed.size()) < requested; ++attempt)
         {
@@ -2542,7 +2592,7 @@ namespace
                 // rejects water and slopes, and keeps every shape honest through one path.
                 if (!editorzone::Contains(zone, point))
                 {
-                    ++rejectedCrowded;
+                    ++rejectedOutsideZone;
                     continue;
                 }
                 x = point.x;
@@ -2626,18 +2676,69 @@ namespace
             placed.push_back(candidate);
         }
 
-        if (placed.empty())
+        // WHY IT WENT NOWHERE, in the counts it already keeps. These existed but were printed
+        // only when NOTHING was placed; a partial result got the sentence "the rest had no
+        // suitable ground", which names one cause out of four and was usually the wrong one.
+        // On an island already carrying six hundred palms, "crowded" is the whole story, and
+        // "no suitable ground" sends the reader to look at the terrain.
+        const auto whyNot = [&]()
         {
-            outStatus = "Found nowhere to place " + record->displayName +
-                " (no ground: " + std::to_string(rejectedNoGround) +
+            std::string why = "no ground: " + std::to_string(rejectedNoGround) +
                 ", underwater: " + std::to_string(rejectedUnderwater) +
                 ", too steep: " + std::to_string(rejectedSteep) +
-                ", too crowded: " + std::to_string(rejectedCrowded) + ")";
+                ", too crowded: " + std::to_string(rejectedCrowded);
+            if (hasZone)
+            {
+                why += ", outside the zone: " + std::to_string(rejectedOutsideZone);
+            }
+            // The one number a person can act on, named as a knob rather than a diagnosis.
+            if (rejectedCrowded > rejectedNoGround + rejectedUnderwater + rejectedSteep)
+            {
+                why += " -- lower minSeparation to fit more in";
+            }
+            return why;
+        };
+
+        if (placed.empty())
+        {
+            outStatus = "Found nowhere to place " + record->displayName + " (" + whyNot() + ")";
             return nullptr;
         }
 
+        // A NEW OBJECT JOINS THE GROUP ITS KIND ALREADY USES, and gets one when its kind has
+        // none. Tidying the outliner and then spawning used to undo the tidying one command
+        // later: the new rocks landed in the ungrouped "Meshes" bucket while three rock
+        // folders sat above them.
+        //
+        // An existing example of the kind has the last word on the name, because somebody may
+        // have renamed the folder; only when no example carries a group is the name derived,
+        // and then by the SAME spelling `group perAsset` uses, or the two would disagree.
+        const auto groupForKind = [&](const EditorAssetRecord* kind) -> std::string
+        {
+            if (!kind || kind->id.key.empty())
+            {
+                return {};
+            }
+            for (const EditorObject& object : ctx.document.Objects())
+            {
+                if (!editormatch::MatchesSearch(object, kind->id.key))
+                {
+                    continue;
+                }
+                const auto it = object.properties.is_object()
+                    ? object.properties.find("group") : object.properties.end();
+                if (it != object.properties.end() && it->is_string() &&
+                    !it->get<std::string>().empty())
+                {
+                    return it->get<std::string>();
+                }
+            }
+            return editormatch::PrettyLabelFromPath(kind->id.key);
+        };
+
         std::vector<std::unique_ptr<EditorCommand>> commands;
         commands.reserve(placed.size());
+        std::map<std::string, std::size_t> intoGroups;
         for (std::size_t index = 0; index < placed.size(); ++index)
         {
             // Round-robin rather than random when several kinds were named: twenty palms of
@@ -2669,6 +2770,13 @@ namespace
                 kind->displayName.c_str(), index + 1);
             objectJson["name"] = nameBuffer;
 
+            const std::string group = groupForKind(kind);
+            if (!group.empty())
+            {
+                objectJson["group"] = group;
+                ++intoGroups[group];
+            }
+
             commands.push_back(std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
         }
 
@@ -2690,14 +2798,35 @@ namespace
             mix += records[kind]->displayName + " x" + std::to_string(share);
         }
         outStatus = "Spawned " + std::to_string(placed.size()) + " (" + mix + ")";
+        if (scaleWasADelta)
+        {
+            // WHEN THE EDITOR REINTERPRETS THE INPUT IT SAYS SO. A signed spread was read as
+            // a delta around 1 rather than as the literal range it cannot have been; the
+            // person who wrote it gets to see what that turned into.
+            char span[64];
+            std::snprintf(span, sizeof(span), " (scale read as %.2f-%.2f)", scaleLo, scaleHi);
+            outStatus += span;
+        }
+        if (!intoGroups.empty())
+        {
+            outStatus += " into ";
+            std::size_t shownGroups = 0;
+            for (const auto& entry : intoGroups)
+            {
+                outStatus += (shownGroups++ ? ", " : "") + entry.first;
+            }
+        }
         if (static_cast<int>(placed.size()) < requested)
         {
             // Saying "10" and placing 6 without a word is the kind of quiet shortfall that
-            // gets noticed three edits later.
+            // gets noticed three edits later -- and saying WHY is what turns it from a
+            // complaint into something the next phrase can fix.
             outStatus += " (asked for " + std::to_string(requested) +
-                "; the rest had no suitable ground " +
+                (wanted > requested ? " -- 200 is the cap, you asked for " +
+                    std::to_string(wanted) : std::string()) + " " +
                 (hasZone ? "inside zone " + zone.name
-                         : "within " + std::to_string(static_cast<int>(radius)) + " m") + ")";
+                         : "within " + std::to_string(static_cast<int>(radius)) + " m") +
+                "; " + whyNot() + ")";
         }
         return FoldIntoOneEntry(std::move(commands),
             "Spawn " + std::to_string(placed.size()) + " x " +
@@ -2799,23 +2928,39 @@ EditorActionRegistry::EditorActionRegistry()
         "alone: the zone decides the shape and the area, and nothing lands outside it. "
         "When the phrase says where but NO zone covers it -- \"by that rock\", \"around the "
         "island\" -- ask for the bounds and pass the point as `at`. Do not invent a zone "
-        "name: only the zones listed in the prompt exist.",
+        "name: only the zones listed in the prompt exist.\n"
+        "FOR \"в выделенной зоне\" / \"the selected zone\", where the phrase names the place "
+        "without naming it, leave `zone` out and set target.scope to \"selected\": the editor "
+        "knows which zone is selected and fills it in. Guessing a name instead is how you get "
+        "a refusal for a zone that does not exist.\n"
+        "NOT OVERLAPPING IS ALREADY THE RULE. \"чтобы не пересекались меж собой и с другими "
+        "мешами\" needs no parameter and is not a reason for needs_api: every object's real "
+        "size is counted, and minSeparation is clear air ON TOP of it. Pass 0 for \"touching "
+        "but not inside each other\".\n"
+        "GROUPING IS AUTOMATIC: what you spawn joins the group its kind already uses, or "
+        "starts that group when the kind has none. Do not follow a spawn with a `group` "
+        "command to tidy it up -- it is already tidy.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Asset,
         {
             { "count", EditorParamKind::Number, true, "how many to create (1-200)" },
             { "radius", EditorParamKind::Number, false, "radius of the scatter disc in metres (default 25)" },
             { "minSeparation", EditorParamKind::Number, false,
-              "closest two of them may stand, in metres (default 6)" },
+              "clear gap between EDGES, in metres (default 1.5). Each object's own size is "
+              "already counted, so this is air on top of it: raise it to thin things out, "
+              "and on a crowded level it is the knob that decides whether anything fits" },
             { "alignToGround", EditorParamKind::Bool, false,
               "drop each onto the surface below (default true)" },
             { "minGroundNormalY", EditorParamKind::Number, false,
               "reject ground steeper than this, 1 = flat only (default 0.82)" },
             { "minHeight", EditorParamKind::Number, false,
               "reject ground below this world height (defaults to just above the waterline)" },
-            { "yawRange", EditorParamKind::Range, false, "random yaw in degrees (default [0, 360])" },
+            { "yawRange", EditorParamKind::Range, false,
+              "random yaw in degrees (default [0, 360]). \"вращение -180+180\" is [-180, 180]" },
             { "scaleRange", EditorParamKind::Range, false,
-              "random size multiplier on the asset's own scale (default [0.9, 1.1])" },
+              "random size multiplier on the asset's own scale (default [0.9, 1.1]). A signed "
+              "spread is a DELTA around 1: \"скейл -0.5+0.1\" is [0.5, 1.1]. Pass it either "
+              "way -- a negative low end is read as the delta it must be" },
             { "seed", EditorParamKind::Number, false, "fixes the layout; omit for a fresh one" },
             { "zone", EditorParamKind::String, false,
               "name of a zone to fill instead of a disc around the camera" },

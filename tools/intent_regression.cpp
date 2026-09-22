@@ -946,6 +946,111 @@ void TestRandomizeIsVariedAndDeterministic(const EditorActionContext& actionCtx)
     stack.Undo(ctx);
 }
 
+// WHAT A NEW OBJECT JOINS. Asked to tidy the outliner, the model put 621 objects into twelve
+// folders by kind; the next command spawned rocks, and they landed in the ungrouped "Meshes"
+// bucket underneath three rock folders. Tidying undone one command after it was asked for.
+void TestSpawnJoinsTheGroupItsKindUses(const EditorActionContext& actionCtx)
+{
+    const EditorActionDesc& spawn = *EditorActionRegistry::Builtin().Find("spawn");
+    EditorIntent intent = MakeActionIntent("spawn", Json{
+        { "count", 3 },
+        { "radius", 40.0 },
+        { "minSeparation", 1.0 },
+        { "alignToGround", false },   // no terrain in a CPU-only scene to land on
+        { "seed", 5 },
+    });
+    intent.target.kind = EditorTargetKind::Asset;
+    intent.target.asset = "models/coconut_palm.mesh.json";
+
+    // Nothing carries a group yet, so the kind gets one -- named the way `group perAsset`
+    // would name it, or the two would build two folders for one kind.
+    std::string status;
+    const EditorIntentPreview fresh = BuildIntentPreview(actionCtx, intent);
+    Check(spawn.build(actionCtx, {}, fresh.resolved, status) != nullptr,
+        "spawn built a command: " + status);
+    Check(status.find("into Coconut Palm") != std::string::npos,
+        "a kind with no group gets one, spelled as the grouping action spells it: " + status);
+
+    // Now somebody has renamed that folder. An example already standing on the level has the
+    // last word: deriving the name again would quietly build a second folder beside theirs.
+    EditorObject* example = nullptr;
+    for (EditorObject& object : actionCtx.editor.document.Objects())
+    {
+        if (editormatch::MatchesSearch(object, "coconut_palm"))
+        {
+            example = &object;
+            break;
+        }
+    }
+    Check(example != nullptr, "the test document has a coconut palm to copy a group from");
+    example->properties["group"] = "North Grove";
+    // Put back at the end: the document is shared with every test after this one.
+    struct GroupCleanup
+    {
+        EditorObject* object;
+        ~GroupCleanup() { object->properties.erase("group"); }
+    } cleanup{ example };
+
+    status.clear();
+    const EditorIntentPreview grouped = BuildIntentPreview(actionCtx, intent);
+    Check(spawn.build(actionCtx, {}, grouped.resolved, status) != nullptr,
+        "spawn built a command again: " + status);
+    Check(status.find("into North Grove") != std::string::npos,
+        "and it joins the folder that kind already uses, whatever it is called: " + status);
+}
+
+// ONE PHRASE, WHOLE. "разбросай по выделенной зоне N камней с рандомным вращением -180.0+180.0
+// и рандомным скейлом -0.5+0.1 которые не пересекаются меж собой и другими мешами" asks for
+// four things at once, and three of them had a way to go wrong that nothing was watching:
+//   * the SELECTED zone arrives as target.where.zone, which spawn did not read -- it had its
+//     own `zone` parameter for named zones and scattered around the camera instead;
+//   * a signed spread is a delta, and read literally "-0.5" is a scale that mirrors the mesh;
+//   * "не пересекаются" must not be a reason to refuse: it is what the action already does.
+void TestTheWholeScatterPhrase(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+
+    EditorObject zone = editorzone::BuildObject(editorzone::Shape::Circle,
+        Math::float3(0.0f, 0.0f, 0.0f), 20.0f, "Selected Zone");
+    zone.id = EditorObjectId{ 950 };
+    ctx.document.Objects().push_back(zone);
+    ctx.selection.Replace(zone.id);
+    struct Cleanup
+    {
+        EditorContext& ctx;
+        EditorObjectId id;
+        ~Cleanup() { ctx.selection.Clear(); ctx.document.Remove(id); }
+    } cleanup{ ctx, zone.id };
+
+    // Exactly what the model has to emit, through the reader the grammar feeds -- so the
+    // test fails if the shape ever stops being expressible, not just if it stops working.
+    EditorIntent intent;
+    std::string error;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"spawn","target":)"
+        R"({"asset":"models/rocks_node_Rock01.mesh.json","scope":"selected"},)"
+        R"("params":{"count":200,"yawRange":[-180.0,180.0],"scaleRange":[-0.5,0.1],)"
+        R"("minSeparation":5,"alignToGround":false,"seed":3}})",
+        intent, error),
+        "the whole phrase is expressible, signed ranges and all: " + error);
+
+    const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+    Check(preview.executable, "and it previews: " + preview.problem);
+
+    const EditorActionDesc& spawn = *EditorActionRegistry::Builtin().Find("spawn");
+    std::string status;
+    Check(spawn.build(actionCtx, preview.targets, preview.resolved, status) != nullptr,
+        "and it builds: " + status);
+
+    // A 20 m circle cannot hold two hundred at five metres apart, and the shortfall names
+    // WHERE it was trying -- which is the only thing that can tell a selected zone from the
+    // camera's disc without looking at coordinates.
+    Check(status.find("Selected Zone") != std::string::npos,
+        "the SELECTED zone is where it scattered, not a disc around the camera: " + status);
+    Check(status.find("scale read as 0.50-1.10") != std::string::npos,
+        "and a signed spread became a delta around 1 rather than a mirrored mesh: " + status);
+}
+
 void TestSpawnPlacement(const EditorActionContext& actionCtx)
 {
     // BuildSpawn is called directly rather than executed: creating the runtime objects
@@ -2339,6 +2444,8 @@ int main(int argc, char** argv)
         TestRandomizeIsVariedAndDeterministic(actionCtx);
         TestReplace(actionCtx, grammar);
         TestSpawnPlacement(actionCtx);
+        TestSpawnJoinsTheGroupItsKindUses(actionCtx);
+        TestTheWholeScatterPhrase(actionCtx);
         std::puts("Intent regression: actions OK");
 
         // The environment family runs on its own document: the palm document has no
