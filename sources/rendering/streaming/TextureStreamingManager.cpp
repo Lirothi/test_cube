@@ -331,7 +331,8 @@ void TextureStreamingManager::DoWork_(AsyncData& d)
         for (std::uint32_t i = 0; i < textures.size(); ++i)
         {
             const StreamingTexture& t = textures[i];
-            if (t.budgetedMips < t.residentMips && t.Size(t.budgetedMips + 1) - t.Size(t.budgetedMips) <= maxDelta)
+            if (t.budgetedMips < std::min(t.residentMips, t.maxAllowedMips) &&
+                t.Size(t.budgetedMips + 1) - t.Size(t.budgetedMips) <= maxDelta)
             {
                 prioritized.push_back(i);
             }

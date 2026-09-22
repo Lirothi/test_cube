@@ -142,6 +142,15 @@
       "windAnimateBelowLevel": 4
     }
   },
+  "streaming": {
+    "boost": 1.0,
+    "enabled": true,
+    "hiddenScale": 0.5,
+    "mipBias": 0,
+    "mipFade": true,
+    "perTextureBias": true,
+    "poolSizeMB": 32
+  },
   "version": 1,
   "visibility": {
     "chunkMask": true,

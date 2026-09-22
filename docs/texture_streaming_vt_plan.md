@@ -547,6 +547,26 @@ mean|shot_k − final|: без фейда `6.58 → 0.11` одним шагом 
 **Что видно в `mem:` попутно:** `rt.as.retired` растёт на орбите (77 → 85 МБ за 5 с) — это
 чужой счётчик, не трогал; проверить, накопительный он или живой.
 
+**Пост-A4 (2026-09-22): глобальный mip bias — «визуально ничего не вижу».** Две причины.
+(1) Семантика UE: `r.Streaming.MipBias` при `UsePerTextureBias = 1` (дефолт) — НЕ кап, а потолок:
+сколько верхних мипов бюджет вправе снять с ОДНОЙ текстуры при переборе пула
+(`TryDropMaxResolutions`, `AsyncTextureStreaming.cpp:415`; help CVar `TextureStreamingHelpers.cpp:203`
+«each texture will be assigned a mip bias between 0 and MipBias as required to fit in budget»); пока
+пул не переполнен, ползунок инертен по построению. Кап на все текстуры сразу — только ветка
+`perTextureBias = 0` (`StreamingTexture.cpp:197-200`). (2) Ошибка транскрипции: `KeepOneMip` не имел
+потолка `maxAllowedMips` (UE `StreamingTexture.cpp:466`: `BudgetedMips < min(ResidentMips,
+MaxAllowedMips)`), и `TryKeepMips` при свободном пуле возвращал budgeted к резидентному — сниженный
+кап не выгружал уже загруженные мипы, поэтому и ветка `perTextureBias = 0` молчала. Исправлено
+(`StreamingTexture.h::KeepOneMip` + фильтр кандидатов `TryKeepMips` в `TextureStreamingManager.cpp`);
+во вкладку Streaming добавлен чекбокс «Per-texture bias» (`GraphicsControl::StreamingPerTextureBias`,
+JSON `streaming.perTextureBias`) и тултипы обоим контролам. Замер (Release, wind_test, статичная камера,
+`--sweep=streaming.mipBias:0,2,0`, пол = 12.9 % px / p99 4): per-texture OFF, пул 32 — used 26 → 4 → 26 МБ,
+шот 69.6 % px / p99 35 и возврат в пол; per-texture ON, пул 32 — used 26 → 26, шот в полу (как у UE);
+per-texture ON, пул 12 (бюджет 7) — bias меняет, ЧТО режется (верхние мипы всех текстур вместо хвоста
+по retention), шот 29.6 % px / p99 19; откат bias в 0 бюджетный bias не сбрасывает (UE: сброс при
+росте бюджета или когда текстура перестаёт упираться в кап). Три конфига собраны. Старый бинарь не
+перемерялся (перезаписан) — диагноз по коду и по тому, что ползунок теперь различает ветки.
+
 ### A5. Первый потребитель: камни 4K без даунскейла — 0.5 дня (по согласованию с владельцем)
 
 Переимпорт `models/rocks` с `--import-max-tex=4096` (и `--import-bc5` для нормалей, если
@@ -1014,7 +1034,7 @@ persistent-buffer аплоад обходит RHI (`VirtualTextureUploadCache.cp
 | `r.Streaming.FramesForFullUpdate` | `streaming.framesForFullUpdate` | 5 |
 | `r.Streaming.MaxTempMemoryAllowed` | `streaming.tempMemoryMB` | 50 |
 | `r.Streaming.MinMipForSplitRequest` | `streaming.minMipForSplit` | 10 |
-| `r.Streaming.UsePerTextureBias` | `streaming.perTextureBias` | 1 |
+| `r.Streaming.UsePerTextureBias` | `streaming.perTextureBias` (чекбокс «Per-texture bias», JSON; при 1 `mipBias` — потолок бюджета, при 0 — кап) | 1 |
 | `r.Streaming.FullyLoadUsedTextures` | `streaming.fullyLoadUsed` | 0 |
 | `r.Streaming.DropMips` | `streaming.dropMips` | 0 |
 | `r.Streaming.MaxNumTexturesToStreamPerFrame` (UE: 0 = без лимита, только при `AmortizeCPUToGPUCopy`) | `streaming.maxPerFrame` | 8 (отступление, §5) |

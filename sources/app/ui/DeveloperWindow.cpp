@@ -2879,6 +2879,13 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("-1 = 70%% of dedicated VRAM (UE), 0 = unlimited. Over budget the manager drops the least-kept mips first.");
                 GRAPHICS_CONTROL(StreamingMipBias, "streamingMipBias", ImGui::SliderInt("Global mip bias", &streaming::g_mipBias, 0, 4));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE r.Streaming.MipBias. Per-texture bias ON: how many top mips the budget may take from one texture "
+                        "when the pool is over budget; while the pool has room nothing changes. OFF: every texture loses this many top mips now.");
+                GRAPHICS_CONTROL(StreamingPerTextureBias, "streamingPerTextureBias", ImGui::Checkbox("Per-texture bias", &streaming::g_perTextureBias));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE r.Streaming.UsePerTextureBias (default on): over budget, textures lose their top mips one at a time up to "
+                        "Global mip bias and get them back when the pool has room. Off: Global mip bias caps every texture directly.");
                 GRAPHICS_CONTROL(StreamingBoost, "streamingBoost", ImGui::SliderFloat("Boost", &streaming::g_boost, 0.25f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Scales the screen size every texture is judged against: 2 = one mip sharper everywhere.");

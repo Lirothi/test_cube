@@ -43,6 +43,7 @@ namespace
         float streamingBoost = 1.0f;
         float streamingHiddenScale = 0.5f;
         bool streamingMipFade = true;
+        bool streamingPerTextureBias = true; // UE r.Streaming.UsePerTextureBias: mip bias is a budget ceiling, not a cap
 
         bool dlssEnabled = false;
         sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
@@ -395,6 +396,7 @@ namespace
         s.streamingBoost = streaming::g_boost;
         s.streamingHiddenScale = streaming::g_hiddenScale;
         s.streamingMipFade = streaming::g_mipFade;
+        s.streamingPerTextureBias = streaming::g_perTextureBias;
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
@@ -527,6 +529,7 @@ namespace
         streaming::g_boost = std::clamp(s.streamingBoost, 0.1f, 8.0f);
         streaming::g_hiddenScale = std::clamp(s.streamingHiddenScale, 0.0f, 1.0f);
         streaming::g_mipFade = s.streamingMipFade;
+        streaming::g_perTextureBias = s.streamingPerTextureBias;
     }
 
     void ApplyReflections(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
@@ -665,7 +668,8 @@ namespace
                 { "mipBias", s.streamingMipBias },
                 { "boost", s.streamingBoost },
                 { "hiddenScale", s.streamingHiddenScale },
-                { "mipFade", s.streamingMipFade }
+                { "mipFade", s.streamingMipFade },
+                { "perTextureBias", s.streamingPerTextureBias }
             } },
             { "visibility", {
                 { "chunkMask", s.visibilityChunkMask },
@@ -829,6 +833,7 @@ namespace
         Read(streamingSec, "boost", s.streamingBoost);
         Read(streamingSec, "hiddenScale", s.streamingHiddenScale);
         Read(streamingSec, "mipFade", s.streamingMipFade);
+        Read(streamingSec, "perTextureBias", s.streamingPerTextureBias);
         Read(visibility, "chunkMask", s.visibilityChunkMask);
         Read(visibility, "occlusionMethod", s.occlusionMethod);
         Read(visibility, "queryLatency", s.occlusionQueryLatency);
@@ -1255,6 +1260,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::StreamingBoost:                 current.streamingBoost = defaults.streamingBoost; break;
     case GraphicsControl::StreamingHiddenScale:           current.streamingHiddenScale = defaults.streamingHiddenScale; break;
     case GraphicsControl::StreamingMipFade:               current.streamingMipFade = defaults.streamingMipFade; break;
+    case GraphicsControl::StreamingPerTextureBias:        current.streamingPerTextureBias = defaults.streamingPerTextureBias; break;
     case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
     case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
     case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;
@@ -1329,7 +1335,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
         ApplyContact(current);
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::StreamingEnabled) &&
-             value <= static_cast<unsigned>(GraphicsControl::StreamingMipFade))
+             value <= static_cast<unsigned>(GraphicsControl::StreamingPerTextureBias))
     {
         ApplyStreaming(current);
     }

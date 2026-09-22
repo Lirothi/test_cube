@@ -136,7 +136,9 @@ struct StreamingTexture
     }
     std::uint64_t KeepOneMip()
     {
-        if (budgetedMips >= residentMips) { return 0; }
+        // StreamingTexture.cpp:464-475: never above maxAllowedMips, or a lowered bias could not
+        // stream out mips that are already resident while the pool has room.
+        if (budgetedMips >= std::min(residentMips, maxAllowedMips)) { return 0; }
         ++budgetedMips;
         return Size(budgetedMips) - Size(budgetedMips - 1);
     }

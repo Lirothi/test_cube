@@ -141,6 +141,7 @@ enum class GraphicsControl
     StreamingBoost,
     StreamingHiddenScale,
     StreamingMipFade,
+    StreamingPerTextureBias,
 };
 
 // Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,
