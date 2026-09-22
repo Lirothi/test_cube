@@ -621,6 +621,7 @@
     <ClInclude Include="sources/rendering/streaming/TextureRetireBin.h" />
     <ClInclude Include="sources/rendering/streaming/TextureStreamingIo.h" />
     <ClInclude Include="sources/rendering/streaming/TextureStreaming.h" />
+    <ClInclude Include="sources/rendering/streaming/MipBiasFade.h" />
     <ClInclude Include="sources/rendering/streaming/StreamingTexture.h" />
     <ClInclude Include="sources/rendering/streaming/StreamingBounds.h" />
     <ClInclude Include="sources/rendering/streaming/TextureStreamingManager.h" />

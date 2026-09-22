@@ -51,20 +51,36 @@ void Texture2D::AdoptResource(Renderer* r, GpuResource&& newRes, UINT residentMi
 {
     outOld = std::move(tex_);
     tex_ = std::move(newRes);
+    mipLevels_ = residentMips;
+    residentMips_ = residentMips;
     // Same heap, same handle: a CPU-only heap is never read by the GPU, only copied from at record
     // time, so rewriting it at the frame boundary is safe and keeps every cached handle valid.
+    WriteCpuSrv_(r, minLodClamp_);
+    ++srvGeneration_;
+    stagedFrame_ = UINT64_MAX; srvGPU_.ptr = 0;
+}
+
+void Texture2D::SetMinLodClamp(Renderer* r, float clamp)
+{
+    clamp = std::max(clamp, 0.0f);
+    if (clamp == minLodClamp_) { return; }
+    const bool returningToZero = clamp == 0.0f;
+    minLodClamp_ = clamp;
+    WriteCpuSrv_(r, clamp);
+    if (returningToZero) { ++srvGeneration_; }
+    stagedFrame_ = UINT64_MAX; srvGPU_.ptr = 0;
+}
+
+void Texture2D::WriteCpuSrv_(Renderer* r, float minLodClamp)
+{
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format = srvFormat_;
     sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    sd.Texture2D.MipLevels = residentMips;
+    sd.Texture2D.MipLevels = mipLevels_;
     sd.Texture2D.MostDetailedMip = 0;
-    sd.Texture2D.ResourceMinLODClamp = 0.f;
+    sd.Texture2D.ResourceMinLODClamp = minLodClamp;
     r->GetDevice()->CreateShaderResourceView(tex_.Get(), &sd, srvCPU_);
-    mipLevels_ = residentMips;
-    residentMips_ = residentMips;
-    ++srvGeneration_;
-    stagedFrame_ = UINT64_MAX; srvGPU_.ptr = 0;
 }
 
 // ========================= helpers =========================

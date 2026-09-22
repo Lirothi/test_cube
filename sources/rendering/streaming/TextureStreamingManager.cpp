@@ -261,8 +261,10 @@ void TextureStreamingManager::DoWork_(AsyncData& d)
     else
     {
         const std::uint64_t available = d.poolBytes > d.marginBytes ? d.poolBytes - d.marginBytes : 0;
+        // UE grows only past temp + margin because its temp textures live in the pool; our ring is a
+        // separate UPLOAD heap, and with pools of tens of MB that guard (55 MB) pinned the budget at 0.
         if (available < memoryBudget) { memoryBudget = available; }
-        else if (available - memoryBudget > d.tempBytes + d.marginBytes) { memoryBudget = available; resetMipBias = true; }
+        else if (available - memoryBudget > d.marginBytes) { memoryBudget = available; resetMipBias = true; }
     }
     d.memoryBudget = memoryBudget;
     if (d.perTextureBias)
@@ -442,6 +444,7 @@ void TextureStreamingManager::Apply_(TextureStreaming& ts)
         if (const Texture2D* tex = ts.EntryTexture(t.entry)) { r.path = tex->GetSourcePath(); }
         r.mipCount = t.mipCount; r.resident = t.residentMips; r.wanted = t.wantedMips; r.budgeted = t.budgetedMips;
         r.requested = t.requestedMips; r.maxAllowed = t.maxAllowedMips;
+        r.visibleWanted = t.visibleWantedMips; r.hiddenWanted = t.hiddenWantedMips;
         r.texelFactor = t.texelFactorMax; r.lastSeen = t.lastRenderTime; r.maxSize = t.maxSize;
         r.retention = t.retentionPriority; r.loadOrder = t.loadOrderPriority; r.bias = t.budgetMipBias;
         r.unknownRef = t.unknownRef; r.terrain = t.isTerrain;
@@ -456,7 +459,7 @@ void TextureStreamingManager::Apply_(TextureStreaming& ts)
     {
         const StreamingTexture& t = d.textures[i];
         if (!ts.EntryAlive(t.entry, t.gen)) { continue; }
-        if (!ts.RequestResident(t.entry, t.wantedMips)) { ++s.refused; continue; }
+        if (!ts.RequestResident(t.entry, t.wantedMips, t.lastRenderTime)) { ++s.refused; continue; }
         if (t.wantedMips > t.residentMips) { ++s.requestsIn; s.bytesInCycle += t.Size(t.wantedMips) - t.Size(t.residentMips); }
         else { ++s.requestsOut; s.bytesOutCycle += t.Size(t.residentMips) - t.Size(t.wantedMips); }
     }

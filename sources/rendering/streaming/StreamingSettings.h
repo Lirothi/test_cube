@@ -21,6 +21,11 @@ inline bool  g_perTextureBias = true;   // r.Streaming.UsePerTextureBias
 inline bool  g_fullyLoadUsed = false;   // r.Streaming.FullyLoadUsedTextures
 inline int   g_dropMips = 0;            // r.Streaming.DropMips (1 = perfect, 2 = visible only)
 inline bool  g_selftest = false;        // LOG_INFO the wanted-mips invariant at manager start
+inline bool  g_dumpRows = false;        // LOG_INFO the per-texture table once, then clears itself
+// A4 (UE GEnableMipLevelFading, GMipFadeSettings[MipFade_Normal] = {0.3, 0.1} seconds per mip)
+inline bool  g_mipFade = true;
+inline float g_mipFadeIn = 0.3f;
+inline float g_mipFadeOut = 0.1f;
 
 inline constexpr float kExtraBoost = 0.71f;      // StreamingTexture.h GetDefaultExtraBoost(new metrics)
 inline constexpr float kVisibleWindowSec = 0.5f; // a bound seen this recently counts as visible

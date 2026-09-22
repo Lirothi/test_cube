@@ -29,6 +29,11 @@ std::uint64_t RetiredBytesProvider(const void* self)
     return static_cast<const TextureStreaming*>(self)->RetiredBytes();
 }
 
+std::uint64_t ResidentBytesProvider(const void* self)
+{
+    return static_cast<const TextureStreaming*>(self)->ResidentBytes();
+}
+
 struct CopyOp
 {
     ID3D12Resource* dst = nullptr;
@@ -48,8 +53,16 @@ void TextureStreaming::Init(ID3D12Device* device)
     if (!device_) { return; }
     io_.Start();
     manager_.Init();
-    render::RegisterMemoryProvider("tex.ret", &RetiredBytesProvider, this);
+    // One `self` per provider: the report keys unregistration by it.
+    render::RegisterMemoryProvider("tex", &ResidentBytesProvider, this);
+    render::RegisterMemoryProvider("tex.ret", &RetiredBytesProvider, &retire_);
     lastReadout_ = std::chrono::steady_clock::now();
+    start_ = lastReadout_;
+}
+
+float TextureStreaming::Now_() const
+{
+    return std::chrono::duration<float>(std::chrono::steady_clock::now() - start_).count();
 }
 
 void TextureStreaming::Shutdown()
@@ -70,6 +83,7 @@ void TextureStreaming::Shutdown()
     freeEntries_.clear();
     registered_ = 0;
     render::UnregisterMemoryProvider(this);
+    render::UnregisterMemoryProvider(&retire_);
     device_ = nullptr;
 }
 
@@ -83,6 +97,11 @@ int TextureStreaming::Register(Texture2D* tex)
     e.tex = tex;
     ++e.gen;
     e.swap = nullptr;
+    e.fading = false;
+    e.fade = MipBiasFade{};
+    // StreamableTextureResource.cpp:227: the fade starts at the loaded count, no interpolation.
+    e.fade.SetNewMipCount(static_cast<float>(tex->GetResidentMips()), static_cast<float>(tex->GetResidentMips()),
+                          0.0f, Now_(), g_mipFadeIn, g_mipFadeOut, g_mipFade);
     ++registered_;
     tex->AttachStreaming(this, static_cast<int>(idx));
     return static_cast<int>(idx);
@@ -142,11 +161,31 @@ UINT TextureStreaming::InFlightTarget(std::uint32_t i) const
     return entries_[i].swap->newResident;
 }
 
-bool TextureStreaming::RequestResident(std::uint32_t i, UINT mips)
+bool TextureStreaming::RequestResident(std::uint32_t i, UINT mips, float lastRenderAge)
 {
     if (i >= entries_.size() || !entries_[i].tex || entries_[i].swap) { return false; }
     if (mips == entries_[i].tex->GetResidentMips()) { return false; }
-    return IssueSwap_(i, mips);
+    return IssueSwap_(i, mips, lastRenderAge);
+}
+
+// A4: per-frame MinLOD clamp of every texture mid-fade; the SRV rewrite is CPU-only.
+void TextureStreaming::UpdateFades_(Renderer* renderer)
+{
+    fadingCount_ = 0;
+    const float now = Now_();
+    for (Entry& e : entries_)
+    {
+        if (!e.tex || !e.fading) { continue; }
+        const float bias = g_mipFade ? e.fade.CalcMipBias(now) : 0.0f;
+        if (bias <= 0.0f || !e.fade.Active(now))
+        {
+            e.tex->SetMinLodClamp(renderer, 0.0f);
+            e.fading = false;
+            continue;
+        }
+        e.tex->SetMinLodClamp(renderer, bias);
+        ++fadingCount_;
+    }
 }
 
 bool TextureStreaming::CancelRequest(std::uint32_t i)
@@ -198,14 +237,23 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
             {
                 if (alive)
                 {
-                    Texture2D* tex = entries_[s->entry].tex;
+                    Entry& e = entries_[s->entry];
+                    Texture2D* tex = e.tex;
                     const UINT64 oldBytes = tex->GetResidentBytes();
                     GpuResource old;
                     tex->AdoptResource(renderer, std::move(s->newRes), s->newResident, old);
                     retire_.Retire(std::move(old), oldBytes, frameNo + render::kFrameCount);
                     ++swapsDone_;
                     frameHadSwaps_ = true;
-                    entries_[s->entry].swap = nullptr;
+                    e.swap = nullptr;
+                    // StreamableTextureResource.cpp:262 FinalizeStreaming: fade from the old count to
+                    // the new. A stream-out already dropped its mips here (UE fades BEFORE dropping),
+                    // so only an arrival walks its clamp down.
+                    e.fade.SetNewMipCount(static_cast<float>(std::max(s->newResident, s->oldResident)),
+                                          static_cast<float>(s->newResident), s->lastRenderAge, Now_(),
+                                          g_mipFadeIn, g_mipFadeOut, g_mipFade);
+                    e.fading = g_mipFade && s->newResident > s->oldResident && e.fade.Active(Now_());
+                    if (!e.fading) { tex->SetMinLodClamp(renderer, 0.0f); }
                 }
                 s->newRes.Reset();
                 swaps_.erase(swaps_.begin() + static_cast<std::ptrdiff_t>(i));
@@ -233,7 +281,21 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
         if (!removed) { ++i; }
     }
 
+    UpdateFades_(renderer);
     if (g_enabled) { IssueRequests_(frameNo); }
+    if (g_dumpRows && manager_.GetStats().cycles > 0)
+    {
+        g_dumpRows = false;
+        const TextureStreamingManager::Stats& m = manager_.GetStats();
+        LOG_INFO(logging::LogCategory::Render, "[texstream] rows (frame {}, cycle {}): mips resident needed(vis/hid) wanted budgeted requested texel seen | path",
+                 frameNo, m.cycles);
+        for (const TextureStreamingManager::Row& r : manager_.Rows())
+        {
+            LOG_INFO(logging::LogCategory::Render, "[texstream]   mips {} resident {} needed {}/{} wanted {} budgeted {} requested {} texel {:.2f} seen {:.1f}{} | {}",
+                     r.mipCount, r.resident, r.visibleWanted, r.hiddenWanted, r.wanted, r.budgeted, r.requested,
+                     r.texelFactor, r.lastSeen < 1.0e5f ? r.lastSeen : -1.0f, r.unknownRef ? " unknown-ref" : (r.terrain ? " terrain" : ""), r.path);
+        }
+    }
     {
         const TextureStreamingManager::Stats& m = manager_.GetStats();
         if (m.cycles != lastCycleSeen_)
@@ -274,7 +336,7 @@ void TextureStreaming::IssueRequests_(std::uint64_t /*frameNo*/)
 }
 
 // The new resource's desc and, for a stream-in, the ring layout + the read request.
-bool TextureStreaming::IssueSwap_(std::uint32_t entryIdx, UINT wanted)
+bool TextureStreaming::IssueSwap_(std::uint32_t entryIdx, UINT wanted, float lastRenderAge)
 {
     Entry& e = entries_[entryIdx];
     Texture2D* tex = e.tex;
@@ -288,6 +350,7 @@ bool TextureStreaming::IssueSwap_(std::uint32_t entryIdx, UINT wanted)
     swap->gen = e.gen;
     swap->oldResident = oldResident;
     swap->newResident = wanted;
+    swap->lastRenderAge = lastRenderAge;
     swap->newDesc = tex->GetResource()->GetDesc();
     swap->newDesc.Width = table.mips[mipCount - wanted].width;
     swap->newDesc.Height = table.mips[mipCount - wanted].height;
@@ -483,13 +546,13 @@ void TextureStreaming::Readout_(std::uint64_t frameNo)
     const double avgMs = dtCount_ ? dtSumMs_ / dtCount_ : 0.0;
     const TextureStreamingManager::Stats& m = manager_.GetStats();
     LOG_INFO(logging::LogCategory::Render,
-        "[texstream] frame {}: {} textures, swaps io {} / ready {} / copied {}, ring {}/{} KB, retired {} ({} KB), done {} failed {}, read {} MB | frame ms avg {:.2f} max quiet {:.2f} max swap {:.2f} ({} swap frames) | pool {} MB budget {} used {} wanted {} | cycle in {} ({} KB) out {} ({} KB) cancel {} refused {} | lag>2 max {} in {} cycles | calc {:.3f} ms",
+        "[texstream] frame {}: {} textures, swaps io {} / ready {} / copied {}, ring {}/{} KB, retired {} ({} KB), done {} failed {}, read {} MB | frame ms avg {:.2f} max quiet {:.2f} max swap {:.2f} ({} swap frames) | pool {} MB budget {} used {} wanted {} | cycle in {} ({} KB) out {} ({} KB) cancel {} refused {} | lag>2 max {} in {} cycles | fading {} | calc {:.3f} ms",
         frameNo, registered_, waitIo, ready, copied, ring_.BytesInUse() >> 10, ring_.Capacity() >> 10,
         retire_.Count(), retire_.Bytes() >> 10, swapsDone_, swapsFailed_, io_.BytesRead() >> 20,
         avgMs, dtMaxQuietMs_, dtMaxSwapMs_, swapFrames_,
         m.poolBytes >> 20, m.budgetBytes >> 20, m.usedBytes >> 20, m.wantedBytes >> 20,
         m.requestsIn, m.bytesInCycle >> 10, m.requestsOut, m.bytesOutCycle >> 10, m.cancels, m.refused,
-        lagMax_, lagCycles_, m.calcMs);
+        lagMax_, lagCycles_, fadingCount_, m.calcMs);
     dtSumMs_ = 0.0; dtCount_ = 0; dtMaxQuietMs_ = 0.0; dtMaxSwapMs_ = 0.0; swapFrames_ = 0;
     lagMax_ = 0; lagCycles_ = 0;
 }

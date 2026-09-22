@@ -140,6 +140,10 @@ public:
         // (ShadowGpuData::maskedAlbedoSrvs_, material tables) sees the new resource on its next
         // copy; the one consumer that keeps a GPU COPY (rt::BindlessTable) keys on the generation.
         void AdoptResource(Renderer* r, GpuResource&& newRes, UINT residentMips, GpuResource& outOld);
+        // A4 mip fade: rewrite the SRV in place with this ResourceMinLODClamp (0 = none). Returning to
+        // 0 bumps the generation so a consumer holding a GPU copy (RT bindless) refreshes unclamped.
+        void SetMinLodClamp(Renderer* r, float clamp);
+        float GetMinLodClamp() const { return Source_().minLodClamp_; }
         // Since process start: DDS loads whose mip table passed the self-check, DDS loads that
         // failed it (reported by name when they did), and WIC loads (no table at all).
         static void StreamingStats(std::uint32_t& streamable, std::uint32_t& nonStreamable,
@@ -201,6 +205,8 @@ private:
 
         // Create the CPU SRV
         void CreateCpuSrv_(Renderer* renderer, DXGI_FORMAT srvFmt, UINT mipLevels);
+        // Rewrite the SRV in the existing CPU heap (resource, mipLevels_ and srvFormat_ as they are).
+        void WriteCpuSrv_(Renderer* renderer, float minLodClamp);
 
         // The instance that actually OWNS the GPU objects: the shared one when this is a view of a
         // cached texture, otherwise this object. A shared instance never itself has `shared_` set,
@@ -244,5 +250,6 @@ private:
         int streamingIndex_ = -1;
         bool streamable_ = false;
         std::uint32_t srvGeneration_ = 0;
+        float minLodClamp_ = 0.0f;
         streaming::TextureStreaming* streaming_ = nullptr; // set by the registry; nulled on unregister
 };

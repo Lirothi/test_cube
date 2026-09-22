@@ -33,14 +33,7 @@ void BuildBounds(const SceneFrameData& frame, const Frustum& frustum, float now,
         if (!box.IsValid()) { continue; }
 
         BoundsEntry e;
-        e.center = box.GetCenter();
-        e.halfExtents = box.GetHalfExtents();
         e.terrain = (base->GetRenderLayerMask() & RenderLayerMask(RenderLayer::Terrain)) != 0u;
-        // Visibility: a CPU frustum test stands in for UE's per-primitive LastRenderTime.
-        float& seen = lastSeen[base];
-        if (frustum.Intersects(box)) { seen = now; }
-        else if (seen == 0.0f) { seen = -1.0e6f; } // never seen
-        e.lastSeenAge = now - seen;
 
         const Math::float3 scale = ro->GetScale();
         const float objScale = std::max({ std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z), 1.0e-4f });
@@ -70,7 +63,40 @@ void BuildBounds(const SceneFrameData& frame, const Frustum& frustum, float now,
                 e.refs.push_back(BoundsEntry::Ref{ static_cast<std::uint32_t>(idx), texelFactor });
             }
         }
-        if (!e.refs.empty()) { out.push_back(std::move(e)); }
+        if (e.refs.empty()) { continue; }
+
+        // Visibility: a CPU frustum test stands in for UE's per-primitive LastRenderTime.
+        const auto seenAge = [&lastSeen, now, &frustum](const void* key, const AABB& b)
+        {
+            float& seen = lastSeen[key];
+            if (frustum.Intersects(b)) { seen = now; }
+            else if (seen == 0.0f) { seen = -1.0e6f; } // never seen
+            return now - seen;
+        };
+        // A chunked mesh (terrain) is one box per chunk, the way a UE landscape is one primitive
+        // per component: the island's whole-box distance was ~0 from anywhere above it.
+        const Mesh* mesh = ro->GetMesh();
+        if (mesh && mesh->IsChunkedSubmeshes() && !mesh->GetSubmeshBounds().empty())
+        {
+            const Math::mat4& model = ro->GetModelMatrix();
+            const std::vector<AABB>& chunks = mesh->GetSubmeshBounds();
+            for (size_t c = 0; c < chunks.size(); ++c)
+            {
+                if (!chunks[c].IsValid()) { continue; }
+                const AABB w = chunks[c].Transform(model);
+                BoundsEntry ce = e;
+                ce.center = w.GetCenter();
+                ce.halfExtents = w.GetHalfExtents();
+                const void* key = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(base) + c + 1u);
+                ce.lastSeenAge = seenAge(key, w);
+                out.push_back(std::move(ce));
+            }
+            continue;
+        }
+        e.center = box.GetCenter();
+        e.halfExtents = box.GetHalfExtents();
+        e.lastSeenAge = seenAge(base, box);
+        out.push_back(std::move(e));
     }
 }
 

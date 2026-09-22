@@ -42,6 +42,7 @@ namespace
         int streamingMipBias = 0;
         float streamingBoost = 1.0f;
         float streamingHiddenScale = 0.5f;
+        bool streamingMipFade = true;
 
         bool dlssEnabled = false;
         sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
@@ -393,6 +394,7 @@ namespace
         s.streamingMipBias = streaming::g_mipBias;
         s.streamingBoost = streaming::g_boost;
         s.streamingHiddenScale = streaming::g_hiddenScale;
+        s.streamingMipFade = streaming::g_mipFade;
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
@@ -524,6 +526,7 @@ namespace
         streaming::g_mipBias = std::clamp(s.streamingMipBias, 0, 8);
         streaming::g_boost = std::clamp(s.streamingBoost, 0.1f, 8.0f);
         streaming::g_hiddenScale = std::clamp(s.streamingHiddenScale, 0.0f, 1.0f);
+        streaming::g_mipFade = s.streamingMipFade;
     }
 
     void ApplyReflections(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
@@ -661,7 +664,8 @@ namespace
                 { "poolSizeMB", s.streamingPoolSizeMB },
                 { "mipBias", s.streamingMipBias },
                 { "boost", s.streamingBoost },
-                { "hiddenScale", s.streamingHiddenScale }
+                { "hiddenScale", s.streamingHiddenScale },
+                { "mipFade", s.streamingMipFade }
             } },
             { "visibility", {
                 { "chunkMask", s.visibilityChunkMask },
@@ -824,6 +828,7 @@ namespace
         Read(streamingSec, "mipBias", s.streamingMipBias);
         Read(streamingSec, "boost", s.streamingBoost);
         Read(streamingSec, "hiddenScale", s.streamingHiddenScale);
+        Read(streamingSec, "mipFade", s.streamingMipFade);
         Read(visibility, "chunkMask", s.visibilityChunkMask);
         Read(visibility, "occlusionMethod", s.occlusionMethod);
         Read(visibility, "queryLatency", s.occlusionQueryLatency);
@@ -1249,6 +1254,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::StreamingMipBias:               current.streamingMipBias = defaults.streamingMipBias; break;
     case GraphicsControl::StreamingBoost:                 current.streamingBoost = defaults.streamingBoost; break;
     case GraphicsControl::StreamingHiddenScale:           current.streamingHiddenScale = defaults.streamingHiddenScale; break;
+    case GraphicsControl::StreamingMipFade:               current.streamingMipFade = defaults.streamingMipFade; break;
     case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
     case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
     case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;
@@ -1323,7 +1329,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
         ApplyContact(current);
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::StreamingEnabled) &&
-             value <= static_cast<unsigned>(GraphicsControl::StreamingHiddenScale))
+             value <= static_cast<unsigned>(GraphicsControl::StreamingMipFade))
     {
         ApplyStreaming(current);
     }

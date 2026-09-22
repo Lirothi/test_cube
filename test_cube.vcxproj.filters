@@ -1139,6 +1139,9 @@
     <ClInclude Include="sources/rendering/streaming/TextureStreaming.h">
       <Filter>sources\rendering\streaming</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/streaming/MipBiasFade.h">
+      <Filter>sources\rendering\streaming</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/streaming/StreamingTexture.h">
       <Filter>sources\rendering\streaming</Filter>
     </ClInclude>

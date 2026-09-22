@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "rendering/core/ResourceDeclarations.h"
+#include "rendering/streaming/MipBiasFade.h"
 #include "rendering/streaming/TextureRetireBin.h"
 #include "rendering/streaming/TextureStreamingIo.h"
 #include "rendering/streaming/TextureStreamingManager.h"
@@ -58,7 +59,9 @@ public:
     std::uint32_t EntryGen(std::uint32_t i) const { return i < entries_.size() ? entries_[i].gen : 0u; }
     bool EntryAlive(std::uint32_t i, std::uint32_t gen) const { return i < entries_.size() && entries_[i].tex != nullptr && entries_[i].gen == gen; }
     UINT InFlightTarget(std::uint32_t i) const; // mips the in-flight swap lands on; 0 = idle
-    bool RequestResident(std::uint32_t i, UINT mips); // false: busy, ring full, or nothing to do
+    // `lastRenderAge` = seconds since the texture was last seen (UE LastRenderTime): a texture not
+    // seen for 0.5 s pops instead of fading (FMipBiasFade age threshold).
+    bool RequestResident(std::uint32_t i, UINT mips, float lastRenderAge = 0.0f); // false: busy, ring full, or nothing to do
     bool CancelRequest(std::uint32_t i);             // false: nothing cancellable (already copied)
     UINT64 ResidentBytes() const;
     std::uint64_t LastFrame() const { return frameNo_; }
@@ -70,6 +73,8 @@ private:
         Texture2D* tex = nullptr;
         std::uint32_t gen = 0; // bumped on every (un)register so a stale swap cannot match
         Swap* swap = nullptr;
+        MipBiasFade fade;      // A4
+        bool fading = false;
     };
     struct Swap
     {
@@ -87,12 +92,15 @@ private:
         GpuResource newRes;
         std::uint64_t copyFrame = 0;
         UINT64 newBytes = 0;
+        float lastRenderAge = 0.0f;   // A4: decides whether the arrival fades
     };
 
     bool EnsureRing_();
     bool Alive_(const Swap& s) const;
     void IssueRequests_(std::uint64_t frameNo);
-    bool IssueSwap_(std::uint32_t entryIdx, UINT wanted);
+    bool IssueSwap_(std::uint32_t entryIdx, UINT wanted, float lastRenderAge = 0.0f);
+    void UpdateFades_(Renderer* renderer);
+    float Now_() const;
     void DropSwap_(Swap* s, std::uint64_t frameNo);
     void Readout_(std::uint64_t frameNo);
 
@@ -106,6 +114,8 @@ private:
     std::vector<std::unique_ptr<IoRequest>> orphanIo_; // cancelled while the worker may still hold them
     TextureStreamingManager manager_;
     std::uint64_t frameNo_ = 0;
+    std::chrono::steady_clock::time_point start_{};
+    unsigned fadingCount_ = 0;
     std::size_t registered_ = 0;
     std::uint64_t swapsDone_ = 0;
     std::uint64_t swapsFailed_ = 0;

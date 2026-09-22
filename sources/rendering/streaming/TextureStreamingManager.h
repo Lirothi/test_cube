@@ -47,6 +47,7 @@ public:
     {
         std::wstring path;
         unsigned mipCount = 0, resident = 0, wanted = 0, budgeted = 0, requested = 0, maxAllowed = 0;
+        unsigned visibleWanted = 0, hiddenWanted = 0; // "perfect" wanted from distance, before the budget
         float texelFactor = 0.0f, lastSeen = 0.0f, maxSize = 0.0f;
         int retention = 0, loadOrder = 0, bias = 0;
         bool unknownRef = false, terrain = false;

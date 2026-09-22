@@ -2885,6 +2885,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 GRAPHICS_CONTROL(StreamingHiddenScale, "streamingHiddenScale", ImGui::SliderFloat("Hidden primitive scale", &streaming::g_hiddenScale, 0.0f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Objects outside the frustum ask for this fraction of their size (UE 0.5): what stays warm for a camera turn.");
+                GRAPHICS_CONTROL(StreamingMipFade, "streamingMipFade", ImGui::Checkbox("Mip fade", &streaming::g_mipFade));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Newly arrived mips reveal over 0.3 s per mip (UE FMipBiasFade) instead of popping. --set=streaming.mipFade / mipFadeIn / mipFadeOut");
                 ImGui::Separator();
                 if (streaming::TextureStreaming* ts = renderer.GetTextureStreaming())
                 {
@@ -2904,12 +2907,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     }
                     const std::vector<streaming::TextureStreamingManager::Row>& rows = ts->Manager().Rows();
                     const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
-                    if (ImGui::BeginTable("streamingTextures", 9, flags, ImVec2(0.0f, ImGui::GetFontSize() * 18.0f)))
+                    ImGui::TextDisabled("needed vis/hid = mips the distance asks for right now (on screen / off screen x0.5); wanted = after the budget, and with room to spare the budget KEEPS resident mips (UE TryKeepMips)");
+                    if (ImGui::BeginTable("streamingTextures", 10, flags, ImVec2(0.0f, ImGui::GetFontSize() * 18.0f)))
                     {
                         ImGui::TableSetupScrollFreeze(0, 1);
                         ImGui::TableSetupColumn("Texture", ImGuiTableColumnFlags_WidthStretch, 4.0f);
                         ImGui::TableSetupColumn("mips");
                         ImGui::TableSetupColumn("resident");
+                        ImGui::TableSetupColumn("needed vis/hid");
                         ImGui::TableSetupColumn("wanted");
                         ImGui::TableSetupColumn("budgeted");
                         ImGui::TableSetupColumn("requested");
@@ -2927,6 +2932,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                             if (r.unknownRef && ImGui::IsItemHovered()) { ImGui::SetTooltip("no placed object references it: kept fully loaded (UE unknown ref)"); }
                             ImGui::TableNextColumn(); ImGui::Text("%u", r.mipCount);
                             ImGui::TableNextColumn(); ImGui::Text("%u", r.resident);
+                            ImGui::TableNextColumn(); ImGui::Text("%u / %u", r.visibleWanted, r.hiddenWanted);
                             ImGui::TableNextColumn(); ImGui::Text("%u", r.wanted);
                             ImGui::TableNextColumn(); ImGui::Text("%u%s", r.budgeted, r.bias ? "*" : "");
                             ImGui::TableNextColumn(); ImGui::Text("%u", r.requested);

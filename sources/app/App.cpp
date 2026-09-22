@@ -399,6 +399,10 @@ namespace
         if (setting == "streaming.fullyLoadUsed") { streaming::g_fullyLoadUsed = value != 0.0f; return true; }
         if (setting == "streaming.dropMips")      { streaming::g_dropMips = std::clamp(static_cast<int>(value), 0, 2); return true; }
         if (setting == "streaming.selftest")      { streaming::g_selftest = value != 0.0f; return true; }
+        if (setting == "streaming.dumpRows")      { streaming::g_dumpRows = value != 0.0f; return true; }
+        if (setting == "streaming.mipFade")       { streaming::g_mipFade = value != 0.0f; return true; }
+        if (setting == "streaming.mipFadeIn")     { streaming::g_mipFadeIn = std::clamp(value, 0.01f, 10.0f); return true; }
+        if (setting == "streaming.mipFadeOut")    { streaming::g_mipFadeOut = std::clamp(value, 0.01f, 10.0f); return true; }
         if (setting == "vsm.clipmapDepthBias")  { vsm::g_clipmapDepthBias = value;  return true; }
         // Per-level depth-bias shaping (bias(L) = max(base * decay^L, floorTexels), see
         // VsmClipmapShadow) -- headless mirrors of the two dev-window sliders beside the base bias.
@@ -1552,7 +1556,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 renderer.Tick(deltaTime);
                 // The memory line (rendering/core/MemoryReport.h): every 5 s, after the previous
                 // frame's work is joined so the providers read settled state.
-                //render::TickMemoryReport(renderer.GetDevice(), now);
+                render::TickMemoryReport(renderer.GetDevice(), now); // A4: back on; providers tex / tex.ret / rt.as* / sky / cloud
                 appController_.Tick(input, renderer, scene, levelManager, deltaTime);
                 scene.Tick(deltaTime);
 
