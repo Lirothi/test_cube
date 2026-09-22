@@ -17,6 +17,7 @@
 #include <mimalloc.h>
 #include <vector>
 #include <wincodec.h>
+#include <timeapi.h> // timeBeginPeriod: the frame cap's sleep granularity (see App::Run)
 #include <wrl/client.h>
 #include "vfx/WindState.h" // --shot-count phase series steps the frozen wind clock (g_windStep)
 
@@ -89,6 +90,29 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "winmm.lib") // timeBeginPeriod
+
+// t.MaxFPS's wait, transcribed from UEngine::UpdateTimeAndHandleMaxTickRate (UnrealEngine.cpp:
+// 3060-3125): WaitTime = budget - time already spent; above 5 ms, Sleep(WaitTime - 2 ms), then
+// give the timeslice away (UE's SleepNoStats(0) is SwitchToThread) until the deadline. The 2 ms
+// of slack is what lands the cap on its number: Sleep only ever overshoots, by up to a timer
+// period, and that period is 1 ms only because App::Run asks for it the way UE's
+// FWindowsPlatformMisc::PlatformInit does. `frameStart` is the end of the previous wait -- UE's
+// LastRealTime -- so the budget covers the whole frame, not just the part after Present.
+static void WaitOutFrameBudget(double frameStart, double frameSeconds)
+{
+    const double waitEnd = frameStart + frameSeconds;
+    const double waitTime = waitEnd - GetTimeSeconds();
+    if (waitTime <= 0.0) { return; }
+    if (waitTime > 0.005)
+    {
+        Sleep(static_cast<DWORD>((waitTime - 0.002) * 1000.0));
+    }
+    while (GetTimeSeconds() < waitEnd)
+    {
+        SwitchToThread();
+    }
+}
 
 // mimalloc's output callback (its exit statistics, plus any "mimalloc: warning/error:" it raises
 // from ANY thread). Allocator callback, so the raw no-allocation frontend only. The statistics
@@ -344,6 +368,9 @@ namespace
     {
         // Occlusion plan S0: recorded, applied after the --set loop (needs the renderer + level path).
         if (setting == "scene.replicate") { g_sceneReplicateRequest = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 16.0f)); return true; }
+        // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
+        if (setting == "frame.vsync")  { render::g_vsync = value != 0.0f; return true; }
+        if (setting == "frame.maxFps") { render::g_maxFps = render::ClampMaxFps(static_cast<int>(value)); return true; }
         render::CameraExposureSettings& e = scene.CameraExposureRef();
         render::ColorPipelineSettings& c = scene.ColorPipelineRef();
 
@@ -1460,6 +1487,12 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             renderer.SetDlssMode(static_cast<sl::DLSSMode>(g_bootDlssMode));
         }
 
+        // 1 ms scheduler granularity for the frame cap's Sleep (WaitOutFrameBudget). Since
+        // Windows 10 2004 the resolution is per process: one that never asked has its sleeps
+        // rounded up to the 15.6 ms default tick, whatever other processes requested, and a 6 ms
+        // sleep inside an 8.3 ms budget would take the whole tick. UE sets the same at boot.
+        timeBeginPeriod(1);
+
         MSG msg = {};
         double lastTime = GetTimeSeconds();
         bool firstFrameDumped = false;
@@ -1767,6 +1800,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
             Profiler::Get().EndFrame();
 
+            // Frame budget = the tighter of two caps: the user's (render::g_maxFps, UE t.MaxFPS)
+            // and the model throttle below. One wait serves both (WaitOutFrameBudget).
+            //
             // While the local model is answering, STOP rendering flat out.
             //
             // The editor draws the atoll in 1.56 ms, which is about 640 frames a second,
@@ -1789,17 +1825,30 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 g_modelBusy.load(std::memory_order_relaxed) ? 1.0 / 30.0
                 : g_modelBusyBackground.load(std::memory_order_relaxed) ? 1.0 / 120.0
                 : 0.0;
-            if (busyFrameSeconds > 0.0)
+            const int maxFps = render::ClampMaxFps(render::g_maxFps);
+            const double capFrameSeconds = maxFps > 0 ? 1.0 / static_cast<double>(maxFps) : 0.0;
+            const double frameSeconds = std::max(busyFrameSeconds, capFrameSeconds);
+            if (frameSeconds > 0.0)
             {
-                const double spare = busyFrameSeconds - (GetTimeSeconds() - frameStart);
-                if (spare > 0.0)
-                {
-                    std::this_thread::sleep_for(std::chrono::duration<double>(spare));
-                }
+                WaitOutFrameBudget(frameStart, frameSeconds);
             }
             frameStart = GetTimeSeconds();
+
+            // The pacing state as the loop APPLIES it: at boot (after graphics_settings.json) and
+            // on every change -- a --set override, a Developer Controls edit. A headless run that
+            // times frames reads its cap from here instead of trusting the file.
+            static int s_loggedMaxFps = -1;
+            static bool s_loggedVsync = false;
+            if (maxFps != s_loggedMaxFps || render::g_vsync != s_loggedVsync)
+            {
+                s_loggedMaxFps = maxFps;
+                s_loggedVsync = render::g_vsync;
+                LOG_INFO(logging::LogCategory::Render, "frame pacing: vsync={} maxFps={}{}",
+                         render::g_vsync ? "on" : "off", maxFps, maxFps == 0 ? " (uncapped)" : "");
+            }
         }
 
+        timeEndPeriod(1);
         appController_.FlushGraphicsSettings(renderer, scene);
         TaskSystem::Get().Stop();
 

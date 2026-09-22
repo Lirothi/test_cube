@@ -125,6 +125,7 @@ namespace
         switch (control)
         {
         case GraphicsControl::AsyncCompute:
+        case GraphicsControl::VSync:
         case GraphicsControl::VisibilityChunkMask:
         case GraphicsControl::OcclusionIndirectQueries:
         case GraphicsControl::DlssEnabled:
@@ -575,6 +576,31 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Text("Draw calls: %u   Primitives: %.3fM",
                     render::g_renderStats.lastDrawCalls,
                     static_cast<double>(render::g_renderStats.lastPrimitives) / 1.0e6);
+
+                ImGui::Separator();
+                // Frame pacing: UE's r.VSync and t.MaxFPS, both off by default as UE ships them.
+                bool vsync = render::g_vsync;
+                if (GRAPHICS_CONTROL(VSync, "vsync", ImGui::Checkbox("VSync", &vsync)))
+                {
+                    render::g_vsync = vsync;
+                }
+                DevHelp("UE r.VSync. On: Present waits for the monitor's vblank (sync interval 1), "
+                        "so the frame rate tops out at the refresh rate and nothing tears. Off: "
+                        "present immediately, tearing allowed. Applies from the next Present.");
+                // Enter-to-apply: typing "144" must not pass through a 1 fps and a 14 fps cap on
+                // the way. The local copy is reseeded every frame; the field keeps its own text
+                // while it is being edited.
+                int maxFps = render::g_maxFps;
+                if (GRAPHICS_CONTROL(MaxFps, "maxFps",
+                        ImGui::InputInt("Max FPS", &maxFps, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)))
+                {
+                    render::g_maxFps = render::ClampMaxFps(maxFps);
+                }
+                DevHelp("UE t.MaxFPS. 0 = uncapped, otherwise 10..1000; press Enter to apply. The "
+                        "main loop sleeps out the rest of each 1/N s frame, so the GPU sits idle "
+                        "for that remainder instead of rendering frames nobody sees -- uncapped, it "
+                        "never idles, and video playing on another monitor stutters. Independent "
+                        "of VSync, as in UE: with both on, the lower rate wins.");
 
                 ImGui::Separator();
                 // Async compute (plan step 8's `--no-async-compute`, made live). Sits next to the

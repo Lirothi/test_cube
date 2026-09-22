@@ -1507,7 +1507,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         try {
             {
                 const auto presentBegin = std::chrono::steady_clock::now();
-                swapchain_.Present();
+                swapchain_.Present(render::g_vsync);
                 if (boot::g_frameProfiling) {
                     boot::AddBucket("DXGI Present",
                                     std::chrono::duration<double, std::milli>(

@@ -28,6 +28,8 @@ namespace
     struct GraphicsSettingsSnapshot
     {
         bool asyncCompute = true;
+        bool vsync = false; // UE r.VSync default
+        int maxFps = 0;     // UE t.MaxFPS default: uncapped
         bool visibilityChunkMask = true;
         int occlusionMethod = static_cast<int>(vis::OcclusionMethod::Queries);
         int occlusionQueryLatency = static_cast<int>(vis::kOcclusionBufferedFrames);
@@ -267,6 +269,7 @@ namespace
             s.dlssMode = sl::DLSSMode::eBalanced;
         }
         s.renderScale = std::clamp(finite(s.renderScale, 1.0f), 0.1f, 1.0f);
+        s.maxFps = render::ClampMaxFps(s.maxFps);
         s.occlusionMethod = std::clamp(s.occlusionMethod, 0, 2);
         s.occlusionQueryLatency = std::clamp(
             s.occlusionQueryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames));
@@ -382,6 +385,8 @@ namespace
     {
         GraphicsSettingsSnapshot s{};
         s.asyncCompute = !render::g_noAsyncCompute;
+        s.vsync = render::g_vsync;
+        s.maxFps = render::g_maxFps;
         s.visibilityChunkMask = render::g_visChunkMask;
         s.occlusionMethod = vis::g_occlusion.method;
         s.occlusionQueryLatency = vis::g_occlusion.queryLatency;
@@ -492,6 +497,8 @@ namespace
     void ApplyFrame(const GraphicsSettingsSnapshot& s)
     {
         render::g_noAsyncCompute = !s.asyncCompute;
+        render::g_vsync = s.vsync;
+        render::g_maxFps = render::ClampMaxFps(s.maxFps);
     }
 
     void ApplyVisibility(const GraphicsSettingsSnapshot& s)
@@ -655,6 +662,10 @@ namespace
         return json{
             { "version", 1 },
             { "scope", "Global runtime graphics quality. Scene look stays in level environment data." },
+            { "frame", {
+                { "vsync", s.vsync },
+                { "maxFps", s.maxFps }
+            } },
             { "performance", {
                 { "asyncCompute", s.asyncCompute },
                 { "gpuDrivenGBuffer", s.indirectGBuffer },
@@ -821,6 +832,9 @@ namespace
         const json& sdsmSettings = Section(shadows, "sdsm");
         const json& vsmSettings = Section(shadows, "vsm");
 
+        const json& frame = Section(root, "frame");
+        Read(frame, "vsync", s.vsync);
+        Read(frame, "maxFps", s.maxFps);
         Read(performance, "asyncCompute", s.asyncCompute);
         Read(performance, "gpuDrivenGBuffer", s.indirectGBuffer);
         Read(performance, "gbufferHzbCull", s.gbufferHzbCull);
@@ -1155,6 +1169,8 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     switch (control)
     {
     case GraphicsControl::AsyncCompute:                   current.asyncCompute = defaults.asyncCompute; break;
+    case GraphicsControl::VSync:                          current.vsync = defaults.vsync; break;
+    case GraphicsControl::MaxFps:                         current.maxFps = defaults.maxFps; break;
     case GraphicsControl::VisibilityChunkMask:             current.visibilityChunkMask = defaults.visibilityChunkMask; break;
     case GraphicsControl::OcclusionMethod:                 current.occlusionMethod = defaults.occlusionMethod; break;
     case GraphicsControl::OcclusionQueryLatency:           current.occlusionQueryLatency = defaults.occlusionQueryLatency; break;
@@ -1294,7 +1310,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
 
     Sanitize(current);
     const auto value = static_cast<unsigned>(control);
-    if (value <= static_cast<unsigned>(GraphicsControl::AsyncCompute))
+    if (value <= static_cast<unsigned>(GraphicsControl::MaxFps))
     {
         ApplyFrame(current);
     }

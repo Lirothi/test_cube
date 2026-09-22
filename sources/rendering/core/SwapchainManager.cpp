@@ -115,9 +115,15 @@ void SwapchainManager::ResizeBuffers(UINT width, UINT height)
     ThrowIfFailed(swapChain_->ResizeBuffers(render::kFrameCount, width, height, desc.BufferDesc.Format, desc.Flags));
 }
 
-void SwapchainManager::Present()
+void SwapchainManager::Present(bool vsync)
 {
-    ThrowIfFailed(swapChain_->Present(0, DXGI_PRESENT_ALLOW_TEARING));
+    // FD3D12Viewport::PresentInternal (WindowsD3D12Viewport.cpp:377): SyncInterval is
+    // `bLockToVsync ? rhi.SyncInterval : 0`, and ALLOW_TEARING goes only with interval 0 --
+    // DXGI rejects the flag with a non-zero interval. UE also drops it in exclusive fullscreen;
+    // this swapchain never enters that state (ReleaseSwapchain only ever leaves it).
+    const UINT syncInterval = vsync ? 1u : 0u;
+    const UINT flags = vsync ? 0u : DXGI_PRESENT_ALLOW_TEARING;
+    ThrowIfFailed(swapChain_->Present(syncInterval, flags));
 }
 
 void SwapchainManager::ReleaseBuffers()

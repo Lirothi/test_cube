@@ -22,7 +22,8 @@ public:
     void ReleaseBuffersForResize();
     void ResizeBuffers(UINT width, UINT height);
 
-    void Present();
+    // vsync = UE's r.VSync with rhi.SyncInterval 1; off presents immediately with tearing.
+    void Present(bool vsync);
 
     // Shutdown is staged to preserve the original release order.
     void ReleaseBuffers();   // backbuffers, depth, RTV/DSV heaps

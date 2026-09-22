@@ -186,6 +186,32 @@ inline bool g_noAsyncCompute = false;
 inline std::uint32_t g_asyncComputeLists = 0;
 inline std::uint32_t g_crossQueueWaits = 0;
 
+// Frame pacing: UE's two independent switches, both default off exactly as UE ships them.
+//   g_vsync  = r.VSync (ConsoleManager.cpp:4330, default 0) with rhi.SyncInterval 1
+//              (RHIUtilities.cpp:91). SwapchainManager::Present owns the flag rule.
+//   g_maxFps = t.MaxFPS (UnrealEngine.cpp:12136, default 0 = uncapped). App::Run sleeps out the
+//              rest of 1/maxFps the way UEngine::UpdateTimeAndHandleMaxTickRate does.
+// They exist because uncapped, a 3 ms frame holds the GPU at 99 % with three frames queued and
+// never leaves it idle, and a browser playing video on the next monitor drops frames.
+// Measured 2026-09-22, 4090, boot level, one Release binary:
+//   uncapped          3.26 ms  99 %  329 W
+//   maxFps 120        8.33 ms  51 %  207 W
+//   vsync (240 Hz)    4.17 ms  88 %  302 W
+// On a fast panel it is the cap, not vsync, that gives the GPU back.
+// Floor 10: App::Run clamps deltaTime to 0.1 s, so below 10 fps the simulation would run slower
+// than the wall clock -- and a 1 fps cap would leave the UI that undoes it barely usable.
+inline constexpr int kMaxFpsFloor = 10;
+inline constexpr int kMaxFpsCeiling = 1000;
+inline bool g_vsync = false;
+inline int g_maxFps = 0;
+
+// 0 (or less) = uncapped; anything else lands in [kMaxFpsFloor, kMaxFpsCeiling].
+inline int ClampMaxFps(int fps)
+{
+    if (fps <= 0) { return 0; }
+    return fps < kMaxFpsFloor ? kMaxFpsFloor : (fps > kMaxFpsCeiling ? kMaxFpsCeiling : fps);
+}
+
 // `--dr-check`: poll GetDeviceRemovedReason() once per BeginFrame, so a device removal leaves a
 // file behind no matter where it surfaces — a failed Present, a fence wait that never returns, a
 // TDR between frames.

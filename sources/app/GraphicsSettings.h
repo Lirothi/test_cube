@@ -13,7 +13,9 @@ struct SceneRenderSettings;
 enum class GraphicsControl
 {
     // Contiguous per tab: ResetControl dispatches its Apply group by range (GraphicsSettings.cpp).
-    AsyncCompute,                 // Frame
+    AsyncCompute,                 // Frame ...
+    VSync,
+    MaxFps,
     VisibilityChunkMask,          // Visibility ...
     OcclusionMethod,
     OcclusionQueryLatency,

@@ -5,6 +5,10 @@
     "fxaa": false,
     "renderScale": 0.580078125
   },
+  "frame": {
+    "maxFps": 0,
+    "vsync": false
+  },
   "lod": {
     "chunkDistance": 24.0,
     "chunkFactor": 2.0,
@@ -149,7 +153,7 @@
     "mipBias": 0,
     "mipFade": true,
     "perTextureBias": true,
-    "poolSizeMB": 32
+    "poolSizeMB": -1
   },
   "version": 1,
   "visibility": {
