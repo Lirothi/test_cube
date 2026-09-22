@@ -1,6 +1,6 @@
 # План: текстурный стриминг и виртуальные текстуры (транскрипция UE 5.6)
 
-Дата: 2026-09-20. Статус: **A1 сделан 2026-09-22 (не закоммичен, см. блок «Статус» в A1); следующий — A2.** Референс — дроп `D:\Programming\ue_strip`
+Дата: 2026-09-20. Статус: **A1 сделан 2026-09-22 (коммит `186e2be`, см. блок «Статус» в A1); следующий — A2.** Референс — дроп `D:\Programming\ue_strip`
 (оба дерева, `Source/` и `Shaders/`). Каждая ссылка на UE и на наш код — с `file:line`, сверено
 2026-09-20 по файлам; что не сверено — помечено «(сверить)». Документ написан как задание для
 исполнителя: шаг берётся целиком, без переразведки, кроме чтения файлов, перечисленных в шаге.
@@ -193,7 +193,7 @@ page table/пул/feedback части B. Порядок: A1→A6, затем B1�
 
 **Откат.** `streamable = false` везде (код мёртвый).
 
-**Статус (2026-09-22): СДЕЛАНО, не закоммичено.** Вошло: `sources/rendering/streaming/DdsMipTable.h`
+**Статус (2026-09-22): СДЕЛАНО, коммит `186e2be`.** Вошло: `sources/rendering/streaming/DdsMipTable.h`
 (`streaming::kNonStreamingMips = 7`, `DdsMipTable::{Build, DataBytes, TailBytes}`);
 `Texture2D::CreateDesc::{streamable, residentMips}`; на текстуре `mipTable_ / sourcePath_ /
 residentMips_ / streamingIndex_ / streamable_` с аксессорами `IsStreamable, GetMipTable,
@@ -231,11 +231,12 @@ WriteManifestUvDensity}`, `BakeToBinary(..., outUvDensity)`; ключ `uvDensity
 Гейт: три конфига собраны; Release `--scene-stress` CLEAN 300 итераций (45.7 с), компаратор
 молчит (`barrier_diag.log` не родился).
 
-**Манифесты в `models/` НЕ тронуты** (запись ассетов — по команде владельца). Заполнить одной
-командой из корня репо, без пере-бейка `.bin`:
-`x64/Release/test_cube.exe --uv-density=models/coconut_palm.mesh.json,models/curly_palm.mesh.json,…`
-(все 14 через запятую). До этого при каждой загрузке уровня — один `WARN` «mesh.json without
-uvDensity», и A3 будет считать `TexelFactor` от AABB объекта.
+**Все 14 манифестов в `models/` заполнены** (по команде владельца, тот же коммит) командой из
+корня репо, без пере-бейка `.bin`: `x64/Release/test_cube.exe --uv-density=models/a.mesh.json,…`.
+Значения: пальмы 0.09–1.02 (атласы), камни 2.1–3.1, тент 0.8–5.2, террейн ~120 (UV 0..1 на ~1 км,
+тайлинг через `texOffsScale`). После заполнения `wind_test` грузится без `WARN` про uvDensity. Новый
+ассет получает ключ от бейка сам; манифест без ключа даёт один `WARN` на процесс, и A3 считает
+`TexelFactor` от AABB объекта.
 
 ### A2. IO-ринг, аплоад-ринг, пасс `Main_TextureStreaming`, подмена ресурса — 3 дня
 
