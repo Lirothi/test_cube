@@ -1,4 +1,5 @@
 #include "vfx/ParticleEmitterObject.h"
+#include "rendering/core/RenderStats.h"
 #include "core/logging/Log.h"
 
 #include <algorithm>
@@ -513,4 +514,5 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
         if (render::g_bindBatchingEnabled) { cache.topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST; }
     }
     cl->DrawInstanced(6u * desc_.maxParticles, 1, 0, 0);
+    render::g_renderStats.AddDraw(6u * desc_.maxParticles, 1u);
 }

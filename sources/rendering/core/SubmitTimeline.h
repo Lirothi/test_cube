@@ -118,8 +118,16 @@ public:
     // The driver's lifecycle ends here (step 4): bundles are appended in sorted
     // order and the driver is CLOSED exactly once, at gather time. Direct lists
     // were already closed by EndThreadCommandList; this only collects them.
-    template <class MakeFallbackDriver>
-    void GatherFrameLists(std::vector<Submission>& out, MakeFallbackDriver&& makeFallbackDriver)
+    //
+    // `beforeDriverClose(driver)` runs after the bundles and before Close -- the last point at
+    // which the driver can still record (the renderer ends its statistics query there).
+    struct NoDriverHook
+    {
+        void operator()(ID3D12GraphicsCommandList*) const {}
+    };
+    template <class MakeFallbackDriver, class BeforeDriverClose = NoDriverHook>
+    void GatherFrameLists(std::vector<Submission>& out, MakeFallbackDriver&& makeFallbackDriver,
+        BeforeDriverClose&& beforeDriverClose = BeforeDriverClose{})
     {
         std::lock_guard<std::mutex> lk(mtx_);
         ApplySubmitOrderLocked_();
@@ -174,6 +182,7 @@ public:
                         driver->ExecuteBundle(bundle.cl); // non-null (checked at registration)
                     }
                 }
+                beforeDriverClose(driver);
                 if (FAILED(driver->Close())) {
                     RendererInvariantFailure("SubmitTimeline::GatherFrameLists: driver Close() failed");
                 }

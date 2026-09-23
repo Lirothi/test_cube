@@ -1,4 +1,5 @@
 #include "rendering/lighting/PointLight.h"
+#include "rendering/core/RenderStats.h"
 #include "rendering/core/PhotographicSettings.h" // P16.5 CandelaFromLumens
 #include "rendering/core/Renderer.h"
 #include <algorithm>
@@ -245,6 +246,7 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     // Fullscreen triangle
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->DrawInstanced(3, 1, 0, 0);
+    render::g_renderStats.AddDraw(3u, 1u);
 }
 
 void PointLight::OnMaterialHotReload()

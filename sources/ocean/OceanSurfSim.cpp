@@ -303,6 +303,7 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
         return [readablePoint](RenderGraphPassContext c)
         {
             auto t = c.BeginCL();
+            SetCommandListName(t.cl, c.pass);
             {
                 GPU_SCOPE(t.cl, ProfilerScopes::kOceanSurfSim);
                 c.renderer->EmitPoint(t.cl, readablePoint);
@@ -346,6 +347,7 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
     {
         Renderer* renderer = c.renderer;
         auto t = c.BeginCL();
+        SetCommandListName(t.cl, c.pass);
         ID3D12GraphicsCommandList* cl = t.cl;
         {
             GPU_SCOPE(cl, ProfilerScopes::kOceanSurfSim);

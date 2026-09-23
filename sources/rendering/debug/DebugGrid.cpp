@@ -1,4 +1,5 @@
 #include "rendering/debug/DebugGrid.h"
+#include "rendering/core/RenderStats.h"
 
 #include <DirectXMath.h>
 
@@ -143,6 +144,7 @@ public:
         cl->IASetVertexBuffers(0, 1, &vbv_);
         if (vertexCount_ > 0u) {
             cl->DrawInstanced(vertexCount_, 1, 0, 0);
+            render::g_renderStats.AddDraw(vertexCount_, 1u);
         }
     }
 
@@ -259,6 +261,7 @@ public:
         cl->IASetVertexBuffers(0, 1, &vbv_);
         if (vertexCount_ > 0u) {
             cl->DrawInstanced(vertexCount_, 1, 0, 0);
+            render::g_renderStats.AddDraw(vertexCount_, 1u);
         }
     }
 

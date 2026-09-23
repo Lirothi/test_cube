@@ -404,6 +404,18 @@ public:
     void RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl);
     void RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchIndex);
 
+    // GPU pipeline statistics around every DIRECT list of the frame (render::g_renderStats).
+    // Begin runs in BeginThreadCommandList; End runs where the list is closed -- in
+    // EndThreadCommandList, and for a pass DRIVER in GatherFrameLists after its bundles, since
+    // the bundled draws execute there. A pipeline-statistics query cannot span lists, so a list
+    // closed anywhere else would be closed with the query open; the index therefore rides on the
+    // list itself (private data), which is also what makes End safe on a list nobody began.
+    void BeginListStats(ID3D12GraphicsCommandList* cl);
+    void EndListStats(ID3D12GraphicsCommandList* cl);
+    // End the list's current query under its current name and open the next one -- for passes
+    // that share one list (RenderGraph groups), so each is counted under its own name.
+    void SplitListStats(ID3D12GraphicsCommandList* cl) { EndListStats(cl); BeginListStats(cl); }
+
     // Getters
     ID3D12Device* GetDevice() const { return graphicsDevice_.Device(); }
     ID3D12CommandQueue* GetCommandQueue() const { return graphicsDevice_.Queue(); }
@@ -832,6 +844,22 @@ private:
 
 
 private:
+    // See BeginListStats. One heap and one readback buffer, slot-major: frame slot f owns queries
+    // [f * kListStatsPerFrame, (f + 1) * kListStatsPerFrame), read at BeginFrame after that slot's
+    // fence -- which is the only moment its resolves are known to have landed.
+    static constexpr uint32_t kListStatsPerFrame = 1024;
+    void EnsureListStats();
+    void ResolveListStats(ID3D12GraphicsCommandList* cl);
+    void PublishListStats(uint32_t slot);
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> listStatsHeap_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> listStatsReadback_;
+    bool listStatsFailed_ = false;
+    uint32_t listStatsSlot_ = 0;                    // the frame slot being recorded
+    std::atomic<uint32_t> listStatsNext_{ 0 };      // queries handed out in that slot
+    std::array<uint32_t, render::kFrameCount> listStatsUsed_{};  // per slot, frozen at BeginFrame
+    std::array<bool, render::kFrameCount> listStatsArmed_{};     // the slot's queries were recorded
+    std::vector<std::array<char, 48>> listStatsNames_; // [slot * kListStatsPerFrame + i]
+
     SubmitTimeline submitTimeline_;
     // Step 6: the frame's submissions, one per contiguous same-queue run of batches.
     std::vector<SubmitTimeline::Submission> submitSegmentsScratch_;

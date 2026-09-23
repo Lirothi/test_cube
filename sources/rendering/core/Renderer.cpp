@@ -27,6 +27,7 @@
 #include "rendering/core/DlssHandler.h"
 #include "rendering/shadows/ShadowSettings.h" // S5: kCascadeAtlasBorder
 #include "rendering/core/RasterSettings.h"    // A6: raster.bindless -> material PSO rebuild
+#include "rendering/core/RenderStats.h"       // GPU pipeline statistics per direct list
 #include "streamline/include/sl.h"
 
 #pragma comment(lib, "dxguid.lib")
@@ -716,6 +717,37 @@ void Renderer::BeginFrame() {
     // Wait for the GPU using its back buffer fence value
     WaitForFrame(currentFrameIndex_);
 
+    // GPU pipeline statistics: freeze how many queries the slot just recorded handed out, publish
+    // the slot this frame reuses -- its fence is what WaitForFrame just passed, so its resolves
+    // have landed -- and record into it from here on.
+    if (listStatsArmed_[listStatsSlot_]) {
+        listStatsUsed_[listStatsSlot_] = listStatsNext_.load(std::memory_order_relaxed);
+    }
+    // On demand by default: the UI's request from the frame just built arms this one -- and then
+    // only ONE FRAME IN kListStatsSampleFrames. A frame that records the queries costs +0.36 ms on
+    // wind_test (38 lists, 3.22 -> 3.58 ms), which the Frame tab would otherwise report as its own
+    // FPS; sampled, it averages ~0.01 ms and the counters still refresh several times a second.
+    // stats.pipeline:1 records every frame, for a headless read of the numbers.
+    constexpr uint64_t kListStatsSampleFrames = 32;
+    const bool requested = render::g_pipelineStatsRequested.exchange(false, std::memory_order_relaxed);
+    const bool listStatsWanted = render::g_pipelineStatsMode == 1 ||
+        (render::g_pipelineStatsMode == 2 && requested && totalFrameNumber_ % kListStatsSampleFrames == 0);
+    if (currentFrameIndex_ < render::kFrameCount) {
+        if (listStatsArmed_[currentFrameIndex_]) {
+            PublishListStats(currentFrameIndex_);
+            listStatsArmed_[currentFrameIndex_] = false;
+        }
+        if (listStatsWanted) {
+            EnsureListStats();
+        }
+        listStatsSlot_ = currentFrameIndex_;
+        listStatsNext_.store(0u, std::memory_order_relaxed);
+        listStatsArmed_[currentFrameIndex_] = listStatsWanted && listStatsHeap_ != nullptr;
+    }
+    if (render::g_pipelineStatsMode == 0) {
+        render::g_renderStats.gpuValid = false;
+    }
+
     // The inspector re-states its preview request every frame it is open, so clearing here means a
     // CLOSED inspector stops the pass instead of leaving it resampling the last target forever.
     // Order matters and holds: BeginFrame -> UI building (which may re-request) -> Scene::Render.
@@ -1177,6 +1209,182 @@ bool Renderer::ConsumeMaterialHotReloadFlag()
     return wasReloaded;
 }
 
+// ---- GPU pipeline statistics per direct list (see Renderer.h, RenderStats.h) -------------------
+
+namespace
+{
+    // The query index a list carries between Begin and End. Private data rather than a field on
+    // ThreadCL because a pass DRIVER is begun as a ThreadCL and closed as a bare list pointer in
+    // SubmitTimeline::GatherFrameLists, after its bundles have run inside it.
+    // {6F2B8A51-3C4D-4E7A-9B1F-2D6E8C0A5B93}
+    const GUID kListStatsQueryGuid =
+        { 0x6f2b8a51, 0x3c4d, 0x4e7a, { 0x9b, 0x1f, 0x2d, 0x6e, 0x8c, 0x0a, 0x5b, 0x93 } };
+    constexpr uint32_t kNoListStatsQuery = 0xffffffffu;
+}
+
+void Renderer::EnsureListStats()
+{
+    if (listStatsHeap_ || listStatsFailed_ || !GetDevice()) {
+        return;
+    }
+    const uint32_t total = kListStatsPerFrame * render::kFrameCount;
+    D3D12_QUERY_HEAP_DESC qh{};
+    qh.Type = D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS;
+    qh.Count = total;
+    D3D12_HEAP_PROPERTIES hp{};
+    hp.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC rd{};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    rd.Width = static_cast<UINT64>(total) * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS);
+    rd.Height = 1;
+    rd.DepthOrArraySize = 1;
+    rd.MipLevels = 1;
+    rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    rd.SampleDesc.Count = 1;
+    if (FAILED(GetDevice()->CreateQueryHeap(&qh, IID_PPV_ARGS(&listStatsHeap_))) ||
+        FAILED(GetDevice()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&listStatsReadback_))))
+    {
+        listStatsHeap_.Reset();
+        listStatsReadback_.Reset();
+        listStatsFailed_ = true;
+        LOG_WARNING(logging::LogCategory::Render,
+            "pipeline statistics unavailable: query heap or readback creation failed -- the "
+            "Frame tab's GPU triangle count stays blank");
+        return;
+    }
+    listStatsHeap_->SetName(L"Renderer.ListStats");
+    listStatsReadback_->SetName(L"Renderer.ListStatsReadback");
+    listStatsNames_.assign(total, {});
+}
+
+void Renderer::BeginListStats(ID3D12GraphicsCommandList* cl)
+{
+    if (!cl || cl->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) {
+        return;
+    }
+    uint32_t query = kNoListStatsQuery;
+    if (listStatsArmed_[listStatsSlot_] && listStatsHeap_) {
+        const uint32_t local = listStatsNext_.fetch_add(1u, std::memory_order_relaxed);
+        if (local < kListStatsPerFrame) {
+            query = listStatsSlot_ * kListStatsPerFrame + local;
+            cl->BeginQuery(listStatsHeap_.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, query);
+        }
+    }
+    // Written even when not measuring: lists are pooled, and a stale index from an earlier use
+    // would make End close a query this list never opened.
+    cl->SetPrivateData(kListStatsQueryGuid, sizeof(query), &query);
+}
+
+void Renderer::EndListStats(ID3D12GraphicsCommandList* cl)
+{
+    if (!cl || !listStatsHeap_) {
+        return;
+    }
+    uint32_t query = kNoListStatsQuery;
+    UINT size = sizeof(query);
+    if (FAILED(cl->GetPrivateData(kListStatsQueryGuid, &size, &query)) || size != sizeof(query) ||
+        query == kNoListStatsQuery)
+    {
+        return; // never begun: a fallback driver, a profiler bracket list, stats switched off
+    }
+    cl->EndQuery(listStatsHeap_.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, query);
+    // Resolved in ONE call in the epilogue list (ResolveListStats), not per list. That was the
+    // first suspect for the cost and it was not it: stats.pipeline:0/1 swept in one process on
+    // wind_test read 3.20 -> 3.54 ms with a resolve per list and 3.22 -> 3.58 ms with one resolve
+    // -- the queries themselves cost ~9 us each. Hence the sampling in BeginFrame.
+    // The pass name the list was given (SetCommandListName), for the per-pass breakdown. Each
+    // query index belongs to exactly one list, so concurrent workers write disjoint entries.
+    render::DebugObjectLabel(cl, listStatsNames_[query].data(), listStatsNames_[query].size());
+    const uint32_t none = kNoListStatsQuery;
+    cl->SetPrivateData(kListStatsQueryGuid, sizeof(none), &none);
+}
+
+// Every query of the frame in one resolve, recorded into the epilogue list -- submitted after
+// every work list on the direct queue, so all of them have ended by the time it runs.
+void Renderer::ResolveListStats(ID3D12GraphicsCommandList* cl)
+{
+    if (!cl || !listStatsHeap_ || !listStatsReadback_ || !listStatsArmed_[listStatsSlot_]) {
+        return;
+    }
+    const uint32_t count = std::min(listStatsNext_.load(std::memory_order_relaxed), kListStatsPerFrame);
+    if (count == 0) {
+        return;
+    }
+    const uint32_t first = listStatsSlot_ * kListStatsPerFrame;
+    cl->ResolveQueryData(listStatsHeap_.Get(), D3D12_QUERY_TYPE_PIPELINE_STATISTICS, first, count,
+        listStatsReadback_.Get(), static_cast<UINT64>(first) * sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS));
+}
+
+void Renderer::PublishListStats(uint32_t slot)
+{
+    render::RenderStats& stats = render::g_renderStats;
+    const uint32_t used = listStatsUsed_[slot];
+    const uint32_t measured = std::min(used, kListStatsPerFrame);
+    const size_t stride = sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS);
+    const size_t first = static_cast<size_t>(slot) * kListStatsPerFrame;
+    D3D12_RANGE readRange{ first * stride, (first + measured) * stride };
+    void* mapped = nullptr;
+    if (measured == 0 || !listStatsReadback_ || FAILED(listStatsReadback_->Map(0, &readRange, &mapped))) {
+        stats.gpuValid = false;
+        return;
+    }
+    const auto* data = reinterpret_cast<const D3D12_QUERY_DATA_PIPELINE_STATISTICS*>(
+        static_cast<const uint8_t*>(mapped) + first * stride);
+
+    uint64_t ia = 0;
+    uint64_t clipped = 0;
+    uint64_t ps = 0;
+    // Merged by name: a pass split over several lists (cascades, spot faces, worker chunks) is
+    // one line in the breakdown, which is the question the breakdown answers.
+    std::vector<render::RenderStats::ListShare> byName;
+    byName.reserve(64);
+    for (uint32_t i = 0; i < measured; ++i) {
+        ia += data[i].IAPrimitives;
+        clipped += data[i].CPrimitives;
+        ps += data[i].PSInvocations;
+        if (data[i].IAPrimitives == 0) {
+            continue;
+        }
+        const char* name = listStatsNames_[first + i][0] ? listStatsNames_[first + i].data() : "<unnamed>";
+        auto it = std::find_if(byName.begin(), byName.end(),
+            [name](const render::RenderStats::ListShare& s) { return std::strcmp(s.name, name) == 0; });
+        if (it == byName.end()) {
+            byName.emplace_back();
+            it = byName.end() - 1;
+            std::snprintf(it->name, sizeof(it->name), "%s", name);
+        }
+        it->primitives += data[i].IAPrimitives;
+    }
+    const D3D12_RANGE noWrite{ 0, 0 };
+    listStatsReadback_->Unmap(0, &noWrite);
+
+    std::sort(byName.begin(), byName.end(),
+        [](const render::RenderStats::ListShare& a, const render::RenderStats::ListShare& b) {
+            return a.primitives > b.primitives;
+        });
+    stats.gpuTopCount = static_cast<int>(std::min<size_t>(byName.size(), render::RenderStats::kTopLists));
+    for (int i = 0; i < stats.gpuTopCount; ++i) {
+        stats.gpuTop[i] = byName[static_cast<size_t>(i)];
+    }
+    stats.gpuPrimitives = ia;
+    stats.gpuRasterized = clipped;
+    stats.gpuPixelShaded = ps;
+    stats.gpuLists = measured;
+    stats.gpuListsUnmeasured = used - measured;
+    stats.gpuValid = true;
+
+    // Only while the counters are being recorded (the Frame tab is open, or stats.pipeline:1),
+    // so a headless run can read the same numbers the panel shows.
+    LOG_INFO_THROTTLED(std::chrono::seconds(5), logging::LogCategory::Render,
+        "gpu stats: {:.3f}M tris in, {:.3f}M past clipping, {:.1f}M pixels shaded, {} lists ({} unmeasured); "
+        "top: {} {:.3f}M, {} {:.3f}M, {} {:.3f}M",
+        ia / 1.0e6, clipped / 1.0e6, ps / 1.0e6, measured, used - measured,
+        stats.gpuTopCount > 0 ? stats.gpuTop[0].name : "-", stats.gpuTopCount > 0 ? stats.gpuTop[0].primitives / 1.0e6 : 0.0,
+        stats.gpuTopCount > 1 ? stats.gpuTop[1].name : "-", stats.gpuTopCount > 1 ? stats.gpuTop[1].primitives / 1.0e6 : 0.0,
+        stats.gpuTopCount > 2 ? stats.gpuTop[2].name : "-", stats.gpuTopCount > 2 ? stats.gpuTop[2].primitives / 1.0e6 : 0.0);
+}
+
 Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* pso)
 {
     CPU_SCOPE(ProfilerScopes::kRendererBeginThreadCommandList);
@@ -1207,6 +1415,9 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
     // this thread's bind cache — the first draw recorded into it binds fully.
     render::g_clBindState.Reset();
 
+    if (type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
+        BeginListStats(cl);
+    }
     return ThreadCL{ alloc, cl, type };
 }
 
@@ -1237,6 +1448,9 @@ void Renderer::EndThreadCommandList(ThreadCL& t, size_t batchIndex, uint32_t loc
     // fixup used to append the next list's acquire barriers to this one's tail).
     // Runs on worker tasks, which must not throw — check the HRESULT explicitly;
     // a list that failed to Close would lose its GPU work.
+    if (t.type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
+        EndListStats(t.cl);
+    }
     const HRESULT hr = t.cl->Close();
     if (FAILED(hr)) {
         // Name the LIST and the code. "Close() failed" alone says only that some command in some
@@ -1321,6 +1535,10 @@ void Renderer::ExecuteTimelineAndPresent() {
                 fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
             RecordBindDefaultsNoClear(cl);
             return cl;
+        }, [this](ID3D12GraphicsCommandList* driver) {
+            // A driver's statistics query closes HERE, after its bundles: the bundled draws
+            // execute inside the driver, and closing at the driver's own pass would drop them.
+            EndListStats(driver);
         });
     }
 
@@ -1398,6 +1616,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         barriers::EmitOne(epilogueCmd, presentBarrier);
         // The engine's one return-to-canonical transition (D2's frame epilogue): PRESENT is
         // the backbuffer's declared resting state, so the frame ends where it began.
+        ResolveListStats(epilogueCmd);
 #if PROF_GPU_ENABLED
         Profiler::Get().EndGpuFrame(epilogueCmd);
 #endif
@@ -2244,6 +2463,10 @@ void Renderer::ExecuteIndirect(ID3D12GraphicsCommandList* cl, ID3D12CommandSigna
         return;
     }
     cl->ExecuteIndirect(sig, maxCommandCount, argBuffer, argOffset, countBuffer, countOffset);
+    // Every caller is a DRAW signature today (G-buffer, CSM, VSM). One API call, up to
+    // maxCommandCount draws -- how many the GPU cull actually emitted only the GPU knows, which
+    // is why the Frame tab takes its triangle count from pipeline statistics instead.
+    render::g_renderStats.AddIndirect(maxCommandCount);
 }
 
 void Renderer::RecordBindAndClear(ID3D12GraphicsCommandList* cl) {

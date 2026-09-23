@@ -1,4 +1,5 @@
 #include "rendering/visibility/OcclusionQueries.h"
+#include "rendering/core/RenderStats.h"
 
 #include <cstring>
 
@@ -199,6 +200,7 @@ void OcclusionQueryHeap::Record(Renderer* renderer, ID3D12GraphicsCommandList* c
         cl->BeginQuery(heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION, base + batch.queryIndex);
         cl->DrawIndexedInstanced(kIndicesPerBox * batch.boxCount, 1, 0,
                                  static_cast<INT>(batch.firstBox * kVerticesPerBox), 0);
+        render::g_renderStats.AddDraw(kIndicesPerBox * batch.boxCount, 1u);
         cl->EndQuery(heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION, base + batch.queryIndex);
     }
     cl->ResolveQueryData(heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION, base, plan.queryCount, readback_.Get(),

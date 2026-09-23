@@ -587,6 +587,8 @@ namespace
         if (setting == "gbuffer.indirect") { render::g_indirectGBufferEnabled = value != 0.0f; return true; } // occlusion plan S4
         if (setting == "raster.bindless") { render::g_rasterBindless = value != 0.0f; return true; }          // texture streaming A6
         if (setting == "gbuffer.hzb") { render::g_gbufferHzbCullEnabled = value != 0.0f; return true; }       // occlusion plan S5
+        // GPU triangle statistics for the Frame tab: 0 off, 1 always, 2 while the tab is open.
+        if (setting == "stats.pipeline") { render::g_pipelineStatsMode = std::clamp(static_cast<int>(value), 0, 2); return true; }
         // Volumetric fog cell size (8 / 16 / 32 render pixels); the renderer picks the change up at the next frame.
         if (setting == "fog.gridPixels") { render::g_fogGridPixels = static_cast<unsigned>(std::clamp(value, 4.0f, 64.0f)); return true; } // the renderer rounds to a power of two
         if (setting == "fog.gridZ") { render::g_fogGridZ = static_cast<unsigned>(std::clamp(value, 16.0f, 128.0f)); return true; }

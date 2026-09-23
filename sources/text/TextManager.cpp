@@ -1,4 +1,5 @@
 #include <cstdarg>
+#include "rendering/core/RenderStats.h"
 #include <cstdio>
 #include <cwchar>
 #include <optional>
@@ -561,6 +562,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
         cl->IASetVertexBuffers(0, 1, &rectVBV_);
         cl->IASetIndexBuffer(&rectIBV_);
         cl->DrawIndexedInstanced((UINT)rectIdx_.size(), 1, 0, 0, 0);
+        render::g_renderStats.AddDraw(static_cast<uint32_t>(rectIdx_.size()), 1u);
     }
 
     // 2) Text
@@ -607,6 +609,7 @@ void TextManager::Draw(Renderer* r, ID3D12GraphicsCommandList* cl) {
 
         const UINT indexCount = (UINT)((verts_.size() / 4u) * 6u);
         cl->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+        render::g_renderStats.AddDraw(indexCount, 1u);
     }
 }
 

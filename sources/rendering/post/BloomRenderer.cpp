@@ -10,6 +10,7 @@
 // step is not the place to re-earn those lessons.
 
 #include "rendering/post/BloomRenderer.h"
+#include "rendering/core/RenderStats.h"
 
 #include <algorithm>
 #include <array>
@@ -902,6 +903,7 @@ void BloomRenderer::FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandList* c
         const UINT tiles = D.lensFlareWidth * D.lensFlareHeight;
         const UINT instances = (tiles + kFlareQuadsPerInstance - 1u) / kFlareQuadsPerInstance;
         cl->DrawInstanced(6u * kFlareQuadsPerInstance, instances, 0, 0);
+        render::g_renderStats.AddDraw(6u * kFlareQuadsPerInstance, instances);
     }
     renderer->EmitPoint(cl, pts.flareRead);
 }

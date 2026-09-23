@@ -1,4 +1,5 @@
 #include "editor/assets/EditorPreviewRenderer.h"
+#include "rendering/core/RenderStats.h"
 #include "core/logging/Log.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
@@ -896,6 +897,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         cl->SetGraphicsRootDescriptorTable(1, skyboxGpuHandle);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         cl->DrawInstanced(3, 1, 0, 0);
+        render::g_renderStats.AddDraw(3u, 1u);
     }
 
     cl->SetPipelineState(pipeline_.Get());
@@ -1118,6 +1120,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         cl->SetGraphicsRootDescriptorTable(1, gpuHandle);
         cl->DrawIndexedInstanced(indexCount, 1,
             hasSubmesh ? submesh.indexOffset : 0, 0, 0);
+        render::g_renderStats.AddDraw(indexCount, 1u);
     }
 
     if (mode == EditorPreviewMode::VertexNormals)
@@ -1133,6 +1136,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
             cl->IASetIndexBuffer(nullptr);
             cl->DrawInstanced(vertexCount, 1, 0, 0);
+            render::g_renderStats.AddDraw(vertexCount, 1u);
         }
     }
 
@@ -1186,6 +1190,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             static_cast<UINT64>(kPreviewLightMarkerSlot) * kPreviewConstantStride);
         cl->SetGraphicsRootDescriptorTable(1, frame.srvGpuHandle);
         cl->DrawIndexedInstanced(markerDraw.indexCount, 1, 0, 0, 0);
+        render::g_renderStats.AddDraw(markerDraw.indexCount, 1u);
     }
 
     // Leave the thumbnail in a shader-read state, exactly like a loaded texture,
@@ -1284,6 +1289,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordCubeThumbnai
     cl->SetGraphicsRootDescriptorTable(1, frame.srvGpuHandle);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cl->DrawInstanced(3, 1, 0, 0);
+    render::g_renderStats.AddDraw(3u, 1u);
 
     barrier(color.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

@@ -1,4 +1,5 @@
 #include "rendering/debug/DebugDraw.h"
+#include "rendering/core/RenderStats.h"
 
 #include <algorithm>
 #include <array>
@@ -777,6 +778,7 @@ void DebugDrawSystem::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
         cl->IASetVertexBuffers(0, 1, &vbv);
         cl->DrawInstanced(static_cast<UINT>(vertexCount), 1, 0, 0);
+        render::g_renderStats.AddDraw(static_cast<uint32_t>(vertexCount), 1u);
 
         ctx.cbv[0] = 0;
     };

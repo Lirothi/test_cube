@@ -1,4 +1,5 @@
 #include "rendering/shadows/VirtualShadowMap.h"
+#include "rendering/core/RenderStats.h"
 #include "core/logging/Log.h"
 #include "rendering/core/TextureCreate.h"
 
@@ -1756,6 +1757,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         pageClearMat_->Bind(cl, cctx, false);
         cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         cl->DrawInstanced(4u, vsm::kPoolPageCount, 0u, 0u);
+        render::g_renderStats.AddDraw(6u, vsm::kPoolPageCount); // a 4-vertex strip is two triangles
     }
     else
     {

@@ -692,6 +692,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
 
         CPU_SCOPE(ProfilerScopes::kSpotShadowPerLight);
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        SetCommandListName(t.cl, RenderPass::Main_SpotShadows);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
             // Only the FIRST light's list moves the atlas. Recording order across the fan-out is
@@ -816,6 +817,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
 
         CPU_SCOPE(ProfilerScopes::kSpotShadowPerLight);
         auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+        SetCommandListName(t.cl, RenderPass::Main_PointShadows);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassPointShadow);
             // See Pass_SpotShadows: the atlas barrier must be recorded into the list submitted

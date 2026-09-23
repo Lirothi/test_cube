@@ -1481,6 +1481,12 @@ private:
         PassContext::GroupCL groupCL;
         for (size_t m : groups_[gid]) {
             if (!passes_[m].exec) { continue; }
+            // Per-MEMBER pipeline statistics: the members share one list, and a single query over
+            // all of them was reported under whichever member named the list last -- which
+            // changes with the members that run, so the ocean's 0.56M triangles showed up as
+            // "Lighting", "VolumetricFog" or "GlassReflections" from one frame to the next.
+            // Closing the previous member's query here labels it with that member's name.
+            if (groupCL.opened) { renderer->SplitListStats(groupCL.shared.cl); }
             PassContext ctx;
             ctx.renderer = renderer;
             ctx.batchIndex = batch;

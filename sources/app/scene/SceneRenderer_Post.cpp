@@ -6,6 +6,7 @@
 // trimmed one is a second thing to review.
 
 #include "app/scene/SceneRenderer.h"
+#include "rendering/core/RenderStats.h"
 #include "core/logging/Log.h"
 
 #include <algorithm>
@@ -587,6 +588,7 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx,
         debugMaterial->Bind(t.cl, rc);
         t.cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         t.cl->DrawInstanced(3, 1, 0, 0);
+        render::g_renderStats.AddDraw(3u, 1u);
     } while (false);
 
     // OUTSIDE the do-block on purpose: the `break` above (no debug material) must not skip the

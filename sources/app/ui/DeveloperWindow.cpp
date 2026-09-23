@@ -576,9 +576,47 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Text("FPS: %.1f (%.2f ms)", fps, frameMs);
                 ImGui::Text("Display: %ux%u", renderer.GetWidth(), renderer.GetHeight());
                 ImGui::Text("Render: %ux%u (scale %.2f)", renderer.GetRenderWidth(), renderer.GetRenderHeight(), renderer.GetRenderResolutionScale());
-                ImGui::Text("Draw calls: %u   Primitives: %.3fM",
-                    render::g_renderStats.lastDrawCalls,
-                    static_cast<double>(render::g_renderStats.lastPrimitives) / 1.0e6);
+                // Two sources, because the CPU no longer sees most of the scene: the palms, the
+                // CSM and the VSM pages are drawn by ExecuteIndirect, and the old line read
+                // "Draw calls: 2" on wind_test. Draw calls are the CPU's own record -- each
+                // ExecuteIndirect one call that MAY issue many draws. Triangles are the GPU's.
+                const render::RenderStats& rs = render::g_renderStats;
+                ImGui::Text("Draw calls: %u direct + %u ExecuteIndirect (up to %llu GPU draws)",
+                    rs.lastDrawCalls, rs.lastIndirectCalls,
+                    static_cast<unsigned long long>(rs.lastIndirectMaxDraws));
+                render::RequestPipelineStats(); // this panel is what keeps the GPU counters on
+                if (rs.gpuValid)
+                {
+                    ImGui::Text("Triangles (GPU): %.3fM in, %.3fM past clipping   Pixels shaded: %.1fM",
+                        static_cast<double>(rs.gpuPrimitives) / 1.0e6,
+                        static_cast<double>(rs.gpuRasterized) / 1.0e6,
+                        static_cast<double>(rs.gpuPixelShaded) / 1.0e6);
+                    if (rs.gpuListsUnmeasured != 0)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                            "%u of %u command lists past the query budget are NOT counted",
+                            rs.gpuListsUnmeasured, rs.gpuLists + rs.gpuListsUnmeasured);
+                    }
+                    if (ImGui::TreeNode("Triangles by pass"))
+                    {
+                        for (int i = 0; i < rs.gpuTopCount; ++i)
+                        {
+                            ImGui::Text("%-32s %8.3fM  %4.1f%%", rs.gpuTop[i].name,
+                                static_cast<double>(rs.gpuTop[i].primitives) / 1.0e6,
+                                rs.gpuPrimitives > 0
+                                    ? 100.0 * static_cast<double>(rs.gpuTop[i].primitives) /
+                                          static_cast<double>(rs.gpuPrimitives)
+                                    : 0.0);
+                        }
+                        ImGui::TreePop();
+                    }
+                }
+                else
+                {
+                    ImGui::TextDisabled(render::g_pipelineStatsMode == 0
+                        ? "Triangles (GPU): off (--set=stats.pipeline:0)"
+                        : "Triangles (GPU): measuring...");
+                }
 
                 ImGui::Separator();
                 // Frame pacing: UE's r.VSync and t.MaxFPS, both off by default as UE ships them.

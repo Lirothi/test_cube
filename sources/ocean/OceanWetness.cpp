@@ -236,6 +236,7 @@ std::function<void(RenderGraphPassContext)> OceanWetness::BuildUpdatePass(
     {
         Renderer* renderer = pass.renderer;
         auto token = pass.BeginCL();
+        SetCommandListName(token.cl, pass.pass);
         ID3D12GraphicsCommandList* cl = token.cl;
         // Async-compute step 9: this pass had NO GPU scope, so its cost was invisible in every
         // trace — it could only ever be bounded by the gap between its neighbours' scopes. An
