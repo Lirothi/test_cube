@@ -27,6 +27,8 @@ namespace
         case EditorParamKind::Vec3:   return "[x, y, z]";
         case EditorParamKind::Enum:   return "enum";
         case EditorParamKind::Any:    return "value";
+        case EditorParamKind::Placements:
+            return "list of {asset, position [x, y, z], yawDeg?, rotationDeg? [p, y, r], scale?}";
         }
         return "value";
     }

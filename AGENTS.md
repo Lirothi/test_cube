@@ -237,6 +237,12 @@ from the open level: every action, query and name — read it first), `run_actio
 - The gate covers the protocol without a socket (`TestMcpDrivesTheSameRoad`); for a live check,
   launch `--editor --level=...` and POST JSON-RPC to the endpoint. Kill the process afterwards
   rather than closing it, so nothing can save the level.
+- **Codex reaches the same door** through `.codex/config.toml` (project-scoped; read because this
+  project is trusted in `~/.codex/config.toml`), with `default_tools_approval_mode = "approve"` —
+  without it every call needs approval and `codex exec` (approval `never`) fails them all. Codex
+  does not list MCP tools up front: they sit in its tool registry (`ALL_TOOLS` via
+  `functions.exec`) as `mcp__test_cube_editor__*`. Verified 2026-09-23 with `codex exec` calling
+  `get_camera` (the editor logs `MCP: tools/call get_camera`). Its edits also show under **claude**.
 
 The local model (`intentModel.enabled`) is **off by default** since this exists.
 

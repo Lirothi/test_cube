@@ -2339,6 +2339,46 @@ namespace
         return origin + direction * std::max(radius, 10.0f);
     }
 
+    // A NEW OBJECT JOINS THE GROUP ITS KIND ALREADY USES, and gets one when its kind has
+    // none. Tidying the outliner and then spawning used to undo the tidying one command
+    // later: the new rocks landed in the ungrouped "Meshes" bucket while three rock
+    // folders sat above them.
+    //
+    // An existing example of the kind has the last word on the name, because somebody may
+    // have renamed the folder; only when no example carries a group is the name derived,
+    // and then by the SAME spelling `group perAsset` uses, or the two would disagree.
+    // Shared by spawn and place: two ways of creating a thing must not file it differently.
+    std::string GroupForKind(const EditorSceneDocument& document, const EditorAssetRecord* kind)
+    {
+        if (!kind || kind->id.key.empty())
+        {
+            return {};
+        }
+        for (const EditorObject& object : document.Objects())
+        {
+            if (!editormatch::MatchesSearch(object, kind->id.key))
+            {
+                continue;
+            }
+            const auto it = object.properties.is_object()
+                ? object.properties.find("group") : object.properties.end();
+            if (it != object.properties.end() && it->is_string() &&
+                !it->get<std::string>().empty())
+            {
+                return it->get<std::string>();
+            }
+        }
+        return editormatch::PrettyLabelFromPath(kind->id.key);
+    }
+
+    // For mesh records the registry sets id.key to the path, but not for every asset type,
+    // so both spellings are tried rather than depending on that.
+    const EditorAssetRecord* FindMeshAsset(const AssetRegistry& assets, const std::string& name)
+    {
+        const EditorAssetRecord* record = assets.FindById({ EditorAssetType::Mesh, name });
+        return record ? record : assets.FindByPath(name);
+    }
+
     std::unique_ptr<EditorCommand> BuildSpawn(const EditorActionContext& actionCtx,
         const std::vector<EditorObjectId>&,
         const EditorIntent& intent,
@@ -2372,14 +2412,7 @@ namespace
         records.reserve(assetNames.size());
         for (const std::string& name : assetNames)
         {
-            // For mesh records the registry sets id.key to the path, but not for every asset
-            // type, so try both spellings rather than depending on that.
-            const EditorAssetRecord* record =
-                actionCtx.assets.FindById({ EditorAssetType::Mesh, name });
-            if (!record)
-            {
-                record = actionCtx.assets.FindByPath(name);
-            }
+            const EditorAssetRecord* record = FindMeshAsset(actionCtx.assets, name);
             if (!record)
             {
                 outStatus = "Unknown asset '" + name + "'";
@@ -2705,37 +2738,6 @@ namespace
             return nullptr;
         }
 
-        // A NEW OBJECT JOINS THE GROUP ITS KIND ALREADY USES, and gets one when its kind has
-        // none. Tidying the outliner and then spawning used to undo the tidying one command
-        // later: the new rocks landed in the ungrouped "Meshes" bucket while three rock
-        // folders sat above them.
-        //
-        // An existing example of the kind has the last word on the name, because somebody may
-        // have renamed the folder; only when no example carries a group is the name derived,
-        // and then by the SAME spelling `group perAsset` uses, or the two would disagree.
-        const auto groupForKind = [&](const EditorAssetRecord* kind) -> std::string
-        {
-            if (!kind || kind->id.key.empty())
-            {
-                return {};
-            }
-            for (const EditorObject& object : ctx.document.Objects())
-            {
-                if (!editormatch::MatchesSearch(object, kind->id.key))
-                {
-                    continue;
-                }
-                const auto it = object.properties.is_object()
-                    ? object.properties.find("group") : object.properties.end();
-                if (it != object.properties.end() && it->is_string() &&
-                    !it->get<std::string>().empty())
-                {
-                    return it->get<std::string>();
-                }
-            }
-            return editormatch::PrettyLabelFromPath(kind->id.key);
-        };
-
         std::vector<std::unique_ptr<EditorCommand>> commands;
         commands.reserve(placed.size());
         std::map<std::string, std::size_t> intoGroups;
@@ -2770,7 +2772,7 @@ namespace
                 kind->displayName.c_str(), index + 1);
             objectJson["name"] = nameBuffer;
 
-            const std::string group = groupForKind(kind);
+            const std::string group = GroupForKind(ctx.document, kind);
             if (!group.empty())
             {
                 objectJson["group"] = group;
@@ -2831,6 +2833,136 @@ namespace
         return FoldIntoOneEntry(std::move(commands),
             "Spawn " + std::to_string(placed.size()) + " x " +
             (records.size() == 1 ? record->displayName : "mixed assets"));
+    }
+
+    // PLACE: objects at the positions the caller worked out, as given. spawn cannot do this
+    // and should not learn to: its whole job is deciding WHERE -- probing the ground,
+    // rejecting water and slopes, keeping things apart by their bounds. That is the wrong
+    // job for a layout computed elsewhere, and it failed it twice on wind_test: the ground
+    // probe starts 500 m up and lands on palm CROWNS, and the separation rule counts a palm
+    // as its ~4 m canopy, so no palm can stand closer than ~8 m to another where the real
+    // belt is spaced at 2.5. A scripted infill of the palm belt had no honest way in.
+    //
+    // Nothing here is probed, jittered or kept apart. The one thing it shares with spawn is
+    // what a new object IS: the factory's default for the asset (its own spawn scale, which
+    // `scale` multiplies), a readable name, and the group its kind already uses.
+    std::unique_ptr<EditorCommand> BuildPlace(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>&,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        EditorContext& ctx = actionCtx.editor;
+        const IEditorObjectFactory* factory = actionCtx.extensions.FindObjectFactory("staticMesh");
+        if (!factory)
+        {
+            outStatus = "No static-mesh factory is registered";
+            return nullptr;
+        }
+        const auto itemsIt = intent.params.find("items");
+        if (itemsIt == intent.params.end() || !itemsIt->is_array() || itemsIt->empty())
+        {
+            outStatus = "place needs a list of items";
+            return nullptr;
+        }
+        const std::string groupOverride = StringOr(intent.params, "group", "");
+
+        // Every asset resolved UP FRONT, as spawn does: a list with one misspelt kind says
+        // which item, rather than placing the rest and reporting success.
+        std::map<std::string, const EditorAssetRecord*> records;
+        for (std::size_t index = 0; index < itemsIt->size(); ++index)
+        {
+            const std::string name = (*itemsIt)[index].value("asset", std::string());
+            if (records.count(name))
+            {
+                continue;
+            }
+            const EditorAssetRecord* record = FindMeshAsset(actionCtx.assets, name);
+            if (!record)
+            {
+                outStatus = "Item " + std::to_string(index + 1) + ": unknown asset '" + name + "'";
+                return nullptr;
+            }
+            if (!factory->CanBuildFromAsset(record))
+            {
+                outStatus = "Item " + std::to_string(index + 1) + ": '" + record->displayName +
+                    "' cannot be placed as a static mesh";
+                return nullptr;
+            }
+            records[name] = record;
+        }
+
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        commands.reserve(itemsIt->size());
+        std::map<std::string, std::size_t> perKind;
+        std::map<std::string, std::size_t> intoGroups;
+        for (std::size_t index = 0; index < itemsIt->size(); ++index)
+        {
+            const nlohmann::json& item = (*itemsIt)[index];
+            const EditorAssetRecord* kind = records[item.value("asset", std::string())];
+            const nlohmann::json& p = item["position"];
+            const Math::float3 position(p[0].get<float>(), p[1].get<float>(), p[2].get<float>());
+            nlohmann::json objectJson = factory->BuildDefaultJson(kind, ctx, actionCtx.assets, &position);
+            // The factory may have its own opinion of where a new object goes; the caller's
+            // point is the whole reason this action exists, so it is written last.
+            objectJson["position"] = nlohmann::json::array({ position.x, position.y, position.z });
+
+            // A number multiplies all three axes, three numbers multiply each -- both ON TOP
+            // of the asset's own spawn scale, so a mesh authored at 0.03 stays its own size.
+            const auto scaleIt = objectJson.find("scale");
+            const auto askedScale = item.find("scale");
+            if (askedScale != item.end() && scaleIt != objectJson.end() && scaleIt->is_array() &&
+                scaleIt->size() == 3)
+            {
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                {
+                    const float factor = askedScale->is_number()
+                        ? askedScale->get<float>() : (*askedScale)[axis].get<float>();
+                    (*scaleIt)[axis] = (*scaleIt)[axis].get<float>() * factor;
+                }
+            }
+            // rotationDeg is the whole orientation; yawDeg is the common case of an upright
+            // thing turned on the spot. Given both, the full one wins -- it says more.
+            const auto rotationIt = item.find("rotationDeg");
+            if (rotationIt != item.end())
+            {
+                objectJson["rotationDeg"] = *rotationIt;
+            }
+            else
+            {
+                objectJson["rotationDeg"] = nlohmann::json::array({ 0.0f, item.value("yawDeg", 0.0f), 0.0f });
+            }
+
+            const std::size_t ordinal = ++perKind[kind->displayName];
+            char nameBuffer[128];
+            std::snprintf(nameBuffer, sizeof(nameBuffer), "%s %03zu", kind->displayName.c_str(), ordinal);
+            objectJson["name"] = nameBuffer;
+
+            const std::string group = groupOverride.empty() ? GroupForKind(ctx.document, kind) : groupOverride;
+            if (!group.empty())
+            {
+                objectJson["group"] = group;
+                ++intoGroups[group];
+            }
+            commands.push_back(std::make_unique<SpawnMeshCommand>(std::move(objectJson)));
+        }
+
+        std::string mix;
+        for (const auto& entry : perKind)
+        {
+            mix += (mix.empty() ? "" : ", ") + entry.first + " x" + std::to_string(entry.second);
+        }
+        outStatus = "Placed " + std::to_string(commands.size()) + " (" + mix + ")";
+        if (!intoGroups.empty())
+        {
+            outStatus += " into ";
+            std::size_t shownGroups = 0;
+            for (const auto& entry : intoGroups)
+            {
+                outStatus += (shownGroups++ ? ", " : "") + entry.first;
+            }
+        }
+        const std::size_t count = commands.size();
+        return FoldIntoOneEntry(std::move(commands), "Place " + std::to_string(count) + " objects");
     }
 }
 
@@ -2974,6 +3106,28 @@ EditorActionRegistry::EditorActionRegistry()
               "alignToGround is on, which it is by default" },
         },
         &BuildSpawn,
+    });
+
+    actions_.push_back({
+        "place",
+        "Create new objects at EXACT positions, one per item of params.items: each item is "
+        "{asset, position [x, y, z]} with an optional yawDeg, rotationDeg [pitch, yaw, roll] "
+        "and scale (a number, or [x, y, z]; it multiplies the asset's own size). Nothing is "
+        "scattered, dropped onto the ground or kept apart -- the positions are used as given, "
+        "height included. This is for a layout that was worked out already: numbers the "
+        "designer typed, or points computed from the terrain. For \"plant twenty palms here\" "
+        "use spawn, which finds the ground and the spacing itself.\n"
+        "Each object joins the group its kind already uses, unless params.group names one. "
+        "Up to 500 items, all of them one undo entry.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::None,
+        {
+            { "items", EditorParamKind::Placements, true,
+              "the objects: [{asset, position, yawDeg?, rotationDeg?, scale?}, ...], 1-500" },
+            { "group", EditorParamKind::String, false,
+              "put every placed object into this group instead of its kind's own" },
+        },
+        &BuildPlace,
     });
 
     // Both of these were REFUSALS first. The editor could already do them -- RenameObject
@@ -3476,6 +3630,61 @@ bool ValidateParams(const EditorActionDesc& action, nlohmann::json& params, std:
             break;
         case EditorParamKind::Any:
             break;   // checked later, by something that knows the real type
+        case EditorParamKind::Placements:
+        {
+            // Checked HERE, item by item and by number, because a list is where "half of it
+            // was fine" hides: a builder that met item 37's missing position would have
+            // already built 36 objects' worth of command before it could say so.
+            constexpr std::size_t kMaxItems = 500;
+            if (!it->is_array() || it->empty() || it->size() > kMaxItems)
+            {
+                outError = "'" + name + "' must be a list of 1-" + std::to_string(kMaxItems) +
+                    " items, each {asset, position}";
+                return false;
+            }
+            const auto isVec3 = [](const nlohmann::json& v)
+            {
+                return v.is_array() && v.size() == 3 && v[0].is_number() && v[1].is_number() &&
+                    v[2].is_number();
+            };
+            for (std::size_t index = 0; index < it->size(); ++index)
+            {
+                const nlohmann::json& item = (*it)[index];
+                const std::string at = "'" + name + "' item " + std::to_string(index + 1);
+                if (!item.is_object())
+                {
+                    outError = at + " must be an object {asset, position}";
+                    return false;
+                }
+                for (const auto& field : item.items())
+                {
+                    const std::string& key = field.key();
+                    const nlohmann::json& v = field.value();
+                    const bool ok =
+                        (key == "asset" && v.is_string() && !v.get<std::string>().empty()) ||
+                        (key == "position" && isVec3(v)) ||
+                        (key == "yawDeg" && v.is_number()) ||
+                        (key == "rotationDeg" && isVec3(v)) ||
+                        (key == "scale" && ((v.is_number() && v.get<float>() > 0.0f) || isVec3(v)));
+                    if (!ok)
+                    {
+                        const bool known = key == "asset" || key == "position" || key == "yawDeg" ||
+                            key == "rotationDeg" || key == "scale";
+                        outError = at + (known ? " has a malformed '" + key + "'"
+                                               : " has no field '" + key + "'") +
+                            "; an item is {asset, position [x, y, z], yawDeg?, rotationDeg? [p, y, r], "
+                            "scale? (number or [x, y, z])}";
+                        return false;
+                    }
+                }
+                if (!item.contains("asset") || !item.contains("position"))
+                {
+                    outError = at + " needs both 'asset' and 'position'";
+                    return false;
+                }
+            }
+            break;
+        }
         case EditorParamKind::Enum:
         {
             if (!it->is_string())

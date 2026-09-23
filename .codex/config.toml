@@ -1,0 +1,9 @@
+# Codex: the running Level Editor is an MCP server (sources/editor/intent/EditorMcpServer.*).
+# The same endpoint Claude Code reaches through .mcp.json; see AGENTS.md, "Claude Code drives the editor".
+[mcp_servers.test_cube_editor]
+url = "http://127.0.0.1:8128/mcp"
+# Up only while the editor is open with a level; a call waits up to 60 s for a frame.
+tool_timeout_sec = 90
+# No per-call approval: nothing over this door can save the level, and every edit is one undo
+# entry in the person's command bar. "prompt" puts the question back on every call.
+default_tools_approval_mode = "approve"

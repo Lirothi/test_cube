@@ -54,6 +54,11 @@ enum class EditorParamKind
     // ComputeEnvironmentValue rejects a mismatch by naming the setting and its type --
     // which beats a generic "must be a number" from here.
     Any,
+    // `place`'s list of objects: [{asset, position, yawDeg?, rotationDeg?, scale?}, ...].
+    // Its own kind, with its own grammar rule, because `Any` samples as `pvalue` and that
+    // has no object production -- the action would be described to the model and
+    // unreachable by it, the way groundHeight's point list once was.
+    Placements,
 };
 
 struct EditorActionParam

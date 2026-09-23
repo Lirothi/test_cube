@@ -42,6 +42,18 @@ namespace
         return nlohmann::json::array({ Round1(v.x), Round1(v.y), Round1(v.z) });
     }
 
+    // Millimetres, for the one answer that promises to be EXACT. getTransform at a tenth said
+    // "scale 1.2" of a palm at 1.242 and put its root a few centimetres off the sand it was
+    // measured on -- enough to float a trunk when the answer was used to place a copy.
+    nlohmann::json Xyz3(const Math::float3& v)
+    {
+        const auto round3 = [](float value)
+        {
+            return std::round(static_cast<double>(value) * 1000.0) / 1000.0;
+        };
+        return nlohmann::json::array({ round3(v.x), round3(v.y), round3(v.z) });
+    }
+
     struct Aabb
     {
         Math::float3 min{ std::numeric_limits<float>::max(),
@@ -237,7 +249,8 @@ namespace
               "the exact position, rotation in degrees and scale of each object the target "
               "names. bounds gives a box; this gives orientation, which cloning or aligning "
               "needs",
-              true, "", EditorQueryDesc::ChatArg::Filter },
+              true, "offset, limit: page through a long list (default 0 and 12, limit up to 1000)",
+              EditorQueryDesc::ChatArg::Filter },
         };
         return queries;
     }
@@ -533,11 +546,21 @@ namespace
 
             if (ask.query == "getTransform")
             {
-                // Capped, because "the transform of every palm" is 183 of them and the
-                // model asked for orientation, not for an inventory it already has.
-                constexpr std::size_t kMaxListed = 12;
+                // Capped by default, because "the transform of every palm" is 183 of them
+                // and the local model asked for orientation, not for an inventory it already
+                // has. But a cap with no way past it made the rest unreachable: a script
+                // laying out the palm belt from the live level got 12 of 251 and had to fall
+                // back to the file on disk, which did not have the last hour's edits. So the
+                // list PAGES -- offset and limit -- and the note says how, and how far.
+                constexpr std::size_t kDefaultListed = 12;
+                constexpr std::size_t kMaxListed = 1000;
+                const std::size_t offset = static_cast<std::size_t>(
+                    std::max(0.0, ask.params.value("offset", 0.0)));
+                const std::size_t limit = std::clamp<std::size_t>(static_cast<std::size_t>(
+                    std::max(1.0, ask.params.value("limit", static_cast<double>(kDefaultListed)))),
+                    1, kMaxListed);
                 nlohmann::json objects = nlohmann::json::array();
-                for (std::size_t i = 0; i < ids.size() && i < kMaxListed; ++i)
+                for (std::size_t i = offset; i < ids.size() && i < offset + limit; ++i)
                 {
                     const EditorObject* object = ctx.document.Find(ids[i]);
                     if (!object)
@@ -545,18 +568,25 @@ namespace
                         continue;
                     }
                     nlohmann::json entry = nlohmann::json::object();
+                    entry["id"] = object->id.value;
                     entry["name"] = object->name;
                     entry["asset"] = AssetKeyOf(*object);
-                    entry["position"] = Xyz(object->transform.position);
+                    entry["position"] = Xyz3(object->transform.position);
                     entry["rotationDeg"] = Xyz(object->transform.rotationDeg);
-                    entry["scale"] = Xyz(object->transform.scale);
+                    entry["scale"] = Xyz3(object->transform.scale);
                     objects.push_back(entry);
                 }
                 out["objects"] = objects;
-                if (ids.size() > kMaxListed)
+                const std::size_t end = std::min(ids.size(), offset + limit);
+                if (offset > 0 || end < ids.size())
                 {
-                    out["listed"] = kMaxListed;
-                    out["note"] = "narrow the target to see the rest";
+                    out["listed"] = { offset, end };
+                    out["note"] = "objects " + std::to_string(offset) + ".." + std::to_string(end) +
+                        " of " + std::to_string(ids.size()) +
+                        (end < ids.size() ? "; params.offset=" + std::to_string(end) +
+                            " for the next page, params.limit up to " + std::to_string(kMaxListed) +
+                            " per page"
+                                          : std::string("; that is the last page"));
                 }
                 return out;
             }
@@ -769,10 +799,16 @@ namespace editorquery
                 out[ask.query] = { { "error", "no such query" } };
                 continue;
             }
-            // Keyed by NAME, so a batch comes back labelled. Asking the same one twice in
-            // one turn overwrites rather than duplicating, which is the right reading of a
-            // question asked twice.
-            out[ask.query] = AnswerOne(actionCtx, ask);
+            // Keyed by NAME, so a batch comes back labelled -- and a name asked AGAIN gets
+            // `name#2`, `name#3`. It used to overwrite, on the theory that the same question
+            // twice is one question; but "the bounds of the palms and the bounds of the rocks"
+            // is two bounds with different targets, and the palms' answer was silently lost.
+            std::string key = ask.query;
+            for (int repeat = 2; out.contains(key); ++repeat)
+            {
+                key = ask.query + "#" + std::to_string(repeat);
+            }
+            out[key] = AnswerOne(actionCtx, ask);
         }
         return out.dump();
     }

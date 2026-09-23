@@ -165,6 +165,10 @@ void TestQueryListIntegrity()
     Check(gbnf.find("pointlist ::=") != std::string::npos &&
         gbnf.find("| pointlist") != std::string::npos,
         "a parameter can be a LIST of points, which groundHeight exists to take");
+    // And `place` can be sampled at all: its items are objects, which pvalue cannot spell.
+    Check(gbnf.find("placelist ::=") != std::string::npos &&
+        gbnf.find("\\\"items\\\":\" placelist") != std::string::npos,
+        "place's list of objects has a rule of its own, and place's parameters use it");
 
     // And the reader accepts what the grammar can produce, including the target it shares
     // with a command -- "the bounds of the palms" is the same narrowing as "delete the palms".
@@ -1205,6 +1209,61 @@ void TestSpawnPlacement(const EditorActionContext& actionCtx)
         "and says which rule refused: " + impossibleStatus);
 }
 
+// PLACE puts things where it is told. It exists because spawn could not be told: its ground
+// probe lands on palm crowns and its spacing counts a palm as its canopy, so an infill of the
+// palm belt worked out from the island's own mesh had no way into the level.
+void TestPlaceIsExact(const EditorActionContext& actionCtx)
+{
+    const EditorActionDesc& place = *EditorActionRegistry::Builtin().Find("place");
+    std::string error;
+
+    // The shape the grammar lets the model write reads back as a command -- if the list
+    // ever stops being expressible, this fails rather than the feature going quiet.
+    EditorIntent intent;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"place","target":{},"params":{"items":[)"
+        R"({"asset":"models/coconut_palm.mesh.json","position":[0,0.4,0],"yawDeg":30,"scale":1.2},)"
+        R"({"asset":"models/date_palm.mesh.json","position":[3.5,0.6,-2],"rotationDeg":[0,90,5]}]}})",
+        intent, error), "a place answer parses: " + error);
+
+    // A list is where half of it being fine hides, so a bad item is named by number.
+    Json noPosition = Json{ { "items", Json::array({
+        Json{ { "asset", "models/coconut_palm.mesh.json" }, { "position", Json::array({ 1, 2, 3 }) } },
+        Json{ { "asset", "models/coconut_palm.mesh.json" } } }) } };
+    Check(!ValidateParams(place, noPosition, error) && error.find("item 2") != std::string::npos,
+        "an item without a position is refused BY NUMBER: " + error);
+    Json invented = Json{ { "items", Json::array({ Json{ { "asset", "models/coconut_palm.mesh.json" },
+        { "position", Json::array({ 1, 2, 3 }) }, { "tilt", 4 } } }) } };
+    Check(!ValidateParams(place, invented, error) && error.find("tilt") != std::string::npos,
+        "a field an item does not take is refused, not dropped: " + error);
+    Json empty = Json{ { "items", Json::array() } };
+    Check(!ValidateParams(place, empty, error), "an empty list is refused rather than placing nothing");
+
+    // ON TOP of an existing palm, which spawn's separation would never allow: the caller
+    // decided, and nothing here second-guesses it.
+    const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+    Check(preview.executable, "place previews: " + preview.problem);
+    Check(preview.summary.find("2 objects") != std::string::npos,
+        "and the preview says how many it will make: " + preview.summary);
+    std::string status;
+    Check(place.build(actionCtx, {}, preview.resolved, status) != nullptr, "place builds: " + status);
+    Check(status.find("Placed 2") != std::string::npos, "and says what it placed: " + status);
+
+    EditorIntent grouped = preview.resolved;
+    grouped.params["group"] = "Palm Infill";
+    status.clear();
+    Check(place.build(actionCtx, {}, grouped, status) != nullptr &&
+        status.find("into Palm Infill") != std::string::npos,
+        "a named group overrides the kind's own: " + status);
+
+    EditorIntent misspelt = preview.resolved;
+    misspelt.params["items"][1]["asset"] = "models/no_such_palm.mesh.json";
+    status.clear();
+    Check(place.build(actionCtx, {}, misspelt, status) == nullptr &&
+        status.find("Item 2") != std::string::npos,
+        "one unknown asset refuses the whole list and names the item: " + status);
+}
+
 void TestReplace(const EditorActionContext& actionCtx, GrammarIntentSource& grammar)
 {
     EditorContext& ctx = actionCtx.editor;
@@ -2017,6 +2076,31 @@ void TestQuestionsAnswerWithoutChangingAnything(const EditorActionContext& actio
     Check(status.find("question") != std::string::npos,
         "and says why: " + status);
     Check(stack.HistorySize() == 0, "still no history entry");
+
+    // The same question twice with DIFFERENT targets is two questions. Keyed by name, the
+    // second used to overwrite the first, and the palms' bounds vanished behind the rock's.
+    EditorIntent twoBounds;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"query","ask":[)"
+        R"({"query":"bounds","target":{"filter":["coconut_palm"],"scope":"all"}},)"
+        R"({"query":"bounds","target":{"filter":["beach_rock"],"scope":"all"}}]})",
+        twoBounds, whyNot), "two bounds in one turn parse: " + whyNot);
+    const Json both = Json::parse(editorquery::Answer(actionCtx, twoBounds));
+    Check(both.contains("bounds") && both.contains("bounds#2") &&
+        both["bounds"]["count"] == 2 && both["bounds#2"]["count"] == 1,
+        "a repeated question keeps BOTH answers, the second as bounds#2: " + both.dump());
+
+    // getTransform pages instead of stopping at its default cap, and says how far it got.
+    EditorIntent page;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"query","ask":[{"query":"getTransform","target":{"filter":["palm"],"scope":"all"},)"
+        R"("params":{"offset":1,"limit":1}}]})", page, whyNot), "a paged getTransform parses: " + whyNot);
+    const Json paged = Json::parse(editorquery::Answer(actionCtx, page))["getTransform"];
+    Check(paged["count"] == 3 && paged["objects"].size() == 1,
+        "one object per page when limit is 1, out of all three palms: " + paged.dump());
+    Check(paged["objects"][0].contains("id") &&
+        paged["note"].get<std::string>().find("offset=2") != std::string::npos,
+        "each entry carries its id, and the note names the next page: " + paged.dump());
 }
 
 // --------------------------------------------------------------- environment
@@ -2546,6 +2630,7 @@ int main(int argc, char** argv)
         TestRandomizeIsVariedAndDeterministic(actionCtx);
         TestReplace(actionCtx, grammar);
         TestSpawnPlacement(actionCtx);
+        TestPlaceIsExact(actionCtx);
         TestSpawnJoinsTheGroupItsKindUses(actionCtx);
         TestTheWholeScatterPhrase(actionCtx);
         std::puts("Intent regression: actions OK");

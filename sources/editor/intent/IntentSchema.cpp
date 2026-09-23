@@ -232,6 +232,7 @@ namespace intentschema
         // `Any` means "a later check knows the type and its message is better". It keeps
         // the old wide rule, which is exactly what that comment was always describing.
         case EditorParamKind::Any: return "pvalue";
+        case EditorParamKind::Placements: return "placelist";
         }
         return "pvalue";
     }
@@ -443,6 +444,14 @@ namespace intentschema
         // the second `[` and forced a single point. The feature was advertised in the
         // prompt and could not be sampled: described, implemented, and unreachable.
         g += "pointlist ::= \"[\" ( range | vec3 ) ( \",\" ( range | vec3 ) )* \"]\"\n";
+        // `place`'s objects, for the same reason: a list of OBJECTS is a shape pvalue cannot
+        // spell. asset and position lead and are required, so an item without either cannot
+        // be sampled; the rest are what ValidateParams accepts and nothing more.
+        g += "placelist ::= \"[\" placeitem ( \",\" placeitem )* \"]\"\n";
+        g += "placeitem ::= \"{\\\"asset\\\":\" asset \",\\\"position\\\":\" vec3"
+             " ( \",\" placemember )* \"}\"\n";
+        g += "placemember ::= \"\\\"yawDeg\\\":\" number | \"\\\"rotationDeg\\\":\" vec3"
+             " | \"\\\"scale\\\":\" ( number | vec3 )\n";
         g += "pstring ::= string\n\n";
 
         // --- query ----------------------------------------------------------------
