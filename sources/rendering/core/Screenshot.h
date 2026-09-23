@@ -13,4 +13,10 @@ namespace Screenshot
     // Copy the last-presented backbuffer to a readback buffer (GPU-idle) and encode a PNG (WIC).
     // Returns false on any failure. Call at a safe point (between frames), not mid-record.
     bool SaveBackbufferPng(Renderer& renderer, const std::string& path);
+
+    // The same, box-filtered down by a whole factor until the width is at most `maxWidth` (0 =
+    // full size). For a capture that is going to be READ by a model rather than diffed: the
+    // full backbuffer is megabytes of PNG, and "did the rocks land on the beach" needs a
+    // fraction of it. Same safe-point rule as above.
+    bool SaveBackbufferPng(Renderer& renderer, const std::string& path, unsigned maxWidth);
 }

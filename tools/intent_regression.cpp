@@ -43,6 +43,7 @@
 #include "editor/intent/EditorRepoSearch.h"
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/IntentSchema.h"
+#include "editor/intent/EditorMcpServer.h"
 #include "editor/intent/LlmIntentSource.h"
 #include "rendering/core/Renderer.h"
 
@@ -845,6 +846,99 @@ void TestAssetResolution(const EditorActionContext& actionCtx, GrammarIntentSour
 
 // ------------------------------------------------------------------- execution
 
+// CLAUDE CODE'S DOOR. The MCP server is a protocol wrapped round the SAME resolver the command
+// bar uses, and this drives that protocol end to end with no socket: initialize, the tool list,
+// a preview, a real edit, its undo, and the three ways a caller gets it wrong. If the wrapper
+// ever grows its own road to the document, this is where it shows.
+class DirectMcpHost final : public editormcp::ToolHost
+{
+public:
+    DirectMcpHost(const EditorActionContext& actionCtx, EditorCommandStack& stack)
+        : actionCtx_(actionCtx), stack_(stack) {}
+    editormcp::ToolResult Call(const std::string& name, const nlohmann::json& arguments) override
+    {
+        editormcp::CallRecord record;
+        return editormcp::RunDocumentTool(actionCtx_, stack_, name, arguments, record);
+    }
+private:
+    const EditorActionContext& actionCtx_;
+    EditorCommandStack& stack_;
+};
+
+void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
+{
+    using nlohmann::json;
+    EditorContext& ctx = actionCtx.editor;
+    EditorCommandStack stack;
+    DirectMcpHost host(actionCtx, stack);
+    const auto call = [&](int id, const std::string& method, json params)
+    {
+        return editormcp::HandleMessage({ { "jsonrpc", "2.0" }, { "id", id },
+            { "method", method }, { "params", std::move(params) } }, host);
+    };
+    const auto text = [](const std::optional<json>& reply)
+    {
+        return (*reply)["result"]["content"][0]["text"].get<std::string>();
+    };
+
+    const std::optional<json> init =
+        call(1, "initialize", { { "protocolVersion", "2025-06-18" } });
+    Check(init && (*init)["result"]["protocolVersion"] == "2025-06-18",
+        "initialize answers in the client's protocol version");
+    Check(!editormcp::HandleMessage({ { "jsonrpc", "2.0" },
+        { "method", "notifications/initialized" } }, host),
+        "a notification gets no reply at all");
+
+    const std::optional<json> list = call(2, "tools/list", json::object());
+    bool hasRun = false;
+    bool hasSave = false;
+    for (const json& tool : (*list)["result"]["tools"])
+    {
+        const std::string name = tool.value("name", "");
+        hasRun = hasRun || name == "run_action";
+        hasSave = hasSave || name.find("save") != std::string::npos;
+    }
+    Check(hasRun, "the tool list offers run_action");
+    Check(!hasSave, "and nothing that saves -- the level is saved by the person, only");
+
+    const json hidePalms = { { "action", "setEnabled" },
+        { "target", { { "filter", json::array({ "models/coconut_palm.mesh.json" }) },
+                      { "scope", "all" } } },
+        { "params", { { "enabled", false } } } };
+
+    const std::optional<json> preview =
+        call(3, "tools/call", { { "name", "preview_action" }, { "arguments", { { "command", hidePalms } } } });
+    Check(text(preview).rfind("Would run", 0) == 0, "a preview says what it would do: " + text(preview));
+    Check(stack.HistorySize() == 0, "and does not do it");
+
+    const std::optional<json> ran =
+        call(4, "tools/call", { { "name", "run_action" }, { "arguments", { { "command", hidePalms } } } });
+    Check(!(*ran)["result"]["isError"].get<bool>(), "the edit runs: " + text(ran));
+    Check(stack.HistorySize() == 1, "as ONE undo entry, like a phrase typed into the bar");
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        if (editormatch::MatchesSearch(object, "coconut_palm"))
+        {
+            Check(!object.enabled, "and it reached the document");
+        }
+    }
+
+    const std::optional<json> undone = call(5, "tools/call", { { "name", "undo" } });
+    Check(text(undone).rfind("Undid", 0) == 0, "undo names what it undid: " + text(undone));
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        Check(object.enabled, "and the document is back as it was");
+    }
+
+    const std::optional<json> refused = call(6, "tools/call", { { "name", "run_action" },
+        { "arguments", { { "command", { { "action", "noSuchAction" } } } } } });
+    Check((*refused)["result"]["isError"].get<bool>(), "an unknown action is refused, with a reason");
+    const std::optional<json> noTool = call(7, "tools/call", { { "name", "save_level" } });
+    Check(noTool && (*noTool)["error"]["code"] == -32602, "a tool that does not exist is a protocol error");
+    const std::optional<json> noMethod = call(8, "resources/list", json::object());
+    Check(noMethod && (*noMethod)["error"]["code"] == -32601, "so is a method that does not");
+}
+
 void TestOnePhraseIsOneUndo(const EditorActionContext& actionCtx, GrammarIntentSource& grammar)
 {
     EditorContext& ctx = actionCtx.editor;
@@ -1253,7 +1347,14 @@ void TestModelAnswersAreRead()
 
 void TestModelSettingsRoundTrip()
 {
+    // Off unless somebody turns it on: since Claude Code drives the editor over MCP the local
+    // model is the second way in, and sixteen gigabytes of video memory is not a default.
+    Check(!LlmIntentSettings{}.enabled, "the local model ships switched off");
+
     LlmIntentSettings settings;
+    // Switched ON here, explicitly: what follows is about a missing FILE, and a source that is
+    // switched off says so before it ever looks for one.
+    settings.enabled = true;
     settings.modelPath = "D:/llm_models/model.gguf";
     settings.serverExe = "D:/llm_models/llama.cpp/llama-server.exe";
     settings.endpoint = "127.0.0.1:9999";
@@ -2440,6 +2541,7 @@ int main(int argc, char** argv)
         std::puts("Intent regression: selector, assets and refusals OK");
 
         TestOnePhraseIsOneUndo(actionCtx, grammar);
+        TestMcpDrivesTheSameRoad(actionCtx);
         TestTransforms(actionCtx, grammar);
         TestRandomizeIsVariedAndDeterministic(actionCtx);
         TestReplace(actionCtx, grammar);

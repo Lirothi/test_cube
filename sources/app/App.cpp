@@ -87,6 +87,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "rendering/core/RasterSettings.h" // A6: --set=raster.bindless
 #if WITH_EDITOR
 #include "editor/EditorController.h"
+#include "editor/intent/EditorMcpServer.h" // Claude Code's screenshots, taken at the --shot point
 #endif
 
 #pragma comment(lib, "ole32.lib")
@@ -1657,6 +1658,13 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     }
                 }
             }
+
+#if WITH_EDITOR
+            // A screenshot Claude Code asked for over MCP. Same safe point as --shot below: the
+            // frame has been presented and the GPU can be waited on. One uncontended lock when
+            // nobody asked.
+            editormcp::ServiceScreenshot(renderer);
+#endif
 
             // "--shot=<path>": after the warmup delay (ocean/particle sim settling), grab the
             // just-presented backbuffer to a PNG and quit. Reliable on the flip-model swapchain.

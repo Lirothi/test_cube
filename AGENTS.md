@@ -217,6 +217,29 @@ each and are not obvious:
   an empty `<think>\n\n</think>\n\n` after the assistant tag; it is part of the prompt, so the
   grammar never sees it.
 
+### Claude Code drives the editor (MCP)
+
+The running Level Editor is an MCP server at `http://127.0.0.1:8128/mcp` (streamable HTTP,
+localhost only; `sources/editor/intent/EditorMcpServer.*`), registered for Claude Code by
+`.mcp.json` in the repo root. Tools: `editor_guide` (the local model's own system prompt, rebuilt
+from the open level: every action, query and name — read it first), `run_action` /
+`preview_action` (the same `{action, target, params}` JSON the local model emits, through the same
+`ParseAnswer` → `BuildIntentPreview` → `ExecuteIntent`), `query`, `get_camera`, `set_camera`,
+`screenshot` (the editor window as a PNG, taken at the `--shot` safe point), `undo`.
+
+- **There is no save.** The level is saved by the person, and nothing over MCP can do it.
+- Each edit is one undo entry and shows in the command bar's transcript under **claude**.
+- Only while the editor is open with a level; calls wait up to 60 s for a frame, then fail.
+- Browser requests are refused (`Origin`/`Host` must be this machine), so a web page cannot
+  drive it. A second editor cannot bind the port and says so in its panel.
+- Toggle and status: command bar settings → "Claude Code (MCP)". `mcpEnabled` / `mcpPort` live in
+  `editor_state.json` → `levelEditor.intentModel`.
+- The gate covers the protocol without a socket (`TestMcpDrivesTheSameRoad`); for a live check,
+  launch `--editor --level=...` and POST JSON-RPC to the endpoint. Kill the process afterwards
+  rather than closing it, so nothing can save the level.
+
+The local model (`intentModel.enabled`) is **off by default** since this exists.
+
 ### Photographing the editor
 
 `--editor` opens the Level Editor at boot, for the same reason `--log-window` exists: so a

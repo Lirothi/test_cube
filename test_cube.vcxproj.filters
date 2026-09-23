@@ -324,6 +324,9 @@
     <ClCompile Include="sources/editor/intent/LlmClient.cpp">
       <Filter>sources\editor\intent</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorMcpServer.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/intent/LlmIntentSource.cpp">
       <Filter>sources\editor\intent</Filter>
     </ClCompile>
@@ -774,6 +777,9 @@
       <Filter>sources\editor\intent</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/intent/LlmClient.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/intent/EditorMcpServer.h">
       <Filter>sources\editor\intent</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/intent/LlmIntentSource.h">

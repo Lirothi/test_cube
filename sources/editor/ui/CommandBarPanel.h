@@ -10,6 +10,7 @@
 #include "editor/intent/EditorIntent.h"
 #include "editor/intent/EditorIntentResolver.h"
 #include "editor/intent/EditorIntentSource.h"
+#include "editor/intent/EditorMcpServer.h"
 #include "editor/intent/LlmIntentSource.h"
 
 struct EditorContext;
@@ -91,7 +92,18 @@ public:
     const LlmIntentSettings& ModelSettings() const;
     void SetModelSettings(const LlmIntentSettings& settings);
 
+    // Claude Code's calls, run on the frame thread. Called by the editor EVERY frame, not
+    // from Draw: a panel that is closed must not leave a caller waiting a minute for nothing.
+    void ServiceMcp(const EditorActionContext& actionCtx, EditorCommandStack& commandStack);
+
 private:
+    // Claude Code driving the editor (EditorMcpServer). Started and stopped by the settings,
+    // shown in its own fold, and its edits land in this panel's transcript as they happen.
+    editormcp::Server mcp_;
+    std::string mcpError_;
+    void ApplyMcpSettings(const LlmIntentSettings& settings);
+    void DrawMcpSettings();
+
     void Begin(const EditorActionContext& actionCtx, float buryDepthPercent);
     void PollSources(const EditorActionContext& actionCtx);
     void FinishIntent(const EditorActionContext& actionCtx);
@@ -113,6 +125,10 @@ private:
         // the sentence that offered it; pressing it submits the phrase the ordinary way,
         // through the grammar and the preview. Nothing here runs anything by itself.
         std::string offer;
+        // Who said the phrase. Everything was "you" until Claude Code could edit the level
+        // too, and its calls then appeared under the person's name. LAST, so the existing
+        // brace-initialisations of {phrase, verdict, kind} still mean what they say.
+        std::string speaker = "you";
     };
     void RecordOutcome(const std::string& verdict, Exchange::Kind kind);
     // Up/Down while the box has focus. Returns true when it changed the text, so the caller

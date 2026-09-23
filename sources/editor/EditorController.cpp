@@ -4152,6 +4152,10 @@ void EditorController::Draw(
     // level or an edit changed the document) so the outliner group + errors window are fresh.
     RefreshAssetErrorsIfStale();
 
+    // Claude Code's calls (MCP), every frame. Here rather than in the command bar's Draw so a
+    // closed panel cannot leave a caller waiting out its timeout for a frame that never comes.
+    commandBar_.ServiceMcp(actionCtx, commandStack_);
+
     // Warm the model while the user is still looking at the level they just opened. The
     // first phrase of a session costs 53 s against 1.5 s for the next one, and almost all of
     // that is starting the server and prefilling a prompt that never changes -- both of

@@ -15,7 +15,10 @@
 // path change, not a rebuild, and neither the model nor the runtime lives in the repo.
 struct LlmIntentSettings
 {
-    bool enabled = true;
+    // OFF BY DEFAULT since Claude Code can drive the editor over MCP (EditorMcpServer): the
+    // local model costs sixteen gigabytes of video memory the renderer would rather have, and
+    // is now the second way in rather than the only one. A checkbox away when it is wanted.
+    bool enabled = false;
     std::string modelPath;          // .gguf
     std::string serverExe;          // llama-server.exe
     std::string endpoint = "127.0.0.1:8127";
@@ -133,6 +136,13 @@ struct LlmIntentSettings
     // back on the card.
     bool keepServerAfterExit = true;
     int keepAliveSeconds = 300;
+
+    // The editor's MCP endpoint (editor/mcp/EditorMcpServer): Claude Code driving the same
+    // actions this model drives, through the same resolver. Kept with these settings because
+    // it lives in the same panel and answers the same question -- who may edit the level from
+    // outside the keyboard -- not because it has anything to do with llama.cpp. Localhost only.
+    bool mcpEnabled = true;
+    int mcpPort = 8128;
 
     bool Configured() const { return !modelPath.empty() && !serverExe.empty(); }
 };

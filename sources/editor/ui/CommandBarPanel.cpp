@@ -269,6 +269,112 @@ void CommandBarPanel::SetModelSettings(const LlmIntentSettings& settings)
     CopyToBuffer(modelPathBuffer_, sizeof(modelPathBuffer_), settings.modelPath);
     CopyToBuffer(serverExeBuffer_, sizeof(serverExeBuffer_), settings.serverExe);
     CopyToBuffer(endpointBuffer_, sizeof(endpointBuffer_), settings.endpoint);
+    ApplyMcpSettings(settings);
+}
+
+void CommandBarPanel::ApplyMcpSettings(const LlmIntentSettings& settings)
+{
+    if (mcp_.Running() && (!settings.mcpEnabled || mcp_.Port() != settings.mcpPort))
+    {
+        mcp_.Stop();
+    }
+    if (!settings.mcpEnabled)
+    {
+        mcpError_.clear();
+        return;
+    }
+    if (!mcp_.Running())
+    {
+        std::string error;
+        if (mcp_.Start(settings.mcpPort, error))
+        {
+            mcpError_.clear();
+        }
+        else
+        {
+            mcpError_ = error;
+            LOG_WARNING(logging::LogCategory::Editor, "MCP: not serving -- {}", error);
+        }
+    }
+}
+
+void CommandBarPanel::ServiceMcp(const EditorActionContext& actionCtx,
+    EditorCommandStack& commandStack)
+{
+    if (!mcp_.Running())
+    {
+        return;
+    }
+    for (const editormcp::CallRecord& record : mcp_.Service(actionCtx, commandStack))
+    {
+        if (!record.show)
+        {
+            continue;
+        }
+        Exchange exchange;
+        exchange.speaker = "claude";
+        exchange.phrase = record.title;
+        exchange.verdict = record.verdict;
+        exchange.kind = record.failed ? Exchange::Kind::Refused : Exchange::Kind::Ran;
+        // NOT onto the end while a phrase of the person's is still open. Its outcome is
+        // written into the LAST entry when it arrives -- a preview becomes "ran" in place --
+        // and appending here would have that verdict land on Claude's line instead.
+        const bool lastIsOpen = !transcript_.empty() &&
+            (waiting_ || transcript_.back().kind == Exchange::Kind::Preview ||
+             transcript_.back().kind == Exchange::Kind::Asked);
+        if (lastIsOpen)
+        {
+            transcript_.insert(transcript_.end() - 1, std::move(exchange));
+        }
+        else
+        {
+            transcript_.push_back(std::move(exchange));
+        }
+        transcriptScrollToBottom_ = true;
+        // Into the level's memory as well, so "что тут сделано?" put to the local model
+        // knows about edits it did not make. Written as a record, like the model's own.
+        if (record.ran && !record.action.empty())
+        {
+            RememberTurn("[claude] " + record.title, "<action>" + record.action + "</action> ",
+                record.verdict);
+        }
+    }
+}
+
+void CommandBarPanel::DrawMcpSettings()
+{
+    if (!ImGui::CollapsingHeader("Claude Code (MCP)"))
+    {
+        return;
+    }
+    LlmIntentSettings settings = model_->Settings();
+    if (ImGui::Checkbox("Let Claude Code edit the level", &settings.mcpEnabled))
+    {
+        model_->SetSettings(settings);
+        ApplyMcpSettings(settings);
+        modelSettingsDirty_ = true;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("An MCP server on 127.0.0.1, nowhere else. Claude Code runs the same "
+            "actions this bar runs, through the same checks: each edit is one undo entry and "
+            "appears in this transcript as [claude]. It can move the camera and take a "
+            "screenshot to see its work. It cannot save the level.");
+    }
+    if (mcp_.Running())
+    {
+        const std::string last = mcp_.LastCall();
+        ImGui::TextDisabled("Listening on http://127.0.0.1:%d/mcp -- %llu calls%s%s",
+            mcp_.Port(), mcp_.CallCount(), last.empty() ? "" : ", last: ", last.c_str());
+    }
+    else if (!mcpError_.empty())
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1.0f), "Not serving: %s", mcpError_.c_str());
+    }
+    else
+    {
+        ImGui::TextDisabled("Off.");
+    }
 }
 
 void CommandBarPanel::ClearThread()
@@ -1422,6 +1528,10 @@ CommandBarPanel::HeadlessState CommandBarPanel::PollHeadless(const EditorActionC
 
 void CommandBarPanel::DrawSettings()
 {
+    // Its own fold and FIRST: whether Claude Code may edit the level has nothing to do with
+    // whether the local model is loaded, and it must not vanish when that fold is closed.
+    DrawMcpSettings();
+
     if (!ImGui::CollapsingHeader("Local model"))
     {
         return;
@@ -1818,7 +1928,11 @@ if (ImGui::BeginChild("##barLog", ImVec2(0.0f, -reserve), true))
             // path does nothing and looks broken. A right-click menu is the honest way to
             // get the text out.
             ImGui::BeginGroup();
-            ImGui::TextColored(ImVec4(0.55f, 0.78f, 1.0f, 1.0f), "you");
+            // Claude's calls in its own colour, so an edit nobody at the keyboard made cannot be
+            // mistaken for one they did.
+            ImGui::TextColored(exchange.speaker == "you" ? ImVec4(0.55f, 0.78f, 1.0f, 1.0f)
+                                                         : ImVec4(0.85f, 0.62f, 1.0f, 1.0f),
+                "%s", exchange.speaker.c_str());
             SelectableText("##phrase", exchange.phrase, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
             const ImVec4 colour =
                 exchange.kind == Exchange::Kind::Ran ? ImVec4(0.65f, 0.95f, 0.65f, 1.0f) :

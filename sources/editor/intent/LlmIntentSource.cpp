@@ -1277,6 +1277,8 @@ LlmIntentSettings LlmIntentSource::LoadSettings(const nlohmann::json& levelEdito
     settings.keepServerAfterExit =
         ReadBoolOr(json, "keepServerAfterExit", settings.keepServerAfterExit);
     settings.keepAliveSeconds = ReadIntOr(json, "keepAliveSeconds", settings.keepAliveSeconds);
+    settings.mcpEnabled = ReadBoolOr(json, "mcpEnabled", settings.mcpEnabled);
+    settings.mcpPort = ReadIntOr(json, "mcpPort", settings.mcpPort);
     return settings;
 }
 
@@ -1302,6 +1304,8 @@ nlohmann::json LlmIntentSource::SaveSettings(const LlmIntentSettings& settings)
         { "webUi", settings.webUi },
         { "keepServerAfterExit", settings.keepServerAfterExit },
         { "keepAliveSeconds", settings.keepAliveSeconds },
+        { "mcpEnabled", settings.mcpEnabled },
+        { "mcpPort", settings.mcpPort },
     };
 }
 

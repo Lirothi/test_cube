@@ -70,6 +70,11 @@ namespace Screenshot
 {
 bool SaveBackbufferPng(Renderer& renderer, const std::string& path)
 {
+    return SaveBackbufferPng(renderer, path, 0u);
+}
+
+bool SaveBackbufferPng(Renderer& renderer, const std::string& path, unsigned maxWidth)
+{
     ID3D12Device* device = renderer.GetDevice();
     ID3D12Resource* src = renderer.GetLastPresentedBackbuffer();
     if (!device || !src || path.empty())
@@ -162,6 +167,45 @@ bool SaveBackbufferPng(Renderer& renderer, const std::string& path)
         std::swap(px[i], px[i + 2]);
     }
 
+    // A whole factor and a box filter: averaging gamma-encoded bytes is not photometrically
+    // exact, and for an image somebody is going to LOOK at rather than measure it does not
+    // need to be. A whole factor keeps every source pixel in exactly one output pixel.
+    UINT outW = w;
+    UINT outH = h;
+    if (maxWidth > 0 && w > maxWidth)
+    {
+        const UINT factor = (w + maxWidth - 1) / maxWidth;
+        outW = w / factor;
+        outH = h / factor;
+        std::vector<std::uint8_t> scaled(static_cast<size_t>(outW) * outH * 4);
+        const UINT area = factor * factor;
+        for (UINT y = 0; y < outH; ++y)
+        {
+            for (UINT x = 0; x < outW; ++x)
+            {
+                UINT sum[4] = { 0, 0, 0, 0 };
+                for (UINT sy = 0; sy < factor; ++sy)
+                {
+                    const std::uint8_t* row =
+                        px.data() + (static_cast<size_t>(y * factor + sy) * w + x * factor) * 4;
+                    for (UINT sx = 0; sx < factor; ++sx)
+                    {
+                        for (UINT c = 0; c < 4; ++c)
+                        {
+                            sum[c] += row[sx * 4 + c];
+                        }
+                    }
+                }
+                std::uint8_t* out = scaled.data() + (static_cast<size_t>(y) * outW + x) * 4;
+                for (UINT c = 0; c < 4; ++c)
+                {
+                    out[c] = static_cast<std::uint8_t>(sum[c] / area);
+                }
+            }
+        }
+        px.swap(scaled);
+    }
+
     ScopedCom com;
     if (!com.ok)
     {
@@ -173,6 +217,6 @@ bool SaveBackbufferPng(Renderer& renderer, const std::string& path)
     {
         fs::create_directories(out.parent_path(), ec);
     }
-    return EncodePng(px, w, h, out.wstring());
+    return EncodePng(px, outW, outH, out.wstring());
 }
 } // namespace Screenshot
