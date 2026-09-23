@@ -4175,6 +4175,8 @@ void EditorController::Draw(
 
     // Claude Code's calls (MCP), every frame. Here rather than in the command bar's Draw so a
     // closed panel cannot leave a caller waiting out its timeout for a frame that never comes.
+    editormcp::SetImportHost(&mcpImportHost_);
+    mcpImportHost_.Tick();
     commandBar_.ServiceMcp(actionCtx, commandStack_);
 
     // Warm the model while the user is still looking at the level they just opened. The

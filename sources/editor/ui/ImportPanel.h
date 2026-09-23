@@ -52,6 +52,22 @@ public:
     // dependencies. Deleted sources remove only their mapped output.
     bool BeginReimport(const EditorAssetRecord& asset, AssetRegistry& registry);
 
+    // --- the MCP door (editormcp's list_staging / import_asset / import_status) ---------------
+    // Not a second importer: the window's own scan, its own BeginImport and its own finish.
+    //
+    // What import_staging holds, as this window's table sees it -- a JSON array as text.
+    std::string StagingJson();
+    // Start a MESH import exactly as the dialog's Import button does, with the dialog's defaults:
+    // the longest side normalised to `targetSizeM` metres INTO THE VERTICES (0 = keep the source's
+    // own size), split into one asset per top-level node when `split`, the dialog's current LOD
+    // knobs. False and a reason when it cannot start. The import only FINISHES while this window
+    // is drawn -- PollImport runs from Draw -- so the caller must open it.
+    bool StartMeshImport(const std::string& name, float targetSizeM, bool split, std::string& outStatus);
+    // Running or not, progress, the status line the window shows, what the last import wrote.
+    std::string StatusJson() const;
+    // An import is converting or still waiting for the Draw that finishes it.
+    bool Busy() const { return running_.load() || joinPending_; }
+
 private:
     enum class Kind { Mesh, TextureSet, Skybox };
     struct Item

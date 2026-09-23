@@ -1,0 +1,9 @@
+{
+  "bakeScale": 0.006627372000366449,
+  "geometry": "models/old_boat/old_boat.mesh.bin",
+  "material": "old_boat_0",
+  "source": "import_staging\\old_boat\\scene.gltf",
+  "uvDensity": [
+    6.956295013427734
+  ]
+}

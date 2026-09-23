@@ -1,0 +1,17 @@
+{
+  "albedo": "models/fishing_boat/textures/Torus_baseColor.png",
+  "ambientOcclusion": 1.0,
+  "indirectSpecularScale": 1.0,
+  "mr": "models/fishing_boat/textures/Torus_metallicRoughness.png",
+  "normal": "models/fishing_boat/textures/Torus_normal.png",
+  "normalIsRG": false,
+  "shadingModel": "defaultLit",
+  "subsurfaceColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "transmissionAlbedoPower": 0.6000000238418579,
+  "transmissionNormalWeight": 0.3499999940395355,
+  "transmissionStrength": 0.0
+}

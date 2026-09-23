@@ -1,0 +1,23 @@
+{
+  "albedo": "models/beach_grass/textures/Grass-Material_diffuse.png",
+  "alphaCutoff": 0.5,
+  "alphaTest": true,
+  "ambientOcclusion": 1.0,
+  "indirectSpecularScale": 0.699999988079071,
+  "metalRough": [
+    0.0,
+    0.5
+  ],
+  "normal": "models/beach_grass/textures/Grass-Material_normal.png",
+  "normalIsRG": false,
+  "shadingModel": "twoSidedFoliage",
+  "subsurfaceColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "transmissionAlbedoPower": 0.6000000238418579,
+  "transmissionNormalWeight": 1.0,
+  "transmissionStrength": 1.0,
+  "twoSided": true
+}

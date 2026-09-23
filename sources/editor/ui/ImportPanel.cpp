@@ -2,7 +2,10 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include "core/diagnostics/DiagPaths.h"
 #include <fstream>
@@ -24,6 +27,8 @@
 #pragma warning(push)
 #pragma warning(disable: 26819)
 #include "third_party/json/json.hpp"
+#include "core/logging/Log.h"
+#include "third_party/zlib/zip_extract.h" // import_staging/*.zip -> a folder (zlib + minizip)
 #pragma warning(pop)
 
 namespace fs = std::filesystem;
@@ -520,7 +525,9 @@ namespace
         return "";
     }
 
-    // First ~3 non-empty lines of a source/license text file (trimmed), for the row tooltip.
+    // The WHOLE source/license text file (lines trimmed, blank runs collapsed to one): it is what
+    // CREDITS.md records, and a Sketchfab license.txt names the license only after its first blank
+    // line -- the old 4-line excerpt credited title/author/link and dropped "CC-BY-4.0".
     std::string ReadLicense(const fs::path& dir)
     {
         for (const char* name : { "source.txt", "license.txt", "License.txt", "credits.txt" })
@@ -528,17 +535,41 @@ namespace
             std::ifstream f(dir / name);
             if (!f) { continue; }
             std::string out, line;
-            int lines = 0;
-            while (std::getline(f, line) && lines < 4)
+            bool pendingBlank = false;
+            while (std::getline(f, line))
             {
                 const size_t a = line.find_first_not_of(" \t\r\n");
-                if (a == std::string::npos) { continue; }
+                if (a == std::string::npos) { pendingBlank = !out.empty(); continue; }
                 const size_t b = line.find_last_not_of(" \t\r\n");
+                if (pendingBlank) { out += '\n'; pendingBlank = false; }
                 out += line.substr(a, b - a + 1);
                 out += '\n';
-                ++lines;
             }
             if (!out.empty()) { return out; }
+        }
+        return {};
+    }
+
+    // One short label for a license text: the license itself when the file names it
+    // ("license type: CC-BY-4.0 (...)" from Sketchfab, "License: CC0 1.0" from Poly Haven), else "".
+    std::string LicenseSummary(const std::string& text)
+    {
+        std::istringstream in(text);
+        std::string line;
+        while (std::getline(in, line))
+        {
+            std::string lower = line;
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            size_t at = lower.find("license type:");
+            size_t skip = 13;
+            if (at == std::string::npos && lower.rfind("license:", 0) == 0) { at = 0; skip = 8; }
+            if (at == std::string::npos) { continue; }
+            std::string value = line.substr(at + skip);
+            const size_t paren = value.find(" (");
+            if (paren != std::string::npos) { value.resize(paren); }
+            const size_t a = value.find_first_not_of(" \t");
+            if (a != std::string::npos) { return value.substr(a); }
         }
         return {};
     }
@@ -910,6 +941,30 @@ namespace
                 if (f.is_number()) { bakeOpt.slotFoliage.push_back(f.get<float>()); }
             }
         }
+        else if (IsGltfPath(sourceGltf))
+        {
+            // First import: which slots are LEAVES, read off the glTF by the same rule the material
+            // files follow (a two-sided alpha cutout), and decided HERE, before the bake -- the
+            // bake's wind weights need it, and a foliage asset imported without it stood rigid in
+            // a wind that swayed every hand-set-up palm beside it.
+            const size_t slots = std::max<size_t>(1, MeshManager::CountSubmeshes(sourceGltf));
+            std::vector<float> foliage(slots, 0.0f);
+            bool anyFoliage = false;
+            for (size_t i = 0; i < slots; ++i)
+            {
+                if (materialgen::IsFoliageCard(MeshManager::DescribeGltfMaterial(sourceGltf, static_cast<int>(i))))
+                {
+                    foliage[i] = 1.0f;
+                    anyFoliage = true;
+                }
+            }
+            if (anyFoliage)
+            {
+                bakeOpt.slotFoliage = foliage;
+                asset["windFoliage"] = foliage;
+                if (!asset.contains("windStrength")) { asset["windStrength"] = 1.0f; }
+            }
+        }
         // Mesh chunking. The bake and mesh.json MUST agree: the .bin carries no flag of its own,
         // so mesh.json's "chunkGrid" is the ONLY thing that tells the runtime these submeshes are
         // spatial chunks rather than material groups. Resolve it once here and use that one value
@@ -1091,25 +1146,46 @@ namespace
         return changed;
     }
 
+    // One "## <name>" section per asset. The header must match the WHOLE line: a substring test
+    // took "## coconut_palm" for "## coconut" and never credited the coconut. A re-import rewrites
+    // a section whose text changed, so an entry written from an older, shorter reading heals.
     void WriteCreditsEntry(const std::string& name, const std::string& license)
     {
         if (license.empty()) { return; }
         const fs::path path = "CREDITS.md";
-        // Skip if an entry for this asset already exists (dedupe by the "## <name>" header).
         std::string existing;
         {
             std::ifstream in(path);
             if (in) { std::ostringstream ss; ss << in.rdbuf(); existing = ss.str(); }
         }
-        const std::string header = "## " + name;
-        if (existing.find(header) != std::string::npos) { return; }
+        std::string section = "## " + name + "\n" + license;
+        if (section.back() != '\n') { section += '\n'; }
+        section += '\n';
 
-        std::ofstream out(path, std::ios::app);
+        const std::string header = "## " + name + "\n";
+        size_t begin = std::string::npos;
+        for (size_t at = existing.find(header); at != std::string::npos; at = existing.find(header, at + 1))
+        {
+            if (at == 0 || existing[at - 1] == '\n') { begin = at; break; }
+        }
+        std::string updated;
+        if (begin == std::string::npos)
+        {
+            updated = existing.empty() ? std::string("# Asset credits\n\n") : existing;
+            updated += section;
+        }
+        else
+        {
+            size_t end = existing.find("\n## ", begin);
+            end = end == std::string::npos ? existing.size() : end + 1;
+            if (existing.compare(begin, end - begin, section) == 0) { return; }
+            updated = existing.substr(0, begin) + section + existing.substr(end);
+        }
+        std::ofstream out(path, std::ios::trunc);
         if (!out) { return; }
-        if (existing.empty()) { out << "# Asset credits\n\n"; }
-        out << header << "\n" << license;
-        if (license.back() != '\n') { out << '\n'; }
-        out << "\n";
+        out << updated;
+        LOG_INFO(logging::LogCategory::Asset, "CREDITS.md: {} '{}' ({})",
+            begin == std::string::npos ? "added" : "updated", name, LicenseSummary(license));
     }
 }
 
@@ -1305,6 +1381,101 @@ bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& r
     return false;
 }
 
+namespace
+{
+    // "Brain Coral 3.3.zip" -> "brain_coral_3_3": the folder name becomes the asset name
+    // (models/<name>.mesh.json), so it keeps to what every later lookup handles -- a dot in it
+    // reads as an extension. A trailing "_2k.gltf" style suffix of a Poly Haven download goes too.
+    std::string StagingNameFromArchive(const fs::path& zip)
+    {
+        std::string stem = zip.stem().string();
+        for (const char* ext : { ".gltf", ".glb" })
+        {
+            const std::string e(ext);
+            if (stem.size() > e.size() && stem.compare(stem.size() - e.size(), e.size(), e) == 0)
+            {
+                stem.resize(stem.size() - e.size());
+            }
+        }
+        std::string out;
+        for (const char c : stem)
+        {
+            const char l = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const bool keep = (l >= 'a' && l <= 'z') || (l >= '0' && l <= '9');
+            if (keep) { out.push_back(l); }
+            else if (!out.empty() && out.back() != '_') { out.push_back('_'); }
+        }
+        while (!out.empty() && out.back() == '_') { out.pop_back(); }
+        return out.empty() ? std::string("archive") : out;
+    }
+
+    // import_staging/<x>.zip -> import_staging/<name>/, so a download can be dropped in as it came.
+    // Once per archive: ".from_zip" in the folder records which archive (size + write time) it
+    // holds, and only a CHANGED archive is unpacked again. A folder of that name without the marker
+    // was made by hand and is never touched.
+    void ExtractStagingArchives(const fs::path& root)
+    {
+        std::error_code ec;
+        for (const auto& entry : fs::directory_iterator(root, ec))
+        {
+            if (ec) { break; }
+            if (!entry.is_regular_file(ec) || LowerExt(entry.path()) != ".zip") { continue; }
+            const fs::path zip = entry.path();
+            const std::string name = StagingNameFromArchive(zip);
+            const fs::path dest = root / name;
+            const std::string stamp = zip.filename().string() + " " +
+                std::to_string(FileSize(zip)) + " " + std::to_string(FileWriteTime(zip));
+            const fs::path marker = dest / ".from_zip";
+            if (fs::exists(dest, ec))
+            {
+                std::ifstream in(marker);
+                std::string held;
+                if (!in)
+                {
+                    LOG_WARNING_ONCE_PER_MESSAGE(logging::LogCategory::Asset,
+                        "import_staging: {} not unpacked -- a folder '{}' already exists and did not come from an archive",
+                        zip.filename().string(), name);
+                    continue;
+                }
+                std::getline(in, held);
+                if (held == stamp) { continue; }
+            }
+
+            const fs::path tmp = root / ("." + name + ".unzipping");
+            fs::remove_all(tmp, ec);
+            fs::create_directories(tmp, ec);
+            std::string why;
+            std::size_t files = 0;
+            if (!thirdparty::ExtractZip(zip, tmp, why, &files))
+            {
+                fs::remove_all(tmp, ec);
+                LOG_WARNING(logging::LogCategory::Asset,
+                    "import_staging: could not unpack {}: {}", zip.filename().string(), why);
+                continue;
+            }
+            // A zip whose whole content sits in one top-level folder unpacks one level too deep.
+            fs::path content = tmp;
+            std::vector<fs::path> top;
+            for (const auto& child : fs::directory_iterator(tmp, ec)) { top.push_back(child.path()); }
+            if (top.size() == 1 && fs::is_directory(top.front(), ec)) { content = top.front(); }
+
+            fs::remove_all(dest, ec);
+            fs::rename(content, dest, ec);
+            if (ec)
+            {
+                LOG_WARNING(logging::LogCategory::Asset, "import_staging: unpacked {} but could not move it to {}/ ({})",
+                    zip.filename().string(), name, ec.message());
+                fs::remove_all(tmp, ec);
+                continue;
+            }
+            fs::remove_all(tmp, ec);
+            std::ofstream(marker) << stamp << "\n";
+            LOG_INFO(logging::LogCategory::Asset, "import_staging: unpacked {} -> {}/ ({} files)",
+                zip.filename().string(), name, files);
+        }
+    }
+}
+
 void ImportPanel::Rescan()
 {
     items_.clear();
@@ -1312,6 +1483,7 @@ void ImportPanel::Rescan()
 
     std::error_code ec;
     if (!fs::exists(kStagingRoot, ec) || !fs::is_directory(kStagingRoot, ec)) { return; }
+    ExtractStagingArchives(kStagingRoot);
 
     for (const auto& entry : fs::directory_iterator(kStagingRoot, ec))
     {
@@ -1506,6 +1678,100 @@ void ImportPanel::BeginImport(const Item& item,
         workerFailures_.store(failures);
         running_.store(false);
     });
+}
+
+// ---- the MCP door ----------------------------------------------------------------------------
+
+std::string ImportPanel::StagingJson()
+{
+    if (!running_.load())
+    {
+        Rescan();
+    }
+    nlohmann::json out = nlohmann::json::array();
+    for (const Item& item : items_)
+    {
+        nlohmann::json row;
+        row["name"] = item.name;
+        row["kind"] = item.kind == Kind::Mesh ? "mesh" : item.kind == Kind::TextureSet ? "textureSet" : "skybox";
+        row["summary"] = item.meta;
+        if (item.kind == Kind::Mesh)
+        {
+            row["longestSideM"] = std::round(item.worldSizeM * 1000.0f) / 1000.0f;
+            row["topLevelNodes"] = ListSplittableTopLevelNodes(item.gltfFile).size();
+        }
+        const std::string licenseType = LicenseSummary(item.license);
+        row["license"] = !licenseType.empty() ? licenseType : item.license.substr(0, item.license.find('\n'));
+        row["alreadyInProject"] = item.alreadyInProject;
+        out.push_back(std::move(row));
+    }
+    return out.dump();
+}
+
+bool ImportPanel::StartMeshImport(const std::string& name, float targetSizeM, bool split,
+    std::string& outStatus)
+{
+    if (running_.load() || joinPending_)
+    {
+        outStatus = "an import is already running (" + activeItem_.name + "); ask import_status";
+        return false;
+    }
+    Rescan();
+    const auto it = std::find_if(items_.begin(), items_.end(),
+        [&name](const Item& item) { return item.name == name; });
+    if (it == items_.end())
+    {
+        outStatus = "import_staging has no '" + name + "'; it holds:";
+        for (const Item& item : items_) { outStatus += " " + item.name; }
+        return false;
+    }
+    if (it->kind != Kind::Mesh)
+    {
+        outStatus = "'" + name + "' is not a mesh (no glTF/GLB/OBJ inside); only meshes import from here";
+        return false;
+    }
+    // The dialog's confirm path with its defaults: normalise into the vertices (bake scale), no
+    // spawnScale on the asset, no chunking, the LOD knobs as the window currently holds them.
+    MeshLoadOptions lod = DialogLodOptions();
+    lod.bakeScale = 1.0f;
+    if (targetSizeM > 0.0f)
+    {
+        if (it->worldSizeM <= 0.0f)
+        {
+            outStatus = "'" + name + "' has no measurable size, so it cannot be normalised to " +
+                std::to_string(targetSizeM) + " m; import it with targetSizeM 0";
+            return false;
+        }
+        lod.bakeScale = targetSizeM / it->worldSizeM;
+    }
+    std::vector<std::string> nodes;
+    if (split)
+    {
+        nodes = ListSplittableTopLevelNodes(it->gltfFile);
+        if (nodes.size() < 2) { nodes.clear(); }
+    }
+    const Item item = *it;
+    BeginImport(item, {}, true, {}, {}, 0.0f, nodes, true, 0, &lod);
+    char scale[96];
+    std::snprintf(scale, sizeof(scale), "longest side %.3f m -> %.3f m (x%.4f in the vertices)",
+        item.worldSizeM, item.worldSizeM * lod.bakeScale, lod.bakeScale);
+    outStatus = "importing " + item.name + " (" + item.meta + "); " + scale +
+        (nodes.empty() ? std::string("; one asset") :
+                         "; split into " + std::to_string(nodes.size()) + " assets");
+    return true;
+}
+
+std::string ImportPanel::StatusJson() const
+{
+    nlohmann::json out;
+    out["running"] = running_.load() || joinPending_;
+    out["item"] = activeItem_.name;
+    out["texturesDone"] = progressDone_.load();
+    out["texturesTotal"] = progressTotal_.load();
+    out["status"] = status_;
+    out["failed"] = statusIsError_;
+    out["lastImported"] = lastImportedName_;
+    return out.dump();
 }
 
 void ImportPanel::OpenImportDialog(const Item& item)
@@ -2746,10 +3012,15 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
             }
             else
             {
-                ImGui::TextColored(ImVec4(0.50f, 0.85f, 0.50f, 1.0f), "credited");
-                if (ImGui::IsItemHovered())
+                const std::string licenseType = LicenseSummary(it.license);
+                ImGui::TextColored(ImVec4(0.50f, 0.85f, 0.50f, 1.0f), "%s",
+                    licenseType.empty() ? "credited" : licenseType.c_str());
+                if (ImGui::IsItemHovered() && ImGui::BeginTooltip())
                 {
-                    ImGui::SetTooltip("%s", it.license.c_str());
+                    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.0f);
+                    ImGui::TextUnformatted(it.license.c_str());
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
                 }
             }
 

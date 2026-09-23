@@ -1,0 +1,20 @@
+{
+  "albedo": "models/seashells/textures/08_-_Default_baseColor.jpeg",
+  "ambientOcclusion": 1.0,
+  "indirectSpecularScale": 1.0,
+  "metalRough": [
+    0.4529344439506531,
+    0.44073933362960815
+  ],
+  "normal": "models/seashells/textures/08_-_Default_normal.png",
+  "normalIsRG": false,
+  "shadingModel": "defaultLit",
+  "subsurfaceColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "transmissionAlbedoPower": 0.6000000238418579,
+  "transmissionNormalWeight": 0.3499999940395355,
+  "transmissionStrength": 0.0
+}

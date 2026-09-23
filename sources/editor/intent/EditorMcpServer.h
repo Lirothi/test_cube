@@ -70,6 +70,20 @@ namespace editormcp
         bool show = false;
     };
 
+    // The Import window, for list_staging / import_asset / import_status. It is not part of the
+    // action context -- it owns files, not the document -- so the editor registers it here and a
+    // host without one (the gate) answers those tools with a refusal. Frame thread only.
+    class ImportHost
+    {
+    public:
+        virtual ~ImportHost() = default;
+        virtual std::string Staging() = 0;          // JSON array of what import_staging holds
+        virtual bool Start(const std::string& name, float targetSizeM, bool split,
+            std::string& outText) = 0;              // false + the reason when it cannot start
+        virtual std::string Status() = 0;           // JSON object
+    };
+    void SetImportHost(ImportHost* host);
+
     // Runs one tool that touches the DOCUMENT, on the frame thread -- everything except
     // `screenshot`, which needs the frame loop's safe point instead. Public so the gate can
     // drive it directly.

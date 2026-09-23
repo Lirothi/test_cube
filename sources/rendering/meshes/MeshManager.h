@@ -159,6 +159,7 @@ struct GltfMaterialDesc {
     float normalScale  = 1.0f;
     float emissive[3]  = {0.0f, 0.0f, 0.0f};
     bool  alphaMask    = false;   // alphaMode == MASK
+    bool  alphaBlend   = false;   // alphaMode == BLEND (the importer reads a textured one as a cutout)
     float alphaCutoff  = 0.5f;
     bool  doubleSided  = false;
 };

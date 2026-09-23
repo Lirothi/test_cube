@@ -1,0 +1,9 @@
+{
+  "bakeScale": 0.17027303576469421,
+  "geometry": "models/brain_coral/brain_coral.mesh.bin",
+  "material": "brain_coral_0",
+  "source": "import_staging\\brain_coral\\scene.gltf",
+  "uvDensity": [
+    3.348454236984253
+  ]
+}

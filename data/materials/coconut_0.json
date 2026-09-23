@@ -1,0 +1,17 @@
+{
+  "albedo": "models/coconut/textures/Coconut_PBR_baseColor.jpeg",
+  "ambientOcclusion": 1.0,
+  "indirectSpecularScale": 1.0,
+  "mr": "models/coconut/textures/Coconut_PBR_metallicRoughness.png",
+  "normal": "models/coconut/textures/Coconut_PBR_normal.jpeg",
+  "normalIsRG": false,
+  "shadingModel": "defaultLit",
+  "subsurfaceColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "transmissionAlbedoPower": 0.6000000238418579,
+  "transmissionNormalWeight": 0.3499999940395355,
+  "transmissionStrength": 0.0
+}

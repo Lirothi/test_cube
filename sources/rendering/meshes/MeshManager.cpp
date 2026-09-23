@@ -2324,11 +2324,24 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
             d.albedoPath = ResolveTexUri(pbr.base_color_texture.texture, dir);
             d.mrPath = ResolveTexUri(pbr.metallic_roughness_texture.texture, dir);
         }
+        else if (m.has_pbr_specular_glossiness) {
+            // KHR_materials_pbrSpecularGlossiness (older Sketchfab uploads, 3ds Max exports): the
+            // diffuse is the albedo, and a dielectric roughness is derived from the glossiness.
+            // Unread, the albedo came through EMPTY and the asset drew untextured grey -- a grass
+            // pack imported as dark featureless cards. Floored at 0.5 because the factor alone,
+            // without the per-pixel gloss texture it scales, reads as a mirror at glossiness 1.
+            const cgltf_pbr_specular_glossiness& sg = m.pbr_specular_glossiness;
+            for (int i = 0; i < 4; ++i) { d.baseColor[i] = sg.diffuse_factor[i]; }
+            d.metallic = 0.0f;
+            d.roughness = std::clamp(1.0f - sg.glossiness_factor, 0.5f, 1.0f);
+            d.albedoPath = ResolveTexUri(sg.diffuse_texture.texture, dir);
+        }
         d.normalPath = ResolveTexUri(m.normal_texture.texture, dir);
         d.normalScale = (m.normal_texture.texture ? m.normal_texture.scale : 1.0f);
         for (int i = 0; i < 3; ++i) { d.emissive[i] = m.emissive_factor[i]; }
         d.emissivePath = ResolveTexUri(m.emissive_texture.texture, dir);
         d.alphaMask = (m.alpha_mode == cgltf_alpha_mode_mask);
+        d.alphaBlend = (m.alpha_mode == cgltf_alpha_mode_blend);
         d.alphaCutoff = m.alpha_cutoff;
         d.doubleSided = (m.double_sided != 0);
         d.valid = true;

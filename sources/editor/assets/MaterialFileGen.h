@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+struct GltfMaterialDesc; // rendering/meshes/MeshManager.h
+
 // Part I3 — write a schema-v2 material file (data/materials/<name>.json) from a glTF material,
 // shared by the importer (auto-materials -> named files at import) and the inspector's
 // "Save slot as material" button. Uses MeshManager::DescribeGltfMaterial so the ordinal->material
@@ -43,6 +45,15 @@ namespace materialgen
     };
     TwoSidedDecision DecideTwoSided(bool gltfDoubleSided, bool alphaMask, bool measured,
         float seamRatio);
+
+    // Is this glTF material an alpha CUTOUT, and at what threshold? MASK is one by definition. BLEND
+    // with a base-colour texture is read as one too: it is how Sketchfab and most exporters ship
+    // cut-out foliage, and this renderer has no blended opaque path -- drawn opaque, every leaf card
+    // is a rectangle. A BLEND material with no texture (tinted glass) stays opaque.
+    bool IsAlphaCutout(const GltfMaterialDesc& d, float* cutoffOut = nullptr);
+    // A two-sided alpha cutout is a leaf / frond / grass card: it gets the palms' foliage shading
+    // (twoSidedFoliage, light through the leaf) and its slot is marked wind foliage at import.
+    bool IsFoliageCard(const GltfMaterialDesc& d);
 
     // Write data/materials/<name>.json for material `ordinal` of `geometry` (a glTF/GLB path, with
     // an optional #node: selector). If `overwrite` is false an existing file is preserved (keeps

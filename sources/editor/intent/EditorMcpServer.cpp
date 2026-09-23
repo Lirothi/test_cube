@@ -276,6 +276,16 @@ namespace
 
 namespace editormcp
 {
+    namespace
+    {
+        ImportHost* g_importHost = nullptr; // frame thread only, like every document tool
+    }
+
+    void SetImportHost(ImportHost* host)
+    {
+        g_importHost = host;
+    }
+
     json ToolList()
     {
         return json::array({
@@ -368,6 +378,46 @@ namespace editormcp
                   "Undo the newest entry on the editor's undo stack -- WHOEVER made it, you or "
                   "the person. The answer names what was undone. One entry per call, the same "
                   "as Ctrl+Z." },
+                { "inputSchema", ObjectSchema() },
+            },
+            {
+                { "name", "list_staging" },
+                { "description",
+                  "What import_staging/ holds, as the editor's Import window sees it: each "
+                  "folder's name, kind (mesh / textureSet / skybox), triangle and material "
+                  "summary, longest side in metres, how many top-level nodes it could be split "
+                  "into, its license line, and whether it is already in the project." },
+                { "inputSchema", ObjectSchema() },
+            },
+            {
+                { "name", "import_asset" },
+                { "description",
+                  "Import one MESH folder from import_staging/ into the project, exactly as the "
+                  "Import window's Import button does: textures to DDS, geometry baked with LODs, "
+                  "models/<name>.mesh.json written, a CREDITS.md entry added. It WRITES FILES "
+                  "(models/, data/materials/, CREDITS.md) and is not undoable -- only import what "
+                  "the person asked for. It returns at once; the work runs in the background, "
+                  "one import at a time, and finishes only while the Import window is open (this "
+                  "opens it). Poll import_status. `targetSizeM` normalises the longest side to "
+                  "that many metres inside the vertices (0 or absent keeps the source size -- "
+                  "check longestSideM in list_staging first, Sketchfab sources are often in "
+                  "centimetres); `split` makes one asset per top-level node, "
+                  "models/<name>_node_<node>.mesh.json." },
+                { "inputSchema", ObjectSchema({
+                    { "name", { { "type", "string" },
+                        { "description", "the folder name under import_staging/" } } },
+                    { "targetSizeM", { { "type", "number" },
+                        { "description", "longest side in metres after import; 0 = keep" } } },
+                    { "split", { { "type", "boolean" },
+                        { "description", "one asset per top-level node (default false)" } } } },
+                    json::array({ "name" })) },
+            },
+            {
+                { "name", "import_status" },
+                { "description",
+                  "Whether an import is running, its texture progress, the Import window's "
+                  "status line (\"Imported <name> ...\" or \"Import FAILED ... see "
+                  "asset_import.log\"), and the name of the last import that finished." },
                 { "inputSchema", ObjectSchema() },
             },
         });
@@ -634,6 +684,42 @@ namespace editormcp
             outRecord.show = true;
             ToolResult result;
             result.text = "Undid: " + label;
+            return result;
+        }
+
+        if (name == "list_staging" || name == "import_asset" || name == "import_status")
+        {
+            if (!g_importHost)
+            {
+                return Error("There is no Import window here to import with.");
+            }
+            ToolResult result;
+            if (name == "list_staging")
+            {
+                result.text = g_importHost->Staging();
+                return result;
+            }
+            if (name == "import_status")
+            {
+                result.text = g_importHost->Status();
+                return result;
+            }
+            const std::string asset = arguments.value("name", std::string());
+            if (asset.empty())
+            {
+                return Error("import_asset needs `name`, a folder under import_staging/.");
+            }
+            const float targetSizeM = arguments.contains("targetSizeM") &&
+                arguments["targetSizeM"].is_number() ? arguments["targetSizeM"].get<float>() : 0.0f;
+            const bool split = arguments.value("split", false);
+            std::string text;
+            const bool started = g_importHost->Start(asset, targetSizeM, split, text);
+            outRecord.title = "import_asset " + asset;
+            outRecord.verdict = text;
+            outRecord.failed = !started;
+            outRecord.show = true;
+            result.text = text;
+            result.isError = !started;
             return result;
         }
 

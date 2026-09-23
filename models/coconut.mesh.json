@@ -1,0 +1,9 @@
+{
+  "bakeScale": 0.7451966404914856,
+  "geometry": "models/coconut/coconut.mesh.bin",
+  "material": "coconut_0",
+  "source": "import_staging\\coconut\\scene.gltf",
+  "uvDensity": [
+    0.48132359981536865
+  ]
+}

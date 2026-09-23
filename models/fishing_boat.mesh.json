@@ -1,0 +1,14 @@
+{
+  "geometry": "models/fishing_boat/fishing_boat.mesh.bin",
+  "materials": [
+    "fishing_boat_0",
+    "fishing_boat_1",
+    "fishing_boat_2"
+  ],
+  "source": "import_staging\\fishing_boat\\scene.gltf",
+  "uvDensity": [
+    10.48452091217041,
+    1.3267731666564941,
+    0.9484995603561401
+  ]
+}

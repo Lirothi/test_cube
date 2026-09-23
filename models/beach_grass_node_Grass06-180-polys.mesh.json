@@ -1,0 +1,13 @@
+{
+  "bakeScale": 6.7996745109558105,
+  "geometry": "models/beach_grass/beach_grass_node_Grass06-180-polys.mesh.bin",
+  "material": "beach_grass_Grass06-180-polys_0",
+  "source": "import_staging\\beach_grass\\scene.gltf#node:Grass06-180-polys",
+  "uvDensity": [
+    0.10063690692186356
+  ],
+  "windFoliage": [
+    1.0
+  ],
+  "windStrength": 1.0
+}

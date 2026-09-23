@@ -1,0 +1,8 @@
+{
+  "geometry": "models/starfish/starfish.mesh.bin",
+  "material": "starfish_0",
+  "source": "import_staging\\starfish\\scene.gltf",
+  "uvDensity": [
+    0.349811851978302
+  ]
+}

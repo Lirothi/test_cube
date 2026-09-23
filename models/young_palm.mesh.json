@@ -1,0 +1,18 @@
+{
+  "bakeScale": 0.40050816535949707,
+  "geometry": "models/young_palm/young_palm.mesh.bin",
+  "materials": [
+    "young_palm_0",
+    "young_palm_1"
+  ],
+  "source": "import_staging\\young_palm\\scene.gltf",
+  "uvDensity": [
+    2.682157516479492,
+    2.152843713760376
+  ],
+  "windFoliage": [
+    0.0,
+    1.0
+  ],
+  "windStrength": 1.0
+}

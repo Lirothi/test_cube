@@ -937,6 +937,18 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     const std::optional<json> refused = call(6, "tools/call", { { "name", "run_action" },
         { "arguments", { { "command", { { "action", "noSuchAction" } } } } } });
     Check((*refused)["result"]["isError"].get<bool>(), "an unknown action is refused, with a reason");
+    // The import tools are listed, and with no Import window registered (this harness has none)
+    // they refuse with a reason instead of reaching for a panel that is not there.
+    bool listsImport = false;
+    for (const json& tool : (*list)["result"]["tools"])
+    {
+        listsImport = listsImport || tool.value("name", "") == "import_asset";
+    }
+    Check(listsImport, "the tool list offers import_asset");
+    const std::optional<json> noImporter = call(9, "tools/call", { { "name", "list_staging" } });
+    Check((*noImporter)["result"]["isError"].get<bool>(),
+        "list_staging without an Import window is refused: " + text(noImporter));
+
     const std::optional<json> noTool = call(7, "tools/call", { { "name", "save_level" } });
     Check(noTool && (*noTool)["error"]["code"] == -32602, "a tool that does not exist is a protocol error");
     const std::optional<json> noMethod = call(8, "resources/list", json::object());

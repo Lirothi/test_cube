@@ -1,0 +1,12 @@
+{
+  "geometry": "models/fern_02/fern_02_node_fern_02_b.mesh.bin",
+  "material": "fern_02_fern_02_b_0",
+  "source": "import_staging\\fern_02\\fern_02_2k.gltf#node:fern_02_b",
+  "uvDensity": [
+    0.9046667218208313
+  ],
+  "windFoliage": [
+    1.0
+  ],
+  "windStrength": 1.0
+}

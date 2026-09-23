@@ -193,6 +193,41 @@ private:
     // watchdog's rule is about sessions, not about model use.
     llmreaper::EditorSessionMark modelSessionMark_;
     CommandBarPanel commandBar_;
+
+    // The MCP door's view of the Import window (list_staging / import_asset / import_status).
+    // Registered every frame right before the MCP calls are serviced; withdrawn when the editor
+    // goes away. Starting an import OPENS the window, because the import only finishes while the
+    // window is drawn -- PollImport runs from its Draw, as it does for a click.
+    class McpImportHost final : public editormcp::ImportHost
+    {
+    public:
+        explicit McpImportHost(EditorController& owner) : owner_(owner) {}
+        ~McpImportHost() override { editormcp::SetImportHost(nullptr); }
+        std::string Staging() override { return owner_.importPanel_.StagingJson(); }
+        bool Start(const std::string& name, float targetSizeM, bool split, std::string& outText) override
+        {
+            // Opened for the import's sake only -> closed again once it has finished (Tick), so a
+            // scripted batch does not leave the window over the viewport the next screenshot needs.
+            openedWindow_ = openedWindow_ || !owner_.showImportPanel_;
+            owner_.showImportPanel_ = true;
+            return owner_.importPanel_.StartMeshImport(name, targetSizeM, split, outText);
+        }
+        std::string Status() override { return owner_.importPanel_.StatusJson(); }
+        // Once a frame, after the window has drawn (its Draw is what finishes an import).
+        void Tick()
+        {
+            if (openedWindow_ && !owner_.importPanel_.Busy())
+            {
+                owner_.showImportPanel_ = false;
+                openedWindow_ = false;
+            }
+        }
+
+    private:
+        EditorController& owner_;
+        bool openedWindow_ = false;
+    };
+    McpImportHost mcpImportHost_{ *this };
     ViewportGizmo viewportGizmo_;
     EditorHotkeys hotkeys_;
     EditorExtensionRegistry extensions_;

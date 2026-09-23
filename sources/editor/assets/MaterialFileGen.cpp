@@ -146,11 +146,28 @@ namespace materialgen
         return { true, "two-sided: open surface, glTF doubleSided kept" };
     }
 
+    bool IsAlphaCutout(const GltfMaterialDesc& d, float* cutoffOut)
+    {
+        const bool cutout = d.alphaMask || (d.alphaBlend && !d.albedoPath.empty());
+        if (cutoffOut) { *cutoffOut = d.alphaMask ? d.alphaCutoff : 0.5f; }
+        return cutout;
+    }
+
+    bool IsFoliageCard(const GltfMaterialDesc& d)
+    {
+        // Two-sided by the glTF's own say: a cutout card is open by construction, so the seam
+        // measure DecideTwoSided applies to opaque surfaces never overrules it.
+        return d.valid && d.doubleSided && IsAlphaCutout(d);
+    }
+
     std::string WriteFromGltf(const std::string& geometry, int ordinal,
         const std::string& name, bool overwrite, SurfaceMeasure* measure)
     {
         const GltfMaterialDesc d = MeshManager::DescribeGltfMaterial(geometry, ordinal);
         if (!d.valid) { return "auto"; } // null-material slot -> resolve from glTF at runtime
+        float cutoff = 0.5f;
+        const bool cutout = IsAlphaCutout(d, &cutoff);
+        const bool foliage = IsFoliageCard(d);
 
         const fs::path matPath = fs::path("data/materials") / (name + ".json");
         std::error_code ec;
@@ -160,7 +177,7 @@ namespace materialgen
         // Only an opaque double-sided material is worth measuring: nothing else can change.
         bool measured = false;
         float ratio = 0.0f;
-        if (d.doubleSided && !d.alphaMask)
+        if (d.doubleSided && !cutout)
         {
             SurfaceMeasure local;
             SurfaceMeasure& surface = measure ? *measure : local;
@@ -172,7 +189,7 @@ namespace materialgen
             measured = ordinal >= 0 && static_cast<std::size_t>(ordinal) < surface.seamRatios.size();
             ratio = measured ? surface.seamRatios[static_cast<std::size_t>(ordinal)] : 0.0f;
         }
-        const TwoSidedDecision decision = DecideTwoSided(d.doubleSided, d.alphaMask, measured, ratio);
+        const TwoSidedDecision decision = DecideTwoSided(d.doubleSided, cutout, measured, ratio);
         const bool twoSided = decision.twoSided;
         if (d.doubleSided)
         {
@@ -202,15 +219,27 @@ namespace materialgen
         if (!d.albedoPath.empty()) { m["albedo"] = normalize(d.albedoPath); }
         if (!d.mrPath.empty()) { m["mr"] = normalize(d.mrPath); }
         if (!d.normalPath.empty()) { m["normal"] = normalize(d.normalPath); }
-        m["shadingModel"] = "defaultLit";
+        // A leaf card gets the shading the hand-tuned palm leaves carry (coconut_palm_2,
+        // curly_palm_1): light through the leaf at full strength, the leaf's own normal deciding
+        // it, a little less sky specular. It used to come in defaultLit like a rock -- every
+        // imported fern, grass tuft and frond lit as an opaque card with nothing behind it.
+        m["shadingModel"] = foliage ? "twoSidedFoliage" : "defaultLit";
         m["subsurfaceColor"] = { 1.0f, 1.0f, 1.0f };
-        m["transmissionStrength"] = 0.0f;
+        m["transmissionStrength"] = foliage ? 1.0f : 0.0f;
         m["transmissionAlbedoPower"] = 0.6f;
-        m["transmissionNormalWeight"] = 0.35f;
-        m["indirectSpecularScale"] = 1.0f;
+        m["transmissionNormalWeight"] = foliage ? 1.0f : 0.35f;
+        m["indirectSpecularScale"] = foliage ? 0.7f : 1.0f;
         m["ambientOcclusion"] = 1.0f;
         m["normalIsRG"] = false;
-        if (d.alphaMask) { m["alphaTest"] = true; m["alphaCutoff"] = d.alphaCutoff; }
+        if (cutout) { m["alphaTest"] = true; m["alphaCutoff"] = cutoff; }
+        if (d.alphaBlend || foliage)
+        {
+            LOG_INFO(logging::LogCategory::Asset, "material {}: {}{}", name,
+                d.alphaBlend ? (cutout ? "glTF BLEND read as an alpha cutout at 0.5"
+                                       : "glTF BLEND without a texture kept opaque")
+                             : "alpha cutout",
+                foliage ? ", two-sided -> twoSidedFoliage" : "");
+        }
         if (twoSided) { m["twoSided"] = true; }
         // Factors are baked into the DDS by H6 when a texture exists; only surface them as a param
         // when there's no texture to carry them.

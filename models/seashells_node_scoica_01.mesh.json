@@ -1,0 +1,9 @@
+{
+  "bakeScale": 0.0001767773210303858,
+  "geometry": "models/seashells/seashells_node_scoica_01.mesh.bin",
+  "material": "seashells_scoica_01_0",
+  "source": "import_staging\\seashells\\scene.gltf#node:scoica_01",
+  "uvDensity": [
+    0.16310301423072815
+  ]
+}

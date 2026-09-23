@@ -1,0 +1,9 @@
+{
+  "bakeScale": 0.0001767773210303858,
+  "geometry": "models/seashells/seashells_node_Cylinder009.mesh.bin",
+  "material": "seashells_Cylinder009_0",
+  "source": "import_staging\\seashells\\scene.gltf#node:Cylinder009",
+  "uvDensity": [
+    0.17740318179130554
+  ]
+}
