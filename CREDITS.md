@@ -39,3 +39,9 @@ Model Information:
 * source:	https://sketchfab.com/3d-models/tent-fa46028e8d3849399ba5271df07ed99c
 * author:	Gajk.Mv (https://sketchfab.com/Gajk.Mv)
 
+## lowpoly_sticks
+Model Information:
+* title:	Lowpoly Sticks
+* source:	https://sketchfab.com/3d-models/lowpoly-sticks-396f8957029e4440ba15efb0fe217d5f
+* author:	Loïc Norgeot (https://sketchfab.com/norgeotloic)
+

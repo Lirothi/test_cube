@@ -40,11 +40,18 @@ namespace
     constexpr std::uint32_t kPreviewSkyboxSlot = kPreviewLightMarkerSlot + 1;
     constexpr std::uint32_t kPreviewDrawSlots = kPreviewSkyboxSlot + 1;
     constexpr std::uint32_t kPreviewMaterialTexturesPerDraw = 3;
-    constexpr std::uint32_t kPreviewTexturesPerDraw = 4;
+    // t3 the sky; t4..t6 the renderer's split-sum IBL (prefiltered radiance, irradiance, BRDF
+    // LUT), bound only when the preview is lit by the level (PhysicalLighting) and null otherwise.
+    constexpr std::uint32_t kPreviewTexturesPerDraw = 7;
     constexpr std::uint32_t kPreviewEnvironmentTexture = 3;
+    constexpr std::uint32_t kPreviewSpecularTexture = 4;
+    constexpr std::uint32_t kPreviewIrradianceTexture = 5;
+    constexpr std::uint32_t kPreviewBrdfLutTexture = 6;
     constexpr std::uint32_t kPreviewSrvDescriptors =
         kPreviewDrawSlots * kPreviewTexturesPerDraw;
-    constexpr std::uint32_t kPreviewConstantStride = 512;
+    // 768, not 512: the renderer's lighting added nine float4s and the struct outgrew 512. A CBV
+    // region must stay 256-aligned, so the next size up.
+    constexpr std::uint32_t kPreviewConstantStride = 768;
 
     // Matches the PreviewCB cbuffer in shaders/editor_preview.hlsl (16-byte packed).
     struct PreviewConstants
@@ -70,7 +77,20 @@ namespace
         dx::XMFLOAT4 skyboxUp;
         dx::XMFLOAT4 skyboxForward;
         dx::XMFLOAT4 skyboxParams; // xy = horizontal/vertical tan half-FOV, z = exposure
+        // ---- the renderer's lighting; mirrors the appended block of PreviewCB ----
+        dx::XMFLOAT4 physical;        // x = on, y = specular mips, z = sky intensity, w = sky fill
+        dx::XMFLOAT4 sunIlluminance;  // rgb = lux, w = flat ambient
+        dx::XMFLOAT4 groundAlbedo;    // rgb, w = irradiance present
+        dx::XMFLOAT4 sunParams;       // x = sun half-apex, y = light's legacy exposure
+        dx::XMFLOAT4 camera;          // x = exposure multiplier, y = tone curve
+        dx::XMFLOAT4 grade;           // saturation, contrast, gamma, gain
+        dx::XMFLOAT4 gradeOffsetAgx;  // x = offset, yzw = AgX slope, power, saturation
+        dx::XMFLOAT4 film;            // slope, toe, shoulder, black clip
+        dx::XMFLOAT4 filmWhiteClip;   // x = white clip
     };
+    static_assert(sizeof(PreviewConstants) % 16 == 0, "PreviewConstants mirrors a cbuffer.");
+    static_assert(kPreviewConstantStride % D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT == 0,
+        "A CBV region must stay 256-aligned.");
     static_assert(sizeof(PreviewConstants) <= kPreviewConstantStride,
         "PreviewConstants must fit one aligned preview CB region.");
 
@@ -566,7 +586,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     int highlightMaterialSlot,
     int highlightSubmeshOrdinal,
     const TextureCube* environment,
-    float environmentExposure)
+    float environmentExposure,
+    const PhysicalLighting* physical)
 {
     ID3D12Device* device = renderer.GetDevice();
     if (!initialized_ || !device || !cl || renderSlot >= renderSlots_.size())
@@ -623,7 +644,15 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         lightDirection = dx::XMVectorSet(-0.4f, -0.8f, 0.5f, 0.0f);
     }
     lightDirection = dx::XMVector3Normalize(lightDirection);
-    const bool hasEnvironment = environment && environment->GetResource();
+    // Lit by the level, the sky is whatever the PhysicalLighting names -- a descriptor, which is
+    // how both kinds of Skybox hand it out -- and the TextureCube argument is not consulted.
+    const bool hasEnvironment = physical
+        ? physical->sky.ptr != 0
+        : (environment && environment->GetResource());
+    if (physical)
+    {
+        environmentExposure = physical->skyIntensity;
+    }
 
     const bool drawLightPosition = light.showPosition && sphere_ &&
         sphere_->GetVertexBufferResource() && sphere_->GetIndexBufferResource() &&
@@ -690,6 +719,37 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     barrier(frame.depthTarget.Get(), D3D12_RESOURCE_STATE_COMMON,
         D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
+    // The level's sky textures, opened for a pixel-shader read for the length of this preview and
+    // closed again below. Only a DECLARED read-only resting state is widened: COMMON is what an
+    // undeclared resource reports, and guessing its real state is how a wrong barrier gets written.
+    constexpr D3D12_RESOURCE_STATES kReadStates =
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_INDEX_BUFFER |
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT | D3D12_RESOURCE_STATE_COPY_SOURCE |
+        D3D12_RESOURCE_STATE_DEPTH_READ;
+    std::array<std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>, 4> pixelReadWindow{};
+    std::size_t pixelReadCount = 0;
+    if (physical)
+    {
+        for (ID3D12Resource* resource : physical->resources)
+        {
+            if (!resource || std::any_of(pixelReadWindow.begin(),
+                    pixelReadWindow.begin() + pixelReadCount,
+                    [resource](const auto& open) { return open.first == resource; }))
+            {
+                continue;
+            }
+            const D3D12_RESOURCE_STATES rest = renderer.GetCanonicalState(resource);
+            if (rest == D3D12_RESOURCE_STATE_COMMON || (rest & ~kReadStates) != 0 ||
+                (rest & D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) != 0)
+            {
+                continue;
+            }
+            pixelReadWindow[pixelReadCount++] = { resource, rest };
+            barrier(resource, rest, rest | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+    }
+
     cl->OMSetRenderTargets(1, &frame.rtvHandle, FALSE, &frame.dsvHandle);
     D3D12_VIEWPORT viewport{ 0.0f, 0.0f,
         static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f };
@@ -706,8 +766,59 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     ID3D12DescriptorHeap* heaps[] = { frame.srvHeap.Get() };
     cl->SetDescriptorHeaps(1, heaps);
 
+    // t3..t6 for one draw. A null descriptor still carries a dimension, and it has to be the one
+    // the shader declares -- a cube where it reads a cube, a 2D texture where it reads the LUT --
+    // or the debug layer rightly objects.
+    const auto slotHandle = [&](std::uint32_t descriptorBase, std::uint32_t texture)
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = frame.srvCpuHandle;
+        handle.ptr += static_cast<SIZE_T>(descriptorBase + texture) * srvDescriptorSize_;
+        return handle;
+    };
+    const auto writeNullSrv = [&](std::uint32_t descriptorBase, std::uint32_t texture, bool cube)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC nullDesc{};
+        nullDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        nullDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        if (cube)
+        {
+            nullDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+            nullDesc.TextureCube.MipLevels = 1;
+        }
+        else
+        {
+            nullDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            nullDesc.Texture2D.MipLevels = 1;
+        }
+        device->CreateShaderResourceView(nullptr, &nullDesc, slotHandle(descriptorBase, texture));
+    };
+    // The level's own descriptors, copied rather than re-created: a Skybox hands out CPU handles
+    // for both its kinds, and the procedural one has no TextureCube to build a view from.
+    const auto copyOrNull = [&](std::uint32_t descriptorBase, std::uint32_t texture,
+                                D3D12_CPU_DESCRIPTOR_HANDLE source, bool cube)
+    {
+        if (source.ptr != 0)
+        {
+            device->CopyDescriptorsSimple(1, slotHandle(descriptorBase, texture), source,
+                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
+        else
+        {
+            writeNullSrv(descriptorBase, texture, cube);
+        }
+    };
     const auto writeEnvironmentSrv = [&](std::uint32_t descriptorBase)
     {
+        if (physical)
+        {
+            copyOrNull(descriptorBase, kPreviewEnvironmentTexture, physical->sky, true);
+            copyOrNull(descriptorBase, kPreviewSpecularTexture,
+                physical->specularMips > 0 ? physical->specular : D3D12_CPU_DESCRIPTOR_HANDLE{},
+                true);
+            copyOrNull(descriptorBase, kPreviewIrradianceTexture, physical->irradiance, true);
+            copyOrNull(descriptorBase, kPreviewBrdfLutTexture, physical->brdfLut, false);
+            return;
+        }
         D3D12_SHADER_RESOURCE_VIEW_DESC environmentSrv{};
         environmentSrv.Format = hasEnvironment
             ? environment->GetFormat()
@@ -719,13 +830,39 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             ? std::max(environment->GetMips(), 1u)
             : 1u;
         environmentSrv.TextureCube.ResourceMinLODClamp = 0.0f;
-        D3D12_CPU_DESCRIPTOR_HANDLE environmentHandle = frame.srvCpuHandle;
-        environmentHandle.ptr += static_cast<SIZE_T>(
-            descriptorBase + kPreviewEnvironmentTexture) * srvDescriptorSize_;
         device->CreateShaderResourceView(
             hasEnvironment ? environment->GetResource() : nullptr,
             &environmentSrv,
-            environmentHandle);
+            slotHandle(descriptorBase, kPreviewEnvironmentTexture));
+        writeNullSrv(descriptorBase, kPreviewSpecularTexture, true);
+        writeNullSrv(descriptorBase, kPreviewIrradianceTexture, true);
+        writeNullSrv(descriptorBase, kPreviewBrdfLutTexture, false);
+    };
+
+    // The renderer's lighting block of the constants, shared by the model and the sky behind it.
+    const auto fillPhysical = [&](PreviewConstants& cb)
+    {
+        if (!physical)
+        {
+            return;   // zero: the shader's legacy path
+        }
+        cb.physical = dx::XMFLOAT4{ 1.0f, static_cast<float>(physical->specularMips),
+            std::max(0.0f, physical->skyIntensity), std::max(0.0f, physical->skyFill) };
+        cb.sunIlluminance = dx::XMFLOAT4{ physical->sunIlluminance.x,
+            physical->sunIlluminance.y, physical->sunIlluminance.z,
+            std::max(0.0f, physical->flatAmbient) };
+        cb.groundAlbedo = dx::XMFLOAT4{ physical->groundAlbedo.x, physical->groundAlbedo.y,
+            physical->groundAlbedo.z, physical->irradiance.ptr != 0 ? 1.0f : 0.0f };
+        cb.sunParams = dx::XMFLOAT4{ physical->sunHalfApex, physical->lightExposure, 0.0f, 0.0f };
+        cb.camera = dx::XMFLOAT4{ physical->exposure, static_cast<float>(physical->toneCurve),
+            0.0f, 0.0f };
+        cb.grade = dx::XMFLOAT4{ physical->gradeSaturation, physical->gradeContrast,
+            physical->gradeGamma, physical->gradeGain };
+        cb.gradeOffsetAgx = dx::XMFLOAT4{ physical->gradeOffset, physical->agxSlope,
+            physical->agxPower, physical->agxSaturation };
+        cb.film = dx::XMFLOAT4{ physical->filmSlope, physical->filmToe, physical->filmShoulder,
+            physical->filmBlackClip };
+        cb.filmWhiteClip = dx::XMFLOAT4{ physical->filmWhiteClip, 0.0f, 0.0f, 0.0f };
     };
 
     if (hasEnvironment)
@@ -744,6 +881,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             tanHalfFov,
             std::max(0.0f, environmentExposure),
             0.0f };
+        fillPhysical(skyboxConstants);
         std::memcpy(frame.constantBufferMapped +
             static_cast<std::size_t>(kPreviewSkyboxSlot) * kPreviewConstantStride,
             &skyboxConstants,
@@ -955,13 +1093,18 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             std::max(0.0f, light.color.y),
             std::max(0.0f, light.color.z),
             std::max(0.0f, light.ambient) };
+        // The LAST mip of the chain, uncapped. It was held at 5, which on a big sky cube is a
+        // 64-texel face: the shader's roughness blur and its diffuse fill both need the
+        // smallest mips, and the cap kept a rough surface reflecting a recognisable sky.
+        const std::uint32_t skyMips = physical
+            ? std::max(physical->skyMips, 1u)
+            : (hasEnvironment ? std::max(environment->GetMips(), 1u) : 1u);
         cb.environmentParams = dx::XMFLOAT4{
             hasEnvironment ? 1.0f : 0.0f,
             std::max(0.0f, environmentExposure),
-            hasEnvironment
-                ? static_cast<float>(std::min(std::max(environment->GetMips(), 1u) - 1u, 5u))
-                : 0.0f,
+            hasEnvironment ? static_cast<float>(skyMips - 1u) : 0.0f,
             0.0f };
+        fillPhysical(cb);
         cb.debugParams = dx::XMFLOAT4{
             radius * 0.05f, 0.15f, 0.85f, 1.0f };
         std::memcpy(frame.constantBufferMapped +
@@ -1051,6 +1194,12 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     barrier(frame.depthTarget.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
         D3D12_RESOURCE_STATE_COMMON);
+    for (std::size_t i = 0; i < pixelReadCount; ++i)
+    {
+        barrier(pixelReadWindow[i].first,
+            pixelReadWindow[i].second | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            pixelReadWindow[i].second);
+    }
 
     return color;
 }

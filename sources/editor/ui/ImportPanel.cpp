@@ -781,11 +781,14 @@ namespace
         // hand in the Mesh Editor — better than emitting a bogus "auto" the runtime cannot resolve.
         if (!IsGltfPath(geometry)) { return names; }
         const size_t slotCount = std::max<size_t>(1, MeshManager::CountSubmeshes(geometry));
+        // Parsed at most once for all slots, and only if some slot's glTF says doubleSided.
+        materialgen::SurfaceMeasure surface;
         for (size_t i = 0; i < slotCount; ++i)
         {
             // Preserve existing files (overwrite=false) so a re-import keeps material-editor edits.
             const std::string result = materialgen::WriteFromGltf(
-                geometry, static_cast<int>(i), baseName + "_" + std::to_string(i), /*overwrite=*/false);
+                geometry, static_cast<int>(i), baseName + "_" + std::to_string(i), /*overwrite=*/false,
+                &surface);
             names.push_back(result.empty() ? std::string("auto") : result);
         }
         return names;

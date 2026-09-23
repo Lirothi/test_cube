@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 #include <sstream>
 
 #include <d3d12.h>
@@ -70,6 +71,44 @@ bool SameLight(const MeshEditorPreviewLight& a,
             a.showPosition == b.showPosition &&
             a.positionDistance == b.positionDistance;
     }
+
+    bool SameHandle(D3D12_CPU_DESCRIPTOR_HANDLE a, D3D12_CPU_DESCRIPTOR_HANDLE b)
+    {
+        return a.ptr == b.ptr;
+    }
+
+    // Field by field: the struct has padding, so comparing its bytes would compare garbage.
+    bool SamePhysical(const std::optional<EditorPreviewRenderer::PhysicalLighting>& cached,
+        const EditorPreviewRenderer::PhysicalLighting* current)
+    {
+        if (!cached || !current)
+        {
+            return !cached && !current;
+        }
+        const EditorPreviewRenderer::PhysicalLighting& a = *cached;
+        const EditorPreviewRenderer::PhysicalLighting& b = *current;
+        return SameHandle(a.sky, b.sky) && a.skyMips == b.skyMips &&
+            SameHandle(a.specular, b.specular) && a.specularMips == b.specularMips &&
+            SameHandle(a.irradiance, b.irradiance) && SameHandle(a.brdfLut, b.brdfLut) &&
+            a.skyIntensity == b.skyIntensity && a.skyFill == b.skyFill &&
+            a.sunIlluminance.x == b.sunIlluminance.x &&
+            a.sunIlluminance.y == b.sunIlluminance.y &&
+            a.sunIlluminance.z == b.sunIlluminance.z &&
+            a.sunHalfApex == b.sunHalfApex && a.flatAmbient == b.flatAmbient &&
+            a.lightExposure == b.lightExposure &&
+            a.groundAlbedo.x == b.groundAlbedo.x &&
+            a.groundAlbedo.y == b.groundAlbedo.y &&
+            a.groundAlbedo.z == b.groundAlbedo.z &&
+            a.exposure == b.exposure && a.toneCurve == b.toneCurve &&
+            a.gradeSaturation == b.gradeSaturation && a.gradeContrast == b.gradeContrast &&
+            a.gradeGamma == b.gradeGamma && a.gradeGain == b.gradeGain &&
+            a.gradeOffset == b.gradeOffset &&
+            a.agxSlope == b.agxSlope && a.agxPower == b.agxPower &&
+            a.agxSaturation == b.agxSaturation &&
+            a.filmSlope == b.filmSlope && a.filmToe == b.filmToe &&
+            a.filmShoulder == b.filmShoulder && a.filmBlackClip == b.filmBlackClip &&
+            a.filmWhiteClip == b.filmWhiteClip;
+    }
 }
 
 struct MeshEditorPreviewScene::Impl
@@ -91,6 +130,8 @@ struct MeshEditorPreviewScene::Impl
     std::array<int, render::kFrameCount> renderedHighlightOrdinals{ -1, -1, -1 };
     std::array<ID3D12Resource*, render::kFrameCount> renderedEnvironments{};
     std::array<float, render::kFrameCount> renderedEnvironmentExposures{};
+    std::array<std::optional<EditorPreviewRenderer::PhysicalLighting>, render::kFrameCount>
+        renderedPhysical{};
     std::array<bool, render::kFrameCount> cameraValid{};
     std::string sourceSignature;
     std::string error;
@@ -193,7 +234,8 @@ struct MeshEditorPreviewScene::Impl
         int highlightMaterialSlot,
         int highlightSubmeshOrdinal,
         const TextureCube* environment,
-        float environmentExposure)
+        float environmentExposure,
+        const EditorPreviewRenderer::PhysicalLighting* physical)
     {
         if (!loaded || !mesh || frameIndex >= render::kFrameCount)
         {
@@ -250,7 +292,8 @@ struct MeshEditorPreviewScene::Impl
                 highlightMaterialSlot,
                 highlightSubmeshOrdinal,
                 environment,
-                environmentExposure);
+                environmentExposure,
+                physical);
         if (!target || !commands->Submit(&renderer))
         {
             error = "Could not submit the mesh preview render.";
@@ -269,6 +312,9 @@ struct MeshEditorPreviewScene::Impl
         renderedHighlightOrdinals[frameIndex] = highlightSubmeshOrdinal;
         renderedEnvironments[frameIndex] = environment ? environment->GetResource() : nullptr;
         renderedEnvironmentExposures[frameIndex] = environmentExposure;
+        renderedPhysical[frameIndex] = physical
+            ? std::optional<EditorPreviewRenderer::PhysicalLighting>(*physical)
+            : std::nullopt;
         cameraValid[frameIndex] = true;
         error.clear();
         return true;
@@ -310,6 +356,7 @@ void MeshEditorPreviewScene::Reset(Renderer& renderer)
     impl_->cameraValid.fill(false);
     impl_->renderedEnvironments.fill(nullptr);
     impl_->renderedEnvironmentExposures.fill(0.0f);
+    impl_->renderedPhysical.fill(std::nullopt);
     impl_->sourceSignature.clear();
     impl_->error.clear();
     impl_->loaded = false;
@@ -331,7 +378,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     int highlightMaterialSlot,
     int highlightSubmeshOrdinal,
     const TextureCube* environment,
-    float environmentExposure)
+    float environmentExposure,
+    const EditorPreviewRenderer::PhysicalLighting* physical)
 {
     View view;
     const std::string signature = BuildSourceSignature(assetKey,
@@ -388,7 +436,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
         impl_->renderedHighlights[frameIndex] != highlightMaterialSlot ||
         impl_->renderedHighlightOrdinals[frameIndex] != highlightSubmeshOrdinal ||
         impl_->renderedEnvironments[frameIndex] != environmentResource ||
-        impl_->renderedEnvironmentExposures[frameIndex] != environmentExposure)
+        impl_->renderedEnvironmentExposures[frameIndex] != environmentExposure ||
+        !SamePhysical(impl_->renderedPhysical[frameIndex], physical))
     {
         if (!impl_->RenderFrame(renderer,
                 frameIndex,
@@ -402,7 +451,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
                 highlightMaterialSlot,
                 highlightSubmeshOrdinal,
                 environment,
-                environmentExposure))
+                environmentExposure,
+                physical))
         {
             view.state = State::Failed;
             view.error = impl_->error.c_str();

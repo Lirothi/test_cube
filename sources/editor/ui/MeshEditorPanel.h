@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "editor/ui/MeshEditorPreviewScene.h"
+#include "materials/TextureCube.h"
 #include "rendering/meshes/MeshManager.h" // BinaryInfo: per-LOD chunk triangle counts
 #include "third_party/json/json.hpp"
 
@@ -78,6 +79,36 @@ private:
     EditorPreviewMode previewMode_ = EditorPreviewMode::Lit;
     std::uint32_t previewLod_ = 0;
     float previewPaneRatio_ = 0.55f;
+
+    // The sky the preview is lit by, per previewLight_.sky. The level's own sky is borrowed
+    // from the scene; a picked cubemap is loaded here once per choice and kept until another
+    // is picked. Returns null for "none" or a cube that would not load (previewSkyError_ says).
+    const TextureCube* ResolvePreviewSky(EditorContext& ctx, float& outExposure);
+    void DrawPreviewSkyControls(AssetRegistry& registry);
+    std::unique_ptr<TextureCube> previewSkyCube_;
+    // A picked cube's split-sum derivatives, found beside it by name exactly as the level's
+    // Skybox finds its own (`<stem>_spec.dds`, `<stem>_diffuse.dds`). Both or neither.
+    std::unique_ptr<TextureCube> previewSkySpec_;
+    std::unique_ptr<TextureCube> previewSkyIrradiance_;
+    float previewSkyUpIlluminance_ = 0.0f;   // cube units, from `_diffuse.dds`; 0 = uncalibrated
+    std::string previewSkyCubePath_;
+    std::string previewSkyError_;
+
+    // previewLight_.levelLighting: the level's sun, sky, exposure and tone curve, in the renderer's
+    // own units. False = the preview's legacy look (and `out` is untouched).
+    bool BuildPreviewLighting(EditorContext& ctx, EditorPreviewRenderer::PhysicalLighting& out);
+    // What BuildPreviewLighting took from the level last frame, for the panel to say so.
+    struct LevelLightingReadout
+    {
+        bool built = false;
+        float sunLux = 0.0f;           // luminance of the sun's illuminance, before the tint/scale
+        float ev100 = 0.0f;
+        bool metered = false;          // false = the level's camera exposure is off (x1)
+        bool skyIbl = false;           // split-sum sky (else the flat ambient fills)
+        float skyScale = 1.0f;         // what the sky's cube values are multiplied by
+        bool skyCalibrated = true;     // false = a picked cube with no `_diffuse.dds` beside it
+    };
+    LevelLightingReadout levelReadout_;
 };
 
 #endif // WITH_EDITOR

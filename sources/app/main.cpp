@@ -9,6 +9,7 @@
 #include "app/App.h"
 
 #include "assets/AssetImporter.h"
+#include "editor/assets/MaterialFileGen.h" // --seam-ratio (empty outside WITH_EDITOR)
 #include "app/diagnostics/CullBenchmark.h"
 #include "app/diagnostics/SceneStress.h"
 #include "app/scene/SceneRenderQueue.h"
@@ -770,6 +771,14 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--editor")) {
             g_bootEditor = true;
         }
+        // "--edit-mesh=<path>": open the Mesh Editor on that asset at boot (implies --editor).
+        if (const char* flag = std::strstr(lpCmdLine, "--edit-mesh=")) {
+            const char* value = flag + std::strlen("--edit-mesh=");
+            const char* end = value;
+            while (*end && *end != ' ' && *end != '\t') { ++end; }
+            g_bootEditMesh.assign(value, end);
+            g_bootEditor = g_bootEditor || !g_bootEditMesh.empty();
+        }
         // "--intent=<phrase>": one phrase through the editor's real pipeline, then quit.
         // Implies --editor, because the pipeline lives behind EditorController::Draw.
         if (const char* flag = std::strstr(lpCmdLine, "--intent=")) {
@@ -991,6 +1000,48 @@ int WINAPI WinMain(
             }
             return failed;
         }
+#if WITH_EDITOR
+        // "--seam-ratio=<geometry>[,<geometry>...]": how OPEN each submesh's surface is, measured
+        // exactly as the importer measures it, next to that slot's glTF flags and the twoSided the
+        // importer would write (materialgen::DecideTwoSided). Read-only: one line per submesh,
+        // nothing written. Exit code = geometries that could not be read.
+        if (const char* flag = std::strstr(lpCmdLine, "--seam-ratio=")) {
+            const char* p = flag + std::strlen("--seam-ratio=");
+            std::string list;
+            while (*p && !std::isspace(static_cast<unsigned char>(*p))) { list.push_back(*p); ++p; }
+            int failed = 0;
+            for (size_t i = 0; i < list.size();) {
+                size_t j = list.find(',', i);
+                if (j == std::string::npos) { j = list.size(); }
+                const std::string path = list.substr(i, j - i);
+                i = j + 1;
+                if (path.empty()) { continue; }
+                const std::vector<float> ratios = materialgen::MeasureSeamRatios(path);
+                if (ratios.empty()) {
+                    LOG_ERROR(logging::LogCategory::Asset, "--seam-ratio: could not read {}", path);
+                    ++failed;
+                    continue;
+                }
+                for (size_t s = 0; s < ratios.size(); ++s) {
+                    const GltfMaterialDesc material =
+                        MeshManager::DescribeGltfMaterial(path, static_cast<int>(s));
+                    if (!material.valid) {
+                        LOG_INFO(logging::LogCategory::Asset,
+                            "--seam-ratio: {} submesh {}: {:.5f}, no glTF material (slot stays auto)",
+                            path, s, ratios[s]);
+                        continue;
+                    }
+                    const materialgen::TwoSidedDecision decision = materialgen::DecideTwoSided(
+                        material.doubleSided, material.alphaMask, true, ratios[s]);
+                    LOG_INFO(logging::LogCategory::Asset,
+                        "--seam-ratio: {} submesh {}: {:.5f}, glTF doubleSided={}{} -> {}",
+                        path, s, ratios[s], material.doubleSided ? 1 : 0,
+                        material.alphaMask ? " MASK" : "", decision.reason);
+                }
+            }
+            return failed;
+        }
+#endif
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
         // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our
         // binary geometry that mesh.json's "geometry" references. The explicit content reimport step.

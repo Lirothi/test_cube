@@ -1,6 +1,8 @@
 #include "editor/assets/MaterialFileGen.h"
 #if WITH_EDITOR
 
+#include "core/logging/Log.h"
+#include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/MeshManager.h"
 
 #pragma warning(push)
@@ -9,17 +11,143 @@
 #pragma warning(pop)
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
 namespace materialgen
 {
+    std::vector<float> MeasureSeamRatios(const std::string& geometry)
+    {
+        MeshCpuData cpu;
+        MeshLoadOptions options;
+        options.generateTangentSpace = false; // positions are all this reads
+        MeshManager parser;
+        if (!parser.ParseFileCpu(geometry, cpu, options) || cpu.vertices.empty())
+        {
+            return {};
+        }
+
+        // Weld on a grid of 1e-5 of the bounding diagonal: exporters split vertices at every UV
+        // and normal seam, and an unwelded mesh would read as a pile of open patches.
+        DirectX::XMFLOAT3 lo = cpu.vertices[0].position;
+        DirectX::XMFLOAT3 hi = lo;
+        for (const VertexPNTUV& v : cpu.vertices)
+        {
+            lo = { std::min(lo.x, v.position.x), std::min(lo.y, v.position.y), std::min(lo.z, v.position.z) };
+            hi = { std::max(hi.x, v.position.x), std::max(hi.y, v.position.y), std::max(hi.z, v.position.z) };
+        }
+        const double dx = hi.x - lo.x, dy = hi.y - lo.y, dz = hi.z - lo.z;
+        const double diagonal = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double cell = diagonal > 0.0 ? diagonal * 1.0e-5 : 1.0;
+        struct CellHash
+        {
+            std::size_t operator()(const std::array<std::int64_t, 3>& c) const noexcept
+            {
+                return static_cast<std::size_t>(c[0] * 73856093LL ^ c[1] * 19349663LL ^ c[2] * 83492791LL);
+            }
+        };
+        std::unordered_map<std::array<std::int64_t, 3>, std::uint32_t, CellHash> cells;
+        std::vector<std::uint32_t> weld(cpu.vertices.size());
+        std::vector<DirectX::XMFLOAT3> welded;
+        for (std::size_t i = 0; i < cpu.vertices.size(); ++i)
+        {
+            const DirectX::XMFLOAT3& p = cpu.vertices[i].position;
+            const std::array<std::int64_t, 3> key{
+                static_cast<std::int64_t>(std::llround(p.x / cell)),
+                static_cast<std::int64_t>(std::llround(p.y / cell)),
+                static_cast<std::int64_t>(std::llround(p.z / cell)) };
+            const auto [it, inserted] = cells.try_emplace(key, static_cast<std::uint32_t>(welded.size()));
+            if (inserted) { welded.push_back(p); }
+            weld[i] = it->second;
+        }
+
+        std::vector<Mesh::Submesh> submeshes = cpu.submeshes;
+        if (submeshes.empty())
+        {
+            submeshes.push_back({ 0, static_cast<std::uint32_t>(cpu.indices.size()), 0 });
+        }
+        std::vector<float> ratios;
+        ratios.reserve(submeshes.size());
+        for (const Mesh::Submesh& submesh : submeshes)
+        {
+            // Directed-edge counts: a sealed edge is used exactly once each way.
+            std::unordered_map<std::uint64_t, std::uint32_t> directed;
+            double area = 0.0;
+            const std::size_t end = std::min<std::size_t>(cpu.indices.size(),
+                static_cast<std::size_t>(submesh.indexOffset) + submesh.indexCount);
+            for (std::size_t t = submesh.indexOffset; t + 2 < end; t += 3)
+            {
+                const std::uint32_t tri[3] = { weld[cpu.indices[t]], weld[cpu.indices[t + 1]],
+                    weld[cpu.indices[t + 2]] };
+                if (tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2]) { continue; }
+                const DirectX::XMFLOAT3& a = welded[tri[0]];
+                const DirectX::XMFLOAT3& b = welded[tri[1]];
+                const DirectX::XMFLOAT3& c = welded[tri[2]];
+                const double ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+                const double vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+                const double cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+                area += 0.5 * std::sqrt(cx * cx + cy * cy + cz * cz);
+                for (int e = 0; e < 3; ++e)
+                {
+                    ++directed[(static_cast<std::uint64_t>(tri[e]) << 32) | tri[(e + 1) % 3]];
+                }
+            }
+            double seam = 0.0;
+            for (const auto& [edge, count] : directed)
+            {
+                const std::uint32_t u = static_cast<std::uint32_t>(edge >> 32);
+                const std::uint32_t v = static_cast<std::uint32_t>(edge & 0xffffffffu);
+                const auto reverse = directed.find((static_cast<std::uint64_t>(v) << 32) | u);
+                const std::uint32_t back = reverse == directed.end() ? 0u : reverse->second;
+                if (count == 1 && back == 1) { continue; }
+                // Each undirected edge once: from its lower end, or from whichever direction exists.
+                if (back != 0 && u > v) { continue; }
+                const DirectX::XMFLOAT3& a = welded[u];
+                const DirectX::XMFLOAT3& b = welded[v];
+                const double ex = b.x - a.x, ey = b.y - a.y, ez = b.z - a.z;
+                seam += std::sqrt(ex * ex + ey * ey + ez * ez);
+            }
+            constexpr double kPi = 3.14159265358979323846;
+            ratios.push_back(area > 0.0
+                ? static_cast<float>(seam * seam / (4.0 * kPi * area))
+                : std::numeric_limits<float>::infinity());
+        }
+        return ratios;
+    }
+
+    TwoSidedDecision DecideTwoSided(bool gltfDoubleSided, bool alphaMask, bool measured,
+        float seamRatio)
+    {
+        if (!gltfDoubleSided)
+        {
+            return { false, "single-sided: the glTF does not ask for doubleSided" };
+        }
+        if (alphaMask)
+        {
+            return { true, "two-sided: alpha-masked card, glTF doubleSided kept" };
+        }
+        if (!measured)
+        {
+            return { true, "two-sided: geometry not readable, glTF doubleSided kept" };
+        }
+        if (seamRatio < kClosedSeamRatio)
+        {
+            return { false, "single-sided: closed surface, glTF doubleSided dropped" };
+        }
+        return { true, "two-sided: open surface, glTF doubleSided kept" };
+    }
+
     std::string WriteFromGltf(const std::string& geometry, int ordinal,
-        const std::string& name, bool overwrite)
+        const std::string& name, bool overwrite, SurfaceMeasure* measure)
     {
         const GltfMaterialDesc d = MeshManager::DescribeGltfMaterial(geometry, ordinal);
         if (!d.valid) { return "auto"; } // null-material slot -> resolve from glTF at runtime
@@ -28,6 +156,30 @@ namespace materialgen
         std::error_code ec;
         fs::create_directories("data/materials", ec);
         if (!overwrite && fs::exists(matPath, ec)) { return name; } // preserve prior/edited file
+
+        // Only an opaque double-sided material is worth measuring: nothing else can change.
+        bool measured = false;
+        float ratio = 0.0f;
+        if (d.doubleSided && !d.alphaMask)
+        {
+            SurfaceMeasure local;
+            SurfaceMeasure& surface = measure ? *measure : local;
+            if (!surface.measured)
+            {
+                surface.seamRatios = MeasureSeamRatios(geometry);
+                surface.measured = true;
+            }
+            measured = ordinal >= 0 && static_cast<std::size_t>(ordinal) < surface.seamRatios.size();
+            ratio = measured ? surface.seamRatios[static_cast<std::size_t>(ordinal)] : 0.0f;
+        }
+        const TwoSidedDecision decision = DecideTwoSided(d.doubleSided, d.alphaMask, measured, ratio);
+        const bool twoSided = decision.twoSided;
+        if (d.doubleSided)
+        {
+            LOG_INFO(logging::LogCategory::Asset, "material {}: submesh {} of {}: {}{}", name,
+                ordinal, geometry, decision.reason,
+                measured ? " (seam ratio " + std::to_string(ratio) + ")" : std::string());
+        }
 
         // Preset paths are stored relative to the working dir WITH FORWARD SLASHES (the same
         // convention AssetImporter documents). These arrive from ResolveTexUri, which joins the
@@ -59,7 +211,7 @@ namespace materialgen
         m["ambientOcclusion"] = 1.0f;
         m["normalIsRG"] = false;
         if (d.alphaMask) { m["alphaTest"] = true; m["alphaCutoff"] = d.alphaCutoff; }
-        if (d.doubleSided) { m["twoSided"] = true; }
+        if (twoSided) { m["twoSided"] = true; }
         // Factors are baked into the DDS by H6 when a texture exists; only surface them as a param
         // when there's no texture to carry them.
         if (d.albedoPath.empty() &&

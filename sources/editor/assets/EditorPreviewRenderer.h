@@ -54,6 +54,47 @@ public:
         float positionDistance = 1.5f;
     };
 
+    // Everything the level lights a surface with, in the renderer's own units, so a preview can
+    // look like the level instead of like a preview. Filled from the same objects the lighting and
+    // tonemap passes read -- Skybox, DirectionalLight, the colour pipeline and the metered
+    // exposure -- and consumed by the same shader headers. Descriptors are CPU handles because
+    // that is what a Skybox hands out for both of its kinds, the file sky and the procedural one.
+    struct PhysicalLighting
+    {
+        // The sky as seen: the background, and the reflections when there is no prefilter.
+        D3D12_CPU_DESCRIPTOR_HANDLE sky{};
+        std::uint32_t skyMips = 1;
+        // Split-sum IBL, as lighting_cs reads it. `specularMips` 0 = none: the raw sky is then
+        // sampled at a guessed mip, which is also what the renderer does for such a sky.
+        D3D12_CPU_DESCRIPTOR_HANDLE specular{};
+        std::uint32_t specularMips = 0;
+        D3D12_CPU_DESCRIPTOR_HANDLE irradiance{};  // E/PI; null = the flat ambient fills instead
+        D3D12_CPU_DESCRIPTOR_HANDLE brdfLut{};
+        // The textures behind those handles. The procedural sky RESTS in NON_PIXEL_SHADER_RESOURCE
+        // (only compute passes read it), and this pipeline samples it from a pixel shader, so the
+        // draw is bracketed by a transition to a pixel-readable state and back to canonical. A
+        // file texture already rests pixel-readable and costs nothing. Null entries are skipped.
+        std::array<ID3D12Resource*, 4> resources{};
+        float skyIntensity = 1.0f;      // Skybox::GetExposure(): trim times physical calibration
+        float skyFill = 1.0f;           // DirectionalLight::GetSkyFillIntensity()
+        // The sun. The DIRECTION stays the preview's own, so the light can still be walked round
+        // the model; how much light and of what colour is the level's.
+        Math::float3 sunIlluminance{};  // lux, DirectionalLight::GetEffectiveColor()
+        float sunHalfApex = 0.0f;       // DirectionalLight::GetSunHalfApexRadians()
+        float flatAmbient = 0.0f;       // DirectionalLight::GetAmbient(); only without irradiance
+        float lightExposure = 1.0f;     // DirectionalLight::GetExposure(); 1.0 once migrated
+        Math::float3 groundAlbedo{};    // DirectionalLight::GetGroundAlbedo(), for the bounce
+        // The camera: the tonemap pass's exposure, grade and curve (not its local exposure or
+        // bloom, which are operators on a whole frame).
+        float exposure = 1.0f;          // render::ExposureMultiplierFromEv100(metered EV100)
+        std::uint32_t toneCurve = 2;    // render::ToneCurve
+        float gradeSaturation = 1.0f, gradeContrast = 1.0f, gradeGamma = 1.0f, gradeGain = 1.0f;
+        float gradeOffset = 0.0f;
+        float agxSlope = 1.0f, agxPower = 1.0f, agxSaturation = 1.0f;
+        float filmSlope = 0.88f, filmToe = 0.55f, filmShoulder = 0.26f;
+        float filmBlackClip = 0.0f, filmWhiteClip = 0.04f;
+    };
+
     // Create the pipeline objects and independent per-frame render slots once.
     // Returns false if any step fails; callers then mark the preview Failed.
     bool EnsureInitialized(ID3D12Device* device, std::uint32_t maxRenderSize = 256);
@@ -129,7 +170,10 @@ public:
         int highlightSubmeshOrdinal = -1,
         // Optional scene environment used for metallic reflections and the preview background.
         const TextureCube* environment = nullptr,
-        float environmentExposure = 1.0f);
+        float environmentExposure = 1.0f,
+        // THE RENDERER'S LIGHTING instead of the preview's own. When set, it replaces `light`'s
+        // colour/exposure/ambient and `environment` entirely; see PhysicalLighting.
+        const PhysicalLighting* physical = nullptr);
 
     // Render the +X face of a cube texture into the standard 2D thumbnail
     // target. The caller submits `cl` and owns the returned color target.

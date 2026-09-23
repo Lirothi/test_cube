@@ -1,6 +1,14 @@
 #ifndef FILM_CURVE_HLSLI
 #define FILM_CURVE_HLSLI
 
+// dxc defines __HLSL_VERSION and has select(); fxc has neither, and its vector ternary is already
+// per-component. See the use below.
+#ifdef __HLSL_VERSION
+#define FILM_SELECT(c, a, b) select(c, a, b)
+#else
+#define FILM_SELECT(c, a, b) ((c) ? (a) : (b))
+#endif
+
 // Unreal's parameterised film curve (photographic plan, step P3C stage 1).
 //
 // Transcribed from `FilmToneMap` in the engine's TonemapCommon.ush. The five controls are exactly
@@ -81,10 +89,12 @@ float3 FilmCurveToneMap(float3 color, FilmCurveParams p)
         - (2.0f * shoulderScale) / (1.0f + exp((2.0f * p.slope / shoulderScale) * (logColor - shoulderMatch)));
 
     // select(), not ?: -- a per-component condition cannot drive a short-circuiting ternary in
-    // current HLSL. UE's source uses select() here for the same reason; writing it as a ternary
-    // compiles nowhere.
-    toeColor = select(logColor < toeMatch, toeColor, straightColor);
-    shoulderColor = select(logColor > shoulderMatch, shoulderColor, straightColor);
+    // HLSL 2021. UE's source uses select() here for the same reason. FILM_SELECT is that select()
+    // under dxc and the vector ternary under fxc, which has no select() but whose ternary IS the
+    // per-component one: the editor's asset preview still compiles with fxc and ends with this
+    // same curve.
+    toeColor = FILM_SELECT(logColor < toeMatch, toeColor, straightColor);
+    shoulderColor = FILM_SELECT(logColor > shoulderMatch, shoulderColor, straightColor);
 
     float3 t = saturate((logColor - toeMatch) / (shoulderMatch - toeMatch));
     // A shoulder match below the toe match means the knobs have inverted the segments; flipping t

@@ -1108,7 +1108,9 @@ namespace
             { "ambientOcclusion", 1.0f },
             { "tint", { 1.0f, 1.0f, 1.0f, 1.0f } },
             { "metalRough", { 0.0f, 0.5f } },
-            { "useMR", true },
+            // False: a new material has no Metal/Rough map yet. The Material Editor ticks it
+            // itself when one is assigned.
+            { "useMR", false },
             { "multiplyMR", false },
             { "texOffsScale", { 0.0f, 0.0f, 1.0f, 1.0f } },
             { "normalStrength", 1.0f },

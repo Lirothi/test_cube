@@ -8,6 +8,7 @@
 
 #include "core/math/Math.h"
 #include "editor/assets/EditorPreviewMode.h"
+#include "editor/assets/EditorPreviewRenderer.h" // PhysicalLighting
 #include "imgui.h"
 
 class Renderer;
@@ -30,6 +31,15 @@ struct MeshEditorPreviewLight
     float ambient = 0.1f;
     bool showPosition = false;
     float positionDistance = 1.5f;
+    // Which sky the preview REFLECTS (the background too): "" = the open level's own sky,
+    // "none" = no sky at all, otherwise a cubemap asset path.
+    std::string sky;
+    float skyIntensity = 1.0f;
+    // Light the preview the way the level lights the scene: its sun in lux, its sky through the
+    // split-sum IBL, its metered exposure and its tone curve. Only `direction` (and the sky choice
+    // above) still apply then; `color`, `exposure` and `ambient` belong to the legacy look, which
+    // keeps them for when this is switched off.
+    bool levelLighting = true;
 };
 
 // A small isolated scene used by the Mesh Editor. Geometry and materials are
@@ -84,7 +94,10 @@ public:
         // which the slot highlight above cannot do (every tile shares slot 0).
         int highlightSubmeshOrdinal = -1,
         const TextureCube* environment = nullptr,
-        float environmentExposure = 1.0f);
+        float environmentExposure = 1.0f,
+        // The level's own lighting (see EditorPreviewRenderer::PhysicalLighting); null = the
+        // preview's legacy look.
+        const EditorPreviewRenderer::PhysicalLighting* physical = nullptr);
 
     // Release resources while the renderer is available. Used when switching
     // assets; normal application teardown already idles the GPU first.

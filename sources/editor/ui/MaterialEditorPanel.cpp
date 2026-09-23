@@ -202,9 +202,33 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
 
     ImGui::SeparatorText("Textures");
     TexturePicker("Albedo", doc_, "albedo", textures);
+    // NO TEXTURE, NO "USE". The checkbox read `useMR` with a default of true, so a material with
+    // no Metal/Rough map at all showed it ticked -- while the renderer, which ANDs it with
+    // "has an MR texture", was using the Metal / Rough values below and nothing else. Now it
+    // shows what the renderer does: unticked and greyed while there is no map, ticked by itself
+    // the moment one is assigned, unticked again when it is removed.
+    const auto mrPath = [this]() -> std::string
+    {
+        const auto it = doc_.find("mr");
+        return it != doc_.end() && it->is_string() ? it->get<std::string>() : std::string();
+    };
+    const std::string mrBefore = mrPath();
     TexturePicker("Metal/Rough", doc_, "mr", textures);
-    bool useMR = doc_.value("useMR", true);
+    const std::string mrAfter = mrPath();
+    if (mrAfter != mrBefore)
+    {
+        doc_["useMR"] = !mrAfter.empty();
+    }
+    const bool hasMRTexture = !mrAfter.empty();
+    bool useMR = hasMRTexture && doc_.value("useMR", true);
+    ImGui::BeginDisabled(!hasMRTexture);
     if (ImGui::Checkbox("Use MR Texture", &useMR)) { doc_["useMR"] = useMR; }
+    ImGui::EndDisabled();
+    if (!hasMRTexture && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("No Metal/Rough texture is assigned, so the Metal / Rough values "
+            "below are what the surface uses.");
+    }
     TexturePicker("Normal", doc_, "normal", textures);
     TexturePicker("Emissive", doc_, "emissive", textures);
 

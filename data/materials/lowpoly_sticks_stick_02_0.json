@@ -1,0 +1,20 @@
+{
+  "albedo": "models/lowpoly_sticks/textures/stick_02_baseColor.jpeg",
+  "ambientOcclusion": 1.0,
+  "indirectSpecularScale": 1.0,
+  "metalRough": [
+    0.0,
+    0.8024691343307495
+  ],
+  "normal": "models/lowpoly_sticks/textures/stick_02_normal.jpeg",
+  "normalIsRG": false,
+  "shadingModel": "defaultLit",
+  "subsurfaceColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "transmissionAlbedoPower": 0.6000000238418579,
+  "transmissionNormalWeight": 0.3499999940395355,
+  "transmissionStrength": 0.0
+}

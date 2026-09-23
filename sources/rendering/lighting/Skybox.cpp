@@ -298,6 +298,11 @@ void Skybox::ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDes
     desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 }
 
+float Skybox::MeasureUpIlluminance(const std::wstring& diffusePath)
+{
+    return MeasureCubeUpIlluminance(diffusePath);
+}
+
 void Skybox::DeclareEnvironment(RenderGraphPassContext& ctx, D3D12_RESOURCE_STATES state) const
 {
     for (auto* resource : environmentResource_) if (resource) ctx.Use(resource, state);

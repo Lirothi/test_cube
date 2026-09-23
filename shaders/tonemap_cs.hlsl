@@ -95,29 +95,13 @@ cbuffer TonemapCB : register(b0)
 #include "agx.hlsli"
 #include "color_grade.hlsli"
 #include "film_curve.hlsli"
+#include "tone_curves.hlsli"
 #include "local_exposure.hlsli"
 
 // ---- named constants ----
-static const float kGammaOut = 2.2;
+// kGammaOut, TonemapACES and LinearToSrgb moved to tone_curves.hlsli, with the curve selection,
+// so the editor's asset preview ends with the same curve as this pass.
 static const float kDitherAmplitude = 1.0 / 255.0; // enough to break banding
-
-// ACES fitted (K. Narkowicz)
-float3 TonemapACES(float3 x)
-{
-    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
-}
-
-// The real sRGB OETF, not pow(1/2.2). The two diverge most in the deep shadows, where the linear
-// toe below 0.0031308 keeps near-black from being lifted -- which is precisely the region the
-// reference image has and we do not (the P0 measurements put our p02 ABOVE the reference's).
-float3 LinearToSrgb(float3 x)
-{
-    x = saturate(x);
-    const float3 lo = x * 12.92f;
-    const float3 hi = 1.055f * pow(x, 1.0f / 2.4f) - 0.055f;
-    return lerp(hi, lo, step(x, 0.0031308f));
-}
 
 // Stable, cheap hash based on the pixel coordinate
 float Dither(uint2 p)
@@ -245,30 +229,15 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         hdr = hdr * bloomSceneApply + bloom * (bloomScatterApply * exposureMultiplier);
     }
 
-    float3 ldr;
-    if (toneCurve == 2)
-    {
-        // P3C: Unreal's parameterised film curve. Returns display-referred linear, so the sRGB
-        // OETF below stays the single place the display encoding happens.
-        FilmCurveParams film;
-        film.slope = filmSlope;
-        film.toe = filmToe;
-        film.shoulder = filmShoulder;
-        film.blackClip = filmBlackClip;
-        film.whiteClip = filmWhiteClip;
-        ldr = LinearToSrgb(FilmCurveToneMap(hdr, film));
-    }
-    else if (toneCurve == 1)
-    {
-        // AgX returns display-referred LINEAR, so the display encoding happens in exactly one
-        // place: the sRGB OETF below.
-        ldr = LinearToSrgb(AgxTonemap(hdr, agxSlope, agxPower, agxSaturation));
-    }
-    else
-    {
-        // Legacy path, byte-for-byte what shipped before P3.
-        ldr = LinearToGamma(TonemapACES(hdr), kGammaOut);
-    }
+    // P3C film curve / AgX / legacy ACES -- the selection lives in tone_curves.hlsli, shared with
+    // the editor's asset preview so the two end with the same curve.
+    FilmCurveParams film;
+    film.slope = filmSlope;
+    film.toe = filmToe;
+    film.shoulder = filmShoulder;
+    film.blackClip = filmBlackClip;
+    film.whiteClip = filmWhiteClip;
+    float3 ldr = ToneCurveToDisplay(hdr, toneCurve, film, agxSlope, agxPower, agxSaturation);
 
     // Optional: add identical noise to every channel — sufficient to break banding
     //float d = Dither(dispatchThreadId.xy) * kDitherAmplitude;

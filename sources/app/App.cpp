@@ -54,6 +54,7 @@ int g_bootDlssMode = -1;
 bool g_hudHidden = false;
 bool g_bootLogWindow = false;
 bool g_bootEditor = false;
+std::string g_bootEditMesh;
 std::string g_intentPhrase;
 bool   g_intentRun = false;
 bool   g_intentFinished = false;

@@ -11,8 +11,11 @@
 #include "editor/EditorContext.h"
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/EditorLightDirection.h"
+#include "rendering/core/ExposureMetering.h"
+#include "rendering/core/PhotographicSettings.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
+#include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 
@@ -23,10 +26,12 @@
 #include <cctype>
 #include <cfloat>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <system_error>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -192,7 +197,10 @@ void DrawMeshPreview(EditorContext& ctx,
     const std::vector<std::uint32_t>& recomputeNormalSlots,
     const Math::float4* texOffsScaleOverride,
     int highlightMaterialSlot,
-    int highlightSubmeshOrdinal)
+    int highlightSubmeshOrdinal,
+    const TextureCube* environment,
+    float environmentExposure,
+    const EditorPreviewRenderer::PhysicalLighting* physical)
 {
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const float controlsHeight = ImGui::GetFrameHeightWithSpacing() +
@@ -243,8 +251,6 @@ void DrawMeshPreview(EditorContext& ctx,
         std::round(requestedWidth * resolutionScale), 64.0f, 1024.0f));
     const std::uint32_t renderHeight = static_cast<std::uint32_t>(std::clamp(
         std::round(requestedHeight * resolutionScale), 64.0f, 1024.0f));
-    const Skybox* skybox = ctx.scene.GetSkybox();
-    const TextureCube* environment = skybox ? skybox->GetTex() : nullptr;
     const MeshEditorPreviewScene::View preview = previewScene.Update(ctx.renderer,
         path,
         geometry,
@@ -261,8 +267,8 @@ void DrawMeshPreview(EditorContext& ctx,
         highlightMaterialSlot,
         highlightSubmeshOrdinal,
         environment,
-        // Trim, not GetExposure(): the preview has no tonemapper. See Skybox.h.
-        skybox ? skybox->GetIntensity() : 1.0f);
+        environmentExposure,
+        physical);
 
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
@@ -570,6 +576,10 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             hasTexOffsScale = true;
         }
     }
+    float previewSkyExposure = 1.0f;
+    const TextureCube* previewSky = ResolvePreviewSky(ctx, previewSkyExposure);
+    EditorPreviewRenderer::PhysicalLighting levelLighting;
+    const bool useLevelLighting = BuildPreviewLighting(ctx, levelLighting);
     DrawMeshPreview(ctx,
         registry,
         previewScene_,
@@ -583,7 +593,10 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         recomputeNormalSlots_,
         hasTexOffsScale ? &texOffsScale : nullptr,
         hoveredSlot_,
-        hoveredChunk_);
+        hoveredChunk_,
+        previewSky,
+        previewSkyExposure,
+        useLevelLighting ? &levelLighting : nullptr);
     ImGui::EndChild();
 
     ImGui::SameLine(0.0f, kSplitterWidth);
@@ -595,10 +608,24 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         doc_.value("geometry", std::string("(none)")).c_str());
     ImGui::Spacing();
 
+    DrawPreviewSkyControls(registry);
+
     ImGui::SeparatorText("Preview Directional Light");
-    ImGui::ColorEdit3("Color", &previewLight_.color.x);
-    ImGui::DragFloat("Exposure", &previewLight_.exposure, 0.05f, 0.0f, 100.0f);
-    ImGui::DragFloat("Ambient", &previewLight_.ambient, 0.005f, 0.0f, 10.0f);
+    if (previewLight_.levelLighting)
+    {
+        // The level's sun: its colour, lux and fill are not the preview's to change, so there are
+        // no controls for them here -- only what they are.
+        if (levelReadout_.built)
+        {
+            ImGui::TextDisabled("Level sun: %.0f lx", levelReadout_.sunLux);
+        }
+    }
+    else
+    {
+        ImGui::ColorEdit3("Color", &previewLight_.color.x);
+        ImGui::DragFloat("Exposure", &previewLight_.exposure, 0.05f, 0.0f, 100.0f);
+        ImGui::DragFloat("Ambient", &previewLight_.ambient, 0.005f, 0.0f, 10.0f);
+    }
     float sourceAzimuth = 0.0f;
     float sourceElevation = 0.0f;
     EditorLightDirection::SourceAngles(
@@ -1216,6 +1243,305 @@ void MeshEditorPanel::SetWindFoliageForSlot(size_t slot, float value)
     // applies again instead of pinning every slot to woody.
     if (allZero) { doc_.erase("windFoliage"); }
     else { doc_["windFoliage"] = weights; }
+}
+
+const TextureCube* MeshEditorPanel::ResolvePreviewSky(EditorContext& ctx, float& outExposure)
+{
+    const float intensity = std::max(0.0f, previewLight_.skyIntensity);
+    outExposure = intensity;
+    if (previewLight_.sky == "none")
+    {
+        return nullptr;
+    }
+    if (previewLight_.sky.empty())
+    {
+        const Skybox* skybox = ctx.scene.GetSkybox();
+        // The authored trim, not GetExposure(): the preview has no tonemapper, and the physical
+        // calibration folded into GetExposure() saturates the whole image to white. Skybox.h.
+        outExposure = (skybox ? skybox->GetIntensity() : 1.0f) * intensity;
+        return skybox ? skybox->GetTex() : nullptr;
+    }
+    if (previewSkyCubePath_ != previewLight_.sky)
+    {
+        // A different cube. The old one may still be read by a frame in flight, so the GPU is
+        // drained before it goes: one stall on a click, instead of a texture freed under a
+        // command list that still points at it.
+        ctx.renderer.WaitForPreviousFrame();
+        previewSkyCube_.reset();
+        previewSkySpec_.reset();
+        previewSkyIrradiance_.reset();
+        previewSkyUpIlluminance_ = 0.0f;
+        previewSkyError_.clear();
+        previewSkyCubePath_ = previewLight_.sky;
+        auto cube = std::make_unique<TextureCube>();
+        UploadBatch batch;
+        if (batch.Begin(&ctx.renderer) &&
+            cube->CreateFromDDS(&ctx.renderer, batch.CommandList(),
+                fs::path(previewLight_.sky).wstring(), batch.KeepAlive()))
+        {
+            // The derivatives, by name, as Skybox::Init finds the level's: both or neither, since a
+            // prefiltered cube without its irradiance is a different lighting model, not a lesser one.
+            fs::path stem(previewLight_.sky);
+            stem.replace_extension();
+            const std::wstring specPath = stem.wstring() + L"_spec.dds";
+            const std::wstring diffusePath = stem.wstring() + L"_diffuse.dds";
+            std::error_code ec;
+            if (fs::exists(specPath, ec) && fs::exists(diffusePath, ec))
+            {
+                auto spec = std::make_unique<TextureCube>();
+                auto irradiance = std::make_unique<TextureCube>();
+                if (spec->CreateFromDDS(&ctx.renderer, batch.CommandList(), specPath,
+                        batch.KeepAlive()) &&
+                    irradiance->CreateFromDDS(&ctx.renderer, batch.CommandList(), diffusePath,
+                        batch.KeepAlive()))
+                {
+                    previewSkySpec_ = std::move(spec);
+                    previewSkyIrradiance_ = std::move(irradiance);
+                    previewSkyUpIlluminance_ = Skybox::MeasureUpIlluminance(diffusePath);
+                }
+            }
+            batch.SubmitAndWait(&ctx.renderer);
+            previewSkyCube_ = std::move(cube);
+        }
+        else
+        {
+            previewSkyError_ = "Could not load " + previewLight_.sky + " as a cubemap.";
+        }
+    }
+    return previewSkyCube_ ? previewSkyCube_.get() : nullptr;
+}
+
+bool MeshEditorPanel::BuildPreviewLighting(EditorContext& ctx,
+    EditorPreviewRenderer::PhysicalLighting& out)
+{
+    levelReadout_ = {};
+    if (!previewLight_.levelLighting)
+    {
+        return false;
+    }
+    const Scene& scene = ctx.scene;
+    const DirectionalLight& sun = scene.GetDirectionalLight();
+    const Skybox* skybox = scene.GetSkybox();
+    const float trim = std::max(0.0f, previewLight_.skyIntensity);
+
+    // The sun, as FillLightingConstants hands it to lighting_cs. Only its direction is the
+    // preview's own.
+    out.sunIlluminance = sun.GetEffectiveColor();
+    out.sunHalfApex = sun.GetSunHalfApexRadians();
+    out.flatAmbient = sun.GetAmbient();
+    out.lightExposure = sun.GetExposure();
+    out.groundAlbedo = sun.GetGroundAlbedo();
+    out.skyFill = sun.GetSkyFillIntensity();
+    const auto addResource = [&out](ID3D12Resource* resource)
+    {
+        for (ID3D12Resource*& slot : out.resources)
+        {
+            if (slot == nullptr) { slot = resource; return; }
+        }
+    };
+    const Texture2D* brdfLut = skybox ? skybox->GetBrdfLut() : nullptr;
+    const bool hasLut = brdfLut && brdfLut->GetResource();
+
+    bool calibrated = true;
+    if (previewLight_.sky.empty() && skybox)
+    {
+        // The level's sky, whichever kind it is: the procedural environment's three cubes when the
+        // sky atmosphere supplies them, else the file sky and its F7 siblings.
+        out.sky = skybox->EnvironmentSrv();
+        out.skyMips = skybox->HasEnvironment() ? 8u : std::max(skybox->GetTex()->GetMips(), 1u);
+        if (skybox->HasIbl())
+        {
+            out.specular = skybox->SpecularSrv();
+            out.specularMips = skybox->GetSpecMips();
+            out.irradiance = skybox->IrradianceSrv();
+        }
+        out.skyIntensity = skybox->GetExposure() * trim;
+        if (skybox->HasEnvironment())
+        {
+            for (ID3D12Resource* resource : skybox->EnvironmentResources()) { addResource(resource); }
+        }
+        else
+        {
+            addResource(skybox->GetTex()->GetResource());
+            addResource(skybox->GetSpecTex()->GetResource());
+            addResource(skybox->GetIrradianceTex()->GetResource());
+        }
+    }
+    else if (previewLight_.sky != "none" && previewSkyCube_)
+    {
+        // A picked cube, calibrated the way Skybox calibrates the level's: its measured horizontal
+        // illuminance is scaled to the level sky's authored lux (a clear sky's 12,000 when the
+        // level authored none). Without a `_diffuse.dds` there is nothing to measure, and the cube
+        // goes in raw -- next to a sun of 10^5 lux that is black, which the panel then says.
+        out.sky = previewSkyCube_->GetSRVCPU();
+        out.skyMips = std::max(previewSkyCube_->GetMips(), 1u);
+        addResource(previewSkyCube_->GetResource());
+        if (previewSkySpec_ && previewSkyIrradiance_ && hasLut)
+        {
+            out.specular = previewSkySpec_->GetSRVCPU();
+            out.specularMips = previewSkySpec_->GetMips();
+            out.irradiance = previewSkyIrradiance_->GetSRVCPU();
+            addResource(previewSkySpec_->GetResource());
+            addResource(previewSkyIrradiance_->GetResource());
+        }
+        const float levelLux = skybox ? skybox->GetIlluminanceLux() : 0.0f;
+        const float targetLux = levelLux > 0.0f ? levelLux : 12000.0f;
+        calibrated = previewSkyUpIlluminance_ > 1.0e-8f;
+        out.skyIntensity = (calibrated ? targetLux / previewSkyUpIlluminance_ : 1.0f) * trim;
+    }
+    if (out.specularMips > 0 && hasLut)
+    {
+        out.brdfLut = brdfLut->GetSRVCPU();
+        addResource(brdfLut->GetResource());
+    }
+
+    // The camera: the tonemap pass's exposure (SceneRenderer_Post: enabled AND metering ready,
+    // else a literal 1) and its colour pipeline. The EV is rounded to 1/64 stop so an exposure
+    // that is still settling does not re-render the preview every frame for an invisible change.
+    const render::CameraExposureSettings& camera = scene.GetCameraExposure();
+    const ExposureMetering& metering = ctx.renderer.Exposure();
+    out.exposure = 1.0f;
+    if (camera.enabled && metering.IsReady())
+    {
+        const float ev = std::round(metering.LatestReadback().adaptedEv100 * 64.0f) / 64.0f;
+        const float multiplier = render::ExposureMultiplierFromEv100(ev);
+        if (std::isfinite(ev) && std::isfinite(multiplier) && multiplier > 0.0f)
+        {
+            out.exposure = multiplier;
+            levelReadout_.metered = true;
+            levelReadout_.ev100 = ev;
+        }
+    }
+    const render::ColorPipelineSettings& color = scene.GetColorPipeline();
+    out.toneCurve = static_cast<std::uint32_t>(color.toneCurve);
+    out.gradeSaturation = color.gradeSaturation;
+    out.gradeContrast = color.gradeContrast;
+    out.gradeGamma = color.gradeGamma;
+    out.gradeGain = color.gradeGain;
+    out.gradeOffset = color.gradeOffset;
+    out.agxSlope = color.agxSlope;
+    out.agxPower = color.agxPower;
+    out.agxSaturation = color.agxSaturation;
+    out.filmSlope = color.filmSlope;
+    out.filmToe = color.filmToe;
+    out.filmShoulder = color.filmShoulder;
+    out.filmBlackClip = color.filmBlackClip;
+    out.filmWhiteClip = color.filmWhiteClip;
+
+    levelReadout_.built = true;
+    levelReadout_.sunLux = 0.2126f * out.sunIlluminance.x + 0.7152f * out.sunIlluminance.y +
+        0.0722f * out.sunIlluminance.z;
+    levelReadout_.skyIbl = out.irradiance.ptr != 0;
+    levelReadout_.skyScale = out.skyIntensity;
+    levelReadout_.skyCalibrated = calibrated;
+    return true;
+}
+
+void MeshEditorPanel::DrawPreviewSkyControls(AssetRegistry& registry)
+{
+    ImGui::SeparatorText("Preview Lighting");
+    ImGui::Checkbox("Level lighting", &previewLight_.levelLighting);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Light the preview the way the open level lights the scene: its sun in "
+            "lux, its sky's diffuse and specular (split-sum IBL), the camera exposure metered in "
+            "the viewport, and its grade and tone curve. Only the light's direction stays the "
+            "preview's own.\nOff: the preview's own studio light, with no camera.");
+    }
+    if (previewLight_.levelLighting && levelReadout_.built)
+    {
+        if (levelReadout_.metered)
+        {
+            ImGui::TextDisabled("Camera: EV100 %.2f, as metered in the viewport",
+                levelReadout_.ev100);
+        }
+        else
+        {
+            ImGui::TextDisabled("Camera: the level's exposure is off (x1)");
+        }
+        ImGui::TextDisabled("Sky fill: %s", levelReadout_.skyIbl
+            ? "the sky's irradiance" : "the level's flat ambient (no irradiance cube)");
+    }
+    const auto labelFor = [](const std::string& sky) -> std::string
+    {
+        if (sky.empty())
+        {
+            return "Level sky";
+        }
+        if (sky == "none")
+        {
+            return "None (light + ambient only)";
+        }
+        return fs::path(sky).filename().string();
+    };
+    if (ImGui::BeginCombo("Sky", labelFor(previewLight_.sky).c_str()))
+    {
+        int id = 0;
+        const auto option = [&](const std::string& value, const char* hint)
+        {
+            // By index: two cubes with the same file name in different folders would otherwise
+            // be two widgets with one ImGui identity.
+            ImGui::PushID(id++);
+            const bool selected = previewLight_.sky == value;
+            if (ImGui::Selectable(labelFor(value).c_str(), selected))
+            {
+                previewLight_.sky = value;
+            }
+            if (hint != nullptr && ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s", hint);
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+            ImGui::PopID();
+        };
+        option("", "The open level's own sky, at its own intensity.");
+        option("none", "No sky: the directional light and the ambient fill only.");
+        for (const EditorAssetRecord& record : registry.Assets())
+        {
+            if (record.texture.kind != EditorTextureKind::TextureCube)
+            {
+                continue;
+            }
+            // A sky's F7 derivatives are cubes too, but they are its lighting, not a sky: picking
+            // one shows a blurred sky that no level would ever display. They come with their sky.
+            const std::string stem = fs::path(record.path).stem().string();
+            const auto endsWith = [&stem](const char* suffix)
+            {
+                const std::size_t n = std::strlen(suffix);
+                return stem.size() > n && stem.compare(stem.size() - n, n, suffix) == 0;
+            };
+            if (endsWith("_spec") || endsWith("_diffuse"))
+            {
+                continue;
+            }
+            option(record.path, record.path.c_str());
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::BeginDisabled(previewLight_.sky == "none");
+    ImGui::DragFloat("Sky intensity", &previewLight_.skyIntensity, 0.01f, 0.0f, 16.0f, "%.2f",
+        ImGuiSliderFlags_AlwaysClamp);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("Multiplies the sky in this preview only: the background and the "
+            "reflections, and under Level lighting its diffuse fill too. On the level sky it "
+            "rides on top of that sky's own intensity.");
+    }
+    if (!previewSkyError_.empty() && previewLight_.sky == previewSkyCubePath_)
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.4f, 1.0f), "%s", previewSkyError_.c_str());
+    }
+    else if (previewLight_.levelLighting && levelReadout_.built && !levelReadout_.skyCalibrated)
+    {
+        // Said, not hidden: raw cube values next to a sun of 10^5 lux read as a black sky, which
+        // looks like a bug in the preview rather than a cube with nothing to calibrate it by.
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+            "No _diffuse.dds beside this cube: its brightness is uncalibrated (x1).");
+    }
 }
 
 void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)

@@ -41,6 +41,9 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE EnvironmentSrv() const { return HasEnvironment() ? environmentSrv_[0] : cube_.GetSRVCPU(); }
     D3D12_CPU_DESCRIPTOR_HANDLE SpecularSrv() const { return HasEnvironment() ? environmentSrv_[1] : specCube_.GetSRVCPU(); }
     D3D12_CPU_DESCRIPTOR_HANDLE IrradianceSrv() const { return HasEnvironment() ? environmentSrv_[2] : irradianceCube_.GetSRVCPU(); }
+    // The procedural environment's three textures (null without one) -- for a reader outside the
+    // render graph that has to bracket its own read with barriers (the editor's asset preview).
+    const std::array<ID3D12Resource*, 3>& EnvironmentResources() const { return environmentResource_; }
     void DeclareEnvironment(RenderGraphPassContext& ctx, D3D12_RESOURCE_STATES state) const;
     const TextureCube* GetSpecTex() const { return &specCube_; }
     const TextureCube* GetIrradianceTex() const { return &irradianceCube_; }
@@ -77,6 +80,9 @@ public:
     // The sky's horizontal illuminance in CUBE UNITS, measured from `_diffuse.dds` at load. 0 when
     // this sky has no derivatives, which is also what disables the calibration.
     float MeasuredUpIlluminance() const { return measuredUpIlluminance_; }
+    // The same measurement for any `_diffuse.dds`, so a cube that is NOT the level's sky (the
+    // editor's preview sky picker) can be calibrated to lux the way this one is. 0 on any surprise.
+    static float MeasureUpIlluminance(const std::wstring& diffusePath);
     float PhysicalScale() const
     {
         return (illuminanceLux_ > 0.0f && measuredUpIlluminance_ > 1e-8f)

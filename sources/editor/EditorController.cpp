@@ -1593,7 +1593,10 @@ namespace
                 { "exposure", state.previewLight.exposure },
                 { "ambient", state.previewLight.ambient },
                 { "showPosition", state.previewLight.showPosition },
-                { "positionDistance", state.previewLight.positionDistance }
+                { "positionDistance", state.previewLight.positionDistance },
+                { "sky", state.previewLight.sky },
+                { "skyIntensity", state.previewLight.skyIntensity },
+                { "levelLighting", state.previewLight.levelLighting }
             } }
         };
     }
@@ -1627,6 +1630,14 @@ namespace
             ReadBoolMember(*lightIt, "showPosition", state.previewLight.showPosition);
             ReadFloatMember(*lightIt, "positionDistance", 0.25f, 8.0f,
                 state.previewLight.positionDistance);
+            const auto skyIt = lightIt->find("sky");
+            if (skyIt != lightIt->end() && skyIt->is_string())
+            {
+                state.previewLight.sky = skyIt->get<std::string>();
+            }
+            ReadFloatMember(*lightIt, "skyIntensity", 0.0f, 16.0f,
+                state.previewLight.skyIntensity);
+            ReadBoolMember(*lightIt, "levelLighting", state.previewLight.levelLighting);
         }
         meshEditor.SetPersistentState(state);
     }
@@ -1742,7 +1753,10 @@ namespace
             a.previewLight.exposure == b.previewLight.exposure &&
             a.previewLight.ambient == b.previewLight.ambient &&
             a.previewLight.showPosition == b.previewLight.showPosition &&
-            a.previewLight.positionDistance == b.previewLight.positionDistance;
+            a.previewLight.positionDistance == b.previewLight.positionDistance &&
+            a.previewLight.sky == b.previewLight.sky &&
+            a.previewLight.skyIntensity == b.previewLight.skyIntensity &&
+            a.previewLight.levelLighting == b.previewLight.levelLighting;
     }
 
     void LoadEditorPanelState(bool& showContentBrowser,
@@ -2970,6 +2984,13 @@ void EditorController::Draw(
         meshEditor_.Open(meshPath);
         showMeshEditor_ = true;
     };
+    // "--edit-mesh=<path>": once, on the first frame that has a context to open it with.
+    if (!g_bootEditMesh.empty())
+    {
+        ctx.openMeshEditor(g_bootEditMesh);
+        LOG_INFO(logging::LogCategory::Editor, "--edit-mesh: opened {}", g_bootEditMesh);
+        g_bootEditMesh.clear();
+    }
     ctx.openMaterialEditor = [this](const std::string& materialName, const std::string& materialPath)
     {
         materialEditor_.Open(materialName, materialPath);
