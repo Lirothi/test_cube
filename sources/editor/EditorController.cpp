@@ -2991,6 +2991,22 @@ void EditorController::Draw(
         LOG_INFO(logging::LogCategory::Editor, "--edit-mesh: opened {}", g_bootEditMesh);
         g_bootEditMesh.clear();
     }
+    // "--show-import[=<name>]": once, the Import Assets window open with <name> selected.
+    if (g_bootShowImport)
+    {
+        showImportPanel_ = true;
+        if (g_bootImportItem.empty() || importPanel_.Reveal(g_bootImportItem))
+        {
+            LOG_INFO(logging::LogCategory::Editor, "--show-import: opened{}{}",
+                g_bootImportItem.empty() ? "" : " on ", g_bootImportItem);
+        }
+        else
+        {
+            LOG_WARNING(logging::LogCategory::Editor, "--show-import: import_staging has no '{}'",
+                g_bootImportItem);
+        }
+        g_bootShowImport = false;
+    }
     ctx.openMaterialEditor = [this](const std::string& materialName, const std::string& materialPath)
     {
         materialEditor_.Open(materialName, materialPath);

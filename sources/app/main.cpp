@@ -779,6 +779,19 @@ int WINAPI WinMain(
             g_bootEditMesh.assign(value, end);
             g_bootEditor = g_bootEditor || !g_bootEditMesh.empty();
         }
+        // "--show-import[=<name>]": the Import Assets window open at boot, <name> selected (implies
+        // --editor). Not "--import...": that prefix is the offline converter's, matched by strstr.
+        if (const char* flag = std::strstr(lpCmdLine, "--show-import")) {
+            const char* value = flag + std::strlen("--show-import");
+            if (*value == '=') {
+                ++value;
+                const char* end = value;
+                while (*end && *end != ' ' && *end != '\t') { ++end; }
+                g_bootImportItem.assign(value, end);
+            }
+            g_bootShowImport = true;
+            g_bootEditor = true;
+        }
         // "--intent=<phrase>": one phrase through the editor's real pipeline, then quit.
         // Implies --editor, because the pipeline lives behind EditorController::Draw.
         if (const char* flag = std::strstr(lpCmdLine, "--intent=")) {

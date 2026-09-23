@@ -12,6 +12,7 @@
 #include "editor/assets/AssetRegistry.h"
 
 struct MeshLoadOptions; // rendering/meshes/MeshManager.h — LOD/bake knobs a mesh import carries
+struct ImVec4;
 
 // Part H3 — content-browser "Import Assets" window. Scans import_staging/ for raw downloads
 // (glTF/GLB folders, texture-set folders, .hdr skyboxes), shows what was detected + license, and
@@ -68,6 +69,10 @@ public:
     // An import is converting or still waiting for the Draw that finishes it.
     bool Busy() const { return running_.load() || joinPending_; }
 
+    // Select the staged item called `name` (search and kind filter cleared, its group opened, the
+    // row scrolled into view). False when import_staging has no such item.
+    bool Reveal(const std::string& name);
+
 private:
     enum class Kind { Mesh, TextureSet, Skybox };
     struct Item
@@ -77,13 +82,13 @@ private:
         Kind kind = Kind::Mesh;
         std::string gltfFile;  // relative gltf/glb inside the folder (Mesh)
         std::string meta;      // "5 materials, 6630 tris, ~5.8 m" etc.
-        std::string license;   // first lines of source/license.txt or glTF copyright
+        std::string license;   // the whole source/license.txt (CREDITS.md records it) or glTF copyright
         float worldSizeM = 0.0f; // Mesh: longest world-space bbox axis (0 = unknown)
         bool alreadyInProject = false;
         EditorAssetImportStatus importStatus = EditorAssetImportStatus::Untracked;
     };
 
-    // One selectable image row in the texture-import dialog.
+    // One selectable image row in the texture-set details.
     struct DialogFile
     {
         std::string rel;      // path relative to the item folder (what the backend whitelists on)
@@ -109,16 +114,31 @@ private:
         // mesh.json settings, never the dialog's leftovers.
         const MeshLoadOptions* meshLodFromDialog = nullptr);
     void PollImport(AssetRegistry& registry, bool& finishedOut);
-    void OpenImportDialog(const Item& item); // texture sets: choose files + preset before importing
-    void DrawImportDialog();
-    // Skybox import asks its own two questions -- cube face size and the calibration target -- in a
-    // modal, the same way meshes and texture sets do. They used to sit in the shared Options block,
-    // where they were noise for every other asset kind and easy to miss for the one kind that needs
-    // them.
-    void OpenSkyboxImportDialog(const Item& item);
-    void DrawSkyboxImportDialog();
-    void OpenMeshImportDialog(const Item& item);
-    void DrawMeshImportDialog(AssetRegistry& registry);
+
+    // The window is a LIST (left) and the selected item's IMPORT SETTINGS (right). The right pane is
+    // what used to be three modal dialogs: a modal sat over the viewport, hid the list it was opened
+    // from, and lost its answers on Cancel. Each kind still asks only its own questions -- a skybox
+    // its face size and calibration, a texture set which images and whether to make a preset, a
+    // mesh its size, split, LODs and chunks. The pane is seeded when the selection lands on an item
+    // (Load*Details) and kept until the selection moves.
+    void LoadDetails(const Item& item);
+    void LoadTextureDetails(const Item& item);
+    void LoadMeshDetails(const Item& item);
+    void DrawToolbar();
+    void DrawSettingsPopup(); // texture encoding + output: every import, so not any one pane's
+    void DrawItemList();
+    void DrawDetails(AssetRegistry& registry);
+    void DrawTextureDetails();
+    void DrawSkyboxDetails(const Item& item);
+    void DrawMeshDetails(AssetRegistry& registry);
+    void DrawBatchDetails();
+    void DrawStatusBar();
+    // Not in the project yet, or its output is stale / incomplete: the list's upper group.
+    static bool NeedsImport(const Item& item);
+    const Item* FindItem(const std::string& path) const;
+    static const char* KindLabel(Kind kind);
+    static ImVec4 KindColor(Kind kind);
+    bool LodSettingsNonDefault() const;
     // `chunkGrid`: -1 = no explicit choice (bulk / per-resource re-import), keep whatever the
     // existing mesh.json carries; >= 0 is the import dialog's answer, and 0 must be able to REMOVE
     // an existing grid or the dialog's checkbox could be cleared and silently do nothing.
@@ -194,18 +214,31 @@ private:
     std::string status_;
     bool statusIsError_ = false; // colors the status line red on failure, green on success
 
-    // Import dialog (texture sets only): pick which images to convert + whether to make a preset.
-    bool showImportDialog_ = false;
-    bool showSkyboxImportDialog_ = false;
-    Item skyboxDialogItem_{};
+    // Selection. `selectedPath_` is the item the details pane shows; `detailsPath_` is the one its
+    // settings were seeded from (they differ for exactly one frame after a click, and are made to
+    // differ after that item's import finishes so the pane re-reads what the import wrote). More than
+    // one path in `batch_` (Ctrl/Shift-click) turns the pane into the batch view.
+    std::string selectedPath_;
+    std::string detailsPath_;
+    std::vector<std::string> batch_;
+    std::string rangeAnchor_;
+    char search_[96] = {};
+    int kindFilter_ = 0; // 0 = all, 1 = meshes, 2 = texture sets, 3 = skyboxes
+    float listWidth_ = 280.0f;
+    bool revealPending_ = false; // the next list draw opens the selection's group and scrolls to it
+
+    // Texture-set details: pick which images to convert + whether to make a preset. ("dialog" in
+    // these names is historical: it is the details pane now.)
     Item dialogItem_;
     std::vector<DialogFile> dialogFiles_;
     bool dialogCreatePreset_ = true;
 
-    // Mesh import confirmation. Size normalization is intentionally decided
-    // per mesh here rather than being a persistent global importer option.
-    bool showMeshImportDialog_ = false;
+    // Mesh details. Size normalization is intentionally decided per mesh here rather than being a
+    // persistent global importer option.
     Item meshDialogItem_;
+    // One line per material slot: what the importer will write for it (MaterialFileGen's own
+    // IsFoliageCard / IsAlphaCutout), so a leaf card is seen to be one BEFORE the import.
+    std::vector<std::string> meshDialogMaterials_;
     bool meshDialogNormalizeSpawn_ = false;
     float meshDialogTargetM_ = 6.0f;
     // How the unit correction is expressed. Target-side is the readable one when you know the real
@@ -246,7 +279,7 @@ private:
     int  meshDialogSubmeshCount_ = 1;
     // Triangle count parsed out of Item::meta (both describe paths write "<N> tris"). 0 = unknown.
     // Chunking needs it because the thing that actually limits the grid is TRIANGLES PER TILE, not
-    // the tile count — see the readout in DrawMeshImportDialog.
+    // the tile count — see the readout in DrawMeshDetails.
     int  meshDialogTriCount_ = 0;
     std::vector<std::string> meshDialogTopLevelNodes_;
 };

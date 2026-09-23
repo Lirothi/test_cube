@@ -254,6 +254,10 @@ whatever `editor_state.json` -> `levelEditor.panelState.*Visible` last held, so 
 Allow a long `--shot-delay` (40 frames is comfortable) -- the asset registry scan and the first
 editor frame both happen before the panels look settled.
 
+`--show-import[=<name>]` (implies `--editor`) opens the Import Assets window with the staged item
+`<name>` selected, so its details pane -- size, split, material preview, LOD, chunking -- can be
+photographed; `--edit-mesh=<models/x.mesh.json>` does the same for the Mesh Editor.
+
 **Registering a panel is not the same as drawing one.** `EditorController::Draw` ends with a
 hardcoded list of `drawPanel("<id>")` calls; a panel missing from it exists, toggles from the
 Window menu, persists its visibility -- and never appears. Two panels shipped that way until a

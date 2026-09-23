@@ -101,6 +101,11 @@ extern bool g_bootEditor;
 // --editor). Same reason again: its preview is otherwise reachable only by a double-click in
 // the content browser, and a lighting change there is judged by LOOKING at it.
 extern std::string g_bootEditMesh;
+// "--show-import[=<name>]": open the Import Assets window at boot with <name> selected (implies
+// --editor). Its details pane is otherwise reachable only by clicking a row in a window that is
+// itself behind a menu, and the pane is judged by LOOKING at it.
+extern bool g_bootShowImport;
+extern std::string g_bootImportItem;
 
 // "--intent=<phrase>": run ONE phrase through the editor's real command pipeline at boot,
 // log the verdict, and quit. This is the only harness that exercises the whole chain as the

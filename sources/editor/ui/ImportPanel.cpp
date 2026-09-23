@@ -20,9 +20,11 @@
 #include "meshoptimizer.h"                // meshopt_Simplify* flags for the LOD import options
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kMaxMeshGroups: the shadow caster-group
                                                 // budget the chunk-grid control spends from
+#include <shellapi.h>                             // ShellExecuteW: the toolbar's "Open folder"
 #include <cfloat>
 #include "third_party/cgltf/cgltf.h"
 #include "imgui.h"
+#include "imgui_internal.h" // SplitterBehavior, RenderTextClipped: the list | details split
 
 #pragma warning(push)
 #pragma warning(disable: 26819)
@@ -43,7 +45,7 @@ namespace
     {
         switch (status)
         {
-        case EditorAssetImportStatus::Staged:      return "STAGED";
+        case EditorAssetImportStatus::Staged:      return "NEW";
         case EditorAssetImportStatus::UpToDate:    return "CURRENT";
         case EditorAssetImportStatus::SourceNewer: return "CHANGED";
         case EditorAssetImportStatus::Incomplete:  return "MISSING";
@@ -828,6 +830,17 @@ namespace
     // mesh.json "chunkGrid" of an already-imported asset; 0 = absent or off. The import dialog seeds
     // its chunking control from this, so re-opening the dialog shows what the asset really carries
     // instead of whatever the last-opened mesh left in the widget.
+    // mesh.json "bakeScale": the unit correction an import folded into the vertices. 1 = none.
+    float ReadAssetBakeScale(const fs::path& meshJsonPath)
+    {
+        std::ifstream in(meshJsonPath);
+        if (!in) { return 1.0f; }
+        const nlohmann::json j = nlohmann::json::parse(in, nullptr, false, true);
+        if (!j.is_object()) { return 1.0f; }
+        const auto it = j.find("bakeScale");
+        return it != j.end() && it->is_number() ? it->get<float>() : 1.0f;
+    }
+
     int ReadAssetChunkGrid(const fs::path& meshJsonPath)
     {
         std::ifstream in(meshJsonPath);
@@ -1144,6 +1157,69 @@ namespace
             if (it == before.end() || it->second != writeTime) { changed.push_back(path); }
         }
         return changed;
+    }
+
+    // TextDisabled that wraps at the pane edge: the details pane is resizable, and a path or a
+    // sentence must not run off it (ImGui's TextDisabled never wraps).
+    void TextDisabledWrapped(const std::string& text)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", text.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    // One field of a license text ("author:", "title:"), value trimmed and cut before a " (url)".
+    std::string LicenseField(const std::string& text, const char* key)
+    {
+        std::istringstream in(text);
+        std::string line;
+        const std::string wanted = key;
+        while (std::getline(in, line))
+        {
+            std::string lower = line;
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const size_t at = lower.find(wanted);
+            if (at == std::string::npos) { continue; }
+            std::string value = line.substr(at + wanted.size());
+            const size_t paren = value.find(" (");
+            if (paren != std::string::npos) { value.resize(paren); }
+            const size_t v0 = value.find_first_not_of(" \t");
+            return v0 == std::string::npos ? std::string() : value.substr(v0);
+        }
+        return {};
+    }
+
+    // What the importer will write for one glTF material slot, in one line -- decided by the same
+    // MaterialFileGen predicates the import uses.
+    std::string MaterialImportPreview(const GltfMaterialDesc& d, int slot)
+    {
+        std::string line = "slot " + std::to_string(slot);
+        if (!d.albedoPath.empty()) { line += " (" + fs::path(d.albedoPath).filename().string() + ")"; }
+        float cutoff = 0.5f;
+        char what[128];
+        if (!d.valid)
+        {
+            snprintf(what, sizeof(what), "no material - the slot imports as 'auto'");
+        }
+        else if (materialgen::IsFoliageCard(d))
+        {
+            materialgen::IsAlphaCutout(d, &cutoff);
+            snprintf(what, sizeof(what), "leaf card - twoSidedFoliage, alpha cutout %.2f, wind foliage", cutoff);
+        }
+        else if (materialgen::IsAlphaCutout(d, &cutoff))
+        {
+            snprintf(what, sizeof(what), "alpha cutout %.2f, single-sided", cutoff);
+        }
+        else if (d.doubleSided)
+        {
+            snprintf(what, sizeof(what), "opaque; two-sided only if the surface is open (measured at import)");
+        }
+        else
+        {
+            snprintf(what, sizeof(what), "opaque");
+        }
+        return line + ": " + what;
     }
 
     // One "## <name>" section per asset. The header must match the WHOLE line: a substring test
@@ -1751,6 +1827,9 @@ bool ImportPanel::StartMeshImport(const std::string& name, float targetSizeM, bo
         if (nodes.size() < 2) { nodes.clear(); }
     }
     const Item item = *it;
+    selectedPath_ = item.path; // the window opens on what is importing
+    batch_.clear();
+    revealPending_ = true;
     BeginImport(item, {}, true, {}, {}, 0.0f, nodes, true, 0, &lod);
     char scale[96];
     std::snprintf(scale, sizeof(scale), "longest side %.3f m -> %.3f m (x%.4f in the vertices)",
@@ -1774,7 +1853,46 @@ std::string ImportPanel::StatusJson() const
     return out.dump();
 }
 
-void ImportPanel::OpenImportDialog(const Item& item)
+bool ImportPanel::Reveal(const std::string& name)
+{
+    if (!scanned_ && !running_.load()) { Rescan(); }
+    const auto it = std::find_if(items_.begin(), items_.end(),
+        [&name](const Item& item) { return item.name == name; });
+    if (it == items_.end()) { return false; }
+    selectedPath_ = it->path;
+    rangeAnchor_ = it->path;
+    batch_.clear();
+    search_[0] = '\0';
+    kindFilter_ = 0;
+    revealPending_ = true;
+    return true;
+}
+
+bool ImportPanel::NeedsImport(const Item& item)
+{
+    return !item.alreadyInProject ||
+        item.importStatus == EditorAssetImportStatus::Staged ||
+        item.importStatus == EditorAssetImportStatus::SourceNewer ||
+        item.importStatus == EditorAssetImportStatus::Incomplete;
+}
+
+const ImportPanel::Item* ImportPanel::FindItem(const std::string& path) const
+{
+    if (path.empty()) { return nullptr; }
+    const auto it = std::find_if(items_.begin(), items_.end(),
+        [&path](const Item& item) { return item.path == path; });
+    return it == items_.end() ? nullptr : &*it;
+}
+
+void ImportPanel::LoadDetails(const Item& item)
+{
+    detailsPath_ = item.path;
+    if (item.kind == Kind::TextureSet) { LoadTextureDetails(item); }
+    else if (item.kind == Kind::Mesh) { LoadMeshDetails(item); }
+    // A skybox's two questions (face size, calibration) are importer-wide values: nothing to seed.
+}
+
+void ImportPanel::LoadTextureDetails(const Item& item)
 {
     dialogItem_ = item;
     dialogFiles_.clear();
@@ -1803,35 +1921,12 @@ void ImportPanel::OpenImportDialog(const Item& item)
     }
     std::sort(dialogFiles_.begin(), dialogFiles_.end(),
         [](const DialogFile& a, const DialogFile& b) { return a.rel < b.rel; });
-    showImportDialog_ = true;
 }
 
-void ImportPanel::OpenSkyboxImportDialog(const Item& item)
+void ImportPanel::DrawSkyboxDetails(const Item& item)
 {
-    skyboxDialogItem_ = item;
-    showSkyboxImportDialog_ = true;
-}
-
-void ImportPanel::DrawSkyboxImportDialog()
-{
-    if (showSkyboxImportDialog_)
-    {
-        ImGui::OpenPopup("Import Skybox");
-        showSkyboxImportDialog_ = false; // OpenPopup latches it open until the popup closes
-    }
-
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const ImVec2 center(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f);
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_FirstUseEver);
-
-    if (!ImGui::BeginPopupModal("Import Skybox", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-    {
-        return;
-    }
-
-    ImGui::Text("Import '%s'", skyboxDialogItem_.name.c_str());
-    ImGui::Separator();
+    const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y + 2.0f;
+    ImGui::BeginChild("##skyBody", ImVec2(0.0f, -footerH), false);
 
     ImGui::SetNextItemWidth(140.0f);
     const char* faces[] = { "512", "1024", "2048" };
@@ -1848,96 +1943,80 @@ void ImportPanel::DrawSkyboxImportDialog()
             "mirror reflections.");
     }
 
-    ImGui::Spacing();
     ImGui::SetNextItemWidth(220.0f);
     ImGui::SliderFloat("Sky brightness", &skyTargetMedianLuma_, 0.0f, 0.6f, "%.3f");
     ImGui::SameLine();
     if (ImGui::SmallButton("Middle grey")) { skyTargetMedianLuma_ = 0.18f; }
-    ImGui::TextWrapped(
-        "Calibration target: the MEDIAN luminance the cubemap is scaled to. HDRI libraries are not "
-        "calibrated to this engine's linear scale -- Poly Haven skies land around 0.6-0.9, and the "
-        "manual exposure multiplier is 0.18*8 = 1.44, so an un-normalised sky puts roughly half its "
-        "pixels above 1.0 before the tone curve even runs.");
-    ImGui::TextWrapped(
-        "The scale goes on the CUBE, so it reaches every consumer at once: background, ocean "
-        "reflection, compose, and the prefiltered IBL siblings. Correcting this on the camera "
-        "instead would darken the whole scene to fix one asset.");
-    ImGui::TextWrapped(
-        "0.18 = middle grey and is the default. Lower darkens the sky AND everything the sky "
-        "lights, because it also feeds the water's reflection and the ambient fill. 0 disables "
-        "calibration and keeps the source's own radiance.");
     if (skyTargetMedianLuma_ <= 0.0f)
     {
         ImGui::TextDisabled("Calibration OFF: the source's radiance is written as-is.");
     }
-    ImGui::TextDisabled("The applied factor is logged as 'sky calib ... (+/-N.NN EV)'.");
-
-    ImGui::Spacing();
     ImGui::Checkbox("Sun out of the sky's lighting", &skyRemoveSunFromIbl_);
-    ImGui::TextWrapped(
-        "The sun disc is removed from the _spec and _diffuse siblings -- what the engine LIGHTS "
-        "with. The display cube keeps it, so the sky still looks the same when you look up.");
-    ImGui::TextWrapped(
-        "Measured on rustig_koppie: the disc is 91.7% of the horizontal illuminance. An irradiance "
-        "cube built from that is not a sky, it is a second sun spread over the whole hemisphere -- "
-        "shadowless, occluded by nothing, and impossible to out-shine with the directional light "
-        "that is supposed to BE the sun. It is why raising the sun never made the shadows read.");
-    ImGui::TextWrapped(
-        "Turn it OFF only for a sky used with no directional light of its own; then the fill is "
-        "the only thing lighting the scene and it needs the sun in it.");
-    ImGui::TextDisabled("The split is logged as 'sky sun REMOVED ... sun N + sky N'; those two "
-                        "numbers are what to set the directional light from.");
-
-    ImGui::Separator();
-    ImGui::TextDisabled("Also writes the IBL siblings: _spec (GGX-prefiltered), _diffuse "
+    TextDisabledWrapped("Also writes the IBL siblings: _spec (GGX-prefiltered), _diffuse "
                         "(irradiance), and the shared brdf_lut.");
 
+    // The reasoning stays one click away rather than being a wall above the controls.
     ImGui::Spacing();
-    if (ImGui::Button("Import", ImVec2(120.0f, 0.0f)))
+    if (ImGui::TreeNode("What these do"))
     {
-        ImGui::CloseCurrentPopup();
-        BeginImport(skyboxDialogItem_, {}, true);
+        ImGui::TextWrapped(
+            "Sky brightness is the calibration target: the MEDIAN luminance the cubemap is scaled to. "
+            "HDRI libraries are not calibrated to this engine's linear scale -- Poly Haven skies land "
+            "around 0.6-0.9, and the manual exposure multiplier is 0.18*8 = 1.44, so an un-normalised "
+            "sky puts roughly half its pixels above 1.0 before the tone curve even runs.");
+        ImGui::TextWrapped(
+            "The scale goes on the CUBE, so it reaches every consumer at once: background, ocean "
+            "reflection, compose, and the prefiltered IBL siblings. Correcting this on the camera "
+            "instead would darken the whole scene to fix one asset.");
+        ImGui::TextWrapped(
+            "0.18 = middle grey and is the default. Lower darkens the sky AND everything the sky "
+            "lights, because it also feeds the water's reflection and the ambient fill. 0 disables "
+            "calibration and keeps the source's own radiance.");
+        ImGui::TextDisabled("The applied factor is logged as 'sky calib ... (+/-N.NN EV)'.");
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "Sun out of the sky's lighting: the sun disc is removed from the _spec and _diffuse "
+            "siblings -- what the engine LIGHTS with. The display cube keeps it, so the sky still "
+            "looks the same when you look up.");
+        ImGui::TextWrapped(
+            "Measured on rustig_koppie: the disc is 91.7% of the horizontal illuminance. An irradiance "
+            "cube built from that is not a sky, it is a second sun spread over the whole hemisphere -- "
+            "shadowless, occluded by nothing, and impossible to out-shine with the directional light "
+            "that is supposed to BE the sun. It is why raising the sun never made the shadows read.");
+        ImGui::TextWrapped(
+            "Turn it OFF only for a sky used with no directional light of its own; then the fill is "
+            "the only thing lighting the scene and it needs the sun in it.");
+        ImGui::TextDisabled("The split is logged as 'sky sun REMOVED ... sun N + sky N'; those two "
+                            "numbers are what to set the directional light from.");
+        ImGui::TreePop();
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f)))
+    ImGui::EndChild();
+
+    ImGui::Separator();
+    ImGui::BeginDisabled(running_.load());
+    if (ImGui::Button(item.alreadyInProject ? "Re-import" : "Import", ImVec2(120.0f, 0.0f)))
     {
-        ImGui::CloseCurrentPopup();
+        BeginImport(item, {}, true);
     }
-    ImGui::EndPopup();
+    ImGui::EndDisabled();
 }
 
-void ImportPanel::DrawImportDialog()
+void ImportPanel::DrawTextureDetails()
 {
-    if (showImportDialog_)
-    {
-        ImGui::OpenPopup("Import Texture Set");
-        showImportDialog_ = false; // OpenPopup latches the popup open until it is closed
-    }
+    int selCount = 0;
+    for (const auto& f : dialogFiles_) { if (f.selected) { ++selCount; } }
 
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const ImVec2 center(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f);
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(560.0f, 430.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(420.0f, 280.0f), ImVec2(FLT_MAX, FLT_MAX));
-
-    if (!ImGui::BeginPopupModal("Import Texture Set", nullptr))
-    {
-        return;
-    }
-
-    ImGui::Text("Import '%s'", dialogItem_.name.c_str());
-    ImGui::Separator();
-
-    ImGui::TextDisabled("Textures to convert:");
+    ImGui::TextDisabled("Textures to convert");
     ImGui::SameLine();
     if (ImGui::SmallButton("All")) { for (auto& f : dialogFiles_) { f.selected = true; } }
     ImGui::SameLine();
     if (ImGui::SmallButton("None")) { for (auto& f : dialogFiles_) { f.selected = false; } }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%d of %d", selCount, static_cast<int>(dialogFiles_.size()));
 
-    // File list fills the dialog; the footer (preset checkbox + buttons) stays pinned below.
-    const float dialogFooterH = ImGui::GetFrameHeightWithSpacing() * 2.0f +
-        ImGui::GetTextLineHeightWithSpacing();
-    ImGui::BeginChild("##dlgFiles", ImVec2(0.0f, -dialogFooterH), true);
+    // File list fills the pane; the preset checkbox + Import stay pinned below it.
+    const float footerH = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("##texFiles", ImVec2(0.0f, -footerH), true);
     for (size_t i = 0; i < dialogFiles_.size(); ++i)
     {
         DialogFile& f = dialogFiles_[i];
@@ -1965,12 +2044,8 @@ void ImportPanel::DrawImportDialog()
             "Off: just convert the selected images to DDS (no material).");
     }
 
-    ImGui::Separator();
-    int selCount = 0;
-    for (const auto& f : dialogFiles_) { if (f.selected) { ++selCount; } }
-
-    ImGui::BeginDisabled(selCount == 0);
-    if (ImGui::Button("Import", ImVec2(120.0f, 0.0f)))
+    ImGui::BeginDisabled(selCount == 0 || running_.load());
+    if (ImGui::Button(dialogItem_.alreadyInProject ? "Re-import" : "Import", ImVec2(120.0f, 0.0f)))
     {
         // Everything selected = a FULL import (empty whitelist): the destination folder is
         // synced to the run, stale outputs of deleted sources get cleaned. A subset = a
@@ -1980,18 +2055,11 @@ void ImportPanel::DrawImportDialog()
         for (const auto& f : dialogFiles_) { if (f.selected) { includeRel.push_back(f.rel); } }
         if (includeRel.size() == dialogFiles_.size()) { includeRel.clear(); }
         BeginImport(dialogItem_, includeRel, dialogCreatePreset_);
-        ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) { ImGui::CloseCurrentPopup(); }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%d selected", selCount);
-
-    ImGui::EndPopup();
 }
 
-void ImportPanel::OpenMeshImportDialog(const Item& item)
+void ImportPanel::LoadMeshDetails(const Item& item)
 {
     meshDialogItem_ = item;
     meshDialogNormalizeSpawn_ = false;
@@ -2008,23 +2076,57 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
     {
         meshDialogNormalizeSpawn_ = existingScale > 0.0f;
     }
+    if (existingScale > 0.0f)
+    {
+        meshDialogBakeIntoVertices_ = false; // it was imported as a spawnScale; keep it one
+    }
     if (existingScale > 0.0f && item.worldSizeM > 0.0f)
     {
+        meshDialogScaleMode_ = MeshScaleMode::TargetSide;
         meshDialogTargetM_ = item.worldSizeM * existingScale;
     }
     if (!existingSplitNodes.empty() && meshDialogTopLevelNodes_.size() > 1)
     {
         meshDialogSplitTopLevelNodes_ = true;
     }
+    // A size baked INTO THE VERTICES is not in the import manifest at all -- it is the asset's own
+    // mesh.json "bakeScale" (a split import: every part carries the same one). Seeding only from
+    // the manifest left "Correct scale" off, and Re-import then baked the source's own size back
+    // in: a palm imported at 4.5 m came back at its authored 11.2 m.
+    {
+        const fs::path meshAssetRoot = fs::path(ProjectDest(item)).parent_path();
+        fs::path meshJson = meshAssetRoot / (item.name + ".mesh.json");
+        if (!fs::is_regular_file(meshJson, ec) && !existingSplitNodes.empty())
+        {
+            meshJson = meshAssetRoot /
+                (item.name + "_node_" + MeshAssetFileComponent(existingSplitNodes.front()) + ".mesh.json");
+        }
+        const float bakedScale = ReadAssetBakeScale(meshJson);
+        if (bakedScale > 0.0f && bakedScale != 1.0f)
+        {
+            meshDialogNormalizeSpawn_ = true;
+            meshDialogBakeIntoVertices_ = true;
+            if (item.worldSizeM > 0.0f)
+            {
+                meshDialogScaleMode_ = MeshScaleMode::TargetSide;
+                meshDialogTargetM_ = item.worldSizeM * bakedScale;
+            }
+            else
+            {
+                meshDialogScaleMode_ = MeshScaleMode::Multiplier;
+                meshDialogMultiplier_ = bakedScale;
+            }
+        }
+    }
 
-    // LOD settings are deliberately STICKY across dialog opens — the workflow is "tune the
+    // LOD settings are deliberately STICKY across selections — the workflow is "tune the
     // sliders once, stamp several meshes with them". Seeding them per-asset was tried and
     // reverted the same day (2026-08-21): a mesh whose json carried no knobs silently reset
     // the widgets and the next bake threw the user's tuning away. The Reset button under the
     // sliders is the way back to defaults; what an asset ACTUALLY baked with lives in its
     // mesh.json, which non-dialog re-imports and the Mesh Editor's Save read directly.
 
-    // Mesh chunking: seed from what the asset ALREADY carries, so re-opening the dialog shows the
+    // Mesh chunking: seed from what the asset ALREADY carries, so selecting it shows the
     // truth rather than the previous mesh's widget state. Whole-file assets only (a split import
     // writes one sidecar per node and none of them is chunked — see RecreateMeshAssets).
     const int existingChunkGrid = ReadAssetChunkGrid(
@@ -2032,7 +2134,7 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
     meshDialogChunk_ = existingChunkGrid > 0;
     meshDialogChunkGrid_ = existingChunkGrid > 0 ? existingChunkGrid : 6;
     // v1 chunks single-submesh meshes only. Read it once here (the bake would otherwise reject the
-    // request and log it where nobody looks) so the dialog can say so before the user commits.
+    // request and log it where nobody looks) so the pane can say so before the user commits.
     meshDialogSubmeshCount_ = static_cast<int>(
         std::max<size_t>(MeshManager::CountSubmeshes(item.gltfFile), 1));
     // "<N> tris" appears in both DescribeObj's and DescribeGltf's meta strings; 0 if absent.
@@ -2044,48 +2146,59 @@ void ImportPanel::OpenMeshImportDialog(const Item& item)
         if (b < at) { meshDialogTriCount_ = std::atoi(item.meta.c_str() + b); }
     }
 
-    showMeshImportDialog_ = true;
+    // What each slot's material file will say -- the same calls WriteImportedMeshAsset and
+    // MaterialFileGen make, so the preview cannot promise what the import does not do.
+    meshDialogMaterials_.clear();
+    if (IsGltfPath(item.gltfFile))
+    {
+        for (int slot = 0; slot < meshDialogSubmeshCount_; ++slot)
+        {
+            meshDialogMaterials_.push_back(MaterialImportPreview(
+                MeshManager::DescribeGltfMaterial(item.gltfFile, slot), slot));
+        }
+    }
 }
 
-void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
+bool ImportPanel::LodSettingsNonDefault() const
 {
-    if (showMeshImportDialog_)
-    {
-        ImGui::OpenPopup("Import Mesh");
-        showMeshImportDialog_ = false;
-    }
+    return meshDialogLodRatio_ != 1.0f || meshDialogLodError_ != 1.0f ||
+           meshDialogLodPermissive_ || meshDialogLodPrune_ ||
+           !meshDialogLod3Aggressive_ || meshDialogFoliageKeep_ != 0.35f ||
+           meshDialogLod3Ratio_ != 1.0f || meshDialogLod3Error_ != 1.0f ||
+           meshDialogInnerRatio_ != 0.5f || meshDialogInnerError_ != 0.15f ||
+           meshDialogFoliageGrow_ != 1.0f || meshDialogUvWeight_ != 0.0f ||
+           meshDialogNormalWeight_ != 0.0f;
+}
 
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const ImVec2 center(
-        viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
-        viewport->WorkPos.y + viewport->WorkSize.y * 0.5f);
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(470.0f, 0.0f), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Import Mesh", nullptr,
-            ImGuiWindowFlags_AlwaysAutoResize))
-    {
-        return;
-    }
+void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
+{
+    const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y + 2.0f;
+    ImGui::BeginChild("##meshBody", ImVec2(0.0f, -footerH), false);
 
-    ImGui::Text("Import '%s'", meshDialogItem_.name.c_str());
-    ImGui::Separator();
-    if (meshDialogItem_.worldSizeM > 0.0f)
+    // --- Size ------------------------------------------------------------------------------------
+    ImGui::SeparatorText("Size");
+    const bool haveSize = meshDialogItem_.worldSizeM > 0.0f;
+    if (haveSize)
     {
-        ImGui::Text("Detected longest side: %.3f m", meshDialogItem_.worldSizeM);
+        ImGui::Text("Authored longest side: %.3f m", meshDialogItem_.worldSizeM);
+        if (meshDialogItem_.worldSizeM > 50.0f)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f), "- likely centimetre-authored");
+        }
     }
     else
     {
         ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f),
             "Mesh size could not be determined from the glTF bounds.");
-        meshDialogNormalizeSpawn_ = false;
     }
 
     // A multiplier needs no measured size, so only the target-side mode depends on the bounds.
-    const bool haveSize = meshDialogItem_.worldSizeM > 0.0f;
     ImGui::Checkbox("Correct scale", &meshDialogNormalizeSpawn_);
     ImGui::BeginDisabled(!meshDialogNormalizeSpawn_);
 
     int mode = static_cast<int>(meshDialogScaleMode_);
+    ImGui::SameLine();
     ImGui::BeginDisabled(!haveSize);
     if (ImGui::RadioButton("Target longest side", &mode, 0))
     {
@@ -2107,7 +2220,7 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     {
         ImGui::SetNextItemWidth(110.0f);
         ImGui::InputFloat("Target longest side (m)", &meshDialogTargetM_, 0.0f, 0.0f, "%.2f");
-        meshDialogTargetM_ = std::clamp(meshDialogTargetM_, 0.1f, 1000.0f);
+        meshDialogTargetM_ = std::clamp(meshDialogTargetM_, 0.01f, 1000.0f);
         factor = haveSize ? meshDialogTargetM_ / meshDialogItem_.worldSizeM : 1.0f;
     }
     else
@@ -2136,14 +2249,15 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
             "      418 x 227 x 284 and every instance carries scale 0.0107.\n\n"
             "Changing the factor re-bakes: it is part of the geometry freshness hash.");
     }
+    const char* where = meshDialogBakeIntoVertices_ ? "into the vertices" : "as the asset's spawn scale";
     if (haveSize)
     {
-        ImGui::TextDisabled("%.3f m -> %.3f m   (x %.6f)", meshDialogItem_.worldSizeM,
-            meshDialogItem_.worldSizeM * factor, factor);
+        ImGui::TextDisabled("%.3f m -> %.3f m   (x %.6f, %s)", meshDialogItem_.worldSizeM,
+            meshDialogItem_.worldSizeM * factor, factor, where);
     }
     else
     {
-        ImGui::TextDisabled("x %.6f", factor);
+        ImGui::TextDisabled("x %.6f, %s", factor, where);
     }
     ImGui::EndDisabled();
 
@@ -2153,9 +2267,10 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     meshDialogPendingSpawnScale_ = (meshDialogNormalizeSpawn_ && !meshDialogBakeIntoVertices_)
         ? factor : 0.0f;
 
+    // --- Parts -----------------------------------------------------------------------------------
     if (meshDialogTopLevelNodes_.size() > 1)
     {
-        ImGui::Spacing();
+        ImGui::SeparatorText("Parts");
         ImGui::Checkbox("Split by top-level nodes", &meshDialogSplitTopLevelNodes_);
         if (ImGui::IsItemHovered())
         {
@@ -2184,14 +2299,27 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
         }
     }
 
-    ImGui::Spacing();
-    ImGui::TextWrapped(
-        "Normalization records a default spawn scale in the import manifest. "
-        "It does not modify the glTF or its vertex data.");
+    // --- Materials -------------------------------------------------------------------------------
+    ImGui::SeparatorText("Materials");
+    if (meshDialogMaterials_.empty())
+    {
+        ImGui::TextDisabled("No glTF materials (OBJ): every slot imports as 'auto'.");
+    }
+    else
+    {
+        for (const std::string& line : meshDialogMaterials_)
+        {
+            ImGui::Bullet();
+            ImGui::TextWrapped("%s", line.c_str());
+        }
+        TextDisabledWrapped("What a NEW data/materials file gets; an existing one is kept.");
+    }
 
     // --- LOD generation (collapsed: the defaults are the shipped chain and rarely need touching) ---
     ImGui::Spacing();
-    if (ImGui::CollapsingHeader("LOD generation"))
+    const bool lodChanged = LodSettingsNonDefault();
+    if (ImGui::CollapsingHeader(lodChanged ? "LOD generation  (changed)###lodGeneration" :
+                                             "LOD generation  (defaults)###lodGeneration"))
     {
         ImGui::TextDisabled("Three coarser levels, built per submesh over the SAME vertex buffer.");
 
@@ -2331,16 +2459,9 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
         ImGui::EndDisabled(); // pruneOff
         ImGui::EndDisabled(); // pruneDead (chunked mesh)
 
-        ImGui::Spacing();
-        const bool nonDefault = meshDialogLodRatio_ != 1.0f || meshDialogLodError_ != 1.0f ||
-                                meshDialogLodPermissive_ || meshDialogLodPrune_ ||
-                                !meshDialogLod3Aggressive_ || meshDialogFoliageKeep_ != 0.35f ||
-                                meshDialogLod3Ratio_ != 1.0f || meshDialogLod3Error_ != 1.0f ||
-                                meshDialogInnerRatio_ != 0.5f || meshDialogInnerError_ != 0.15f ||
-                                meshDialogFoliageGrow_ != 1.0f || meshDialogUvWeight_ != 0.0f ||
-                                meshDialogNormalWeight_ != 0.0f;
-        if (nonDefault)
+        if (lodChanged)
         {
+            ImGui::Spacing();
             ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f), "Non-default LOD settings");
             ImGui::SameLine();
             if (ImGui::SmallButton("Reset"))
@@ -2367,13 +2488,21 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
     // same per-chunk tier drives its shadow casters — caster == receiver by construction, which is
     // what retired the terrain self-shadow artefacts. The shadow side additionally gains per-chunk
     // bounds, so a shadow page rasterizes only the tiles that reach it instead of the whole surface.
-    ImGui::Spacing();
-    if (ImGui::CollapsingHeader("Mesh chunking"))
+    const bool splitting = meshDialogSplitTopLevelNodes_ && meshDialogTopLevelNodes_.size() > 1;
+    const bool multiSubmesh = meshDialogSubmeshCount_ > 1;
+    const bool blocked = splitting || multiSubmesh;
+    char chunkHeader[96];
+    if (meshDialogChunk_ && !blocked)
     {
-        const bool splitting = meshDialogSplitTopLevelNodes_ && meshDialogTopLevelNodes_.size() > 1;
-        const bool multiSubmesh = meshDialogSubmeshCount_ > 1;
-        const bool blocked = splitting || multiSubmesh;
-
+        snprintf(chunkHeader, sizeof(chunkHeader), "Mesh chunking  (%d x %d)###meshChunking",
+            meshDialogChunkGrid_, meshDialogChunkGrid_);
+    }
+    else
+    {
+        snprintf(chunkHeader, sizeof(chunkHeader), "Mesh chunking  (off)###meshChunking");
+    }
+    if (ImGui::CollapsingHeader(chunkHeader))
+    {
         ImGui::TextDisabled("Splits LOD0 into a grid of tiles that LOD and draw independently.");
         ImGui::BeginDisabled(blocked);
         ImGui::Checkbox("Split into chunks", &meshDialogChunk_);
@@ -2480,6 +2609,7 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
             }
         }
     }
+    ImGui::EndChild();
     ImGui::Separator();
 
     // Zero when the correction went into the vertices -- the asset must NOT also carry a
@@ -2494,18 +2624,17 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
         (meshDialogChunk_ && selectedSplitNodes.empty() && meshDialogSubmeshCount_ <= 1)
             ? meshDialogChunkGrid_ : 0;
 
-    if (ImGui::Button(meshDialogItem_.alreadyInProject ? "Re-import" : "Import",
-            ImVec2(0.0f, 0.0f)))
+    ImGui::BeginDisabled(running_.load());
+    if (ImGui::Button(meshDialogItem_.alreadyInProject ? "Re-import" : "Import", ImVec2(120.0f, 0.0f)))
     {
         const MeshLoadOptions dialogLod = DialogLodOptions();
         BeginImport(meshDialogItem_, {}, true, {}, {}, selectedSpawnScale,
             selectedSplitNodes, true, selectedChunkGrid, &dialogLod);
-        ImGui::CloseCurrentPopup();
     }
+    ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::BeginDisabled(!meshDialogItem_.alreadyInProject);
-    const bool recreateMeshJson = ImGui::Button(
-        "Recreate JSON + re-bake bin", ImVec2(0.0f, 0.0f));
+    ImGui::BeginDisabled(!meshDialogItem_.alreadyInProject || running_.load());
+    const bool recreateMeshJson = ImGui::Button("Recreate JSON + re-bake bin");
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     {
@@ -2540,15 +2669,134 @@ void ImportPanel::DrawMeshImportDialog(AssetRegistry& registry)
                 dst / (meshDialogItem_.name + ".mesh.bin")));
             pendingInvalidate_ = true;
         }
-        ImGui::CloseCurrentPopup();
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(0.0f, 0.0f)))
-    {
-        ImGui::CloseCurrentPopup();
-    }
+}
 
-    ImGui::EndPopup();
+void ImportPanel::DrawBatchDetails()
+{
+    ImGui::Text("%d items selected", static_cast<int>(batch_.size()));
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Clear")) { batch_.clear(); }
+    ImGui::Separator();
+
+    int bigNewMeshes = 0;
+    const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y + 2.0f;
+    ImGui::BeginChild("##batchBody", ImVec2(0.0f, -footerH), false);
+    for (const std::string& path : batch_)
+    {
+        const Item* item = FindItem(path);
+        if (!item) { continue; }
+        ImGui::TextColored(KindColor(item->kind), "%-4s", KindLabel(item->kind));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(item->name.c_str());
+        ImGui::SameLine();
+        ImGui::TextColored(ImportStatusColor(item->importStatus), "%s", ImportStatusBadge(item->importStatus));
+        if (item->kind == Kind::Mesh && !item->alreadyInProject && item->worldSizeM > 50.0f)
+        {
+            ++bigNewMeshes;
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f), "%.0f m", item->worldSizeM);
+        }
+    }
+    ImGui::Spacing();
+    ImGui::TextWrapped(
+        "Each one imports with the settings it already has: a re-import repeats the asset's own "
+        "mesh.json and import manifest; a NEW mesh comes in at its authored size, unsplit, with "
+        "the default LODs. One at a time, in this order.");
+    if (bigNewMeshes > 0)
+    {
+        ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f),
+            "%d new mesh%s measure%s over 50 m (likely centimetres): import %s alone to set a size.",
+            bigNewMeshes, bigNewMeshes == 1 ? "" : "es", bigNewMeshes == 1 ? "s" : "",
+            bigNewMeshes == 1 ? "it" : "them");
+    }
+    ImGui::EndChild();
+    ImGui::Separator();
+
+    ImGui::BeginDisabled(running_.load() || !reimportQueue_.empty());
+    char label[48];
+    snprintf(label, sizeof(label), "Import %d", static_cast<int>(batch_.size()));
+    if (ImGui::Button(label, ImVec2(120.0f, 0.0f)))
+    {
+        for (const std::string& path : batch_)
+        {
+            if (FindItem(path)) { reimportQueue_.push_back(path); }
+        }
+    }
+    ImGui::EndDisabled();
+}
+
+void ImportPanel::DrawDetails(AssetRegistry& registry)
+{
+    if (batch_.size() > 1)
+    {
+        DrawBatchDetails();
+        return;
+    }
+    const Item* found = FindItem(selectedPath_);
+    if (!found)
+    {
+        int waiting = 0;
+        for (const Item& it : items_) { if (NeedsImport(it)) { ++waiting; } }
+        ImGui::TextDisabled("Pick an item on the left to see how it imports.");
+        ImGui::TextDisabled("%d of %d staged item%s need%s importing.", waiting,
+            static_cast<int>(items_.size()), items_.size() == 1 ? "" : "s", waiting == 1 ? "s" : "");
+        ImGui::Spacing();
+        ImGui::TextDisabled("Ctrl+click or Shift+click picks several to import in one go.");
+        return;
+    }
+    const Item item = *found; // copy: an import finishing below rescans items_
+    if (detailsPath_ != item.path) { LoadDetails(item); }
+
+    // --- Header: what it is, where it goes, whose it is --------------------------------------------
+    ImGui::TextColored(KindColor(item.kind), "%s", KindLabel(item.kind));
+    ImGui::SameLine();
+    ImGui::TextUnformatted(item.name.c_str());
+    ImGui::SameLine();
+    const bool importing = running_.load() && activeItem_.path == item.path;
+    if (importing)
+    {
+        ImGui::TextColored(ImVec4(0.55f, 0.80f, 1.0f, 1.0f), "importing...");
+    }
+    else
+    {
+        ImGui::TextColored(ImportStatusColor(item.importStatus), "%s", ImportStatusBadge(item.importStatus));
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", ImportStatusHint(item.importStatus)); }
+    }
+    TextDisabledWrapped(item.meta);
+
+    if (item.license.empty())
+    {
+        ImGui::TextColored(ImVec4(0.90f, 0.70f, 0.20f, 1.0f), "No license");
+        ImGui::SameLine();
+        ImGui::TextDisabled("- add source.txt or license.txt so CREDITS.md records it");
+    }
+    else
+    {
+        const std::string licenseType = LicenseSummary(item.license);
+        const std::string author = LicenseField(item.license, "author:");
+        ImGui::TextColored(ImVec4(0.50f, 0.85f, 0.50f, 1.0f), "%s",
+            licenseType.empty() ? "Credited" : licenseType.c_str());
+        if (!author.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("by %s", author.c_str());
+        }
+        if (ImGui::IsItemHovered() && ImGui::BeginTooltip())
+        {
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.0f);
+            ImGui::TextUnformatted(item.license.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
+    TextDisabledWrapped(fs::path(item.path).generic_string() + "  ->  " +
+        (moveIntoProject_ ? fs::path(ProjectDest(item)).generic_string() : std::string("(stays in import_staging)")));
+    ImGui::Separator();
+
+    if (item.kind == Kind::Mesh) { DrawMeshDetails(registry); }
+    else if (item.kind == Kind::TextureSet) { DrawTextureDetails(); }
+    else { DrawSkyboxDetails(item); }
 }
 
 void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
@@ -2798,6 +3046,8 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
         }
         registry.Refresh();
         Rescan(); // pick up the new alreadyInProject state
+        // The details pane re-reads what the import wrote (manifest scale, split, chunk grid).
+        if (detailsPath_ == activeItem_.path) { detailsPath_.clear(); }
         status_ = finalizeFailed ? ("Import FINALIZE FAILED for " + activeItem_.name) :
             ("Imported " + activeItem_.name + "  " + destLabel);
         statusIsError_ = finalizeFailed;
@@ -2811,13 +3061,338 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
     }
 }
 
+const char* ImportPanel::KindLabel(Kind kind)
+{
+    return kind == Kind::Mesh ? "mesh" : (kind == Kind::TextureSet ? "tex" : "sky");
+}
+
+ImVec4 ImportPanel::KindColor(Kind kind)
+{
+    return kind == Kind::Mesh       ? ImVec4(0.55f, 0.80f, 1.00f, 1.0f) :
+           kind == Kind::TextureSet ? ImVec4(0.70f, 0.90f, 0.50f, 1.0f) :
+                                      ImVec4(0.95f, 0.78f, 0.45f, 1.0f);
+}
+
+void ImportPanel::DrawSettingsPopup()
+{
+    if (!ImGui::BeginPopup("##importSettings")) { return; }
+
+    ImGui::SeparatorText("Texture encoding (every import)");
+    ImGui::SetNextItemWidth(120.0f);
+    const char* sizes[] = { "1024", "2048", "4096" };
+    int sizeIdx = maxTextureSize_ >= 4096 ? 2 : (maxTextureSize_ >= 2048 ? 1 : 0);
+    if (ImGui::Combo("Max texture size", &sizeIdx, sizes, 3))
+    {
+        maxTextureSize_ = sizeIdx == 2 ? 4096 : (sizeIdx == 1 ? 2048 : 1024);
+    }
+    ImGui::Checkbox("High-quality BC7 (slower)", &highQuality_);
+    ImGui::Checkbox("GPU texture encode", &useGpu_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Encode BC6H/BC7 on the GPU (D3D11 compute) — seconds -> sub-second per 2K.\n"
+            "Falls back to the CPU encoder automatically if no device is available.");
+    }
+    ImGui::Checkbox("Flip normal-map green", &flipGreen_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Leave OFF for glTF meshes and plain textures.\n"
+            "Only enable if a normal-mapped surface ends up lit from the wrong side.");
+    }
+    ImGui::Checkbox("Center normal maps", &centerNormals_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Re-center a normal map whose flat baseline strays from (128,128) -- a 'purple cast'\n"
+            "DC lean that skews lighting (shoves a point light's lit disc off-center). Only acts\n"
+            "when the average tilt exceeds ~1.7 deg, so clean/neutral maps are left untouched.");
+    }
+
+    ImGui::SeparatorText("Output");
+    ImGui::Checkbox("Move into project after import", &moveIntoProject_);
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "On: meshes go to models/<name>/, texture sets and skies to textures/.\n"
+            "Off: the converted files stay in import_staging/ next to their source.");
+    }
+    ImGui::EndPopup();
+}
+
+void ImportPanel::DrawToolbar()
+{
+    if (ImGui::Button("Rescan")) { Rescan(); }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Scan import_staging/ again. A .zip dropped there is unpacked into its own folder first.");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Open folder"))
+    {
+        std::error_code ec;
+        fs::create_directories(kStagingRoot, ec);
+        const std::wstring dir = fs::absolute(kStagingRoot, ec).wstring();
+        ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Open import_staging/ in Explorer."); }
+
+    int newCount = 0;
+    int changedCount = 0;
+    for (const Item& it : items_)
+    {
+        if (!it.alreadyInProject) { ++newCount; }
+        else if (it.importStatus == EditorAssetImportStatus::SourceNewer ||
+                 it.importStatus == EditorAssetImportStatus::Incomplete)
+        {
+            ++changedCount;
+        }
+    }
+    ImGui::SameLine(0.0f, 16.0f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%d staged   %d new   %d changed", static_cast<int>(items_.size()),
+        newCount, changedCount);
+
+    if (changedCount > 0)
+    {
+        ImGui::SameLine();
+        ImGui::BeginDisabled(running_.load() || !reimportQueue_.empty());
+        char reimportLabel[48];
+        snprintf(reimportLabel, sizeof(reimportLabel), "Re-import changed (%d)", changedCount);
+        if (ImGui::Button(reimportLabel))
+        {
+            for (const Item& it : items_)
+            {
+                if (it.alreadyInProject &&
+                    (it.importStatus == EditorAssetImportStatus::SourceNewer ||
+                     it.importStatus == EditorAssetImportStatus::Incomplete))
+                {
+                    reimportQueue_.push_back(it.path);
+                }
+            }
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("Queue a full re-import of every CHANGED/MISSING item, one at a time.");
+        }
+    }
+
+    // Right-aligned; the asterisk says a setting is off its default without opening the popup.
+    const bool nonDefault = maxTextureSize_ != 2048 || highQuality_ || !useGpu_ || flipGreen_ ||
+                            !centerNormals_ || !moveIntoProject_;
+    const char* settingsLabel = nonDefault ? "Settings *###importSettingsButton" :
+                                             "Settings###importSettingsButton";
+    const float settingsW = ImGui::CalcTextSize("Settings *").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::SameLine();
+    const float avail = ImGui::GetContentRegionAvail().x;
+    if (avail > settingsW) { ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - settingsW); }
+    if (ImGui::Button(settingsLabel)) { ImGui::OpenPopup("##importSettings"); }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Texture encoding for every import (size, BC7 quality, GPU, normal-map fixes)\n"
+                          "and where the converted output goes.");
+    }
+    DrawSettingsPopup();
+}
+
+void ImportPanel::DrawItemList()
+{
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##importSearch", "Search staging...", search_, sizeof(search_));
+
+    const char* kinds[] = { "All", "Mesh", "Texture", "Sky" };
+    for (int k = 0; k < 4; ++k)
+    {
+        if (k > 0) { ImGui::SameLine(0.0f, 4.0f); }
+        const bool on = kindFilter_ == k;
+        if (on) { ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive)); }
+        if (ImGui::SmallButton(kinds[k])) { kindFilter_ = k; }
+        if (on) { ImGui::PopStyleColor(); }
+    }
+    ImGui::Separator();
+
+    std::string needle = search_;
+    std::transform(needle.begin(), needle.end(), needle.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const auto visible = [&](const Item& it)
+    {
+        if (kindFilter_ == 1 && it.kind != Kind::Mesh) { return false; }
+        if (kindFilter_ == 2 && it.kind != Kind::TextureSet) { return false; }
+        if (kindFilter_ == 3 && it.kind != Kind::Skybox) { return false; }
+        if (needle.empty()) { return true; }
+        std::string name = it.name;
+        std::transform(name.begin(), name.end(), name.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return name.find(needle) != std::string::npos;
+    };
+
+    int waiting = 0;
+    int inProject = 0;
+    for (const Item& it : items_)
+    {
+        if (!visible(it)) { continue; }
+        ++(NeedsImport(it) ? waiting : inProject);
+    }
+    if (items_.empty())
+    {
+        ImGui::TextDisabled("import_staging/ is empty.");
+        ImGui::TextWrapped("Drop glTF/GLB/OBJ folders, texture-set folders, .hdr skies or .zip "
+                           "downloads there, then Rescan.");
+        return;
+    }
+
+    ImGui::BeginChild("##importRows", ImVec2(0.0f, 0.0f), false);
+    std::vector<std::string> order;  // visible rows top to bottom, for Shift+click ranges
+    std::string clickedPath;
+    bool clickedCtrl = false;
+    bool clickedShift = false;
+    const bool busy = running_.load();
+    const float kindW = ImGui::CalcTextSize("mesh ").x;
+    const auto drawRow = [&](const Item& it)
+    {
+        order.push_back(it.path);
+        const bool selected = batch_.size() > 1 ?
+            std::find(batch_.begin(), batch_.end(), it.path) != batch_.end() :
+            it.path == selectedPath_;
+        ImGui::PushID(it.path.c_str());
+        // Text is placed from the CURSOR, not the item rect: Selectable widens its rect by half the
+        // item spacing on both sides, past the child's clip, which cut "mesh" to "esh".
+        const ImVec2 textPos = ImGui::GetCursorScreenPos();
+        const float rowRight = textPos.x + ImGui::GetContentRegionAvail().x;
+        if (ImGui::Selectable("##row", selected))
+        {
+            clickedPath = it.path;
+            clickedCtrl = ImGui::GetIO().KeyCtrl;
+            clickedShift = ImGui::GetIO().KeyShift;
+        }
+        if (revealPending_ && it.path == selectedPath_)
+        {
+            ImGui::SetScrollHereY(0.5f);
+            revealPending_ = false;
+        }
+        const bool hovered = ImGui::IsItemHovered();
+
+        // Status badge on the right for what needs doing (the "In project" header already says
+        // the rest is current), the name clipped short of it.
+        const bool importing = busy && it.path == activeItem_.path;
+        const EditorAssetImportStatus shown =
+            it.alreadyInProject ? it.importStatus : EditorAssetImportStatus::Staged;
+        const char* badge = importing ? "importing..." : (NeedsImport(it) ? ImportStatusBadge(shown) : "");
+        const ImVec4 badgeColor = importing ? ImVec4(0.55f, 0.80f, 1.0f, 1.0f) : ImportStatusColor(shown);
+        const float badgeW = *badge ? ImGui::CalcTextSize(badge).x : 0.0f;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddText(textPos, ImGui::GetColorU32(KindColor(it.kind)), KindLabel(it.kind));
+        if (*badge) { dl->AddText(ImVec2(rowRight - badgeW, textPos.y), ImGui::GetColorU32(badgeColor), badge); }
+        const ImVec2 nameMin(textPos.x + kindW, textPos.y);
+        const ImVec2 nameMax(rowRight - badgeW - (*badge ? 8.0f : 0.0f), textPos.y + ImGui::GetTextLineHeight());
+        ImGui::RenderTextClipped(nameMin, nameMax, it.name.c_str(), nullptr, nullptr, ImVec2(0.0f, 0.0f));
+
+        if (hovered)
+        {
+            ImGui::SetTooltip("%s\n%s\nSource: %s\nOutput: %s", it.meta.c_str(),
+                ImportStatusHint(it.importStatus), it.path.c_str(), ProjectDest(it).c_str());
+        }
+        ImGui::PopID();
+    };
+
+    char header[64];
+    snprintf(header, sizeof(header), "Needs import (%d)###needsImport", waiting);
+    if (ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (waiting == 0) { ImGui::TextDisabled("Nothing new or changed."); }
+        for (const Item& it : items_) { if (visible(it) && NeedsImport(it)) { drawRow(it); } }
+    }
+    snprintf(header, sizeof(header), "In project (%d)###inProject", inProject);
+    if (revealPending_)
+    {
+        const Item* revealed = FindItem(selectedPath_);
+        if (revealed && !NeedsImport(*revealed)) { ImGui::SetNextItemOpen(true); }
+    }
+    if (ImGui::CollapsingHeader(header))
+    {
+        for (const Item& it : items_) { if (visible(it) && !NeedsImport(it)) { drawRow(it); } }
+    }
+    ImGui::EndChild();
+
+    // Selection, resolved after every visible row is known (a Shift range may run upwards).
+    if (clickedPath.empty()) { return; }
+    if (clickedShift && !rangeAnchor_.empty())
+    {
+        const auto a = std::find(order.begin(), order.end(), rangeAnchor_);
+        const auto b = std::find(order.begin(), order.end(), clickedPath);
+        if (a != order.end() && b != order.end())
+        {
+            batch_.assign(std::min(a, b), std::max(a, b) + 1);
+            selectedPath_ = clickedPath;
+            if (batch_.size() < 2) { batch_.clear(); }
+            return;
+        }
+    }
+    if (clickedCtrl)
+    {
+        if (batch_.empty() && !selectedPath_.empty()) { batch_.push_back(selectedPath_); }
+        const auto at = std::find(batch_.begin(), batch_.end(), clickedPath);
+        if (at != batch_.end()) { batch_.erase(at); }
+        else { batch_.push_back(clickedPath); }
+        if (batch_.size() == 1) { selectedPath_ = batch_.front(); batch_.clear(); }
+        rangeAnchor_ = clickedPath;
+        return;
+    }
+    batch_.clear();
+    selectedPath_ = clickedPath;
+    rangeAnchor_ = clickedPath;
+}
+
+void ImportPanel::DrawStatusBar()
+{
+    ImGui::Separator();
+    const bool busy = running_.load();
+    if (busy)
+    {
+        const int done = progressDone_.load();
+        const int total = progressTotal_.load();
+        char overlay[48];
+        if (total > 0)
+        {
+            snprintf(overlay, sizeof(overlay), "%d / %d textures", done, total);
+            ImGui::ProgressBar(static_cast<float>(done) / static_cast<float>(total),
+                ImVec2(220.0f, 0.0f), overlay);
+        }
+        else
+        {
+            // Total not known yet (scanning, or a skybox with no staged textures): sweep.
+            ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(220.0f, 0.0f), "scanning...");
+        }
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.55f, 0.80f, 1.0f, 1.0f), "%s", status_.c_str());
+    }
+    else if (!status_.empty())
+    {
+        ImGui::AlignTextToFramePadding();
+        const ImVec4 statusColor = statusIsError_ ?
+            ImVec4(1.00f, 0.42f, 0.34f, 1.0f) : ImVec4(0.50f, 0.85f, 0.50f, 1.0f);
+        ImGui::TextColored(statusColor, "%s", status_.c_str());
+    }
+    else
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Drop asset folders, .hdr skies or .zip downloads into import_staging/.");
+    }
+    if (!reimportQueue_.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%d more queued)", static_cast<int>(reimportQueue_.size()));
+    }
+}
+
 bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
 {
     bool finished = false;
     PollImport(registry, finished);
 
-    ImGui::SetNextWindowSize(ImVec2(860.0f, 440.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(560.0f, 260.0f), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowSize(ImVec2(980.0f, 560.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(640.0f, 320.0f), ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Import Assets", open))
     {
         ImGui::End();
@@ -2830,7 +3405,7 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
         lastRegistryRevision_ = registry.Revision();
     }
 
-    // "Re-import all changed" queue pump — imports run one at a time, so start the
+    // Batch / "Re-import changed" queue pump — imports run one at a time, so start the
     // next queued item as soon as the worker is idle and fully joined.
     if (!running_.load() && !joinPending_ && !reimportQueue_.empty())
     {
@@ -2846,251 +3421,38 @@ bool ImportPanel::Draw(AssetRegistry& registry, bool* open)
         }
     }
 
-    // --- Header -------------------------------------------------------------
-    ImGui::TextWrapped(
-        "Drop raw asset folders (glTF meshes, texture sets) or .hdr skyboxes into "
-        "import_staging/, then import them into the project here.");
-    if (ImGui::Button("Rescan")) { Rescan(); }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%d item%s staged", static_cast<int>(items_.size()),
-        items_.size() == 1 ? "" : "s");
-    int changedCount = 0;
-    for (const Item& it : items_)
+    DrawToolbar();
+    ImGui::Spacing();
+
+    // --- List | details, the status bar pinned under both ----------------------------------------
+    constexpr float kMinListWidth = 200.0f;
+    constexpr float kMinDetailsWidth = 340.0f;
+    constexpr float kSplitterWidth = 6.0f;
+    const float statusH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y + 2.0f;
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const ImVec2 area(avail.x, std::max(1.0f, avail.y - statusH));
+    float listW = std::clamp(listWidth_, kMinListWidth,
+        std::max(kMinListWidth, area.x - kMinDetailsWidth - kSplitterWidth));
+    float detailsW = std::max(kMinDetailsWidth, area.x - listW - kSplitterWidth);
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImRect splitterRect(
+        ImVec2(origin.x + listW, origin.y),
+        ImVec2(origin.x + listW + kSplitterWidth, origin.y + area.y));
+    if (ImGui::SplitterBehavior(splitterRect, ImGui::GetID("##importSplitter"), ImGuiAxis_X,
+            &listW, &detailsW, kMinListWidth, kMinDetailsWidth, 3.0f, 0.1f))
     {
-        if (it.importStatus == EditorAssetImportStatus::SourceNewer ||
-            it.importStatus == EditorAssetImportStatus::Incomplete)
-        {
-            ++changedCount;
-        }
-    }
-    if (changedCount > 0)
-    {
-        ImGui::SameLine();
-        ImGui::BeginDisabled(running_.load() || !reimportQueue_.empty());
-        char reimportLabel[48];
-        snprintf(reimportLabel, sizeof(reimportLabel), "Re-import changed (%d)", changedCount);
-        if (ImGui::Button(reimportLabel))
-        {
-            for (const Item& it : items_)
-            {
-                if (it.importStatus == EditorAssetImportStatus::SourceNewer ||
-                    it.importStatus == EditorAssetImportStatus::Incomplete)
-                {
-                    reimportQueue_.push_back(it.path);
-                }
-            }
-        }
-        ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        {
-            ImGui::SetTooltip("Queue a full re-import of every CHANGED/MISSING item, one at a time.");
-        }
+        listWidth_ = listW;
     }
 
-    // --- Options (collapsible; the item list is the focus) ------------------
-    if (ImGui::CollapsingHeader("Options", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        ImGui::SetNextItemWidth(120.0f);
-        const char* sizes[] = { "1024", "2048", "4096" };
-        int sizeIdx = maxTextureSize_ >= 4096 ? 2 : (maxTextureSize_ >= 2048 ? 1 : 0);
-        if (ImGui::Combo("Max texture size", &sizeIdx, sizes, 3))
-        {
-            maxTextureSize_ = sizeIdx == 2 ? 4096 : (sizeIdx == 1 ? 2048 : 1024);
-        }
-        ImGui::Checkbox("High-quality BC7 (slower)", &highQuality_);
-        ImGui::SameLine(0.0f, 24.0f);
-        ImGui::Checkbox("Move into project after import", &moveIntoProject_);
-        ImGui::Checkbox("GPU texture encode", &useGpu_);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "Encode BC6H/BC7 on the GPU (D3D11 compute) — seconds -> sub-second per 2K.\n"
-                "Falls back to the CPU encoder automatically if no device is available.");
-        }
-        ImGui::SameLine(0.0f, 24.0f);
-        ImGui::Checkbox("Flip normal-map green", &flipGreen_);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "Leave OFF for glTF meshes and plain textures.\n"
-                "Only enable if a normal-mapped surface ends up lit from the wrong side.");
-        }
-        ImGui::SameLine(0.0f, 24.0f);
-        ImGui::Checkbox("Center normal maps", &centerNormals_);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "Re-center a normal map whose flat baseline strays from (128,128) -- a 'purple cast'\n"
-                "DC lean that skews lighting (shoves a point light's lit disc off-center). Only acts\n"
-                "when the average tilt exceeds ~1.7 deg, so clean/neutral maps are left untouched.");
-        }
-    }
-
-    // --- Status: blue while running, then green on success / red on failure --
-    if (running_.load())
-    {
-        ImGui::TextColored(ImVec4(0.55f, 0.80f, 1.0f, 1.0f), "%s", status_.c_str());
-    }
-    else if (!status_.empty())
-    {
-        const ImVec4 statusColor = statusIsError_ ?
-            ImVec4(1.00f, 0.42f, 0.34f, 1.0f) : ImVec4(0.50f, 0.85f, 0.50f, 1.0f);
-        ImGui::TextColored(statusColor, "%s", status_.c_str());
-    }
-
-    ImGui::Separator();
-
-    // --- Item table (scrolls in its own region; progress bar pinned below) --
-    const bool busy = running_.load();
-    const float bottomBarH = busy ? ImGui::GetFrameHeightWithSpacing() : 0.0f;
-    ImGui::BeginChild("##itemsRegion", ImVec2(0.0f, -bottomBarH), false);
-
-    const ImGuiTableFlags tableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
-        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable;
-    if (items_.empty())
-    {
-        ImGui::TextDisabled("Nothing importable found in import_staging/.");
-    }
-    else if (ImGui::BeginTable("##importItems", 5, tableFlags))
-    {
-        ImGui::TableSetupColumn("Asset", ImGuiTableColumnFlags_WidthStretch, 0.38f);
-        ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthStretch, 0.34f);
-        ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 72.0f);
-        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 96.0f);
-        ImGui::TableHeadersRow();
-
-        for (size_t i = 0; i < items_.size(); ++i)
-        {
-            const Item& it = items_[i];
-            ImGui::PushID(static_cast<int>(i));
-            ImGui::TableNextRow();
-
-            // Asset: colored kind tag + name.
-            ImGui::TableSetColumnIndex(0);
-            const ImVec4 kindColor =
-                it.kind == Kind::Mesh       ? ImVec4(0.55f, 0.80f, 1.00f, 1.0f) :
-                it.kind == Kind::TextureSet ? ImVec4(0.70f, 0.90f, 0.50f, 1.0f) :
-                                              ImVec4(0.95f, 0.78f, 0.45f, 1.0f);
-            const char* kindStr = it.kind == Kind::Mesh ? "mesh" :
-                (it.kind == Kind::TextureSet ? "tex" : "sky");
-            ImGui::TextColored(kindColor, "%-4s", kindStr);
-            ImGui::SameLine();
-            ImGui::TextUnformatted(it.name.c_str());
-
-            // Details. A "prop" measured in tens/hundreds of meters is almost always a
-            // cm-authored glTF with no unit conversion — warn so the user expects to scale.
-            ImGui::TableSetColumnIndex(1);
-            const bool implausiblyLarge = it.kind == Kind::Mesh && it.worldSizeM > 50.0f;
-            if (implausiblyLarge)
-            {
-                ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f), "%s", it.meta.c_str());
-                if (ImGui::IsItemHovered())
-                {
-                    ImGui::SetTooltip(
-                        "Baked world size is ~%.0f m — likely centimeter-authored.\n"
-                        "Use the mesh import dialog to choose a normalized spawn size.",
-                        it.worldSizeM);
-                }
-            }
-            else
-            {
-                ImGui::TextDisabled("%s", it.meta.c_str());
-            }
-
-            // Source / license status (hover for detail).
-            ImGui::TableSetColumnIndex(2);
-            if (it.license.empty())
-            {
-                ImGui::TextColored(ImVec4(0.90f, 0.70f, 0.20f, 1.0f), "no license");
-                if (ImGui::IsItemHovered())
-                {
-                    ImGui::SetTooltip(
-                        "Add source.txt or license.txt in the asset folder\n"
-                        "so it is recorded in CREDITS.md on import.");
-                }
-            }
-            else
-            {
-                const std::string licenseType = LicenseSummary(it.license);
-                ImGui::TextColored(ImVec4(0.50f, 0.85f, 0.50f, 1.0f), "%s",
-                    licenseType.empty() ? "credited" : licenseType.c_str());
-                if (ImGui::IsItemHovered() && ImGui::BeginTooltip())
-                {
-                    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.0f);
-                    ImGui::TextUnformatted(it.license.c_str());
-                    ImGui::PopTextWrapPos();
-                    ImGui::EndTooltip();
-                }
-            }
-
-            // Import freshness: source timestamps are compared against DDS/copies.
-            ImGui::TableSetColumnIndex(3);
-            ImGui::TextColored(ImportStatusColor(it.importStatus), "%s",
-                ImportStatusBadge(it.importStatus));
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("%s\nSource: %s\nOutput: %s",
-                    ImportStatusHint(it.importStatus),
-                    it.path.c_str(),
-                    ProjectDest(it).c_str());
-            }
-
-            // Action: Import / Re-import; the row being imported shows live state instead.
-            ImGui::TableSetColumnIndex(4);
-            if (busy && it.path == activeItem_.path)
-            {
-                ImGui::TextColored(ImVec4(0.55f, 0.80f, 1.0f, 1.0f), "importing...");
-            }
-            else
-            {
-                ImGui::BeginDisabled(busy);
-                if (ImGui::SmallButton(it.alreadyInProject ? "Re-import" : "Import"))
-                {
-                    // Each asset type asks only for the decisions relevant to it.
-                    if (it.kind == Kind::TextureSet) { OpenImportDialog(it); }
-                    else if (it.kind == Kind::Mesh) { OpenMeshImportDialog(it); }
-                    else if (it.kind == Kind::Skybox) { OpenSkyboxImportDialog(it); }
-                    else { BeginImport(it, {}, true); }
-                }
-                ImGui::EndDisabled();
-                if (it.alreadyInProject && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                {
-                    ImGui::SetTooltip("%s\nRe-import all source files to: %s",
-                        ImportStatusHint(it.importStatus), ProjectDest(it).c_str());
-                }
-            }
-
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
-    }
+    ImGui::BeginChild("##importList", ImVec2(listW, area.y), true);
+    DrawItemList();
+    ImGui::EndChild();
+    ImGui::SameLine(0.0f, kSplitterWidth);
+    ImGui::BeginChild("##importDetails", ImVec2(0.0f, area.y), true);
+    DrawDetails(registry);
     ImGui::EndChild();
 
-    // --- Conversion progress bar (bottom of the window) ---------------------
-    if (busy)
-    {
-        const int done = progressDone_.load();
-        const int total = progressTotal_.load();
-        const float width = ImGui::GetContentRegionAvail().x;
-        if (total > 0)
-        {
-            const std::string overlay =
-                "converting  " + std::to_string(done) + " / " + std::to_string(total);
-            ImGui::ProgressBar(static_cast<float>(done) / static_cast<float>(total),
-                ImVec2(width, 0.0f), overlay.c_str());
-        }
-        else
-        {
-            // Total not known yet (scanning, or a skybox with no staged textures): sweep.
-            ImGui::ProgressBar(-1.0f * static_cast<float>(ImGui::GetTime()),
-                ImVec2(width, 0.0f), "scanning...");
-        }
-    }
-
-    DrawImportDialog();     // texture-set pick-files + preset modal
-    DrawSkyboxImportDialog(); // cube face size + sky calibration modal
-    DrawMeshImportDialog(registry); // per-mesh spawn-size normalization modal
+    DrawStatusBar();
 
     ImGui::End();
     // "Recreate JSON + re-bake bin" is SYNCHRONOUS (no worker), so it flags the invalidation
