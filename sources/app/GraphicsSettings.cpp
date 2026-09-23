@@ -15,6 +15,7 @@
 #include "rendering/streaming/StreamingSettings.h" // A3: streaming.* globals
 #include "rendering/core/VisibilityStats.h"
 #include "rendering/debug/LodDebugView.h"
+#include "rendering/lighting/VolumetricCloudSettings.h" // render::g_cloudShadowUpdateFrames
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/core/RasterSettings.h" // A6: rasterBindless
@@ -40,6 +41,9 @@ namespace
         bool rasterBindless = true; // texture streaming A6: material textures by heap index (SM6.6)
         int fogGridPixels = static_cast<int>(render::kFogGridPixels); // volumetric fog cell size, powers of two 4..64
         int fogGridZ = static_cast<int>(render::kFogGridZ);           // volumetric fog slices, 16..128
+        std::uint32_t cloudShadowUpdateFrames = 4u; // 1 = the whole cloud shadow map every frame (UE), 4, 16
+        bool cloudShadowBilinearWeather = true;     // the map's march: 1 weather tap instead of the view's 4
+        bool cloudShadowDetailMean = true;          // the map's march: detail by its mean, no fetch
         // Texture streaming A3 (UE r.Streaming.*)
         bool streamingEnabled = true;
         int streamingPoolSizeMB = -1;   // -1 = 70 % of dedicated VRAM, 0 = unlimited
@@ -272,6 +276,7 @@ namespace
         }
         s.renderScale = std::clamp(finite(s.renderScale, 1.0f), 0.1f, 1.0f);
         s.maxFps = render::ClampMaxFps(s.maxFps);
+        s.cloudShadowUpdateFrames = render::SanitizeCloudShadowUpdateFrames(s.cloudShadowUpdateFrames);
         s.occlusionMethod = std::clamp(s.occlusionMethod, 0, 2);
         s.occlusionQueryLatency = std::clamp(
             s.occlusionQueryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames));
@@ -398,6 +403,9 @@ namespace
         s.rasterBindless = render::g_rasterBindless;
         s.fogGridPixels = static_cast<int>(render::g_fogGridPixels);
         s.fogGridZ = static_cast<int>(render::g_fogGridZ);
+        s.cloudShadowUpdateFrames = render::g_cloudShadowUpdateFrames;
+        s.cloudShadowBilinearWeather = render::g_cloudShadowBilinearWeather;
+        s.cloudShadowDetailMean = render::g_cloudShadowDetailMean;
         s.streamingEnabled = streaming::g_enabled;
         s.streamingPoolSizeMB = streaming::g_poolSizeMB;
         s.streamingMipBias = streaming::g_mipBias;
@@ -532,6 +540,13 @@ namespace
         render::g_fogGridZ = static_cast<unsigned>(std::clamp(s.fogGridZ, 16, 128));
     }
 
+    void ApplySky(const GraphicsSettingsSnapshot& s)
+    {
+        render::g_cloudShadowUpdateFrames = render::SanitizeCloudShadowUpdateFrames(s.cloudShadowUpdateFrames);
+        render::g_cloudShadowBilinearWeather = s.cloudShadowBilinearWeather;
+        render::g_cloudShadowDetailMean = s.cloudShadowDetailMean;
+    }
+
     void ApplyStreaming(const GraphicsSettingsSnapshot& s)
     {
         streaming::g_enabled = s.streamingEnabled;
@@ -650,6 +665,7 @@ namespace
         ApplyUpscale(s, renderer, settings);
         ApplyReflections(s, renderer, settings);
         ApplyFog(s);
+        ApplySky(s);
         ApplyStreaming(s);
         ApplyLod(s);
         ApplyContact(s);
@@ -669,6 +685,11 @@ namespace
             { "frame", {
                 { "vsync", s.vsync },
                 { "maxFps", s.maxFps }
+            } },
+            { "cloudShadow", {
+                { "updateFrames", s.cloudShadowUpdateFrames },
+                { "bilinearWeather", s.cloudShadowBilinearWeather },
+                { "detailMean", s.cloudShadowDetailMean }
             } },
             { "performance", {
                 { "asyncCompute", s.asyncCompute },
@@ -840,6 +861,10 @@ namespace
         const json& frame = Section(root, "frame");
         Read(frame, "vsync", s.vsync);
         Read(frame, "maxFps", s.maxFps);
+        const json& cloudShadow = Section(root, "cloudShadow");
+        Read(cloudShadow, "updateFrames", s.cloudShadowUpdateFrames);
+        Read(cloudShadow, "bilinearWeather", s.cloudShadowBilinearWeather);
+        Read(cloudShadow, "detailMean", s.cloudShadowDetailMean);
         Read(performance, "asyncCompute", s.asyncCompute);
         Read(performance, "gpuDrivenGBuffer", s.indirectGBuffer);
         Read(performance, "gbufferHzbCull", s.gbufferHzbCull);
@@ -1277,6 +1302,9 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::RasterBindless:                 current.rasterBindless = defaults.rasterBindless; break;
     case GraphicsControl::FogGridPixels:                  current.fogGridPixels = defaults.fogGridPixels; break;
     case GraphicsControl::FogGridZ:                       current.fogGridZ = defaults.fogGridZ; break;
+    case GraphicsControl::CloudShadowUpdateFrames:        current.cloudShadowUpdateFrames = defaults.cloudShadowUpdateFrames; break;
+    case GraphicsControl::CloudShadowBilinearWeather:     current.cloudShadowBilinearWeather = defaults.cloudShadowBilinearWeather; break;
+    case GraphicsControl::CloudShadowDetailMean:          current.cloudShadowDetailMean = defaults.cloudShadowDetailMean; break;
     case GraphicsControl::StreamingEnabled:               current.streamingEnabled = defaults.streamingEnabled; break;
     case GraphicsControl::StreamingPoolSizeMB:            current.streamingPoolSizeMB = defaults.streamingPoolSizeMB; break;
     case GraphicsControl::StreamingMipBias:               current.streamingMipBias = defaults.streamingMipBias; break;
@@ -1336,6 +1364,10 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     else if (value <= static_cast<unsigned>(GraphicsControl::FogGridZ))
     {
         ApplyFog(current);
+    }
+    else if (value <= static_cast<unsigned>(GraphicsControl::CloudShadowDetailMean))
+    {
+        ApplySky(current);
     }
     else if (value <= static_cast<unsigned>(GraphicsControl::ChunkLodFactor))
     {

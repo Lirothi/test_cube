@@ -68,6 +68,7 @@ void VolumetricCloud::Reset()
     initialized_ = failed_ = false;
     noiseReady_ = false; noiseSeed_ = 0; noiseBuilds_ = 0;
     shadowBuilt_ = false; shadowViewProj_ = {}; shadowFarKm_ = 1.0f;
+    shadowHistoryValid_ = false; shadowSlicePhase_ = 0;
     ownedBytes_ = 0;
 }
 
@@ -360,8 +361,91 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
                                     const FrameInputs& in, size_t after)
 {
     shadowBuilt_ = false;
-    if (!Ready() || !in.settings || !in.settings->shadowMap || !noiseReady_) { return kNone; }
-    const VolumetricCloudConstants constants = MakeConstants(in);
+    render::g_cloudShadowStats.tracedTexels = 0;
+    render::g_cloudShadowStats.totalTexels = kShadowSize * kShadowSize;
+    if (!Ready() || !in.settings || !in.settings->shadowMap || !noiseReady_)
+    {
+        shadowHistoryValid_ = false;
+        return kNone;
+    }
+    VolumetricCloudConstants constants = MakeConstants(in);
+
+    // TIME SLICING (render::g_cloudShadowUpdateFrames; the rationale is at the switch). The raw map
+    // persists, so a partial trace is only valid while everything the whole map was traced under is
+    // unchanged. The key, in the order it is most likely to move:
+    //   - the map's own matrix: the sun's direction and the snapped anchor under the camera -- every
+    //     texel's ray is a different ray (a sun animated by the dev window re-traces every frame,
+    //     which is simply the old cost, never a stale map);
+    //   - the cloud settings (a byte copy: this struct is copied whole every frame), the noise, the
+    //     planet;
+    //   - the wind: the drift is the one thing slicing is ALLOWED to lag, and only while it moves
+    //     less than a quarter texel a frame -- a jump (a level load resetting the clock, a shot
+    //     series stepping it, a hitch at a gale) re-traces instead of smearing.
+    // The filter pass still runs over the whole map every frame; it reads texels of mixed age.
+    const std::uint32_t updateFrames = render::SanitizeCloudShadowUpdateFrames(render::g_cloudShadowUpdateFrames);
+    const float texelMetres = 2000.0f * std::max(in.settings->shadowExtentKm, 0.001f) / static_cast<float>(kShadowSize);
+    const float windDx = constants.wind[0] - shadowKeyWind_.x, windDz = constants.wind[2] - shadowKeyWind_.y;
+    // The map march's cheap-density bits (render::CloudShadowCheapBits): part of the key, because a
+    // slice traced with them beside texels traced without them would be two different maps.
+    const std::uint32_t cheapBits = render::CloudShadowCheapBits();
+    if (updateFrames != shadowKeyFrames_ || cheapBits != shadowKeyCheap_)
+    {
+        LOG_INFO(logging::LogCategory::Render, "cloud shadow map: {} of the texels re-traced per frame{}; weather {}, detail {}",
+                 updateFrames == 1u ? "all" : (updateFrames == 4u ? "1/4" : "1/16"),
+                 updateFrames == 1u ? " (UE)" : (updateFrames == 4u ? " (2x2 interleave)" : " (4x4 interleave)"),
+                 (cheapBits & 1u) != 0u ? "bilinear" : "bicubic (as the view)",
+                 (cheapBits & 2u) != 0u ? "mean" : "full (as the view)");
+    }
+    const char* forced = nullptr;
+    if (!shadowHistoryValid_) { forced = "no history"; }
+    else if (updateFrames != shadowKeyFrames_) { forced = "update mode changed"; }
+    else if (cheapBits != shadowKeyCheap_) { forced = "density mode changed"; }
+    else if (std::memcmp(constants.shadowViewProj, shadowKeyViewProj_, sizeof(shadowKeyViewProj_)) != 0) { forced = "map moved (sun or anchor)"; }
+    else if (std::memcmp(in.settings, &shadowKeySettings_, sizeof(VolumetricCloudSettings)) != 0) { forced = "cloud settings"; }
+    else if (noiseBuilds_ != shadowKeyNoise_) { forced = "noise rebuilt"; }
+    else if (in.planetRadiusKm != shadowKeyPlanetKm_) { forced = "planet radius"; }
+    else if (windDx * windDx + windDz * windDz > 0.0625f * texelMetres * texelMetres) { forced = "wind jumped"; }
+
+    // Interleave orders (ordered-dither ranks): consecutive frames land far apart in the cell, so a
+    // half-finished cycle never leaves a contiguous stale block.
+    static constexpr std::uint8_t kOrder2[4][2] = { {0, 0}, {1, 1}, {1, 0}, {0, 1} };
+    static constexpr std::uint8_t kOrder4[16][2] = {
+        {0, 0}, {2, 2}, {2, 0}, {0, 2}, {1, 1}, {3, 3}, {3, 1}, {1, 3},
+        {1, 0}, {3, 2}, {3, 0}, {1, 2}, {0, 1}, {2, 3}, {2, 1}, {0, 3} };
+    std::uint32_t stride = 1u, offsetX = 0u, offsetY = 0u;
+    if (updateFrames > 1u && forced == nullptr)
+    {
+        const std::uint32_t phase = shadowSlicePhase_ % updateFrames;
+        shadowSlicePhase_ = phase + 1u;
+        stride = updateFrames == 16u ? 4u : 2u;
+        offsetX = updateFrames == 16u ? kOrder4[phase][0] : kOrder2[phase][0];
+        offsetY = updateFrames == 16u ? kOrder4[phase][1] : kOrder2[phase][1];
+    }
+    else
+    {
+        shadowSlicePhase_ = 0u;
+        if (updateFrames > 1u)
+        {
+            ++render::g_cloudShadowStats.forcedFullTraces;
+            render::g_cloudShadowStats.lastForcedReason = forced;
+        }
+    }
+    constants.shadowMap3[0] = static_cast<float>(stride);
+    constants.shadowMap3[1] = static_cast<float>(offsetX);
+    constants.shadowMap3[2] = static_cast<float>(offsetY);
+    constants.shadowMap3[3] = static_cast<float>(cheapBits);
+    const UINT traceSize = kShadowSize / stride;
+    render::g_cloudShadowStats.tracedTexels = traceSize * traceSize;
+
+    shadowHistoryValid_ = true;
+    std::memcpy(shadowKeyViewProj_, constants.shadowViewProj, sizeof(shadowKeyViewProj_));
+    std::memcpy(&shadowKeySettings_, in.settings, sizeof(VolumetricCloudSettings));
+    shadowKeyNoise_ = noiseBuilds_;
+    shadowKeyPlanetKm_ = in.planetRadiusKm;
+    shadowKeyFrames_ = updateFrames;
+    shadowKeyCheap_ = cheapBits;
+    shadowKeyWind_ = Math::float2(constants.wind[0], constants.wind[2]);
+
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
     if (after != kNone) { deps.push_back(after); }
     // ASYNC COMPUTE. Everything this pass registers is compute-legal (`kRest` here is NON_PIXEL)
@@ -375,7 +459,7 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     // to the NEXT frame's write in that state -- and no compute acquire may begin from it.
     // `Main_TransparentFog` hands it back; see the note there.
     return graph.AddPass2(RenderPass::Main_CloudShadow, RenderQueue::AsyncCompute, deps, {}, {},
-        [this, renderer, constants](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, constants, traceSize](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             std::array<std::uint32_t, 3> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(base_.Get(), kRest); ctx.Use(detail_.Get(), kRest); ctx.Use(weather_.Get(), kRest);
@@ -389,7 +473,7 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
             shadowBuilt_ = true;
             std::memcpy(&shadowViewProj_.m, constants.shadowViewProj, sizeof(float) * 16);
             shadowFarKm_ = constants.shadowMap[2];
-            return [this, renderer, constants, points](RenderGraphPassContext c) {
+            return [this, renderer, constants, points, traceSize](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassCloudShadow);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
@@ -398,7 +482,7 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
                     const auto write = [&constants](uint8_t* dst) { std::memcpy(dst, &constants, sizeof(constants)); };
                     renderer->EmitPoint(t.cl, points[0]);
                     RecordComputeDispatch(renderer, t.cl, shadowTrace_.get(), cbBytes_, write,
-                        {baseSrv_, detailSrv_, weatherSrv_, renderer->VsmDummyTexSrv()}, {shadowRawUav_}, sampler, kShadowSize, kShadowSize);
+                        {baseSrv_, detailSrv_, weatherSrv_, renderer->VsmDummyTexSrv()}, {shadowRawUav_}, sampler, traceSize, traceSize);
                     renderer->EmitPoint(t.cl, points[1]);
                     RecordComputeDispatch(renderer, t.cl, shadowFilter_.get(), cbBytes_, write,
                         {baseSrv_, detailSrv_, weatherSrv_, shadowRawSrv_}, {shadowFilteredUav_}, sampler, kShadowSize, kShadowSize);

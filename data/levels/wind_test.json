@@ -15109,7 +15109,7 @@
     "shadowDepthBiasKm": 0.0,
     "shadowExtentKm": 20.0,
     "shadowMap": true,
-    "shadowMapSampleCount": 16,
+    "shadowMapSampleCount": 8,
     "shadowSampleCount": 6,
     "shadowSnapKm": 2.0,
     "shadowStrength": 0.800000011920929,

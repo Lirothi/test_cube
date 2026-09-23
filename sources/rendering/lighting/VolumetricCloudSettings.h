@@ -119,5 +119,60 @@ struct VolumetricCloudConstants
     float shadowMap2[4];  // sample count, depth bias km, base vertical compression, overcast
     float distortion[4]; // x: weather strength (UV), y: 1/distortion tile km, zw: unused
     float distortionOffset[4]; // xyz: wrapped distortion offset in texture UVW, w: unused
+    float shadowMap3[4];  // x: shadow-map texel stride this frame (1 = all), yz: traced offset in the stride cell, w: cheap-density bits (1 bilinear weather, 2 detail mean)
 };
-static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 18 * 16, "CloudCB layout");
+static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 19 * 16, "CloudCB layout");
+
+// --- PROJECT-WIDE, not the level: graphics_settings.json "cloudShadow", Developer Controls > Sky,
+// `--set=cloudShadow.updateFrames`. A performance switch, the role UE gives a cvar
+// (r.VolumetricCloud.ShadowMap.*), so it does not travel with a level.
+//
+// Over how many frames ONE full refresh of the cloud shadow map is spread. 1 = every texel every
+// frame, which is UE's behaviour (they re-trace the map each frame; their only amortisation is an
+// experimental half-res temporal filter, TemporalFiltering.NewFrameWeight, off by default). 4 = a
+// 2x2-interleaved quarter per frame, 16 = a 4x4-interleaved sixteenth. Sound because the cloud
+// field moves RIGIDLY with the wind: at 150 km/h it drifts 0.14 m a frame at 300 fps (1.4 m at
+// 30) against a 78 m texel, so a texel re-traced every 4 frames lags by less than a metre. Whatever
+// moves the map itself -- the sun, the snapped anchor, the cloud settings, a noise rebuild, a wind
+// jump -- forces a full trace that frame (VolumetricCloud::BuildShadow).
+namespace render
+{
+inline std::uint32_t g_cloudShadowUpdateFrames = 4u;
+inline std::uint32_t SanitizeCloudShadowUpdateFrames(std::uint32_t frames)
+{
+    return frames >= 16u ? 16u : (frames >= 4u ? 4u : 1u);
+}
+
+// Cheap density for the MAP's march only (the view, its self-shadow and the capture keep the full
+// model), same file / tab / --set family. Each drops texture taps from every map sample:
+//   bilinearWeather: the weather map in one bilinear tap instead of the view's 4-tap B-spline. The
+//     B-spline exists for a PERSPECTIVE artefact (facets drawn out into streaks along the view); the
+//     map is an ortho grid at the weather texel's own 78 m pitch, filtered 3x3 afterwards.
+//   detailMean: erode by the detail noise's mean (kCloudDetailMean) without fetching it -- what the
+//     view's own far self-shadow samples already do. Detail features are ~250 m, 3 map texels.
+// The price is a shadow that can differ slightly from the cloud casting it. Measured 2026-09-23,
+// wind_test from 400 m over the sea with overcast 0.35, the map traced whole every frame, one binary:
+//   GPU.Frame   both off 2.862 ms / bilinear 2.751 / mean 2.744 / both 2.575
+//   image vs both off: bilinear max 2 codes, 0.01 % of the shadow's own contribution;
+//   mean (and both) 0.39 % of pixels > 2 codes, max 13, all on sun glints at the edge of a
+//   partial shadow (the glints take the cloud shadow whole); 0.22 % of the shadow's contribution.
+// Hence both default ON; switching one off restores the view's model for that term exactly.
+inline bool g_cloudShadowBilinearWeather = true;
+inline bool g_cloudShadowDetailMean = true;
+inline std::uint32_t CloudShadowCheapBits()
+{
+    return (g_cloudShadowBilinearWeather ? 1u : 0u) | (g_cloudShadowDetailMean ? 2u : 0u);
+}
+
+// What the map's update ACTUALLY did last frame, for the Developer window: a scheduling switch
+// without the number that says it reached the GPU is not a control. Written by BuildShadow in the
+// serial graph build, read by the UI on the same thread.
+struct CloudShadowUpdateStats
+{
+    std::uint32_t tracedTexels = 0; // last frame; 0 when no map was built
+    std::uint32_t totalTexels = 0;
+    std::uint64_t forcedFullTraces = 0; // while slicing: full traces the key forced
+    const char* lastForcedReason = "none";
+};
+inline CloudShadowUpdateStats g_cloudShadowStats{};
+}

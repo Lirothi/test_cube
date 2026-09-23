@@ -127,6 +127,8 @@ namespace
         {
         case GraphicsControl::AsyncCompute:
         case GraphicsControl::VSync:
+        case GraphicsControl::CloudShadowBilinearWeather:
+        case GraphicsControl::CloudShadowDetailMean:
         case GraphicsControl::VisibilityChunkMask:
         case GraphicsControl::OcclusionIndirectQueries:
         case GraphicsControl::DlssEnabled:
@@ -1264,6 +1266,60 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::TextWrapped("Gray views of the half-res trace, display-linear with the calibration "
                                    "ramp on top; the temporal resolve is bypassed while one is shown. "
                                    "--set=cloud.debugView:0..3");
+
+                // Project-wide (graphics_settings.json), unlike the level-authored look above: a
+                // performance switch, UE's cvar role. The readout under it is what the last frame
+                // actually traced -- the proof the switch reached the GPU.
+                static const char* const kCloudShadowUpdateModes[] = {
+                    "Every frame (UE)", "1/4 per frame (2x2)", "1/16 per frame (4x4)" };
+                int updateMode = render::g_cloudShadowUpdateFrames >= 16u ? 2 : (render::g_cloudShadowUpdateFrames >= 4u ? 1 : 0);
+                if (GRAPHICS_CONTROL(CloudShadowUpdateFrames, "cloudShadowUpdateFrames",
+                        ImGui::Combo("Cloud shadow update", &updateMode, kCloudShadowUpdateModes,
+                                     IM_ARRAYSIZE(kCloudShadowUpdateModes))))
+                {
+                    render::g_cloudShadowUpdateFrames = updateMode == 2 ? 16u : (updateMode == 1 ? 4u : 1u);
+                }
+                DevHelp("How much of the cloud shadow map (512x512, a march through the layer per "
+                        "texel) is re-traced each frame. Every frame is UE's behaviour and costs about "
+                        "0.3 ms of GPU frame on wind_test. 1/4 and 1/16 re-trace an interleaved subset "
+                        "and keep the rest: the clouds move rigidly with the wind, well under a texel "
+                        "(78 m) between refreshes. A moved sun or map anchor, a cloud setting, a noise "
+                        "rebuild or a wind jump re-traces the whole map that frame. "
+                        "--set=cloudShadow.updateFrames:1|4|16");
+                // The map march's cheap density: each is a texture tap per sample the view keeps.
+                bool bilinearWeather = render::g_cloudShadowBilinearWeather;
+                if (GRAPHICS_CONTROL(CloudShadowBilinearWeather, "cloudShadowBilinearWeather",
+                        ImGui::Checkbox("Cloud shadow: bilinear weather", &bilinearWeather)))
+                {
+                    render::g_cloudShadowBilinearWeather = bilinearWeather;
+                }
+                DevHelp("The shadow map reads the weather map with one bilinear tap instead of the "
+                        "view's 4-tap B-spline. The B-spline is there for a perspective artefact (facets "
+                        "drawn into streaks across distant clouds); the map is a top-down grid at the "
+                        "weather texel's own 78 m pitch, blurred 3x3 afterwards. Off = the map sees "
+                        "exactly the view's weather. --set=cloudShadow.bilinearWeather:0|1");
+                bool detailMean = render::g_cloudShadowDetailMean;
+                if (GRAPHICS_CONTROL(CloudShadowDetailMean, "cloudShadowDetailMean",
+                        ImGui::Checkbox("Cloud shadow: detail by its mean", &detailMean)))
+                {
+                    render::g_cloudShadowDetailMean = detailMean;
+                }
+                DevHelp("The shadow map erodes the cloud by the detail noise's MEAN instead of fetching "
+                        "it -- what the clouds' own far self-shadow samples already do. Detail features "
+                        "are ~250 m, about three map texels. Off = the map sees the view's full detail. "
+                        "--set=cloudShadow.detailMean:0|1");
+                const render::CloudShadowUpdateStats& cloudStats = render::g_cloudShadowStats;
+                if (cloudStats.tracedTexels == 0u)
+                {
+                    ImGui::TextDisabled("No cloud shadow map was built last frame.");
+                }
+                else
+                {
+                    ImGui::TextDisabled("Last frame traced %u of %u texels (%.1f%%); forced full traces %llu (last: %s)",
+                        cloudStats.tracedTexels, cloudStats.totalTexels,
+                        100.0 * cloudStats.tracedTexels / std::max(1u, cloudStats.totalTexels),
+                        static_cast<unsigned long long>(cloudStats.forcedFullTraces), cloudStats.lastForcedReason);
+                }
             }
 
             if (activeTab_ == Tab::Debug)

@@ -48,6 +48,7 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), z: base noise vertical compression (>= 1), w: overcast (0..1)
     float4 cloudDistortion; // x: weather strength (UV), y: 1/distortion tile km, zw: unused
     float4 cloudDistortionOffset; // xyz: distortion offset in texture UVW, w: unused
+    float4 cloudShadowMap3;  // x: shadow-map texel stride this frame (1 = every texel), yz: the traced texel's offset in its stride x stride cell, w: cheap-density bits (1 bilinear weather, 2 detail mean)
 #ifdef CLOUD_WITH_SKY_CB
     // The sky's SkyAtmosphereCB (sky_atmosphere.hlsli, its SKY_VIEW layout), appended for the one
     // pass that needs both -- the environment capture composites the cloud INTO the sky
@@ -254,14 +255,22 @@ float2 CloudWeatherCoordinates(float3 shapeKm, float2 weatherUV)
 // erosion is only paid when it is (UE's VolumeSampleConservativeDensity, usf:781-787). The wind
 // offset drifts the whole field with the level's wind. Evaluate the warp here too: empty-space
 // decisions must use the same warped weather as the full view, self-shadow, map and capture samples.
-float CloudBaseDensity(float3 worldMetres, float normAlt, out float coverageOut, out float typeOut)
+//
+// bicubicWeather false = one bilinear tap instead of the B-spline's four: the cloud shadow map's
+// cheap option only (render::g_cloudShadowBilinearWeather). The facets the B-spline exists to
+// remove are a PERSPECTIVE artefact of the view; the map is an ortho grid of the same 78 m pitch as
+// the weather texel, filtered 3x3 afterwards. Every other caller passes a literal true.
+float CloudBaseDensity(float3 worldMetres, float normAlt, bool bicubicWeather, out float coverageOut, out float typeOut)
 {
     const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm; // km, drifting
     const float3 shapeKm = float3(p.x, p.y * cloudShadowMap2.z, p.z);
     const float3 baseCoordinates = shapeKm * cloudShape.x;
     // Warp before ALL weather interpretation: coverage, type and conservative density agree.
     const float2 weatherCoordinates = CloudWeatherCoordinates(shapeKm, p.xz * cloudShape.z);
-    const float4 weather = CloudSampleWeather(weatherCoordinates);
+    // A branch, not `?:` -- HLSL evaluates both arms of a ternary, which would pay all five taps.
+    float4 weather;
+    [branch] if (bicubicWeather) { weather = CloudSampleWeather(weatherCoordinates); }
+    else { weather = CloudWeather.SampleLevel(CloudLinearWrap, weatherCoordinates, 0); }
     // The coverage knob is a THRESHOLD on the weather field: 0 clears the sky, 1 lets every part of
     // the field through in proportion -- and no further: a third of the procedural map is zero after
     // its contrast stretch, so coverage 1 is "the map as drawn", not a closed sky (owner,
@@ -299,18 +308,25 @@ static const float kCloudDetailMean = 0.48f;
 // in cloud_trace_cs.hlsl for why): UE hands the same distance to the material as
 // ShadowSampleDistance (VolumetricCloud.usf:1096, MaterialTemplate.ush:2568-2571) so that a far
 // shadow sample can drop its detail; we have no material graph, so the rule lives in the march.
-CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight)
+CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight, bool bicubicWeather)
 {
     CloudSample s;
     float coverage, type;
-    const float base = CloudBaseDensity(worldMetres, normAlt, coverage, type);
+    const float base = CloudBaseDensity(worldMetres, normAlt, bicubicWeather, coverage, type);
     s.coverage = coverage;
     s.extinction = 0.0f;
     if (base <= 0.0f) { return s; }
-    const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm;
-    const float4 detail = CloudDetailNoise.SampleLevel(CloudLinearWrap, p * cloudShape.y, 0);
-    const float pointFbm = detail.r * 0.625f + detail.g * 0.25f + detail.b * 0.125f;
-    const float highFreqFbm = lerp(kCloudDetailMean, pointFbm, saturate(detailWeight));
+    // A sample that resolves NONE of the detail does not fetch it: lerp(mean, x, 0) is the mean
+    // exactly, so this is bit-identical and saves a 3D fetch on every far self-shadow sample of
+    // the view march and on every shadow-map sample in its detail-mean mode.
+    float highFreqFbm = kCloudDetailMean;
+    [branch] if (detailWeight > 0.0f)
+    {
+        const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm;
+        const float4 detail = CloudDetailNoise.SampleLevel(CloudLinearWrap, p * cloudShape.y, 0);
+        const float pointFbm = detail.r * 0.625f + detail.g * 0.25f + detail.b * 0.125f;
+        highFreqFbm = lerp(kCloudDetailMean, pointFbm, saturate(detailWeight));
+    }
     // Wispy at the bottom of the cloud, billowy towards the top.
     const float modifier = lerp(highFreqFbm, 1.0f - highFreqFbm, saturate(normAlt * 10.0f));
     const float eroded = saturate(CloudRemap(base, modifier * saturate(cloudShape.w), 1.0f, 0.0f, 1.0f));
@@ -318,9 +334,14 @@ CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight)
     return s;
 }
 
+CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight)
+{
+    return CloudSampleAt(worldMetres, normAlt, detailWeight, true);
+}
+
 CloudSample CloudSampleAt(float3 worldMetres, float normAlt)
 {
-    return CloudSampleAt(worldMetres, normAlt, 1.0f);
+    return CloudSampleAt(worldMetres, normAlt, 1.0f, true);
 }
 #endif // CLOUD_DENSITY
 

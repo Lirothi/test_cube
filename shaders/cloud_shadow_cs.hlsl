@@ -12,6 +12,15 @@
 //
 // Two entry points: CSTrace (b0 CloudCB, t0..t2 the noise set, u0 the raw map) and
 // CSFilter (t3 the raw map, u0 the filtered map).
+//
+// Time slicing (ours; render::g_cloudShadowUpdateFrames): CSTrace may trace only one texel of every
+// stride x stride cell (cloudShadowMap3.xyz), dispatched at resolution / stride; the rest of the raw
+// map keeps what earlier frames traced. CSFilter always runs over the whole map.
+//
+// Cheap density (ours; cloudShadowMap3.w): bit 1 reads the weather map with one bilinear tap
+// instead of the view's B-spline, bit 2 erodes by the detail's MEAN without fetching it. Both
+// change what the map sees, not what the view sees, so the shadow can drift slightly from the
+// cloud that casts it -- switchable so it is judged by eye (render::g_cloudShadow*).
 #pragma pack_matrix(row_major)
 #define CLOUD_DENSITY
 #define CLOUD_T_BASE t0
@@ -34,8 +43,9 @@ RWTexture2D<float4> OutShadow : register(u0);
 void CSTrace(uint3 id : SV_DispatchThreadID)
 {
     const uint resolution = (uint)cloudShadowMap.x;
-    if (any(id.xy >= resolution)) { return; }
-    const float2 uv = (float2(id.xy) + 0.5f) * cloudShadowMap.y;
+    const uint2 texel = id.xy * (uint)cloudShadowMap3.x + (uint2)cloudShadowMap3.yz;
+    if (any(texel >= resolution)) { return; }
+    const float2 uv = (float2(texel) + 0.5f) * cloudShadowMap.y;
     const float farDepthKm = cloudShadowMap.z;
     const float strength = cloudShadowMap.w;
 
@@ -52,7 +62,7 @@ void CSTrace(uint3 id : SV_DispatchThreadID)
     float tMin, tMax;
     if (!CloudRaySphere(originKm, lightDir, 0.0f.xxx, cloudLayer.y, tTop))
     {
-        OutShadow[id.xy] = float4(farDepthKm, 0.0f, 0.0f, 0.0f); // no intersection with the top of the layer
+        OutShadow[texel] = float4(farDepthKm, 0.0f, 0.0f, 0.0f); // no intersection with the top of the layer
         return;
     }
     if (CloudRaySphere(originKm, lightDir, 0.0f.xxx, cloudLayer.x, tBottom))
@@ -66,7 +76,7 @@ void CSTrace(uint3 id : SV_DispatchThreadID)
         else
         {
             // Under the layer already: nothing above this texel to shadow it (usf:2142).
-            OutShadow[id.xy] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+            OutShadow[texel] = float4(0.0f, 0.0f, 0.0f, 0.0f);
             return;
         }
         tMin = min(tempBottom, tempTop);
@@ -88,13 +98,16 @@ void CSTrace(uint3 id : SV_DispatchThreadID)
     float extinctionAcc = 0.0f, extinctionCount = 0.0f, maxOpticalDepth = 0.0f;
     float nearDepthKm = farDepthKm;
     const float invLayerHeight = cloudLayer.z;
+    const uint cheapBits = (uint)cloudShadowMap3.w;
+    const bool bicubicWeather = (cheapBits & 1u) == 0u;
+    const float detailWeight = (cheapBits & 2u) != 0u ? 0.0f : 1.0f;
     [loop] for (float st = 0.5f; st < steps; st += 1.0f)
     {
         const float sampleKm = lengthKm * (st / steps);
         const float3 P = nearWorld + lightDir * ((tMin + sampleKm) * CloudMetresPerKm);
         const float normAlt = (length(CloudWorldToPlanetKm(P)) - cloudLayer.x) * invLayerHeight;
         if (normAlt <= 0.0f || normAlt >= 1.0f) { continue; }
-        const CloudSample s = CloudSampleAt(P, normAlt);
+        const CloudSample s = CloudSampleAt(P, normAlt, detailWeight, bicubicWeather);
         const bool present = s.extinction > 0.0f;
         nearDepthKm = present ? min(nearDepthKm, sampleKm) : nearDepthKm;
         extinctionAcc += s.extinction;
@@ -105,7 +118,7 @@ void CSTrace(uint3 id : SV_DispatchThreadID)
     const float maxGreyOpticalDepth = strength * maxOpticalDepth;
     const bool noHit = nearDepthKm == farDepthKm;
     const float frontDepthKm = noHit ? tMax : (tMin + nearDepthKm);
-    OutShadow[id.xy] = float4(max(0.0f, frontDepthKm + cloudShadowMap2.y), meanExtinction, maxGreyOpticalDepth, 0.0f);
+    OutShadow[texel] = float4(max(0.0f, frontDepthKm + cloudShadowMap2.y), meanExtinction, maxGreyOpticalDepth, 0.0f);
 }
 
 [numthreads(8, 8, 1)]

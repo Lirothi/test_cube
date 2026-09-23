@@ -372,6 +372,15 @@ namespace
         // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
         if (setting == "frame.vsync")  { render::g_vsync = value != 0.0f; return true; }
         if (setting == "frame.maxFps") { render::g_maxFps = render::ClampMaxFps(static_cast<int>(value)); return true; }
+        // The cloud shadow map's time slicing (project-wide, graphics_settings.json "cloudShadow"):
+        // 1 = every texel every frame (UE), 4, 16. Not under cloud.*, whose keys are the LEVEL's.
+        if (setting == "cloudShadow.updateFrames")
+        {
+            render::g_cloudShadowUpdateFrames = render::SanitizeCloudShadowUpdateFrames(static_cast<std::uint32_t>(std::max(value, 0.0f)));
+            return true;
+        }
+        if (setting == "cloudShadow.bilinearWeather") { render::g_cloudShadowBilinearWeather = value != 0.0f; return true; }
+        if (setting == "cloudShadow.detailMean")      { render::g_cloudShadowDetailMean = value != 0.0f; return true; }
         render::CameraExposureSettings& e = scene.CameraExposureRef();
         render::ColorPipelineSettings& c = scene.ColorPipelineRef();
 

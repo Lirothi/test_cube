@@ -84,7 +84,7 @@ public:
 
     // A frame that registers no cloud passes at all (clouds off, cubemap sky) clears the per-frame
     // flags the consumers read, so a stale "built" never outlives the frame that built it.
-    void ClearFrameState() { shadowBuilt_ = false; }
+    void ClearFrameState() { shadowBuilt_ = false; shadowHistoryValid_ = false; }
     bool ShadowBuilt() const { return shadowBuilt_; }
     ID3D12Resource* ShadowResource() const { return shadowFiltered_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE ShadowSrv() const { return shadowFilteredSrv_; }
@@ -124,5 +124,17 @@ private:
     bool shadowBuilt_ = false; // reset/committed by each frame's serial builder
     Math::mat4 shadowViewProj_{};
     float shadowFarKm_ = 1.0f;
+    // Time slicing (render::g_cloudShadowUpdateFrames): the raw map persists across frames, and
+    // this is the key it was traced under. Anything in it changing forces a full trace; so does a
+    // frame that built no map (the content is then of unknown age). Committed in BuildShadow.
+    bool shadowHistoryValid_ = false;
+    float shadowKeyViewProj_[16] = {};
+    VolumetricCloudSettings shadowKeySettings_{}; // byte copy (memcpy), compared with memcmp
+    unsigned shadowKeyNoise_ = 0;
+    float shadowKeyPlanetKm_ = 0.0f;
+    std::uint32_t shadowKeyFrames_ = 0;
+    std::uint32_t shadowKeyCheap_ = ~0u; // cheap-density bits the map was traced with (never a valid value at start)
+    Math::float2 shadowKeyWind_{}; // LAST frame's drift offset (m): a jump beyond a quarter texel re-traces
+    std::uint32_t shadowSlicePhase_ = 0;
     UINT64 ownedBytes_ = 0;
 };

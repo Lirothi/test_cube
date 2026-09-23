@@ -50,6 +50,9 @@ enum class GraphicsControl
     RtWindBlasRadius,
     FogGridPixels,                // Fog
     FogGridZ,
+    CloudShadowUpdateFrames,      // Sky ...
+    CloudShadowBilinearWeather,
+    CloudShadowDetailMean,
     LodEnabled,                   // LOD ...
     LodBound0,
     LodBound1,

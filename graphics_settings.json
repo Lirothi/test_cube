@@ -5,6 +5,11 @@
     "fxaa": false,
     "renderScale": 0.580078125
   },
+  "cloudShadow": {
+    "bilinearWeather": true,
+    "detailMean": true,
+    "updateFrames": 4
+  },
   "frame": {
     "maxFps": 0,
     "vsync": false
@@ -25,7 +30,8 @@
     "fogGridPixels": 16,
     "fogGridZ": 64,
     "gbufferHzbCull": true,
-    "gpuDrivenGBuffer": true
+    "gpuDrivenGBuffer": true,
+    "rasterBindless": true
   },
   "reflections": {
     "glossyBlur": 1.0,
@@ -153,7 +159,7 @@
     "mipBias": 0,
     "mipFade": true,
     "perTextureBias": true,
-    "poolSizeMB": -1
+    "poolSizeMB": 1024
   },
   "version": 1,
   "visibility": {
