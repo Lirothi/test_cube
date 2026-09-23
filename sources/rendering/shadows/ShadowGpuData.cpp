@@ -1499,6 +1499,15 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             // slot params (the shadow VS reads world/wind only, so the shadow path is unchanged;
             // the per-slot foliage weight the shadow VS does read is the slot's, as before).
             FillInstanceSlot(obj, s, cpuInstances_[idx]);
+            // The rebuild primes EVERY ring region from this record, so a record carrying motion
+            // (prev != world: the object moved on the last sync -- dragged, then Ctrl+D) would put
+            // that motion into all of them for good. Give it the same settle window a mover gets
+            // in UpdateForFrame, and the refills converge prev onto world in every region.
+            if (std::memcmp(&cpuInstances_[idx].world, &cpuInstances_[idx].prevWorld,
+                    sizeof(cpuInstances_[idx].world)) != 0)
+            {
+                pending_[idx] = static_cast<std::uint8_t>(render::kFrameCount + 1);
+            }
             cpuBounds_[idx] = bnd;
             if (chunked) { FillChunkBounds(ro, s, bnd, cpuBounds_[idx]); }
             // Seed the version this record was filled from, or the first UpdateForFrame after any
@@ -2104,9 +2113,10 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         // and keeps smearing it: an object that was nudged once loses its surface detail for the
         // rest of the session. (Reported 2026-09-15: palm trunks go soft after moving them.)
         //
-        // `pending_` already tracks "changed recently" for kFrameCount frames to walk the change
-        // through every ring region, so it is exactly the window in which prev has to converge --
-        // refill during it, but do NOT re-arm it, or the object would refill itself forever.
+        // `pending_` already tracks "changed recently" for kFrameCount + 1 frames to walk the change
+        // through every ring region (see where it is armed below for the + 1), so it is exactly the
+        // window in which prev has to converge -- refill during it, but do NOT re-arm it, or the
+        // object would refill itself forever.
         const bool settling = !contentChanged && idx < pending_.size() && pending_[idx] > 0;
         if (contentChanged || settling)
         {
@@ -2129,9 +2139,18 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
             }
             if (contentChanged)
             {
+                // kFrameCount + 1, NOT kFrameCount: the window has to outlast the region written on
+                // THIS frame. That record is the only one filled while prev was still the old
+                // transform; with kFrameCount refills the next two frames rewrite the other two
+                // regions and this one is never touched again, so every third frame the G-buffer
+                // reported the whole move as motion. DLSS then rejected the object's history one
+                // frame in three -- a clone dragged into place flickered over its trunk and fronds
+                // for the rest of the session, while the CPU path (prevWorld read from the object
+                // every frame) and --set=gbuffer.indirect:0 stayed clean. Measured 2026-09-23 on
+                // wind_test, wind frozen: 5.2 % of view pixels changing frame to frame vs 0.75 %.
                 for (size_t s = 0; s < slots; ++s)
                 {
-                    pending_[idx + s] = static_cast<std::uint8_t>(render::kFrameCount);
+                    pending_[idx + s] = static_cast<std::uint8_t>(render::kFrameCount + 1);
                 }
             }
         }
@@ -2160,7 +2179,8 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
     // Step 4 (docs/vsm_page_caching_plan.md): republish the caster meta for THIS frame with the
     // movers' dynamic bit set. `pending_ > 0` is already exactly "this caster changed recently" --
     // it is what propagates a transform across every ring region -- so it is the mover signal, and
-    // it stays set for kFrameCount frames, which is precisely how long the stale pages live.
+    // it stays set for kFrameCount + 1 frames: as long as the stale pages live, plus the one frame
+    // the prevWorld settle needs (one extra re-render of a stopped object's pages, nothing more).
     //
     // The page setup CS already dirties a page when a DYNAMIC caster overlaps it (`dynamicOverlap`
     // from the scatter pass). Until now a moved STATIC caster could not reach that path, so the only
