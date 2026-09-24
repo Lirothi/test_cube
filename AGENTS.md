@@ -139,6 +139,13 @@ A level's `freeCameraStart.rotationDeg` is `(pitch, yaw, roll)` in degrees.
 Guessing a camera by hand does not work: a wrong angle shows an empty patch of scene and you conclude
 the bug is not reproducible when it simply is not in frame.
 
+**True 4K.** The default window is 2560x1440 (clamped to the work area); `--window=3840x2160` makes a
+borderless window of exactly that client size and initialises the renderer at it. Measured
+2026-09-24 on wind_test (DLSS Balanced): 4.3-5.0 ms GPU at 4K vs 3.3 at 1440p, GPU-bound. At 4K the
+reflection trace (0.5 x the DISPLAY, whatever the DLSS mode) and the bloom FFT grid are the costs
+that grow fastest; the bloom steps its percent down automatically (BloomRenderer, logs `bloom:
+convPercent 25.0 -> 19.0`), the rest are settings (DLSS Performance, reflection resolution 0.35).
+
 ### Make the frame deterministic before diffing
 
 Add `--wind-freeze[=<seconds>]`. It pins the shared wind+ocean clock, so two runs are comparable

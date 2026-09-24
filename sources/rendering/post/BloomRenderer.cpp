@@ -1015,7 +1015,46 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         while (p < v && p < 2048u) { p <<= 1u; }
         return p;
     };
-    const float pct = std::clamp(settings.convPercent, 10.0f, 100.0f) * 0.01f;
+    float pct = std::clamp(settings.convPercent, 10.0f, 100.0f) * 0.01f;
+    // THE POWER-OF-TWO CLIFF AT 4K. The grid is the next power of two above the image plus its 5/4
+    // zero pad, so the cost does not follow the percent smoothly: at 3840x2160 the default 25 % is a
+    // 960x540 image whose pad (1200x675) spills out of 1024x512 into a 2048x1024 grid -- four times
+    // the cells 1440p transforms, 0.63 ms instead of 0.22 -- to blur a bloom image 1.5x finer than the
+    // one the level was tuned on. When the resolution pushes the grid past the 1440p one, the percent
+    // steps down to the largest that fits the next-smaller grid, if that keeps at least 3/4 of it:
+    // 25 -> 19 % at 4K, measured 0.63 -> 0.33 ms with no visible change. 1440p and below never step.
+    {
+        const float outW = static_cast<float>(renderer->GetWidth());
+        const float outH = static_cast<float>(renderer->GetHeight());
+        const float spanFrac = std::clamp(settings.convSize, 0.02f, 1.0f);
+        const auto gridCells = [&](float p) -> std::uint64_t
+        {
+            const UINT w = std::max(16u, static_cast<UINT>(std::lround(outW * p)));
+            const UINT h = std::max(16u, static_cast<UINT>(std::lround(outH * p)));
+            const UINT span = static_cast<UINT>(std::ceil(std::max(spanFrac * static_cast<float>(std::max(w, h)), 1.0f)));
+            return static_cast<std::uint64_t>(nextPow2(std::max((w * 5u) / 4u, span))) *
+                   nextPow2(std::max((h * 5u) / 4u, span));
+        };
+        constexpr std::uint64_t k1440Grid = 1024ull * 512ull;
+        const std::uint64_t full = gridCells(pct);
+        float lo = 0.75f * pct;
+        // The cheapest grid within the 3/4 bound, then the largest percent that still fits it:
+        // gridCells never falls as the percent grows, so bisect for that grid's upper edge.
+        const std::uint64_t target = gridCells(lo);
+        if (full > k1440Grid && target < full)
+        {
+            float hi = pct;
+            for (int i = 0; i < 24; ++i)
+            {
+                const float mid = 0.5f * (lo + hi);
+                (gridCells(mid) <= target ? lo : hi) = mid;
+            }
+            LOG_INFO_ONCE_PER_MESSAGE(logging::LogCategory::Render,
+                "bloom: convPercent {:.1f} -> {:.1f} at {}x{} (FFT grid {} -> {} cells)",
+                pct * 100.0f, lo * 100.0f, renderer->GetWidth(), renderer->GetHeight(), full, gridCells(lo));
+            pct = lo;
+        }
+    }
     UINT imageW = std::max(16u,
         static_cast<UINT>(std::lround(static_cast<float>(renderer->GetWidth()) * pct)));
     UINT imageH = std::max(16u,

@@ -50,6 +50,8 @@ std::string g_profDumpPath;
 uint32_t g_traceFrames = 0;
 // Boot upscaler mode; see App.h. Set by main.cpp from "--dlss=<mode>". -1 = compiled default.
 int g_bootDlssMode = -1;
+// Borderless client size; see App.h. Set by main.cpp from "--window=<w>x<h>". 0 = default window.
+int g_windowSize[2] = { 0, 0 };
 // Empty-HUD capture mode; see App.h. Set by main.cpp from "--no-hud".
 bool g_hudHidden = false;
 bool g_bootLogWindow = false;
@@ -617,6 +619,14 @@ namespace
         // and on RT-capable hardware that means the screen-space path never runs -- so without this
         // key there is no headless way to exercise, measure or gate SSR at all. (Found the hard way
         // in P6C step 6: a "HiZ" capture that had quietly been tracing the TLAS.)
+        // Reflection trace resolution as a fraction of the DISPLAY (graphics_settings reflections.
+        // resolution; the RT and SSR traces run at it whatever the DLSS mode), for a 4K sweep.
+        if (setting == "reflections.resolution")
+        {
+            const float scale = std::clamp(value, 0.25f, 1.0f);
+            Systems::GetRenderer().SetReflectionTextureScale(Math::float2(scale, scale));
+            return true;
+        }
         if (setting == "render.reflectionSource")
         {
             const uint32_t r = (uint32_t)std::max(0.0f, value);
@@ -1226,11 +1236,28 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     int windowHeight = rect.bottom - rect.top;
     int posX = (screenRect.right - windowWidth) / 2;
     int posY = (screenRect.bottom - windowHeight) / 2;
+    DWORD windowStyle = WS_OVERLAPPEDWINDOW;
+    // "--window=<w>x<h>": borderless, client = exactly w x h, at the primary monitor's origin (over
+    // the taskbar -- which is the point: a 3840x2160 client on the 3840x2160 panel).
+    if (g_windowSize[0] > 0 && g_windowSize[1] > 0)
+    {
+        windowStyle = WS_POPUP;
+        windowWidth = g_windowSize[0];
+        windowHeight = g_windowSize[1];
+        posX = 0;
+        posY = 0;
+        // The renderer is initialised with defWidth x defHeight below, and the WM_SIZE of the
+        // window's creation arrives before there is a device to resize -- so the swapchain would
+        // stay 2560x1440 inside a 3840x2160 window (it did, the first time).
+        defWidth = windowWidth;
+        defHeight = windowHeight;
+        LOG_INFO(logging::LogCategory::App, "window: borderless {}x{} (--window)", windowWidth, windowHeight);
+    }
 
     hWnd_ = CreateWindow(
         wc.lpszClassName,
         L"D3D12 Multi-Mesh Renderer",
-        WS_OVERLAPPEDWINDOW,
+        windowStyle,
         posX, posY,
         windowWidth,
         windowHeight,

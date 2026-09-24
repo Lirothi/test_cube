@@ -66,6 +66,12 @@ extern uint32_t g_traceFrames;
 // compiled default alone.
 extern int g_bootDlssMode;
 
+// "--window=<w>x<h>": a BORDERLESS window whose client area is exactly w x h, at the primary
+// monitor's origin. The default window is 2560x1440 clamped to the work area, so on the 3840x2160
+// panel there was no way to measure (or play at) true 4K: a maximised window loses the title bar and
+// the taskbar. 0 = the default window.
+extern int g_windowSize[2];
+
 // "--sweep=<setting>:<v0>,<v1>,...": capture a settings sweep from ONE process run, instead of one
 // process launch per value. Sets the shot count from the value list, applies value[i] before shot i
 // and resets the exposure adaptation so each shot settles on its own value.

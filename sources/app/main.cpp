@@ -739,6 +739,13 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--trace=")) {
             g_traceFrames = static_cast<uint32_t>(std::atoi(flag + std::strlen("--trace=")));
         }
+        // "--window=<w>x<h>": borderless window with exactly that client size (see App.h).
+        if (const char* flag = std::strstr(lpCmdLine, "--window=")) {
+            const char* p = flag + std::strlen("--window=");
+            g_windowSize[0] = std::atoi(p);
+            if (const char* x = std::strchr(p, 'x')) { g_windowSize[1] = std::atoi(x + 1); }
+            if (g_windowSize[0] < 64 || g_windowSize[1] < 64) { g_windowSize[0] = g_windowSize[1] = 0; }
+        }
         // "--dlss=<off|perf|balanced|quality|ultraperf|ultraquality|dlaa>": boot upscaler mode, so a
         // native-resolution capture no longer needs an F-key by hand (see App.h). An unrecognised
         // value leaves the compiled default in place rather than failing — check the capture's
