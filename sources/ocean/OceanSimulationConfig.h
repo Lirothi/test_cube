@@ -42,6 +42,14 @@ struct OceanRenderConfig
     // the prefilter blur exactly there (full reasoning in ocean_surface_surf_sim.hlsli). ~0.4-0.6 is
     // the useful range; the planar reflection and the land IBL are untouched.
     float reflectionSkyHorizonPull = 1.0f;
+    // How much of the sun still lights the water BODY (deep scatter, subsurface glow, diffuse) when
+    // the sun sits on the horizon -- the floor of SunBodyEntry (ocean_surface_common.hlsli), which
+    // fades the sun's share below 12 degrees by what actually gets into the water. 0 = the physical
+    // fade alone (at 2 degrees the body keeps 4 % of the sun: a dark sea, which the owner found
+    // "черезчур погасил"), 1 = off (the old full-strength green glow at sunset). Nothing changes for
+    // a sun at 12 degrees or higher, whatever this says. 0.1 from a 2-degree sweep of 0-0.35: the
+    // body keeps a teal tint without glowing; by 0.2 the near waves are green again.
+    float lowSunBodyLight = 0.1f;
     float cascadeFadeScale = 20.0f;
     float minMeshScale = 15.0f;
     float detailNormalMipBias = 0.0f;

@@ -997,6 +997,21 @@ namespace
             }
             return true;
         }
+        // The water body's floor under a low sun (OceanRenderConfig::lowSunBodyLight), for a headless
+        // sweep at a sunset elevation.
+        if (setting == "ocean.lowSunBodyLight")
+        {
+            if (OceanRenderable* ocean = scene.FindOceanRenderable())
+            {
+                if (OceanSimulation* sim = ocean->GetSimulation())
+                {
+                    OceanRenderConfig cfg = sim->GetRenderConfig();
+                    cfg.lowSunBodyLight = Math::Saturate(value);
+                    sim->SetRenderConfig(cfg);
+                }
+            }
+            return true;
+        }
         if (setting == "ocean.contactFoam")
         {
             if (OceanRenderable* ocean = scene.FindOceanRenderable())

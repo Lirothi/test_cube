@@ -386,6 +386,26 @@ float SampleDistantRoughness(float2 worldUV, float viewDist)
     return roughness;
 }
 
+// How much of the SUN gets into the water body, relative to the sun the scatter colours were tuned
+// under. The body is lit through the mean (horizontal) surface: the irradiance there is the sun's
+// times sin(elevation), and of that the surface reflects F(90 deg - elevation) (Schlick, water) --
+// so a sun 2 degrees up puts ~1 % of its noon light into the sea. The body terms used the sun colour
+// at FULL strength whatever its height, and at sunset the whole sea lit up green ("солнце на угле 2
+// градуса дико зеленит воду"); UE's water has no such glow.
+// Normalised at 12 degrees and capped at 1, so every sun at or above it -- every authored level,
+// the lowest at 13.5 -- keeps exactly the look it was tuned with, and the fade happens below:
+// 10 deg 0.75, 5 deg 0.22, 2 deg 0.04. The pure fade left the sunset sea too dark for the owner
+// ("черезчур погасил"), so the preset's lowSunBodyLight (cloudShadowParams.w) is its floor: what the
+// body keeps with the sun on the horizon. Only the light INTO the water: the glints and the reflected
+// sun are the surface's and keep the full sun.
+float SunBodyEntry(float3 lightDirection)
+{
+    const float sinElevation = saturate(-lightDirection.y);
+    const float entry = sinElevation * (1.0f - pow(1.0f - sinElevation, 5.0f));
+    const float fade = saturate(entry * (1.0f / 0.1430860f)); // sin(12) * (1 - (1 - sin(12))^5)
+    return lerp(saturate(cloudShadowParams.w), 1.0f, fade);
+}
+
 float2 SubsurfaceScatteringFactor(const LightingInput li)
 {
     float3 aligned = normalize(lerp(li.viewDir, li.normal, subsurfaceParams.w));

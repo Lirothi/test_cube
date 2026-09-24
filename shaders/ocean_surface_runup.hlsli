@@ -91,7 +91,7 @@ cbuffer OceanCB : register(b0)
     // Plan C3: the cloud shadow map's projection and (on, far depth km, 0, 0) -- the SAME numbers the
     // deferred lighting and the fog get (SceneRenderer sets them from the frame's VolumetricCloud).
     float4x4 cloudShadowViewProj;
-    float4 cloudShadowParams;          // x: on, y: far depth km, z: how much of the shadow the water body takes (cloud.oceanBodyShadow), w: 0
+    float4 cloudShadowParams;          // x: on, y: far depth km, z: how much of the shadow the water body takes (cloud.oceanBodyShadow), w: low-sun body light (SunBodyEntry's floor, ocean preset lowSunBodyLight)
 };
 
 Texture2DArray<float4> DisplacementDerivatives : register(t0);
@@ -1655,7 +1655,10 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     // (owner, 2026-09-12: "вода не так реагирует на тень, как плотная геометрия").
     const float bodyShadow = lerp(1.0f, li.mainLight.shadowAttenuation, saturate(cloudShadowParams.z));
     const float3 skyFill = SkyFillRadiance(li.normal);
-    const float3 waterLight = li.mainLight.color * bodyShadow + skyFill;
+    // The sun's share scaled by how much of it gets INTO the water at its height (SunBodyEntry):
+    // a low sun lights the sea through its reflection and its sky, not through a glowing body.
+    const float sunEntry = SunBodyEntry(li.mainLight.direction);
+    const float3 waterLight = li.mainLight.color * (bodyShadow * sunEntry) + skyFill;
     float3 color = DeepScatterColor(depthScale) * waterLight;
 
     float3 sssColor = SssColor(depthScale);
@@ -1665,7 +1668,7 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
 
     float ndotl = saturate(dot(li.normal, -li.mainLight.direction));
     // The directional part keeps its 0.8 weight; the 0.2 sun-tinted floor is the sky term above.
-    color += (ndotl * 0.8f * bodyShadow * li.mainLight.color + skyFill) * DiffuseColor(depthScale);
+    color += (ndotl * 0.8f * bodyShadow * sunEntry * li.mainLight.color + skyFill) * DiffuseColor(depthScale);
     
     //return color;
 

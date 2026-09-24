@@ -1056,6 +1056,14 @@ namespace
         drawColor("Deep scatter tint", render.deepScatterColor);
         drawColor("Subsurface tint", render.sssColor);
         drawColor("Diffuse tint", render.diffuseColor);
+        drag("Low-sun body light", render.lowSunBodyLight, 0.005f, 0.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("How much of the sun still lights the water body with the sun on the horizon.\n"
+                              "Below 12 degrees the sun's share fades by what actually gets into the water;\n"
+                              "this is the floor of that fade. 1 = no fade (the green glow at sunset).\n"
+                              "A sun at 12 degrees or higher is not affected.");
+        }
 
         ImGui::SeparatorText("Specular and reflection");
         drag("Specular strength", render.specularStrength, 0.01f, 0.0f, 10.0f);

@@ -90,6 +90,7 @@ namespace OceanRenderConfigJson
             ReadFloat(object, "reflectionNormalStrength", render.reflectionNormalStrength));
         render.reflectionSkyHorizonPull = Math::Clamp(
             ReadFloat(object, "reflectionSkyHorizonPull", render.reflectionSkyHorizonPull), 0.05f, 1.0f);
+        render.lowSunBodyLight = Math::Saturate(ReadFloat(object, "lowSunBodyLight", render.lowSunBodyLight));
         render.cascadeFadeScale = std::max(
             0.0f, ReadFloat(object, "cascadeFadeScale", render.cascadeFadeScale));
         render.minMeshScale = std::max(
@@ -592,6 +593,7 @@ namespace OceanRenderConfigJson
         out["horizonFogDistanceScale"] = render.horizonFogDistanceScale;
         out["reflectionNormalStrength"] = render.reflectionNormalStrength;
         out["reflectionSkyHorizonPull"] = render.reflectionSkyHorizonPull;
+        out["lowSunBodyLight"] = render.lowSunBodyLight;
         out["cascadeFadeScale"] = render.cascadeFadeScale;
         out["minMeshScale"] = render.minMeshScale;
         out["detailNormalMipBias"] = render.detailNormalMipBias;

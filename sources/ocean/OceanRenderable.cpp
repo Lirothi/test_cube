@@ -466,7 +466,11 @@ public:
         UpdateUniform(owner, fogVolumeParamsHandle_, material, owner_.GetFogVolumeParams(), cbData);
         UpdateUniform(owner, fogVolumeZParamsHandle_, material, owner_.GetFogVolumeZParams(), cbData);
         UpdateUniform(owner, cloudShadowViewProjHandle_, material, owner_.GetCloudShadowViewProj(), cbData);
-        UpdateUniform(owner, cloudShadowParamsHandle_, material, owner_.GetCloudShadowParams(), cbData);
+        // w carries the preset's low-sun body light (SunBodyEntry's floor): both say how much light
+        // the water BODY takes, and w was the only free slot beside them.
+        Math::float4 cloudShadowParams = owner_.GetCloudShadowParams();
+        cloudShadowParams.w = owner_.GetRenderConfig().lowSunBodyLight;
+        UpdateUniform(owner, cloudShadowParamsHandle_, material, cloudShadowParams, cbData);
         UpdateUniform(owner, skyParamsHandle_, material, owner_.GetSkyParams(), cbData);
         UpdateUniform(owner, deepScatterColorHandle_, material, owner_.GetDeepScatterColor(), cbData);
         UpdateUniform(owner, sssColorHandle_, material, owner_.GetSssColor(), cbData);

@@ -32658,6 +32658,7 @@
       "fogDensity": 0.10000000149011612,
       "horizonFogDistanceScale": 2.5,
       "horizonFogStrength": 0.009999999776482582,
+      "lowSunBodyLight": 0.10000000149011612,
       "macroNormalMipBiasDlss": 0.0,
       "macroNormalMipBiasNative": 2.0,
       "minMeshScale": 15.0,
