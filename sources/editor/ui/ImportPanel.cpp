@@ -879,6 +879,10 @@ namespace
             }
         }
 
+        // A leaf asset's first import picks its windStrength from its height once the bake has
+        // measured it (below); a re-import keeps whatever the asset already says.
+        bool autoWindStrength = false;
+
         // Bake the staging glTF -> our binary geometry (CPU-only). Match the runtime mesh load:
         // wantCW=false winding, plus the mesh.json's authored recomputeNormalSlots (a Mesh Editor
         // override survives re-import here) — otherwise the baked winding/normals would drift.
@@ -975,7 +979,7 @@ namespace
             {
                 bakeOpt.slotFoliage = foliage;
                 asset["windFoliage"] = foliage;
-                if (!asset.contains("windStrength")) { asset["windStrength"] = 1.0f; }
+                autoWindStrength = !asset.contains("windStrength");
             }
         }
         // Mesh chunking. The bake and mesh.json MUST agree: the .bin carries no flag of its own,
@@ -992,9 +996,28 @@ namespace
         if (effectiveChunkGrid < 0) { effectiveChunkGrid = 0; }
         bakeOpt.chunkGrid = static_cast<unsigned int>(effectiveChunkGrid);
         std::vector<float> uvDensity;
+        float bakedHeightM = 0.0f;
         {
             MeshManager mm;
-            if (!mm.BakeToBinary(sourceGltf, binGeometry, bakeOpt, &uvDensity)) { return false; }
+            if (!mm.BakeToBinary(sourceGltf, binGeometry, bakeOpt, &uvDensity, &bakedHeightM)) { return false; }
+        }
+        if (autoWindStrength)
+        {
+            // The level's sway (wind.foliageSwayMeters x strength) is METRES at the canopy, tuned on
+            // the 6-7 m palms. Handed to a 1.3 m ground palm at windStrength 1 the same metres are a
+            // 30-degree lean, and every imported fern and grass tuft bent flat in a breeze that
+            // barely moved the palms beside it. Scaling the strength by the plant's height keeps
+            // the LEAN roughly equal across sizes; the floor keeps the smallest tufts alive.
+            constexpr float kWindReferenceHeightM = 6.0f;
+            const float spawn = asset.value("spawnScale", 1.0f);
+            const float heightM = bakedHeightM * (spawn > 0.0f ? spawn : 1.0f);
+            const float strength = heightM > 0.0f
+                ? std::round(std::clamp(heightM / kWindReferenceHeightM, 0.1f, 1.0f) * 100.0f) / 100.0f
+                : 1.0f;
+            asset["windStrength"] = strength;
+            LOG_INFO(logging::LogCategory::Asset,
+                "import {}: foliage {:.2f} m tall -> windStrength {:.2f} (sway is metres at the canopy, "
+                "tuned on {:.0f} m palms)", sourceGltf, heightM, strength, kWindReferenceHeightM);
         }
 
         asset["geometry"] = binGeometry;

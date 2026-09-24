@@ -205,6 +205,7 @@ namespace
     {
         bool alive = false;
         std::string assetKey; // rebuild only when the dragged asset actually changes
+        float lift = 0.0f;    // an asset's rest pose raises the pivot off the surface under the cursor
     };
     SpawnPreviewState g_spawnPreview;
 
@@ -254,7 +255,7 @@ namespace
             {
                 // The cheap path: every frame of the drag lands here. Position only -- visibility is
                 // never touched during a drag, see HideSpawnPreview.
-                ro->SetPosition(position);
+                ro->SetPosition(Math::float3(position.x, position.y + g_spawnPreview.lift, position.z));
                 return true;
             }
             DestroySpawnPreview(ctx); // it went away underneath us; fall through and rebuild
@@ -263,6 +264,8 @@ namespace
         DestroySpawnPreview(ctx); // a DIFFERENT asset: the old mesh really has to go
         const nlohmann::json objectJson =
             factory.BuildDefaultJson(&record, ctx, registry, &position);
+        const nlohmann::json& built = objectJson["position"];
+        const float lift = built.is_array() && built.size() == 3 ? built[1].get<float>() - position.y : 0.0f;
         std::unique_ptr<RenderableObjectBase> runtime =
             SceneObjectFactory::CreateStaticMeshFromJson(objectJson);
         if (!runtime)
@@ -298,6 +301,7 @@ namespace
         // nobody was reading.
         ctx.scene.RefreshShadowGpuForEditor(ctx.renderer);
         g_spawnPreview.alive = true;
+        g_spawnPreview.lift = lift;
         g_spawnPreview.assetKey = record.id.key;
         return true;
     }

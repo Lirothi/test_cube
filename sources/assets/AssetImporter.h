@@ -85,4 +85,23 @@ struct ImportOptions
 // (0 = success, non-zero = number of failed conversions / fatal setup error).
 int RunImport(const ImportOptions& opts);
 
+// How steep a tangent-space normal map is where it is SEEN: the mean Z of its unit normals over
+// the texels the albedo's alpha keeps (all texels when the albedo has no cutout), measured at
+// <= 512 texels a side -- the mips a plant is mostly looked at through. A good leaf or bark map sits
+// at 0.9-0.98; one derived from the albedo by a height-from-colour tool can sit near 0.5, i.e. its
+// texels lean ~60 degrees on average, and a leaf lit through that is dark and grainy whatever the
+// sun does. `strengthFor(target)` is the material's normalStrength (the shader's XY scale,
+// gbuffer_common.hlsli) that brings the mean Z up to `target`.
+struct NormalMapSteepness
+{
+    bool  valid = false;
+    float coverage = 0.0f; // fraction of texels measured
+    float meanZ = 1.0f;
+    std::vector<float> xy2; // per measured texel: x^2 + y^2 of the unit normal
+    std::vector<float> z;   // per measured texel: z of the unit normal (floored at 1e-4)
+    float MeanZAt(float strength) const;
+    float StrengthFor(float targetMeanZ) const; // 1 when the map already reaches it
+};
+NormalMapSteepness MeasureNormalMapSteepness(const std::string& normalPath, const std::string& albedoPath);
+
 } // namespace assets

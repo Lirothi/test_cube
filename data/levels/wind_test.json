@@ -25173,1846 +25173,6 @@
     {
       "enabled": true,
       "group": "Beach Props",
-      "id": 1428,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 001",
-      "position": [
-        60.57500076293945,
-        0.30000001192092896,
-        5.585000038146973
-      ],
-      "rotationDeg": [
-        -13.800000190734863,
-        307.8999938964844,
-        7.599999904632568
-      ],
-      "scale": [
-        1.2400000095367432,
-        1.2400000095367432,
-        1.2400000095367432
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1429,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 001",
-      "position": [
-        -49.547000885009766,
-        0.18199999630451202,
-        -80.31900024414063
-      ],
-      "rotationDeg": [
-        13.5,
-        80.30000305175781,
-        0.4000000059604645
-      ],
-      "scale": [
-        1.3600000143051147,
-        1.3600000143051147,
-        1.3600000143051147
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1430,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 002",
-      "position": [
-        -46.90299987792969,
-        0.03700000047683716,
-        80.51699829101563
-      ],
-      "rotationDeg": [
-        -6.199999809265137,
-        94.4000015258789,
-        2.0999999046325684
-      ],
-      "scale": [
-        1.1970000267028809,
-        1.1970000267028809,
-        1.1970000267028809
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1431,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 002",
-      "position": [
-        -81.83499908447266,
-        0.5550000071525574,
-        34.06999969482422
-      ],
-      "rotationDeg": [
-        -1.600000023841858,
-        89.69999694824219,
-        -9.800000190734863
-      ],
-      "scale": [
-        0.8870000243186951,
-        0.8870000243186951,
-        0.8870000243186951
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1432,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 003",
-      "position": [
-        59.07699966430664,
-        0.3540000021457672,
-        -62.8849983215332
-      ],
-      "rotationDeg": [
-        -13.199999809265137,
-        333.70001220703125,
-        -12.0
-      ],
-      "scale": [
-        1.3079999685287476,
-        1.3079999685287476,
-        1.3079999685287476
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1433,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 001",
-      "position": [
-        6.822999954223633,
-        0.4350000023841858,
-        -63.14799880981445
-      ],
-      "rotationDeg": [
-        -14.399999618530273,
-        36.900001525878906,
-        10.399999618530273
-      ],
-      "scale": [
-        1.218999981880188,
-        1.218999981880188,
-        1.218999981880188
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1434,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 004",
-      "position": [
-        76.75399780273438,
-        -0.054999999701976776,
-        -42.972999572753906
-      ],
-      "rotationDeg": [
-        -1.600000023841858,
-        100.4000015258789,
-        2.5999999046325684
-      ],
-      "scale": [
-        1.069000005722046,
-        1.069000005722046,
-        1.069000005722046
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1435,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 005",
-      "position": [
-        -13.40999984741211,
-        0.4729999899864197,
-        -89.19999694824219
-      ],
-      "rotationDeg": [
-        4.599999904632568,
-        84.69999694824219,
-        11.199999809265137
-      ],
-      "scale": [
-        0.8349999785423279,
-        0.8349999785423279,
-        0.8349999785423279
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1436,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 003",
-      "position": [
-        -70.125,
-        0.39500001072883606,
-        -63.82899856567383
-      ],
-      "rotationDeg": [
-        13.600000381469727,
-        54.400001525878906,
-        12.0
-      ],
-      "scale": [
-        1.2649999856948853,
-        1.2649999856948853,
-        1.2649999856948853
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1437,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 004",
-      "position": [
-        60.61800003051758,
-        0.3370000123977661,
-        -7.817999839782715
-      ],
-      "rotationDeg": [
-        11.399999618530273,
-        110.5,
-        9.100000381469727
-      ],
-      "scale": [
-        1.340000033378601,
-        1.340000033378601,
-        1.340000033378601
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1438,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 005",
-      "position": [
-        -81.32499694824219,
-        0.382999986410141,
-        36.63199996948242
-      ],
-      "rotationDeg": [
-        10.5,
-        35.79999923706055,
-        -0.8999999761581421
-      ],
-      "scale": [
-        1.3240000009536743,
-        1.3240000009536743,
-        1.3240000009536743
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1439,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 006",
-      "position": [
-        62.3849983215332,
-        0.032999999821186066,
-        77.69100189208984
-      ],
-      "rotationDeg": [
-        12.399999618530273,
-        335.0,
-        11.100000381469727
-      ],
-      "scale": [
-        0.9110000133514404,
-        0.9110000133514404,
-        0.9110000133514404
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1440,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 002",
-      "position": [
-        -90.5790023803711,
-        0.11599999666213989,
-        -3.811000108718872
-      ],
-      "rotationDeg": [
-        -6.800000190734863,
-        193.39999389648438,
-        -3.799999952316284
-      ],
-      "scale": [
-        1.1460000276565552,
-        1.1460000276565552,
-        1.1460000276565552
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1441,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 006",
-      "position": [
-        -57.185001373291016,
-        -0.05900000035762787,
-        4.541999816894531
-      ],
-      "rotationDeg": [
-        13.0,
-        245.89999389648438,
-        -1.399999976158142
-      ],
-      "scale": [
-        1.2120000123977661,
-        1.2120000123977661,
-        1.2120000123977661
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1442,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 007",
-      "position": [
-        92.44100189208984,
-        0.054999999701976776,
-        11.635000228881836
-      ],
-      "rotationDeg": [
-        -5.900000095367432,
-        68.0999984741211,
-        -11.0
-      ],
-      "scale": [
-        1.1440000534057617,
-        1.1440000534057617,
-        1.1440000534057617
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1443,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 003",
-      "position": [
-        65.93900299072266,
-        0.6489999890327454,
-        -52.084999084472656
-      ],
-      "rotationDeg": [
-        8.899999618530273,
-        168.39999389648438,
-        -4.599999904632568
-      ],
-      "scale": [
-        1.253000020980835,
-        1.253000020980835,
-        1.253000020980835
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1444,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 004",
-      "position": [
-        -83.68000030517578,
-        0.8100000023841858,
-        -40.8650016784668
-      ],
-      "rotationDeg": [
-        4.800000190734863,
-        124.0,
-        -3.0
-      ],
-      "scale": [
-        0.8519999980926514,
-        0.8519999980926514,
-        0.8519999980926514
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1445,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 007",
-      "position": [
-        -52.35300064086914,
-        0.05999999865889549,
-        -33.40999984741211
-      ],
-      "rotationDeg": [
-        -14.800000190734863,
-        137.3000030517578,
-        0.699999988079071
-      ],
-      "scale": [
-        1.2200000286102295,
-        1.2200000286102295,
-        1.2200000286102295
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1446,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 008",
-      "position": [
-        77.09300231933594,
-        0.593999981880188,
-        51.92900085449219
-      ],
-      "rotationDeg": [
-        -6.900000095367432,
-        347.1000061035156,
-        -7.400000095367432
-      ],
-      "scale": [
-        0.9089999794960022,
-        0.9089999794960022,
-        0.9089999794960022
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1447,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 009",
-      "position": [
-        77.62300109863281,
-        0.12099999934434891,
-        54.94900131225586
-      ],
-      "rotationDeg": [
-        4.400000095367432,
-        214.1999969482422,
-        -3.5999999046325684
-      ],
-      "scale": [
-        1.378000020980835,
-        1.378000020980835,
-        1.378000020980835
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1448,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 010",
-      "position": [
-        91.34100341796875,
-        0.18199999630451202,
-        24.6299991607666
-      ],
-      "rotationDeg": [
-        9.399999618530273,
-        276.6000061035156,
-        0.10000000149011612
-      ],
-      "scale": [
-        0.8999999761581421,
-        0.8999999761581421,
-        0.8999999761581421
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1449,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 011",
-      "position": [
-        42.16999816894531,
-        0.9789999723434448,
-        -76.4520034790039
-      ],
-      "rotationDeg": [
-        10.5,
-        246.89999389648438,
-        -12.0
-      ],
-      "scale": [
-        1.3980000019073486,
-        1.3980000019073486,
-        1.3980000019073486
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1450,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 008",
-      "position": [
-        41.832000732421875,
-        0.08799999952316284,
-        -80.43900299072266
-      ],
-      "rotationDeg": [
-        5.599999904632568,
-        274.70001220703125,
-        6.099999904632568
-      ],
-      "scale": [
-        1.0779999494552612,
-        1.0779999494552612,
-        1.0779999494552612
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1451,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 012",
-      "position": [
-        -39.553001403808594,
-        0.6790000200271606,
-        -82.30899810791016
-      ],
-      "rotationDeg": [
-        -8.699999809265137,
-        194.89999389648438,
-        5.400000095367432
-      ],
-      "scale": [
-        1.2610000371932983,
-        1.2610000371932983,
-        1.2610000371932983
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1452,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 009",
-      "position": [
-        -60.303001403808594,
-        0.367000013589859,
-        -19.284000396728516
-      ],
-      "rotationDeg": [
-        4.400000095367432,
-        260.29998779296875,
-        -12.5
-      ],
-      "scale": [
-        0.8080000281333923,
-        0.8080000281333923,
-        0.8080000281333923
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1453,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 010",
-      "position": [
-        63.928001403808594,
-        -0.03200000151991844,
-        -58.952999114990234
-      ],
-      "rotationDeg": [
-        3.0,
-        103.9000015258789,
-        -7.0
-      ],
-      "scale": [
-        1.309999942779541,
-        1.309999942779541,
-        1.309999942779541
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1454,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 005",
-      "position": [
-        -3.5290000438690186,
-        0.2280000001192093,
-        -90.72699737548828
-      ],
-      "rotationDeg": [
-        -12.300000190734863,
-        3.5999999046325684,
-        -5.699999809265137
-      ],
-      "scale": [
-        1.2869999408721924,
-        1.2869999408721924,
-        1.2869999408721924
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1455,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 013",
-      "position": [
-        8.83899974822998,
-        0.11299999803304672,
-        -61.33700180053711
-      ],
-      "rotationDeg": [
-        -1.7000000476837158,
-        267.29998779296875,
-        -4.099999904632568
-      ],
-      "scale": [
-        1.3320000171661377,
-        1.3320000171661377,
-        1.3320000171661377
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1456,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 014",
-      "position": [
-        -85.31199645996094,
-        0.7260000109672546,
-        -33.882999420166016
-      ],
-      "rotationDeg": [
-        -14.0,
-        287.6000061035156,
-        -10.300000190734863
-      ],
-      "scale": [
-        1.2699999809265137,
-        1.2699999809265137,
-        1.2699999809265137
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1457,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 011",
-      "position": [
-        31.264999389648438,
-        0.12600000202655792,
-        54.814998626708984
-      ],
-      "rotationDeg": [
-        -9.699999809265137,
-        272.70001220703125,
-        14.399999618530273
-      ],
-      "scale": [
-        1.2589999437332153,
-        1.2589999437332153,
-        1.2589999437332153
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1458,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 012",
-      "position": [
-        -52.257999420166016,
-        0.052000001072883606,
-        -33.4630012512207
-      ],
-      "rotationDeg": [
-        -3.5999999046325684,
-        3.9000000953674316,
-        4.5
-      ],
-      "scale": [
-        1.2000000476837158,
-        1.2000000476837158,
-        1.2000000476837158
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1459,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 015",
-      "position": [
-        76.85700225830078,
-        0.32600000500679016,
-        -40.606998443603516
-      ],
-      "rotationDeg": [
-        -13.699999809265137,
-        167.39999389648438,
-        -7.900000095367432
-      ],
-      "scale": [
-        1.25,
-        1.25,
-        1.25
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1460,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 016",
-      "position": [
-        -19.285999298095703,
-        0.4950000047683716,
-        85.06900024414063
-      ],
-      "rotationDeg": [
-        -2.5,
-        192.10000610351563,
-        -2.700000047683716
-      ],
-      "scale": [
-        1.2690000534057617,
-        1.2690000534057617,
-        1.2690000534057617
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1461,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 006",
-      "position": [
-        -78.79199981689453,
-        -0.03400000184774399,
-        -57.61000061035156
-      ],
-      "rotationDeg": [
-        -12.899999618530273,
-        142.3000030517578,
-        0.4000000059604645
-      ],
-      "scale": [
-        1.2610000371932983,
-        1.2610000371932983,
-        1.2610000371932983
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1462,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 007",
-      "position": [
-        -88.58799743652344,
-        0.625,
-        -1.6380000114440918
-      ],
-      "rotationDeg": [
-        12.600000381469727,
-        53.70000076293945,
-        13.0
-      ],
-      "scale": [
-        1.0670000314712524,
-        1.0670000314712524,
-        1.0670000314712524
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1463,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 008",
-      "position": [
-        84.03600311279297,
-        0.8040000200271606,
-        -25.094999313354492
-      ],
-      "rotationDeg": [
-        -1.7000000476837158,
-        284.0,
-        7.0
-      ],
-      "scale": [
-        1.2569999694824219,
-        1.2569999694824219,
-        1.2569999694824219
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1464,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 017",
-      "position": [
-        -83.2300033569336,
-        0.18700000643730164,
-        -49.382999420166016
-      ],
-      "rotationDeg": [
-        -0.30000001192092896,
-        292.1000061035156,
-        12.699999809265137
-      ],
-      "scale": [
-        0.968999981880188,
-        0.968999981880188,
-        0.968999981880188
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1465,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 018",
-      "position": [
-        48.32099914550781,
-        0.4230000078678131,
-        -74.5250015258789
-      ],
-      "rotationDeg": [
-        -7.300000190734863,
-        215.60000610351563,
-        12.199999809265137
-      ],
-      "scale": [
-        1.1749999523162842,
-        1.1749999523162842,
-        1.1749999523162842
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1466,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 013",
-      "position": [
-        58.560001373291016,
-        0.14399999380111694,
-        15.21399974822998
-      ],
-      "rotationDeg": [
-        2.0,
-        92.5,
-        8.199999809265137
-      ],
-      "scale": [
-        1.121999979019165,
-        1.121999979019165,
-        1.121999979019165
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1467,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 019",
-      "position": [
-        -59.48500061035156,
-        0.3190000057220459,
-        1.2569999694824219
-      ],
-      "rotationDeg": [
-        -2.299999952316284,
-        23.299999237060547,
-        13.100000381469727
-      ],
-      "scale": [
-        1.0429999828338623,
-        1.0429999828338623,
-        1.0429999828338623
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1468,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 020",
-      "position": [
-        -53.10100173950195,
-        0.0860000029206276,
-        27.615999221801758
-      ],
-      "rotationDeg": [
-        -2.200000047683716,
-        341.0,
-        -14.899999618530273
-      ],
-      "scale": [
-        1.2860000133514404,
-        1.2860000133514404,
-        1.2860000133514404
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1469,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 014",
-      "position": [
-        -82.44999694824219,
-        0.4749999940395355,
-        33.56999969482422
-      ],
-      "rotationDeg": [
-        -9.600000381469727,
-        133.39999389648438,
-        -9.5
-      ],
-      "scale": [
-        1.187999963760376,
-        1.187999963760376,
-        1.187999963760376
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1470,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 015",
-      "position": [
-        -74.4260025024414,
-        0.22499999403953552,
-        47.48899841308594
-      ],
-      "rotationDeg": [
-        -14.699999809265137,
-        16.100000381469727,
-        11.699999809265137
-      ],
-      "scale": [
-        1.190000057220459,
-        1.190000057220459,
-        1.190000057220459
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1471,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 009",
-      "position": [
-        -47.277000427246094,
-        0.19699999690055847,
-        37.39400100708008
-      ],
-      "rotationDeg": [
-        -12.800000190734863,
-        31.899999618530273,
-        -3.700000047683716
-      ],
-      "scale": [
-        0.9399999976158142,
-        0.9399999976158142,
-        0.9399999976158142
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1472,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 021",
-      "position": [
-        39.810001373291016,
-        0.32600000500679016,
-        -80.47699737548828
-      ],
-      "rotationDeg": [
-        1.2999999523162842,
-        110.19999694824219,
-        2.5999999046325684
-      ],
-      "scale": [
-        0.8790000081062317,
-        0.8790000081062317,
-        0.8790000081062317
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1473,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 016",
-      "position": [
-        78.30699920654297,
-        0.26899999380111694,
-        -38.928001403808594
-      ],
-      "rotationDeg": [
-        -11.800000190734863,
-        263.6000061035156,
-        -14.600000381469727
-      ],
-      "scale": [
-        1.0740000009536743,
-        1.0740000009536743,
-        1.0740000009536743
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1474,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 017",
-      "position": [
-        -56.659000396728516,
-        0.061000000685453415,
-        -77.41899871826172
-      ],
-      "rotationDeg": [
-        8.600000381469727,
-        236.8000030517578,
-        -8.5
-      ],
-      "scale": [
-        1.0180000066757202,
-        1.0180000066757202,
-        1.0180000066757202
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1475,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 018",
-      "position": [
-        -60.229000091552734,
-        0.2840000092983246,
-        -17.2189998626709
-      ],
-      "rotationDeg": [
-        6.900000095367432,
-        4.400000095367432,
-        -1.899999976158142
-      ],
-      "scale": [
-        1.2400000095367432,
-        1.2400000095367432,
-        1.2400000095367432
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1476,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 010",
-      "position": [
-        -21.18000030517578,
-        0.5180000066757202,
-        58.832000732421875
-      ],
-      "rotationDeg": [
-        14.600000381469727,
-        118.30000305175781,
-        13.899999618530273
-      ],
-      "scale": [
-        1.3550000190734863,
-        1.3550000190734863,
-        1.3550000190734863
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1477,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 011",
-      "position": [
-        -59.930999755859375,
-        0.15399999916553497,
-        -11.680000305175781
-      ],
-      "rotationDeg": [
-        12.399999618530273,
-        287.3999938964844,
-        3.299999952316284
-      ],
-      "scale": [
-        0.8700000047683716,
-        0.8700000047683716,
-        0.8700000047683716
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1478,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 019",
-      "position": [
-        -31.93199920654297,
-        0.17299999296665192,
-        -52.53499984741211
-      ],
-      "rotationDeg": [
-        -11.600000381469727,
-        115.0,
-        12.600000381469727
-      ],
-      "scale": [
-        1.3259999752044678,
-        1.3259999752044678,
-        1.3259999752044678
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1479,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 022",
-      "position": [
-        -70.27999877929688,
-        0.7139999866485596,
-        -61.375
-      ],
-      "rotationDeg": [
-        11.899999618530273,
-        190.6999969482422,
-        1.899999976158142
-      ],
-      "scale": [
-        1.3660000562667847,
-        1.3660000562667847,
-        1.3660000562667847
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1480,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 012",
-      "position": [
-        -58.61000061035156,
-        0.3970000147819519,
-        10.498000144958496
-      ],
-      "rotationDeg": [
-        -8.899999618530273,
-        37.400001525878906,
-        -13.899999618530273
-      ],
-      "scale": [
-        1.25600004196167,
-        1.25600004196167,
-        1.25600004196167
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1481,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 023",
-      "position": [
-        35.36199951171875,
-        0.2750000059604645,
-        53.09199905395508
-      ],
-      "rotationDeg": [
-        -13.699999809265137,
-        233.39999389648438,
-        2.799999952316284
-      ],
-      "scale": [
-        0.9490000009536743,
-        0.9490000009536743,
-        0.9490000009536743
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1482,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 020",
-      "position": [
-        -85.80999755859375,
-        0.39500001072883606,
-        25.270999908447266
-      ],
-      "rotationDeg": [
-        8.300000190734863,
-        343.6000061035156,
-        0.6000000238418579
-      ],
-      "scale": [
-        0.8690000176429749,
-        0.8690000176429749,
-        0.8690000176429749
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1483,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 013",
-      "position": [
-        -90.00499725341797,
-        0.1080000028014183,
-        -15.925999641418457
-      ],
-      "rotationDeg": [
-        2.9000000953674316,
-        252.3000030517578,
-        0.0
-      ],
-      "scale": [
-        0.9610000252723694,
-        0.9610000252723694,
-        0.9610000252723694
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1484,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 021",
-      "position": [
-        -63.36800003051758,
-        -0.0020000000949949026,
-        68.47699737548828
-      ],
-      "rotationDeg": [
-        3.0999999046325684,
-        88.4000015258789,
-        -5.0
-      ],
-      "scale": [
-        0.8199999928474426,
-        0.8199999928474426,
-        0.8199999928474426
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1485,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 014",
-      "position": [
-        37.10100173950195,
-        0.8130000233650208,
-        -79.6989974975586
-      ],
-      "rotationDeg": [
-        -13.199999809265137,
-        304.5,
-        -9.399999618530273
-      ],
-      "scale": [
-        1.218000054359436,
-        1.218000054359436,
-        1.218000054359436
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1486,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 015",
-      "position": [
-        53.78799819946289,
-        0.3109999895095825,
-        -27.642000198364258
-      ],
-      "rotationDeg": [
-        4.5,
-        20.0,
-        -0.30000001192092896
-      ],
-      "scale": [
-        1.1929999589920044,
-        1.1929999589920044,
-        1.1929999589920044
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1487,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 016",
-      "position": [
-        -77.83599853515625,
-        0.5519999861717224,
-        40.847999572753906
-      ],
-      "rotationDeg": [
-        13.199999809265137,
-        93.69999694824219,
-        -11.100000381469727
-      ],
-      "scale": [
-        1.3519999980926514,
-        1.3519999980926514,
-        1.3519999980926514
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1488,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 017",
-      "position": [
-        87.78500366210938,
-        0.6499999761581421,
-        -15.194999694824219
-      ],
-      "rotationDeg": [
-        3.0,
-        135.3000030517578,
-        7.900000095367432
-      ],
-      "scale": [
-        1.0950000286102295,
-        1.0950000286102295,
-        1.0950000286102295
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1489,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 018",
-      "position": [
-        -12.682999610900879,
-        0.21199999749660492,
-        60.59700012207031
-      ],
-      "rotationDeg": [
-        9.800000190734863,
-        250.60000610351563,
-        8.0
-      ],
-      "scale": [
-        1.0290000438690186,
-        1.0290000438690186,
-        1.0290000438690186
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1490,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 022",
-      "position": [
-        4.815000057220459,
-        -0.028999999165534973,
-        -90.95999908447266
-      ],
-      "rotationDeg": [
-        7.5,
-        321.79998779296875,
-        4.699999809265137
-      ],
-      "scale": [
-        1.284999966621399,
-        1.284999966621399,
-        1.284999966621399
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1491,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 023",
-      "position": [
-        91.09700012207031,
-        0.3319999873638153,
-        16.474000930786133
-      ],
-      "rotationDeg": [
-        1.399999976158142,
-        70.0999984741211,
-        12.899999618530273
-      ],
-      "scale": [
-        0.8569999933242798,
-        0.8569999933242798,
-        0.8569999933242798
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1492,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 019",
-      "position": [
-        -42.52000045776367,
-        0.32100000977516174,
-        43.051998138427734
-      ],
-      "rotationDeg": [
-        10.600000381469727,
-        93.80000305175781,
-        10.300000190734863
-      ],
-      "scale": [
-        1.2890000343322754,
-        1.2890000343322754,
-        1.2890000343322754
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1493,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 020",
-      "position": [
-        -87.93199920654297,
-        0.035999998450279236,
-        -36.409000396728516
-      ],
-      "rotationDeg": [
-        -10.899999618530273,
-        64.30000305175781,
-        3.9000000953674316
-      ],
-      "scale": [
-        1.065000057220459,
-        1.065000057220459,
-        1.065000057220459
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1494,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 021",
-      "position": [
-        -25.738000869750977,
-        0.3240000009536743,
-        -56.49599838256836
-      ],
-      "rotationDeg": [
-        3.200000047683716,
-        155.39999389648438,
-        0.8999999761581421
-      ],
-      "scale": [
-        0.9909999966621399,
-        0.9909999966621399,
-        0.9909999966621399
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1495,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 022",
-      "position": [
-        -20.889999389648438,
-        0.4970000088214874,
-        -88.00399780273438
-      ],
-      "rotationDeg": [
-        9.399999618530273,
-        288.79998779296875,
-        -3.5
-      ],
-      "scale": [
-        0.984000027179718,
-        0.984000027179718,
-        0.984000027179718
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1496,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 024",
-      "position": [
-        60.275001525878906,
-        0.7910000085830688,
-        -58.42499923706055
-      ],
-      "rotationDeg": [
-        10.899999618530273,
-        337.1000061035156,
-        8.100000381469727
-      ],
-      "scale": [
-        1.0160000324249268,
-        1.0160000324249268,
-        1.0160000324249268
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1497,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 025",
-      "position": [
-        -54.89400100708008,
-        -0.012000000104308128,
-        77.98300170898438
-      ],
-      "rotationDeg": [
-        -7.199999809265137,
-        283.5,
-        -14.600000381469727
-      ],
-      "scale": [
-        0.824999988079071,
-        0.824999988079071,
-        0.824999988079071
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1498,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 023",
-      "position": [
-        59.16299819946289,
-        0.0689999982714653,
-        -9.425999641418457
-      ],
-      "rotationDeg": [
-        -7.400000095367432,
-        148.1999969482422,
-        13.800000190734863
-      ],
-      "scale": [
-        0.9700000286102295,
-        0.9700000286102295,
-        0.9700000286102295
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1499,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 026",
-      "position": [
-        -40.055999755859375,
-        0.25699999928474426,
-        44.97700119018555
-      ],
-      "rotationDeg": [
-        -13.699999809265137,
-        244.10000610351563,
-        3.9000000953674316
-      ],
-      "scale": [
-        0.9100000262260437,
-        0.9100000262260437,
-        0.9100000262260437
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1500,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 027",
-      "position": [
-        34.20500183105469,
-        0.46399998664855957,
-        -48.3849983215332
-      ],
-      "rotationDeg": [
-        4.099999904632568,
-        341.3999938964844,
-        0.5
-      ],
-      "scale": [
-        1.3070000410079956,
-        1.3070000410079956,
-        1.3070000410079956
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1501,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 028",
-      "position": [
-        -47.41299819946289,
-        0.050999999046325684,
-        36.17900085449219
-      ],
-      "rotationDeg": [
-        -14.399999618530273,
-        339.8999938964844,
-        7.599999904632568
-      ],
-      "scale": [
-        1.2610000371932983,
-        1.2610000371932983,
-        1.2610000371932983
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1502,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 024",
-      "position": [
-        55.775001525878906,
-        0.14800000190734863,
-        -22.652999877929688
-      ],
-      "rotationDeg": [
-        -13.399999618530273,
-        47.400001525878906,
-        -7.599999904632568
-      ],
-      "scale": [
-        0.9369999766349792,
-        0.9369999766349792,
-        0.9369999766349792
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1503,
-      "mesh": "models/seashells_node_scoica_02.mesh.json",
-      "name": "seashells_node_scoica_02 025",
-      "position": [
-        39.15599822998047,
-        0.3440000116825104,
-        50.63800048828125
-      ],
-      "rotationDeg": [
-        3.0999999046325684,
-        61.79999923706055,
-        7.599999904632568
-      ],
-      "scale": [
-        0.9340000152587891,
-        0.9340000152587891,
-        0.9340000152587891
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1504,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 024",
-      "position": [
-        30.13599967956543,
-        -0.014000000432133675,
-        97.76599884033203
-      ],
-      "rotationDeg": [
-        -6.800000190734863,
-        213.0,
-        -10.699999809265137
-      ],
-      "scale": [
-        1.055999994277954,
-        1.055999994277954,
-        1.055999994277954
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1505,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 029",
-      "position": [
-        -87.57499694824219,
-        0.03500000014901161,
-        -38.382999420166016
-      ],
-      "rotationDeg": [
-        14.0,
-        151.10000610351563,
-        8.5
-      ],
-      "scale": [
-        1.1410000324249268,
-        1.1410000324249268,
-        1.1410000324249268
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1506,
-      "mesh": "models/seashells_node_Cylinder009.mesh.json",
-      "name": "seashells_node_Cylinder009 030",
-      "position": [
-        -16.323999404907227,
-        0.09200000017881393,
-        81.9020004272461
-      ],
-      "rotationDeg": [
-        8.0,
-        79.4000015258789,
-        -8.699999809265137
-      ],
-      "scale": [
-        0.9010000228881836,
-        0.9010000228881836,
-        0.9010000228881836
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
-      "id": 1507,
-      "mesh": "models/seashells_node_scoica_01.mesh.json",
-      "name": "seashells_node_scoica_01 025",
-      "position": [
-        -14.390999794006348,
-        0.5429999828338623,
-        -88.7959976196289
-      ],
-      "rotationDeg": [
-        8.800000190734863,
-        273.5,
-        -8.5
-      ],
-      "scale": [
-        1.1369999647140503,
-        1.1369999647140503,
-        1.1369999647140503
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
       "id": 1508,
       "mesh": "models/starfish.mesh.json",
       "name": "starfish 001",
@@ -32578,6 +30738,1846 @@
         1.0,
         1.0,
         1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1771,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 001",
+      "position": [
+        60.575401306152344,
+        0.38339999318122864,
+        5.572299957275391
+      ],
+      "rotationDeg": [
+        142.4499969482422,
+        -49.689998626708984,
+        10.579999923706055
+      ],
+      "scale": [
+        1.2400000095367432,
+        1.2400000095367432,
+        1.2400000095367432
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1772,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 001",
+      "position": [
+        -49.52069854736328,
+        0.1873999983072281,
+        -80.43669891357422
+      ],
+      "rotationDeg": [
+        74.2699966430664,
+        -10.319999694824219,
+        25.040000915527344
+      ],
+      "scale": [
+        1.3600000143051147,
+        1.3600000143051147,
+        1.3600000143051147
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1773,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 002",
+      "position": [
+        -46.90290069580078,
+        0.05689999833703041,
+        80.40779876708984
+      ],
+      "rotationDeg": [
+        88.91999816894531,
+        -9.529999732971191,
+        156.4600067138672
+      ],
+      "scale": [
+        1.1970000267028809,
+        1.1970000267028809,
+        1.1970000267028809
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1774,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 002",
+      "position": [
+        -81.79900360107422,
+        0.5419999957084656,
+        34.06589889526367
+      ],
+      "rotationDeg": [
+        47.13999938964844,
+        83.41000366210938,
+        96.38999938964844
+      ],
+      "scale": [
+        0.8870000243186951,
+        0.8870000243186951,
+        0.8870000243186951
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1775,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 003",
+      "position": [
+        59.214900970458984,
+        0.3596999943256378,
+        -62.863800048828125
+      ],
+      "rotationDeg": [
+        -65.29000091552734,
+        -53.849998474121094,
+        142.47999572753906
+      ],
+      "scale": [
+        1.3079999685287476,
+        1.3079999685287476,
+        1.3079999685287476
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1776,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 001",
+      "position": [
+        6.832699775695801,
+        0.41519999504089355,
+        -63.132598876953125
+      ],
+      "rotationDeg": [
+        -41.33000183105469,
+        35.79999923706055,
+        10.489999771118164
+      ],
+      "scale": [
+        1.218999981880188,
+        1.218999981880188,
+        1.218999981880188
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1777,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 004",
+      "position": [
+        76.72019958496094,
+        -0.049800001084804535,
+        -43.06399917602539
+      ],
+      "rotationDeg": [
+        89.11000061035156,
+        7.960000038146973,
+        37.08000183105469
+      ],
+      "scale": [
+        1.069000005722046,
+        1.069000005722046,
+        1.069000005722046
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1778,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 005",
+      "position": [
+        -13.41510009765625,
+        0.46639999747276306,
+        -89.27130126953125
+      ],
+      "rotationDeg": [
+        75.05000305175781,
+        2.7799999713897705,
+        53.33000183105469
+      ],
+      "scale": [
+        0.8349999785423279,
+        0.8349999785423279,
+        0.8349999785423279
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1779,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 003",
+      "position": [
+        -70.09339904785156,
+        0.3700000047683716,
+        -63.797401428222656
+      ],
+      "rotationDeg": [
+        -49.869998931884766,
+        54.650001525878906,
+        -1.440000057220459
+      ],
+      "scale": [
+        1.2649999856948853,
+        1.2649999856948853,
+        1.2649999856948853
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1780,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 004",
+      "position": [
+        60.66230010986328,
+        0.31029999256134033,
+        -7.8358001708984375
+      ],
+      "rotationDeg": [
+        136.89999389648438,
+        69.2699966430664,
+        -173.6199951171875
+      ],
+      "scale": [
+        1.340000033378601,
+        1.340000033378601,
+        1.340000033378601
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1781,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 005",
+      "position": [
+        -81.3302001953125,
+        0.46959999203681946,
+        36.63710021972656
+      ],
+      "rotationDeg": [
+        150.1199951171875,
+        37.33000183105469,
+        15.5
+      ],
+      "scale": [
+        1.3240000009536743,
+        1.3240000009536743,
+        1.3240000009536743
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1782,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 006",
+      "position": [
+        62.36360168457031,
+        0.012199999764561653,
+        77.71949768066406
+      ],
+      "rotationDeg": [
+        -36.790000915527344,
+        -24.729999542236328,
+        -0.1899999976158142
+      ],
+      "scale": [
+        0.9110000133514404,
+        0.9110000133514404,
+        0.9110000133514404
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1783,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 002",
+      "position": [
+        -90.57530212402344,
+        0.10080000013113022,
+        -3.839200019836426
+      ],
+      "rotationDeg": [
+        123.44000244140625,
+        -13.4399995803833,
+        -166.0
+      ],
+      "scale": [
+        1.1460000276565552,
+        1.1460000276565552,
+        1.1460000276565552
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1784,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 006",
+      "position": [
+        -57.234798431396484,
+        0.0027000000700354576,
+        4.6371002197265625
+      ],
+      "rotationDeg": [
+        -70.33999633789063,
+        16.829999923706055,
+        -130.5500030517578
+      ],
+      "scale": [
+        1.2120000123977661,
+        1.2120000123977661,
+        1.2120000123977661
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1785,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 007",
+      "position": [
+        92.4645004272461,
+        0.020600000396370888,
+        11.643799781799316
+      ],
+      "rotationDeg": [
+        -35.06999969482422,
+        68.36000061035156,
+        -9.279999732971191
+      ],
+      "scale": [
+        1.1440000534057617,
+        1.1440000534057617,
+        1.1440000534057617
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1786,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 003",
+      "position": [
+        65.94580078125,
+        0.6229000091552734,
+        -52.123199462890625
+      ],
+      "rotationDeg": [
+        132.80999755859375,
+        12.3100004196167,
+        170.67999267578125
+      ],
+      "scale": [
+        1.253000020980835,
+        1.253000020980835,
+        1.253000020980835
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1787,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 004",
+      "position": [
+        -83.69419860839844,
+        0.8410999774932861,
+        -40.856998443603516
+      ],
+      "rotationDeg": [
+        -50.650001525878906,
+        55.34000015258789,
+        -162.0500030517578
+      ],
+      "scale": [
+        0.8519999980926514,
+        0.8519999980926514,
+        0.8519999980926514
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1788,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 007",
+      "position": [
+        -52.43429946899414,
+        0.10400000214576721,
+        -33.485198974609375
+      ],
+      "rotationDeg": [
+        90.8499984741211,
+        -53.11000061035156,
+        162.57000732421875
+      ],
+      "scale": [
+        1.2200000286102295,
+        1.2200000286102295,
+        1.2200000286102295
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1789,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 008",
+      "position": [
+        77.1073989868164,
+        0.6556000113487244,
+        51.92499923706055
+      ],
+      "rotationDeg": [
+        150.07000732421875,
+        -9.710000038146973,
+        -12.710000038146973
+      ],
+      "scale": [
+        0.9089999794960022,
+        0.9089999794960022,
+        0.9089999794960022
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1790,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 009",
+      "position": [
+        77.59519958496094,
+        0.08860000222921371,
+        54.910099029541016
+      ],
+      "rotationDeg": [
+        135.88999938964844,
+        -34.790000915527344,
+        174.80999755859375
+      ],
+      "scale": [
+        1.378000020980835,
+        1.378000020980835,
+        1.378000020980835
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1791,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 010",
+      "position": [
+        91.34850311279297,
+        0.24330000579357147,
+        24.630800247192383
+      ],
+      "rotationDeg": [
+        156.36000061035156,
+        -80.62999725341797,
+        -26.729999542236328
+      ],
+      "scale": [
+        0.8999999761581421,
+        0.8999999761581421,
+        0.8999999761581421
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1792,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 011",
+      "position": [
+        42.129600524902344,
+        0.9447000026702881,
+        -76.45379638671875
+      ],
+      "rotationDeg": [
+        173.30999755859375,
+        -62.880001068115234,
+        144.02000427246094
+      ],
+      "scale": [
+        1.3980000019073486,
+        1.3980000019073486,
+        1.3980000019073486
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1793,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 008",
+      "position": [
+        41.806800842285156,
+        0.14010000228881836,
+        -80.34120178222656
+      ],
+      "rotationDeg": [
+        -105.13999938964844,
+        9.569999694824219,
+        -5.920000076293945
+      ],
+      "scale": [
+        1.0779999494552612,
+        1.0779999494552612,
+        1.0779999494552612
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1794,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 012",
+      "position": [
+        -39.557701110839844,
+        0.7638999819755554,
+        -82.3051986694336
+      ],
+      "rotationDeg": [
+        -24.75,
+        -17.549999237060547,
+        -177.9499969482422
+      ],
+      "scale": [
+        1.2610000371932983,
+        1.2610000371932983,
+        1.2610000371932983
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1795,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 009",
+      "position": [
+        -60.30780029296875,
+        0.3734000027179718,
+        -19.212600708007813
+      ],
+      "rotationDeg": [
+        -101.80000305175781,
+        6.210000038146973,
+        96.83000183105469
+      ],
+      "scale": [
+        0.8080000281333923,
+        0.8080000281333923,
+        0.8080000281333923
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1796,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 010",
+      "position": [
+        63.92060089111328,
+        0.006500000134110451,
+        -59.0723991394043
+      ],
+      "rotationDeg": [
+        74.19999694824219,
+        -12.75,
+        -96.94000244140625
+      ],
+      "scale": [
+        1.309999942779541,
+        1.309999942779541,
+        1.309999942779541
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1797,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 005",
+      "position": [
+        -3.526599884033203,
+        0.2624000012874603,
+        -90.7686996459961
+      ],
+      "rotationDeg": [
+        108.66999816894531,
+        3.559999942779541,
+        -1.3200000524520874
+      ],
+      "scale": [
+        1.2869999408721924,
+        1.2869999408721924,
+        1.2869999408721924
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1798,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 013",
+      "position": [
+        8.810500144958496,
+        0.07699999958276749,
+        -61.34510040283203
+      ],
+      "rotationDeg": [
+        66.29000091552734,
+        -78.9800033569336,
+        -101.91999816894531
+      ],
+      "scale": [
+        1.3320000171661377,
+        1.3320000171661377,
+        1.3320000171661377
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1799,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 014",
+      "position": [
+        -85.3104019165039,
+        0.6917999982833862,
+        -33.8744010925293
+      ],
+      "rotationDeg": [
+        -44.83000183105469,
+        -71.80000305175781,
+        20.290000915527344
+      ],
+      "scale": [
+        1.2699999809265137,
+        1.2699999809265137,
+        1.2699999809265137
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1800,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 011",
+      "position": [
+        31.242900848388672,
+        0.1826000064611435,
+        54.92610168457031
+      ],
+      "rotationDeg": [
+        -101.41000366210938,
+        1.3799999952316284,
+        -35.18000030517578
+      ],
+      "scale": [
+        1.2589999437332153,
+        1.2589999437332153,
+        1.2589999437332153
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1801,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 012",
+      "position": [
+        -52.15879821777344,
+        0.043699998408555984,
+        -33.468299865722656
+      ],
+      "rotationDeg": [
+        3.7300000190734863,
+        14.5600004196167,
+        88.95999908447266
+      ],
+      "scale": [
+        1.2000000476837158,
+        1.2000000476837158,
+        1.2000000476837158
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1802,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 015",
+      "position": [
+        76.86949920654297,
+        0.4104999899864197,
+        -40.59400177001953
+      ],
+      "rotationDeg": [
+        -27.329999923706055,
+        11.079999923706055,
+        169.5399932861328
+      ],
+      "scale": [
+        1.25,
+        1.25,
+        1.25
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1803,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 016",
+      "position": [
+        -19.2908992767334,
+        0.48240000009536743,
+        85.02790069580078
+      ],
+      "rotationDeg": [
+        127.80000305175781,
+        -12.199999809265137,
+        -177.8699951171875
+      ],
+      "scale": [
+        1.2690000534057617,
+        1.2690000534057617,
+        1.2690000534057617
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1804,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 006",
+      "position": [
+        -78.7698974609375,
+        -0.050999999046325684,
+        -57.62699890136719
+      ],
+      "rotationDeg": [
+        133.1199951171875,
+        36.63999938964844,
+        -165.00999450683594
+      ],
+      "scale": [
+        1.2610000371932983,
+        1.2610000371932983,
+        1.2610000371932983
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1805,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 007",
+      "position": [
+        -88.55960083007813,
+        0.6183000206947327,
+        -1.6152000427246094
+      ],
+      "rotationDeg": [
+        -56.150001525878906,
+        53.720001220703125,
+        15.119999885559082
+      ],
+      "scale": [
+        1.0670000314712524,
+        1.0670000314712524,
+        1.0670000314712524
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1806,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 008",
+      "position": [
+        83.99109649658203,
+        0.7994999885559082,
+        -25.083999633789063
+      ],
+      "rotationDeg": [
+        -83.33000183105469,
+        -75.33000183105469,
+        10.359999656677246
+      ],
+      "scale": [
+        1.2569999694824219,
+        1.2569999694824219,
+        1.2569999694824219
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1807,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 017",
+      "position": [
+        -83.25309753417969,
+        0.1597999930381775,
+        -49.36800003051758
+      ],
+      "rotationDeg": [
+        -54.029998779296875,
+        -66.08999633789063,
+        27.350000381469727
+      ],
+      "scale": [
+        0.968999981880188,
+        0.968999981880188,
+        0.968999981880188
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1808,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 018",
+      "position": [
+        48.32600021362305,
+        0.5033000111579895,
+        -74.52030181884766
+      ],
+      "rotationDeg": [
+        -23.450000762939453,
+        -36.220001220703125,
+        162.1999969482422
+      ],
+      "scale": [
+        1.1749999523162842,
+        1.1749999523162842,
+        1.1749999523162842
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1809,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 013",
+      "position": [
+        58.56650161743164,
+        0.15549999475479126,
+        15.111800193786621
+      ],
+      "rotationDeg": [
+        90.91999816894531,
+        -6.340000152587891,
+        155.5800018310547
+      ],
+      "scale": [
+        1.121999979019165,
+        1.121999979019165,
+        1.121999979019165
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1810,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 019",
+      "position": [
+        -59.49250030517578,
+        0.2955000102519989,
+        1.2812999486923218
+      ],
+      "rotationDeg": [
+        -38.79999923706055,
+        23.399999618530273,
+        -11.949999809265137
+      ],
+      "scale": [
+        1.0429999828338623,
+        1.0429999828338623,
+        1.0429999828338623
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1811,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 020",
+      "position": [
+        -53.10820007324219,
+        0.05590000003576279,
+        27.649499893188477
+      ],
+      "rotationDeg": [
+        -42.470001220703125,
+        -19.010000228881836,
+        -7.730000019073486
+      ],
+      "scale": [
+        1.2860000133514404,
+        1.2860000133514404,
+        1.2860000133514404
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1812,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 014",
+      "position": [
+        -82.5082015991211,
+        0.47609999775886536,
+        33.49140167236328
+      ],
+      "rotationDeg": [
+        126.80999755859375,
+        -27.290000915527344,
+        119.87000274658203
+      ],
+      "scale": [
+        1.187999963760376,
+        1.187999963760376,
+        1.187999963760376
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1813,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 015",
+      "position": [
+        -74.3499984741211,
+        0.2976999878883362,
+        47.438899993896484
+      ],
+      "rotationDeg": [
+        163.61000061035156,
+        -18.43000030517578,
+        -78.05999755859375
+      ],
+      "scale": [
+        1.190000057220459,
+        1.190000057220459,
+        1.190000057220459
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1814,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 009",
+      "position": [
+        -47.2681999206543,
+        0.18809999525547028,
+        37.41510009765625
+      ],
+      "rotationDeg": [
+        -66.0,
+        30.940000534057617,
+        -14.1899995803833
+      ],
+      "scale": [
+        0.9399999976158142,
+        0.9399999976158142,
+        0.9399999976158142
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1815,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 021",
+      "position": [
+        39.82780075073242,
+        0.3025999963283539,
+        -80.47959899902344
+      ],
+      "rotationDeg": [
+        176.6999969482422,
+        66.73999786376953,
+        -155.16000366210938
+      ],
+      "scale": [
+        0.8790000081062317,
+        0.8790000081062317,
+        0.8790000081062317
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1816,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 016",
+      "position": [
+        78.31659698486328,
+        0.2897999882698059,
+        -38.8296012878418
+      ],
+      "rotationDeg": [
+        -103.25,
+        9.819999694824219,
+        47.43000030517578
+      ],
+      "scale": [
+        1.0740000009536743,
+        1.0740000009536743,
+        1.0740000009536743
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1817,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 017",
+      "position": [
+        -56.715301513671875,
+        0.07450000196695328,
+        -77.35099792480469
+      ],
+      "rotationDeg": [
+        -125.56999969482422,
+        -1.559999942779541,
+        68.55999755859375
+      ],
+      "scale": [
+        1.0180000066757202,
+        1.0180000066757202,
+        1.0180000066757202
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1818,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 018",
+      "position": [
+        -60.11859893798828,
+        0.265500009059906,
+        -17.213300704956055
+      ],
+      "rotationDeg": [
+        2.880000114440918,
+        4.170000076293945,
+        84.11000061035156
+      ],
+      "scale": [
+        1.2400000095367432,
+        1.2400000095367432,
+        1.2400000095367432
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1819,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 010",
+      "position": [
+        -21.149799346923828,
+        0.49239999055862427,
+        58.81589889526367
+      ],
+      "rotationDeg": [
+        147.97999572753906,
+        59.83000183105469,
+        -162.85000610351563
+      ],
+      "scale": [
+        1.3550000190734863,
+        1.3550000190734863,
+        1.3550000190734863
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1820,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 011",
+      "position": [
+        -59.91790008544922,
+        0.18469999730587006,
+        -11.683699607849121
+      ],
+      "rotationDeg": [
+        123.5999984741211,
+        -72.45999908447266,
+        -11.84000015258789
+      ],
+      "scale": [
+        0.8700000047683716,
+        0.8700000047683716,
+        0.8700000047683716
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1821,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 019",
+      "position": [
+        -31.999099731445313,
+        0.21439999341964722,
+        -52.645599365234375
+      ],
+      "rotationDeg": [
+        93.83999633789063,
+        -31.540000915527344,
+        142.61000061035156
+      ],
+      "scale": [
+        1.3259999752044678,
+        1.3259999752044678,
+        1.3259999752044678
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1822,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 022",
+      "position": [
+        -70.28469848632813,
+        0.6705999970436096,
+        -61.41490173339844
+      ],
+      "rotationDeg": [
+        150.8300018310547,
+        -11.3100004196167,
+        -174.24000549316406
+      ],
+      "scale": [
+        1.3660000562667847,
+        1.3660000562667847,
+        1.3660000562667847
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1823,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 012",
+      "position": [
+        -58.587501525878906,
+        0.3747999966144562,
+        10.52299976348877
+      ],
+      "rotationDeg": [
+        -58.4900016784668,
+        37.25,
+        -13.449999809265137
+      ],
+      "scale": [
+        1.25600004196167,
+        1.25600004196167,
+        1.25600004196167
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1824,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 023",
+      "position": [
+        35.35169982910156,
+        0.25029999017715454,
+        53.089599609375
+      ],
+      "rotationDeg": [
+        159.24000549316406,
+        -52.95000076293945,
+        172.64999389648438
+      ],
+      "scale": [
+        0.9490000009536743,
+        0.9490000009536743,
+        0.9490000009536743
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1825,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 020",
+      "position": [
+        -85.7437973022461,
+        0.4327999949455261,
+        25.316600799560547
+      ],
+      "rotationDeg": [
+        -137.97000122070313,
+        73.0,
+        -36.220001220703125
+      ],
+      "scale": [
+        0.8690000176429749,
+        0.8690000176429749,
+        0.8690000176429749
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1826,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 013",
+      "position": [
+        -90.02790069580078,
+        0.09160000085830688,
+        -15.934499740600586
+      ],
+      "rotationDeg": [
+        127.5999984741211,
+        -72.43000030517578,
+        -171.2899932861328
+      ],
+      "scale": [
+        0.9610000252723694,
+        0.9610000252723694,
+        0.9610000252723694
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1827,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 021",
+      "position": [
+        -63.34379959106445,
+        0.017100000753998756,
+        68.4030990600586
+      ],
+      "rotationDeg": [
+        87.0,
+        -3.7699999809265137,
+        163.41000366210938
+      ],
+      "scale": [
+        0.8199999928474426,
+        0.8199999928474426,
+        0.8199999928474426
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1828,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 014",
+      "position": [
+        37.084598541259766,
+        0.8015999794006348,
+        -79.67980194091797
+      ],
+      "rotationDeg": [
+        -80.13999938964844,
+        -53.779998779296875,
+        13.739999771118164
+      ],
+      "scale": [
+        1.218000054359436,
+        1.218000054359436,
+        1.218000054359436
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1829,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 015",
+      "position": [
+        53.8047981262207,
+        0.29330000281333923,
+        -27.608699798583984
+      ],
+      "rotationDeg": [
+        -49.0,
+        19.18000030517578,
+        13.739999771118164
+      ],
+      "scale": [
+        1.1929999589920044,
+        1.1929999589920044,
+        1.1929999589920044
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1830,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 016",
+      "position": [
+        -77.7750015258789,
+        0.5440999865531921,
+        40.84199905395508
+      ],
+      "rotationDeg": [
+        54.720001220703125,
+        81.75,
+        122.41999816894531
+      ],
+      "scale": [
+        1.3519999980926514,
+        1.3519999980926514,
+        1.3519999980926514
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1831,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 017",
+      "position": [
+        87.79779815673828,
+        0.6302000284194946,
+        -15.21780014038086
+      ],
+      "rotationDeg": [
+        128.1199951171875,
+        45.0,
+        168.55999755859375
+      ],
+      "scale": [
+        1.0950000286102295,
+        1.0950000286102295,
+        1.0950000286102295
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1832,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 018",
+      "position": [
+        -12.725500106811523,
+        0.2152000069618225,
+        60.586299896240234
+      ],
+      "rotationDeg": [
+        138.88999938964844,
+        -68.95999908447266,
+        144.9499969482422
+      ],
+      "scale": [
+        1.0290000438690186,
+        1.0290000438690186,
+        1.0290000438690186
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1833,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 022",
+      "position": [
+        4.893899917602539,
+        0.04320000112056732,
+        -90.88580322265625
+      ],
+      "rotationDeg": [
+        -138.8000030517578,
+        -21.530000686645508,
+        -105.61000061035156
+      ],
+      "scale": [
+        1.284999966621399,
+        1.284999966621399,
+        1.284999966621399
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1834,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 023",
+      "position": [
+        91.10389709472656,
+        0.3637999892234802,
+        16.3981990814209
+      ],
+      "rotationDeg": [
+        97.22000122070313,
+        -22.899999618530273,
+        -40.20000076293945
+      ],
+      "scale": [
+        0.8569999933242798,
+        0.8569999933242798,
+        0.8569999933242798
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1835,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 019",
+      "position": [
+        -42.48820114135742,
+        0.29760000109672546,
+        43.055198669433594
+      ],
+      "rotationDeg": [
+        -163.61000061035156,
+        79.79000091552734,
+        -116.7699966430664
+      ],
+      "scale": [
+        1.2890000343322754,
+        1.2890000343322754,
+        1.2890000343322754
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1836,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 020",
+      "position": [
+        -87.9083023071289,
+        0.02800000086426735,
+        -36.39780044555664
+      ],
+      "rotationDeg": [
+        -61.349998474121094,
+        64.5,
+        8.479999542236328
+      ],
+      "scale": [
+        1.065000057220459,
+        1.065000057220459,
+        1.065000057220459
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1837,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 021",
+      "position": [
+        -25.726900100708008,
+        0.3176000118255615,
+        -56.52690124511719
+      ],
+      "rotationDeg": [
+        111.16999816894531,
+        23.610000610351563,
+        170.3800048828125
+      ],
+      "scale": [
+        0.9909999966621399,
+        0.9909999966621399,
+        0.9909999966621399
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1838,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 022",
+      "position": [
+        -20.919700622558594,
+        0.4878000020980835,
+        -87.98970031738281
+      ],
+      "rotationDeg": [
+        -94.33000183105469,
+        -66.29000091552734,
+        37.75
+      ],
+      "scale": [
+        0.984000027179718,
+        0.984000027179718,
+        0.984000027179718
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1839,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 024",
+      "position": [
+        60.340999603271484,
+        0.8215000033378601,
+        -58.36479949951172
+      ],
+      "rotationDeg": [
+        -156.38999938964844,
+        37.220001220703125,
+        -85.83999633789063
+      ],
+      "scale": [
+        1.0160000324249268,
+        1.0160000324249268,
+        1.0160000324249268
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1840,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 025",
+      "position": [
+        -54.8468017578125,
+        0.017100000753998756,
+        78.0519027709961
+      ],
+      "rotationDeg": [
+        -97.6500015258789,
+        -7.190000057220459,
+        -159.4199981689453
+      ],
+      "scale": [
+        0.824999988079071,
+        0.824999988079071,
+        0.824999988079071
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1841,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 023",
+      "position": [
+        59.138099670410156,
+        0.10000000149011612,
+        -9.404899597167969
+      ],
+      "rotationDeg": [
+        -58.189998626708984,
+        31.799999237060547,
+        -169.10000610351563
+      ],
+      "scale": [
+        0.9700000286102295,
+        0.9700000286102295,
+        0.9700000286102295
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1842,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 026",
+      "position": [
+        -40.09299850463867,
+        0.30709999799728394,
+        45.04869842529297
+      ],
+      "rotationDeg": [
+        -83.97000122070313,
+        -22.1200008392334,
+        -45.56999969482422
+      ],
+      "scale": [
+        0.9100000262260437,
+        0.9100000262260437,
+        0.9100000262260437
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1843,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 027",
+      "position": [
+        34.306400299072266,
+        0.510200023651123,
+        -48.32099914550781
+      ],
+      "rotationDeg": [
+        -156.0399932861328,
+        54.849998474121094,
+        -66.19999694824219
+      ],
+      "scale": [
+        1.3070000410079956,
+        1.3070000410079956,
+        1.3070000410079956
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1844,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 028",
+      "position": [
+        -47.31769943237305,
+        0.04800000041723251,
+        36.214599609375
+      ],
+      "rotationDeg": [
+        -25.40999984741211,
+        42.83000183105469,
+        71.2699966430664
+      ],
+      "scale": [
+        1.2610000371932983,
+        1.2610000371932983,
+        1.2610000371932983
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1845,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 024",
+      "position": [
+        55.80080032348633,
+        0.1307000070810318,
+        -22.6471004486084
+      ],
+      "rotationDeg": [
+        -28.309999465942383,
+        46.66999816894531,
+        19.010000228881836
+      ],
+      "scale": [
+        0.9369999766349792,
+        0.9369999766349792,
+        0.9369999766349792
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1846,
+      "mesh": "models/seashells_node_scoica_02.mesh.json",
+      "name": "seashells_node_scoica_02 025",
+      "position": [
+        39.142601013183594,
+        0.40560001134872437,
+        50.63079833984375
+      ],
+      "rotationDeg": [
+        121.79000091552734,
+        63.099998474121094,
+        -11.869999885559082
+      ],
+      "scale": [
+        0.9340000152587891,
+        0.9340000152587891,
+        0.9340000152587891
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1847,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 024",
+      "position": [
+        30.126800537109375,
+        -0.026200000196695328,
+        97.74299621582031
+      ],
+      "rotationDeg": [
+        121.77999877929688,
+        -33.040000915527344,
+        -179.50999450683594
+      ],
+      "scale": [
+        1.055999994277954,
+        1.055999994277954,
+        1.055999994277954
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1848,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 029",
+      "position": [
+        -87.66239929199219,
+        0.01860000006854534,
+        -38.446800231933594
+      ],
+      "rotationDeg": [
+        147.1999969482422,
+        12.119999885559082,
+        91.41999816894531
+      ],
+      "scale": [
+        1.1410000324249268,
+        1.1410000324249268,
+        1.1410000324249268
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1849,
+      "mesh": "models/seashells_node_Cylinder009.mesh.json",
+      "name": "seashells_node_Cylinder009 030",
+      "position": [
+        -16.300399780273438,
+        0.11240000277757645,
+        81.82109832763672
+      ],
+      "rotationDeg": [
+        88.70999908447266,
+        -18.6299991607666,
+        22.360000610351563
+      ],
+      "scale": [
+        0.9010000228881836,
+        0.9010000228881836,
+        0.9010000228881836
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Beach Props",
+      "id": 1850,
+      "mesh": "models/seashells_node_scoica_01.mesh.json",
+      "name": "seashells_node_scoica_01 025",
+      "position": [
+        -14.423800468444824,
+        0.527899980545044,
+        -88.78949737548828
+      ],
+      "rotationDeg": [
+        -132.0399932861328,
+        -75.20999908447266,
+        76.95999908447266
+      ],
+      "scale": [
+        1.1369999647140503,
+        1.1369999647140503,
+        1.1369999647140503
       ],
       "type": "staticMesh"
     }

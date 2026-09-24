@@ -291,9 +291,11 @@ public:
     // without booting the app. Pass the SAME opt the runtime loads with (wantCW=false, the mesh's
     // recomputeNormalSlots) or the baked winding/normals won't match.
     // `outUvDensity` (optional) receives ComputeUvDensities of the LOD0 triangles as baked -- the
-    // caller owes it to the manifest (mesh.json "uvDensity").
+    // caller owes it to the manifest (mesh.json "uvDensity"). `outHeightM` (optional) receives the
+    // baked mesh's Y extent in metres, after the unit fix.
     bool BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
-                      const MeshLoadOptions& opt, std::vector<float>* outUvDensity = nullptr);
+                      const MeshLoadOptions& opt, std::vector<float>* outUvDensity = nullptr,
+                      float* outHeightM = nullptr);
 
     // True when binPath is missing, unreadable, or was baked under a different wood/foliage
     // classification — its per-vertex wind weights no longer match `opt` and it must be re-baked.

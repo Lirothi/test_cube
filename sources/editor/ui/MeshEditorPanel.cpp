@@ -3,6 +3,7 @@
 
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/MaterialFileGen.h"
+#include "editor/assets/MeshRestPose.h"
 #include "rendering/meshes/MeshManager.h"
 #include "meshoptimizer.h" // lodPermissive/lodDropSmallParts -> meshopt simplify flags
 
@@ -1045,6 +1046,15 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         DrawBuoyancySection(hoveredPontoonThisFrame);
     }
 
+    // Rest pose: how a NEW copy lies. Its numbers act where objects are created (spawn, place, a
+    // drop into the viewport -- the drag ghost shows it), not on this preview and not on copies
+    // already placed, and the section says so rather than letting a control look inert.
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Rest pose"))
+    {
+        DrawRestPoseSection();
+    }
+
     // Texturing (separate from Wind above — unrelated knobs, and mixing them made the wind block
     // look like it owned the tiling).
     ImGui::Spacing();
@@ -1444,6 +1454,54 @@ void MeshEditorPanel::DrawBuoyancySection(int& hoveredPontoonThisFrame)
         else { doc_["buoyancy"] = block; }
     }
     ImGui::TextDisabled("Applies to placed instances on Save.");
+}
+
+void MeshEditorPanel::DrawRestPoseSection()
+{
+    const std::string geometry = doc_.value("geometry", std::string());
+    const std::optional<Math::float3> rest = restpose::Read(doc_);
+    ImGui::TextWrapped("How a NEW copy lies when it is spawned, placed or dropped into the viewport "
+        "(the drag ghost shows it). Copies already in a level keep their own rotation.");
+    const auto write = [this](const Math::float3& r)
+    {
+        const auto round2 = [](float v) { return std::round(v * 100.0f) / 100.0f; };
+        doc_["restRotationDeg"] = nlohmann::json::array({ round2(r.x), round2(r.y), round2(r.z) });
+    };
+    if (rest)
+    {
+        float v[3] = { rest->x, rest->y, rest->z };
+        if (ImGui::DragFloat3("Rotation (deg)", v, 0.5f, -180.0f, 180.0f, "%.1f"))
+        {
+            write(Math::float3(v[0], v[1], v[2]));
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("pitch, yaw, roll -- the level's rotationDeg order. Spawn turns it further\n"
+                              "by its random yaw about the vertical; place by the item's yawDeg.");
+        }
+        ImGui::Text("Pivot raised %.3f m so the lowest point rests on the ground", restpose::Lift(geometry, *rest));
+    }
+    else
+    {
+        ImGui::TextDisabled("Upright, as authored.");
+    }
+    if (ImGui::Button("Lay flat (auto)"))
+    {
+        if (const std::optional<Math::float3> automatic = restpose::Auto(geometry)) { write(*automatic); }
+        else { restPoseStatus_ = "Could not read the geometry: " + geometry; }
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Onto its broadest side: the axis its surface is thinnest along points up,\n"
+                          "a cupped shape rim-down (how a wave leaves a shell), a long one along its length.");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Upright") && rest)
+    {
+        doc_.erase("restRotationDeg");
+    }
+    if (!restPoseStatus_.empty()) { ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), "%s", restPoseStatus_.c_str()); }
+    ImGui::TextDisabled("Applies to new copies on Save.");
 }
 
 void MeshEditorPanel::SetWindFoliageForSlot(size_t slot, float value)

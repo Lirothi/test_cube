@@ -77,8 +77,10 @@ private:
     // overlay highlights it, same one-frame hand-off as the slots and chunks above.
     int           hoveredPontoon_ = -1;
     bool          buoyancyOpen_ = false; // the section is open: the preview draws the pontoons
+    std::string   restPoseStatus_;       // why the last "Lay flat (auto)" did nothing
     bool          expandBuoyancy_ = false;
     void DrawBuoyancySection(int& hoveredPontoonThisFrame);
+    void DrawRestPoseSection();
     MeshManager::BinaryInfo binInfo_{}; // per-LOD, per-submesh triangle counts; empty if not baked
     std::string   status_;
     MeshEditorPreviewScene previewScene_;

@@ -259,6 +259,11 @@ editor frame both happen before the panels look settled.
 photographed; `--edit-mesh=<models/x.mesh.json>` does the same for the Mesh Editor, and
 `--edit-mesh=<models/x.mesh.json>#buoyancy` opens it with the Buoyancy section expanded.
 
+**Registering a panel is not the same as drawing one.** `EditorController::Draw` ends with a
+hardcoded list of `drawPanel("<id>")` calls; a panel missing from it exists, toggles from the
+Window menu, persists its visibility -- and never appears. Two panels shipped that way until a
+screenshot showed the gap, because no headless gate can see ImGui wiring.
+
 ## Buoyancy — Meshes Floating on the Ocean
 
 A level object `"buoyant": true` (Inspector: "Floats on the ocean", MCP: `setBuoyant`) heaves,
@@ -281,7 +286,15 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
   with nothing floating costs 0 us CPU and no copy. The copy was tried on the async
   queue inside Main_ObjectCompute and cost the frame ~108 us: the ocean draw waits on that pass.
 
-**Registering a panel is not the same as drawing one.** `EditorController::Draw` ends with a
-hardcoded list of `drawPanel("<id>")` calls; a panel missing from it exists, toggles from the
-Window menu, persists its visibility -- and never appears. Two panels shipped that way until a
-screenshot showed the gap, because no headless gate can see ImGui wiring.
+## Rest Pose — How a New Copy Lies
+
+mesh.json `"restRotationDeg": [pitch, yaw, roll]` (the level's rotationDeg order) is how a NEW copy of
+the asset lies; absent = as authored, upright. Every creation path applies it through one call,
+`restpose::ApplyToNewObject` (`editor/assets/MeshRestPose.*`): the object factory (Content Browser,
+viewport drop and its drag ghost), `spawn` (the pose turned by its random yaw) and `place` without a
+`rotationDeg` (turned by `yawDeg`). The pivot is raised or lowered so the posed geometry's lowest point
+sits at the ground height -- the lift is measured from the .mesh.bin at spawn, never stored, so a rebake
+cannot leave it stale. Placed copies keep their own rotation. Mesh Editor > Rest pose > "Lay flat
+(auto)" writes the automatic pose (thinnest surface axis up, a cupped shape rim-down);
+`intent_regression --rest-pose <mesh.json>...` prints the same numbers headless. The seashells carry
+one: imported, they stood on their hinges 37-56 degrees off flat.

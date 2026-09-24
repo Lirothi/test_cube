@@ -257,6 +257,21 @@ namespace Math
             XMStoreFloat4x4(&out.m, XMMatrixMultiply(XMMatrixMultiply(Rx, Ry), Rz));
             return out;
         }
+        // The inverse of RotationFromEulerXYZRad: the (x, y, z) radians that rebuild this rotation.
+        // At y = +-90 degrees x and z turn about the same axis, and x takes all of it.
+        // y comes from atan2, not asin: near +-90 degrees asin of a float is off by a few hundredths
+        // of a degree, and the rebuilt matrix with it.
+        static float3 EulerXYZRadFromRotation(const mat4& r)
+        {
+            const float s = -r.m._13;
+            const float c = std::sqrt(r.m._11 * r.m._11 + r.m._12 * r.m._12);
+            const float y = std::atan2(s, c);
+            if (c < 1.0e-5f)
+            {
+                return float3(std::atan2(s > 0.0f ? r.m._21 : -r.m._21, r.m._22), y, 0.0f);
+            }
+            return float3(std::atan2(r.m._23, r.m._33), y, std::atan2(r.m._12, r.m._11));
+        }
         static mat4 FromQuaternion(const quat& q) {
             mat4 r; XMStoreFloat4x4(&r.m, XMMatrixRotationQuaternion(q.xm())); return r;
         }

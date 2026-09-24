@@ -16,6 +16,7 @@
 #include "app/scene/SceneObjectFactory.h"
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
+#include "editor/assets/MeshRestPose.h"
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetBuoyantCommand.h"
@@ -356,6 +357,10 @@ namespace
                 o["scale"] = meshScale > 0.0f
                     ? nlohmann::json::array({ meshScale, meshScale, meshScale })
                     : nlohmann::json::array({ 1.0f, 1.0f, 1.0f });
+                // An asset with a rest pose (a shell, a starfish) lies in it, its lowest point on the
+                // spot the new object is put at. Spawn and place lay it again after their own scale
+                // and yaw; the Content Browser and a viewport drop keep this one.
+                restpose::ApplyToNewObject(o, 0.0f, o["position"][1].get<float>());
                 return o;
             }
 

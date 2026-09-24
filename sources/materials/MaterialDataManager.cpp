@@ -366,6 +366,23 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     // factors -> the metalRough fallback/scale; texFlags gate which textures are actually sampled.
     MaterialParams& p = md->gltfDefaultParams;
     p.baseColor  = float4(d.baseColor[0], d.baseColor[1], d.baseColor[2], d.baseColor[3]);
+    // An albedo that resolves to the importer's DDS (CreateFromFile prefers the sibling, as for
+    // the MR above) already carries baseColorFactor.rgb (H6). The shader multiplies the tint in
+    // every layout, so the factor must not ride along a second time; alpha is never baked (it
+    // feeds the alpha test) and stays.
+    if (!d.albedoPath.empty())
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::path albedoPath(d.albedoPath);
+        std::string ext = albedoPath.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext == ".dds" || fs::exists(albedoPath.replace_extension(".dds"), ec))
+        {
+            p.baseColor = float4(1.0f, 1.0f, 1.0f, d.baseColor[3]);
+        }
+    }
     p.metalRough = float2(d.metallic, d.roughness);
     p.SetUseAlbedo(md->hasAlbedo);
     p.SetUseMR(md->hasMR);

@@ -1,6 +1,7 @@
 #include "editor/assets/MaterialFileGen.h"
 #if WITH_EDITOR
 
+#include "assets/AssetImporter.h"
 #include "core/logging/Log.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/MeshManager.h"
@@ -219,6 +220,29 @@ namespace materialgen
         if (!d.albedoPath.empty()) { m["albedo"] = normalize(d.albedoPath); }
         if (!d.mrPath.empty()) { m["mr"] = normalize(d.mrPath); }
         if (!d.normalPath.empty()) { m["normal"] = normalize(d.normalPath); }
+        // A leaf card's normal decides both its lighting and the light through it, so a map whose
+        // texels lean ~60 degrees on average (ground_palm's, made from its own albedo) turns the
+        // whole plant dark and grainy. Such a map is kept -- its detail is real -- but at the
+        // strength that brings it to the steepness a good leaf map has (coconut/date/curly palm
+        // fronds and fern_02 measure 0.91-0.95). Opaque surfaces are not touched: a brain coral's
+        // grooves measure 0.55 and are meant to.
+        if (foliage && !d.normalPath.empty())
+        {
+            constexpr float kSteepLeafMeanZ = 0.75f;
+            constexpr float kLeafMeanZ = 0.9f;
+            const assets::NormalMapSteepness steep =
+                assets::MeasureNormalMapSteepness(d.normalPath, d.albedoPath);
+            if (steep.valid && steep.meanZ < kSteepLeafMeanZ)
+            {
+                const float strength = std::round(steep.StrengthFor(kLeafMeanZ) * 100.0f) / 100.0f;
+                m["normalStrength"] = strength;
+                LOG_WARNING(logging::LogCategory::Asset,
+                    "material {}: normal map {} leans {:.0f} deg on average over the {:.0f}% of texels "
+                    "the leaf covers (mean z {:.2f}; a good leaf map is 0.9+) -> normalStrength {:.2f}",
+                    name, normalize(d.normalPath), std::acos(steep.meanZ) * 57.2958f,
+                    steep.coverage * 100.0f, steep.meanZ, strength);
+            }
+        }
         // A leaf card gets the shading the hand-tuned palm leaves carry (coconut_palm_2,
         // curly_palm_1): light through the leaf at full strength, the leaf's own normal deciding
         // it, a little less sky specular. It used to come in defaultLit like a rock -- every

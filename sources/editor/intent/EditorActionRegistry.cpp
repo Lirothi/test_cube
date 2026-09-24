@@ -38,6 +38,7 @@
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SetMaterialSlotCommand.h"
 #include "editor/commands/SetMeshAssetCommand.h"
+#include "editor/assets/MeshRestPose.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "ocean/OceanRenderable.h"
@@ -2829,7 +2830,13 @@ namespace
                     }
                 }
             }
-            objectJson["rotationDeg"] = nlohmann::json::array({ 0.0f, yawDist(rng), 0.0f });
+            // An asset with a rest pose lies in it, turned by the yaw, its lowest point on the
+            // ground -- a scatter of shells, not a field of shells standing on their hinges.
+            const float yaw = yawDist(rng);
+            if (!restpose::ApplyToNewObject(objectJson, yaw, placed[index].y))
+            {
+                objectJson["rotationDeg"] = nlohmann::json::array({ 0.0f, yaw, 0.0f });
+            }
 
             objectJson["name"] = names.Next(kind->displayName);
 
@@ -2983,7 +2990,10 @@ namespace
                 }
             }
             // rotationDeg is the whole orientation; yawDeg is the common case of an upright
-            // thing turned on the spot. Given both, the full one wins -- it says more.
+            // thing turned on the spot. Given both, the full one wins -- it says more, and it is
+            // taken as given together with the position. Without it, an asset with a rest pose
+            // lies in it (yawDeg turning it about the vertical) with its lowest point AT the
+            // given height.
             const auto rotationIt = item.find("rotationDeg");
             if (rotationIt != item.end())
             {
@@ -2991,7 +3001,11 @@ namespace
             }
             else
             {
-                objectJson["rotationDeg"] = nlohmann::json::array({ 0.0f, item.value("yawDeg", 0.0f), 0.0f });
+                const float yaw = item.value("yawDeg", 0.0f);
+                if (!restpose::ApplyToNewObject(objectJson, yaw, position.y))
+                {
+                    objectJson["rotationDeg"] = nlohmann::json::array({ 0.0f, yaw, 0.0f });
+                }
             }
 
             ++perKind[kind->displayName];
@@ -3115,7 +3129,8 @@ EditorActionRegistry::EditorActionRegistry()
     actions_.push_back({
         "spawn",
         "Create COUNT new copies, scattered over the ground around the point the camera is "
-        "looking at (or around the selection). Each copy is dropped onto the surface, given "
+        "looking at (or around the selection). Each copy is dropped onto the surface (lying in "
+        "its asset's rest pose if it has one), given "
         "a random yaw and a slightly random size, and kept clear of water, steep slopes and "
         "whatever is already standing there. This is the action for planting, scattering or "
         "adding new objects that are not in the level yet.\n"
@@ -3188,6 +3203,9 @@ EditorActionRegistry::EditorActionRegistry()
         "height included. This is for a layout that was worked out already: numbers the "
         "designer typed, or points computed from the terrain. For \"plant twenty palms here\" "
         "use spawn, which finds the ground and the spacing itself.\n"
+        "An asset with a rest pose (one that lies rather than stands, like a shell) is laid in "
+        "it when the item has no rotationDeg: yawDeg turns it about the vertical and the "
+        "position's height is where its lowest point touches. A rotationDeg is taken as given.\n"
         "Each object joins the group its kind already uses, unless params.group names one. "
         "Up to 500 items, all of them one undo entry.",
         EditorActionEffect::DocumentEdit,

@@ -2033,4 +2033,116 @@ int RunImport(const ImportOptions& opts)
     return failures;
 }
 
+float NormalMapSteepness::MeanZAt(float strength) const
+{
+    if (z.empty()) { return 1.0f; }
+    const float s2 = strength * strength;
+    double sum = 0.0;
+    for (size_t i = 0; i < z.size(); ++i)
+    {
+        sum += z[i] / std::sqrt(s2 * xy2[i] + z[i] * z[i]);
+    }
+    return static_cast<float>(sum / static_cast<double>(z.size()));
+}
+
+float NormalMapSteepness::StrengthFor(float targetMeanZ) const
+{
+    if (MeanZAt(1.0f) >= targetMeanZ) { return 1.0f; }
+    float lo = 0.0f, hi = 1.0f; // MeanZAt falls monotonically with the strength
+    for (int i = 0; i < 24; ++i)
+    {
+        const float mid = 0.5f * (lo + hi);
+        (MeanZAt(mid) >= targetMeanZ ? lo : hi) = mid;
+    }
+    return lo;
+}
+
+NormalMapSteepness MeasureNormalMapSteepness(const std::string& normalPath, const std::string& albedoPath)
+{
+    NormalMapSteepness out;
+    // WIC needs COM on the calling thread; the import worker may not have it.
+    const HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool coInited = SUCCEEDED(hrCo);
+    constexpr size_t kMaxEdge = 512;
+    const auto load = [](const std::string& path, size_t width, size_t height, ScratchImage& img) -> bool
+    {
+        const fs::path p(path);
+        TexMetadata meta{};
+        ScratchImage loaded;
+        const HRESULT hr = (LowerExt(p) == ".tga")
+            ? LoadFromTGAFile(p.wstring().c_str(), TGA_FLAGS_NONE, &meta, loaded)
+            : LoadFromWICFile(p.wstring().c_str(), WIC_FLAGS_IGNORE_SRGB, &meta, loaded);
+        if (FAILED(hr)) { return false; }
+        ScratchImage rgba;
+        if (loaded.GetMetadata().format != DXGI_FORMAT_R8G8B8A8_UNORM)
+        {
+            if (FAILED(Convert(*loaded.GetImage(0, 0, 0), DXGI_FORMAT_R8G8B8A8_UNORM, TEX_FILTER_DEFAULT,
+                TEX_THRESHOLD_DEFAULT, rgba))) { return false; }
+        }
+        else { rgba = std::move(loaded); }
+        if (width == 0)
+        {
+            const size_t w = rgba.GetMetadata().width, h = rgba.GetMetadata().height;
+            const size_t edge = std::max(w, h);
+            width = edge > kMaxEdge ? std::max<size_t>(1, w * kMaxEdge / edge) : w;
+            height = edge > kMaxEdge ? std::max<size_t>(1, h * kMaxEdge / edge) : h;
+        }
+        if (rgba.GetMetadata().width == width && rgba.GetMetadata().height == height)
+        {
+            img = std::move(rgba);
+            return true;
+        }
+        return SUCCEEDED(Resize(*rgba.GetImage(0, 0, 0), width, height, TEX_FILTER_LINEAR, img));
+    };
+
+    ScratchImage normal;
+    if (load(normalPath, 0, 0, normal))
+    {
+        const Image& n = *normal.GetImage(0, 0, 0);
+        ScratchImage albedo;
+        const bool haveAlbedo = !albedoPath.empty() && load(albedoPath, n.width, n.height, albedo);
+        const Image* a = haveAlbedo ? albedo.GetImage(0, 0, 0) : nullptr;
+        // The alpha cuts the card only when it actually cuts something: an opaque albedo measures all.
+        size_t cut = 0;
+        if (a)
+        {
+            for (size_t y = 0; y < a->height; ++y)
+            {
+                const uint8_t* row = a->pixels + y * a->rowPitch;
+                for (size_t x = 0; x < a->width; ++x) { cut += row[x * 4 + 3] < 128 ? 1u : 0u; }
+            }
+            if (cut * 100 < a->width * a->height) { a = nullptr; }
+        }
+        out.xy2.reserve(n.width * n.height);
+        out.z.reserve(n.width * n.height);
+        double sumZ = 0.0;
+        for (size_t y = 0; y < n.height; ++y)
+        {
+            const uint8_t* row = n.pixels + y * n.rowPitch;
+            const uint8_t* arow = a ? a->pixels + y * a->rowPitch : nullptr;
+            for (size_t x = 0; x < n.width; ++x)
+            {
+                if (arow && arow[x * 4 + 3] < 128) { continue; }
+                float nx = row[x * 4 + 0] / 127.5f - 1.0f;
+                float ny = row[x * 4 + 1] / 127.5f - 1.0f;
+                float nz = row[x * 4 + 2] / 127.5f - 1.0f;
+                const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (len < 1e-4f) { continue; }
+                nx /= len; ny /= len; nz = std::max(nz / len, 1e-4f);
+                out.xy2.push_back(nx * nx + ny * ny);
+                out.z.push_back(nz);
+                sumZ += nz;
+            }
+        }
+        if (!out.z.empty())
+        {
+            out.valid = true;
+            out.coverage = static_cast<float>(out.z.size()) / static_cast<float>(n.width * n.height);
+            out.meanZ = static_cast<float>(sumZ / static_cast<double>(out.z.size()));
+        }
+    }
+    if (coInited) { CoUninitialize(); }
+    return out;
+}
+
 } // namespace assets

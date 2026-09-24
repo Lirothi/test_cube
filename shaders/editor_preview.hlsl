@@ -215,12 +215,11 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         clip(albedoSample.a * gBaseColor.a - gMetalRoughAlpha.z);
     }
 
+    // The tint multiplies the texture in both layouts, as in the G-buffer shaders.
     float3 albedo = gBaseColor.rgb;
     if (gTexFlags.x > 0.5)
     {
-        albedo = gMaterialFlags.x > 0.5
-            ? albedoSample.rgb * gBaseColor.rgb
-            : albedoSample.rgb;
+        albedo = albedoSample.rgb * gBaseColor.rgb;
     }
 
     float2 mr = gMetalRoughAlpha.xy;

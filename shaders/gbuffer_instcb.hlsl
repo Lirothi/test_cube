@@ -189,11 +189,12 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     FetchShadingValuesP(gAlbedo, gMR, gNormalMap, gSmp, i.UV, i.TWS, mTexOffsScale,
                         mTexFlags, mTerrainTiling, mTerrainEdgeParams, albedo, mr, N);
 
-#if MR_LAYOUT_GLTF
+    // baseColor multiplies the texture in BOTH layouts. An imported material's factors are baked
+    // into its DDS, so its tint is 1 unless someone authored one (material "tint", object
+    // "baseColor") -- and then they mean it: a lerp that dropped it made the tint a control that
+    // did nothing on every textured imported mesh, while RT reflections (rt_reflect_common.hlsli)
+    // already multiplied it.
     albedo = mTexFlags.x > 0.5 ? albedo * mBaseColor.rgb : mBaseColor.rgb;
-#else
-    albedo = lerp(mBaseColor.rgb, albedo, mTexFlags.x);
-#endif
     float2 texturedMR = lerp(mr, mr * mMetalRough.xy, mMrMultiply);
     mr = lerp(mMetalRough.xy, texturedMR, mTexFlags.y);
     if (mTexFlags.z < 0.5)

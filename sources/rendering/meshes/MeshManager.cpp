@@ -1358,7 +1358,7 @@ bool MeshManager::BinaryNeedsRebake(const std::string& binPath, const MeshLoadOp
 }
 
 bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
-    const MeshLoadOptions& opt, std::vector<float>* outUvDensity)
+    const MeshLoadOptions& opt, std::vector<float>* outUvDensity, float* outHeightM)
 {
     MeshCpuData cpu;
     if (!ParseFileCpu(srcPath, cpu, opt)) { return false; } // parse glTF + regen normals/tangents (CPU)
@@ -1373,6 +1373,16 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
             v.position.y *= opt.bakeScale;
             v.position.z *= opt.bakeScale;
         }
+    }
+    if (outHeightM)
+    {
+        float lo = std::numeric_limits<float>::max(), hi = std::numeric_limits<float>::lowest();
+        for (const VertexPNTUV& v : cpu.vertices)
+        {
+            lo = std::min(lo, v.position.y);
+            hi = std::max(hi, v.position.y);
+        }
+        *outHeightM = hi >= lo ? hi - lo : 0.0f;
     }
 
     std::vector<Mesh::Submesh> lod0Subs = cpu.submeshes;

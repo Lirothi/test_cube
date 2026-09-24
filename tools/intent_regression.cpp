@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -31,6 +32,7 @@
 #include "editor/EditorContext.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/assets/AssetRegistry.h"
+#include "editor/assets/MeshRestPose.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/scene/EditorZone.h"
 #include "editor/intent/EditorActionRegistry.h"
@@ -46,6 +48,7 @@
 #include "editor/intent/EditorMcpServer.h"
 #include "editor/intent/LlmIntentSource.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/meshes/MeshManager.h"
 
 using Json = nlohmann::json;
 
@@ -2350,6 +2353,189 @@ void TestEnvironmentEditsGoThroughUndo(const EditorActionContext& actionCtx)
     }
 }
 
+// The rest pose (editor/assets/MeshRestPose): mesh.json "restRotationDeg" is how a NEW copy lies.
+// The Euler inverse it leans on, the yaw composed on top, the automatic "broadest side down" on a
+// synthetic cup and on the real shells that stood on their hinges, and the one call every creation
+// path makes -- which must leave an asset without a rest pose exactly as it was.
+bool SameRotation(const Math::mat4& a, const Math::mat4& b)
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        for (int j = 0; j < 3; ++j)
+        {
+            if (std::fabs(a.m.m[i][j] - b.m.m[i][j]) > 1.0e-4f) { return false; }
+        }
+    }
+    return true;
+}
+
+Math::mat4 RotationDeg(const Math::float3& deg)
+{
+    return Math::mat4::RotationFromEulerXYZRad(
+        Math::float3(deg.x * Math::DEG2RAD, deg.y * Math::DEG2RAD, deg.z * Math::DEG2RAD));
+}
+
+bool ReadLod0(const std::string& path, std::vector<Math::float3>& positions, std::vector<std::uint32_t>& indices)
+{
+    MeshCpuData cpu;
+    MeshLoadOptions opt;
+    opt.generateTangentSpace = false;
+    MeshManager manager;
+    if (!manager.ParseFileCpu(path, cpu, opt)) { return false; }
+    for (const VertexPNTUV& v : cpu.vertices) { positions.emplace_back(v.position); }
+    indices = std::move(cpu.indices);
+    return !indices.empty();
+}
+
+// Extents of the LOD0 geometry turned by `deg`: x, y, z.
+Math::float3 PosedExtent(const std::vector<Math::float3>& positions, const std::vector<std::uint32_t>& indices,
+    const Math::float3& deg)
+{
+    const Math::mat4 r = RotationDeg(deg);
+    Math::float3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+    for (const std::uint32_t i : indices)
+    {
+        const Math::float3 q = r.TransformPoint(positions[i]);
+        lo = Math::float3(std::min(lo.x, q.x), std::min(lo.y, q.y), std::min(lo.z, q.z));
+        hi = Math::float3(std::max(hi.x, q.x), std::max(hi.y, q.y), std::max(hi.z, q.z));
+    }
+    return Math::float3(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
+}
+
+void TestRestPose()
+{
+    // 1. The inverse rebuilds the same rotation, gimbal lock (y = +-90) included.
+    const Math::float3 angles[] = { { 0, 0, 0 }, { 30, 90, -40 }, { 10, -90, 20 }, { 170, 45, -120 },
+        { -60, 10, 80 }, { 142.45f, -49.69f, 10.58f } };
+    for (const Math::float3& a : angles)
+    {
+        const Math::mat4 m = RotationDeg(a);
+        const Math::float3 back = Math::mat4::EulerXYZRadFromRotation(m);
+        Check(SameRotation(m, Math::mat4::RotationFromEulerXYZRad(back)),
+            "EulerXYZRadFromRotation rebuilds (" + std::to_string(a.x) + ", " + std::to_string(a.y) + ", " +
+            std::to_string(a.z) + "): got (" + std::to_string(back.x * Math::RAD2DEG) + ", " +
+            std::to_string(back.y * Math::RAD2DEG) + ", " + std::to_string(back.z * Math::RAD2DEG) + "), _13 " +
+            std::to_string(m.m._13) + " _21 " + std::to_string(m.m._21) + " _22 " + std::to_string(m.m._22));
+    }
+
+    // 2. ComposeYaw = the rest turn, THEN a yaw about world up (row vectors: rest * yaw).
+    const Math::float3 rest(35.0f, 20.0f, -50.0f);
+    Check(SameRotation(RotationDeg(restpose::ComposeYaw(rest, 70.0f)),
+        RotationDeg(rest) * Math::mat4::RotationY(70.0f * Math::DEG2RAD)),
+        "ComposeYaw turns the rested mesh about the vertical");
+
+    // 3. A cup -- dome up at the centre, rim 0.3 below it -- tilted 130 degrees about X, so it lies
+    // on its side and mostly upside down. Auto has to find the thin axis AND the rim.
+    std::vector<Math::float3> cup;
+    std::vector<std::uint32_t> cupIndices;
+    constexpr int kRings = 8, kSectors = 24;
+    const Math::mat4 tilt = Math::mat4::RotationX(130.0f * Math::DEG2RAD);
+    cup.push_back(tilt.TransformPoint(Math::float3(0.0f, 0.3f, 0.0f)));
+    for (int ring = 1; ring <= kRings; ++ring)
+    {
+        const float r = static_cast<float>(ring) / kRings;
+        for (int k = 0; k < kSectors; ++k)
+        {
+            const float a = 6.2831853f * k / kSectors;
+            cup.push_back(tilt.TransformPoint(Math::float3(r * std::cos(a), 0.3f * (1.0f - r * r), r * std::sin(a))));
+        }
+    }
+    for (int k = 0; k < kSectors; ++k)
+    {
+        cupIndices.insert(cupIndices.end(), { 0u, static_cast<std::uint32_t>(1 + k), static_cast<std::uint32_t>(1 + (k + 1) % kSectors) });
+    }
+    for (int ring = 1; ring < kRings; ++ring)
+    {
+        for (int k = 0; k < kSectors; ++k)
+        {
+            const auto a = static_cast<std::uint32_t>(1 + (ring - 1) * kSectors + k);
+            const auto b = static_cast<std::uint32_t>(1 + (ring - 1) * kSectors + (k + 1) % kSectors);
+            const std::uint32_t c = a + kSectors, d = b + kSectors;
+            cupIndices.insert(cupIndices.end(), { a, c, b, b, c, d });
+        }
+    }
+    const std::optional<Math::float3> cupPose = restpose::Auto(cup, cupIndices);
+    Check(cupPose.has_value(), "Auto finds a pose for a cup");
+    const Math::mat4 posed = RotationDeg(*cupPose);
+    const float apexY = posed.TransformPoint(cup[0]).y;
+    float rimY = 0.0f, lowest = 1e30f;
+    for (int k = 0; k < kSectors; ++k) { rimY += posed.TransformPoint(cup[1 + (kRings - 1) * kSectors + k]).y / kSectors; }
+    for (const Math::float3& p : cup) { lowest = std::min(lowest, posed.TransformPoint(p).y); }
+    const Math::float3 cupExtent = PosedExtent(cup, cupIndices, *cupPose);
+    Check(cupExtent.y < 0.2f * std::min(cupExtent.x, cupExtent.z), "the cup lies flat: y extent " +
+        std::to_string(cupExtent.y));
+    Check(apexY > rimY + 0.25f, "rim down, dome up: apex " + std::to_string(apexY) + " rim " + std::to_string(rimY));
+    Check(std::fabs(lowest + restpose::Lift(cup, *cupPose)) < 1.0e-5f, "the lift puts the lowest point on the pivot");
+
+    // 4. The real shells, which came in 37-56 degrees off flat (the conch on its tip): each lies with
+    // its thinnest extent vertical.
+    const char* shells[] = { "models/seashells/seashells_node_scoica_01.mesh.bin",
+        "models/seashells/seashells_node_scoica_02.mesh.bin", "models/seashells/seashells_node_Cylinder009.mesh.bin" };
+    for (const char* shell : shells)
+    {
+        std::vector<Math::float3> positions;
+        std::vector<std::uint32_t> indices;
+        Check(ReadLod0(shell, positions, indices), std::string("reads ") + shell);
+        const std::optional<Math::float3> pose = restpose::Auto(shell);
+        Check(pose.has_value(), std::string("Auto finds a pose for ") + shell);
+        const Math::float3 e = PosedExtent(positions, indices, *pose);
+        Check(e.y <= e.x && e.y <= e.z, std::string(shell) + " lies on its broadest side: extent " +
+            std::to_string(e.x) + " x " + std::to_string(e.y) + " x " + std::to_string(e.z));
+    }
+
+    // 5. The call every creation path makes. With a rest pose: the rotation is the pose turned by the
+    // yaw, the height the ground plus the lift at the object's scale, x/z untouched. Without one:
+    // nothing changes at all.
+    const std::filesystem::path tempAsset = std::filesystem::temp_directory_path() / "intent_regression_rest.mesh.json";
+    const Math::float3 shellRest(-12.5f, 0.0f, 33.0f);
+    {
+        std::ofstream out(tempAsset);
+        out << Json{ { "geometry", shells[0] }, { "restRotationDeg", Json::array({ shellRest.x, shellRest.y, shellRest.z }) } }.dump();
+    }
+    Json shell = Json{ { "mesh", tempAsset.string() }, { "position", Json::array({ 1.0f, 2.0f, 3.0f }) },
+        { "scale", Json::array({ 2.0f, 2.0f, 2.0f }) } };
+    Check(restpose::ApplyToNewObject(shell, 40.0f, 5.0f), "a rest-posed asset is laid");
+    const Math::float3 expected = restpose::ComposeYaw(shellRest, 40.0f);
+    const Json& rot = shell["rotationDeg"];
+    Check(SameRotation(RotationDeg(Math::float3(rot[0].get<float>(), rot[1].get<float>(), rot[2].get<float>())),
+        RotationDeg(expected)), "its rotation is the pose turned by the yaw");
+    const float lift = restpose::Lift(shells[0], shellRest);
+    Check(lift > 0.0f && Near(shell["position"][1].get<float>(), 5.0f + 2.0f * lift),
+        "its pivot sits the scaled lift above the ground: " + shell["position"].dump());
+    Check(shell["position"][0].get<float>() == 1.0f && shell["position"][2].get<float>() == 3.0f,
+        "and x/z stay where they were put");
+    std::filesystem::remove(tempAsset);
+
+    Json palm = Json{ { "mesh", "models/coconut_palm.mesh.json" }, { "position", Json::array({ 1.0f, 2.0f, 3.0f }) },
+        { "rotationDeg", Json::array({ 0.0f, 10.0f, 0.0f }) }, { "scale", Json::array({ 1.0f, 1.0f, 1.0f }) } };
+    const Json before = palm;
+    Check(!restpose::ApplyToNewObject(palm, 40.0f, 5.0f) && palm == before,
+        "an asset without a rest pose (a palm) is left exactly as it was");
+}
+
+// `intent_regression --rest-pose <mesh.json>...` prints the automatic rest pose of each asset's
+// geometry -- the numbers the Mesh Editor's "Lay flat (auto)" writes -- and the lift that goes with it.
+int PrintRestPoses(int count, char** paths)
+{
+    int failures = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        std::ifstream file(paths[i]);
+        const Json asset = Json::parse(file, nullptr, false, true);
+        const std::string geometry = asset.is_object() ? asset.value("geometry", std::string()) : std::string();
+        const std::optional<Math::float3> pose = restpose::Auto(geometry);
+        if (!pose)
+        {
+            std::printf("%s: cannot read geometry '%s'\n", paths[i], geometry.c_str());
+            ++failures;
+            continue;
+        }
+        std::printf("%s: \"restRotationDeg\": [%.2f, %.2f, %.2f]  lift %.4f m\n", paths[i], pose->x, pose->y,
+            pose->z, restpose::Lift(geometry, *pose));
+    }
+    return failures;
+}
+
 // `intent_regression --dump <level.json> <gbnf-out> <prompt-out>` writes the grammar and
 // the system prompt this editor would send for a REAL level. It exists so the contract
 // can be exercised against a live llama-server with the exact bytes the editor uses --
@@ -2639,6 +2825,10 @@ int main(int argc, char** argv)
     {
         return DumpForLevel(argv[2], argv[3], argv[4]);
     }
+    if (argc >= 3 && std::string(argv[1]) == "--rest-pose")
+    {
+        return PrintRestPoses(argc - 2, argv + 2);
+    }
     if (argc == 4 && std::string(argv[1]) == "--stream")
     {
         return StreamProbe(argv[2], argv[3]);
@@ -2694,6 +2884,7 @@ int main(int argc, char** argv)
         TestSpawnPlacement(actionCtx);
         TestPlaceIsExact(actionCtx);
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
+        TestRestPose();
         TestSpawnJoinsTheGroupItsKindUses(actionCtx);
         TestTheWholeScatterPhrase(actionCtx);
         std::puts("Intent regression: actions OK");
