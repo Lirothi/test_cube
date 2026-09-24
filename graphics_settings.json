@@ -3,7 +3,7 @@
     "dlssEnabled": true,
     "dlssMode": "balanced",
     "fxaa": false,
-    "renderScale": 0.5799478888511658
+    "renderScale": 0.580078125
   },
   "cloudShadow": {
     "bilinearWeather": true,

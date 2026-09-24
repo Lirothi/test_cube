@@ -2513,6 +2513,48 @@ void TestRestPose()
         "an asset without a rest pose (a palm) is left exactly as it was");
 }
 
+// mesh.json "pivot": "base" moves the model origin to where the mesh meets the ground at bake time.
+// The fern_02 variants were split out of one glTF with their layout offsets baked in (the pivot
+// 1.0-1.4 m beside three of them). And the option must cost nothing when off: every .bin baked
+// before it existed has to stay current, or every Mesh Editor Save turns into a re-bake.
+void TestPivotToBase()
+{
+    MeshLoadOptions palm;
+    palm.wantCW = false;
+    Check(MeshManager::ApplyManifestOptions("models/coconut_palm.mesh.json", palm), "reads the palm manifest");
+    Check(!palm.pivotToBase, "a manifest without \"pivot\" leaves it off");
+    Check(!MeshManager::BinaryNeedsRebake("models/coconut_palm/coconut_palm.mesh.bin", palm),
+        "a .bin baked before the option existed is still current");
+
+    MeshLoadOptions fern;
+    fern.wantCW = false;
+    fern.slotFoliage = { 1.0f };
+    fern.pivotToBase = true;
+    const std::string out = (std::filesystem::temp_directory_path() / "intent_regression_pivot.mesh.bin").string();
+    MeshManager manager;
+    Check(manager.BakeToBinary("import_staging/fern_02/fern_02_2k.gltf#node:fern_02_d", out, fern),
+        "bakes fern_02_d with its pivot at the base");
+    std::vector<Math::float3> positions;
+    std::vector<std::uint32_t> indices;
+    Check(ReadLod0(out, positions, indices), "reads the baked fern back");
+    float minY = 1e30f, maxY = -1e30f;
+    for (const std::uint32_t i : indices) { minY = std::min(minY, positions[i].y); maxY = std::max(maxY, positions[i].y); }
+    double sx = 0.0, sz = 0.0;
+    int n = 0;
+    for (const std::uint32_t i : indices)
+    {
+        if (positions[i].y <= minY + 0.05f * (maxY - minY)) { sx += positions[i].x; sz += positions[i].z; ++n; }
+    }
+    Check(std::fabs(minY) < 1.0e-4f, "its lowest point is at the origin's height: " + std::to_string(minY));
+    Check(n > 0 && std::hypot(sx / n, sz / n) < 0.01, "and its footing is centred on the origin: " +
+        std::to_string(sx / n) + ", " + std::to_string(sz / n));
+    MeshLoadOptions fernOff = fern;
+    fernOff.pivotToBase = false;
+    Check(!MeshManager::BinaryNeedsRebake(out, fern) && MeshManager::BinaryNeedsRebake(out, fernOff),
+        "the option is part of what a .bin was baked with: turning it off asks for a re-bake");
+    std::filesystem::remove(out);
+}
+
 // `intent_regression --rest-pose <mesh.json>...` prints the automatic rest pose of each asset's
 // geometry -- the numbers the Mesh Editor's "Lay flat (auto)" writes -- and the lift that goes with it.
 int PrintRestPoses(int count, char** paths)
@@ -2885,6 +2927,7 @@ int main(int argc, char** argv)
         TestPlaceIsExact(actionCtx);
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
         TestRestPose();
+        TestPivotToBase();
         TestSpawnJoinsTheGroupItsKindUses(actionCtx);
         TestTheWholeScatterPhrase(actionCtx);
         std::puts("Intent regression: actions OK");

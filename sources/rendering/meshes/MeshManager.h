@@ -103,6 +103,16 @@ struct MeshLoadOptions {
     // them alone. Non-positive values are ignored rather than flipping winding silently.
     float bakeScale = 1.0f;
 
+    // Move the model origin to the mesh's BASE at bake time (mesh.json "pivot": "base"): y = the
+    // lowest vertex, x/z = the centre of the vertices in the bottom 5 % of the height -- where a
+    // plant's stems or a rock's footing meet the ground. A node split out of a multi-object glTF
+    // keeps its place in that file's layout otherwise: three of the four fern_02 variants baked
+    // with the pivot 1.0-1.4 m to one side, so the wind bent them about a point beside them and a
+    // spawn's random yaw swung them round a metre-wide circle. Applied after bakeScale, before the
+    // wind bake (which measures from the base). Off by default: switching it on moves the geometry
+    // under every copy already placed.
+    bool pivotToBase = false;
+
     // --- LOD generation knobs (exposed per-import in the mesh import window) ---------------------
     // Defaults reproduce the shipped chain exactly: per-level target ratios 0.5/0.25/0.12 at error
     // budgets 0.02/0.05/0.12 (relative to mesh extents), with meshopt's safe options.

@@ -635,6 +635,12 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
     // The bake scale CHANGES THE VERTICES, so it has to invalidate an existing .bin -- otherwise
     // re-importing at a new unit silently reuses geometry baked at the old one.
     h = Fnv1a(&opt.bakeScale, sizeof(opt.bakeScale), h);
+    // Hashed only when on, so every .bin baked before the option existed keeps its hash.
+    if (opt.pivotToBase)
+    {
+        const uint8_t pivotTag = 0xB5;
+        h = Fnv1a(&pivotTag, 1, h);
+    }
     uint64_t pattern = 0;
     for (size_t i = 0; i < opt.slotFoliage.size() && i < 64; ++i)
     {
@@ -1372,6 +1378,49 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
             v.position.x *= opt.bakeScale;
             v.position.y *= opt.bakeScale;
             v.position.z *= opt.bakeScale;
+        }
+    }
+    if (opt.pivotToBase && !cpu.vertices.empty())
+    {
+        // LOD0 only (the indices): the vertex array is what the bake is about to build LODs from,
+        // so at this point it holds nothing else, but the indices say which vertices are drawn.
+        float minY = std::numeric_limits<float>::max(), maxY = std::numeric_limits<float>::lowest();
+        for (const uint32_t i : cpu.indices)
+        {
+            if (i < cpu.vertices.size())
+            {
+                minY = std::min(minY, cpu.vertices[i].position.y);
+                maxY = std::max(maxY, cpu.vertices[i].position.y);
+            }
+        }
+        if (maxY >= minY)
+        {
+            const float band = minY + 0.05f * (maxY - minY);
+            double sx = 0.0, sz = 0.0;
+            size_t n = 0;
+            float loX = std::numeric_limits<float>::max(), hiX = std::numeric_limits<float>::lowest();
+            float loZ = std::numeric_limits<float>::max(), hiZ = std::numeric_limits<float>::lowest();
+            for (const uint32_t i : cpu.indices)
+            {
+                if (i >= cpu.vertices.size()) { continue; }
+                const DirectX::XMFLOAT3& p = cpu.vertices[i].position;
+                loX = std::min(loX, p.x); hiX = std::max(hiX, p.x);
+                loZ = std::min(loZ, p.z); hiZ = std::max(hiZ, p.z);
+                if (p.y <= band) { sx += p.x; sz += p.z; ++n; }
+            }
+            // A handful of bottom vertices is a stray, not a footing: fall back to the bounds centre.
+            const float px = n >= 8 ? static_cast<float>(sx / n) : 0.5f * (loX + hiX);
+            const float pz = n >= 8 ? static_cast<float>(sz / n) : 0.5f * (loZ + hiZ);
+            for (VertexPNTUV& v : cpu.vertices)
+            {
+                v.position.x -= px;
+                v.position.y -= minY;
+                v.position.z -= pz;
+            }
+            char pmsg[192];
+            std::snprintf(pmsg, sizeof(pmsg), "[meshbake] pivot to base: origin moved by (%.4f, %.4f, %.4f) m\n",
+                px, minY, pz);
+            logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Asset, pmsg);
         }
     }
     if (outHeightM)
@@ -2505,6 +2554,10 @@ bool MeshManager::ApplyManifestOptions(const std::string& meshJsonPath, MeshLoad
     num("foliageUvWeight", opt.foliageUvWeight);
     num("lodNormalWeight", opt.lodNormalWeight);
     num("bakeScale", opt.bakeScale);
+    {
+        const auto it = doc.find("pivot");
+        if (it != doc.end() && it->is_string()) { opt.pivotToBase = it->get<std::string>() == "base"; }
+    }
     boolean("lod3Aggressive", opt.lod3Aggressive);
     uints("lod1DropSlots", opt.lod1DropSlots);
     uints("lod2DropSlots", opt.lod2DropSlots);

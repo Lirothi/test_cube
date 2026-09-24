@@ -2,8 +2,9 @@
   "bakeScale": 0.009999999776482582,
   "geometry": "models/lowpoly_sticks/lowpoly_sticks_node_stick_07.mesh.bin",
   "material": "lowpoly_sticks_stick_07_0",
+  "pivot": "base",
   "source": "import_staging\\lowpoly_sticks\\scene.gltf#node:stick_07",
   "uvDensity": [
-    0.27873554825782776
+    0.27873557806015015
   ]
 }

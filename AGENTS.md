@@ -298,3 +298,13 @@ cannot leave it stale. Placed copies keep their own rotation. Mesh Editor > Rest
 (auto)" writes the automatic pose (thinnest surface axis up, a cupped shape rim-down);
 `intent_regression --rest-pose <mesh.json>...` prints the same numbers headless. The seashells carry
 one: imported, they stood on their hinges 37-56 degrees off flat.
+
+mesh.json `"pivot": "base"` moves the model origin to the mesh's footing AT BAKE TIME (lowest point,
+centred on the bottom 5 % of its height; `MeshLoadOptions::pivotToBase`, logged as `[meshbake] pivot to
+base: origin moved by (...)`). A node split out of a multi-object glTF otherwise keeps that file's
+layout offset -- fern_02 baked with the pivot 1.0-1.4 m beside the plant, so wind bent it about a
+point beside it. New split imports get it by default; an existing asset keeps what its manifest says,
+because switching it on moves the geometry under every placed copy: re-place them by
+`T' = T + R (s * offset)` with the logged offset. Every node-split asset carries it since 2026-09-24
+(fern_02, lowpoly_sticks, rocks_node, seashells, beach_grass), and wind_test's copies were re-placed
+that way; for a rock or a stick the footing is its contact patch, up to 0.3 m off its box centre.

@@ -1460,6 +1460,19 @@ void MeshEditorPanel::DrawRestPoseSection()
 {
     const std::string geometry = doc_.value("geometry", std::string());
     const std::optional<Math::float3> rest = restpose::Read(doc_);
+    bool pivotAtBase = doc_.value("pivot", std::string()) == "base";
+    if (ImGui::Checkbox("Pivot at the base (re-bakes on Save)", &pivotAtBase))
+    {
+        if (pivotAtBase) { doc_["pivot"] = "base"; }
+        else { doc_.erase("pivot"); }
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Moves the model origin to where the mesh meets the ground: the lowest point,\n"
+                          "centred on its footing. A part split out of a bigger file keeps that file's layout\n"
+                          "otherwise -- a pivot a metre beside the plant, so wind and yaw swing it round.\n"
+                          "Copies already placed move with the geometry by the same offset.");
+    }
     ImGui::TextWrapped("How a NEW copy lies when it is spawned, placed or dropped into the viewport "
         "(the drag ghost shows it). Copies already in a level keep their own rotation.");
     const auto write = [this](const Math::float3& r)
@@ -1919,6 +1932,8 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
             // re-bake reverts the mesh to the SOURCE unit scale.
             const auto bs = doc_.find("bakeScale");
             if (bs != doc_.end() && bs->is_number()) { opt.bakeScale = bs->get<float>(); }
+            // The pivot move is folded into the vertices the same way.
+            opt.pivotToBase = doc_.value("pivot", std::string()) == "base";
             // Mesh chunking is a bake input too: omitting it here would re-bake a chunked
             // terrain into one giant caster while mesh.json keeps claiming chunks.
             const auto cg = doc_.find("chunkGrid");

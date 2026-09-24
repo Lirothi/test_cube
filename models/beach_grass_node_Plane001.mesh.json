@@ -2,6 +2,7 @@
   "bakeScale": 6.7996745109558105,
   "geometry": "models/beach_grass/beach_grass_node_Plane001.mesh.bin",
   "material": "beach_grass_Plane001_0",
+  "pivot": "base",
   "source": "import_staging\\beach_grass\\scene.gltf#node:Plane001",
   "uvDensity": [
     0.8014310598373413

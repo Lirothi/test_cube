@@ -941,6 +941,18 @@ namespace
             bakeOpt.lodNormalWeight = asset.value("lodNormalWeight", 0.0f);
             bakeOpt.bakeScale = asset.value("bakeScale", 1.0f);
         }
+        // A node split out of a multi-object glTF sits where that file's LAYOUT put it -- fern_02's
+        // variants stand a metre apart, so three of them baked with the pivot beside the plant. On a
+        // FIRST import the pivot goes to the node's own base; an asset that already exists keeps what
+        // its manifest says, because switching it on moves the geometry under every placed copy.
+        if (asset.contains("pivot") && asset["pivot"].is_string())
+        {
+            bakeOpt.pivotToBase = asset["pivot"].get<std::string>() == "base";
+        }
+        else if (!asset.contains("geometry") && sourceGltf.find("#node:") != std::string::npos)
+        {
+            bakeOpt.pivotToBase = true;
+        }
         if (asset.contains("recomputeNormalSlots") && asset["recomputeNormalSlots"].is_array())
         {
             for (const nlohmann::json& s : asset["recomputeNormalSlots"])
@@ -1090,6 +1102,7 @@ namespace
         // The unit correction folded into the vertices must round-trip like the LOD knobs, or
         // the next Save/bulk re-import would re-bake the mesh at the SOURCE unit scale.
         writeLodF("bakeScale", bakeOpt.bakeScale, 1.0f);
+        if (bakeOpt.pivotToBase) { asset["pivot"] = "base"; }
         // Texture streaming A1: the per-slot UV density the bake just measured. Derived data, so it
         // is always rewritten -- a stale value would mis-size every mip request for the asset.
         if (!uvDensity.empty()) { asset["uvDensity"] = uvDensity; }

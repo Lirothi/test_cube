@@ -2,9 +2,10 @@
   "bakeScale": 6.7996745109558105,
   "geometry": "models/beach_grass/beach_grass_node_Grass05-172-polys.mesh.bin",
   "material": "beach_grass_Grass05-172-polys_0",
+  "pivot": "base",
   "source": "import_staging\\beach_grass\\scene.gltf#node:Grass05-172-polys",
   "uvDensity": [
-    0.09524471312761307
+    0.09524472057819366
   ],
   "windFoliage": [
     1.0
