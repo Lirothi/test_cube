@@ -9,6 +9,7 @@
 
 #include "core/logging/Log.h"
 #include "core/math/Math.h"
+#include "ocean/BuoyancyJson.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/meshes/StaticMesh.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
@@ -367,6 +368,22 @@ namespace SceneObjectFactory
         if (o.contains("renderLayer"))
         {
             mesh.SetRenderLayer(RenderLayerFromString(o["renderLayer"].get<std::string>()));
+        }
+
+        // Buoyancy: "buoyant" is the per-OBJECT switch (the Inspector's checkbox, absent = off);
+        // "buoyancy" says where and how it floats and normally comes from the asset's mesh.json,
+        // folded in by ResolveMeshAsset like every other asset key. See ocean/BuoyancyLayout.h.
+        if (o.contains("buoyant") && o["buoyant"].is_boolean())
+        {
+            mesh.SetBuoyant(o["buoyant"].get<bool>());
+        }
+        if (o.contains("buoyancy"))
+        {
+            buoyancy::Settings settings;
+            if (buoyancy::ReadSettings(o["buoyancy"], settings))
+            {
+                mesh.SetBuoyancySettings(std::move(settings));
+            }
         }
     }
 

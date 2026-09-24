@@ -1552,6 +1552,10 @@ void Scene::Tick(float deltaTime) {
             }, batchSize);
     }
 
+    // Buoyancy between the objects' Tick (the ocean clock is this frame's now) and their PostTick,
+    // which folds the render offsets it writes into this frame's model matrices.
+    buoyancy_.Tick(FindOceanRenderable(), Systems::GetRenderer(), deltaTime);
+
     {
         CPU_SCOPE(ProfilerScopes::kSceneTickPostObjects);
         TaskSystem::ParallelFor(objects_.size(),
@@ -1570,6 +1574,8 @@ void Scene::Tick(float deltaTime) {
             obj->Tick(deltaTime);
         }
     }
+
+    buoyancy_.Tick(FindOceanRenderable(), Systems::GetRenderer(), deltaTime);
 
     {
         CPU_SCOPE(ProfilerScopes::kSceneTickPostObjects);

@@ -700,6 +700,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     const dx::XMMATRIX proj = dx::XMMatrixPerspectiveFovLH(
         fovY, aspect, framedNearZ, framedFarZ);
     const dx::XMMATRIX mvp = dx::XMMatrixMultiply(framedView, proj);
+    dx::XMStoreFloat4x4(&lastViewProj_.m, mvp);
 
     auto barrier = [cl](ID3D12Resource* res,
         D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)

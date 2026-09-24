@@ -384,6 +384,9 @@ public:
     // Occlusion plan S3a: block until one frame SLOT's fence has passed -- the wait a query
     // latency below kFrameCount costs (UE's Map blocks the same way). Not the full idle above.
     void WaitForFrameSlot(UINT frameIndex) { WaitForFrame(frameIndex); }
+    // The non-blocking half: has the GPU finished the frame last submitted in this slot? A reader
+    // that can use ANY finished copy (the ocean readback) asks this instead of waiting.
+    bool IsFrameSlotComplete(UINT frameIndex) const { return frameScheduler_.IsFrameComplete(frameIndex); }
     void OnResize(UINT width, UINT height);
 
     ThreadCL BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* initialPSO = nullptr);

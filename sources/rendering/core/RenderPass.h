@@ -37,6 +37,7 @@ enum class RenderPass : uint16_t {
     Main_SurfSim,
     Main_ShoreWetness,
     Main_TerrainDepth,
+    Main_OceanReadback, // the first 1-2 FFT cascades + shore map -> the CPU (buoyancy); only when asked
     Main_ShadowCull,
     Main_CSM,
     // Occlusion plan S5b: the cascades' light-space two-pass HZB cull -- the tile pyramids from
@@ -153,6 +154,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_SurfSim: return L"SurfSim";
     case RenderPass::Main_ShoreWetness: return L"ShoreWetness";
     case RenderPass::Main_TerrainDepth: return L"TerrainDepth";
+    case RenderPass::Main_OceanReadback: return L"OceanReadback";
     case RenderPass::Main_ShadowCull: return L"ShadowCull";
     case RenderPass::Main_CSM: return L"CSM";
     case RenderPass::Main_CsmHzb: return L"CsmHzb";

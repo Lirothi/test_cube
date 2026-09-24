@@ -874,6 +874,20 @@ void ViewportGizmo::Update(EditorContext& ctx,
             }
             break;
         }
+
+        // Pontoons of the selected objects that float: where the ocean pushes, as it pushes this
+        // frame (the spheres ride the wave with the hull).
+        std::vector<Math::float4> pontoons;
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value);
+            RenderableObject* object = base ? base->AsRenderableObject() : nullptr;
+            if (!object || !ctx.scene.Buoyancy().GetWorldPontoons(object, pontoons)) { continue; }
+            for (const Math::float4& p : pontoons)
+            {
+                dd->AddSphere(p.xyz(), p.w, Math::float4(0.25f, 0.85f, 1.0f, 0.6f), /*wireframe=*/true);
+            }
+        }
     }
 
     // ZONES. Drawn always, not only when selected: a zone is invisible otherwise -- it has
@@ -968,7 +982,10 @@ void ViewportGizmo::Update(EditorContext& ctx,
                 // and skipping it here is why a zone could not be dragged at all. Its model
                 // matrix comes from the document instead of from the scene -- the same
                 // matrix, built from the same numbers, just not by way of a mesh.
-                snapshot.model = renderable ? renderable->GetModelMatrix()
+                // AUTHORED, not GetModelMatrix(): a floating boat's model matrix carries this
+                // frame's wave (its render offset), and a drag that started from it would write
+                // the wave into the level.
+                snapshot.model = renderable ? renderable->GetAuthoredModelMatrix()
                                             : MatrixFromTransform(object->transform);
                 dragSnapshots_.push_back(std::move(snapshot));
                 continue;
@@ -1132,7 +1149,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
         if (primaryRenderable)
         {
             primaryPosition = primaryRenderable->GetPosition();
-            primaryModel = primaryRenderable->GetModelMatrix();
+            primaryModel = primaryRenderable->GetAuthoredModelMatrix(); // see captureDragSnapshots
         }
         else if (primaryTransformOnly)
         {

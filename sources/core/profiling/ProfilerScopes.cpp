@@ -51,6 +51,7 @@ const Profiler::ScopeNameKey kSceneTick = Profiler::RegisterTraceLiteral(L"Scene
 const Profiler::ScopeNameKey kSceneTickPointLights = Profiler::RegisterTraceLiteral(L"Scene::Tick.PointLights");
 const Profiler::ScopeNameKey kSceneTickObjects = Profiler::RegisterTraceLiteral(L"Scene::Tick.Objects");
 const Profiler::ScopeNameKey kSceneTickPostObjects = Profiler::RegisterTraceLiteral(L"Scene::Tick.PostObjects");
+const Profiler::ScopeNameKey kSceneTickBuoyancy = Profiler::RegisterTraceLiteral(L"Scene::TickBuoyancy");
 const Profiler::ScopeNameKey kSceneTickWind = Profiler::RegisterTraceLiteral(L"Scene::Tick.Wind");
 const Profiler::ScopeNameKey kSceneRender = Profiler::RegisterTraceLiteral(L"Scene::Render");
 const Profiler::ScopeNameKey kPassPrologueClear = Profiler::RegisterTraceLiteral(L"Pass_PrologueClear");
@@ -59,6 +60,7 @@ const Profiler::ScopeNameKey kPassObjectCompute = Profiler::RegisterTraceLiteral
 const Profiler::ScopeNameKey kPassGpuInstanceCompute = Profiler::RegisterTraceLiteral(L"Pass_GpuInstanceCompute");
 // Step 9: the wetness pass had NO GPU scope, so its cost was invisible in every trace.
 const Profiler::ScopeNameKey kPassShoreWetness = Profiler::RegisterTraceLiteral(L"Pass_ShoreWetness");
+const Profiler::ScopeNameKey kPassOceanReadback = Profiler::RegisterTraceLiteral(L"Pass_OceanReadback");
 // Async-compute step 3: the scope around step 2's empty compute submission. Its only job is to put
 // a real timestamped event on the SECOND trace row, so the row proves the compute queue's
 // calibration, frequency and drain fence work — an empty row would prove nothing.

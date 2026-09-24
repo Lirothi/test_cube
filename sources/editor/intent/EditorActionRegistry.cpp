@@ -2,6 +2,7 @@
 #if WITH_EDITOR
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -32,6 +33,7 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/scene/EditorZone.h"
+#include "editor/commands/SetBuoyantCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SetMaterialSlotCommand.h"
@@ -161,6 +163,29 @@ namespace
         }
         return composite;
     }
+
+    // Names continue the LEVEL's numbering: "<stem> NNN" takes the next NNN after the highest the
+    // document already has for that stem. Restarting at 001 on every spawn/place minted names the
+    // level already had -- and then a phrase excluding "old_boat 001" could not tell the boat pulled
+    // up on the beach from the one just placed in the lagoon, and left out both.
+    class NameCounter
+    {
+    public:
+        explicit NameCounter(const EditorSceneDocument& document) : document_(document) {}
+
+        std::string Next(const std::string& stem)
+        {
+            auto it = next_.find(stem);
+            if (it == next_.end()) { it = next_.emplace(stem, editornames::HighestNameOrdinal(document_, stem)).first; }
+            char buffer[192];
+            std::snprintf(buffer, sizeof(buffer), "%s %03zu", stem.c_str(), ++it->second);
+            return buffer;
+        }
+
+    private:
+        const EditorSceneDocument& document_;
+        std::map<std::string, std::size_t> next_;
+    };
 
     std::string CountedObjects(std::size_t count)
     {
@@ -355,6 +380,42 @@ namespace
         return FoldIntoOneEntry(std::move(commands),
             std::string(enabled ? "Enable " : "Disable ") +
             std::to_string(commands.size()) + " Objects");
+    }
+
+    // ------------------------------------------------------------------ setBuoyant
+
+    std::unique_ptr<EditorCommand> BuildSetBuoyant(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        const bool buoyant = BoolOr(intent.params, "enabled", true);
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        std::size_t skipped = 0;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* obj = actionCtx.editor.document.Find(id);
+            if (!obj || obj->type != "staticMesh")
+            {
+                ++skipped; // lights, zones, the ocean itself: nothing with a hull
+                continue;
+            }
+            commands.push_back(std::make_unique<SetBuoyantCommand>(id, buoyant));
+        }
+        if (commands.empty())
+        {
+            outStatus = "Nothing that can float: buoyancy is for meshes";
+            return nullptr;
+        }
+        const std::size_t count = commands.size();
+        outStatus = (buoyant ? "Floating " : "Stopped floating ") + CountedObjects(count);
+        if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not meshes)"; }
+        if (buoyant && !actionCtx.editor.scene.FindOceanRenderable())
+        {
+            outStatus += "; this level has no ocean, so nothing moves until it gets one";
+        }
+        return FoldIntoOneEntry(std::move(commands),
+            std::string(buoyant ? "Float " : "Stop Floating ") + std::to_string(count) + " Objects");
     }
 
     // ------------------------------------------------------------------ rename
@@ -1622,7 +1683,9 @@ namespace
                 continue;
             }
 
-            const Math::mat4& world = renderable->GetModelMatrix();
+            // Authored: bury rewrites the transform the level saves, and a floating object's model
+            // matrix also carries this frame's wave.
+            const Math::mat4 world = renderable->GetAuthoredModelMatrix();
             const std::vector<Math::float3>& localPositions = mesh->RaycastPositions();
 
             // The footing band is measured in WORLD height: the object can be rotated, so the
@@ -2741,6 +2804,7 @@ namespace
         std::vector<std::unique_ptr<EditorCommand>> commands;
         commands.reserve(placed.size());
         std::map<std::string, std::size_t> intoGroups;
+        NameCounter names(ctx.document);
         for (std::size_t index = 0; index < placed.size(); ++index)
         {
             // Round-robin rather than random when several kinds were named: twenty palms of
@@ -2767,10 +2831,7 @@ namespace
             }
             objectJson["rotationDeg"] = nlohmann::json::array({ 0.0f, yawDist(rng), 0.0f });
 
-            char nameBuffer[128];
-            std::snprintf(nameBuffer, sizeof(nameBuffer), "%s %03zu",
-                kind->displayName.c_str(), index + 1);
-            objectJson["name"] = nameBuffer;
+            objectJson["name"] = names.Next(kind->displayName);
 
             const std::string group = GroupForKind(ctx.document, kind);
             if (!group.empty())
@@ -2895,6 +2956,7 @@ namespace
         commands.reserve(itemsIt->size());
         std::map<std::string, std::size_t> perKind;
         std::map<std::string, std::size_t> intoGroups;
+        NameCounter names(ctx.document);
         for (std::size_t index = 0; index < itemsIt->size(); ++index)
         {
             const nlohmann::json& item = (*itemsIt)[index];
@@ -2932,10 +2994,8 @@ namespace
                 objectJson["rotationDeg"] = nlohmann::json::array({ 0.0f, item.value("yawDeg", 0.0f), 0.0f });
             }
 
-            const std::size_t ordinal = ++perKind[kind->displayName];
-            char nameBuffer[128];
-            std::snprintf(nameBuffer, sizeof(nameBuffer), "%s %03zu", kind->displayName.c_str(), ordinal);
-            objectJson["name"] = nameBuffer;
+            ++perKind[kind->displayName];
+            objectJson["name"] = names.Next(kind->displayName);
 
             const std::string group = groupOverride.empty() ? GroupForKind(ctx.document, kind) : groupOverride;
             if (!group.empty())
@@ -3003,6 +3063,17 @@ EditorActionRegistry::EditorActionRegistry()
         EditorTargetKind::Objects,
         { { "enabled", EditorParamKind::Bool, true, "true shows the objects, false hides them" } },
         &BuildSetEnabled,
+    });
+
+    actions_.push_back({
+        "setBuoyant",
+        "Float the matching meshes on the ocean -- heave, pitch and roll on its waves -- or stop them "
+        "floating. Position and heading stay where they are; how each floats comes from its mesh's "
+        "buoyancy settings.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        { { "enabled", EditorParamKind::Bool, true, "true floats the meshes, false puts them back where the level placed them" } },
+        &BuildSetBuoyant,
     });
 
     actions_.push_back({
@@ -3799,6 +3870,24 @@ bool RunEditorAction(const EditorActionContext& actionCtx,
     }
     outStatus = buildStatus;
     return true;
+}
+
+std::size_t editornames::HighestNameOrdinal(const EditorSceneDocument& document, const std::string& stem)
+{
+    std::size_t highest = 0;
+    const std::string prefix = stem + " ";
+    for (const EditorObject& object : document.Objects())
+    {
+        if (object.name.size() <= prefix.size() || object.name.compare(0, prefix.size(), prefix) != 0)
+        {
+            continue;
+        }
+        const std::string tail = object.name.substr(prefix.size());
+        const bool digits = tail.size() <= 9 && std::all_of(tail.begin(), tail.end(),
+            [](unsigned char c) { return std::isdigit(c) != 0; });
+        if (digits) { highest = std::max<std::size_t>(highest, std::stoul(tail)); }
+    }
+    return highest;
 }
 
 #endif // WITH_EDITOR

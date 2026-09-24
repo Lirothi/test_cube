@@ -83,7 +83,7 @@
       "blendFraction": 0.0,
       "casterReach": 150.0,
       "depthBiasTexels": 1.0,
-      "distanceFadeFraction": 0.05000000074505806,
+      "distanceFadeFraction": 0.0,
       "distributionExponent": 3.0,
       "filterMode": 0,
       "filterSharpen": 0.019999999552965164,

@@ -282,6 +282,9 @@
     <ClCompile Include="sources/editor/commands/TransformObjectCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetBuoyantCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -502,6 +505,15 @@
       <Filter>sources\ocean</Filter>
     </ClCompile>
     <ClCompile Include="sources/ocean/OceanWetness.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ocean/BuoyancyLayout.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ocean/OceanBuoyancy.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ocean/OceanReadback.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
     <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp">
@@ -887,6 +899,9 @@
     <ClInclude Include="sources/editor/commands/TransformObjectCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetBuoyantCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
@@ -1092,6 +1107,18 @@
       <Filter>sources\ocean</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanWetness.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/BuoyancyJson.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/BuoyancyLayout.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/OceanBuoyancy.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ocean/OceanReadback.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>
     <ClInclude Include="sources/vfx/ParticleEmitterObject.h">

@@ -256,7 +256,30 @@ editor frame both happen before the panels look settled.
 
 `--show-import[=<name>]` (implies `--editor`) opens the Import Assets window with the staged item
 `<name>` selected, so its details pane -- size, split, material preview, LOD, chunking -- can be
-photographed; `--edit-mesh=<models/x.mesh.json>` does the same for the Mesh Editor.
+photographed; `--edit-mesh=<models/x.mesh.json>` does the same for the Mesh Editor, and
+`--edit-mesh=<models/x.mesh.json>#buoyancy` opens it with the Buoyancy section expanded.
+
+## Buoyancy — Meshes Floating on the Ocean
+
+A level object `"buoyant": true` (Inspector: "Floats on the ocean", MCP: `setBuoyant`) heaves,
+pitches and rolls on the ocean; position and yaw stay authored. Where and how it floats is the
+ASSET's: mesh.json `"buoyancy": {draft, inertia, damping, pontoons:[[x,y,z,r]]}`, every key optional
+-- no pontoons = the automatic layout (`ocean/BuoyancyLayout.cpp`: the hull's waterplane at the draft,
+split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > Buoyancy edits it.
+
+- The pose is a RENDER OFFSET (`RenderableObject::SetRenderOffset`), never the authored transform.
+  Anything that builds a new authored transform from a live one must use `GetAuthoredModelMatrix()`
+  (the gizmo and `bury` do) -- `GetModelMatrix()` would write this frame's wave into the level.
+- Waves come from `ocean/OceanReadback`: the first 1-2 FFT cascades (the ocean preset's
+  `readbackCascades`; **`None` = everything floats on a flat surface**, and both shipped presets say
+  None) plus the shore depth map, copied to a readback ring and read the first frame the fence says
+  it is done -- never waited on. Its `SampleHeight` is the vertex shader's surface term for term.
+- Cost, measured (Release, ~340 fps, 5 boats / 30 automatic pontoons): GPU `Pass_OceanReadback` 41 us
+  per copy, but copies are capped at 30 a second -> ~3 us per frame averaged (every other frame at
+  60 fps); CPU `Scene::TickBuoyancy` median 5 us (heights are re-sampled only when a copy lands). The
+  floating objects come from a REGISTRY (`RenderableObject::SetBuoyant`), never a scene walk: a level
+  with nothing floating costs 0 us CPU and no copy. The copy was tried on the async
+  queue inside Main_ObjectCompute and cost the frame ~108 us: the ocean draw waits on that pass.
 
 **Registering a panel is not the same as drawing one.** `EditorController::Draw` ends with a
 hardcoded list of `drawPanel("<id>")` calls; a panel missing from it exists, toggles from the

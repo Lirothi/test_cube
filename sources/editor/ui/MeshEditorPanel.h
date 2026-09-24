@@ -33,6 +33,8 @@ public:
 
     // Load a `.mesh.json` for editing (content-browser EditMesh action). Resets prior state.
     void Open(const std::string& meshAssetPath);
+    // Expand a collapsed section on the next draw ("buoyancy"); unknown names are ignored.
+    void ExpandSection(const std::string& section) { expandBuoyancy_ = expandBuoyancy_ || section == "buoyancy"; }
 
     // Draw the window body (inside the editor's lambda panel). `open` backs the close button.
     // `ctx` gives access to the scene document so Save can live-apply to placed instances.
@@ -71,6 +73,12 @@ private:
     // which is the only way to single out one tile (they all share material slot 0).
     int           chunkGrid_ = 0;
     int           hoveredChunk_ = -1;
+    // Buoyancy (mesh.json "buoyancy"): the pontoon whose row was hovered LAST frame -- the preview
+    // overlay highlights it, same one-frame hand-off as the slots and chunks above.
+    int           hoveredPontoon_ = -1;
+    bool          buoyancyOpen_ = false; // the section is open: the preview draws the pontoons
+    bool          expandBuoyancy_ = false;
+    void DrawBuoyancySection(int& hoveredPontoonThisFrame);
     MeshManager::BinaryInfo binInfo_{}; // per-LOD, per-submesh triangle counts; empty if not baked
     std::string   status_;
     MeshEditorPreviewScene previewScene_;

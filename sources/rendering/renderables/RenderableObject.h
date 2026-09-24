@@ -13,6 +13,7 @@
 #include "core/math/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "core/math/AABB.h"
+#include "ocean/BuoyancyLayout.h" // buoyancy::Settings, held per object
 
 class Renderer;
 class Camera;
@@ -106,6 +107,42 @@ public:
     Math::float3 GetScale() const { return scale_; }
     Math::float3 GetRotationEulerRad() const { return rotEuler_; }
     Math::mat4 GetOrientationMatrix() const { return Math::mat4::RotationFromEulerXYZRad(rotEuler_); }
+
+    // --- Render offset -----------------------------------------------------------------------
+    // A WORLD-space pose correction composed after the authored S*R*T: the ocean's buoyancy
+    // (ocean/OceanBuoyancy) heaves, pitches and rolls a boat through it every frame. Only
+    // modelMatrix_ sees it -- and through it everything drawn: motion vectors, shadows, the RT
+    // instance, culling bounds. pos_/rotEuler_/scale_, what GetPosition() and friends return,
+    // what the editor document holds and what a save writes, never do.
+    void SetRenderOffset(const Math::mat4& worldOffset);
+    void ClearRenderOffset();
+    bool HasRenderOffset() const { return hasRenderOffset_; }
+    // S*R*T without the render offset. Anything that builds a NEW authored transform out of the
+    // current one (a gizmo drag, bury) must start here: from GetModelMatrix() it would write this
+    // frame's wave into the level.
+    Math::mat4 GetAuthoredModelMatrix() const;
+
+    // --- Buoyancy ----------------------------------------------------------------------------
+    // Level object "buoyant": true floats it on the ocean (when the level has a visible one);
+    // "buoyancy" -- normally from the asset's mesh.json -- says where and how. See
+    // ocean/BuoyancyLayout.h.
+    // Also (un)registers with OceanBuoyancy, which then never walks the scene to find what floats;
+    // turning it off puts the object straight back where the level placed it.
+    void SetBuoyant(bool buoyant);
+    bool IsBuoyant() const { return buoyant_; }
+    void SetBuoyancySettings(buoyancy::Settings settings)
+    {
+        buoyancySettings_ = std::move(settings);
+        ++buoyancyRevision_;
+    }
+    const buoyancy::Settings& GetBuoyancySettings() const { return buoyancySettings_; }
+    std::uint32_t GetBuoyancyRevision() const { return buoyancyRevision_; }
+    // The geometry an automatic pontoon layout analyses (StaticMesh: its .mesh.bin). Empty = none.
+    virtual const std::string& GetGeometryPath() const
+    {
+        static const std::string kNone;
+        return kNone;
+    }
 
     // Mesh/material
     Mesh* GetMesh() { return mesh_.get(); }
@@ -333,6 +370,11 @@ private:
     Math::float3 pos_{};
     Math::float3 scale_ = Math::float3(1.0f, 1.0f, 1.0f);
     Math::float3 rotEuler_{};
+    Math::mat4 renderOffset_;
+    bool hasRenderOffset_ = false;
+    bool buoyant_ = false;
+    std::uint32_t buoyancyRevision_ = 0;
+    buoyancy::Settings buoyancySettings_;
     bool transformDirty_ = true;
     bool prevModelMatrixValid_ = false;
     bool modelMatrixChangedThisTick_ = false;

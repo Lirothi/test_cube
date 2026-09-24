@@ -631,6 +631,8 @@ namespace
         // already the behaviour here. Symptom without it: re-baking a rock to metres still spawned
         // it at the original size.
         if (MeshManager* meshes = ctx.renderer.GetMeshManager()) { meshes->Clear(); }
+        // ...and the buoyancy analysis of it, keyed on the same unchanged path.
+        buoyancy::ForgetGeometry("");
 
         std::size_t droppedTextures = 0;
         std::size_t droppedDecodes = 0;
@@ -2979,9 +2981,13 @@ void EditorController::Draw(
     }
 
     EditorContext ctx{ renderer, scene, levelManager, document_, selection_ };
+    // "models/x.mesh.json#buoyancy" opens the asset with that section expanded (the Inspector's
+    // "Edit pontoons" button, and --edit-mesh=...#buoyancy for a headless capture of it).
     ctx.openMeshEditor = [this](const std::string& meshPath)
     {
-        meshEditor_.Open(meshPath);
+        const size_t anchor = meshPath.find('#');
+        meshEditor_.Open(meshPath.substr(0, anchor));
+        if (anchor != std::string::npos) { meshEditor_.ExpandSection(meshPath.substr(anchor + 1)); }
         showMeshEditor_ = true;
     };
     // "--edit-mesh=<path>": once, on the first frame that has a context to open it with.

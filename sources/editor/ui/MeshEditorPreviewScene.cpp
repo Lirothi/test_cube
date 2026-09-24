@@ -133,6 +133,7 @@ struct MeshEditorPreviewScene::Impl
     std::array<std::optional<EditorPreviewRenderer::PhysicalLighting>, render::kFrameCount>
         renderedPhysical{};
     std::array<bool, render::kFrameCount> cameraValid{};
+    std::array<Math::mat4, render::kFrameCount> renderedViewProj{};
     std::string sourceSignature;
     std::string error;
     bool loaded = false;
@@ -299,6 +300,7 @@ struct MeshEditorPreviewScene::Impl
             error = "Could not submit the mesh preview render.";
             return false;
         }
+        renderedViewProj[frameIndex] = previewRenderer.LastViewProj();
 
         targets[frameIndex] = std::move(target);
         frameCommands[frameIndex] = std::move(commands);
@@ -468,6 +470,7 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     renderer.MarkImGuiTextureShaderReadable(impl_->targets[frameIndex].Get());
     view.texture = renderer.CreateImGuiTextureId(impl_->targets[frameIndex].Get(), srv);
     view.state = view.texture != ImTextureID_Invalid ? State::Ready : State::Loading;
+    view.viewProj = impl_->renderedViewProj[frameIndex];
     return view;
 }
 

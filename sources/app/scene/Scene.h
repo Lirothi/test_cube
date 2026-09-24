@@ -25,6 +25,7 @@
 #include "rendering/visibility/OcclusionQueries.h"
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
 #include "vfx/WindState.h"
+#include "ocean/OceanBuoyancy.h"
 
 class Renderer;
 class UploadBatch;
@@ -98,6 +99,8 @@ public:
     // W1: locate the ocean's shared clock (null if no ocean). PUBLIC since P16.6 -- the capture
     // harness turns the shore contact foam off through it, which beats editing tuned content.
     OceanRenderable* FindOceanRenderable();
+    // What floats and where its pontoons are this frame (the editor's overlay).
+    const OceanBuoyancy& Buoyancy() const { return buoyancy_; }
 
 #if WITH_EDITOR
     // Stable identity for editor-spawned objects. SceneObjectId 0 = a runtime
@@ -329,6 +332,7 @@ private:
     std::uint32_t staticSetVersion_ = 0; // Step 11: bumped on shadow-caster membership/visibility changes
 
     vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
+    OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
 
     DirectionalLight dirLight_;
     render::CameraExposureSettings cameraExposure_{}; // P1, dormant; see PhotographicSettings.h

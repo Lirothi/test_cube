@@ -24,6 +24,9 @@ public:
 
     bool IsSimpleRender() const override { return true; }
 
+    // The .mesh.bin (or source) this mesh loads -- what a buoyancy auto layout analyses.
+    const std::string& GetGeometryPath() const override { return modelName_; }
+
 protected:
     // A3: a glTF model with "material":"auto" (or no preset) sources its material from the glTF.
     std::string GetGltfMaterialSourcePath() const override;

@@ -92,6 +92,13 @@ enum class EditorActionEffect
 
 // Everything an action may need besides the document. Passed by reference so adding a
 // service later does not touch every build function's signature again.
+// Object names minted by spawn/place continue the level's own numbering: the highest NNN among the
+// document's "<stem> NNN" names (0 when there are none). Public so the gate can hold it to that.
+namespace editornames
+{
+    std::size_t HighestNameOrdinal(const EditorSceneDocument& document, const std::string& stem);
+}
+
 struct EditorActionContext
 {
     EditorContext& editor;

@@ -281,6 +281,7 @@
     <ClCompile Include="sources/editor/commands/PasteObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/RenameObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/TransformObjectCommand.cpp" />
+    <ClCompile Include="sources/editor/commands/SetBuoyantCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetMaterialCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetMeshAssetCommand.cpp" />
@@ -354,6 +355,9 @@
     <ClCompile Include="sources/ocean/OceanSimulation.cpp" />
     <ClCompile Include="sources/ocean/OceanSurfSim.cpp" />
     <ClCompile Include="sources/ocean/OceanWetness.cpp" />
+    <ClCompile Include="sources/ocean/BuoyancyLayout.cpp" />
+    <ClCompile Include="sources/ocean/OceanBuoyancy.cpp" />
+    <ClCompile Include="sources/ocean/OceanReadback.cpp" />
     <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp" />
     <ClCompile Include="sources/vfx/ParticlePresets.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp" />
@@ -506,6 +510,7 @@
     <ClInclude Include="sources/editor/commands/PasteObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/RenameObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/TransformObjectCommand.h" />
+    <ClInclude Include="sources/editor/commands/SetBuoyantCommand.h" />
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h" />
     <ClInclude Include="sources/editor/commands/SetMaterialCommand.h" />
     <ClInclude Include="sources/editor/commands/SetMeshAssetCommand.h" />
@@ -574,6 +579,10 @@
     <ClInclude Include="sources/ocean/OceanSimulation.h" />
     <ClInclude Include="sources/ocean/OceanSurfSim.h" />
     <ClInclude Include="sources/ocean/OceanWetness.h" />
+    <ClInclude Include="sources/ocean/BuoyancyJson.h" />
+    <ClInclude Include="sources/ocean/BuoyancyLayout.h" />
+    <ClInclude Include="sources/ocean/OceanBuoyancy.h" />
+    <ClInclude Include="sources/ocean/OceanReadback.h" />
     <ClInclude Include="sources/vfx/ParticleEmitterObject.h" />
     <ClInclude Include="sources/vfx/ParticlePresets.h" />
     <ClInclude Include="sources/vfx/ParticleTypes.h" />

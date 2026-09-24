@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "app/Systems.h"
+#include "ocean/OceanBuoyancy.h" // SetBuoyant registers the floating objects
 #include "rendering/core/Renderer.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/InputLayoutManager.h"
@@ -73,7 +74,25 @@ void RenderableObject::SetRotationEulerDeg(const Math::float3& eulerDegXYZ)
     SetRotationEulerRad(Math::float3(eulerDegXYZ.x * k, eulerDegXYZ.y * k, eulerDegXYZ.z * k));
 }
 
-RenderableObject::~RenderableObject() = default;
+RenderableObject::~RenderableObject()
+{
+    if (buoyant_) { OceanBuoyancy::Unregister(this); }
+}
+
+void RenderableObject::SetBuoyant(bool buoyant)
+{
+    if (buoyant == buoyant_) { return; }
+    buoyant_ = buoyant;
+    if (buoyant)
+    {
+        OceanBuoyancy::Register(this);
+    }
+    else
+    {
+        OceanBuoyancy::Unregister(this);
+        ClearRenderOffset();
+    }
+}
 
 void RenderableObject::Init(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
@@ -548,12 +567,38 @@ void RenderableObject::UpdateWorldBoundsCache() const
     worldBoundsDirty_ = false;
 }
 
+Math::mat4 RenderableObject::GetAuthoredModelMatrix() const
+{
+    return Math::mat4::Scaling(scale_) * Math::mat4::RotationFromEulerXYZRad(rotEuler_) *
+           Math::mat4::Translation(pos_);
+}
+
+void RenderableObject::SetRenderOffset(const Math::mat4& worldOffset)
+{
+    if (hasRenderOffset_ && std::memcmp(&renderOffset_.m, &worldOffset.m, sizeof(worldOffset.m)) == 0)
+    {
+        return;
+    }
+    renderOffset_ = worldOffset;
+    hasRenderOffset_ = true;
+    MarkTransformDirty();
+}
+
+void RenderableObject::ClearRenderOffset()
+{
+    if (!hasRenderOffset_) { return; }
+    renderOffset_ = Math::mat4::Identity();
+    hasRenderOffset_ = false;
+    MarkTransformDirty();
+}
+
 void RenderableObject::RebuildModelMatrix()
 {
-    Math::mat4 T = Math::mat4::Translation(pos_);
-    Math::mat4 S = Math::mat4::Scaling(scale_);
-    Math::mat4 R = Math::mat4::RotationFromEulerXYZRad(rotEuler_);
-    Math::mat4 M = S * R * T;
+    Math::mat4 M = GetAuthoredModelMatrix();
+    if (hasRenderOffset_)
+    {
+        M = M * renderOffset_;
+    }
     SetModelMatrix(M);
 }
 

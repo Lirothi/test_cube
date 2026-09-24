@@ -64,6 +64,9 @@ public:
         std::uint32_t lodCount = 1;
         std::uint32_t indexCount = 0;
         std::uint32_t triangleCount = 0;
+        // Mesh space -> clip for the image in `texture` (the frame it was rendered with, cached
+        // or not). Valid when state == Ready.
+        Math::mat4 viewProj;
     };
 
     MeshEditorPreviewScene();

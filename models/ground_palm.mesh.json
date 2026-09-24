@@ -3,11 +3,12 @@
   "geometry": "models/ground_palm/ground_palm.mesh.bin",
   "material": "ground_palm_0",
   "source": "import_staging\\ground_palm\\scene.gltf",
+  "texOffsScale": null,
   "uvDensity": [
     1.6391143798828125
   ],
   "windFoliage": [
     1.0
   ],
-  "windStrength": 1.0
+  "windStrength": 0.5
 }

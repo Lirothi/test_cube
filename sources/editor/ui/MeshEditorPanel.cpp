@@ -11,6 +11,7 @@
 #include "editor/EditorContext.h"
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/EditorLightDirection.h"
+#include "ocean/BuoyancyJson.h"
 #include "rendering/core/ExposureMetering.h"
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/core/Renderer.h"
@@ -200,7 +201,9 @@ void DrawMeshPreview(EditorContext& ctx,
     int highlightSubmeshOrdinal,
     const TextureCube* environment,
     float environmentExposure,
-    const EditorPreviewRenderer::PhysicalLighting* physical)
+    const EditorPreviewRenderer::PhysicalLighting* physical,
+    const std::vector<buoyancy::Pontoon>* pontoons,
+    int hoveredPontoon)
 {
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const float controlsHeight = ImGui::GetFrameHeightWithSpacing() +
@@ -299,6 +302,38 @@ void DrawMeshPreview(EditorContext& ctx,
     }
 
     DrawLocalAxesOverlay(drawList, min, max, camera);
+
+    // Pontoons over the picture, projected with the very matrix the picture was rendered with.
+    // A sphere is drawn as its silhouette circle: centre plus the radius along the camera's right.
+    if (pontoons && !pontoons->empty() && preview.state == MeshEditorPreviewScene::State::Ready)
+    {
+        const float pitch = std::clamp(camera.pitch, -1.55334f, 1.55334f);
+        const float cosPitch = std::cos(pitch);
+        const Math::float3 offset(cosPitch * std::sin(camera.yaw), std::sin(pitch), -cosPitch * std::cos(camera.yaw));
+        const Math::float3 right = offset.Cross(Math::float3(0.0f, 1.0f, 0.0f)).Normalized();
+        const auto project = [&](const Math::float3& p, ImVec2& out)
+        {
+            const Math::float4 clip = preview.viewProj.Transform(Math::float4(p, 1.0f));
+            if (clip.w <= 1e-5f) { return false; }
+            out = ImVec2(min.x + (clip.x / clip.w * 0.5f + 0.5f) * (max.x - min.x),
+                         min.y + (0.5f - clip.y / clip.w * 0.5f) * (max.y - min.y));
+            return true;
+        };
+        drawList->PushClipRect(min, max, true);
+        for (size_t i = 0; i < pontoons->size(); ++i)
+        {
+            const buoyancy::Pontoon& pontoon = (*pontoons)[i];
+            ImVec2 centre, edge;
+            if (!project(pontoon.center, centre) || !project(pontoon.center + right * pontoon.radius, edge)) { continue; }
+            const float radius = std::hypot(edge.x - centre.x, edge.y - centre.y);
+            const bool hot = static_cast<int>(i) == hoveredPontoon;
+            const ImU32 color = hot ? IM_COL32(255, 205, 60, 255) : IM_COL32(70, 200, 255, 210);
+            drawList->AddCircle(centre, radius, IM_COL32(20, 20, 22, 160), 40, hot ? 4.0f : 3.0f);
+            drawList->AddCircle(centre, radius, color, 40, hot ? 2.5f : 1.5f);
+            drawList->AddCircleFilled(centre, hot ? 3.5f : 2.5f, color);
+        }
+        drawList->PopClipRect();
+    }
 
     drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border));
     if (ImGui::Button("Frame"))
@@ -580,6 +615,14 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     const TextureCube* previewSky = ResolvePreviewSky(ctx, previewSkyExposure);
     EditorPreviewRenderer::PhysicalLighting levelLighting;
     const bool useLevelLighting = BuildPreviewLighting(ctx, levelLighting);
+    // The pontoons the Buoyancy section edits, over the preview while that section is open.
+    buoyancy::Layout pontoonOverlay;
+    if (buoyancyOpen_)
+    {
+        buoyancy::Settings settings;
+        if (const auto block = doc_.find("buoyancy"); block != doc_.end()) { buoyancy::ReadSettings(*block, settings); }
+        pontoonOverlay = buoyancy::Resolve(settings, doc_.value("geometry", std::string()));
+    }
     DrawMeshPreview(ctx,
         registry,
         previewScene_,
@@ -596,7 +639,9 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         hoveredChunk_,
         previewSky,
         previewSkyExposure,
-        useLevelLighting ? &levelLighting : nullptr);
+        useLevelLighting ? &levelLighting : nullptr,
+        buoyancyOpen_ ? &pontoonOverlay.pontoons : nullptr,
+        hoveredPontoon_);
     ImGui::EndChild();
 
     ImGui::SameLine(0.0f, kSplitterWidth);
@@ -678,6 +723,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     // Collected while drawing the settings pane; consumed by the preview on the NEXT frame.
     int hoveredSlotThisFrame = -1;
     int hoveredChunkThisFrame = -1;
+    int hoveredPontoonThisFrame = -1;
 
     // --- Chunks (chunked meshes only) -------------------------------------------------------------
     // These submeshes are spatial TILES of one surface, not material slots, so they get their own
@@ -985,6 +1031,20 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         }
     }
 
+    // Buoyancy: where the mesh floats and how it moves, for every placed instance whose "Floats on
+    // the ocean" is on. Closed by default like Wind; while open the preview draws the pontoons.
+    ImGui::Spacing();
+    if (expandBuoyancy_)
+    {
+        ImGui::SetNextItemOpen(true);
+        expandBuoyancy_ = false;
+    }
+    buoyancyOpen_ = ImGui::CollapsingHeader("Buoyancy");
+    if (buoyancyOpen_)
+    {
+        DrawBuoyancySection(hoveredPontoonThisFrame);
+    }
+
     // Texturing (separate from Wind above — unrelated knobs, and mixing them made the wind block
     // look like it owned the tiling).
     ImGui::Spacing();
@@ -1148,6 +1208,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     }
 
     hoveredSlot_ = hoveredSlotThisFrame;
+    hoveredPontoon_ = hoveredPontoonThisFrame;
     hoveredChunk_ = hoveredChunkThisFrame;
 
     ImGui::Separator();
@@ -1227,6 +1288,162 @@ float MeshEditorPanel::WindFoliageForSlot(size_t slot) const
     if (it == doc_.end() || !it->is_array() || slot >= it->size()) { return 0.0f; }
     const auto& v = (*it)[slot];
     return v.is_number() ? v.get<float>() : 0.0f;
+}
+
+void MeshEditorPanel::DrawBuoyancySection(int& hoveredPontoonThisFrame)
+{
+    buoyancy::Settings settings;
+    if (const auto block = doc_.find("buoyancy"); block != doc_.end()) { buoyancy::ReadSettings(*block, settings); }
+    const std::string geometry = doc_.value("geometry", std::string());
+    const buoyancy::Layout layout = buoyancy::Resolve(settings, geometry);
+    bool changed = false;
+
+    ImGui::TextDisabled("Used by placed instances whose Inspector says \"Floats on the ocean\".");
+    if (!layout.Valid())
+    {
+        ImGui::TextColored(ImVec4(0.96f, 0.62f, 0.16f, 1.0f),
+            "No pontoons: nothing of this mesh is below its waterline at this draft.");
+    }
+
+    // --- How it floats ------------------------------------------------------------------------
+    bool autoDraft = settings.draft < 0.0f;
+    if (ImGui::Checkbox("Automatic draft", &autoDraft))
+    {
+        settings.draft = autoDraft ? -1.0f : layout.draft;
+        changed = true;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Automatic = a quarter of the hull's height (keel to gunwale, %.2f m here).",
+            layout.hullHeight);
+    }
+    ImGui::BeginDisabled(autoDraft);
+    float draft = autoDraft ? layout.draft : settings.draft;
+    if (ImGui::SliderFloat("Draft (m)", &draft, 0.01f, std::max(layout.hullHeight, 0.05f), "%.3f"))
+    {
+        settings.draft = std::max(draft, 0.0f);
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("How deep the hull sits in calm water: the waterline above the mesh's lowest\n"
+                          "point. Automatic pontoons sit ON this waterline and follow it.");
+    }
+    if (ImGui::SliderFloat("Inertia", &settings.inertia, 0.25f, 8.0f, "%.2f", ImGuiSliderFlags_Logarithmic))
+    {
+        changed = true;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Added mass. 1 = the calibrated hull. Higher = the SAME draft, but heave, pitch\n"
+                          "and roll answer the waves sqrt(x) slower: a heavy boat wallows, a float bobs.");
+    }
+    if (ImGui::SliderFloat("Damping", &settings.damping, 0.0f, 1.0f, "%.2f"))
+    {
+        changed = true;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Damping ratio of the heave: 0 rings on forever, 1 settles without overshoot.");
+    }
+
+    // --- Where it floats ----------------------------------------------------------------------
+    ImGui::SeparatorText("Pontoons");
+    if (settings.pontoons.empty())
+    {
+        ImGui::TextDisabled("Automatic: %d on the hull's waterplane (re-placed with the draft).",
+            static_cast<int>(layout.pontoons.size()));
+    }
+    else
+    {
+        ImGui::TextDisabled("Authored: %d.", static_cast<int>(settings.pontoons.size()));
+    }
+    if (ImGui::Button("Place automatically"))
+    {
+        buoyancy::Settings automatic = settings;
+        automatic.pontoons.clear();
+        settings.pontoons = buoyancy::Resolve(automatic, geometry).pontoons;
+        changed = true;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Write the automatic layout into the mesh as pontoons you can edit.");
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(settings.pontoons.empty());
+    if (ImGui::Button("Use automatic"))
+    {
+        settings.pontoons.clear();
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("Drop the authored pontoons: the runtime places them from the hull itself.");
+    }
+
+    // Editing an automatic pontoon turns the whole set into authored ones -- the row you touched
+    // cannot stay automatic while it holds your number.
+    std::vector<buoyancy::Pontoon> rows = settings.pontoons.empty() ? layout.pontoons : settings.pontoons;
+    int removeIndex = -1;
+    bool rowsChanged = false;
+    for (size_t i = 0; i < rows.size(); ++i)
+    {
+        ImGui::PushID(static_cast<int>(2000 + i));
+        float v[4] = { rows[i].center.x, rows[i].center.y, rows[i].center.z, rows[i].radius };
+        ImGui::SetNextItemWidth(-ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
+        if (ImGui::DragFloat4("##pontoon", v, 0.005f, 0.0f, 0.0f, "%.3f"))
+        {
+            rows[i].center = Math::float3(v[0], v[1], v[2]);
+            rows[i].radius = std::max(v[3], 0.01f);
+            rowsChanged = true;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            hoveredPontoonThisFrame = static_cast<int>(i);
+            ImGui::SetTooltip("Pontoon %d: centre x, y, z and radius, in the mesh's metres.", static_cast<int>(i));
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("x", ImVec2(ImGui::GetFrameHeight(), 0.0f))) { removeIndex = static_cast<int>(i); }
+        if (ImGui::IsItemHovered()) { hoveredPontoonThisFrame = static_cast<int>(i); }
+        ImGui::PopID();
+    }
+    if (removeIndex >= 0)
+    {
+        rows.erase(rows.begin() + removeIndex);
+        rowsChanged = true;
+    }
+    if (ImGui::Button("Add pontoon"))
+    {
+        // At the middle of the set, the average size: a starting point to drag, not a guess.
+        buoyancy::Pontoon added;
+        added.center = Math::float3(0.0f, layout.waterline, 0.0f);
+        added.radius = 0.25f;
+        if (!rows.empty())
+        {
+            Math::float3 sum(0.0f);
+            float radius = 0.0f;
+            for (const buoyancy::Pontoon& p : rows) { sum += p.center; radius += p.radius; }
+            added.center = sum / static_cast<float>(rows.size());
+            added.radius = radius / static_cast<float>(rows.size());
+        }
+        rows.push_back(added);
+        rowsChanged = true;
+    }
+    if (rowsChanged)
+    {
+        settings.pontoons = std::move(rows);
+        changed = true;
+    }
+
+    if (changed)
+    {
+        const nlohmann::json block = buoyancy::WriteSettings(settings);
+        if (block.empty()) { doc_.erase("buoyancy"); } // absent == automatic everything
+        else { doc_["buoyancy"] = block; }
+    }
+    ImGui::TextDisabled("Applies to placed instances on Save.");
 }
 
 void MeshEditorPanel::SetWindFoliageForSlot(size_t slot, float value)
@@ -1677,6 +1894,7 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
     if (rebaked)
     {
         if (MeshManager* meshes = ctx.renderer.GetMeshManager()) { meshes->Clear(); }
+        buoyancy::ForgetGeometry(doc_.value("geometry", std::string()));
     }
 
     // Live-apply to placed instances (must happen AFTER the file is written AND after any re-bake —

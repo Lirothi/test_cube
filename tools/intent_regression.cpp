@@ -1268,12 +1268,62 @@ void TestPlaceIsExact(const EditorActionContext& actionCtx)
         status.find("into Palm Infill") != std::string::npos,
         "a named group overrides the kind's own: " + status);
 
+    // Names continue the level's numbering (spawn and place): the next number is after the highest
+    // "<stem> NNN" the document has. Restarting at 001 per call gave duplicates a phrase could not
+    // tell apart. Only a real "<stem> <digits>" counts -- a longer stem or a word suffix does not.
+    {
+        EditorSceneDocument named;
+        named.Objects().push_back(MakeMesh(1, "fishing_boat 001", "models/fishing_boat.mesh.json", { 0.0f, 0.0f, 0.0f }));
+        named.Objects().push_back(MakeMesh(2, "fishing_boat 007", "models/fishing_boat.mesh.json", { 0.0f, 0.0f, 0.0f }));
+        named.Objects().push_back(MakeMesh(3, "fishing_boat 12b", "models/fishing_boat.mesh.json", { 0.0f, 0.0f, 0.0f }));
+        named.Objects().push_back(MakeMesh(4, "fishing_boat_big 040", "models/fishing_boat.mesh.json", { 0.0f, 0.0f, 0.0f }));
+        named.Objects().push_back(MakeMesh(5, "fishing_boat", "models/fishing_boat.mesh.json", { 0.0f, 0.0f, 0.0f }));
+        Check(editornames::HighestNameOrdinal(named, "fishing_boat") == 7,
+            "the next boat is 008: only 'fishing_boat <digits>' names count");
+        Check(editornames::HighestNameOrdinal(named, "old_boat") == 0, "a stem nobody has starts at 001");
+    }
+
     EditorIntent misspelt = preview.resolved;
     misspelt.params["items"][1]["asset"] = "models/no_such_palm.mesh.json";
     status.clear();
     Check(place.build(actionCtx, {}, misspelt, status) == nullptr &&
         status.find("Item 2") != std::string::npos,
         "one unknown asset refuses the whole list and names the item: " + status);
+}
+
+// Buoyancy is a per-object FLAG in the document: written while on, ABSENT while off (so a level
+// that never floated anything saves byte-identical), one undo entry for the whole group, and an
+// undo that takes the key away again rather than leaving "buoyant": false behind.
+void TestBuoyancyIsAFlagThatUndoes(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+    Check(EditorActionRegistry::Builtin().Find("setBuoyant") != nullptr, "setBuoyant is a registered action");
+    std::string error;
+    EditorIntent intent;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"setBuoyant","target":{"filter":["palm"]},"params":{"enabled":true}})",
+        intent, error), "a setBuoyant answer parses: " + error);
+    const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+    Check(preview.executable && preview.targets.size() == 3, "setBuoyant previews the three palms: " + preview.problem);
+
+    EditorCommandStack stack;
+    std::string status;
+    Check(ExecuteIntent(actionCtx, stack, preview, status), status);
+    Check(stack.HistorySize() == 1, "floating three palms is ONE history entry");
+    Check(status.find("Floating 3") != std::string::npos, "and says what it floated: " + status);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        const auto flag = object.properties.find("buoyant");
+        const bool buoyant = flag != object.properties.end() && flag->is_boolean() && flag->get<bool>();
+        Check(buoyant == (object.id.value <= 3), "the palms float and the rock does not");
+    }
+
+    stack.Undo(ctx);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        Check(object.properties.find("buoyant") == object.properties.end(),
+            "undo takes the key away -- the level saves exactly as before");
+    }
 }
 
 void TestReplace(const EditorActionContext& actionCtx, GrammarIntentSource& grammar)
@@ -2643,6 +2693,7 @@ int main(int argc, char** argv)
         TestReplace(actionCtx, grammar);
         TestSpawnPlacement(actionCtx);
         TestPlaceIsExact(actionCtx);
+        TestBuoyancyIsAFlagThatUndoes(actionCtx);
         TestSpawnJoinsTheGroupItsKindUses(actionCtx);
         TestTheWholeScatterPhrase(actionCtx);
         std::puts("Intent regression: actions OK");

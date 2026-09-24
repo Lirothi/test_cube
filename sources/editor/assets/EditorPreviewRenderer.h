@@ -182,7 +182,14 @@ public:
         const TextureCube& cube,
         std::uint32_t size);
 
+    // The view-projection the LAST RecordPreview framed its mesh with (the model matrix is the
+    // identity, so this maps mesh space straight to clip). An overlay drawn over that image --
+    // the Mesh Editor's pontoons -- projects with it and cannot drift from the picture.
+    const Math::mat4& LastViewProj() const { return lastViewProj_; }
+
 private:
+    Math::mat4 lastViewProj_;
+
     struct RenderSlot
     {
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;

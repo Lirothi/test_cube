@@ -9,6 +9,7 @@
 #include "core/math/Math.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "materials/Texture2D.h"
+#include "ocean/OceanReadback.h"
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanSurfSim.h" // surf sim injection (docs/ocean_surf_sim_plan.md)
 #include "ocean/OceanWetness.h"
@@ -99,6 +100,14 @@ public:
     // SceneRenderer calls this as the pass builder. Empty return = the sim is off this frame.
     std::function<void(RenderGraphPassContext)> BuildSurfSimPass(RenderGraphPassContext& ctx);
     std::function<void(RenderGraphPassContext)> BuildWetnessPass(RenderGraphPassContext& ctx);
+    // Main_OceanReadback's builder: the surface to the CPU, only on a frame someone asked for it.
+    std::function<void(RenderGraphPassContext)> BuildReadbackPass(RenderGraphPassContext& ctx)
+    {
+        return readback_.BuildPass(ctx, *this);
+    }
+    // The CPU copy of the surface (buoyancy). See ocean/OceanReadback.h.
+    OceanReadback& GetReadback() { return readback_; }
+    const OceanReadback& GetReadback() const { return readback_; }
     void PrepareRender(RenderGraphPassContext& ctx) override;
     bool RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     // Only to give the surface draw a GPU scope — see the note on the definition.
@@ -268,11 +277,16 @@ private:
     void UpdateFoamTrailState();
 
 private:
+    // The CPU copy of the surface reads the SAME private CB getters the vertex shader's constants
+    // come from, so the two cannot drift apart.
+    friend class OceanReadback;
+
     Camera* camera_ = nullptr;
     Scene* scene_ = nullptr;
     OceanSimulation* simulation_ = nullptr;
     std::unique_ptr<OceanSurfSim> surfSim_; // surf sim injection
     std::unique_ptr<OceanWetness> wetness_;
+    OceanReadback readback_;
 
     Math::float4 fogParams0_{}; // density 0 = disabled, which is the default
     Math::float4 fogParams1_{};

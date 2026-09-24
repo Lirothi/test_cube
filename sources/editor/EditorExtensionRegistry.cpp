@@ -16,12 +16,15 @@
 #include "app/scene/SceneObjectFactory.h"
 #include "core/math/Math.h"
 #include "editor/EditorContext.h"
+#include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditorCommandStack.h"
+#include "editor/commands/SetBuoyantCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SetMaterialSlotCommand.h"
 #include "editor/commands/SetParticlePresetCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "imgui.h"
+#include "ocean/OceanRenderable.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/renderables/GBufferRenderable.h"
 #include "rendering/renderables/RenderableObjectBase.h"
@@ -574,6 +577,70 @@ namespace
                 gb->MaterialParamsRef().metalRough = Math::float2(metalRough[0], metalRough[1]);
                 obj.properties["metalRough"] = { metalRough[0], metalRough[1] };
                 ctx.document.SetDirty(true);
+            }
+
+            DrawBuoyancy(ctx, commandStack, obj, runtime);
+        }
+
+    private:
+        // Offered only in a level that HAS an ocean: a switch with nothing to float on is not shown.
+        static void DrawBuoyancy(EditorContext& ctx, EditorCommandStack& commandStack,
+            const EditorObject& obj, RenderableObjectBase* runtime)
+        {
+            OceanRenderable* ocean = ctx.scene.FindOceanRenderable();
+            if (!ocean) { return; }
+            ImGui::SeparatorText("Buoyancy");
+            const auto flag = obj.properties.find("buoyant");
+            bool buoyant = flag != obj.properties.end() && flag->is_boolean() && flag->get<bool>();
+            if (ImGui::Checkbox("Floats on the ocean", &buoyant))
+            {
+                // Every selected static mesh, one undo entry.
+                auto composite = std::make_unique<CompositeCommand>(
+                    buoyant ? "Enable Buoyancy" : "Disable Buoyancy");
+                for (const EditorObjectId id : ctx.selection.Ordered())
+                {
+                    const EditorObject* selected = ctx.document.Find(id);
+                    if (selected && selected->type == "staticMesh")
+                    {
+                        composite->Add(std::make_unique<SetBuoyantCommand>(id, buoyant));
+                    }
+                }
+                if (composite->Empty()) { composite->Add(std::make_unique<SetBuoyantCommand>(obj.id, buoyant)); }
+                commandStack.Execute(ctx, std::move(composite));
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "Heave, pitch and roll on the ocean's waves. Position and heading stay where you put\n"
+                    "them; the saved transform is never touched.\n\n"
+                    "Where it floats (pontoons, draft) and how it moves (inertia, damping) belong to the\n"
+                    "MESH: Mesh Editor > Buoyancy. Waves need the ocean preset's readbackCascades set to\n"
+                    "One or Two; with None everything floats on a flat surface.");
+            }
+            if (!ocean->IsVisible())
+            {
+                ImGui::TextDisabled("The ocean is disabled -- nothing floats.");
+                return;
+            }
+            if (!buoyant) { return; }
+            RenderableObject* object = runtime ? runtime->AsRenderableObject() : nullptr;
+            std::vector<Math::float4> pontoons;
+            if (object && ctx.scene.Buoyancy().GetWorldPontoons(object, pontoons))
+            {
+                const buoyancy::Settings& settings = object->GetBuoyancySettings();
+                ImGui::TextDisabled("%d %s pontoons, inertia %.2f, damping %.2f",
+                    static_cast<int>(pontoons.size()), settings.pontoons.empty() ? "automatic" : "authored",
+                    settings.inertia, settings.damping);
+            }
+            else
+            {
+                ImGui::TextDisabled("Not floating yet (no pontoons could be placed on this mesh).");
+            }
+            const auto mesh = obj.properties.find("mesh");
+            if (mesh != obj.properties.end() && mesh->is_string() && ctx.openMeshEditor &&
+                ImGui::SmallButton("Edit pontoons in the Mesh Editor"))
+            {
+                ctx.openMeshEditor(mesh->get<std::string>() + "#buoyancy");
             }
         }
     };
