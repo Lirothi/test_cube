@@ -32821,6 +32821,7 @@
       "radius": 1.0,
       "softKnee": 0.5,
       "sunGlareIntensity": 0.014999999664723873,
+      "sunGlareRadiusDeg": 2.0,
       "sunRaysBundles": 48,
       "sunRaysCount": 150,
       "sunRaysHalo": 0.06499999761581421,
@@ -32895,7 +32896,7 @@
       "worldRadius": 1.2000000476837158
     },
     "heightFog": {
-      "density": 0.0010000000474974513,
+      "density": 0.001500000013038516,
       "enabled": true,
       "heightFalloff": 0.05999999865889549,
       "maxOpacity": 0.8999999761581421,
