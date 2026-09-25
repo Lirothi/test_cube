@@ -31,6 +31,8 @@
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
 #include "rendering/core/RenderConstants.h"
+#include "app/camera/Camera.h"                  // stage 9: the sun glare's view
+#include "rendering/lighting/DirectionalLight.h" // stage 9: the sun's direction and disc
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
 
@@ -90,6 +92,35 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
                 // failure here is not a failure to bloom -- the split falls back to neutral.
                 if (bloomKernelReady_) { ReadKernelPixels(desc.path.c_str()); }
                 up.SubmitAndWait(renderer);
+            }
+        }
+    }
+    // The sun corona's image, lazily and only while the corona is on and names one; a new path
+    // reloads it. WIC loads get a CPU-built mip chain, which the corona's thin rays need: the
+    // image is drawn smaller than its own size and would shimmer from mip 0.
+    {
+        const BloomSettings& b = frame.settings.bloom;
+        const std::string want = b.sunRaysIntensity > 0.0f ? b.sunRaysTexture : std::string();
+        if (want != coronaLoadedPath_)
+        {
+            coronaLoadedPath_ = want;
+            coronaReady_ = false;
+            if (!want.empty())
+            {
+                renderer->WaitForPreviousFrame();
+                UploadBatch up;
+                if (up.Begin(renderer))
+                {
+                    Texture2D::CreateDesc desc;
+                    desc.path = std::wstring(want.begin(), want.end());
+                    desc.usage = Texture2D::Usage::AlbedoSRGB;
+                    coronaReady_ = coronaTex_.CreateFromFile(renderer, up.CommandList(), desc, up.KeepAlive());
+                    up.SubmitAndWait(renderer);
+                }
+                if (!coronaReady_)
+                {
+                    LOG_WARNING(logging::LogCategory::Render, "sun corona image not loaded ({}): procedural corona", want);
+                }
             }
         }
     }
@@ -412,6 +443,7 @@ void BloomRenderer::Build(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     {
         FlaresComposite(renderer, cl, hdrSource, flareConv);
     }
+    SunGlareComposite(renderer, cl, hdrSource);
     // ...and the whole chain back to shader-readable for the tone curve, in one marker.
     renderer->EmitPoint(cl, pts.read);
 }
@@ -954,6 +986,96 @@ void BloomRenderer::FlaresComposite(Renderer* renderer, ID3D12GraphicsCommandLis
     }
 }
 
+bool BloomRenderer::SunInView(Math::float3& viewDir, float& projX, float& projY, float& discTan) const
+{
+    if (!frame_ || !frame_->camera || !frame_->dirLight) { return false; }
+    // The direction TO the sun, into view space (row vectors: v * view, rotation part only).
+    const Math::mat4& view = frame_->camera->GetViewMatrix();
+    Math::float3 toSun = -frame_->dirLight->GetDirection();
+    const float len = std::sqrt(toSun.x * toSun.x + toSun.y * toSun.y + toSun.z * toSun.z);
+    if (!(len > 0.0f)) { return false; }
+    toSun = toSun * (1.0f / len);
+    viewDir = Math::float3(
+        toSun.x * view.m._11 + toSun.y * view.m._21 + toSun.z * view.m._31,
+        toSun.x * view.m._12 + toSun.y * view.m._22 + toSun.z * view.m._32,
+        toSun.x * view.m._13 + toSun.y * view.m._23 + toSun.z * view.m._33);
+    if (viewDir.z <= 0.02f) { return false; } // behind the camera: nothing to measure it from
+    const Math::mat4& proj = frame_->camera->GetProjMatrixNoJitter();
+    projX = proj.m._11;
+    projY = proj.m._22;
+    // Wholly off screen (centre more than a quarter-screen past an edge): the shaders would fade it
+    // to nothing anyway.
+    if (std::abs(viewDir.x * projX / viewDir.z) > 1.5f || std::abs(viewDir.y * projY / viewDir.z) > 1.5f)
+    {
+        return false;
+    }
+    discTan = std::tan(std::max(frame_->dirLight->GetSunHalfApexRadians(), 0.0025f));
+    return true;
+}
+
+SunRaysConstants BloomRenderer::SunRays() const
+{
+    SunRaysConstants c{};
+    if (!frame_) { return c; }
+    const BloomSettings& settings = frame_->settings.bloom;
+    Math::float3 v;
+    float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
+    if (!(settings.sunRaysIntensity > 0.0f) || !SunInView(v, sx, sy, discTan)) { return c; }
+    constexpr float kDeg = 3.14159265f / 180.0f;
+    c.dir = Math::float4(v.x, v.y, v.z, std::max(settings.sunRaysHalo, 0.0f));
+    c.proj = Math::float4(sx, sy, 0.5f * sx * discTan, 0.5f * sy * discTan);
+    c.shape = Math::float4(settings.sunRaysIntensity, static_cast<float>(std::max(settings.sunRaysCount, 16u)),
+        std::max(settings.sunRaysLengthDeg, 0.1f) * kDeg, std::max(settings.sunRaysSpikes, 0.0f));
+    c.look = Math::float4(std::max(settings.sunRaysSharpness, 1.0f), settings.sunRaysRotationDeg * kDeg,
+        std::atan(discTan), static_cast<float>(std::max(settings.sunRaysSpikeCount, 2u)));
+    c.extra = Math::float4(static_cast<float>(std::max(settings.sunRaysBundles, 1u)),
+        std::max(settings.sunRaysHaloRadiusDeg, 0.1f) * kDeg, 0.0f, 0.0f);
+    // IMAGE MODE: the image laid about the sun, its half-width where the procedural length was.
+    if (coronaReady_ && !settings.sunRaysTexture.empty())
+    {
+        c.shape.z = std::max(settings.sunRaysTextureSizeDeg, 0.5f) * kDeg;
+        c.extra.z = 1.0f;
+        c.extra.w = static_cast<float>(std::max(coronaTex_.GetWidth(), 1u));
+    }
+    return c;
+}
+
+void BloomRenderer::SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                      D3D12_CPU_DESCRIPTOR_HANDLE hdrSource)
+{
+    const BloomSettings& settings = frame_->settings.bloom;
+    Math::float3 v;
+    float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
+    if (!(settings.sunGlareIntensity > 0.0f) || !SunInView(v, sx, sy, discTan))
+    {
+        return;
+    }
+
+    const auto& D = renderer->GetDeferredForFrame();
+    auto convMaterial = resources_->GetBloomConvMaterial();
+    if (!convMaterial) { return; }
+    const UINT convCb = resources_->GetBloomConvCBSizeBytes();
+    const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
+    const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
+        renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+    constexpr float kDeg = 3.14159265f / 180.0f;
+    BloomConvConstants g{};
+    g.convStage = 9u;
+    g.sourceSize = uint2{ D.bloomWidth, D.bloomHeight };
+    g.sunGlareDir = Math::float4(v.x, v.y, v.z, 0.0f);
+    g.sunGlareProj = Math::float4(sx, sy, 0.5f * sx * discTan, 0.5f * sy * discTan);
+    g.sunGlareParams = Math::float4(settings.sunGlareIntensity,
+        std::max(settings.sunGlareRadiusDeg, 0.05f) * kDeg,
+        std::max(settings.sunGlareVeil, 0.0f),
+        std::max(settings.sunGlareVeilRadiusDeg, 0.1f) * kDeg);
+    RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
+        [&](uint8_t* dest) { resources_->WriteBloomConvConstants(g, dest); },
+        { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
+        { D.streakAUAV, D.bloomUpMipUAV[0], renderer->Exposure().ExposureUav() },
+        samplerTable, D.bloomWidth, D.bloomHeight, D.bloomUp.Get());
+}
+
 // P8C / P8C-2 -- convolution bloom. Same slot in the frame as the pyramid, same output texture,
 // and the tonemap cannot tell which one ran: `intensity` scales either.
 //
@@ -1299,6 +1421,7 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         CPU_SCOPE(ProfilerScopes::kBloomRecFlares);
         FlaresComposite(renderer, cl, hdrSource, conv);
     }
+    SunGlareComposite(renderer, cl, hdrSource);
     // ...and all of them back to shader-readable for the tone curve, in one marker.
     renderer->EmitPoint(cl, pts.read);
 }

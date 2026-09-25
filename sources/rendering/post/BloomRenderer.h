@@ -71,6 +71,9 @@ public:
 
     // Read by the tone curve: how much of the chain to add back, and the scale it is added with.
     BloomApplyConstants ApplyConstants() const;
+    // The sun's star for the tone curve pass (BloomSettings::sunRays*); off when the setting is 0
+    // or the sun is behind the camera / well off screen.
+    SunRaysConstants SunRays() const;
     float TonemapBloomScale() const;
 
 private:
@@ -86,6 +89,13 @@ private:
                      const Points& pts);
     void FlaresComposite(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                          D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const BloomConvConstants& conv);
+    // Stage 9: the fake sun glare (BloomSettings::sunGlare*), additive onto bloom mip 0 after
+    // either method's own output. Records nothing when it is off or the sun is not in view.
+    void SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                           D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
+    // The sun in this frame's view: its direction in view space, the projection's x/y scales and
+    // the tangent of the disc's half angle. False when it is behind the camera or well off screen.
+    bool SunInView(Math::float3& viewDir, float& projX, float& projY, float& discTan) const;
     void BakeFlareBokeh(Renderer* renderer, uint32_t blades);
     bool ReadKernelPixels(const wchar_t* path);
     void SurveyKernel(float ratio);
@@ -169,6 +179,17 @@ private:
     // setting is the whole reload gate, which is why the old once-only `bloomKernelTried_`
     // flag is gone rather than kept beside it -- two gates would have disagreed.
     std::string bloomKernelLoadedPath_;
+public:
+    // The sun corona's image for the tone curve's t4 (BloomSettings::sunRaysTexture), or
+    // `fallback` while none is resident -- the table is positional, so something is always staged.
+    D3D12_CPU_DESCRIPTOR_HANDLE CoronaSrv(D3D12_CPU_DESCRIPTOR_HANDLE fallback) const
+    {
+        return coronaReady_ ? coronaTex_.GetSRVCPU() : fallback;
+    }
+private:
+    Texture2D coronaTex_;
+    bool coronaReady_ = false;
+    std::string coronaLoadedPath_;
     // P8C-2o -- THE SAME PIXELS ON THE CPU, for UE's centre/scatter survey.
     //
     // They survey the kernel on the GPU (FindKernelCenter -> SurveyKernelCenterEnergy ->

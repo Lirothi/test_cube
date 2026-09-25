@@ -936,6 +936,25 @@ namespace
             return true;
         }
         if (setting == "bloom.ghostBokeh") { scene.BloomRef().convGhostBokeh = value; return true; }
+        // The fake sun glare (BloomSettings::sunGlare*).
+        if (setting == "bloom.sunGlare") { scene.BloomRef().sunGlareIntensity = std::max(0.0f, value); return true; }
+        if (setting == "bloom.sunGlareRadius") { scene.BloomRef().sunGlareRadiusDeg = std::max(0.05f, value); return true; }
+        if (setting == "bloom.sunGlareVeil") { scene.BloomRef().sunGlareVeil = std::max(0.0f, value); return true; }
+        if (setting == "bloom.sunGlareVeilRadius") { scene.BloomRef().sunGlareVeilRadiusDeg = std::max(0.1f, value); return true; }
+        // The sun's corona (BloomSettings::sunRays*).
+        if (setting == "bloom.sunRays") { scene.BloomRef().sunRaysIntensity = std::max(0.0f, value); return true; }
+        if (setting == "bloom.sunRaysCount") { scene.BloomRef().sunRaysCount = static_cast<uint32_t>(std::clamp(value, 16.0f, 2000.0f)); return true; }
+        if (setting == "bloom.sunRaysBundles") { scene.BloomRef().sunRaysBundles = static_cast<uint32_t>(std::clamp(value, 1.0f, 128.0f)); return true; }
+        if (setting == "bloom.sunRaysSharpness") { scene.BloomRef().sunRaysSharpness = std::clamp(value, 1.0f, 16.0f); return true; }
+        if (setting == "bloom.sunRaysHalo") { scene.BloomRef().sunRaysHalo = std::max(0.0f, value); return true; }
+        if (setting == "bloom.sunRaysHaloRadius") { scene.BloomRef().sunRaysHaloRadiusDeg = std::max(0.1f, value); return true; }
+        // 0 = the procedural corona, 1 = astra6's image (the only way to A/B the two from a command line).
+        if (setting == "bloom.sunRaysTexture") { scene.BloomRef().sunRaysTexture = value != 0.0f ? "textures/sun_corona_v2.png" : ""; return true; }
+        if (setting == "bloom.sunRaysTextureSize") { scene.BloomRef().sunRaysTextureSizeDeg = std::max(0.5f, value); return true; }
+        if (setting == "bloom.sunRaysLength") { scene.BloomRef().sunRaysLengthDeg = std::max(0.1f, value); return true; }
+        if (setting == "bloom.sunRaysSpikes") { scene.BloomRef().sunRaysSpikes = std::max(0.0f, value); return true; }
+        if (setting == "bloom.sunRaysSpikeCount") { scene.BloomRef().sunRaysSpikeCount = static_cast<uint32_t>(std::clamp(value, 2.0f, 32.0f)); return true; }
+        if (setting == "bloom.sunRaysRotation") { scene.BloomRef().sunRaysRotationDeg = value; return true; }
         if (setting == "bloom.ghostThreshold") { scene.BloomRef().convGhostThreshold = value; return true; }
         if (setting == "bloom.ghostIntensity")
         {

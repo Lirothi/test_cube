@@ -335,6 +335,11 @@ void SceneTonemapCBHandles::Populate(Material* material)
     bilateralInvLogLumRange = material->ComputeCB0FieldHandle("bilateralInvLogLumRange");
     bloomSceneApply = material->ComputeCB0FieldHandle("bloomSceneApply");
     bloomScatterApply = material->ComputeCB0FieldHandle("bloomScatterApply");
+    sunRaysDir = material->ComputeCB0FieldHandle("sunRaysDir");
+    sunRaysProj = material->ComputeCB0FieldHandle("sunRaysProj");
+    sunRaysShape = material->ComputeCB0FieldHandle("sunRaysShape");
+    sunRaysLook = material->ComputeCB0FieldHandle("sunRaysLook");
+    sunRaysExtra = material->ComputeCB0FieldHandle("sunRaysExtra");
 }
 
 void SceneExposureHistogramCBHandles::Populate(Material* material)
@@ -1282,6 +1287,9 @@ void BloomConvHandles::Populate(Material* material)
     streakOffsets = material->ComputeCB0FieldHandle("streakOffsets");
     ghostCount = material->ComputeCB0FieldHandle("ghostCount");
     ghostIntensity = material->ComputeCB0FieldHandle("ghostIntensity");
+    sunGlareDir = material->ComputeCB0FieldHandle("sunGlareDir");
+    sunGlareProj = material->ComputeCB0FieldHandle("sunGlareProj");
+    sunGlareParams = material->ComputeCB0FieldHandle("sunGlareParams");
 }
 
 void LensFlareHandles::Populate(Material* material)
@@ -1392,6 +1400,9 @@ void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants
     matBloomConvCS_->UpdateCBField(h.streakOffsets, d.streakOffsets, dest);
     matBloomConvCS_->UpdateCBField(h.ghostCount, d.ghostCount, dest);
     matBloomConvCS_->UpdateCBField(h.ghostIntensity, d.ghostIntensity, dest);
+    matBloomConvCS_->UpdateCBField(h.sunGlareDir, d.sunGlareDir, dest);
+    matBloomConvCS_->UpdateCBField(h.sunGlareProj, d.sunGlareProj, dest);
+    matBloomConvCS_->UpdateCBField(h.sunGlareParams, d.sunGlareParams, dest);
 }
 
 UINT SceneResourceBootstrapper::GetFogApplyCBSizeBytes() const
@@ -1735,6 +1746,7 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
                                                       const render::CameraExposureSettings& camera,
                                                       const BloomApplyConstants& bloomApply,
                                                       bool bilateralBuilt,
+                                                      const SunRaysConstants& sunRays,
                                                       uint8_t* dest) const
 {
     if (!matTonemapCS_ || !dest)
@@ -1777,6 +1789,11 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
         1.0f / (ExposureMeteringConstants::kMaxLogLum - ExposureMeteringConstants::kMinLogLum), dest);
     matTonemapCS_->UpdateCBField(h.bloomSceneApply, bloomApply.sceneApply, dest);
     matTonemapCS_->UpdateCBField(h.bloomScatterApply, bloomApply.scatterApply, dest);
+    matTonemapCS_->UpdateCBField(h.sunRaysDir, sunRays.dir, dest);
+    matTonemapCS_->UpdateCBField(h.sunRaysProj, sunRays.proj, dest);
+    matTonemapCS_->UpdateCBField(h.sunRaysShape, sunRays.shape, dest);
+    matTonemapCS_->UpdateCBField(h.sunRaysLook, sunRays.look, dest);
+    matTonemapCS_->UpdateCBField(h.sunRaysExtra, sunRays.extra, dest);
 }
 
 void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMeteringConstants& data,

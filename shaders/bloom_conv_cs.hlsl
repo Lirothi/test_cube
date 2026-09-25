@@ -39,7 +39,7 @@ SamplerState gSmp : register(s0);
 
 cbuffer BloomConvCB : register(b0)
 {
-    uint  convStage;        // 0 setup, 2 resolve, 3 kernel resample, 4 anamorphic streak
+    uint  convStage;        // 0 setup, 2 resolve, 3 kernel resample, 4-7 anamorphic streak, 8 ghosts, 9 sun glare
     uint  exposureEnabled;
     uint2 transformSize;    // the ACTIVE padded power-of-two grid (may be a sub-grid of the texture)
     uint2 imageSize;        // how much of it the frame occupies; the rest is the zero pad
@@ -103,6 +103,11 @@ cbuffer BloomConvCB : register(b0)
     // image scaled about the screen centre.
     uint  ghostCount;
     float ghostIntensity;
+    // Stage 9, the FAKE SUN GLARE (BloomSettings::sunGlare*). View space is the camera's (+z
+    // forward, +y up); the projection's x/y scales turn a view direction into NDC and back.
+    float4 sunGlareDir;      // xyz: direction TO the sun, view space, unit; w: unused
+    float4 sunGlareProj;     // xy: projection _11/_22; zw: the sun disc's radius in source UV
+    float4 sunGlareParams;   // x: intensity, y: core radius (rad), z: veil weight, w: veil radius (rad)
 };
 
 // The exposure record, read to put `threshold` in the units the viewer sees. Same buffer and same
@@ -475,6 +480,69 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         const float3 streak = (sum / max(wsum, 1.0e-6f)) * anamorphicTint * anamorphicIntensity;
         float4 dst = BloomOut[pixel];
         BloomOut[pixel] = float4(dst.rgb + streak, dst.a);
+        return;
+    }
+
+    if (convStage == 9u)
+    {
+        // ---- stage 9: FAKE SUN GLARE, additive onto bloom mip 0 ----
+        //
+        // The convolution cannot give the sun a corona: its kernel is the size of the bloom
+        // image's percent and the photographed star has no wide veil, so the sun came out a small
+        // disc with a faint rim ("мне не хватает норм короны вокруг солнца"). This is an analytic
+        // halo about the sun's DIRECTION -- an exponential core plus a wide Lorentzian veil, in
+        // degrees, so it is the same size at any resolution or field of view -- whose colour and
+        // strength are the frame's OWN pixels over the sun disc: a palm in front of the sun, a
+        // cloud over it or a sunset's transmittance dims and tints it with nothing else wired.
+        // Every thread reads the same nine texels, so the taps cost a cache hit.
+        if (pixel.x >= sourceSize.x || pixel.y >= sourceSize.y) { return; }
+        const float3 sunDir = sunGlareDir.xyz;
+        if (sunDir.z <= 0.02f) { return; }
+        const float2 sunNdc = sunDir.xy * sunGlareProj.xy / sunDir.z;
+        const float2 sunUV = float2(0.5f + 0.5f * sunNdc.x, 0.5f - 0.5f * sunNdc.y);
+        const float2 discUV = max(sunGlareProj.zw, 1.0e-5f.xx);
+
+        // The taps are the sun only while its disc is in the frame: full strength with the disc
+        // wholly inside, none with its centre on the edge.
+        const float2 toEdge = min(sunUV, 1.0f - sunUV) / discUV;
+        const float edgeFade = saturate(min(toEdge.x, toEdge.y));
+        if (edgeFade <= 0.0f) { return; }
+
+        float3 seen = HDRColor.SampleLevel(gSmp, sunUV, 0.0f).rgb;
+        [unroll]
+        for (uint k = 0u; k < 8u; ++k)
+        {
+            const float a = (float)k * 0.78539816f;
+            seen += HDRColor.SampleLevel(gSmp, sunUV + float2(cos(a), sin(a)) * discUV * 0.6f, 0.0f).rgb;
+        }
+        seen *= 1.0f / 9.0f;
+        // THE SUN, NOT THE SKY IN FRONT OF IT: a gate on how much brighter the disc is than a ring 2.5
+        // disc radii out. Glare structure comes from a POINT source far brighter than its
+        // neighbourhood; an overcast deck over the sun is about as bright on the disc as beside it and
+        // must throw nothing -- the disc alone drew rays in a grey sky ("при оверкасте видны лучи").
+        // Full strength from 3.5x the ring (a clear sun is 5x or more, its bright aureole included),
+        // none at 1.5x (a cloud lit brighter toward the sun by forward scattering stays below it).
+        // A gate rather than a subtraction: subtracting the ring took the aureole off a clear sun too.
+        const float2 ring = discUV * (2.5f * 0.7071f);
+        const float3 around = 0.25f * (HDRColor.SampleLevel(gSmp, sunUV + float2( ring.x,  ring.y), 0.0f).rgb +
+                                       HDRColor.SampleLevel(gSmp, sunUV + float2(-ring.x,  ring.y), 0.0f).rgb +
+                                       HDRColor.SampleLevel(gSmp, sunUV + float2( ring.x, -ring.y), 0.0f).rgb +
+                                       HDRColor.SampleLevel(gSmp, sunUV + float2(-ring.x, -ring.y), 0.0f).rgb);
+        const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
+        const float contrast = dot(seen, lumaW) / max(dot(around, lumaW), 1.0e-4f);
+        seen = max(seen, 0.0f.xxx) * saturate((contrast - 1.5f) * 0.5f);
+
+        const float2 uv = (float2(pixel) + 0.5f) / float2(sourceSize);
+        const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+        const float3 dir = normalize(float3(ndc / sunGlareProj.xy, 1.0f));
+        const float angle = acos(clamp(dot(dir, sunDir), -1.0f, 1.0f));
+        const float core = exp(-angle / max(sunGlareParams.y, 1.0e-4f));
+        const float v = angle / max(sunGlareParams.w, 1.0e-4f);
+        const float veil = sunGlareParams.z / (1.0f + v * v);
+        const float3 glare = seen * (sunGlareParams.x * (core + veil) * edgeFade);
+
+        float4 dst = BloomOut[pixel];
+        BloomOut[pixel] = float4(dst.rgb + glare, dst.a);
         return;
     }
 

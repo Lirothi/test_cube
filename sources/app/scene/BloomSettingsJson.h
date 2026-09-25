@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "third_party/json/json.hpp"
 
 #include "app/scene/SceneFrameData.h"
@@ -62,6 +64,22 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     s.convGhostBokeh = j.value("convGhostBokeh", s.convGhostBokeh);
     s.convGhostIntensity = j.value("convGhostIntensity", s.convGhostIntensity);
     s.convGhostThreshold = j.value("convGhostThreshold", s.convGhostThreshold);
+    s.sunGlareIntensity = std::max(0.0f, j.value("sunGlareIntensity", s.sunGlareIntensity));
+    s.sunGlareRadiusDeg = std::max(0.05f, j.value("sunGlareRadiusDeg", s.sunGlareRadiusDeg));
+    s.sunGlareVeil = std::max(0.0f, j.value("sunGlareVeil", s.sunGlareVeil));
+    s.sunGlareVeilRadiusDeg = std::max(0.1f, j.value("sunGlareVeilRadiusDeg", s.sunGlareVeilRadiusDeg));
+    s.sunRaysIntensity = std::max(0.0f, j.value("sunRaysIntensity", s.sunRaysIntensity));
+    s.sunRaysCount = std::clamp(j.value("sunRaysCount", s.sunRaysCount), 16u, 2000u);
+    s.sunRaysBundles = std::clamp(j.value("sunRaysBundles", s.sunRaysBundles), 1u, 128u);
+    s.sunRaysLengthDeg = std::max(0.1f, j.value("sunRaysLengthDeg", s.sunRaysLengthDeg));
+    s.sunRaysSharpness = std::clamp(j.value("sunRaysSharpness", s.sunRaysSharpness), 1.0f, 16.0f);
+    s.sunRaysHalo = std::max(0.0f, j.value("sunRaysHalo", s.sunRaysHalo));
+    s.sunRaysHaloRadiusDeg = std::max(0.1f, j.value("sunRaysHaloRadiusDeg", s.sunRaysHaloRadiusDeg));
+    s.sunRaysTexture = j.value("sunRaysTexture", s.sunRaysTexture);
+    s.sunRaysTextureSizeDeg = std::max(0.5f, j.value("sunRaysTextureSizeDeg", s.sunRaysTextureSizeDeg));
+    s.sunRaysSpikes = std::max(0.0f, j.value("sunRaysSpikes", s.sunRaysSpikes));
+    s.sunRaysSpikeCount = std::clamp(j.value("sunRaysSpikeCount", s.sunRaysSpikeCount), 2u, 32u);
+    s.sunRaysRotationDeg = j.value("sunRaysRotationDeg", s.sunRaysRotationDeg);
 }
 
 inline nlohmann::json ToJson(const BloomSettings& s)
@@ -93,6 +111,22 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["convGhostBokeh"] = s.convGhostBokeh;
     j["convGhostIntensity"] = s.convGhostIntensity;
     j["convGhostThreshold"] = s.convGhostThreshold;
+    j["sunGlareIntensity"] = s.sunGlareIntensity;
+    j["sunGlareRadiusDeg"] = s.sunGlareRadiusDeg;
+    j["sunGlareVeil"] = s.sunGlareVeil;
+    j["sunGlareVeilRadiusDeg"] = s.sunGlareVeilRadiusDeg;
+    j["sunRaysIntensity"] = s.sunRaysIntensity;
+    j["sunRaysCount"] = s.sunRaysCount;
+    j["sunRaysLengthDeg"] = s.sunRaysLengthDeg;
+    j["sunRaysBundles"] = s.sunRaysBundles;
+    j["sunRaysSharpness"] = s.sunRaysSharpness;
+    j["sunRaysHalo"] = s.sunRaysHalo;
+    j["sunRaysHaloRadiusDeg"] = s.sunRaysHaloRadiusDeg;
+    j["sunRaysTexture"] = s.sunRaysTexture;
+    j["sunRaysTextureSizeDeg"] = s.sunRaysTextureSizeDeg;
+    j["sunRaysSpikes"] = s.sunRaysSpikes;
+    j["sunRaysSpikeCount"] = s.sunRaysSpikeCount;
+    j["sunRaysRotationDeg"] = s.sunRaysRotationDeg;
     return j;
 }
 

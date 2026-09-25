@@ -247,6 +247,7 @@ struct SceneTonemapCBHandles
     // rather than adding to it. See the block comment in tonemap_cs.hlsl.
     Material::CBFieldHandle bloomSceneApply;
     Material::CBFieldHandle bloomScatterApply;
+    Material::CBFieldHandle sunRaysDir, sunRaysProj, sunRaysShape, sunRaysLook, sunRaysExtra;
 
     void Populate(Material* material);
 };
@@ -570,6 +571,10 @@ struct BloomConvConstants
     uint2 streakOffsets{ 0u, 0u };
     uint32_t ghostCount = 0u;
     float ghostIntensity = 0.6f;
+    // Stage 9, the fake sun glare (bloom_conv_cs.hlsl).
+    Math::float4 sunGlareDir{ 0.0f, 0.0f, 1.0f, 0.0f };
+    Math::float4 sunGlareProj{ 1.0f, 1.0f, 0.0f, 0.0f };
+    Math::float4 sunGlareParams{ 0.0f, 0.03f, 0.0f, 0.2f };
 };
 
 struct BloomConvHandles
@@ -584,6 +589,7 @@ struct BloomConvHandles
     Material::CBFieldHandle anamorphicThreshold, anamorphicChroma;
     Material::CBFieldHandle anamorphicTint, streakWeight, streakSrcWeight, streakOffsets;
     Material::CBFieldHandle ghostCount, ghostIntensity;
+    Material::CBFieldHandle sunGlareDir, sunGlareProj, sunGlareParams;
     void Populate(Material* material);
 };
 
@@ -894,6 +900,16 @@ struct BloomApplyConstants
     std::array<float, 3> scatterApply{ 0.0f, 0.0f, 0.0f };
 };
 
+// The sun's star in the tone curve pass (tonemap_cs.hlsl SunRays). Default = off.
+struct SunRaysConstants
+{
+    Math::float4 dir{ 0.0f, 0.0f, 1.0f, 0.0f };
+    Math::float4 proj{ 1.0f, 1.0f, 0.0f, 0.0f };
+    Math::float4 shape{ 0.0f, 1.0f, 0.1f, 0.0f };
+    Math::float4 look{ 3.0f, 0.0f, 0.005f, 6.0f };
+    Math::float4 extra{ 14.0f, 0.0f, 0.0f, 0.0f };
+};
+
 // P2 photographic camera. The log-luminance window is a compile-time constant of the metering,
 // not an authored setting: it only has to be wide enough to contain any scene the histogram will
 // ever see, and moving it would silently reinterpret every stored bin.
@@ -1077,6 +1093,7 @@ public:
                                const render::CameraExposureSettings& camera,
                                const BloomApplyConstants& bloomApply,
                                bool bilateralBuilt,
+                               const SunRaysConstants& sunRays,
                                uint8_t* dest) const;
     void WriteExposureHistogramConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
     void WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;

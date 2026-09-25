@@ -1,4 +1,4 @@
-#define TONEMAP_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), UAV(u1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define TONEMAP_CS_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), SRV(t4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE), UAV(u1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 Texture2D HDRColor : register(t0);
 // P3B: blurred base log-luminance, sampled bilinearly. The metering pass writes it and owns both
@@ -12,6 +12,9 @@ Texture2D BloomTex : register(t2);
 // by exposure_bilateral_cs in the same metering pass as t1 and resting in the same read state.
 // Sliced trilinearly at (uv, this pixel's luminance); see local_exposure.hlsli.
 Texture3D<float2> BilateralGridTex : register(t3);
+// The sun corona's image (BloomSettings::sunRaysTexture), when the corona draws from one. Bound to
+// a stand-in when it does not; sunRaysExtra.z = 0 is what keeps it unsampled.
+Texture2D SunCoronaTex : register(t4);
 RWTexture2D<float4> LdrTarget : register(u0);
 // P2: the persistent exposure record, read-only here. Bound as a UAV rather than an SRV purely so
 // it never leaves its canonical UNORDERED_ACCESS state -- an SRV binding would cost a transition
@@ -89,6 +92,14 @@ cbuffer TonemapCB : register(b0)
     float  tonemapPad4;
     float3 bloomScatterApply;
     float  tonemapPad5;
+    // SUN RAYS (BloomSettings::sunRays*), drawn here at OUTPUT resolution because they are
+    // sub-degree thin -- the bloom target is a quarter of the screen and would smear them. View
+    // space is the camera's (+z forward, +y up). x of sunRaysShape = 0 turns the term off.
+    float4 sunRaysDir;     // xyz: direction TO the sun, view space, unit; w: halo weight
+    float4 sunRaysProj;    // xy: projection _11/_22; zw: the sun disc's radius in UV
+    float4 sunRaysShape;   // x: intensity, y: needle count, z: length (rad), w: regular-star weight
+    float4 sunRaysLook;    // x: needle sharpness, y: rotation (rad), z: disc radius (rad), w: star spike count
+    float4 sunRaysExtra;   // x: bundle count, y: halo radius (rad), z: 1 = draw from SunCoronaTex, w: its width
 };
 
 #include "utils.hlsli"
@@ -102,6 +113,159 @@ cbuffer TonemapCB : register(b0)
 // kGammaOut, TonemapACES and LinearToSrgb moved to tone_curves.hlsli, with the curve selection,
 // so the editor's asset preview ends with the same curve as this pass.
 static const float kDitherAmplitude = 1.0 / 255.0; // enough to break banding
+
+float SunRayHash(float n)
+{
+    return frac(sin(n * 12.9898f + 4.1414f) * 43758.5453f);
+}
+
+// Periodic value noise on the circle: `x` in cells, `period` cells around, smooth between cells.
+float SunRayNoise(float x, float period)
+{
+    const float i = floor(x);
+    const float f = x - i;
+    const float a = SunRayHash(i - period * floor(i / period));
+    const float i1 = i + 1.0f;
+    const float b = SunRayHash(i1 - period * floor(i1 / period));
+    return lerp(a, b, f * f * (3.0f - 2.0f * f));
+}
+
+// THE SUN'S CORONA -- the glare structure around the sun that the bloom cannot give, modelled on
+// Ritschel et al. 2009, "Temporal Glare" (fig. 1: a point source through the eye) rather than on
+// stock art: the first two cuts were eight even spikes, then a hedgehog of even rays ("ты где
+// такую корону видел?", "не особо реалистично"), and real glare has neither.
+//   bundles  a LOW-frequency pattern around the circle: dense bright wedges and dim gaps between
+//            them ("в реале там есть плотные участки"); a bright bundle also reaches further.
+//   needles  a HIGH-frequency pattern inside them -- hundreds of fine radial needles (the ciliary
+//            corona), faded to their mean where a needle would be thinner than a pixel, so the
+//            core does not alias into moire.
+//   falloff  a power law, not an exponential: dense at the core with a long faint tail. Evaluated
+//            per channel at slightly different scales (diffraction grows with wavelength), so the
+//            needles' tips go warm and their roots cool.
+//   halo     the lenticular halo: a faint ring whose red edge sits outside its blue one.
+//   spikes   an optional regular star (eyelashes / an aperture), off by default.
+// Everything is in degrees on the sky and the same cells every frame, so nothing crawls. Colour
+// and strength are the frame's own pixels over the sun disc (five taps every thread shares): a palm
+// or a cloud in front of the sun, or a sunset, takes the corona with it. Analytic rather than a
+// texture: the taps are the price and a sprite would need them too.
+float3 SunRays(float2 uv, float outputWidth)
+{
+    const float3 sunDir = sunRaysDir.xyz;
+    if (sunDir.z <= 0.02f) { return 0.0f.xxx; }
+    const float2 sunNdc = sunDir.xy * sunRaysProj.xy / sunDir.z;
+    const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    const float3 dir = normalize(float3(ndc / sunRaysProj.xy, 1.0f));
+    const float theta = acos(clamp(dot(dir, sunDir), -1.0f, 1.0f));
+    const float len = max(sunRaysShape.z, 1.0e-4f);
+    const float haloR = sunRaysExtra.y;
+    // IMAGE MODE: `len` is then the image's half-width on the sky, and the corona is the image.
+    const bool fromImage = sunRaysExtra.z > 0.5f;
+    if (fromImage && theta > 1.42f * len) { return 0.0f.xxx; }
+    // The bound is the whole cost story: only the pixels inside it pay for what follows (measured
+    // at 4K with the sun mid-frame: +0.04-0.06 ms; nothing with the sun out of frame). The tail is
+    // faded to nothing across its last 30 % so the bound never shows as a circle.
+    const float bound = max(12.0f * len, 1.3f * haloR);
+    if (theta > bound) { return 0.0f.xxx; }
+
+    const float2 sunUV = float2(0.5f + 0.5f * sunNdc.x, 0.5f - 0.5f * sunNdc.y);
+    const float2 discUV = max(sunRaysProj.zw, 1.0e-5f.xx);
+    const float2 toEdge = min(sunUV, 1.0f - sunUV) / discUV;
+    const float edgeFade = saturate(min(toEdge.x, toEdge.y));
+    if (edgeFade <= 0.0f) { return 0.0f.xxx; }
+
+    // Five taps over the disc (every thread reads the same five texels).
+    const float2 o = discUV * 0.6f;
+    float3 seen = HDRColor.SampleLevel(gSmp, sunUV, 0.0f).rgb +
+                  HDRColor.SampleLevel(gSmp, sunUV + float2(o.x, 0.0f), 0.0f).rgb +
+                  HDRColor.SampleLevel(gSmp, sunUV - float2(o.x, 0.0f), 0.0f).rgb +
+                  HDRColor.SampleLevel(gSmp, sunUV + float2(0.0f, o.y), 0.0f).rgb +
+                  HDRColor.SampleLevel(gSmp, sunUV - float2(0.0f, o.y), 0.0f).rgb;
+    seen *= 0.2f;
+    // THE SUN, NOT THE SKY IN FRONT OF IT: a gate on how much brighter the disc is than a ring 2.5
+    // disc radii out. Glare structure comes from a POINT source far brighter than its
+    // neighbourhood; an overcast deck over the sun is about as bright on the disc as beside it and
+    // must throw nothing -- the disc alone drew rays in a grey sky ("при оверкасте видны лучи").
+    // Full strength from 3.5x the ring (a clear sun is 5x or more, its bright aureole included),
+    // none at 1.5x (a cloud lit brighter toward the sun by forward scattering stays below it).
+    // A gate rather than a subtraction: subtracting the ring took the aureole off a clear sun too.
+    const float2 ring = discUV * (2.5f * 0.7071f);
+    const float3 around = 0.25f * (HDRColor.SampleLevel(gSmp, sunUV + float2( ring.x,  ring.y), 0.0f).rgb +
+                                   HDRColor.SampleLevel(gSmp, sunUV + float2(-ring.x,  ring.y), 0.0f).rgb +
+                                   HDRColor.SampleLevel(gSmp, sunUV + float2( ring.x, -ring.y), 0.0f).rgb +
+                                   HDRColor.SampleLevel(gSmp, sunUV + float2(-ring.x, -ring.y), 0.0f).rgb);
+    const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
+    const float contrast = dot(seen, lumaW) / max(dot(around, lumaW), 1.0e-4f);
+    seen = max(seen, 0.0f.xxx) * saturate((contrast - 1.5f) * 0.5f);
+    if (all(seen <= 0.0f)) { return 0.0f.xxx; }
+
+    // Offset from the sun on the tangent plane (the /proj un-squashes the aspect), and its polar
+    // angle in turns [0, 1).
+    const float2 d = (ndc - sunNdc) / sunRaysProj.xy;
+    const float twoPi = 6.2831853f;
+    const float turn = frac((atan2(d.y, d.x) + sunRaysLook.y) / twoPi);
+    const float pixel = 2.0f / (sunRaysProj.x * max(outputWidth, 1.0f));   // radians per pixel
+
+    // IMAGE MODE: the texture laid about the sun, `len` radians to either side, turned by the
+    // rotation, its mip chosen from texels per pixel (a compute shader has no derivatives). An
+    // image made for additive use: black is nothing, its white core sits on the disc.
+    if (fromImage)
+    {
+        const float rot = sunRaysLook.y;
+        const float2 local = float2(d.x * cos(rot) + d.y * sin(rot), -d.x * sin(rot) + d.y * cos(rot));
+        const float2 tuv = 0.5f + float2(local.x, -local.y) / (2.0f * len);
+        if (any(tuv < 0.0f) || any(tuv > 1.0f)) { return 0.0f.xxx; }
+        const float texelsPerPixel = max(sunRaysExtra.w, 1.0f) * pixel / (2.0f * len);
+        const float lod = max(log2(max(texelsPerPixel, 1.0e-6f)), 0.0f);
+        const float image = dot(SunCoronaTex.SampleLevel(gSmp, tuv, lod).rgb, float3(0.2126f, 0.7152f, 0.0722f));
+        // Fade the square's own edge, which the image's black margin should already have done.
+        const float2 edge = saturate(min(tuv, 1.0f - tuv) * 20.0f);
+        return seen * (sunRaysShape.x * image * edge.x * edge.y * edgeFade);
+    }
+
+    // Bundles: dense wedges and dim gaps, contrast from squaring; mean ~1 so the knob keeps its scale.
+    const float clumps = max(sunRaysExtra.x, 1.0f);
+    const float c = SunRayNoise(turn * clumps, clumps);
+    const float bundle = 3.0f * c * c;
+
+    // Needles: two octaves, sharpened; resolved only where a needle is wider than about a pixel.
+    const float m = max(sunRaysShape.y, 4.0f);
+    const float n = 0.65f * SunRayNoise(turn * m, m) + 0.35f * SunRayNoise(turn * m * 3.0f + 0.5f, m * 3.0f);
+    const float sharp = max(sunRaysLook.x, 1.0f);
+    const float needleMean = 1.0f / (sharp + 1.0f);
+    const float resolved = saturate(((twoPi / m) * theta / pixel - 1.0f) * 0.5f);
+    const float needle = lerp(needleMean, pow(saturate(n), sharp), resolved) / needleMean;
+
+    // Each needle's reach: its own random length, longer inside a bright bundle.
+    const float reach = len * (0.4f + 0.6f * SunRayNoise(turn * m + 0.37f, m)) * (0.6f + 0.4f * bundle);
+    const float3 chroma = float3(1.08f, 1.0f, 0.92f);   // red spreads furthest
+    const float3 q = theta / (reach * chroma);
+    const float3 falloff = 1.0f / (1.0f + q * q * q);
+    float3 glare = (bundle * needle) * falloff;
+
+    // The lenticular halo: a thin ring, red outside, blue inside.
+    if (sunRaysDir.w > 0.0f && haloR > 0.0f)
+    {
+        const float3 r = theta - haloR * chroma;
+        const float w = haloR * 0.07f;
+        glare += sunRaysDir.w * exp(-(r * r) / (w * w)) * (0.7f + 0.6f * c);
+    }
+
+    // The optional regular star (eyelashes, an aperture), a pixel and a half wide.
+    if (sunRaysShape.w > 0.0f)
+    {
+        const float k = max(sunRaysLook.w, 1.0f);
+        const float t = turn * k;
+        const float across = abs(t - round(t)) * (twoPi / k) * theta;
+        const float w = max(1.5f * pixel, 3.0e-4f) * (1.0f + theta / len * 0.1f);
+        glare += sunRaysShape.w * exp(-(across * across) / (w * w)) / (1.0f + theta / (4.0f * len));
+    }
+
+    // Rays from UNDER the disc's edge: fading in from one disc radius to two left a dark ring
+    // between the disc and the corona ("зазор между диском и стартом лучей").
+    const float rim = smoothstep(0.5f * sunRaysLook.z, sunRaysLook.z, theta);
+    const float tail = 1.0f - smoothstep(0.7f * bound, bound, theta);
+    return seen * (sunRaysShape.x * glare * rim * tail * edgeFade);
+}
 
 // Stable, cheap hash based on the pixel coordinate
 float Dither(uint2 p)
@@ -227,6 +391,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // The scene is scaled FIRST and by its own factor: this is a partition of the light, not
         // an addition to it. With the pyramid's sceneApply of 1 the line reduces to the old `+=`.
         hdr = hdr * bloomSceneApply + bloom * (bloomScatterApply * exposureMultiplier);
+    }
+    // The sun's star, beside the bloom and in the same units: global exposure, no local one.
+    if (sunRaysShape.x > 0.0f)
+    {
+        hdr += SunRays(uv, (float)width) * exposureMultiplier;
     }
 
     // P3C film curve / AgX / legacy ACES -- the selection lives in tone_curves.hlsli, shared with

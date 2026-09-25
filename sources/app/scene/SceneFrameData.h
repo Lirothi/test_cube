@@ -367,6 +367,40 @@ struct BloomSettings
     // sunlit foliage or bright clouds become ones (both observed). On wind_test's scale (sky ~1,
     // corona 4-6, sun core 10-12) the default takes the core only: one clean disc ghost.
     float convGhostThreshold = 10.0f;
+    // FAKE SUN GLARE -- the corona the convolution does not give (its kernel is the size of the
+    // bloom image's percent and the photographed star has no wide veil). An analytic halo about
+    // the sun's direction: an exponential core plus a wide veil, both in DEGREES, so its size does
+    // not follow the resolution or the field of view. Its colour and strength are the frame's own
+    // pixels over the sun disc, so whatever hides or tints the sun (a palm, a cloud, a sunset)
+    // hides or tints the glare. Runs with either bloom method, into the same target.
+    // 0 = off. 0.05 from a sweep of 0-0.1 at a 28-degree and a 4-degree sun: a soft corona at noon,
+    // a wide warm glow at sunset; 0.1 washes a low sun out.
+    float sunGlareIntensity = 0.05f;
+    float sunGlareRadiusDeg = 2.0f;      // the core's e-folding angle
+    float sunGlareVeil = 0.15f;          // the wide veil's weight, relative to the core's peak
+    float sunGlareVeilRadiusDeg = 12.0f; // the veil's half-strength angle
+    // THE SUN'S CORONA, drawn by the tone curve pass at output resolution (tonemap_cs.hlsl SunRays),
+    // after Ritschel's "Temporal Glare": dense bright BUNDLES with dim gaps between them, fine
+    // NEEDLES inside them, a power-law fall-off with warm tips, a faint lenticular HALO ring, and an
+    // optional regular star. Same colour source as the glare: the frame's pixels over the sun disc.
+    // 0 = off. 0.15 from a sweep of 0.1-0.6 at a 28-degree and a 4-degree sun (the low sun reads
+    // stronger: the exposure is higher there).
+    float sunRaysIntensity = 0.15f;
+    uint32_t sunRaysCount = 300u;        // fine needles around the full circle
+    uint32_t sunRaysBundles = 14u;       // dense bundles around the full circle
+    float sunRaysLengthDeg = 2.5f;       // the power law's scale: where a needle is at half strength
+    float sunRaysSharpness = 3.0f;       // needle contrast (1 = soft streaks, higher = crisper needles)
+    float sunRaysHalo = 0.08f;           // the lenticular halo ring's weight (0 = none)
+    float sunRaysHaloRadiusDeg = 3.5f;   // its radius
+    // IMAGE MODE: a corona painted as a texture (grayscale on black, for additive use) laid about
+    // the sun instead of the procedural one -- one fetch a pixel, the look of the picture. Empty =
+    // procedural, the default: the owner preferred the procedural bundles over astra6's
+    // sun_corona_v2.png (2026-09-25, "твои лучи прикольнее"), which stays one pick away.
+    std::string sunRaysTexture;
+    float sunRaysTextureSizeDeg = 15.0f; // the image's half-width on the sky
+    float sunRaysSpikes = 0.0f;          // weight of the regular star (0 = none)
+    uint32_t sunRaysSpikeCount = 6u;     // the star's spikes
+    float sunRaysRotationDeg = 0.0f;     // turns the pattern on screen
 };
 
 // P7 item 8. Deliberately NOT part of HeightFogSettings: that struct is serialized into the level,

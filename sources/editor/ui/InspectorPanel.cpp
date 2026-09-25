@@ -1607,6 +1607,119 @@ namespace
                           "10 gave before the knee. Raising it also cuts the scatter's cost "
                           "directly: collapsed quads rasterize nothing.");
 
+            ImGui::SeparatorText("Sun glare");
+            dragF("Sun Glare", "sunGlareIntensity", 0.0f, 0.001f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("A corona around the sun that the convolution cannot give: an analytic "
+                          "halo about the sun's direction, added to the bloom. 0 = off.\n\n"
+                          "Its colour and strength are the frame's own pixels over the sun disc, "
+                          "so a palm in front of the sun, a cloud over it or a sunset dims and "
+                          "tints it by itself. Works with either bloom method.");
+            dragF("Glare Radius", "sunGlareRadiusDeg", 2.0f, 0.05f, 0.05f, 30.0f, "%.2f deg");
+            InspectorHelp("The bright core's size, in degrees from the sun's centre (its "
+                          "e-folding angle). Degrees, not pixels: the same at any resolution "
+                          "or field of view.");
+            dragF("Glare Veil", "sunGlareVeil", 0.15f, 0.005f, 0.0f, 2.0f, "%.3f");
+            InspectorHelp("Weight of the WIDE, faint veil under the core -- the haze of light "
+                          "a real lens or eye spreads far across the frame. 0 = core only.");
+            dragF("Veil Radius", "sunGlareVeilRadiusDeg", 12.0f, 0.1f, 0.1f, 90.0f, "%.1f deg");
+            InspectorHelp("Angle at which the veil has fallen to half.");
+
+            ImGui::SeparatorText("Sun corona");
+            dragF("Corona", "sunRaysIntensity", 0.15f, 0.005f, 0.0f, 2.0f, "%.3f");
+            InspectorHelp("The glare structure around the sun, drawn at full resolution in the tone "
+                          "curve pass after Ritschel's \"Temporal Glare\": dense bright bundles with "
+                          "dim gaps, fine needles inside them, warm tips, a faint rainbow halo ring. "
+                          "0 = off.\n\n"
+                          "Colour and strength are the frame's own pixels over the sun disc, so "
+                          "anything in front of the sun takes the corona with it.");
+            {
+                static std::vector<std::string> coronaImages;
+                static bool coronaScanned = false;
+                if (!coronaScanned)
+                {
+                    coronaScanned = true;
+                    std::error_code ec;
+                    for (const auto& e : std::filesystem::directory_iterator("textures", ec))
+                    {
+                        if (ec) { break; }
+                        if (!e.is_regular_file()) { continue; }
+                        std::string name = e.path().filename().string();
+                        std::string lower = name;
+                        for (char& ch : lower) { ch = static_cast<char>(::tolower(ch)); }
+                        const bool image = lower.size() > 4 &&
+                            (lower.ends_with(".png") || lower.ends_with(".dds") || lower.ends_with(".jpg"));
+                        if (image && (lower.find("corona") != std::string::npos || lower.find("glare") != std::string::npos))
+                        {
+                            coronaImages.push_back("textures/" + name);
+                        }
+                    }
+                    std::sort(coronaImages.begin(), coronaImages.end());
+                }
+                const std::string cur = tgt().value("sunRaysTexture", std::string());
+                std::vector<const char*> items{ "(procedural)" };
+                int sel = cur.empty() ? 0 : -1;
+                for (size_t i = 0; i < coronaImages.size(); ++i)
+                {
+                    items.push_back(coronaImages[i].c_str());
+                    if (coronaImages[i] == cur) { sel = static_cast<int>(i) + 1; }
+                }
+                const bool changed = ImGui::Combo("Corona Image", &sel, items.data(), static_cast<int>(items.size()));
+                beginContinuousEdit(changed);
+                if (changed && sel >= 0) { tgt()["sunRaysTexture"] = sel == 0 ? std::string() : coronaImages[static_cast<size_t>(sel) - 1]; }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("Draw the corona from a painted image (grayscale on black, for additive "
+                          "use; any textures/*corona* or *glare* file) or procedurally. The image is "
+                          "one texture fetch a pixel; the procedural one has the knobs below.");
+            const bool coronaFromImage = !tgt().value("sunRaysTexture", std::string()).empty();
+            if (coronaFromImage)
+            {
+                dragF("Corona Size", "sunRaysTextureSizeDeg", 15.0f, 0.1f, 0.5f, 90.0f, "%.1f deg");
+                InspectorHelp("The image's half-width on the sky, in degrees: its core should sit on "
+                              "the sun disc.");
+                dragF("Corona Rotation", "sunRaysRotationDeg", 0.0f, 0.5f, -180.0f, 180.0f, "%.1f deg");
+            }
+            else
+            {
+            {
+                int bundles = static_cast<int>(tgt().value("sunRaysBundles", 14u));
+                const bool changed = ImGui::SliderInt("Bundles", &bundles, 1, 64);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["sunRaysBundles"] = static_cast<std::uint32_t>(bundles < 1 ? 1 : bundles); }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("How many dense bright wedges around the circle; the gaps between them "
+                          "stay dim. A bright bundle also reaches further.");
+            {
+                int needles = static_cast<int>(tgt().value("sunRaysCount", 300u));
+                const bool changed = ImGui::SliderInt("Needles", &needles, 16, 2000);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["sunRaysCount"] = static_cast<std::uint32_t>(needles < 16 ? 16 : needles); }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("How many fine needles around the circle, inside the bundles. Near the "
+                          "sun, where a needle would be thinner than a pixel, they merge into glow.");
+            dragF("Needle Sharpness", "sunRaysSharpness", 3.0f, 0.05f, 1.0f, 16.0f, "%.2f");
+            InspectorHelp("1 = soft streaks, higher = crisper, sparser needles.");
+            dragF("Corona Length", "sunRaysLengthDeg", 2.5f, 0.05f, 0.1f, 30.0f, "%.2f deg");
+            InspectorHelp("Where a needle has fallen to half, in degrees on the sky. The fall-off is a "
+                          "power law: a dense core with a long faint tail.");
+            dragF("Halo", "sunRaysHalo", 0.08f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("The lenticular halo: a faint rainbow ring, red outside. 0 = none.");
+            dragF("Halo Radius", "sunRaysHaloRadiusDeg", 3.5f, 0.05f, 0.1f, 30.0f, "%.2f deg");
+            dragF("Star Spikes", "sunRaysSpikes", 0.0f, 0.01f, 0.0f, 3.0f, "%.2f");
+            InspectorHelp("An extra REGULAR star on top (eyelashes, an aperture's spikes). 0 = none.");
+            {
+                int spikes = static_cast<int>(tgt().value("sunRaysSpikeCount", 6u));
+                const bool changed = ImGui::SliderInt("Star Spike Count", &spikes, 2, 32);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["sunRaysSpikeCount"] = static_cast<std::uint32_t>(spikes < 2 ? 2 : spikes); }
+                trackContinuousEdit(changed);
+            }
+            dragF("Corona Rotation", "sunRaysRotationDeg", 0.0f, 0.5f, -180.0f, 180.0f, "%.1f deg");
+            InspectorHelp("Turns the whole pattern on screen.");
+            }
+
             ImGui::TextDisabled("Runs after the upscaler on the image the tone curve reads,");
             ImGui::TextDisabled("so the pyramid is sized off the DISPLAY resolution and does");
             ImGui::TextDisabled("not change shape with the DLSS quality mode.");

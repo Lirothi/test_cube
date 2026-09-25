@@ -427,9 +427,11 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
                     bloomRan ? bloom_.ApplyConstants() : BloomApplyConstants{};
                 // Same rule for the grid: not built this frame -> a pure-blur blend, never sliced.
                 resources_.WriteTonemapConstants(applyExposure, frame_->colorPipeline,
-                                                 frame_->cameraExposure, apply, bilateralRan, dest);
+                                                 frame_->cameraExposure, apply, bilateralRan,
+                                                 bloom_.SunRays(), dest);
             },
-            { tonemapSrc, metering.BaseLumSrv(), D.bloomUpSRV, metering.BilateralGridSrv() },
+            { tonemapSrc, metering.BaseLumSrv(), D.bloomUpSRV, metering.BilateralGridSrv(),
+              bloom_.CoronaSrv(D.bloomUpSRV) },
             { D.tonemapUAV, metering.ExposureUav() }, samplerTable,
             renderer->GetWidth(), renderer->GetHeight(),
             D.tonemap.Get());
