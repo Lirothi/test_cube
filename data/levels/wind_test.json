@@ -32644,7 +32644,7 @@
       "detailNormalMipBias": 0.0,
       "diffuseColor": [
         0.0,
-        0.0,
+        0.02199999988079071,
         0.027450980618596077,
         1.0
       ],
@@ -32660,7 +32660,7 @@
       "horizonFogStrength": 0.009999999776482582,
       "lowSunBodyLight": 0.10000000149011612,
       "macroNormalMipBiasDlss": 0.0,
-      "macroNormalMipBiasNative": 2.0,
+      "macroNormalMipBiasNative": 1.5,
       "minMeshScale": 15.0,
       "reflectionNormalStrength": 0.10000000149011612,
       "reflectionSkyHorizonPull": 1.0,
