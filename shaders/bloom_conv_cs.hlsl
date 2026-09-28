@@ -37,9 +37,11 @@ RWTexture2D<float4> Grid : register(u0);        // the complex grid, transformSi
 RWTexture2D<float4> BloomOut : register(u1);    // mip 0 of the bloom UP chain, resolve only
 SamplerState gSmp : register(s0);
 
+#include "sun_probe.hlsli"
+
 cbuffer BloomConvCB : register(b0)
 {
-    uint  convStage;        // 0 setup, 2 resolve, 3 kernel resample, 4-7 anamorphic streak, 8 ghosts, 9 sun glare
+    uint  convStage;        // 0 setup, 2 resolve, 3 kernel resample, 4-7 anamorphic streak, 8 ghosts, 9 sun glare, 10 sun probe
     uint  exposureEnabled;
     uint2 transformSize;    // the ACTIVE padded power-of-two grid (may be a sub-grid of the texture)
     uint2 imageSize;        // how much of it the frame occupies; the rest is the zero pad
@@ -103,16 +105,18 @@ cbuffer BloomConvCB : register(b0)
     // image scaled about the screen centre.
     uint  ghostCount;
     float ghostIntensity;
-    // Stage 9, the FAKE SUN GLARE (BloomSettings::sunGlare*). View space is the camera's (+z
-    // forward, +y up); the projection's x/y scales turn a view direction into NDC and back.
+    // Stage 9, the FAKE SUN GLARE (BloomSettings::sunGlare*), and stage 10, the sun probe. View
+    // space is the camera's (+z forward, +y up); the projection's x/y scales turn a view direction
+    // into NDC and back.
     float4 sunGlareDir;      // xyz: direction TO the sun, view space, unit; w: unused
     float4 sunGlareProj;     // xy: projection _11/_22; zw: the sun disc's radius in source UV
-    float4 sunGlareParams;   // x: intensity, y: core radius (rad), z: veil weight, w: veil radius (rad)
+    float4 sunGlareParams;   // stage 9: x intensity, y core radius (rad), z veil weight, w veil radius (rad)
+                             // stage 10: x the off-frame fade angle (rad)
 };
 
 // The exposure record, read to put `threshold` in the units the viewer sees. Same buffer and same
 // arithmetic as tonemap_cs.hlsl and bloom_cs.hlsl -- a threshold measured against a different
-// exposure than the image is not a threshold.
+// exposure than the image is not a threshold. It also carries the sun probe (sun_probe.hlsli).
 RWByteAddressBuffer ExposureValue : register(u2);
 
 static const float3 kLumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
@@ -483,6 +487,85 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
+    if (convStage == 10u)
+    {
+        // ---- stage 10: THE SUN PROBE, one thread, before the glare and the tone curve ----
+        //
+        // What the sun disc looks like in the frame, metered ONCE into the metering record for the
+        // sun glare (stage 9) and the corona (tonemap_cs.hlsl SunRays) to read, where each pixel
+        // used to tap the disc itself. Only the taps that land INSIDE the frame count, and when
+        // none does the last value seen is held: the taps stopped at the frame's edge, so both
+        // faded out as the disc's centre reached it and were gone once it passed ("очень резко все
+        // добро вокруг солнца пропадает"). Past the edge they now fade by the ANGLE the sun has left
+        // the frame by (sunGlareParams.x, radians); the CPU stops asking beyond it.
+        //   record +16  last disc colour seen (rgb) and last gate (a) -- held off the frame
+        //   record +32  this frame's value (rgb) = colour x gate x off-frame fade
+        if (any(pixel != 0u)) { return; }
+        float3 held = asfloat(ExposureValue.Load3(kSunProbeHeld));
+        float gate = asfloat(ExposureValue.Load(kSunProbeHeld + 12u));
+        float fade = 0.0f;
+        const float3 sunDir = sunGlareDir.xyz;
+        if (sunDir.z > 0.02f)
+        {
+            const float2 sunNdc = sunDir.xy * sunGlareProj.xy / sunDir.z;
+            const float2 sunUV = float2(0.5f + 0.5f * sunNdc.x, 0.5f - 0.5f * sunNdc.y);
+            const float2 discUV = max(sunGlareProj.zw, 1.0e-5f.xx);
+            // Nine taps over the disc: its centre and eight at 0.6 of its radius.
+            float3 disc = 0.0f.xxx;
+            float discTaps = 0.0f;
+            [unroll]
+            for (uint k = 0u; k < 9u; ++k)
+            {
+                const float a = (float)k * 0.78539816f;
+                const float2 tapUV = sunUV + (k == 8u ? 0.0f.xx : float2(cos(a), sin(a)) * discUV * 0.6f);
+                if (all(tapUV >= 0.0f) && all(tapUV <= 1.0f))
+                {
+                    disc += HDRColor.SampleLevel(gSmp, tapUV, 0.0f).rgb;
+                    discTaps += 1.0f;
+                }
+            }
+            // THE SUN, NOT THE SKY IN FRONT OF IT: a gate on how much brighter the disc is than a
+            // ring 2.5 disc radii out. Glare structure comes from a POINT source far brighter than
+            // its neighbourhood; an overcast deck over the sun is about as bright on the disc as
+            // beside it and must throw nothing -- the disc alone drew rays in a grey sky ("при
+            // оверкасте видны лучи"). Full strength from 3.5x the ring (a clear sun is 5x or more,
+            // its bright aureole included), none at 1.5x (a cloud lit brighter toward the sun by
+            // forward scattering stays below it). A gate rather than a subtraction: subtracting
+            // the ring took the aureole off a clear sun too.
+            float3 around = 0.0f.xxx;
+            float ringTaps = 0.0f;
+            [unroll]
+            for (uint r = 0u; r < 4u; ++r)
+            {
+                const float2 corner = float2((r & 1u) ? 1.0f : -1.0f, (r & 2u) ? 1.0f : -1.0f);
+                const float2 tapUV = sunUV + corner * discUV * (2.5f * 0.7071f);
+                if (all(tapUV >= 0.0f) && all(tapUV <= 1.0f))
+                {
+                    around += HDRColor.SampleLevel(gSmp, tapUV, 0.0f).rgb;
+                    ringTaps += 1.0f;
+                }
+            }
+            if (discTaps > 0.0f)
+            {
+                held = max(disc / discTaps, 0.0f.xxx);
+                if (ringTaps > 0.0f)
+                {
+                    const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
+                    const float contrast = dot(held, lumaW) / max(dot(around / ringTaps, lumaW), 1.0e-4f);
+                    gate = saturate((contrast - 1.5f) * 0.5f);
+                }
+            }
+            // How far past the frame's edge the sun's centre is, as angles per axis (the tangent
+            // plane's edge sits at 1 / projection).
+            const float2 past = max(atan(abs(sunDir.xy) / sunDir.z) - atan(1.0f / sunGlareProj.xy), 0.0f);
+            fade = 1.0f - smoothstep(0.0f, max(sunGlareParams.x, 1.0e-4f), length(past));
+        }
+        ExposureValue.Store3(kSunProbeHeld, asuint(held));
+        ExposureValue.Store(kSunProbeHeld + 12u, asuint(gate));
+        ExposureValue.Store3(kSunProbeOut, asuint(held * (gate * fade)));
+        return;
+    }
+
     if (convStage == 9u)
     {
         // ---- stage 9: FAKE SUN GLARE, additive onto bloom mip 0 ----
@@ -494,43 +577,13 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // degrees, so it is the same size at any resolution or field of view -- whose colour and
         // strength are the frame's OWN pixels over the sun disc: a palm in front of the sun, a
         // cloud over it or a sunset's transmittance dims and tints it with nothing else wired.
-        // Every thread reads the same nine texels, so the taps cost a cache hit.
+        // Those are metered once a frame by the sun probe (stage 10) -- including its hold while
+        // the disc is off the frame and its fade by how far off -- and read here.
         if (pixel.x >= sourceSize.x || pixel.y >= sourceSize.y) { return; }
         const float3 sunDir = sunGlareDir.xyz;
         if (sunDir.z <= 0.02f) { return; }
-        const float2 sunNdc = sunDir.xy * sunGlareProj.xy / sunDir.z;
-        const float2 sunUV = float2(0.5f + 0.5f * sunNdc.x, 0.5f - 0.5f * sunNdc.y);
-        const float2 discUV = max(sunGlareProj.zw, 1.0e-5f.xx);
-
-        // The taps are the sun only while its disc is in the frame: full strength with the disc
-        // wholly inside, none with its centre on the edge.
-        const float2 toEdge = min(sunUV, 1.0f - sunUV) / discUV;
-        const float edgeFade = saturate(min(toEdge.x, toEdge.y));
-        if (edgeFade <= 0.0f) { return; }
-
-        float3 seen = HDRColor.SampleLevel(gSmp, sunUV, 0.0f).rgb;
-        [unroll]
-        for (uint k = 0u; k < 8u; ++k)
-        {
-            const float a = (float)k * 0.78539816f;
-            seen += HDRColor.SampleLevel(gSmp, sunUV + float2(cos(a), sin(a)) * discUV * 0.6f, 0.0f).rgb;
-        }
-        seen *= 1.0f / 9.0f;
-        // THE SUN, NOT THE SKY IN FRONT OF IT: a gate on how much brighter the disc is than a ring 2.5
-        // disc radii out. Glare structure comes from a POINT source far brighter than its
-        // neighbourhood; an overcast deck over the sun is about as bright on the disc as beside it and
-        // must throw nothing -- the disc alone drew rays in a grey sky ("при оверкасте видны лучи").
-        // Full strength from 3.5x the ring (a clear sun is 5x or more, its bright aureole included),
-        // none at 1.5x (a cloud lit brighter toward the sun by forward scattering stays below it).
-        // A gate rather than a subtraction: subtracting the ring took the aureole off a clear sun too.
-        const float2 ring = discUV * (2.5f * 0.7071f);
-        const float3 around = 0.25f * (HDRColor.SampleLevel(gSmp, sunUV + float2( ring.x,  ring.y), 0.0f).rgb +
-                                       HDRColor.SampleLevel(gSmp, sunUV + float2(-ring.x,  ring.y), 0.0f).rgb +
-                                       HDRColor.SampleLevel(gSmp, sunUV + float2( ring.x, -ring.y), 0.0f).rgb +
-                                       HDRColor.SampleLevel(gSmp, sunUV + float2(-ring.x, -ring.y), 0.0f).rgb);
-        const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
-        const float contrast = dot(seen, lumaW) / max(dot(around, lumaW), 1.0e-4f);
-        seen = max(seen, 0.0f.xxx) * saturate((contrast - 1.5f) * 0.5f);
+        const float3 seen = asfloat(ExposureValue.Load3(kSunProbeOut));
+        if (all(seen <= 0.0f)) { return; }
 
         const float2 uv = (float2(pixel) + 0.5f) / float2(sourceSize);
         const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
@@ -539,7 +592,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         const float core = exp(-angle / max(sunGlareParams.y, 1.0e-4f));
         const float v = angle / max(sunGlareParams.w, 1.0e-4f);
         const float veil = sunGlareParams.z / (1.0f + v * v);
-        const float3 glare = seen * (sunGlareParams.x * (core + veil) * edgeFade);
+        const float3 glare = seen * (sunGlareParams.x * (core + veil));
 
         float4 dst = BloomOut[pixel];
         BloomOut[pixel] = float4(dst.rgb + glare, dst.a);

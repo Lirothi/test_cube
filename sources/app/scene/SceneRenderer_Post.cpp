@@ -394,6 +394,10 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
 
         const D3D12_CPU_DESCRIPTOR_HANDLE tonemapSrc = pts.ranDlss ? D.dlssOutputSRV : D.sceneSRV;
         const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
+        // The sun probe: the sun disc metered once into the metering record for the glare (inside
+        // the bloom below) and the corona (the tone curve) to read -- before both, bloom or not.
+        // It writes the exposure buffer, which this pass already declares at UNORDERED_ACCESS.
+        bloom_.RecordSunProbe(renderer, t.cl, tonemapSrc);
         // P8: build the bloom pyramid off whatever the tonemap is about to read — the upscaled
         // image when DLSS runs, which the submission order guarantees is finished on the GPU
         // before this list executes.

@@ -1629,6 +1629,9 @@
     <None Include="shaders\height_fog.hlsli">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\sun_probe.hlsli">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\ssr_trace_ue.hlsli">
       <Filter>shaders</Filter>
     </None>

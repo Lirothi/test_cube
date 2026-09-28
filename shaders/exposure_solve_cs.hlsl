@@ -7,7 +7,8 @@
 //
 // t0: histogram (raw, 256 uint bins)
 // u0: persistent exposure record (raw, 4 floats): adapted EV100, low percentile luminance,
-//     high percentile luminance, target EV100.
+//     high percentile luminance, target EV100. (The same buffer carries the sun probe behind
+//     them -- sun_probe.hlsli -- which this pass never touches.)
 
 #define EXPOSURE_SOLVE_CS_RS \
     "CBV(b0)," \

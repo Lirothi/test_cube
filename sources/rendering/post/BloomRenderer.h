@@ -69,6 +69,15 @@ public:
     void Record(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                 D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const Points& pts);
 
+    // Stage 10, the SUN PROBE: meters the sun disc once into the metering record (sun_probe.hlsli)
+    // for the glare and the corona, holding its last value while the disc is off the frame. On the
+    // tonemap's list BEFORE Record() and the tone curve; nothing when neither sun effect is on or
+    // the sun is not in view.
+    void RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                        D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
+    // How far past the frame's edge (degrees) the sun glare and the corona fade out over.
+    static constexpr float kSunOffFrameFadeDeg = 8.0f;
+
     // Read by the tone curve: how much of the chain to add back, and the scale it is added with.
     BloomApplyConstants ApplyConstants() const;
     // The sun's star for the tone curve pass (BloomSettings::sunRays*); off when the setting is 0
@@ -94,7 +103,8 @@ private:
     void SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                            D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
     // The sun in this frame's view: its direction in view space, the projection's x/y scales and
-    // the tangent of the disc's half angle. False when it is behind the camera or well off screen.
+    // the tangent of the disc's half angle. False when it is behind the camera or further past the
+    // frame's edge than kSunOffFrameFadeDeg.
     bool SunInView(Math::float3& viewDir, float& projX, float& projY, float& discTan) const;
     void BakeFlareBokeh(Renderer* renderer, uint32_t blades);
     bool ReadKernelPixels(const wchar_t* path);

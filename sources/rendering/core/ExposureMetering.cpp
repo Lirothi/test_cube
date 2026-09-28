@@ -12,6 +12,12 @@ namespace
     // (metered low percentile, metered high percentile, target EV100). Sized now so P2 does not
     // have to grow the resource and re-plumb its descriptors.
     constexpr UINT64 kExposureRecordBytes = 16u;
+    // The same buffer carries the SUN PROBE behind the record (bloom_conv_cs.hlsl stage 10): bytes
+    // 16-31 the last sun-disc colour and gate seen on screen, held while the disc is off it; 32-47
+    // this frame's value the sun glare and the corona read. It is metering too -- of the sun -- and
+    // this buffer is already bound to both readers. The readback copies the exposure record only.
+    constexpr UINT64 kSunProbeBytes = 32u;
+    constexpr UINT64 kMeteringBufferBytes = kExposureRecordBytes + kSunProbeBytes;
 
     ComPtr<ID3D12Resource> CreateRawUavBuffer(ID3D12Device* device, UINT64 bytes)
     {
@@ -57,7 +63,7 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         CreateRawUavBuffer(device, static_cast<UINT64>(kHistogramBins) * sizeof(std::uint32_t)),
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.Histogram");
     exposure_.Attach(renderer->Declarations(),
-        CreateRawUavBuffer(device, kExposureRecordBytes),
+        CreateRawUavBuffer(device, kMeteringBufferBytes),
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.Value");
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
@@ -97,7 +103,7 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         device->CreateUnorderedAccessView(resource, nullptr, &uavDesc, dst);
     };
 
-    constexpr UINT kExposureWords = static_cast<UINT>(kExposureRecordBytes / sizeof(std::uint32_t));
+    constexpr UINT kExposureWords = static_cast<UINT>(kMeteringBufferBytes / sizeof(std::uint32_t));
     histogramSrv_ = next();
     rawSrv(histogram_.Get(), kHistogramBins, histogramSrv_);
     histogramUav_ = next();

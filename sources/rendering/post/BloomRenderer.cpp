@@ -1003,9 +1003,11 @@ bool BloomRenderer::SunInView(Math::float3& viewDir, float& projX, float& projY,
     const Math::mat4& proj = frame_->camera->GetProjMatrixNoJitter();
     projX = proj.m._11;
     projY = proj.m._22;
-    // Wholly off screen (centre more than a quarter-screen past an edge): the shaders would fade it
-    // to nothing anyway.
-    if (std::abs(viewDir.x * projX / viewDir.z) > 1.5f || std::abs(viewDir.y * projY / viewDir.z) > 1.5f)
+    // Further past the frame's edge than the probe's fade (bloom_conv_cs.hlsl stage 10 measures it
+    // the same way, as angles per axis): the glare and the corona have faded to nothing.
+    const float pastX = std::max(std::atan(std::abs(viewDir.x) / viewDir.z) - std::atan(1.0f / projX), 0.0f);
+    const float pastY = std::max(std::atan(std::abs(viewDir.y) / viewDir.z) - std::atan(1.0f / projY), 0.0f);
+    if (std::sqrt(pastX * pastX + pastY * pastY) > kSunOffFrameFadeDeg * (3.14159265f / 180.0f))
     {
         return false;
     }
@@ -1045,6 +1047,43 @@ SunRaysConstants BloomRenderer::SunRays() const
         c.extra.w = static_cast<float>(std::max(coronaTex_.GetWidth(), 1u));
     }
     return c;
+}
+
+void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                   D3D12_CPU_DESCRIPTOR_HANDLE hdrSource)
+{
+    if (!frame_) { return; }
+    const BloomSettings& settings = frame_->settings.bloom;
+    Math::float3 v;
+    float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
+    ExposureMetering& metering = renderer->Exposure();
+    if (!(settings.sunGlareIntensity > 0.0f || settings.sunRaysIntensity > 0.0f) || !metering.IsReady() ||
+        !SunInView(v, sx, sy, discTan))
+    {
+        return;
+    }
+    const auto& D = renderer->GetDeferredForFrame();
+    auto convMaterial = resources_->GetBloomConvMaterial();
+    if (!convMaterial) { return; }
+    const UINT convCb = resources_->GetBloomConvCBSizeBytes();
+    const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
+    const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
+        renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+    constexpr float kDeg = 3.14159265f / 180.0f;
+    BloomConvConstants g{};
+    g.convStage = 10u;
+    g.sourceSize = uint2{ 1u, 1u };
+    g.sunGlareDir = Math::float4(v.x, v.y, v.z, 0.0f);
+    g.sunGlareProj = Math::float4(sx, sy, 0.5f * sx * discTan, 0.5f * sy * discTan);
+    g.sunGlareParams = Math::float4(kSunOffFrameFadeDeg * kDeg, 0.0f, 0.0f, 0.0f);
+    // One group, one working thread; the UAV barrier makes its record visible to the glare and the
+    // tone curve after it. u0/u1 are only there because the table is positional.
+    RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
+        [&](uint8_t* dest) { resources_->WriteBloomConvConstants(g, dest); },
+        { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
+        { D.streakAUAV, D.bloomUpMipUAV[0], metering.ExposureUav() },
+        samplerTable, 1u, 1u, metering.ExposureResource());
 }
 
 void BloomRenderer::SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandList* cl,

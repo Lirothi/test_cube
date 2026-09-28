@@ -18,7 +18,8 @@ Texture2D SunCoronaTex : register(t4);
 RWTexture2D<float4> LdrTarget : register(u0);
 // P2: the persistent exposure record, read-only here. Bound as a UAV rather than an SRV purely so
 // it never leaves its canonical UNORDERED_ACCESS state -- an SRV binding would cost a transition
-// down and back every frame for 16 bytes nobody writes in this pass.
+// down and back every frame for 48 bytes this dispatch never writes. Behind the exposure record it
+// carries the sun probe (sun_probe.hlsli), written by one thread earlier in this same pass.
 // This runs AFTER the DLSS resolve (the upscaler evaluates earlier in this same pass) and BEFORE
 // the tone curve, which is the ordering the plan's section 6.3 fixes. NGX keeps its own internal
 // auto-exposure -- nothing here is handed to it.
@@ -111,6 +112,7 @@ cbuffer TonemapCB : register(b0)
 #include "film_curve.hlsli"
 #include "tone_curves.hlsli"
 #include "local_exposure.hlsli"
+#include "sun_probe.hlsli"
 
 // ---- named constants ----
 // kGammaOut, TonemapACES and LinearToSrgb moved to tone_curves.hlsli, with the curve selection,
@@ -267,9 +269,9 @@ float3 SunCoronaGlare(float theta, float turn, float pixel, float len, float hal
 //   halo     the lenticular halo: a faint ring whose red edge sits outside its blue one.
 //   spikes   an optional regular star (eyelashes / an aperture), off by default.
 // Everything is in degrees on the sky and the same cells every frame, so nothing crawls. Colour
-// and strength are the frame's own pixels over the sun disc (five taps every thread shares): a palm
-// or a cloud in front of the sun, or a sunset, takes the corona with it. Analytic rather than a
-// texture: the taps are the price and a sprite would need them too.
+// and strength are the frame's own pixels over the sun disc, metered once by the sun probe
+// (sun_probe.hlsli): a palm or a cloud in front of the sun, or a sunset, takes the corona with it,
+// and a sun just off the frame keeps throwing it in, fading with the angle it has left by.
 float3 SunRays(float2 uv, float outputWidth)
 {
     const float3 sunDir = sunRaysDir.xyz;
@@ -293,37 +295,10 @@ float3 SunRays(float2 uv, float outputWidth)
     const float spikeBound = sunRaysShape.w > 0.0f ? 3.5f * spikeLen : 0.0f;
     if (theta > max(coronaBound, spikeBound)) { return 0.0f.xxx; }
 
-    const float2 sunUV = float2(0.5f + 0.5f * sunNdc.x, 0.5f - 0.5f * sunNdc.y);
-    const float2 discUV = max(sunRaysProj.zw, 1.0e-5f.xx);
-    const float2 toEdge = min(sunUV, 1.0f - sunUV) / discUV;
-    const float edgeFade = saturate(min(toEdge.x, toEdge.y));
-    if (edgeFade <= 0.0f) { return 0.0f.xxx; }
-
-    // Five taps over the disc (every thread reads the same five texels).
-    const float2 o = discUV * 0.6f;
-    float3 seen = HDRColor.SampleLevel(gSmp, sunUV, 0.0f).rgb +
-                  HDRColor.SampleLevel(gSmp, sunUV + float2(o.x, 0.0f), 0.0f).rgb +
-                  HDRColor.SampleLevel(gSmp, sunUV - float2(o.x, 0.0f), 0.0f).rgb +
-                  HDRColor.SampleLevel(gSmp, sunUV + float2(0.0f, o.y), 0.0f).rgb +
-                  HDRColor.SampleLevel(gSmp, sunUV - float2(0.0f, o.y), 0.0f).rgb;
-    seen *= 0.2f;
-    // THE SUN, NOT THE SKY IN FRONT OF IT: a gate on how much brighter the disc is than a ring 2.5
-    // disc radii out. Glare structure comes from a POINT source far brighter than its
-    // neighbourhood; an overcast deck over the sun is about as bright on the disc as beside it and
-    // must throw nothing -- the disc alone drew rays in a grey sky ("при оверкасте видны лучи").
-    // Full strength from 3.5x the ring (a clear sun is 5x or more, its bright aureole included),
-    // none at 1.5x (a cloud lit brighter toward the sun by forward scattering stays below it).
-    // A gate rather than a subtraction: subtracting the ring took the aureole off a clear sun too.
-    // (Taking the nine taps in one lane a wave and broadcasting them measured no faster: the cost
-    // out here is the per-pixel arithmetic, not the texture units.)
-    const float2 ring = discUV * (2.5f * 0.7071f);
-    const float3 around = 0.25f * (HDRColor.SampleLevel(gSmp, sunUV + float2( ring.x,  ring.y), 0.0f).rgb +
-                                   HDRColor.SampleLevel(gSmp, sunUV + float2(-ring.x,  ring.y), 0.0f).rgb +
-                                   HDRColor.SampleLevel(gSmp, sunUV + float2( ring.x, -ring.y), 0.0f).rgb +
-                                   HDRColor.SampleLevel(gSmp, sunUV + float2(-ring.x, -ring.y), 0.0f).rgb);
-    const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
-    const float contrast = dot(seen, lumaW) / max(dot(around, lumaW), 1.0e-4f);
-    seen = max(seen, 0.0f.xxx) * saturate((contrast - 1.5f) * 0.5f);
+    // The sun disc's colour and visibility -- metered once a frame by the sun probe
+    // (bloom_conv_cs.hlsl stage 10), held while the disc is off the frame and faded by how far off,
+    // gated against an overcast sky.
+    const float3 seen = asfloat(ExposureValue.Load3(kSunProbeOut));
     if (all(seen <= 0.0f)) { return 0.0f.xxx; }
 
     // Offset from the sun on the tangent plane (the /proj un-squashes the aspect), and its polar
@@ -347,7 +322,7 @@ float3 SunRays(float2 uv, float outputWidth)
         const float image = dot(SunCoronaTex.SampleLevel(gSmp, tuv, lod).rgb, float3(0.2126f, 0.7152f, 0.0722f));
         // Fade the square's own edge, which the image's black margin should already have done.
         const float2 edge = saturate(min(tuv, 1.0f - tuv) * 20.0f);
-        return seen * (sunRaysShape.x * image * edge.x * edge.y * edgeFade);
+        return seen * (sunRaysShape.x * image * edge.x * edge.y);
     }
 
     // The corona proper, inside its own bound.
@@ -376,7 +351,7 @@ float3 SunRays(float2 uv, float outputWidth)
     // Rays from UNDER the disc's edge: fading in from one disc radius to two left a dark ring
     // between the disc and the corona ("зазор между диском и стартом лучей").
     const float rim = smoothstep(0.5f * sunRaysLook.z, sunRaysLook.z, theta);
-    return seen * (sunRaysShape.x * glare * rim * edgeFade);
+    return seen * (sunRaysShape.x * glare * rim);
 }
 
 // Stable, cheap hash based on the pixel coordinate
