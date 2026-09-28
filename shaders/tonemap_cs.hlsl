@@ -98,8 +98,11 @@ cbuffer TonemapCB : register(b0)
     float4 sunRaysDir;     // xyz: direction TO the sun, view space, unit; w: halo weight
     float4 sunRaysProj;    // xy: projection _11/_22; zw: the sun disc's radius in UV
     float4 sunRaysShape;   // x: intensity, y: needle count, z: length (rad), w: regular-star weight
-    float4 sunRaysLook;    // x: needle sharpness, y: rotation (rad), z: disc radius (rad), w: star spike count
+    float4 sunRaysLook;    // x: star spike length (rad), y: rotation (rad), z: disc radius (rad), w: star spike count
     float4 sunRaysExtra;   // x: bundle count, y: halo radius (rad), z: 1 = draw from SunCoronaTex, w: its width
+    float4 sunRaysWidth;   // x: needle width, y: star spike width -- each the Gaussian's 1/e half-width (rad);
+                           // z: bundle width (turns: a raised cosine's half-width, which is its FWHM);
+                           // w: bundle strength 0-1 (how dark the gaps and how gathered the needles)
 };
 
 #include "utils.hlsli"
@@ -114,31 +117,150 @@ cbuffer TonemapCB : register(b0)
 // so the editor's asset preview ends with the same curve as this pass.
 static const float kDitherAmplitude = 1.0 / 255.0; // enough to break banding
 
-float SunRayHash(float n)
+// PCG: a needle's or a bundle's random numbers are the 10-bit fields of one hash.
+uint SunRayHashU(uint n)
 {
-    return frac(sin(n * 12.9898f + 4.1414f) * 43758.5453f);
+    const uint state = n * 747796405u + 2891336453u;
+    const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
 }
 
-// Periodic value noise on the circle: `x` in cells, `period` cells around, smooth between cells.
-float SunRayNoise(float x, float period)
+// The corona proper -- bundles, needles and the lenticular halo -- `theta` radians from the sun
+// and `turn` turns round it; see SunRays.
+float3 SunCoronaGlare(float theta, float turn, float pixel, float len, float haloR)
 {
-    const float i = floor(x);
-    const float f = x - i;
-    const float a = SunRayHash(i - period * floor(i / period));
-    const float i1 = i + 1.0f;
-    const float b = SunRayHash(i1 - period * floor(i1 / period));
-    return lerp(a, b, f * f * (3.0f - 2.0f * f));
+    const float twoPi = 6.2831853f;
+    // Bundles: one to a cell round the circle at a random angle inside it, each a raised-cosine bump
+    // of its own brightness whose FWHM is the Bundle Width (sunRaysWidth.z, turns). The first cut
+    // was value noise, whose wedges were always as wide as their spacing, so narrow bundles took 48
+    // of them ("ширину бандлов надо тоже задавать"). Only the three nearest are summed, so a bundle
+    // is at most ~one spacing wide.
+    //   A bundle both BRIGHTENS the needles and GATHERS them, by one knob, the Bundle Strength g
+    //   (sunRaysWidth.w): the gaps are lit at lerp(1, 0.05, sqrt g) of a bundle's peak, and the
+    //   needles are laid out evenly in the running integral of a density that is gapDensity between
+    //   bundles and 1 more at a bundle's peak. Brightening alone (needles even round the circle) lit
+    //   only the ~15 of 100 needles that crossed 12 bundles, and a full corona took hundreds;
+    //   gathering alone collapsed a small corona into one beam per bundle, where the needle count
+    //   no longer showed ("сделай чтобы не нужно было такое безумное кол-во бандлов и иголок").
+    //   Moving both together also keeps the light roughly constant: the brightness is taken where
+    //   the needles are. The integral of a raised cosine is closed-form; the bundles before the
+    //   three nearest contribute their whole mass, hwB each.
+    const float nB = max(sunRaysExtra.x, 1.0f);
+    const float hwB = clamp(sunRaysWidth.z, 1.0e-4f, 1.1f / nB);
+    const float jb0 = floor(turn * nB);
+    float bumps = 0.0f;
+    float bumpsLit = 0.0f;
+    float bumpMass = hwB * (jb0 - 1.0f);
+    [unroll] for (int b = -1; b <= 1; ++b)
+    {
+        const float jb = jb0 + (float)b;
+        const uint bits = SunRayHashU((uint)(jb - nB * floor(jb / nB)) + 7919u);
+        const float2 hb = float2(bits & 1023u, (bits >> 10) & 1023u) * (1.0f / 1023.0f);
+        const float x = clamp(turn - (jb + 0.5f + 0.7f * (hb.x - 0.5f)) / nB, -hwB, hwB);
+        float s, c;
+        sincos(3.14159265f * x / hwB, s, c);
+        const float bump = 0.5f + 0.5f * c;                      // 0 at and past +-hwB
+        bumps += bump;
+        bumpsLit += bump * (0.5f + 0.5f * hb.y);
+        bumpMass += 0.5f * (x + hwB) + hwB * s * (1.0f / twoPi);  // 0 before, hwB after
+    }
+    const float strength = saturate(sunRaysWidth.w);
+    const float gapLit = lerp(1.0f, 0.05f, sqrt(strength));
+    const float gapDensity = 0.5f * (1.0f - strength) / max(strength, 1.0e-3f);
+    const float mass = nB * hwB;                   // all the bumps' integral round the circle
+    const float densityTotal = gapDensity + mass;
+    // Divided by its mean where the needles ARE (a raised cosine integrates to hw, its square to
+    // 0.75 hw; a bundle's own brightness averages 0.75), so the strength moves light between the
+    // bundles and the gaps rather than adding it: measured, not dividing let strength 0 throw 4.5x
+    // the light of strength 1.
+    const float litMean = (gapDensity * gapLit + mass * (0.75f * (1.0f - gapLit) * (gapDensity + 0.75f) + gapLit))
+                          / densityTotal;
+    const float bundle = (gapLit + (1.0f - gapLit) * min(bumpsLit, 1.5f)) / litMean;
+
+    // Needles: LINES of a set width on the sky, not wedges of a set angle. The first cut was a
+    // pattern around the circle, so a needle was a wedge that widened with distance, no knob set
+    // its thickness ("толщина лучей непонятно как регулируется"), and past what fit side by side
+    // more needles only aliased ("выше 150 не выглядит что их реально больше"). Needle j sits at a
+    // random place inside its cell of the bundles' integral (so mostly inside a bundle) with its
+    // own brightness and length (a Gaussian across, the power law along); only the three nearest
+    // are summed, across-distances linearised by the local needles-per-turn. A needle is never
+    // drawn thinner than a pixel: a thinner one is drawn a pixel wide and correspondingly fainter.
+    const float m = max(sunRaysShape.y, 4.0f);
+    const float w = max(sunRaysWidth.x, 1.0e-6f);
+    const float wDrawn = max(w, 0.6f * pixel);
+    // Where this pixel is among the needles, and how many there are to a turn here.
+    const float cells = (gapDensity * turn + bumpMass) * (m / densityTotal);
+    const float perTurn = max((gapDensity + bumps) * (m / densityTotal), 1.0e-3f);
+    const float cell = twoPi * theta / perTurn;    // radians between neighbouring needles, here
+    // 1 where the needles stand apart, 0 where they are packed as close as their width. Not below
+    // twice the width for "apart": closer than that the needle dropped from the three nearest as the
+    // pixel crosses a cell edge still showed, as a dotted seam along a ray.
+    const float apart = saturate(cell / wDrawn - 1.0f);
+    // The power law per channel from one scalar: (theta / reach)^3 times each channel's 1/chroma^3,
+    // chroma (1.08, 1, 0.92) -- red spreads furthest. A bright bundle reaches further.
+    const float3 chromaInvCube = float3(0.7938f, 1.0f, 1.2842f);
+    const float qBase = theta / (len * (0.6f + 0.4f * bundle));
+    const float qBase3 = qBase * qBase * qBase;
+    float3 lines = 0.0f.xxx;
+    if (apart > 0.0f)
+    {
+        [unroll] for (int k = -1; k <= 1; ++k)
+        {
+            const float j = floor(cells) + (float)k;
+            const uint bits = SunRayHashU((uint)(j - m * floor(j / m)));   // wraps round the circle
+            const float3 h = float3(bits & 1023u, (bits >> 10) & 1023u, (bits >> 20) & 1023u) * (1.0f / 1023.0f);
+            const float across = (cells - (j + 0.5f + 0.7f * (h.x - 0.5f))) * cell / wDrawn;
+            // Its length: 0.4-1.0 of the scale, and the top tenth up to twice as far (h^8).
+            const float h2 = h.y * h.y;
+            const float h4 = h2 * h2;
+            const float reach = 0.4f + 0.6f * h.y + 1.2f * h4 * h4;
+            const float3 q3 = (qBase3 / (reach * reach * reach)) * chromaInvCube;
+            lines += (0.35f + 0.65f * h.z) * exp(-across * across) / (1.0f + q3);
+        }
+        lines *= w / wDrawn;
+    }
+    float3 merged = 0.0f.xxx;
+    if (apart < 1.0f)
+    {
+        // Packed closer than their width they ARE a glow, which the three nearest no longer add up
+        // to: their mean -- the comb's coverage sqrt(pi) w / cell times the mean brightness and the
+        // fall-off averaged over the spread of lengths (five-point quadrature: 1/reach^3 at h = 0.1,
+        // 0.35, 0.6, 0.85, 0.97). The coverage is softly capped at 3 as if the needles were even
+        // round the circle (it would grow without bound toward the disc), THEN scaled by how
+        // gathered they are here -- capping the local one took the light out of a gathered bundle.
+        // Also what a count too high to show becomes: glow, not moire.
+        static const float kInvReach3[5] = { 10.2737f, 4.3998f, 2.106f, 0.5283f, 0.1407f };
+        static const float kWeight[5] = { 0.22f, 0.25f, 0.25f, 0.2f, 0.08f };
+        float3 fallMean = 0.0f.xxx;
+        [unroll] for (int s = 0; s < 5; ++s)
+        {
+            fallMean += kWeight[s] / (1.0f + (qBase3 * kInvReach3[s]) * chromaInvCube);
+        }
+        float cover = 1.7724539f * w * m / max(twoPi * theta, 1.0e-9f);
+        cover /= 1.0f + cover / 3.0f;
+        merged = (0.675f * cover * perTurn / m) * fallMean;
+    }
+    float3 glare = bundle * lerp(merged, lines, apart);
+
+    // The lenticular halo: a thin ring, red outside, blue inside.
+    if (sunRaysDir.w > 0.0f && haloR > 0.0f)
+    {
+        const float3 r = theta - haloR * float3(1.08f, 1.0f, 0.92f);
+        const float ringW = haloR * 0.07f;
+        glare += sunRaysDir.w * exp(-(r * r) / (ringW * ringW)) * (0.7f + 0.6f * saturate(bumps));
+    }
+    return glare;
 }
 
 // THE SUN'S CORONA -- the glare structure around the sun that the bloom cannot give, modelled on
 // Ritschel et al. 2009, "Temporal Glare" (fig. 1: a point source through the eye) rather than on
 // stock art: the first two cuts were eight even spikes, then a hedgehog of even rays ("ты где
 // такую корону видел?", "не особо реалистично"), and real glare has neither.
-//   bundles  a LOW-frequency pattern around the circle: dense bright wedges and dim gaps between
-//            them ("в реале там есть плотные участки"); a bright bundle also reaches further.
-//   needles  a HIGH-frequency pattern inside them -- hundreds of fine radial needles (the ciliary
-//            corona), faded to their mean where a needle would be thinner than a pixel, so the
-//            core does not alias into moire.
+//   bundles  bright wedges of a set angular width at random angles, dim gaps between them ("в реале
+//            там есть плотные участки"); a bright bundle also reaches further.
+//   needles  radial LINES all round (the ciliary corona), lit by the bundles, each of a set width
+//            on the sky, its own brightness and its own length -- most short, a few long. Where
+//            they are packed closer than their width they are drawn as the glow they merge into.
 //   falloff  a power law, not an exponential: dense at the core with a long faint tail. Evaluated
 //            per channel at slightly different scales (diffraction grows with wavelength), so the
 //            needles' tips go warm and their roots cool.
@@ -161,11 +283,15 @@ float3 SunRays(float2 uv, float outputWidth)
     // IMAGE MODE: `len` is then the image's half-width on the sky, and the corona is the image.
     const bool fromImage = sunRaysExtra.z > 0.5f;
     if (fromImage && theta > 1.42f * len) { return 0.0f.xxx; }
-    // The bound is the whole cost story: only the pixels inside it pay for what follows (measured
-    // at 4K with the sun mid-frame: +0.04-0.06 ms; nothing with the sun out of frame). The tail is
-    // faded to nothing across its last 30 % so the bound never shows as a circle.
-    const float bound = max(12.0f * len, 1.3f * haloR);
-    if (theta > bound) { return 0.0f.xxx; }
+    // The bounds are the whole cost story: only the pixels inside them pay for what follows
+    // (measured at 4K with the sun mid-frame: +0.02-0.07 ms; nothing with the sun out of frame).
+    // The corona and the star have their own, so a long star does not make the needles run over
+    // its whole reach. Each tail is faded to nothing across its last 30 % so no bound shows as a
+    // circle.
+    const float coronaBound = max(12.0f * len, 1.3f * haloR);
+    const float spikeLen = max(sunRaysLook.x, 1.0e-4f);
+    const float spikeBound = sunRaysShape.w > 0.0f ? 3.5f * spikeLen : 0.0f;
+    if (theta > max(coronaBound, spikeBound)) { return 0.0f.xxx; }
 
     const float2 sunUV = float2(0.5f + 0.5f * sunNdc.x, 0.5f - 0.5f * sunNdc.y);
     const float2 discUV = max(sunRaysProj.zw, 1.0e-5f.xx);
@@ -188,6 +314,8 @@ float3 SunRays(float2 uv, float outputWidth)
     // Full strength from 3.5x the ring (a clear sun is 5x or more, its bright aureole included),
     // none at 1.5x (a cloud lit brighter toward the sun by forward scattering stays below it).
     // A gate rather than a subtraction: subtracting the ring took the aureole off a clear sun too.
+    // (Taking the nine taps in one lane a wave and broadcasting them measured no faster: the cost
+    // out here is the per-pixel arithmetic, not the texture units.)
     const float2 ring = discUV * (2.5f * 0.7071f);
     const float3 around = 0.25f * (HDRColor.SampleLevel(gSmp, sunUV + float2( ring.x,  ring.y), 0.0f).rgb +
                                    HDRColor.SampleLevel(gSmp, sunUV + float2(-ring.x,  ring.y), 0.0f).rgb +
@@ -222,49 +350,33 @@ float3 SunRays(float2 uv, float outputWidth)
         return seen * (sunRaysShape.x * image * edge.x * edge.y * edgeFade);
     }
 
-    // Bundles: dense wedges and dim gaps, contrast from squaring; mean ~1 so the knob keeps its scale.
-    const float clumps = max(sunRaysExtra.x, 1.0f);
-    const float c = SunRayNoise(turn * clumps, clumps);
-    const float bundle = 3.0f * c * c;
-
-    // Needles: two octaves, sharpened; resolved only where a needle is wider than about a pixel.
-    const float m = max(sunRaysShape.y, 4.0f);
-    const float n = 0.65f * SunRayNoise(turn * m, m) + 0.35f * SunRayNoise(turn * m * 3.0f + 0.5f, m * 3.0f);
-    const float sharp = max(sunRaysLook.x, 1.0f);
-    const float needleMean = 1.0f / (sharp + 1.0f);
-    const float resolved = saturate(((twoPi / m) * theta / pixel - 1.0f) * 0.5f);
-    const float needle = lerp(needleMean, pow(saturate(n), sharp), resolved) / needleMean;
-
-    // Each needle's reach: its own random length, longer inside a bright bundle.
-    const float reach = len * (0.4f + 0.6f * SunRayNoise(turn * m + 0.37f, m)) * (0.6f + 0.4f * bundle);
-    const float3 chroma = float3(1.08f, 1.0f, 0.92f);   // red spreads furthest
-    const float3 q = theta / (reach * chroma);
-    const float3 falloff = 1.0f / (1.0f + q * q * q);
-    float3 glare = (bundle * needle) * falloff;
-
-    // The lenticular halo: a thin ring, red outside, blue inside.
-    if (sunRaysDir.w > 0.0f && haloR > 0.0f)
+    // The corona proper, inside its own bound.
+    const float coronaFade = 1.0f - smoothstep(0.7f * coronaBound, coronaBound, theta);
+    float3 glare = 0.0f.xxx;
+    [branch] if (coronaFade > 0.0f)
     {
-        const float3 r = theta - haloR * chroma;
-        const float w = haloR * 0.07f;
-        glare += sunRaysDir.w * exp(-(r * r) / (w * w)) * (0.7f + 0.6f * c);
+        glare = SunCoronaGlare(theta, turn, pixel, len, haloR) * coronaFade;
     }
 
-    // The optional regular star (eyelashes, an aperture), a pixel and a half wide.
-    if (sunRaysShape.w > 0.0f)
+    // The optional regular star (eyelashes, an aperture): its own width (no thinner than a pixel,
+    // as the needles) and its own length, the angle where it is at half -- it was pinned to 4x the
+    // corona's. Falls as 1 / (1 + (theta / length)^2): a tenth at three lengths, faded out by 3.5.
+    if (sunRaysShape.w > 0.0f && theta <= spikeBound)
     {
-        const float k = max(sunRaysLook.w, 1.0f);
-        const float t = turn * k;
-        const float across = abs(t - round(t)) * (twoPi / k) * theta;
-        const float w = max(1.5f * pixel, 3.0e-4f) * (1.0f + theta / len * 0.1f);
-        glare += sunRaysShape.w * exp(-(across * across) / (w * w)) / (1.0f + theta / (4.0f * len));
+        const float spikes = max(sunRaysLook.w, 1.0f);
+        const float at = turn * spikes;
+        const float ws = max(sunRaysWidth.y, 1.0e-6f);
+        const float wsDrawn = max(ws, 0.6f * pixel);
+        const float across = abs(at - round(at)) * (twoPi / spikes) * theta / wsDrawn;
+        const float along = theta / spikeLen;
+        const float spikeFade = 1.0f - smoothstep(0.7f * spikeBound, spikeBound, theta);
+        glare += (sunRaysShape.w * ws / wsDrawn * spikeFade) * exp(-across * across) / (1.0f + along * along);
     }
 
     // Rays from UNDER the disc's edge: fading in from one disc radius to two left a dark ring
     // between the disc and the corona ("зазор между диском и стартом лучей").
     const float rim = smoothstep(0.5f * sunRaysLook.z, sunRaysLook.z, theta);
-    const float tail = 1.0f - smoothstep(0.7f * bound, bound, theta);
-    return seen * (sunRaysShape.x * glare * rim * tail * edgeFade);
+    return seen * (sunRaysShape.x * glare * rim * edgeFade);
 }
 
 // Stable, cheap hash based on the pixel coordinate

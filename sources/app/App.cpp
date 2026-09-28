@@ -945,7 +945,11 @@ namespace
         if (setting == "bloom.sunRays") { scene.BloomRef().sunRaysIntensity = std::max(0.0f, value); return true; }
         if (setting == "bloom.sunRaysCount") { scene.BloomRef().sunRaysCount = static_cast<uint32_t>(std::clamp(value, 16.0f, 2000.0f)); return true; }
         if (setting == "bloom.sunRaysBundles") { scene.BloomRef().sunRaysBundles = static_cast<uint32_t>(std::clamp(value, 1.0f, 128.0f)); return true; }
-        if (setting == "bloom.sunRaysSharpness") { scene.BloomRef().sunRaysSharpness = std::clamp(value, 1.0f, 16.0f); return true; }
+        if (setting == "bloom.sunRaysBundleStrength") { scene.BloomRef().sunRaysBundleStrength = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "bloom.sunRaysBundleWidth") { scene.BloomRef().sunRaysBundleWidthDeg = std::clamp(value, 0.1f, 360.0f); return true; }
+        if (setting == "bloom.sunRaysWidth") { scene.BloomRef().sunRaysWidthDeg = std::clamp(value, 0.005f, 2.0f); return true; }
+        if (setting == "bloom.sunRaysSpikeLength") { scene.BloomRef().sunRaysSpikeLengthDeg = std::clamp(value, 0.1f, 60.0f); return true; }
+        if (setting == "bloom.sunRaysSpikeWidth") { scene.BloomRef().sunRaysSpikeWidthDeg = std::clamp(value, 0.005f, 2.0f); return true; }
         if (setting == "bloom.sunRaysHalo") { scene.BloomRef().sunRaysHalo = std::max(0.0f, value); return true; }
         if (setting == "bloom.sunRaysHaloRadius") { scene.BloomRef().sunRaysHaloRadiusDeg = std::max(0.1f, value); return true; }
         // 0 = the procedural corona, 1 = astra6's image (the only way to A/B the two from a command line).

@@ -340,6 +340,7 @@ void SceneTonemapCBHandles::Populate(Material* material)
     sunRaysShape = material->ComputeCB0FieldHandle("sunRaysShape");
     sunRaysLook = material->ComputeCB0FieldHandle("sunRaysLook");
     sunRaysExtra = material->ComputeCB0FieldHandle("sunRaysExtra");
+    sunRaysWidth = material->ComputeCB0FieldHandle("sunRaysWidth");
 }
 
 void SceneExposureHistogramCBHandles::Populate(Material* material)
@@ -1794,6 +1795,7 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
     matTonemapCS_->UpdateCBField(h.sunRaysShape, sunRays.shape, dest);
     matTonemapCS_->UpdateCBField(h.sunRaysLook, sunRays.look, dest);
     matTonemapCS_->UpdateCBField(h.sunRaysExtra, sunRays.extra, dest);
+    matTonemapCS_->UpdateCBField(h.sunRaysWidth, sunRays.width, dest);
 }
 
 void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMeteringConstants& data,

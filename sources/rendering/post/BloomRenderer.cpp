@@ -1026,10 +1026,17 @@ SunRaysConstants BloomRenderer::SunRays() const
     c.proj = Math::float4(sx, sy, 0.5f * sx * discTan, 0.5f * sy * discTan);
     c.shape = Math::float4(settings.sunRaysIntensity, static_cast<float>(std::max(settings.sunRaysCount, 16u)),
         std::max(settings.sunRaysLengthDeg, 0.1f) * kDeg, std::max(settings.sunRaysSpikes, 0.0f));
-    c.look = Math::float4(std::max(settings.sunRaysSharpness, 1.0f), settings.sunRaysRotationDeg * kDeg,
+    c.look = Math::float4(std::clamp(settings.sunRaysSpikeLengthDeg, 0.1f, 60.0f) * kDeg, settings.sunRaysRotationDeg * kDeg,
         std::atan(discTan), static_cast<float>(std::max(settings.sunRaysSpikeCount, 2u)));
     c.extra = Math::float4(static_cast<float>(std::max(settings.sunRaysBundles, 1u)),
         std::max(settings.sunRaysHaloRadiusDeg, 0.1f) * kDeg, 0.0f, 0.0f);
+    // The widths are authored as full width at half maximum; the shader's Gaussian takes the 1/e
+    // half-width, FWHM / (2 sqrt(ln 2)). A bundle is a raised cosine, whose half-width IS its FWHM,
+    // passed in turns (it is an angle around the sun).
+    constexpr float kFwhmToE = 1.0f / 1.6651092f;
+    c.width = Math::float4(std::max(settings.sunRaysWidthDeg, 0.005f) * kDeg * kFwhmToE,
+        std::max(settings.sunRaysSpikeWidthDeg, 0.005f) * kDeg * kFwhmToE,
+        std::max(settings.sunRaysBundleWidthDeg, 0.1f) / 360.0f, std::clamp(settings.sunRaysBundleStrength, 0.0f, 1.0f));
     // IMAGE MODE: the image laid about the sun, its half-width where the procedural length was.
     if (coronaReady_ && !settings.sunRaysTexture.empty())
     {

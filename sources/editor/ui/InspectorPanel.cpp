@@ -1682,25 +1682,43 @@ namespace
             else
             {
             {
-                int bundles = static_cast<int>(tgt().value("sunRaysBundles", 14u));
+                int bundles = static_cast<int>(tgt().value("sunRaysBundles", 12u));
                 const bool changed = ImGui::SliderInt("Bundles", &bundles, 1, 64);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["sunRaysBundles"] = static_cast<std::uint32_t>(bundles < 1 ? 1 : bundles); }
                 trackContinuousEdit(changed);
             }
-            InspectorHelp("How many dense bright wedges around the circle; the gaps between them "
-                          "stay dim. A bright bundle also reaches further.");
+            InspectorHelp("How many bright wedges around the circle, each at a random angle and "
+                          "brightness; the gaps between them stay dim. A bright bundle also reaches "
+                          "further.");
+            dragF("Bundle Width", "sunRaysBundleWidthDeg", 5.0f, 0.05f, 0.1f, 90.0f, "%.1f deg");
+            InspectorHelp("A bundle's width as an ANGLE around the sun (full width at half maximum), "
+                          "so it opens out with distance like a wedge. At most about the spacing "
+                          "between bundles (360 / Bundles): wider than that they are one glow.");
+            dragF("Bundle Strength", "sunRaysBundleStrength", 0.5f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("How much the bundles rule. 0 = needles evenly round the circle and all "
+                          "alike; 1 = every needle gathered into a bundle, dark between them. It "
+                          "brightens and gathers together, so the corona's light stays the same "
+                          "(measured within 20 % from 0 to 1). On a small corona a high strength "
+                          "packs a bundle's needles into one beam.");
             {
-                int needles = static_cast<int>(tgt().value("sunRaysCount", 300u));
-                const bool changed = ImGui::SliderInt("Needles", &needles, 16, 2000);
+                int needles = static_cast<int>(tgt().value("sunRaysCount", 100u));
+                const bool changed = ImGui::SliderInt("Needles", &needles, 16, 1000);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["sunRaysCount"] = static_cast<std::uint32_t>(needles < 16 ? 16 : needles); }
                 trackContinuousEdit(changed);
             }
-            InspectorHelp("How many fine needles around the circle, inside the bundles. Near the "
-                          "sun, where a needle would be thinner than a pixel, they merge into glow.");
-            dragF("Needle Sharpness", "sunRaysSharpness", 3.0f, 0.05f, 1.0f, 16.0f, "%.2f");
-            InspectorHelp("1 = soft streaks, higher = crisper, sparser needles.");
+            InspectorHelp("How many needles around the circle, lit by the bundles they cross; each has "
+                          "its own brightness and length, and one in ten reaches about twice as far.\n\n"
+                          "Only so many fit side by side: at a distance d from the sun the circle "
+                          "holds 2 pi d / width of them. Closer in than that they merge into glow "
+                          "-- so a higher count shows as more LONG needles, with the glow reaching "
+                          "further out, not as more needles at the core.");
+            dragF("Needle Width", "sunRaysWidthDeg", 0.15f, 0.001f, 0.005f, 2.0f, "%.3f deg");
+            InspectorHelp("A needle's thickness on the sky (full width at half maximum), the same "
+                          "all along it. 0.045 deg is about a pixel at 1440p with a 90-degree field "
+                          "of view; a needle is never drawn thinner than a pixel -- below that it "
+                          "gets fainter instead. Wider needles also merge into glow sooner.");
             dragF("Corona Length", "sunRaysLengthDeg", 2.5f, 0.05f, 0.1f, 30.0f, "%.2f deg");
             InspectorHelp("Where a needle has fallen to half, in degrees on the sky. The fall-off is a "
                           "power law: a dense core with a long faint tail.");
@@ -1716,6 +1734,11 @@ namespace
                 if (changed) { tgt()["sunRaysSpikeCount"] = static_cast<std::uint32_t>(spikes < 2 ? 2 : spikes); }
                 trackContinuousEdit(changed);
             }
+            dragF("Star Spike Width", "sunRaysSpikeWidthDeg", 0.1f, 0.001f, 0.005f, 2.0f, "%.3f deg");
+            InspectorHelp("A star spike's thickness on the sky, as Needle Width.");
+            dragF("Star Spike Length", "sunRaysSpikeLengthDeg", 10.0f, 0.05f, 0.1f, 60.0f, "%.1f deg");
+            InspectorHelp("Where a star spike has fallen to half, in degrees on the sky; a tenth at "
+                          "three lengths, gone by three and a half.");
             dragF("Corona Rotation", "sunRaysRotationDeg", 0.0f, 0.5f, -180.0f, 180.0f, "%.1f deg");
             InspectorHelp("Turns the whole pattern on screen.");
             }

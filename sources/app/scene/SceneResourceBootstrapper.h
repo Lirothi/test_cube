@@ -247,7 +247,7 @@ struct SceneTonemapCBHandles
     // rather than adding to it. See the block comment in tonemap_cs.hlsl.
     Material::CBFieldHandle bloomSceneApply;
     Material::CBFieldHandle bloomScatterApply;
-    Material::CBFieldHandle sunRaysDir, sunRaysProj, sunRaysShape, sunRaysLook, sunRaysExtra;
+    Material::CBFieldHandle sunRaysDir, sunRaysProj, sunRaysShape, sunRaysLook, sunRaysExtra, sunRaysWidth;
 
     void Populate(Material* material);
 };
@@ -906,8 +906,9 @@ struct SunRaysConstants
     Math::float4 dir{ 0.0f, 0.0f, 1.0f, 0.0f };
     Math::float4 proj{ 1.0f, 1.0f, 0.0f, 0.0f };
     Math::float4 shape{ 0.0f, 1.0f, 0.1f, 0.0f };
-    Math::float4 look{ 3.0f, 0.0f, 0.005f, 6.0f };
-    Math::float4 extra{ 14.0f, 0.0f, 0.0f, 0.0f };
+    Math::float4 look{ 0.17f, 0.0f, 0.005f, 6.0f };
+    Math::float4 extra{ 12.0f, 0.0f, 0.0f, 0.0f };
+    Math::float4 width{ 0.0016f, 0.001f, 0.014f, 0.5f };
 };
 
 // P2 photographic camera. The log-luminance window is a compile-time constant of the metering,

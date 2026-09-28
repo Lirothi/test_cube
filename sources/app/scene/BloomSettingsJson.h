@@ -71,14 +71,18 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     s.sunRaysIntensity = std::max(0.0f, j.value("sunRaysIntensity", s.sunRaysIntensity));
     s.sunRaysCount = std::clamp(j.value("sunRaysCount", s.sunRaysCount), 16u, 2000u);
     s.sunRaysBundles = std::clamp(j.value("sunRaysBundles", s.sunRaysBundles), 1u, 128u);
+    s.sunRaysBundleWidthDeg = std::clamp(j.value("sunRaysBundleWidthDeg", s.sunRaysBundleWidthDeg), 0.1f, 360.0f);
+    s.sunRaysBundleStrength = std::clamp(j.value("sunRaysBundleStrength", s.sunRaysBundleStrength), 0.0f, 1.0f);
     s.sunRaysLengthDeg = std::max(0.1f, j.value("sunRaysLengthDeg", s.sunRaysLengthDeg));
-    s.sunRaysSharpness = std::clamp(j.value("sunRaysSharpness", s.sunRaysSharpness), 1.0f, 16.0f);
+    s.sunRaysWidthDeg = std::clamp(j.value("sunRaysWidthDeg", s.sunRaysWidthDeg), 0.005f, 2.0f);
     s.sunRaysHalo = std::max(0.0f, j.value("sunRaysHalo", s.sunRaysHalo));
     s.sunRaysHaloRadiusDeg = std::max(0.1f, j.value("sunRaysHaloRadiusDeg", s.sunRaysHaloRadiusDeg));
     s.sunRaysTexture = j.value("sunRaysTexture", s.sunRaysTexture);
     s.sunRaysTextureSizeDeg = std::max(0.5f, j.value("sunRaysTextureSizeDeg", s.sunRaysTextureSizeDeg));
     s.sunRaysSpikes = std::max(0.0f, j.value("sunRaysSpikes", s.sunRaysSpikes));
     s.sunRaysSpikeCount = std::clamp(j.value("sunRaysSpikeCount", s.sunRaysSpikeCount), 2u, 32u);
+    s.sunRaysSpikeWidthDeg = std::clamp(j.value("sunRaysSpikeWidthDeg", s.sunRaysSpikeWidthDeg), 0.005f, 2.0f);
+    s.sunRaysSpikeLengthDeg = std::clamp(j.value("sunRaysSpikeLengthDeg", s.sunRaysSpikeLengthDeg), 0.1f, 60.0f);
     s.sunRaysRotationDeg = j.value("sunRaysRotationDeg", s.sunRaysRotationDeg);
 }
 
@@ -119,13 +123,17 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["sunRaysCount"] = s.sunRaysCount;
     j["sunRaysLengthDeg"] = s.sunRaysLengthDeg;
     j["sunRaysBundles"] = s.sunRaysBundles;
-    j["sunRaysSharpness"] = s.sunRaysSharpness;
+    j["sunRaysBundleWidthDeg"] = s.sunRaysBundleWidthDeg;
+    j["sunRaysBundleStrength"] = s.sunRaysBundleStrength;
+    j["sunRaysWidthDeg"] = s.sunRaysWidthDeg;
     j["sunRaysHalo"] = s.sunRaysHalo;
     j["sunRaysHaloRadiusDeg"] = s.sunRaysHaloRadiusDeg;
     j["sunRaysTexture"] = s.sunRaysTexture;
     j["sunRaysTextureSizeDeg"] = s.sunRaysTextureSizeDeg;
     j["sunRaysSpikes"] = s.sunRaysSpikes;
     j["sunRaysSpikeCount"] = s.sunRaysSpikeCount;
+    j["sunRaysSpikeWidthDeg"] = s.sunRaysSpikeWidthDeg;
+    j["sunRaysSpikeLengthDeg"] = s.sunRaysSpikeLengthDeg;
     j["sunRaysRotationDeg"] = s.sunRaysRotationDeg;
     return j;
 }

@@ -386,10 +386,19 @@ struct BloomSettings
     // 0 = off. 0.15 from a sweep of 0.1-0.6 at a 28-degree and a 4-degree sun (the low sun reads
     // stronger: the exposure is higher there).
     float sunRaysIntensity = 0.15f;
-    uint32_t sunRaysCount = 300u;        // fine needles around the full circle
-    uint32_t sunRaysBundles = 14u;       // dense bundles around the full circle
+    uint32_t sunRaysCount = 100u;        // needles around the full circle
+    uint32_t sunRaysBundles = 12u;       // bright bundles around the full circle
+    float sunRaysBundleWidthDeg = 5.0f;  // a bundle's FWHM as an ANGLE around the sun (at most ~its spacing)
+    // How much the bundles rule: 0 = needles evenly round the circle and all alike; 1 = every needle
+    // gathered into a bundle, dark between them. Brightens and gathers together, so the light stays
+    // about the same.
+    float sunRaysBundleStrength = 0.5f;
     float sunRaysLengthDeg = 2.5f;       // the power law's scale: where a needle is at half strength
-    float sunRaysSharpness = 3.0f;       // needle contrast (1 = soft streaks, higher = crisper needles)
+    // A needle's width on the sky, full width at half maximum. Degrees, so the same at any
+    // resolution: 0.15 is ~3.3 px at 1440p and a 90-degree FOV, ~5 px at 4K -- a hundred needles
+    // that wide read as a full corona where pixel-thin ones needed hundreds. A needle is never
+    // drawn thinner than a pixel: below that it gets FAINTER, as a thinner line would look.
+    float sunRaysWidthDeg = 0.15f;
     float sunRaysHalo = 0.08f;           // the lenticular halo ring's weight (0 = none)
     float sunRaysHaloRadiusDeg = 3.5f;   // its radius
     // IMAGE MODE: a corona painted as a texture (grayscale on black, for additive use) laid about
@@ -400,6 +409,8 @@ struct BloomSettings
     float sunRaysTextureSizeDeg = 15.0f; // the image's half-width on the sky
     float sunRaysSpikes = 0.0f;          // weight of the regular star (0 = none)
     uint32_t sunRaysSpikeCount = 6u;     // the star's spikes
+    float sunRaysSpikeWidthDeg = 0.1f;   // a spike's width, as sunRaysWidthDeg (was a fixed 1.5 px)
+    float sunRaysSpikeLengthDeg = 10.0f; // where a spike is at half (was 4x the corona length: 10 at its default)
     float sunRaysRotationDeg = 0.0f;     // turns the pattern on screen
 };
 
