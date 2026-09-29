@@ -171,6 +171,11 @@ struct FoamInput
     float3 viewDir;
     float3 normal;
     float shoreMapDepth; // water depth from the shore map at this pixel; 1000 = outside the map
+    // Screen derivatives of worldUV, taken at the top of PSMain where control flow is uniform: the
+    // foam textures are gradient-sampled with them from inside per-pixel branches, where implicit
+    // derivatives are undefined -- which is why they used to be read at mip 0 and shimmered far off.
+    float2 worldUVdx;
+    float2 worldUVdy;
 };
 
 struct FoamData
@@ -440,7 +445,8 @@ VSOutput VSMain(VSInput input)
 // two touch points are the shoreLegacyDissipationParams cbuffer field and one multiply below.
 #include "ocean_shore_foam_dissipation.hlsli"
 
-float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float shoreMapDepth)
+float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float2 worldDx, float2 worldDy,
+                  float shoreMapDepth)
 {
     // AUTHORED since the June original (sanctioned edit, see the header note). Two changes of
     // substance on top of the June formula:
@@ -472,10 +478,12 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float sho
     windDirection = directionLengthSquared > 1e-8f
         ? windDirection * rsqrt(directionLengthSquared)
         : float2(1.0f, 0.0f);
+    const float tailScale = max(shoreLegacyFoamParams.x, 1e-3f);
     float2 tailUV =
-        (worldUV - windDirection * simulationParams.z * max(shoreLegacyFoamParams.z, 0.0f)) *
-        max(shoreLegacyFoamParams.x, 1e-3f);
-    float tail = ContactFoamTex.SampleLevel(LinearWrapSampler, tailUV, 0).r;
+        (worldUV - windDirection * simulationParams.z * max(shoreLegacyFoamParams.z, 0.0f)) * tailScale;
+    const float2 tailDx = worldDx * tailScale;
+    const float2 tailDy = worldDy * tailScale;
+    float tail = ContactFoamTex.SampleGrad(AnisotropicWrapSampler, tailUV, tailDx, tailDy).r;
     [branch]
     if (shoreLegacyFoamParams.w > 1e-3f)
     {
@@ -484,7 +492,9 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float sho
         float2 rotatedUV =
             float2(tailUV.x * 0.8f - tailUV.y * 0.6f,
                    tailUV.x * 0.6f + tailUV.y * 0.8f) * 0.531f + 17.31f;
-        float tail2 = ContactFoamTex.SampleLevel(LinearWrapSampler, rotatedUV, 0).r;
+        const float2 rotDx = float2(tailDx.x * 0.8f - tailDx.y * 0.6f, tailDx.x * 0.6f + tailDx.y * 0.8f) * 0.531f;
+        const float2 rotDy = float2(tailDy.x * 0.8f - tailDy.y * 0.6f, tailDy.x * 0.6f + tailDy.y * 0.8f) * 0.531f;
+        float tail2 = ContactFoamTex.SampleGrad(AnisotropicWrapSampler, rotatedUV, rotDx, rotDy).r;
         tail = lerp(tail, saturate(tail + tail2 - 0.5f), saturate(shoreLegacyFoamParams.w));
     }
 
@@ -502,7 +512,7 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float sho
     // foam breakup injection: dissipation patches x wind thinning squeeze the depth threshold,
     // so foam geometrically vanishes instead of alpha-fading.
     float breakup = ShoreFoamBreakupThresholdFactor(
-        ContactFoamTex, LinearWrapSampler, worldUV, simulationParams.z,
+        ContactFoamTex, AnisotropicWrapSampler, worldUV, worldDx, worldDy, simulationParams.z,
         ShoreFoamWindAmount(shoreFoamWindParams), shoreLegacyFoamParams2.y,
         shoreLegacyDissipationParams);
     float coverage = saturate(
@@ -524,7 +534,7 @@ float ContactFoam(float4 positionNDC, float viewDepth, float2 worldUV, float sho
 // is the shore dissipation include's counter-drifting two-octave field — the SAME breathing
 // patches that tear the contact rim — at the authored patch scale (surfSimParams2.z, metres),
 // so the tear itself is alive instead of a frozen stencil.
-float SurfSimFoamCoverage(float2 baseXZ)
+float SurfSimFoamCoverage(float2 baseXZ, float2 baseDx, float2 baseDy)
 {
     [branch]
     if (surfSimParams.z <= 0.0f || surfSimParams3.x <= 0.0f)
@@ -556,7 +566,7 @@ float SurfSimFoamCoverage(float2 baseXZ)
     const float kDriftSpeed = 0.12f; // m/s, fixed like the include's shore usage
     const float kContrast = 1.6f;
     const float pattern = 1.0f - ShoreFoamDissipationFactor(
-        ContactFoamTex, LinearWrapSampler, baseXZ, simulationParams.z,
+        ContactFoamTex, AnisotropicWrapSampler, baseXZ, baseDx, baseDy, simulationParams.z,
         float4(max(surfSimParams2.z, 1.0f), kDriftSpeed, 1.0f, kContrast));
     // Tail breakup runs 0..2 (NOT saturated): above 1 the threshold climbs past the pattern's
     // range, so even mid-fresh foam tears - the "рвать сильнее" headroom. Cap width bends the
@@ -593,19 +603,23 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     float contactCoverage = 0.0f;
     if (foamParams2.y > 0.0f)
     {
-        contactCoverage = ContactFoam(input.positionNDC, input.viewDepth, input.worldUV, input.shoreMapDepth);
+        contactCoverage = ContactFoam(input.positionNDC, input.viewDepth, input.worldUV,
+                                      input.worldUVdx, input.worldUVdy, input.shoreMapDepth);
     }
     // surf sim injection (S4): the sim's breaking foam joins as another additive shore
     // coverage source - same slot as contact foam, so it wears the shore foam albedo below.
-    contactCoverage = saturate(contactCoverage + SurfSimFoamCoverage(input.worldUV));
+    contactCoverage = saturate(contactCoverage +
+                               SurfSimFoamCoverage(input.worldUV, input.worldUVdx, input.worldUVdy));
     data.coverage.x = saturate(data.coverage.x + contactCoverage);
 
     float4 foamNormalWeights = saturate(float4(1.0f, 0.66f, 0.33f, 0.0f) + foamParams1.w) * activeCascades;
     float3 foamNormal = NormalFromDerivatives(input.derivatives, foamNormalWeights);
     data.normal = foamNormal;
 
+    // Gradient samples (derivatives from the top of PSMain): at mip 0 this 1-metre tile shimmered
+    // in the distance without DLSS.
     float2 uv = input.worldUV * 1.0f;
-    data.albedo = FoamAlbedoTex.SampleLevel(LinearWrapSampler, uv, 0).rgb;
+    data.albedo = FoamAlbedoTex.SampleGrad(AnisotropicWrapSampler, uv, input.worldUVdx, input.worldUVdy).rgb;
     // The shore strip wears the SHORE foam albedo (same asset and sliders as the modern
     // surface), blended in by its share of the total coverage so simulated whitecap foam
     // keeps its own look.
@@ -617,12 +631,12 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
         windDirection = directionLengthSquared > 1e-8f
             ? windDirection * rsqrt(directionLengthSquared)
             : float2(1.0f, 0.0f);
+        const float shoreAlbedoScale = max(shoreFoamAlbedoParams.x, 1e-3f);
         float2 shoreAlbedoUV =
             (input.worldUV -
-             windDirection * input.time * max(shoreFoamAlbedoParams.y, 0.0f)) *
-            max(shoreFoamAlbedoParams.x, 1e-3f);
-        float3 shoreAlbedo = ShoreFoamAlbedoTex.SampleLevel(
-            LinearWrapSampler, shoreAlbedoUV, 0).rgb;
+             windDirection * input.time * max(shoreFoamAlbedoParams.y, 0.0f)) * shoreAlbedoScale;
+        float3 shoreAlbedo = ShoreFoamAlbedoTex.SampleGrad(AnisotropicWrapSampler, shoreAlbedoUV,
+            input.worldUVdx * shoreAlbedoScale, input.worldUVdy * shoreAlbedoScale).rgb;
         float shoreMix = saturate(contactCoverage / max(data.coverage.x, 1e-3f));
         data.albedo = lerp(data.albedo, shoreAlbedo, shoreMix);
     }
@@ -946,6 +960,8 @@ PSOut PSMain(VSOutput input)
     foamInput.normal = normal;
     foamInput.viewDepth = input.viewDepth;
     foamInput.shoreMapDepth = shorePixelDepth;
+    foamInput.worldUVdx = ddx(input.baseXZ);
+    foamInput.worldUVdy = ddy(input.baseXZ);
 
     FoamData foamData = GetFoamData(foamInput, cascadesCount);
     //return float4(foamData.coverage.xxx, 1);

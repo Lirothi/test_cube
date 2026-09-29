@@ -32941,7 +32941,7 @@
     "albedo": 1.0,
     "baseTileKm": 6.0,
     "cloudType": 0.0,
-    "coverage": 0.0,
+    "coverage": 0.699999988079071,
     "detailStrength": 0.3499999940395355,
     "detailTileKm": 1.0,
     "distanceToSampleCountMaxKm": 15.0,

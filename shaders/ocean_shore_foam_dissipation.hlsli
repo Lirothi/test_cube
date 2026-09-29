@@ -14,8 +14,13 @@
 // params: x = patch scale (metres), y = drift speed (m/s), z = amount (0 = OFF, exact identity),
 //         w = contrast (steepness of the patch remap around mid-grey; the averaged samples
 //             cluster near 0.5, so > 1 is needed for patches to reach full kill/keep).
+// worldDx / worldDy: the screen derivatives of worldPos, taken by the caller where control flow is
+// still uniform. The samples are GRADIENT samples: at mip 0 (as they were) the texture's texels shrank
+// below a pixel in the distance and the patch threshold turned into per-pixel noise -- visible
+// shimmer without DLSS ("пена для surfsim без мипов выбирается и шумит без dlss вдалеке").
 float ShoreFoamDissipationFactor(
-    Texture2D noiseTex, SamplerState wrapSampler, float2 worldPos, float time, float4 params)
+    Texture2D noiseTex, SamplerState wrapSampler, float2 worldPos, float2 worldDx, float2 worldDy,
+    float time, float4 params)
 {
     [branch]
     if (params.z <= 0.0f)
@@ -29,9 +34,12 @@ float ShoreFoamDissipationFactor(
     const float2 kDirB = float2(-0.6f, 0.8f);
     // Slightly different scale and speed for the second layer so the beat between them stays
     // aperiodic; the constant offset decorrelates it from the first layer's texels.
-    float n1 = noiseTex.SampleLevel(wrapSampler, (worldPos + kDirA * drift) * invScale, 0).r;
-    float n2 = noiseTex.SampleLevel(
-        wrapSampler, (worldPos + kDirB * (drift * 0.73f)) * (invScale * 0.61f) + 11.17f, 0).r;
+    float n1 = noiseTex.SampleGrad(wrapSampler, (worldPos + kDirA * drift) * invScale,
+        worldDx * invScale, worldDy * invScale).r;
+    const float invScale2 = invScale * 0.61f;
+    float n2 = noiseTex.SampleGrad(
+        wrapSampler, (worldPos + kDirB * (drift * 0.73f)) * invScale2 + 11.17f,
+        worldDx * invScale2, worldDy * invScale2).r;
 
     float field = saturate(((n1 + n2) * 0.5f - 0.5f) * max(params.w, 0.01f) + 0.5f);
     return lerp(1.0f, field, saturate(params.z));
@@ -59,11 +67,11 @@ float ShoreFoamWindAmount(float4 windParams)
 // variant A (dissipation patches) x variant C (wind thinning: at dead calm the band starves
 // toward zero, full wind is untouched).
 float ShoreFoamBreakupThresholdFactor(
-    Texture2D noiseTex, SamplerState wrapSampler, float2 worldPos, float time,
-    float windAmount, float windThinning, float4 dissipationParams)
+    Texture2D noiseTex, SamplerState wrapSampler, float2 worldPos, float2 worldDx, float2 worldDy,
+    float time, float windAmount, float windThinning, float4 dissipationParams)
 {
-    float factor =
-        ShoreFoamDissipationFactor(noiseTex, wrapSampler, worldPos, time, dissipationParams);
+    float factor = ShoreFoamDissipationFactor(
+        noiseTex, wrapSampler, worldPos, worldDx, worldDy, time, dissipationParams);
     factor *= lerp(1.0f, saturate(windAmount), saturate(windThinning));
     return factor;
 }
