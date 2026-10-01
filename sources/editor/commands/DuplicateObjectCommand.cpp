@@ -156,9 +156,8 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
             continue;
         }
 
-        runtime->SetVisible(object_.enabled);
         if (!ctx.scene.AddInitializedEditorObject(
-            ctx.renderer, uploads, object_.id.value, std::move(runtime)))
+            ctx.renderer, uploads, object_.id.value, std::move(runtime), object_.enabled))
         {
             ctx.scene.RemoveEditorObject(object_.id.value);
             ctx.document.Remove(object_.id);

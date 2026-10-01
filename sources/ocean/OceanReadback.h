@@ -69,13 +69,16 @@ public:
     std::function<void(RenderGraphPassContext)> BuildPass(RenderGraphPassContext& ctx, const OceanRenderable& ocean);
 
     // Adopt the newest finished copy. Never waits. Call after Renderer::BeginFrame, before this
-    // frame's passes are built (Scene::Tick).
-    void Poll(Renderer* renderer);
+    // frame's passes are built (Scene::Tick). With readbackCascades None it DROPS the adopted
+    // surface and every copy still in flight: None means the flat water level from the frame it is
+    // chosen, not the last wave that was copied before it.
+    void Poll(Renderer* renderer, const OceanRenderable& ocean);
 
     // World y of the water surface at world (x, z). Before the first copy lands: the flat level.
     // Reads the adopted slot IN PLACE (no copy): BuildPass never lands a copy in the adopted slot,
     // so it stays intact until Poll adopts a newer one.
     float SampleHeight(float x, float z) const;
+    // False before the first copy lands and while readbackCascades is None.
     bool HasSurface() const { return adoptedFrame_ != 0; }
     // The frame the adopted copy was taken on; changes exactly when a new copy is adopted.
     std::uint64_t AdoptedFrame() const { return adoptedFrame_; }
@@ -89,6 +92,9 @@ private:
     float SampleShoreDepth(float u, float v) const;
     bool EnsureBuffer(Renderer* renderer, ID3D12Resource* displacement, ID3D12Resource* shore,
         std::uint32_t cascades);
+    // Forget the adopted surface; copies in flight are marked to be freed, never adopted. Their
+    // slots stay busy until their fence says the GPU is done writing them.
+    void DropSurface();
 
     struct Slot
     {
@@ -96,6 +102,7 @@ private:
         UINT frameSlot = 0;      // the renderer frame slot that recorded the copy (its fence)
         SurfaceParams surface;
         bool hasShore = false;
+        bool discard = false;    // recorded before DropSurface: free it when it lands, do not adopt
         ShoreParams shore;
     };
 

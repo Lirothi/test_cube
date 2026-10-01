@@ -279,7 +279,8 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
             if (uploads.Begin(&ctx.renderer))
             {
                 ctx.scene.RemoveEditorObject(object->id.value);
-                ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, object->id.value, std::move(replacement));
+                ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, object->id.value, std::move(replacement),
+                    object->enabled);
                 uploads.SubmitAndWait(&ctx.renderer);
             }
         }

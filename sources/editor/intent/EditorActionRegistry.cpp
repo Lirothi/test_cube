@@ -145,8 +145,13 @@ namespace
 
     // Folds N commands into one history entry. One typed phrase must cost exactly one
     // Ctrl+Z, whether it moved a single palm or two hundred of them (E6).
+    //
+    // Taken by REFERENCE: callers write `FoldIntoOneEntry(std::move(commands), "... " +
+    // std::to_string(commands.size()))`, and with a by-value parameter the order in which the
+    // vector is moved out and the label reads its size is unspecified -- "0 Objects" on a
+    // left-to-right compiler. Bound to a reference, nothing moves until the body runs.
     std::unique_ptr<EditorCommand> FoldIntoOneEntry(
-        std::vector<std::unique_ptr<EditorCommand>> commands,
+        std::vector<std::unique_ptr<EditorCommand>>&& commands,
         const std::string& label)
     {
         if (commands.empty())
@@ -324,6 +329,17 @@ namespace
             "Duplicate " + std::to_string(targets.size()) + " Objects");
     }
 
+    // A document object carries `enabled` as a field, an environment entity in its properties.
+    bool IsEnabled(const EditorSceneDocument& document, EditorObjectId id)
+    {
+        if (const EditorObject* object = document.Find(id))
+        {
+            return object->enabled;
+        }
+        const EditorObject* environment = FindEnvironmentObject(document, id);
+        return environment ? environment->properties.value("enabled", true) : true;
+    }
+
     std::unique_ptr<EditorCommand> BuildSetEnabledOne(const EditorSceneDocument& document,
         EditorObjectId id,
         bool enabled)
@@ -374,13 +390,26 @@ namespace
                 outStatus = "Selection contains an object that cannot be enabled or disabled";
                 return nullptr;
             }
+            // Already in the asked-for state: nothing to do and nothing to undo. Not only tidy --
+            // an environment edit that changes nothing refuses to run, and one refusal rolls the
+            // whole fold back, so showing a selection that held an already-lit sun undid the rest
+            // of it (the Outliner's eye runs this on the whole selection).
+            if (IsEnabled(actionCtx.editor.document, id) == enabled)
+            {
+                continue;
+            }
             commands.push_back(std::move(command));
         }
+        if (commands.empty())
+        {
+            outStatus = enabled ? "Already shown" : "Already hidden";
+            return nullptr;
+        }
 
-        outStatus = (enabled ? "Enabled " : "Disabled ") + CountedObjects(targets.size());
+        const std::size_t changed = commands.size();
+        outStatus = (enabled ? "Enabled " : "Disabled ") + CountedObjects(changed);
         return FoldIntoOneEntry(std::move(commands),
-            std::string(enabled ? "Enable " : "Disable ") +
-            std::to_string(commands.size()) + " Objects");
+            std::string(enabled ? "Enable " : "Disable ") + std::to_string(changed) + " Objects");
     }
 
     // ------------------------------------------------------------------ setBuoyant

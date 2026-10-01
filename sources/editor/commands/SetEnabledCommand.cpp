@@ -36,13 +36,32 @@ void SetEnabledCommand::Apply(EditorContext& ctx, bool enabled)
 
 bool SetEnabledCommand::Execute(EditorContext& ctx)
 {
+    // Undo used to apply !enabled_, which is the state before only if Execute really flipped
+    // it: "show" on an object that was already shown, then Ctrl+Z, hid it. Captured once, so
+    // a Redo cannot move the point Undo returns to.
+    if (!captured_)
+    {
+        if (const EditorObject* obj = ctx.document.Find(id_))
+        {
+            oldEnabled_ = obj->enabled;
+        }
+        else if (const RenderableObjectBase* base = ctx.scene.FindEditorObject(id_.value))
+        {
+            oldEnabled_ = base->IsVisible();
+        }
+        else
+        {
+            oldEnabled_ = !enabled_;
+        }
+        captured_ = true;
+    }
     Apply(ctx, enabled_);
     return true;
 }
 
 void SetEnabledCommand::Undo(EditorContext& ctx)
 {
-    Apply(ctx, !enabled_);
+    Apply(ctx, oldEnabled_);
 }
 
 #endif // WITH_EDITOR

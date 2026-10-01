@@ -29,11 +29,14 @@
 
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
+#include "app/scene/SceneObjectFactory.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/MeshRestPose.h"
 #include "editor/commands/EditorCommandStack.h"
+#include "editor/commands/SetEnabledCommand.h"
+#include "editor/commands/SetMaterialCommand.h"
 #include "editor/scene/EditorZone.h"
 #include "editor/intent/EditorActionRegistry.h"
 #include "editor/intent/EditorIntentResolver.h"
@@ -49,6 +52,7 @@
 #include "editor/intent/LlmIntentSource.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
+#include "rendering/renderables/GBufferRenderable.h"
 
 using Json = nlohmann::json;
 
@@ -2860,6 +2864,132 @@ int TalkProbe(const char* promptFile, const char* answerFile, int maxTokens)
     }
 }
 
+// ----------------------------------------------------- undo restores what was there
+//
+// docs/bug_review_2026-10-01.md. Commands whose Undo put back something other than what was
+// there. Each was right for the case its author tried -- a real change to a key the object
+// carried -- and wrong for the ones nobody tried: asking for the state the object already had,
+// and a key the object did not carry at all because its mesh asset supplies it.
+
+void TestShowingWhatIsShownUndoesToShown(const EditorActionContext& envActionCtx)
+{
+    EditorContext& ctx = envActionCtx.editor;
+    EditorCommandStack stack;
+    std::string status;
+    const auto enabled = [&ctx](uint64_t id) { return ctx.document.Find({ id })->enabled; };
+
+    // The command alone. Undo applied !enabled, which is the state before only when Execute
+    // really flipped it: "show" on a shown palm, Ctrl+Z, and the palm was hidden.
+    ctx.document.Find({ 1 })->enabled = true;
+    Check(stack.Execute(ctx, std::make_unique<SetEnabledCommand>(EditorObjectId{ 1 }, true)), "show runs");
+    stack.Undo(ctx);
+    Check(enabled(1), "show on a shown object, then undo: still shown");
+    ctx.document.Find({ 1 })->enabled = false;
+    Check(stack.Execute(ctx, std::make_unique<SetEnabledCommand>(EditorObjectId{ 1 }, false)), "hide runs");
+    stack.Undo(ctx);
+    Check(!enabled(1), "hide on a hidden object, then undo: still hidden");
+    // A real change still round-trips, and Redo does not move the point Undo returns to.
+    ctx.document.Find({ 1 })->enabled = true;
+    stack.Execute(ctx, std::make_unique<SetEnabledCommand>(EditorObjectId{ 1 }, false));
+    stack.Undo(ctx);
+    Check(enabled(1), "hide then undo: shown again");
+    stack.Redo(ctx);
+    Check(!enabled(1), "redo: hidden again");
+    stack.Undo(ctx);
+    Check(enabled(1), "a second undo still returns to shown");
+
+    // The Outliner's eye runs setEnabled over the whole selection: here a shown palm, the sun
+    // (lit) and a hidden palm. Only the hidden palm has anything to change. Before, the shown
+    // palm got a no-op command, the sun's no-op environment edit refused to run, the fold rolled
+    // back -- and the rollback's inverted Undo HID the palm that had been shown all along.
+    stack.Clear();
+    ctx.document.Find({ 1 })->enabled = true;
+    ctx.document.Find({ 2 })->enabled = false;
+    const std::vector<EditorObjectId> mixed{ EditorObjectId{ 1 }, EditorObjectId{ 902 }, EditorObjectId{ 2 } };
+    Check(RunEditorAction(envActionCtx, stack, MakeActionIntent("setEnabled", Json{ { "enabled", true } }),
+        mixed, status), "showing a mixed selection runs: " + status);
+    Check(enabled(1) && enabled(2), "both palms are shown");
+    Check(stack.HistorySize() == 1, "as one undo entry");
+    stack.Undo(ctx);
+    Check(enabled(1), "undo leaves the palm that was shown, shown");
+    Check(!enabled(2), "and hides the one that was hidden");
+
+    // Nothing to change is said, and nothing is recorded.
+    ctx.document.Find({ 2 })->enabled = true;
+    stack.Clear();
+    Check(!RunEditorAction(envActionCtx, stack, MakeActionIntent("setEnabled", Json{ { "enabled", true } }),
+        { EditorObjectId{ 1 }, EditorObjectId{ 2 } }, status), "showing what is all shown does nothing");
+    Check(status == "Already shown", "and says so: " + status);
+    Check(stack.HistorySize() == 0, "and records nothing");
+}
+
+// "Give it this material" means every slot, and Undo gives back the keys the object had: an
+// ABSENT key stays absent, so what the mesh asset supplies is inherited again rather than frozen
+// into an override (an empty one, which then shadowed the asset for good once saved).
+void TestWholeObjectMaterial(const EditorActionContext& actionCtx)
+{
+    EditorSceneDocument document;
+    document.Objects().push_back(MakeMeshWithKey(1, "Box", "mesh", "models/box.mesh.json", {}));
+    document.Objects().push_back(MakeMeshWithKey(2, "Tent", "mesh", "models/tent.mesh.json", {}));
+    EditorObject explicitEmpty = MakeMeshWithKey(3, "Box_002", "mesh", "models/box.mesh.json", {});
+    explicitEmpty.properties["material"] = "";
+    document.Objects().push_back(explicitEmpty);
+    EditorObject ownList = MakeMeshWithKey(4, "Tent_002", "mesh", "models/tent.mesh.json", {});
+    ownList.properties["materials"] = Json::array({ "tent_0", "bronze", "tent_2" });
+    document.Objects().push_back(ownList);
+    EditorSelection selection;
+    EditorContext ctx{ actionCtx.editor.renderer, actionCtx.editor.scene, actionCtx.editor.levelManager,
+        document, selection };
+    EditorCommandStack stack;
+    const auto own = [&document](uint64_t id) -> const Json& { return document.Find({ id })->properties; };
+    const auto effective = [&document](uint64_t id)
+    {
+        return SceneObjectFactory::ResolveMeshAsset(EditorSceneDocument::ObjectToJson(*document.Find({ id })));
+    };
+
+    // A one-slot box that inherits bronze from models/box.mesh.json.
+    Check(effective(1).value("material", "") == "bronze", "the box inherits bronze from its asset");
+    Check(stack.Execute(ctx, std::make_unique<SetMaterialCommand>(EditorObjectId{ 1 }, "tent_0")), "assign runs");
+    Check(effective(1).value("material", "") == "tent_0", "the box takes the new material");
+    Check(!own(1).contains("materials"), "a one-slot box is given no slot list");
+    stack.Undo(ctx);
+    Check(!own(1).contains("material"), "undo removes the key the box never had, not an empty override");
+    Check(effective(1).value("material", "") == "bronze", "so bronze is inherited again");
+
+    // An explicit empty material is a value, and comes back as one.
+    stack.Execute(ctx, std::make_unique<SetMaterialCommand>(EditorObjectId{ 3 }, "tent_0"));
+    stack.Undo(ctx);
+    Check(own(3).contains("material") && own(3)["material"] == "", "an explicit empty material comes back as it was");
+
+    // The tent inherits a three-slot list. The scalar alone changed nothing on screen: the factory
+    // hands the list to the slots and never reads the scalar.
+    stack.Execute(ctx, std::make_unique<SetMaterialCommand>(EditorObjectId{ 2 }, "bronze"));
+    {
+        std::unique_ptr<RenderableObjectBase> runtime =
+            SceneObjectFactory::CreateStaticMeshFromJson(EditorSceneDocument::ObjectToJson(*document.Find({ 2 })));
+        GBufferRenderable* gb = runtime ? runtime->AsGBufferRenderable() : nullptr;
+        Check(gb != nullptr, "the tent builds");
+        for (size_t slot = 0; slot < 3; ++slot)
+        {
+            Check(gb->SlotPreset(slot) == "bronze",
+                "every tent slot draws bronze, slot " + std::to_string(slot) + " has '" + gb->SlotPreset(slot) + "'");
+        }
+    }
+    stack.Undo(ctx);
+    Check(!own(2).contains("material") && !own(2).contains("materials"), "undo leaves the tent with neither key");
+    Check(effective(2)["materials"] == Json::array({ "tent_0", "tent_1", "tent_2" }),
+        "so the asset's list is inherited again");
+
+    // An object's own list is replaced slot for slot, and undo returns it exactly.
+    stack.Execute(ctx, std::make_unique<SetMaterialCommand>(EditorObjectId{ 4 }, "bronze"));
+    Check(own(4)["materials"] == Json::array({ "bronze", "bronze", "bronze" }), "an own list becomes bronze in every slot");
+    stack.Undo(ctx);
+    Check(own(4)["materials"] == Json::array({ "tent_0", "bronze", "tent_2" }), "undo returns the exact list");
+    Check(!own(4).contains("material"), "without a scalar it never had");
+    stack.Redo(ctx);
+    Check(own(4)["materials"] == Json::array({ "bronze", "bronze", "bronze" }), "redo assigns it again");
+}
+
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -2930,6 +3060,7 @@ int main(int argc, char** argv)
         TestPivotToBase();
         TestSpawnJoinsTheGroupItsKindUses(actionCtx);
         TestTheWholeScatterPhrase(actionCtx);
+        TestWholeObjectMaterial(actionCtx);
         std::puts("Intent regression: actions OK");
 
         // The environment family runs on its own document: the palm document has no
@@ -2978,6 +3109,7 @@ int main(int argc, char** argv)
             const EditorActionContext envActionCtx{ envCtx, assets, extensions };
             TestEnvironmentPreviewShowsBeforeAndAfter(envActionCtx);
             TestEnvironmentEditsGoThroughUndo(envActionCtx);
+            TestShowingWhatIsShownUndoesToShown(envActionCtx);
         }
         std::puts("Intent regression: environment OK");
 

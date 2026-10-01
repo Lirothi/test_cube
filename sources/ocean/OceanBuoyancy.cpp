@@ -202,7 +202,14 @@ void OceanBuoyancy::Step(Body& body, const OceanRenderable& ocean, float deltaTi
     // 1. The water under each pontoon. A NEW copy is sampled where the pontoons are now and yields
     //    a rate from the previous copy; every frame then carries height + rate * age forward to the
     //    ocean's current time -- the readback's latency and its steps never reach the body raw.
-    if (readback.HasSurface() && readback.AdoptedFrame() != body.waterFrame)
+    if (!readback.HasSurface())
+    {
+        // Flat water: readbackCascades None, or no copy has landed yet. The carried samples are
+        // forgotten, so a surface that comes back starts its rate at zero instead of differencing
+        // its first copy against a wave from before the gap.
+        body.waterFrame = 0;
+    }
+    else if (readback.AdoptedFrame() != body.waterFrame)
     {
         const Math::mat4 tilt = TiltMatrix(body.tilt);
         const Math::float3 com = body.comRest + Math::float3(0.0f, body.heave, 0.0f);
@@ -326,7 +333,7 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
 
     OceanReadback& readback = ocean->GetReadback();
     readback.Request();
-    readback.Poll(&renderer);
+    readback.Poll(&renderer, *ocean);
     if (ocean->GetSimulation()->GetSettings().GetReadbackMode() ==
         OceanSimulationSettings::ReadbackCascadesMode::None)
     {
@@ -357,7 +364,8 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
         const Body& first = bodies_.begin()->second;
         LOG_DEBUG_THROTTLED(std::chrono::seconds(2), logging::LogCategory::Ocean,
             "buoyancy: {} floating, surface {} frame(s) old ({} cascade(s)); '{}' heave {:.3f} m (v {:.3f}), tilt x {:.2f} z {:.2f} deg",
-            bodies_.size(), readback.LatencyFrames(), readback.Surface().cascades, first.geometry,
+            bodies_.size(), readback.LatencyFrames(), readback.HasSurface() ? readback.Surface().cascades : 0u,
+            first.geometry,
             first.heave, first.heaveVelocity, first.tilt.x * 57.2958f, first.tilt.z * 57.2958f);
     }
 }

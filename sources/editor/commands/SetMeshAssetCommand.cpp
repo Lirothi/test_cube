@@ -65,7 +65,7 @@ bool SetMeshAssetCommand::Apply(EditorContext& ctx, const nlohmann::json& proper
     UploadBatch uploads;
     if (uploads.Begin(&ctx.renderer))
     {
-        ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id_.value, std::move(runtime));
+        ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id_.value, std::move(runtime), obj->enabled);
         uploads.SubmitAndWait(&ctx.renderer);
     }
     return true;

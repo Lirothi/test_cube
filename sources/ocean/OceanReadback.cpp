@@ -30,6 +30,12 @@ namespace
         }
     }
 
+    // What the preset asks to copy, bounded by what is simulated and by the ring's two cascades.
+    std::uint32_t CascadesWanted(const OceanSimulation& sim)
+    {
+        return std::min({ CascadesFor(sim.GetSettings().GetReadbackMode()), sim.GetCascadeCount(), 2u });
+    }
+
     // ocean_surface_common.hlsli EaseInOutClamped / LodWeights.
     float EaseInOutClamped(float x)
     {
@@ -68,7 +74,7 @@ bool OceanReadback::EnsureBuffer(Renderer* renderer, ID3D12Resource* displacemen
         buffer_.Reset();
         mapped_ = nullptr;
     }
-    for (Slot& slot : slots_) { slot.frame = 0; }
+    for (Slot& slot : slots_) { slot.frame = 0; slot.discard = false; }
     adoptedFrame_ = 0; // the adopted slot lived in the old ring
     shoreQueued_ = false;
 
@@ -136,8 +142,7 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
     const OceanSimulation* sim = ocean.GetSimulation();
     if (!renderer || !sim) { return {}; }
     ID3D12Resource* displacement = sim->GetDisplacementResource();
-    const std::uint32_t cascades = std::min({ CascadesFor(sim->GetSettings().GetReadbackMode()),
-                                              sim->GetCascadeCount(), 2u });
+    const std::uint32_t cascades = CascadesWanted(*sim);
     if (!displacement || cascades == 0u) { return {}; }
     ID3D12Resource* shore = sim->GetShoreDepthResource();
     if (shore && sim->GetShoreDepthSrv().ptr == 0) { shore = nullptr; }
@@ -170,6 +175,7 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
 
     Slot& slot = slots_[slotIndex];
     slot.frame = renderer->GetTotalFrameNumber();
+    slot.discard = false;
     slot.frameSlot = renderer->GetCurrentFrameIndex(); // whose fence says the copy has landed
     SurfaceParams& s = slot.surface;
     s.lengthScales = sim->GetLengthScales();
@@ -253,12 +259,37 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
     };
 }
 
-void OceanReadback::Poll(Renderer* renderer)
+void OceanReadback::DropSurface()
+{
+    if (adoptedFrame_ != 0)
+    {
+        LOG_INFO(logging::LogCategory::Ocean,
+            "ocean readback: surface dropped (readbackCascades None) -- floating objects ride the flat water level");
+    }
+    adoptedFrame_ = 0;
+    latency_ = 0;
+    // The shore map goes with it: the copy that carried it may be one of the discarded ones, and
+    // a stale shoreQueued_ would keep the next mode from ever copying it again.
+    hasShore_ = false;
+    shoreQueued_ = false;
+    for (Slot& slot : slots_)
+    {
+        if (slot.frame != 0) { slot.discard = true; }
+    }
+}
+
+void OceanReadback::Poll(Renderer* renderer, const OceanRenderable& ocean)
 {
     if (!renderer) { return; }
     const std::uint64_t now = renderer->GetTotalFrameNumber();
     retired_.erase(std::remove_if(retired_.begin(), retired_.end(),
         [now](const auto& entry) { return now > entry.first + render::kFrameCount + 1u; }), retired_.end());
+
+    // BuildPass stops copying under None, but stopping is not forgetting: the surface adopted under
+    // One/Two stayed adopted, HasSurface stayed true, and a floating object settled onto a frozen
+    // snapshot of the last wave instead of the flat water level None promises.
+    const OceanSimulation* sim = ocean.GetSimulation();
+    if (!sim || CascadesWanted(*sim) == 0u) { DropSurface(); }
     if (!buffer_ || !mapped_) { return; }
 
     // Every finished slot, oldest first: the newest brings the cascades, but an older one may be
@@ -275,9 +306,23 @@ void OceanReadback::Poll(Renderer* renderer)
     std::sort(ready.begin(), ready.begin() + static_cast<std::ptrdiff_t>(count),
         [this](UINT a, UINT b) { return slots_[a].frame < slots_[b].frame; });
 
+    // The newest copy still wanted is adopted. One recorded before DropSurface lands like any other
+    // but describes a mode nobody asks for any more: its slot is freed, its contents never read.
+    size_t newest = count;
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (!slots_[ready[i]].discard) { newest = i; }
+    }
+
     for (size_t i = 0; i < count; ++i)
     {
         Slot& slot = slots_[ready[i]];
+        if (slot.discard)
+        {
+            slot.frame = 0;
+            slot.discard = false;
+            continue;
+        }
         if (slot.hasShore && shoreFootprint_.Footprint.Width != 0)
         {
             // The one copy: the shore map outlives its slot (it changes only with the camera).
@@ -293,7 +338,7 @@ void OceanReadback::Poll(Renderer* renderer)
             shore_ = slot.shore;
             hasShore_ = true;
         }
-        if (i + 1 == count)
+        if (i == newest)
         {
             surface_ = slot.surface;
             adoptedSlot_ = ready[i];

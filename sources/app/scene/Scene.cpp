@@ -1265,13 +1265,15 @@ void Scene::AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, Sce
     }
 }
 
-bool Scene::AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id, std::unique_ptr<RenderableObjectBase> obj)
+bool Scene::AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id,
+    std::unique_ptr<RenderableObjectBase> obj, bool visible)
 {
     if (!obj || !uploads.IsOpen())
     {
         return false;
     }
 
+    obj->SetVisible(visible);
     obj->Init(&renderer, uploads.CommandList(), uploads.KeepAlive());
     obj->SetEditorObjectId(id);
     obj->SyncSceneState(SceneObjectSyncReason::EditorSpawn);

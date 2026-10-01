@@ -129,9 +129,8 @@ void DeleteObjectCommand::Undo(EditorContext& ctx)
                         continue;
                     }
 
-                    runtime->SetVisible(object_.enabled);
                     addedAny |= ctx.scene.AddInitializedEditorObject(
-                        ctx.renderer, uploads, object_.id.value, std::move(runtime));
+                        ctx.renderer, uploads, object_.id.value, std::move(runtime), object_.enabled);
                 }
 
                 if (addedAny)

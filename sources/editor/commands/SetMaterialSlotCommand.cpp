@@ -25,7 +25,7 @@ void SetMaterialSlotCommand::Respawn(EditorContext& ctx, EditorObjectId id) cons
 {
     if (ctx.scene.FindEditorObject(id.value) == nullptr)
     {
-        return; // no live runtime (e.g. object disabled) — the document change is enough
+        return; // no live runtime -- the document change is enough (a disabled object has one, hidden)
     }
     const EditorObject* obj = ctx.document.Find(id);
     if (!obj)
@@ -43,7 +43,7 @@ void SetMaterialSlotCommand::Respawn(EditorContext& ctx, EditorObjectId id) cons
     UploadBatch uploads;
     if (uploads.Begin(&ctx.renderer))
     {
-        ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime));
+        ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime), obj->enabled);
         uploads.SubmitAndWait(&ctx.renderer);
     }
 }

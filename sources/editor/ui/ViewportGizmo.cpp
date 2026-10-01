@@ -282,7 +282,7 @@ namespace
             return false;
         }
         const bool added = ctx.scene.AddInitializedEditorObject(
-            ctx.renderer, uploads, kSpawnPreviewId, std::move(runtime));
+            ctx.renderer, uploads, kSpawnPreviewId, std::move(runtime), true);
         uploads.SubmitAndWait(&ctx.renderer);
         if (!added)
         {

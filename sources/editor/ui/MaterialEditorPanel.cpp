@@ -570,14 +570,16 @@ int MaterialEditorPanel::ApplyToScene(EditorContext& ctx) const
     int applied = 0;
     for (const EditorObjectId id : targets)
     {
-        if (ctx.scene.FindEditorObject(id.value) == nullptr) { continue; } // disabled -> no runtime
+        // No live runtime: nothing to respawn. (A disabled object HAS one -- loaded hidden -- and
+        // the respawn below keeps it hidden.)
+        if (ctx.scene.FindEditorObject(id.value) == nullptr) { continue; }
         const EditorObject* obj = ctx.document.Find(id);
         if (!obj) { continue; }
         const nlohmann::json json = EditorSceneDocument::ObjectToJson(*obj);
         std::unique_ptr<RenderableObjectBase> runtime = SceneObjectFactory::CreateStaticMeshFromJson(json);
         if (!runtime) { continue; }
         ctx.scene.RemoveEditorObject(id.value);
-        ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime));
+        ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime), obj->enabled);
         ++applied;
     }
     uploads.SubmitAndWait(&ctx.renderer);

@@ -110,7 +110,11 @@ public:
     using SceneObjectId = std::uint64_t;
     SceneObjectId AddEditorObject(std::unique_ptr<RenderableObjectBase> obj);
     void AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, SceneObjectId id);
-    bool AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id, std::unique_ptr<RenderableObjectBase> obj);
+    // `visible` is the editor document's `enabled` and is not optional: a factory builds every
+    // object visible, and a caller that respawned a HIDDEN object (a material, mesh or preset
+    // change, a Material/Mesh Editor save) showed it again while the document still said hidden.
+    bool AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id,
+        std::unique_ptr<RenderableObjectBase> obj, bool visible);
     bool RemoveEditorObject(SceneObjectId id);
     // Rebuild the shadow-caster GPU data + the consolidated mega VB/IB after an editor caster-set
     // change (spawn/delete). Runs on a fresh GPU-idle upload batch, so the VSM per-page draw keeps its

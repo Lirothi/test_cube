@@ -71,7 +71,7 @@ bool SpawnMeshCommand::Execute(EditorContext& ctx)
         return false;
     }
     const bool added = ctx.scene.AddInitializedEditorObject(
-        ctx.renderer, uploads, object_.id.value, std::move(runtime));
+        ctx.renderer, uploads, object_.id.value, std::move(runtime), object_.enabled);
     uploads.SubmitAndWait(&ctx.renderer);
 
     if (!added)

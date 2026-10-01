@@ -1102,7 +1102,7 @@ private:
         bool added = false;
         if (uploads.Begin(&renderer_))
         {
-            added = scene_.AddInitializedEditorObject(renderer_, uploads, id, std::move(runtime));
+            added = scene_.AddInitializedEditorObject(renderer_, uploads, id, std::move(runtime), true);
             uploads.SubmitAndWait(&renderer_);
         }
         if (!added)

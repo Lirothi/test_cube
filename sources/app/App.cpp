@@ -1045,6 +1045,25 @@ namespace
             }
             return true;
         }
+        // The ocean preset's readbackCascades (0 None, 1 One, 2 Two), applied through the same
+        // SetSettings the Ocean controls combo calls. Its point is the LIVE switch: a sweep
+        // `ocean.readbackCascades:1,0,1` adopts a surface, drops it, adopts again -- the case a
+        // cold start in None never reaches (docs/bug_review_2026-10-01.md, BUG-05).
+        if (setting == "ocean.readbackCascades")
+        {
+            if (OceanRenderable* ocean = scene.FindOceanRenderable())
+            {
+                if (OceanSimulation* sim = ocean->GetSimulation())
+                {
+                    using Mode = OceanSimulationSettings::ReadbackCascadesMode;
+                    const int cascades = std::clamp(static_cast<int>(value), 0, 2);
+                    OceanSimulationSettings settings = sim->GetSettings();
+                    settings.SetReadbackMode(cascades == 2 ? Mode::Two : cascades == 1 ? Mode::One : Mode::None);
+                    sim->SetSettings(&Systems::GetRenderer(), settings);
+                }
+            }
+            return true;
+        }
         if (setting == "ocean.contactFoam")
         {
             if (OceanRenderable* ocean = scene.FindOceanRenderable())

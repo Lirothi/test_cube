@@ -4,8 +4,9 @@
 #include "editor/commands/EditorCommand.h"
 #include "editor/scene/EditorSceneDocument.h" // EditorObjectId
 
-// Toggles an object's enabled flag on the document and its runtime visibility
-// (when it has a live editor-owned runtime). Undoable.
+// Sets an object's enabled flag on the document and its runtime visibility
+// (when it has a live editor-owned runtime). Undo restores the state the object
+// had before, which is not the opposite of the target when nothing changed.
 class SetEnabledCommand : public EditorCommand
 {
 public:
@@ -23,6 +24,8 @@ private:
 
     EditorObjectId id_;
     bool enabled_;
+    bool oldEnabled_ = false;
+    bool captured_ = false;
 };
 
 #endif // WITH_EDITOR
