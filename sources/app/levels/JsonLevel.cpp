@@ -416,6 +416,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         dirLight.SetLightShaftBloomMaxBrightness(dl.value("lightShaftBloomMaxBrightness", dirLight.GetLightShaftBloomMaxBrightness()));
         dirLight.SetLightShaftBloomTint(ToFloat3(dl.value("lightShaftBloomTint", json::array()), dirLight.GetLightShaftBloomTint()));
         dirLight.SetLightShaftOcclusionDepthRange(dl.value("lightShaftOcclusionDepthRange", dirLight.GetLightShaftOcclusionDepthRange()));
+        dirLight.SetLightShaftSmoothingSec(dl.value("lightShaftSmoothing", dirLight.GetLightShaftSmoothingSec()));
         // The sun's angular diameter in degrees (UE LightSourceAngle); drives the drawn disc and the specular lobe floor.
         dirLight.SetLightSourceAngleDegrees(dl.value("lightSourceAngle", dirLight.GetLightSourceAngleDegrees()));
         scene.SetDirectionalLight(dirLight);

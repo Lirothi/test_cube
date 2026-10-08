@@ -639,11 +639,11 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
             matFogIntegrateCS_.reset();
         }
     }
-    // Plan A7 light shafts (UE LightShaftBloom): three entry points of one file. Optional like the fog:
-    // a failed PSO leaves the pass unregistered (DecideFrame gates on all three).
+    // Plan A7 light shafts (UE LightShaftBloom): four entry points of one file. Optional like the fog:
+    // a failed PSO leaves the pass unregistered (DecideFrame gates on all four).
     {
-        static const char* const kLightShaftEntries[3] = { "CSDownsample", "CSBlur", "CSApply" };
-        for (UINT k = 0u; k < 3u; ++k)
+        static const char* const kLightShaftEntries[kLightShaftKernels] = { "CSDownsample", "CSBlur", "CSApply", "CSTemporal" };
+        for (UINT k = 0u; k < kLightShaftKernels; ++k)
         {
             if (matLightShaftCS_[k]) { continue; }
             Material::ComputeDesc cd{};
@@ -930,7 +930,7 @@ void SceneResourceBootstrapper::RefreshHandles()
     hzbHandles_.Populate(matHzbCS_.get());
     fogScatterHandles_.Populate(matFogScatterCS_.get(), 1u);   // FogCB at b1 (b0 = lighting)
     fogIntegrateHandles_.Populate(matFogIntegrateCS_.get(), 0u);
-    for (UINT k = 0u; k < 3u; ++k) { lightShaftHandles_[k].Populate(matLightShaftCS_[k].get()); }
+    for (UINT k = 0u; k < kLightShaftKernels; ++k) { lightShaftHandles_[k].Populate(matLightShaftCS_[k].get()); }
     bloomHandles_.Populate(matBloomCS_.get());
     bloomFftHandles_.Populate(matBloomFftCS_.get());
     bloomConvHandles_.Populate(matBloomConvCS_.get());
@@ -1200,17 +1200,18 @@ void LightShaftHandles::Populate(Material* material)
     depth = material->ComputeCB0FieldHandle("lsDepth");
     size = material->ComputeCB0FieldHandle("lsSize");
     invSize = material->ComputeCB0FieldHandle("lsInvSize");
+    temporal = material->ComputeCB0FieldHandle("lsTemporal");
 }
 
 UINT SceneResourceBootstrapper::GetLightShaftCBSizeBytes(UINT kernel) const
 {
-    return (kernel < 3u && matLightShaftCS_[kernel])
+    return (kernel < kLightShaftKernels && matLightShaftCS_[kernel])
         ? matLightShaftCS_[kernel]->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 void SceneResourceBootstrapper::WriteLightShaftConstants(UINT kernel, const LightShaftConstants& d, uint8_t* dest) const
 {
-    if (kernel >= 3u || !matLightShaftCS_[kernel] || !dest) { return; }
+    if (kernel >= kLightShaftKernels || !matLightShaftCS_[kernel] || !dest) { return; }
     Material* material = matLightShaftCS_[kernel].get();
     const LightShaftHandles& h = lightShaftHandles_[kernel];
     material->UpdateCBField(h.origin, d.origin, dest);
@@ -1219,6 +1220,7 @@ void SceneResourceBootstrapper::WriteLightShaftConstants(UINT kernel, const Ligh
     material->UpdateCBField(h.depth, d.depth, dest);
     material->UpdateCBField(h.size, d.size, dest);
     material->UpdateCBField(h.invSize, d.invSize, dest);
+    material->UpdateCBField(h.temporal, d.temporal, dest);
 }
 
 UINT SceneResourceBootstrapper::GetHzbCBSizeBytes() const

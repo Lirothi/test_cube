@@ -18,7 +18,7 @@ Texture2D SunCoronaTex : register(t4);
 RWTexture2D<float4> LdrTarget : register(u0);
 // P2: the persistent exposure record, read-only here. Bound as a UAV rather than an SRV purely so
 // it never leaves its canonical UNORDERED_ACCESS state -- an SRV binding would cost a transition
-// down and back every frame for 48 bytes this dispatch never writes. Behind the exposure record it
+// down and back every frame for 64 bytes this dispatch never writes. Behind the exposure record it
 // carries the sun probe (sun_probe.hlsli), written by one thread earlier in this same pass.
 // This runs AFTER the DLSS resolve (the upscaler evaluates earlier in this same pass) and BEFORE
 // the tone curve, which is the ordering the plan's section 6.3 fixes. NGX keeps its own internal
@@ -96,8 +96,9 @@ cbuffer TonemapCB : register(b0)
     // SUN RAYS (BloomSettings::sunRays*), drawn here at OUTPUT resolution because they are
     // sub-degree thin -- the bloom target is a quarter of the screen and would smear them. View
     // space is the camera's (+z forward, +y up). x of sunRaysShape = 0 turns the term off.
-    float4 sunRaysDir;     // xyz: direction TO the sun, view space, unit; w: halo weight
-    float4 sunRaysProj;    // xy: projection _11/_22; zw: the sun disc's radius in UV
+    float4 sunRaysDir;     // xyz: direction TO the sun's centre, view space, unit (the rays leave from the
+                           // centroid of what shows, which the sun probe adds); w: halo weight
+    float4 sunRaysProj;    // xy: projection _11/_22; zw: unused
     float4 sunRaysShape;   // x: intensity, y: needle count, z: length (rad), w: regular-star weight
     float4 sunRaysLook;    // x: star spike length (rad), y: rotation (rad), z: disc radius (rad), w: star spike count
     float4 sunRaysExtra;   // x: bundle count, y: halo radius (rad), z: 1 = draw from SunCoronaTex, w: its width
@@ -274,9 +275,13 @@ float3 SunCoronaGlare(float theta, float turn, float pixel, float len, float hal
 // and a sun just off the frame keeps throwing it in, fading with the angle it has left by.
 float3 SunRays(float2 uv, float outputWidth)
 {
-    const float3 sunDir = sunRaysDir.xyz;
-    if (sunDir.z <= 0.02f) { return 0.0f.xxx; }
-    const float2 sunNdc = sunDir.xy * sunRaysProj.xy / sunDir.z;
+    if (sunRaysDir.z <= 0.02f) { return 0.0f.xxx; }
+    // The rays leave from WHAT SHOWS of the disc -- the centroid the sun probe measured -- not from
+    // its centre: a disc half behind a palm trunk, or half under the sea, threw a centred star out
+    // of the trunk ("лучи из ниоткуда").
+    const float2 originTan = sunRaysDir.xy / sunRaysDir.z + asfloat(ExposureValue.Load2(kSunProbeCentroid));
+    const float3 sunDir = normalize(float3(originTan, 1.0f));
+    const float2 sunNdc = originTan * sunRaysProj.xy;
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     const float3 dir = normalize(float3(ndc / sunRaysProj.xy, 1.0f));
     const float theta = acos(clamp(dot(dir, sunDir), -1.0f, 1.0f));
@@ -349,8 +354,10 @@ float3 SunRays(float2 uv, float outputWidth)
     }
 
     // Rays from UNDER the disc's edge: fading in from one disc radius to two left a dark ring
-    // between the disc and the corona ("зазор между диском и стартом лучей").
-    const float rim = smoothstep(0.5f * sunRaysLook.z, sunRaysLook.z, theta);
+    // between the disc and the corona ("зазор между диском и стартом лучей"). The radius is that
+    // of what shows -- area-equivalent, from the probe's visible share.
+    const float shownRadius = sunRaysLook.z * sqrt(saturate(asfloat(ExposureValue.Load(kSunProbeOut + 12u))));
+    const float rim = smoothstep(0.5f * shownRadius, shownRadius, theta);
     return seen * (sunRaysShape.x * glare * rim);
 }
 

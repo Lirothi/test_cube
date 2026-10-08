@@ -626,6 +626,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.lightShaft,
             DeferredSrvSlot::LightShaftB, DeferredSrvSlot::LightShaftBUAV, f,
             D.lightShaftB, D.lightShaftBSRV, D.lightShaftBUAV, sizes.lightShaftWidth, sizes.lightShaftHeight);
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.lightShaft,
+            DeferredSrvSlot::LightShaftHistory, DeferredSrvSlot::LightShaftHistoryUAV, f,
+            D.lightShaftHistory, D.lightShaftHistorySRV, D.lightShaftHistoryUAV, sizes.lightShaftWidth, sizes.lightShaftHeight);
         D.lightShaftWidth = std::max(1u, sizes.lightShaftWidth);
         D.lightShaftHeight = std::max(1u, sizes.lightShaftHeight);
 
@@ -860,6 +863,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.fogIntegrated.Get(), L"FogIntegrated", kNps);
         nameRes(D.lightShaftA.Get(), L"LightShaftA", kNps);
         nameRes(D.lightShaftB.Get(), L"LightShaftB", kNps);
+        nameRes(D.lightShaftHistory.Get(), L"LightShaftHistory", kNps);
         nameRes(D.cloudTrace.Get(), L"CloudTrace", kNps);
         nameRes(D.cloudTraceDepth.Get(), L"CloudTraceDepth", kNps);
         nameRes(D.cloudResolved.Get(), L"CloudResolved", kNps);
@@ -1149,6 +1153,9 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         collect(D.cloudTraceDepth);
         collect(D.cloudResolved);
         collect(D.cloudResolvedDepth);
+        collect(D.lightShaftA);
+        collect(D.lightShaftB);
+        collect(D.lightShaftHistory);
     }
 
     shadowAtlas_.Reset(); // S3.5: the single cascade atlas; Reset unregisters it

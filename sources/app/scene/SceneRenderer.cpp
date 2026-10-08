@@ -80,6 +80,7 @@ void SceneRenderer::Reset()
     skyAtmosphere_.Reset();
     volumetricCloud_.Reset();
     cloudHistoryFrames_ = 0u; cloudLogged_ = -1;
+    lightShaftHistoryFrames_ = 0u; lightShaftLastSeconds_ = -1.0;
     fogDistantRevision_ = 0u;
     decisions_.reflectionTemporal = false;
     ssrHistoryValid_ = false;
@@ -528,16 +529,23 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     // and the bloom would be non-zero; off-screen but in front is fine, the shafts enter from the edge.
     {
         decisions_.lightShafts = false;
+        decisions_.lightShaftHistoryValid = false;
+        decisions_.lightShaftBlend = 1.0f;
         const DirectionalLight* sun = frame.dirLight;
         const auto& D = renderer->GetDeferredForFrame();
+        const auto& P = renderer->GetDeferredForPrevFrame();
         const bool ready = sun != nullptr && frame.camera != nullptr && g_fogDebugView == 0u &&
             sun->GetLightShaftsEnabled() && sun->GetLightShaftBloomScale() > 0.0f &&
             (sun->GetColor().x > 0.0f || sun->GetColor().y > 0.0f || sun->GetColor().z > 0.0f) &&
             resources_.GetLightShaftMaterial(0u) && resources_.GetLightShaftMaterial(1u) && resources_.GetLightShaftMaterial(2u) &&
             resources_.GetLightShaftCBSizeBytes(0u) != 0u && resources_.GetLightShaftCBSizeBytes(1u) != 0u &&
             resources_.GetLightShaftCBSizeBytes(2u) != 0u &&
+            resources_.GetLightShaftMaterial(3u) && resources_.GetLightShaftCBSizeBytes(3u) != 0u &&
             D.lightShaftA.Get() != nullptr && D.lightShaftB.Get() != nullptr &&
             D.lightShaftASRV.ptr != 0 && D.lightShaftAUAV.ptr != 0 && D.lightShaftBSRV.ptr != 0 && D.lightShaftBUAV.ptr != 0 &&
+            D.lightShaftHistory.Get() != nullptr && D.lightShaftHistoryUAV.ptr != 0 &&
+            P.lightShaftHistory.Get() != nullptr && P.lightShaftHistorySRV.ptr != 0 &&
+            D.gbVelocity.Get() != nullptr && D.gbSRV[3].ptr != 0 &&
             D.sceneSRV.ptr != 0 && D.sceneUAV.ptr != 0 && D.depthSRV.ptr != 0;
         if (ready)
         {
@@ -559,6 +567,24 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
                 decisions_.lightShafts = true;
             }
         }
+        // The temporal step's history -- last frame's output, the previous slot's copy -- holds only
+        // if the pass ran last frame at this size and camera history (the cloud's rule). Its blend
+        // weight is a frame-rate-independent exponential of the sun's smoothing time constant, on a
+        // delta capped like the exposure's so a pause does not resolve into one jump.
+        const std::uint64_t rev = frame.camera ? frame.camera->GetHistoryRevision() : 0ull;
+        const bool sameHistory = lightShaftHistoryWidth_ == D.lightShaftWidth &&
+            lightShaftHistoryHeight_ == D.lightShaftHeight && lightShaftHistoryRevision_ == rev;
+        decisions_.lightShaftHistoryValid = decisions_.lightShafts && lightShaftHistoryFrames_ > 0u && sameHistory;
+        lightShaftHistoryFrames_ = decisions_.lightShafts ? (sameHistory ? lightShaftHistoryFrames_ + 1u : 1u) : 0u;
+        lightShaftHistoryWidth_ = D.lightShaftWidth;
+        lightShaftHistoryHeight_ = D.lightShaftHeight;
+        lightShaftHistoryRevision_ = rev;
+        const double now = GetTimeSeconds();
+        const double dt = lightShaftLastSeconds_ >= 0.0 ? std::clamp(now - lightShaftLastSeconds_, 0.0, 0.1) : 0.0;
+        lightShaftLastSeconds_ = now;
+        const float smoothing = sun ? sun->GetLightShaftSmoothingSec() : 0.0f;
+        decisions_.lightShaftBlend = smoothing > 0.0f
+            ? std::max(1.0f - std::exp(-static_cast<float>(dt) / smoothing), 1.0e-3f) : 1.0f;
         const int state = decisions_.lightShafts ? 1 : 0;
         if (state != lightShaftsLogged_)
         {

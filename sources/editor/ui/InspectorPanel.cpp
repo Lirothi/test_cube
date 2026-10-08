@@ -1623,6 +1623,13 @@ namespace
                           "a real lens or eye spreads far across the frame. 0 = core only.");
             dragF("Veil Radius", "sunGlareVeilRadiusDeg", 12.0f, 0.1f, 0.1f, 90.0f, "%.1f deg");
             InspectorHelp("Angle at which the veil has fallen to half.");
+            dragF("Low-Sun Below", "sunGlareLowSunDeg", 12.0f, 0.1f, 0.0f, 90.0f, "%.1f deg");
+            InspectorHelp("Sun elevation below which the glare starts to ease down (0 = never). The "
+                          "exposure opens up as the sun sets, so a glare sized for noon washes a "
+                          "sunset frame white.");
+            dragF("Low-Sun Floor", "sunGlareLowSunFloor", 0.2f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("What is left of the glare with the sun on the horizon, as a fraction of "
+                          "Sun Glare (1 = no fade).");
 
             ImGui::SeparatorText("Sun corona");
             dragF("Corona", "sunRaysIntensity", 0.15f, 0.005f, 0.0f, 2.0f, "%.3f");
@@ -2019,6 +2026,12 @@ namespace
             InspectorHelp("UE LightShaftOcclusionDepthRange (their 1000 m): only pixels in the FAR half of this range "
                           "seed the shafts -- the sky and distant ground -- so nearby lit surfaces do not streak. Anything "
                           "nearer stands in front of the rays and cuts them, which is what makes the crowns read.");
+            dragF("Smoothing (s)", "lightShaftSmoothing", 0.15f, 0.005f, 0.0f, 2.0f, "%.3f");
+            InspectorHelp("How slowly the shafts follow what the sun shines through: the time constant of a "
+                          "temporal blend of their mask (reprojected, so the camera can move). 0 = every frame "
+                          "as it is -- the rays then tremble with the sub-pixel camera jitter and with every "
+                          "leaf. Higher = more inertia: a swaying crown eases the rays over instead of "
+                          "flickering them. --set=lightShafts.smoothing:<s>");
 
             ImGui::SeparatorText("Sun Disc");
             dragF("Light Source Angle (deg)", "lightSourceAngle", 0.5357f, 0.005f, 0.0f, 10.0f, "%.4f");

@@ -106,6 +106,10 @@ private:
     // the tangent of the disc's half angle. False when it is behind the camera or further past the
     // frame's edge than kSunOffFrameFadeDeg.
     bool SunInView(Math::float3& viewDir, float& projX, float& projY, float& discTan) const;
+    // The direction TO the sun in world space, unit; false without a sun.
+    bool SunWorldDirection(Math::float3& toSun) const;
+    // A world direction into this frame's view space (rotation only). Needs a camera.
+    Math::float3 ToView(const Math::float3& world) const;
     void BakeFlareBokeh(Renderer* renderer, uint32_t blades);
     bool ReadKernelPixels(const wchar_t* path);
     void SurveyKernel(float ratio);

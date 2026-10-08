@@ -14,9 +14,10 @@ namespace
     constexpr UINT64 kExposureRecordBytes = 16u;
     // The same buffer carries the SUN PROBE behind the record (bloom_conv_cs.hlsl stage 10): bytes
     // 16-31 the last sun-disc colour and gate seen on screen, held while the disc is off it; 32-47
-    // this frame's value the sun glare and the corona read. It is metering too -- of the sun -- and
-    // this buffer is already bound to both readers. The readback copies the exposure record only.
-    constexpr UINT64 kSunProbeBytes = 32u;
+    // this frame's value the sun glare and the corona read, and the disc's visible share; 48-55 the
+    // centroid of what shows of it (sun_probe.hlsli). It is metering too -- of the sun -- and this
+    // buffer is already bound to both readers. The readback copies the exposure record only.
+    constexpr UINT64 kSunProbeBytes = 48u;
     constexpr UINT64 kMeteringBufferBytes = kExposureRecordBytes + kSunProbeBytes;
 
     ComPtr<ID3D12Resource> CreateRawUavBuffer(ID3D12Device* device, UINT64 bytes)

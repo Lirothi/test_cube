@@ -111,7 +111,7 @@ cbuffer BloomConvCB : register(b0)
     float4 sunGlareDir;      // xyz: direction TO the sun, view space, unit; w: unused
     float4 sunGlareProj;     // xy: projection _11/_22; zw: the sun disc's radius in source UV
     float4 sunGlareParams;   // stage 9: x intensity, y core radius (rad), z veil weight, w veil radius (rad)
-                             // stage 10: x the off-frame fade angle (rad)
+                             // stage 10: x the off-frame fade angle (rad), yzw world up in view space
 };
 
 // The exposure record, read to put `threshold` in the units the viewer sees. Same buffer and same
@@ -498,31 +498,73 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // faded out as the disc's centre reached it and were gone once it passed ("очень резко все
         // добро вокруг солнца пропадает"). Past the edge they now fade by the ANGLE the sun has left
         // the frame by (sunGlareParams.x, radians); the CPU stops asking beyond it.
+        //   WHERE the disc shows, too. With the disc half behind a palm trunk the corona, centred on
+        // the disc, drew rays out of the trunk ("лучи из ниоткуда"). So the taps are 32 in a
+        // sunflower over the disc's flat core (0.7 of its radius: the sky draws the disc with a
+        // soft edge from there out), each weighted by its luminance -- a trunk or a leaf in front is
+        // dark next to the sun and weighs nothing -- and by whether its DIRECTION is above the
+        // horizon, decided geometrically (sunGlareParams.yzw = world up in view space), because the
+        // sea below a low sun can glitter as bright as the disc. Their centroid is where the
+        // corona's rays leave from, and the visible share how far inside it they start. The
+        // horizon used to be a separate analytic segment on the CPU; this covers it and every
+        // occluder with one rule. Both are held, like the colour, unless all 32 taps are in frame.
         //   record +16  last disc colour seen (rgb) and last gate (a) -- held off the frame
-        //   record +32  this frame's value (rgb) = colour x gate x off-frame fade
+        //   record +32  this frame's value (rgb) = colour x gate x off-frame fade; (a) visible share
+        //   record +48  centroid of what shows: tangent-plane offset from the disc's centre (xy)
         if (any(pixel != 0u)) { return; }
         float3 held = asfloat(ExposureValue.Load3(kSunProbeHeld));
         float gate = asfloat(ExposureValue.Load(kSunProbeHeld + 12u));
+        float share = asfloat(ExposureValue.Load(kSunProbeOut + 12u));
+        float2 shownAt = asfloat(ExposureValue.Load2(kSunProbeCentroid));
         float fade = 0.0f;
         const float3 sunDir = sunGlareDir.xyz;
         if (sunDir.z > 0.02f)
         {
-            const float2 sunNdc = sunDir.xy * sunGlareProj.xy / sunDir.z;
+            const float2 sunTan = sunDir.xy / sunDir.z;
+            const float2 sunNdc = sunTan * sunGlareProj.xy;
             const float2 sunUV = float2(0.5f + 0.5f * sunNdc.x, 0.5f - 0.5f * sunNdc.y);
             const float2 discUV = max(sunGlareProj.zw, 1.0e-5f.xx);
-            // Nine taps over the disc: its centre and eight at 0.6 of its radius.
+            const float discTan = 2.0f * discUV.x / max(sunGlareProj.x, 1.0e-6f);
+            const float3 upView = sunGlareParams.yzw;
+            const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
             float3 disc = 0.0f.xxx;
             float discTaps = 0.0f;
+            float allInFrame = 1.0f;
+            float weight = 0.0f;
+            float2 weighted = 0.0f.xx;
+            float lumMax = 0.0f;
             [unroll]
-            for (uint k = 0u; k < 9u; ++k)
+            for (uint k = 0u; k < 32u; ++k)
             {
-                const float a = (float)k * 0.78539816f;
-                const float2 tapUV = sunUV + (k == 8u ? 0.0f.xx : float2(cos(a), sin(a)) * discUV * 0.6f);
+                // Equal area per tap, golden-angle turns; the tangent plane's y is up.
+                const float rho = 0.7f * sqrt(((float)k + 0.5f) / 32.0f);
+                const float a = (float)k * 2.39996323f;
+                const float2 t = float2(cos(a), sin(a)) * (rho * discTan);
+                const float2 tapNdc = (sunTan + t) * sunGlareProj.xy;
+                const float2 tapUV = float2(0.5f + 0.5f * tapNdc.x, 0.5f - 0.5f * tapNdc.y);
                 if (all(tapUV >= 0.0f) && all(tapUV <= 1.0f))
                 {
-                    disc += HDRColor.SampleLevel(gSmp, tapUV, 0.0f).rgb;
+                    // Softened over a fifth of the disc's radius, so a setting sun slides instead
+                    // of stepping tap by tap.
+                    const float above =
+                        saturate(dot(normalize(float3(sunTan + t, 1.0f)), upView) / (0.2f * discTan) + 0.5f);
+                    const float3 col = max(HDRColor.SampleLevel(gSmp, tapUV, 0.0f).rgb, 0.0f.xxx) * above;
+                    const float lum = dot(col, lumaW);
+                    disc += col;
                     discTaps += 1.0f;
+                    weight += lum;
+                    weighted += lum * t;
+                    lumMax = max(lumMax, lum);
                 }
+                else
+                {
+                    allInFrame = 0.0f;
+                }
+            }
+            if (allInFrame > 0.5f)
+            {
+                shownAt = weight > 0.0f ? weighted / weight : 0.0f.xx;
+                share = lumMax > 0.0f ? saturate(weight / (32.0f * lumMax)) : 0.0f;
             }
             // THE SUN, NOT THE SKY IN FRONT OF IT: a gate on how much brighter the disc is than a
             // ring 2.5 disc radii out. Glare structure comes from a POINT source far brighter than
@@ -563,6 +605,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         ExposureValue.Store3(kSunProbeHeld, asuint(held));
         ExposureValue.Store(kSunProbeHeld + 12u, asuint(gate));
         ExposureValue.Store3(kSunProbeOut, asuint(held * (gate * fade)));
+        ExposureValue.Store(kSunProbeOut + 12u, asuint(share));
+        ExposureValue.Store2(kSunProbeCentroid, asuint(shownAt));
         return;
     }
 

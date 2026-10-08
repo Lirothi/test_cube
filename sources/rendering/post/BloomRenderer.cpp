@@ -986,19 +986,32 @@ void BloomRenderer::FlaresComposite(Renderer* renderer, ID3D12GraphicsCommandLis
     }
 }
 
-bool BloomRenderer::SunInView(Math::float3& viewDir, float& projX, float& projY, float& discTan) const
+bool BloomRenderer::SunWorldDirection(Math::float3& toSun) const
 {
-    if (!frame_ || !frame_->camera || !frame_->dirLight) { return false; }
-    // The direction TO the sun, into view space (row vectors: v * view, rotation part only).
-    const Math::mat4& view = frame_->camera->GetViewMatrix();
-    Math::float3 toSun = -frame_->dirLight->GetDirection();
+    if (!frame_ || !frame_->dirLight) { return false; }
+    toSun = -frame_->dirLight->GetDirection();
     const float len = std::sqrt(toSun.x * toSun.x + toSun.y * toSun.y + toSun.z * toSun.z);
     if (!(len > 0.0f)) { return false; }
     toSun = toSun * (1.0f / len);
-    viewDir = Math::float3(
-        toSun.x * view.m._11 + toSun.y * view.m._21 + toSun.z * view.m._31,
-        toSun.x * view.m._12 + toSun.y * view.m._22 + toSun.z * view.m._32,
-        toSun.x * view.m._13 + toSun.y * view.m._23 + toSun.z * view.m._33);
+    return true;
+}
+
+Math::float3 BloomRenderer::ToView(const Math::float3& world) const
+{
+    // Row vectors: v * view, rotation part only.
+    const Math::mat4& view = frame_->camera->GetViewMatrix();
+    return Math::float3(
+        world.x * view.m._11 + world.y * view.m._21 + world.z * view.m._31,
+        world.x * view.m._12 + world.y * view.m._22 + world.z * view.m._32,
+        world.x * view.m._13 + world.y * view.m._23 + world.z * view.m._33);
+}
+
+bool BloomRenderer::SunInView(Math::float3& viewDir, float& projX, float& projY, float& discTan) const
+{
+    if (!frame_ || !frame_->camera) { return false; }
+    Math::float3 toSun;
+    if (!SunWorldDirection(toSun)) { return false; }
+    viewDir = ToView(toSun);
     if (viewDir.z <= 0.02f) { return false; } // behind the camera: nothing to measure it from
     const Math::mat4& proj = frame_->camera->GetProjMatrixNoJitter();
     projX = proj.m._11;
@@ -1024,12 +1037,21 @@ SunRaysConstants BloomRenderer::SunRays() const
     float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
     if (!(settings.sunRaysIntensity > 0.0f) || !SunInView(v, sx, sy, discTan)) { return c; }
     constexpr float kDeg = 3.14159265f / 180.0f;
+    // Where the rays leave from -- the centroid of what shows of the disc above the horizon and
+    // behind whatever stands in front of it -- is the sun probe's (bloom_conv_cs.hlsl stage 10);
+    // this hands over the disc's centre. A sun wholly under the sea throws nothing.
+    const float discRadius = std::atan(discTan);
+    if (Math::float3 toSun; SunWorldDirection(toSun) && std::asin(std::clamp(toSun.y, -1.0f, 1.0f)) <= -discRadius)
+    {
+        return c;
+    }
     c.dir = Math::float4(v.x, v.y, v.z, std::max(settings.sunRaysHalo, 0.0f));
-    c.proj = Math::float4(sx, sy, 0.5f * sx * discTan, 0.5f * sy * discTan);
+    // zw unused since the sun probe took the disc taps.
+    c.proj = Math::float4(sx, sy, 0.0f, 0.0f);
     c.shape = Math::float4(settings.sunRaysIntensity, static_cast<float>(std::max(settings.sunRaysCount, 16u)),
         std::max(settings.sunRaysLengthDeg, 0.1f) * kDeg, std::max(settings.sunRaysSpikes, 0.0f));
     c.look = Math::float4(std::clamp(settings.sunRaysSpikeLengthDeg, 0.1f, 60.0f) * kDeg, settings.sunRaysRotationDeg * kDeg,
-        std::atan(discTan), static_cast<float>(std::max(settings.sunRaysSpikeCount, 2u)));
+        discRadius, static_cast<float>(std::max(settings.sunRaysSpikeCount, 2u)));
     c.extra = Math::float4(static_cast<float>(std::max(settings.sunRaysBundles, 1u)),
         std::max(settings.sunRaysHaloRadiusDeg, 0.1f) * kDeg, 0.0f, 0.0f);
     // The widths are authored as full width at half maximum; the shader's Gaussian takes the 1/e
@@ -1076,7 +1098,9 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
     g.sourceSize = uint2{ 1u, 1u };
     g.sunGlareDir = Math::float4(v.x, v.y, v.z, 0.0f);
     g.sunGlareProj = Math::float4(sx, sy, 0.5f * sx * discTan, 0.5f * sy * discTan);
-    g.sunGlareParams = Math::float4(kSunOffFrameFadeDeg * kDeg, 0.0f, 0.0f, 0.0f);
+    // yzw: world up in view space, so the probe can tell the taps above the horizon from the sea.
+    const Math::float3 upView = ToView(Math::float3(0.0f, 1.0f, 0.0f));
+    g.sunGlareParams = Math::float4(kSunOffFrameFadeDeg * kDeg, upView.x, upView.y, upView.z);
     // One group, one working thread; the UAV barrier makes its record visible to the glare and the
     // tone curve after it. u0/u1 are only there because the table is positional.
     RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
@@ -1096,6 +1120,18 @@ void BloomRenderer::SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandL
     {
         return;
     }
+    constexpr float kDeg = 3.14159265f / 180.0f;
+    // A LOW sun's glare eases down to its floor (BloomSettings::sunGlareLowSun*).
+    float lowSun = 1.0f;
+    if (Math::float3 toSun; settings.sunGlareLowSunDeg > 0.0f && SunWorldDirection(toSun))
+    {
+        const float elevationDeg = std::asin(std::clamp(toSun.y, -1.0f, 1.0f)) / kDeg;
+        const float t = std::clamp(elevationDeg / settings.sunGlareLowSunDeg, 0.0f, 1.0f);
+        const float atHorizon = std::clamp(settings.sunGlareLowSunFloor, 0.0f, 1.0f);
+        lowSun = atHorizon + (1.0f - atHorizon) * t * t * (3.0f - 2.0f * t);
+    }
+    const float intensity = settings.sunGlareIntensity * lowSun;
+    if (!(intensity > 0.0f)) { return; }
 
     const auto& D = renderer->GetDeferredForFrame();
     auto convMaterial = resources_->GetBloomConvMaterial();
@@ -1105,13 +1141,12 @@ void BloomRenderer::SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandL
     const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
         renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
-    constexpr float kDeg = 3.14159265f / 180.0f;
     BloomConvConstants g{};
     g.convStage = 9u;
     g.sourceSize = uint2{ D.bloomWidth, D.bloomHeight };
     g.sunGlareDir = Math::float4(v.x, v.y, v.z, 0.0f);
     g.sunGlareProj = Math::float4(sx, sy, 0.5f * sx * discTan, 0.5f * sy * discTan);
-    g.sunGlareParams = Math::float4(settings.sunGlareIntensity,
+    g.sunGlareParams = Math::float4(intensity,
         std::max(settings.sunGlareRadiusDeg, 0.05f) * kDeg,
         std::max(settings.sunGlareVeil, 0.0f),
         std::max(settings.sunGlareVeilRadiusDeg, 0.1f) * kDeg);

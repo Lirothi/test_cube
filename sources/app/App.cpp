@@ -813,6 +813,7 @@ namespace
         if (setting == "lightShafts.bloomScale") { scene.DirectionalLightRef().SetLightShaftBloomScale(value); return true; }
         if (setting == "lightShafts.bloomThreshold") { scene.DirectionalLightRef().SetLightShaftBloomThreshold(value); return true; }
         if (setting == "lightShafts.bloomMaxBrightness") { scene.DirectionalLightRef().SetLightShaftBloomMaxBrightness(value); return true; }
+        if (setting == "lightShafts.smoothing") { scene.DirectionalLightRef().SetLightShaftSmoothingSec(std::max(value, 0.0f)); return true; }
         if (setting == "lightShafts.occlusionDepthRange") { scene.DirectionalLightRef().SetLightShaftOcclusionDepthRange(value); return true; }
         if (setting == "fog.density") { scene.HeightFogRef().density = value; return true; }
         if (setting == "fog.debugView")
@@ -940,6 +941,8 @@ namespace
         if (setting == "bloom.sunGlare") { scene.BloomRef().sunGlareIntensity = std::max(0.0f, value); return true; }
         if (setting == "bloom.sunGlareRadius") { scene.BloomRef().sunGlareRadiusDeg = std::max(0.05f, value); return true; }
         if (setting == "bloom.sunGlareVeil") { scene.BloomRef().sunGlareVeil = std::max(0.0f, value); return true; }
+        if (setting == "bloom.sunGlareLowSun") { scene.BloomRef().sunGlareLowSunDeg = std::clamp(value, 0.0f, 90.0f); return true; }
+        if (setting == "bloom.sunGlareLowSunFloor") { scene.BloomRef().sunGlareLowSunFloor = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "bloom.sunGlareVeilRadius") { scene.BloomRef().sunGlareVeilRadiusDeg = std::max(0.1f, value); return true; }
         // The sun's corona (BloomSettings::sunRays*).
         if (setting == "bloom.sunRays") { scene.BloomRef().sunRaysIntensity = std::max(0.0f, value); return true; }

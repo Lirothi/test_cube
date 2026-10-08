@@ -2096,23 +2096,36 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 constexpr D3D12_RESOURCE_STATES kUav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                constexpr D3D12_RESOURCE_STATES kSrvAllLs =
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
                 const auto& DL = renderer->GetDeferredForFrame();
+                const auto& PL = renderer->GetDeferredForPrevFrame();
                 LightShaftPoints pts{};
                 // 1. Downsample + mask: scene colour and depth read, A written.
                 pts.downsample = ctx.usePoint ? *ctx.usePoint : 0u;
                 ctx.Use(DL.scene.Get(), kNps);
                 ctx.Use(DL.depth.Get(), kNps);
                 ctx.Use(DL.lightShaftA.Get(), kUav);
-                // 2-4. Three radial blurs, A -> B -> A -> B (r.LightShaftBlurPasses 3).
+                // 2. Temporal: A and last frame's history (the previous slot's, at rest) read with the
+                // G-buffer velocity, this slot's history written -- next frame's history.
+                ctx.NextPoint();
+                pts.temporal = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(DL.lightShaftA.Get(), kNps);
+                ctx.Use(PL.lightShaftHistory.Get(), kNps);
+                ctx.Use(DL.gbVelocity.Get(), kSrvAllLs);
+                ctx.Use(DL.lightShaftHistory.Get(), kUav);
+                // 3-5. Three radial blurs, history -> B -> A -> B (r.LightShaftBlurPasses 3).
                 for (uint32_t pass = 0u; pass < 3u; ++pass)
                 {
                     ctx.NextPoint();
                     pts.blur[pass] = ctx.usePoint ? *ctx.usePoint : 0u;
-                    const bool fromA = (pass % 2u) == 0u;
-                    ctx.Use(fromA ? DL.lightShaftA.Get() : DL.lightShaftB.Get(), kNps);
-                    ctx.Use(fromA ? DL.lightShaftB.Get() : DL.lightShaftA.Get(), kUav);
+                    ID3D12Resource* src = pass == 0u ? DL.lightShaftHistory.Get()
+                                        : (pass == 1u ? DL.lightShaftB.Get() : DL.lightShaftA.Get());
+                    ID3D12Resource* dst = pass == 1u ? DL.lightShaftA.Get() : DL.lightShaftB.Get();
+                    ctx.Use(src, kNps);
+                    ctx.Use(dst, kUav);
                 }
-                // 5. Additive apply: B read, scene colour read-modify-written in place. Both targets end at
+                // 6. Additive apply: B read, scene colour read-modify-written in place. Both targets end at
                 // their rest (NPS); the scene's next consumer declares its own state, as after the outline.
                 ctx.NextPoint();
                 pts.apply = ctx.usePoint ? *ctx.usePoint : 0u;

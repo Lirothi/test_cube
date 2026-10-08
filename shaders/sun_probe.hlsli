@@ -5,7 +5,10 @@
 // exposure record's 16 bytes. Written once a frame by bloom_conv_cs.hlsl stage 10 -- what the sun
 // disc looks like in the frame, held while the disc is off it -- and read by the sun glare (stage 9)
 // and the corona (tonemap_cs.hlsl SunRays) instead of each of their pixels tapping the disc.
-static const uint kSunProbeHeld = 16u;  // last disc colour seen (rgb, 12 bytes), then the last gate
-static const uint kSunProbeOut = 32u;   // this frame's colour x gate x off-frame fade (rgb)
+static const uint kSunProbeHeld = 16u;      // last disc colour seen (rgb, 12 bytes), then the last gate
+static const uint kSunProbeOut = 32u;       // this frame's colour x gate x off-frame fade (rgb), then the
+                                            // visible share of the disc (0-1)
+static const uint kSunProbeCentroid = 48u;  // centroid of what shows of the disc: tangent-plane offset
+                                            // from its centre (xy, y up) -- where the corona's rays leave
 
 #endif // SUN_PROBE_HLSLI

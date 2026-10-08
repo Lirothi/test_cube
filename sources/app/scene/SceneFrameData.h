@@ -379,6 +379,13 @@ struct BloomSettings
     float sunGlareRadiusDeg = 2.0f;      // the core's e-folding angle
     float sunGlareVeil = 0.15f;          // the wide veil's weight, relative to the core's peak
     float sunGlareVeilRadiusDeg = 12.0f; // the veil's half-strength angle
+    // The glare on a LOW sun ("на низком угле солнца надо гасить sun glare"): full strength above
+    // sunGlareLowSunDeg of elevation, easing (smoothstep) down to sunGlareLowSunFloor of itself at
+    // the horizon. The exposure opens up as the sun sets, so a glare sized for noon washed a whole
+    // sunset frame white (wind_test at 0.5-1.5 degrees). 12 degrees leaves every shipped level as it
+    // was: the lowest sun among them is demo's 13.5.
+    float sunGlareLowSunDeg = 12.0f;
+    float sunGlareLowSunFloor = 0.2f;
     // THE SUN'S CORONA, drawn by the tone curve pass at output resolution (tonemap_cs.hlsl SunRays),
     // after Ritschel's "Temporal Glare": dense bright BUNDLES with dim gaps between them, fine
     // NEEDLES inside them, a power-law fall-off with warm tips, a faint lenticular HALO ring, and an

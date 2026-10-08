@@ -145,6 +145,10 @@ private:
         // TextureSpaceBlurOrigin, aspect-corrected uv (v * H/W), decided once for the five dispatches.
         bool lightShafts = false;
         Math::float2 lightShaftOrigin{};
+        // ...and its temporal step: last frame's output is a usable history (the pass ran last frame
+        // at this size and camera history), and this frame's weight in the blend.
+        bool lightShaftHistoryValid = false;
+        float lightShaftBlend = 1.0f;
     };
     void DecideFrame(Renderer* renderer, const SceneFrameData& frame);
     FrameDecisions decisions_{};
@@ -332,12 +336,14 @@ private:
     // Plan part C: what one frame's cloud constants are made of (camera, sun, exposure, the sky's
     // per-frame products, the wind clock, the ring sizes); VolumetricCloud::MakeConstants is pure.
     VolumetricCloud::FrameInputs MakeCloudInputs(Renderer* r) const;
-    // Plan A7 light shafts: five dispatches under five declared points (downsample + mask, three
-    // radial blurs ping-ponging the two half-res targets, the additive apply into scene colour).
+    // Plan A7 light shafts: six dispatches under six declared points (downsample + mask, the temporal
+    // blend into the history, three radial blurs ping-ponging the half-res targets, the additive apply
+    // into scene colour).
     struct LightShaftPoints
     {
         uint32_t downsample = 0; // scene + depth NPS, A UAV
-        uint32_t blur[3] = { 0u, 0u, 0u }; // A->B, B->A, A->B
+        uint32_t temporal = 0;   // A + previous history NPS, velocity SRV, history UAV
+        uint32_t blur[3] = { 0u, 0u, 0u }; // history->B, B->A, A->B
         uint32_t apply = 0;      // B NPS, scene UAV
     };
     void Pass_LightShafts(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const LightShaftPoints& pts);
@@ -690,6 +696,12 @@ private:
     std::uint64_t cloudHistoryRevision_ = 0u;
     int cloudLogged_ = -1;
     int lightShaftsLogged_ = -1;     // plan A7: last logged on/off, so the log gets the flips only
+    // Light shaft temporal history: the cloud's rule, plus the clock its blend weight is taken from.
+    uint32_t lightShaftHistoryFrames_ = 0u;
+    UINT lightShaftHistoryWidth_ = 0u;
+    UINT lightShaftHistoryHeight_ = 0u;
+    std::uint64_t lightShaftHistoryRevision_ = 0u;
+    double lightShaftLastSeconds_ = -1.0;
 
     // ---- PER-LEVEL / ONE-SHOT: survives frames, cleared by Reset(). ----
     bool rtFailureLogged_ = false; // S13: one "AS alloc failed -> SSR fallback" line per scene

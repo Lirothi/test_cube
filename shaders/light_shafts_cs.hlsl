@@ -1,30 +1,41 @@
 // Light shafts (plan A7, docs/volumetric_fog_sky_clouds_ssgi_plan.md): UE's LightShaftBloom,
 // transcribed from Shaders/Private/LightShaftShader.usf (148 lines) and
-// Renderer/Private/LightShaftRendering.cpp -- three compute kernels over ONE cbuffer:
+// Renderer/Private/LightShaftRendering.cpp -- four compute kernels over ONE cbuffer:
 //   CSDownsample  usf:39-85 (#else = the bloom branch): half-res masked bloom source from scene colour + depth
 //   CSBlur        usf:93-121: one radial blur pass towards the sun's screen position, NUM_SAMPLES 12
 //   CSApply       usf:141-149, blend BF_One/BF_One (LightShaftRendering.cpp:530): add the result into scene colour
-// The renderer runs downsample -> 3 blurs (r.LightShaftBlurPasses) -> apply, half resolution
-// (r.LightShaftDownSampleFactor 2), after the transparents. UE's TAA pass between the downsample and
-// the blurs is not transcribed (no TAA helper here; DLSS smooths the output, see the plan).
+//   CSTemporal    UE's TAA of the downsample (LightShaftRendering.cpp, the LightShafts history): this
+//                 frame's mask blended into last frame's, reprojected by the G-buffer velocity
+// The renderer runs downsample -> temporal -> 3 blurs (r.LightShaftBlurPasses) -> apply, half
+// resolution (r.LightShaftDownSampleFactor 2), after the transparents. The temporal step was first
+// left to DLSS, which cannot do it: the mask is drawn from the JITTERED scene at half resolution and
+// three radial blurs stretch every sub-pixel change of a leaf edge into a whole ray -- the shafts
+// trembled with the foliage frozen (frame-to-frame difference around the sun 2.8 against 0.7 with
+// the shafts off) and more with it swaying ("солнечные лучи оч сильно дрожат сквозь листву").
 //
 // Units: scene colour is stored PRE-EXPOSED, exactly as UE's is ("post exposure brightness",
 // usf:70), so BloomThreshold / BloomMaxBrightness mean what they mean in UE. Depths are metres on
 // both sides (UE cm against a cm range): the range is the same unit as the depth it masks.
 //
-// t0 SrcColor  -- downsample: scene colour (render res); blur/apply: the previous half-res result
-// t1 DepthTex  -- downsample only (a dummy in the other two kernels; never sampled there)
-// u0 Out       -- downsample/blur: the half-res target; apply: scene colour (read-modify-write)
-// s0 linear clamp (UE GlobalBilinearClampedSampler)  s1 point clamp (depth)
+// t0 SrcColor    -- downsample: scene colour (render res); temporal: this frame's mask;
+//                   blur/apply: the previous half-res result
+// t1 DepthTex    -- downsample only
+// t2 HistoryTex  -- temporal only: last frame's temporal output (the previous frame slot's)
+// t3 VelocityTex -- temporal only: the G-buffer motion, currUv - prevUv, render res
+//                   (unused slots are dummies, never sampled: the table is positional)
+// u0 Out         -- downsample/temporal/blur: the half-res target; apply: scene colour (read-modify-write)
+// s0 linear clamp (UE GlobalBilinearClampedSampler)  s1 point clamp (depth, velocity)
 #define LIGHT_SHAFTS_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 
-Texture2D           SrcColor : register(t0);
-Texture2D           DepthTex : register(t1);
-RWTexture2D<float4> Out      : register(u0);
+Texture2D           SrcColor    : register(t0);
+Texture2D           DepthTex    : register(t1);
+Texture2D           HistoryTex  : register(t2);
+Texture2D           VelocityTex : register(t3);
+RWTexture2D<float4> Out         : register(u0);
 SamplerState gSmpLinear : register(s0);
 SamplerState gSmpPoint  : register(s1);
 
@@ -44,6 +55,9 @@ cbuffer LightShaftCB : register(b0)
     uint4  lsSize;
     // xy = 1 / lsSize.xy, zw = half a texel of the SOURCE: UE's UVMinMax bilinear inset.
     float4 lsInvSize;
+    // Temporal only: x = this frame's weight (1 - exp(-dt / smoothing); 1 = no history), y = the
+    // history's pre-exposure rescale (now / then), z = 1 when last frame's history is valid, w = 0.
+    float4 lsTemporal;
 };
 
 static const int kNumSamples = 12; // r.LightShaftNumSamples, baked into the shader like UE's define
@@ -82,6 +96,36 @@ void CSDownsample(uint3 tid : SV_DispatchThreadID)
     // usf:83.
     Out[tid.xy] = float4(bloomColor * lsTint.rgb * bloomDistanceMask * (1.0f - edgeMask) *
                          blurOriginDistanceMask * blurOriginDistanceMask, 1.0f);
+}
+
+// The temporal step between the downsample and the blurs, half res. Last frame's mask is
+// reprojected by the G-buffer velocity (every pixel has one, the sky included: currUv - prevUv) and
+// this frame's is blended in at lsTemporal.x, a frame-rate-independent exponential with the sun's
+// Light Shaft Smoothing as its time constant. No neighbourhood clamp, unlike a TAA: the point is the
+// inertia -- a leaf swaying across the sun eases the rays over instead of switching them -- and the
+// radial blur after it smears any lag into the ray it belongs to. Off the previous frame, or with no
+// valid history (first frame, resize, camera cut, the pass off last frame), this frame's mask as is.
+[numthreads(8, 8, 1)]
+[RootSignature(LIGHT_SHAFTS_RS)]
+void CSTemporal(uint3 tid : SV_DispatchThreadID)
+{
+    if (tid.x >= lsSize.x || tid.y >= lsSize.y)
+    {
+        return;
+    }
+    const float3 current = SrcColor[tid.xy].rgb;
+    float3 result = current;
+    if (lsTemporal.z > 0.5f)
+    {
+        const float2 uv = (float2(tid.xy) + 0.5f) * lsInvSize.xy;
+        const float2 prevUv = uv - VelocityTex.SampleLevel(gSmpPoint, uv, 0).xy;
+        if (all(prevUv >= 0.0f) && all(prevUv <= 1.0f))
+        {
+            const float3 history = HistoryTex.SampleLevel(gSmpLinear, prevUv, 0).rgb * lsTemporal.y;
+            result = lerp(history, current, saturate(lsTemporal.x));
+        }
+    }
+    Out[tid.xy] = float4(result, 1.0f);
 }
 
 // usf:93-121: one radial blur pass, kNumSamples taps from the texel towards the sun. Half res.

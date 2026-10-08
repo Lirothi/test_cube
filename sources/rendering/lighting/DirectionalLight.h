@@ -198,6 +198,11 @@ public:
     const Math::float3& GetLightShaftBloomTint() const { return lightShaftBloomTint_; }
     void SetLightShaftBloomTint(const Math::float3& v) { lightShaftBloomTint_ = v; }
     float GetLightShaftOcclusionDepthRange() const { return lightShaftOcclusionDepthRange_; }
+    // Not UE's: how slowly the shafts follow what the sun shines through -- the time constant
+    // (seconds) of the temporal blend of their mask; 0 = this frame's mask as is. UE runs its TAA on
+    // the mask instead; without either the shafts trembled with every leaf (light_shafts_cs.hlsl).
+    float GetLightShaftSmoothingSec() const { return lightShaftSmoothingSec_; }
+    void SetLightShaftSmoothingSec(float v) { lightShaftSmoothingSec_ = v; }
     void SetLightShaftOcclusionDepthRange(float metres) { lightShaftOcclusionDepthRange_ = metres; }
 
     // THE SUN'S ANGULAR SIZE -- UE's LightSourceAngle (DirectionalLightComponent.cpp:1024: 0.5357 deg,
@@ -237,6 +242,7 @@ private:
     float lightShaftBloomMaxBrightness_ = 100.0f;
     Math::float3 lightShaftBloomTint_{ 1.0f, 1.0f, 1.0f };
     float lightShaftOcclusionDepthRange_ = 1000.0f; // metres (UE 100000 cm)
+    float lightShaftSmoothingSec_ = 0.15f;
     float lightSourceAngleDeg_ = 0.5357f; // UE's LightSourceAngle: the real sun's angular diameter
 };
 

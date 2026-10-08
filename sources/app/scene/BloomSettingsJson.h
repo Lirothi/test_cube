@@ -68,7 +68,8 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     s.sunGlareRadiusDeg = std::max(0.05f, j.value("sunGlareRadiusDeg", s.sunGlareRadiusDeg));
     s.sunGlareVeil = std::max(0.0f, j.value("sunGlareVeil", s.sunGlareVeil));
     s.sunGlareVeilRadiusDeg = std::max(0.1f, j.value("sunGlareVeilRadiusDeg", s.sunGlareVeilRadiusDeg));
-    s.sunRaysIntensity = std::max(0.0f, j.value("sunRaysIntensity", s.sunRaysIntensity));
+    s.sunGlareLowSunDeg = std::clamp(j.value("sunGlareLowSunDeg", s.sunGlareLowSunDeg), 0.0f, 90.0f);
+    s.sunGlareLowSunFloor = std::clamp(j.value("sunGlareLowSunFloor", s.sunGlareLowSunFloor), 0.0f, 1.0f);    s.sunRaysIntensity = std::max(0.0f, j.value("sunRaysIntensity", s.sunRaysIntensity));
     s.sunRaysCount = std::clamp(j.value("sunRaysCount", s.sunRaysCount), 16u, 2000u);
     s.sunRaysBundles = std::clamp(j.value("sunRaysBundles", s.sunRaysBundles), 1u, 128u);
     s.sunRaysBundleWidthDeg = std::clamp(j.value("sunRaysBundleWidthDeg", s.sunRaysBundleWidthDeg), 0.1f, 360.0f);
@@ -119,7 +120,8 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["sunGlareRadiusDeg"] = s.sunGlareRadiusDeg;
     j["sunGlareVeil"] = s.sunGlareVeil;
     j["sunGlareVeilRadiusDeg"] = s.sunGlareVeilRadiusDeg;
-    j["sunRaysIntensity"] = s.sunRaysIntensity;
+    j["sunGlareLowSunDeg"] = s.sunGlareLowSunDeg;
+    j["sunGlareLowSunFloor"] = s.sunGlareLowSunFloor;    j["sunRaysIntensity"] = s.sunRaysIntensity;
     j["sunRaysCount"] = s.sunRaysCount;
     j["sunRaysLengthDeg"] = s.sunRaysLengthDeg;
     j["sunRaysBundles"] = s.sunRaysBundles;

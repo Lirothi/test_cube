@@ -482,8 +482,8 @@ struct FogHandles
     void Populate(Material* material, UINT cbRegister);
 };
 
-// Plan A7 light shafts. Mirrors `LightShaftCB` in shaders/light_shafts_cs.hlsl, shared by its three
-// kernels (downsample + mask, radial blur, additive apply); `size[2]` is the blur pass index.
+// Plan A7 light shafts. Mirrors `LightShaftCB` in shaders/light_shafts_cs.hlsl, shared by its four
+// kernels (downsample + mask, radial blur, additive apply, temporal); `size[2]` is the blur pass index.
 struct LightShaftConstants
 {
     float4 origin{};   // xy = TextureSpaceBlurOrigin (aspect-corrected uv), z = W/H, w = H/W
@@ -492,10 +492,11 @@ struct LightShaftConstants
     float4 depth{};    // depthA, depthB, 0, 0
     uint32_t size[4] = { 1u, 1u, 0u, 0u }; // target size, blur pass index, 0
     float4 invSize{};  // 1/size.xy, half a SOURCE texel (UE's UVMinMax bilinear inset)
+    float4 temporal{ 1.0f, 1.0f, 0.0f, 0.0f }; // this frame's weight, history pre-exposure rescale, history valid, 0
 };
 struct LightShaftHandles
 {
-    Material::CBFieldHandle origin, bloom, tint, depth, size, invSize;
+    Material::CBFieldHandle origin, bloom, tint, depth, size, invSize, temporal;
     void Populate(Material* material);
 };
 
@@ -1002,7 +1003,9 @@ public:
     void WriteFogIntegrateConstants(const FogPassConstants& data, uint8_t* dest) const;
     // Plan A7 light shafts: kernel 0 = downsample + mask, 1 = radial blur, 2 = additive apply (one file,
     // three entry points); each has its own reflection, so its own CB size and handles.
-    std::shared_ptr<Material> GetLightShaftMaterial(UINT kernel) const { return kernel < 3u ? matLightShaftCS_[kernel] : nullptr; }
+    // Kernels: 0 CSDownsample, 1 CSBlur, 2 CSApply, 3 CSTemporal.
+    std::shared_ptr<Material> GetLightShaftMaterial(UINT kernel) const { return kernel < kLightShaftKernels ? matLightShaftCS_[kernel] : nullptr; }
+    static constexpr UINT kLightShaftKernels = 4u;
     UINT GetLightShaftCBSizeBytes(UINT kernel) const;
     void WriteLightShaftConstants(UINT kernel, const LightShaftConstants& data, uint8_t* dest) const;
     std::shared_ptr<Material> GetBloomMaterial() const { return matBloomCS_; }
@@ -1132,8 +1135,8 @@ private:
     std::shared_ptr<Material> matFogIntegrateCS_; // shaders/fog_integrate_cs.hlsl
     FogHandles fogScatterHandles_{};
     FogHandles fogIntegrateHandles_{};
-    std::shared_ptr<Material> matLightShaftCS_[3]; // shaders/light_shafts_cs.hlsl: CSDownsample, CSBlur, CSApply
-    LightShaftHandles lightShaftHandles_[3]{};
+    std::shared_ptr<Material> matLightShaftCS_[kLightShaftKernels]; // shaders/light_shafts_cs.hlsl: CSDownsample, CSBlur, CSApply, CSTemporal
+    LightShaftHandles lightShaftHandles_[kLightShaftKernels]{};
     std::shared_ptr<Material> matBloomCS_;
     std::shared_ptr<Material> matBloomFftCS_;
     std::shared_ptr<Material> matBloomConvCS_;

@@ -41,9 +41,9 @@ public:
         // lens-flare target and P8C-2l the streak pyramid's two halves.
         static constexpr size_t kResourceCount =
 #if WITH_EDITOR
-            31; // Runtime targets plus the editor-only objectID target (+2 fog volumes).
+            34; // Runtime targets plus the editor-only objectID target (+2 fog volumes, +3 light shafts).
 #else
-            30;
+            33;
 #endif
         // Resources
         GpuResource gb0;   // albedo+metal
@@ -132,6 +132,9 @@ public:
         // into A, three radial blurs A->B->A->B, B added into scene colour). Compute-only, rest NPS.
         GpuResource lightShaftA;
         GpuResource lightShaftB;
+        // ...and their temporal history: the mask after its blend with the previous frame's, which
+        // is next frame's history (the previous slot's copy, like gtaoHistory). Same size, rest NPS.
+        GpuResource lightShaftHistory;
         // P8: the bloom pyramid's two chains. `bloomDown` holds the thresholded image reduced level
         // by level, `bloomUp` the tent reconstruction on the way back; the upsample of level N reads
         // BOTH up[N+1] and down[N], which is why one ping-ponged chain would not do. Mip 0 of
@@ -215,6 +218,7 @@ public:
         // Plan A7 light shafts (half the render resolution).
         D3D12_CPU_DESCRIPTOR_HANDLE lightShaftASRV{}, lightShaftAUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE lightShaftBSRV{}, lightShaftBUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE lightShaftHistorySRV{}, lightShaftHistoryUAV{};
         UINT lightShaftWidth = 1, lightShaftHeight = 1;
 
         // P8 bloom pyramid, at DISPLAY resolution: it runs after the upscaler, on the same image
@@ -358,7 +362,7 @@ private:
     // Volumetric fog froxel volumes (3D).
     FogScatter, FogScatterUAV, FogIntegrated, FogIntegratedUAV,
     // Plan A7 light shafts: the half-res ping-pong pair.
-    LightShaftA, LightShaftAUAV, LightShaftB, LightShaftBUAV,
+    LightShaftA, LightShaftAUAV, LightShaftB, LightShaftBUAV, LightShaftHistory, LightShaftHistoryUAV,
     // The ocean reflection's temporal history.
     OceanReflectionHistory, OceanReflectionHistoryUAV,
     // Plan C2 volumetric clouds: the half-res march and its resolve, each with its depth.
