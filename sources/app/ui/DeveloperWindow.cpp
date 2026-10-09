@@ -2283,6 +2283,28 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "cost is lag: the splits chase the scene, so very long half-lives can leave a "
                         "boundary in the wrong place for a moment after a hard cut or a fast turn. "
                         "Counted in FRAMES, so the real time constant follows the frame rate.");
+                {
+                    int cacheFrames = static_cast<int>(render::sdsm::g_cacheFrames);
+                    if (GRAPHICS_CONTROL(SdsmCacheFrames, "sdsmCacheFrames",
+                        ImGui::SliderInt("Far partitions every N frames", &cacheFrames, 1, 8)))
+                    {
+                        render::sdsm::g_cacheFrames = static_cast<std::uint32_t>(std::clamp(cacheFrames, 1, 16));
+                    }
+                }
+                DevHelp("The partition cache. Partition 0 renders every frame; partition p >= 1 every "
+                        "min(N, 2^p) frames, staggered so a frame re-renders at most one of them besides "
+                        "0 (N = 4: partition 1 every 2nd frame, 2 and 3 every 4th). In between a partition "
+                        "keeps its tile and the matrix it was drawn with; only its depth interval is "
+                        "fresh. Far foliage shadows then sway at 1/period of the frame rate. Re-rendered "
+                        "out of turn when the sun moves, the camera cuts or turns/moves past the box's "
+                        "margin below, the atlas or the partition count changes. 1 = off.");
+                GRAPHICS_CONTROL(SdsmCacheDilation, "sdsmCacheDilation",
+                    ImGui::SliderFloat("Cached box margin", &render::sdsm::g_cacheDilation, 0.0f, 0.3f, "%.3f"));
+                DevHelp("How much wider (fraction of its own extent, per side) a partition that will be "
+                        "kept is fitted, so the camera can turn and move a little before a receiver walks "
+                        "off its tile (off it, the next partition shadows it, and past the last one "
+                        "nothing does). The camera guard re-renders at half of this margin. Wider = more "
+                        "headroom and slightly coarser far shadows.");
 
                 // ---- S16: EVSM4 -------------------------------------------------------------
                 ImGui::SeparatorText("SDSM filter (EVSM4)");

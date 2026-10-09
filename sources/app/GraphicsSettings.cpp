@@ -96,6 +96,9 @@ namespace
         float sdsmMinScaleOverSphere = 0.02f;
         float sdsmZMargin = 25.0f;
         float sdsmStabilityFrames = 30.0f;
+        // S20: the partition cache -- partitions 1+ re-render every min(N, 2^p) frames; 1 = off.
+        std::uint32_t sdsmCacheFrames = 4u;
+        float sdsmCacheDilation = 0.05f;
         // S16 (EVSM4). Off by default: it costs an RGBA32F atlas beside the depth one.
         bool sdsmEvsm = false;
         float sdsmEvsmPos = 42.0f;
@@ -321,6 +324,8 @@ namespace
         s.sdsmMinScaleOverSphere = std::clamp(finite(s.sdsmMinScaleOverSphere, 0.02f), 0.001f, 1.0f);
         s.sdsmZMargin = std::clamp(finite(s.sdsmZMargin, 25.0f), 0.0f, 1000.0f);
         s.sdsmStabilityFrames = std::clamp(finite(s.sdsmStabilityFrames, 30.0f), 0.0f, 240.0f);
+        s.sdsmCacheFrames = std::clamp(s.sdsmCacheFrames, 1u, 16u);
+        s.sdsmCacheDilation = std::clamp(finite(s.sdsmCacheDilation, 0.05f), 0.0f, 0.5f);
         s.sdsmEvsmPos = std::clamp(finite(s.sdsmEvsmPos, 42.0f), 1.0f, render::sdsm::kEvsmMaxExponent);
         s.sdsmEvsmNeg = std::clamp(finite(s.sdsmEvsmNeg, 5.25f), 1.0f, render::sdsm::kEvsmMaxExponent);
         s.sdsmBlur = std::clamp(finite(s.sdsmBlur, 0.002f), 0.0f, 0.25f);
@@ -452,6 +457,8 @@ namespace
         s.sdsmMinScaleOverSphere = render::sdsm::g_minScaleOverSphere;
         s.sdsmZMargin = render::sdsm::g_zMargin;
         s.sdsmStabilityFrames = render::sdsm::g_stabilityFrames;
+        s.sdsmCacheFrames = render::sdsm::g_cacheFrames;
+        s.sdsmCacheDilation = render::sdsm::g_cacheDilation;
         s.sdsmEvsm = render::sdsm::g_evsm;
         s.sdsmEvsmPos = render::sdsm::g_evsmPos;
         s.sdsmEvsmNeg = render::sdsm::g_evsmNeg;
@@ -596,6 +603,8 @@ namespace
         render::sdsm::g_minScaleOverSphere = s.sdsmMinScaleOverSphere;
         render::sdsm::g_zMargin = s.sdsmZMargin;
         render::sdsm::g_stabilityFrames = s.sdsmStabilityFrames;
+        render::sdsm::g_cacheFrames = s.sdsmCacheFrames;
+        render::sdsm::g_cacheDilation = s.sdsmCacheDilation;
         render::sdsm::g_evsm = s.sdsmEvsm;
         render::sdsm::g_evsmPos = s.sdsmEvsmPos;
         render::sdsm::g_evsmNeg = s.sdsmEvsmNeg;
@@ -803,6 +812,8 @@ namespace
                     { "minScaleOverSphere", s.sdsmMinScaleOverSphere },
                     { "zMargin", s.sdsmZMargin },
                     { "stabilityFrames", s.sdsmStabilityFrames },
+                    { "cacheFrames", s.sdsmCacheFrames },
+                    { "cacheDilation", s.sdsmCacheDilation },
                     { "evsm", s.sdsmEvsm },
                     { "evsmPositiveExponent", s.sdsmEvsmPos },
                     { "evsmNegativeExponent", s.sdsmEvsmNeg },
@@ -996,6 +1007,8 @@ namespace
         Read(sdsmSettings, "minScaleOverSphere", s.sdsmMinScaleOverSphere);
         Read(sdsmSettings, "zMargin", s.sdsmZMargin);
         Read(sdsmSettings, "stabilityFrames", s.sdsmStabilityFrames);
+        Read(sdsmSettings, "cacheFrames", s.sdsmCacheFrames);
+        Read(sdsmSettings, "cacheDilation", s.sdsmCacheDilation);
         Read(sdsmSettings, "evsm", s.sdsmEvsm);
         Read(sdsmSettings, "evsmPositiveExponent", s.sdsmEvsmPos);
         Read(sdsmSettings, "evsmNegativeExponent", s.sdsmEvsmNeg);
@@ -1278,6 +1291,8 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::SdsmMinScale:                   current.sdsmMinScaleOverSphere = defaults.sdsmMinScaleOverSphere; break;
     case GraphicsControl::SdsmZMargin:                    current.sdsmZMargin = defaults.sdsmZMargin; break;
     case GraphicsControl::SdsmStability:                  current.sdsmStabilityFrames = defaults.sdsmStabilityFrames; break;
+    case GraphicsControl::SdsmCacheFrames:                current.sdsmCacheFrames = defaults.sdsmCacheFrames; break;
+    case GraphicsControl::SdsmCacheDilation:              current.sdsmCacheDilation = defaults.sdsmCacheDilation; break;
     case GraphicsControl::SdsmEvsm:                       current.sdsmEvsm = defaults.sdsmEvsm; break;
     case GraphicsControl::SdsmEvsmPos:                    current.sdsmEvsmPos = defaults.sdsmEvsmPos; break;
     case GraphicsControl::SdsmEvsmNeg:                    current.sdsmEvsmNeg = defaults.sdsmEvsmNeg; break;

@@ -340,6 +340,24 @@ namespace sdsm
     // a lie at a different frame rate, and the wind clock can be frozen at dt = 0.
     inline float g_stabilityFrames = 30.0f;
 
+    // S20 PARTITION CACHE ("кэширование дальних каскадов тени плюс обновление реже начиная с не
+    // 0го каскада"). Partition 0 renders every frame; partition p >= 1 every min(N, 2^p) frames,
+    // staggered so a frame re-renders at most one of them besides partition 0 (N = 4: 1 every 2nd
+    // frame, 2 and 3 every 4th). Between renders a partition keeps its tile AND everything the
+    // sampler reads about it (Finalize carries matrix, rect, biases from last frame; only its
+    // depth interval is fresh, so the receivers' choice stays contiguous). The tile shadows the
+    // swaying foliage at 1/period of the frame rate. 1 = off: every partition every frame.
+    // A partition is re-rendered out of turn when the sun moves, the camera cuts, the atlas or
+    // the partition count changes, or the camera has turned or moved further than its widened box
+    // covers (Scene::UpdateSdsmFrameParams).
+    inline std::uint32_t g_cacheFrames = 4u;
+    // How much wider (fraction of the box's own extent, per side, in light-space XY) a partition
+    // that will be kept is fitted, so the camera can turn and move a little before a receiver walks
+    // off its tile -- off it, CsmSampleChain falls to the next partition, and past the last one to
+    // lit. 0.05 covers about 5 degrees of turn at a 90-degree field of view; the camera guard
+    // re-renders at half of that.
+    inline float g_cacheDilation = 0.05f;
+
     // NO `analyzeFullRes` KNOB, and that is a decision rather than an omission. The plan listed
     // one; it was written, wired to --set, and read by NOBODY -- a control that lies. The
     // reduction always walks EVERY depth pixel, because a min/max over a strided grid loses a

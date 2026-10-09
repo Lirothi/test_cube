@@ -3160,6 +3160,35 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
     }
 }
 
+void Renderer::ClearShadowTiles(ID3D12GraphicsCommandList* cl, std::uint32_t tileMask)
+{
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
+    cl->OMSetRenderTargets(0, nullptr, FALSE, &D.shadowDSV);
+    if ((tileMask & 0xFu) == 0xFu)
+    {
+        cl->ClearDepthStencilView(D.shadowDSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+        return;
+    }
+    // The same 2x2 layout BindShadowTarget places the tiles in; each rect is the WHOLE tile, gutter
+    // included, so a re-rendered tile's border is back at the clear value (1.0 = lit).
+    const LONG tile = static_cast<LONG>(D.shadowRes / 2u);
+    D3D12_RECT rects[4]{};
+    UINT count = 0u;
+    for (UINT i = 0u; i < 4u; ++i)
+    {
+        if ((tileMask >> i) & 1u)
+        {
+            const LONG x = static_cast<LONG>(i % 2u) * tile;
+            const LONG y = static_cast<LONG>(i / 2u) * tile;
+            rects[count++] = D3D12_RECT{ x, y, x + tile, y + tile };
+        }
+    }
+    if (count > 0u)
+    {
+        cl->ClearDepthStencilView(D.shadowDSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, count, rects);
+    }
+}
+
 void Renderer::BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth)
 {
     auto& D = rtManager_.Deferred(currentFrameIndex_);

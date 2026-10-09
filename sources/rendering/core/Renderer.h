@@ -291,6 +291,10 @@ public:
     // cone; it is intersected with the tile's content rect, and the VIEWPORT stays the full rect.
     void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth,
                           const D3D12_RECT* scissor = nullptr);
+    // S20: clear only the atlas tiles in `tileMask` (bit i = tile i, whole tile with its gutter)
+    // and leave the others as they are -- the SDSM partition cache keeps those. All four bits = the
+    // whole-atlas clear BindShadowTarget(cl, 0, true) does.
+    void ClearShadowTiles(ID3D12GraphicsCommandList* cl, std::uint32_t tileMask);
     void BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth);
     // Bind one cube face (cubeSlot in [0,kMaxShadowedPointLights), face in [0,6)) of the
     // point shadow atlas as the color render target, with the shared scratch depth. When

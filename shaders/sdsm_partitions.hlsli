@@ -123,7 +123,7 @@ cbuffer SdsmAnalyzeCB : register(b0)
     uint   gEvsmOn;
     uint   gAccurateCull;
     float  gStability;   // S16.7: fraction of LAST frame's reduced range to keep, 0 = raw
-    uint   gSdsmPad3;
+    uint   gUpdateMask;  // S20: bit p = partition p renders this frame; the rest are cached
 
     // The gbuffer's wind, passed through so Finalize can write a COMPLETE PerView block.
     float  gWindTime;
@@ -140,7 +140,7 @@ cbuffer SdsmAnalyzeCB : register(b0)
     int4   gHzbViewRect;
     uint2  gHzbSize;
     uint   gHzbOn;
-    uint   gHzbPad;
+    float  gCacheDilation; // S20: extra XY dilation of a partition that will be cached, 0 = cache off
 };
 
 // Row-vector z flip, CascadeHzb.cpp's `FlipZ` transcribed: clip.z' = w - z. The atlas is

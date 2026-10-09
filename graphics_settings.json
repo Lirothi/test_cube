@@ -110,6 +110,8 @@
     "mode": "sdsm",
     "sdsm": {
       "borderTexels": 4.0,
+      "cacheDilation": 0.05000000074505806,
+      "cacheFrames": 4,
       "dilation": 0.009999999776482582,
       "evsm": false,
       "evsmBlur": 0.0020000000949949026,

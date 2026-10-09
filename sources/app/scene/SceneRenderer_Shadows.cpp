@@ -562,16 +562,21 @@ void SceneRenderer::Pass_SdsmShadow(Renderer* renderer, RenderGraphPassContext c
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSdsmShadow);
         renderer->EmitPoint(t.cl, atlasPoint);
-        // Pass A clears the whole atlas once, exactly as Pass_CSM does: the S5 gutter has to keep
-        // the clear value (1.0 = lit) or a filter tap that lands in it reads a stale shadow.
-        // Pass B draws into the SAME tiles and must not clear them.
-        if (!passB) { renderer->BindShadowTarget(t.cl, 0, /*clear=*/true); }
+        // S20: only the partitions that RENDER this frame; a cached one keeps its tile as it is,
+        // and the analyze already gave its cull rows nothing to draw. ~0 with the cache off.
+        const std::uint32_t renderMask = sdsm ? sdsm->FrameParams().updateMask : ~0u;
+        // Pass A clears what it renders, exactly as Pass_CSM clears the whole atlas: the S5 gutter
+        // has to keep the clear value (1.0 = lit) or a filter tap that lands in it reads a stale
+        // shadow. Every tile re-rendered = the whole-atlas clear, as before. Pass B draws into the
+        // SAME tiles and must not clear them.
+        if (!passB) { renderer->ClearShadowTiles(t.cl, renderMask); }
 
         const std::uint32_t partitions = (shadowGpu && sdsm)
             ? std::min<std::uint32_t>(sdsm->FrameParams().partitions, render::sdsm::kMaxPartitions)
             : 0u;
         for (std::uint32_t p = 0; p < partitions; ++p)
         {
+            if (((renderMask >> p) & 1u) == 0u) { continue; }
             // Partition p -> atlas tile p -> args row p: the same identity a cascade index carries,
             // which is what lets the whole indirect path stay unchanged.
             renderer->BindShadowTarget(t.cl, static_cast<int>(p), /*clear=*/false);

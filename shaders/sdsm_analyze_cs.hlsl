@@ -578,6 +578,30 @@ void Finalize(uint groupIndex : SV_GroupIndex)
         return;
     }
 
+    // S20 PARTITION CACHE: a partition that does not re-render this frame keeps EVERYTHING its tile
+    // was rendered with -- matrix, atlas rect, biases, texel -- from last frame's copy (which was
+    // itself carried, back to the frame it rendered). Only its INTERVAL is this frame's, the one
+    // LogPartitions just wrote: receivers pick a partition by interval, and fresh intervals keep
+    // that choice contiguous however the partitions are cached. A receiver the kept box does not
+    // cover falls to the next partition in CsmSampleChain, as at any box edge. Nothing is drawn
+    // into a kept tile, so its cull rows reject every caster; its PerView and cull-CB blocks are
+    // left as they are -- the next render overwrites them, and HZB pairs last frame's matrix with
+    // a tile that still holds exactly that render.
+    if (((gUpdateMask >> p) & 1u) == 0u)
+    {
+        SdsmPartition kept = PrevPartitions[p];
+        kept.intervalBegin = Partitions[p].intervalBegin;
+        kept.intervalEnd = Partitions[p].intervalEnd;
+        kept.smoothedRange = Partitions[p].smoothedRange;
+        Partitions[p] = kept;
+        OutFrustums[p * kViewPlanes] = float4(0.0f, 0.0f, 0.0f, -1.0f);
+        [unroll] for (uint k = 1u; k < kViewPlanes; ++k)
+        {
+            OutFrustums[p * kViewPlanes + k] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        }
+        return;
+    }
+
     const float intervalBegin = Partitions[p].intervalBegin;
     const float intervalEnd = Partitions[p].intervalEnd;
     const uint  samples = Bounds[p].sampleCount;
@@ -617,6 +641,14 @@ void Finalize(uint groupIndex : SV_GroupIndex)
         const float3 ext = max(bmax - bmin, float3(1e-3f, 1e-3f, 1e-3f));
         bmin -= ext * gDilation;
         bmax += ext * gDilation;
+        // S20: a partition that will be KEPT for a few frames is fitted a little wider in XY, so
+        // the camera can turn and move a little before a receiver walks off its tile. Partition 0
+        // renders every frame and keeps the tight fit; 0 with the cache off.
+        if (p > 0u && gCacheDilation > 0.0f)
+        {
+            bmin.xy -= ext.xy * gCacheDilation;
+            bmax.xy += ext.xy * gCacheDilation;
+        }
     }
 
     // The scale CEILING, expressed against the Legacy sphere (`mMaxScale`, SDSMPartitions.hlsl:163

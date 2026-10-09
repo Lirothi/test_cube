@@ -2372,6 +2372,64 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     cb.blendFraction = cascadeConfig_.blendFraction;
     cb.accurateCull = cascadeConfig_.accurateCasterCull ? 1u : 0u;
 
+    // S20 -- the partition cache: which partitions RENDER this frame (render::sdsm::g_cacheFrames).
+    // Partition 0 always; partition p >= 1 every min(N, 2^p) frames, staggered (phases 0 / 1 / 3)
+    // so a frame re-renders at most one of them besides 0, and out of turn as soon as the camera
+    // has turned or moved half as far as the partition's widened box covers. EVERYTHING renders
+    // whenever a kept tile could be wrong: the sun moved, the camera cut, the atlas was re-created
+    // or resized, the partition count or the caster set changed, or the analyze did not run last
+    // frame (the mode was off). The analyze does the GPU half -- see Finalize.
+    {
+        const std::uint32_t cacheFrames = std::clamp<std::uint32_t>(render::sdsm::g_cacheFrames, 1u, 16u);
+        const float dilation = std::clamp(render::sdsm::g_cacheDilation, 0.0f, 0.5f);
+        const std::uint64_t frame = renderer->GetTotalFrameNumber();
+        const std::uint32_t sunVersion = dirLight_.GetTransformVersion();
+        const std::uint64_t camRevision = camera_.GetHistoryRevision();
+        const void* atlas = D.shadow;
+        const bool keep = cacheFrames > 1u && sdsmCacheFrame_ + 1u == frame &&
+            sunVersion == sdsmCacheSunVersion_ && camRevision == sdsmCacheCamRevision_ &&
+            D.shadowRes == sdsmCacheAtlasRes_ && atlas == sdsmCacheAtlas_ &&
+            cb.partitions == sdsmCachePartitions_ && staticSetVersion_ == sdsmCacheStaticSet_;
+        sdsmCacheFrame_ = frame;
+        sdsmCacheSunVersion_ = sunVersion;
+        sdsmCacheCamRevision_ = camRevision;
+        sdsmCacheAtlasRes_ = D.shadowRes;
+        sdsmCacheAtlas_ = atlas;
+        sdsmCachePartitions_ = cb.partitions;
+        sdsmCacheStaticSet_ = staticSetVersion_;
+
+        std::uint32_t mask = ~0u;
+        if (keep)
+        {
+            mask = 1u;
+            // The widened box reaches `dilation` of its own extent past the slice it was fitted to;
+            // at the far end of the partition that is about 2 * dilation * z * tan(halfFovX) per
+            // side. The guard fires at HALF of it, before a receiver can walk off.
+            const float turnCos = std::cos(0.5f * std::atan(2.0f * dilation * tanHalfX));
+            for (std::uint32_t p = 1u; p < cb.partitions; ++p)
+            {
+                const SdsmCacheSlot& slot = sdsmCache_[p];
+                const std::uint32_t period = std::min<std::uint32_t>(cacheFrames, 1u << p);
+                const std::uint32_t phase = ((p == 1u) ? 0u : (p == 2u ? 1u : 3u)) % period;
+                bool render = !slot.valid || (frame % period) == phase;
+                render = render || camDir.Dot(slot.camDir) < turnCos;
+                // How far the partition reaches, from the readout (a few frames old, which is
+                // plenty for a threshold); without one, the shadow distance -- the safe side.
+                const float reach = sdsm_.ReadoutValid() ? std::max(sdsm_.Readout()[p].intervalEnd, 1.0f) : cb.farZ;
+                const float moveLimit = dilation * reach * tanHalfX;
+                const float3 moved = camPos - slot.camPos;
+                render = render || moved.Dot(moved) > moveLimit * moveLimit;
+                if (render) { mask |= 1u << p; }
+            }
+        }
+        for (std::uint32_t p = 0u; p < render::sdsm::kMaxPartitions; ++p)
+        {
+            if ((mask >> p) & 1u) { sdsmCache_[p] = SdsmCacheSlot{ true, camPos, camDir }; }
+        }
+        cb.updateMask = mask;
+        cb.cacheDilation = (cacheFrames > 1u) ? dilation : 0.0f;
+    }
+
     // S16: the moments atlas, allocated only while EVSM is on -- four times the bytes per texel
     // of the depth it is derived from. The EXPONENTS are zero when it is off, and that single
     // zero is what makes csm_sample take the PCF arm: one switch, no second opinion.
@@ -2437,9 +2495,10 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
         if (--s_readoutFrames == 0) { render::sdsm::g_dumpReadout = false; }
         const auto& parts = sdsm_.Readout();
         LOG_INFO(logging::LogCategory::RenderShadow,
-                 "SDSM readout frame {} partitions={} border={:.1f} dilation={:.3f} minScale={:.3f} stability={:.2f} cpuTailCasters={} hzb={}",
+                 "SDSM readout frame {} partitions={} border={:.1f} dilation={:.3f} minScale={:.3f} stability={:.2f} cpuTailCasters={} hzb={} cache={} renders=0x{:x}",
                  renderer->GetTotalFrameNumber(), cb.partitions, cb.borderTexels, cb.dilation,
-                 cb.minScaleOverSphere, cb.stability, sdsm_.CpuCasterCount(), cb.hzbOn);
+                 cb.minScaleOverSphere, cb.stability, sdsm_.CpuCasterCount(), cb.hzbOn,
+                 render::sdsm::g_cacheFrames, cb.updateMask & 0xFu);
         LOG_INFO(logging::LogCategory::RenderShadow,
                  "  evsm={} exponents {:.1f}/{:.1f} atlas {}x{} moments {:.1f} MB",
                  cb.evsmOn, cb.evsmPos, cb.evsmNeg, D.shadowRes, D.shadowRes,

@@ -329,6 +329,24 @@ private:
     // S15: the SDSM analysis (partition buffer + GPU-written cull planes). Allocated only while
     // the mode is Sdsm and released on the way out, the same residency rule VSM follows.
     SdsmShadows sdsm_{};
+    // S20 partition cache (render::sdsm::g_cacheFrames): per partition, when it last rendered and
+    // from where the camera looked then -- the camera guard re-renders it once the camera has
+    // turned or moved further than its widened box covers. `valid` drops whenever anything the
+    // kept tiles depend on changes (sun, camera cut, atlas, partition count, the mode itself).
+    struct SdsmCacheSlot
+    {
+        bool valid = false;
+        Math::float3 camPos{};
+        Math::float3 camDir{};
+    };
+    std::array<SdsmCacheSlot, 4> sdsmCache_{};
+    std::uint32_t sdsmCacheSunVersion_ = ~0u;
+    std::uint64_t sdsmCacheCamRevision_ = ~0ull;
+    UINT sdsmCacheAtlasRes_ = 0u;
+    const void* sdsmCacheAtlas_ = nullptr; // the atlas resource: a re-created one holds nothing
+    std::uint32_t sdsmCachePartitions_ = 0u;
+    std::uint32_t sdsmCacheStaticSet_ = ~0u;
+    std::uint64_t sdsmCacheFrame_ = ~0ull; // the frame the analyze last ran; a gap = the mode was off
     LightManager lightManager_{};
     Camera camera_;
 

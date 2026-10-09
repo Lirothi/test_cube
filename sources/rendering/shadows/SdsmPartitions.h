@@ -176,10 +176,11 @@ struct alignas(16) AnalyzeConstants
     // Took one of the two pads below rather than growing the block -- the row stays full, so no
     // field after it moves. render::sdsm::g_stability.
     float stability = 0.0f;
-    // ONE pad, and it is still load-bearing: HLSL never straddles a scalar across a 16-byte
-    // cbuffer row, so the scalars above occupy two full rows and the wind block starts on the
-    // third. Dropping it would leave the C++ struct a slot short and slide every field after it.
-    std::uint32_t pad3 = 0u;
+    // S20: which partitions RENDER this frame (bit p); the rest are cached -- Finalize carries
+    // their last frame's data and rejects every caster for them. ~0u = all (the cache off). Took
+    // the row's last pad: HLSL never straddles a scalar across a 16-byte cbuffer row, so this slot
+    // keeps the wind block on the third row exactly as the pad did.
+    std::uint32_t updateMask = ~0u;
 
     // ---- the wind tail of PerViewCB, passed through so the analyze can write a COMPLETE
     // per-partition constant block. It is the gbuffer's wind, verbatim: a shadow swaying to
@@ -201,7 +202,9 @@ struct alignas(16) AnalyzeConstants
     std::int32_t  hzbViewRect[4] = { 0, 0, 0, 0 };      // (0, 0, content/2, content/2)
     std::uint32_t hzbSize[2] = { 0u, 0u };              // pyramid mip 0
     std::uint32_t hzbOn = 0u;                           // 0 = no occlusion test this frame
-    std::uint32_t hzbPad = 0u;
+    // S20: the extra XY dilation of a partition that will be cached (render::sdsm::g_cacheDilation;
+    // 0 with the cache off). The row's last slot, which was a pad.
+    float cacheDilation = 0.0f;
 };
 static_assert(sizeof(AnalyzeConstants) == 416,
               "sdsm::AnalyzeConstants must stay byte-identical to SdsmAnalyzeCB in "

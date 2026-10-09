@@ -562,6 +562,8 @@ namespace
         if (setting == "sdsm.minScaleOverSphere") { render::sdsm::g_minScaleOverSphere = std::clamp(value, 0.001f, 1.0f); return true; }
         if (setting == "sdsm.zMargin") { render::sdsm::g_zMargin = std::clamp(value, 0.0f, 1000.0f); return true; }
         if (setting == "sdsm.stabilityFrames") { render::sdsm::g_stabilityFrames = std::clamp(value, 0.0f, 240.0f); return true; }
+        if (setting == "sdsm.cacheFrames") { render::sdsm::g_cacheFrames = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 16.0f)); return true; }
+        if (setting == "sdsm.cacheDilation") { render::sdsm::g_cacheDilation = std::clamp(value, 0.0f, 0.5f); return true; }
         if (setting == "sdsm.evsm") { render::sdsm::g_evsm = value != 0.0f; return true; }
         if (setting == "sdsm.evsmPos") { render::sdsm::g_evsmPos = std::clamp(value, 1.0f, render::sdsm::kEvsmMaxExponent); return true; }
         if (setting == "sdsm.evsmNeg") { render::sdsm::g_evsmNeg = std::clamp(value, 1.0f, render::sdsm::kEvsmMaxExponent); return true; }

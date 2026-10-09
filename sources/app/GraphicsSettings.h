@@ -93,6 +93,8 @@ enum class GraphicsControl
     SdsmMinScale,
     SdsmZMargin,
     SdsmStability,
+    SdsmCacheFrames,
+    SdsmCacheDilation,
     SdsmEvsm,
     SdsmEvsmPos,
     SdsmEvsmNeg,
