@@ -227,11 +227,11 @@ namespace
             MakeTarget(TextureDebugViewer::Target::LightShaftB, "Lighting", "Plan A7 light shafts, half render resolution: the THIRD radial blur's output (UE BlurLightShaftsMain, 3 passes x 12 samples), which the apply adds into scene colour bilinearly. This is exactly what the shafts add to the frame.", D.lightShaftB.Get(), render::kLightShaftFormat),
             MakeTarget(TextureDebugViewer::Target::Hzb, "Depth", "P6C hierarchical depth pyramid, FURTHEST variant: each level is the 2x2 MIN of the previous, which under reversed-Z is the furthest surface in the tile. That is what a horizon search wants -- a coarse tile then UNDER-estimates occlusion, so it cannot invent contact shadows. GTAO reads this one. Mip 0 is half the render resolution; pick the level with the Mip control. Built right after the G-buffer, so it holds OPAQUE depth only and will legitimately disagree with \"Depth\" wherever the transparent pass wrote water or glass. Reversed-Z device depth sits within a hair of 0, so raise Gain or switch on Depth stretch or this reads as a black rectangle.", D.hzb.Get(), render::kHzbFormat),
             MakeTarget(TextureDebugViewer::Target::HzbClosest, "Depth", "P6C step 6: the same pyramid reduced with MAX device Z = the NEAREST surface in each tile. A ray march wants this one, so that a long step cannot tunnel through a surface the tile really contains -- the exact opposite of what the AO search wants, which is why there are two. ONLY BUILT while the HiZ SSR technique is the active reflection source; on any other frame this shows whatever was last written, not live data. Same black-by-nature caveat: use Gain or Depth stretch.", D.hzbClosest.Get(), render::kHzbFormat),
-            MakeTarget(TextureDebugViewer::Target::GBuffer0, "GBuffer", "Albedo RGB, metalness A.", D.gb0.Get(), renderer.GetGBuffer0Format()),
-            MakeTarget(TextureDebugViewer::Target::GBuffer1, "GBuffer", "Encoded normal RGB; alpha is unused.", D.gb1.Get(), renderer.GetGBuffer1Format()),
-            MakeTarget(TextureDebugViewer::Target::ShadingModel, "GBuffer", "Four-bit shading-model ID scale from GBAux.b: black=0 Default Lit, 1/15 gray=1 Two-Sided Foliage, 2/15 gray=2 Terrain, 3..15 are reserved.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
+            MakeTarget(TextureDebugViewer::Target::GBuffer0, "GBuffer", "Albedo RGB; A packs roughness (5 bits) and metalness (3 bits). Over the ocean A is the water's reflection roughness, written after compose (RGB keeps the opaque albedo).", D.gb0.Get(), renderer.GetGBuffer0Format()),
+            MakeTarget(TextureDebugViewer::Target::GBuffer1, "GBuffer", "Encoded normal RGB; alpha is unused. Over the ocean: the normal its reflection is taken about, written after compose.", D.gb1.Get(), renderer.GetGBuffer1Format()),
+            MakeTarget(TextureDebugViewer::Target::ShadingModel, "GBuffer", "Four-bit shading-model ID scale from GBAux.b: black=0 Default Lit, 1/15 gray=1 Two-Sided Foliage, 2/15 gray=2 Terrain, 3/15 gray=3 Water (the ocean, written after compose), 4..15 are reserved.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
             MakeTarget(TextureDebugViewer::Target::GBuffer2, "GBuffer", "DefaultLit emissive; Two-Sided Foliage subsurface/transmission payload.", D.gb2.Get(), renderer.GetGBuffer2Format()),
-            MakeTarget(TextureDebugViewer::Target::GBufferAux, "GBuffer", "Auxiliary material payload: AO R, indirect specular scale G, shading model B, reserved A.", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
+            MakeTarget(TextureDebugViewer::Target::GBufferAux, "GBuffer", "Auxiliary material payload: AO R, indirect specular scale G, shading model B, A = foliage transmission normal weight. Over the ocean A = the reflection weight (Fresnel x foam x horizon x soft edge).", D.gbAux.Get(), renderer.GetGBufferAuxFormat()),
             MakeTarget(TextureDebugViewer::Target::Velocity, "GBuffer", "Motion vectors.", D.gbVelocity.Get(), renderer.GetGBufferVelocityFormat()),
             MakeTarget(TextureDebugViewer::Target::Depth, "Depth", "Main deferred depth SRV.", D.depth.Get(), renderer.GetDepthSrvFormat()),
             MakeTarget(TextureDebugViewer::Target::DepthCopy, "Depth", "Depth copy before transparent pass.", D.depthCopy.Get(), renderer.GetDepthSrvFormat()),
@@ -393,7 +393,9 @@ void TextureDebugViewer::Draw(Renderer& renderer, ID3D12Resource* oceanShoreDept
             (target_ == Target::GtaoUpsampled) ? 4 :
             (target_ == Target::Hzb) ? 5 :
             (target_ == Target::Depth) ? 6 :
-            (target_ == Target::HzbClosest) ? 7 : -1;
+            (target_ == Target::HzbClosest) ? 7 :
+            (target_ == Target::GBuffer1) ? 9 :
+            (target_ == Target::ShadingModel) ? 10 : -1;
         ImGui::BeginDisabled(fsTarget < 0);
         if (ImGui::Button("Show fullscreen"))
         {

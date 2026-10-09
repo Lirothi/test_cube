@@ -12,11 +12,14 @@ cbuffer DebugTexCB : register(b0)
     // MONOTONE, which is what makes this safe for verification: min() commutes with it, so a
     // min-reduction checked on the stretched image is the same check as on the raw values.
     uint depthStretch;
-    // Show ALPHA instead of red. For the SSR reflection buffer that channel IS the answer: it
-    // carries the ray's visibility, so "did this pixel's ray find anything" becomes a value that
-    // can be counted headlessly instead of guessed at from the composited frame.
-    uint showAlpha;
-    uint pad1;
+    // Which channel: 0 R, 1 G, 2 B, 3 A, 4 RGB as colour. ALPHA for the SSR reflection buffer IS the
+    // answer: it carries the ray's visibility, so "did this pixel's ray find anything" becomes a
+    // value that can be counted headlessly instead of guessed at from the composited frame. B of
+    // GBAux is the shading model; RGB of GB1 is the normal.
+    uint channel;
+    // Linear gain after the channel pick (1 = raw). GBAux.b x5 puts the water's ID 3 at white,
+    // terrain at 0.67 and foliage at 0.33.
+    float gain;
 };
 
 struct VSOut { float4 H:SV_POSITION; float2 UV:TEXCOORD0; };
@@ -33,11 +36,16 @@ VSOut VSMain(uint vid:SV_VertexID)
 float4 PSMain(VSOut i):SV_Target
 {
     float4 d = ShadowAtlas.SampleLevel(Smp, i.UV, float(mipLevel));
-    float v = (showAlpha != 0u) ? d.a : d.r;
+    if (channel == 4u)
+    {
+        return float4(d.rgb * gain, 1);
+    }
+    float v = (channel == 3u) ? d.a : (channel == 2u) ? d.b : (channel == 1u) ? d.g : d.r;
     if (depthStretch != 0u)
     {
         v = pow(saturate(v), 1.0f / 8.0f);
     }
+    v *= gain;
     return float4(v, v, v, 1);
     //return float4(d.rg * 20, 0, 1);
 }

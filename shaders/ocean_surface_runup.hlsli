@@ -1575,10 +1575,17 @@ float3 Specular(const LightingInput li, const BrunetonInputs bi, float roughness
     return spec * li.mainLight.color;
 }
 
-float3 Reflection(const LightingInput li, float roughness)
+// The normal the reflection is taken about: the shading normal tilted toward +Y by the reflection
+// normal strength. Also what this surface leaves in GB1 (OceanGBuffer, plan S1).
+float3 OceanReflectionNormal(const LightingInput li)
 {
     float reflectionNormalStrength = saturate(heightFogParams.w);
-    float3 adjustedNormal = normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
+    return normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
+}
+
+float3 Reflection(const LightingInput li, float roughness)
+{
+    float3 adjustedNormal = OceanReflectionNormal(li);
     float3 reflectDir = OceanSkyReflectDir(reflect(-li.viewDir, adjustedNormal));
     reflectDir.y = abs(reflectDir.y);
 
@@ -1724,7 +1731,7 @@ float4 HorizonBlend(const LightingInput li)
     return float4(horizonColor, blend);
 }
 
-float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const FoamData foamData)
+float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const FoamData foamData, out OceanGBuffer gb)
 {
     BrunetonInputs bi = BuildBrunetonInputs(macroLi);
     float2 sss = SubsurfaceScatteringFactor(macroLi);
@@ -1743,6 +1750,11 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
     float3 color = specular + lerp(refracted, reflected, fresnel);
     //color = fresnel.xxx;
     color = lerp(color, foamLitColor, foamData.coverage.x);
+    // Plan S1: the G-buffer layer -- the reflection is taken about the MACRO normal on this surface.
+    // The weight follows `reflected` through every lerp below.
+    gb.reflectionNormal = OceanReflectionNormal(macroLi);
+    gb.reflectionRoughness = roughness;
+    gb.reflectionWeight = fresnel * (1.0f - foamData.coverage.x);
 
     // P7. The ocean's OWN horizon fade and the global aerial perspective are the same effect
     // authored twice, so exactly one of them runs. With fog off (density 0) this is byte-for-byte
@@ -1763,17 +1775,24 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
     else
     {
         color = lerp(color, horizon.rgb, horizon.a);
+        gb.reflectionWeight *= 1.0f - horizon.a;
         // Same rule compose follows: a debug view must not leave un-measured pixels showing the
         // ordinary image, or "no fog" and "not part of this view" look identical.
-        if (fogDebugView != 0u) { color = 0.0f.xxx; }
+        if (fogDebugView != 0u) { color = 0.0f.xxx; gb.reflectionWeight = 0.0f; }
     }
     return color;
 }
 
+// Plan S1: RT2..RT4 are the water's G-buffer layer (OceanGBuffer). The editor's objectID target sits
+// AFTER them (RT5, editor builds only) with a zero write mask and no output here, so one PS serves
+// both builds.
 struct PSOut
 {
     float4 color : SV_Target0;
     float2 velocity : SV_Target1;
+    float4 gb0 : SV_Target2;
+    float4 gb1 : SV_Target3;
+    float4 gbAux : SV_Target4;
 };
 
 [earlydepthstencil]
@@ -1989,14 +2008,16 @@ PSOut PSMain(VSOutput input)
     macroLi.normal = macroNormal;
     macroLi.slopeFactor = saturate(1.0f - macroNormal.y);
 
-    float3 color = GetOceanColor(li, macroLi, foamData);
-    
+    OceanGBuffer gb;
+    float3 color = GetOceanColor(li, macroLi, foamData, gb);
+
     float refractionEdgeWeight = refractionSoftEdge;
     [branch]
     if (refractionEdgeWeight < 0.95f)
     {
         float3 softEdgeRefraction = SceneColorTexture.SampleLevel(LinearClampSampler, screenUV, 0).rgb / max(skyParams.z, 1.0e-8f);   // P16.1, see above
         color = lerp(softEdgeRefraction, color, refractionEdgeWeight);
+        gb.reflectionWeight *= refractionEdgeWeight;
     }
     
     // NOT saturate(): this writes into the HDR scene target (R16G16B16A16_FLOAT), and clamping to
@@ -2116,6 +2137,7 @@ PSOut PSMain(VSOutput input)
             dbg = DebugHeat(g_foamDbg.x) * lerp(0.55f, 1.0f, checker);
         }
         outColor = float4(dbg, 1.0f);
+        gb.reflectionWeight = 0.0f;
     }
 #endif
 
@@ -2124,6 +2146,9 @@ PSOut PSMain(VSOutput input)
     PSOut o;
     o.color = outColor;
     o.velocity = motion;
+    o.gb0 = OceanGBuffer0(gb);
+    o.gb1 = OceanGBuffer1(gb);
+    o.gbAux = OceanGBufferAux(gb);
     return o;
 }
 

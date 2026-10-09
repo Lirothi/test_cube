@@ -984,7 +984,9 @@ namespace
         }
         // The fullscreen debug blit, so a half-res intermediate can be captured headlessly instead
         // of only judged by eye in the GUI. `debug.tex` = 0 shadow atlas, 1 GTAO raw, 2 denoised,
-        // 3 temporal, 4 upsampled, 5 HZB furthest, 6 scene depth, 7 HZB closest;
+        // 3 temporal, 4 upsampled, 5 HZB furthest, 6 scene depth, 7 HZB closest, 8 reflection hit
+        // mask, 9 GB1 normal (colour), 10 shading model (GBAux.b x5: water white), 11 GBAux alpha
+        // (the water's reflection weight);
         // `debug.texMode` turns the blit on.
         if (setting == "debug.texMode")    { renderSettings.debugTexMode = value != 0.0f; return true; }
         if (setting == "debug.tex")        { renderSettings.debugTexTarget = (int)value; return true; }

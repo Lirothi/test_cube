@@ -17,6 +17,7 @@ const char* ShadingModelToString(ShadingModel model)
     case ShadingModel::DefaultLit: return "defaultLit";
     case ShadingModel::TwoSidedFoliage: return "twoSidedFoliage";
     case ShadingModel::Terrain: return "terrain";
+    case ShadingModel::Water: return "water"; // logs only; deliberately not parseable
     default: return "defaultLit";
     }
 }

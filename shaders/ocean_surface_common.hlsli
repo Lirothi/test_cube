@@ -28,6 +28,41 @@ float CloudSunVisibility(float3 worldPos)
     return CloudShadowTransmittance(worldPos, cloudShadowViewProj, cloudShadowParams.y, CloudShadowMap, LinearClampSampler);
 }
 
+// THE WATER'S G-BUFFER LAYER (docs/ocean_gbuffer_ssr_unification_plan.md S1, UE SingleLayerWater):
+// what the forward draw leaves behind for the passes after it. Nothing reads it yet; S3's water SSR
+// traces from it and S4's composite adds the reflection back with it.
+//   GB0.a  = PackRM(the roughness the reflection is filtered with, metal 0) -- the PSO masks GB0.rgb,
+//            so the opaque albedo under the water survives;
+//   GB1    = the normal the reflection is taken about (not the shading normal: each surface tilts
+//            its reflection normal toward +Y by its own rule);
+//   GBAux  = (AO 1, indirect specular 1, kShadingModelWater, REFLECTION WEIGHT).
+// The weight is everything that multiplies `reflected` on its way into the scene colour except the
+// frame's pre-exposure: the Fresnel lerp, then every later lerp toward something else (foam, the
+// horizon fade, the refraction soft edge, debug overlays). Each of those is linear in the colour, so
+// final = rest + reflected * weight * skyParams.z EXACTLY, and S4 can move the reflected term out of
+// this shader without recomputing a Fresnel from G-buffer inputs that do not carry foam or the edge.
+struct OceanGBuffer
+{
+    float3 reflectionNormal;
+    float  reflectionRoughness;
+    float  reflectionWeight;
+};
+
+float4 OceanGBuffer0(const OceanGBuffer g)
+{
+    return float4(0.0f, 0.0f, 0.0f, PackRM(g.reflectionRoughness, 0.0f));
+}
+
+float4 OceanGBuffer1(const OceanGBuffer g)
+{
+    return float4(NrmTo01(normalize(g.reflectionNormal)), 0.0f);
+}
+
+float4 OceanGBufferAux(const OceanGBuffer g)
+{
+    return float4(1.0f, 1.0f, EncodeShadingModel(kShadingModelWater), saturate(g.reflectionWeight));
+}
+
 Gradient CreateGradient(float4 src[kGradientMaxKeys], float2 params)
 {
     Gradient g;

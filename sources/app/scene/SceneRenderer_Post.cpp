@@ -527,6 +527,11 @@ SceneRenderer::DebugTexPick SceneRenderer::PickDebugTexTarget(
     // that answers "did the ray find anything" WITHOUT the answer being filtered through shading,
     // the glossy blur and compose -- which is what a tracer A/B actually needs to compare.
     case 8: return { D.reflection.Get(), D.reflectionSRV };
+    // The G-buffer as the frame ENDS, i.e. with the water's layer on top (plan S1): the normal as
+    // colour, the shading model (GBAux.b x5: water white), and GBAux ALPHA = the water's reflection weight.
+    case 9: return { D.gb1.Get(), D.gbSRV[1] };
+    case 10: return { D.gbAux.Get(), D.gbAuxSRV };
+    case 11: return { D.gbAux.Get(), D.gbAuxSRV };
     default: return { D.shadow, D.shadowSRV }; // S3.5: non-owning alias, already a raw pointer
     }
 }
@@ -557,8 +562,8 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx,
         {
             std::uint32_t mipLevel;
             std::uint32_t depthStretch;
-            std::uint32_t showAlpha;
-            std::uint32_t pad1;
+            std::uint32_t channel; // 0 R, 1 G, 2 B, 3 A, 4 RGB (debug_texture.hlsl)
+            float gain;
         } cb{};
         const int target = frame_->settings.debugTexTarget;
         // The depth-like targets: both pyramids and the depth buffer they come from. Keep this ONE
@@ -568,7 +573,10 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx,
         const bool depthLike = (target == 5 || target == 6 || target == 7);
         cb.mipLevel = static_cast<std::uint32_t>(std::max(0, frame_->settings.debugTexMip));
         cb.depthStretch = depthLike ? 1u : 0u;
-        cb.showAlpha = (target == 8) ? 1u : 0u; // the reflection buffer's hit mask
+        // Reflection hit mask / water reflection weight are ALPHA, the normal is colour, and GBAux.b is
+        // the shading model x5 (water = white). Everything else shows red.
+        cb.channel = (target == 8 || target == 11) ? 3u : (target == 9) ? 4u : (target == 10) ? 2u : 0u;
+        cb.gain = (target == 10) ? 5.0f : 1.0f;
         {
             auto cbAlloc = renderer->GetFrameResource()->AllocDynamic(
                 sizeof(DebugTexCB), render::kConstantBufferAlignment);

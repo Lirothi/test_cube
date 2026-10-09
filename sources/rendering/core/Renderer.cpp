@@ -3107,6 +3107,19 @@ void Renderer::BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMo
     }
 }
 
+void Renderer::BindWaterTargets(ID3D12GraphicsCommandList* cl) {
+    auto& D = rtManager_.Deferred(currentFrameIndex_);
+#if WITH_EDITOR
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[6] = { D.sceneRTV, D.gbRTV[3], D.gbRTV[0], D.gbRTV[1], D.gbAuxRTV, D.objectIDRTV };
+#else
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[5] = { D.sceneRTV, D.gbRTV[3], D.gbRTV[0], D.gbRTV[1], D.gbAuxRTV };
+#endif
+    cl->OMSetRenderTargets(static_cast<UINT>(std::size(rtvs)), rtvs, FALSE, &D.dsv);
+    D3D12_VIEWPORT vp{ 0,0,float(renderWidth_),float(renderHeight_),0,1 };
+    D3D12_RECT     sr{ 0,0,(LONG)renderWidth_,(LONG)renderHeight_ };
+    cl->RSSetViewports(1, &vp); cl->RSSetScissorRects(1, &sr);
+}
+
 void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth,
                                 const D3D12_RECT* scissor)
 {

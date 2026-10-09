@@ -1976,6 +1976,17 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
 #if WITH_EDITOR
         p.Use(DT.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
 #endif
+        // Plan S1 (docs/ocean_gbuffer_ssr_unification_plan.md): the water's G-buffer layer, UE's
+        // SingleLayerWater. Lighting and compose are done with these three, so the water overwrites
+        // them where it covers the opaque scene. Main_TransparentFog returns them to their resting
+        // state -- the out-of-graph peeks (texture inspector, debug preview) borrow from there.
+        pts.water = WaterDrawsThisFrame();
+        if (pts.water)
+        {
+            p.Use(DT.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            p.Use(DT.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            p.Use(DT.gbAux.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+        }
         p.Use(DT.glassReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         // 5. Per-object reads (ocean displacement, particle sim buffers), on fan-out workers.
         if (frame_->objects)
@@ -2038,6 +2049,18 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             if (skyAtmosphere_.AerialBuilt())
             {
                 ctx.Use(skyAtmosphere_.AerialResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            }
+            // Plan S1 HAND-BACK: the water's G-buffer layer, a render target since Main_Transparent's
+            // `rebind`, back to its resting state. Here and not in Main_Transparent because a state
+            // change after that pass's fan-out water chunks is not expressible inside it (see this
+            // pass's header); this pass's point is emitted unconditionally. Moves to the water
+            // reflection pass when S3 adds it between the two.
+            if (WaterDrawsThisFrame())
+            {
+                const auto& DW = ctx.renderer->GetDeferredForFrame();
+                ctx.Use(DW.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(DW.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(DW.gbAux.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             }
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {

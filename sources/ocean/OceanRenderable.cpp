@@ -1072,17 +1072,23 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
+    // Plan S1 (docs/ocean_gbuffer_ssr_unification_plan.md): the water's G-buffer layer at RT2..RT4,
+    // the order Renderer::BindWaterTargets binds. objectID goes LAST so the slots are the same in both
+    // builds and the PS (which never writes it) needs no editor variant.
 #if WITH_EDITOR
-    desc.numRT = 3;
+    desc.numRT = 6;
 #else
-    desc.numRT = 2;
+    desc.numRT = 5;
 #endif
     if (renderer)
     {
         desc.rtvFormats[0] = renderer->GetSceneColorFormat();
         desc.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
+        desc.rtvFormats[2] = renderer->GetGBuffer0Format();
+        desc.rtvFormats[3] = renderer->GetGBuffer1Format();
+        desc.rtvFormats[4] = renderer->GetGBufferAuxFormat();
 #if WITH_EDITOR
-        desc.rtvFormats[2] = renderer->GetObjectIdFormat();
+        desc.rtvFormats[5] = renderer->GetObjectIdFormat();
 #endif
         desc.dsvFormat = renderer->GetDsvFormat();
     }
@@ -1105,15 +1111,22 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;
-    // RT2 is the editor object-ID target. Independent blending is required for its zero write
+    // RT5 is the editor object-ID target. Independent blending is required for its zero write
     // mask to apply; otherwise D3D12 replicates RT0's write mask to every bound target and the
     // ocean can overwrite per-pixel selection IDs.
     desc.blend.IndependentBlendEnable = TRUE;
     desc.blend.RenderTarget[1].BlendEnable = FALSE;
     desc.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-#if WITH_EDITOR
+    // GB0: ALPHA only (roughness/metal); the opaque albedo under the water is left as it was.
     desc.blend.RenderTarget[2].BlendEnable = FALSE;
-    desc.blend.RenderTarget[2].RenderTargetWriteMask = 0;
+    desc.blend.RenderTarget[2].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALPHA;
+    desc.blend.RenderTarget[3].BlendEnable = FALSE;
+    desc.blend.RenderTarget[3].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    desc.blend.RenderTarget[4].BlendEnable = FALSE;
+    desc.blend.RenderTarget[4].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+#if WITH_EDITOR
+    desc.blend.RenderTarget[5].BlendEnable = FALSE;
+    desc.blend.RenderTarget[5].RenderTargetWriteMask = 0;
 #endif
 }
 

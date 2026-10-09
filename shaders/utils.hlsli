@@ -17,6 +17,9 @@ static const float3 kF0Dielectric = float3(0.04f, 0.04f, 0.04f); // IOR ~1.5 for
 static const uint kShadingModelDefaultLit = 0u;
 static const uint kShadingModelTwoSidedFoliage = 1u;
 static const uint kShadingModelTerrain = 2u;
+// The ocean surface, written by its own forward draw AFTER compose (UE's SingleLayerWater), never by a
+// material: lighting and compose never see it. docs/ocean_gbuffer_ssr_unification_plan.md S1.
+static const uint kShadingModelWater = 3u;
 static const uint kShadingModelMask = 15u;
 
 inline float EncodeShadingModel(uint id)

@@ -63,8 +63,7 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
     RenderPass pass,
     const Camera& camera,
     bool useBundles,
-    bool bindGbufOrScene,
-    bool bindVelocity,
+    BatchTargets targets,
     size_t chunkSize,
     D3D12_GPU_VIRTUAL_ADDRESS viewCB,
     uint32_t localOrderBase)
@@ -85,7 +84,7 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
     // Step 7: the compiled barriers travel with the log — a fan-out worker must emit its
     // pass's barriers too, or the flip loses exactly the passes that record in parallel.
     Renderer::CompiledBarriers* const cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
-    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, pass, bindGbufOrScene, bindVelocity, viewCB, localOrderBase, cmpLog, cmpBarriers](std::size_t jobIndex)
+    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, pass, targets, viewCB, localOrderBase, cmpLog, cmpBarriers](std::size_t jobIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
         Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
@@ -113,24 +112,28 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
             SetCommandListName(t.cl, pass);
             {
                 GPU_SCOPE(t.cl, ProfilerScopes::kRenderObjectBatchGpu);
-                if (bindGbufOrScene)
+                if (targets == BatchTargets::GBuffer)
                 {
                     renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // no clear!
                 }
                 else
                 {
-                    if (bindVelocity)
-                    {
-                        const auto& D = renderer->GetDeferredForFrame();
-                        renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                    const auto& D = renderer->GetDeferredForFrame();
+                    renderer->Transition(t.cl, D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
 #if WITH_EDITOR
-                        renderer->Transition(t.cl, D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                    renderer->Transition(t.cl, D.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
 #endif
-                        renderer->BindSceneColorWithVelocity(t.cl, Renderer::ClearMode::None, true);
+                    if (targets == BatchTargets::Water)
+                    {
+                        // Plan S1: the water's G-buffer layer, declared at Main_Transparent's `rebind`.
+                        renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                        renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                        renderer->Transition(t.cl, D.gbAux.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                        renderer->BindWaterTargets(t.cl);
                     }
                     else
                     {
-                        renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
+                        renderer->BindSceneColorWithVelocity(t.cl, Renderer::ClearMode::None, true);
                     }
                 }
 
@@ -255,7 +258,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
             // Auto-instancing leaves one heavyweight object per mesh/material run. Small chunks
             // let the three palm species record concurrently without paying one bundle per tiny
             // terrain object. localOrder preserves deterministic execution order.
-            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, sub.pass, camera, /*useBundles=*/true, true, true, 2, viewCB);
+            RenderObjectBatch(renderer, opaqueSimple, sub.batchIndex, sub.pass, camera, /*useBundles=*/true, BatchTargets::GBuffer, 2, viewCB);
         }
         });
 
@@ -265,7 +268,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
         const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
         if (!opaqueComplex.empty())
         {
-            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, sub.pass, camera, /*useBundles=*/false, true, true, 32, viewCB);
+            RenderObjectBatch(renderer, opaqueComplex, sub.batchIndex, sub.pass, camera, /*useBundles=*/false, BatchTargets::GBuffer, 32, viewCB);
         }
         });
 
@@ -349,6 +352,14 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
 // out with the same chunk size so their submission-order arithmetic stays comparable.
 static constexpr size_t kTransparentChunkSize = 32;
 
+// Plan S1: does the ocean draw this frame? Exactly the list Transparent_Water iterates, so the
+// builders that declare (Main_Transparent) and hand back (Main_TransparentFog) the water's G-buffer
+// layer agree with the draw that writes it.
+bool SceneRenderer::WaterDrawsThisFrame() const
+{
+    return frame_ && frame_->mainView && !frame_->mainView->transparentWater.empty();
+}
+
 // ---- Pass_Transparent (+ its inner graph) ----
 void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, const SceneView& mainView, const TransparentPoints& pts)
@@ -401,9 +412,16 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
             // 2/3. The ocean reflection compute and the pixel-readable hand-off it always ends on.
             RecordOceanReflection(renderer, driver.cl, camera, pts);
 
-            // 4. Rebind the forward targets.
+            // 4. Rebind the forward targets (with the water's G-buffer layer when the water draws).
             renderer->EmitPoint(driver.cl, pts.rebind);
-            renderer->BindSceneColorWithVelocity(driver.cl, Renderer::ClearMode::None, true);
+            if (pts.water)
+            {
+                renderer->BindWaterTargets(driver.cl);
+            }
+            else
+            {
+                renderer->BindSceneColorWithVelocity(driver.cl, Renderer::ClearMode::None, true);
+            }
         }
         renderer->RegisterPassDriver(driver.cl, sub.batchIndex);
         });
@@ -423,7 +441,7 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
         if (!waterObjects.empty())
         {
             RenderObjectBatch(renderer, waterObjects, sub.batchIndex, sub.pass, camera, /*useBundles=*/false,
-                false, true, kTransparentChunkSize, viewCB);
+                BatchTargets::Water, kTransparentChunkSize, viewCB);
         }
         });
 
@@ -488,7 +506,7 @@ void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext 
         if (!translucentComplex.empty())
         {
             RenderObjectBatch(renderer, translucentComplex, sub.batchIndex, sub.pass, camera, /*useBundles=*/false,
-                false, true, kTransparentChunkSize, viewCB);
+                BatchTargets::SceneVelocity, kTransparentChunkSize, viewCB);
         }
         });
 
@@ -498,7 +516,7 @@ void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext 
         if (!transparentSimple.empty())
         {
             RenderObjectBatch(renderer, transparentSimple, sub.batchIndex, sub.pass, camera, /*useBundles=*/false,
-                false, true, kTransparentChunkSize, viewCB, simpleLocalOrderBase);
+                BatchTargets::SceneVelocity, kTransparentChunkSize, viewCB, simpleLocalOrderBase);
         }
         });
 

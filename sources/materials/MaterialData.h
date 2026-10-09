@@ -22,12 +22,16 @@ enum class ShadingModel : uint8_t
 {
     DefaultLit = 0,
     TwoSidedFoliage = 1,
-    Terrain = 2
+    Terrain = 2,
+    // Reserved for the ocean surface, which writes it from its own forward draw after compose. Not a
+    // material's choice: TryParseShadingModel does not accept it, so no material file can select it.
+    Water = 3
 };
 static_assert(static_cast<uint8_t>(ShadingModel::DefaultLit) == 0);
 static_assert(static_cast<uint8_t>(ShadingModel::TwoSidedFoliage) == 1);
 static_assert(static_cast<uint8_t>(ShadingModel::Terrain) == 2);
-static_assert(static_cast<uint8_t>(ShadingModel::Terrain) < 16);
+static_assert(static_cast<uint8_t>(ShadingModel::Water) == 3);
+static_assert(static_cast<uint8_t>(ShadingModel::Water) < 16);
 
 const char* ShadingModelToString(ShadingModel model);
 bool TryParseShadingModel(std::string_view text, ShadingModel& outModel);

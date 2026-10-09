@@ -226,8 +226,15 @@ private:
     void BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb);
     void BuildPost(Renderer* renderer, GraphBuild& gb);
 
+    // Which targets a fan-out chunk binds before it draws (each chunk records its own list).
+    enum class BatchTargets : uint8_t
+    {
+        GBuffer,       // the opaque G-buffer MRT
+        SceneVelocity, // scene + velocity (+ editor objectID): glass, particles
+        Water,         // scene + velocity + the water's G-buffer layer (+ objectID): Renderer::BindWaterTargets
+    };
     void RenderObjectBatch(Renderer* renderer, const std::vector<RenderableObjectBase*>& objects, size_t batchIndex,
-        RenderPass pass, const Camera& camera, bool useCommandBundle, bool bindGbufOrScene, bool bindVelocity, size_t chunkSize,
+        RenderPass pass, const Camera& camera, bool useCommandBundle, BatchTargets targets, size_t chunkSize,
         D3D12_GPU_VIRTUAL_ADDRESS viewCB, uint32_t localOrderBase = 0);
 
     // Barrier plan step 5: register the draw-time resource states of every OPAQUE object.
@@ -529,7 +536,12 @@ private:
         bool copyScene = false;
         bool oceanReflect = false; // the reflection compute runs (targets + material + descriptors)
         bool oceanTemporalRun = false; // ...and the temporal resolve after it (ssrTemporal + history ready)
+        // Plan S1: the water draws this frame, so its G-buffer layer (GB0, GB1, GBAux) is a render
+        // target from `rebind` on. The SAME predicate (WaterDrawsThisFrame) decides Main_TransparentFog's
+        // hand-back of those three to their resting state.
+        bool water = false;
     };
+    bool WaterDrawsThisFrame() const;
     void RecordOceanReflection(Renderer* r, ID3D12GraphicsCommandList* cl,
         const Camera& camera, const TransparentPoints& pts);
     void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,

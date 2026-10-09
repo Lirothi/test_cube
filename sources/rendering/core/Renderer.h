@@ -287,6 +287,9 @@ public:
     void BindSceneColor(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindLightTargetWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
     void BindSceneColorWithVelocity(ID3D12GraphicsCommandList* cl, ClearMode mode, bool withDepth);
+    // The ocean's forward draw (UE SingleLayerWater): scene, velocity, then the water's G-buffer layer
+    // GB0, GB1, GBAux, and the editor's objectID last -- OceanRenderable's PSO slot order. No clear.
+    void BindWaterTargets(ID3D12GraphicsCommandList* cl);
     // S11: `scissor` (atlas texels, optional) narrows the cascade's scissor to the camera's view
     // cone; it is intersected with the tile's content rect, and the VIEWPORT stays the full rect.
     void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth,
